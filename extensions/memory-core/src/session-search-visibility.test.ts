@@ -19,6 +19,8 @@ type TestSessionEntry = {
   sessionId: string;
   updatedAt: number;
   sessionFile: string;
+  chatType?: "direct" | "group" | "channel";
+  origin?: { chatType?: "direct" | "group" | "channel" };
 };
 
 const crossAgentStore: Record<string, TestSessionEntry> = {
@@ -210,6 +212,749 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
       hits,
     });
     expect(filtered).toEqual(hits);
+  });
+
+  it("allows another same-agent private transcript through trusted conversation recall", async () => {
+    combinedSessionStore = {
+      "agent:main:telegram:direct:owner": {
+        sessionId: "current",
+        updatedAt: 2,
+        sessionFile: "/tmp/sessions/current.jsonl",
+        chatType: "direct",
+      },
+      "agent:main:webchat:direct:owner": {
+        sessionId: "past",
+        updatedAt: 1,
+        sessionFile: "/tmp/sessions/past.jsonl",
+        chatType: "direct",
+      },
+    };
+    const hit: MemorySearchResult = {
+      path: "sessions/past.jsonl",
+      source: "sessions",
+      score: 1,
+      snippet: "private context",
+      startLine: 1,
+      endLine: 2,
+    };
+    const cfg = asOpenClawConfig({ tools: { sessions: { visibility: "self" } } });
+
+    const filtered = await filterMemorySearchHitsBySessionVisibility({
+      cfg,
+      requesterSessionKey: "agent:main:telegram:direct:owner",
+      sandboxed: false,
+      hits: [hit],
+      conversationRecall: {
+        anchorSessionKey: "agent:main:telegram:direct:owner",
+        scope: "same-agent-private",
+        corpus: "sessions",
+      },
+    });
+
+    expect(filtered).toEqual([hit]);
+  });
+
+  it("allows an agent-scoped builtin hit for an Active Memory private requester", async () => {
+    const anchorSessionKey = "agent:qa:qa-channel:direct:dm:remember-target";
+    combinedSessionStore = {
+      [anchorSessionKey]: {
+        sessionId: "target-id",
+        updatedAt: 2,
+        sessionFile: "/tmp/sessions/target-id.jsonl",
+        chatType: "direct",
+      },
+      "agent:qa:qa-channel:direct:dm:remember-source": {
+        sessionId: "source-id",
+        updatedAt: 1,
+        sessionFile: "/tmp/sessions/source-id.jsonl",
+        chatType: "direct",
+      },
+    };
+    const hit: MemorySearchResult = {
+      path: "sessions/qa/source-id.jsonl",
+      source: "sessions",
+      score: 1,
+      snippet: "private context",
+      startLine: 1,
+      endLine: 2,
+    };
+
+    const filtered = await filterMemorySearchHitsBySessionVisibility({
+      cfg: asOpenClawConfig({ tools: { sessions: { visibility: "self" } } }),
+      agentId: "qa",
+      requesterSessionKey: `${anchorSessionKey}:active-memory:7e1ee8190516`,
+      sandboxed: false,
+      hits: [hit],
+      conversationRecall: {
+        anchorSessionKey,
+        scope: "same-agent-private",
+        corpus: "sessions",
+      },
+    });
+
+    expect(filtered).toEqual([hit]);
+  });
+
+  it("allows recognized explicit private sessions with persisted direct metadata", async () => {
+    const anchorSessionKey = "agent:main:explicit:laptop";
+    combinedSessionStore = {
+      [anchorSessionKey]: {
+        sessionId: "current",
+        updatedAt: 2,
+        sessionFile: "/tmp/sessions/current.jsonl",
+        origin: { chatType: "direct" },
+      },
+      "agent:main:explicit:phone:group:shadow": {
+        sessionId: "explicit-private",
+        updatedAt: 1,
+        sessionFile: "/tmp/sessions/explicit-private.jsonl",
+        chatType: "direct",
+      },
+    };
+    const hit: MemorySearchResult = {
+      path: "sessions/explicit-private.jsonl",
+      source: "sessions",
+      score: 1,
+      snippet: "private context",
+      startLine: 1,
+      endLine: 2,
+    };
+    const cfg = asOpenClawConfig({ tools: { sessions: { visibility: "self" } } });
+
+    const filtered = await filterMemorySearchHitsBySessionVisibility({
+      cfg,
+      requesterSessionKey: `${anchorSessionKey}:active-memory:123456abcdef`,
+      sandboxed: false,
+      hits: [hit],
+      conversationRecall: {
+        anchorSessionKey,
+        scope: "same-agent-private",
+        corpus: "sessions",
+      },
+    });
+
+    expect(filtered).toEqual([hit]);
+  });
+
+  it("denies recall when the anchor transcript also has a shared group alias", async () => {
+    combinedSessionStore = {
+      "agent:main:telegram:direct:owner": {
+        sessionId: "current",
+        updatedAt: 2,
+        sessionFile: "/tmp/sessions/current.jsonl",
+        chatType: "direct",
+      },
+      "agent:main:telegram:group:team": {
+        sessionId: "current",
+        updatedAt: 2,
+        sessionFile: "/tmp/sessions/current.jsonl",
+        chatType: "group",
+      },
+      "agent:main:qa-channel:direct:dm:friend": {
+        sessionId: "other-private",
+        updatedAt: 1,
+        sessionFile: "/tmp/sessions/other-private.jsonl",
+        chatType: "direct",
+      },
+    };
+    const hit: MemorySearchResult = {
+      path: "sessions/other-private.jsonl",
+      source: "sessions",
+      score: 1,
+      snippet: "private context",
+      startLine: 1,
+      endLine: 2,
+    };
+    const cfg = asOpenClawConfig({ tools: { sessions: { visibility: "self" } } });
+
+    const filtered = await filterMemorySearchHitsBySessionVisibility({
+      cfg,
+      requesterSessionKey: "agent:main:telegram:direct:owner",
+      sandboxed: false,
+      hits: [hit],
+      conversationRecall: {
+        anchorSessionKey: "agent:main:telegram:direct:owner",
+        scope: "same-agent-private",
+        corpus: "sessions",
+      },
+    });
+
+    expect(filtered).toStrictEqual([]);
+  });
+
+  it("denies the shared global session as a recall source despite direct metadata", async () => {
+    combinedSessionStore = {
+      "agent:main:telegram:direct:owner": {
+        sessionId: "current",
+        updatedAt: 2,
+        sessionFile: "/tmp/sessions/current.jsonl",
+        chatType: "direct",
+      },
+      global: {
+        sessionId: "global-shared",
+        updatedAt: 1,
+        sessionFile: "/tmp/sessions/global-shared.jsonl",
+        chatType: "direct",
+      },
+    };
+    const hit: MemorySearchResult = {
+      path: "sessions/global-shared.jsonl",
+      source: "sessions",
+      score: 1,
+      snippet: "shared global context",
+      startLine: 1,
+      endLine: 2,
+    };
+    const cfg = asOpenClawConfig({
+      session: { scope: "global" },
+      tools: { sessions: { visibility: "self" } },
+    });
+
+    const filtered = await filterMemorySearchHitsBySessionVisibility({
+      cfg,
+      requesterSessionKey: "agent:main:telegram:direct:owner",
+      sandboxed: false,
+      hits: [hit],
+      conversationRecall: {
+        anchorSessionKey: "agent:main:telegram:direct:owner",
+        scope: "same-agent-private",
+        corpus: "sessions",
+      },
+    });
+
+    expect(filtered).toStrictEqual([]);
+  });
+
+  it("denies recall anchored in the shared global session despite direct metadata", async () => {
+    combinedSessionStore = {
+      "agent:main:global": {
+        sessionId: "global-shared",
+        updatedAt: 2,
+        sessionFile: "/tmp/sessions/global-shared.jsonl",
+        chatType: "direct",
+      },
+      "agent:main:qa-channel:direct:dm:friend": {
+        sessionId: "other-private",
+        updatedAt: 1,
+        sessionFile: "/tmp/sessions/other-private.jsonl",
+        chatType: "direct",
+      },
+    };
+    const hit: MemorySearchResult = {
+      path: "sessions/other-private.jsonl",
+      source: "sessions",
+      score: 1,
+      snippet: "private context",
+      startLine: 1,
+      endLine: 2,
+    };
+    const cfg = asOpenClawConfig({
+      session: { scope: "global" },
+      tools: { sessions: { visibility: "self" } },
+    });
+
+    const filtered = await filterMemorySearchHitsBySessionVisibility({
+      cfg,
+      requesterSessionKey: "agent:main:global",
+      sandboxed: false,
+      hits: [hit],
+      conversationRecall: {
+        anchorSessionKey: "agent:main:global",
+        scope: "same-agent-private",
+        corpus: "sessions",
+      },
+    });
+
+    expect(filtered).toStrictEqual([]);
+  });
+
+  it("denies a metadata-less generated explicit model-run transcript", async () => {
+    combinedSessionStore = {
+      "agent:main:telegram:direct:owner": {
+        sessionId: "current",
+        updatedAt: 2,
+        sessionFile: "/tmp/sessions/current.jsonl",
+        chatType: "direct",
+      },
+      "agent:main:explicit:model-run-probe": {
+        sessionId: "model-run-probe",
+        updatedAt: 1,
+        sessionFile: "/tmp/sessions/model-run-probe.jsonl",
+      },
+    };
+    const hit: MemorySearchResult = {
+      path: "sessions/model-run-probe.jsonl",
+      source: "sessions",
+      score: 1,
+      snippet: "internal model probe",
+      startLine: 1,
+      endLine: 2,
+    };
+    const cfg = asOpenClawConfig({ tools: { sessions: { visibility: "self" } } });
+
+    const filtered = await filterMemorySearchHitsBySessionVisibility({
+      cfg,
+      requesterSessionKey: "agent:main:telegram:direct:owner",
+      sandboxed: false,
+      hits: [hit],
+      conversationRecall: {
+        anchorSessionKey: "agent:main:telegram:direct:owner",
+        scope: "same-agent-private",
+        corpus: "sessions",
+      },
+    });
+
+    expect(filtered).toStrictEqual([]);
+  });
+
+  it("denies another agent's private transcript during trusted conversation recall", async () => {
+    combinedSessionStore = {
+      "agent:main:telegram:direct:owner": {
+        sessionId: "current",
+        updatedAt: 2,
+        sessionFile: "/tmp/sessions/current.jsonl",
+        chatType: "direct",
+      },
+      "agent:peer:telegram:direct:owner": {
+        sessionId: "peer-private",
+        updatedAt: 1,
+        sessionFile: "/tmp/sessions/peer-private.jsonl",
+        chatType: "direct",
+      },
+    };
+    const hit: MemorySearchResult = {
+      path: "sessions/peer-private.jsonl",
+      source: "sessions",
+      score: 1,
+      snippet: "other agent context",
+      startLine: 1,
+      endLine: 2,
+    };
+    const cfg = asOpenClawConfig({ tools: { sessions: { visibility: "all" } } });
+
+    const filtered = await filterMemorySearchHitsBySessionVisibility({
+      cfg,
+      requesterSessionKey: "agent:main:telegram:direct:owner",
+      sandboxed: false,
+      hits: [hit],
+      conversationRecall: {
+        anchorSessionKey: "agent:main:telegram:direct:owner",
+        scope: "same-agent-private",
+        corpus: "sessions",
+      },
+    });
+
+    expect(filtered).toStrictEqual([]);
+  });
+
+  it("denies persisted Active Memory helper transcripts under explicit sessions", async () => {
+    combinedSessionStore = {
+      "agent:main:explicit:laptop": {
+        sessionId: "current",
+        updatedAt: 2,
+        sessionFile: "/tmp/sessions/current.jsonl",
+        chatType: "direct",
+      },
+      "agent:main:explicit:laptop:active-memory:abcdef123456": {
+        sessionId: "helper",
+        updatedAt: 1,
+        sessionFile: "/tmp/sessions/helper.jsonl",
+      },
+    };
+    const hit: MemorySearchResult = {
+      path: "sessions/helper.jsonl",
+      source: "sessions",
+      score: 1,
+      snippet: "internal helper transcript",
+      startLine: 1,
+      endLine: 2,
+    };
+    const cfg = asOpenClawConfig({ tools: { sessions: { visibility: "agent" } } });
+
+    const filtered = await filterMemorySearchHitsBySessionVisibility({
+      cfg,
+      requesterSessionKey: "agent:main:explicit:laptop:active-memory:123456abcdef",
+      sandboxed: false,
+      hits: [hit],
+      conversationRecall: {
+        anchorSessionKey: "agent:main:explicit:laptop",
+        scope: "same-agent-private",
+        corpus: "sessions",
+      },
+    });
+
+    expect(filtered).toStrictEqual([]);
+  });
+
+  it("excludes the anchor transcript from trusted conversation recall", async () => {
+    combinedSessionStore = {
+      "agent:main:telegram:direct:owner": {
+        sessionId: "current",
+        updatedAt: 2,
+        sessionFile: "/tmp/sessions/current.jsonl",
+        chatType: "direct",
+      },
+    };
+    const hit: MemorySearchResult = {
+      path: "sessions/current.jsonl",
+      source: "sessions",
+      score: 1,
+      snippet: "already in context",
+      startLine: 1,
+      endLine: 2,
+    };
+    const cfg = asOpenClawConfig({ tools: { sessions: { visibility: "agent" } } });
+
+    const filtered = await filterMemorySearchHitsBySessionVisibility({
+      cfg,
+      requesterSessionKey: "agent:main:telegram:direct:owner",
+      sandboxed: false,
+      hits: [hit],
+      conversationRecall: {
+        anchorSessionKey: "agent:main:telegram:direct:owner",
+        scope: "same-agent-private",
+        corpus: "sessions",
+      },
+    });
+
+    expect(filtered).toStrictEqual([]);
+  });
+
+  it("excludes the anchor transcript when another private key aliases the same session", async () => {
+    combinedSessionStore = {
+      "agent:main:telegram:direct:owner": {
+        sessionId: "current",
+        updatedAt: 2,
+        sessionFile: "/tmp/sessions/current.jsonl",
+        chatType: "direct",
+      },
+      "agent:main:explicit:legacy-owner-alias": {
+        sessionId: "current",
+        updatedAt: 1,
+        sessionFile: "/tmp/sessions/current.jsonl",
+        chatType: "direct",
+      },
+    };
+    const hit: MemorySearchResult = {
+      path: "sessions/current.jsonl",
+      source: "sessions",
+      score: 1,
+      snippet: "already in context",
+      startLine: 1,
+      endLine: 2,
+    };
+    const cfg = asOpenClawConfig({ tools: { sessions: { visibility: "agent" } } });
+
+    const filtered = await filterMemorySearchHitsBySessionVisibility({
+      cfg,
+      requesterSessionKey: "agent:main:telegram:direct:owner",
+      sandboxed: false,
+      hits: [hit],
+      conversationRecall: {
+        anchorSessionKey: "agent:main:telegram:direct:owner",
+        scope: "same-agent-private",
+        corpus: "sessions",
+      },
+    });
+
+    expect(filtered).toStrictEqual([]);
+  });
+
+  it.each([
+    { name: "group", chatType: "group" as const },
+    { name: "channel", chatType: "channel" as const },
+    { name: "unknown", chatType: undefined },
+  ])("denies $name transcript hits from trusted conversation recall", async ({ chatType }) => {
+    combinedSessionStore = {
+      "agent:main:telegram:direct:owner": {
+        sessionId: "current",
+        updatedAt: 2,
+        sessionFile: "/tmp/sessions/current.jsonl",
+        chatType: "direct",
+      },
+      [chatType ? "agent:main:telegram:group:family" : "agent:main:unknown-surface"]: {
+        sessionId: "candidate",
+        updatedAt: 1,
+        sessionFile: "/tmp/sessions/candidate.jsonl",
+        ...(chatType ? { chatType } : {}),
+      },
+    };
+    const hit: MemorySearchResult = {
+      path: "sessions/candidate.jsonl",
+      source: "sessions",
+      score: 1,
+      snippet: "not private",
+      startLine: 1,
+      endLine: 2,
+    };
+    const cfg = asOpenClawConfig({ tools: { sessions: { visibility: "agent" } } });
+
+    const filtered = await filterMemorySearchHitsBySessionVisibility({
+      cfg,
+      requesterSessionKey: "agent:main:telegram:direct:owner",
+      sandboxed: false,
+      hits: [hit],
+      conversationRecall: {
+        anchorSessionKey: "agent:main:telegram:direct:owner",
+        scope: "same-agent-private",
+        corpus: "sessions",
+      },
+    });
+
+    expect(filtered).toStrictEqual([]);
+  });
+
+  it("rejects a transcript when one alias is private and another alias is shared", async () => {
+    combinedSessionStore = {
+      "agent:main:telegram:direct:owner": {
+        sessionId: "current",
+        updatedAt: 3,
+        sessionFile: "/tmp/sessions/current.jsonl",
+        chatType: "direct",
+      },
+      "agent:main:telegram:direct:private-alias": {
+        sessionId: "candidate",
+        updatedAt: 2,
+        sessionFile: "/tmp/sessions/candidate.jsonl",
+        chatType: "direct",
+      },
+      "agent:main:telegram:group:shared-alias": {
+        sessionId: "candidate",
+        updatedAt: 1,
+        sessionFile: "/tmp/sessions/candidate.jsonl",
+        chatType: "group",
+      },
+    };
+    const hit: MemorySearchResult = {
+      path: "sessions/candidate.jsonl",
+      source: "sessions",
+      score: 1,
+      snippet: "shared transcript",
+      startLine: 1,
+      endLine: 2,
+    };
+    const cfg = asOpenClawConfig({ tools: { sessions: { visibility: "agent" } } });
+
+    const filtered = await filterMemorySearchHitsBySessionVisibility({
+      cfg,
+      requesterSessionKey: "agent:main:telegram:direct:owner",
+      sandboxed: false,
+      hits: [hit],
+      conversationRecall: {
+        anchorSessionKey: "agent:main:telegram:direct:owner",
+        scope: "same-agent-private",
+        corpus: "sessions",
+      },
+    });
+
+    expect(filtered).toStrictEqual([]);
+  });
+
+  it("denies a metadata-less main transcript during trusted conversation recall", async () => {
+    combinedSessionStore = {
+      "agent:main:telegram:direct:owner": {
+        sessionId: "current",
+        updatedAt: 2,
+        sessionFile: "/tmp/sessions/current.jsonl",
+        chatType: "direct",
+      },
+      "agent:main:main": {
+        sessionId: "ambiguous-main",
+        updatedAt: 1,
+        sessionFile: "/tmp/sessions/ambiguous-main.jsonl",
+      },
+    };
+    const hit: MemorySearchResult = {
+      path: "sessions/ambiguous-main.jsonl",
+      source: "sessions",
+      score: 1,
+      snippet: "unknown conversation kind",
+      startLine: 1,
+      endLine: 2,
+    };
+    const cfg = asOpenClawConfig({ tools: { sessions: { visibility: "agent" } } });
+
+    const filtered = await filterMemorySearchHitsBySessionVisibility({
+      cfg,
+      requesterSessionKey: "agent:main:telegram:direct:owner",
+      sandboxed: false,
+      hits: [hit],
+      conversationRecall: {
+        anchorSessionKey: "agent:main:telegram:direct:owner",
+        scope: "same-agent-private",
+        corpus: "sessions",
+      },
+    });
+
+    expect(filtered).toStrictEqual([]);
+  });
+
+  it("rejects a synthetic recall requester that does not start with the anchor key", async () => {
+    combinedSessionStore = {
+      "agent:main:main": {
+        sessionId: "current",
+        updatedAt: 2,
+        sessionFile: "/tmp/sessions/current.jsonl",
+        chatType: "direct",
+      },
+      "agent:main:webchat:direct:owner": {
+        sessionId: "past",
+        updatedAt: 1,
+        sessionFile: "/tmp/sessions/past.jsonl",
+        chatType: "direct",
+      },
+    };
+    const hit: MemorySearchResult = {
+      path: "sessions/past.jsonl",
+      source: "sessions",
+      score: 1,
+      snippet: "private context",
+      startLine: 1,
+      endLine: 2,
+    };
+    const cfg = asOpenClawConfig({ tools: { sessions: { visibility: "all" } } });
+
+    const filtered = await filterMemorySearchHitsBySessionVisibility({
+      cfg,
+      requesterSessionKey: "agent:main:xxxx:active-memory:abcdef123456",
+      sandboxed: false,
+      hits: [hit],
+      conversationRecall: {
+        anchorSessionKey: "agent:main:main",
+        scope: "same-agent-private",
+        corpus: "sessions",
+      },
+    });
+
+    expect(filtered).toStrictEqual([]);
+  });
+
+  it("denies trusted conversation recall when the anchor is shared, mismatched, or sandboxed", async () => {
+    combinedSessionStore = {
+      "agent:main:telegram:group:family": {
+        sessionId: "current",
+        updatedAt: 2,
+        sessionFile: "/tmp/sessions/current.jsonl",
+        chatType: "group",
+      },
+      "agent:main:webchat:direct:owner": {
+        sessionId: "past",
+        updatedAt: 1,
+        sessionFile: "/tmp/sessions/past.jsonl",
+        chatType: "direct",
+      },
+    };
+    const hit: MemorySearchResult = {
+      path: "sessions/past.jsonl",
+      source: "sessions",
+      score: 1,
+      snippet: "private context",
+      startLine: 1,
+      endLine: 2,
+    };
+    const cfg = asOpenClawConfig({ tools: { sessions: { visibility: "self" } } });
+    const conversationRecall = {
+      anchorSessionKey: "agent:main:telegram:group:family",
+      scope: "same-agent-private" as const,
+      corpus: "sessions" as const,
+    };
+
+    const [sharedAnchor, mismatchedAnchor, sandboxed] = await Promise.all([
+      filterMemorySearchHitsBySessionVisibility({
+        cfg,
+        requesterSessionKey: conversationRecall.anchorSessionKey,
+        sandboxed: false,
+        hits: [hit],
+        conversationRecall,
+      }),
+      filterMemorySearchHitsBySessionVisibility({
+        cfg,
+        requesterSessionKey: "agent:main:webchat:direct:owner",
+        sandboxed: false,
+        hits: [hit],
+        conversationRecall,
+      }),
+      filterMemorySearchHitsBySessionVisibility({
+        cfg,
+        requesterSessionKey: conversationRecall.anchorSessionKey,
+        sandboxed: true,
+        hits: [hit],
+        conversationRecall,
+      }),
+    ]);
+
+    expect(sharedAnchor).toStrictEqual([]);
+    expect(mismatchedAnchor).toStrictEqual([]);
+    expect(sandboxed).toStrictEqual([]);
+  });
+
+  it("preserves ordinary memory while denying unauthorized configured transcript recall", async () => {
+    combinedSessionStore = {};
+    const memoryHit: MemorySearchResult = {
+      path: "MEMORY.md",
+      source: "memory",
+      score: 1,
+      snippet: "shared workspace memory",
+      startLine: 1,
+      endLine: 2,
+    };
+    const sessionHit: MemorySearchResult = {
+      path: "sessions/private.jsonl",
+      source: "sessions",
+      score: 0.9,
+      snippet: "private transcript",
+      startLine: 1,
+      endLine: 2,
+    };
+    const cfg = asOpenClawConfig({ tools: { sessions: { visibility: "all" } } });
+
+    const filtered = await filterMemorySearchHitsBySessionVisibility({
+      cfg,
+      requesterSessionKey: "agent:main:main:active-memory:abcdef123456",
+      sandboxed: false,
+      hits: [memoryHit, sessionHit],
+      conversationRecall: {
+        anchorSessionKey: "agent:main:main",
+        scope: "same-agent-private",
+        corpus: "configured",
+      },
+    });
+
+    expect(filtered).toEqual([memoryHit]);
+  });
+
+  it("restricts trusted sessions-only recall to transcript hits", async () => {
+    combinedSessionStore = {
+      "agent:main:telegram:direct:owner": {
+        sessionId: "current",
+        updatedAt: 2,
+        sessionFile: "/tmp/sessions/current.jsonl",
+        chatType: "direct",
+      },
+    };
+    const hit: MemorySearchResult = {
+      path: "memory/private.md",
+      source: "memory",
+      score: 1,
+      snippet: "workspace memory",
+      startLine: 1,
+      endLine: 2,
+    };
+    const cfg = asOpenClawConfig({ tools: { sessions: { visibility: "agent" } } });
+
+    const filtered = await filterMemorySearchHitsBySessionVisibility({
+      cfg,
+      requesterSessionKey: "agent:main:telegram:direct:owner",
+      sandboxed: false,
+      hits: [hit],
+      conversationRecall: {
+        anchorSessionKey: "agent:main:telegram:direct:owner",
+        scope: "same-agent-private",
+        corpus: "sessions",
+      },
+    });
+
+    expect(filtered).toStrictEqual([]);
   });
 
   it("loads the combined session store once per filter pass", async () => {
@@ -668,6 +1413,126 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
     });
 
     expect(filtered).toEqual([copiedHit]);
+  });
+
+  it("denies mapped QMD hits whose transcript file also has a shared group alias", async () => {
+    combinedSessionStore = {
+      "agent:main:telegram:direct:owner": {
+        sessionId: "current",
+        updatedAt: 2,
+        sessionFile: "/tmp/sessions/current.jsonl",
+        chatType: "direct",
+      },
+      "agent:main:explicit:laptop": {
+        sessionId: "actual-session-id",
+        updatedAt: 1,
+        sessionFile: "/tmp/sessions/shared-transcript.jsonl",
+        chatType: "direct",
+      },
+      // Same transcript file exposed under a group alias with a different
+      // sessionId: session-id alias resolution alone would miss this.
+      "agent:main:telegram:group:team": {
+        sessionId: "group-alias-id",
+        updatedAt: 1,
+        sessionFile: "/tmp/sessions/shared-transcript.jsonl",
+        chatType: "group",
+      },
+    };
+    const searchPath = "qmd/sessions-main/shared-transcript-export.md";
+    const indexPath = await createQmdArtifactIndex({
+      agentId: "main",
+      artifactPath: "shared-transcript-export.md",
+      collection: "sessions-main",
+      searchPath,
+      sessionId: "actual-session-id",
+    });
+    const hit = attachMappedQmdHit(
+      {
+        path: searchPath,
+        source: "sessions",
+        score: 1,
+        snippet: "private context",
+        startLine: 1,
+        endLine: 2,
+      },
+      {
+        artifactPath: "shared-transcript-export.md",
+        collection: "sessions-main",
+        indexPath,
+        searchPath,
+      },
+    );
+    const cfg = asOpenClawConfig({ tools: { sessions: { visibility: "self" } } });
+
+    const filtered = await filterMemorySearchHitsBySessionVisibility({
+      cfg,
+      requesterSessionKey: "agent:main:telegram:direct:owner",
+      sandboxed: false,
+      hits: [hit],
+      conversationRecall: {
+        anchorSessionKey: "agent:main:telegram:direct:owner",
+        scope: "same-agent-private",
+        corpus: "sessions",
+      },
+    });
+
+    expect(filtered).toStrictEqual([]);
+  });
+
+  it("allows mapped QMD hits for another same-agent private conversation", async () => {
+    combinedSessionStore = {
+      "agent:main:telegram:direct:owner": {
+        sessionId: "current",
+        updatedAt: 2,
+        sessionFile: "/tmp/sessions/current.jsonl",
+        chatType: "direct",
+      },
+      "agent:main:explicit:laptop": {
+        sessionId: "actual-session-id",
+        updatedAt: 1,
+        sessionFile: "/tmp/sessions/actual-session-id.jsonl",
+        chatType: "direct",
+      },
+    };
+    const searchPath = "qmd/sessions-main/lossy-export-name.md";
+    const indexPath = await createQmdArtifactIndex({
+      agentId: "main",
+      artifactPath: "lossy-export-name.md",
+      collection: "sessions-main",
+      searchPath,
+      sessionId: "actual-session-id",
+    });
+    const hit = attachMappedQmdHit(
+      {
+        path: searchPath,
+        source: "sessions",
+        score: 1,
+        snippet: "private context",
+        startLine: 1,
+        endLine: 2,
+      },
+      {
+        artifactPath: "lossy-export-name.md",
+        collection: "sessions-main",
+        indexPath,
+        searchPath,
+      },
+    );
+    const cfg = asOpenClawConfig({ tools: { sessions: { visibility: "self" } } });
+
+    const filtered = await filterMemorySearchHitsBySessionVisibility({
+      cfg,
+      requesterSessionKey: "agent:main:telegram:direct:owner",
+      sandboxed: false,
+      hits: [hit],
+      conversationRecall: {
+        anchorSessionKey: "agent:main:telegram:direct:owner",
+        scope: "same-agent-private",
+        corpus: "sessions",
+      },
+    });
+
+    expect(filtered).toEqual([hit]);
   });
 
   it("denies mapped live QMD session hits when no session-store key remains", async () => {

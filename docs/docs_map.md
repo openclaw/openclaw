@@ -2215,7 +2215,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /concepts/active-memory
 - Headings:
-  - H2: Quick start
+  - H2: Remember across conversations
+  - H2: Advanced Active Memory quick start
   - H2: How it works
   - H2: When it runs
   - H3: Session types
@@ -2227,7 +2228,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Speed recommendations
   - H4: Cerebras setup
   - H2: Memory tools
-  - H3: Built-in memory-core
+  - H3: Built-in memory
   - H3: LanceDB memory
   - H3: Lossless Claw
   - H2: Advanced escape hatches
@@ -2941,6 +2942,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: How messages are routed
   - H2: DM isolation
   - H3: Dock linked channels
+  - H2: Remember across conversations
   - H2: Session lifecycle
   - H2: Where state lives
   - H2: Session maintenance
@@ -8681,6 +8683,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /reference/memory-config
 - Headings:
+  - H2: Remember across conversations
   - H2: Provider selection
   - H3: Custom provider ids
   - H3: API key resolution
