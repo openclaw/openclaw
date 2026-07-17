@@ -15,7 +15,7 @@ export async function searchActiveListings(filters: PropertyFilters, page = 1, l
     `;
   const params: any[] = [];
   if (filters.city) {
-    sql += " AND L_City = ?";
+    sql += " AND LOWER(L_City) = LOWER(?)";
     params.push(filters.city);
   }
   if (filters.maxPrice) {

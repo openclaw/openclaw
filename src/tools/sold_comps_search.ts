@@ -9,7 +9,7 @@ export async function getSoldComps(city: string, months = 12) {
     PropertyType, PropertySubType, YearBuilt,
     ListAgentFullName, ListOfficeName, BuyerOfficeName
     FROM california_sold
-    WHERE City = ?
+    WHERE LOWER(City) = LOWER(?)
     AND CloseDate >= DATE_SUB(CURDATE(), INTERVAL ? MONTH)
     AND PropertyType = "Residential"
     ORDER BY CloseDate DESC
