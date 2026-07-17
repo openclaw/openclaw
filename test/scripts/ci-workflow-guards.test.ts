@@ -4279,4 +4279,11 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       'call.getFile().getRelativePath() = "extensions/codex/src/app-server/transport-websocket.ts"',
     );
   });
+
+  it("bounds Opengrep installer downloads with connect timeout", () => {
+    for (const path of [OPENGREP_PR_DIFF_WORKFLOW, OPENGREP_FULL_WORKFLOW]) {
+      const workflow = readFileSync(path, "utf8");
+      expect(workflow).toContain("curl -fsSL --connect-timeout 30 --max-time 120");
+    }
+  });
 });
