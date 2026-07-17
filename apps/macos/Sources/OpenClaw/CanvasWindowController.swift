@@ -194,7 +194,7 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, WK
         }
 
         self.showWindow(nil)
-        self.window?.makeKeyAndOrderFront(nil)
+        self.window?.orderFrontRegardless()
         if let path {
             self.load(target: path, trustedA2UIActions: trustedA2UIActions)
         }
