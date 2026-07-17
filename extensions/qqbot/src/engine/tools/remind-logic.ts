@@ -222,14 +222,21 @@ function buildOnceJob(params: RemindParams, atMs: number, to: string, accountId:
 
 /** Build cron job params for a recurring cron reminder. */
 function buildCronJob(params: RemindParams, to: string, accountId: string) {
-  const content = params.content!;
+  const content = params.content;
+  if (!content) {
+    throw new Error("Reminder content is required for cron job");
+  }
   const name = params.name || generateJobName(content);
   const tz = params.timezone || QQBOT_DEFAULT_REMINDER_TIMEZONE;
+  const timeExpr = params.time?.trim();
+  if (!timeExpr) {
+    throw new Error("Reminder time expression is required for cron job");
+  }
   return {
     action: "add" as const,
     job: {
       name,
-      schedule: { kind: "cron" as const, expr: params.time!.trim(), tz },
+      schedule: { kind: "cron" as const, expr: timeExpr, tz },
       sessionTarget: "isolated" as const,
       wakeMode: "now" as const,
       payload: {
