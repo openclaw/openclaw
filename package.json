@@ -66,6 +66,14 @@
     "!dist/plugin-sdk/test-env.d.ts",
     "!dist/plugin-sdk/test-fixtures.js",
     "!dist/plugin-sdk/test-fixtures.d.ts",
+    "!dist/plugin-sdk/test-live.js",
+    "!dist/plugin-sdk/test-live.d.ts",
+    "!dist/plugin-sdk/test-live-auth.js",
+    "!dist/plugin-sdk/test-live-auth.d.ts",
+    "!dist/plugin-sdk/test-media-generation.js",
+    "!dist/plugin-sdk/test-media-generation.d.ts",
+    "!dist/plugin-sdk/test-media-understanding.js",
+    "!dist/plugin-sdk/test-media-understanding.d.ts",
     "!dist/plugin-sdk/test-node-mocks.js",
     "!dist/plugin-sdk/test-node-mocks.d.ts",
     "!dist/plugin-sdk/test-utils.js",
@@ -81,6 +89,7 @@
     "!dist/extensions/node_modules/**",
     "!dist/extensions/*/node_modules/**",
     "!dist/extensions/arcee/**",
+    "!dist/extensions/baseten/**",
     "!dist/extensions/brave/**",
     "!dist/extensions/cerebras/**",
     "!dist/extensions/chutes/**",
@@ -563,6 +572,10 @@
     "./plugin-sdk/speech-core": {
       "types": "./dist/plugin-sdk/speech-core.d.ts",
       "default": "./dist/plugin-sdk/speech-core.js"
+    },
+    "./plugin-sdk/speech-settings": {
+      "types": "./dist/plugin-sdk/speech-settings.d.ts",
+      "default": "./dist/plugin-sdk/speech-settings.js"
     },
     "./plugin-sdk/tts-runtime": {
       "types": "./dist/plugin-sdk/tts-runtime.d.ts",
@@ -1504,14 +1517,14 @@
     "./cli-entry": "./openclaw.mjs"
   },
   "scripts": {
-    "android:assemble": "node scripts/run-android-gradle.mjs :app:assemblePlayDebug",
+    "android:assemble": "node scripts/run-android-gradle.mjs :app:assemblePlayDebug :wear-shared:assembleDebug",
     "android:assemble:third-party": "node scripts/run-android-gradle.mjs :app:assembleThirdPartyDebug",
     "android:bundle:release": "bash -lc 'source ./scripts/lib/android-fastlane.sh && cd apps/android && run_android_fastlane android play_store_archive'",
-    "android:format": "cd apps/android && ./gradlew :app:ktlintFormat :benchmark:ktlintFormat",
+    "android:format": "cd apps/android && ./gradlew :app:ktlintFormat :benchmark:ktlintFormat :wear-shared:ktlintFormat",
     "android:install": "node scripts/run-android-gradle.mjs :app:installPlayDebug",
     "android:install:third-party": "node scripts/run-android-gradle.mjs :app:installThirdPartyDebug",
-    "android:lint": "cd apps/android && ./gradlew :app:ktlintCheck :benchmark:ktlintCheck",
-    "android:lint:android": "node scripts/run-android-gradle.mjs :app:lintPlayDebug :app:lintThirdPartyDebug",
+    "android:lint": "cd apps/android && ./gradlew :app:ktlintCheck :benchmark:ktlintCheck :wear-shared:ktlintCheck",
+    "android:lint:android": "node scripts/run-android-gradle.mjs :app:lintPlayDebug :app:lintThirdPartyDebug :wear-shared:lintDebug",
     "android:run": "node scripts/run-android-gradle.mjs :app:installPlayDebug -- adb shell am start -n ai.openclaw.app/.MainActivity",
     "android:run:third-party": "node scripts/run-android-gradle.mjs :app:installThirdPartyDebug -- adb shell am start -n ai.openclaw.app/.MainActivity",
     "android:release": "bash scripts/android-release.sh",
@@ -1525,7 +1538,7 @@
     "android:release:signing:sync:push": "bash -lc 'source ./scripts/lib/android-fastlane.sh && cd apps/android && run_android_fastlane android signing_sync_push'",
     "android:release:upload": "bash scripts/android-release-upload.sh",
     "android:screenshots": "bash scripts/android-screenshots.sh",
-    "android:test": "node scripts/run-android-gradle.mjs :app:testPlayDebugUnitTest",
+    "android:test": "node scripts/run-android-gradle.mjs :app:testPlayDebugUnitTest :wear-shared:testDebugUnitTest",
     "android:test:integration": "node scripts/run-with-env.mjs OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_ANDROID_NODE=1 -- node scripts/run-vitest.mjs run --config test/vitest/vitest.live.config.ts src/gateway/android-node.capabilities.live.test.ts",
     "android:test:third-party": "node scripts/run-android-gradle.mjs :app:testThirdPartyDebugUnitTest",
     "android:version": "node --import tsx scripts/android-version.ts --json",
@@ -2090,7 +2103,7 @@
     "@types/web-push": "3.6.4",
     "@types/ws": "8.18.1",
     "@typescript/native-preview": "7.0.0-dev.20260707.2",
-    "@vitest/coverage-v8": "4.1.9",
+    "@vitest/coverage-v8": "4.1.10",
     "acorn": "8.17.0",
     "esbuild": "0.28.1",
     "fast-glob": "3.3.3",
@@ -2108,7 +2121,7 @@
     "tsx": "4.22.4",
     "unrun": "0.3.1",
     "vite": "8.1.3",
-    "vitest": "4.1.9"
+    "vitest": "4.1.10"
   },
   "optionalDependencies": {
     "sqlite-vec": "0.1.9"

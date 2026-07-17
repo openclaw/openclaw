@@ -184,6 +184,12 @@ export {
   type RealtimeVoiceTranscriptHealth,
 } from "../talk/session-log-runtime.js";
 export {
+  calculateMulawRms,
+  createSpeechThresholdGate,
+  readPcm16AudioStats,
+  type AudioEnergyStats,
+} from "../talk/audio-energy.js";
+export {
   convertPcmToMulaw8k,
   mulawToPcm,
   pcmToMulaw,

@@ -51,9 +51,11 @@ function props(overrides: Partial<ModelSetupViewProps> = {}): ModelSetupViewProp
   return {
     page: { phase: "ready", result: detected },
     activation: { phase: "idle" },
+    verify: { phase: "idle" },
     wizard: { phase: "idle" },
     wizardValue: undefined,
     canAdmin: true,
+    canVerify: true,
     gatewayTooOld: false,
     actionsDisabled: false,
     manualProviderId: "openai",
@@ -61,6 +63,7 @@ function props(overrides: Partial<ModelSetupViewProps> = {}): ModelSetupViewProp
     manualError: null,
     moreSignInOpen: false,
     onDetect: vi.fn(),
+    onVerify: vi.fn(),
     onActivateCandidate: vi.fn(),
     onStartAuth: vi.fn(),
     onManualProviderChange: vi.fn(),
@@ -154,6 +157,76 @@ describe("renderModelSetup", () => {
     container.querySelector<HTMLButtonElement>(".model-setup__success button")?.click();
     expect(onOpenChat).toHaveBeenCalledOnce();
     expect(container.querySelector(".settings-section")).toBeNull();
+  });
+
+  it("renders an idle current connection and verifies it", () => {
+    const onVerify = vi.fn();
+    const container = mount(
+      props({
+        page: { phase: "ready", result: { ...detected, configuredModel: "openai/gpt-5" } },
+        onVerify,
+      }),
+    );
+    const current = container.querySelector(".model-setup__current");
+    expect(container.querySelector(".settings-section")).toBe(current);
+    expect(text(current!)).toContain("Current connection openai/gpt-5 Verify connection");
+    current?.querySelector<HTMLButtonElement>("button")?.click();
+    expect(onVerify).toHaveBeenCalledOnce();
+  });
+
+  it("renders connection verification progress", () => {
+    const container = mount(
+      props({
+        page: { phase: "ready", result: { ...detected, configuredModel: "openai/gpt-5" } },
+        verify: { phase: "checking" },
+        actionsDisabled: true,
+      }),
+    );
+    expect(text(container)).toContain("Checking — asking openai/gpt-5 for a quick reply…");
+    expect(
+      container.querySelector<HTMLButtonElement>(".model-setup__current button")?.disabled,
+    ).toBe(true);
+  });
+
+  it("renders successful connection verification with the answering model", () => {
+    const container = mount(
+      props({
+        page: { phase: "ready", result: { ...detected, configuredModel: "openai/gpt-5" } },
+        verify: { phase: "ok", modelRef: "anthropic/claude-opus-4-8", latencyMs: 1234 },
+      }),
+    );
+    expect(text(container)).toContain("Answered in 1234 ms");
+    const current = container.querySelector(".model-setup__current");
+    expect(current?.textContent).toContain("anthropic/claude-opus-4-8");
+    expect(current?.querySelector("strong")?.textContent).not.toContain("openai/gpt-5");
+  });
+
+  it("renders failed connection verification", () => {
+    const container = mount(
+      props({
+        page: { phase: "ready", result: { ...detected, configuredModel: "openai/gpt-5" } },
+        verify: { phase: "failed", status: "billing", error: "No credits" },
+      }),
+    );
+    expect(text(container)).toContain("Billing problem No credits");
+  });
+
+  it("hides the current connection without a configured model", () => {
+    const container = mount(props());
+    expect(container.querySelector(".model-setup__current")).toBeNull();
+  });
+
+  it("shows the current model without verification controls for non-admin and unsupported gateways", () => {
+    const result = { ...detected, configuredModel: "openai/gpt-5" };
+    const nonAdmin = mount(
+      props({ page: { phase: "ready", result }, canAdmin: false, canVerify: false }),
+    );
+    expect(text(nonAdmin)).toContain("Current connection openai/gpt-5");
+    expect(nonAdmin.querySelector(".model-setup__current button")).toBeNull();
+
+    const unsupportedGateway = mount(props({ page: { phase: "ready", result }, canVerify: false }));
+    expect(text(unsupportedGateway)).toContain("Current connection openai/gpt-5");
+    expect(unsupportedGateway.querySelector(".model-setup__current button")).toBeNull();
   });
 
   it("renders manual activation progress and failure inline", () => {

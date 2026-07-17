@@ -13,7 +13,7 @@ import {
   validateSessionsCatalogListParams,
   validateSessionsCatalogReadParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { getPluginRegistryState } from "../../plugins/runtime-state.js";
+import { getActivePluginSessionExtensionRegistry } from "../../plugins/runtime.js";
 import type {
   SessionCatalogCreateTarget,
   SessionCatalogProvider,
@@ -57,8 +57,8 @@ export function resolveSessionCatalogProvider(
 }
 
 function registrations() {
-  return (getPluginRegistryState()?.activeRegistry?.sessionCatalogs ?? []).toSorted((left, right) =>
-    left.provider.id.localeCompare(right.provider.id),
+  return (getActivePluginSessionExtensionRegistry()?.sessionCatalogs ?? []).toSorted(
+    (left, right) => left.provider.id.localeCompare(right.provider.id),
   );
 }
 

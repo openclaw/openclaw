@@ -6,6 +6,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../config/io.js";
+import { isSessionTranscriptProjectionUnavailableError } from "../config/sessions/session-accessor.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
@@ -143,41 +144,61 @@ export async function handleSessionHistoryHttpRequest(
   const limit = resolveLimit(req);
   const cursor = normalizeOptionalString(getRequestUrl(req).searchParams.get("cursor"));
   const effectiveMaxChars = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
-  const boundedSnapshot =
-    cursor === undefined && typeof limit === "number"
-      ? await readRecentSessionMessagesWithStatsAsync(
-          {
-            agentId: target.agentId,
-            sessionEntry: entry,
-            sessionId: entry.sessionId,
-            sessionKey: target.canonicalKey,
-            storePath: target.storePath,
-          },
-          {
-            ...resolveSessionHistoryTailReadOptions(limit),
-            allowResetArchiveFallback: true,
-          },
-        )
-      : undefined;
-  // Cursor reads still need an arbitrary historical window. The common first
-  // page path is bounded above so `limit=1` cannot materialize huge transcripts.
-  const fullSnapshot =
-    boundedSnapshot === undefined && entry?.sessionId
-      ? await readSessionMessagesWithSourceAsync(
-          {
-            agentId: target.agentId,
-            sessionEntry: entry,
-            sessionId: entry.sessionId,
-            sessionKey: target.canonicalKey,
-            storePath: target.storePath,
-          },
-          {
-            mode: "full",
-            reason: "session history cursor pagination",
-            allowResetArchiveFallback: true,
-          },
-        )
-      : undefined;
+  let boundedSnapshot:
+    | Awaited<ReturnType<typeof readRecentSessionMessagesWithStatsAsync>>
+    | undefined;
+  let fullSnapshot: Awaited<ReturnType<typeof readSessionMessagesWithSourceAsync>> | undefined;
+  try {
+    boundedSnapshot =
+      cursor === undefined && typeof limit === "number"
+        ? await readRecentSessionMessagesWithStatsAsync(
+            {
+              agentId: target.agentId,
+              sessionEntry: entry,
+              sessionId: entry.sessionId,
+              sessionKey: target.canonicalKey,
+              storePath: target.storePath,
+            },
+            {
+              ...resolveSessionHistoryTailReadOptions(limit),
+              allowResetArchiveFallback: true,
+            },
+          )
+        : undefined;
+    // Cursor reads still need an arbitrary historical window. The common first
+    // page path is bounded above so `limit=1` cannot materialize huge transcripts.
+    fullSnapshot =
+      boundedSnapshot === undefined && entry?.sessionId
+        ? await readSessionMessagesWithSourceAsync(
+            {
+              agentId: target.agentId,
+              sessionEntry: entry,
+              sessionId: entry.sessionId,
+              sessionKey: target.canonicalKey,
+              storePath: target.storePath,
+            },
+            {
+              mode: "full",
+              reason: "session history cursor pagination",
+              allowResetArchiveFallback: true,
+            },
+          )
+        : undefined;
+  } catch (error) {
+    if (!isSessionTranscriptProjectionUnavailableError(error)) {
+      throw error;
+    }
+    res.setHeader("Retry-After", "1");
+    sendJson(res, 503, {
+      ok: false,
+      error: {
+        type: "unavailable",
+        message: "session history is rebuilding; retry shortly",
+        retryable: true,
+      },
+    });
+    return true;
+  }
   const rawSnapshot = boundedSnapshot?.messages ?? fullSnapshot?.messages ?? [];
   const historySnapshot = buildSessionHistorySnapshot({
     rawMessages: rawSnapshot,

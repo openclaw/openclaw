@@ -67,6 +67,12 @@
   color: var(--accent);
 }
 
+.model-setup__verified {
+  margin-top: 8px;
+  color: var(--ok);
+  font-weight: 600;
+}
+
 .model-setup__row .callout {
   margin-top: 10px;
 }

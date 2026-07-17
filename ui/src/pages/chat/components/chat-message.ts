@@ -51,6 +51,8 @@ import { stripThinkingTags } from "../../../lib/strip-thinking-tags.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { getSafeLocalStorage } from "../../../local-storage.ts";
 import { renderChatAvatar } from "../chat-avatar.ts";
+import type { PlanStatus } from "../tool-stream.ts";
+import { renderChatPlanChecklist } from "./chat-plan-checklist.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
 import {
   isRunningToolCard,
@@ -556,13 +558,18 @@ function extractTranscriptAttachments(message: unknown): AttachmentItem[] {
 }
 
 /** A contiguous run of in-flight streaming items rendered under one assistant group. */
-type StreamGroupPart = Extract<ChatItem, { kind: "stream" } | { kind: "reading-indicator" }>;
+type StreamGroupPart = Extract<
+  ChatItem,
+  { kind: "stream" } | { kind: "reading-indicator" } | { kind: "plan" }
+>;
 
 type StreamGroupOptions = {
   onOpenSidebar?: (content: SidebarContent) => void;
   assistant?: AssistantIdentity;
   basePath?: string;
   authToken?: string | null;
+  planStatus?: PlanStatus | null;
+  planActive?: boolean;
 };
 
 // One assistant group per contiguous run of streaming items: a reply that
@@ -578,14 +585,14 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
   // While the agent works with nothing streamed yet the run is pure claw: no
   // avatar next to it - the punching pincer is the whole signal. The avatar
   // arrives with the first stream part.
-  const indicatorOnly = parts.every((part) => part.kind === "reading-indicator");
-  const avatar = indicatorOnly
+  const workingOnly = parts.every((part) => part.kind !== "stream");
+  const avatar = workingOnly
     ? nothing
     : renderChatAvatar("assistant", assistant, undefined, basePath, authToken);
 
   return html`
     <div
-      class="chat-group assistant ${indicatorOnly ? "chat-group--working" : ""}"
+      class="chat-group assistant ${workingOnly ? "chat-group--working" : ""}"
       data-chat-row-key=${parts[0]?.key ?? nothing}
     >
       ${avatar}
@@ -593,16 +600,21 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
         ${parts.map((part) =>
           part.kind === "reading-indicator"
             ? renderChatWorkingIndicator(part)
-            : renderGroupedMessage(
-                {
-                  role: "assistant",
-                  content: [{ type: "text", text: part.text }],
-                  timestamp: part.startedAt,
-                },
-                part.key,
-                { isStreaming: part.isStreaming, showReasoning: false },
-                onOpenSidebar,
-              ),
+            : part.kind === "plan"
+              ? renderChatPlanChecklist(opts.planStatus, {
+                  active: opts.planActive === true,
+                  variant: "card",
+                })
+              : renderGroupedMessage(
+                  {
+                    role: "assistant",
+                    content: [{ type: "text", text: part.text }],
+                    timestamp: part.startedAt,
+                  },
+                  part.key,
+                  { isStreaming: part.isStreaming, showReasoning: false },
+                  onOpenSidebar,
+                ),
         )}
         ${footerStartedAt !== null
           ? html`

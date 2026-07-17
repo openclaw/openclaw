@@ -59,9 +59,10 @@ const WIDGET_KIND_DESCRIPTION = [
   "builtin:markdown (props {markdown} or {text}, or a file binding of a .md file),",
   "builtin:table (binding id `rows`; props {columns: string[]}),",
   "builtin:iframe-embed (props {url}),",
+  "builtin:preview (props {url, defaultViewport?: desktop|tablet|mobile}, or binding id `value`; live sandboxed preview with reload and viewport controls),",
   "builtin:sessions, builtin:usage, builtin:cron, builtin:instances, builtin:activity",
   "(each reads its own rpc binding; see workspace_get for a worked example).",
-  "Charts are not builtins — author one with workspace_widget_scaffold and use custom:<name>.",
+  "builtin:chart (binding id `value`; props {type?: line|bar|area|sparkline|gauge, min?: number, max?: number}; value is number[] or {points: Array<number|{y|value}>}).",
 ].join(" ");
 
 const JsonSchema = Type.Unknown({

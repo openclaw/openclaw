@@ -3,6 +3,7 @@ import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { buildApprovalResolutionRef } from "../infra/approval-resolution-ref.js";
+import { createDedupeCache } from "../infra/dedupe.js";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
   executeSqliteQuerySync,
@@ -180,7 +181,10 @@ export function assertOpenClawStateDatabaseForMaintenance(
 const stateDbLog = createSubsystemLogger("state/db");
 
 /** Targets already warned about, so chmod-less filesystems warn once per path. */
-const chmodWarnedTargets = new Set<string>();
+const chmodWarnedTargets = createDedupeCache({
+  ttlMs: 0,
+  maxSize: 4096,
+});
 
 // Permission hardening is best-effort only on filesystems that cannot apply
 // it: the database stays usable without the chmod, and crashing at open would
@@ -188,10 +192,9 @@ const chmodWarnedTargets = new Set<string>();
 // chmod failures still throw so credentials-adjacent hardening stays loud.
 function bestEffortChmodSync(target: string, mode: number): void {
   const result = applyPrivateModeSync(target, mode);
-  if (result.applied || chmodWarnedTargets.has(target)) {
+  if (result.applied || chmodWarnedTargets.check(target)) {
     return;
   }
-  chmodWarnedTargets.add(target);
   stateDbLog.warn(`skipped permission hardening for ${target}: ${String(result.error)}`);
 }
 
@@ -1350,6 +1353,7 @@ function backfillDeliveryQueueEntriesFromEntryJson(db: DatabaseSync): void {
 // The caller owns the state.schema.ensure transaction so every probe, DDL
 // change, and backfill observes one authoritative schema across processes.
 function ensureAdditiveStateColumns(db: DatabaseSync): void {
+  ensureColumn(db, "worktrees", "provisioned_paths_json TEXT");
   ensureColumn(db, "node_host_config", "gateway_context_path TEXT");
   ensureColumn(db, "apns_registrations", "relay_origin TEXT");
   ensureColumn(db, "device_pairing_pending", "refreshed_at_ms INTEGER");
@@ -1538,6 +1542,13 @@ function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "task_runs", "last_tool_name TEXT");
   ensureColumn(db, "task_runs", "detail_json TEXT");
   ensureColumn(db, "subagent_runs", "task_name TEXT");
+  ensureColumn(db, "subagent_runs", "requester_settle_wake_status TEXT");
+  ensureColumn(db, "subagent_runs", "requester_settle_wake_attempt_count INTEGER");
+  ensureColumn(db, "subagent_runs", "requester_settle_wake_replay_count INTEGER");
+  ensureColumn(db, "subagent_runs", "requester_settle_wake_next_attempt_at INTEGER");
+  ensureColumn(db, "subagent_runs", "requester_settle_wake_batch_run_ids_json TEXT");
+  ensureColumn(db, "subagent_runs", "requester_settle_wake_last_error TEXT");
+  ensureColumn(db, "subagent_runs", "requester_settle_wake_retire_after INTEGER");
   ensureColumn(db, "worker_environments", "bootstrap_bundle_hash TEXT");
   ensureColumn(db, "worker_environments", "bootstrap_openclaw_version TEXT");
   ensureColumn(db, "worker_environments", "bootstrap_protocol_features_json TEXT");

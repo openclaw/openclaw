@@ -51,6 +51,7 @@ import {
   redactTranscriptMessageForStorage,
   replaceSqliteTranscriptEventsInTransaction,
 } from "./session-accessor.sqlite-transcript-store.js";
+import { reconcileSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 import type {
   SessionTranscriptTurnExpectedState,
   SessionTranscriptTurnLifecyclePatch,
@@ -185,6 +186,7 @@ export async function importSqliteSessionRows(
           }
           if (
             appendTranscriptEventInTransaction(database, transcriptScope, event, {
+              scheduleProjectionReconcile: false,
               touchMutation: false,
             })
           ) {
@@ -192,6 +194,7 @@ export async function importSqliteSessionRows(
             transcriptEvents += 1;
           }
         });
+        reconcileSessionTranscriptIndexInTransaction(database.db, params.entry.sessionId);
       }
       if (params.transcriptMtimeMs !== undefined) {
         advanceTranscriptMutationAtInTransaction(

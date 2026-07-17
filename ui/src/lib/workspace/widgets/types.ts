@@ -22,7 +22,14 @@ export type BuiltinWidgetContext = {
     ApplicationConfigCapability["current"],
     "embedSandboxMode" | "allowExternalEmbedUrls"
   >;
+  /** Ephemeral preview UI state owned by the workspace view, never the document. */
+  preview: {
+    getViewport: (widgetId: string, fallback: PreviewViewport) => PreviewViewport;
+    setViewport: (widgetId: string, viewport: PreviewViewport) => void;
+  };
 };
+
+export type PreviewViewport = "desktop" | "tablet" | "mobile";
 
 /** A builtin widget renderer: pure, side-effect-free, throws only on real bugs. */
 export type BuiltinWidgetRenderer = (

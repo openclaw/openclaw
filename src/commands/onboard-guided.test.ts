@@ -105,6 +105,7 @@ function setupDeps(params: {
   activate?: GuidedOnboardingDeps["activate"];
   runSystemAgentChat?: GuidedOnboardingDeps["runSystemAgentChat"];
   persistRiskAcknowledgement?: GuidedOnboardingDeps["persistRiskAcknowledgement"];
+  runSetupMemoryImportStep?: GuidedOnboardingDeps["runSetupMemoryImportStep"];
 }) {
   const runSystemAgentChat = vi.fn<NonNullable<GuidedOnboardingDeps["runSystemAgentChat"]>>(
     params.runSystemAgentChat ?? (async () => {}),
@@ -121,6 +122,7 @@ function setupDeps(params: {
         lines: ["Workspace: /tmp/work", "Gateway: running"],
       })),
     persistRiskAcknowledgement: params.persistRiskAcknowledgement ?? vi.fn(async () => undefined),
+    runSetupMemoryImportStep: params.runSetupMemoryImportStep ?? vi.fn(async () => undefined),
     runSystemAgentChat,
   } satisfies GuidedOnboardingDeps;
 }
@@ -179,6 +181,62 @@ describe("runGuidedOnboarding", () => {
     expect(restoreTerminalState.mock.invocationCallOrder[0]).toBeLessThan(
       deps.runSystemAgentChat.mock.invocationCallOrder[0]!,
     );
+  });
+
+  it("offers memory import after successful inference using the persisted config", async () => {
+    const persistedConfig: OpenClawConfig = {
+      agents: { defaults: { workspace: "/tmp/persisted-workspace" } },
+    };
+    readConfigFileSnapshot
+      .mockResolvedValueOnce({
+        exists: false,
+        valid: true,
+        path: "/tmp/openclaw.json",
+        issues: [],
+        config: {},
+      })
+      .mockResolvedValueOnce({
+        exists: true,
+        valid: true,
+        path: "/tmp/openclaw.json",
+        issues: [],
+        config: persistedConfig,
+      });
+    const prompter = createWizardPrompter();
+    const runSetupMemoryImportStep = vi.fn(
+      async ({ prompter: stepPrompter }: { prompter: WizardPrompter }) => {
+        await stepPrompter.note("Codex — /source/codex (1 memories)", "Memories found");
+      },
+    );
+    const deps = setupDeps({ prompter, runSetupMemoryImportStep });
+
+    await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
+
+    expect(runSetupMemoryImportStep).toHaveBeenCalledWith(
+      expect.objectContaining({ config: persistedConfig, prompter }),
+    );
+    const notes = (prompter.note as ReturnType<typeof vi.fn>).mock.calls;
+    const appliedIndex = notes.findIndex((call) => call[1] === "Inference ready");
+    const memoryIndex = notes.findIndex((call) => call[1] === "Memories found");
+    expect(appliedIndex).toBeGreaterThanOrEqual(0);
+    expect(memoryIndex).toBeGreaterThan(appliedIndex);
+    expect(runSetupMemoryImportStep.mock.invocationCallOrder[0]).toBeLessThan(
+      deps.runSystemAgentChat.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("shows no memory page when the memory step finds no offers", async () => {
+    const prompter = createWizardPrompter();
+    const runSetupMemoryImportStep = vi.fn(async () => undefined);
+    const deps = setupDeps({ prompter, runSetupMemoryImportStep });
+
+    await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
+
+    expect(runSetupMemoryImportStep).toHaveBeenCalledOnce();
+    expect((prompter.note as ReturnType<typeof vi.fn>).mock.calls).not.toContainEqual([
+      expect.anything(),
+      "Memories found",
+    ]);
   });
 
   it("persists the one-time risk acknowledgement before inference detection", async () => {

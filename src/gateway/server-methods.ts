@@ -681,6 +681,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "node.rename",
       "node.list",
       "node.describe",
+      "plugin.surface.refresh",
       "node.pluginSurface.refresh",
       "node.pluginTools.update",
       "node.skills.update",
