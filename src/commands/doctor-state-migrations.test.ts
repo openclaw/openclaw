@@ -1797,6 +1797,61 @@ describe("doctor legacy state migrations", () => {
     });
   });
 
+  it("preserves legacy creation times so later live writes evict migrated rows before fresher existing rows", async () => {
+    const root = await makeTempRoot();
+    const sourcePath = path.join(root, "legacy-cache.json");
+    fs.writeFileSync(sourcePath, "legacy", "utf-8");
+    mockedChannelMigrationPlans.plans = [
+      {
+        kind: "plugin-state-import",
+        label: "Test recency cache",
+        sourcePath,
+        targetPath: "plugin state:test.recency-cache",
+        pluginId: "telegram",
+        namespace: "test.recency-cache",
+        maxEntries: 2,
+        scopeKey: "",
+        cleanupSource: "rename",
+        readEntries: () => [
+          { key: "legacy-old", value: { body: "old" }, timestamp: 1_000 },
+          { key: "legacy-new", value: { body: "new" }, timestamp: 2_000 },
+        ],
+      },
+    ];
+
+    await withStateDir(root, async () => {
+      const store = createPluginStateKeyedStore<{ body: string }>("telegram", {
+        namespace: "test.recency-cache",
+        maxEntries: 2,
+      });
+      await store.register("current", { body: "current" });
+    });
+    resetPluginStateStoreForTests();
+
+    const detected = await detectLegacyStateMigrations({
+      cfg: {},
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    const result = await runLegacyStateMigrations({ detected });
+    expect(result.changes).toStrictEqual(["Migrated 1 Test recency cache entry → plugin state"]);
+
+    await withStateDir(root, async () => {
+      const store = createPluginStateKeyedStore<{ body: string }>("telegram", {
+        namespace: "test.recency-cache",
+        maxEntries: 2,
+      });
+      const migrated = (await store.entries()).find(({ key }) => key === "legacy-new");
+      expect(migrated?.createdAt).toBe(2_000);
+
+      // The next live write must evict the oldest logical entry (the migrated
+      // legacy row), never the fresher pre-existing row.
+      await store.register("after", { body: "after" });
+      expect(await store.lookup("current")).toStrictEqual({ body: "current" });
+      expect(await store.lookup("after")).toStrictEqual({ body: "after" });
+      expect(await store.lookup("legacy-new")).toBeUndefined();
+    });
+  });
+
   it("imports deferred entries on a later run once the namespace frees capacity", async () => {
     const root = await makeTempRoot();
     const sourcePath = path.join(root, "legacy-cache.json");

@@ -4,6 +4,7 @@ import type { ChannelLegacyStateMigrationPlan } from "../channels/plugins/types.
 import {
   countPluginStateLiveEntries,
   createPluginStateKeyedStore,
+  registerMigratedPluginStateEntry,
   resolveMaxPluginStateEntriesPerPlugin,
 } from "../plugin-state/plugin-state-store.js";
 import {
@@ -284,7 +285,7 @@ export async function runLegacyMigrationPlans(
   for (const plan of plans) {
     if (plan.kind === "plugin-state-import") {
       await withPluginStateImportEnv(plan, async () => {
-        let storeEntries: Array<{ key: string; value: unknown }>;
+        let storeEntries: Array<{ key: string; value: unknown; createdAt: number }>;
         let pluginEntryCount;
         const store = createPluginStateKeyedStore<unknown>(plan.pluginId, {
           namespace: plan.namespace,
@@ -302,6 +303,9 @@ export async function runLegacyMigrationPlans(
         }
         const existingKeys = new Set(storeEntries.map(({ key }) => key));
         const existingValuesByKey = new Map(storeEntries.map(({ key, value }) => [key, value]));
+        const existingCreatedAtByKey = new Map(
+          storeEntries.map(({ key, createdAt }) => [key, createdAt]),
+        );
         const expectedKeys = new Set(existingKeys);
         const namespaceRemainingCapacity = Math.max(0, plan.maxEntries - storeEntries.length);
         let entries: Awaited<ReturnType<typeof plan.readEntries>>;
@@ -361,15 +365,56 @@ export async function runLegacyMigrationPlans(
               : `Deferring ${plan.label} migration because ${constraint} of ${missingEntryCount} missing entries; left legacy source in place to retry when capacity frees`,
           );
         }
+        // Eviction removes the smallest created_at first, so imported rows must
+        // keep their legacy creation time; writing them through the normal
+        // register path would stamp them "now" and let later live writes evict
+        // fresher pre-existing rows before the migrated ones.
+        const registerPreservingCreatedAt = async (params: {
+          key: string;
+          value: unknown;
+          ttlMs?: number;
+          createdAtMs?: number;
+        }) => {
+          if (
+            params.createdAtMs === undefined ||
+            !Number.isFinite(params.createdAtMs) ||
+            params.createdAtMs < 0
+          ) {
+            await store.register(
+              params.key,
+              params.value,
+              params.ttlMs != null ? { ttlMs: params.ttlMs } : undefined,
+            );
+            return;
+          }
+          registerMigratedPluginStateEntry({
+            pluginId: plan.pluginId,
+            namespace: plan.namespace,
+            maxEntries: plan.maxEntries,
+            ...(plan.defaultTtlMs != null ? { defaultTtlMs: plan.defaultTtlMs } : {}),
+            key: params.key,
+            value: params.value,
+            ...(params.ttlMs != null ? { ttlMs: params.ttlMs } : {}),
+            createdAtMs: params.createdAtMs,
+          });
+        };
+        const restoreExistingEntry = async (key: string) => {
+          await registerPreservingCreatedAt({
+            key,
+            value: existingValuesByKey.get(key),
+            createdAtMs: existingCreatedAtByKey.get(key),
+          });
+        };
         let imported = 0;
         const changedKeys = new Set<string>();
         for (const entry of [...replacementEntries, ...newEntries]) {
           try {
-            await store.register(
-              entry.targetKey,
-              entry.value,
-              entry.ttlMs != null ? { ttlMs: entry.ttlMs } : undefined,
-            );
+            await registerPreservingCreatedAt({
+              key: entry.targetKey,
+              value: entry.value,
+              ...(entry.ttlMs != null ? { ttlMs: entry.ttlMs } : {}),
+              ...(entry.timestamp !== undefined ? { createdAtMs: entry.timestamp } : {}),
+            });
             const nextExpectedKeys = new Set(expectedKeys);
             nextExpectedKeys.add(entry.targetKey);
             const liveKeys = new Set((await store.entries()).map(({ key }) => key));
@@ -380,7 +425,7 @@ export async function runLegacyMigrationPlans(
               // row when we still hold its value, and keep everything imported so far —
               // deferred entries stay in the legacy source for the next startup.
               if (existingValuesByKey.has(entry.targetKey)) {
-                await store.register(entry.targetKey, existingValuesByKey.get(entry.targetKey));
+                await restoreExistingEntry(entry.targetKey);
               } else {
                 await store.delete(entry.targetKey);
               }
@@ -391,7 +436,7 @@ export async function runLegacyMigrationPlans(
                 imported = Math.max(0, imported - 1);
               } else if (existingValuesByKey.has(missingKey)) {
                 try {
-                  await store.register(missingKey, existingValuesByKey.get(missingKey));
+                  await restoreExistingEntry(missingKey);
                 } catch (restoreErr) {
                   warnings.push(
                     `Failed restoring ${plan.label} entry ${missingKey} after cap eviction: ${String(restoreErr)}`,
