@@ -46,11 +46,11 @@ export function logAcceptedEnvOption(option: AcceptedEnvOption): void {
   if (process.env.VITEST || process.env.NODE_ENV === "test") {
     return;
   }
-  if (loggedEnv.check(option.key)) {
-    return;
-  }
   const rawValue = option.value ?? process.env[option.key];
   if (!rawValue || !rawValue.trim()) {
+    return;
+  }
+  if (loggedEnv.check(option.key)) {
     return;
   }
   void getLog()
