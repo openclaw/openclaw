@@ -20,6 +20,7 @@ const loadWebMediaMock = vi.fn();
 let sendMessageWhatsApp: typeof import("./send.js").sendMessageWhatsApp;
 let sendPollWhatsApp: typeof import("./send.js").sendPollWhatsApp;
 let sendReactionWhatsApp: typeof import("./send.js").sendReactionWhatsApp;
+let sendStatusWhatsApp: typeof import("./send.js").sendStatusWhatsApp;
 let sendTypingWhatsApp: typeof import("./send.js").sendTypingWhatsApp;
 let resetLogger: typeof import("openclaw/plugin-sdk/runtime-env").resetLogger;
 let setLoggerOverride: typeof import("openclaw/plugin-sdk/runtime-env").setLoggerOverride;
@@ -80,10 +81,16 @@ describe("web outbound", () => {
   const sendReaction = vi.fn(async () =>
     createAcceptedWhatsAppSendResult("reaction", "reaction123"),
   );
+  const sendStatus = vi.fn(async () => createAcceptedWhatsAppSendResult("text", "status123"));
 
   beforeAll(async () => {
-    ({ sendMessageWhatsApp, sendPollWhatsApp, sendReactionWhatsApp, sendTypingWhatsApp } =
-      await import("./send.js"));
+    ({
+      sendMessageWhatsApp,
+      sendPollWhatsApp,
+      sendReactionWhatsApp,
+      sendStatusWhatsApp,
+      sendTypingWhatsApp,
+    } = await import("./send.js"));
     const { resetLogger: loadedResetLogger, setLoggerOverride: loadedSetLoggerOverride } =
       await import("openclaw/plugin-sdk/runtime-env");
     resetLogger = loadedResetLogger;
@@ -123,6 +130,7 @@ describe("web outbound", () => {
       sendMessage,
       sendPoll,
       sendReaction,
+      sendStatus,
     });
   });
 
@@ -143,6 +151,23 @@ describe("web outbound", () => {
     });
     expect(sendComposingTo).toHaveBeenCalledWith("+1555");
     expect(sendMessage).toHaveBeenCalledWith("+1555", "hi", undefined, undefined);
+  });
+
+  it("publishes a text Status through the active listener", async () => {
+    const result = await sendStatusWhatsApp("**Release shipped**", {
+      cfg: WHATSAPP_TEST_CFG,
+      audience: ["+1555"],
+      backgroundColor: "#112233",
+      font: 6,
+    });
+
+    expect(result).toEqual({ messageId: "status123", toJid: "status@broadcast" });
+    expect(sendStatus).toHaveBeenCalledWith("*Release shipped*", undefined, undefined, {
+      audience: ["+1555"],
+      backgroundColor: "#112233",
+      font: 6,
+    });
+    expect(sendComposingTo).not.toHaveBeenCalled();
   });
 
   it("checks send readiness before composing or sending direct messages", async () => {

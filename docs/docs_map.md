@@ -1057,6 +1057,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Personal-number and self-chat behavior
   - H2: Message normalization and context
   - H2: Delivery, chunking, and media
+  - H2: Publish WhatsApp Status updates
   - H2: Reply quoting
   - H2: Reaction level
   - H2: Acknowledgment reactions

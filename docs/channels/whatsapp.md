@@ -129,7 +129,7 @@ A separate WhatsApp number is recommended (setup and metadata are optimized for 
 - Baileys socket timings are explicit under `web.whatsapp.*`: `keepAliveIntervalMs` (application ping interval), `connectTimeoutMs` (opening handshake timeout), `defaultQueryTimeoutMs` (Baileys query waits, plus OpenClaw's outbound send/presence and inbound read-receipt timeouts).
 - Outbound sends require an active WhatsApp listener for the target account; sends fail fast otherwise.
 - Group sends attach native mention metadata for `@+<digits>` and `@<digits>` tokens (in text and media captions) when the token matches current participant metadata, including LID-backed groups.
-- Status and broadcast chats (`@status`, `@broadcast`) are ignored.
+- Inbound Status and broadcast chats (`@status`, `@broadcast`) are ignored.
 - Direct chats use DM session rules (`session.dmScope`; default `main` collapses DMs into the agent main session). Group sessions are isolated per JID (`agent:<agentId>:whatsapp:group:<jid>`).
 - WhatsApp Channels/Newsletters can be explicit outbound targets via their native `@newsletter` JID, using channel session metadata (`agent:<agentId>:whatsapp:channel:<jid>`) rather than DM semantics.
 - WhatsApp Web transport honors standard proxy environment variables on the gateway host (`HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`, lowercase variants). Prefer host-level proxy config over per-channel settings.
@@ -416,6 +416,40 @@ When the linked self number is also present in `allowFrom`, self-chat safeguards
   </Accordion>
 </AccordionGroup>
 
+## Publish WhatsApp Status updates
+
+Status publishing is disabled by default. Enable it explicitly:
+
+```json5
+{
+  channels: {
+    whatsapp: {
+      allowFrom: ["+15551234567", "+15557654321"],
+      actions: {
+        status: true,
+      },
+    },
+  },
+}
+```
+
+The shared `message` tool then exposes the WhatsApp-only `post-status` action in trusted owner turns. Every publish must include a non-empty `audience` array; each recipient must also be a concrete entry in the selected account's `allowFrom` list (`"*"` does not count). There is no default audience and `status@broadcast` is not accepted as an ordinary chat target.
+
+```json5
+{
+  action: "post-status",
+  channel: "whatsapp",
+  audience: ["+15551234567", "+15557654321"],
+  message: "Release shipped",
+  backgroundColor: "#112233",
+  font: 6,
+}
+```
+
+`post-status` accepts text, image, video, or audio/voice media through the normal `message`, `media`, and `buffer` fields. Image and video updates can include a caption. Audio Status updates cannot include a caption, and document media is rejected. Media uses the selected account's normal `mediaMaxMb` limit and local/remote media access rules. `backgroundColor` and the non-negative numeric `font` value apply to text Status presentation.
+
+Inbound Status and broadcast chats remain ignored. Publishing uses the existing linked Baileys session; it does not require a second linked device.
+
 ## Reply quoting
 
 `channels.whatsapp.replyToMode` controls native reply quoting (outbound replies visibly quote the inbound message):
@@ -515,7 +549,7 @@ Notes: `channels.whatsapp.ackReaction` still controls eligibility for direct mes
 ## Tools, actions, and config writes
 
 - Agent tool support includes the WhatsApp reaction action (`react`).
-- Action gates: `channels.whatsapp.actions.reactions`, `channels.whatsapp.actions.polls` (existing actions default to `true`), `channels.whatsapp.actions.calls` (default `false`, see MeowCaller above).
+- Action gates: `channels.whatsapp.actions.reactions`, `channels.whatsapp.actions.polls` (existing actions default to `true`), `channels.whatsapp.actions.calls` (default `false`, see MeowCaller above), and `channels.whatsapp.actions.status` (default `false`, owner-gated, explicit audience required).
 - Channel-initiated config writes are enabled by default; disable via `channels.whatsapp.configWrites: false`.
 
 ## Troubleshooting
@@ -674,14 +708,14 @@ Example:
 
 Primary reference: [Configuration reference - WhatsApp](/gateway/config-channels#whatsapp)
 
-| Area             | Fields                                                                                                         |
-| ---------------- | -------------------------------------------------------------------------------------------------------------- |
-| Access           | `dmPolicy`, `allowFrom`, `groupPolicy`, `groupAllowFrom`, `groups`                                             |
-| Delivery         | `textChunkLimit`, `streaming.chunkMode`, `mediaMaxMb`, `sendReadReceipts`, `ackReaction`, `reactionLevel`      |
-| Multi-account    | `accounts.<id>.enabled`, `accounts.<id>.authDir`, and other per-account overrides                              |
-| Operations       | `configWrites`, `debounceMs`, `web.enabled`, `web.heartbeatSeconds`, `web.reconnect.*`, `web.whatsapp.*`       |
-| Session behavior | `session.dmScope`, `historyLimit`, `dmHistoryLimit`, `dms.<id>.historyLimit`                                   |
-| Prompts          | `groups.<id>.systemPrompt`, `groups["*"].systemPrompt`, `direct.<id>.systemPrompt`, `direct["*"].systemPrompt` |
+| Area             | Fields                                                                                                                     |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Access           | `dmPolicy`, `allowFrom`, `groupPolicy`, `groupAllowFrom`, `groups`                                                         |
+| Delivery         | `textChunkLimit`, `streaming.chunkMode`, `mediaMaxMb`, `sendReadReceipts`, `ackReaction`, `reactionLevel`                  |
+| Multi-account    | `accounts.<id>.enabled`, `accounts.<id>.authDir`, and other per-account overrides                                          |
+| Operations       | `configWrites`, `debounceMs`, `actions.status`, `web.enabled`, `web.heartbeatSeconds`, `web.reconnect.*`, `web.whatsapp.*` |
+| Session behavior | `session.dmScope`, `historyLimit`, `dmHistoryLimit`, `dms.<id>.historyLimit`                                               |
+| Prompts          | `groups.<id>.systemPrompt`, `groups["*"].systemPrompt`, `direct.<id>.systemPrompt`, `direct["*"].systemPrompt`             |
 
 ## Related
 

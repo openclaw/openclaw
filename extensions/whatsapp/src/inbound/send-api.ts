@@ -5,6 +5,7 @@ import type {
   WAMessage,
   WAPresence,
 } from "baileys";
+import { STORIES_JID } from "baileys";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import { resolveWhatsAppDocumentFileName } from "../document-filename.js";
 import { addWhatsAppImagePreviewFields } from "../image-preview.js";
@@ -21,7 +22,7 @@ import {
   type WhatsAppSendKind,
   type WhatsAppSendResult,
 } from "./send-result.js";
-import type { ActiveWebSendOptions } from "./types.js";
+import type { ActiveWebSendOptions, ActiveWebStatusOptions } from "./types.js";
 
 type StructuredContactSend = {
   displayName: string;
@@ -182,6 +183,50 @@ export function createWebSendApi(params: {
       const accountId = sendOptions?.accountId ?? params.defaultAccountId;
       recordWhatsAppOutbound(accountId);
       return combineWhatsAppSendResults(mediaBuffer ? "media" : "text", results);
+    },
+    sendStatus: async (
+      text: string,
+      mediaBuffer: Buffer | undefined,
+      mediaTypeInput: string | undefined,
+      options: ActiveWebStatusOptions,
+    ): Promise<WhatsAppSendResult> => {
+      const statusJidList = [...new Set(options.audience.map(resolveOutboundJid))];
+      if (statusJidList.length === 0) {
+        throw new Error("WhatsApp Status requires at least one audience recipient");
+      }
+      let payload: AnyMessageContent;
+      let kind: WhatsAppSendKind = "text";
+      if (mediaBuffer) {
+        const mediaType = mediaTypeInput ?? "application/octet-stream";
+        kind = "media";
+        if (mediaType.startsWith("image/")) {
+          payload = await addWhatsAppImagePreviewFields({
+            image: mediaBuffer,
+            caption: text || undefined,
+            mimetype: mediaType,
+          });
+        } else if (mediaType.startsWith("video/")) {
+          payload = {
+            video: mediaBuffer,
+            caption: text || undefined,
+            mimetype: mediaType,
+          };
+        } else if (mediaType.startsWith("audio/")) {
+          payload = { audio: mediaBuffer, ptt: true, mimetype: mediaType };
+        } else {
+          throw new Error("WhatsApp Status supports only image, video, or audio media");
+        }
+      } else {
+        payload = { text };
+      }
+      const result = await params.sock.sendMessage(STORIES_JID, payload, {
+        broadcast: true,
+        statusJidList,
+        ...(options.backgroundColor ? { backgroundColor: options.backgroundColor } : {}),
+        ...(options.font !== undefined ? { font: options.font } : {}),
+      });
+      recordWhatsAppOutbound(params.defaultAccountId);
+      return normalizeWhatsAppSendResult(result, kind);
     },
     sendPoll: async (
       to: string,

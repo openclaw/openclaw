@@ -158,17 +158,21 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
           (await loadWhatsAppDirectoryConfig()).listWhatsAppDirectoryGroupsFromConfig(params),
       },
       actions: {
-        describeMessageTool: ({ cfg, accountId }) =>
-          describeWhatsAppMessageActions({ cfg, accountId }),
-        supportsAction: ({ action }) => action === "react" || action === "upload-file",
+        describeMessageTool: ({ cfg, accountId, senderIsOwner }) =>
+          describeWhatsAppMessageActions({ cfg, accountId, senderIsOwner }),
+        supportsAction: ({ action }) =>
+          action === "react" || action === "upload-file" || action === "post-status",
         resolveExecutionMode: ({ action }) =>
-          action === "react" || action === "upload-file" ? "gateway" : "local",
+          action === "react" || action === "upload-file" || action === "post-status"
+            ? "gateway"
+            : "local",
         handleAction: async ({
           action,
           params,
           cfg,
           accountId,
           requesterSenderId,
+          senderIsOwner,
           mediaAccess,
           mediaLocalRoots,
           mediaReadFile,
@@ -182,6 +186,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
             cfg,
             accountId,
             requesterSenderId,
+            senderIsOwner,
             mediaAccess,
             mediaLocalRoots,
             mediaReadFile,

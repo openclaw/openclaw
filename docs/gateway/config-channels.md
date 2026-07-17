@@ -138,6 +138,9 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
       streaming: { chunkMode: "length" }, // length | newline
       mediaMaxMb: 50,
       sendReadReceipts: true, // blue ticks (false in self-chat mode)
+      actions: {
+        status: false, // owner-gated Status publishing; explicit audience required
+      },
       groups: {
         "*": { requireMention: true },
       },
@@ -151,6 +154,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 - `web.whatsapp.keepAliveIntervalMs` (default `25000`), `connectTimeoutMs` (default `60000`), and `defaultQueryTimeoutMs` (default `60000`) tune the Baileys socket.
 - `web.reconnect` defaults: `initialMs: 2000`, `maxMs: 30000`, `factor: 1.8`, `jitter: 0.25`, `maxAttempts: 12`. `maxAttempts: 0` retries forever instead of giving up.
 - Top-level `bindings[]` entries with `type: "acp"` configure persistent ACP bindings for WhatsApp DMs and groups. Use an E.164 direct number or WhatsApp group JID in `match.peer.id`. Field semantics are shared in [ACP Agents](/tools/acp-agents#persistent-channel-bindings).
+- `channels.whatsapp.actions.status` defaults to `false`. When enabled, trusted owner turns can use `message` action `post-status` with an explicit `audience` array whose recipients are concrete entries in `allowFrom` (`"*"` does not count); text, image, video, and voice Status updates use the existing linked Baileys session.
 
 <Accordion title="Multi-account WhatsApp">
 

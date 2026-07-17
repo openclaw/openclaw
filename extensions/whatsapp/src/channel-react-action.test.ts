@@ -23,6 +23,10 @@ const hoisted = vi.hoisted(() => ({
     messageId: "msg-media-1",
     toJid: "1555@s.whatsapp.net",
   })),
+  sendStatusWhatsApp: vi.fn(async () => ({
+    messageId: "status-1",
+    toJid: "status@broadcast",
+  })),
 }));
 
 vi.mock("./channel-react-action.runtime.js", async () => {
@@ -32,6 +36,35 @@ vi.mock("./channel-react-action.runtime.js", async () => {
     resolveWhatsAppAccount: hoisted.resolveWhatsAppAccount,
     resolveWhatsAppMediaMaxBytes: hoisted.resolveWhatsAppMediaMaxBytes,
     sendMessageWhatsApp: hoisted.sendMessageWhatsApp,
+    sendStatusWhatsApp: hoisted.sendStatusWhatsApp,
+    createActionGate:
+      (actions?: { status?: boolean }) =>
+      (name: string, defaultValue = true) =>
+        name === "status" ? (actions?.status ?? defaultValue) : defaultValue,
+    readStringArrayParam: (
+      params: Record<string, unknown>,
+      key: string,
+      options?: { required?: boolean },
+    ) => {
+      const value = params[key];
+      const entries = Array.isArray(value)
+        ? value.filter(
+            (entry): entry is string => typeof entry === "string" && Boolean(entry.trim()),
+          )
+        : [];
+      if (entries.length > 0) {
+        return entries;
+      }
+      if (options?.required) {
+        throw new Error(`${key} required`);
+      }
+      return undefined;
+    },
+    readNumberParam: (params: Record<string, unknown>, key: string) => {
+      const value = params[key];
+      return typeof value === "number" ? value : undefined;
+    },
+    ToolAuthorizationError: class ToolAuthorizationError extends Error {},
     resolveReactionMessageId: ({
       args,
       toolContext,
@@ -50,6 +83,8 @@ vi.mock("./channel-react-action.runtime.js", async () => {
       return undefined;
     },
     isWhatsAppGroupJid: (value?: string | null) => (value ?? "").trim().endsWith("@g.us"),
+    isWhatsAppNewsletterJid: (value?: string | null) =>
+      (value ?? "").trim().endsWith("@newsletter"),
     normalizeWhatsAppTarget: (value?: string | null) => {
       const raw = (value ?? "").trim();
       if (!raw) {
@@ -102,6 +137,171 @@ describe("whatsapp react action messageId resolution", () => {
     hoisted.resolveWhatsAppAccount.mockReturnValue({ accountId: "default", mediaMaxMb: 50 });
     hoisted.resolveWhatsAppMediaMaxBytes.mockReturnValue(50 * 1024 * 1024);
     hoisted.sendMessageWhatsApp.mockClear();
+    hoisted.sendStatusWhatsApp.mockClear();
+  });
+
+  it("publishes a Status for an owner to an explicit allowlisted audience", async () => {
+    const cfg = {
+      channels: {
+        whatsapp: { actions: { status: true }, allowFrom: ["+1555", "+1666"] },
+      },
+    } as OpenClawConfig;
+    hoisted.resolveWhatsAppAccount.mockReturnValue({
+      accountId: "default",
+      mediaMaxMb: 50,
+      allowFrom: ["+1555", "+1666"],
+    });
+
+    const result = await handleWhatsAppMessageAction({
+      action: "post-status",
+      params: {
+        audience: ["+1555", "+1666"],
+        message: "Release shipped",
+        backgroundColor: "#112233",
+        font: 6,
+      },
+      cfg,
+      accountId: "default",
+      senderIsOwner: true,
+    });
+
+    expect(hoisted.sendStatusWhatsApp).toHaveBeenCalledWith("Release shipped", {
+      cfg,
+      audience: ["+1555", "+1666"],
+      mediaAccess: undefined,
+      mediaLocalRoots: undefined,
+      mediaReadFile: undefined,
+      backgroundColor: "#112233",
+      font: 6,
+      accountId: "default",
+    });
+    expect(result.details).toEqual({
+      ok: true,
+      channel: "whatsapp",
+      action: "post-status",
+      messageId: "status-1",
+      toJid: "status@broadcast",
+      audienceCount: 2,
+    });
+  });
+
+  it("rejects Status publishing when disabled, non-owner, or missing an audience", async () => {
+    const enabledCfg = {
+      channels: { whatsapp: { actions: { status: true }, allowFrom: ["+1555"] } },
+    } as OpenClawConfig;
+
+    await expect(
+      handleWhatsAppMessageAction({
+        action: "post-status",
+        params: { audience: ["+1555"], message: "hello" },
+        cfg: baseCfg,
+        senderIsOwner: true,
+      }),
+    ).rejects.toThrow("WhatsApp Status publishing is disabled");
+    await expect(
+      handleWhatsAppMessageAction({
+        action: "post-status",
+        params: { audience: ["+1555"], message: "hello" },
+        cfg: enabledCfg,
+        senderIsOwner: false,
+      }),
+    ).rejects.toThrow("requires a trusted owner");
+    await expect(
+      handleWhatsAppMessageAction({
+        action: "post-status",
+        params: { message: "hello" },
+        cfg: enabledCfg,
+        senderIsOwner: true,
+      }),
+    ).rejects.toThrow("audience required");
+    expect(hoisted.sendStatusWhatsApp).not.toHaveBeenCalled();
+  });
+
+  it("does not publish when a Status audience recipient is unauthorized", async () => {
+    const cfg = {
+      channels: { whatsapp: { actions: { status: true }, allowFrom: ["+1555"] } },
+    } as OpenClawConfig;
+    hoisted.resolveWhatsAppAccount.mockReturnValue({
+      accountId: "default",
+      mediaMaxMb: 50,
+      allowFrom: ["+1555"],
+    });
+
+    await expect(
+      handleWhatsAppMessageAction({
+        action: "post-status",
+        params: { audience: ["+1999"], message: "hello" },
+        cfg,
+        senderIsOwner: true,
+      }),
+    ).rejects.toThrow("WhatsApp Status audience blocked");
+    expect(hoisted.sendStatusWhatsApp).not.toHaveBeenCalled();
+  });
+
+  it("rejects groups in a Status audience", async () => {
+    const cfg = {
+      channels: { whatsapp: { actions: { status: true }, allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    hoisted.resolveWhatsAppAccount.mockReturnValue({
+      accountId: "default",
+      mediaMaxMb: 50,
+      allowFrom: ["*"],
+    });
+
+    await expect(
+      handleWhatsAppMessageAction({
+        action: "post-status",
+        params: { audience: ["123@g.us"], message: "hello" },
+        cfg,
+        senderIsOwner: true,
+      }),
+    ).rejects.toThrow("is not a direct-user target");
+    expect(hoisted.sendStatusWhatsApp).not.toHaveBeenCalled();
+  });
+
+  it("does not treat the allowFrom wildcard as an explicit Status audience entry", async () => {
+    const cfg = {
+      channels: { whatsapp: { actions: { status: true }, allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    hoisted.resolveWhatsAppAccount.mockReturnValue({
+      accountId: "default",
+      mediaMaxMb: 50,
+      allowFrom: ["*"],
+    });
+
+    await expect(
+      handleWhatsAppMessageAction({
+        action: "post-status",
+        params: { audience: ["+1555"], message: "hello" },
+        cfg,
+        senderIsOwner: true,
+      }),
+    ).rejects.toThrow("is not explicitly listed in allowFrom");
+    expect(hoisted.sendStatusWhatsApp).not.toHaveBeenCalled();
+  });
+
+  it("reports the deduplicated Status audience count", async () => {
+    const cfg = {
+      channels: { whatsapp: { actions: { status: true }, allowFrom: ["+1555"] } },
+    } as OpenClawConfig;
+    hoisted.resolveWhatsAppAccount.mockReturnValue({
+      accountId: "default",
+      mediaMaxMb: 50,
+      allowFrom: ["+1555"],
+    });
+
+    const result = await handleWhatsAppMessageAction({
+      action: "post-status",
+      params: { audience: ["+1555", "+1555"], message: "hello" },
+      cfg,
+      senderIsOwner: true,
+    });
+
+    expect(hoisted.sendStatusWhatsApp).toHaveBeenCalledWith(
+      "hello",
+      expect.objectContaining({ audience: ["+1555"] }),
+    );
+    expect(result.details).toMatchObject({ audienceCount: 1 });
   });
 
   it("sends upload-file through the WhatsApp media send path", async () => {

@@ -21,6 +21,8 @@ export type WhatsAppActionConfig = {
   polls?: boolean;
   /** Enable the experimental requester-bound voice-call tool. Default: false. */
   calls?: boolean;
+  /** Enable owner-gated WhatsApp Status publishing. Default: false. */
+  status?: boolean;
 };
 
 export type WhatsAppReactionLevel = ReactionLevel;
@@ -133,7 +135,7 @@ export type WhatsAppConfig = WhatsAppConfigCore &
     accounts?: Record<string, WhatsAppAccountConfig>;
     /** Optional default account id when multiple accounts are configured. */
     defaultAccount?: string;
-    /** Per-action tool gating. Calls default to false; existing actions default to true. */
+    /** Per-action tool gating. Calls and Status publishing default to false. */
     actions?: WhatsAppActionConfig;
     /** Plugin hook opt-in configuration for privacy-sensitive inbound events. */
     pluginHooks?: {
