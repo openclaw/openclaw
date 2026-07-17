@@ -82,6 +82,10 @@ function readVydraOverrides(overrides: SpeechProviderOverrides | undefined): {
   };
 }
 
+function resolveVydraApiKey(configApiKey?: string): string | undefined {
+  return configApiKey ?? trimToUndefined(process.env.VYDRA_API_KEY);
+}
+
 export function buildVydraSpeechProvider(): SpeechProviderPlugin {
   return {
     id: "vydra",
@@ -91,11 +95,11 @@ export function buildVydraSpeechProvider(): SpeechProviderPlugin {
     resolveConfig: ({ rawConfig }) => normalizeVydraSpeechConfig(rawConfig),
     listVoices: async () => VYDRA_SPEECH_VOICES.map((voice) => Object.assign({}, voice)),
     isConfigured: ({ providerConfig }) =>
-      Boolean(readVydraSpeechConfig(providerConfig).apiKey || process.env.VYDRA_API_KEY),
+      Boolean(resolveVydraApiKey(readVydraSpeechConfig(providerConfig).apiKey)),
     synthesize: async (req) => {
       const config = readVydraSpeechConfig(req.providerConfig);
       const overrides = readVydraOverrides(req.providerOverrides);
-      const apiKey = config.apiKey || process.env.VYDRA_API_KEY;
+      const apiKey = resolveVydraApiKey(config.apiKey);
       if (!apiKey) {
         throw new Error("Vydra API key missing");
       }
