@@ -1,4 +1,6 @@
 // Memory Wiki plugin entrypoint registers its OpenClaw integration.
+import fs from "node:fs/promises";
+import path from "node:path";
 import { definePluginEntry, type OpenClawConfig } from "./api.js";
 import { registerWikiCli } from "./src/cli.js";
 import {
@@ -21,7 +23,7 @@ import {
   configureMemoryWikiImportRunStateStore,
   createMemoryWikiImportRunStateStore,
 } from "./src/import-runs-state.js";
-import { loadMemoryWikiVaultGeneration } from "./src/log.js";
+import { ensureMemoryWikiVaultGeneration, loadMemoryWikiVaultGeneration } from "./src/log.js";
 import {
   createWikiPromptSectionBuilder,
   createWikiPromptSectionPreparer,
@@ -37,6 +39,27 @@ import {
   createWikiSearchTool,
   createWikiStatusTool,
 } from "./src/tool.js";
+
+async function loadConfiguredVaultGeneration(vaultRoot: string): Promise<string | null> {
+  const generation = await loadMemoryWikiVaultGeneration(vaultRoot);
+  if (generation) {
+    return generation;
+  }
+  try {
+    const stat = await fs.stat(path.join(vaultRoot, ".openclaw-wiki", "log.jsonl"));
+    if (!stat.isFile()) {
+      return null;
+    }
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+  // Cache data is rebuildable, but an initialized pre-generation vault still
+  // needs a stable owner identity before an external compiler can publish it.
+  return ensureMemoryWikiVaultGeneration(vaultRoot);
+}
 
 export default definePluginEntry({
   id: "memory-wiki",
@@ -85,7 +108,7 @@ export default definePluginEntry({
               );
         const activeOwnerIds = new Set<string>();
         for (const activeConfig of activeConfigs) {
-          const generation = await loadMemoryWikiVaultGeneration(activeConfig.vault.path);
+          const generation = await loadConfiguredVaultGeneration(activeConfig.vault.path);
           if (!generation) {
             continue;
           }

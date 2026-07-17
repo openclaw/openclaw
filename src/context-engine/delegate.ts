@@ -3,6 +3,7 @@ import { normalizeStructuredPromptSection } from "@openclaw/ai/internal/shared";
 import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import {
   buildMemoryPromptSection,
+  getActivePreparedMemoryPromptSection,
   prepareMemoryPromptSection,
   type MemoryPromptSectionParams,
   type PreparedMemoryPromptSection,
@@ -158,7 +159,18 @@ function renderMemorySystemPromptAddition(
 export function buildMemorySystemPromptAddition(
   params: MemoryPromptSectionParams,
 ): string | undefined {
-  return renderMemorySystemPromptAddition(params);
+  const prepared = getActivePreparedMemoryPromptSection();
+  if (!prepared) {
+    return renderMemorySystemPromptAddition(params);
+  }
+  const contextParams: MemoryPromptSectionParams = {
+    availableTools: params.availableTools,
+    citationsMode: params.citationsMode ?? prepared.context.citationsMode,
+    agentId: params.agentId ?? prepared.context.agentId,
+    agentSessionKey: params.agentSessionKey ?? prepared.context.agentSessionKey,
+    sandboxed: params.sandboxed ?? prepared.context.sandboxed,
+  };
+  return renderMemorySystemPromptAddition(contextParams, prepared);
 }
 
 /** Prepare memory state asynchronously, then render it without prompt-path I/O. */

@@ -1,4 +1,5 @@
 /** Registry state for plugin memory runtimes, prompt supplements, and flush planning. */
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -205,6 +206,7 @@ const memoryPluginState: MemoryPluginState = {
 };
 
 const preparedMemoryPromptSections = new WeakSet<PreparedMemoryPromptSection>();
+const activePreparedMemoryPromptSection = new AsyncLocalStorage<PreparedMemoryPromptSection>();
 
 export function registerMemoryCorpusSupplement(
   pluginId: string,
@@ -373,6 +375,19 @@ export async function prepareMemoryPromptSection(
   });
   preparedMemoryPromptSections.add(prepared);
   return prepared;
+}
+
+/** Keep async preparation run-scoped while a context engine assembles synchronously. */
+export async function runWithPreparedMemoryPromptSection<T>(
+  params: MemoryPromptSectionParams,
+  run: () => Promise<T>,
+): Promise<T> {
+  const prepared = await prepareMemoryPromptSection(params);
+  return activePreparedMemoryPromptSection.run(prepared, run);
+}
+
+export function getActivePreparedMemoryPromptSection(): PreparedMemoryPromptSection | undefined {
+  return activePreparedMemoryPromptSection.getStore();
 }
 
 export function buildMemoryPromptSection(

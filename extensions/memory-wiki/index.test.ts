@@ -1,8 +1,10 @@
 // Memory Wiki tests cover index plugin behavior.
+import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "./api.js";
 import plugin from "./index.js";
+import { loadMemoryWikiVaultGeneration } from "./src/log.js";
 import { createMemoryWikiTestHarness } from "./src/test-helpers.js";
 
 const toolMocks = vi.hoisted(() => {
@@ -137,5 +139,19 @@ describe("memory-wiki plugin", () => {
       }
       expect(() => factory({ agentId: "finance" })).toThrow("Unknown memory-wiki agentId: finance");
     }
+  });
+
+  it("activates an initialized legacy vault before an external compile", async () => {
+    const rootDir = await createTempDir("memory-wiki-index-legacy-vault-");
+    await fs.mkdir(path.join(rootDir, ".openclaw-wiki"), { recursive: true });
+    await fs.writeFile(path.join(rootDir, ".openclaw-wiki", "log.jsonl"), "", "utf8");
+    const { api, registerService } = createPluginApi();
+    api.pluginConfig = { vault: { path: rootDir } };
+
+    plugin.register(api);
+    const service = registerService.mock.calls[0]?.[0];
+    await service?.start?.();
+
+    await expect(loadMemoryWikiVaultGeneration(rootDir)).resolves.toEqual(expect.any(String));
   });
 });
