@@ -106,6 +106,17 @@ function providerAlreadyWrapped(raw: Record<string, unknown>): boolean {
   return isRecord(raw.externalContent) && raw.externalContent.wrapped === true;
 }
 
+function isHttpUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+const ERROR_CODE_RE = /^[A-Za-z0-9_.-]{1,64}$/u;
+
 function normalizeExternalContent(raw: Record<string, unknown>): WebSearchExternalContent {
   const externalContent = isRecord(raw.externalContent) ? raw.externalContent : undefined;
   return {
@@ -120,22 +131,25 @@ function normalizeExternalContent(raw: Record<string, unknown>): WebSearchExtern
 
 function normalizeCitations(
   value: unknown,
-  wrapText: (value: string) => string,
+  options: { wrapText: (value: string) => string; alreadyWrapped: boolean },
 ): Array<{ url: string; title?: string }> | undefined {
   if (!Array.isArray(value)) {
     return undefined;
   }
+  // On the core-wrapping path a citation url must actually parse as http(s);
+  // free text in a url slot would bypass the untrusted-content envelope.
+  const urlOk = (value: string) => options.alreadyWrapped || isHttpUrl(value);
   return value.flatMap((entry) => {
     if (typeof entry === "string") {
-      return [{ url: entry }];
+      return urlOk(entry) ? [{ url: entry }] : [];
     }
-    if (!isRecord(entry) || typeof entry.url !== "string") {
+    if (!isRecord(entry) || typeof entry.url !== "string" || !urlOk(entry.url)) {
       return [];
     }
     return [
       {
         url: entry.url,
-        ...(typeof entry.title === "string" ? { title: wrapText(entry.title) } : {}),
+        ...(typeof entry.title === "string" ? { title: options.wrapText(entry.title) } : {}),
       },
     ];
   });
@@ -153,13 +167,16 @@ export function normalizeWebSearchOutput(params: {
     alreadyWrapped || value.length === 0 ? value : wrapWebContent(value, "web_search");
   const tookMs = readFiniteNumber(result.tookMs);
   const cached = result.cached === true ? true : undefined;
-  const queryTerms = Array.isArray(result.searchQueries)
-    ? result.searchQueries.filter((entry): entry is string => typeof entry === "string")
-    : undefined;
+  // Provider-echoed query text is only trusted from providers that wrapped
+  // their own output; otherwise the model's own request query is authoritative.
+  const queryTerms =
+    alreadyWrapped && Array.isArray(result.searchQueries)
+      ? result.searchQueries.filter((entry): entry is string => typeof entry === "string")
+      : undefined;
   const query =
     queryTerms !== undefined
       ? (queryTerms[0] ?? params.query)
-      : typeof result.query === "string"
+      : alreadyWrapped && typeof result.query === "string"
         ? result.query
         : params.query;
 
@@ -171,7 +188,8 @@ export function normalizeWebSearchOutput(params: {
       isRecord(entry) &&
       typeof entry.title === "string" &&
       typeof entry.url === "string" &&
-      entry.url.length > 0,
+      entry.url.length > 0 &&
+      (alreadyWrapped || isHttpUrl(entry.url)),
   );
   if (rows && conformingRows) {
     const results = rows.map((row) => {
@@ -212,7 +230,7 @@ export function normalizeWebSearchOutput(params: {
   }
 
   if (typeof result.content === "string") {
-    const citations = normalizeCitations(result.citations, wrapText);
+    const citations = normalizeCitations(result.citations, { wrapText, alreadyWrapped });
     return {
       kind: "answer",
       provider,
@@ -226,13 +244,18 @@ export function normalizeWebSearchOutput(params: {
   }
 
   if (Object.hasOwn(result, "error")) {
-    const error = typeof result.error === "string" ? result.error : "provider_error";
+    // Error branches carry no externalContent marker, so nothing free-form may
+    // pass unwrapped: codes are charset-gated, docs must parse as http(s), and
+    // the human-readable message gets the untrusted envelope.
+    const rawError = typeof result.error === "string" ? result.error : "provider_error";
+    const error = ERROR_CODE_RE.test(rawError) ? rawError : "provider_error";
+    const rawMessage = typeof result.message === "string" ? result.message : rawError;
     return {
       kind: "error",
       provider,
       error,
-      message: typeof result.message === "string" ? result.message : error,
-      ...(typeof result.docs === "string" ? { docs: result.docs } : {}),
+      message: wrapText(rawMessage),
+      ...(typeof result.docs === "string" && isHttpUrl(result.docs) ? { docs: result.docs } : {}),
     };
   }
 
