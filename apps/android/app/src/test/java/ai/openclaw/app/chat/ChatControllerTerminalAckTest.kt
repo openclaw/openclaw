@@ -50,6 +50,7 @@ class ChatControllerTerminalAckTest {
         ),
       )
       controller.prepareMainSessionKey("agent:main:node-test")
+      controller.handleGatewayEvent("health", null)
       val owner = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "main", sessionKey = "agent:main:node-test")
       assertTrue(controller.canSendForOwner(owner))
       assertFalse(controller.canSendForOwner(owner.copy(gatewayStableId = "gateway-b")))

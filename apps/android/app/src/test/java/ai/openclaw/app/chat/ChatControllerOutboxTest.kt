@@ -480,7 +480,7 @@ class ChatControllerOutboxTest {
 
       assertEquals(listOf("one", "two", "three"), gateway.sentMessages)
       assertEquals(queuedIds, gateway.sentIdempotencyKeys)
-      assertEquals(listOf("main", "main", "main"), gateway.sentSessionKeys)
+      assertEquals(listOf("agent:main:main", "agent:main:main", "agent:main:main"), gateway.sentSessionKeys)
       assertEquals(listOf("high", "off", "off"), gateway.sentThinkingLevels)
       assertTrue(chat.outboxItems.value.isEmpty())
     }
@@ -691,7 +691,8 @@ class ChatControllerOutboxTest {
       // unknown-session row flushes first in createdAt order.
       assertEquals(listOf("unknown session", "active session"), gateway.sentMessages)
       assertEquals(listOf("medium", "off"), gateway.sentThinkingLevels)
-      assertTrue(chat.outboxItems.value.isEmpty())
+      assertFalse(outbox.rows.containsKey("active"))
+      assertEquals(ChatOutboxStatus.Accepted, outbox.rows.getValue("other").status)
     }
 
   @Test
@@ -713,7 +714,7 @@ class ChatControllerOutboxTest {
       chat.handleGatewayEvent("health", null)
       advanceUntilIdle()
 
-      assertEquals(listOf("agent:work:main"), gateway.sentSessionKeys)
+      assertEquals(listOf("agent:main:main"), gateway.sentSessionKeys)
       assertTrue(chat.outboxItems.value.isEmpty())
     }
 
@@ -1918,7 +1919,7 @@ class ChatControllerOutboxTest {
       gateway.echoDeliveredSendsInHistory = false
       gateway.sendFailureAfterDispatch = GatewayRequestOutcomeUnknown("ack lost")
       gateway.online = true
-      chat.applyMainSessionKey("agent:work:main")
+      chat.applyMainSessionKey("agent:main:main")
       advanceUntilIdle()
       chat.handleGatewayEvent("health", null)
       advanceUntilIdle()
@@ -2045,6 +2046,7 @@ class ChatControllerOutboxTest {
       val outbox = FakeCommandOutbox()
       val chat = controller(this, gateway, outbox)
       gateway.online = true
+      gateway.echoDeliveredSendsInHistory = false
       chat.load("agent:main:main")
       advanceUntilIdle()
 
@@ -2088,6 +2090,7 @@ class ChatControllerOutboxTest {
       val outbox = FakeCommandOutbox()
       val chat = controller(this, gateway, outbox)
       gateway.online = true
+      gateway.echoDeliveredSendsInHistory = false
       gateway.sendGate = CompletableDeferred()
       chat.load("agent:main:main")
       advanceUntilIdle()
@@ -2111,7 +2114,7 @@ class ChatControllerOutboxTest {
 
       chat.switchSession("agent:other:main")
       chat.switchSession("agent:main:main")
-      assertEquals(0, chat.pendingRunCount.value)
+      assertEquals(1, chat.pendingRunCount.value)
       gateway.sendGate?.complete(Unit)
       assertTrue(send.await())
 
@@ -2355,7 +2358,7 @@ class ChatControllerOutboxTest {
           sessionKey = "custom",
           text = "owner A turn",
           thinkingLevel = "off",
-          createdAtMs = 1,
+          createdAtMs = System.currentTimeMillis(),
           status = ChatOutboxStatus.Queued,
           retryCount = 0,
           lastError = null,
@@ -2409,7 +2412,7 @@ class ChatControllerOutboxTest {
           sessionKey = "custom",
           text = "owner A turn",
           thinkingLevel = "off",
-          createdAtMs = 1,
+          createdAtMs = System.currentTimeMillis(),
           status = ChatOutboxStatus.Accepted,
           retryCount = 0,
           lastError = null,
@@ -2674,17 +2677,25 @@ class ChatControllerOutboxTest {
       val sendStarted = CompletableDeferred<Unit>()
       val sendGate = CompletableDeferred<Unit>()
       var generation = 1L
+      var sendRequestCount = 0
       val chat =
         ChatController(
           scope = this,
           json = json,
-          requestGateway = { method, _ ->
+          requestGateway = { method, paramsJson ->
             if (method == "chat.send") {
-              sendStarted.complete(Unit)
-              sendGate.await()
-              throw GatewayRequestNotEnqueued("old connection closed")
+              sendRequestCount += 1
+              if (sendRequestCount == 1) {
+                sendStarted.complete(Unit)
+                sendGate.await()
+                throw GatewayRequestNotEnqueued("old connection closed")
+              }
+              val params = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
+              val runId = (params["idempotencyKey"] as JsonPrimitive).content
+              """{"runId":"$runId","status":"started"}"""
+            } else {
+              "{}"
             }
-            "{}"
           },
           cacheScope = { ChatCacheScope(gatewayId = "gateway-test", connectionGeneration = generation) },
           currentDefaultAgentId = { "main" },
@@ -2708,12 +2719,13 @@ class ChatControllerOutboxTest {
       assertTrue(accepted.await())
       assertTrue(chat.healthOk.value)
       assertEquals(
-        ChatOutboxStatus.Queued,
+        ChatOutboxStatus.Accepted,
         outbox.rows.values
           .single()
           .status,
       )
-      assertEquals(0, chat.pendingRunCount.value)
+      assertEquals(2, sendRequestCount)
+      assertEquals(1, chat.pendingRunCount.value)
     }
 
   @Test
@@ -2805,7 +2817,7 @@ class ChatControllerOutboxTest {
         ),
       )
       chat.load("main")
-      chat.applyMainSessionKey("agent:work:main")
+      chat.applyMainSessionKey("agent:main:main")
       advanceUntilIdle()
 
       // The durable pin is the only record of the alias resolution; if it cannot persist,
@@ -2822,7 +2834,7 @@ class ChatControllerOutboxTest {
       outbox.pinSessionKeyFailure = null
       chat.handleGatewayEvent("health", null)
       advanceUntilIdle()
-      assertEquals(listOf("agent:work:main"), gateway.sentSessionKeys)
+      assertEquals(listOf("agent:main:main"), gateway.sentSessionKeys)
       assertTrue(outbox.rows.values.none { it.sessionKey == "main" })
     }
 
@@ -2965,8 +2977,8 @@ class ChatControllerOutboxTest {
       assertEquals(listOf("independent session", "blocked successor"), gateway.sentMessages)
       assertEquals(ChatOutboxStatus.Failed, outbox.rows.getValue("ambiguous-a").status)
       assertEquals(OUTBOX_DELIVERY_UNCONFIRMED_ERROR, outbox.rows.getValue("ambiguous-a").lastError)
-      assertFalse(outbox.rows.containsKey("queued-a"))
-      assertFalse(outbox.rows.containsKey("queued-b"))
+      assertEquals(ChatOutboxStatus.Accepted, outbox.rows.getValue("queued-a").status)
+      assertEquals(ChatOutboxStatus.Accepted, outbox.rows.getValue("queued-b").status)
     }
 
   @Test

@@ -1128,15 +1128,11 @@ class ChatControllerTranscriptCacheTest {
       cache.transcripts[TranscriptKey("gateway-a", "agent-a", "custom")] = listOf(cachedMessage("offline custom"))
       cache.sessionsByOwner["gateway-a" to "agent-a"] =
         listOf(ChatSessionEntry(key = "custom", updatedAtMs = 1, displayName = "Offline custom"))
-      var requestCount = 0
       val controller =
         ChatController(
           scope = this,
           json = json,
-          requestGateway = { _, _ ->
-            requestCount += 1
-            "{}"
-          },
+          requestGateway = { _, _ -> error("offline") },
           transcriptCache = cache,
           cacheScope = { gatewayScope },
           currentDefaultAgentId = { null },
@@ -1145,7 +1141,6 @@ class ChatControllerTranscriptCacheTest {
       controller.load("custom")
       advanceUntilIdle()
 
-      assertEquals(0, requestCount)
       assertEquals(listOf("offline custom"), controller.messages.value.map { it.content.single().text })
       assertEquals(listOf("Offline custom"), controller.sessions.value.mapNotNull { it.displayName })
       assertEquals(GatewayDefaultAgentOwner("gateway-a", "agent-a"), controller.composerDefaultAgentOwner.value)

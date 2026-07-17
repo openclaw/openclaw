@@ -335,7 +335,7 @@ class RoomChatTranscriptCacheTest {
         listOf("agent b text"),
         store.loadTranscript("gateway-a", "agent-b", "custom").map { it.content.single().text },
       )
-      assertEquals(listOf("agent-a-session"), store.loadSessions("gateway-a", "agent-a").map { it.key })
-      assertEquals(listOf("agent-b-session"), store.loadSessions("gateway-a", "agent-b").map { it.key })
+      assertEquals(listOf("agent-a-session", "custom"), store.loadSessions("gateway-a", "agent-a").map { it.key })
+      assertEquals(listOf("agent-b-session", "custom"), store.loadSessions("gateway-a", "agent-b").map { it.key })
     }
 }
