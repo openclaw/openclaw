@@ -42,6 +42,24 @@ class SessionsScreenGroupingTest {
   }
 
   @Test
+  fun sessionActionTargetSavedStatePreservesOwnerAndNullableLabels() {
+    val full = SessionActionTarget("gateway-a", "custom", "agent-a", "", "Display")
+    val sparse = SessionActionTarget(null, "agent:main:device", null, null, null)
+
+    assertEquals(full, sessionActionTargetFromSavedState(full.toSavedState()))
+    assertEquals(sparse, sessionActionTargetFromSavedState(sparse.toSavedState()))
+  }
+
+  @Test
+  fun sessionActionTargetSavedStateRejectsMissingIdentity() {
+    assertEquals(null, sessionActionTargetFromSavedState(emptyList()))
+    assertEquals(
+      null,
+      sessionActionTargetFromSavedState(listOf("1", "gateway-a", "", "0", "", "0", "", "0", "")),
+    )
+  }
+
+  @Test
   fun groupsPinnedThenAlphabeticalCategoriesThenUngrouped() {
     val sections =
       groupSessionEntries(

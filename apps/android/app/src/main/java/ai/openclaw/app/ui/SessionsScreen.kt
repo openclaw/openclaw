@@ -60,6 +60,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -93,9 +94,12 @@ internal fun SessionsScreen(
   var compactLayout by rememberSaveable { mutableStateOf(false) }
   var recentFirst by rememberSaveable { mutableStateOf(true) }
   var sortMenuExpanded by remember { mutableStateOf(false) }
-  var renameSessionTarget by remember { mutableStateOf<SessionActionTarget?>(null) }
-  var groupSessionTarget by remember { mutableStateOf<SessionActionTarget?>(null) }
-  var deleteSessionTarget by remember { mutableStateOf<SessionActionTarget?>(null) }
+  var renameSessionTarget by
+    rememberSaveable(stateSaver = SessionActionTargetSaver) { mutableStateOf<SessionActionTarget?>(null) }
+  var groupSessionTarget by
+    rememberSaveable(stateSaver = SessionActionTargetSaver) { mutableStateOf<SessionActionTarget?>(null) }
+  var deleteSessionTarget by
+    rememberSaveable(stateSaver = SessionActionTargetSaver) { mutableStateOf<SessionActionTarget?>(null) }
   var searchText by rememberSaveable { mutableStateOf("") }
   var searchResults by remember { mutableStateOf<List<ChatSessionEntry>>(emptyList()) }
   var searchLoading by remember { mutableStateOf(false) }
@@ -860,6 +864,38 @@ internal data class SessionActionTarget(
   val stateKey: String = "${gatewayStableId.orEmpty()}:${ownerAgentId.orEmpty()}:$key"
 
   fun matchesGateway(activeGatewayStableId: String?): Boolean = gatewayStableId == activeGatewayStableId
+}
+
+private const val SESSION_ACTION_TARGET_STATE_FIELDS = 9
+
+private val SessionActionTargetSaver =
+  Saver<SessionActionTarget?, ArrayList<String>>(
+    save = { target -> target?.toSavedState() ?: arrayListOf() },
+    restore = ::sessionActionTargetFromSavedState,
+  )
+
+internal fun SessionActionTarget.toSavedState(): ArrayList<String> =
+  arrayListOf(
+    if (gatewayStableId == null) "0" else "1",
+    gatewayStableId.orEmpty(),
+    key,
+    if (ownerAgentId == null) "0" else "1",
+    ownerAgentId.orEmpty(),
+    if (label == null) "0" else "1",
+    label.orEmpty(),
+    if (displayName == null) "0" else "1",
+    displayName.orEmpty(),
+  )
+
+internal fun sessionActionTargetFromSavedState(values: List<String>): SessionActionTarget? {
+  if (values.size != SESSION_ACTION_TARGET_STATE_FIELDS || values[2].isEmpty()) return null
+  return SessionActionTarget(
+    gatewayStableId = values[1].takeIf { values[0] == "1" },
+    key = values[2],
+    ownerAgentId = values[4].takeIf { values[3] == "1" },
+    label = values[6].takeIf { values[5] == "1" },
+    displayName = values[8].takeIf { values[7] == "1" },
+  )
 }
 
 internal fun ChatSessionEntry.toActionTarget(gatewayStableId: String?): SessionActionTarget =

@@ -1300,8 +1300,9 @@ class ChatController internal constructor(
     }
   }
 
-  private suspend fun waitForPendingSessionSettings(sessionKey: String): Boolean {
-    val settingsKey = sessionSettingsKey(sessionKey)
+  private suspend fun waitForPendingSessionSettings(sessionKey: String): Boolean = waitForPendingSessionSettings(sessionSettingsKey(sessionKey))
+
+  private suspend fun waitForPendingSessionSettings(settingsKey: SessionSettingsKey): Boolean {
     var pending = pendingSettingsMutations[settingsKey] ?: return true
     while (true) {
       if (!pending.await()) return false
@@ -3165,8 +3166,15 @@ class ChatController internal constructor(
       return OutboxSendOutcome.Continue
     }
     // Reconnect flushes share the live-send settings boundary. Claiming before this wait
-    // could durably dispatch a queued turn against the previous model or thinking state.
-    if (!waitForPendingSessionSettings(normalizeRequestedSessionKey(item.sessionKey))) {
+    // could durably dispatch a queued turn against the previous model or thinking state. Use
+    // the row's owner because the visible chat may switch while this queued turn is waiting.
+    val settingsKey =
+      sessionSettingsKey(
+        sessionKey = normalizeRequestedSessionKey(item.sessionKey),
+        gatewayScope = flushScope,
+        ownerAgentId = ownerAgentId,
+      )
+    if (!waitForPendingSessionSettings(settingsKey)) {
       return OutboxSendOutcome.Stop
     }
     // Atomically claim the row before sending: null means the claim could not be made durable,
@@ -4436,11 +4444,15 @@ class ChatController internal constructor(
     return lastVerifiedDefaultAgentId.takeIf { lastVerifiedDefaultAgentGatewayId == gatewayId }
   }
 
-  private fun sessionSettingsKey(sessionKey: String): SessionSettingsKey =
+  private fun sessionSettingsKey(
+    sessionKey: String,
+    gatewayScope: ChatCacheScope? = currentCacheScope(),
+    ownerAgentId: String? = resolveAgentIdForSessionKey(sessionKey),
+  ): SessionSettingsKey =
     SessionSettingsKey(
-      gatewayScope = currentCacheScope(),
+      gatewayScope = gatewayScope,
       sessionKey = sessionKey,
-      ownerAgentId = resolveAgentIdForSessionKey(sessionKey),
+      ownerAgentId = ownerAgentId,
     )
 
   private fun normalizeThinking(raw: String): String = raw.trim().lowercase(Locale.US).ifEmpty { "off" }

@@ -517,6 +517,41 @@ class ChatControllerOutboxTest {
     }
 
   @Test
+  fun reconnectFlushWaitsForQueuedRowsOwnerAfterVisibleOwnerChanges() =
+    runTest {
+      val gateway = FakeGateway()
+      val outbox = FakeCommandOutbox()
+      val chat = controller(this, gateway, outbox)
+      chat.load("custom", ownerAgentId = "agent-a")
+      advanceUntilIdle()
+      assertTrue(chat.sendMessageAwaitAcceptance(message = "owned by agent a", thinkingLevel = "off", attachments = emptyList()))
+
+      gateway.online = true
+      gateway.settingsPatchStarted = CompletableDeferred()
+      gateway.settingsPatchGate = CompletableDeferred()
+      chat.setSessionModel("custom", "openai/gpt-5.6-sol")
+      gateway.settingsPatchStarted?.await()
+
+      chat.switchSession("custom", ownerAgentId = "agent-b")
+      runCurrent()
+      chat.handleGatewayEvent("health", null)
+      runCurrent()
+
+      assertTrue(gateway.sentMessages.isEmpty())
+      assertEquals(
+        ChatOutboxStatus.Queued,
+        chat.outboxItems.value
+          .single()
+          .status,
+      )
+
+      gateway.settingsPatchGate?.complete(Unit)
+      advanceUntilIdle()
+      assertEquals(listOf("owned by agent a"), gateway.sentMessages)
+      assertEquals(listOf("agent-a"), gateway.sentAgentIds)
+    }
+
+  @Test
   fun reconnectFlushResumesAfterNewerPendingSessionSettingSucceeds() =
     runTest {
       val gateway = FakeGateway()
