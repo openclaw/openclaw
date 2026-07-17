@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTestTimeout } from "../../test/helpers/promise.js";
@@ -57,6 +58,7 @@ async function writeListToolsMcpServer(params: {
     _meta?: Record<string, unknown>;
   }>;
   capabilities?: Record<string, unknown>;
+  databasePath?: string;
   pidPath?: string;
   notifyListChangedOnInitialized?: boolean;
   notifyListChangedAfterFirstList?: boolean;
@@ -77,6 +79,7 @@ const delayMs = ${params.delayMs ?? 0};
 const initializeDelayMs = ${params.initializeDelayMs ?? 0};
 const hang = ${params.hang === true};
 const capabilities = ${JSON.stringify(params.capabilities ?? { tools: {} })};
+const databasePath = ${JSON.stringify(params.databasePath)};
 const pidPath = ${JSON.stringify(params.pidPath)};
 const notifyListChangedOnInitialized = ${params.notifyListChangedOnInitialized === true};
 const notifyListChangedAfterFirstList = ${params.notifyListChangedAfterFirstList === true};
@@ -100,6 +103,12 @@ let buffer = "";
 let listCount = 0;
 let pendingTimer;
 let keepAlive;
+let database;
+if (databasePath) {
+  const { DatabaseSync } = await import("node:sqlite");
+  database = new DatabaseSync(databasePath);
+  database.exec("PRAGMA busy_timeout = 0; CREATE TABLE IF NOT EXISTS lock_probe (value TEXT); BEGIN IMMEDIATE; INSERT INTO lock_probe VALUES ('held')");
+}
 if (pidPath) {
   await fs.writeFile(pidPath, String(process.pid), "utf8");
 }
@@ -232,6 +241,10 @@ function shutdown() {
   if (keepAlive) {
     clearInterval(keepAlive);
   }
+  try {
+    database?.exec("ROLLBACK");
+  } catch {}
+  database?.close();
   process.exit(0);
 }
 process.stdin.on("data", (chunk) => {
@@ -2058,13 +2071,15 @@ process.on("SIGINT", shutdown);`,
     expect(testing.getCachedSessionIds()).not.toContain("session-run-lease");
   });
 
-  it("keeps an active MCP child alive until deferred run retirement completes", async () => {
+  it("keeps an active MCP child and its database lock until deferred retirement completes", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-deferred-run-"));
     const serverPath = path.join(tempDir, "server.mjs");
     const logPath = path.join(tempDir, "server.log");
     const pidPath = path.join(tempDir, "server.pid");
-    await writeListToolsMcpServer({ filePath: serverPath, logPath, pidPath });
+    const databasePath = path.join(tempDir, "locked.sqlite");
+    await writeListToolsMcpServer({ filePath: serverPath, logPath, pidPath, databasePath });
     let materialized: Awaited<ReturnType<typeof materializeBundleMcpToolsForRun>> | undefined;
+    let lockProbe: DatabaseSync | undefined;
 
     try {
       const runtime = await getOrCreateSessionMcpRuntime({
@@ -2083,6 +2098,11 @@ process.on("SIGINT", shutdown);`,
       materialized = await materializeBundleMcpToolsForRun({ runtime });
       await waitForFileText(pidPath, "", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
       const pid = Number.parseInt((await fs.readFile(pidPath, "utf8")).trim(), 10);
+      const { DatabaseSync } = await import("node:sqlite");
+      const database = new DatabaseSync(databasePath);
+      lockProbe = database;
+      database.exec("PRAGMA busy_timeout = 0");
+      expect(() => database.exec("BEGIN IMMEDIATE")).toThrow(/database is locked|SQLITE_BUSY/iu);
 
       await retireSessionMcpRuntime({
         sessionId: "session-run-child",
@@ -2107,7 +2127,10 @@ process.on("SIGINT", shutdown);`,
         LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
       );
       expect(testing.getCachedSessionIds()).not.toContain("session-run-child");
+      expect(() => database.exec("BEGIN IMMEDIATE")).not.toThrow();
+      database.exec("ROLLBACK");
     } finally {
+      lockProbe?.close();
       await materialized?.dispose();
       await fs.rm(tempDir, { recursive: true, force: true });
     }
