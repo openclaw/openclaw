@@ -118,6 +118,7 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
     public let fileName: String?
     public let durationSeconds: Double?
     public let content: AnyCodable?
+    public let preview: OpenClawChatCanvasPreview?
 
     // Tool-call fields (when `type == "toolCall"` or similar)
     public let id: String?
@@ -133,6 +134,7 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         fileName: String?,
         durationSeconds: Double? = nil,
         content: AnyCodable?,
+        preview: OpenClawChatCanvasPreview? = nil,
         id: String? = nil,
         name: String? = nil,
         arguments: AnyCodable? = nil)
@@ -145,6 +147,7 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         self.fileName = fileName
         self.durationSeconds = durationSeconds
         self.content = content
+        self.preview = preview
         self.id = id
         self.name = name
         self.arguments = arguments
@@ -159,6 +162,7 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         case fileName
         case durationSeconds
         case content
+        case preview
         case id
         case name
         case arguments
@@ -176,6 +180,7 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         self.id = try container.decodeIfPresent(String.self, forKey: .id)
         self.name = try container.decodeIfPresent(String.self, forKey: .name)
         self.arguments = try container.decodeIfPresent(AnyCodable.self, forKey: .arguments)
+        self.preview = try container.decodeIfPresent(OpenClawChatCanvasPreview.self, forKey: .preview)
 
         if let any = try container.decodeIfPresent(AnyCodable.self, forKey: .content) {
             self.content = any
@@ -184,6 +189,32 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         } else {
             self.content = nil
         }
+    }
+}
+
+public struct OpenClawChatCanvasPreview: Codable, Hashable, Sendable {
+    public let kind: String?
+    public let surface: String?
+    public let render: String?
+    public let title: String?
+    public let preferredHeight: Double?
+    public let url: String?
+    public let viewId: String?
+    public let sandbox: String?
+
+    public var inlineWidgetPath: String? {
+        guard self.kind == "canvas",
+              self.surface == "assistant_message",
+              self.render == "url",
+              self.sandbox == "scripts" || self.sandbox == "strict",
+              let url = self.url?.trimmingCharacters(in: .whitespacesAndNewlines),
+              OpenClawChatWidgetURLResolver.supportsTarget(url)
+        else { return nil }
+        return url
+    }
+
+    public var inlineWidgetHeight: Double {
+        min(max(self.preferredHeight ?? 320, 160), 1200)
     }
 }
 

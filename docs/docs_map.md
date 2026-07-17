@@ -3857,7 +3857,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: SSH backend
   - H2: OpenShell backend
   - H2: Workspace access
-  - H2: Custom bind mounts
+  - H2: Multiple folders for one agent
+  - H3: Other bind behavior
   - H2: Images and setup
   - H2: setupCommand (one-time container setup)
   - H2: Tool policy and escape hatches
@@ -5831,9 +5832,11 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /plugins/llama-cpp
 - Headings:
-  - H2: Configuration
-  - H2: Native Runtime
-  - H2: Runtime diagnostics
+  - H2: Local text inference
+  - H3: Use another GGUF model
+  - H2: Memory embedding configuration
+  - H2: Native runtime
+  - H2: Memory runtime diagnostics
   - H2: Troubleshooting
 
 ## plugins/logbook.md
@@ -8732,6 +8735,18 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Env toggles (one-off debugging)
   - H3: What to inspect
   - H2: Quick troubleshooting
+  - H2: Related
+
+## reference/pull-request-review-flow.md
+
+- Route: /reference/pull-request-review-flow
+- Headings:
+  - H2: Barnacle
+  - H2: ClawSweeper
+  - H2: Improve a PR during review
+  - H2: When automation stays quiet
+  - H2: Troubleshooting
+  - H2: Forking the automation
   - H2: Related
 
 ## reference/release-performance-sweep.md

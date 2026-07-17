@@ -375,6 +375,7 @@
     <string name="native_40d04f6fb9437ff3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"기기 내 음성 인식을 사용할 수 없습니다."</string>
     <string name="native_4122a5c9825224af" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"첨부 파일이 너무 커서 하나의 메시지로 대기열에 추가할 수 없습니다. 일부를 제거한 후 다시 시도하세요."</string>
     <string name="native_4135d64f3bde1a92" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"구성된 모델이 1개 있습니다. 새로 고쳐 사용 가능 여부를 다시 확인하세요."</string>
+    <string name="native_41659b48f2dc4c36" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"위젯을 사용할 수 없음"</string>
     <string name="native_4186107d2194d09a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"이 호스트에는 보안 연결이 필요합니다."</string>
     <string name="native_41cb8a2ca2cf1e36" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"일치하는 자동화가 없습니다."</string>
     <string name="native_41df9f586511e084" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"휴대폰에서 Gateway에 연결할 수 있음"</string>

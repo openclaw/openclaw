@@ -375,6 +375,7 @@
     <string name="native_40d04f6fb9437ff3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"डिवाइस पर स्पीच रिकग्निशन उपलब्ध नहीं है।"</string>
     <string name="native_4122a5c9825224af" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"एक संदेश के लिए अटैचमेंट कतार में लगाने हेतु बहुत बड़े हैं; कुछ हटाकर फिर से कोशिश करें।"</string>
     <string name="native_4135d64f3bde1a92" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"1 मॉडल कॉन्फ़िगर किया गया है। उपलब्धता दोबारा जाँचने के लिए रीफ़्रेश करें।"</string>
+    <string name="native_41659b48f2dc4c36" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"विजेट उपलब्ध नहीं है"</string>
     <string name="native_4186107d2194d09a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"इस होस्ट के लिए सुरक्षित कनेक्शन आवश्यक है।"</string>
     <string name="native_41cb8a2ca2cf1e36" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"कोई मेल खाता ऑटोमेशन नहीं मिला।"</string>
     <string name="native_41df9f586511e084" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"फ़ोन Gateway तक पहुँच सकता है"</string>

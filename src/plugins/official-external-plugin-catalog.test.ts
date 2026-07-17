@@ -269,6 +269,7 @@ describe("official external plugin catalog", () => {
           title: "Trusted",
           version: "1.2.3",
           state: "available",
+          featured: true,
           publisher: { id: "acme", trust: "official" },
           install: {
             candidates: [
@@ -336,6 +337,8 @@ describe("official external plugin catalog", () => {
       defaultChoice: "clawhub",
       expectedIntegrity: "sha256-s1XdoEQDvsqri7qwaf0eewV4Ji50WeWYzFsZYVtb2rk=",
     });
+    expect(trusted.featured).toBe(true);
+    expect(disabled).not.toHaveProperty("featured");
     expect(resolveOfficialExternalPluginInstall(disabled)).toBeNull();
     expect(resolveOfficialExternalPluginInstall(community)).toBeNull();
   });

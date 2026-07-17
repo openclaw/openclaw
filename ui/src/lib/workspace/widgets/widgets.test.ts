@@ -1,16 +1,20 @@
-// Data-shape mapping tests for the L4 builtin widgets: each `map*` turns an RPC
-// payload fixture into the rendered view model. The render fns are exercised
-// separately (empty/populated) to lock the empty/loading/error affordances.
+// Focused renderer tests for builtin data shapes and empty/error affordances.
 
 import { render } from "lit";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { WorkspaceWidget } from "../types.ts";
 import { renderActivity } from "./activity.ts";
+import { renderAgentStatus } from "./agent-status.ts";
 import { renderChart } from "./chart.ts";
 import { renderCron } from "./cron.ts";
+import {
+  buildCustomWidgetApprovalsSource,
+  renderCustomWidgetApprovals,
+} from "./custom-widget-approvals.ts";
 import { renderIframeEmbed } from "./iframe-embed.ts";
 import { renderInstances } from "./instances.ts";
 import { renderMarkdown } from "./markdown.ts";
+import { renderPreview } from "./preview.ts";
 import { renderSessions } from "./sessions.ts";
 import { renderStatCard } from "./stat-card.ts";
 import { renderTable } from "./table.ts";
@@ -37,7 +41,99 @@ function renderToContainer(template: unknown): HTMLElement {
 const STRICT_EMBED: BuiltinWidgetContext = {
   basePath: "",
   embed: { embedSandboxMode: "strict", allowExternalEmbedUrls: false },
+  preview: { getViewport: (_widgetId, fallback) => fallback, setViewport: vi.fn() },
 };
+
+describe("agent-status mapping", () => {
+  it("maps only keyed sessions and clamps goal progress", () => {
+    const container = renderToContainer(
+      renderAgentStatus(widget({ props: { limit: 2 } }), {
+        sessions: [
+          {
+            key: "agent:one",
+            displayName: "One",
+            hasActiveRun: true,
+            goal: { objective: "Ship the workspace", tokensUsed: 125, tokenBudget: 100 },
+          },
+          { key: "agent:two", status: "idle" },
+          { displayName: "missing key" },
+        ],
+      }),
+    );
+    expect(container.querySelectorAll(".workspace-list__row")).toHaveLength(2);
+    expect(container.textContent).toContain("Ship the workspace");
+    expect(container.textContent).toContain("100");
+    expect(container.textContent).not.toContain("missing key");
+  });
+
+  it("renders accessible status text and an empty state", () => {
+    const populated = renderToContainer(
+      renderAgentStatus(widget(), { sessions: [{ key: "agent:one", hasActiveRun: true }] }),
+    );
+    expect(
+      populated.querySelector("[data-test-id='workspace-agent-status']")?.textContent,
+    ).toContain("Busy");
+    const empty = renderToContainer(renderAgentStatus(widget(), { sessions: [] }));
+    expect(empty.querySelector(".workspace-widget__placeholder")).not.toBeNull();
+  });
+});
+
+describe("custom-widget-approvals mapping", () => {
+  it("exposes only pending custom-widget registry entries", () => {
+    const decisions: Array<[string, "approved" | "rejected"]> = [];
+    const source = buildCustomWidgetApprovalsSource(
+      {
+        schemaVersion: 1,
+        workspaceVersion: 3,
+        tabs: [],
+        prefs: { tabOrder: [] },
+        widgetsRegistry: {
+          pending: { status: "pending", createdBy: "agent:builder" },
+          approved: { status: "approved", createdBy: "agent:builder" },
+        },
+      },
+      new Set(),
+      (name, decision) => decisions.push([name, decision]),
+    );
+    expect(source.pending).toEqual([
+      { id: "pending", title: "pending", requestedBy: "builder", deciding: false },
+    ]);
+    source.onDecide?.(source.pending[0]!, "reject");
+    expect(decisions).toEqual([["pending", "rejected"]]);
+  });
+
+  it("limits rows and renders permission-aware decision controls", () => {
+    const source = {
+      pending: [
+        { id: "one", title: "one", requestedBy: null, deciding: false },
+        { id: "two", title: "two", requestedBy: "builder", deciding: false },
+      ],
+      onDecide: () => undefined,
+    };
+    const container = renderToContainer(
+      renderCustomWidgetApprovals(widget({ props: { limit: 1 } }), undefined, {
+        ...STRICT_EMBED,
+        customWidgetApprovals: source,
+      }),
+    );
+    expect(container.querySelectorAll(".workspace-list__row")).toHaveLength(1);
+    expect(container.querySelectorAll("button")).toHaveLength(2);
+    expect(container.querySelector("button")?.disabled).toBe(false);
+    expect(container.textContent).toContain("Approve");
+    expect(container.textContent).toContain("Reject");
+
+    const restricted = renderToContainer(
+      renderCustomWidgetApprovals(widget(), undefined, {
+        ...STRICT_EMBED,
+        customWidgetApprovals: { pending: source.pending },
+      }),
+    );
+    expect(
+      Array.from(restricted.querySelectorAll("button")).every((button) => button.disabled),
+    ).toBe(true);
+    expect(restricted.textContent).toContain("Approval permission required");
+  });
+});
 
 describe("stat-card mapping", () => {
   it("renders the value and omits a duplicate label", () => {
@@ -278,6 +374,7 @@ describe("iframe-embed render × sandbox mode", () => {
       renderIframeEmbed(widget({ props: { url: "/preview" } }), null, {
         basePath: "",
         embed: { embedSandboxMode: "scripts", allowExternalEmbedUrls: false },
+        preview: STRICT_EMBED.preview,
       }),
     );
     const frame = container.querySelector<HTMLIFrameElement>(
@@ -293,6 +390,7 @@ describe("iframe-embed render × sandbox mode", () => {
       renderIframeEmbed(widget({ props: { url: "/preview" } }), null, {
         basePath: "",
         embed: { embedSandboxMode: "trusted", allowExternalEmbedUrls: false },
+        preview: STRICT_EMBED.preview,
       }),
     );
     const frame = container.querySelector<HTMLIFrameElement>(
@@ -308,5 +406,180 @@ describe("iframe-embed render × sandbox mode", () => {
     );
     expect(container.querySelector('[data-test-id="workspace-embed-blocked"]')).not.toBeNull();
     expect(container.querySelector('[data-test-id="workspace-embed-frame"]')).toBeNull();
+  });
+});
+
+describe("preview widget", () => {
+  it("renders its URL with the workspace embed sandbox ceiling", () => {
+    const container = renderToContainer(
+      renderPreview(widget({ props: { url: "/preview" } }), undefined, {
+        basePath: "",
+        embed: { embedSandboxMode: "trusted", allowExternalEmbedUrls: false },
+        preview: STRICT_EMBED.preview,
+      }),
+    );
+    const frame = container.querySelector<HTMLIFrameElement>(
+      '[data-test-id="workspace-preview-frame"]',
+    );
+    expect(frame?.getAttribute("src")).toBe("/preview");
+    expect(frame?.getAttribute("sandbox")).toBe("allow-scripts");
+    expect(frame?.getAttribute("sandbox")).not.toContain("allow-same-origin");
+    expect(frame?.getAttribute("referrerpolicy")).toBe("no-referrer");
+  });
+
+  it("reloads the mounted frame without reading its content window", () => {
+    const container = renderToContainer(
+      renderPreview(widget({ props: { url: "/preview" } }), undefined, STRICT_EMBED),
+    );
+    const frame = container.querySelector<HTMLIFrameElement>(
+      '[data-test-id="workspace-preview-frame"]',
+    );
+    expect(frame).not.toBeNull();
+    const setAttribute = vi.spyOn(frame!, "setAttribute");
+    container
+      .querySelector<HTMLButtonElement>('[data-test-id="workspace-preview-reload"]')
+      ?.click();
+    expect(setAttribute).toHaveBeenCalledWith("src", "/preview");
+  });
+
+  it("exposes labeled controls and updates the selected viewport state", () => {
+    let selected: "desktop" | "tablet" | "mobile" | undefined;
+    const context: BuiltinWidgetContext = {
+      ...STRICT_EMBED,
+      preview: {
+        getViewport: (_widgetId, fallback) => selected ?? fallback,
+        setViewport: (_widgetId, viewport) => {
+          selected = viewport;
+        },
+      },
+    };
+    const previewWidget = widget({ props: { url: "/preview", defaultViewport: "tablet" } });
+    const container = renderToContainer(renderPreview(previewWidget, undefined, context));
+    expect(container.querySelector('[role="toolbar"]')?.getAttribute("aria-label")).toBeTruthy();
+    expect(container.querySelector('[role="group"]')?.getAttribute("aria-label")).toBeTruthy();
+    const tablet = container.querySelector<HTMLButtonElement>(
+      '[data-test-id="workspace-preview-viewport-tablet"]',
+    );
+    const mobile = container.querySelector<HTMLButtonElement>(
+      '[data-test-id="workspace-preview-viewport-mobile"]',
+    );
+    expect(tablet?.getAttribute("aria-pressed")).toBe("true");
+    expect(mobile?.getAttribute("aria-pressed")).toBe("false");
+    mobile?.click();
+    expect(selected).toBe("mobile");
+    render(renderPreview(previewWidget, undefined, context), container);
+    expect(
+      container
+        .querySelector('[data-test-id="workspace-preview-viewport-tablet"]')
+        ?.getAttribute("aria-pressed"),
+    ).toBe("false");
+    expect(
+      container
+        .querySelector('[data-test-id="workspace-preview-viewport-mobile"]')
+        ?.getAttribute("aria-pressed"),
+    ).toBe("true");
+    expect(container.querySelector(".workspace-preview__frame-wrap")?.className).toContain(
+      "workspace-preview__frame-wrap--mobile",
+    );
+  });
+
+  it.each(["bogus", 42])("defaults malformed viewport prop %j to desktop", (defaultViewport) => {
+    const container = renderToContainer(
+      renderPreview(
+        widget({ props: { url: "/preview", defaultViewport } }),
+        undefined,
+        STRICT_EMBED,
+      ),
+    );
+
+    expect(container.querySelector(".workspace-preview__frame-wrap")?.className).toContain(
+      "workspace-preview__frame-wrap--desktop",
+    );
+  });
+
+  it("uses a bound URL instead of props and does not hide malformed binding data", () => {
+    const bound = renderToContainer(
+      renderPreview(
+        widget({
+          props: { url: "/stale" },
+          bindings: { value: { source: "static", value: "/bound" } },
+        }),
+        "/bound",
+        STRICT_EMBED,
+      ),
+    );
+    expect(
+      bound.querySelector('[data-test-id="workspace-preview-frame"]')?.getAttribute("src"),
+    ).toBe("/bound");
+
+    const malformed = renderToContainer(
+      renderPreview(
+        widget({
+          props: { url: "/fallback" },
+          bindings: { value: { source: "static", value: 42 } },
+        }),
+        42,
+        STRICT_EMBED,
+      ),
+    );
+    expect(malformed.querySelector('[data-test-id="workspace-preview-frame"]')).toBeNull();
+
+    const missing = renderToContainer(
+      renderPreview(
+        widget({
+          props: { url: "/fallback" },
+          bindings: { value: { source: "static" } },
+        }),
+        undefined,
+        STRICT_EMBED,
+      ),
+    );
+    expect(missing.querySelector('[data-test-id="workspace-preview-frame"]')).toBeNull();
+
+    const unrelated = renderToContainer(
+      renderPreview(
+        widget({
+          props: { url: "/configured" },
+          bindings: { other: { source: "static", value: "/ignored" } },
+        }),
+        "/ignored",
+        STRICT_EMBED,
+      ),
+    );
+    expect(
+      unrelated.querySelector('[data-test-id="workspace-preview-frame"]')?.getAttribute("src"),
+    ).toBe("/configured");
+  });
+
+  it("allows policy-approved external URLs and blocks external or unsafe URLs by default", () => {
+    const allowed = renderToContainer(
+      renderPreview(
+        widget({
+          bindings: {
+            value: { source: "static", value: "https://preview.example" },
+          },
+        }),
+        "https://preview.example",
+        {
+          ...STRICT_EMBED,
+          embed: { embedSandboxMode: "strict", allowExternalEmbedUrls: true },
+        },
+      ),
+    );
+    expect(
+      allowed.querySelector('[data-test-id="workspace-preview-frame"]')?.getAttribute("src"),
+    ).toBe("https://preview.example");
+
+    for (const value of [undefined, 42, "https://evil.example", "javascript:alert(1)"]) {
+      const container = renderToContainer(
+        renderPreview(
+          widget({ bindings: { value: { source: "static", value } } }),
+          value,
+          STRICT_EMBED,
+        ),
+      );
+      expect(container.querySelector('[data-test-id="workspace-preview-frame"]')).toBeNull();
+      expect(container.querySelector(".workspace-widget__placeholder")).not.toBeNull();
+    }
   });
 });

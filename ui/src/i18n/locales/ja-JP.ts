@@ -2521,6 +2521,19 @@ export const ja_JP: TranslationMap = {
         blockedExternal: "External embeds are disabled by your gateway policy.",
         blockedScheme: "This embed URL uses an unsupported scheme.",
       },
+      preview: {
+        missing: "このプレビューにはまだURLがありません。",
+        blockedExternal: "Gatewayポリシーにより、外部プレビューは無効になっています。",
+        blockedScheme: "このプレビューURLでは、サポートされていないスキームが使用されています。",
+        toolbar: "プレビューコントロール",
+        reload: "プレビューを再読み込み",
+        viewport: {
+          label: "プレビューのビューポート",
+          desktop: "デスクトップ",
+          tablet: "タブレット",
+          mobile: "モバイル",
+        },
+      },
     },
   },
   workboard: {

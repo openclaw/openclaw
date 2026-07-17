@@ -38,7 +38,7 @@ actor MacNodeRuntime {
         canvasSurfaceUrl: @escaping @Sendable () async -> String? = {
             await GatewayConnection.shared.canvasPluginSurfaceUrl()
         },
-        refreshCanvasSurfaceUrl: @escaping @Sendable () async -> String? = { nil },
+        refreshCanvasSurfaceUrl: @escaping @Sendable (String?) async -> String? = { _ in nil },
         codexThreadCatalogEnabled: @escaping @Sendable () -> Bool = {
             MacNodeCodexThreadCatalog.shouldAdvertise()
         },

@@ -7114,6 +7114,11 @@
       "translated": "$text "
     },
     {
+      "id": "native.android.d1712183ebf86197",
+      "source": "Widget unavailable",
+      "translated": "Widget tidak tersedia"
+    },
+    {
       "id": "native.android.cd2033b0a82a72dd",
       "source": "$index.",
       "translated": "$index."
@@ -22617,6 +22622,11 @@
       "id": "native.apple.9243b96b3d4d590f",
       "source": "%@ tokens used",
       "translated": "%@ token telah digunakan"
+    },
+    {
+      "id": "native.apple.2c865ac4a69645d3",
+      "source": "Widget unavailable",
+      "translated": "Widget tidak tersedia"
     },
     {
       "id": "native.apple.769b7dcea4708c40",

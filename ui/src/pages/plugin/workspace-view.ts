@@ -63,7 +63,9 @@ import type {
   WorkspaceDocument,
   WidgetManifestView,
 } from "../../lib/workspace/types.ts";
+import { buildCustomWidgetApprovalsSource } from "../../lib/workspace/widgets/custom-widget-approvals.ts";
 import type { BuiltinWidgetContext } from "../../lib/workspace/widgets/index.ts";
+import type { PreviewViewport } from "../../lib/workspace/widgets/types.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import "../../styles/workspace.css";
 import { pluginTabRefFromSearch } from "./route.ts";
@@ -72,13 +74,17 @@ type WorkspaceProps = {
   host: object;
   client: GatewayBrowserClient | null;
   connected: boolean;
-  /** Control UI embed policy for the iframe-embed builtin (defaults to strict). */
+  /** Control UI embed policy for iframe-based builtins (defaults to strict). */
   embed?: BuiltinWidgetContext["embed"];
-  onRequestUpdate?: () => void;
+  onRequestUpdate: () => void;
   /** Gateway HTTP base path for custom-widget iframe sources (L5). */
   basePath?: string;
   /** Session key for custom-widget prompt dispatch (L5). */
   sessionKey?: string;
+  /** Advances when the shared session capability publishes a canonical list. */
+  sessionListRevision?: number;
+  /** Controls custom-widget decisions; reads remain available without this scope. */
+  canApproveWidgets?: boolean;
 };
 
 const DEFAULT_EMBED_CONTEXT: BuiltinWidgetContext["embed"] = {
@@ -91,6 +97,12 @@ const DEFAULT_EMBED_CONTEXT: BuiltinWidgetContext["embed"] = {
 type WorkspaceViewState = {
   openMenuWidgetId: string | null;
   drag: WorkspaceDragState | null;
+  /** Per-host preview viewport choices; intentionally not persisted in workspace data. */
+  previewViewports: Map<string, PreviewViewport>;
+  /** Last shared sessions.list revision folded into the binding cache. */
+  sessionListRevision: number | undefined;
+  sessionListRevisionSeen: boolean;
+  sessionBindingGeneration: number;
   /** Resolved binding cache keyed by widgetId; refreshed when the doc changes. */
   bindingResults: Map<string, WorkspaceBindingResult>;
   bindingLoads: Set<string>;
@@ -219,6 +231,10 @@ function getViewState(host: object): WorkspaceViewState {
     state = {
       openMenuWidgetId: null,
       drag: null,
+      previewViewports: new Map(),
+      sessionListRevision: undefined,
+      sessionListRevisionSeen: false,
+      sessionBindingGeneration: 0,
       bindingResults: new Map(),
       bindingLoads: new Set(),
       bindingVersion: -1,
@@ -269,6 +285,25 @@ function primaryBinding(widget: WorkspaceWidget): WorkspaceBinding | null {
   return first ?? null;
 }
 
+function isCanonicalSessionBinding(binding: WorkspaceBinding | null): boolean {
+  return binding?.source === "rpc" && binding.method === "sessions.list";
+}
+
+function invalidateCanonicalSessionBindings(
+  viewState: WorkspaceViewState,
+  workspace: WorkspaceDocument | null,
+): void {
+  for (const tab of workspace?.tabs ?? []) {
+    for (const widget of tab.widgets) {
+      if (!isCanonicalSessionBinding(primaryBinding(widget))) {
+        continue;
+      }
+      viewState.bindingResults.delete(widget.id);
+      viewState.bindingLoads.delete(widget.id);
+    }
+  }
+}
+
 /**
  * Cache key mixing the workspace version with the data-refresh counter: a doc
  * change OR a poll tick both invalidate resolved bindings. Overflow-safe: only
@@ -302,8 +337,15 @@ function ensureBindings(
       continue;
     }
     viewState.bindingLoads.add(widget.id);
+    const sessionBindingGeneration = isCanonicalSessionBinding(binding)
+      ? viewState.sessionBindingGeneration
+      : undefined;
     void resolveBinding(client, binding).then((result) => {
-      if (viewState.bindingVersion !== key) {
+      if (
+        viewState.bindingVersion !== key ||
+        (sessionBindingGeneration !== undefined &&
+          viewState.sessionBindingGeneration !== sessionBindingGeneration)
+      ) {
         return;
       }
       viewState.bindingResults.set(widget.id, result);
@@ -475,7 +517,7 @@ function ensureManifests(
       viewState.manifestLoads.delete(name);
       if (manifest) {
         viewState.manifestCache.set(name, manifest);
-        props.onRequestUpdate?.();
+        props.onRequestUpdate();
       }
     });
   }
@@ -530,9 +572,26 @@ function renderGrid(
     `;
   }
   const callbacks = makeCallbacks(props, state, viewState, tab);
+  const decideCustomWidget = props.canApproveWidgets
+    ? (name: string, decision: "approved" | "rejected") => {
+        void approveWidget(state, props.client, { name, decision });
+      }
+    : undefined;
   const builtinContext: BuiltinWidgetContext = {
     basePath: props.basePath ?? "",
     embed: props.embed ?? DEFAULT_EMBED_CONTEXT,
+    preview: {
+      getViewport: (widgetId, fallback) => viewState.previewViewports.get(widgetId) ?? fallback,
+      setViewport: (widgetId, viewport) => {
+        viewState.previewViewports.set(widgetId, viewport);
+        props.onRequestUpdate?.();
+      },
+    },
+    customWidgetApprovals: buildCustomWidgetApprovalsSource(
+      workspace,
+      state.pendingApprovalNames,
+      decideCustomWidget,
+    ),
   };
   const rows = gridRowCount(tab.widgets);
   const minHeight = rows * WORKSPACE_ROW_HEIGHT + Math.max(0, rows - 1) * WORKSPACE_GRID_GAP;
@@ -680,6 +739,7 @@ function makeCallbacks(
     },
     onRemove: (widget) => {
       viewState.openMenuWidgetId = null;
+      viewState.previewViewports.delete(widget.id);
       void removeWidgetFromTab(state, props.client, { slug: tab.slug, widgetId: widget.id });
     },
     onEditTitle: (widget) => {
@@ -844,6 +904,15 @@ function renderDialog(
 export function renderWorkspace(props: WorkspaceProps): TemplateResult {
   const state = getWorkspaceState(props.host);
   const viewState = getViewState(props.host);
+  const sessionListRevision = props.sessionListRevision;
+  if (viewState.sessionListRevisionSeen && sessionListRevision !== viewState.sessionListRevision) {
+    // The shared session capability already coalesced the canonical event refresh.
+    // Drop only sessions.list values; unrelated data widgets keep their caches.
+    viewState.sessionBindingGeneration += 1;
+    invalidateCanonicalSessionBindings(viewState, state.workspace);
+  }
+  viewState.sessionListRevision = sessionListRevision;
+  viewState.sessionListRevisionSeen = true;
   state.requestUpdate = props.onRequestUpdate ?? null;
   // Keep the outside-click / Escape dismiss listeners in sync with the open kebab
   // menu (#3). Cheap no-op when the open state is unchanged.

@@ -505,11 +505,16 @@ function runDependencyCheckFixture(options: { historicalTarget: boolean; scripts
 function runGeneratedPublisherScenario(
   baseChangePath: "a" | "b" | null,
   options: {
+    autoMerge?: boolean;
+    existingAutoMergeMethod?: "MERGE" | "REBASE" | "SQUASH";
     existingPr?: boolean;
     expectFailure?: boolean;
+    failGeneratedPush?: boolean;
+    mergeGeneratedPush?: boolean;
     noGeneratedChange?: boolean;
     overlapPolicy?: string;
     stalePrHeadOnce?: boolean;
+    stalePrViewHeadOnce?: boolean;
     updateSource?: boolean;
   } = {},
 ) {
@@ -523,7 +528,9 @@ function runGeneratedPublisherScenario(
     const fakeBin = path.join(root, "bin");
     const runnerTemp = path.join(root, "runner-temp");
     const prState = path.join(root, "pr-open");
+    const mergeCalls = path.join(root, "merge-calls");
     const stalePrHeadOnce = path.join(root, "stale-pr-head-once");
+    const stalePrViewHeadOnce = path.join(root, "stale-pr-view-head-once");
     const summary = path.join(root, "summary.md");
 
     mkdirSync(generatedDir, { recursive: true });
@@ -533,6 +540,9 @@ function runGeneratedPublisherScenario(
     writeFileSync(summary, "", "utf8");
     if (options.stalePrHeadOnce) {
       writeFileSync(stalePrHeadOnce, "", "utf8");
+    }
+    if (options.stalePrViewHeadOnce) {
+      writeFileSync(stalePrViewHeadOnce, "", "utf8");
     }
     runGit(root, ["init", "--bare", origin]);
     runGit(root, ["init", "--initial-branch=main", worktree]);
@@ -576,6 +586,24 @@ function runGeneratedPublisherScenario(
     if (!options.noGeneratedChange) {
       writeFileSync(path.join(generatedDir, "a.txt"), "desired-a\n", "utf8");
     }
+    if (options.failGeneratedPush) {
+      writeExecutable(path.join(origin, "hooks", "pre-receive"), [
+        "#!/bin/sh",
+        'rm -f "$0"',
+        "exit 1",
+      ]);
+    }
+    if (options.mergeGeneratedPush) {
+      writeExecutable(path.join(origin, "hooks", "post-receive"), [
+        "#!/bin/sh",
+        "while read -r old_head new_head ref; do",
+        '  if [ "$ref" = "refs/heads/automation/locale" ]; then',
+        '    git update-ref refs/heads/main "$new_head"',
+        '    git update-ref -d refs/heads/automation/locale "$new_head"',
+        "  fi",
+        "done",
+      ]);
+    }
 
     writeExecutable(path.join(fakeBin, "timeout"), [
       "#!/usr/bin/env bash",
@@ -610,6 +638,21 @@ function runGeneratedPublisherScenario(
       '    printf "%s\\n" "https://github.com/openclaw/openclaw/pull/1"',
       "    ;;",
       "  pr:edit) exit 0 ;;",
+      "  pr:view)",
+      '    [[ -n "${GH_TOKEN:-}" ]]',
+      '    [[ -f "$FAKE_PR_STATE" ]]',
+      '    if [[ -f "$FAKE_STALE_PR_VIEW_HEAD_ONCE" ]]; then',
+      '      head="0000000000000000000000000000000000000000"',
+      '      rm -f "$FAKE_STALE_PR_VIEW_HEAD_ONCE"',
+      "    else",
+      '      head="$(git --git-dir="$FAKE_ORIGIN" rev-parse refs/heads/automation/locale)"',
+      "    fi",
+      '    printf "%s\\t%s\\n" "$head" "$FAKE_AUTO_MERGE_METHOD"',
+      "    ;;",
+      "  pr:merge)",
+      '    [[ "$GH_TOKEN" == "test-token" ]]',
+      '    printf "%s\\n" "$*" >> "$FAKE_MERGE_CALLS"',
+      "    ;;",
       '  *) printf "unexpected gh call: %s\\n" "$*" >&2; exit 2 ;;',
       "esac",
     ]);
@@ -625,9 +668,13 @@ function runGeneratedPublisherScenario(
         ...process.env,
         BASE_BRANCH: "main",
         COMMIT_MESSAGE: "chore(test): refresh generated output",
+        AUTO_MERGE: String(options.autoMerge ?? false),
+        FAKE_AUTO_MERGE_METHOD: options.existingAutoMergeMethod ?? "",
         FAKE_ORIGIN: origin,
+        FAKE_MERGE_CALLS: mergeCalls,
         FAKE_PR_STATE: prState,
         FAKE_STALE_HEAD_ONCE: stalePrHeadOnce,
+        FAKE_STALE_PR_VIEW_HEAD_ONCE: stalePrViewHeadOnce,
         GENERATED_PATHS: "generated",
         INVALIDATION_PATHS: "source",
         OVERLAP_POLICY: options.overlapPolicy ?? "defer",
@@ -673,7 +720,14 @@ function runGeneratedPublisherScenario(
       generatedB: branchExists
         ? runGit(root, ["--git-dir", origin, "show", `${branchRef}:generated/b.txt`])
         : "",
+      mainGeneratedA: runGit(root, [
+        "--git-dir",
+        origin,
+        "show",
+        "refs/heads/main:generated/a.txt",
+      ]),
       mainHead: runGit(root, ["--git-dir", origin, "rev-parse", "refs/heads/main"]),
+      mergeCalls: existsSync(mergeCalls) ? readFileSync(mergeCalls, "utf8") : "",
       publishOutput,
       summary: readFileSync(summary, "utf8"),
     };
@@ -771,6 +825,35 @@ describe("ci workflow guards", () => {
     expect(validationStep.run).toContain("release_gate must run from the branch at target_ref");
     expect(validationStep.run).toContain(
       "release_gate cannot be combined with historical_target_tag",
+    );
+    const diffBaseStep = preflightSteps.find(
+      (step: WorkflowStep) => step.name === "Resolve exact diff base",
+    );
+    expect(diffBaseStep.env).toMatchObject({
+      PULL_REQUEST_NUMBER: "${{ inputs.pull_request_number }}",
+      RELEASE_GATE: "${{ inputs.release_gate }}",
+    });
+    expect(diffBaseStep.run).toContain("refs/pull/${PULL_REQUEST_NUMBER}/merge");
+    expect(diffBaseStep.run).toContain('release_gate_head="$(git rev-parse "${merge_ref}^2")"');
+    expect(diffBaseStep.run).toContain(
+      "release_gate pull request head ${release_gate_head} does not match target ${target_head}",
+    );
+    expect(diffBaseStep.run).toContain('base_sha="$(git rev-parse "${merge_ref}^1")"');
+    expect(diffBaseStep.run).toContain('head_sha="$(git rev-parse "$merge_ref")"');
+    expect(diffBaseStep.run).toContain('echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"');
+    const changedScopeStep = preflightSteps.find(
+      (step: WorkflowStep) => step.name === "Detect changed scopes",
+    );
+    expect(changedScopeStep.if).toContain(
+      "github.event_name == 'workflow_dispatch' && inputs.release_gate",
+    );
+    expect(changedScopeStep.env?.OPENCLAW_ALLOW_RELEASE_GENERATED_MIX).toContain(
+      "github.event_name == 'workflow_dispatch'",
+    );
+    expect(changedScopeStep.run).toContain('elif [ "${{ github.event_name }}" = "pull_request" ]');
+    expect(changedScopeStep.run).toContain('HEAD_SHA="${{ steps.diff_base.outputs.head_sha }}"');
+    expect(changedScopeStep.run).toContain(
+      'node scripts/ci-changed-scope.mjs --base "$BASE" --head "$HEAD_SHA"',
     );
     expect(workflow.jobs.preflight.permissions).toEqual({ contents: "read" });
     expect(readFileSync(".github/workflows/ci.yml", "utf8")).toContain(
@@ -1123,7 +1206,13 @@ describe("ci workflow guards", () => {
       required: false,
       default: "defer",
     });
+    expect(publishAction.inputs["auto-merge"]).toEqual({
+      description: "Enable squash auto-merge; false rejects an inherited auto-merge request.",
+      required: false,
+      default: "false",
+    });
     expect(actionPublishStep.env.OVERLAP_POLICY).toBe("${{ inputs.overlap-policy }}");
+    expect(actionPublishStep.env.AUTO_MERGE).toBe("${{ inputs.auto-merge }}");
     expect(actionPublishStep.run).toContain('case "${OVERLAP_POLICY}" in');
     expect(actionPublishStep.run).toContain("defer | fail");
     expect(actionPublishStep.run).toContain("GIT_TERMINAL_PROMPT=0");
@@ -1192,7 +1281,19 @@ describe("ci workflow guards", () => {
     expect(actionPublishStep.run).toContain('--base "${BASE_BRANCH}"');
     expect(actionPublishStep.run).toContain('--head "${HEAD_BRANCH}"');
     expect(actionPublishStep.run).toContain('--body-file "${body_file}"');
+    expect(actionPublishStep.run).toContain("ensure_auto_merge_compatible");
+    expect(actionPublishStep.run).toContain("enable_auto_merge");
+    expect(actionPublishStep.run).not.toContain("disable_existing_auto_merge");
+    expect(actionPublishStep.run).not.toContain("--disable-auto");
+    expect(actionPublishStep.run).toContain("--json autoMergeRequest");
+    expect(actionPublishStep.run).not.toContain('GH_TOKEN="${CONTENTS_TOKEN}"');
+    expect(actionPublishStep.run).toContain(
+      '--auto --squash --match-head-commit "${published_commit}"',
+    );
     expect(actionPublishStep.run).not.toContain('HEAD:"${BASE_BRANCH}"');
+    expect(readFileSync(".github/workflows/ci.yml", "utf8")).toContain(
+      "OPENCLAW_ALLOW_RELEASE_GENERATED_MIX",
+    );
 
     for (const [
       ownerWorkflow,
@@ -1273,12 +1374,146 @@ describe("ci workflow guards", () => {
         ".github/actions/publish-generated-pr/action.yml",
       );
       expect(publishStep.with).not.toHaveProperty("overlap-policy");
+      expect(publishStep.with["auto-merge"]).toBe(
+        automationBranch.includes("control-ui") ? "true" : undefined,
+      );
       expect(publishStep.with["pr-body"]).toContain("## What Problem This Solves");
       expect(publishStep.with["pr-body"]).toContain("## Evidence");
       expect(publishStep.with["pr-body"]).toContain("${{ needs.resolve-base.outputs.sha }}");
       expect(publishStep.with["pr-body"]).not.toContain("${{ github.sha }}");
     }
   });
+
+  it.skipIf(process.platform === "win32")(
+    "enables auto-merge for the exact generated pull request head",
+    () => {
+      const result = runGeneratedPublisherScenario(null, { autoMerge: true });
+
+      expect(result.branchExists).toBe(true);
+      expect(result.mergeCalls).toContain("pr merge https://github.com/openclaw/openclaw/pull/1");
+      expect(result.mergeCalls).toContain("--auto --squash --match-head-commit");
+      expect(result.summary).toContain("Enabled squash auto-merge for exact generated head");
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "waits for the published pull request head before enabling auto-merge",
+    () => {
+      const result = runGeneratedPublisherScenario(null, {
+        autoMerge: true,
+        stalePrViewHeadOnce: true,
+      });
+
+      expect(result.mergeCalls).toContain("--auto --squash --match-head-commit");
+      expect(result.publishOutput).toContain(
+        "Generated pull request head has not converged yet; rechecking",
+      );
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "preserves inherited auto-merge while replacing a generated pull request head",
+    () => {
+      const result = runGeneratedPublisherScenario(null, {
+        autoMerge: true,
+        existingAutoMergeMethod: "SQUASH",
+        existingPr: true,
+      });
+
+      expect(result.generatedA).toBe("desired-a");
+      expect(result.mergeCalls).toBe("");
+      expect(result.summary).toContain(
+        "Squash auto-merge already enabled for generated pull request",
+      );
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "accepts inherited auto-merge completing immediately after publication",
+    () => {
+      const result = runGeneratedPublisherScenario(null, {
+        autoMerge: true,
+        existingAutoMergeMethod: "SQUASH",
+        existingPr: true,
+        mergeGeneratedPush: true,
+      });
+
+      expect(result.branchExists).toBe(false);
+      expect(result.mainGeneratedA).toBe("desired-a");
+      expect(result.mergeCalls).toBe("");
+      expect(result.summary).toContain(
+        "Generated output was merged before pull request reconciliation",
+      );
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "waits for the existing pull request head before replacing it",
+    () => {
+      const result = runGeneratedPublisherScenario(null, {
+        autoMerge: true,
+        existingAutoMergeMethod: "SQUASH",
+        existingPr: true,
+        stalePrHeadOnce: true,
+      });
+
+      expect(result.generatedA).toBe("desired-a");
+      expect(result.publishOutput).toContain(
+        "Generated pull request head has not converged yet; rechecking",
+      );
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "refuses to replace an auto-merge-enabled head when publication opts out",
+    () => {
+      const result = runGeneratedPublisherScenario(null, {
+        autoMerge: false,
+        existingAutoMergeMethod: "SQUASH",
+        existingPr: true,
+        expectFailure: true,
+      });
+
+      expect(result.generatedA).toBe("stale-pr-a");
+      expect(result.mergeCalls).toBe("");
+      expect(result.publishOutput).toContain("auto-merge enabled while publication opted out");
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "does not mutate inherited auto-merge when generated publication fails",
+    () => {
+      const result = runGeneratedPublisherScenario(null, {
+        autoMerge: true,
+        existingAutoMergeMethod: "SQUASH",
+        existingPr: true,
+        expectFailure: true,
+        failGeneratedPush: true,
+      });
+
+      expect(result.generatedA).toBe("stale-pr-a");
+      expect(result.mergeCalls).toBe("");
+      expect(result.summary).not.toContain("auto-merge");
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "rejects an incompatible inherited auto-merge method without mutating it",
+    () => {
+      const result = runGeneratedPublisherScenario(null, {
+        autoMerge: true,
+        existingAutoMergeMethod: "MERGE",
+        existingPr: true,
+        expectFailure: true,
+      });
+
+      expect(result.generatedA).toBe("stale-pr-a");
+      expect(result.mergeCalls).toBe("");
+      expect(result.publishOutput).toContain(
+        "Generated pull request already uses incompatible MERGE auto-merge",
+      );
+    },
+  );
 
   it.skipIf(process.platform === "win32")(
     "defers a newer owned snapshot even when the desired diff is disjoint",
@@ -3036,7 +3271,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     expect(localeJob.needs).toEqual(["preflight"]);
     expect(localeJob.if).toBe("needs.preflight.outputs.run_control_ui_i18n == 'true'");
-    expect(localeJob["continue-on-error"]).toBe("${{ github.event_name != 'workflow_dispatch' }}");
+    expect(localeJob["continue-on-error"]).toBe(
+      "${{ github.event_name != 'workflow_dispatch' && needs.preflight.outputs.strict_control_ui_i18n != 'true' }}",
+    );
     expect(localeStep.run).toBe("pnpm ui:i18n:check");
     expect(readFileSync(".github/workflows/full-release-validation.yml", "utf8")).toContain(
       'dispatch_and_wait ci.yml "$dispatch_run_name"',

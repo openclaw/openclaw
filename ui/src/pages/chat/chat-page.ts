@@ -10,7 +10,8 @@ import { UI_COMMAND_EVENT, type UiCommandDetail } from "../../components/panel-t
 import { t } from "../../i18n/index.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { readSessionDragData, sessionDragActive } from "../../lib/sessions/drag.ts";
-import { searchForSession } from "../../lib/sessions/index.ts";
+import { resolveSessionKey, searchForSession } from "../../lib/sessions/index.ts";
+import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import "../../styles/chat.css";
@@ -493,9 +494,14 @@ export class ChatPage extends OpenClawLightDomElement {
    * own header so the workspace toggle can read per-pane workspace state. */
   private renderPaneCell(pane: ChatSplitPane, active: boolean, weight: number, splitMode: boolean) {
     const sessions = this.context?.sessions?.state.result?.sessions ?? [];
+    // Route keys can be unresolved aliases ("main"); resolve against the
+    // hello defaults and match rows by equivalence like the pane itself
+    // does, or renamed sessions fall back to the generic key-derived title.
+    const resolvedKey =
+      resolveSessionKey(pane.sessionKey, this.context?.gateway?.snapshot?.hello) || pane.sessionKey;
     const title = resolveSessionDisplayName(
-      pane.sessionKey,
-      sessions.find((row) => row.key === pane.sessionKey),
+      resolvedKey,
+      sessions.find((row) => areUiSessionKeysEquivalent(row.key, resolvedKey)),
     );
     return html`
       <div
@@ -511,7 +517,6 @@ export class ChatPage extends OpenClawLightDomElement {
           .sessionKey=${pane.sessionKey}
           .active=${active}
           .draft=${active ? this.routeDraftForActivePane(pane.sessionKey) : undefined}
-          .showPaneHeader=${splitMode}
           .paneTitle=${title}
           .narrow=${this.narrow}
           .onOpenSplitView=${splitMode || this.narrow ? undefined : this.openSplitView}

@@ -2507,6 +2507,19 @@ export const fa: TranslationMap = {
         blockedExternal: "External embeds are disabled by your gateway policy.",
         blockedScheme: "This embed URL uses an unsupported scheme.",
       },
+      preview: {
+        missing: "این پیش‌نمایش هنوز URL ندارد.",
+        blockedExternal: "پیش‌نمایش‌های خارجی طبق خط‌مشی Gateway شما غیرفعال شده‌اند.",
+        blockedScheme: "URL این پیش‌نمایش از یک طرح‌واره پشتیبانی‌نشده استفاده می‌کند.",
+        toolbar: "کنترل‌های پیش‌نمایش",
+        reload: "بارگذاری مجدد پیش‌نمایش",
+        viewport: {
+          label: "محدوده نمایش پیش‌نمایش",
+          desktop: "رومیزی",
+          tablet: "تبلت",
+          mobile: "موبایل",
+        },
+      },
     },
   },
   workboard: {

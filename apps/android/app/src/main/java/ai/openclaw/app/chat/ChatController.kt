@@ -3787,6 +3787,30 @@ internal fun parseChatMessageContent(el: JsonElement): ChatMessageContent? {
       )
     }
 
+    "canvas" -> {
+      val preview = obj["preview"].asObjectOrNull() ?: return null
+      val sandbox = preview["sandbox"].asStringOrNull() ?: return null
+      if (preview["kind"].asStringOrNull() != "canvas" ||
+        preview["surface"].asStringOrNull() != "assistant_message" ||
+        preview["render"].asStringOrNull() != "url" ||
+        (sandbox != "scripts" && sandbox != "strict")
+      ) {
+        return null
+      }
+      val path = preview["url"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty) ?: return null
+      if (!ChatWidgetUrlResolver.supportsTarget(path)) return null
+      ChatMessageContent(
+        type = "canvas",
+        widget =
+          ChatWidgetPreview(
+            title = preview["title"].asStringOrNull(),
+            path = path,
+            preferredHeight = preview["preferredHeight"].asLongOrNull()?.coerceIn(160, 1200)?.toInt(),
+            sandbox = sandbox,
+          ),
+      )
+    }
+
     else -> null
   }
 }

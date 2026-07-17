@@ -1962,6 +1962,12 @@
                 ]
               },
               {
+                "group": "Contributing",
+                "pages": [
+                  "reference/pull-request-review-flow"
+                ]
+              },
+              {
                 "group": "Release and CI",
                 "pages": [
                   {

@@ -375,6 +375,7 @@
     <string name="native_40d04f6fb9437ff3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Il riconoscimento vocale sul dispositivo non è disponibile."</string>
     <string name="native_4122a5c9825224af" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gli allegati sono troppo grandi per essere messi in coda in un solo messaggio; rimuovine alcuni e riprova."</string>
     <string name="native_4135d64f3bde1a92" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"1 modello configurato. Aggiorna per verificare nuovamente la disponibilità."</string>
+    <string name="native_41659b48f2dc4c36" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Widget non disponibile"</string>
     <string name="native_4186107d2194d09a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Per questo host è necessaria una connessione sicura."</string>
     <string name="native_41cb8a2ca2cf1e36" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Nessuna automazione corrispondente."</string>
     <string name="native_41df9f586511e084" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Il telefono può raggiungere il Gateway"</string>

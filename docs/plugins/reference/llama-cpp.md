@@ -1,5 +1,5 @@
 ---
-summary: "Local GGUF embeddings through node-llama-cpp."
+summary: "Local GGUF text inference and embeddings through node-llama-cpp."
 read_when:
   - You are installing, configuring, or auditing the llama-cpp plugin
 title: "Llama Cpp plugin"
@@ -7,7 +7,7 @@ title: "Llama Cpp plugin"
 
 # Llama Cpp plugin
 
-Local GGUF embeddings through node-llama-cpp.
+Local GGUF text inference and embeddings through node-llama-cpp.
 
 ## Distribution
 
@@ -16,7 +16,7 @@ Local GGUF embeddings through node-llama-cpp.
 
 ## Surface
 
-contracts: `embeddingProviders`
+providers: `llama-cpp`; contracts: `embeddingProviders`
 
 ## Related docs
 

@@ -2486,6 +2486,19 @@ export const hi: TranslationMap = {
         blockedExternal: "External embeds are disabled by your gateway policy.",
         blockedScheme: "This embed URL uses an unsupported scheme.",
       },
+      preview: {
+        missing: "इस पूर्वावलोकन के लिए अभी कोई URL नहीं है।",
+        blockedExternal: "आपकी gateway नीति द्वारा बाहरी पूर्वावलोकन अक्षम किए गए हैं।",
+        blockedScheme: "यह पूर्वावलोकन URL एक असमर्थित स्कीम का उपयोग करता है।",
+        toolbar: "पूर्वावलोकन नियंत्रण",
+        reload: "पूर्वावलोकन फिर से लोड करें",
+        viewport: {
+          label: "पूर्वावलोकन व्यूपोर्ट",
+          desktop: "डेस्कटॉप",
+          tablet: "टैबलेट",
+          mobile: "मोबाइल",
+        },
+      },
     },
   },
   workboard: {

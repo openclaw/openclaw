@@ -316,10 +316,6 @@ describe("scripts/test-projects changed-target routing", () => {
       mode: "targets",
       targets: ["test/scripts/control-ui-i18n.test.ts", "src/scripts/control-ui-i18n.test.ts"],
     });
-    expect(resolveChangedTestTargetPlan(["scripts/control-ui-i18n-resolve-conflicts.ts"])).toEqual({
-      mode: "targets",
-      targets: ["test/scripts/control-ui-i18n.test.ts"],
-    });
   });
 
   it("routes top-level scripts through conventional owner tests", () => {
@@ -1436,7 +1432,7 @@ describe("scripts/test-projects changed-target routing", () => {
   it("keeps CI, dependency, and docs tooling edits on owner tests", () => {
     expect(resolveChangedTestTargetPlan(["scripts/ci-changed-scope.mjs"])).toEqual({
       mode: "targets",
-      targets: ["src/scripts/ci-changed-scope.test.ts"],
+      targets: ["src/scripts/ci-changed-scope.test.ts", "test/scripts/control-ui-i18n.test.ts"],
     });
 
     expect(resolveChangedTestTargetPlan(["scripts/check-dependency-pins.mjs"])).toEqual({

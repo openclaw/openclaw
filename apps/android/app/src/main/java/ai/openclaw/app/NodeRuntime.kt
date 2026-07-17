@@ -13,6 +13,10 @@ import ai.openclaw.app.chat.ChatPlanStep
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatThinkingLevelSelection
 import ai.openclaw.app.chat.ChatTranscriptCache
+import ai.openclaw.app.chat.ChatWidgetResource
+import ai.openclaw.app.chat.ChatWidgetSurface
+import ai.openclaw.app.chat.ChatWidgetSurfaceUrls
+import ai.openclaw.app.chat.ChatWidgetUrlResolver
 import ai.openclaw.app.chat.MainSessionBinding
 import ai.openclaw.app.chat.MessageSpeechClient
 import ai.openclaw.app.chat.MessageSpeechController
@@ -105,6 +109,7 @@ import android.os.SystemClock
 import android.util.Base64
 import android.util.Log
 import androidx.core.content.ContextCompat
+import androidx.webkit.WebViewFeature
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -467,6 +472,7 @@ class NodeRuntime private constructor(
   @Volatile private var connectingEndpointStableId: String? = null
   private val gatewayDataScopeLock = Any()
   private val gatewaySwitchMutex = Mutex()
+  private val inlineWidgetRefreshMutex = Mutex()
   private val gatewayLifecycleIntentLock = Any()
   private val gatewayLifecycleIntentSeq = AtomicLong()
   private var gatewayDataGeneration = 0L
@@ -720,6 +726,7 @@ class NodeRuntime private constructor(
           hasRecordAudioPermission() &&
           isVoiceWakeWordsReadyForCurrentGateway()
       },
+      inlineWidgetsAvailable = { WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE) },
       manualTls = { endpoint ->
         prefs.gatewayRegistry.entries.value
           .firstOrNull { it.stableId == endpoint.stableId }
@@ -4105,6 +4112,52 @@ class NodeRuntime private constructor(
   }
 
   fun isTrustedCanvasActionUrl(rawUrl: String?): Boolean = a2uiHandler.isTrustedCanvasActionUrl(rawUrl)
+
+  internal suspend fun resolveInlineWidgetResource(
+    path: String,
+    failedResource: ChatWidgetResource?,
+  ): ChatWidgetResource? {
+    fun GatewaySession.currentWidgetSurface(): ChatWidgetSurface? =
+      currentCanvasHostRoute()?.let { route ->
+        ChatWidgetSurface(
+          url = route.url,
+          tlsFingerprintSha256 = route.tlsFingerprintSha256,
+        )
+      }
+
+    fun currentSurfaceUrls(): ChatWidgetSurfaceUrls =
+      ChatWidgetSurfaceUrls(
+        node = nodeSession.currentWidgetSurface(),
+        operator = operatorSession.currentWidgetSurface(),
+      )
+
+    // Initial loads may use the operator fallback; failures rotate the preferred live route.
+    if (failedResource == null) return ChatWidgetUrlResolver.resolvePreferred(currentSurfaceUrls(), path, excluding = null)
+    return inlineWidgetRefreshMutex.withLock {
+      // Serialize both role sessions so sibling widgets cannot invalidate each other's new token.
+      ChatWidgetUrlResolver.resolveAfterFailure(
+        target = path,
+        failedResource = failedResource,
+        currentSurfaceUrls = ::currentSurfaceUrls,
+        refreshNodeSurface = { observedUrl ->
+          nodeSession.refreshCanvasHostRouteIfCurrent(observedUrl)?.let { route ->
+            ChatWidgetSurface(
+              url = route.url,
+              tlsFingerprintSha256 = route.tlsFingerprintSha256,
+            )
+          }
+        },
+        refreshOperatorSurface = { observedUrl ->
+          operatorSession.refreshCanvasHostRouteIfCurrent(observedUrl)?.let { route ->
+            ChatWidgetSurface(
+              url = route.url,
+              tlsFingerprintSha256 = route.tlsFingerprintSha256,
+            )
+          }
+        },
+      )
+    }
+  }
 
   fun loadChat(sessionKey: String) {
     val key = sessionKey.trim().ifEmpty { resolveMainSessionKey() }

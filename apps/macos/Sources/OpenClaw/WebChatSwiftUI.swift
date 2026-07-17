@@ -89,6 +89,34 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
             agentID: target.agentID)
     }
 
+    func resolveInlineWidgetResource(
+        path: String,
+        replacing failedResource: OpenClawChatWidgetResource?) async -> OpenClawChatWidgetResource?
+    {
+        await OpenClawChatWidgetURLResolver.resolveResource(
+            target: path,
+            replacing: failedResource,
+            currentSurfaceRoutes: {
+                let node = await MacNodeModeCoordinator.shared.currentCanvasPluginSurfaceRoute()
+                let operatorSurface = await GatewayConnection.shared.canvasPluginSurfaceRoute()
+                return (node: node, operatorSurface: operatorSurface)
+            },
+            // Prefer the local node route; operator rotation keeps chat usable
+            // while macOS node mode is disabled or reconnecting.
+            refreshNodeSurfaceRoute: { observed in
+                await MacNodeModeCoordinator.shared.refreshCanvasPluginSurfaceRoute(replacing: observed?.url)
+            },
+            refreshOperatorSurfaceRoute: { observed in
+                await GatewayConnection.shared.refreshCanvasPluginSurfaceRoute(replacing: observed?.url)
+            })
+    }
+
+    func resolveInlineWidgetURL(path: String, replacing failedURL: URL?) async -> URL? {
+        await self.resolveInlineWidgetResource(
+            path: path,
+            replacing: failedURL.map { OpenClawChatWidgetResource(url: $0) })?.url
+    }
+
     func listModels() async throws -> [OpenClawChatModelChoice] {
         do {
             let data = try await GatewayConnection.shared.request(OpenClawChatGatewayRequests.modelsList())
