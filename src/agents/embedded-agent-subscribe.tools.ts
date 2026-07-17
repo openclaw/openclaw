@@ -39,6 +39,18 @@ function normalizeToolErrorText(text: string): string | undefined {
   if (!firstLine) {
     return undefined;
   }
+  // Require error indicators before treating text as an error message.
+  // Without this, successful tool outputs (shellcheck "SYNTAX OK", `date`,
+  // `true`, `pwd`, grep-no-match with stderr empty, etc.) get classified
+  // as failures and rendered as a false-positive "exec failed" even though
+  // the tool exited 0. Fixes openclaw/openclaw#110222.
+  const hasErrorIndicator =
+    /\b(?:error|fail(?:ed|ing|s)?|timeout(?:s)?|timed[_\s-]?out|den(?:y|ies|ied|ying)|invalid|forbidden?|cancel(?:led|celling|ling|ed|s)?|abort(?:ed|ing|s)?|kill(?:ed|ing|s)?|exception|panic(?:ked|kking|ks)?|wrong|fatal|refus(?:e|es|ed|ing)|reject(?:ed|ing|s)?|undefined|cannot|missing|required|not\s+found|bad\s+option|EACCES|EPERM|ENOENT|EISDIR|ENOTDIR|EBUSY|EAGAIN|ETIMEDOUT|ECONNREFUSED|command\s+not\s+found|no\s+such\s+file|is\s+not\s+(?:a|an))\b/i.test(
+      firstLine,
+    );
+  if (!hasErrorIndicator) {
+    return undefined;
+  }
   return firstLine.length > TOOL_ERROR_MAX_CHARS
     ? `${truncateUtf16Safe(firstLine, TOOL_ERROR_MAX_CHARS)}…`
     : firstLine;

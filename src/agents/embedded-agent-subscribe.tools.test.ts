@@ -388,3 +388,97 @@ describe("sanitizeToolArgs", () => {
     });
   });
 });
+
+describe("normalizeToolErrorText (regression guard for #110222)", () => {
+  // Successful tool outputs that the OLD code classified as failures.
+  // These got rendered as "⚠️ 🛠️ Exec failed:" in Discord and made the bot
+  // stop mid-work despite the underlying tool exiting 0.
+  describe("returns undefined for non-error text", () => {
+    const nonErrorTexts: ReadonlyArray<readonly [string, string]> = [
+      ["shellcheck success", "SYNTAX OK"],
+      ["shellcheck success with notes", "SYNTAX OK\nscript.sh:1:1: note ... rest of body"],
+      ["date -u output", "Thu Jul 17 23:00:00 UTC 2026"],
+      ["pwd output", "/home/desktopuser"],
+      ["true output", "yes"],
+      ["empty stdout", ""],
+      ["literal OK", "OK"],
+      ["build succeeded", "Build succeeded"],
+      ["tests passed", "Tests passed"],
+      ["all good", "All good"],
+      ["ready signal", "ready"],
+      ["multi-line non-error output", "All good\nSecond line of stdout\nThird line"],
+    ];
+    // extractToolResultText reads result.content (OpenAI/Anthropic content
+    // blocks), not result.text. The path through extractToolErrorMessage
+    // that lands in normalizeToolErrorText walks via these content blocks.
+    for (const [label, text] of nonErrorTexts) {
+      it(`returns undefined for ${label}`, () => {
+        const result = {
+          content: text === "" ? [] : [{ type: "text", text }],
+        };
+        expect(extractToolErrorMessage(result)).toBeUndefined();
+      });
+    }
+  });
+
+  // Genuine error outputs that must still surface to the user.
+  describe("returns the first line when error indicators are present", () => {
+    const errorTexts: ReadonlyArray<readonly [string, string]> = [
+      ["node: bad option", "node: bad option: --foo"],
+      ["ENOENT", "Error: ENOENT: no such file or directory"],
+      ["command not found", "bash: foo: command not found"],
+      ["EACCES", "EACCES: permission denied"],
+      ["git fatal: not a repo", "fatal: not a git repository"],
+      ["timeout", "error: timeout connecting to host"],
+      ["timed out", "request timed out after 5000ms"],
+      ["missing required", "missing required argument: foo"],
+      ["mysql denied", "ERROR 1045 (28000): Access denied"],
+      ["task was canceled (US)", "Task was canceled"],
+      ["task was cancelled (UK)", "Task was cancelled"],
+      ["task was cancelling", "Task was cancelling"],
+      ["task was cancelled gracefully", "Task was cancelled gracefully"],
+      ["panic", "panic: runtime error: invalid memory address"],
+      ["cannot (fatal error)", "fatal error: cannot find module \'foo\'"],
+      ["EPERM", "EPERM: operation not permitted"],
+      ["EPERM phrase form", "EPERM: operation not permitted"],
+      ["npm ELIFECYCLE", "npm error code ELIFECYCLE"],
+      ["spawn ENOENT", "Error: spawn ENOENT"],
+      ["git not a command", "git: \'foo\' is not a git command"],
+      ["git not an option", "git: \'foo\' is not an option"],
+      [
+        "python file not found",
+        "python3: can\'t open file \'foo.py\': [Errno 2] No such file or directory",
+      ],
+      ["grep invalid option", "grep: invalid option"],
+      ["ls cannot access", "ls: cannot access \'foo\': No such file or directory"],
+      ["connection refused", "Connection refused"],
+      ["aborted", "Operation was aborted"],
+      ["killed", "The process was killed"],
+      ["killed phrase", "task was killed by signal"],
+      ["failed (status-like)", "request failed with status code 500"],
+      ["failing", "failing to start service"],
+      ["fails", "check fails"],
+    ];
+    for (const [label, text] of errorTexts) {
+      it(`returns the first line for ${label}`, () => {
+        const result = { content: [{ type: "text", text }] };
+        expect(extractToolErrorMessage(result)).toBe(text);
+      });
+    }
+  });
+
+  // Existing behavior is preserved: when a non-error tool result is wrapped
+  // in a result with a non-error status, the function still returns undefined
+  // without going through normalizeToolErrorText. This is the upstream guard
+  // against false-positive LAST_CHECK_RESULT for successful results.
+  describe("preserves upstream behavior: non-error status with non-error text", () => {
+    it("returns undefined when status is completed and text is benign", () => {
+      expect(
+        extractToolErrorMessage({
+          details: { status: "completed" },
+          content: [{ type: "text", text: "SYNTAX OK" }],
+        }),
+      ).toBeUndefined();
+    });
+  });
+});
