@@ -225,6 +225,66 @@ describe("secrets runtime snapshot", () => {
     expect(ssh?.knownHostsData).toBe("example.com ssh-ed25519 AAAATEST");
   });
 
+  it("isolates only the agent whose inherited sandbox SSH SecretRef is unavailable", async () => {
+    const missingRef = {
+      source: "env",
+      provider: "default",
+      id: "MISSING_COLD_SSH_IDENTITY",
+    } as const;
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "all",
+              backend: "ssh",
+              ssh: {
+                target: "sandbox@example.com:22",
+                identityData: missingRef,
+              },
+            },
+          },
+          list: [
+            { id: "cold" },
+            {
+              id: "healthy",
+              sandbox: {
+                ssh: {
+                  identityData: {
+                    source: "env",
+                    provider: "default",
+                    id: "HEALTHY_SSH_IDENTITY",
+                  },
+                },
+              },
+            },
+          ],
+        },
+      }),
+      env: { HEALTHY_SSH_IDENTITY: "HEALTHY PRIVATE KEY" },
+      includeAuthStoreRefs: false,
+      allowUnavailableSecretOwners: true,
+      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+    });
+
+    expect(snapshot.config.agents?.defaults?.sandbox?.ssh?.identityData).toEqual(missingRef);
+    expect(snapshot.config.agents?.list?.[1]?.sandbox?.ssh?.identityData).toBe(
+      "HEALTHY PRIVATE KEY",
+    );
+    expect(snapshot.degradedOwners).toMatchObject([
+      {
+        ownerKind: "capability",
+        ownerId: "agent-sandbox:cold",
+        state: "unavailable",
+        paths: ["agents.defaults.sandbox.ssh.identityData"],
+      },
+    ]);
+    expectWarning(snapshot, {
+      code: "SECRETS_OWNER_UNAVAILABLE",
+      path: "agents.defaults.sandbox.ssh.identityData",
+    });
+  });
+
   it("treats sandbox ssh secret refs as inactive when ssh backend is not selected", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({
