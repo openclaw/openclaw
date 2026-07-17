@@ -332,8 +332,25 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         resolved.admission ?? preflight.admission ?? ({ kind: "dispatch" } as const);
       let dispatchResult;
       if ("runDispatch" in resolved) {
+        const prepared =
+          "route" in resolved
+            ? (() => {
+                if (!mergedRuntime) {
+                  throw new Error("plugin runtime mock run used before initialization");
+                }
+                const { cfg, route, ...turn } = resolved;
+                return {
+                  ...turn,
+                  routeSessionKey: route.sessionKey,
+                  storePath: mergedRuntime.channel.session.resolveStorePath(cfg.session?.store, {
+                    agentId: route.agentId,
+                  }),
+                  recordInboundSession: mergedRuntime.channel.session.recordInboundSession,
+                };
+              })()
+            : resolved;
         dispatchResult = await runPreparedChannelTurnMock({
-          ...resolved,
+          ...prepared,
           admission,
         } as unknown as Parameters<PluginRuntime["channel"]["inbound"]["runPreparedReply"]>[0]);
       } else {

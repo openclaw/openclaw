@@ -2,7 +2,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const createChannelMessageReplyPipelineMock = vi.hoisted(() => vi.fn());
-const createReplyDispatcherWithTypingMock = vi.hoisted(() => vi.fn());
 const getMSTeamsRuntimeMock = vi.hoisted(() => vi.fn());
 const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
 const renderReplyPayloadsToMessagesMock = vi.hoisted(() => vi.fn(() => []));
@@ -13,14 +12,6 @@ vi.mock("../runtime-api.js", () => ({
   logTypingFailure: vi.fn(),
   resolveChannelMediaMaxBytes: vi.fn(() => 8 * 1024 * 1024),
 }));
-
-vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
-  return {
-    ...actual,
-    createReplyDispatcherWithTyping: createReplyDispatcherWithTypingMock,
-  };
-});
 
 vi.mock("./runtime.js", () => ({
   getMSTeamsRuntime: getMSTeamsRuntimeMock,
@@ -90,13 +81,6 @@ describe("createMSTeamsReplyDispatcher", () => {
       typingCallbacks,
     });
 
-    createReplyDispatcherWithTypingMock.mockImplementation((options) => ({
-      dispatcher: {},
-      replyOptions: {},
-      markDispatchIdle: vi.fn(),
-      _options: options,
-    }));
-
     getMSTeamsRuntimeMock.mockReturnValue({
       system: {
         enqueueSystemEvent: enqueueSystemEventMock,
@@ -106,10 +90,7 @@ describe("createMSTeamsReplyDispatcher", () => {
           resolveChunkMode: vi.fn(() => "length"),
           resolveMarkdownTableMode: vi.fn(() => "code"),
         },
-        reply: {
-          createReplyDispatcherWithTyping: createReplyDispatcherWithTypingMock,
-          resolveHumanDelayConfig: vi.fn(() => undefined),
-        },
+        reply: { resolveHumanDelayConfig: vi.fn(() => undefined) },
       },
     });
   });
@@ -190,11 +171,16 @@ describe("createMSTeamsReplyDispatcher", () => {
   };
 
   function dispatcherOptions(): DispatcherOptions {
-    const [call] = createReplyDispatcherWithTypingMock.mock.calls;
-    if (!call) {
-      throw new Error("expected reply dispatcher factory call");
+    const created = lastCreatedDispatcher;
+    if (!created) {
+      throw new Error("createDispatcher must be called first");
     }
-    return call[0] as DispatcherOptions;
+    return {
+      onReplyStart: created.dispatcherOptions.onReplyStart,
+      deliver: async (payload) => {
+        await created.delivery.deliver(payload, { kind: "final" });
+      },
+    };
   }
 
   function pipelineArgs(): PipelineArgs {
