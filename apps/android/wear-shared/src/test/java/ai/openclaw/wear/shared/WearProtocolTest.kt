@@ -106,6 +106,7 @@ class WearProtocolTest {
     assertEquals("openclaw_wear_companion_v1", WearProtocol.WATCH_CAPABILITY)
     assertEquals("agent-controls", WearProxyCapability.AgentControls.wireValue)
     assertEquals("gateway-controls", WearProxyCapability.GatewayControls.wireValue)
+    assertEquals("session-selection-lookup", WearProxyCapability.SessionSelectionLookup.wireValue)
     assertEquals(WearProxyCapability.AgentControls, WearProxyCapability.fromWireValue("agent-controls"))
     assertEquals(null, WearProxyCapability.fromWireValue("future-capability"))
   }

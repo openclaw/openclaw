@@ -1,5 +1,6 @@
 package ai.openclaw.app.wear
 
+import ai.openclaw.app.resolveAgentIdFromMainSessionKey
 import ai.openclaw.wear.shared.WearMessage
 import ai.openclaw.wear.shared.WearProxyCapability
 import ai.openclaw.wear.shared.WearRealtimeTalkCodec
@@ -188,8 +189,10 @@ internal class WearProxyController(
   }
 
   private suspend fun listSessions(params: JsonObject): JsonObject {
-    params.requireOnly("limit")
+    params.requireOnly("limit", "selectedSessionKey")
     val limit = params.intParam("limit", default = DEFAULT_SESSION_LIMIT, range = 1..MAX_SESSION_LIMIT)
+    val selectedSessionKey = params.optionalStringParam("selectedSessionKey", MAX_SESSION_KEY_CHARS)
+    val agentId = activeAgentId()?.trim()?.takeIf(String::isNotEmpty)
     val gatewayResult =
       requestGateway(
         "sessions.list",
@@ -197,15 +200,40 @@ internal class WearProxyController(
           put("limit", limit)
           put("includeGlobal", false)
           put("includeUnknown", false)
+          agentId?.let { put("agentId", it.takeCodePoints(MAX_AGENT_ID_CHARS)) }
         },
       ).asObject("sessions.list")
     val sessions =
       gatewayResult["sessions"]
         .asArrayOrNull()
-        ?.mapNotNull(::projectSession)
+        ?.mapNotNull { projectSession(it, agentId) }
         .orEmpty()
+        .toMutableList()
+    val selectedSessionValid =
+      selectedSessionKey
+        ?.takeIf { selectedKey -> sessions.none { session -> session.stringOrNull("key") == selectedKey } }
+        ?.let { selectedKey ->
+          val lookupResult =
+            requestGateway(
+              "sessions.resolve",
+              buildJsonObject {
+                put("key", selectedKey)
+                put("allowMissing", true)
+                put("includeGlobal", false)
+                put("includeUnknown", false)
+                agentId?.let { put("agentId", it.takeCodePoints(MAX_AGENT_ID_CHARS)) }
+              },
+            ).asObject("sessions.resolve")
+          val resolvedKey = lookupResult.stringOrNull("key")
+          lookupResult["ok"].booleanPrimitiveOrNull() == true &&
+            resolvedKey == selectedKey &&
+            agentId != null &&
+            resolveAgentIdFromMainSessionKey(resolvedKey) == agentId
+        } ?: false
     return buildJsonObject {
       put("sessions", JsonArray(sessions))
+      agentId?.let { put("activeAgentId", it.takeCodePoints(MAX_AGENT_ID_CHARS)) }
+      if (selectedSessionKey != null) put("selectedSessionValid", selectedSessionValid)
       gatewayResult["hasMore"].booleanPrimitiveOrNull()?.let { put("hasMore", it) }
       gatewayResult["totalCount"].longPrimitiveOrNull()?.let { put("totalCount", it) }
     }
@@ -351,11 +379,15 @@ private fun projectHistory(source: JsonObject): JsonObject =
     }
   }
 
-private fun projectSession(element: JsonElement): JsonObject? {
+private fun projectSession(
+  element: JsonElement,
+  agentId: String?,
+): JsonObject? {
   val source = element as? JsonObject ?: return null
   val key = source.stringOrNull("key") ?: source.stringOrNull("sessionKey") ?: return null
   return buildJsonObject {
     put("key", key.takeCodePoints(MAX_SESSION_KEY_CHARS))
+    agentId?.let { put("agentId", it.takeCodePoints(MAX_PROJECTED_AGENT_ID_CHARS)) }
     copyString(source, "displayName", MAX_SESSION_LABEL_CHARS)
     copyString(source, "label", MAX_SESSION_LABEL_CHARS)
     copyLong(source, "updatedAt")
@@ -532,6 +564,7 @@ private fun String.takeUtf8Bytes(maxBytes: Int): String {
 }
 
 private const val MAX_SESSION_KEY_CHARS = 512
+private const val MAX_PROJECTED_AGENT_ID_CHARS = 200
 private const val MAX_RUN_ID_CHARS = 128
 private const val MAX_IDEMPOTENCY_KEY_CHARS = 128
 private const val MAX_SESSION_LABEL_CHARS = 200

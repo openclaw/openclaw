@@ -261,13 +261,18 @@ class WearProxyControllerTest {
       var requestedMethod: String? = null
       var requestedParams: JsonObject? = null
       val controller =
-        controller { method, params ->
-          requestedMethod = method
-          requestedParams = params
-          json.parseToJsonElement(
-            """{"sessions":[{"key":"agent:main","displayName":"Main","updatedAt":7,"model":"secret-model","lastMessage":"hidden"}],"hasMore":true,"totalCount":9}""",
-          )
-        }
+        WearProxyController(
+          requestGateway = { method, params ->
+            requestedMethod = method
+            requestedParams = params
+            json.parseToJsonElement(
+              """{"sessions":[{"key":"agent:main","displayName":"Main","updatedAt":7,"model":"secret-model","lastMessage":"hidden"}],"hasMore":true,"totalCount":9}""",
+            )
+          },
+          isGatewayConnected = { true },
+          gatewayStatusText = { "Connected" },
+          activeAgentId = { "main" },
+        )
 
       val response =
         controller.handle(
@@ -280,7 +285,7 @@ class WearProxyControllerTest {
       assertEquals("sessions.list", requestedMethod)
       assertEquals(
         json
-          .parseToJsonElement("""{"limit":5,"includeGlobal":false,"includeUnknown":false}""")
+          .parseToJsonElement("""{"limit":5,"includeGlobal":false,"includeUnknown":false,"agentId":"main"}""")
           .jsonObject,
         requestedParams,
       )
@@ -291,13 +296,74 @@ class WearProxyControllerTest {
           .jsonArray
           .single()
           .jsonObject
-      assertEquals(setOf("key", "displayName", "updatedAt"), session.keys)
+      assertEquals(setOf("key", "agentId", "displayName", "updatedAt"), session.keys)
+      assertEquals("main", result.getValue("activeAgentId").jsonPrimitive.content)
       assertEquals(
         true,
         result
           .getValue("hasMore")
           .jsonPrimitive
           .content
+          .toBoolean(),
+      )
+    }
+
+  @Test
+  fun sessionsListValidatesSelectedSessionOutsideBoundedPage() =
+    runTest {
+      val requestedMethods = mutableListOf<String>()
+      val requestedParams = mutableListOf<JsonObject>()
+      val controller =
+        WearProxyController(
+          requestGateway = { method, params ->
+            requestedMethods += method
+            requestedParams += params
+            if (method == "sessions.resolve") {
+              json.parseToJsonElement("""{"ok":true,"key":"agent:main:watch-selected"}""")
+            } else {
+              assertEquals("sessions.list", method)
+              json.parseToJsonElement(
+                """{"sessions":[{"key":"agent:main:recent","displayName":"Recent"}],"hasMore":true}""",
+              )
+            }
+          },
+          isGatewayConnected = { true },
+          gatewayStatusText = { "Connected" },
+          activeAgentId = { "main" },
+        )
+
+      val response =
+        controller.handle(
+          request(
+            WearRpcMethod.SessionsList,
+            buildJsonObject {
+              put("limit", 5)
+              put("selectedSessionKey", "agent:main:watch-selected")
+            },
+          ),
+        )
+
+      assertTrue(response.ok)
+      assertEquals(
+        listOf("agent:main:recent"),
+        checkNotNull(response.result)
+          .jsonObject
+          .getValue("sessions")
+          .jsonArray
+          .map {
+            it.jsonObject
+              .getValue("key")
+              .jsonPrimitive.content
+          },
+      )
+      assertEquals(listOf("sessions.list", "sessions.resolve"), requestedMethods)
+      assertEquals("agent:main:watch-selected", requestedParams[1].getValue("key").jsonPrimitive.content)
+      assertEquals("main", requestedParams[1].getValue("agentId").jsonPrimitive.content)
+      assertTrue(
+        checkNotNull(response.result)
+          .jsonObject
+          .getValue("selectedSessionValid")
+          .jsonPrimitive.content
           .toBoolean(),
       )
     }

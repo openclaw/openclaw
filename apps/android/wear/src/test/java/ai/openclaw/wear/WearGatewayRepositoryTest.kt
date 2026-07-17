@@ -36,7 +36,7 @@ class WearGatewayRepositoryTest {
           when (method) {
             WearRpcMethod.SessionsList ->
               json.parseToJsonElement(
-                """{"sessions":[{"key":"agent:main","displayName":"Main","updatedAt":7,"hasActiveRun":true}]}""",
+                """{"sessions":[{"key":"agent:main","agentId":"main","displayName":"Main","updatedAt":7,"hasActiveRun":true}],"activeAgentId":"main","selectedSessionValid":true}""",
               )
             WearRpcMethod.ChatHistory ->
               json.parseToJsonElement(
@@ -47,7 +47,11 @@ class WearGatewayRepositoryTest {
         }
       val repository = WearGatewayRepository(requester)
 
-      val sessions = repository.sessions()
+      val sessions =
+        repository.sessions(
+          selectedSessionKey = "agent:main",
+          capabilities = setOf(WearProxyCapability.SessionSelectionLookup),
+        )
       val history = repository.history("agent:main", sessions.phoneNodeId)
 
       assertEquals("Main", sessions.sessions.single().title)
@@ -55,11 +59,14 @@ class WearGatewayRepositoryTest {
       assertEquals(7L, sessions.eventSequence)
       assertEquals("phone", sessions.phoneNodeId)
       assertEquals("phone", sessions.sessions.single().phoneNodeId)
+      assertEquals("main", sessions.sessions.single().agentId)
+      assertEquals("main", sessions.activeAgentId)
+      assertTrue(sessions.selectedSessionValid)
       assertEquals("hello 😀", history.messages.single().text)
       assertEquals("run-1", history.activeRunId)
       assertEquals("working", history.activeText)
       assertEquals(7L, history.eventSequence)
-      assertEquals(setOf("limit"), requester.calls[0].second.keys)
+      assertEquals(setOf("limit", "selectedSessionKey"), requester.calls[0].second.keys)
       assertEquals(setOf("sessionKey", "limit", "maxChars"), requester.calls[1].second.keys)
     }
 
@@ -77,7 +84,7 @@ class WearGatewayRepositoryTest {
             WearRpcMethod.AgentsSelect -> JsonObject(emptyMap())
             WearRpcMethod.GatewayDisconnect ->
               json.parseToJsonElement(
-                """{"connected":false,"status":"Offline","activeAgentId":"main","selectedModelRef":"openai/gpt-test","capabilities":["agent-controls","gateway-controls"]}""",
+                """{"connected":false,"status":"Offline","activeAgentId":"main","selectedModelRef":"openai/gpt-test","capabilities":["agent-controls","gateway-controls","session-selection-lookup"]}""",
               )
             else -> error("unexpected $method")
           }
@@ -143,7 +150,7 @@ class WearGatewayRepositoryTest {
       val requester =
         RecordingRequester { _, _ ->
           json.parseToJsonElement(
-            """{"connected":true,"status":"Connected","capabilities":["agent-controls","future-capability","gateway-controls"]}""",
+            """{"connected":true,"status":"Connected","capabilities":["agent-controls","future-capability","gateway-controls","session-selection-lookup"]}""",
           )
         }
 

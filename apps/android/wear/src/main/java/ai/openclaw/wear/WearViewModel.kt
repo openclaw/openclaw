@@ -363,9 +363,14 @@ internal class WearViewModel(
                 phoneNodeId = status.phoneNodeId,
               )
             }
+          val previousSession = mutableState.value.selectedSession
           val sessionList =
             if (status.connected) {
-              repository.sessions(status.phoneNodeId)
+              repository.sessions(
+                expectedNodeId = status.phoneNodeId,
+                selectedSessionKey = previousSession?.key,
+                capabilities = status.capabilities,
+              )
             } else {
               WearSessionList(
                 sessions = emptyList(),
@@ -374,9 +379,23 @@ internal class WearViewModel(
                 phoneNodeId = status.phoneNodeId,
               )
             }
+          if (mutableState.value.selectedSession?.key != previousSession?.key) return@launch
+          val activeSessionKey =
+            coherentWearActiveSessionKey(
+              statusAgentId = status.activeAgentId,
+              statusSessionKey = status.activeSessionKey,
+              sessionListAgentId = sessionList.activeAgentId,
+            )
+          val retainedSession =
+            previousSession?.takeIf { previous ->
+              sessionList.selectedSessionValid &&
+                previous.phoneNodeId == sessionList.phoneNodeId &&
+                sessionList.sessions.none { session -> session.key == previous.key }
+            }
+          val listedSessions = retainedSession?.let { listOf(it) + sessionList.sessions } ?: sessionList.sessions
           val projectedSessions =
-            status.activeSessionKey
-              ?.takeIf { activeKey -> sessionList.sessions.none { session -> session.key == activeKey } }
+            activeSessionKey
+              ?.takeIf { activeKey -> listedSessions.none { session -> session.key == activeKey } }
               ?.let { activeKey ->
                 listOf(
                   WearSession(
@@ -385,13 +404,13 @@ internal class WearViewModel(
                     updatedAt = null,
                     hasActiveRun = false,
                     phoneNodeId = sessionList.phoneNodeId,
+                    agentId = sessionList.activeAgentId,
                   ),
-                ) + sessionList.sessions
-              } ?: sessionList.sessions
-          val previousSession = mutableState.value.selectedSession
+                ) + listedSessions
+              } ?: listedSessions
           val selectedSession =
             projectedSessions.firstOrNull { session -> session.key == previousSession?.key }
-              ?: projectedSessions.firstOrNull { session -> session.key == status.activeSessionKey }
+              ?: projectedSessions.firstOrNull { session -> session.key == activeSessionKey }
               ?: projectedSessions.firstOrNull()
           val selectionChanged = selectedSession?.key != previousSession?.key
           val pendingEvents =
@@ -409,7 +428,8 @@ internal class WearViewModel(
               phoneNodeId = status.phoneNodeId,
               agents = agentList.agents,
               activeAgentId =
-                status.activeAgentId
+                sessionList.activeAgentId
+                  ?: status.activeAgentId
                   ?: agentList.agents.firstOrNull(WearAgent::selected)?.id,
               selectedModelRef = status.selectedModelRef,
               proxyCapabilities = status.capabilities,
@@ -742,6 +762,16 @@ internal class WearViewModel(
     talkStartJob?.cancel()
     realtimeTalkClient.shutdown()
   }
+}
+
+internal fun coherentWearActiveSessionKey(
+  statusAgentId: String?,
+  statusSessionKey: String?,
+  sessionListAgentId: String?,
+): String? {
+  // A phone-side agent switch can land between status and sessions.list. The
+  // later list owns session selection; never attach its agent to a stale key.
+  return statusSessionKey.takeIf { sessionListAgentId == null || sessionListAgentId == statusAgentId }
 }
 
 internal fun mergeEventMessage(

@@ -47,6 +47,7 @@ internal data class WearSession(
   val updatedAt: Long?,
   val hasActiveRun: Boolean,
   val phoneNodeId: String,
+  val agentId: String? = null,
 )
 
 internal data class WearSessionList(
@@ -54,6 +55,8 @@ internal data class WearSessionList(
   val eventSequence: Long?,
   val phoneNodeId: String,
   val eventStreamId: String? = null,
+  val activeAgentId: String? = null,
+  val selectedSessionValid: Boolean = false,
 )
 
 internal data class WearChatMessage(
@@ -202,12 +205,21 @@ internal class WearGatewayRepository(
     )
   }
 
-  suspend fun sessions(expectedNodeId: String? = null): WearSessionList {
+  suspend fun sessions(
+    expectedNodeId: String? = null,
+    selectedSessionKey: String? = null,
+    capabilities: Set<WearProxyCapability> = emptySet(),
+  ): WearSessionList {
     val response =
       requester
         .request(
           WearRpcMethod.SessionsList,
-          buildJsonObject { put("limit", 30) },
+          buildJsonObject {
+            put("limit", 30)
+            if (WearProxyCapability.SessionSelectionLookup in capabilities) {
+              selectedSessionKey?.takeIf(String::isNotBlank)?.let { put("selectedSessionKey", it) }
+            }
+          },
           expectedNodeId,
         )
     val result = response.payload.asObject("sessions.list")
@@ -219,6 +231,8 @@ internal class WearGatewayRepository(
       eventStreamId = response.eventStreamId,
       eventSequence = response.eventSequence,
       phoneNodeId = response.sourceNodeId,
+      activeAgentId = result.string("activeAgentId"),
+      selectedSessionValid = result.boolean("selectedSessionValid") ?: false,
     )
   }
 
@@ -347,6 +361,7 @@ private fun parseSession(
     updatedAt = source.long("updatedAt") ?: source.long("lastActivityAt"),
     hasActiveRun = source.boolean("hasActiveRun") ?: false,
     phoneNodeId = phoneNodeId,
+    agentId = source.string("agentId"),
   )
 }
 

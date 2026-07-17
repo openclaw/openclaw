@@ -38,6 +38,7 @@ enum class WearProxyCapability(
 ) {
   AgentControls(wireValue = "agent-controls"),
   GatewayControls(wireValue = "gateway-controls"),
+  SessionSelectionLookup(wireValue = "session-selection-lookup"),
   ;
 
   companion object {
