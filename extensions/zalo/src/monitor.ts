@@ -771,12 +771,10 @@ async function deliverZaloReply(params: {
     chunkText: (value) =>
       core.channel.text.chunkMarkdownTextWithMode(value, ZALO_TEXT_LIMIT, chunkMode),
     sendText: async (chunk) => {
-      try {
-        await sendMessage(token, { chat_id: chatId, text: chunk }, fetcher);
-        statusSink?.({ lastOutboundAt: Date.now() });
-      } catch (err) {
-        runtime.error?.(`Zalo message send failed: ${String(err)}`);
-      }
+      // Failures must throw so the core dispatcher records the reply as failed
+      // instead of delivered; sendMedia below already propagates the same way.
+      await sendMessage(token, { chat_id: chatId, text: chunk }, fetcher);
+      statusSink?.({ lastOutboundAt: Date.now() });
     },
     sendMedia: async ({ mediaUrl, caption }) => {
       const sendableMediaUrl =
