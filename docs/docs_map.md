@@ -5157,7 +5157,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Requirements
   - H2: Enable access
   - H3: 1. Authorize the Gateway command
-  - H3: 2. Enable sharing on the iPhone
+  - H3: 2. Enable sharing on the iOS device
   - H2: Request today's summary
   - H2: Privacy behavior
   - H2: Troubleshooting
