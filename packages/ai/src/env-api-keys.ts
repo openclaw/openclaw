@@ -212,7 +212,7 @@ export function findEnvKeys(provider: string): string[] | undefined {
     return undefined;
   }
 
-  const found = envVars.filter((envVar) => Boolean(getEnvValue(envVar)));
+  const found = envVars.filter((envVar) => Boolean(getEnvValue(envVar)?.trim()));
   return found.length > 0 ? found : undefined;
 }
 
@@ -232,9 +232,9 @@ export function getEnvApiKey(provider: string): string | undefined {
   if (provider === "google-vertex") {
     const hasCredentials = hasVertexAdcCredentials();
     const hasProject = Boolean(
-      getEnvValue("GOOGLE_CLOUD_PROJECT") || getEnvValue("GCLOUD_PROJECT"),
+      getEnvValue("GOOGLE_CLOUD_PROJECT")?.trim() || getEnvValue("GCLOUD_PROJECT")?.trim(),
     );
-    const hasLocation = Boolean(getEnvValue("GOOGLE_CLOUD_LOCATION"));
+    const hasLocation = Boolean(getEnvValue("GOOGLE_CLOUD_LOCATION")?.trim());
 
     if (hasCredentials && hasProject && hasLocation) {
       return "<authenticated>";
@@ -250,12 +250,12 @@ export function getEnvApiKey(provider: string): string | undefined {
     // 5. AWS_CONTAINER_CREDENTIALS_FULL_URI - ECS task roles (full URI)
     // 6. AWS_WEB_IDENTITY_TOKEN_FILE - IRSA (IAM Roles for Service Accounts)
     if (
-      getEnvValue("AWS_PROFILE") ||
-      (getEnvValue("AWS_ACCESS_KEY_ID") && getEnvValue("AWS_SECRET_ACCESS_KEY")) ||
-      getEnvValue("AWS_BEARER_TOKEN_BEDROCK") ||
-      getEnvValue("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI") ||
-      getEnvValue("AWS_CONTAINER_CREDENTIALS_FULL_URI") ||
-      getEnvValue("AWS_WEB_IDENTITY_TOKEN_FILE")
+      getEnvValue("AWS_PROFILE")?.trim() ||
+      (getEnvValue("AWS_ACCESS_KEY_ID")?.trim() && getEnvValue("AWS_SECRET_ACCESS_KEY")?.trim()) ||
+      getEnvValue("AWS_BEARER_TOKEN_BEDROCK")?.trim() ||
+      getEnvValue("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI")?.trim() ||
+      getEnvValue("AWS_CONTAINER_CREDENTIALS_FULL_URI")?.trim() ||
+      getEnvValue("AWS_WEB_IDENTITY_TOKEN_FILE")?.trim()
     ) {
       return "<authenticated>";
     }

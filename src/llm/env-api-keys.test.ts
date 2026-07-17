@@ -184,6 +184,45 @@ describe("getEnvApiKey", () => {
     );
   });
 
+  it("treats blank env API keys as unconfigured", async () => {
+    await withEnvAsync({ OPENAI_API_KEY: "  " }, async () => {
+      vi.resetModules();
+      const { findEnvKeys, getEnvApiKey } = await import("@openclaw/ai/internal/runtime");
+
+      expect(findEnvKeys("openai")).toBeUndefined();
+      expect(getEnvApiKey("openai")).toBeUndefined();
+    });
+  });
+
+  it("treats blank Google Vertex ADC env vars as unconfigured", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "openclaw-vertex-adc-"));
+    tempDirs.push(dir);
+    const credentialsPath = join(dir, "application_default_credentials.json");
+    await writeFile(credentialsPath, "{}", "utf-8");
+    await withEnvAsync(
+      {
+        GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
+        GOOGLE_CLOUD_LOCATION: "  ",
+        GOOGLE_CLOUD_PROJECT: "  ",
+      },
+      async () => {
+        vi.resetModules();
+        const { getEnvApiKey } = await import("@openclaw/ai/internal/runtime");
+
+        expect(getEnvApiKey("google-vertex")).toBeUndefined();
+      },
+    );
+  });
+
+  it("treats blank Amazon Bedrock env vars as unconfigured", async () => {
+    await withEnvAsync({ AWS_PROFILE: "  " }, async () => {
+      vi.resetModules();
+      const { getEnvApiKey } = await import("@openclaw/ai/internal/runtime");
+
+      expect(getEnvApiKey("amazon-bedrock")).toBeUndefined();
+    });
+  });
+
   it("trims the Google Vertex credentials path before checking it", async () => {
     const dir = await mkdtemp(join(tmpdir(), "openclaw-vertex-adc-"));
     tempDirs.push(dir);
