@@ -17,6 +17,7 @@ const detected: SystemAgentSetupDetectResult = {
       modelRef: "openai/gpt-5",
       recommended: true,
       credentials: true,
+      icon: "https://cdn.example.com/codex.png",
     },
   ],
   unavailableCandidates: [
@@ -27,7 +28,14 @@ const detected: SystemAgentSetupDetectResult = {
       reason: "No active login",
     },
   ],
-  manualProviders: [{ id: "openai", label: "OpenAI", hint: "Use a project API key." }],
+  manualProviders: [
+    {
+      id: "openai",
+      label: "OpenAI",
+      hint: "Use a project API key.",
+      icon: "https://cdn.example.com/openai.png",
+    },
+  ],
   authOptions: [
     {
       id: "openai-oauth",
@@ -35,12 +43,22 @@ const detected: SystemAgentSetupDetectResult = {
       kind: "oauth",
       featured: true,
       hint: "Continue in your browser.",
+      icon: "https://cdn.example.com/openai.png",
     },
     {
       id: "other-device",
       label: "Other provider",
       kind: "device-code",
       featured: false,
+    },
+  ],
+  recommendedInstalls: [
+    {
+      id: "ollama",
+      label: "Ollama",
+      hint: "Run open models locally",
+      website: "https://ollama.com/download",
+      icon: "https://cdn.simpleicons.org/ollama",
     },
   ],
   workspace: "/tmp/workspace",
@@ -132,6 +150,37 @@ describe("renderModelSetup", () => {
     );
     expect(container.querySelector('input[type="password"]')).not.toBeNull();
     expect(container.querySelector("details")?.open).toBe(false);
+    expect(container.querySelectorAll("img")).toHaveLength(3);
+  });
+
+  it("renders recommended install cards only when candidates and sign-ins are empty", () => {
+    const container = mount(
+      props({
+        page: {
+          phase: "ready",
+          result: { ...detected, candidates: [], authOptions: [] },
+        },
+      }),
+    );
+
+    expect(text(container)).toContain("Recommended installs");
+    expect(text(container)).toContain("Ollama Run open models locally");
+    const card = container.querySelector('[data-recommended-install="ollama"]');
+    const image = card?.querySelector<HTMLImageElement>("img");
+    const link = card?.querySelector<HTMLAnchorElement>("a");
+    expect(image?.src).toBe("https://cdn.simpleicons.org/ollama");
+    expect(image?.alt).toBe("Ollama");
+    expect(image?.width).toBe(24);
+    expect(link?.href).toBe("https://ollama.com/download");
+    expect(link?.target).toBe("_blank");
+    expect(link?.rel).toBe("noopener");
+
+    const withSignIn = mount(
+      props({
+        page: { phase: "ready", result: { ...detected, candidates: [] } },
+      }),
+    );
+    expect(withSignIn.querySelector(".model-setup__empty")).toBeNull();
   });
 
   it("renders admin and older-gateway gates without actions", () => {

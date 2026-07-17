@@ -1740,6 +1740,10 @@ export const en: TranslationMap = {
       testingButton: "Testing…",
       testing: "Testing — asking {modelRef} for a quick reply…",
     },
+    empty: {
+      title: "Recommended installs",
+      intro: "No existing AI access was detected. Install one of these tools, then check again.",
+    },
     unavailable: {
       title: "Detected, but not auto-tested",
     },
