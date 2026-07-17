@@ -2908,6 +2908,7 @@ export function startHeartbeatRunner(opts: {
   updateConfig(state.cfg);
 
   const cleanup = () => {
+    opts.abortSignal?.removeEventListener("abort", cleanup);
     if (state.stopped) {
       return;
     }
