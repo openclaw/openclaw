@@ -1083,6 +1083,11 @@ async function finalizeExecutedToolCall(
         `Tool requested ${result.control.type}, but ${result.control.type} is not supported in this runtime`,
       );
       isError = true;
+    } else if (prepared.tool.executionMode !== "sequential") {
+      result = createErrorToolResult(
+        `Tool ${prepared.tool.name} requested ${result.control.type}, but yielding tools must declare executionMode: "sequential"`,
+      );
+      isError = true;
     } else {
       try {
         await config.onToolResultControl(result.control);
