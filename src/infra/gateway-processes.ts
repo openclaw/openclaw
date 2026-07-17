@@ -43,7 +43,15 @@ export function signalVerifiedGatewayPidSync(pid: number, signal: "SIGTERM" | "S
   if (!args || !isGatewayArgv(args, { allowGatewayBinary: true })) {
     throw new Error(`refusing to signal non-gateway process pid ${pid}`);
   }
-  process.kill(pid, signal);
+  try {
+    process.kill(pid, signal);
+  } catch (err) {
+    // The verified process can exit between argv inspection and signaling;
+    // ESRCH already satisfies the requested stop or restart handoff.
+    if ((err as NodeJS.ErrnoException).code !== "ESRCH") {
+      throw err;
+    }
+  }
 }
 
 /** Find listener PIDs on `port` and keep only verified gateway processes. */

@@ -175,6 +175,33 @@ describe("gateway-processes", () => {
     );
   });
 
+  it("swallows ESRCH when a verified gateway process exits before the signal", () => {
+    setPlatform("linux");
+    readFileSyncMock.mockReturnValue("node\0gateway\0");
+    parseProcCmdlineMock.mockReturnValue(["node", "gateway"]);
+    isGatewayArgvMock.mockReturnValue(true);
+    const esrchErr = Object.assign(new Error("no such process"), { code: "ESRCH" });
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => {
+      throw esrchErr;
+    });
+
+    expect(() => signalVerifiedGatewayPidSync(500, "SIGTERM")).not.toThrow();
+    expect(killSpy).toHaveBeenCalledWith(500, "SIGTERM");
+  });
+
+  it("re-throws non-ESRCH kill errors", () => {
+    setPlatform("linux");
+    readFileSyncMock.mockReturnValue("node\0gateway\0");
+    parseProcCmdlineMock.mockReturnValue(["node", "gateway"]);
+    isGatewayArgvMock.mockReturnValue(true);
+    const epermErr = Object.assign(new Error("permission denied"), { code: "EPERM" });
+    vi.spyOn(process, "kill").mockImplementation(() => {
+      throw epermErr;
+    });
+
+    expect(() => signalVerifiedGatewayPidSync(500, "SIGTERM")).toThrow("permission denied");
+  });
+
   it("dedupes and filters verified gateway listener pids on unix and windows", () => {
     setPlatform("linux");
     findGatewayPidsOnPortSyncMock.mockReturnValue([process.pid, 200, 200, 300, -1]);
