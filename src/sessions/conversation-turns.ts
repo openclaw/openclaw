@@ -103,22 +103,22 @@ export function registerPendingConversationTurn(params: {
       timer = undefined;
     }
   };
+  let pending: PendingConversationTurn;
   const settle = (reply: ConversationTurnReply | undefined) => {
     if (settled) {
       return;
     }
     settled = true;
     markCorrelationReady();
-    pendingTurns.delete(key);
+    if (pendingTurns.get(key) === pending) {
+      pendingTurns.delete(key);
+    }
     stopTimeout();
     params.signal?.removeEventListener("abort", cancel);
     resolvePromise(reply);
   };
   const cancel = () => settle(undefined);
-  timer = setTimeout(cancel, timeoutMs);
-  timer.unref?.();
-  params.signal?.addEventListener("abort", cancel, { once: true });
-  pendingTurns.set(key, {
+  pending = {
     key,
     agentId,
     id,
@@ -131,27 +131,33 @@ export function registerPendingConversationTurn(params: {
     stopTimeout,
     claimed: false,
     settle,
-  });
+  };
+  pendingTurns.set(key, pending);
+  timer = setTimeout(cancel, timeoutMs);
+  timer.unref?.();
+  params.signal?.addEventListener("abort", cancel, { once: true });
   if (params.signal?.aborted) {
     cancel();
   }
   return {
     id,
     setOutboundMessageId: (messageId) => {
-      const pending = pendingTurns.get(key);
-      if (pending) {
-        pending.outboundMessageId = normalize(messageId);
-        if (!pending.outboundMessageId) {
-          pending.settle(undefined);
-        }
+      if (pendingTurns.get(key) !== pending) {
+        return;
+      }
+      pending.outboundMessageId = normalize(messageId);
+      if (!pending.outboundMessageId) {
+        pending.settle(undefined);
       }
     },
     markReady: () => {
-      const pending = pendingTurns.get(key);
-      if (pending?.outboundMessageId) {
+      if (pendingTurns.get(key) !== pending) {
+        return;
+      }
+      if (pending.outboundMessageId) {
         pending.markCorrelationReady();
       } else {
-        pending?.settle(undefined);
+        pending.settle(undefined);
       }
     },
     wait: async () => await promise,

@@ -207,6 +207,18 @@ describe("conversations.turn Gateway handler", () => {
     expect(runConversationTurn).toHaveBeenCalledWith(
       expect.objectContaining({ senderIsOwner: true }),
     );
+    const timeoutMismatchRespond = vi.fn<RespondFn>();
+    await invoke({
+      handler,
+      context: gatewayContext,
+      respond: timeoutMismatchRespond,
+      request: { ...request, timeoutMs: 5_000 },
+    });
+    expect(timeoutMismatchRespond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "INVALID_REQUEST" }),
+    );
     const second = invoke({ handler, context: gatewayContext, respond: secondRespond });
     finish?.(result);
     await Promise.all([first, second]);

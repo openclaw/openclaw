@@ -227,6 +227,42 @@ describe("conversation turn correlation", () => {
     expect(cancelPendingConversationTurn({ agentId: "main", id: "cancelled-turn" })).toBe(false);
   });
 
+  it("ignores delayed handle writes after a turn id is reused", async () => {
+    const first = registerPendingConversationTurn({
+      agentId: "main",
+      id: "reused-turn",
+      conversationRef: "conv_reused",
+      sessionId: "session-main",
+      timeoutMs: 5_000,
+    });
+    first.cancel();
+    await expect(first.wait()).resolves.toBeUndefined();
+
+    const replacement = registerPendingConversationTurn({
+      agentId: "main",
+      id: "reused-turn",
+      conversationRef: "conv_reused",
+      sessionId: "session-main",
+      timeoutMs: 5_000,
+    });
+    first.setOutboundMessageId("outbound-stale");
+    first.markReady();
+    replacement.setOutboundMessageId("outbound-current");
+    replacement.markReady();
+
+    const claim = await claimPendingConversationTurnReply({
+      agentId: "main",
+      conversationRef: "conv_reused",
+      sessionId: "session-main",
+      messageId: "inbound-current",
+      replyToId: "outbound-current",
+      text: "current reply",
+    });
+    expect(claim).toBeDefined();
+    claim?.complete();
+    await expect(replacement.wait()).resolves.toMatchObject({ text: "current reply" });
+  });
+
   it("isolates equal turn IDs between agents", async () => {
     const first = registerPendingConversationTurn({
       agentId: "first-agent",

@@ -33,10 +33,13 @@ function parseConversationEntry(value: unknown): MigratedConversationEntry | und
   }
 }
 
-function migratedConversation(entry: MigratedConversationEntry) {
+function migratedConversation(entry: MigratedConversationEntry, persistedChatType?: string) {
   const delivery = migratedObject(entry, "deliveryContext");
   const origin = migratedObject(entry, "origin");
-  const kind = normalizeChatType(migratedText(entry.chatType)) ?? "direct";
+  const kind =
+    normalizeChatType(migratedText(entry.chatType)) ??
+    normalizeChatType(migratedText(persistedChatType)) ??
+    "direct";
   const deliveryRouteTarget = migratedText(delivery?.to);
   const deliveryTarget =
     deliveryRouteTarget ?? (kind === "direct" ? migratedText(origin?.from) : undefined);
@@ -107,7 +110,12 @@ export function backfillSessionConversations(db: DatabaseSync): void {
   const rows = db
     .prepare(
       `
-        SELECT se.session_id, se.entry_json, se.updated_at, s.session_scope
+        SELECT
+          se.session_id,
+          se.entry_json,
+          se.updated_at,
+          s.session_scope,
+          CASE WHEN se.session_key = s.session_key THEN s.chat_type END AS persisted_chat_type
         FROM session_entries AS se
         INNER JOIN sessions AS s ON s.session_id = se.session_id
         ORDER BY se.updated_at ASC, se.session_key ASC;
@@ -115,6 +123,7 @@ export function backfillSessionConversations(db: DatabaseSync): void {
     )
     .all() as Array<{
     entry_json?: unknown;
+    persisted_chat_type?: unknown;
     session_id?: unknown;
     session_scope?: unknown;
     updated_at?: unknown;
@@ -159,7 +168,9 @@ export function backfillSessionConversations(db: DatabaseSync): void {
     const sessionId = migratedText(row.session_id);
     const entry = parseConversationEntry(row.entry_json);
     const updatedAt = typeof row.updated_at === "number" ? row.updated_at : Date.now();
-    const conversation = entry ? migratedConversation(entry) : undefined;
+    const conversation = entry
+      ? migratedConversation(entry, migratedText(row.persisted_chat_type))
+      : undefined;
     if (!sessionId || !conversation) {
       continue;
     }
@@ -188,7 +199,9 @@ export function backfillSessionConversations(db: DatabaseSync): void {
       deleteMatchingRelated.run(sessionId, conversation.conversationRef);
     }
     linkConversation.run(sessionId, conversation.conversationRef, role, updatedAt, updatedAt);
-    updatePrimary.run(role === "primary" ? conversation.conversationRef : null, sessionId);
+    if (role === "primary") {
+      updatePrimary.run(conversation.conversationRef, sessionId);
+    }
   }
 }
 

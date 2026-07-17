@@ -61,6 +61,7 @@ function bindConversationOperationIdentity(
     sourceSessionKey?: string;
     conversationRef: string;
     message: string;
+    timeoutMs?: number;
   },
 ): string | null {
   const identity = createHash("sha256")
@@ -70,6 +71,7 @@ function bindConversationOperationIdentity(
         request.sourceSessionKey ?? null,
         request.conversationRef,
         request.message,
+        request.timeoutMs ?? null,
       ]),
     )
     .digest("hex");
@@ -258,6 +260,7 @@ export function createConversationHandlers(
         ...(request.sourceSessionKey ? { sourceSessionKey: request.sourceSessionKey } : {}),
         conversationRef: request.conversationRef,
         message: request.message,
+        timeoutMs: request.timeoutMs,
       });
       if (!requestIdentity) {
         respond(

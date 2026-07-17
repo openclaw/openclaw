@@ -40,6 +40,7 @@ describe("agent DB conversation migration", () => {
         session_id TEXT PRIMARY KEY,
         session_key TEXT NOT NULL,
         session_scope TEXT NOT NULL,
+        chat_type TEXT,
         primary_conversation_id TEXT
       );
       CREATE TABLE session_entries (
@@ -69,22 +70,34 @@ describe("agent DB conversation migration", () => {
         ON session_conversations(session_id) WHERE role = 'primary';
     `);
     const insertSession = database.prepare(
-      "INSERT INTO sessions (session_id, session_key, session_scope) VALUES (?, ?, ?)",
+      "INSERT INTO sessions (session_id, session_key, session_scope, chat_type) VALUES (?, ?, ?, ?)",
     );
     const insertEntry = database.prepare(
       "INSERT INTO session_entries (session_key, session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
     );
-    insertSession.run("shared", "agent:main:main", "shared-main");
+    insertSession.run("shared", "agent:main:main", "shared-main", "channel");
     insertEntry.run(
       "agent:main:main",
       "shared",
       JSON.stringify({
-        chatType: "direct",
+        groupId: "shared-ops",
+        deliveryContext: {
+          channel: "discord",
+          accountId: "default",
+          to: "channel:shared-ops",
+        },
+      }),
+      50,
+    );
+    insertEntry.run(
+      "agent:main:reef:direct:peer-a",
+      "shared",
+      JSON.stringify({
         deliveryContext: { channel: "reef", accountId: "default", to: "reef:peer-a" },
       }),
       100,
     );
-    insertSession.run("dedicated", "agent:main:reef:direct:peer-b", "conversation");
+    insertSession.run("dedicated", "agent:main:reef:direct:peer-b", "conversation", "direct");
     insertEntry.run(
       "agent:main:reef:direct:peer-b",
       "dedicated",
@@ -109,7 +122,7 @@ describe("agent DB conversation migration", () => {
       }),
       300,
     );
-    insertSession.run("channel-case", "agent:main:discord:channel:ops-room", "channel");
+    insertSession.run("channel-case", "agent:main:discord:channel:ops-room", "channel", "channel");
     insertEntry.run(
       "agent:main:discord:channel:ops-room",
       "channel-case",
@@ -165,12 +178,29 @@ describe("agent DB conversation migration", () => {
         peer_id: "peer-a",
         delivery_target: "reef:peer-a",
       },
+      {
+        session_id: "shared",
+        role: "primary",
+        kind: "channel",
+        peer_id: "shared-ops",
+        delivery_target: "channel:shared-ops",
+      },
     ]);
     expect(
       database
         .prepare("SELECT primary_conversation_id FROM sessions WHERE session_id = 'shared'")
         .get(),
-    ).toEqual({ primary_conversation_id: null });
+    ).toEqual({ primary_conversation_id: expect.stringMatching(/^conv_[a-f0-9]{32}$/u) });
+    expect(
+      database
+        .prepare(
+          `SELECT c.peer_id
+           FROM sessions s
+           JOIN conversations c ON c.conversation_id = s.primary_conversation_id
+           WHERE s.session_id = 'shared'`,
+        )
+        .get(),
+    ).toEqual({ peer_id: "shared-ops" });
     expect(
       database
         .prepare("SELECT primary_conversation_id FROM sessions WHERE session_id = 'dedicated'")
@@ -212,6 +242,7 @@ describe("agent DB conversation migration", () => {
         session_id TEXT PRIMARY KEY,
         session_key TEXT NOT NULL,
         session_scope TEXT NOT NULL,
+        chat_type TEXT,
         primary_conversation_id TEXT
       );
       CREATE TABLE session_entries (
