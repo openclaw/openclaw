@@ -1359,6 +1359,13 @@ extension GatewayNodeSession {
             socketGeneration: socketGeneration)
     }
 
+    // periphery:ignore - package tests wait for asynchronous lifecycle cleanup before replacement traffic.
+    func _test_waitForLifecycleCallbacks() async {
+        while let barrier = self.lifecycleCallbackBarrier {
+            await barrier.task.value
+        }
+    }
+
     // periphery:ignore - package tests verify event stream filtering without a live gateway.
     func _test_broadcastServerEvent(_ event: EventFrame) {
         self.broadcastServerEvent(event)
