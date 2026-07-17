@@ -6,9 +6,19 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   listClickClackAccountIds,
   resolveClickClackAccount,
+  resolveClickClackRuntimeAccount,
   resolveDefaultClickClackAccountId,
 } from "./accounts.js";
 import type { CoreConfig } from "./types.js";
+
+function writeExecResolver(filePath: string, values: Record<string, string>) {
+  fs.writeFileSync(
+    filePath,
+    `#!/bin/sh\nprintf '%s\\n' '${JSON.stringify({ protocolVersion: 1, values })}'\n`,
+    "utf8",
+  );
+  fs.chmodSync(filePath, 0o700);
+}
 
 describe("ClickClack account resolution", () => {
   afterEach(() => {
@@ -124,6 +134,86 @@ describe("ClickClack account resolution", () => {
       timeoutSeconds: undefined,
       toolsAllow: undefined,
       workspace: "wsp_1",
+    });
+  });
+
+  it("treats configured exec SecretRefs as configured without exposing tokens in inspect snapshots", () => {
+    const cfg = {
+      channels: {
+        clickclack: {
+          enabled: true,
+          baseUrl: "https://app.clickclack.chat",
+          workspace: "wsp_1",
+          token: { source: "exec", provider: "example_exec", id: "CLICKCLACK_SERVICE_TOKEN" },
+        },
+      },
+      secrets: {
+        providers: {
+          example_exec: {
+            source: "exec",
+            command: "/not-run-during-inspection",
+            jsonOnly: true,
+            allowInsecurePath: true,
+          },
+        },
+      },
+    } satisfies CoreConfig;
+
+    const account = resolveClickClackAccount({ cfg });
+
+    expect(account.configured).toBe(true);
+    expect(account.token).toBe("");
+  });
+
+  it("resolves file and exec SecretRefs for runtime account tokens", async () => {
+    await withTempDir("clickclack-secretref-", async (tempDir) => {
+      const secretFile = path.join(tempDir, "clickclack-token");
+      fs.writeFileSync(secretFile, "  file-token-placeholder  \n", "utf8");
+      fs.chmodSync(secretFile, 0o600);
+      const execResolver = path.join(tempDir, "resolve-clickclack-token");
+      writeExecResolver(execResolver, {
+        CLICKCLACK_SERVICE_TOKEN: "  exec-token-placeholder  ",
+      });
+      const cfg = {
+        channels: {
+          clickclack: {
+            enabled: true,
+            baseUrl: "https://app.clickclack.chat",
+            workspace: "wsp_1",
+            accounts: {
+              file: {
+                token: { source: "file", provider: "clickclack_file", id: "value" },
+              },
+              exec: {
+                token: {
+                  source: "exec",
+                  provider: "clickclack_exec",
+                  id: "CLICKCLACK_SERVICE_TOKEN",
+                },
+              },
+            },
+          },
+        },
+        secrets: {
+          providers: {
+            clickclack_file: { source: "file", path: secretFile, mode: "singleValue" },
+            clickclack_exec: { source: "exec", command: execResolver, jsonOnly: true },
+          },
+        },
+      } satisfies CoreConfig;
+
+      await expect(
+        resolveClickClackRuntimeAccount({ cfg, accountId: "file" }),
+      ).resolves.toMatchObject({
+        configured: true,
+        token: "file-token-placeholder",
+      });
+      await expect(
+        resolveClickClackRuntimeAccount({ cfg, accountId: "exec" }),
+      ).resolves.toMatchObject({
+        configured: true,
+        token: "exec-token-placeholder",
+      });
     });
   });
 

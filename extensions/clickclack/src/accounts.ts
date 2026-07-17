@@ -17,6 +17,7 @@ import {
   normalizeResolvedSecretInputString,
   resolveSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
+import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ClickClackAccountConfig, CoreConfig, ResolvedClickClackAccount } from "./types.js";
 
@@ -74,6 +75,33 @@ export function resolveClickClackAccountConfig(
   return merged;
 }
 
+function clickClackTokenPath(accountId: string): string {
+  return accountId === DEFAULT_ACCOUNT_ID
+    ? "channels.clickclack.token"
+    : `channels.clickclack.accounts.${accountId}.token`;
+}
+
+function clickClackTokenFilePath(accountId: string): string {
+  return accountId === DEFAULT_ACCOUNT_ID
+    ? "channels.clickclack.tokenFile"
+    : `channels.clickclack.accounts.${accountId}.tokenFile`;
+}
+
+function readClickClackTokenFile(tokenFile: string, accountId: string): string {
+  return (
+    tryReadSecretFileSync(tokenFile, clickClackTokenFilePath(accountId), {
+      rejectSymlink: true,
+    }) ?? ""
+  );
+}
+
+function defaultEnvToken(params: { accountId: string; env?: NodeJS.ProcessEnv }): string {
+  if (params.accountId !== DEFAULT_ACCOUNT_ID) {
+    return "";
+  }
+  return normalizeSecretInputString((params.env ?? process.env).CLICKCLACK_BOT_TOKEN) ?? "";
+}
+
 function resolveClickClackToken(params: {
   cfg: CoreConfig;
   value: unknown;
@@ -83,28 +111,17 @@ function resolveClickClackToken(params: {
 }): string {
   const tokenFile = params.tokenFile?.trim();
   if (tokenFile) {
-    return (
-      tryReadSecretFileSync(
-        tokenFile,
-        params.accountId === DEFAULT_ACCOUNT_ID
-          ? "channels.clickclack.tokenFile"
-          : `channels.clickclack.accounts.${params.accountId}.tokenFile`,
-        { rejectSymlink: true },
-      ) ?? ""
-    );
+    return readClickClackTokenFile(tokenFile, params.accountId);
   }
   const resolved = resolveSecretInputString({
     value: params.value,
-    path:
-      params.accountId === DEFAULT_ACCOUNT_ID
-        ? "channels.clickclack.token"
-        : `channels.clickclack.accounts.${params.accountId}.token`,
+    path: clickClackTokenPath(params.accountId),
     defaults: params.cfg.secrets?.defaults,
     mode: "inspect",
   });
   if (resolved.status !== "available") {
     if (resolved.status === "missing" && params.accountId === DEFAULT_ACCOUNT_ID) {
-      return normalizeSecretInputString((params.env ?? process.env).CLICKCLACK_BOT_TOKEN) ?? "";
+      return defaultEnvToken(params);
     }
     if (resolved.status === "configured_unavailable" && resolved.ref.source === "env") {
       const providerConfig = params.cfg.secrets?.providers?.[resolved.ref.provider];
@@ -134,8 +151,57 @@ function resolveClickClackToken(params: {
   return (
     normalizeResolvedSecretInputString({
       value: resolved.value,
-      path: "channels.clickclack.token",
+      path: clickClackTokenPath(params.accountId),
     }) ?? ""
+  );
+}
+
+async function resolveClickClackRuntimeToken(params: {
+  cfg: CoreConfig;
+  value: unknown;
+  tokenFile?: string;
+  accountId: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<string> {
+  const tokenFile = params.tokenFile?.trim();
+  if (tokenFile) {
+    return readClickClackTokenFile(tokenFile, params.accountId);
+  }
+
+  const path = clickClackTokenPath(params.accountId);
+  const inspected = resolveSecretInputString({
+    value: params.value,
+    path,
+    defaults: params.cfg.secrets?.defaults,
+    mode: "inspect",
+  });
+  const resolved = await resolveConfiguredSecretInputString({
+    config: params.cfg,
+    env: params.env ?? process.env,
+    value: params.value,
+    path,
+  });
+  if (resolved.value) {
+    return resolved.value;
+  }
+  if (inspected.status === "missing") {
+    return defaultEnvToken(params);
+  }
+  return "";
+}
+
+function hasConfiguredClickClackToken(params: {
+  token: string;
+  value: unknown;
+  tokenFile?: string;
+  accountId: string;
+  env?: NodeJS.ProcessEnv;
+}): boolean {
+  return Boolean(
+    params.token ||
+    params.tokenFile?.trim() ||
+    hasConfiguredAccountValue(params.value) ||
+    defaultEnvToken(params),
   );
 }
 
@@ -161,10 +227,17 @@ export function resolveClickClackAccount(params: {
     env: params.env,
   });
   const workspace = merged.workspace?.trim() ?? "";
+  const hasToken = hasConfiguredClickClackToken({
+    token,
+    value: merged.token,
+    tokenFile: merged.tokenFile,
+    accountId,
+    env: params.env,
+  });
   return {
     accountId,
     enabled,
-    configured: Boolean(baseUrl && token && workspace),
+    configured: Boolean(baseUrl && hasToken && workspace),
     name: normalizeOptionalString(merged.name),
     baseUrl,
     token,
@@ -193,6 +266,30 @@ export function resolveClickClackAccount(params: {
       ...merged,
       allowFrom: merged.allowFrom ?? ["*"],
     },
+  };
+}
+
+/**
+ * Builds the runtime account snapshot with SecretRefs materialized for gateway
+ * startup and outbound delivery.
+ */
+export async function resolveClickClackRuntimeAccount(params: {
+  cfg: CoreConfig;
+  accountId?: string | null;
+  env?: NodeJS.ProcessEnv;
+}): Promise<ResolvedClickClackAccount> {
+  const account = resolveClickClackAccount(params);
+  const token = await resolveClickClackRuntimeToken({
+    cfg: params.cfg,
+    value: account.config.token,
+    tokenFile: account.config.tokenFile,
+    accountId: account.accountId,
+    env: params.env,
+  });
+  return {
+    ...account,
+    token,
+    configured: Boolean(account.baseUrl && token && account.workspace),
   };
 }
 

@@ -1,6 +1,9 @@
 // Clickclack tests cover gateway plugin behavior.
 import { EventEmitter } from "node:events";
+import fs from "node:fs";
+import path from "node:path";
 import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedClickClackAccount } from "./types.js";
 
@@ -64,22 +67,25 @@ function createGatewayContext(
   abortSignal: AbortSignal,
   options: {
     commandMenu?: boolean;
+    cfg?: ChannelGatewayContext<ResolvedClickClackAccount>["cfg"];
   } = {},
 ): ChannelGatewayContext<ResolvedClickClackAccount> {
   const setStatus = vi.fn();
   const log = { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() };
   return {
-    cfg: {
-      channels: {
-        clickclack: {
-          baseUrl: "https://clickclack.example",
-          token: "test-token",
-          workspace: "main",
-          reconnectMs: 1,
-          ...(options.commandMenu === undefined ? {} : { commandMenu: options.commandMenu }),
+    cfg:
+      options.cfg ??
+      ({
+        channels: {
+          clickclack: {
+            baseUrl: "https://clickclack.example",
+            token: "test-token",
+            workspace: "main",
+            reconnectMs: 1,
+            ...(options.commandMenu === undefined ? {} : { commandMenu: options.commandMenu }),
+          },
         },
-      },
-    } as ChannelGatewayContext<ResolvedClickClackAccount>["cfg"],
+      } as ChannelGatewayContext<ResolvedClickClackAccount>["cfg"]),
     accountId: "default",
     account: {} as ResolvedClickClackAccount,
     runtime: {} as ChannelGatewayContext<ResolvedClickClackAccount>["runtime"],
@@ -118,6 +124,15 @@ function emitMessageEvent(
       JSON.stringify({ ...event, seq: index + 1, payload: { ...event.payload, ...payload } }),
     ),
   );
+}
+
+function writeExecResolver(filePath: string, values: Record<string, string>) {
+  fs.writeFileSync(
+    filePath,
+    `#!/bin/sh\nprintf '%s\\n' '${JSON.stringify({ protocolVersion: 1, values })}'\n`,
+    "utf8",
+  );
+  fs.chmodSync(filePath, 0o700);
 }
 
 describe("ClickClack gateway", () => {
@@ -200,6 +215,51 @@ describe("ClickClack gateway", () => {
 
     abort.abort();
     await run;
+  });
+
+  it("resolves exec SecretRef tokens before gateway startup", async () => {
+    await withTempDir("clickclack-gateway-secretref-", async (tempDir) => {
+      const execResolver = path.join(tempDir, "resolve-clickclack-token");
+      writeExecResolver(execResolver, {
+        CLICKCLACK_SERVICE_TOKEN: "  exec-token-placeholder  ",
+      });
+      const socket = new FakeSocket();
+      mocks.client.websocket.mockReturnValue(socket);
+      const abort = new AbortController();
+      const ctx = createGatewayContext(abort.signal, {
+        cfg: {
+          channels: {
+            clickclack: {
+              baseUrl: "https://clickclack.example",
+              token: {
+                source: "exec",
+                provider: "clickclack_exec",
+                id: "CLICKCLACK_SERVICE_TOKEN",
+              },
+              workspace: "main",
+              reconnectMs: 1,
+              commandMenu: false,
+            },
+          },
+          secrets: {
+            providers: {
+              clickclack_exec: { source: "exec", command: execResolver, jsonOnly: true },
+            },
+          },
+        } as ChannelGatewayContext<ResolvedClickClackAccount>["cfg"],
+      });
+      const run = startClickClackGatewayAccount(ctx);
+
+      await waitForGatewayState(() => expect(mocks.client.websocket).toHaveBeenCalledTimes(1));
+
+      expect(mocks.createClickClackClient).toHaveBeenCalledWith({
+        baseUrl: "https://clickclack.example",
+        token: "exec-token-placeholder",
+      });
+
+      abort.abort();
+      await run;
+    });
   });
 
   it.each([
