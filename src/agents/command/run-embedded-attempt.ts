@@ -293,7 +293,25 @@ export async function runEmbeddedAgentAttempt(params: {
             typeof runResult.meta.finalAssistantVisibleText === "string" &&
             runResult.meta.finalAssistantVisibleText.trim().length > 0
           ) {
-            return true;
+            // A classified provider error (rate limit, overload, auth failure)
+            // can surface as visible text from an error payload. Don't
+            // short-circuit fallback when every text-bearing payload is an
+            // error or reasoning block — the visible text is a rendered error
+            // message, not a successful output (see #106277).
+            const payloads = runResult.payloads ?? [];
+            const hasNonErrorPayload = payloads.some(
+              (payload) =>
+                !payload.isError &&
+                !payload.isReasoning &&
+                typeof payload.text === "string" &&
+                payload.text.trim().length > 0,
+            );
+            // If there are no payloads (visible text came from hook/reply),
+            // treat as success. If there are payloads, require at least one
+            // non-error payload to confirm genuine assistant output.
+            if (payloads.length === 0 || hasNonErrorPayload) {
+              return true;
+            }
           }
           const payloads = runResult.payloads ?? [];
           return payloads.some(

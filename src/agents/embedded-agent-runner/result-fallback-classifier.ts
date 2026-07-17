@@ -221,7 +221,17 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
     params.result.meta.finalAssistantVisibleText.trim().length > 0 &&
     !isSilentReplyPayloadText(params.result.meta.finalAssistantVisibleText)
   ) {
-    return null;
+    // When every text-bearing payload is an error or reasoning block, the
+    // visible text is a rendered provider error (rate limit, overload, auth
+    // failure), not genuine assistant output. Let the error payload check
+    // below decide whether to fallback.
+    const innerPayloads = params.result.payloads ?? [];
+    const hasNonErrorPayload = innerPayloads.some(
+      (p) => !p.isError && !p.isReasoning && typeof p.text === "string" && p.text.trim().length > 0,
+    );
+    if (innerPayloads.length === 0 || hasNonErrorPayload) {
+      return null;
+    }
   }
   if (
     hasVisibleAgentPayload(params.result, {

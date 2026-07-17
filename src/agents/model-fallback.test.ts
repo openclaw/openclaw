@@ -2149,6 +2149,88 @@ describe("runWithModelFallback", () => {
     });
   });
 
+  it("continues fallback when finalAssistantVisibleText comes from a classified provider error payload", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "zai/glm-5.1",
+            fallbacks: ["openai/gpt-5.5"],
+          },
+        },
+      },
+    });
+    // The error text is surfaced as finalAssistantVisibleText. The old
+    // isSuccessfulResult would short-circuit because visible text is non-empty.
+    // The fix checks payloads: when every text-bearing payload is an error,
+    // the visible text is a rendered provider error, not successful output.
+    const rawError =
+      '{"success":false,"code":"CE-011","message":"当前ak因违规请求被禁止访问该模型"}';
+    const run = vi
+      .fn()
+      .mockResolvedValueOnce({
+        payloads: [{ text: rawError, isError: true }],
+        meta: { finalAssistantVisibleText: rawError, durationMs: 1 },
+      } satisfies EmbeddedAgentRunResult)
+      .mockResolvedValueOnce({
+        payloads: [{ text: "fallback ok" }],
+        meta: { durationMs: 1 },
+      } satisfies EmbeddedAgentRunResult);
+    const isSuccessfulResult = vi.fn(
+      // Matches the production isSuccessfulResult in run-embedded-attempt.ts
+      (runResult: EmbeddedAgentRunResult) => {
+        if (
+          runResult.didSendViaMessagingTool ||
+          ("didDeliverSourceReplyViaMessageTool" in runResult &&
+            (runResult as Record<string, unknown>).didDeliverSourceReplyViaMessageTool)
+        ) {
+          return true;
+        }
+        if (
+          typeof runResult.meta?.finalAssistantVisibleText === "string" &&
+          runResult.meta.finalAssistantVisibleText.trim().length > 0
+        ) {
+          const payloads = runResult.payloads ?? [];
+          const hasNonErrorPayload = payloads.some(
+            (p) =>
+              !p.isError &&
+              !p.isReasoning &&
+              typeof p.text === "string" &&
+              p.text.trim().length > 0,
+          );
+          if (payloads.length === 0 || hasNonErrorPayload) {
+            return true;
+          }
+        }
+        const payloads = runResult.payloads ?? [];
+        return payloads.some(
+          (p) =>
+            !p.isError && !p.isReasoning && typeof p.text === "string" && p.text.trim().length > 0,
+        );
+      },
+    );
+
+    const result = await runWithModelFallback<EmbeddedAgentRunResult>({
+      cfg,
+      provider: "zai",
+      model: "glm-5.1",
+      run,
+      classifyResult: ({ provider, model, result: resultLocal }) =>
+        classifyEmbeddedAgentRunResultForModelFallback({
+          provider,
+          model,
+          result: resultLocal,
+        }),
+      isSuccessfulResult,
+    });
+
+    // Fallback should fire despite finalAssistantVisibleText being non-empty,
+    // because all payloads are error payloads.
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(result.result.payloads).toEqual([{ text: "fallback ok" }]);
+    expect(isSuccessfulResult).toHaveBeenCalledTimes(1);
+  });
+
   it("surfaces classified terminal results when no fallback remains", async () => {
     const cfg = makeCfg({
       agents: {
