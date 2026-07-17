@@ -97,6 +97,7 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
 }));
 
 let TelegramPollingSession: typeof import("./polling-session.js").TelegramPollingSession;
+let telegramPollingSessionTesting: typeof import("../test-api.js").telegramPollingSessionTesting;
 const telegramSpooledRetryDeadLetterMinAgeMs = 24 * 60 * 60 * 1000;
 const pollingSessionTesting = {
   createTelegramRestartBackoffState,
@@ -740,6 +741,7 @@ function startIsolatedIngressSession(params: {
 describe("TelegramPollingSession", () => {
   beforeAll(async () => {
     ({ TelegramPollingSession } = await import("./polling-session.js"));
+    ({ telegramPollingSessionTesting } = await import("../test-api.js"));
     ({ writeTelegramSpooledUpdate } = await import("./telegram-ingress-spool.js"));
     ({
       claimNextTelegramSpooledUpdate,
@@ -4374,6 +4376,117 @@ describe("TelegramPollingSession", () => {
     }
   });
 
+  it("holds the polling lease until a pending runner stop settles after abort", async () => {
+    const abort = new AbortController();
+    const botStop = vi.fn(async () => undefined);
+    createTelegramBotMock.mockReturnValue({
+      api: {
+        deleteWebhook: vi.fn(async () => true),
+        getUpdates: vi.fn(async () => []),
+        config: { use: vi.fn() },
+      },
+      stop: botStop,
+    });
+
+    let releaseRunnerStop: (() => void) | undefined;
+    const runnerStop = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseRunnerStop = resolve;
+        }),
+    );
+    let resolveTask: (() => void) | undefined;
+    const task = new Promise<void>((resolve) => {
+      resolveTask = resolve;
+    });
+    runMock.mockReturnValue({
+      task: () => task,
+      // grammY semantics: stop() lets the polling loop exit promptly while the
+      // returned promise keeps draining in-flight middleware.
+      stop: vi.fn(() => {
+        resolveTask?.();
+        return runnerStop();
+      }),
+      isRunning: () => true,
+    });
+
+    const session = createPollingSession({ abortSignal: abort.signal });
+    let leaseReleased = false;
+    const runPromise = session.runUntilAbort().then(() => {
+      leaseReleased = true;
+    });
+
+    await waitForTelegramTestState(() => expect(runMock).toHaveBeenCalledTimes(1));
+    abort.abort();
+
+    // The abort triggers runner.stop(), but while that stop promise is still
+    // draining, runUntilAbort must not return: the monitor releases the polling
+    // lease when it does, and a replacement poller would overlap getUpdates.
+    await waitForTelegramTestState(() => expect(runnerStop).toHaveBeenCalledTimes(1));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 50);
+    });
+    expect(leaseReleased).toBe(false);
+
+    releaseRunnerStop?.();
+    await runPromise;
+    expect(leaseReleased).toBe(true);
+    // The cleanup barrier also started bot.shutdown concurrently with the wait.
+    expect(botStop).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases the polling lease at the grace deadline when the runner stop never settles", async () => {
+    vi.useFakeTimers();
+    try {
+      const abort = new AbortController();
+      const botStop = vi.fn(async () => undefined);
+      createTelegramBotMock.mockReturnValue({
+        api: {
+          deleteWebhook: vi.fn(async () => true),
+          getUpdates: vi.fn(async () => []),
+          config: { use: vi.fn() },
+        },
+        stop: botStop,
+      });
+
+      const runnerStop = vi.fn(() => new Promise<void>(() => {}));
+      let resolveTask: (() => void) | undefined;
+      const task = new Promise<void>((resolve) => {
+        resolveTask = resolve;
+      });
+      runMock.mockReturnValue({
+        task: () => task,
+        stop: vi.fn(() => {
+          resolveTask?.();
+          return runnerStop();
+        }),
+        isRunning: () => true,
+      });
+
+      const session = createPollingSession({ abortSignal: abort.signal });
+      let leaseReleased = false;
+      const runPromise = session.runUntilAbort().then(() => {
+        leaseReleased = true;
+      });
+
+      // The startup path is microtask-only; flush until the polling cycle runs.
+      for (let attempt = 0; attempt < 100 && runMock.mock.calls.length === 0; attempt += 1) {
+        await Promise.resolve();
+      }
+      expect(runMock).toHaveBeenCalledTimes(1);
+
+      abort.abort();
+      await vi.advanceTimersByTimeAsync(telegramPollingSessionTesting.POLL_STOP_GRACE_MS - 1);
+      expect(leaseReleased).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await runPromise;
+      expect(leaseReleased).toBe(true);
+      expect(botStop).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("cools down repeated stop-timeout restart bursts", () => {
     computeBackoffMock.mockImplementation((policy: { initialMs: number }, attempt: number) => {
       if (policy.initialMs === 120_000) {
@@ -5084,6 +5197,92 @@ describe("TelegramPollingSession", () => {
     // dispose() closes transport2 since it becomes the held transport after the rebuild.
     expect(transport1.close).toHaveBeenCalled();
     expect(transport2.close).toHaveBeenCalled();
+  });
+});
+
+describe("waitForGracefulStop", () => {
+  let waitForGracefulStop: (typeof import("../test-api.js"))["telegramPollingSessionTesting"]["waitForGracefulStop"];
+  let pollStopGraceMs: number;
+
+  beforeAll(async () => {
+    const testing = (await import("../test-api.js")).telegramPollingSessionTesting;
+    waitForGracefulStop = testing.waitForGracefulStop;
+    pollStopGraceMs = testing.POLL_STOP_GRACE_MS;
+  });
+
+  it("starts every stop concurrently and resolves once all of them settle", async () => {
+    const started: string[] = [];
+    let releaseRunner: (() => void) | undefined;
+    let releaseBot: (() => void) | undefined;
+    const runnerStop = vi.fn(() => {
+      started.push("runner");
+      return new Promise<void>((resolve) => {
+        releaseRunner = resolve;
+      });
+    });
+    const botStop = vi.fn(() => {
+      started.push("bot");
+      return new Promise<void>((resolve) => {
+        releaseBot = resolve;
+      });
+    });
+
+    let settled = false;
+    const wait = waitForGracefulStop([runnerStop, botStop]).then(() => {
+      settled = true;
+    });
+
+    // Both shutdown paths start together instead of serial 15s grace windows.
+    expect(started).toEqual(["runner", "bot"]);
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    releaseRunner?.();
+    await Promise.resolve();
+    await Promise.resolve();
+    // The barrier holds while the bot stop is still pending.
+    expect(settled).toBe(false);
+
+    releaseBot?.();
+    await wait;
+    expect(settled).toBe(true);
+  });
+
+  it("forces completion at the grace deadline when a stop never settles", async () => {
+    vi.useFakeTimers();
+    try {
+      const wedgedStop = vi.fn(() => new Promise<void>(() => {}));
+      let settled = false;
+      const wait = waitForGracefulStop([wedgedStop]).then(() => {
+        settled = true;
+      });
+      expect(wedgedStop).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(pollStopGraceMs - 1);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await wait;
+      expect(settled).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("resolves without riding out the grace window when every stop is already settled", async () => {
+    vi.useFakeTimers();
+    try {
+      let settled = false;
+      const wait = waitForGracefulStop([async () => undefined, async () => undefined]).then(() => {
+        settled = true;
+      });
+      // Settled stops resolve through the microtask queue ahead of the deadline
+      // timer; no timer advance is needed.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toBe(true);
+      await wait;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

@@ -53,11 +53,23 @@ function normalizeTelegramAccountId(accountId?: string | null): string {
 
 type TelegramBot = ReturnType<typeof createTelegramBot>;
 
-const waitForGracefulStop = async (stop: () => Promise<void>) => {
+// Shared cleanup barrier for session shutdown. Abort/restart paths TRIGGER the
+// stops, but this wait is time-bounded only: it must not resolve early on the
+// owner abort signal. runUntilAbort returns (and the account monitor releases
+// the polling lease) only after every stop promise has settled or the grace
+// deadline expired, so a replacement monitor cannot start a competing poller
+// while grammY runner.stop() is still draining middleware (Telegram 409s).
+const waitForGracefulStop = async (stops: ReadonlyArray<() => Promise<void>>) => {
+  // Start every stop concurrently; stop handles memoize their in-flight
+  // promise, so stops already triggered by abort/restart are joined, not
+  // restarted.
+  const allSettled = Promise.allSettled(stops.map((stop) => stop()));
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
+    // Already-settled stops resolve through the microtask queue before the
+    // deadline timer can fire, so the clean-shutdown fast path stays immediate.
     await Promise.race([
-      stop(),
+      allSettled,
       new Promise<void>((resolve) => {
         timer = setTimeout(resolve, POLL_STOP_GRACE_MS);
         timer.unref?.();
@@ -707,7 +719,7 @@ export class TelegramPollingSession {
       }
       this.#ingressDrain?.dispose();
       this.#ingressDrain = undefined;
-      await waitForGracefulStop(stopBot);
+      await waitForGracefulStop([stopBot]);
       if (this.#activeCycleAbort === cycleAbortController) {
         this.#activeCycleAbort = undefined;
       }
@@ -890,8 +902,7 @@ export class TelegramPollingSession {
       clearForceCycleTimer();
       this.opts.abortSignal?.removeEventListener("abort", abortFetch);
       this.opts.abortSignal?.removeEventListener("abort", stopOnAbort);
-      await waitForGracefulStop(stopRunner);
-      await waitForGracefulStop(stopBot);
+      await waitForGracefulStop([stopRunner, stopBot]);
       this.#activeRunner = undefined;
       if (this.#activeCycleAbort === fetchAbortController) {
         this.#activeCycleAbort = undefined;
@@ -921,5 +932,9 @@ const isGetUpdatesConflict = (err: unknown) => {
   const normalizedHaystack = normalizeLowercaseStringOrEmpty(haystack);
   return normalizedHaystack.includes("getupdates");
 };
+
+// Test-only surface. Re-exported from the plugin root `test-api.ts` entry so Knip's
+// production scan sees the consumer; tests import `testing` from `test-api.js`.
+export const testing = { POLL_STOP_GRACE_MS, waitForGracefulStop };
 
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
