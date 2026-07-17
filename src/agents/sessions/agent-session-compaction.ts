@@ -141,7 +141,14 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     }
 
     const pathEntries = this.sessionManager.getBranch();
-    const preparation = unwrapCoreResult(prepareCompaction(pathEntries, options.settings));
+    let preparation = unwrapCoreResult(prepareCompaction(pathEntries, options.settings));
+    if (!preparation && isManual) {
+      // An explicit request should compact the smallest valid history instead of
+      // relying on the old empty-summary behavior when the whole session fits the keep budget.
+      preparation = unwrapCoreResult(
+        prepareCompaction(pathEntries, { ...options.settings, keepRecentTokens: 0 }),
+      );
+    }
     if (!preparation) {
       if (isManual) {
         const lastEntry = pathEntries[pathEntries.length - 1];

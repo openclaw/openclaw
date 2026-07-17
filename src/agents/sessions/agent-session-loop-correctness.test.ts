@@ -201,6 +201,31 @@ afterEach(() => {
 });
 
 describe("AgentSession loop correctness", () => {
+  it("manually compacts a completed turn smaller than the retained-token budget", async () => {
+    const sessionManager = SessionManager.inMemory();
+    appendHistory(
+      sessionManager,
+      createAssistant(testModel, [{ type: "text", text: "short answer" }]),
+    );
+    const settingsManager = SettingsManager.inMemory({
+      compaction: { enabled: true, reserveTokens: 0, keepRecentTokens: 10_000 },
+      retry: { enabled: false },
+    });
+    const { session } = await createTestSession({
+      sessionManager,
+      settingsManager,
+      resourceLoader: createResourceLoader(createCompactionHandlers()),
+    });
+
+    const result = await session.compact();
+
+    expect(result.summary).toBe("condensed history");
+    expect(sessionManager.getBranch().at(-1)).toMatchObject({
+      type: "compaction",
+      summary: "condensed history",
+    });
+  });
+
   it("keeps a successful high-usage response and performs threshold maintenance without retry", async () => {
     const settingsManager = SettingsManager.inMemory({
       compaction: { enabled: true, reserveTokens: 0, keepRecentTokens: 1 },
