@@ -70,7 +70,7 @@ function buildAccount(config?: Partial<ResolvedFeishuAccount["config"]>): Resolv
     enabled: true,
     configured: true,
     appId: "cli_test",
-    appSecret: "secret_test", // pragma: allowlist secret
+    appSecret: "test-app-secret",
     domain: "feishu",
     config: {
       enabled: true,
