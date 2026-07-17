@@ -478,9 +478,10 @@ describe("SQLite active transcript event projection", () => {
         JSON.stringify({ id: scope.sessionId, type: "session", version: 3 }),
         0,
       );
+      // Cardinality and parent links drive this bound; keep unrelated payload bytes minimal.
       for (let index = 1; index <= 100_000; index += 1) {
-        const eventId = `message-${index}`;
-        const parentId = index === 1 ? null : `message-${index - 1}`;
+        const eventId = `m${index}`;
+        const parentId = index === 1 ? null : `m${index - 1}`;
         insertEvent.run(
           scope.sessionId,
           index,
@@ -488,7 +489,7 @@ describe("SQLite active transcript event projection", () => {
             type: "message",
             id: eventId,
             parentId,
-            message: { role: "toolResult", content: `payload-${index}` },
+            message: { role: "toolResult", content: "x" },
           }),
           index,
         );
@@ -501,7 +502,7 @@ describe("SQLite active transcript event projection", () => {
             INSERT INTO session_transcript_index_state
               (session_id, indexed_seq, leaf_event_id, needs_rebuild,
                active_event_count, active_message_count, updated_at)
-            VALUES (?, 100000, 'message-100000', 0, 100000, 100000, 100000)
+            VALUES (?, 100000, 'm100000', 0, 100000, 100000, 100000)
           `,
         )
         .run(scope.sessionId);
@@ -527,10 +528,10 @@ describe("SQLite active transcript event projection", () => {
       maxLines: 3,
       maxMessages: 10,
     });
-    const byId = readSessionTranscriptMessageEventById(scope, "message-100000");
+    const byId = readSessionTranscriptMessageEventById(scope, "m100000");
     const anchor = readSessionTranscriptMessageAnchorPage(scope, {
       maxMessages: 5,
-      messageId: "message-100000",
+      messageId: "m100000",
     });
 
     expect(page.totalMessages).toBe(100_000);
@@ -559,9 +560,9 @@ describe("SQLite active transcript event projection", () => {
       .run(
         JSON.stringify({
           type: "message",
-          id: "message-1",
+          id: "m1",
           parentId: null,
-          message: { role: "toolResult", content: "payload-1" },
+          message: { role: "toolResult", content: "x" },
         }),
         scope.sessionId,
       );
@@ -589,8 +590,8 @@ describe("SQLite active transcript event projection", () => {
     const liveWrite = await persistSessionTranscriptTurn(scope, {
       messages: [
         {
-          eventId: "message-100001",
-          parentId: "message-100000",
+          eventId: "m100001",
+          parentId: "m100000",
           message: { role: "toolResult", content: "live-write" },
         },
       ],

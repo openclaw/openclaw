@@ -88,6 +88,7 @@ import {
   resolveRunnerMatrix,
   resolveStaticFileContentType,
   startStaticFileServer,
+  trimForSummary,
   shouldExerciseManagedGatewayLifecycleAfterInstall,
   shouldRunPackagedUpgradeStatusProbe,
   shouldRunWindowsInstalledBrowserOverrideImportSmoke,
@@ -208,6 +209,41 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(text).toContain("[truncated]");
     expect(text).not.toContain(tail);
     expect(CROSS_OS_FETCH_BODY_MAX_CHARS).toBeGreaterThan(1024);
+  });
+
+  it.each([
+    {
+      caseName: "drops a split surrogate pair",
+      responseBody: `abc\u{1f600}tail`,
+      expectedText: "abc\n[truncated]",
+    },
+    {
+      caseName: "preserves a complete surrogate pair",
+      responseBody: `ab\u{1f600}tail`,
+      expectedText: `ab\u{1f600}\n[truncated]`,
+    },
+  ])(
+    "keeps cross-OS response truncation UTF-16 safe: $caseName",
+    async ({ responseBody, expectedText }) => {
+      const response = new Response(responseBody);
+
+      await expect(readBoundedCrossOsResponseText(response, 4)).resolves.toBe(expectedText);
+    },
+  );
+
+  it.each([
+    {
+      caseName: "drops a split surrogate pair",
+      input: `${"x".repeat(599)}\u{1f600}tail`,
+      expected: `${"x".repeat(599)}...`,
+    },
+    {
+      caseName: "preserves a complete surrogate pair",
+      input: `${"x".repeat(598)}\u{1f600}tail`,
+      expected: `${"x".repeat(598)}\u{1f600}...`,
+    },
+  ])("keeps cross-OS summaries UTF-16 safe: $caseName", ({ input, expected }) => {
+    expect(trimForSummary(input)).toBe(expected);
   });
 
   it("keeps cross-OS fetch timeouts active while reading response bodies", async () => {

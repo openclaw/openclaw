@@ -20,6 +20,7 @@ export function collectHostedGateEvidence({
   pullRequestHeadBranch,
   pullRequestHeadRepository,
   workflowRuns,
+  ciGateJobs,
   changelogOnly,
   nowMs,
 }: {
@@ -30,6 +31,7 @@ export function collectHostedGateEvidence({
   pullRequestHeadBranch?: string;
   pullRequestHeadRepository?: string;
   workflowRuns: Array<Record<string, unknown>>;
+  ciGateJobs?: Array<Record<string, unknown>>;
   changelogOnly?: boolean | undefined;
   nowMs?: number | undefined;
 }): {

@@ -113,6 +113,14 @@ async function callGatewayCli(method: string, opts: GatewayRpcOpts, params?: unk
   return mod.callGatewayCli(method, opts, params);
 }
 
+function parseGatewayCallParams(value = "{}"): unknown {
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    throw new Error("--params must be valid JSON.");
+  }
+}
+
 async function loadSettledCostUsageSummary(
   rpcOpts: GatewayRpcOpts,
   params: { days: number; agentId?: string; agentScope?: "all" },
@@ -586,7 +594,7 @@ export function registerGatewayCli(program: Command) {
         await runGatewayCommand(
           async () => {
             const rpcOpts = resolveGatewayRpcOptions(opts, command);
-            const params = JSON.parse(String(opts.params ?? "{}"));
+            const params = parseGatewayCallParams(String(opts.params ?? "{}"));
             const result = await callGatewayCli(method, rpcOpts, params);
             if (rpcOpts.json) {
               defaultRuntime.writeJson(result);

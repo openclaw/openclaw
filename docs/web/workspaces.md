@@ -38,10 +38,10 @@ collapse it, hide it, or delete it.
 
 ## Built-in widgets
 
-Ten trusted widgets ship with the plugin and render as first-party UI:
+Eleven trusted widgets ship with the plugin and render as first-party UI:
 
 `stat-card`, `markdown`, `table`, `iframe-embed`, `sessions`, `usage`, `cron`,
-`instances`, `activity`, `chart`.
+`instances`, `activity`, `chart`, `preview`.
 
 The `chart` widget renders dependency-free inline SVG as `line`, `bar`, `area`,
 `sparkline`, or `gauge`. Bind `value` to a numeric array or to an object shaped like
@@ -49,6 +49,13 @@ The `chart` widget renders dependency-free inline SVG as `line`, `bar`, `area`,
 visual and optionally set finite numeric `props.min` and `props.max` bounds. Invalid
 types, bounds, points, and series longer than 500 entries render a safe error state;
 empty series render an empty state.
+
+The `preview` widget embeds a live page with reload plus desktop, tablet, and mobile
+viewport controls. Set `props.url`, or bind `value` to a URL when the preview target is
+data-driven; a binding takes precedence over the prop. Relative and same-origin HTTP(S)
+URLs are allowed. External HTTP(S) URLs follow the gateway's external-embed policy, and
+other schemes are blocked. Preview frames share the `iframe-embed` sandbox ceiling and
+never receive same-origin access.
 
 Widgets declare data through **bindings**, they never fetch on their own:
 
