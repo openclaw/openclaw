@@ -14,6 +14,7 @@ import {
   overflowBaseRunParams,
   warmRunOverflowCompactionHarness,
 } from "./run.overflow-compaction.harness.js";
+import { stripSessionsYieldArtifacts } from "./run/attempt.sessions-yield.js";
 import { isEmbeddedAgentRunActive, queueEmbeddedAgentMessageWithOutcome } from "./runs.js";
 
 let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
@@ -133,5 +134,30 @@ describe("sessions_yield orchestration", () => {
     // Neither clientToolCall nor yieldDetected → stopReason is undefined
     expect(result.meta.stopReason).toBeUndefined();
     expect(result.meta.pendingToolCalls).toBeUndefined();
+  });
+});
+
+describe("stripSessionsYieldArtifacts — trailing assistant stripping (#109638)", () => {
+  it("strips trailing regular assistant messages after aborted + yield interrupt", () => {
+    const messages: any[] = [
+      { role: "user", content: "do something" },
+      { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "fn", input: {} }] },
+      { role: "tool_result", tool_use_id: "t1", content: "ok" },
+      { role: "assistant", content: [{ type: "tool_use", id: "t2", name: "fn2", input: {} }] },
+      { role: "tool_result", tool_use_id: "t2", content: "done" },
+      { role: "assistant", stopReason: "aborted", content: [] },
+      { role: "custom", customType: "openclaw.sessions_yield_interrupt" },
+    ];
+
+    const activeSession = {
+      messages: messages.slice(),
+      agent: { state: { messages: messages.slice() } },
+    };
+
+    stripSessionsYieldArtifacts(activeSession);
+
+    const last = activeSession.agent.state.messages.at(-1) as any;
+    expect(last.role).toBe("tool_result");
+    expect(last.tool_use_id).toBe("t2");
   });
 });

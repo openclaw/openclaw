@@ -195,6 +195,14 @@ export function stripSessionsYieldArtifacts(activeSession: {
     }
     break;
   }
+  while (strippedMessages.length > 0) {
+    const last = strippedMessages.at(-1) as AgentMessage | { role?: string };
+    if (last?.role === "assistant") {
+      strippedMessages.pop();
+      continue;
+    }
+    break;
+  }
   if (strippedMessages.length !== activeSession.messages.length) {
     activeSession.agent.state.messages = strippedMessages;
   }
@@ -238,7 +246,8 @@ export function stripSessionsYieldArtifacts(activeSession: {
       const isYieldInterruptMessage =
         entry.type === "custom_message" &&
         entry.customType === SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE;
-      return isYieldAbortAssistant || isYieldInterruptMessage;
+      const isTrailingAssistant = entry.type === "message" && entry.message?.role === "assistant";
+      return isYieldAbortAssistant || isYieldInterruptMessage || isTrailingAssistant;
     },
     {
       preserveTrailing: (entry) =>
