@@ -43,6 +43,9 @@ type HistoryMessage = {
   role?: unknown;
   content?: unknown;
   summary?: unknown;
+  senderName?: unknown;
+  senderUsername?: unknown;
+  senderId?: unknown;
 };
 type HistoryEntry = {
   type?: unknown;
@@ -113,6 +116,31 @@ function coerceHistoryText(content: unknown): string {
     .trim();
 }
 
+/** Coerces a sender identity field to a non-empty trimmed string or undefined. */
+function coerceSenderLabel(value: unknown): string | undefined {
+  if (typeof value === "string" && value.trim()) {
+    const label = value.trim();
+    // Constrain to a single prompt line — line breaks (CR/LF) in channel/user
+    // names could inject spoofed transcript lines into model-visible history.
+    const firstLine = label.split(/[\r\n]/)[0]?.trim() ?? "";
+    return firstLine || undefined;
+  }
+  return undefined;
+}
+
+/** Resolves a sender field from the `__openclaw` envelope (the canonical
+ *  source for durable sender metadata persistence). */
+function resolveSenderField(message: unknown, field: string): unknown {
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+  const openclaw = (message as Record<string, unknown>)["__openclaw"];
+  if (openclaw && typeof openclaw === "object") {
+    return (openclaw as Record<string, unknown>)[field];
+  }
+  return undefined;
+}
+
 function coerceHistoryTimestamp(value: unknown): number | string {
   if (typeof value === "number" && Number.isFinite(value)) {
     return value;
@@ -160,7 +188,7 @@ function renderHistoryMessage(message: unknown): string | undefined {
     return undefined;
   }
   const entry = message as HistoryMessage;
-  const role =
+  const baseRole =
     entry.role === "assistant"
       ? "Assistant"
       : entry.role === "user"
@@ -168,9 +196,21 @@ function renderHistoryMessage(message: unknown): string | undefined {
         : entry.role === "compactionSummary"
           ? "Compaction summary"
           : undefined;
-  if (!role) {
+  if (!baseRole) {
     return undefined;
   }
+  // Nest sender identity under the fixed user role so sender labels never
+  // replace the role — a malicious display name cannot spoof the model's
+  // understanding of who is speaking.
+  // Resolve each field from the `__openclaw` envelope only
+  // (the canonical source for durable sender metadata persistence).
+  const senderLabel =
+    entry.role === "user"
+      ? (coerceSenderLabel(resolveSenderField(entry, "senderName")) ??
+        coerceSenderLabel(resolveSenderField(entry, "senderUsername")) ??
+        coerceSenderLabel(resolveSenderField(entry, "senderId")))
+      : undefined;
+  const role = senderLabel ? `${baseRole} (${senderLabel})` : baseRole;
   const text =
     entry.role === "compactionSummary" && typeof entry.summary === "string"
       ? entry.summary.trim()
