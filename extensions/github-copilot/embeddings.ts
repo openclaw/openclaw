@@ -283,19 +283,19 @@ export const githubCopilotMemoryEmbeddingProviderAdapter: MemoryEmbeddingProvide
   allowExplicitWhenConfiguredAuto: true,
   shouldContinueAutoSelection: (err: unknown) => isCopilotSetupError(err),
   create: async (options) => {
-    const remoteGithubToken = await resolveConfiguredSecretInputString({
+    const explicitValue = await resolveConfiguredSecretInputString({
       config: options.config,
       env: process.env,
       value: options.remote?.apiKey,
       path: "agents.*.memorySearch.remote.apiKey",
     });
-    const { githubToken: profileGithubToken } = await resolveFirstGithubToken({
+    const { githubToken: profileValue } = await resolveFirstGithubToken({
       agentDir: options.agentDir,
       config: options.config,
       env: process.env,
     });
-    const githubToken = remoteGithubToken.value || profileGithubToken;
-    if (!githubToken) {
+    const value = explicitValue.value || profileValue;
+    if (!value) {
       throw new Error("No GitHub token available for Copilot embedding provider");
     }
 
@@ -304,7 +304,7 @@ export const githubCopilotMemoryEmbeddingProviderAdapter: MemoryEmbeddingProvide
       config: options.config,
     });
     const { token: copilotToken, baseUrl: resolvedBaseUrl } = await resolveCopilotApiToken({
-      githubToken,
+      githubToken: value,
       env: process.env,
       githubDomain,
     });
