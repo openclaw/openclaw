@@ -566,11 +566,11 @@ export async function getStatusSummary(
     channelSummary,
     queuedSystemEvents,
     degradedSecretOwners: listActiveDegradedSecretOwners().map(
-      ({ ownerKind, ownerId, state, paths, reason }) => ({
+      ({ ownerKind, ownerId, state, paths: ownerPaths, reason }) => ({
         ownerKind,
         ownerId,
         state,
-        paths,
+        paths: ownerPaths,
         reason,
       }),
     ),
