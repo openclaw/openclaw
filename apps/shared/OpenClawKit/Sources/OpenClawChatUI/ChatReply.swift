@@ -31,6 +31,9 @@ enum ChatReplyQuote {
         let senderLabel = replyTarget.senderLabel.trimmingCharacters(in: .whitespacesAndNewlines)
         let label = self.escapeMarkdownInline(senderLabel.isEmpty ? "User" : senderLabel)
         let text = replyTarget.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        // LF-only detection matches the web encoder (chat-send.ts
+        // prependReplyQuote) byte-for-byte; normalizing CR here would make
+        // native quotes diverge from web transcripts for identical targets.
         if !text.contains("\n") {
             return "> **\(label):** \(text)\n\n\(message)"
         }

@@ -370,11 +370,14 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
     }
 
     func synthesizeSpeech(text: String) async throws -> OpenClawChatSpeechClip {
-        if let outboxGatewayID {
-            try await Self.requireGateway(outboxGatewayID)
-        }
+        // Capture the lease before validating the pinned gateway: a gateway
+        // switch after validation then fails the request via the lease guard
+        // instead of re-routing the text to the newly selected gateway.
         guard let serverLease = await GatewayConnection.shared.captureServerLease() else {
             throw OpenClawChatTransportSendError.notDispatched
+        }
+        if let outboxGatewayID {
+            try await Self.requireGateway(outboxGatewayID)
         }
         return try await MacChatMessageSpeechClient.synthesize(
             text: text,

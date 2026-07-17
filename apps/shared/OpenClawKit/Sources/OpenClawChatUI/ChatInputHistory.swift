@@ -69,6 +69,12 @@ struct ChatInputHistory: Equatable, Sendable {
             self.entries.append(entry)
         }
         for entry in newerAdditions where self.entries.first != entry {
+            // A newer transcript addition that already exists in history is a
+            // restore after transient rollback (cache vs live pagination) or a
+            // resend; move it to the front instead of duplicating the entry.
+            if let existing = self.entries.firstIndex(of: entry) {
+                self.entries.remove(at: existing)
+            }
             self.entries.insert(entry, at: 0)
         }
         self.enforceLimit()

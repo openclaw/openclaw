@@ -128,6 +128,16 @@ struct ChatInputHistoryTests {
         #expect(history.entries == ["two", "one", "zero"])
     }
 
+    @Test func `rollback restore after local command does not duplicate entries`() {
+        var history = ChatInputHistory()
+        history.seed(transcriptInputs: ["one", "two"])
+        history.record("/compact")
+        history.seed(transcriptInputs: ["one"])
+        history.seed(transcriptInputs: ["one", "two"])
+
+        #expect(history.entries == ["two", "/compact", "one"])
+    }
+
     @Test func `manual edit exits recall without overwriting stashed draft`() {
         var history = ChatInputHistory()
         history.record("sent")
