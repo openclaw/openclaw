@@ -50,6 +50,7 @@ Use for background feature builds, PR reviews, large refactors, and issue-to-PR 
 - Never checkout branches or run background coding agents in `~/Projects/openclaw`; use an isolated checkout.
 - Classify the source ref as trusted or untrusted before any checkout or worktree creation. Never materialize a contributor-controlled ref outside the repository's approved untrusted-PR sandbox/review workflow, and never launch a permission-bypassed worker in it.
 - For tasks that modify a Git-backed project, prepare and verify the Git worktree before launch, then include the exact Git preparation block below in the worker prompt.
+- When the same ChatGPT account is authenticated for both OpenClaw OAuth and Codex CLI (`~/.codex`), the two clients can invalidate each other's refresh tokens (`refresh_token_reused`). Isolate the Codex credential home: create a dedicated `CODEX_HOME` outside every Git worktree (`mkdir -p <safe-path> && chmod 700 <safe-path>`), run `CODEX_HOME=<safe-path> codex login` once, and prepend `CODEX_HOME=<safe-path>` to every `codex exec` launch below. Codex scopes CLI auth to `CODEX_HOME`, but the configured credential store may persist it in `$CODEX_HOME/auth.json`, the OS keyring, or a keyring-with-file-fallback mode; treat the home path and matching keyring entry as credentials and never stage or commit them. The runtime's bounded-turn path already isolates `CODEX_HOME`; this rule applies to the manual launch forms.
 
 ## Mandatory Git preparation
 
@@ -123,7 +124,7 @@ Use `$PROMPT` when launching from the same shell/session. If using a separate to
 Codex:
 
 ```bash
-bash pty:true background:true workdir:/path/isolated-worktree command:"codex exec - < \"$PROMPT\""
+bash pty:true background:true workdir:/path/isolated-worktree command:"CODEX_HOME=/safe/path/.codex-isolated codex exec - < \"$PROMPT\""
 ```
 
 Claude Code:
@@ -153,13 +154,25 @@ Codex needs a trusted git repo. This throwaway scaffold is not project work and 
 ```bash
 SCRATCH=$(mktemp -d)
 git -C "$SCRATCH" init
+CODEX_HOME=$(mktemp -d)
+chmod 700 "$CODEX_HOME"
+CODEX_HOME=$CODEX_HOME codex login
 PROMPT=$(mktemp -t openclaw-worker-prompt.XXXXXX)
 cat >"$PROMPT" <<'EOF'
 Build X.
 <notification block>
 EOF
 printf 'prompt file: %s\n' "$PROMPT"
-bash pty:true background:true workdir:$SCRATCH command:"codex exec - < \"$PROMPT\""
+bash pty:true background:true workdir:$SCRATCH command:"CODEX_HOME=$CODEX_HOME codex exec - < \"$PROMPT\""
+```
+
+The scratch worker uses a dedicated, authenticated `CODEX_HOME` outside `$SCRATCH` (mode 700) so it never discovers the ambient `~/.codex` credential or places auth state inside a Git checkout. For repeated scratch workers, reuse a previously authenticated external home instead of creating a fresh empty one each time:
+
+```bash
+CODEX_HOME=/safe/path/.codex-isolated
+mkdir -p "$CODEX_HOME"
+chmod 700 "$CODEX_HOME"
+CODEX_HOME=$CODEX_HOME codex login
 ```
 
 ## Process actions
