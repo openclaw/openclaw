@@ -1,4 +1,7 @@
-import type { SessionApprovalReplay } from "../../../packages/gateway-protocol/src/index.js";
+import type {
+  SessionApprovalReplay,
+  SystemAgentChatQuestion,
+} from "../../../packages/gateway-protocol/src/index.js";
 // Shared server-method types define the client, context, response, and handler
 // contracts used by every gateway RPC method module.
 import type {
@@ -98,6 +101,7 @@ type GatewaySystemAgentSession = {
       text: string;
       action: "none" | "exit" | "open-tui" | "open-setup";
       sensitive?: boolean;
+      question?: SystemAgentChatQuestion;
     }>;
     getPendingOperatorProposal: () => { operation: SystemAgentOperation; hash: string } | null;
     resolveOperatorApproval: (
@@ -107,6 +111,7 @@ type GatewaySystemAgentSession = {
     dispose: () => Promise<void>;
   };
   welcome: string;
+  welcomeQuestion?: SystemAgentChatQuestion;
   lastUsedAt: number;
   delegationKey?: string;
   pendingApproval?: { id: string; proposalHash: string };
