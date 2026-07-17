@@ -3,7 +3,7 @@ import type { App } from "@slack/bolt";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatSlackError } from "../errors.js";
 
-export type SlackSuggestedPrompt = {
+type SlackSuggestedPrompt = {
   title: string;
   message: string;
 };

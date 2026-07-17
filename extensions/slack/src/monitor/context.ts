@@ -40,7 +40,6 @@ import {
 
 export { normalizeSlackChannelType, resolveSlackChatType } from "./channel-type.js";
 export { DEFAULT_SLACK_SUGGESTED_PROMPTS } from "./suggested-prompts.js";
-export type { SlackSuggestedPrompt } from "./suggested-prompts.js";
 
 export type SlackAssistantThreadContext = {
   assistantChannelId: string;
