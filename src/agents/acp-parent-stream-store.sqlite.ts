@@ -6,7 +6,6 @@ import {
 } from "../infra/kysely-sync.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import {
-  openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabaseOptions,
 } from "../state/openclaw-agent-db.js";
@@ -65,21 +64,4 @@ export function recordAcpParentStreamEvents(
       ),
     );
   }, options);
-}
-
-/** Lists one run's recorded stream events in emission order. */
-export function listAcpParentStreamEvents(
-  options: OpenClawAgentDatabaseOptions & { sessionId: string; runId: string },
-): AcpParentStreamEvent[] {
-  const database = openOpenClawAgentDatabase(options);
-  const db = getAcpParentStreamKysely(database.db);
-  return executeSqliteQuerySync(
-    database.db,
-    db
-      .selectFrom("acp_parent_stream_events")
-      .select("event_json")
-      .where("session_id", "=", options.sessionId)
-      .where("run_id", "=", options.runId)
-      .orderBy("seq", "asc"),
-  ).rows.map((row) => JSON.parse(row.event_json) as AcpParentStreamEvent);
 }

@@ -6,10 +6,8 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
-import {
-  listAcpParentStreamEvents,
-  recordAcpParentStreamEvents,
-} from "./acp-parent-stream-store.sqlite.js";
+import { recordAcpParentStreamEvents } from "./acp-parent-stream-store.sqlite.js";
+import { listAcpParentStreamEventsForTest } from "./acp-parent-stream-store.sqlite.test-support.js";
 
 describe("ACP parent stream SQLite store", () => {
   afterEach(() => {
@@ -47,7 +45,7 @@ describe("ACP parent stream SQLite store", () => {
       });
 
       expect(
-        listAcpParentStreamEvents({ ...options, sessionId: "session-1", runId: "run-1" }),
+        listAcpParentStreamEventsForTest({ ...options, sessionId: "session-1", runId: "run-1" }),
       ).toEqual([
         { kind: "assistant_delta", delta: "one" },
         { kind: "lifecycle", phase: "end" },
@@ -61,7 +59,7 @@ describe("ACP parent stream SQLite store", () => {
         );
       }, options);
       expect(
-        listAcpParentStreamEvents({ ...options, sessionId: "session-1", runId: "run-1" }),
+        listAcpParentStreamEventsForTest({ ...options, sessionId: "session-1", runId: "run-1" }),
       ).toEqual([]);
     });
   });

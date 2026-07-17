@@ -2,13 +2,10 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  CONFIG_AUDIT_MAX_ENTRIES,
-  CONFIG_AUDIT_SCOPE,
-  listConfigAuditRecordsForTests,
-} from "../config/io.audit.js";
+import { CONFIG_AUDIT_MAX_ENTRIES, CONFIG_AUDIT_SCOPE } from "../config/io.audit.js";
+import { listConfigAuditRecordsForTests } from "../config/io.audit.test-support.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
-import { listSystemAgentAuditEntriesForTests } from "../system-agent/audit.js";
+import { listSystemAgentAuditEntriesForTests } from "../system-agent/audit.test-support.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import { createSqliteAuditRecordStore } from "./sqlite-audit-record-store.js";

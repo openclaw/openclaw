@@ -6,7 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
-import { listSystemAgentAuditEntriesForTests } from "./audit.js";
+import { listSystemAgentAuditEntriesForTests } from "./audit.test-support.js";
 import {
   describeSystemAgentPersistentOperation,
   executeSystemAgentOperation,

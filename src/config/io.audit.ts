@@ -628,12 +628,3 @@ export function appendConfigAuditRecordSync(params: ConfigAuditAppendParams): vo
     // best-effort
   }
 }
-
-export function listConfigAuditRecordsForTests(params: {
-  env: NodeJS.ProcessEnv;
-  homedir: () => string;
-}): ConfigAuditRecord[] {
-  return openConfigAuditStore(resolveConfigAuditStoreEnv(params))
-    .entries()
-    .map((entry) => entry.value);
-}

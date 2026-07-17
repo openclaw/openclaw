@@ -11,7 +11,7 @@ import {
 } from "../plugin-state/plugin-state-store.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { listSystemAgentAuditEntriesForTests } from "./audit.js";
+import { listSystemAgentAuditEntriesForTests } from "./audit.test-support.js";
 import { extractSystemAgentRescueMessage, runSystemAgentRescueMessage } from "./rescue-message.js";
 
 let tempRoot = "";

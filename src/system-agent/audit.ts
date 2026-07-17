@@ -48,7 +48,3 @@ export async function appendSystemAgentAuditEntry(
   );
   return SYSTEM_AGENT_AUDIT_STORE_LABEL;
 }
-
-export function listSystemAgentAuditEntriesForTests(params?: { env?: NodeJS.ProcessEnv }) {
-  return openSystemAgentAuditStore(params?.env).entries();
-}

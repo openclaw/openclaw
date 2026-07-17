@@ -10,10 +10,10 @@ import {
   createConfigWriteAuditRecordBase,
   finalizeConfigWriteAuditRecord,
   formatConfigOverwriteLogMessage,
-  listConfigAuditRecordsForTests,
   resolveLegacyConfigAuditLogPath,
   scrubConfigAuditLog,
 } from "./io.audit.js";
+import { listConfigAuditRecordsForTests } from "./io.audit.test-support.js";
 
 function createAuditRecordBase(configPath: string, argv?: string[]) {
   return createConfigWriteAuditRecordBase({

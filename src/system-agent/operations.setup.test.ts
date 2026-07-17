@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
-import { listSystemAgentAuditEntriesForTests } from "./audit.js";
+import { listSystemAgentAuditEntriesForTests } from "./audit.test-support.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import { executeSystemAgentOperation, isPersistentSystemAgentOperation } from "./operations.js";
 import { createSystemAgentTestRuntime } from "./system-agent.test-helpers.js";

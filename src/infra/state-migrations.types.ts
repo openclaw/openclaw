@@ -1,7 +1,7 @@
 import type { ChannelLegacyStateMigrationPlan } from "../channels/plugins/types.core.js";
 import type { SessionScope } from "../config/sessions/types.js";
 import type { PluginDoctorStateMigration } from "../plugins/doctor-contract-registry.js";
-import type { LegacyAuditLogsDetection } from "./state-migrations.audit-logs.js";
+import type { LegacyAuditLogsDetection } from "./state-migrations.audit-logs.types.js";
 import type { LegacyChannelPairingStateDetection } from "./state-migrations.channel-pairing.js";
 import type { LegacyMcpOAuthDetection } from "./state-migrations.mcp-oauth.types.js";
 import type { LegacyRestartSentinelDetection } from "./state-migrations.restart-sentinel.types.js";

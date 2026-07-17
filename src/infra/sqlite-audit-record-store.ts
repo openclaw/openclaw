@@ -22,9 +22,10 @@ type DiagnosticEventRow = Pick<
 
 // diagnostic_events has ordinary SQLite rowids. They preserve append order across
 // timestamp ties; event_key is record identity and must not determine chronology.
-const auditInsertionSequence = sql<number>`rowid`;
+const auditInsertionSequence =
+  /* kysely-allow-raw: hidden rowid is the table's append-order tie breaker. */ sql<number>`rowid`;
 
-export type SqliteAuditRecordEntry<T> = {
+type SqliteAuditRecordEntry<T> = {
   key: string;
   value: T;
   createdAt: number;

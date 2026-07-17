@@ -16,19 +16,12 @@ import {
 } from "../system-agent/audit.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import { createSqliteAuditRecordStore } from "./sqlite-audit-record-store.js";
+import type {
+  LegacyAuditLogSource,
+  LegacyAuditLogsDetection,
+} from "./state-migrations.audit-logs.types.js";
 import { archiveLegacyImportSource } from "./state-migrations.storage.js";
-import type { LegacyStateDetection, MigrationMessages } from "./state-migrations.types.js";
-
-export type LegacyAuditLogSource = {
-  kind: "config" | "system-agent" | "crestodian";
-  label: string;
-  sourcePath: string;
-};
-
-export type LegacyAuditLogsDetection = {
-  sources: LegacyAuditLogSource[];
-  hasLegacy: boolean;
-};
+import type { MigrationMessages } from "./state-migrations.types.js";
 
 type PreparedAuditRecord = {
   key: string;
@@ -237,7 +230,7 @@ function migrateLegacyAuditLogSource(params: {
 }
 
 export async function migrateLegacyAuditLogs(params: {
-  detected: LegacyStateDetection["auditLogs"];
+  detected: LegacyAuditLogsDetection;
   stateDir: string;
 }): Promise<MigrationMessages> {
   const changes: string[] = [];

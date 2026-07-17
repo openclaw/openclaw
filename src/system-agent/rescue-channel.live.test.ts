@@ -8,7 +8,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
-import { listSystemAgentAuditEntriesForTests } from "./audit.js";
+import { listSystemAgentAuditEntriesForTests } from "./audit.test-support.js";
 import { runSystemAgentRescueMessage } from "./rescue-message.js";
 
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;

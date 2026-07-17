@@ -1,14 +1,14 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { createPluginStateSyncKeyedStore } from "../plugin-state/plugin-state-store.js";
-import type { MemoryHostEventRecord } from "./events.js";
+import type { MemoryHostEventRecord } from "./event-types.js";
 
 const MEMORY_HOST_EVENTS_PLUGIN_ID = "memory-core";
 const MEMORY_HOST_EVENTS_NAMESPACE = "memory-host.events";
 const MAX_MEMORY_HOST_EVENTS = 50_000;
 const WORKSPACE_HASH_BYTES = 24;
 
-export type StoredMemoryHostEvent = {
+type StoredMemoryHostEvent = {
   kind: "event";
   workspaceKey: string;
   event: MemoryHostEventRecord;
@@ -24,13 +24,13 @@ type StoredMemoryHostCursor = {
 
 type StoredMemoryHostEntry = StoredMemoryHostEvent | StoredMemoryHostCursor;
 
-export type PersistedMemoryHostEvent = {
+type PersistedMemoryHostEvent = {
   key: string;
   value: StoredMemoryHostEvent;
   createdAt: number;
 };
 
-export function normalizeMemoryHostWorkspaceKey(workspaceDir: string): string {
+function normalizeMemoryHostWorkspaceKey(workspaceDir: string): string {
   const resolved = path.resolve(workspaceDir).replace(/\\/g, "/");
   return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
