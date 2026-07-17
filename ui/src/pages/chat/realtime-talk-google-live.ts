@@ -68,6 +68,7 @@ function googleLiveVideoMessage(frame: RealtimeTalkVideoFrame): unknown {
     },
   };
 }
+
 const GOOGLE_LIVE_SETUP_TIMEOUT_MS = 30_000;
 
 // Browser sessions can still pin a 2.5 model, whose text and tool-response wire
