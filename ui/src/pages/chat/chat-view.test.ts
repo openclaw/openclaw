@@ -295,10 +295,6 @@ vi.mock("../../lib/agents/tools-effective.ts", () => ({
   refreshVisibleToolsEffectiveForCurrentSession: refreshVisibleToolsEffectiveForCurrentSessionMock,
 }));
 
-vi.mock("../../lib/agents/display.ts", () => ({
-  assistantAvatarFallbackUrl: () => "apple-touch-icon.png",
-}));
-
 function createSessionsResultFromRows(
   sessions: GatewaySessionRow[],
   overrides: Partial<

@@ -104,7 +104,7 @@ function collectSkillAssignments(params: {
   context: ResolverContext;
 }): void {
   for (const [skillKey, entry] of Object.entries(params.entries)) {
-    collectSecretInputAssignment({
+    collectRuntimeSecretInputAssignment({
       value: entry.apiKey,
       path: `skills.entries.${skillKey}.apiKey`,
       expected: "string",
@@ -112,6 +112,14 @@ function collectSkillAssignments(params: {
       context: params.context,
       active: entry.enabled !== false,
       inactiveReason: "skill entry is disabled.",
+      // Keep this id aligned with isSkillSecretOwnerUnavailable so a failed key
+      // removes only its owning skill from prompts and runtime env injection.
+      owner: {
+        ownerKind: "capability",
+        ownerId: `skill:${skillKey}`,
+        requiredForGateway: false,
+        disposition: "isolate",
+      },
       apply: (value) => {
         entry.apiKey = value;
       },

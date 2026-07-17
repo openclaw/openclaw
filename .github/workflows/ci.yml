@@ -644,7 +644,7 @@ jobs:
                 save_vitest_fs_cache: shard.saveVitestFsCache,
                 targets: shard.targets,
                 requires_go:
-                  shard.shardName === "core-tooling" ||
+                  shard.shardName.startsWith("core-tooling") ||
                   shard.groups?.some((group) => group.shard_name.startsWith("core-tooling")),
               }));
           const nodeTestNonDistShards = nodeTestShards.filter((shard) => !shard.requires_dist);
@@ -1016,6 +1016,11 @@ jobs:
           install-bun: "false"
           node-compile-cache: "true"
           node-compile-cache-scope: "build"
+          # Blacksmith same-repo runs clone dependencies from a sticky disk.
+          # Fork PRs must keep actions/cache: sticky snapshots are writable,
+          # repository-global state and must never be produced by fork code.
+          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
           runtime-cache-sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           save-node-compile-cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'true' || 'false' }}
 
@@ -1227,6 +1232,11 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+          # Blacksmith same-repo runs clone dependencies from a sticky disk.
+          # Fork PRs must keep actions/cache: sticky snapshots are writable,
+          # repository-global state and must never be produced by fork code.
+          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       - name: Check native app i18n inventory
         run: pnpm native:i18n:check
@@ -1254,6 +1264,11 @@ jobs:
         with:
           node-version: "24.x"
           install-bun: "false"
+          # Blacksmith same-repo runs clone dependencies from a sticky disk.
+          # Fork PRs must keep actions/cache: sticky snapshots are writable,
+          # repository-global state and must never be produced by fork code.
+          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       - name: Install Playwright Chromium
         run: |
@@ -1298,6 +1313,11 @@ jobs:
         with:
           node-version: "24.x"
           install-bun: "false"
+          # Blacksmith same-repo runs clone dependencies from a sticky disk.
+          # Fork PRs must keep actions/cache: sticky snapshots are writable,
+          # repository-global state and must never be produced by fork code.
+          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       - name: Check Control UI locale parity
         run: pnpm ui:i18n:check
@@ -1371,6 +1391,11 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: ${{ matrix.task == 'bun-launcher' && 'true' || 'false' }}
+          # Blacksmith same-repo runs clone dependencies from a sticky disk.
+          # Fork PRs must keep actions/cache: sticky snapshots are writable,
+          # repository-global state and must never be produced by fork code.
+          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         env:
@@ -1500,6 +1525,11 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+          # Blacksmith same-repo runs clone dependencies from a sticky disk.
+          # Fork PRs must keep actions/cache: sticky snapshots are writable,
+          # repository-global state and must never be produced by fork code.
+          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       - name: Set up Blacksmith Docker layer cache
         if: ${{ matrix.docker_cache == true && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') }}
@@ -1671,6 +1701,11 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+          # Blacksmith same-repo runs clone dependencies from a sticky disk.
+          # Fork PRs must keep actions/cache: sticky snapshots are writable,
+          # repository-global state and must never be produced by fork code.
+          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       - name: Run plugin contract shard
         env:
@@ -1709,6 +1744,11 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+          # Blacksmith same-repo runs clone dependencies from a sticky disk.
+          # Fork PRs must keep actions/cache: sticky snapshots are writable,
+          # repository-global state and must never be produced by fork code.
+          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       - name: Run channel contract shard
         env:
@@ -1783,14 +1823,15 @@ jobs:
           # Blacksmith same-repo runs clone dependencies from a sticky disk.
           # Fork PRs must keep actions/cache: sticky snapshots are writable,
           # repository-global state and must never be produced by fork code.
-          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
-          runtime-cache-sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
-          use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
+          sticky-disk: ${{ (matrix.node_version == null || matrix.node_version == '24.x') && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          runtime-cache-sticky-disk: ${{ (matrix.node_version == null || matrix.node_version == '24.x') && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ (matrix.node_version == null || matrix.node_version == '24.x') && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
           vitest-fs-cache: "true"
           node-compile-cache: "true"
           node-compile-cache-scope: "test"
-          # One matrix job commits the shared warm seed. Other jobs restore it
-          # read-only, avoiding concurrent sticky-disk or archive writers.
+          # One matrix job is the designated warm-seed writer; the action only
+          # honors it outside pull_request events, so PR shards always read the
+          # protected snapshot without committing competing writes.
           save-vitest-fs-cache: ${{ matrix.save_vitest_fs_cache && 'true' || 'false' }}
           save-node-compile-cache: ${{ matrix.save_vitest_fs_cache && 'true' || 'false' }}
 
@@ -1925,24 +1966,36 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+          # Blacksmith same-repo runs clone dependencies from a sticky disk.
+          # Fork PRs must keep actions/cache: sticky snapshots are writable,
+          # repository-global state and must never be produced by fork code.
+          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       # check-lint's shard runner rebuilds the same plugin-sdk boundary
       # artifacts the boundary lane snapshots (~72s cold); restore them from
-      # the shared sticky. Strictly read-only (commit: false): if this lane
-      # could commit a freshly formatted disk, a cold-key race with the
-      # boundary lane would permanently seed an empty, marker-less snapshot
-      # that if-missing then refuses to repair.
+      # the shared sticky. Strictly read-only (commit: false): only the
+      # protected boundary lane may publish this repository-global snapshot.
       - name: Mount extension boundary sticky disk
         if: matrix.task == 'lint' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
         uses: useblacksmith/stickydisk@5b350170ae4ef55b536b548ef5f5896e76a6b54f # v1.4.0
         with:
-          key: ${{ github.repository }}-ext-boundary-v1-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'protected' }}-${{ hashFiles('tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'packages/plugin-sdk/tsconfig.json', 'scripts/check-extension-package-tsc-boundary.mjs', 'scripts/prepare-extension-package-boundary-artifacts.mjs', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-entries.mjs', 'package.json', 'pnpm-lock.yaml') }}
+          # One stable disk for the whole repository. The v1 per-PR/per-config
+          # keys minted a new backing disk for every PR and toolchain change
+          # and helped saturate Blacksmith's installation-wide sticky-disk
+          # budget, 429-failing every mount. Snapshot validity lives in the
+          # in-job marker checked below instead of the key.
+          key: ${{ github.repository }}-ext-boundary-v2
           path: /var/tmp/openclaw-ext-boundary
           commit: "false"
 
       - name: Restore extension boundary artifacts from sticky disk
         if: matrix.task == 'lint' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
         shell: bash
+        env:
+          # Config/toolchain inputs the tree-OID gate below cannot see; must
+          # stay identical to the boundary lane's fingerprint composition.
+          BOUNDARY_CONFIG_HASH: ${{ hashFiles('tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'packages/plugin-sdk/tsconfig.json', 'scripts/check-extension-package-tsc-boundary.mjs', 'scripts/prepare-extension-package-boundary-artifacts.mjs', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-entries.mjs', 'package.json', 'pnpm-lock.yaml') }}
         run: |
           set -euo pipefail
           sticky_root=/var/tmp/openclaw-ext-boundary
@@ -1953,7 +2006,7 @@ jobs:
           # Same tree-OID gate as the boundary lane: restore only artifacts
           # produced from identical generative sources, so stale snapshots can
           # neither false-skip rebuilds nor leave ghost declarations.
-          current_trees="$({ git rev-parse HEAD:src/plugin-sdk HEAD:packages HEAD:extensions HEAD:src/auto-reply HEAD:src/types HEAD:src/plugins/types.ts HEAD:src/video-generation HEAD:src/channels; node --version; corepack pnpm --version 2>/dev/null || pnpm --version; })"
+          current_trees="$({ git rev-parse HEAD:src/plugin-sdk HEAD:packages HEAD:extensions HEAD:src/auto-reply HEAD:src/types HEAD:src/plugins/types.ts HEAD:src/video-generation HEAD:src/channels; node --version; corepack pnpm --version 2>/dev/null || pnpm --version; echo "$BOUNDARY_CONFIG_HASH"; })"
           if [ ! -f "$sticky_root/.source-trees" ] || [ "$current_trees" != "$(cat "$sticky_root/.source-trees")" ]; then
             echo "boundary source trees changed since snapshot; lint prepares cold"
             exit 0
@@ -2133,7 +2186,11 @@ jobs:
             runner: blacksmith-8vcpu-ubuntu-2404
           - check_name: check-additional-extension-package-boundary
             group: extension-package-boundary
-            runner: blacksmith-8vcpu-ubuntu-2404
+            # Light-run critical-path pole: cold runs spend ~100s in nine
+            # parallel plugin-sdk dts builds plus ~58s compiling 122 plugins
+            # at concurrency 6 on 8 vCPUs. Both phases scale with cores at
+            # similar billed core-minutes.
+            runner: blacksmith-32vcpu-ubuntu-2404
           - check_name: check-additional-runtime-topology-architecture
             group: runtime-topology-architecture
             runner: blacksmith-4vcpu-ubuntu-2404
@@ -2143,6 +2200,11 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+          # Blacksmith same-repo runs clone dependencies from a sticky disk.
+          # Fork PRs must keep actions/cache: sticky snapshots are writable,
+          # repository-global state and must never be produced by fork code.
+          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       # Same-repo runs carry boundary artifacts on a Blacksmith sticky disk:
       # the GitHub cache below is evicted so quickly under the repo quota that
@@ -2153,19 +2215,30 @@ jobs:
         if: matrix.group == 'extension-package-boundary' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
         uses: useblacksmith/stickydisk@5b350170ae4ef55b536b548ef5f5896e76a6b54f # v1.4.0
         with:
-          # Coarse toolchain key only: source changes are meant to hit a stale
-          # snapshot, whose restored artifacts rebuild incrementally. PR scope
-          # keeps feature snapshots separate from protected pushes.
-          key: ${{ github.repository }}-ext-boundary-v1-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'protected' }}-${{ hashFiles('tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'packages/plugin-sdk/tsconfig.json', 'scripts/check-extension-package-tsc-boundary.mjs', 'scripts/prepare-extension-package-boundary-artifacts.mjs', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-entries.mjs', 'package.json', 'pnpm-lock.yaml') }}
+          # One stable disk for the whole repository. The v1 per-PR/per-config
+          # keys minted a new backing disk for every PR and toolchain change
+          # and helped saturate Blacksmith's installation-wide sticky-disk
+          # budget, 429-failing every mount. Snapshot validity lives in the
+          # in-job marker checked below instead of the key, so source and
+          # toolchain changes refresh this disk in place.
+          key: ${{ github.repository }}-ext-boundary-v2
           path: /var/tmp/openclaw-ext-boundary
-          # v1.4.0 skips commit after failed/cancelled steps, so an incomplete
-          # first hydration cannot seed this key.
-          commit: if-missing
+          # Single semantic writer: only protected pushes commit, so
+          # pull_request clones stay read-only and the snapshot tracks main.
+          # Explicit true (not on-change/if-missing) because the allocated-byte
+          # heuristic can miss a same-size refresh, permanently stranding
+          # consumers on a stale marker. v1.4.0 skips commit after
+          # failed/cancelled steps, so a broken build cannot poison this key.
+          commit: ${{ github.event_name != 'pull_request' && 'true' || 'false' }}
 
       - name: Restore extension boundary artifacts from sticky disk
         id: boundary-sticky-restore
         if: matrix.group == 'extension-package-boundary' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
         shell: bash
+        env:
+          # Config/toolchain inputs the tree-OID gate below cannot see; must
+          # stay identical to the seed step and check-lint's restore gate.
+          BOUNDARY_CONFIG_HASH: ${{ hashFiles('tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'packages/plugin-sdk/tsconfig.json', 'scripts/check-extension-package-tsc-boundary.mjs', 'scripts/prepare-extension-package-boundary-artifacts.mjs', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-entries.mjs', 'package.json', 'pnpm-lock.yaml') }}
         run: |
           set -euo pipefail
           sticky_root=/var/tmp/openclaw-ext-boundary
@@ -2175,12 +2248,12 @@ jobs:
           fi
           # Restore only when the generative source trees AND the runner
           # toolchain match the snapshotting run. Tree OIDs cover source
-          # content exactly; the node/pnpm versions cover toolchain-only
-          # changes (the sticky key already hashes config/scripts/lockfile, so
-          # those force a fresh key). Restored artifacts are valid by
-          # construction: no clock-skew mtime race can false-skip a rebuild,
-          # and deleted/renamed sources or a toolchain bump build cold.
-          current_trees="$({ git rev-parse HEAD:src/plugin-sdk HEAD:packages HEAD:extensions HEAD:src/auto-reply HEAD:src/types HEAD:src/plugins/types.ts HEAD:src/video-generation HEAD:src/channels; node --version; corepack pnpm --version 2>/dev/null || pnpm --version; })"
+          # content exactly; the node/pnpm versions and the config hash cover
+          # toolchain/config/scripts/lockfile changes the OIDs cannot see.
+          # Restored artifacts are valid by construction: no clock-skew mtime
+          # race can false-skip a rebuild, and deleted/renamed sources or a
+          # toolchain bump build cold.
+          current_trees="$({ git rev-parse HEAD:src/plugin-sdk HEAD:packages HEAD:extensions HEAD:src/auto-reply HEAD:src/types HEAD:src/plugins/types.ts HEAD:src/video-generation HEAD:src/channels; node --version; corepack pnpm --version 2>/dev/null || pnpm --version; echo "$BOUNDARY_CONFIG_HASH"; })"
           if [ ! -f "$sticky_root/.source-trees" ] || [ "$current_trees" != "$(cat "$sticky_root/.source-trees")" ]; then
             echo "boundary source trees changed since snapshot; building cold"
             echo "restored=false" >> "$GITHUB_OUTPUT"
@@ -2256,7 +2329,9 @@ jobs:
           RUN_PROMPT_SNAPSHOTS: ${{ needs.preflight.outputs.run_prompt_snapshots }}
           OPENCLAW_ADDITIONAL_BOUNDARY_SHARD: ${{ matrix.boundary_shard || '' }}
           OPENCLAW_ADDITIONAL_BOUNDARY_CONCURRENCY: 4
-          OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY: 6
+          # Matches the boundary lane's 32 vCPU runner (cores/2); the
+          # script's default caps at 6 to protect laptops.
+          OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY: 16
         shell: bash
         run: |
           set -euo pipefail
@@ -2347,16 +2422,22 @@ jobs:
 
           exit "$failures"
 
-      # commit: if-missing snapshots only the first run per key; seed the
-      # payload before the sticky post-action flushes. rsync -aR mirrors the
-      # repo-relative layout the restore step replays.
+      # Only the protected writer refreshes the snapshot (pull_request mounts
+      # never commit, so seeding there would burn wall clock on a discarded
+      # clone). Seed the payload before the sticky post-action flushes.
+      # rsync -aR mirrors the repo-relative layout the restore step replays.
       - name: Seed extension boundary sticky disk
-        if: success() && steps.boundary-sticky-restore.outputs.restored == 'false' && matrix.group == 'extension-package-boundary' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
+        if: success() && steps.boundary-sticky-restore.outputs.restored == 'false' && matrix.group == 'extension-package-boundary' && github.event_name != 'workflow_dispatch' && github.event_name != 'pull_request' && github.repository == 'openclaw/openclaw'
         shell: bash
+        env:
+          # Must stay identical to the restore gates above.
+          BOUNDARY_CONFIG_HASH: ${{ hashFiles('tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'packages/plugin-sdk/tsconfig.json', 'scripts/check-extension-package-tsc-boundary.mjs', 'scripts/prepare-extension-package-boundary-artifacts.mjs', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-entries.mjs', 'package.json', 'pnpm-lock.yaml') }}
         run: |
           set -euo pipefail
           sticky_root=/var/tmp/openclaw-ext-boundary
-          rm -rf "$sticky_root/dist" "$sticky_root/packages" "$sticky_root/extensions" "$sticky_root/.snapshot-ready"
+          # A stale marker must not survive a mid-seed failure: drop readiness
+          # first so a partial payload can never be restored as valid.
+          rm -rf "$sticky_root/.snapshot-ready" "$sticky_root/.source-trees" "$sticky_root/dist" "$sticky_root/packages" "$sticky_root/extensions"
           if [ -d dist/plugin-sdk ]; then
             rsync -aR dist/plugin-sdk "$sticky_root/"
           fi
@@ -2365,7 +2446,7 @@ jobs:
           fi
           find extensions -maxdepth 3 \( -name '.boundary-tsc.tsbuildinfo' -o -name '.boundary-tsc.stamp' \) \
             -exec rsync -aR {} "$sticky_root/" \;
-          { git rev-parse HEAD:src/plugin-sdk HEAD:packages HEAD:extensions HEAD:src/auto-reply HEAD:src/types HEAD:src/plugins/types.ts HEAD:src/video-generation HEAD:src/channels; node --version; corepack pnpm --version 2>/dev/null || pnpm --version; } > "$sticky_root/.source-trees"
+          { git rev-parse HEAD:src/plugin-sdk HEAD:packages HEAD:extensions HEAD:src/auto-reply HEAD:src/types HEAD:src/plugins/types.ts HEAD:src/video-generation HEAD:src/channels; node --version; corepack pnpm --version 2>/dev/null || pnpm --version; echo "$BOUNDARY_CONFIG_HASH"; } > "$sticky_root/.source-trees"
           touch "$sticky_root/.snapshot-ready"
 
   # Validate docs (format, lint, broken links) only when docs files changed.
@@ -2382,6 +2463,11 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+          # Blacksmith same-repo runs clone dependencies from a sticky disk.
+          # Fork PRs must keep actions/cache: sticky snapshots are writable,
+          # repository-global state and must never be produced by fork code.
+          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       - name: Check formatting
         if: needs.preflight.outputs.run_format_check == 'true'
@@ -3046,28 +3132,54 @@ jobs:
         if: github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
         uses: useblacksmith/stickydisk@5b350170ae4ef55b536b548ef5f5896e76a6b54f # v1.4.0
         with:
-          # Task-scoped keys keep one semantic writer per snapshot: each matrix
-          # task resolves a different dependency set, and a shared if-missing
-          # key would let a light task (ktlint) win the cold-key race and pin a
-          # thin snapshot the heavy build lanes can never repair. Gradle's own
-          # caches are content-addressed, so stale restored entries are ignored
-          # and dependency-file changes mint a fresh key/snapshot.
-          key: ${{ github.repository }}-gradle-v1-${{ matrix.task }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'protected' }}-${{ hashFiles('apps/android/**/*.gradle*', 'apps/android/**/gradle-wrapper.properties', 'apps/android/gradle/libs.versions.toml') }}
+          # One stable disk per matrix task. The v1 per-PR/per-dependency-hash
+          # keys minted a new backing disk for every PR and dependency bump
+          # and helped saturate Blacksmith's installation-wide sticky-disk
+          # budget, 429-failing every mount. Task scope stays in the key: each
+          # matrix task resolves a different dependency set, and a shared key
+          # would let a light task (ktlint) pin a thin snapshot the heavy
+          # build lanes can never repair. Dependency-file changes live in the
+          # runtime fingerprint marker below instead of the key.
+          key: ${{ github.repository }}-gradle-v2-${{ matrix.task }}
           path: /var/tmp/openclaw-gradle
-          # on-change keeps the snapshot learning: Gradle's build cache
-          # accumulates across runs (if-missing would freeze the first
-          # hydration forever). Entries are content-addressed, task-scoped
-          # keys give one semantic writer, and v1.4.0 still skips commit
-          # after failed/cancelled steps.
-          commit: on-change
+          # Single semantic writer: only protected pushes commit, so
+          # pull_request clones stay read-only and the snapshot tracks main.
+          # Explicit true (not on-change) because the allocated-byte heuristic
+          # can miss a same-size refresh and strand the fingerprint marker;
+          # v1.4.0 still skips commit after failed/cancelled steps, so a
+          # broken build cannot poison this key.
+          commit: ${{ github.event_name != 'pull_request' && 'true' || 'false' }}
 
       - name: Point Gradle at the sticky disk
         if: github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
         shell: bash
+        env:
+          # Gradle caches are content-addressed, so a stale snapshot is safe
+          # to restore (obsolete entries are simply ignored). The fingerprint
+          # only bounds disk growth: when dependency inputs change, the writer
+          # rebuilds its snapshot from scratch so retired dependency artifacts
+          # do not accumulate on the O(1) key forever.
+          GRADLE_DEPS_FINGERPRINT: ${{ hashFiles('apps/android/**/*.gradle*', 'apps/android/**/gradle-wrapper.properties', 'apps/android/gradle/libs.versions.toml') }}
+          STICKY_WRITER: ${{ github.event_name != 'pull_request' && 'true' || 'false' }}
         run: |
           set -euo pipefail
-          mkdir -p /var/tmp/openclaw-gradle/gradle-user-home
-          echo "GRADLE_USER_HOME=/var/tmp/openclaw-gradle/gradle-user-home" >> "$GITHUB_ENV"
+          sticky_root=/var/tmp/openclaw-gradle
+          marker="$sticky_root/.openclaw-gradle-deps-fingerprint"
+          disk_fingerprint=""
+          if [ -f "$marker" ]; then
+            disk_fingerprint="$(<"$marker")"
+          fi
+          if [ "$disk_fingerprint" != "$GRADLE_DEPS_FINGERPRINT" ]; then
+            if [ "$STICKY_WRITER" = "true" ]; then
+              echo "Gradle dependency inputs changed; rebuilding snapshot cold to drop retired artifacts"
+              rm -rf "$sticky_root/gradle-user-home"
+              printf '%s\n' "$GRADLE_DEPS_FINGERPRINT" > "$marker"
+            else
+              echo "Gradle dependency inputs changed since snapshot; content-addressed caches stay safe to reuse"
+            fi
+          fi
+          mkdir -p "$sticky_root/gradle-user-home"
+          echo "GRADLE_USER_HOME=$sticky_root/gradle-user-home" >> "$GITHUB_ENV"
 
       - name: Run Android ${{ matrix.task }}
         working-directory: apps/android

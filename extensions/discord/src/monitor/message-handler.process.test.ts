@@ -369,6 +369,55 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
   },
 }));
 
+vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>();
+  const replyRuntime = await import("openclaw/plugin-sdk/reply-runtime");
+  return {
+    ...actual,
+    dispatchChannelInboundTurn: async (
+      plan: Parameters<typeof actual.dispatchChannelInboundTurn>[0],
+    ) => {
+      const { cfg, route, delivery, sessionInitRetry, ...prepared } = plan;
+      const runDispatch = async () => {
+        for (let retryIndex = 0; ; retryIndex += 1) {
+          try {
+            return await replyRuntime.dispatchReplyWithBufferedBlockDispatcher({
+              ctx: plan.ctxPayload,
+              cfg,
+              dispatcherOptions: {
+                ...plan.dispatcherOptions,
+                deliver: delivery.deliver,
+                onError: delivery.onError,
+              },
+              toolsAllow: plan.toolsAllow,
+              replyOptions: plan.replyOptions,
+              replyResolver: plan.replyResolver,
+            });
+          } catch (error) {
+            const delayMs = sessionInitRetry?.delaysMs[retryIndex];
+            const message = error instanceof Error ? error.message : String(error);
+            if (
+              delayMs === undefined ||
+              sessionInitRetry?.signal?.aborted === true ||
+              !/^reply session initialization conflicted for \S+$/u.test(message)
+            ) {
+              throw error;
+            }
+            await sessionInitRetry?.sleep?.(delayMs, sessionInitRetry.signal);
+          }
+        }
+      };
+      return await actual.runPreparedInboundReply({
+        ...prepared,
+        routeSessionKey: route.sessionKey,
+        storePath: resolveStorePath(cfg.session?.store, { agentId: route.agentId }),
+        recordInboundSession,
+        runDispatch,
+      });
+    },
+  };
+});
+
 vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
   recordInboundSession: (...args: unknown[]) => recordInboundSession(...args),
   resolvePinnedMainDmOwnerFromAllowlist: (params: {

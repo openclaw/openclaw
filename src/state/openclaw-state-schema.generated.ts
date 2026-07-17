@@ -15,6 +15,13 @@ CREATE TABLE IF NOT EXISTS auth_profile_state (
   updated_at INTEGER NOT NULL
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS mcp_oauth_stores (
+  store_key TEXT NOT NULL PRIMARY KEY,
+  format_version INTEGER NOT NULL CHECK (format_version = 1),
+  store_json TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS diagnostic_events (
   scope TEXT NOT NULL,
   event_key TEXT NOT NULL,

@@ -1,5 +1,7 @@
 // Feishu plugin module implements comment dispatcher behavior.
+import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import { createReplyDispatcherWithTyping } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import {
@@ -56,10 +58,10 @@ export function createFeishuCommentReplyDispatcher(
   });
 
   const { dispatcher, replyOptions, markDispatchIdle, markRunComplete } =
-    core.channel.reply.createReplyDispatcherWithTyping({
+    createReplyDispatcherWithTyping({
       responsePrefix: prefixContext.responsePrefix,
       responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
-      humanDelay: core.channel.reply.resolveHumanDelayConfig(params.cfg, params.agentId),
+      humanDelay: resolveHumanDelayConfig(params.cfg, params.agentId),
       onReplyStart: async () => {
         await typingReaction.start();
       },

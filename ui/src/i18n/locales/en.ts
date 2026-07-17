@@ -1740,6 +1740,10 @@ export const en: TranslationMap = {
       testingButton: "Testing…",
       testing: "Testing — asking {modelRef} for a quick reply…",
     },
+    empty: {
+      title: "Recommended installs",
+      intro: "No existing AI access was detected. Install one of these tools, then check again.",
+    },
     unavailable: {
       title: "Detected, but not auto-tested",
     },
@@ -3686,6 +3690,11 @@ export const en: TranslationMap = {
       pause: "Pause goal",
       resume: "Resume goal",
       clear: "Clear goal",
+    },
+    questions: {
+      title: "Codex needs input",
+      other: "Type another answer",
+      submit: "Submit answer",
     },
     messages: {
       activity: "Activity",

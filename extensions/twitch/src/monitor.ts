@@ -5,6 +5,7 @@
  * resolves agent routes, and handles replies.
  */
 
+import { createChannelInboundEnvelopeBuilder } from "openclaw/plugin-sdk/channel-inbound";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
@@ -75,11 +76,10 @@ async function processTwitchMessage(params: {
         });
         const senderId = message.userId ?? message.username;
         const fromLabel = message.displayName ?? message.username;
-        const body = core.channel.reply.formatAgentEnvelope({
+        const body = createChannelInboundEnvelopeBuilder({ cfg, route })({
           channel: "Twitch",
           from: fromLabel,
           timestamp: input.timestamp,
-          envelope: core.channel.reply.resolveEnvelopeFormatOptions(cfg),
           body: input.rawText,
         });
         const ctxPayload = core.channel.inbound.buildContext({
@@ -113,9 +113,6 @@ async function processTwitchMessage(params: {
             commandBody: input.textForCommands,
           },
         });
-        const storePath = core.channel.session.resolveStorePath(cfg.session?.store, {
-          agentId: route.agentId,
-        });
         const tableMode = core.channel.text.resolveMarkdownTableMode({
           cfg,
           channel: "twitch",
@@ -125,13 +122,8 @@ async function processTwitchMessage(params: {
           cfg,
           channel: "twitch",
           accountId,
-          agentId: route.agentId,
-          routeSessionKey: route.sessionKey,
-          storePath,
+          route: { agentId: route.agentId, sessionKey: route.sessionKey },
           ctxPayload,
-          recordInboundSession: core.channel.session.recordInboundSession,
-          dispatchReplyWithBufferedBlockDispatcher:
-            core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
           delivery: {
             durable: () => ({
               to: `twitch:channel:${message.channel}`,

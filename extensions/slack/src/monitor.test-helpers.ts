@@ -1,7 +1,10 @@
-// Slack helper module supports monitor helpers behavior.
+import fs from "node:fs";
+import path from "node:path";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
-import { resolveGlobalDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
+// Slack helper module supports monitor helpers behavior.
+import { closeOpenClawStateDatabaseForTest } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { vi } from "vitest";
 import type { Mock } from "vitest";
 
@@ -54,14 +57,6 @@ const slackTestState: SlackTestState = vi.hoisted(() => ({
   socketModeLogger: undefined,
   createSlackStartupAuthClientMock: vi.fn(),
 }));
-
-const slackInboundDeliveryTestCache = resolveGlobalDedupeCache(
-  Symbol.for("openclaw.slackInboundDeliveries"),
-  {
-    ttlMs: 24 * 60 * 60 * 1000,
-    maxSize: 20_000,
-  },
-);
 
 export const getSlackTestState = (): SlackTestState => slackTestState;
 
@@ -236,8 +231,21 @@ export const defaultSlackTestConfig = () => ({
   },
 });
 
+let lastSlackTestStateDir: string | undefined;
+
 export function resetSlackTestState(config: Record<string, unknown> = defaultSlackTestConfig()) {
-  slackInboundDeliveryTestCache.clear();
+  // Fresh persistent state per test: the dispatch-dedupe guard writes logical
+  // message keys to the state DB, and fixture ts values repeat across tests,
+  // so a carried-over DB would dedupe unrelated test messages. realpath keeps
+  // macOS /var vs /private/var symlinks out of resolver assertions.
+  closeOpenClawStateDatabaseForTest();
+  if (lastSlackTestStateDir) {
+    fs.rmSync(lastSlackTestStateDir, { recursive: true, force: true });
+  }
+  lastSlackTestStateDir = fs.realpathSync(
+    fs.mkdtempSync(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-slack-monitor-state-")),
+  );
+  process.env.OPENCLAW_STATE_DIR = lastSlackTestStateDir;
   slackTestState.config = config;
   slackTestState.socketModeLogger = undefined;
   slackTestState.appStartMock.mockReset().mockResolvedValue(undefined);
@@ -295,23 +303,16 @@ vi.mock("./monitor/config.runtime.js", async () => {
   };
 });
 
-vi.mock("./monitor/reply.runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("./monitor/reply.runtime.js")>(
-    "./monitor/reply.runtime.js",
-  );
-  type BufferedDispatchParams = Parameters<
-    typeof actual.dispatchReplyWithBufferedBlockDispatcher
-  >[0];
-  type ReplyResolver = NonNullable<BufferedDispatchParams["replyResolver"]>;
+vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>();
+  type DispatchParams = Parameters<typeof actual.dispatchChannelInboundTurn>[0];
+  type ReplyResolver = NonNullable<DispatchParams["replyResolver"]>;
   const replyResolver: ReplyResolver = (...args) =>
     slackTestState.replyMock(...args) as ReturnType<ReplyResolver>;
   return {
     ...actual,
-    dispatchReplyWithBufferedBlockDispatcher: (params: BufferedDispatchParams) =>
-      actual.dispatchReplyWithBufferedBlockDispatcher({
-        ...params,
-        replyResolver,
-      }),
+    dispatchChannelInboundTurn: (params: DispatchParams) =>
+      actual.dispatchChannelInboundTurn({ ...params, replyResolver }),
   };
 });
 
@@ -349,7 +350,6 @@ vi.mock("./monitor/conversation.runtime.js", async () => {
     ...actual,
     readChannelAllowFromStore: (...args: unknown[]) =>
       slackTestState.readAllowFromStoreMock(...args),
-    recordInboundSession: vi.fn().mockResolvedValue(undefined),
     upsertChannelPairingRequest: (...args: unknown[]) =>
       slackTestState.upsertPairingRequestMock(...args),
   };
