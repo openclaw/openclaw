@@ -33,11 +33,12 @@ import {
 } from "../types.js";
 import {
   computeFileLists,
+  countCompactionContentBlockChars,
   createFileOps,
+  estimateStringChars,
   extractFileOpsFromMessage,
   type FileOperations,
   formatFileOperations,
-  getCompactionContentBlockText,
   serializeConversation,
 } from "./utils.js";
 
@@ -252,22 +253,6 @@ export function shouldCompact(
   return contextTokens > contextWindow - settings.reserveTokens;
 }
 
-const IMAGE_BLOCK_CHARS = 4800;
-
-function countContentBlockChars(
-  content: Array<{ type: string; content?: unknown; text?: string }>,
-): number {
-  let chars = 0;
-  for (const block of content) {
-    if (block.type === "image") {
-      chars += IMAGE_BLOCK_CHARS;
-    } else {
-      chars += getCompactionContentBlockText(block).length;
-    }
-  }
-  return chars;
-}
-
 /** Estimate token count for one message using a conservative character heuristic. */
 export function estimateTokens(message: AgentMessage): number {
   let chars = 0;
@@ -279,9 +264,9 @@ export function estimateTokens(message: AgentMessage): number {
         harnessMessage as { content: string | Array<{ type: string; text?: string }> }
       ).content;
       if (typeof content === "string") {
-        chars = content.length;
+        chars = estimateStringChars(content);
       } else if (Array.isArray(content)) {
-        chars = countContentBlockChars(content);
+        chars = countCompactionContentBlockChars(content);
       }
       return Math.ceil(chars / 4);
     }
@@ -289,11 +274,11 @@ export function estimateTokens(message: AgentMessage): number {
       const assistant = harnessMessage;
       for (const block of assistant.content) {
         if (block.type === "text") {
-          chars += block.text.length;
+          chars += estimateStringChars(block.text);
         } else if (block.type === "thinking") {
-          chars += block.thinking.length;
+          chars += estimateStringChars(block.thinking);
         } else if (block.type === "toolCall") {
-          chars += block.name.length + safeJsonStringify(block.arguments).length;
+          chars += estimateStringChars(block.name + safeJsonStringify(block.arguments));
         }
       }
       return Math.ceil(chars / 4);
@@ -301,19 +286,19 @@ export function estimateTokens(message: AgentMessage): number {
     case "custom":
     case "toolResult": {
       if (typeof harnessMessage.content === "string") {
-        chars = harnessMessage.content.length;
+        chars = estimateStringChars(harnessMessage.content);
       } else {
-        chars = countContentBlockChars(harnessMessage.content);
+        chars = countCompactionContentBlockChars(harnessMessage.content);
       }
       return Math.ceil(chars / 4);
     }
     case "bashExecution": {
-      chars = harnessMessage.command.length + harnessMessage.output.length;
+      chars = estimateStringChars(harnessMessage.command + harnessMessage.output);
       return Math.ceil(chars / 4);
     }
     case "branchSummary":
     case "compactionSummary": {
-      chars = harnessMessage.summary.length;
+      chars = estimateStringChars(harnessMessage.summary);
       return Math.ceil(chars / 4);
     }
   }
