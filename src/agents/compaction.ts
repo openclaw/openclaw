@@ -413,7 +413,11 @@ export async function summarizeInStages(params: {
 
   const partialSummaries: string[] = [];
   let consecutiveGenericFallbacks = 0;
-  let usedGenericFallback = false;
+  // Chunk 0 carries the oldest messages, which is where a caller puts context it needs
+  // redistilled into the new summary. Only its degradation means that context never
+  // reached the merge, so this — not "any chunk degraded" — is what the result kind
+  // reports; otherwise a caller restoring lost context duplicates what the merge has.
+  let firstChunkDegraded = false;
   for (const [index, chunk] of plan.chunks.entries()) {
     const result = await summarizeWithFallbackResult({
       ...params,
@@ -422,7 +426,9 @@ export async function summarizeInStages(params: {
     });
     consecutiveGenericFallbacks =
       result.kind === "generic-fallback" ? consecutiveGenericFallbacks + 1 : 0;
-    usedGenericFallback ||= result.kind === "generic-fallback";
+    if (index === 0) {
+      firstChunkDegraded = result.kind === "generic-fallback";
+    }
 
     // Keep one placeholder to mark the missing split, but stop before repeated
     // placeholders trigger more split requests or a doomed merge request.
@@ -445,7 +451,7 @@ export async function summarizeInStages(params: {
       throw new Error("Compaction summary plan produced no summary");
     }
     return {
-      kind: usedGenericFallback ? "generic-fallback" : "summary",
+      kind: firstChunkDegraded ? "generic-fallback" : "summary",
       text: summary,
     };
   }
@@ -486,7 +492,7 @@ export async function summarizeInStages(params: {
     messages: summaryMessages,
     customInstructions: mergeInstructions,
   });
-  return usedGenericFallback && mergedResult.kind === "summary"
+  return firstChunkDegraded && mergedResult.kind === "summary"
     ? { kind: "generic-fallback", text: mergedResult.text }
     : mergedResult;
 }
