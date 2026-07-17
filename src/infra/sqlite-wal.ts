@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { isSqliteLockError } from "./sqlite-transaction.js";
 
@@ -32,7 +33,6 @@ type IntervalHandle = ReturnType<typeof setInterval> & {
 type SqliteWalCheckpointMode = "PASSIVE" | "FULL" | "RESTART" | "TRUNCATE";
 type SqliteFilesystemJournalPolicy = "rollback" | "unsupported" | "wal";
 type MountEntry = { mountPoint: string; fsType: string; source?: string };
-type MountEntryReadResult = { kind: "entries"; entries: MountEntry[] } | { kind: "timeout" };
 
 export type SqliteWalMaintenance = {
   checkpoint: () => boolean;
@@ -173,20 +173,16 @@ function isMountCommandTimeout(error: unknown): boolean {
   );
 }
 
-function readMountEntries(): MountEntryReadResult {
+function readMountEntries(): Result<MountEntry[], "timeout"> {
   try {
-    return {
-      kind: "entries",
-      entries: parseProcMountInfoEntries(fs.readFileSync(PROC_MOUNTINFO_PATH, "utf8")),
-    };
+    return ok(parseProcMountInfoEntries(fs.readFileSync(PROC_MOUNTINFO_PATH, "utf8")));
   } catch {
     // macOS/BSD expose filesystem type names in `mount` output instead of
     // Linux superblock magic, so keep this fallback for named filesystem types.
   }
   try {
-    return {
-      kind: "entries",
-      entries: parseMountCommandEntries(
+    return ok(
+      parseMountCommandEntries(
         String(
           childProcess.execFileSync("mount", [], {
             killSignal: "SIGKILL",
@@ -194,9 +190,9 @@ function readMountEntries(): MountEntryReadResult {
           }),
         ),
       ),
-    };
+    );
   } catch (error) {
-    return isMountCommandTimeout(error) ? { kind: "timeout" } : { kind: "entries", entries: [] };
+    return isMountCommandTimeout(error) ? err("timeout") : ok([]);
   }
 }
 
@@ -251,13 +247,11 @@ function combineMountEntryJournalPolicies(
   targetPaths: readonly string[],
 ): SqliteFilesystemJournalPolicy {
   const mountResult = readMountEntries();
-  if (mountResult.kind === "timeout") {
+  if (!mountResult.ok) {
     return "rollback";
   }
   const policies = new Set(
-    targetPaths.map((targetPath) =>
-      resolveMountEntryJournalPolicy(targetPath, mountResult.entries),
-    ),
+    targetPaths.map((targetPath) => resolveMountEntryJournalPolicy(targetPath, mountResult.value)),
   );
   if (policies.has("unsupported")) {
     return "unsupported";
