@@ -152,6 +152,8 @@ export function exceedsEstimatedHtmlNestingDepth(html: string, maxDepth: number)
       const closingStart = findClosingRawTextTagStart(lowerHtml, tagName, tagEnd + 1);
       if (closingStart >= 0) {
         i = closingStart - 1;
+      } else {
+        break;
       }
     }
   }
