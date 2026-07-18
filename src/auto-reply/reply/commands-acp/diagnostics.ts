@@ -7,7 +7,7 @@ import {
 import { getAcpSessionManager } from "../../../acp/control-plane/manager.js";
 import { toAcpRuntimeError } from "../../../acp/runtime/errors.js";
 import { getAcpRuntimeBackend, requireAcpRuntimeBackend } from "../../../acp/runtime/registry.js";
-import { listAcpSessionEntries } from "../../../acp/runtime/session-meta.js";
+import { listAcpSessionEntries, readAcpSessionEntry } from "../../../acp/runtime/session-meta.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { SessionAcpMeta } from "../../../config/sessions/types.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
@@ -190,10 +190,14 @@ export async function handleAcpSessionsAction(
   const normalizedChannel = bindingContext.channel;
   const normalizedAccountId = bindingContext.accountId || undefined;
   const bindingService = getSessionBindingService();
-  const entries = await listAcpSessionEntries({ cfg: params.cfg });
+  const currentEntry = params.command.senderIsOwner
+    ? null
+    : readAcpSessionEntry({ cfg: params.cfg, sessionKey: currentSessionKey });
   const visibleEntries = params.command.senderIsOwner
-    ? entries
-    : entries.filter((candidate) => candidate.storeSessionKey === currentSessionKey);
+    ? await listAcpSessionEntries({ cfg: params.cfg })
+    : currentEntry
+      ? [currentEntry]
+      : [];
 
   const rows = visibleEntries
     .toSorted((a, b) => (b.entry?.updatedAt ?? 0) - (a.entry?.updatedAt ?? 0))

@@ -1923,36 +1923,64 @@ describe("/acp command", () => {
 
     expect(result?.reply?.text).toContain("agent:codex:acp:own");
     expect(result?.reply?.text).toContain("agent:claude:acp:foreign");
+    expect(hoisted.readAcpSessionEntryMock).not.toHaveBeenCalled();
   });
 
-  it("hides foreign ACP sessions from authorized non-owner senders", async () => {
-    hoisted.sessionBindingResolveByConversationMock.mockReturnValue(
-      createBoundThreadSession("agent:codex:acp:own"),
+  it("lists only the current raw ACP session for an authorized non-owner sender", async () => {
+    const currentSessionKey = "agent:codex:acp:current";
+    hoisted.readAcpSessionEntryMock.mockReturnValue(
+      createAcpSessionEntry({ sessionKey: currentSessionKey }),
     );
-    hoisted.listAcpSessionEntriesMock.mockResolvedValue([
-      createAcpSessionEntry({ sessionKey: "agent:codex:acp:own" }),
-      createAcpSessionEntry({ sessionKey: "agent:claude:acp:foreign" }),
-    ]);
     const params = createDiscordParams("/acp sessions");
     params.command.senderIsOwner = false;
+    params.sessionKey = currentSessionKey;
 
     const result = await handleAcpCommand(params, true);
 
-    expect(result?.reply?.text).toContain("agent:codex:acp:own");
-    expect(result?.reply?.text).not.toContain("agent:claude:acp:foreign");
+    expect(result?.reply?.text).toContain(currentSessionKey);
+    expect(hoisted.readAcpSessionEntryMock).toHaveBeenCalledWith({
+      cfg: baseCfg,
+      sessionKey: currentSessionKey,
+    });
+    expect(hoisted.listAcpSessionEntriesMock).not.toHaveBeenCalled();
   });
 
-  it("returns an empty listing to non-owner senders with no matching session", async () => {
-    hoisted.listAcpSessionEntriesMock.mockResolvedValue([
-      createAcpSessionEntry({ sessionKey: "agent:claude:acp:foreign" }),
-    ]);
+  it("prefers the bound-thread ACP session over a non-owner sender's raw session key", async () => {
+    const boundSessionKey = "agent:codex:acp:bound";
+    hoisted.sessionBindingResolveByConversationMock.mockReturnValue(
+      createBoundThreadSession(boundSessionKey),
+    );
+    hoisted.readAcpSessionEntryMock.mockReturnValue(
+      createAcpSessionEntry({ sessionKey: boundSessionKey }),
+    );
     const params = createDiscordParams("/acp sessions");
     params.command.senderIsOwner = false;
+    params.sessionKey = "agent:main:raw-requester";
+
+    const result = await handleAcpCommand(params, true);
+
+    expect(result?.reply?.text).toContain(boundSessionKey);
+    expect(result?.reply?.text).not.toContain("agent:main:raw-requester");
+    expect(hoisted.readAcpSessionEntryMock).toHaveBeenCalledWith({
+      cfg: baseCfg,
+      sessionKey: boundSessionKey,
+    });
+    expect(hoisted.listAcpSessionEntriesMock).not.toHaveBeenCalled();
+  });
+
+  it("returns an empty listing when a non-owner's raw session key is not an ACP session", async () => {
+    const params = createDiscordParams("/acp sessions");
+    params.command.senderIsOwner = false;
+    params.sessionKey = "agent:main:raw-requester";
 
     const result = await handleAcpCommand(params, true);
 
     expect(result?.reply?.text).toContain("(none)");
-    expect(result?.reply?.text).not.toContain("agent:claude:acp:foreign");
+    expect(hoisted.readAcpSessionEntryMock).toHaveBeenCalledWith({
+      cfg: baseCfg,
+      sessionKey: "agent:main:raw-requester",
+    });
+    expect(hoisted.listAcpSessionEntriesMock).not.toHaveBeenCalled();
   });
 
   it("warns when no session key resolves for /acp sessions", async () => {
