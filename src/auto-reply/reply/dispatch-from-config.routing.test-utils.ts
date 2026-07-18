@@ -422,9 +422,12 @@ describe("dispatchReplyFromConfig", () => {
 
     await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
     expect(dispatcher.sendToolResult).toHaveBeenCalledWith(payload);
-    const toolDeliveryOrder = dispatcher.sendToolResult.mock.invocationCallOrder[0];
+    const toolDeliveryOrder =
+      vi.mocked(dispatcher.sendToolResult).mock.invocationCallOrder[0] ?? Number.NEGATIVE_INFINITY;
     expect(
-      dispatcher.waitForIdle.mock.invocationCallOrder.some((order) => order > toolDeliveryOrder),
+      vi
+        .mocked(dispatcher.waitForIdle)
+        .mock.invocationCallOrder.some((order) => order > toolDeliveryOrder),
     ).toBe(true);
   });
 

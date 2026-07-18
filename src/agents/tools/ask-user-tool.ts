@@ -324,7 +324,9 @@ export async function waitForAskUserPromptReady(
       // Registration and local Gateway credentials may still be coming online.
       // Local state can win on the next pass; isolated runtimes retry the record.
     }
-    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 50);
+    });
   }
   return undefined;
 }
@@ -408,11 +410,6 @@ export function settleAskUserPromptDelivery(questionId: string, error?: unknown)
   );
 }
 
-/** Returns whether a question-associated prompt still belongs to a blocking ask_user call. */
-export function isAskUserPromptActive(questionId: string): boolean {
-  return askUserQuestions.has(questionId);
-}
-
 /** Rechecks the Gateway immediately before exposing an answerable prompt. */
 export async function isAskUserPromptPending(
   questionId: string,
@@ -436,10 +433,11 @@ export async function isAskUserPromptPending(
     }
     // Cancellation can win while the Gateway request is in flight. Recheck local
     // ownership before trusting an older remote `pending` snapshot.
+    const currentState = askUserQuestions.get(questionId);
     if (
-      askUserQuestions.get(questionId) !== state ||
-      state.phase.kind === "resolving" ||
-      state.phase.kind === "prompt-failed"
+      currentState !== state ||
+      currentState.phase.kind === "resolving" ||
+      currentState.phase.kind === "prompt-failed"
     ) {
       return false;
     }

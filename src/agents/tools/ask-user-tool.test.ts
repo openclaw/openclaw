@@ -5,7 +5,6 @@ import { steerActiveSessionWithOptionalDeliveryWait } from "../embedded-agent-ru
 import {
   cancelAskUserPromptDelivery,
   createAskUserTool,
-  isAskUserPromptActive,
   isAskUserPromptPending,
   normalizeAskUserParams,
   reserveAskUserPromptDelivery,
@@ -463,7 +462,13 @@ describe("ask_user execution", () => {
     finishRegistration?.({ id: reservation.questionId });
 
     await expect(pending).rejects.toThrow("stop before registration completed");
-    expect(isAskUserPromptActive(reservation.questionId)).toBe(false);
+    expect(
+      reserveAskUserPromptDelivery({
+        toolCallId: "call-after-late-registration-abort",
+        sessionKey,
+        questions: normalizeAskUserParams(validArgs).questions,
+      }),
+    ).toBeDefined();
   });
 
   it("suppresses a stale prompt when an image arrives during registration", async () => {
@@ -668,8 +673,14 @@ describe("ask_user execution", () => {
 
     controller.abort(new Error("stop during delivery"));
 
-    expect(isAskUserPromptActive(reservation.questionId)).toBe(false);
     await expect(pending).rejects.toThrow("stop during delivery");
+    expect(
+      reserveAskUserPromptDelivery({
+        toolCallId: "call-after-delivery-abort",
+        sessionKey,
+        questions: normalizeAskUserParams(validArgs).questions,
+      }),
+    ).toBeDefined();
     expect(gateway.mock).toHaveBeenCalledWith(
       "question.resolve",
       { timeoutMs: 10_000 },
