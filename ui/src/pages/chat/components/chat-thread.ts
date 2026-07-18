@@ -199,6 +199,28 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
   private readonly controllers = new Set<ReactiveController>();
   private readonly virtualizerController: VirtualizerController<HTMLDivElement, HTMLElement>;
   private scrollElement: HTMLDivElement | null = null;
+  // Stable Lit refs: inline arrows change identity every render, so Lit would
+  // re-invoke them (undefined + element) for every visible row on every render,
+  // sweeping the virtualizer's element cache and re-measuring rows each time.
+  // Lit tracks the last element per (host, callback), so each row needs its own
+  // stable callback; sharing one across rows would still churn every render.
+  private readonly scrollElementRef = (element?: Element) => {
+    this.scrollElement =
+      element?.parentElement instanceof HTMLDivElement ? element.parentElement : null;
+  };
+  private readonly measureRowRefs = new Map<string, (element?: Element) => void>();
+  private measureRowRefFor(key: string): (element?: Element) => void {
+    let callback = this.measureRowRefs.get(key);
+    if (!callback) {
+      callback = (element?: Element) => {
+        this.virtualizerController
+          .getVirtualizer()
+          .measureElement(element instanceof HTMLElement ? element : null);
+      };
+      this.measureRowRefs.set(key, callback);
+    }
+    return callback;
+  }
   private rowKeys: readonly string[] = [];
   private rowIndexesByKey = new Map<string, number>();
   private focusedRowKey: string | null = null;
@@ -292,13 +314,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
     const virtualizer = this.virtualizerController.getVirtualizer();
     const virtualRows = virtualizer.getVirtualItems();
     return html`
-      <div
-        class="chat-thread-inner chat-thread-inner--virtual"
-        ${ref((element) => {
-          this.scrollElement =
-            element?.parentElement instanceof HTMLDivElement ? element.parentElement : null;
-        })}
-      >
+      <div class="chat-thread-inner chat-thread-inner--virtual" ${ref(this.scrollElementRef)}>
         <div
           class="chat-virtual-sizer"
           style=${styleMap({ height: `${virtualizer.getTotalSize()}px` })}
@@ -324,9 +340,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
                   })}
                   data-index=${String(virtualRow.index)}
                   data-virtual-row-key=${row.key}
-                  ${ref((element) =>
-                    virtualizer.measureElement(element instanceof HTMLElement ? element : null),
-                  )}
+                  ${ref(this.measureRowRefFor(row.key))}
                 >
                   ${renderRow(row)}
                 </div>
@@ -388,6 +402,11 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
     }
     this.rowKeys = Object.freeze(nextKeys);
     this.rowIndexesByKey = new Map(this.rowKeys.map((key, index) => [key, index]));
+    for (const key of this.measureRowRefs.keys()) {
+      if (!this.rowIndexesByKey.has(key)) {
+        this.measureRowRefs.delete(key);
+      }
+    }
     const keys = this.rowKeys;
     const virtualizer = this.virtualizerController.getVirtualizer();
     virtualizer.setOptions({

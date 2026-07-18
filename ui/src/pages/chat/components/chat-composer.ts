@@ -161,6 +161,11 @@ type ChatComposerState = {
   composerInputIntentKey: string | null;
   pendingClearedSubmittedDraft: PendingClearedSubmittedDraft | null;
   goalExpandedId: string | null;
+  composerTextarea: HTMLTextAreaElement | null;
+  // Stable Lit ref: an inline arrow would change identity every render, making
+  // Lit re-invoke it (undefined + element) and forcing a layout re-measure of
+  // the textarea on every chat render instead of only on attach/detach.
+  textareaRef: ((element?: Element) => void) | null;
 };
 
 function createChatComposerState(): ChatComposerState {
@@ -178,6 +183,8 @@ function createChatComposerState(): ChatComposerState {
     composerInputIntentKey: null,
     pendingClearedSubmittedDraft: null,
     goalExpandedId: null,
+    composerTextarea: null,
+    textareaRef: null,
   };
 }
 
@@ -1886,7 +1893,23 @@ export function renderChatComposer(props: ChatComposerProps) {
   const draftKey = composerDraftKey(props);
   const actionDraft =
     state.composingDraft?.key === draftKey ? state.composingDraft.value : visibleDraft;
-  let composerTextarea: HTMLTextAreaElement | null = null;
+  state.textareaRef ??= (element?: Element) => {
+    const nextTextarea = element instanceof HTMLTextAreaElement ? element : null;
+    const prevTextarea = state.composerTextarea;
+    if (prevTextarea && prevTextarea !== nextTextarea) {
+      disconnectTextareaOverflowObserver(prevTextarea);
+    }
+    state.composerTextarea = nextTextarea;
+    if (nextTextarea) {
+      observeTextareaOverflow(nextTextarea);
+      scheduleTextareaHeightAdjustment(nextTextarea);
+    }
+  };
+  // The stable ref only measures on attach, so programmatic draft swaps (send
+  // clear, session switch, history restore) must re-measure explicitly.
+  if (state.composerTextarea?.isConnected && state.composerTextarea.value !== visibleDraft) {
+    scheduleTextareaHeightAdjustment(state.composerTextarea);
+  }
   const hasVisualAttachments = (props.attachments ?? []).some(
     (attachment) => !isLargePastedTextAttachment(attachment),
   );
@@ -2142,20 +2165,20 @@ export function renderChatComposer(props: ChatComposerProps) {
     commitComposerDraft(props, target.value);
   };
   const handleSend = () => {
-    const draft = composerTextarea?.value ?? props.draft;
+    const draft = state.composerTextarea?.value ?? props.draft;
     if (!canSubmitDraft(draft)) {
       return;
     }
     commitComposerDraft(props, draft);
     props.onSend();
-    syncComposerDraftAfterSend(composerTextarea);
+    syncComposerDraftAfterSend(state.composerTextarea);
   };
   const handleVoicePrimaryAction = () => {
     if (props.realtimeTalkActive) {
       props.onToggleRealtimeTalk?.();
       return;
     }
-    const liveDraft = composerTextarea?.value ?? visibleDraft;
+    const liveDraft = state.composerTextarea?.value ?? visibleDraft;
     if (liveDraft.trim() || props.attachments?.length) {
       handleSend();
       return;
@@ -2256,7 +2279,7 @@ export function renderChatComposer(props: ChatComposerProps) {
             onGoalEdit: (goal) => {
               commitComposerDraft(props, `/goal edit ${goal.objective}`);
               requestUpdate();
-              queueMicrotask(() => composerTextarea?.focus({ preventScroll: true }));
+              queueMicrotask(() => state.composerTextarea?.focus({ preventScroll: true }));
             },
             requestUpdate,
           })}
@@ -2290,17 +2313,7 @@ export function renderChatComposer(props: ChatComposerProps) {
           ${renderChatAttachmentMenu({ ...props, disabled: !canCompose })}
           <div class="agent-chat__composer-combobox">
             <textarea
-              ${ref((element) => {
-                const nextTextarea = element instanceof HTMLTextAreaElement ? element : null;
-                if (composerTextarea && composerTextarea !== nextTextarea) {
-                  disconnectTextareaOverflowObserver(composerTextarea);
-                }
-                composerTextarea = nextTextarea;
-                if (composerTextarea) {
-                  observeTextareaOverflow(composerTextarea);
-                  scheduleTextareaHeightAdjustment(composerTextarea);
-                }
-              })}
+              ${ref(state.textareaRef)}
               .value=${visibleDraft}
               dir=${detectTextDirection(visibleDraft)}
               ?disabled=${!canCompose}
