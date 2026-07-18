@@ -56,6 +56,13 @@ describe("Microsoft Teams meeting platform adapter", () => {
         captioning: true,
       }),
     ).toBe(false);
+    expect(
+      TEAMS_MEETINGS_PLATFORM_ADAPTER.browser.shouldRetryJoinStatus?.({
+        ...pending,
+        manualActionReason: "teams-session-conflict",
+        manualActionRequired: true,
+      }),
+    ).toBe(false);
   });
 
   it.each([

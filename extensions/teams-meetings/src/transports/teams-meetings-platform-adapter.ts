@@ -296,7 +296,9 @@ export const TEAMS_MEETINGS_PLATFORM_ADAPTER: MeetingPlatformAdapter<
       ((health.manualActionReason === "teams-audio-choice-required" &&
         !health.audioInputRouteError &&
         !health.audioOutputRouteError) ||
-        (health.captionCaptureRequested === true && health.captioning !== true)),
+        (health.manualActionRequired !== true &&
+          health.captionCaptureRequested === true &&
+          health.captioning !== true)),
     browserControlUnavailable: () => ({
       category: "browser-control-unavailable",
       reason: "browser-control-unavailable",
