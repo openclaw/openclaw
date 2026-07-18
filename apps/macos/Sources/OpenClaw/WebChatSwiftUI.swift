@@ -448,6 +448,16 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
         try await GatewayConnection.shared.healthOK(timeoutMs: timeoutMs)
     }
 
+    func listQuestions() async throws -> [QuestionRecord] {
+        let data = try await GatewayConnection.shared.request(OpenClawChatGatewayRequests.questionList())
+        return try JSONDecoder().decode(QuestionListResult.self, from: data).questions
+    }
+
+    func resolveQuestion(id: String, answers: [String: [String]]) async throws {
+        _ = try await GatewayConnection.shared.request(
+            OpenClawChatGatewayRequests.resolveQuestion(id: id, answers: answers))
+    }
+
     func waitForRunCompletion(
         runId rawRunId: String,
         timeoutMs: Int) async -> OpenClawChatRunObservation
