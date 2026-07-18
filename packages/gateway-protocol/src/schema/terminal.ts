@@ -6,6 +6,7 @@ import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 import { SessionCatalogLocatorSchema } from "./sessions-catalog.js";
+import { withSince } from "./since.js";
 import {
   MAX_TERMINAL_UPLOAD_BASE64_LENGTH,
   MAX_TERMINAL_UPLOAD_BYTES,
@@ -138,35 +139,44 @@ export const TerminalAckResultSchema = closedObject({ ok: Type.Boolean() });
 export type TerminalAckResult = Static<typeof TerminalAckResultSchema>;
 
 /** Streamed output chunk; seq is its cumulative UTF-16 end offset within the session. */
-export const TerminalDataEventSchema = closedObject({
-  sessionId: NonEmptyString,
-  seq: Type.Integer({ minimum: 0 }),
-  data: Type.String(),
-});
+export const TerminalDataEventSchema = withSince(
+  "2026.7",
+  closedObject({
+    sessionId: NonEmptyString,
+    seq: Type.Integer({ minimum: 0 }),
+    data: Type.String(),
+  }),
+);
 export type TerminalDataEvent = Static<typeof TerminalDataEventSchema>;
 
 /** Terminal end-of-life notice; the session id is invalid after this event. */
-export const TerminalExitEventSchema = closedObject({
-  sessionId: NonEmptyString,
-  exitCode: Type.Optional(Type.Union([Type.Integer(), Type.Null()])),
-  signal: Type.Optional(Type.Union([Type.Integer(), Type.Null()])),
-  // Stable reason code so clients can distinguish process exit from a
-  // server-side teardown (disconnect, idle sweep, config disable).
-  reason: Type.Optional(
-    Type.Union([
-      Type.Literal("process_exit"),
-      Type.Literal("closed"),
-      Type.Literal("disconnected"),
-      // Another admin connection attached the session away; the session is
-      // still alive server-side, but no longer streams to this connection.
-      Type.Literal("detached"),
-      Type.Literal("error"),
-    ]),
-  ),
-  error: Type.Optional(Type.String()),
-});
+export const TerminalExitEventSchema = withSince(
+  "2026.7",
+  closedObject({
+    sessionId: NonEmptyString,
+    exitCode: Type.Optional(Type.Union([Type.Integer(), Type.Null()])),
+    signal: Type.Optional(Type.Union([Type.Integer(), Type.Null()])),
+    // Stable reason code so clients can distinguish process exit from a
+    // server-side teardown (disconnect, idle sweep, config disable).
+    reason: Type.Optional(
+      Type.Union([
+        Type.Literal("process_exit"),
+        Type.Literal("closed"),
+        Type.Literal("disconnected"),
+        // Another admin connection attached the session away; the session is
+        // still alive server-side, but no longer streams to this connection.
+        Type.Literal("detached"),
+        Type.Literal("error"),
+      ]),
+    ),
+    error: Type.Optional(Type.String()),
+  }),
+);
 export type TerminalExitEvent = Static<typeof TerminalExitEventSchema>;
 
 /** Union of every event a terminal session can emit. */
-export const TerminalEventSchema = Type.Union([TerminalDataEventSchema, TerminalExitEventSchema]);
+export const TerminalEventSchema = withSince(
+  "2026.7",
+  Type.Union([TerminalDataEventSchema, TerminalExitEventSchema]),
+);
 export type TerminalEvent = Static<typeof TerminalEventSchema>;

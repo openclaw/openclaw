@@ -3,6 +3,7 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
+import { withSince } from "./since.js";
 
 const QuestionIdSchema = Type.String({ pattern: "^[a-z][a-z0-9_]*$" });
 // UI chip/tag display cap shared by every question input and output shape.
@@ -112,16 +113,21 @@ export const QuestionListResultSchema = closedObject({
   questions: Type.Array(QuestionRecordSchema),
 });
 
-export const QuestionRequestedEventSchema = QuestionRecordSchema;
-export const QuestionResolvedEventSchema = Type.Union([
-  closedObject({
-    id: NonEmptyString,
-    status: Type.Literal("answered"),
-    answers: QuestionAnswersSchema,
-  }),
-  closedObject({ id: NonEmptyString, status: Type.Literal("cancelled") }),
-  closedObject({ id: NonEmptyString, status: Type.Literal("expired") }),
-]);
+// Native codegen intentionally reuses QuestionRecord for this event instead of
+// registering a duplicate alias, so stamp the shared schema at the event site.
+export const QuestionRequestedEventSchema = withSince("2026.7", QuestionRecordSchema);
+export const QuestionResolvedEventSchema = withSince(
+  "2026.7",
+  Type.Union([
+    closedObject({
+      id: NonEmptyString,
+      status: Type.Literal("answered"),
+      answers: QuestionAnswersSchema,
+    }),
+    closedObject({ id: NonEmptyString, status: Type.Literal("cancelled") }),
+    closedObject({ id: NonEmptyString, status: Type.Literal("expired") }),
+  ]),
+);
 
 export type QuestionOption = Static<typeof QuestionOptionSchema>;
 export type Question = Static<typeof QuestionSchema>;

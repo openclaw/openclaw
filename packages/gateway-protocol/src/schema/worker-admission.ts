@@ -1,6 +1,7 @@
 import { Type, type Static, type TProperties } from "typebox";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../client-info.js";
 import { closedObject } from "./closed-object.js";
+import { withSince } from "./since.js";
 import {
   LiveIntegerSchema,
   LiveSequenceSchema,
@@ -61,14 +62,17 @@ const WorkerBundleHashSchema = Type.String({
 });
 
 /** Build identity presented by a worker before the gateway admits it. */
-export const WorkerAdmissionHandshakeSchema = closedObject({
-  bundleHash: WorkerBundleHashSchema,
-  openclawVersion: Type.String({ minLength: 1, maxLength: 128 }),
-  protocolFeatures: Type.Array(WorkerProtocolFeatureSchema, {
-    maxItems: WORKER_PROTOCOL_MAX_FEATURES,
-    uniqueItems: true,
+export const WorkerAdmissionHandshakeSchema = withSince(
+  "2026.7",
+  closedObject({
+    bundleHash: WorkerBundleHashSchema,
+    openclawVersion: Type.String({ minLength: 1, maxLength: 128 }),
+    protocolFeatures: Type.Array(WorkerProtocolFeatureSchema, {
+      maxItems: WORKER_PROTOCOL_MAX_FEATURES,
+      uniqueItems: true,
+    }),
   }),
-});
+);
 
 const WorkerConnectAdmissionCommonProperties = {
   environmentId: WorkerIdentifierSchema,
