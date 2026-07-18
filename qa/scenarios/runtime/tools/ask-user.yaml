@@ -123,7 +123,7 @@ flow:
           saveAs: finalMessage
           args:
             - lambda:
-                expr: "state.getSnapshot().messages.slice(startIndex).find((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === config.conversationId && candidate !== promptMessage && !candidate.text.includes(config.promptNeedle))"
+                expr: "state.getSnapshot().messages.slice(startIndex).find((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === config.conversationId && candidate !== promptMessage && candidate.text.includes(config.expectedFinal))"
             - expr: liveTurnTimeoutMs(env, 45000)
             - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
         - assert:
