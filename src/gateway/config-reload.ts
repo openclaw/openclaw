@@ -924,11 +924,18 @@ export function startGatewayConfigReloader(opts: {
       opts.onConfigCandidateObserved?.();
       configWriteEpoch += 1;
       watcherIntentCandidate = null;
+      // Pending writes coalesce to the latest config, but a newer non-restart intent
+      // must not erase a restart already required by an unapplied committed write.
+      const afterWrite =
+        pendingInProcessConfig?.afterWrite?.mode === "restart" &&
+        event.afterWrite?.mode !== "restart"
+          ? pendingInProcessConfig.afterWrite
+          : event.afterWrite;
       pendingInProcessConfig = {
         config: event.runtimeConfig,
         compareConfig: event.sourceConfig,
         persistedHash: event.persistedHash,
-        afterWrite: event.afterWrite,
+        afterWrite,
         ...(event.preparedCandidate ? { preparedCandidate: event.preparedCandidate } : {}),
         ...(event.runtimeRefresh ? { runtimeRefresh: event.runtimeRefresh } : {}),
         epoch: configWriteEpoch,
