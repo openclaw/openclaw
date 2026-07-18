@@ -6,7 +6,10 @@ import type { OpenClawConfig, RuntimeEnv } from "../runtime-api.js";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
 import type { MSTeamsActivityHandler } from "./monitor-handler.js";
 import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
-import { getMSTeamsIngressMockState } from "./monitor-ingress-mock.test-support.js";
+import {
+  getMSTeamsIngressMockState,
+  gateIngressAcceptThenDispatch,
+} from "./monitor-ingress-mock.test-support.js";
 import type { MSTeamsPollStore } from "./polls.js";
 
 type FakeServer = EventEmitter & {
@@ -803,22 +806,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     const appendWork = new Promise<void>((resolve) => {
       releaseAppend = resolve;
     });
-    ingress.accept.mockImplementationOnce(async (activity: unknown, context?: unknown) => {
-      await appendWork;
-      void Promise.resolve(
-        ingress.options.dispatch(
-          activity,
-          {
-            abortSignal: new AbortController().signal,
-            onAdopted: vi.fn(),
-            onDeferred: vi.fn(),
-            onAdoptionFinalizing: vi.fn(),
-            onAbandoned: vi.fn(),
-          },
-          context,
-        ),
-      ).catch(() => undefined);
-    });
+    gateIngressAcceptThenDispatch(ingress, appendWork);
 
     const responseWork = cardActionHandler({
       activity: {

@@ -42,3 +42,26 @@ vi.mock("./msteams-ingress.js", () => ({
     return instance;
   },
 }));
+
+/** Gate accept on a promise, then fire dispatch detached with a stub lifecycle. */
+export function gateIngressAcceptThenDispatch(
+  ingress: ReturnType<typeof getMSTeamsIngressMockState>["instances"][number],
+  appendWork: Promise<void>,
+): void {
+  ingress.accept.mockImplementationOnce(async (activity: unknown, context?: unknown) => {
+    await appendWork;
+    void Promise.resolve(
+      ingress.options.dispatch(
+        activity,
+        {
+          abortSignal: new AbortController().signal,
+          onAdopted: vi.fn(),
+          onDeferred: vi.fn(),
+          onAdoptionFinalizing: vi.fn(),
+          onAbandoned: vi.fn(),
+        },
+        context,
+      ),
+    ).catch(() => undefined);
+  });
+}
