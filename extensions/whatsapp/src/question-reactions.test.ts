@@ -101,7 +101,7 @@ describe("WhatsApp question reactions", () => {
       }),
     ).resolves.toBe(true);
     expect(hoisted.resolve).toHaveBeenCalledWith(
-      expect.objectContaining({ questionId, reaction: "2️⃣", senderId: "+1555" }),
+      expect.objectContaining({ questionId, optionValue: "Two", senderId: "+1555" }),
     );
 
     await expect(

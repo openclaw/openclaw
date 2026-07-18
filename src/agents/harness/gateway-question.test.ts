@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   cancelPendingAgentQuestionForSession,
   claimPendingAgentQuestionAnswer,
+  registerPendingAgentQuestion,
   resetPendingAgentQuestionsForTest,
   runAgentHarnessGatewayQuestion,
   type AgentHarnessQuestionGatewayCall,
@@ -32,6 +33,45 @@ afterEach(() => {
 });
 
 describe("gateway harness questions", () => {
+  it("does not request a gateway question when the session reservation conflicts", async () => {
+    const gatewayCall = vi.fn<AgentHarnessQuestionGatewayCall>();
+    const reservation = registerPendingAgentQuestion({
+      questionId: "ask_00000000000000000000000000000000",
+      sessionKey: "agent:main:conflict",
+      questions,
+      gatewayCall,
+    });
+
+    await expect(
+      runAgentHarnessGatewayQuestion({
+        questions,
+        sessionKey: "agent:main:conflict",
+        timeoutMs: 60_000,
+        gatewayCall,
+        delivery: { onBlockReply: vi.fn() },
+      }),
+    ).rejects.toThrow("session already has a pending gateway question");
+    expect(gatewayCall).not.toHaveBeenCalled();
+    reservation.dispose();
+  });
+
+  it("fails a pending claim closed when disposed before registration attaches", async () => {
+    const claim = registerPendingAgentQuestion({
+      questionId: "ask_00000000000000000000000000000000",
+      sessionKey: "agent:main:dispose-before-attach",
+      questions,
+      gatewayCall: vi.fn(),
+    });
+    const answer = claimPendingAgentQuestionAnswer({
+      sessionKey: "agent:main:dispose-before-attach",
+      text: "Continue",
+    });
+
+    claim.dispose();
+
+    await expect(answer).resolves.toBe(false);
+  });
+
   it("reserves the session and suppresses a prompt cancelled during registration", async () => {
     const registration = deferred<{ id: string }>();
     const calls: Array<{ method: string; params: unknown }> = [];

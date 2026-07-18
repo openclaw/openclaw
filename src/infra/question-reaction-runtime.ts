@@ -14,7 +14,7 @@ export const QUESTION_REACTION_EMOJIS = ["1️⃣", "2️⃣", "3️⃣", "4️�
 
 export type QuestionReactionBinding = {
   questionId: string;
-  optionCount: number;
+  optionValues: string[];
 };
 
 export function readAskUserQuestionId(
@@ -36,13 +36,14 @@ export function readQuestionReactionBinding(
     return undefined;
   }
   const questionId = (raw as { questionId?: unknown }).questionId;
-  const optionCount = (raw as { optionCount?: unknown }).optionCount;
+  const optionValues = (raw as { optionValues?: unknown }).optionValues;
   return typeof questionId === "string" &&
     questionId.length > 0 &&
-    Number.isInteger(optionCount) &&
-    Number(optionCount) >= 1 &&
-    Number(optionCount) <= QUESTION_REACTION_EMOJIS.length
-    ? { questionId, optionCount: Number(optionCount) }
+    Array.isArray(optionValues) &&
+    optionValues.length >= 1 &&
+    optionValues.length <= QUESTION_REACTION_EMOJIS.length &&
+    optionValues.every((value) => typeof value === "string" && value.length > 0)
+    ? { questionId, optionValues: [...optionValues] }
     : undefined;
 }
 
@@ -71,13 +72,17 @@ export function prepareQuestionReactionPayloadForDelivery(params: {
     return null;
   }
   const labels: string[] = [];
+  const optionValues: string[] = [];
   for (const button of buttonBlock.buttons) {
-    // Display labels may be formatter-adjusted (e.g. Copilot); resolution uses
-    // the canonical optionValue via question.get, so only identity must match.
-    if (button.action?.type !== "question" || button.action.questionId !== questionId) {
+    if (
+      button.action?.type !== "question" ||
+      button.action.questionId !== questionId ||
+      !button.action.optionValue
+    ) {
       return null;
     }
     labels.push(button.label);
+    optionValues.push(button.action.optionValue);
   }
   // Keep only the leading question block: the second text block carries
   // tap-oriented option guidance that is wrong for reaction channels, and the
@@ -98,17 +103,13 @@ export function prepareQuestionReactionPayloadForDelivery(params: {
     presentationTextMode: undefined,
     channelData: {
       ...params.payload.channelData,
-      [QUESTION_REACTION_CHANNEL_DATA_KEY]: { questionId, optionCount: labels.length },
+      [QUESTION_REACTION_CHANNEL_DATA_KEY]: { questionId, optionValues },
     },
   };
 }
 
 export async function resolveQuestionReactionOverGateway(
-  params: Omit<ResolveQuestionOverGatewayParams, "optionIndex"> & { reaction: string },
+  params: ResolveQuestionOverGatewayParams,
 ): Promise<ResolveQuestionOverGatewayResult | null> {
-  const optionIndex = resolveQuestionReactionIndex(params.reaction);
-  if (optionIndex === undefined) {
-    return null;
-  }
-  return await resolveQuestionOverGateway({ ...params, optionIndex });
+  return await resolveQuestionOverGateway(params);
 }

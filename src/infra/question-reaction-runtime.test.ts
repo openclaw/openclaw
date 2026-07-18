@@ -33,7 +33,10 @@ describe("question reaction runtime", () => {
     });
     expect(payload?.text).toBe("Deploy where?\n\nReact with:\n1️⃣ Staging\n2️⃣ Production");
     expect(payload?.presentation).toBeUndefined();
-    expect(readQuestionReactionBinding(payload ?? {})).toEqual({ questionId, optionCount: 2 });
+    expect(readQuestionReactionBinding(payload ?? {})).toEqual({
+      questionId,
+      optionValues: ["Staging", "Production"],
+    });
   });
 
   it("keeps a one-option prompt reaction-eligible", () => {
@@ -60,10 +63,32 @@ describe("question reaction runtime", () => {
       presentation: singleOptionPresentation,
     });
 
-    expect(readQuestionReactionBinding(payload ?? {})).toEqual({ questionId, optionCount: 1 });
+    expect(readQuestionReactionBinding(payload ?? {})).toEqual({
+      questionId,
+      optionValues: ["Staging"],
+    });
   });
 
-  it("maps a number emoji through question.get to the canonical label", async () => {
+  it("resolves a reordered presentation by its rendered option value", async () => {
+    const reorderedPresentation = {
+      ...presentation,
+      blocks: [
+        presentation.blocks[0]!,
+        {
+          type: "buttons" as const,
+          buttons: ["Production", "Staging"].map((optionValue) => ({
+            label: optionValue,
+            action: { type: "question" as const, questionId, optionValue },
+          })),
+        },
+      ],
+    };
+    const payload = prepareQuestionReactionPayloadForDelivery({
+      payload: { channelData: { askUser: { questionId } }, presentation: reorderedPresentation },
+      presentation: reorderedPresentation,
+    });
+    const binding = readQuestionReactionBinding(payload ?? {});
+    expect(binding?.optionValues).toEqual(["Production", "Staging"]);
     hoisted.callGateway
       .mockResolvedValueOnce({
         question: {
@@ -87,7 +112,7 @@ describe("question reaction runtime", () => {
       resolveQuestionReactionOverGateway({
         cfg: {} as never,
         questionId,
-        reaction: "2️⃣",
+        optionValue: binding!.optionValues[0]!,
         senderId: "signal:+15550001111",
       }),
     ).resolves.toEqual({
@@ -103,16 +128,5 @@ describe("question reaction runtime", () => {
         }),
       }),
     );
-  });
-
-  it("ignores unrelated reactions", async () => {
-    await expect(
-      resolveQuestionReactionOverGateway({
-        cfg: {} as never,
-        questionId,
-        reaction: "👍",
-      }),
-    ).resolves.toBeNull();
-    expect(hoisted.callGateway).not.toHaveBeenCalled();
   });
 });

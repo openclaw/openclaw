@@ -10,7 +10,7 @@ const TARGET_TTL_MS = 24 * 60 * 60 * 1_000;
 
 type WhatsAppQuestionReactionTarget = {
   questionId: string;
-  optionCount: number;
+  optionValues: string[];
   terminal: boolean;
   expiresAtMs: number;
   cleanupTimer: ReturnType<typeof setTimeout>;
@@ -18,7 +18,7 @@ type WhatsAppQuestionReactionTarget = {
 
 const targets = new Map<string, WhatsAppQuestionReactionTarget>();
 
-function storeTarget(key: string, binding: { questionId: string; optionCount: number }): void {
+function storeTarget(key: string, binding: { questionId: string; optionValues: string[] }): void {
   const existing = targets.get(key);
   if (existing) {
     clearTimeout(existing.cleanupTimer);
@@ -154,7 +154,8 @@ export async function maybeResolveWhatsAppQuestionReaction(params: {
     params.logDebug?.(`whatsapp: stale question reaction ignored id=${matched.target.questionId}`);
     return true;
   }
-  if (optionIndex >= matched.target.optionCount) {
+  const optionValue = matched.target.optionValues[optionIndex];
+  if (!optionValue) {
     params.logDebug?.(
       `whatsapp: out-of-range question reaction ignored id=${matched.target.questionId}`,
     );
@@ -164,7 +165,7 @@ export async function maybeResolveWhatsAppQuestionReaction(params: {
     const result = await questionGatewayRuntime.resolveReaction({
       cfg: params.cfg,
       questionId: matched.target.questionId,
-      reaction: reactionKey,
+      optionValue,
       senderId: params.senderId,
       gatewayUrl: params.gatewayUrl,
       clientDisplayName: `WhatsApp question (${params.senderId})`,

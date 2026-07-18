@@ -237,10 +237,25 @@ class ChatQuestionTest {
       assertTrue(controller.questions.value.isEmpty())
     }
 
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun locallyExpiredQuestionIsEvictedAfterTerminalGrace() =
+    runTest {
+      val json = Json { ignoreUnknownKeys = true }
+      val controller = ChatController(scope = this, json = json, requestGateway = { _, _ -> "{}" })
+      val pending = record(expiresAtMs = 1_000)
+
+      controller.handleGatewayEvent("question.requested", json.encodeToString(pending))
+      advanceTimeBy(QUESTION_TERMINAL_RETENTION_MS + 1_001)
+      runCurrent()
+
+      assertTrue(controller.questions.value.isEmpty())
+    }
+
   private fun record(
     id: String = "ask_123",
     status: String = "pending",
-    expiresAtMs: Long = 2_000,
+    expiresAtMs: Long = Long.MAX_VALUE,
     sessionKey: String? = "agent:main:main",
     agentId: String? = "main",
   ) = QuestionRecord(

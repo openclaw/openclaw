@@ -89,6 +89,7 @@ public final class OpenClawChatViewModel {
     var questionRefreshGeneration: UInt64 = 0
     var questionStateRevision: UInt64 = 0
     var questionEvictionTasks: [String: Task<Void, Never>] = [:]
+    var questionEvictionDeadlines: [String: Date] = [:]
     var hasActiveSessionRunWithoutChatSnapshot = false
 
     public private(set) var sessionKey: String {

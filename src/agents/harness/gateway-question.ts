@@ -31,6 +31,7 @@ type PendingAgentQuestion = {
   questions: readonly AgentHarnessUserInputQuestion[];
   gatewayCall: AgentHarnessQuestionGatewayCall;
   registration: Promise<unknown>;
+  attachRegistration: (promise: Promise<unknown>) => void;
   answer?: Promise<QuestionWaitAnswerResult>;
   bufferedAnswers?: AgentHarnessUserInputAnswers;
   cancelRequested: boolean;
@@ -116,10 +117,10 @@ export function registerPendingAgentQuestion(params: {
   sessionKey: string;
   questions: readonly AgentHarnessUserInputQuestion[];
   gatewayCall: AgentHarnessQuestionGatewayCall;
-  registration: Promise<unknown>;
   answer?: Promise<QuestionWaitAnswerResult>;
   onCancel?: (resolvedBy: string) => void;
 }): {
+  attachRegistration: (promise: Promise<unknown>) => void;
   setAnswer: (answer: Promise<QuestionWaitAnswerResult>) => Promise<boolean>;
   isCancellationRequested: () => boolean;
   isResolving: () => boolean;
@@ -130,14 +131,31 @@ export function registerPendingAgentQuestion(params: {
   if (existing) {
     throw new Error(`session already has a pending gateway question: ${existing.questionId}`);
   }
+  let resolveRegistration!: (value: unknown) => void;
+  let rejectRegistration!: (error: unknown) => void;
+  const registration = new Promise<unknown>((resolve, reject) => {
+    resolveRegistration = resolve;
+    rejectRegistration = reject;
+  });
+  void registration.catch(() => undefined);
+  let registrationAttached = false;
   const state: PendingAgentQuestion = {
     ...params,
     sessionKey,
+    registration,
+    attachRegistration: (promise) => {
+      if (registrationAttached) {
+        throw new Error("gateway question registration already attached");
+      }
+      registrationAttached = true;
+      promise.then(resolveRegistration, rejectRegistration);
+    },
     cancelRequested: false,
     resolving: false,
   };
   pendingAgentQuestions.set(sessionKey, state);
   return {
+    attachRegistration: state.attachRegistration,
     setAnswer: async (answer) => {
       if (pendingAgentQuestions.get(sessionKey) !== state) {
         return false;
@@ -157,6 +175,9 @@ export function registerPendingAgentQuestion(params: {
     dispose: () => {
       if (pendingAgentQuestions.get(sessionKey) === state) {
         pendingAgentQuestions.delete(sessionKey);
+      }
+      if (!registrationAttached) {
+        rejectRegistration(new Error("gateway question registration disposed before attachment"));
       }
     },
   };
@@ -258,6 +279,12 @@ export async function runAgentHarnessGatewayQuestion(
   }));
   let aborted = false;
   params.signal?.throwIfAborted();
+  const claim = registerPendingAgentQuestion({
+    questionId,
+    sessionKey: params.sessionKey,
+    questions: params.questions,
+    gatewayCall: params.gatewayCall,
+  });
   const registration = Promise.resolve().then(
     () =>
       params.gatewayCall(
@@ -273,13 +300,7 @@ export async function runAgentHarnessGatewayQuestion(
         params.signal ? { signal: params.signal } : undefined,
       ) as Promise<{ id?: unknown }>,
   );
-  const claim = registerPendingAgentQuestion({
-    questionId,
-    sessionKey: params.sessionKey,
-    questions: params.questions,
-    gatewayCall: params.gatewayCall,
-    registration,
-  });
+  claim.attachRegistration(registration);
   const cancel = async (resolvedBy: string): Promise<QuestionWaitAnswerResult | undefined> => {
     try {
       return (await params.gatewayCall(

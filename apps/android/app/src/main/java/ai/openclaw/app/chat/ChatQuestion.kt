@@ -34,7 +34,7 @@ data class ChatQuestionPrompt(
         }
     }
 
-  fun shouldRetainAfterList(nowMs: Long): Boolean = record.status != "pending" && terminalObservedAtMs?.let { nowMs - it < QUESTION_TERMINAL_RETENTION_MS } == true
+  fun shouldRetainAfterList(nowMs: Long): Boolean = terminalObservedAtMs?.let { nowMs - it < QUESTION_TERMINAL_RETENTION_MS } == true
 }
 
 data class ChatQuestionDraft(

@@ -1227,7 +1227,11 @@ private actor QuestionListEventRace {
     }
 }
 
-private func chatQuestionRecord(id: String, status: QuestionStatus = .pending) -> QuestionRecord {
+private func chatQuestionRecord(
+    id: String,
+    status: QuestionStatus = .pending,
+    expiresAtMs: Int = 4_000_000_000_000) -> QuestionRecord
+{
     QuestionRecord(
         id: id,
         questions: [
@@ -1240,12 +1244,29 @@ private func chatQuestionRecord(id: String, status: QuestionStatus = .pending) -
         agentid: "main",
         sessionkey: "main",
         createdatms: 1,
-        expiresatms: 4_000_000_000_000,
+        expiresatms: expiresAtMs,
         status: status)
 }
 
 @Suite(.serialized)
 struct ChatViewModelTests {
+    @Test @MainActor func `locally expired question is evicted after terminal grace`() {
+        let viewModel = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: TestChatTransport(historyResponses: []))
+        let expiresAt = Date(timeIntervalSince1970: 1500)
+        viewModel.upsertQuestion(chatQuestionRecord(id: "ask_local", expiresAtMs: 1_500_000))
+        let model = viewModel.questionCards[0]
+
+        viewModel.evictQuestionIfTerminalGraceElapsed(model, at: expiresAt)
+        #expect(viewModel.questionCards.map(\.id) == ["ask_local"])
+
+        viewModel.evictQuestionIfTerminalGraceElapsed(
+            model,
+            at: expiresAt.addingTimeInterval(15))
+        #expect(viewModel.questionCards.isEmpty)
+    }
+
     @Test @MainActor func `stale question list cannot overwrite a newer event`() async throws {
         let gate = QuestionListGate()
         let transport = TestChatTransport(

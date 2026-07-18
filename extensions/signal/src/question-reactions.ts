@@ -14,7 +14,7 @@ const TARGET_TTL_MS = 24 * 60 * 60 * 1_000;
 
 type SignalQuestionReactionTarget = {
   questionId: string;
-  optionCount: number;
+  optionValues: string[];
   targetAuthorKeys: string[];
   terminal: boolean;
   expiresAtMs: number;
@@ -25,7 +25,7 @@ const targets = new Map<string, SignalQuestionReactionTarget>();
 
 function storeTarget(
   key: string,
-  binding: { questionId: string; optionCount: number },
+  binding: { questionId: string; optionValues: string[] },
   targetAuthorKeys: string[],
 ): void {
   const existing = targets.get(key);
@@ -143,7 +143,8 @@ export async function maybeResolveSignalQuestionReaction(params: {
     params.logDebug?.(`signal: stale question reaction ignored id=${target.questionId}`);
     return true;
   }
-  if (optionIndex >= target.optionCount) {
+  const optionValue = target.optionValues[optionIndex];
+  if (!optionValue) {
     params.logDebug?.(`signal: out-of-range question reaction ignored id=${target.questionId}`);
     return true;
   }
@@ -151,7 +152,7 @@ export async function maybeResolveSignalQuestionReaction(params: {
     const result = await questionGatewayRuntime.resolveReaction({
       cfg: params.cfg,
       questionId: target.questionId,
-      reaction: params.reactionKey,
+      optionValue,
       senderId: params.actorId,
       gatewayUrl: params.gatewayUrl,
       clientDisplayName: `Signal question (${params.actorId})`,

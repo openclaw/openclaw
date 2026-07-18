@@ -258,7 +258,9 @@ class ChatController internal constructor(
   private val questionStateLock = Any()
   private var questionStateRevision = 0L
   private var questionRefreshGeneration = 0L
-  private val questionEvictionJobs = mutableMapOf<String, Job>()
+  private data class QuestionEvictionJob(val job: Job, val observedAtMs: Long?)
+
+  private val questionEvictionJobs = mutableMapOf<String, QuestionEvictionJob>()
 
   private val _planSteps = MutableStateFlow<List<ChatPlanStep>>(emptyList())
   val planSteps: StateFlow<List<ChatPlanStep>> = _planSteps.asStateFlow()
@@ -2171,7 +2173,11 @@ class ChatController internal constructor(
                   record = record,
                   submitting = prompt.submitting && record.status == "pending",
                   terminalObservedAtMs =
-                    if (record.status == "pending") null else prompt.terminalObservedAtMs ?: nowMs,
+                    if (record.status == "pending" && nowMs < record.expiresAtMs) {
+                      null
+                    } else {
+                      prompt.terminalObservedAtMs ?: nowMs
+                    },
                 )
               } ?: ChatQuestionPrompt(
                 record = record,
@@ -2242,31 +2248,54 @@ class ChatController internal constructor(
 
   private fun syncQuestionEvictionsLocked(nowMs: Long = System.currentTimeMillis()) {
     val currentById = _questions.value.associateBy { it.record.id }
-    questionEvictionJobs.entries.removeAll { (id, job) ->
+    questionEvictionJobs.entries.removeAll { (id, scheduled) ->
       val prompt = currentById[id]
-      if (prompt == null || prompt.record.status == "pending") {
-        job.cancel()
+      if (prompt == null || scheduled.observedAtMs != prompt.terminalObservedAtMs) {
+        scheduled.job.cancel()
         true
       } else {
         false
       }
     }
     for (prompt in _questions.value) {
-      val observedAt = prompt.terminalObservedAtMs ?: continue
-      if (prompt.record.status == "pending" || questionEvictionJobs.containsKey(prompt.record.id)) continue
+      if (questionEvictionJobs.containsKey(prompt.record.id)) continue
       val id = prompt.record.id
-      val remainingMs = (QUESTION_TERMINAL_RETENTION_MS - (nowMs - observedAt)).coerceAtLeast(0)
-      questionEvictionJobs[id] =
-        scope.launch {
+      val observedAt = prompt.terminalObservedAtMs
+      val remainingMs =
+        if (observedAt == null && prompt.record.status == "pending" && prompt.record.expiresAtMs != Long.MAX_VALUE) {
+          (prompt.record.expiresAtMs - nowMs).coerceAtLeast(0)
+        } else if (observedAt != null) {
+          (QUESTION_TERMINAL_RETENTION_MS - (nowMs - observedAt)).coerceAtLeast(0)
+        } else {
+          continue
+        }
+      val job =
+        scope.launch(start = CoroutineStart.LAZY) {
           delay(remainingMs)
           synchronized(questionStateLock) {
             questionEvictionJobs.remove(id)
             val current = _questions.value
+            if (observedAt == null) {
+              val next =
+                current.map {
+                  if (it.record.id == id && it.record.status == "pending" && it.terminalObservedAtMs == null) {
+                    it.copy(terminalObservedAtMs = System.currentTimeMillis())
+                  } else {
+                    it
+                  }
+                }
+              if (next != current) {
+                _questions.value = next
+                questionStateRevision += 1
+              }
+              syncQuestionEvictionsLocked()
+              return@synchronized
+            }
             val next =
               current.filterNot {
                 it.record.id == id &&
                   it.terminalObservedAtMs == observedAt &&
-                  it.record.status != "pending"
+                  (it.status() == ChatQuestionStatus.Expired || it.record.status != "pending")
               }
             if (next != current) {
               _questions.value = next
@@ -2276,6 +2305,8 @@ class ChatController internal constructor(
             }
           }
         }
+      questionEvictionJobs[id] = QuestionEvictionJob(job, observedAt)
+      job.start()
     }
   }
 

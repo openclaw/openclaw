@@ -149,13 +149,26 @@ public final class OpenClawQuestionCardModel: Identifiable {
     }
 
     func shouldRetainAfterList(at date: Date) -> Bool {
-        guard self.record.status != .pending, let terminalObservedAt else { return false }
+        guard let terminalObservedAt else { return false }
         return date.timeIntervalSince(terminalObservedAt) < Self.terminalRetentionSeconds
     }
 
     func terminalRetentionDelay(at date: Date) -> TimeInterval? {
-        guard self.record.status != .pending, let terminalObservedAt else { return nil }
+        guard let terminalObservedAt else { return nil }
         return max(0, Self.terminalRetentionSeconds - date.timeIntervalSince(terminalObservedAt))
+    }
+
+    func observeLocalExpiry(at date: Date) -> Bool {
+        guard self.record.status == .pending, self.terminalObservedAt == nil,
+              date.timeIntervalSince1970 * 1000 >= Double(self.record.expiresatms)
+        else { return false }
+        self.terminalObservedAt = date
+        return true
+    }
+
+    func localExpiryDelay(at date: Date) -> TimeInterval? {
+        guard self.record.status == .pending, self.terminalObservedAt == nil else { return nil }
+        return max(0, Double(self.record.expiresatms) / 1000 - date.timeIntervalSince1970)
     }
 
     private func answers() -> [String: [String]]? {
@@ -432,32 +445,44 @@ extension OpenClawChatViewModel {
         at date: Date = Date())
     {
         guard self.questionCards.first(where: { $0.id == model.id }) === model else { return }
-        guard !model.shouldRetainAfterList(at: date), model.record.status != .pending else {
+        if model.observeLocalExpiry(at: date) {
+            self.questionStateRevision &+= 1
+            self.markTimelineChanged()
+        }
+        guard !model.shouldRetainAfterList(at: date), model.status(at: date) == .expired || model.record.status != .pending else {
             self.syncQuestionEvictions(at: date)
             return
         }
         self.questionCards.removeAll { $0 === model }
         self.questionEvictionTasks.removeValue(forKey: model.id)?.cancel()
+        self.questionEvictionDeadlines.removeValue(forKey: model.id)
         self.questionStateRevision &+= 1
         self.markTimelineChanged()
     }
 
     private func syncQuestionEvictions(at date: Date = Date()) {
         let modelsByID = Dictionary(uniqueKeysWithValues: self.questionCards.map { ($0.id, $0) })
-        let cancelledIDs = self.questionEvictionTasks.keys.filter { id in
-            modelsByID[id]?.record.status == .pending || modelsByID[id] == nil
-        }
+        let cancelledIDs = self.questionEvictionTasks.keys.filter { modelsByID[$0] == nil }
         for id in cancelledIDs {
             self.questionEvictionTasks.removeValue(forKey: id)?.cancel()
+            self.questionEvictionDeadlines.removeValue(forKey: id)
         }
         for model in self.questionCards {
-            guard self.questionEvictionTasks[model.id] == nil,
-                  let delay = model.terminalRetentionDelay(at: date)
+            guard let delay = model.terminalRetentionDelay(at: date) ?? model.localExpiryDelay(at: date)
             else { continue }
+            let deadline = date.addingTimeInterval(delay)
+            if let scheduled = self.questionEvictionDeadlines[model.id],
+               abs(scheduled.timeIntervalSince(deadline)) < 0.01
+            {
+                continue
+            }
+            self.questionEvictionTasks.removeValue(forKey: model.id)?.cancel()
+            self.questionEvictionDeadlines[model.id] = deadline
             self.questionEvictionTasks[model.id] = Task { [weak self, weak model] in
                 try? await Task.sleep(for: .seconds(delay))
                 guard !Task.isCancelled, let self, let model else { return }
                 self.questionEvictionTasks.removeValue(forKey: model.id)
+                self.questionEvictionDeadlines.removeValue(forKey: model.id)
                 self.evictQuestionIfTerminalGraceElapsed(model)
             }
         }

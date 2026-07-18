@@ -93,6 +93,16 @@ private func questionRecord(
 }
 
 @MainActor
+@Test func `question card locally expired state enters terminal retention`() {
+    let expiresAt = Date(timeIntervalSince1970: 1500)
+    let model = OpenClawQuestionCardModel(record: questionRecord(expiresAtMs: 1_500_000))
+
+    #expect(model.observeLocalExpiry(at: expiresAt))
+    #expect(model.shouldRetainAfterList(at: expiresAt.addingTimeInterval(14)))
+    #expect(!model.shouldRetainAfterList(at: expiresAt.addingTimeInterval(15)))
+}
+
+@MainActor
 @Test func `question card stores local answers in gateway record shape`() throws {
     let model = OpenClawQuestionCardModel(record: questionRecord())
     model.toggleOption(questionID: "meal", label: "Pizza")

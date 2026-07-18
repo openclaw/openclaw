@@ -503,6 +503,22 @@ export function createAskUserTool(params: {
       };
 
       try {
+        state.claim = registerPendingAgentQuestion({
+          questionId,
+          sessionKey,
+          questions: normalized.questions,
+          gatewayCall,
+          onCancel: () => {
+            if (
+              askUserQuestions.get(questionId) === state &&
+              state.phase.kind !== "reserved" &&
+              state.phase.kind !== "resolving" &&
+              state.phase.kind !== "prompt-failed"
+            ) {
+              transitionAskUserQuestion(state, { kind: "resolving" });
+            }
+          },
+        });
         const registration = Promise.resolve().then(
           () =>
             gatewayCall(
@@ -518,23 +534,7 @@ export function createAskUserTool(params: {
               signal ? { signal } : undefined,
             ) as Promise<{ id?: unknown }>,
         );
-        state.claim = registerPendingAgentQuestion({
-          questionId,
-          sessionKey,
-          questions: normalized.questions,
-          gatewayCall,
-          registration,
-          onCancel: () => {
-            if (
-              askUserQuestions.get(questionId) === state &&
-              state.phase.kind !== "reserved" &&
-              state.phase.kind !== "resolving" &&
-              state.phase.kind !== "prompt-failed"
-            ) {
-              transitionAskUserQuestion(state, { kind: "resolving" });
-            }
-          },
-        });
+        state.claim.attachRegistration(registration);
         const requestResult = await registration;
         registered = true;
         if (requestResult.id !== questionId) {

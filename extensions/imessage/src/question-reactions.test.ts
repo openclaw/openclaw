@@ -111,7 +111,7 @@ describe("iMessage question reactions", () => {
     await expect(maybeResolveIMessageQuestionReaction(params)).resolves.toBe(true);
     expect(hoisted.resolve).toHaveBeenCalledOnce();
     expect(hoisted.resolve).toHaveBeenCalledWith(
-      expect.objectContaining({ questionId, reaction: "2️⃣", senderId: "+15550002222" }),
+      expect.objectContaining({ questionId, optionValue: "Two", senderId: "+15550002222" }),
     );
   });
 });

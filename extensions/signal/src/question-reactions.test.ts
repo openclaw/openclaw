@@ -85,7 +85,7 @@ describe("Signal question reactions", () => {
     await expect(maybeResolveSignalQuestionReaction(params)).resolves.toBe(true);
     expect(hoisted.resolve).toHaveBeenCalledOnce();
     expect(hoisted.resolve).toHaveBeenCalledWith(
-      expect.objectContaining({ questionId, reaction: "1️⃣", senderId: "+15550002222" }),
+      expect.objectContaining({ questionId, optionValue: "One", senderId: "+15550002222" }),
     );
     expect(params.logDebug).toHaveBeenCalledWith(
       expect.stringContaining("stale question reaction ignored"),

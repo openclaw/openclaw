@@ -10,7 +10,7 @@ const TARGET_TTL_MS = 24 * 60 * 60 * 1_000;
 
 type IMessageQuestionReactionTarget = {
   questionId: string;
-  optionCount: number;
+  optionValues: string[];
   terminal: boolean;
   expiresAtMs: number;
   cleanupTimer: ReturnType<typeof setTimeout>;
@@ -18,7 +18,7 @@ type IMessageQuestionReactionTarget = {
 
 const targets = new Map<string, IMessageQuestionReactionTarget>();
 
-function storeTarget(key: string, binding: { questionId: string; optionCount: number }): void {
+function storeTarget(key: string, binding: { questionId: string; optionValues: string[] }): void {
   const existing = targets.get(key);
   if (existing) {
     clearTimeout(existing.cleanupTimer);
@@ -158,7 +158,8 @@ export async function maybeResolveIMessageQuestionReaction(params: {
     params.logDebug?.(`imessage: stale question reaction ignored id=${target.questionId}`);
     return true;
   }
-  if (optionIndex >= target.optionCount) {
+  const optionValue = target.optionValues[optionIndex];
+  if (!optionValue) {
     params.logDebug?.(`imessage: out-of-range question reaction ignored id=${target.questionId}`);
     return true;
   }
@@ -166,7 +167,7 @@ export async function maybeResolveIMessageQuestionReaction(params: {
     const result = await questionGatewayRuntime.resolveReaction({
       cfg: params.cfg,
       questionId: target.questionId,
-      reaction: reaction.emoji,
+      optionValue,
       senderId: params.senderId,
       gatewayUrl: params.gatewayUrl,
       clientDisplayName: `iMessage question (${params.senderId})`,
