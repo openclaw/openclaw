@@ -64,6 +64,7 @@ import {
 } from "./provider-model-route-auth.js";
 
 const OPENAI_PROVIDER_ID = "openai";
+const CODEX_RUNTIME_PROVIDER_ID = "codex";
 const OPENAI_CODEX_RESPONSES_API = "openai-chatgpt-responses";
 
 export type ModelAuthAvailability = boolean | undefined;
@@ -609,6 +610,7 @@ export function createModelAuthAvailabilityResolver(
       : undefined;
     if (
       provider !== OPENAI_PROVIDER_ID &&
+      provider !== CODEX_RUNTIME_PROVIDER_ID &&
       modelId &&
       (params.syntheticAuthProviderRefs === undefined ||
         synthetic.has(normalizeProvider(provider))) &&
