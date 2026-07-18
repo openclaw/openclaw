@@ -260,6 +260,7 @@ function runStandaloneMcpAppHost(config: { protocolVersion: string; viewPath: st
   const ticket = browser.location.hash.startsWith("#") ? browser.location.hash.slice(1) : "";
   let frame: StandaloneFrame | undefined;
   let payload: ViewPayload | undefined;
+  let initializeAccepted = false;
   let initialized = false;
   let requestId = 0;
   let sandboxOrigin: string | undefined;
@@ -402,6 +403,7 @@ function runStandaloneMcpAppHost(config: { protocolVersion: string; viewPath: st
         reject(message.id, -32602, "Invalid MCP App initialization");
         return;
       }
+      initializeAccepted = true;
       respond(message.id, {
         protocolVersion: config.protocolVersion,
         hostInfo: { name: "OpenClaw standalone host", version: "1.0.0" },
@@ -423,6 +425,10 @@ function runStandaloneMcpAppHost(config: { protocolVersion: string; viewPath: st
       return;
     }
     if (message.method === "ui/notifications/initialized") {
+      // A view cannot unlock server operations by skipping the validated handshake.
+      if (!initializeAccepted) {
+        return;
+      }
       deliverInitialState();
       return;
     }
