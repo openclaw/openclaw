@@ -8,6 +8,7 @@ final class QuickChatReplyBinding {
 
     private(set) var route: QuickChatRoutingTarget?
     private(set) var viewModel: OpenClawChatViewModel?
+    @ObservationIgnored private var preparedRoute: QuickChatRoutingTarget?
 
     @ObservationIgnored private let viewModelFactory: ViewModelFactory
 
@@ -15,10 +16,17 @@ final class QuickChatReplyBinding {
         self.viewModelFactory = viewModelFactory
     }
 
-    func show(route: QuickChatRoutingTarget) {
-        guard self.route != route || self.viewModel == nil else { return }
-        self.route = route
+    /// Starts the transport consumer before the send is dispatched so no early
+    /// delta/final frame is missed; the reply area stays hidden until show(route:).
+    func prepare(route: QuickChatRoutingTarget) {
+        guard self.preparedRoute != route || self.viewModel == nil else { return }
+        self.preparedRoute = route
         self.viewModel = self.viewModelFactory(route)
+    }
+
+    func show(route: QuickChatRoutingTarget) {
+        self.prepare(route: route)
+        self.route = route
     }
 
     func rebindIfActive(route: QuickChatRoutingTarget) {
@@ -28,6 +36,7 @@ final class QuickChatReplyBinding {
 
     func clear() {
         self.route = nil
+        self.preparedRoute = nil
         self.viewModel = nil
     }
 
