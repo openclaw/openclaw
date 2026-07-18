@@ -7,9 +7,11 @@ import {
 import type { WizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
+import { nostrPlugin } from "./channel.js";
 import { nostrSetupWizard } from "./setup-surface.js";
 import {
   TEST_HEX_PRIVATE_KEY,
+  TEST_HEX_PUBLIC_KEY,
   TEST_SETUP_RELAY_URLS,
   buildResolvedNostrAccount,
   createConfiguredNostrCfg,
@@ -228,6 +230,23 @@ describe("nostrPlugin", () => {
 
       expect(normalize(`nostr:${TEST_HEX_PRIVATE_KEY}`)).toBe(TEST_HEX_PRIVATE_KEY);
       expect(normalize(`  nostr:${TEST_HEX_PRIVATE_KEY}  `)).toBe(TEST_HEX_PRIVATE_KEY);
+    });
+
+    it("recognizes prefixed targets after provider normalization", () => {
+      const raw = `nostr:${TEST_HEX_PUBLIC_KEY}`;
+      const normalized = nostrPlugin.messaging?.normalizeTarget?.(raw);
+
+      expect(nostrPlugin.messaging?.targetResolver?.looksLikeId?.(raw, normalized)).toBe(true);
+    });
+
+    it("normalizes prefixed targets for direct outbound sends", () => {
+      const result = nostrPlugin.outbound?.resolveTarget?.({
+        cfg: createConfiguredNostrCfg() as OpenClawConfig,
+        to: `nostr:${TEST_HEX_PUBLIC_KEY}`,
+        mode: "explicit",
+      });
+
+      expect(result).toEqual({ ok: true, to: TEST_HEX_PUBLIC_KEY });
     });
   });
 
