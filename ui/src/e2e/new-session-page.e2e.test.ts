@@ -203,7 +203,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await pastePng(message);
 
       await page.locator('.chat-attachment-thumb img[alt="Attachment preview"]').waitFor();
-      await page.getByRole("button", { name: "Start session" }).click();
+      await page.getByRole("button", { name: "Start thread" }).click();
 
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({
@@ -246,7 +246,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     try {
       await page.goto(`${server.baseUrl}new`);
       const composer = page.locator(".new-session-page__message");
-      const submit = page.getByRole("button", { name: "Start session" });
+      const submit = page.getByRole("button", { name: "Start thread" });
       await composer.fill("include the image that is still loading");
       await pastePng(composer);
 
@@ -417,7 +417,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await composer.waitFor();
       await pastePng(composer);
       await page.locator('.chat-attachment-thumb img[alt="Attachment preview"]').waitFor();
-      await page.getByRole("button", { name: "Start session" }).click();
+      await page.getByRole("button", { name: "Start thread" }).click();
       await page.waitForURL(
         (url) => url.searchParams.get("session") === "agent:main:preview-cleanup",
       );
@@ -476,7 +476,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         )
         .toBe(false);
       await page.locator(".new-session-page__message").fill("use this model");
-      await page.getByRole("button", { name: "Start session" }).click();
+      await page.getByRole("button", { name: "Start thread" }).click();
 
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({
@@ -670,7 +670,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
 
       const message = page.locator(".new-session-page__message");
       await message.fill("fix the flaky test");
-      await page.getByRole("button", { name: "Start session" }).click();
+      await page.getByRole("button", { name: "Start thread" }).click();
 
       const createRequest = await gateway.waitForRequest("sessions.create");
       expect(createRequest.params).toMatchObject({
@@ -811,7 +811,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await composer.fill(message);
       await pastePng(composer);
       await page.locator('.chat-attachment-thumb img[alt="Attachment preview"]').waitFor();
-      const startButton = page.getByRole("button", { name: "Start session" });
+      const startButton = page.getByRole("button", { name: "Start thread" });
       await gateway.deferNext("environments.list");
       const profileRequests = (await gateway.getRequests("environments.list")).length;
       await replaceGatewayClient(page);
@@ -869,7 +869,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         ),
       ).toBeLessThanOrEqual(1);
       await expect.poll(() => startButton.isDisabled()).toBe(false);
-      await page.getByRole("button", { name: "Start session" }).click();
+      await page.getByRole("button", { name: "Start thread" }).click();
       await expect
         .poll(async () => (await gateway.getRequests("sessions.dispatch")).length)
         .toBe(2);
@@ -1007,7 +1007,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
       await expect.poll(() => trigger.textContent()).toContain("Cloud · aws");
       await expect
-        .poll(() => page.getByRole("button", { name: "Start session" }).isDisabled())
+        .poll(() => page.getByRole("button", { name: "Start thread" }).isDisabled())
         .toBe(true);
       await trigger.click();
       await expect
@@ -1119,7 +1119,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await gateway.deferNext("sessions.send");
       await page.locator(".new-session-page__message").fill(message);
       await pastePng(page.locator(".new-session-page__message"));
-      await page.getByRole("button", { name: "Start session" }).click();
+      await page.getByRole("button", { name: "Start thread" }).click();
       const firstSend = await gateway.waitForRequest("sessions.send");
       expect(firstSend.params).toMatchObject({
         attachments: [{ fileName: "pixel.png", content: ONE_PIXEL_PNG_B64 }],
@@ -1146,9 +1146,9 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         .poll(() => page.getByRole("button", { name: "Remove attachment" }).isDisabled())
         .toBe(true);
       await expect
-        .poll(() => page.getByRole("button", { name: "Start session" }).isDisabled())
+        .poll(() => page.getByRole("button", { name: "Start thread" }).isDisabled())
         .toBe(false);
-      await page.getByRole("button", { name: "Start session" }).click();
+      await page.getByRole("button", { name: "Start thread" }).click();
       const resumedSend = await gateway.waitForRequest("sessions.send");
       expect(resumedSend.params).toMatchObject({
         attachments: [{ fileName: "pixel.png", content: ONE_PIXEL_PNG_B64 }],
@@ -1261,7 +1261,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         .toBe("restore after reconnect");
       await page.locator('.chat-attachment-thumb img[alt="Attachment preview"]').waitFor();
       await expect
-        .poll(() => page.getByRole("button", { name: "Start session" }).isDisabled())
+        .poll(() => page.getByRole("button", { name: "Start thread" }).isDisabled())
         .toBe(false);
       await page.evaluate(() => {
         const app = document.querySelector("openclaw-app") as HTMLElement & {
@@ -1287,7 +1287,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         )?.requestUpdate();
       });
       await expect
-        .poll(() => page.getByRole("button", { name: "Start session" }).isDisabled())
+        .poll(() => page.getByRole("button", { name: "Start thread" }).isDisabled())
         .toBe(true);
     } finally {
       await context.close();
@@ -1340,7 +1340,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         .getByRole("button", { name: "Cloud · aws" })
         .click();
       await page.locator(".new-session-page__message").fill(message);
-      await page.getByRole("button", { name: "Start session" }).click();
+      await page.getByRole("button", { name: "Start thread" }).click();
       const firstCreate = await gateway.waitForRequest("sessions.create");
       const firstKey = (firstCreate.params as { key?: string }).key;
       expect(firstKey).toMatch(/^agent:cloud:dashboard:/);
@@ -1350,7 +1350,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await expect
         .poll(() => page.locator(".new-session-page__message").inputValue())
         .toBe(message);
-      await page.getByRole("button", { name: "Start session" }).click();
+      await page.getByRole("button", { name: "Start thread" }).click();
       const retryCreate = await gateway.waitForRequest("sessions.create");
       expect(retryCreate.params).toMatchObject({ key: firstKey, message: "", worktree: true });
       await gateway.resolveDeferred("sessions.create", { key: firstKey });
@@ -1419,7 +1419,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         .getByRole("button", { name: "Cloud · aws" })
         .click();
       await page.locator(".new-session-page__message").fill(message);
-      await page.getByRole("button", { name: "Start session" }).click();
+      await page.getByRole("button", { name: "Start thread" }).click();
       const create = await gateway.waitForRequest("sessions.create");
       const sessionKey = (create.params as { key: string }).key;
       const staged = await readRecovery();
@@ -1538,7 +1538,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         };
       });
       await page.locator(".new-session-page__message").fill(message);
-      await page.getByRole("button", { name: "Start session" }).click();
+      await page.getByRole("button", { name: "Start thread" }).click();
       const firstSend = await gateway.waitForRequest("sessions.send");
       await gateway.rejectDeferred("sessions.send", {
         code: "UNAVAILABLE",
@@ -1557,7 +1557,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await expect
         .poll(async () => (await gateway.getRequests("environments.list")).length)
         .toBeGreaterThan(profileRequests);
-      await page.getByRole("button", { name: "Start session" }).click();
+      await page.getByRole("button", { name: "Start thread" }).click();
       await page.waitForURL((url) => url.searchParams.get("session") === sessionKey, {
         timeout: 30_000,
       });
@@ -1648,7 +1648,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       expect(await page.locator('[data-chat-model-select="true"]').count()).toBe(0);
 
       await page.locator(".new-session-page__message").fill("use Claude Code");
-      await page.getByRole("button", { name: "Start session" }).click();
+      await page.getByRole("button", { name: "Start thread" }).click();
 
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({
@@ -1721,7 +1721,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         .toBe(listCalls + 1);
 
       await message.fill("create during refresh");
-      await page.getByRole("button", { name: "Start session" }).click();
+      await page.getByRole("button", { name: "Start thread" }).click();
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({
         agentId: "main",
@@ -1807,7 +1807,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         .poll(() => page.locator(".new-session-page__runtime").textContent())
         .toContain("claude");
       await expect
-        .poll(() => page.getByRole("button", { name: "Start session" }).isEnabled())
+        .poll(() => page.getByRole("button", { name: "Start thread" }).isEnabled())
         .toBe(false);
       expect(await gateway.getRequests("sessions.catalog.list")).toHaveLength(0);
 
@@ -1837,7 +1837,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         .poll(() => page.getByRole("heading").first().textContent())
         .toContain("Research");
 
-      await page.getByRole("button", { name: "Start session" }).click();
+      await page.getByRole("button", { name: "Start thread" }).click();
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({
         agentId: "research",
@@ -1981,7 +1981,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       });
       await expect.poll(() => baseInput.inputValue()).toBe("beta");
 
-      await page.getByRole("button", { name: "Start session" }).click();
+      await page.getByRole("button", { name: "Start thread" }).click();
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({
         agentId: "research",
@@ -2285,7 +2285,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         await expect.poll(() => start.isDisabled()).toBe(true);
         await page
           .getByText(
-            "The Gateway changed while this session was starting. Check recent sessions before starting this task again.",
+            "The Gateway changed while this thread was starting. Check recent threads before starting this task again.",
           )
           .waitFor();
         expect(new URL(page.url()).searchParams.get("session")).toBeNull();
@@ -2365,7 +2365,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         .toContain("Claude Code");
       await expect.poll(() => folderLabel.textContent()).toBe("openclaw");
       await page.locator(".new-session-page__message").fill("retarget this draft");
-      await page.getByRole("button", { name: "Start session" }).click();
+      await page.getByRole("button", { name: "Start thread" }).click();
 
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({
@@ -2435,7 +2435,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await message.fill(submittedMessage);
       await whereSummary.click();
       expect(await whereSelect.getAttribute("open")).not.toBeNull();
-      await page.getByRole("button", { name: "Start session" }).click();
+      await page.getByRole("button", { name: "Start thread" }).click();
 
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({ message: submittedMessage });
@@ -2472,7 +2472,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         ),
       ).toEqual([false, false]);
 
-      await page.getByRole("button", { name: "Start session" }).click();
+      await page.getByRole("button", { name: "Start thread" }).click();
       await expect.poll(async () => (await gateway.getRequests("sessions.create")).length).toBe(2);
       const retry = (await gateway.getRequests("sessions.create")).at(-1);
       expect(retry?.params).toMatchObject({ message: submittedMessage });
@@ -2500,7 +2500,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       expect(await baseInput.getAttribute("placeholder")).toBe("Loading…");
 
       await page.locator(".new-session-page__message").fill("use the selected repository");
-      await page.getByRole("button", { name: "Start session" }).click();
+      await page.getByRole("button", { name: "Start thread" }).click();
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({
         cwd: TARGET_REPO,
@@ -2531,7 +2531,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       expect(await baseInput.inputValue()).toBe("feature-choice");
 
       await page.locator(".new-session-page__message").fill("use my selected base");
-      await page.getByRole("button", { name: "Start session" }).click();
+      await page.getByRole("button", { name: "Start thread" }).click();
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({
         cwd: TARGET_REPO,
@@ -2606,7 +2606,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       const composer = page.locator(".new-session-page__message");
       await composer.fill(message);
       await pastePng(composer);
-      await page.getByRole("button", { name: "Start session" }).click();
+      await page.getByRole("button", { name: "Start thread" }).click();
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({
         message,
@@ -2681,7 +2681,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       const composer = page.locator(".new-session-page__message");
       await composer.fill(message);
       await pastePng(composer);
-      await page.getByRole("button", { name: "Start session" }).click();
+      await page.getByRole("button", { name: "Start thread" }).click();
 
       await page.waitForURL((url) => url.searchParams.get("session") === sessionKey, {
         timeout: 30_000,
@@ -2902,7 +2902,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         .toBe("repo");
 
       await page.locator(".new-session-page__message").fill("inspect the remote checkout");
-      await page.getByRole("button", { name: "Start session" }).click();
+      await page.getByRole("button", { name: "Start thread" }).click();
       const createRequest = await gateway.waitForRequest("sessions.create");
       expect(createRequest.params).toMatchObject({
         agentId: "main",

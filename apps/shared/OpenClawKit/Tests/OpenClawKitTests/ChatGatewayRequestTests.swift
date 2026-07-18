@@ -228,6 +228,22 @@ struct ChatGatewayRequestTests {
         #expect(meal["answers"] as? [String] == ["Pizza", "Salad"])
     }
 
+    @Test func `question get request carries id`() {
+        let request = OpenClawChatGatewayRequests.questionGet(id: "ask_123")
+
+        #expect(request.method == "question.get")
+        #expect(request.params["id"]?.value as? String == "ask_123")
+    }
+
+    @Test func `question cancel request uses resolve cancel contract`() {
+        let request = OpenClawChatGatewayRequests.cancelQuestion(id: "ask_123")
+
+        #expect(request.method == "question.resolve")
+        #expect(request.params["id"]?.value as? String == "ask_123")
+        #expect(request.params["cancel"]?.value as? Bool == true)
+        #expect(request.params["answers"] == nil)
+    }
+
     @Test func `long running requests share exact gateway timeout margins`() {
         #expect(OpenClawChatGatewayRequests.agentWait(runID: "run-1", timeoutMs: 1).timeoutMs == 5001)
         #expect(OpenClawChatGatewayRequests.agentWait(runID: "run-1", timeoutMs: 30000).timeoutMs == 35000)

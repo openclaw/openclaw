@@ -34,7 +34,8 @@ describe("widget theme bridge", () => {
       "--card": "#ffffff",
       "--text": "   ",
       "--accent": "#bd4531",
-      "--accent-foreground": "#fff",
+      "--primary": "#bd4531",
+      "--primary-foreground": "#fff",
       "--mono": " ui-monospace ",
     });
     const postMessage = vi.fn();
@@ -51,6 +52,7 @@ describe("widget theme bridge", () => {
         surface: "#faf9f7",
         card: "#ffffff",
         accent: "#bd4531",
+        "accent-fill": "#bd4531",
         "accent-fg": "#fff",
         "font-mono": "ui-monospace",
       },

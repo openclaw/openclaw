@@ -98,6 +98,7 @@ class AppSidebar extends AppSidebarSessionListElement {
   }
 
   protected override willUpdate(changed: PropertyValues<this>) {
+    super.willUpdate(changed);
     if (changed.has("connected")) {
       this.syncOfflineIndicator();
     }
@@ -140,6 +141,8 @@ class AppSidebar extends AppSidebarSessionListElement {
     const cardAvatarText =
       (cardAgent ? resolveAgentTextAvatar(cardAgent) : null) ??
       (cardName || cardAgentId).slice(0, 1).toUpperCase();
+    // The sidebar action follows gateway availability; collapsed native chrome
+    // keeps its separate offline-tolerant ⌘N mirror.
     return html`
       <div class="sidebar-brand">
         <openclaw-sidebar-agent-card
@@ -155,6 +158,21 @@ class AppSidebar extends AppSidebarSessionListElement {
           .onToggleMenu=${(trigger: HTMLElement) => this.toggleAgentMenu(trigger)}
         ></openclaw-sidebar-agent-card>
         <div class="sidebar-brand__actions">
+          <openclaw-tooltip
+            .content=${this.connected
+              ? t("chat.runControls.newSession")
+              : t("chat.runControls.newSessionDisconnected")}
+          >
+            <button
+              class="sidebar-brand__icon sidebar-brand__new-thread"
+              type="button"
+              @click=${() => this.onOpenNewSession?.(this.expandedAgentId())}
+              aria-label=${t("chat.runControls.newSession")}
+              ?disabled=${!this.connected}
+            >
+              ${icons.plus}
+            </button>
+          </openclaw-tooltip>
           ${this.renderSearch()}
           <openclaw-tooltip .content=${`${collapseLabel} (⌘B)`}>
             <button
