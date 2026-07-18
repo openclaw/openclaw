@@ -88,10 +88,12 @@ describe("Codex app-server websocket transport", () => {
       resolveMessage = resolve;
     });
     server.once("connection", (socket) => {
-      socket.once("message", (data) => resolveMessage?.(data.toString()));
+      socket.once("message", (data) => resolveMessage?.(rawDataToText(data)));
       resolveConnection?.();
     });
-    await new Promise<void>((resolve) => server.once("listening", resolve));
+    await new Promise<void>((resolve) => {
+      server.once("listening", resolve);
+    });
     const address = server.address();
     if (!address || typeof address === "string") {
       throw new Error("expected websocket test server port");
