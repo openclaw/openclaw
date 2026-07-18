@@ -43,6 +43,17 @@ export type TeamsMeetingsChromeHealth = MeetingBrowserHealth<
   micMuted?: boolean;
   cameraOff?: boolean;
   lobbyWaiting?: boolean;
+  captioning?: boolean;
+  captionsEnabledAttempted?: boolean;
+  transcriptLines?: number;
+  lastCaptionAt?: string;
+  lastCaptionSpeaker?: string;
+  lastCaptionText?: string;
+  recentTranscript?: Array<{
+    at?: string;
+    speaker?: string;
+    text: string;
+  }>;
   audioInputRouted?: boolean;
   audioInputDeviceLabel?: string;
   audioInputRouteError?: string;

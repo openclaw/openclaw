@@ -64,6 +64,7 @@ type MeetingBrowserAdapter<
   buildStatusJoinScript(params: MeetingBrowserStatusScriptParams<Mode>): string;
   parseStatus(result: unknown): Health | undefined;
   classifyManualAction(health: Health): MeetingManualAction | undefined;
+  shouldRetryJoinStatus?(health: Health): boolean;
   browserControlUnavailable(error: unknown): MeetingManualAction;
   buildLeaveScript(meetingUrl: string): string;
   parseLeaveResult(result: unknown): MeetingBrowserLeaveStep;
@@ -79,7 +80,10 @@ type MeetingBrowserAdapter<
       urlMatched?: boolean;
     };
   };
-  permissions(params: { allowMicrophone: boolean }): MeetingBrowserPermissionPlan | undefined;
+  permissions(params: {
+    allowMicrophone: boolean;
+    meetingUrl: string;
+  }): MeetingBrowserPermissionPlan | undefined;
   permissionNotes(params: {
     allowMicrophone: boolean;
     error?: unknown;

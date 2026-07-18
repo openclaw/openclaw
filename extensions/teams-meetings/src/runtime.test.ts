@@ -111,11 +111,19 @@ describe("Microsoft Teams meeting session flow", () => {
       found: true,
       session: { id: first.session.id },
     });
+    const transcriptStartCall = harness.gatewayRequest.mock.calls.length;
     expect(await runtime.transcript(first.session.id)).toMatchObject({
       found: true,
       lines: [],
       nextIndex: 0,
     });
+    const transcriptActScripts = harness.gatewayRequest.mock.calls
+      .slice(transcriptStartCall)
+      .filter(([, params]) => params.path === "/act")
+      .map(([, params]) => String((params.body as { fn?: unknown } | undefined)?.fn ?? ""));
+    expect(transcriptActScripts).toHaveLength(2);
+    expect(transcriptActScripts[0]).toContain("const captureCaptions = true");
+    expect(transcriptActScripts[1]).toContain("expectedSessionId");
     expect(await runtime.speak(first.session.id, "hello")).toMatchObject({
       found: true,
       spoken: false,

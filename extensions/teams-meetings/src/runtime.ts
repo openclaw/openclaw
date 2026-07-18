@@ -264,6 +264,7 @@ export class TeamsMeetingsRuntime {
       isReusable: (session, resolved) => this.#sessions.isReusableSession(session, resolved),
       hasHealthHandle: (sessionId) => this.#sessions.hasHealthHandle(sessionId),
       refreshHealth: (sessionId) => this.#sessions.refreshHealth(sessionId),
+      refreshCaptionHealth: async (session) => await this.#sessions.refreshCaptionHealth(session),
     };
   }
 
@@ -321,7 +322,7 @@ export class TeamsMeetingsRuntime {
           ? "Teams guest joined in Chrome on the selected node with realtime audio through the node bridge."
           : "Teams guest joined in local Chrome with realtime audio through BlackHole 2ch and SoX."
         : session.mode === "transcribe"
-          ? "Teams guest joined observe-only; caption snapshots remain empty pending live selector validation."
+          ? "Teams guest joined observe-only with live-caption transcript capture."
           : "Teams guest join is waiting for the browser to become ready before starting realtime audio.",
     );
     this.#sessions.refreshSpeechReadiness(session);
@@ -413,6 +414,7 @@ export class TeamsMeetingsRuntime {
       const result = await recoverCurrentTeamsMeetingTab({
         runtime: this.params.runtime,
         config: this.params.config,
+        meetingSessionId: session.id,
         mode: session.mode,
         nodeId: session.chrome?.nodeId,
         readOnly: options.readOnly,
@@ -447,6 +449,9 @@ export class TeamsMeetingsRuntime {
     if (!tab) {
       return undefined;
     }
+    // Admission may finish after the initial join poll. Refresh mutably here so
+    // the first transcript read can enable captions before taking its snapshot.
+    await this.#sessions.refreshCaptionHealth(session);
     return await readTeamsMeetingTranscript({
       runtime: this.params.runtime,
       config: this.params.config,

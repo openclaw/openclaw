@@ -83,9 +83,11 @@ async function openOrRecoverTeamsMeeting(params: {
   }
   const recovered = await recoverMeetingBrowserTab({
     adapter: TEAMS_MEETINGS_PLATFORM_ADAPTER,
+    autoJoin: params.config.chrome.autoJoin,
     callBrowser: params.callBrowser,
     config: params.config.chrome,
     locationLabel: params.locationLabel,
+    meetingSessionId: params.meetingSessionId,
     mode: params.mode,
     requestedMeetingUrl: params.url,
     trackedMeetingUrl: params.url,
@@ -498,6 +500,7 @@ export async function launchTeamsMeetingOnNode(params: {
 export async function recoverCurrentTeamsMeetingTab(params: {
   runtime: PluginRuntime;
   config: TeamsMeetingsConfig;
+  meetingSessionId?: string;
   mode: TeamsMeetingsMode;
   nodeId?: string;
   readOnly?: boolean;
@@ -532,6 +535,7 @@ export async function recoverCurrentTeamsMeetingTab(params: {
         : await resolveLocalMeetingBrowserRequest(params.runtime),
       config: params.config.chrome,
       locationLabel: nodeId ? "on the selected Chrome node" : "in local Chrome",
+      meetingSessionId: params.meetingSessionId,
       mode: params.mode,
       readOnly: params.readOnly,
       requestedMeetingUrl: params.url,

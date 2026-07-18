@@ -550,6 +550,17 @@ export class MeetingSessionRuntime<
         releaseBrowser: async () => await this.options.releaseBrowserTab(session),
       });
       session.browserLeft = cleanup.browserLeft;
+      const browser = this.options.getBrowser(session);
+      if (cleanup.browserLeft === true && browser?.health) {
+        this.options.setBrowserHealth(session, {
+          ...browser.health,
+          inCall: false,
+          manualActionRequired: false,
+          manualActionReason: undefined,
+          manualActionMessage: undefined,
+          speechReady: false,
+        } as THealth);
+      }
       if (cleanup.stopSettled && stop && this.#sessionStops.get(session.id) === stop) {
         this.#sessionStops.delete(session.id);
       }

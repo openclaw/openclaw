@@ -286,6 +286,45 @@ describe("MeetingSessionRuntime failed joins", () => {
 });
 
 describe("MeetingSessionRuntime leave cleanup", () => {
+  it("clears stale in-call health after confirmed browser departure", async () => {
+    const { runtime } = createTestRuntime({
+      releaseBrowserTab: async () => true,
+      joinTransport: async ({ session }) => {
+        session.browser = {
+          launched: true,
+          health: {
+            inCall: true,
+            manualActionMessage: "old action",
+            manualActionReason: "old-action",
+            manualActionRequired: true,
+            speechReady: true,
+          },
+          tab: { targetId: "leave-tab", openedByPlugin: true },
+        };
+        return {};
+      },
+    });
+    const { session } = await runtime.join({
+      url: "https://meeting.example/room",
+      agentId: "main",
+    });
+
+    await expect(runtime.leave(session.id)).resolves.toMatchObject({
+      browserLeft: true,
+      session: {
+        browser: {
+          health: {
+            inCall: false,
+            manualActionRequired: false,
+            speechReady: false,
+          },
+        },
+      },
+    });
+    expect(session.browser?.health?.manualActionReason).toBeUndefined();
+    expect(session.browser?.health?.manualActionMessage).toBeUndefined();
+  });
+
   it("retries a failed transport stop without repeating settled browser cleanup", async () => {
     const stopError = new Error("transport stop failed");
     const stop = vi

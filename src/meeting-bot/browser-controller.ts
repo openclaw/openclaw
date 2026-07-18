@@ -59,6 +59,13 @@ function applyMeetingManualAction<Health extends MeetingBrowserHealth>(
     : browser;
 }
 
+export function isMeetingBrowserTransientNavigationError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /execution context was destroyed.*navigation|cannot find context with specified id/i.test(
+    message,
+  );
+}
+
 async function prepareMeetingBrowserTab<
   Session,
   Mode extends string,
@@ -68,11 +75,13 @@ async function prepareMeetingBrowserTab<
   adapter: BrowserAdapter<Session, Mode, Health, Transcript>;
   allowMicrophone: boolean;
   callBrowser: MeetingBrowserRequestCaller;
+  meetingUrl: string;
   targetId: string;
   timeoutMs: number;
 }): Promise<string[]> {
   const plan = params.adapter.browser.permissions({
     allowMicrophone: params.allowMicrophone,
+    meetingUrl: params.meetingUrl,
   });
   if (!plan) {
     return params.adapter.browser.permissionNotes({
@@ -212,6 +221,7 @@ export async function openMeetingWithBrowser<
     adapter: params.adapter,
     allowMicrophone,
     callBrowser: params.callBrowser,
+    meetingUrl: params.session.url,
     targetId,
     timeoutMs,
   });
@@ -247,28 +257,43 @@ export async function openMeetingWithBrowser<
         ? params.adapter.browser.classifyManualAction(browser)
         : undefined;
       browser = applyMeetingManualAction(browser, manual);
-      if (browser?.inCall === true && (!allowMicrophone || browser.micMuted !== true)) {
+      // Some web clients render their in-call media controls after admission. Let the
+      // platform retry those transient states before treating them as user action.
+      const shouldRetry = browser
+        ? params.adapter.browser.shouldRetryJoinStatus?.(browser) === true
+        : false;
+      if (
+        !shouldRetry &&
+        browser?.inCall === true &&
+        (!allowMicrophone || browser.micMuted !== true)
+      ) {
         return { launched: true, browser, tab: tabIdentity };
       }
-      if (browser?.manualActionRequired === true) {
+      if (!shouldRetry && browser?.manualActionRequired === true) {
         return { launched: true, browser, tab: tabIdentity };
       }
     } catch (error) {
-      const manual = params.adapter.browser.browserControlUnavailable(error);
-      browser = {
-        ...browser,
-        inCall: false,
-        manualActionRequired: true,
-        manualActionReason: manual.reason,
-        manualActionMessage: manual.message,
-        notes: [
-          ...permissionNotes,
-          `Browser control could not inspect or auto-join ${params.adapter.browserLabel}: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        ],
-      } as unknown as Health;
-      break;
+      if (isMeetingBrowserTransientNavigationError(error) && Date.now() < deadline) {
+        browser = mergeBrowserNotes(browser, [
+          `${params.adapter.browserLabel} navigated while joining; retrying browser inspection.`,
+        ]);
+      } else {
+        const manual = params.adapter.browser.browserControlUnavailable(error);
+        browser = {
+          ...browser,
+          inCall: false,
+          manualActionRequired: true,
+          manualActionReason: manual.reason,
+          manualActionMessage: manual.message,
+          notes: [
+            ...permissionNotes,
+            `Browser control could not inspect or auto-join ${params.adapter.browserLabel}: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          ],
+        } as unknown as Health;
+        break;
+      }
     }
     const remainingWaitMs = deadline - Date.now();
     if (remainingWaitMs > 0) {
@@ -326,8 +351,10 @@ async function inspectRecoverableTab<
   Transcript extends MeetingTranscriptSnapshot,
 >(params: {
   adapter: BrowserAdapter<Session, Mode, Health, Transcript>;
+  autoJoin?: boolean;
   callBrowser: MeetingBrowserRequestCaller;
   config: MeetingBrowserControllerConfig;
+  meetingSessionId?: string;
   mode: Mode;
   readOnly?: boolean;
   requestedMeetingUrl: string | undefined;
@@ -365,27 +392,45 @@ async function inspectRecoverableTab<
         adapter: params.adapter,
         allowMicrophone,
         callBrowser: params.callBrowser,
+        meetingUrl: params.requestedMeetingUrl ?? params.tab.url ?? "",
         targetId: params.targetId,
         timeoutMs: params.timeoutMs,
       });
-  const evaluated = await params.callBrowser({
-    method: "POST",
-    path: "/act",
-    body: {
-      kind: "evaluate",
-      targetId: params.targetId,
-      fn: params.adapter.browser.buildStatusJoinScript({
-        meetingSessionId: "",
-        mode: params.mode,
-        url: params.requestedMeetingUrl ?? params.tab.url ?? "",
-        autoJoin: false,
-        captureCaptions: params.adapter.browser.captions.enabled(params.mode),
-        guestName: params.config.guestName,
-        readOnly: params.readOnly,
-      }),
-    },
-    timeoutMs: Math.min(params.timeoutMs, 10_000),
-  });
+  const navigationNotes: string[] = [];
+  const deadline = Date.now() + Math.min(params.timeoutMs, 10_000);
+  let evaluated: unknown;
+  for (;;) {
+    try {
+      const remainingMs = Math.max(1, deadline - Date.now());
+      evaluated = await params.callBrowser({
+        method: "POST",
+        path: "/act",
+        body: {
+          kind: "evaluate",
+          targetId: params.targetId,
+          fn: params.adapter.browser.buildStatusJoinScript({
+            meetingSessionId: params.meetingSessionId ?? "",
+            mode: params.mode,
+            url: params.requestedMeetingUrl ?? params.tab.url ?? "",
+            autoJoin: params.autoJoin ?? false,
+            captureCaptions: params.adapter.browser.captions.enabled(params.mode),
+            guestName: params.config.guestName,
+            readOnly: params.readOnly,
+          }),
+        },
+        timeoutMs: Math.min(params.timeoutMs, 10_000, remainingMs),
+      });
+      break;
+    } catch (error) {
+      const remainingMs = deadline - Date.now();
+      if (!isMeetingBrowserTransientNavigationError(error) || remainingMs <= 0) throw error;
+      navigationNotes.push(
+        `${params.adapter.browserLabel} navigated while recovering; retrying browser inspection.`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, Math.min(250, remainingMs)));
+      if (Date.now() >= deadline) throw error;
+    }
+  }
   const browser = mergeBrowserNotes(
     params.adapter.browser.parseStatus(evaluated) ??
       ({
@@ -393,7 +438,7 @@ async function inspectRecoverableTab<
         browserUrl: params.tab.url,
         browserTitle: params.tab.title,
       } as unknown as Health),
-    permissionNotes,
+    [...permissionNotes, ...navigationNotes],
   );
   const manual: MeetingManualAction | undefined = browser
     ? params.adapter.browser.classifyManualAction(browser)
@@ -424,9 +469,11 @@ export async function recoverMeetingBrowserTab<
   Transcript extends MeetingTranscriptSnapshot,
 >(params: {
   adapter: BrowserAdapter<Session, Mode, Health, Transcript>;
+  autoJoin?: boolean;
   callBrowser: MeetingBrowserRequestCaller;
   config: MeetingBrowserControllerConfig;
   locationLabel: string;
+  meetingSessionId?: string;
   mode: Mode;
   requestedMeetingUrl: string | undefined;
   readOnly?: boolean;
@@ -488,8 +535,10 @@ export async function recoverMeetingBrowserTab<
   }
   return await inspectRecoverableTab({
     adapter: params.adapter,
+    autoJoin: params.autoJoin,
     callBrowser: params.callBrowser,
     config: params.config,
+    meetingSessionId: params.meetingSessionId,
     mode: params.mode,
     readOnly: params.readOnly,
     requestedMeetingUrl: params.requestedMeetingUrl,
