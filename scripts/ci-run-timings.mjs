@@ -5,6 +5,8 @@ import { execFileSync } from "node:child_process";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { execPlainGh } from "./lib/plain-gh.mjs";
 
+const CI_RUN_TIMINGS_TIMEOUT_MS = 120_000;
+
 const DEFAULT_GITHUB_REPOSITORY = "openclaw/openclaw";
 const RUN_JOBS_PAGE_SIZE = 20;
 const RUN_JOBS_MAX_PAGES = 25;
@@ -237,7 +239,7 @@ function getLatestCiRunId() {
 }
 
 function getRemoteMainSha() {
-  const raw = execFileSync("git", ["ls-remote", "origin", "main"], { encoding: "utf8" }).trim();
+  const raw = execFileSync("git", ["ls-remote", "origin", "main"], { encoding: "utf8", timeout: CI_RUN_TIMINGS_TIMEOUT_MS, killSignal: "SIGKILL" }).trim();
   const [sha] = raw.split(/\s+/u);
   if (!sha) {
     throw new Error("Could not resolve origin/main");
@@ -506,3 +508,4 @@ async function main() {
 if (import.meta.url === `file://${process.argv[1]}`) {
   await main();
 }
+

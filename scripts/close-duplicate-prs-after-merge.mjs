@@ -2,6 +2,8 @@
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 
+const CLOSE_DUPES_TIMEOUT_MS = 120_000;
+
 const DEFAULT_LABELS = ["duplicate", "close:duplicate", "dedupe:child"];
 
 function usage() {
@@ -93,6 +95,8 @@ function defaultRunGh(args, options = {}) {
   return execFileSync("gh", args, {
     encoding: "utf8",
     stdio: options.input ? ["pipe", "pipe", "inherit"] : ["ignore", "pipe", "inherit"],
+    timeout: CLOSE_DUPES_TIMEOUT_MS,
+    killSignal: "SIGKILL",
     ...(options.input ? { input: options.input } : {}),
   });
 }
@@ -323,3 +327,4 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
     process.exit(1);
   }
 }
+
