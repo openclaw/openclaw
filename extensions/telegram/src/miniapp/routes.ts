@@ -8,6 +8,8 @@ import {
   issueDeviceBootstrapToken,
 } from "openclaw/plugin-sdk/device-bootstrap";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { WEBHOOK_BODY_READ_DEFAULTS } from "openclaw/plugin-sdk/webhook-ingress";
+import { installRequestBodyLimitGuard } from "openclaw/plugin-sdk/webhook-request-guards";
 import { resolveTelegramAccount } from "../accounts.js";
 import { validateTelegramMiniAppInitData } from "./init-data.js";
 import { isTelegramMiniAppOwner } from "./owner.js";
@@ -85,11 +87,11 @@ async function handleAuth(
     return;
   }
 
-  const body = await readJsonBody(req);
-  if (body === "too-large") {
-    sendText(res, 413, "Payload too large");
+  const bodyResult = await readJsonBodyOrReject(req, res);
+  if (!bodyResult.ok) {
     return;
   }
+  const body = bodyResult.value;
   if (!body) {
     sendText(res, 401, TELEGRAM_MINIAPP_EXPIRED_MESSAGE);
     return;
@@ -139,33 +141,64 @@ function currentConfig(api: OpenClawPluginApi): OpenClawConfig {
   return (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig;
 }
 
-async function readJsonBody(
+async function readJsonBodyOrReject(
   req: IncomingMessage,
-): Promise<{ initData: string; accountId?: string } | "too-large" | null> {
-  const chunks: Buffer[] = [];
-  let total = 0;
-  for await (const chunk of req) {
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    total += buffer.length;
-    if (total > MAX_BODY_BYTES) {
-      return "too-large";
-    }
-    chunks.push(buffer);
+  res: ServerResponse,
+): Promise<{ ok: true; value: { initData: string; accountId?: string } | null } | { ok: false }> {
+  const shouldKeepAlive = res.shouldKeepAlive;
+  // The guard ends its error response before destroying the incomplete request.
+  // Predeclare that close on the wire, then restore keep-alive after a complete read.
+  res.shouldKeepAlive = false;
+  const guard = installRequestBodyLimitGuard(req, res, {
+    maxBytes: MAX_BODY_BYTES,
+    timeoutMs: WEBHOOK_BODY_READ_DEFAULTS.preAuth.timeoutMs,
+    responseFormat: "text",
+  });
+  if (guard.isTripped()) {
+    return { ok: false };
   }
+
+  let raw: string;
   try {
-    const parsed = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    }
+    raw = Buffer.concat(chunks).toString("utf8");
+  } catch (error) {
+    // The guard must flush its HTTP error before destroying the incomplete body.
+    // Swallow only that expected stream abort; other read failures still surface.
+    if (guard.isTripped()) {
+      return { ok: false };
+    }
+    throw error;
+  } finally {
+    guard.dispose();
+    if (!guard.isTripped()) {
+      res.shouldKeepAlive = shouldKeepAlive;
+    }
+  }
+  if (guard.isTripped()) {
+    return { ok: false };
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as {
       initData?: unknown;
       accountId?: unknown;
     };
     if (typeof parsed.initData !== "string") {
-      return null;
+      return { ok: true, value: null };
     }
     return {
-      initData: parsed.initData,
-      ...(typeof parsed.accountId === "string" ? { accountId: parsed.accountId } : {}),
+      ok: true,
+      value: {
+        initData: parsed.initData,
+        ...(typeof parsed.accountId === "string" ? { accountId: parsed.accountId } : {}),
+      },
     };
   } catch {
-    return null;
+    return { ok: true, value: null };
   }
 }
 

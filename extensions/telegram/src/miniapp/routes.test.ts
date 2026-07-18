@@ -1,7 +1,9 @@
 import crypto from "node:crypto";
-import type { IncomingMessage, ServerResponse } from "node:http";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import net from "node:net";
 import { Readable } from "node:stream";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { BOOTSTRAP_HANDOFF_OPERATOR_SCOPES } from "openclaw/plugin-sdk/device-bootstrap";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -28,6 +30,20 @@ vi.mock("./url.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./url.js")>()),
   resolveTelegramMiniAppUrls,
 }));
+
+vi.mock("openclaw/plugin-sdk/webhook-ingress", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/webhook-ingress")>();
+  return {
+    ...actual,
+    WEBHOOK_BODY_READ_DEFAULTS: {
+      ...actual.WEBHOOK_BODY_READ_DEFAULTS,
+      preAuth: {
+        ...actual.WEBHOOK_BODY_READ_DEFAULTS.preAuth,
+        timeoutMs: 1,
+      },
+    },
+  };
+});
 
 const { registerTelegramMiniAppRoutes } = await import("./routes.js");
 
@@ -151,7 +167,7 @@ describe("registerTelegramMiniAppRoutes", () => {
     expect(issueDeviceBootstrapToken).toHaveBeenCalledWith({
       profile: {
         roles: ["operator"],
-        scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
+        scopes: BOOTSTRAP_HANDOFF_OPERATOR_SCOPES,
         purpose: "control-ui",
       },
     });
@@ -240,5 +256,67 @@ describe("registerTelegramMiniAppRoutes", () => {
 
     expect(last?.statusCode).toBe(429);
     expect(last?.body).toBe("Too many requests");
+  });
+
+  it("returns 408 and closes the socket for incomplete Mini App auth bodies", async () => {
+    const route = createRoute(config());
+    const server = createServer((req, res) => {
+      void Promise.resolve(route.handler(req, res)).catch(() => {
+        res.destroy();
+      });
+    });
+    try {
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("expected TCP server address");
+      }
+      const response = await new Promise<string>((resolve, reject) => {
+        const socket = net.createConnection({ host: "127.0.0.1", port: address.port });
+        let raw = "";
+        const timeout = setTimeout(() => {
+          socket.destroy();
+          reject(new Error("timed out waiting for server to close the partial request"));
+        }, 500);
+        socket.setEncoding("utf8");
+        socket.on("connect", () => {
+          socket.write(
+            [
+              "POST /__openclaw_tg_miniapp/auth HTTP/1.1",
+              "Host: 127.0.0.1",
+              "Content-Type: application/json",
+              "Content-Length: 64",
+              "Connection: keep-alive",
+              "",
+              '{"initData":"partial',
+            ].join("\r\n"),
+          );
+        });
+        socket.on("data", (chunk) => {
+          raw += typeof chunk === "string" ? chunk : chunk.toString("utf8");
+        });
+        socket.on("error", reject);
+        socket.on("close", () => {
+          clearTimeout(timeout);
+          resolve(raw);
+        });
+      });
+
+      expect(response).toContain("HTTP/1.1 408 Request Timeout");
+      expect(response).toContain("Connection: close");
+      expect(response).toContain("Request body timeout");
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+          resolve();
+        });
+      });
+    }
   });
 });
