@@ -351,7 +351,9 @@ describe("GatewayConnection disconnect status", () => {
       await vi.waitFor(() => expect(createQQWSClientMock).toHaveBeenCalledTimes(1));
 
       controller.abort();
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
 
       expect(unhandledRejections).toStrictEqual([]);
       resolveSocket(ws);
