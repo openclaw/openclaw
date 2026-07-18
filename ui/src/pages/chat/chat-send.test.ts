@@ -1180,6 +1180,28 @@ describe("handleSendChat", () => {
     );
   });
 
+  it("preserves user-authored bang commands through the normal composer send", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return { runId: "bang-command-run", status: "started" };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "!pwd",
+      sessionKey: "agent:main",
+    });
+
+    await handleSendChat(host);
+
+    expect(request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({ message: "!pwd", sessionKey: "agent:main" }),
+    );
+    expect(host.chatMessage).toBe("");
+  });
+
   it.each(["stop", "esc", "abort", "wait", "exit"])(
     "sends the idle conversational word %s as a normal message",
     async (message) => {
