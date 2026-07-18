@@ -1,10 +1,14 @@
 // Refreshes the checked-in CLI startup benchmark fixture.
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
+import { renameSync, rmSync } from "node:fs";
+import path from "node:path";
 import { parseFlagArgs, stringFlag, intFlag } from "./lib/arg-utils.mjs";
+import { signalExitCode, terminateManagedChild } from "./lib/managed-child-process.mjs";
 
 const CLI_STARTUP_BENCH_FIXTURE_PATH = "test/fixtures/cli-startup-bench.json";
 const DEFAULT_BENCHMARK_TIMEOUT_KILL_GRACE_MS = 1_000;
 const DEFAULT_BENCHMARK_PROCESS_CLEANUP_GRACE_MS = 5_000;
+const FORWARDED_SIGNALS = ["SIGHUP", "SIGINT", "SIGTERM"];
 // A timed-out sample can spend one grace before SIGKILL and another reaping its process group.
 // Keep these preset counts aligned with COMMAND_CASES or a valid fixture run can be cut short.
 const BENCHMARK_TIMEOUT_CLEANUP_WINDOWS = 2;
@@ -40,6 +44,74 @@ function resolveBenchmarkProcessTimeoutMs(opts) {
     throw new Error("CLI startup benchmark total timeout exceeds the safe integer range");
   }
   return totalTimeoutMs;
+}
+
+function resolveTemporaryOutputPath(outputPath) {
+  const parsed = path.parse(outputPath);
+  return path.join(parsed.dir, `.${parsed.base}.tmp-${process.pid}`);
+}
+
+async function runBenchmarkDriver(args, opts) {
+  const timeoutMs = resolveBenchmarkProcessTimeoutMs(opts);
+  const terminationGraceMs = resolveTestDurationMs(
+    "OPENCLAW_TEST_CLI_STARTUP_BENCH_PROCESS_CLEANUP_GRACE_MS",
+    DEFAULT_BENCHMARK_PROCESS_CLEANUP_GRACE_MS,
+  );
+  const child = spawn(process.execPath, args, {
+    cwd: process.cwd(),
+    stdio: "inherit",
+    env: process.env,
+    detached: process.platform !== "win32",
+  });
+
+  return await new Promise((resolve) => {
+    let settled = false;
+    let timedOut = false;
+    let receivedSignal;
+    let forceKillTimer;
+    const signalHandlers = new Map();
+    const finish = (status, signal) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(deadlineTimer);
+      if (forceKillTimer) {
+        clearTimeout(forceKillTimer);
+      }
+      for (const [forwardedSignal, handler] of signalHandlers) {
+        process.off(forwardedSignal, handler);
+      }
+      resolve({ receivedSignal, signal, status, timedOut });
+    };
+    const terminateDriver = (signal) => {
+      terminateManagedChild(child, signal);
+      if (forceKillTimer) {
+        terminateManagedChild(child, "SIGKILL");
+        return;
+      }
+      forceKillTimer = setTimeout(() => {
+        terminateManagedChild(child, "SIGKILL");
+      }, terminationGraceMs);
+    };
+    for (const signal of FORWARDED_SIGNALS) {
+      const handler = () => {
+        receivedSignal ??= signal;
+        terminateDriver(signal);
+      };
+      signalHandlers.set(signal, handler);
+      process.on(signal, handler);
+    }
+    const deadlineTimer = setTimeout(() => {
+      timedOut = true;
+      // The driver owns detached sample groups, so let it reap them before the
+      // bounded force-kill fallback restores control to this updater.
+      terminateDriver("SIGTERM");
+    }, timeoutMs);
+
+    child.once("error", () => finish(null, null));
+    child.once("close", (status, signal) => finish(status, signal));
+  });
 }
 
 if (process.argv.slice(2).includes("--help")) {
@@ -100,19 +172,26 @@ const args = [
   "--timeout-ms",
   String(opts.timeoutMs),
   "--output",
-  opts.out,
+  resolveTemporaryOutputPath(opts.out),
 ];
 
-const run = spawnSync(process.execPath, args, {
-  cwd: process.cwd(),
-  stdio: "inherit",
-  env: process.env,
-  timeout: resolveBenchmarkProcessTimeoutMs(opts),
-  killSignal: "SIGKILL",
-});
+const temporaryOutputPath = args.at(-1);
+// Publish only a completed report; a timed-out driver may have already written
+// its output before stalling in reporting or final cleanup.
+rmSync(temporaryOutputPath, { force: true });
+try {
+  const run = await runBenchmarkDriver(args, opts);
 
-if (run.status !== 0) {
-  process.exit(run.status ?? 1);
+  if (run.status !== 0 || run.timedOut || run.receivedSignal) {
+    process.exitCode = run.timedOut
+      ? 1
+      : run.receivedSignal
+        ? signalExitCode(run.receivedSignal)
+        : (run.status ?? 1);
+  } else {
+    renameSync(temporaryOutputPath, opts.out);
+    console.log(`[test-update-cli-startup-bench] wrote fixture to ${opts.out}`);
+  }
+} finally {
+  rmSync(temporaryOutputPath, { force: true });
 }
-
-console.log(`[test-update-cli-startup-bench] wrote fixture to ${opts.out}`);

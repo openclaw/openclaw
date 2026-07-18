@@ -6,6 +6,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { parseStrictIntegerOption } from "./lib/dev-tooling-safety.ts";
+import { signalExitCode, terminateManagedChild } from "./lib/managed-child-process.mjs";
 
 type CommandCase = {
   id: string;
@@ -109,8 +110,46 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_TIMEOUT_KILL_GRACE_MS = 1_000;
 const TIMEOUT_KILL_GRACE_MS = resolveTimeoutKillGraceMs(process.env);
 const PROCESS_GROUP_EXIT_POLL_MS = 25;
+const TERMINATION_SIGNALS = ["SIGHUP", "SIGINT", "SIGTERM"] as const;
 const DEFAULT_ENTRY = "openclaw.mjs";
 const MAX_RSS_MARKER = "__OPENCLAW_MAX_RSS_KB__=";
+let activeSampleProcess: ReturnType<typeof spawn> | undefined;
+let requestedTerminationSignal: NodeJS.Signals | undefined;
+
+class BenchmarkTerminationError extends Error {
+  constructor(readonly signal: NodeJS.Signals) {
+    super(`CLI startup benchmark terminated by ${signal}`);
+    this.name = "BenchmarkTerminationError";
+  }
+}
+
+function throwIfTerminationRequested(): void {
+  if (requestedTerminationSignal) {
+    throw new BenchmarkTerminationError(requestedTerminationSignal);
+  }
+}
+
+function installTerminationHandlers(): () => void {
+  const handlers = new Map<NodeJS.Signals, () => void>();
+  for (const signal of TERMINATION_SIGNALS) {
+    const handler = () => {
+      requestedTerminationSignal ??= signal;
+      process.exitCode = signalExitCode(requestedTerminationSignal);
+      if (activeSampleProcess) {
+        // Samples run in their own process groups. Reap the active group before
+        // the updater's force-kill grace expires, or the CLI can outlive its driver.
+        terminateManagedChild(activeSampleProcess, "SIGKILL");
+      }
+    };
+    handlers.set(signal, handler);
+    process.on(signal, handler);
+  }
+  return () => {
+    for (const [signal, handler] of handlers) {
+      process.off(signal, handler);
+    }
+  };
+}
 
 function resolveTimeoutKillGraceMs(env: NodeJS.ProcessEnv): number {
   const raw = env.VITEST ? env.OPENCLAW_TEST_CLI_STARTUP_TIMEOUT_KILL_GRACE_MS : undefined;
@@ -765,6 +804,7 @@ async function runSample(params: {
         },
         stdio: ["ignore", "pipe", "pipe"],
       });
+      activeSampleProcess = proc;
 
       const finish = (sample: Omit<Sample, "ms" | "firstOutputMs" | "maxRssMb">) => {
         if (settled) {
@@ -774,6 +814,9 @@ async function runSample(params: {
         if (forceKillTimer) {
           clearTimeout(forceKillTimer);
           forceKillTimer = null;
+        }
+        if (activeSampleProcess === proc) {
+          activeSampleProcess = undefined;
         }
         const ms = Number(process.hrtime.bigint() - started) / 1e6;
         resolve({
@@ -793,10 +836,10 @@ async function runSample(params: {
 
       const timeout = setTimeout(() => {
         timedOut = true;
-        signalSampleProcess(proc, "SIGTERM", useProcessGroup);
+        signalSampleProcess(proc, "SIGTERM");
         forceKillAt = Date.now() + TIMEOUT_KILL_GRACE_MS;
         forceKillTimer = setTimeout(() => {
-          signalSampleProcess(proc, "SIGKILL", useProcessGroup);
+          signalSampleProcess(proc, "SIGKILL");
         }, TIMEOUT_KILL_GRACE_MS).unref?.();
       }, params.timeoutMs);
       timeout.unref?.();
@@ -836,7 +879,10 @@ async function runSample(params: {
                   stderrTail: tailLines(stderr, 20),
                 }),
           });
-        if (timedOut && isSampleProcessGroupAlive(proc, useProcessGroup)) {
+        if (
+          (timedOut || requestedTerminationSignal) &&
+          isSampleProcessGroupAlive(proc, useProcessGroup)
+        ) {
           void finishAfterTimeoutCleanup({
             complete,
             forceKillAt,
@@ -867,32 +913,14 @@ async function finishAfterTimeoutCleanup(params: {
     await waitForSampleProcessGroupExit(params.proc, params.useProcessGroup, graceRemainingMs);
   }
   if (isSampleProcessGroupAlive(params.proc, params.useProcessGroup)) {
-    signalSampleProcess(params.proc, "SIGKILL", params.useProcessGroup);
+    signalSampleProcess(params.proc, "SIGKILL");
   }
   await waitForSampleProcessGroupExit(params.proc, params.useProcessGroup, TIMEOUT_KILL_GRACE_MS);
   params.complete();
 }
 
-function signalSampleProcess(
-  proc: ReturnType<typeof spawn>,
-  signal: NodeJS.Signals,
-  useProcessGroup: boolean,
-): void {
-  if (!proc.pid) {
-    return;
-  }
-  try {
-    if (useProcessGroup) {
-      process.kill(-proc.pid, signal);
-    } else {
-      proc.kill(signal);
-    }
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException | undefined)?.code;
-    if (code !== "ESRCH" && code !== "EPERM") {
-      throw error;
-    }
-  }
+function signalSampleProcess(proc: ReturnType<typeof spawn>, signal: NodeJS.Signals): void {
+  terminateManagedChild(proc, signal);
 }
 
 function isSampleProcessGroupAlive(
@@ -940,7 +968,9 @@ async function runCase(params: {
   const samples: Sample[] = [];
   const totalRuns = params.warmup + params.runs;
   for (let i = 0; i < totalRuns; i += 1) {
+    throwIfTerminationRequested();
     const sample = await runSample(params);
+    throwIfTerminationRequested();
     if (i < params.warmup) {
       continue;
     }
@@ -1309,8 +1339,15 @@ export const testing = {
 };
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  await main().catch((error: unknown) => {
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exit(1);
-  });
+  const removeTerminationHandlers = installTerminationHandlers();
+  try {
+    await main();
+  } catch (error: unknown) {
+    if (!(error instanceof BenchmarkTerminationError)) {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exitCode = 1;
+    }
+  } finally {
+    removeTerminationHandlers();
+  }
 }

@@ -1,20 +1,27 @@
 // Test Update Cli Startup Bench tests cover fixture updater subprocess deadlines.
-import type { SpawnSyncReturns } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const { spawnSyncMock } = vi.hoisted(() => ({
-  spawnSyncMock: vi.fn(),
+const { spawnMock, terminateManagedChildMock } = vi.hoisted(() => ({
+  spawnMock: vi.fn(),
+  terminateManagedChildMock: vi.fn(),
 }));
 
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   return {
     ...actual,
-    spawnSync: spawnSyncMock,
+    spawn: spawnMock,
   };
 });
+
+vi.mock("../../scripts/lib/managed-child-process.mjs", () => ({
+  signalExitCode: (signal: NodeJS.Signals) => (signal === "SIGINT" ? 130 : 143),
+  terminateManagedChild: terminateManagedChildMock,
+}));
 
 const UPDATE_SCRIPT_PATH = path.resolve(process.cwd(), "scripts/test-update-cli-startup-bench.mjs");
 const originalArgv = [...process.argv];
@@ -47,7 +54,8 @@ afterEach(() => {
     process.env.OPENCLAW_TEST_CLI_STARTUP_BENCH_PROCESS_CLEANUP_GRACE_MS =
       originalProcessCleanupGrace;
   }
-  spawnSyncMock.mockReset();
+  spawnMock.mockReset();
+  terminateManagedChildMock.mockReset();
   vi.restoreAllMocks();
   vi.resetModules();
 });
@@ -56,32 +64,51 @@ describe("test-update-cli-startup-bench", () => {
   it("gives the benchmark driver a hard total deadline beyond all internal run budgets", async () => {
     delete process.env.OPENCLAW_TEST_CLI_STARTUP_TIMEOUT_KILL_GRACE_MS;
     delete process.env.OPENCLAW_TEST_CLI_STARTUP_BENCH_PROCESS_CLEANUP_GRACE_MS;
-    spawnSyncMock.mockReturnValue({ status: 0 } as SpawnSyncReturns<Buffer>);
+    spawnMock.mockImplementation((_command, args: string[]) => {
+      const child = Object.assign(new EventEmitter(), { pid: 123_456, kill: vi.fn() });
+      const outputIndex = args.indexOf("--output");
+      writeFileSync(args[outputIndex + 1] ?? "", "{}\n", "utf8");
+      queueMicrotask(() => child.emit("close", 0, null));
+      return child;
+    });
     vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const fixtureRoot = mkdtempSync(path.join(process.cwd(), ".tmp-cli-startup-budget-"));
 
-    for (const preset of ["startup", "real", "all"] as const) {
-      process.argv = [
-        process.execPath,
-        UPDATE_SCRIPT_PATH,
-        "--preset",
-        preset,
-        "--runs",
-        "2",
-        "--warmup",
-        "1",
-        "--timeout-ms",
-        "100",
-      ];
-      spawnSyncMock.mockClear();
-      await import("../../scripts/test-update-cli-startup-bench.mjs");
+    try {
+      for (const preset of ["startup", "real", "all"] as const) {
+        const outputPath = path.join(fixtureRoot, `${preset}.json`);
+        process.argv = [
+          process.execPath,
+          UPDATE_SCRIPT_PATH,
+          "--out",
+          outputPath,
+          "--preset",
+          preset,
+          "--runs",
+          "2",
+          "--warmup",
+          "1",
+          "--timeout-ms",
+          "100",
+        ];
+        spawnMock.mockClear();
+        setTimeoutSpy.mockClear();
+        await import(pathToFileURL(UPDATE_SCRIPT_PATH).href);
 
-      expect(spawnSyncMock).toHaveBeenCalledOnce();
-      const options = spawnSyncMock.mock.calls[0]?.[2];
-      const internalBudgetMs = countBenchmarkCases(preset) * (2 + 1) * (100 + 2 * 1_000);
-      expect(options?.killSignal).toBe("SIGKILL");
-      expect(options?.timeout).toBe(internalBudgetMs + 5_000);
-      expect(options?.timeout).toBeGreaterThan(internalBudgetMs);
-      vi.resetModules();
+        expect(spawnMock).toHaveBeenCalledOnce();
+        const args = spawnMock.mock.calls[0]?.[1] as string[];
+        const options = spawnMock.mock.calls[0]?.[2];
+        const internalBudgetMs = countBenchmarkCases(preset) * (2 + 1) * (100 + 2 * 1_000);
+        expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), internalBudgetMs + 5_000);
+        expect(options?.detached).toBe(process.platform !== "win32");
+        expect(args.at(-1)).not.toBe(outputPath);
+        expect(path.dirname(args.at(-1) ?? "")).toBe(path.dirname(outputPath));
+        expect(readFileSync(outputPath, "utf8")).toBe("{}\n");
+        vi.resetModules();
+      }
+    } finally {
+      rmSync(fixtureRoot, { recursive: true, force: true });
     }
   });
 
@@ -96,7 +123,12 @@ describe("test-update-cli-startup-bench", () => {
       mkdirSync(path.join(fixtureRoot, "scripts"), { recursive: true });
       writeFileSync(
         path.join(fixtureRoot, "scripts/bench-cli-startup.ts"),
-        ["setInterval(() => {}, 1_000);", "await new Promise(() => {});", ""].join("\n"),
+        [
+          'process.on("SIGTERM", () => {});',
+          "setInterval(() => {}, 1_000);",
+          "await new Promise(() => {});",
+          "",
+        ].join("\n"),
         "utf8",
       );
 
@@ -134,6 +166,67 @@ describe("test-update-cli-startup-bench", () => {
       expect(result.status).toBe(1);
       expect(Date.now() - startedAt).toBeLessThan(4_000);
       expect(existsSync(outputPath)).toBe(false);
+    } finally {
+      rmSync(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves the existing fixture when the benchmark writes output and then hangs", async () => {
+    const actualChildProcess =
+      await vi.importActual<typeof import("node:child_process")>("node:child_process");
+    const fixtureRoot = mkdtempSync(
+      path.join(process.cwd(), ".tmp-test-update-cli-startup-bench-output-"),
+    );
+    const outputPath = path.join(fixtureRoot, "cli-startup-bench.json");
+    const existingFixture = '{"fixture":"existing"}\n';
+    try {
+      mkdirSync(path.join(fixtureRoot, "scripts"), { recursive: true });
+      writeFileSync(outputPath, existingFixture, "utf8");
+      writeFileSync(
+        path.join(fixtureRoot, "scripts/bench-cli-startup.ts"),
+        [
+          'import { writeFileSync } from "node:fs";',
+          'const outputIndex = process.argv.indexOf("--output");',
+          'writeFileSync(process.argv[outputIndex + 1], "replacement\\n", "utf8");',
+          "setInterval(() => {}, 1_000);",
+          "await new Promise(() => {});",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+
+      const result = actualChildProcess.spawnSync(
+        process.execPath,
+        [
+          UPDATE_SCRIPT_PATH,
+          "--out",
+          outputPath,
+          "--preset",
+          "startup",
+          "--runs",
+          "1",
+          "--warmup",
+          "0",
+          "--timeout-ms",
+          "10",
+        ],
+        {
+          cwd: fixtureRoot,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            VITEST: "true",
+            OPENCLAW_TEST_CLI_STARTUP_TIMEOUT_KILL_GRACE_MS: "0",
+            OPENCLAW_TEST_CLI_STARTUP_BENCH_PROCESS_CLEANUP_GRACE_MS: "1500",
+          },
+          killSignal: "SIGKILL",
+          timeout: 5_000,
+        },
+      );
+
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(1);
+      expect(readFileSync(outputPath, "utf8")).toBe(existingFixture);
     } finally {
       rmSync(fixtureRoot, { recursive: true, force: true });
     }

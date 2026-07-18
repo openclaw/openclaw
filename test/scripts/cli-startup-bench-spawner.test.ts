@@ -15,8 +15,8 @@ describe("CLI startup benchmark script spawners", () => {
     for (const scriptPath of SCRIPT_PATHS) {
       const source = fs.readFileSync(path.resolve(process.cwd(), scriptPath), "utf8");
 
-      expect(source).toContain("spawnSync(process.execPath, args");
-      expect(source).not.toContain('spawnSync("node", args');
+      expect(source).toMatch(/spawn(?:Sync)?\(process\.execPath, args/u);
+      expect(source).not.toMatch(/spawn(?:Sync)?\("node", args/u);
     }
   });
 

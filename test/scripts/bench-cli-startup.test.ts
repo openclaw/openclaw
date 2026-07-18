@@ -1,5 +1,5 @@
 // Bench Cli Startup tests cover bench cli startup script behavior.
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -11,9 +11,25 @@ import { createTempDirTracker } from "../helpers/temp-dir.js";
 function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
-    return true;
   } catch {
     return false;
+  }
+  const status = spawnSync("ps", ["-o", "stat=", "-p", String(pid)], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  return status.status !== 0 || !/^\s*Z/u.test(status.stdout);
+}
+
+async function waitForFile(filePath: string, timeoutMs: number): Promise<void> {
+  const deadlineAt = Date.now() + timeoutMs;
+  while (!existsSync(filePath)) {
+    if (Date.now() >= deadlineAt) {
+      throw new Error(`Timed out waiting for ${filePath}`);
+    }
+    await new Promise<void>((resolveWait) => {
+      setTimeout(resolveWait, 25);
+    });
   }
 }
 
@@ -167,6 +183,89 @@ describe("bench-cli-startup", () => {
       } finally {
         if (childPid !== undefined && isProcessAlive(childPid)) {
           process.kill(childPid, "SIGKILL");
+        }
+        tempDirs.cleanup();
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "cleans the active benchmark process group when the driver is terminated",
+    async () => {
+      const tempDirs = createTempDirTracker();
+      const tmpDir = tempDirs.make("openclaw-cli-startup-driver-termination-");
+      const entryPath = join(tmpDir, "entry.mjs");
+      const samplePidPath = join(tmpDir, "sample.pid");
+      const descendantPidPath = join(tmpDir, "descendant.pid");
+      let samplePid: number | undefined;
+      let descendantPid: number | undefined;
+      try {
+        writeFileSync(
+          entryPath,
+          [
+            "import { spawn } from 'node:child_process';",
+            "import { writeFileSync } from 'node:fs';",
+            `writeFileSync(${JSON.stringify(samplePidPath)}, String(process.pid));`,
+            "const child = spawn(process.execPath, [",
+            "  '-e',",
+            "  \"process.on('SIGTERM',()=>{});setInterval(()=>{},1000);\",",
+            "], { stdio: 'ignore' });",
+            `writeFileSync(${JSON.stringify(descendantPidPath)}, String(child.pid));`,
+            "process.on('SIGTERM', () => {});",
+            "setInterval(() => {}, 1000);",
+            "",
+          ].join("\n"),
+          "utf8",
+        );
+
+        const driver = spawn(
+          process.execPath,
+          [
+            "--import",
+            "tsx",
+            "scripts/bench-cli-startup.ts",
+            "--entry",
+            entryPath,
+            "--case",
+            "version",
+            "--runs",
+            "1",
+            "--warmup",
+            "0",
+            "--timeout-ms",
+            "60000",
+            "--json",
+          ],
+          {
+            cwd: join(__dirname, "../.."),
+            env: {
+              ...process.env,
+              OPENCLAW_TEST_CLI_STARTUP_TIMEOUT_KILL_GRACE_MS: "50",
+              VITEST: "1",
+            },
+            stdio: "ignore",
+          },
+        );
+
+        await waitForFile(descendantPidPath, 5_000);
+        samplePid = Number(readFileSync(samplePidPath, "utf8"));
+        descendantPid = Number(readFileSync(descendantPidPath, "utf8"));
+        driver.kill("SIGTERM");
+        const result = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+          (resolveResult, rejectResult) => {
+            driver.once("error", rejectResult);
+            driver.once("close", (code, signal) => resolveResult({ code, signal }));
+          },
+        );
+
+        expect(result.code).not.toBe(0);
+        expect(isProcessAlive(samplePid)).toBe(false);
+        expect(isProcessAlive(descendantPid)).toBe(false);
+      } finally {
+        if (samplePid !== undefined && isProcessAlive(samplePid)) {
+          process.kill(-samplePid, "SIGKILL");
+        } else if (descendantPid !== undefined && isProcessAlive(descendantPid)) {
+          process.kill(descendantPid, "SIGKILL");
         }
         tempDirs.cleanup();
       }
