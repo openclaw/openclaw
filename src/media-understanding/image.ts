@@ -14,6 +14,10 @@ import { normalizeModelRef } from "../agents/model-selection.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
 import { resolveProviderRequestCapabilities } from "../agents/provider-attribution.js";
 import {
+  getModelProviderRequestTransport,
+  type ModelProviderRequestTransportOverrides,
+} from "../agents/provider-request-config.js";
+import {
   protectPreparedProviderRuntimeAuth,
   unwrapSecretSentinelsForProviderEgress,
 } from "../agents/provider-secret-egress.js";
@@ -346,6 +350,7 @@ async function describeImagesWithMinimax(params: {
   timeoutMs?: number;
   images: Array<{ buffer: Buffer; mime?: string }>;
   allowPrivateNetwork?: boolean;
+  request?: ModelProviderRequestTransportOverrides;
 }): Promise<ImagesDescriptionResult> {
   const responses: string[] = [];
   // MiniMax VLM handles its own outbound fetch, so unwrap only at this final handoff.
@@ -363,6 +368,7 @@ async function describeImagesWithMinimax(params: {
       modelBaseUrl: params.modelBaseUrl,
       timeoutMs: params.timeoutMs,
       allowPrivateNetwork: params.allowPrivateNetwork,
+      request: params.request,
     });
     responses.push(params.images.length > 1 ? `Image ${index + 1}:\n${text.trim()}` : text.trim());
   }
@@ -582,7 +588,7 @@ async function describeImagesWithModelInternal(
       prompt,
       timeoutMs: params.timeoutMs,
       images: params.images,
-      allowPrivateNetwork,
+      request: getModelProviderRequestTransport(model),
     });
   }
 

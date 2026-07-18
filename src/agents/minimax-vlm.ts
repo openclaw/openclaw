@@ -3,13 +3,14 @@ import { readResponseBodySnippet } from "../infra/http-error-body.js";
  * Adapts MiniMax VLM image-understanding requests for agent image inputs.
  */
 import {
-  fetchWithSsrFGuard,
-  withTrustedEnvProxyGuardedFetchMode,
-} from "../infra/net/fetch-guard.js";
+  postJsonRequest,
+  resolveProviderHttpRequestConfigWithOriginTrust,
+} from "../media-understanding/shared.js";
 import { resolvePositiveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { isRecord } from "../utils.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import { readProviderJsonResponse } from "./provider-http-errors.js";
+import type { ModelProviderRequestTransportOverrides } from "./provider-request-config.js";
 import { resolveProviderTransportSsrFPolicy } from "./provider-transport-fetch.js";
 
 type MinimaxBaseResp = {
@@ -40,6 +41,10 @@ function isMinimaxCnProvider(provider: string | undefined): boolean {
   return normalized === "minimax-cn" || normalized === "minimax-portal-cn";
 }
 
+function resolveDefaultApiHost(provider: string | undefined): string {
+  return isMinimaxCnProvider(provider) ? "https://api.minimaxi.com" : "https://api.minimax.io";
+}
+
 function coerceApiHost(params: {
   apiHost?: string;
   modelBaseUrl?: string;
@@ -47,9 +52,7 @@ function coerceApiHost(params: {
   env?: NodeJS.ProcessEnv;
 }): string {
   const env = params.env ?? process.env;
-  const defaultHost = isMinimaxCnProvider(params.provider)
-    ? "https://api.minimaxi.com"
-    : "https://api.minimax.io";
+  const defaultHost = resolveDefaultApiHost(params.provider);
   const raw =
     params.apiHost?.trim() ||
     env.MINIMAX_API_HOST?.trim() ||
@@ -91,6 +94,8 @@ export async function minimaxUnderstandImage(params: {
   timeoutMs?: number;
   /** Operator-configured private-network policy from the provider request config. */
   allowPrivateNetwork?: boolean;
+  /** Resolved model request transport metadata, including proxy and TLS policy. */
+  request?: ModelProviderRequestTransportOverrides;
 }): Promise<string> {
   const apiKey = normalizeSecretInput(params.apiKey);
   if (!apiKey) {
@@ -108,45 +113,51 @@ export async function minimaxUnderstandImage(params: {
     throw new Error("MiniMax VLM: imageDataUrl must be a base64 data:image/(png|jpeg|webp) URL");
   }
 
-  const host = coerceApiHost({
+  const configuredHost = coerceApiHost({
     apiHost: params.apiHost,
     modelBaseUrl: params.modelBaseUrl,
     provider: params.provider,
   });
-  const url = new URL("/v1/coding_plan/vlm", host).toString();
+  const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy, trustConfiguredBaseUrlOrigin } =
+    resolveProviderHttpRequestConfigWithOriginTrust({
+      baseUrl: configuredHost,
+      defaultBaseUrl: resolveDefaultApiHost(params.provider),
+      allowPrivateNetwork: params.allowPrivateNetwork,
+      defaultHeaders: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+        "MM-API-Source": "OpenClaw",
+      },
+      request: params.request,
+      provider: params.provider ?? "minimax",
+      capability: "image",
+      transport: "media-understanding",
+    });
+  const url = new URL("/v1/coding_plan/vlm", baseUrl).toString();
 
   const timeoutMs = resolvePositiveTimerTimeoutMs(params.timeoutMs, DEFAULT_MINIMAX_VLM_TIMEOUT_MS);
 
-  // Reuse the canonical provider transport SSRF policy so MiniMax VLM gets the
-  // same metadata/link-local exclusions and explicit allowPrivateNetwork
-  // semantics as every other provider request.
   const ssrfPolicy = resolveProviderTransportSsrFPolicy({
-    baseUrl: host,
+    baseUrl,
     url,
-    allowPrivateNetwork: params.allowPrivateNetwork,
-    trustConfiguredBaseUrlOrigin: true,
+    allowPrivateNetwork,
+    trustConfiguredBaseUrlOrigin,
   });
 
-  const guarded = await fetchWithSsrFGuard(
-    withTrustedEnvProxyGuardedFetchMode({
-      url,
-      init: {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-          "MM-API-Source": "OpenClaw",
-        },
-        body: JSON.stringify({
-          prompt,
-          image_url: imageDataUrl,
-        }),
-      },
-      timeoutMs,
-      auditContext: "minimax-vlm",
-      ...(ssrfPolicy ? { policy: ssrfPolicy } : {}),
-    }),
-  );
+  const guarded = await postJsonRequest({
+    url,
+    headers,
+    body: {
+      prompt,
+      image_url: imageDataUrl,
+    },
+    timeoutMs,
+    fetchFn: fetch,
+    allowPrivateNetwork,
+    ssrfPolicy,
+    dispatcherPolicy,
+    auditContext: "minimax-vlm",
+  });
   const res = guarded.response;
 
   try {

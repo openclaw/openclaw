@@ -58,7 +58,7 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
     expect(text).toBe("ok");
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
     const opts = fetchWithSsrFGuardMock.mock.calls[0]?.[0];
-    const auth = (opts?.init?.headers as Record<string, string> | undefined)?.Authorization;
+    const auth = new Headers(opts?.init?.headers).get("Authorization");
     expect(auth).toBe("Bearer minimax-test-key");
   }
 
@@ -198,9 +198,8 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
       const opts = fetchWithSsrFGuardMock.mock.calls.at(-1)?.[0];
       expect(opts?.policy).toBeDefined();
       expect(opts?.policy.hostnameAllowlist).toEqual(["api.minimax.io"]);
-      // The canonical provider policy pins the configured origin for default
-      // public hosts too; it does not grant blanket private-network access.
-      expect(opts?.policy.allowedOrigins).toEqual(["https://api.minimax.io"]);
+      // Native public hosts stay DNS-pinned without trusting a rebinding target.
+      expect(opts?.policy.allowedOrigins).toBeUndefined();
       expect(opts?.policy.allowPrivateNetwork).toBeUndefined();
       expect(opts?.policy.dangerouslyAllowPrivateNetwork).toBeUndefined();
     });
@@ -252,10 +251,7 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
     });
 
     it("does not grant broad private-network access when allowPrivateNetwork is explicitly false", async () => {
-      // Operators who set models.providers.<id>.request.allowPrivateNetwork: false
-      // opt out of broad private-network access. The configured origin is still
-      // pinned by the canonical provider policy; the explicit opt-out only
-      // withholds the global private-network flag.
+      // Explicit denial wins over the otherwise trusted configured origin.
       fetchWithSsrFGuardMock.mockResolvedValueOnce(guardedOk());
 
       await expect(
@@ -271,9 +267,7 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
       const opts = fetchWithSsrFGuardMock.mock.calls.at(-1)?.[0];
       expect(opts?.policy).toBeDefined();
       expect(opts?.policy.hostnameAllowlist).toEqual(["localhost"]);
-      // The configured origin remains pinned; the explicit opt-out removes only
-      // the broad private-network authorization.
-      expect(opts?.policy.allowedOrigins).toEqual(["https://localhost:8080"]);
+      expect(opts?.policy.allowedOrigins).toBeUndefined();
       expect(opts?.policy.allowPrivateNetwork).toBeUndefined();
       expect(opts?.policy.dangerouslyAllowPrivateNetwork).toBeUndefined();
     });
@@ -319,9 +313,34 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
       const opts = fetchWithSsrFGuardMock.mock.calls.at(-1)?.[0];
       expect(opts?.policy).toBeDefined();
       expect(opts?.policy.hostnameAllowlist).toEqual(["api.minimax.io"]);
-      expect(opts?.policy.allowedOrigins).toEqual(["https://api.minimax.io"]);
+      expect(opts?.policy.allowedOrigins).toBeUndefined();
       expect(opts?.policy.allowPrivateNetwork).toBeUndefined();
       expect(opts?.policy.dangerouslyAllowPrivateNetwork).toBeUndefined();
+    });
+
+    it("carries model request proxy policy into the guarded fetch", async () => {
+      fetchWithSsrFGuardMock.mockResolvedValueOnce(guardedOk());
+
+      await expect(
+        minimaxUnderstandImage({
+          apiKey: "minimax-test-key",
+          prompt: "hi",
+          imageDataUrl: "data:image/png;base64,AAAA",
+          apiHost: "https://custom-minimax.example.com",
+          request: {
+            proxy: { mode: "explicit-proxy", url: "https://proxy.example.com" },
+          },
+        }),
+      ).resolves.toBe("ok");
+
+      const opts = fetchWithSsrFGuardMock.mock.calls.at(-1)?.[0];
+      expect(opts?.dispatcherPolicy).toEqual({
+        mode: "explicit-proxy",
+        proxyUrl: "https://proxy.example.com",
+      });
+      // Explicit proxy configuration keeps strict mode; ambient proxy auto-upgrade
+      // must not replace its dispatcher policy.
+      expect(opts?.mode).toBeUndefined();
     });
 
     it("refuses metadata-like configured origins", async () => {
