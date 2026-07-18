@@ -4,10 +4,14 @@ import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { findChatChannelMeta, normalizeChatChannelId } from "../channels/registry.js";
+import { readRegularFileSync } from "../infra/regular-file.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { isRecord, resolveConfigDir, resolveUserPath } from "../utils.js";
 import type { PluginAutoEnableCandidate } from "./plugin-auto-enable.types.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
+
+/** Maximum bytes to read from an external catalog file before rejecting it. */
+const MAX_EXTERNAL_CATALOG_BYTES = 16 * 1024 * 1024;
 
 type ExternalCatalogChannelEntry = {
   id: string;
@@ -78,7 +82,15 @@ function resolveExternalCatalogPreferOver(channelId: string, env: NodeJS.Process
       continue;
     }
     try {
-      const payload = JSON.parse(fs.readFileSync(resolved, "utf-8")) as unknown;
+      // Resolve symlinks so a catalog file that points to a regular file
+      // keeps working while the bounded regular-file read still rejects
+      // directories, FIFOs, and oversized targets.
+      const resolvedRealPath = fs.realpathSync(resolved);
+      const { buffer } = readRegularFileSync({
+        filePath: resolvedRealPath,
+        maxBytes: MAX_EXTERNAL_CATALOG_BYTES,
+      });
+      const payload = JSON.parse(buffer.toString("utf-8")) as unknown;
       const channel = parseExternalCatalogChannelEntries(payload).find(
         (entry) => entry.id === channelId,
       );

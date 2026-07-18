@@ -140,7 +140,7 @@ describe("applyPluginAutoEnable channels", () => {
       "utf-8",
     );
 
-    const readFileSpy = vi.spyOn(fs, "readFileSync");
+    const realpathSpy = vi.spyOn(fs, "realpathSync");
 
     try {
       materializePluginAutoEnableCandidates({
@@ -164,13 +164,74 @@ describe("applyPluginAutoEnable channels", () => {
       });
 
       expect(
-        readFileSpy.mock.calls.filter(([filePath]) =>
+        realpathSpy.mock.calls.filter(([filePath]) =>
           String(filePath).endsWith("plugins/catalog.json"),
         ),
       ).toHaveLength(2);
     } finally {
-      readFileSpy.mockRestore();
+      realpathSpy.mockRestore();
     }
+  });
+
+  it("reads external catalog files through a symlink", () => {
+    const stateDir = makeTempDir();
+    const pluginsDir = path.join(stateDir, "plugins");
+    fs.mkdirSync(pluginsDir, { recursive: true });
+    const realPath = path.join(stateDir, "real-catalog.json");
+    fs.writeFileSync(
+      realPath,
+      JSON.stringify({
+        entries: [
+          {
+            name: "@openclaw/env-secondary",
+            openclaw: {
+              channel: {
+                id: "env-secondary",
+                label: "Env Secondary",
+                selectionLabel: "Env Secondary",
+                docsPath: "/channels/env-secondary",
+                blurb: "Env secondary entry",
+                preferOver: ["env-primary"],
+              },
+              install: { npmSpec: "@openclaw/env-secondary" },
+            },
+          },
+        ],
+      }),
+      "utf-8",
+    );
+    const catalogPath = path.join(pluginsDir, "catalog.json");
+    fs.symlinkSync(realPath, catalogPath);
+
+    const result = materializePluginAutoEnableCandidates({
+      config: {
+        channels: {
+          "env-primary": { token: "primary" },
+          "env-secondary": { token: "secondary" },
+        },
+      },
+      candidates: [
+        {
+          pluginId: "env-primary",
+          kind: "channel-configured" as const,
+          channelId: "env-primary",
+        },
+        {
+          pluginId: "env-secondary",
+          kind: "channel-configured" as const,
+          channelId: "env-secondary",
+        },
+      ],
+      env: {
+        ...makeIsolatedEnv(),
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
+      },
+      manifestRegistry: makeRegistry([]),
+    });
+
+    expect(result.config.plugins?.entries?.["env-secondary"]?.enabled).toBe(true);
+    expect(result.config.plugins?.entries?.["env-primary"]).toBeUndefined();
   });
 
   describe("third-party channel plugins", () => {
