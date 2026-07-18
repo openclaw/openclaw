@@ -796,11 +796,9 @@ lists only the current bound or requester session; owner identity and
 
 `/acp status` shows the effective runtime options plus runtime-level and
 backend-level session identifiers. Unsupported-control errors surface
-clearly when a backend lacks a capability. For non-owner senders, `/acp sessions`
-reads only the current bound or requester session; owner identity and
-`operator.admin` clients scan all recent ACP sessions. Target tokens
-(`session-key`, `session-id`, or `session-label`) resolve through gateway session
-discovery, including custom per-agent `session.store` roots.
+clearly when a backend lacks a capability. `/acp sessions` target tokens
+(`session-key`, `session-id`, or `session-label`) resolve through gateway
+session discovery, including custom per-agent `session.store` roots.
 
 ### Runtime options mapping
 
