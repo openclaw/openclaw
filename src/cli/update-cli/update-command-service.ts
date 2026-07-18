@@ -57,6 +57,7 @@ import {
   registerSignalExitGate,
   waitForSignalExitBarriers,
 } from "../signal-exit-barrier.js";
+import { createAggregateErrorWithCause } from "./aggregate-error.js";
 import { runRestartScript } from "./restart-helper.js";
 import { resolveNodeRunner, type UpdateCommandOptions } from "./shared.js";
 import { createUpdateConfigSnapshot } from "./update-command-config.js";
@@ -295,13 +296,7 @@ export class UpdateCommandAbort extends Error {
   }
 }
 
-export function createAggregateErrorWithCause(
-  errors: unknown[],
-  message: string,
-  cause: unknown,
-): AggregateError {
-  return new AggregateError(errors, message, { cause });
-}
+export { createAggregateErrorWithCause };
 
 export type ManagedServiceRootRedirect = {
   root: string;

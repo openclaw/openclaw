@@ -123,8 +123,8 @@ It does not install a new core package and does not restart the Gateway.
 ## `update wizard`
 
 Interactive flow to pick an update channel and confirm whether to restart the
-Gateway afterward (defaults to restart). Selecting `dev` without a git
-checkout offers to create one.
+Gateway afterward (defaults to restart). Selecting `dev` from a package
+installation offers to create a fresh checkout at an unused path.
 
 | Flag                  | Default | Description                   |
 | --------------------- | ------- | ----------------------------- |
@@ -135,10 +135,12 @@ checkout offers to create one.
 Switching channels explicitly (`--channel ...`) also keeps the install method
 aligned:
 
-- `dev` -> ensures a git checkout (default `~/openclaw`, or
-  `$OPENCLAW_HOME/openclaw` when `OPENCLAW_HOME` is set; override with
-  `OPENCLAW_GIT_DIR`), updates it, and installs the global CLI from that
-  checkout.
+- `dev` -> package installations create a fresh git checkout (default
+  `~/openclaw`, or `$OPENCLAW_HOME/openclaw` when `OPENCLAW_HOME` is set;
+  override with `OPENCLAW_GIT_DIR`), update it, and install the global CLI from
+  that checkout. Package-to-dev conversion refuses an existing file or
+  directory at that path instead of adopting its Git configuration, refs, or
+  contents. Existing git installations continue to update in place.
 - `stable` -> installs from npm using `latest`.
 - `extended-stable` -> resolves the public npm `extended-stable` selector,
   verifies the exact selected package, and installs that exact version. It

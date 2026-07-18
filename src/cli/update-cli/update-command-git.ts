@@ -1,11 +1,18 @@
+import fs from "node:fs/promises";
 import type { UpdateChannel } from "../../infra/update-channels.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import {
   createGlobalInstallEnv,
   globalInstallArgs,
   resolveGlobalInstallTarget,
   resolvePnpmGlobalDirFromGlobalRoot,
 } from "../../infra/update-global.js";
-import { runGatewayUpdate, type UpdateRunResult } from "../../infra/update-runner.js";
+import {
+  runGatewayUpdate,
+  type UpdateRunResult,
+  type UpdateStepResult,
+} from "../../infra/update-runner.js";
+import { prepareGitMutation } from "../../infra/update-runner-git-target.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
@@ -16,15 +23,21 @@ import {
 } from "../../state/openclaw-database-preflight.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { createUpdateProgress, printResult } from "./progress.js";
+import { completeManagedGitCheckout, isManagedGitCheckoutRetry } from "./managed-checkout.js";
 import {
   createGlobalCommandRunner,
-  ensureGitCheckout,
+  createGitCheckout,
+  createSanitizedGitEnv,
   resolveGitInstallDir,
   resolveGlobalManager,
   runUpdateStep,
   type UpdateCommandOptions,
 } from "./shared.js";
-import { UpdateCommandAbort, type PreManagedServiceStop } from "./update-command-service.js";
+import {
+  createAggregateErrorWithCause,
+  UpdateCommandAbort,
+  type PreManagedServiceStop,
+} from "./update-command-service.js";
 
 const DEFAULT_UPDATE_STEP_TIMEOUT_MS = 30 * 60_000;
 
@@ -78,40 +91,64 @@ export function createBeforeGitMutation(params: {
   getPreManagedServiceStop: () => PreManagedServiceStop | undefined;
   markSchemaRefusalAfterStop: () => void;
 }): BeforeGitMutation {
+  // A managed retry validates before swapping, then the runner validates its selected target.
+  // Stop the service once, but never let the cached preparation bypass the second schema check.
+  let preparation: {
+    allowGatewayServiceRepair?: boolean;
+    allowGatewayActivation?: boolean;
+  } | null = null;
   return async (target) => {
     if (target?.metadataUnreadable) {
+      if (preparation) {
+        params.markSchemaRefusalAfterStop();
+      }
       defaultRuntime.error(
         `Update refused: could not inspect the target's schema support (${target.metadataUnreadable}). Retry, or see ${OPENCLAW_DATABASE_SCHEMA_DOCS_URL}.`,
       );
-      defaultRuntime.exit(1);
+      if (!preparation) {
+        defaultRuntime.exit(1);
+      }
       throw new UpdateCommandAbort();
     }
-    const preStopSchemas = checkTargetDatabaseSchemas(target?.schemaVersions);
+    const preManagedServiceStop = params.getPreManagedServiceStop();
+    const preStopSchemas = checkTargetDatabaseSchemas(
+      target?.schemaVersions,
+      preparation ? (preManagedServiceStop?.serviceEnv ?? process.env) : process.env,
+    );
     if (hasSchemaRefusal(preStopSchemas)) {
+      if (preparation) {
+        params.markSchemaRefusalAfterStop();
+      }
       defaultRuntime.error(formatSchemaRefusalLines(preStopSchemas).join("\n"));
-      defaultRuntime.exit(1);
+      if (!preparation) {
+        defaultRuntime.exit(1);
+      }
       throw new UpdateCommandAbort();
+    }
+    if (preparation) {
+      return preparation;
     }
     await params.stopManagedService(params.roots);
-    const preManagedServiceStop = params.getPreManagedServiceStop();
+    const stoppedService = params.getPreManagedServiceStop();
     const postStopSchemas = checkTargetDatabaseSchemas(
       target?.schemaVersions,
-      preManagedServiceStop?.serviceEnv ?? process.env,
+      stoppedService?.serviceEnv ?? process.env,
     );
     if (hasSchemaRefusal(postStopSchemas)) {
       params.markSchemaRefusalAfterStop();
       defaultRuntime.error(formatSchemaRefusalLines(postStopSchemas).join("\n"));
       throw new UpdateCommandAbort();
     }
-    return {
+    preparation = {
       // Only a positively owned service may be rewritten. Activation
       // additionally requires this update to have stopped it.
-      allowGatewayServiceRepair: preManagedServiceStop?.serviceMatchesMutationRoot === true,
+      allowGatewayServiceRepair: stoppedService?.serviceMatchesMutationRoot === true,
       allowGatewayActivation:
         params.shouldRestart &&
-        preManagedServiceStop?.stopped === true &&
-        preManagedServiceStop.serviceMatchesMutationRoot === true,
+        stoppedService?.stopped === true &&
+        stoppedService.serviceMatchesMutationRoot === true,
     };
+    return preparation;
   };
 }
 
@@ -135,17 +172,57 @@ export async function runGitUpdate(params: {
   const updateRoot = params.switchToGit ? resolveGitInstallDir() : params.root;
   const effectiveTimeout = params.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
   const installEnv = await createGlobalInstallEnv();
+  const freshCheckoutEnv = params.switchToGit ? createSanitizedGitEnv(installEnv) : undefined;
+  const managedCheckoutRetry = params.switchToGit
+    ? await isManagedGitCheckoutRetry(updateRoot, installEnv)
+    : false;
+  const cleanupCreatedCheckout = async (primaryError?: unknown): Promise<void> => {
+    if (!params.switchToGit) {
+      return;
+    }
+    try {
+      await fs.rm(updateRoot, { recursive: true, force: true });
+      await completeManagedGitCheckout(updateRoot, installEnv);
+    } catch (cleanupError) {
+      if (primaryError !== undefined) {
+        throw createAggregateErrorWithCause(
+          [primaryError, cleanupError],
+          `Package-to-dev conversion failed (${formatErrorMessage(primaryError)}) and its new checkout could not be removed (${formatErrorMessage(cleanupError)})`,
+          primaryError,
+        );
+      }
+      throw cleanupError;
+    }
+  };
 
   const cloneStep = params.switchToGit
-    ? await ensureGitCheckout({
+    ? await createGitCheckout({
         dir: updateRoot,
         env: installEnv,
         timeoutMs: effectiveTimeout,
         progress: params.progress,
+        beforeReplaceManagedCheckout: async (stagingDir) => {
+          const runCommand = createGlobalCommandRunner();
+          await prepareGitMutation({
+            runCommand: async (argv, options) =>
+              await runCommand(argv, {
+                cwd: options.cwd,
+                timeoutMs: options.timeoutMs ?? effectiveTimeout,
+                env: freshCheckoutEnv,
+              }),
+            root: stagingDir,
+            revision: "HEAD",
+            timeoutMs: effectiveTimeout,
+            beforeGitMutation: params.beforeGitMutation,
+          });
+        },
       })
     : null;
 
   if (cloneStep && cloneStep.exitCode !== 0) {
+    if (!managedCheckoutRetry) {
+      await cleanupCreatedCheckout();
+    }
     const result: UpdateRunResult = {
       status: "error",
       mode: "git",
@@ -172,6 +249,7 @@ export async function runGitUpdate(params: {
     allowGatewayServiceRepair: params.allowGatewayServiceRepair,
     allowGatewayActivation: params.allowGatewayActivation,
     beforeGitMutation: params.beforeGitMutation,
+    commandEnv: freshCheckoutEnv,
   });
   const steps = [...(cloneStep ? [cloneStep] : []), ...updateResult.steps];
 
@@ -192,9 +270,19 @@ export async function runGitUpdate(params: {
       installTarget.manager === "pnpm"
         ? resolvePnpmGlobalDirFromGlobalRoot(installTarget.globalRoot)
         : null;
-    const installStep = await runUpdateStep({
+    const installArgv = globalInstallArgs(
+      installTarget,
+      updateRoot,
+      undefined,
+      installLocation,
+      updateRoot,
+    );
+    // From this point onward the package manager may already have persisted a
+    // symlink to updateRoot even when it later reports failure. Preserve the
+    // checkout so a failed install never leaves the global CLI dangling.
+    const installStep: UpdateStepResult = await runUpdateStep({
       name: "global install",
-      argv: globalInstallArgs(installTarget, updateRoot, undefined, installLocation, updateRoot),
+      argv: installArgv,
       cwd: updateRoot,
       env: installEnv,
       timeoutMs: effectiveTimeout,
@@ -203,12 +291,24 @@ export async function runGitUpdate(params: {
     steps.push(installStep);
 
     const failedStep = installStep.exitCode !== 0 ? installStep : null;
+    if (!failedStep) {
+      await completeManagedGitCheckout(updateRoot, installEnv);
+    }
     return {
       ...updateResult,
-      status: updateResult.status === "ok" && !failedStep ? "ok" : "error",
+      status: failedStep ? "error" : "ok",
       steps,
       durationMs: Date.now() - params.startedAt,
     };
+  }
+
+  if (params.switchToGit) {
+    const doctorMayHaveRewrittenService = updateResult.steps.some(
+      (step) => step.name === "openclaw doctor",
+    );
+    if (!managedCheckoutRetry && !doctorMayHaveRewrittenService) {
+      await cleanupCreatedCheckout();
+    }
   }
 
   return {

@@ -48,6 +48,15 @@ For `dev` git installs, the default checkout is `~/openclaw` (or
 `$OPENCLAW_HOME/openclaw` when `OPENCLAW_HOME` is set); override with
 `OPENCLAW_GIT_DIR`.
 
+When a package installation switches to `dev`, this path must not exist.
+OpenClaw creates a fresh checkout and does not adopt an existing directory,
+even when it already contains an OpenClaw checkout. Git installations that are
+already running from their own checkout continue to update in place.
+
+If a conversion is interrupted, OpenClaw recognizes the checkout it created at
+that path and replaces it when you run the update again. A directory OpenClaw
+did not create is still refused; move it or choose an unused `OPENCLAW_GIT_DIR`.
+
 <Tip>
 To keep stable and dev in parallel, use two separate checkouts and point each gateway at its own.
 </Tip>

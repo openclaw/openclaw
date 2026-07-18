@@ -1,10 +1,12 @@
 // Shared update command primitives for channel resolution, install roots, and subprocess steps.
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveRequiredHomeDir } from "../../infra/home-dir.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { readPackageName, readPackageVersion } from "../../infra/package-json.js";
@@ -26,6 +28,14 @@ import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { pathExists } from "../../utils.js";
 import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../completion-runtime.js";
+import { createAggregateErrorWithCause } from "./aggregate-error.js";
+import {
+  claimManagedGitCheckout,
+  completeManagedGitCheckout,
+  isReclaimableManagedReservation,
+  resolveManagedGitCheckoutToken,
+  writeManagedCheckoutMarker,
+} from "./managed-checkout.js";
 
 export type UpdateCommandOptions = {
   json?: boolean;
@@ -59,6 +69,22 @@ export type UpdateWizardOptions = {
 const INVALID_TIMEOUT_ERROR = "--timeout must be a positive integer (seconds)";
 const MAX_SAFE_TIMEOUT_SECONDS = Math.floor(Number.MAX_SAFE_INTEGER / 1000);
 
+/** Build a Git environment that cannot redirect the canonical repository through config. */
+export function createSanitizedGitEnv(env?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const gitEnv = { ...(env ?? process.env) };
+  gitEnv.GIT_CONFIG_NOSYSTEM = "1";
+  gitEnv.GIT_CONFIG_GLOBAL = os.devNull;
+  delete gitEnv.GIT_TEMPLATE_DIR;
+  delete gitEnv.GIT_CONFIG_PARAMETERS;
+  delete gitEnv.GIT_CONFIG_COUNT;
+  for (const key of Object.keys(gitEnv)) {
+    if (/^GIT_CONFIG_(?:KEY|VALUE)_\d+$/u.test(key)) {
+      delete gitEnv[key];
+    }
+  }
+  return gitEnv;
+}
+
 /** Parse a CLI timeout in seconds, exiting through the runtime on invalid input. */
 export function parseTimeoutMsOrExit(timeout?: string): number | undefined | null {
   if (timeout === undefined) {
@@ -78,7 +104,6 @@ const OPENCLAW_REPO_URL = "https://github.com/openclaw/openclaw.git";
 const MAX_LOG_CHARS = 8000;
 
 export const DEFAULT_PACKAGE_NAME = "openclaw";
-const CORE_PACKAGE_NAMES = new Set([DEFAULT_PACKAGE_NAME]);
 
 /** Normalize a CLI tag/version/spec into the npm target form accepted by update flows. */
 export function normalizeTag(value?: string | null): string | null {
@@ -118,31 +143,6 @@ export async function resolveTargetVersion(
     env: options.env,
   });
   return res.version ?? null;
-}
-
-/** Return true when `root` is a local git checkout directory. */
-export async function isGitCheckout(root: string): Promise<boolean> {
-  try {
-    await fs.stat(path.join(root, ".git"));
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function isCorePackage(root: string): Promise<boolean> {
-  const name = await readPackageName(root);
-  return Boolean(name && CORE_PACKAGE_NAMES.has(name));
-}
-
-/** Return true only for existing directories with no entries. */
-export async function isEmptyDir(targetPath: string): Promise<boolean> {
-  try {
-    const entries = await fs.readdir(targetPath);
-    return entries.length === 0;
-  } catch {
-    return false;
-  }
 }
 
 /** Resolve the checkout path used by source-based self-update. */
@@ -238,49 +238,117 @@ export async function runUpdateStep(params: {
   };
 }
 
-/** Ensure the configured source-update directory exists and points at an OpenClaw checkout. */
-export async function ensureGitCheckout(params: {
+/** Reserve the destination so no pre-existing directory is ever adopted. */
+async function reserveGitCheckoutDir(dir: string, env?: NodeJS.ProcessEnv): Promise<void> {
+  try {
+    await fs.mkdir(dir);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "EEXIST") {
+      throw err;
+    }
+    if (!(await isReclaimableManagedReservation(dir, env))) {
+      throw new Error(
+        `OPENCLAW_GIT_DIR already exists: ${dir}. Package-to-dev conversion creates a fresh OpenClaw checkout and will not reuse existing directories. Move it or set OPENCLAW_GIT_DIR to an unused path.`,
+        { cause: err },
+      );
+    }
+  }
+}
+
+/** Move a finished checkout onto the destination, keeping the old one until it lands. */
+async function swapInGitCheckout(params: {
+  dir: string;
+  stagingDir: string;
+  managedRetry: boolean;
+}): Promise<void> {
+  if (!params.managedRetry) {
+    await fs.rmdir(params.dir);
+    await fs.rename(params.stagingDir, params.dir);
+    return;
+  }
+  const backupDir = `${params.dir}.previous-${randomUUID()}`;
+  await fs.rename(params.dir, backupDir);
+  try {
+    await fs.rename(params.stagingDir, params.dir);
+  } catch (err) {
+    await fs.rm(params.dir, { recursive: true, force: true });
+    await fs.rename(backupDir, params.dir);
+    throw err;
+  }
+  await fs.rm(backupDir, { recursive: true, force: true }).catch(() => undefined);
+}
+
+/** Create the source-update checkout without adopting any pre-existing directory state. */
+export async function createGitCheckout(params: {
   dir: string;
   timeoutMs: number;
   progress?: UpdateStepProgress;
   env?: NodeJS.ProcessEnv;
-}): Promise<UpdateStepResult | null> {
-  const gitEnv = params.env ?? (await createGlobalInstallEnv());
-  const dirExists = await pathExists(params.dir);
-  if (!dirExists) {
-    await fs.mkdir(path.dirname(params.dir), { recursive: true });
-    return await runUpdateStep({
+  beforeReplaceManagedCheckout?: (stagingDir: string) => Promise<void>;
+}): Promise<UpdateStepResult> {
+  const ownedToken = await resolveManagedGitCheckoutToken(params.dir, params.env);
+  const managedRetry = ownedToken !== null;
+  await fs.mkdir(path.dirname(params.dir), { recursive: true });
+  if (!managedRetry) {
+    await reserveGitCheckoutDir(params.dir, params.env);
+  }
+
+  const token = ownedToken ?? claimManagedGitCheckout(params.dir, params.env);
+  const stagingDir = path.join(
+    path.dirname(params.dir),
+    `.${path.basename(params.dir)}.staging-${randomUUID()}`,
+  );
+  await fs.mkdir(stagingDir);
+  let templateDir: string | null = null;
+  const discard = async (): Promise<void> => {
+    await fs.rm(stagingDir, { recursive: true, force: true });
+    if (!managedRetry) {
+      await fs.rm(params.dir, { recursive: true, force: true });
+      await completeManagedGitCheckout(params.dir, params.env);
+    }
+  };
+
+  try {
+    templateDir = await fs.mkdtemp(
+      path.join(path.dirname(params.dir), ".openclaw-git-template-"),
+    );
+    await fs.chmod(templateDir, 0o700);
+    const gitEnv = createSanitizedGitEnv(params.env ?? (await createGlobalInstallEnv()));
+    const result = await runUpdateStep({
       name: "git clone",
-      argv: ["git", "clone", OPENCLAW_REPO_URL, params.dir],
+      argv: ["git", "clone", `--template=${templateDir}`, OPENCLAW_REPO_URL, stagingDir],
       env: gitEnv,
       timeoutMs: params.timeoutMs,
       progress: params.progress,
     });
-  }
-
-  if (!(await isGitCheckout(params.dir))) {
-    const empty = await isEmptyDir(params.dir);
-    if (!empty) {
-      throw new Error(
-        `OPENCLAW_GIT_DIR points at a non-git directory: ${params.dir}. Set OPENCLAW_GIT_DIR to an empty folder or an openclaw checkout.`,
+    if (result.exitCode !== 0) {
+      await discard();
+      return result;
+    }
+    if (managedRetry) {
+      await params.beforeReplaceManagedCheckout?.(stagingDir);
+    }
+    await writeManagedCheckoutMarker(stagingDir, token);
+    await swapInGitCheckout({ dir: params.dir, stagingDir, managedRetry });
+    return result;
+  } catch (err) {
+    const cleanupError = await discard().then(
+      () => null,
+      (error: unknown) => error,
+    );
+    if (cleanupError) {
+      throw createAggregateErrorWithCause(
+        [err, cleanupError],
+        `Git clone failed (${formatErrorMessage(err)}) and its new checkout could not be removed (${formatErrorMessage(cleanupError)})`,
+        err,
       );
     }
-
-    return await runUpdateStep({
-      name: "git clone",
-      argv: ["git", "clone", OPENCLAW_REPO_URL, params.dir],
-      cwd: params.dir,
-      env: gitEnv,
-      timeoutMs: params.timeoutMs,
-      progress: params.progress,
-    });
+    throw err;
+  } finally {
+    if (templateDir) {
+      await fs.rm(templateDir, { recursive: true, force: true });
+    }
   }
-
-  if (!(await isCorePackage(params.dir))) {
-    throw new Error(`OPENCLAW_GIT_DIR does not look like a core checkout: ${params.dir}.`);
-  }
-
-  return null;
 }
 
 /** Detect the package manager that owns a global/package OpenClaw install. */

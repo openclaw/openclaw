@@ -81,8 +81,9 @@ export function normalizeFallbackFailureReason(
 
 export async function buildUpdateCommandRunner(
   runCommand?: CommandRunner,
+  commandEnv?: NodeJS.ProcessEnv,
 ): Promise<{ defaultCommandEnv: NodeJS.ProcessEnv | undefined; runCommand: CommandRunner }> {
-  const defaultCommandEnv = await createGlobalInstallEnv();
+  const defaultCommandEnv = commandEnv ?? (await createGlobalInstallEnv());
   if (runCommand) {
     return { defaultCommandEnv, runCommand };
   }

@@ -131,6 +131,7 @@ export type UpdateRunnerOptions = {
   timeoutMs?: number;
   runCommand?: CommandRunner;
   progress?: UpdateStepProgress;
+  commandEnv?: NodeJS.ProcessEnv;
 };
 
 export type UpdateInstallSurface =

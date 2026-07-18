@@ -451,7 +451,8 @@ const {
   updateWizardCommand,
 } = await import("./update-cli.js");
 const updateCliShared = await import("./update-cli/shared.js");
-const { ensureGitCheckout, resolveGitInstallDir } = updateCliShared;
+const { createGitCheckout, resolveGitInstallDir } = updateCliShared;
+const { claimManagedGitCheckout } = await import("./update-cli/managed-checkout.js");
 const { spawnSync } = await import("node:child_process");
 const { readRestartSentinel } = await import("../infra/restart-sentinel.js");
 
@@ -948,6 +949,9 @@ describe("update-cli", () => {
       },
     });
     vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+      if (argv[0] === "git" && argv[1] === "clone" && argv[3]) {
+        await fs.mkdir(path.join(argv[3], ".git"), { recursive: true });
+      }
       if (argv[0] === "npm" && argv[1] === "pack") {
         const destination = argv[argv.indexOf("--pack-destination") + 1];
         if (destination) {
@@ -4477,7 +4481,7 @@ describe("update-cli", () => {
     expect(logs.join("\n")).not.toContain("Gateway: restarted and verified.");
   });
 
-  it("stops a managed gateway rooted at the git checkout when switching package installs to dev", async () => {
+  it("rejects an existing git checkout before stopping its managed gateway", async () => {
     const packageRoot = createCaseDir("openclaw-update-package-root");
     const gitRoot = await createTrackedTempDir("openclaw-update-git-service-root-");
     const serviceEntrypoint = path.join(gitRoot, "dist", "index.js");
@@ -4504,35 +4508,133 @@ describe("update-cli", () => {
       pid: 4242,
       state: "running",
     });
+    await expect(
+      withEnvAsync({ OPENCLAW_GIT_DIR: gitRoot }, async () => {
+        await updateCommand({ channel: "dev", yes: true });
+      }),
+    ).rejects.toThrow(/will not reuse existing directories/u);
+
+    expect(serviceStop).not.toHaveBeenCalled();
+    expect(runGatewayUpdate).not.toHaveBeenCalled();
+  });
+
+  it("removes its new checkout when package-to-dev cloning fails", async () => {
+    const packageRoot = createCaseDir("openclaw-update-package-root");
+    const gitParent = await createTrackedTempDir("openclaw-update-git-clone-parent-");
+    const gitRoot = path.join(gitParent, "checkout");
+    mockPackageInstallStatus(packageRoot);
+    pathExists.mockResolvedValue(false);
+    vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => ({
+      stdout: "",
+      stderr: argv[0] === "git" && argv[1] === "clone" ? "network unavailable" : "",
+      code: argv[0] === "git" && argv[1] === "clone" ? 1 : 0,
+      signal: null,
+      killed: false,
+      termination: "exit" as const,
+    }));
+
+    await withEnvAsync({ OPENCLAW_GIT_DIR: gitRoot }, async () => {
+      await updateCommand({ channel: "dev", yes: true });
+    });
+
+    await expect(fs.stat(gitRoot)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(runGatewayUpdate).not.toHaveBeenCalled();
+  });
+
+  it("removes its new checkout when package-to-dev updating fails", async () => {
+    const packageRoot = createCaseDir("openclaw-update-package-root");
+    const gitParent = await createTrackedTempDir("openclaw-update-git-update-parent-");
+    const gitRoot = path.join(gitParent, "checkout");
+    mockPackageInstallStatus(packageRoot);
+    pathExists.mockResolvedValue(false);
+    mockGitUpdateAfterMutation({
+      status: "error",
+      mode: "git",
+      root: gitRoot,
+      reason: "fetch-failed",
+      steps: [],
+      durationMs: 100,
+    });
+
+    await withEnvAsync({ OPENCLAW_GIT_DIR: gitRoot }, async () => {
+      await updateCommand({ channel: "dev", yes: true });
+    });
+
+    await expect(fs.stat(gitRoot)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(runGatewayUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves its new checkout when doctor may have rewritten the managed service", async () => {
+    const packageRoot = createCaseDir("openclaw-update-package-root");
+    const gitParent = await createTrackedTempDir("openclaw-update-git-doctor-parent-");
+    const gitRoot = path.join(gitParent, "checkout");
+    mockPackageInstallStatus(packageRoot);
+    pathExists.mockResolvedValue(false);
+    mockGitUpdateAfterMutation({
+      status: "error",
+      mode: "git",
+      root: gitRoot,
+      reason: "ui-build-failed",
+      steps: [
+        {
+          name: "openclaw doctor",
+          command: "node openclaw.mjs doctor --non-interactive --fix",
+          cwd: gitRoot,
+          durationMs: 10,
+          exitCode: 0,
+        },
+      ],
+      durationMs: 100,
+    });
+
+    await withEnvAsync({ OPENCLAW_GIT_DIR: gitRoot }, async () => {
+      await updateCommand({ channel: "dev", yes: true });
+    });
+
+    await expect(fs.stat(gitRoot)).resolves.toBeDefined();
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("preserves its new checkout when the global link step fails", async () => {
+    const packageRoot = createCaseDir("openclaw-update-package-root");
+    const gitParent = await createTrackedTempDir("openclaw-update-git-install-parent-");
+    const gitRoot = path.join(gitParent, "checkout");
+    mockPackageInstallStatus(packageRoot);
+    pathExists.mockResolvedValue(false);
     mockGitUpdateAfterMutation(
       makeOkUpdateResult({
         mode: "git",
         root: gitRoot,
       }),
     );
+    vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+      if (argv[0] === "git" && argv[1] === "clone" && argv[3]) {
+        await fs.mkdir(path.join(argv[3], ".git"), { recursive: true });
+      }
+      return {
+        stdout: "",
+        stderr: argv[0] === "npm" && argv[1] === "i" ? "link failed" : "",
+        code: argv[0] === "npm" && argv[1] === "i" ? 1 : 0,
+        signal: null,
+        killed: false,
+        termination: "exit" as const,
+      };
+    });
 
     await withEnvAsync({ OPENCLAW_GIT_DIR: gitRoot }, async () => {
       await updateCommand({ channel: "dev", yes: true });
     });
 
-    expect(serviceStop).toHaveBeenCalledTimes(1);
-    expect(runGatewayUpdate).toHaveBeenCalledTimes(1);
-    const updateCall = vi.mocked(runGatewayUpdate).mock.calls[0]?.[0];
-    expect(updateCall?.cwd).toBe(gitRoot);
-    expect(updateCall?.beforeGitMutation).toEqual(expect.any(Function));
+    await expect(fs.stat(gitRoot)).resolves.toBeDefined();
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 
   it("stops a managed gateway rooted at the package install when switching package installs to dev", async () => {
     const packageRoot = await createTrackedTempDir("openclaw-update-package-service-root-");
     const packageEntrypoint = path.join(packageRoot, "dist", "index.js");
-    const gitRoot = await createTrackedTempDir("openclaw-update-git-service-root-");
-    await fs.mkdir(path.join(gitRoot, ".git"), { recursive: true });
+    const gitParent = await createTrackedTempDir("openclaw-update-git-service-parent-");
+    const gitRoot = path.join(gitParent, "checkout");
     await fs.mkdir(path.dirname(packageEntrypoint), { recursive: true });
-    await fs.writeFile(
-      path.join(gitRoot, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "2026.4.21" }),
-      "utf-8",
-    );
     await fs.writeFile(
       path.join(packageRoot, "package.json"),
       JSON.stringify({ name: "openclaw", version: "2026.4.20" }),
@@ -4540,7 +4642,7 @@ describe("update-cli", () => {
     );
     await fs.writeFile(packageEntrypoint, "export {};\n", "utf-8");
     mockPackageInstallStatus(packageRoot);
-    pathExists.mockImplementation(async (candidate: string) => candidate === gitRoot);
+    pathExists.mockResolvedValue(false);
     serviceReadCommand.mockResolvedValue({
       programArguments: ["node", packageEntrypoint, "gateway", "run"],
       environment: {
@@ -4554,7 +4656,7 @@ describe("update-cli", () => {
       pid: 4242,
       state: "running",
     });
-    mockGitUpdateAfterMutation(
+    const preparations = mockGitUpdateAfterMutation(
       makeOkUpdateResult({
         mode: "git",
         root: gitRoot,
@@ -4570,6 +4672,13 @@ describe("update-cli", () => {
     const updateCall = vi.mocked(runGatewayUpdate).mock.calls[0]?.[0];
     expect(updateCall?.cwd).toBe(gitRoot);
     expect(updateCall?.beforeGitMutation).toEqual(expect.any(Function));
+    expect(updateCall?.commandEnv).toMatchObject({
+      GIT_CONFIG_GLOBAL: os.devNull,
+      GIT_CONFIG_NOSYSTEM: "1",
+    });
+    expect(preparations).toEqual([
+      { allowGatewayServiceRepair: true, allowGatewayActivation: true },
+    ]);
   });
 
   it("does not stop or restart a managed gateway owned by another git checkout", async () => {
@@ -8103,9 +8212,11 @@ describe("update-cli", () => {
   });
 
   it("updateWizardCommand offers dev checkout and forwards selections", async () => {
-    const tempDir = createCaseDir("openclaw-update-wizard");
-    await withEnvAsync({ OPENCLAW_GIT_DIR: tempDir }, async () => {
+    const tempDir = await createTrackedTempDir("openclaw-update-wizard-");
+    const unusedGitDir = path.join(tempDir, "checkout");
+    await withEnvAsync({ OPENCLAW_GIT_DIR: unusedGitDir }, async () => {
       setTty(true);
+      pathExists.mockResolvedValue(false);
 
       vi.mocked(checkUpdateStatus).mockResolvedValue({
         root: "/test/path",
@@ -8117,6 +8228,62 @@ describe("update-cli", () => {
           lockfilePath: null,
           markerPath: null,
         },
+      });
+      select.mockResolvedValue("dev");
+      confirm.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+      vi.mocked(runGatewayUpdate).mockResolvedValue({
+        status: "ok",
+        mode: "git",
+        steps: [],
+        durationMs: 100,
+      });
+
+      await updateWizardCommand({});
+
+      const call = vi.mocked(runGatewayUpdate).mock.calls[0]?.[0];
+      expect(call?.channel).toBe("dev");
+    });
+  });
+
+  it("updateWizardCommand refuses a dev conversion into an existing checkout path", async () => {
+    const tempDir = createCaseDir("openclaw-update-wizard-existing");
+    await withEnvAsync({ OPENCLAW_GIT_DIR: tempDir }, async () => {
+      setTty(true);
+      pathExists.mockResolvedValue(true);
+
+      vi.mocked(checkUpdateStatus).mockResolvedValue({
+        root: "/test/path",
+        installKind: "package",
+        packageManager: "npm",
+        deps: { manager: "npm", status: "ok", lockfilePath: null, markerPath: null },
+      });
+      select.mockResolvedValue("dev");
+
+      await updateWizardCommand({});
+
+      expect(runGatewayUpdate).not.toHaveBeenCalled();
+      const errors = vi.mocked(defaultRuntime.error).mock.calls.map((call) => String(call[0]));
+      expect(errors.join("\n")).toContain(`OPENCLAW_GIT_DIR already exists: ${tempDir}`);
+    });
+  });
+
+  it("updateWizardCommand continues a dev conversion interrupted before its checkout landed", async () => {
+    const stateDir = await createTrackedTempDir("openclaw-update-wizard-state-");
+    const gitDir = path.join(
+      await createTrackedTempDir("openclaw-update-wizard-reserved-"),
+      "checkout",
+    );
+    await withEnvAsync({ OPENCLAW_GIT_DIR: gitDir, OPENCLAW_STATE_DIR: stateDir }, async () => {
+      setTty(true);
+      pathExists.mockResolvedValue(true);
+      claimManagedGitCheckout(gitDir, process.env);
+      await fs.mkdir(gitDir, { recursive: true });
+
+      vi.mocked(checkUpdateStatus).mockResolvedValue({
+        root: "/test/path",
+        installKind: "package",
+        packageManager: "npm",
+        deps: { manager: "npm", status: "ok", lockfilePath: null, markerPath: null },
       });
       select.mockResolvedValue("dev");
       confirm.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
@@ -8175,7 +8342,7 @@ describe("update-cli", () => {
     await withEnvAsync({ OPENCLAW_GIT_DIR: undefined, OPENCLAW_HOME: home }, async () => {
       const dir = resolveGitInstallDir();
       expect(dir).toBe(checkoutDir);
-      await ensureGitCheckout({ dir, timeoutMs: 1_000, env: process.env });
+      await createGitCheckout({ dir, timeoutMs: 1_000, env: process.env });
     });
 
     expect((await fs.stat(home)).isDirectory()).toBe(true);
@@ -8185,9 +8352,11 @@ describe("update-cli", () => {
     expect(cloneCall?.[0]).toEqual([
       "git",
       "clone",
+      expect.stringMatching(/^--template=.*\.openclaw-git-template-/u),
       "https://github.com/openclaw/openclaw.git",
-      checkoutDir,
+      expect.stringMatching(/openclaw\.staging-/u),
     ]);
+    expect(path.dirname(String(cloneCall?.[0][4]))).toBe(home);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

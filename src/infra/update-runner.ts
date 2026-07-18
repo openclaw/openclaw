@@ -28,7 +28,10 @@ export { resolveUpdateDoctorExecutionPolicy, resolveUpdateInstallSurface };
 
 export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<UpdateRunResult> {
   const startedAt = Date.now();
-  const { defaultCommandEnv, runCommand } = await buildUpdateCommandRunner(opts.runCommand);
+  const { defaultCommandEnv, runCommand } = await buildUpdateCommandRunner(
+    opts.runCommand,
+    opts.commandEnv,
+  );
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const candidates = buildStartDirs(opts);
   const pkgRoot = await findPackageRoot(candidates);
