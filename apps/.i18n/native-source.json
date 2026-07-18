@@ -35963,7 +35963,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 758,
+      "line": 768,
       "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift",
       "source": "Talk mode off",
       "surface": "apple",
@@ -35971,7 +35971,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 759,
+      "line": 769,
       "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift",
       "source": "Talk mode paused",
       "surface": "apple",
@@ -35979,7 +35979,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 761,
+      "line": 771,
       "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift",
       "source": "Talk mode ready",
       "surface": "apple",
@@ -35987,7 +35987,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 762,
+      "line": 772,
       "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift",
       "source": "Listening",
       "surface": "apple",
@@ -35995,7 +35995,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 763,
+      "line": 773,
       "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift",
       "source": "Thinking",
       "surface": "apple",
@@ -36003,7 +36003,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 764,
+      "line": 774,
       "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift",
       "source": "Speaking",
       "surface": "apple",
@@ -36011,7 +36011,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 768,
+      "line": 778,
       "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift",
       "source": "What would you like to work on?",
       "surface": "apple",
@@ -36019,7 +36019,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 772,
+      "line": 782,
       "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift",
       "source": "Check OpenClaw status",
       "surface": "apple",
@@ -36027,7 +36027,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 773,
+      "line": 783,
       "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift",
       "source": "Summarize the current OpenClaw status and tell me what needs attention.",
       "surface": "apple",
@@ -36035,7 +36035,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 776,
+      "line": 786,
       "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift",
       "source": "What can you do?",
       "surface": "apple",
@@ -36043,7 +36043,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 777,
+      "line": 787,
       "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift",
       "source": "Show me what you can help with on this Mac right now.",
       "surface": "apple",
@@ -36051,7 +36051,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 780,
+      "line": 790,
       "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift",
       "source": "Catch me up",
       "surface": "apple",
@@ -36059,7 +36059,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 781,
+      "line": 791,
       "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift",
       "source": "Summarize what happened in my sessions since yesterday.",
       "surface": "apple",
@@ -36723,7 +36723,23 @@
     },
     {
       "kind": "ui-call",
-      "line": 237,
+      "line": 329,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
+      "source": "\\(question.header):",
+      "surface": "apple",
+      "id": "native.apple.009d113b4d9a7855"
+    },
+    {
+      "kind": "ui-modifier",
+      "line": 342,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
+      "source": "Question summary",
+      "surface": "apple",
+      "id": "native.apple.b97da55b7e16e60c"
+    },
+    {
+      "kind": "ui-call",
+      "line": 356,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
       "source": "Other answer",
       "surface": "apple",
@@ -36731,7 +36747,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 276,
+      "line": 410,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
       "source": "Not selected",
       "surface": "apple",
@@ -36739,7 +36755,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 276,
+      "line": 410,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
       "source": "Selected",
       "surface": "apple",
@@ -36747,7 +36763,23 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 288,
+      "line": 426,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
+      "source": "Skip",
+      "surface": "apple",
+      "id": "native.apple.14a4bf7b6b7d40dc"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 426,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
+      "source": "Skipping…",
+      "surface": "apple",
+      "id": "native.apple.1bbbbfd1ad3842ce"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 435,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
       "source": "Submit",
       "surface": "apple",
@@ -36755,27 +36787,11 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 288,
+      "line": 435,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
       "source": "Submitting…",
       "surface": "apple",
       "id": "native.apple.6c1adc16e0a846e5"
-    },
-    {
-      "kind": "conditional-branch",
-      "line": 309,
-      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
-      "source": "Expires in \\(seconds / 60)m \\(seconds % 60)s",
-      "surface": "apple",
-      "id": "native.apple.698bdb0d6537edb6"
-    },
-    {
-      "kind": "conditional-branch",
-      "line": 309,
-      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
-      "source": "Expires in \\(seconds)s",
-      "surface": "apple",
-      "id": "native.apple.30e1c342b3345290"
     },
     {
       "kind": "conditional-branch",
@@ -37419,7 +37435,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1150,
+      "line": 1153,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel.swift",
       "source": "Remove attachments or wait for delivery to resolve before switching chats.",
       "surface": "apple",
@@ -37427,7 +37443,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1208,
+      "line": 1211,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel.swift",
       "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
       "surface": "apple",

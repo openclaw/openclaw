@@ -22954,6 +22954,16 @@
       "translated": "展開計畫"
     },
     {
+      "id": "native.apple.009d113b4d9a7855",
+      "source": "\\(question.header):",
+      "translated": "\\(question.header):"
+    },
+    {
+      "id": "native.apple.b97da55b7e16e60c",
+      "source": "Question summary",
+      "translated": "問題摘要"
+    },
+    {
       "id": "native.apple.da4494f9e875169d",
       "source": "Other answer",
       "translated": "其他答案"
@@ -22969,6 +22979,16 @@
       "translated": "已選取"
     },
     {
+      "id": "native.apple.14a4bf7b6b7d40dc",
+      "source": "Skip",
+      "translated": "略過"
+    },
+    {
+      "id": "native.apple.1bbbbfd1ad3842ce",
+      "source": "Skipping…",
+      "translated": "正在略過…"
+    },
+    {
       "id": "native.apple.e3095b651fc46b52",
       "source": "Submit",
       "translated": "提交"
@@ -22977,16 +22997,6 @@
       "id": "native.apple.6c1adc16e0a846e5",
       "source": "Submitting…",
       "translated": "正在提交…"
-    },
-    {
-      "id": "native.apple.698bdb0d6537edb6",
-      "source": "Expires in \\(seconds / 60)m \\(seconds % 60)s",
-      "translated": "將於 \\(seconds / 60)m \\(seconds % 60)s 後過期"
-    },
-    {
-      "id": "native.apple.30e1c342b3345290",
-      "source": "Expires in \\(seconds)s",
-      "translated": "將於 \\(seconds)s 後過期"
     },
     {
       "id": "native.apple.7cd6fb01b9f5d14a",

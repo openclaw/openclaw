@@ -109,13 +109,13 @@ data class QuestionRecord(
 )
 
 @Serializable
-data class QuestionListResult(
-  val questions: List<QuestionRecord>,
+data class QuestionGetResult(
+  val question: QuestionRecord,
 )
 
 @Serializable
-data class QuestionGetResult(
-  val question: QuestionRecord,
+data class QuestionListResult(
+  val questions: List<QuestionRecord>,
 )
 
 @Serializable

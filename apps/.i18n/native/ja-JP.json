@@ -22954,6 +22954,16 @@
       "translated": "計画を展開"
     },
     {
+      "id": "native.apple.009d113b4d9a7855",
+      "source": "\\(question.header):",
+      "translated": "\\(question.header):"
+    },
+    {
+      "id": "native.apple.b97da55b7e16e60c",
+      "source": "Question summary",
+      "translated": "質問の概要"
+    },
+    {
       "id": "native.apple.da4494f9e875169d",
       "source": "Other answer",
       "translated": "その他の回答"
@@ -22969,6 +22979,16 @@
       "translated": "選択済み"
     },
     {
+      "id": "native.apple.14a4bf7b6b7d40dc",
+      "source": "Skip",
+      "translated": "スキップ"
+    },
+    {
+      "id": "native.apple.1bbbbfd1ad3842ce",
+      "source": "Skipping…",
+      "translated": "スキップ中…"
+    },
+    {
       "id": "native.apple.e3095b651fc46b52",
       "source": "Submit",
       "translated": "送信"
@@ -22977,16 +22997,6 @@
       "id": "native.apple.6c1adc16e0a846e5",
       "source": "Submitting…",
       "translated": "送信中…"
-    },
-    {
-      "id": "native.apple.698bdb0d6537edb6",
-      "source": "Expires in \\(seconds / 60)m \\(seconds % 60)s",
-      "translated": "期限切れまで\\(seconds / 60)m \\(seconds % 60)s"
-    },
-    {
-      "id": "native.apple.30e1c342b3345290",
-      "source": "Expires in \\(seconds)s",
-      "translated": "期限切れまで\\(seconds)s"
     },
     {
       "id": "native.apple.7cd6fb01b9f5d14a",

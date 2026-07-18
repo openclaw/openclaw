@@ -22954,6 +22954,16 @@
       "translated": "Expandir el plan"
     },
     {
+      "id": "native.apple.009d113b4d9a7855",
+      "source": "\\(question.header):",
+      "translated": "\\(question.header):"
+    },
+    {
+      "id": "native.apple.b97da55b7e16e60c",
+      "source": "Question summary",
+      "translated": "Resumen de la pregunta"
+    },
+    {
       "id": "native.apple.da4494f9e875169d",
       "source": "Other answer",
       "translated": "Otra respuesta"
@@ -22969,6 +22979,16 @@
       "translated": "Seleccionada"
     },
     {
+      "id": "native.apple.14a4bf7b6b7d40dc",
+      "source": "Skip",
+      "translated": "Omitir"
+    },
+    {
+      "id": "native.apple.1bbbbfd1ad3842ce",
+      "source": "Skipping…",
+      "translated": "Omitiendo…"
+    },
+    {
       "id": "native.apple.e3095b651fc46b52",
       "source": "Submit",
       "translated": "Enviar"
@@ -22977,16 +22997,6 @@
       "id": "native.apple.6c1adc16e0a846e5",
       "source": "Submitting…",
       "translated": "Enviando…"
-    },
-    {
-      "id": "native.apple.698bdb0d6537edb6",
-      "source": "Expires in \\(seconds / 60)m \\(seconds % 60)s",
-      "translated": "Caduca en \\(seconds / 60)m \\(seconds % 60)s"
-    },
-    {
-      "id": "native.apple.30e1c342b3345290",
-      "source": "Expires in \\(seconds)s",
-      "translated": "Caduca en \\(seconds)s"
     },
     {
       "id": "native.apple.7cd6fb01b9f5d14a",
