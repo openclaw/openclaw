@@ -411,7 +411,7 @@ export function handleChatGatewayEvent(state: ChatState, payload?: ChatEventPayl
   if (sideResultTerminalRunId && state.chatSideResultPending?.runId === sideResultTerminalRunId) {
     appendChatSideChatTurn(state, {
       kind: "btw",
-      runId: payload.runId,
+      runId: sideResultTerminalRunId,
       sessionKey: payload.sessionKey ?? state.sessionKey,
       question: state.chatSideResultPending.question,
       text: extractBtwFailureText(payload) ?? "The side question ended without a result.",
@@ -425,7 +425,7 @@ export function handleChatGatewayEvent(state: ChatState, payload?: ChatEventPayl
     sideResultTerminalRunId &&
     state.chatSideResultTerminalRuns?.has(sideResultTerminalRunId) === true
   ) {
-    state.chatSideResultTerminalRuns.delete(payload.runId);
+    state.chatSideResultTerminalRuns.delete(sideResultTerminalRunId);
     return null;
   }
   const activeRunIdBeforeEvent = state.chatRunId;
