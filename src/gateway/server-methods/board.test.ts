@@ -1,8 +1,6 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BoardSnapshot } from "../../../packages/gateway-protocol/src/index.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resetBoardEventNoticeStateForTest } from "../../boards/board-notices.js";
 import { InMemoryBoardStore } from "../../boards/board-store.js";
 import { SqliteBoardStore } from "../../boards/sqlite-board-store.js";
@@ -44,7 +42,7 @@ function createHarness() {
 }
 
 describe("board gateway methods", () => {
-  const tempDirs: string[] = [];
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
   beforeEach(() => {
     resetBoardEventNoticeStateForTest();
@@ -54,9 +52,6 @@ describe("board gateway methods", () => {
   afterEach(() => {
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
-    for (const tempDir of tempDirs.splice(0)) {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
   });
 
   it("registers every contract method with its required scope", () => {
@@ -265,8 +260,7 @@ describe("board gateway methods", () => {
 
   it("keeps board state across the real sessions.reset handler", async () => {
     const sessionKey = "agent:main:board-reset-proof";
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-board-reset-"));
-    tempDirs.push(stateDir);
+    const stateDir = tempDirs.make("openclaw-board-reset-");
     const boardStore = new SqliteBoardStore({
       resolveAgentId: () => "main",
       env: { OPENCLAW_STATE_DIR: stateDir },

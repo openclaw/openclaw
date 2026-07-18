@@ -27,7 +27,6 @@ import {
   createBoardDeclaredSummary,
   createBoardGrantSnapshot,
   createBoardWidgetPutSnapshot,
-  emptyBoardSnapshot,
   type BoardStore,
   type BoardWidgetDocument,
 } from "./board-store.js";

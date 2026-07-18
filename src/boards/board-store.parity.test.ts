@@ -1,17 +1,14 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { InMemoryBoardStore, type BoardStore } from "./board-store.js";
 import { SqliteBoardStore } from "./sqlite-board-store.js";
 
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function createSqliteStore(): BoardStore {
-  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-board-parity-"));
-  tempDirs.push(stateDir);
+  const stateDir = tempDirs.make("openclaw-board-parity-");
   return new SqliteBoardStore({
     resolveAgentId: (sessionKey) => sessionKey.split(":")[1] ?? "main",
     env: { OPENCLAW_STATE_DIR: stateDir },
@@ -21,9 +18,6 @@ function createSqliteStore(): BoardStore {
 afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
-  for (const tempDir of tempDirs.splice(0)) {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  }
 });
 
 describe.each([
@@ -161,8 +155,7 @@ describe.each([
 
 describe("SqliteBoardStore persistence", () => {
   it("reopens durable boards and isolates owning agent databases", () => {
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-board-durable-"));
-    tempDirs.push(stateDir);
+    const stateDir = tempDirs.make("openclaw-board-durable-");
     const options = {
       resolveAgentId: (sessionKey: string) => sessionKey.split(":")[1] ?? "main",
       env: { OPENCLAW_STATE_DIR: stateDir },
