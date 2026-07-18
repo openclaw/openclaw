@@ -345,7 +345,11 @@ function readConfigExport(options: {
   let stat: fs.Stats | undefined;
   try {
     stat = fs.statSync(options.configPath);
-    const parsed = parseConfigJson5(readRegularFileSync({ filePath: options.configPath, maxBytes: DIAGNOSTIC_CONFIG_MAX_BYTES }));
+    const { buffer } = readRegularFileSync({
+      filePath: options.configPath,
+      maxBytes: DIAGNOSTIC_CONFIG_MAX_BYTES,
+    });
+    const parsed = parseConfigJson5(buffer.toString("utf8"));
     if (!parsed.ok) {
       return {
         shape: configShapeReadFailure({
