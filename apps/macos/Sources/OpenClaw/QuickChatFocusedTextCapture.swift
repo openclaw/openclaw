@@ -222,12 +222,29 @@ enum QuickChatFocusedTextCaptureService {
                 isCancelled: { Task.isCancelled })
             return (title, collection)
         }
+        // Hard outer bound: a hung target can stall individual AX reads past any
+        // cooperative check, so the wait itself races a timer and the walk is
+        // abandoned (cancelled, result discarded) on loss. The detached task may
+        // linger briefly on its current AX call; Quick Chat stays responsive.
         let snapshot = await withTaskCancellationHandler {
-            await walk.value
+            await withTaskGroup(of: (String, QuickChatTextCollection)?.self) { group in
+                group.addTask { await walk.value }
+                group.addTask {
+                    try? await Task.sleep(for: .seconds(4))
+                    return nil
+                }
+                let first = await group.next() ?? nil
+                group.cancelAll()
+                return first
+            }
         } onCancel: {
             walk.cancel()
         }
         guard !Task.isCancelled else { return .cancelled }
+        guard let snapshot else {
+            walk.cancel()
+            return .failed("\(appName) is not responding to Accessibility requests.")
+        }
         guard snapshot.1.textEntryCount > 0 else {
             return .failed(String(localized: "No readable text was found in \(appName)."))
         }
