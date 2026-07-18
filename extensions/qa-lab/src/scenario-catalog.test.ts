@@ -186,6 +186,7 @@ describe("qa scenario catalog", () => {
       );
 
     expect(scenarios.map((scenario) => scenario.id).toSorted()).toEqual([
+      "active-memory-preprompt-recall",
       "cron-model-created-one-shot-recurring",
       "kitchen-sink-live-openai",
       "matrix-post-restart-room-continue",
