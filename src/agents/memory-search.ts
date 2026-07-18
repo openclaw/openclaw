@@ -29,8 +29,6 @@ import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths
 import { clampInt, clampNumber } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 
-export { resolveRememberAcrossConversations } from "../memory-host-sdk/host/config-utils.js";
-
 export type ResolvedMemorySearchConfig = {
   enabled: boolean;
   rememberAcrossConversations: boolean;
