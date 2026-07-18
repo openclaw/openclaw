@@ -29,8 +29,7 @@ vi.mock("../session-transcript-readers.js", async () => {
   );
   return {
     ...actual,
-    readSessionMessageCountAsync: (...args: unknown[]) =>
-      readSessionMessageCountAsyncMock(...args),
+    readSessionMessageCountAsync: (...args: unknown[]) => readSessionMessageCountAsyncMock(...args),
   };
 });
 
