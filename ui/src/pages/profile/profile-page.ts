@@ -207,7 +207,7 @@ export class ProfilePage extends OpenClawLightDomElement {
           range: "all",
           agentScope: "all",
           // Instance rows keep durations per transcript; family rollups would
-          // merge resets and inflate "Longest session" to the family lifespan.
+          // merge resets and inflate "Longest thread" to the family lifespan.
           groupBy: "instance",
           limit: 1000,
           ...dateParams,

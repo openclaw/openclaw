@@ -931,7 +931,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       const cloudPlacementBadge = sessionRow.locator('[data-placement-state="active"]');
       await cloudPlacementBadge.waitFor();
       await sessionRow.hover();
-      await sessionRow.getByRole("button", { name: "Open session menu" }).click();
+      await sessionRow.getByRole("button", { name: "Open thread menu" }).click();
       const stopWorker = page
         .locator("openclaw-session-menu")
         .getByRole("menuitem", { name: "Stop cloud worker…" });

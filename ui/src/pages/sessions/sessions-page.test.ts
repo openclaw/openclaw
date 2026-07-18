@@ -259,7 +259,7 @@ describe("sessions page lifecycle", () => {
     expect(sessions.list).toHaveBeenCalledWith(
       expect.objectContaining({ showArchived: true, limit: 1000 }),
     );
-    expect(confirm).toHaveBeenCalledWith("Delete 2 archived sessions and their transcripts?");
+    expect(confirm).toHaveBeenCalledWith("Delete 2 archived threads and their transcripts?");
     expect(sessions.deleteMany).toHaveBeenCalledWith([
       {
         key: archivedKeys[0],
@@ -341,7 +341,7 @@ describe("sessions page lifecycle", () => {
 
     expect(list).toHaveBeenCalledTimes(2);
     expect(list).toHaveBeenNthCalledWith(2, expect.objectContaining({ offset: 2 }));
-    expect(confirm).toHaveBeenCalledWith("Delete 3 archived sessions and their transcripts?");
+    expect(confirm).toHaveBeenCalledWith("Delete 3 archived threads and their transcripts?");
     expect(sessions.deleteMany).toHaveBeenCalledWith(
       [...pageOne, ...pageTwo].map((key) => ({
         key,

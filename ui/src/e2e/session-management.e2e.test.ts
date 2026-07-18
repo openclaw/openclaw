@@ -250,7 +250,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       await expect.poll(() => page.locator(".sidebar-recent-session--child").count()).toBe(0);
       await captureUiProof(page, "child-sessions-collapsed.png");
 
-      await parent.getByRole("button", { name: "Show 2 child sessions for Plan release" }).click();
+      await parent.getByRole("button", { name: "Show 2 child threads for Plan release" }).click();
       await page.getByText("Research sources", { exact: true }).waitFor({ state: "visible" });
       await page.getByText("Verify tests", { exact: true }).waitFor({ state: "visible" });
       await expect
@@ -263,7 +263,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
 
       const childRows = page.locator(".sidebar-recent-session--child");
       await expect.poll(() => childRows.count()).toBe(2);
-      expect(await childRows.getByRole("button", { name: "Open session menu" }).count()).toBe(0);
+      expect(await childRows.getByRole("button", { name: "Open thread menu" }).count()).toBe(0);
       await childRows.nth(0).getByRole("img", { name: "Active run" }).waitFor();
       await childRows.nth(1).getByRole("img", { name: "Done" }).waitFor();
       await captureUiProof(page, "child-sessions-expanded.png");
@@ -297,7 +297,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       const row = page.locator('[data-session-key="agent:main:rename-me"]');
       await row.waitFor({ state: "visible", timeout: 10_000 });
       await row.hover();
-      await row.getByRole("button", { name: "Open session menu" }).click();
+      await row.getByRole("button", { name: "Open thread menu" }).click();
       page.once("dialog", (dialog) => void dialog.accept("Rejected rename"));
       await page.getByRole("menuitem", { name: "Rename…" }).click();
       await gateway.waitForRequest("sessions.patch");
@@ -439,12 +439,12 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
 
       // Hover-revealed management actions on sidebar rows.
       const sidebarResearch = sidebarRows.filter({ hasText: "Research notes" });
-      const sidebarResearchPin = sidebarResearch.getByRole("button", { name: "Pin session" });
+      const sidebarResearchPin = sidebarResearch.getByRole("button", { name: "Pin thread" });
       await page.mouse.move(900, 500);
       await expect.poll(() => actionOpacity(sidebarResearchPin)).toBe("0");
       const sidebarReleasePin = sidebarRows
         .filter({ hasText: "Release planning" })
-        .getByRole("button", { name: "Unpin session" });
+        .getByRole("button", { name: "Unpin thread" });
       await expect.poll(() => actionOpacity(sidebarReleasePin)).toBe("0");
       await sidebarResearch.hover();
       await expect.poll(() => actionOpacity(sidebarResearchPin)).toBe("1");
@@ -465,14 +465,14 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       // The current-main full context menu remains intact: active rows cannot
       // archive, while an idle row can.
       await sidebarMigration.hover();
-      await sidebarMigration.getByRole("button", { name: "Open session menu" }).click();
+      await sidebarMigration.getByRole("button", { name: "Open thread menu" }).click();
       await expect
-        .poll(() => page.getByRole("menuitem", { name: "Archive session" }).isDisabled())
+        .poll(() => page.getByRole("menuitem", { name: "Archive thread" }).isDisabled())
         .toBe(true);
       await page.keyboard.press("Escape");
       await sidebarResearch.hover();
-      await sidebarResearch.getByRole("button", { name: "Open session menu" }).click();
-      await activateMenuItem(page.getByRole("menuitem", { name: "Archive session" }));
+      await sidebarResearch.getByRole("button", { name: "Open thread menu" }).click();
+      await activateMenuItem(page.getByRole("menuitem", { name: "Archive thread" }));
       const archivePatch = await waitForPatch(
         gateway,
         (params) => params.key === "agent:main:research" && params.archived === true,
@@ -595,7 +595,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
 
       const openSessionMenu = async () => {
         await row.hover();
-        await row.getByRole("button", { name: "Open session menu" }).click();
+        await row.getByRole("button", { name: "Open thread menu" }).click();
         await page
           .getByRole("menu", { name: "Actions for Research notes" })
           .waitFor({ state: "visible" });
@@ -715,12 +715,12 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       await row.click({ button: "right" });
       const menuHost = page.locator("openclaw-session-menu");
       await menuHost
-        .getByRole("menuitem", { name: "Archive session" })
+        .getByRole("menuitem", { name: "Archive thread" })
         .waitFor({ state: "visible" });
       await page.keyboard.press("Escape");
 
-      await row.getByRole("button", { name: "Open session menu" }).click();
-      await activateMenuItem(menuHost.getByRole("menuitem", { name: "Archive session" }));
+      await row.getByRole("button", { name: "Open thread menu" }).click();
+      await activateMenuItem(menuHost.getByRole("menuitem", { name: "Archive thread" }));
       const patch = await waitForPatch(
         gateway,
         (params) => params.key === "agent:main:research" && params.archived === true,
@@ -759,7 +759,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       const row = page.locator(".session-data-row").filter({ hasText: "Research notes" });
       await row.waitFor({ state: "visible", timeout: 10_000 });
 
-      await row.getByRole("button", { name: "Open session menu" }).click();
+      await row.getByRole("button", { name: "Open thread menu" }).click();
       await activateMenuItem(
         page.locator("openclaw-session-menu").getByRole("menuitem", { name: "Delete…" }),
       );
@@ -1118,7 +1118,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       await expect.poll(() => sidebarRows.count()).toBe(10);
       await page.getByRole("button", { name: "Load more" }).click();
       await expect.poll(() => sidebarRows.count()).toBe(12);
-      await expect.poll(() => page.getByText("All sessions", { exact: true }).count()).toBe(0);
+      await expect.poll(() => page.getByText("All threads", { exact: true }).count()).toBe(0);
       await captureUiProof(page, "sidebar-all-sessions.png");
 
       // New groups are created from a session's menu (Move to group → New group…),
@@ -1127,7 +1127,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
         '.sidebar-recent-session[data-session-key="agent:main:session-10"]',
       );
       await sessionTen.hover();
-      await sessionTen.getByRole("button", { name: "Open session menu" }).click();
+      await sessionTen.getByRole("button", { name: "Open thread menu" }).click();
       const moveToGroup = page.getByRole("menuitem", { name: "Move to group" });
       await expect.poll(() => moveToGroup.getAttribute("aria-haspopup")).toBe("menu");
       const moveToGroupIndex = await moveToGroup.evaluate((element) =>
@@ -1234,7 +1234,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       await expect.poll(() => page.locator(".sidebar-recent-session").count()).toBe(11);
 
       const patchCountBeforeFlatDrag = (await gateway.getRequests("sessions.patch")).length;
-      const sortSessionsButton = page.getByRole("button", { name: "Sort sessions" });
+      const sortSessionsButton = page.getByRole("button", { name: "Sort threads" });
       await sortSessionsButton.click();
       await activateMenuItem(page.getByRole("menuitemradio", { name: "None" }));
       const flatSection = page.locator('[data-session-section="ungrouped"]');
@@ -1636,14 +1636,14 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
         .locator(".sidebar-recent-sessions__list .sidebar-recent-session")
         .filter({ hasText: "Research notes" });
       await row.waitFor({ state: "visible", timeout: 10_000 });
-      const pin = row.getByRole("button", { name: "Pin session" });
-      const menu = row.getByRole("button", { name: "Open session menu" });
+      const pin = row.getByRole("button", { name: "Pin thread" });
+      const menu = row.getByRole("button", { name: "Open thread menu" });
       await expect.poll(() => actionOpacity(pin)).toBe("1");
       await expect.poll(() => actionPointerEvents(pin)).toBe("auto");
       await expect.poll(() => actionOpacity(menu)).toBe("1");
       await expect.poll(() => actionPointerEvents(menu)).toBe("auto");
       await menu.click();
-      await page.getByRole("menuitem", { name: "Archive session" }).waitFor({ state: "visible" });
+      await page.getByRole("menuitem", { name: "Archive thread" }).waitFor({ state: "visible" });
     } finally {
       await context.close();
     }

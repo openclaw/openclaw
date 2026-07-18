@@ -48,35 +48,35 @@ describe("AppSidebar session pagination", () => {
       sidebar.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
 
     expect(rows()).toHaveLength(10);
-    expect(button("Load more sessions")).not.toBeNull();
+    expect(button("Load more threads")).not.toBeNull();
     expect(button("Collapse")).toBeNull();
 
-    button("Load more sessions")?.click();
+    button("Load more threads")?.click();
     await sidebar.updateComplete;
     expect(rows()).toHaveLength(20);
     expect(button("Collapse")).toBeNull();
 
-    button("Load more sessions")?.click();
+    button("Load more threads")?.click();
     await sidebar.updateComplete;
     expect(rows()).toHaveLength(30);
     expect(button("Collapse")).toBeNull();
 
-    button("Load more sessions")?.click();
+    button("Load more threads")?.click();
     await sidebar.updateComplete;
     expect(rows()).toHaveLength(40);
-    expect(button("Load more sessions")).not.toBeNull();
+    expect(button("Load more threads")).not.toBeNull();
     expect(button("Collapse")).not.toBeNull();
 
-    button("Load more sessions")?.click();
+    button("Load more threads")?.click();
     await sidebar.updateComplete;
     expect(rows()).toHaveLength(41);
-    expect(button("Load more sessions")).toBeNull();
+    expect(button("Load more threads")).toBeNull();
     expect(button("Collapse")).not.toBeNull();
 
     button("Collapse")?.click();
     await sidebar.updateComplete;
     expect(rows()).toHaveLength(10);
-    expect(button("Load more sessions")).not.toBeNull();
+    expect(button("Load more threads")).not.toBeNull();
     expect(button("Collapse")).toBeNull();
   });
 });
@@ -446,7 +446,7 @@ describe("AppSidebar session mutation feedback", () => {
     menu.querySelector<HTMLButtonElement>('[data-shortcut="a"]')?.click();
     await vi.waitFor(() => expect(harness.patch).toHaveBeenCalledOnce());
     await vi.waitFor(() =>
-      expect(toast.querySelector(".app-toast__message")?.textContent).toBe("Session archived"),
+      expect(toast.querySelector(".app-toast__message")?.textContent).toBe("Thread archived"),
     );
     expect(harness.patch).toHaveBeenCalledWith(
       archivedRow.key,
