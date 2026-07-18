@@ -27,7 +27,7 @@ function loadRoute(search: string): CustodianRouteData {
     revalidating: false,
     location: location(search),
     deps: search,
-    cause: "navigate",
+    cause: "navigation",
   } satisfies RouteLoaderOptions) as CustodianRouteData;
 }
 
