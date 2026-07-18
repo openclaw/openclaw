@@ -84,6 +84,38 @@ type DeferredSecretsStateTransition =
 
 type SecretsStateScope = "full" | "provider-auth";
 
+function listProviderAuthDegradedOwners(
+  snapshot: PreparedRuntimeSecretsSnapshot,
+): NonNullable<PreparedRuntimeSecretsSnapshot["degradedOwners"]> {
+  const modelProviderOwnerIds = new Set(
+    Object.keys(snapshot.sourceConfig.models?.providers ?? {}).map(
+      (providerId) => normalizeOptionalLowercaseString(providerId) ?? providerId,
+    ),
+  );
+  const authOwnerIds = new Set(
+    snapshot.authStores.flatMap(({ agentDir, store }) =>
+      Object.keys(store.profiles).map((profileId) =>
+        resolveAuthProfileSecretOwnerId({ agentDir, profileId }),
+      ),
+    ),
+  );
+  return (snapshot.degradedOwners ?? []).filter(
+    (owner) =>
+      (owner.ownerKind === "provider" && modelProviderOwnerIds.has(owner.ownerId)) ||
+      (owner.ownerKind === "account" && authOwnerIds.has(owner.ownerId)),
+  );
+}
+
+function resolvePreparedSecretsStateScope(
+  snapshot: PreparedRuntimeSecretsSnapshot,
+): SecretsStateScope {
+  const degradedOwners = snapshot.degradedOwners ?? [];
+  return degradedOwners.length > 0 &&
+    listProviderAuthDegradedOwners(snapshot).length === degradedOwners.length
+    ? "provider-auth"
+    : "full";
+}
+
 /** Gateway startup hook that prepares secrets and optionally activates the prepared snapshot. */
 export type ActivateRuntimeSecrets = ((
   config: OpenClawConfig,
@@ -294,7 +326,7 @@ export function createRuntimeSecretsActivator(params: {
     const statePrepared = options?.stateDegradedOwners
       ? { ...prepared, degradedOwners: options.stateDegradedOwners }
       : prepared;
-    const stateScope = options?.stateScope ?? "full";
+    const stateScope = options?.stateScope ?? resolvePreparedSecretsStateScope(statePrepared);
     if (activationParams.activate && (statePrepared.degradedOwners?.length ?? 0) > 0) {
       if (activationParams.deferStatePublication === true) {
         deferredStateTransitions.set(prepared, {
@@ -539,26 +571,10 @@ export function createRuntimeSecretsActivator(params: {
       hasCurrentAuthStoreCredentialsRevision(snapshot),
     assertValid: (snapshot) => assertRuntimeGatewayAuthNotKnownWeak(snapshot.config),
     publish: async (snapshot) => {
-      const modelProviderOwnerIds = new Set(
-        Object.keys(snapshot.sourceConfig.models?.providers ?? {}).map(
-          (providerId) => normalizeOptionalLowercaseString(providerId) ?? providerId,
-        ),
-      );
-      const authOwnerIds = new Set(
-        snapshot.authStores.flatMap(({ agentDir, store }) =>
-          Object.keys(store.profiles).map((profileId) =>
-            resolveAuthProfileSecretOwnerId({ agentDir, profileId }),
-          ),
-        ),
-      );
       await finishPreparedSnapshot(snapshot, providerAuthActivationParams, {
         alreadyActivated: true,
         stateScope: "provider-auth",
-        stateDegradedOwners: (snapshot.degradedOwners ?? []).filter(
-          (owner) =>
-            (owner.ownerKind === "provider" && modelProviderOwnerIds.has(owner.ownerId)) ||
-            (owner.ownerKind === "account" && authOwnerIds.has(owner.ownerId)),
-        ),
+        stateDegradedOwners: listProviderAuthDegradedOwners(snapshot),
       });
     },
     onError: (error, snapshot) =>

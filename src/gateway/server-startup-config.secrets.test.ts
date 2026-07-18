@@ -663,6 +663,50 @@ describe("gateway startup config secret preflight", () => {
     expect(emitStateEvent).not.toHaveBeenCalled();
   });
 
+  it("recovers provider-only degradation from a full reload through auth refresh", async () => {
+    const config = gatewayTokenConfig(
+      asConfig({ models: { providers: { openai: { apiKey: "fixture", models: [] } } } }),
+    );
+    const initial = preparedSnapshot(config);
+    const providerDegraded = {
+      ...preparedSnapshot(config),
+      degradedOwners: [
+        {
+          ownerKind: "provider" as const,
+          ownerId: "openai",
+          state: "unavailable" as const,
+          paths: ["models.providers.openai.apiKey"],
+          refKeys: ["env:default:OPENAI_API_KEY"],
+          reason: "secret provider failed" as const,
+          degradationState: "stale" as const,
+        },
+      ],
+    };
+    const emitStateEvent = vi.fn();
+    const activateRuntimeSecrets = runtimeSecretsActivatorForTest({
+      emitStateEvent,
+      prepareRuntimeSecretsSnapshot: vi.fn(async () => providerDegraded),
+      activateRuntimeSecretsSnapshot: activateSecretsRuntimeSnapshotForTest,
+    });
+    activateSecretsRuntimeSnapshotForTest(initial);
+
+    await activateRuntimeSecrets(config, { reason: "reload", activate: true });
+    const recovered = preparedSnapshot(config);
+    await activateProviderAuthRuntimeSnapshot({
+      snapshot: recovered,
+      expectedRevision: getActiveSecretsRuntimeSnapshotRevision(),
+      activateSnapshotIfCurrent: () => {
+        activateSecretsRuntimeSnapshotForTest(recovered);
+        return true;
+      },
+    });
+
+    expect(emitStateEvent.mock.calls.map((call) => call[0])).toEqual([
+      "SECRETS_RELOADER_DEGRADED",
+      "SECRETS_RELOADER_RECOVERED",
+    ]);
+  });
+
   it("publishes prepared degradation only after the reload transaction commits", async () => {
     const initial = preparedSnapshot(gatewayTokenConfig({}));
     const degradedSnapshot = (token: string): PreparedSecretsRuntimeSnapshot => ({
