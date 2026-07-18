@@ -4,7 +4,6 @@ import {
   isTeamsMeetingsRealtimeRouteReady,
 } from "./teams-meetings-platform-adapter.js";
 import {
-  URL,
   CONSUMER_URL,
   MEETING_STATE_KEY,
   consumerLightMeetingUrl,
@@ -32,11 +31,15 @@ describe("Microsoft Teams meeting platform adapter", () => {
   });
 
   it("retries transient in-call audio routing while Teams renders its media controls", () => {
-    const retry = TEAMS_MEETINGS_PLATFORM_ADAPTER.browser.shouldRetryJoinStatus;
     const pending = { ...status("teams-audio-choice-required"), inCall: true };
 
-    expect(retry?.(pending)).toBe(true);
-    expect(retry?.({ ...pending, audioOutputRouteError: "sink failed" })).toBe(false);
+    expect(TEAMS_MEETINGS_PLATFORM_ADAPTER.browser.shouldRetryJoinStatus?.(pending)).toBe(true);
+    expect(
+      TEAMS_MEETINGS_PLATFORM_ADAPTER.browser.shouldRetryJoinStatus?.({
+        ...pending,
+        audioOutputRouteError: "sink failed",
+      }),
+    ).toBe(false);
   });
 
   it.each([
@@ -632,7 +635,7 @@ describe("Microsoft Teams meeting platform adapter", () => {
     expect(bridge.sinkId).toBe("blackhole-output");
     expect(source.muted).toBe(true);
     expect(window).toHaveProperty("__openclawTeamsAudioOutputs");
-    expect((window.__openclawTeamsAudioOutputs as Array<{ bridge: PageMedia }>)[0]?.bridge).toBe(
+    expect((window["__openclawTeamsAudioOutputs"] as Array<{ bridge: PageMedia }>)[0]?.bridge).toBe(
       bridge,
     );
 
@@ -647,12 +650,12 @@ describe("Microsoft Teams meeting platform adapter", () => {
       media: [source, bridge],
       microphone: control({ label: "Turn microphone off", pressed: true }),
       microphoneDevice: control({ label: "BlackHole 2ch" }),
-      priorAudioOutputs: window.__openclawTeamsAudioOutputs as unknown[],
+      priorAudioOutputs: window["__openclawTeamsAudioOutputs"] as unknown[],
       priorMeeting: window[MEETING_STATE_KEY] as Record<string, unknown>,
     });
     expect(repeated.result.audioOutputRouted).toBe(true);
     expect(
-      (repeated.window.__openclawTeamsAudioOutputs as Array<{ bridge: PageMedia }>)[0]?.bridge,
+      (repeated.window["__openclawTeamsAudioOutputs"] as Array<{ bridge: PageMedia }>)[0]?.bridge,
     ).toBe(bridge);
   });
 });

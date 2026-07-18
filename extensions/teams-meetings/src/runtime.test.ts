@@ -120,7 +120,10 @@ describe("Microsoft Teams meeting session flow", () => {
     const transcriptActScripts = harness.gatewayRequest.mock.calls
       .slice(transcriptStartCall)
       .filter(([, params]) => params.path === "/act")
-      .map(([, params]) => String((params.body as { fn?: unknown } | undefined)?.fn ?? ""));
+      .map(([, params]) => {
+        const fn = (params.body as { fn?: unknown } | undefined)?.fn;
+        return typeof fn === "string" ? fn : "";
+      });
     expect(transcriptActScripts).toHaveLength(2);
     expect(transcriptActScripts[0]).toContain("const captureCaptions = true");
     expect(transcriptActScripts[1]).toContain("expectedSessionId");

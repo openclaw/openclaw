@@ -9,7 +9,6 @@ import {
   URL,
   CONSUMER_URL,
   MEETING_STATE_KEY,
-  status,
   control,
   captionRow,
   runStatusScript,
@@ -100,7 +99,7 @@ describe("Microsoft Teams meeting captions and permissions", () => {
       captionRows: [captionRow("OpenClaw QA", "Retry captions")],
       captureCaptions: true,
       leave: control({ label: "Leave" }),
-      priorCaptions: first.window.__openclawTeamsCaptions,
+      priorCaptions: first.window["__openclawTeamsCaptions"],
       priorMeeting: first.window[MEETING_STATE_KEY] as Record<string, unknown>,
     });
     expect(second.captionButton.clicks).toBe(1);
@@ -134,7 +133,7 @@ describe("Microsoft Teams meeting captions and permissions", () => {
       captureCaptions: true,
       leave: control({ label: "Leave" }),
     });
-    const state = window.__openclawTeamsCaptions as {
+    const state = window["__openclawTeamsCaptions"] as {
       droppedLines: number;
       lines: unknown[];
       visible: unknown[];
@@ -171,7 +170,7 @@ describe("Microsoft Teams meeting captions and permissions", () => {
       captionRows: [captionRow("OpenClaw QA", "Yes")],
       captureCaptions: true,
       leave: control({ label: "Leave" }),
-      priorCaptions: first.window.__openclawTeamsCaptions,
+      priorCaptions: first.window["__openclawTeamsCaptions"],
       priorMeeting: first.window[MEETING_STATE_KEY] as Record<string, unknown>,
     });
 
@@ -190,14 +189,16 @@ describe("Microsoft Teams meeting captions and permissions", () => {
     });
     await vi.advanceTimersByTimeAsync(1_000);
     const caption = row.querySelector('[data-tid="closed-caption-text"]');
-    if (!caption) throw new Error("expected caption text control");
+    if (!caption) {
+      throw new Error("expected caption text control");
+    }
     caption.textContent = "We should leave";
     const second = await runStatusScript({
       allowMicrophone: false,
       captionRows: [row],
       captureCaptions: true,
       leave: control({ label: "Leave" }),
-      priorCaptions: first.window.__openclawTeamsCaptions,
+      priorCaptions: first.window["__openclawTeamsCaptions"],
     });
 
     expect(second.result.lastCaptionText).toBe("We should leave");
@@ -215,14 +216,16 @@ describe("Microsoft Teams meeting captions and permissions", () => {
       leave: control({ label: "Leave" }),
     });
     const caption = row.querySelector('[data-tid="closed-caption-text"]');
-    if (!caption) throw new Error("expected caption text control");
+    if (!caption) {
+      throw new Error("expected caption text control");
+    }
     caption.textContent = "I liked cats";
     const second = await runStatusScript({
       allowMicrophone: false,
       captionRows: [row],
       captureCaptions: true,
       leave: control({ label: "Leave" }),
-      priorCaptions: first.window.__openclawTeamsCaptions,
+      priorCaptions: first.window["__openclawTeamsCaptions"],
     });
 
     expect(second.result.transcriptLines).toBe(1);
@@ -241,7 +244,7 @@ describe("Microsoft Teams meeting captions and permissions", () => {
       captionRows: [captionRow("OpenClaw QA", "Logical row replacement", "8")],
       captureCaptions: true,
       leave: control({ label: "Leave" }),
-      priorCaptions: first.window.__openclawTeamsCaptions,
+      priorCaptions: first.window["__openclawTeamsCaptions"],
     });
 
     expect(second.result.transcriptLines).toBe(1);
@@ -263,7 +266,7 @@ describe("Microsoft Teams meeting captions and permissions", () => {
       captionRows: [captionRow("OpenClaw QA", "Late logical correction", "9")],
       captureCaptions: true,
       leave: control({ label: "Leave" }),
-      priorCaptions: first.window.__openclawTeamsCaptions,
+      priorCaptions: first.window["__openclawTeamsCaptions"],
     });
 
     expect(second.result.transcriptLines).toBe(1);
@@ -285,14 +288,14 @@ describe("Microsoft Teams meeting captions and permissions", () => {
       captionRows: [],
       captureCaptions: true,
       leave: control({ label: "Leave" }),
-      priorCaptions: first.window.__openclawTeamsCaptions,
+      priorCaptions: first.window["__openclawTeamsCaptions"],
     });
     const returned = await runStatusScript({
       allowMicrophone: false,
       captionRows: [captionRow("OpenClaw QA", "Virtual row return", "13")],
       captureCaptions: true,
       leave: control({ label: "Leave" }),
-      priorCaptions: missing.window.__openclawTeamsCaptions,
+      priorCaptions: missing.window["__openclawTeamsCaptions"],
     });
 
     expect(returned.result.transcriptLines).toBe(1);
@@ -314,18 +317,20 @@ describe("Microsoft Teams meeting captions and permissions", () => {
       captionRows: [],
       captureCaptions: true,
       leave: control({ label: "Leave" }),
-      priorCaptions: first.window.__openclawTeamsCaptions,
+      priorCaptions: first.window["__openclawTeamsCaptions"],
     });
     await vi.advanceTimersByTimeAsync(1_000);
     const caption = row.querySelector('[data-tid="closed-caption-text"]');
-    if (!caption) throw new Error("expected caption text control");
+    if (!caption) {
+      throw new Error("expected caption text control");
+    }
     caption.textContent = "Completely different second utterance";
     const second = await runStatusScript({
       allowMicrophone: false,
       captionRows: [row],
       captureCaptions: true,
       leave: control({ label: "Leave" }),
-      priorCaptions: disappeared.window.__openclawTeamsCaptions,
+      priorCaptions: disappeared.window["__openclawTeamsCaptions"],
       priorMeeting: first.window[MEETING_STATE_KEY] as Record<string, unknown>,
     });
 
@@ -345,7 +350,9 @@ describe("Microsoft Teams meeting captions and permissions", () => {
       leave: control({ label: "Leave" }),
     });
     const caption = row.querySelector('[data-tid="closed-caption-text"]');
-    if (!caption) throw new Error("expected caption text control");
+    if (!caption) {
+      throw new Error("expected caption text control");
+    }
     caption.textContent = "Rapid second utterance";
     first.triggerCaptionMutation(undefined, row);
     const second = await runStatusScript({
@@ -353,7 +360,7 @@ describe("Microsoft Teams meeting captions and permissions", () => {
       captionRows: [row],
       captureCaptions: true,
       leave: control({ label: "Leave" }),
-      priorCaptions: first.window.__openclawTeamsCaptions,
+      priorCaptions: first.window["__openclawTeamsCaptions"],
     });
 
     expect(second.result.transcriptLines).toBe(2);
@@ -378,18 +385,20 @@ describe("Microsoft Teams meeting captions and permissions", () => {
       captionRows: [],
       captureCaptions: true,
       leave: control({ label: "Leave" }),
-      priorCaptions: first.window.__openclawTeamsCaptions,
+      priorCaptions: first.window["__openclawTeamsCaptions"],
     });
     await vi.advanceTimersByTimeAsync(1_000);
     const caption = row.querySelector('[data-tid="closed-caption-text"]');
-    if (!caption) throw new Error("expected caption text control");
+    if (!caption) {
+      throw new Error("expected caption text control");
+    }
     caption.textContent = "Thank you everyone";
     const second = await runStatusScript({
       allowMicrophone: false,
       captionRows: [row],
       captureCaptions: true,
       leave: control({ label: "Leave" }),
-      priorCaptions: disappeared.window.__openclawTeamsCaptions,
+      priorCaptions: disappeared.window["__openclawTeamsCaptions"],
     });
 
     expect(second.result.recentTranscript).toMatchObject([
@@ -415,7 +424,7 @@ describe("Microsoft Teams meeting captions and permissions", () => {
       captionRows: [firstRow, secondRow],
       captureCaptions: true,
       leave: control({ label: "Leave" }),
-      priorCaptions: first.window.__openclawTeamsCaptions,
+      priorCaptions: first.window["__openclawTeamsCaptions"],
     });
     await vi.advanceTimersByTimeAsync(1_000);
     const third = await runStatusScript({
@@ -423,7 +432,7 @@ describe("Microsoft Teams meeting captions and permissions", () => {
       captionRows: [firstRow, secondRow],
       captureCaptions: true,
       leave: control({ label: "Leave" }),
-      priorCaptions: second.window.__openclawTeamsCaptions,
+      priorCaptions: second.window["__openclawTeamsCaptions"],
     });
 
     expect(third.result.transcriptLines).toBe(2);
@@ -442,14 +451,16 @@ describe("Microsoft Teams meeting captions and permissions", () => {
       leave: control({ label: "Leave" }),
     });
     const author = row.querySelector('[data-tid="author"]');
-    if (!author) throw new Error("expected caption author control");
+    if (!author) {
+      throw new Error("expected caption author control");
+    }
     author.textContent = "OpenClaw QA";
     const second = await runStatusScript({
       allowMicrophone: false,
       captionRows: [row],
       captureCaptions: true,
       leave: control({ label: "Leave" }),
-      priorCaptions: first.window.__openclawTeamsCaptions,
+      priorCaptions: first.window["__openclawTeamsCaptions"],
     });
 
     expect(second.result.transcriptLines).toBe(1);
@@ -470,7 +481,7 @@ describe("Microsoft Teams meeting captions and permissions", () => {
       captionRows: [captionRow("OpenClaw QA", "Stable speaker correction", "10")],
       captureCaptions: true,
       leave: control({ label: "Leave" }),
-      priorCaptions: first.window.__openclawTeamsCaptions,
+      priorCaptions: first.window["__openclawTeamsCaptions"],
     });
 
     expect(second.result.transcriptLines).toBe(1);
@@ -517,8 +528,8 @@ describe("Microsoft Teams meeting captions and permissions", () => {
     });
 
     expect(disconnects).toBe(0);
-    expect(wrongTab.window.__openclawTeamsCaptions).toBe(active);
-    expect(wrongSession.window.__openclawTeamsCaptions).toBe(active);
+    expect(wrongTab.window["__openclawTeamsCaptions"]).toBe(active);
+    expect(wrongSession.window["__openclawTeamsCaptions"]).toBe(active);
   });
 
   it("finalizes same-session captions when meeting identity is lost", async () => {
@@ -545,7 +556,7 @@ describe("Microsoft Teams meeting captions and permissions", () => {
         ],
       },
     });
-    const captions = window.__openclawTeamsCaptions as Record<string, unknown>;
+    const captions = window["__openclawTeamsCaptions"] as Record<string, unknown>;
     const readTranscript = runInNewContext(
       `(${teamsMeetingTranscriptScript(URL, "session-1", true)})`,
       {
@@ -564,7 +575,7 @@ describe("Microsoft Teams meeting captions and permissions", () => {
     expect(JSON.parse(readTranscript())).toMatchObject({
       lines: [{ text: "Preserve call-end captions" }],
     });
-    expect(window.__openclawTeamsCaptions).toBe(captions);
+    expect(window["__openclawTeamsCaptions"]).toBe(captions);
   });
 
   it("finalizes caption capture before an SPA navigation can mix meetings", async () => {
@@ -579,7 +590,7 @@ describe("Microsoft Teams meeting captions and permissions", () => {
     params.captionRows = [captionRow("OpenClaw QA", "Meeting B caption")];
     page.triggerCaptionMutation(CONSUMER_URL);
 
-    const captions = page.window.__openclawTeamsCaptions as {
+    const captions = page.window["__openclawTeamsCaptions"] as {
       finalized?: boolean;
       lines?: Array<{ text: string }>;
       visible?: Array<{ text: string }>;
@@ -624,7 +635,7 @@ describe("Microsoft Teams meeting captions and permissions", () => {
     expect(JSON.parse(readTranscript())).toMatchObject({
       lines: [{ text: "Finalized before navigation" }],
     });
-    expect(window.__openclawTeamsCaptions).toBeDefined();
+    expect(window["__openclawTeamsCaptions"]).toBeDefined();
   });
 
   it("preserves same-session captions during the in-call rerender window", async () => {
@@ -656,7 +667,7 @@ describe("Microsoft Teams meeting captions and permissions", () => {
     });
 
     expect(disconnects).toBe(0);
-    expect(window.__openclawTeamsCaptions).toBe(active);
+    expect(window["__openclawTeamsCaptions"]).toBe(active);
   });
 
   it("keeps the live caption observer during a bounded in-call control rerender", async () => {
@@ -681,7 +692,7 @@ describe("Microsoft Teams meeting captions and permissions", () => {
     page.triggerCaptionMutation();
 
     expect(page.captionObserverDisconnects()).toBe(0);
-    expect(page.window.__openclawTeamsCaptions).not.toMatchObject({ finalized: true });
+    expect(page.window["__openclawTeamsCaptions"]).not.toMatchObject({ finalized: true });
   });
 
   it("replaces finalized captions for a new verified session", async () => {
@@ -701,7 +712,7 @@ describe("Microsoft Teams meeting captions and permissions", () => {
       leave: control({ label: "Leave" }),
       priorCaptions: old,
     });
-    const current = window.__openclawTeamsCaptions as Record<string, unknown>;
+    const current = window["__openclawTeamsCaptions"] as Record<string, unknown>;
 
     expect(current).not.toBe(old);
     expect(current.sessionId).toBe("session-1");
@@ -728,16 +739,16 @@ describe("Microsoft Teams meeting captions and permissions", () => {
         sessionId: "old-session",
       },
     });
-    const current = window.__openclawTeamsCaptions as Record<string, unknown>;
+    const current = window["__openclawTeamsCaptions"] as Record<string, unknown>;
 
     expect(disconnects).toBe(1);
     expect(old).toMatchObject({ finalized: true, lines: [{ text: "Old live caption" }] });
     expect(current).not.toBe(old);
     expect(current.sessionId).toBe("session-1");
-    expect(window.__openclawTeamsCaptionArchive).toMatchObject({
+    expect(window["__openclawTeamsCaptionArchive"]).toMatchObject({
       "old-session": old,
     });
-    delete window.__openclawTeamsCaptions;
+    delete window["__openclawTeamsCaptions"];
 
     const readOldTranscript = runInNewContext(
       `(${teamsMeetingTranscriptScript(URL, "old-session", false)})`,
@@ -762,7 +773,7 @@ describe("Microsoft Teams meeting captions and permissions", () => {
       leave: control({ label: "Leave" }),
     });
     let disconnects = 0;
-    const captions = first.window.__openclawTeamsCaptions as Record<string, unknown>;
+    const captions = first.window["__openclawTeamsCaptions"] as Record<string, unknown>;
     captions.observer = { disconnect: () => (disconnects += 1) };
     captions.observerInstalled = true;
     const finalize = runInNewContext(`(${teamsMeetingTranscriptScript(URL, "session-1", true)})`, {
@@ -785,7 +796,7 @@ describe("Microsoft Teams meeting captions and permissions", () => {
       leave: control({ label: "Leave" }),
       priorCaptions: captions,
     });
-    expect(refreshed.window.__openclawTeamsCaptions).toBe(captions);
+    expect(refreshed.window["__openclawTeamsCaptions"]).toBe(captions);
     expect(captions.observerInstalled).toBe(false);
     expect(captions.lines).toMatchObject([{ text: "Final caption" }]);
   });

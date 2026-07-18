@@ -100,12 +100,16 @@ export function captionRow(
   const author = control({ label: "", text: speaker });
   const content = control({ label: "", text: captionText });
   const row = control({ label: "" });
-  const getAttribute = row.getAttribute;
+  const getAttribute = row.getAttribute.bind(row);
   row.getAttribute = (name) =>
     name === "aria-posinset" && rowIdentity ? rowIdentity : getAttribute(name);
   row.querySelector = (selector) => {
-    if (selector?.includes('data-tid="author"')) return author;
-    if (selector?.includes('data-tid="closed-caption-text"')) return content;
+    if (selector?.includes('data-tid="author"')) {
+      return author;
+    }
+    if (selector?.includes('data-tid="closed-caption-text"')) {
+      return content;
+    }
     return undefined;
   };
   return row;
@@ -163,7 +167,9 @@ export async function runStatusScript(params: {
   const captionButton = control({
     label: "Captions Show live captions",
     onClick: () => {
-      if (!params.captionClickIgnored) captionsOn = true;
+      if (!params.captionClickIgnored) {
+        captionsOn = true;
+      }
     },
   });
   const captionContent = control({ label: "", text: "" });
@@ -180,10 +186,16 @@ export async function runStatusScript(params: {
   const document = {
     body,
     createElement() {
-      if (!params.bridgeMedia) throw new Error("unexpected media bridge");
-      if (!Array.isArray(params.bridgeMedia)) return params.bridgeMedia;
+      if (!params.bridgeMedia) {
+        throw new Error("unexpected media bridge");
+      }
+      if (!Array.isArray(params.bridgeMedia)) {
+        return params.bridgeMedia;
+      }
       const bridge = params.bridgeMedia[bridgeMediaIndex++];
-      if (!bridge) throw new Error("missing media bridge fixture");
+      if (!bridge) {
+        throw new Error("missing media bridge fixture");
+      }
       return bridge;
     },
     title: "Teams",
@@ -270,10 +282,10 @@ export async function runStatusScript(params: {
     window[MEETING_STATE_KEY] = params.priorMeeting;
   }
   if (params.priorAudioOutputs) {
-    window.__openclawTeamsAudioOutputs = params.priorAudioOutputs;
+    window["__openclawTeamsAudioOutputs"] = params.priorAudioOutputs;
   }
   if (params.priorCaptions) {
-    window.__openclawTeamsCaptions = params.priorCaptions;
+    window["__openclawTeamsCaptions"] = params.priorCaptions;
   }
   const script = teamsMeetingStatusScript({
     allowMicrophone: params.allowMicrophone,
@@ -318,7 +330,9 @@ export async function runStatusScript(params: {
     captionButton,
     captionObserverDisconnects: () => captionObserverDisconnects,
     triggerCaptionMutation(nextUrl?: string, removedNode?: PageControl) {
-      if (nextUrl) location.href = nextUrl;
+      if (nextUrl) {
+        location.href = nextUrl;
+      }
       captionObserverCallback?.(removedNode ? [{ removedNodes: [removedNode] }] : []);
     },
     result: JSON.parse(await run()) as Record<string, unknown>,

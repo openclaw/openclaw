@@ -92,9 +92,13 @@ function parseBrowserStatus(result: unknown): TeamsMeetingsChromeHealth | undefi
       typeof parsed.lastCaptionText === "string" ? parsed.lastCaptionText : undefined,
     recentTranscript: Array.isArray(parsed.recentTranscript)
       ? parsed.recentTranscript.flatMap((value) => {
-          if (!value || typeof value !== "object") return [];
+          if (!value || typeof value !== "object") {
+            return [];
+          }
           const line = value as { at?: unknown; speaker?: unknown; text?: unknown };
-          if (typeof line.text !== "string" || !line.text.trim()) return [];
+          if (typeof line.text !== "string" || !line.text.trim()) {
+            return [];
+          }
           return [
             {
               ...(typeof line.at === "string" ? { at: line.at } : {}),
@@ -212,9 +216,13 @@ function parseTranscript(
       : 0;
   const lines = Array.isArray(payload.lines)
     ? payload.lines.flatMap((value) => {
-        if (!value || typeof value !== "object") return [];
+        if (!value || typeof value !== "object") {
+          return [];
+        }
         const line = value as { at?: unknown; speaker?: unknown; text?: unknown };
-        if (typeof line.text !== "string" || !line.text.trim()) return [];
+        if (typeof line.text !== "string" || !line.text.trim()) {
+          return [];
+        }
         return [
           {
             ...(typeof line.at === "string" ? { at: line.at } : {}),
