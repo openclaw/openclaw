@@ -41,6 +41,7 @@ const WARNING_THRESHOLD = 10;
 export const UNKNOWN_TOOL_THRESHOLD = 10;
 const CRITICAL_THRESHOLD = 20;
 const GLOBAL_CIRCUIT_BREAKER_THRESHOLD = 30;
+const LOOP_VETO_RESULT_HASH = "tool-loop-veto";
 const DEFAULT_LOOP_DETECTION_CONFIG = {
   enabled: false,
   historySize: TOOL_CALL_HISTORY_SIZE,
@@ -303,10 +304,10 @@ function hashToolOutcome(
 
   const details = isPlainObject(result.details) ? result.details : {};
   const text = extractTextContent(result);
-  // The loop detector's own veto is not real progress; giving it no result hash keeps a
-  // critical loop block sticky instead of letting the block reset the streak (#89090).
+  // The loop detector's own veto is not real progress; keep a stable sentinel hash so the
+  // record still counts toward no-progress without colliding with ordinary progress.
   if (isLoopVetoResult(details)) {
-    return { resultHash: undefined };
+    return { resultHash: LOOP_VETO_RESULT_HASH };
   }
   if (toolName === "exec") {
     const execHash = hashExecToolOutcome(details, text);
@@ -395,12 +396,16 @@ function getNoProgressStreak(
     if (!record || record.toolName !== toolName || record.argsHash !== argsHash) {
       continue;
     }
+    if (record.resultHash === LOOP_VETO_RESULT_HASH) {
+      streak += 1;
+      continue;
+    }
     if (typeof record.resultHash !== "string" || !record.resultHash) {
       continue;
     }
     if (!latestResultHash) {
       latestResultHash = record.resultHash;
-      streak = 1;
+      streak += 1;
       continue;
     }
     if (record.resultHash !== latestResultHash) {

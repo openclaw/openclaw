@@ -1110,6 +1110,47 @@ describe("tool-loop-detection", () => {
       }
     });
 
+    it("counts tool-loop vetoes toward the global breaker after repeated no-progress sends", () => {
+      const state = createState();
+      const params = { action: "send", target: "feishu:oc_chat", text: "ping" };
+      const config: ToolLoopDetectionConfig = {
+        enabled: true,
+        warningThreshold: 1,
+        criticalThreshold: 2,
+        globalCircuitBreakerThreshold: 3,
+        detectors: {
+          genericRepeat: false,
+          knownPollNoProgress: false,
+          pingPong: false,
+        },
+      };
+
+      recordSend(state, "message", params, sendPayload(0), 0);
+      recordSend(state, "message", params, sendPayload(1), 1);
+
+      expect(detectToolCallLoop(state, "message", params, config).stuck).toBe(false);
+
+      recordToolCall(state, "message", params, "message-veto", config);
+      recordToolCallOutcome(state, {
+        toolName: "message",
+        toolParams: params,
+        toolCallId: "message-veto",
+        result: {
+          content: [{ type: "text", text: "blocked" }],
+          details: { status: "blocked", deniedReason: "tool-loop" },
+        },
+        config,
+      });
+
+      const after = detectToolCallLoop(state, "message", params, config);
+      expect(after.stuck).toBe(true);
+      if (after.stuck) {
+        expect(after.level).toBe("critical");
+        expect(after.detector).toBe("global_circuit_breaker");
+        expect(after.count).toBe(3);
+      }
+    });
+
     it("still escalates repeated plugin/approval vetoes to a critical loop", () => {
       const state = createState();
       const params = { action: "read", target: "feishu:oc_chat" };
