@@ -32,7 +32,7 @@ import {
 } from "../../infra/system-run-approval-binding.js";
 import { resolveSystemRunApprovalRequestContext } from "../../infra/system-run-approval-context.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import type { ExecApprovalManager } from "../exec-approval-manager.js";
+import { InvalidApprovalIdError, type ExecApprovalManager } from "../exec-approval-manager.js";
 import {
   handleApprovalWaitDecision,
   handlePendingApprovalRequest,
@@ -356,7 +356,22 @@ export function createExecApprovalHandlers(
         );
         return;
       }
-      const record = manager.create(request, timeoutMs, explicitId);
+      let record: ReturnType<typeof manager.create>;
+      try {
+        record = manager.create(request, timeoutMs, explicitId);
+      } catch (error) {
+        if (error instanceof InvalidApprovalIdError) {
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.INVALID_REQUEST, error.message, {
+              details: { reason: error.reason },
+            }),
+          );
+          return;
+        }
+        throw error;
+      }
       bindApprovalRequesterMetadata({ record, client });
       if (client?.internal?.approvalRuntime === true) {
         // Reviewer ids widen approval visibility, so only the server-trusted

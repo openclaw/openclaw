@@ -51,6 +51,22 @@ function resolveApprovalTimeoutMs(timeoutMs: number): number {
   return resolveTimerTimeoutMs(timeoutMs, 1);
 }
 
+// Approval IDs cross terminal, UI, push, and channel surfaces unchanged. Keep
+// unsafe display bytes and unbounded identifiers out at the creation boundary.
+const EXPLICIT_APPROVAL_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
+
+/** Typed creation failure for an explicit approval id outside the shared safe format. */
+export class InvalidApprovalIdError extends Error {
+  readonly reason = "INVALID_APPROVAL_ID";
+
+  constructor() {
+    super(
+      "approval id must be 1-128 characters using only letters, numbers, '.', '_', ':', or '-'",
+    );
+    this.name = "InvalidApprovalIdError";
+  }
+}
+
 type ExecApprovalRequestPayload = InfraExecApprovalRequestPayload;
 
 // Distinguishes operator decisions from trusted auto-review resolutions.
@@ -221,7 +237,11 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     if (expiresAtMs === undefined) {
       throw new Error("approval expiry is unavailable");
     }
-    const resolvedId = id === null || id === undefined || id.length === 0 ? randomUUID() : id;
+    const hasExplicitId = id !== null && id !== undefined && id.length > 0;
+    if (hasExplicitId && !EXPLICIT_APPROVAL_ID_PATTERN.test(id)) {
+      throw new InvalidApprovalIdError();
+    }
+    const resolvedId = hasExplicitId ? id : randomUUID();
     const record: ExecApprovalRecord<TPayload> = {
       id: resolvedId,
       request,
