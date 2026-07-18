@@ -74,4 +74,34 @@ describe("web readability extractor", () => {
     });
     expect(requireReadabilityResult(result).text).toContain("Main content starts here");
   });
+
+  it("does not count pseudo tags inside raw-text elements toward the nesting limit", async () => {
+    const extractor = createReadabilityWebContentExtractor();
+    const pseudoTags = "<div>".repeat(3100);
+    const html = SAMPLE_HTML.replace(
+      "<article>",
+      `<article><script>const template = ${JSON.stringify(pseudoTags)};</script>`,
+    );
+    const result = await extractor.extract({
+      html,
+      url: "https://example.com/article",
+      extractMode: "markdown",
+    });
+    expect(requireReadabilityResult(result).text).toContain("Main content starts here");
+  });
+
+  it("handles quoted raw-text attributes while skipping pseudo tags", async () => {
+    const extractor = createReadabilityWebContentExtractor();
+    const pseudoTags = "<div>".repeat(3100);
+    const html = SAMPLE_HTML.replace(
+      "<article>",
+      `<article><script data-close="</script>">const template = ${JSON.stringify(pseudoTags)};</script>`,
+    );
+    const result = await extractor.extract({
+      html,
+      url: "https://example.com/article",
+      extractMode: "markdown",
+    });
+    expect(requireReadabilityResult(result).text).toContain("Main content starts here");
+  });
 });
