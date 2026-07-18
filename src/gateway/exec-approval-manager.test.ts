@@ -597,6 +597,7 @@ describe("ExecApprovalManager", () => {
   });
 
   it.each([
+    ["empty value", ""],
     ["ANSI escape", "approval-\u001b[31mred"],
     ["Unicode control", "approval-\u202Ehidden"],
     ["trailing line feed", "approval-safe\n"],

@@ -237,10 +237,12 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     if (expiresAtMs === undefined) {
       throw new Error("approval expiry is unavailable");
     }
-    const hasExplicitId = id !== null && id !== undefined && id.length > 0;
+    const hasExplicitId = id !== null && id !== undefined;
     if (
       hasExplicitId &&
-      (id.length > 128 || EXPLICIT_APPROVAL_ID_INVALID_CHAR_PATTERN.test(id))
+      (id.length === 0 ||
+        id.length > 128 ||
+        EXPLICIT_APPROVAL_ID_INVALID_CHAR_PATTERN.test(id))
     ) {
       throw new InvalidApprovalIdError();
     }
