@@ -4761,9 +4761,14 @@ class ChatController internal constructor(
           message.contains("succeedsParent")
       if (!isOlderGateway || "succeedsParent" !in params) throw err
 
-      // Closed-schema validation rejected the first request before execution.
-      // Preserve New Chat against older gateways by using its legacy behavior.
-      val legacyParams = JsonObject(params.filterKeys { it != "succeedsParent" })
+      // Older Gateways cannot express a linked parallel child. Keep New Chat parallel by
+      // dropping the parent lifecycle fields instead of falling back to legacy rollover.
+      val legacyParams =
+        JsonObject(
+          params.filterKeys { key ->
+            key != "succeedsParent" && key != "parentSessionKey" && key != "emitCommandHooks"
+          },
+        )
       requestGatewayBound(gatewayId, "sessions.create", legacyParams.toString())
     }
 

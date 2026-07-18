@@ -322,9 +322,21 @@ export class GatewayChatClient implements TuiBackend {
       if (opts.succeedsParent === undefined || !isLegacySucceedsParentError(err)) {
         throw err;
       }
-      // Schema validation rejected the request before execution, so retrying
-      // without the additive field is safe against an older remote Gateway.
       const { succeedsParent: _succeedsParent, ...legacyParams } = params;
+      if (!opts.succeedsParent) {
+        // Older Gateways cannot express a linked parallel child. Preserve the
+        // parent's lifecycle by retrying as an unlinked child, never a rollover.
+        const {
+          parentSessionKey: _parentSessionKey,
+          emitCommandHooks: _emitCommandHooks,
+          ...parallelParams
+        } = legacyParams;
+        return await this.client.request<TuiSessionMutationResult>(
+          "sessions.create",
+          parallelParams,
+        );
+      }
+      // Legacy rollover is equivalent to an explicit successor request.
       return await this.client.request<TuiSessionMutationResult>("sessions.create", legacyParams);
     }
   }

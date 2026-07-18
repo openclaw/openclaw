@@ -261,7 +261,7 @@ class ChatControllerCommandControlsTest {
 
   @OptIn(ExperimentalCoroutinesApi::class)
   @Test
-  fun startNewChatRetriesWithoutDispositionAgainstOlderGateway() =
+  fun startNewChatRetriesWithoutParentLifecycleAgainstOlderGateway() =
     runTest {
       val requests = mutableListOf<Pair<String, String?>>()
       var createCalls = 0
@@ -302,7 +302,10 @@ class ChatControllerCommandControlsTest {
       assertEquals(2, creates.size)
       assertTrue(creates[0].second.orEmpty().contains("\"succeedsParent\":false"))
       assertEquals(false, creates[1].second.orEmpty().contains("\"succeedsParent\""))
-      assertTrue(creates[1].second.orEmpty().contains("\"emitCommandHooks\":true"))
+      assertEquals(false, creates[1].second.orEmpty().contains("\"parentSessionKey\""))
+      assertEquals(false, creates[1].second.orEmpty().contains("\"emitCommandHooks\""))
+      assertTrue(creates[1].second.orEmpty().contains("\"agentId\":\"main\""))
+      assertTrue(creates[1].second.orEmpty().contains("\"label\":\"New chat\""))
       assertEquals("agent:main:dashboard:fresh", controller.sessionKey.value)
     }
 
