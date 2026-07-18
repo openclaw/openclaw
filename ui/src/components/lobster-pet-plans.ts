@@ -24,7 +24,7 @@ export type LobsterPetAct =
   | "droop"
   | "sweep";
 
-export type ActProfile = {
+type ActProfile = {
   // [min, max] delay before the next act.
   delayMs: [number, number];
   acts: Array<[LobsterPetAct, number]>;
@@ -49,7 +49,7 @@ export const LOBSTER_PET_ACT_DURATION_MS: Record<LobsterPetAct, number> = {
   sweep: 1800,
 };
 
-export const PERSONALITIES: Record<LobsterPetPersonalityId, ActProfile> = {
+const PERSONALITIES: Record<LobsterPetPersonalityId, ActProfile> = {
   sleepy: {
     delayMs: [6000, 12000],
     acts: [
@@ -95,7 +95,7 @@ export const PERSONALITIES: Record<LobsterPetPersonalityId, ActProfile> = {
 
 // Busy and offline override the personality: the pet is a status indicator
 // first. Busy scurries (no naps mid-run); offline paces and peeks.
-export const LOBSTER_PET_MODE_ACTS: Record<Exclude<LobsterPetMode, "idle">, ActProfile> = {
+const LOBSTER_PET_MODE_ACTS: Record<Exclude<LobsterPetMode, "idle">, ActProfile> = {
   busy: {
     delayMs: [2200, 4500],
     acts: [
@@ -225,7 +225,7 @@ export function detectLobsterMovingDay(version: string): boolean {
 }
 
 // Late-night visitors are always sleepy, whatever their daytime personality.
-export function isLobsterNightTime(now: Date = new Date()): boolean {
+function isLobsterNightTime(now: Date = new Date()): boolean {
   const hour = now.getHours();
   return hour >= 22 || hour < 6;
 }

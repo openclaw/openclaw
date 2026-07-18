@@ -675,10 +675,7 @@ class LobsterPet extends LitElement {
     const delay = lobsterLook.randomBetween(this.rng, profile.delayMs[0], profile.delayMs[1]);
     this.idleTimer = window.setTimeout(() => {
       this.idleTimer = null;
-      const nextProfile = plans.resolveLobsterActProfile(
-        this.mode,
-        this.look?.personality ?? null,
-      );
+      const nextProfile = plans.resolveLobsterActProfile(this.mode, this.look?.personality ?? null);
       // A crossing pauses the fidget loop: the pet is busy watching. The
       // passer-end timer restarts scheduling.
       if (!nextProfile || document.hidden || this.presence !== "in" || this.passer !== null) {
