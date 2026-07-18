@@ -3189,4 +3189,109 @@ describe("grouped chat rendering", () => {
     expect(sidebar.fullMessageRequest).toBeUndefined();
   });
 });
+
+import type { Server } from "node:http";
+import { createServer } from "node:http";
+import process from "node:process";
+import { beforeEach } from "vitest";
+import { resolveManagedOutgoingImageBlobUrl } from "./chat-message.js";
+
+function installRelativeFetchBridge(serverUrl: string): void {
+  const base = serverUrl.replace(/\/$/, "");
+  const realFetch = globalThis.fetch.bind(globalThis);
+  vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input.toString();
+    const absolute = url.startsWith("http") ? url : `${base}${url}`;
+    return realFetch(absolute, init);
+  });
+}
+
+describe("resolveManagedOutgoingImageBlobUrl fetch bounding", () => {
+  let server: Server;
+  let serverUrl: string;
+  let stall: boolean;
+
+  let onUnhandled: (reason: unknown) => void;
+
+  beforeEach(async () => {
+    stall = false;
+    onUnhandled = (reason: unknown) => {
+      if (reason instanceof Error && reason.name === "AbortError") return;
+      process.emit("uncaughtExceptionMonitor", reason as Error);
+    };
+    process.on("unhandledRejection", onUnhandled);
+    vi.spyOn(URL, "createObjectURL").mockImplementation(() => "blob:fake");
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    server = createServer((req, res) => {
+      if (stall) {
+        return;
+      }
+      res.writeHead(200, { "content-type": "image/png" });
+      res.end(Buffer.from("fake-image-bytes"));
+    });
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    const address = server.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+    serverUrl = `http://127.0.0.1:${port}`;
+    installRelativeFetchBridge(serverUrl);
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    process.off("unhandledRejection", onUnhandled);
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    server.close();
+  });
+
+  it("aborts a stalled image fetch after the bound instead of hanging", async () => {
+    stall = true;
+    const fetchUrl = `${serverUrl}/image/blob/abc123`;
+    const call = resolveManagedOutgoingImageBlobUrl(fetchUrl, {
+      authToken: "test-token",
+    });
+    await vi.advanceTimersByTimeAsync(30_000);
+    await expect(call).resolves.toBeNull();
+  });
+
+  it("still resolves a normal image fetch within timeout", async () => {
+    vi.useRealTimers();
+    const fetchUrl = `${serverUrl}/image/blob/abc123`;
+    const result = await resolveManagedOutgoingImageBlobUrl(fetchUrl, {
+      authToken: "test-token",
+    });
+    expect(result).toBe("blob:fake");
+    vi.useFakeTimers();
+  });
+
+  it("returns null for network errors", async () => {
+    vi.useRealTimers();
+    const fetchUrl = "http://127.0.0.1:1/invalid";
+    const result = await resolveManagedOutgoingImageBlobUrl(fetchUrl, {
+      authToken: "test-token",
+    });
+    expect(result).toBeNull();
+  });
+
+  it("returns null for unauthorized requests (401)", async () => {
+    const authServer = createServer((req, res) => {
+      res.writeHead(401, { "content-type": "text/plain" });
+      res.end("Unauthorized");
+    });
+    await new Promise<void>((resolve) => authServer.listen(0, resolve));
+    const address = authServer.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+    const authServerUrl = `http://127.0.0.1:${port}`;
+
+    vi.useRealTimers();
+    const fetchUrl = `${authServerUrl}/image/blob/abc123`;
+    const result = await resolveManagedOutgoingImageBlobUrl(fetchUrl, {
+      authToken: "test-token",
+    });
+    expect(result).toBeNull();
+    authServer.close();
+    vi.useFakeTimers();
+  });
+});
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

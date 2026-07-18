@@ -1524,7 +1524,7 @@ function buildManagedOutgoingImageFetchUrl(source: string, basePath?: string): s
   return `${normalizedBasePath}${source}`;
 }
 
-async function resolveManagedOutgoingImageBlobUrl(
+export async function resolveManagedOutgoingImageBlobUrl(
   source: string,
   opts?: ImageRenderOptions,
 ): Promise<string | null> {
@@ -1560,6 +1560,8 @@ async function resolveManagedOutgoingImageBlobUrl(
           credentials: "same-origin",
           signal: controller.signal,
         });
+      } catch {
+        return null;
       } finally {
         clearTimeout(timeout);
       }
