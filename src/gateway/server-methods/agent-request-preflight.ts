@@ -87,6 +87,20 @@ export function prepareAgentRequestPreflight(
     );
     return undefined;
   }
+  if (
+    request.disableTools &&
+    !normalizeOptionalString(params.client?.internal?.pluginRuntimeOwnerId)
+  ) {
+    params.respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "disableTools is reserved for plugin-owned subagent runs",
+      ),
+    );
+    return undefined;
+  }
   const allowModelOverride = resolveAllowModelOverrideFromClient(params.client);
   const canUseInternalRuntimeHandoff = resolveCanUseInternalRuntimeHandoff(params.client);
   const canUseCronRunContinuation = resolveCanUseCronRunContinuation(params.client);

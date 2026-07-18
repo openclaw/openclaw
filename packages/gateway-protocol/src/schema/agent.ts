@@ -326,6 +326,10 @@ export const AgentParamsSchema = closedObject({
     Type.Union([Type.Literal("automatic"), Type.Literal("message_tool_only")]),
   ),
   disableMessageTool: Type.Optional(Type.Boolean()),
+  // Plugin-owned subagent runs can skip tool construction for prose/narrative
+  // phases that never need tools (e.g. dreaming narrative subagents).
+  // Reserved for plugin callers — non-plugin callers receive INVALID_REQUEST.
+  disableTools: Type.Optional(Type.Boolean()),
   // Host-owned recovery turns can force every Code Mode exec onto the
   // restart-safe path even if the model omits or clears the tool argument.
   forceRestartSafeTools: Type.Optional(Type.Boolean()),
