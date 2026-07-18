@@ -12,7 +12,7 @@ export type FeishuMessageProcessingClaim = ChannelReplayClaimHandle;
 type FeishuMessageClaim =
   | { kind: "claimed"; handle: FeishuMessageProcessingClaim }
   | { kind: "duplicate" }
-  | { kind: "inflight" }
+  | { kind: "inflight"; pending: Promise<boolean> }
   | { kind: "invalid" };
 
 function dedupeKey(messageId: string | undefined | null): string {
@@ -48,9 +48,6 @@ export async function claimUnprocessedFeishuMessage(params: {
     params.messageId,
     dedupeOptions(params.namespace, params.log),
   );
-  if (claim.kind === "inflight") {
-    return { kind: "inflight" };
-  }
   return claim;
 }
 
