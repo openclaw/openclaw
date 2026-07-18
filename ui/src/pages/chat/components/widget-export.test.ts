@@ -1,12 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  exportWidget,
-  requestWidgetSnapshot,
-  sanitizeWidgetExportTitle,
-  validateWidgetSnapshotDataUrl,
-} from "./widget-export.ts";
+import { exportWidget } from "./widget-export.ts";
 
 const PNG_DATA_URL = "data:image/png;base64,aW1hZ2U=";
 
@@ -28,16 +23,21 @@ describe("widget export", () => {
   it("matches snapshot replies by frame source and request id", async () => {
     const frame = createWidgetFrame();
     const postMessage = vi.spyOn(frame.contentWindow!, "postMessage");
+    const download = vi.fn();
     let settled = false;
-    const snapshot = requestWidgetSnapshot(frame, { id: "snapshot-1", timeoutMs: 1_000 });
-    void snapshot.finally(() => {
+    const result = exportWidget("download", frame, "Current widget", {
+      download,
+      timeoutMs: 1_000,
+    });
+    void result.finally(() => {
       settled = true;
     });
 
     expect(postMessage).toHaveBeenCalledWith(
-      { type: "openclaw:widget-snapshot-request", id: "snapshot-1" },
+      expect.objectContaining({ type: "openclaw:widget-snapshot-request" }),
       "*",
     );
+    const request = postMessage.mock.calls[0]?.[0] as { id: string };
     window.dispatchEvent(
       new MessageEvent("message", {
         source: frame.contentWindow,
@@ -47,7 +47,7 @@ describe("widget export", () => {
     window.dispatchEvent(
       new MessageEvent("message", {
         source: window,
-        data: { type: "openclaw:widget-snapshot", id: "snapshot-1", dataUrl: PNG_DATA_URL },
+        data: { type: "openclaw:widget-snapshot", id: request.id, dataUrl: PNG_DATA_URL },
       }),
     );
     await Promise.resolve();
@@ -56,10 +56,11 @@ describe("widget export", () => {
     window.dispatchEvent(
       new MessageEvent("message", {
         source: frame.contentWindow,
-        data: { type: "openclaw:widget-snapshot", id: "snapshot-1", dataUrl: PNG_DATA_URL },
+        data: { type: "openclaw:widget-snapshot", id: request.id, dataUrl: PNG_DATA_URL },
       }),
     );
-    await expect(snapshot).resolves.toBe(PNG_DATA_URL);
+    await expect(result).resolves.toBe("png");
+    expect(download).toHaveBeenCalledWith(PNG_DATA_URL, "Current-widget.png");
   });
 
   it("selects the copy notice and HTML download fallbacks after a timeout", async () => {
@@ -119,18 +120,43 @@ describe("widget export", () => {
     expect(fetchDocument).not.toHaveBeenCalled();
   });
 
-  it("sanitizes widget titles and falls back to widget", () => {
-    expect(sanitizeWidgetExportTitle("  Quarterly / status: Q3?  ")).toBe("Quarterly-status-Q3");
-    expect(sanitizeWidgetExportTitle("... <> ")).toBe("widget");
-    expect(sanitizeWidgetExportTitle(undefined)).toBe("widget");
+  it("sanitizes PNG download filenames and falls back to widget", async () => {
+    const frame = createWidgetFrame();
+    const download = vi.fn();
+    await exportWidget("download", frame, "  Quarterly / status: Q3?  ", {
+      requestSnapshot: () => Promise.resolve(PNG_DATA_URL),
+      download,
+    });
+    await exportWidget("download", frame, "... <> ", {
+      requestSnapshot: () => Promise.resolve(PNG_DATA_URL),
+      download,
+    });
+    expect(download.mock.calls).toEqual([
+      [PNG_DATA_URL, "Quarterly-status-Q3.png"],
+      [PNG_DATA_URL, "widget.png"],
+    ]);
   });
 
-  it("accepts only bounded PNG data URLs", () => {
-    expect(validateWidgetSnapshotDataUrl(PNG_DATA_URL)).toBe(true);
-    expect(validateWidgetSnapshotDataUrl("data:image/jpeg;base64,aW1hZ2U=")).toBe(false);
-    expect(validateWidgetSnapshotDataUrl("https://example.com/widget.png")).toBe(false);
-    expect(
-      validateWidgetSnapshotDataUrl(`data:image/png;base64,${"A".repeat(32 * 1024 * 1024)}`),
-    ).toBe(false);
+  it("rejects non-PNG and oversized snapshot replies", async () => {
+    for (const dataUrl of [
+      "data:image/jpeg;base64,aW1hZ2U=",
+      "https://example.com/widget.png",
+      `data:image/png;base64,${"A".repeat(32 * 1024 * 1024)}`,
+    ]) {
+      const frame = createWidgetFrame();
+      const postMessage = vi.spyOn(frame.contentWindow!, "postMessage");
+      const result = exportWidget("download", frame, "Current widget");
+      expect(postMessage).toHaveBeenCalledOnce();
+      const request = postMessage.mock.calls[0]?.[0];
+      expect(request).toBeDefined();
+      const id = (request as { id: string }).id;
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          source: frame.contentWindow,
+          data: { type: "openclaw:widget-snapshot", id, dataUrl },
+        }),
+      );
+      await expect(result).rejects.toThrow("widget returned an invalid snapshot");
+    }
   });
 });

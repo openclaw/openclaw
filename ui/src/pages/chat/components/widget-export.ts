@@ -3,52 +3,18 @@ const WIDGET_SNAPSHOT_REPLY_TYPE = "openclaw:widget-snapshot";
 const WIDGET_SNAPSHOT_TIMEOUT_MS = 5_000;
 const WIDGET_SNAPSHOT_MAX_DATA_URL_CHARS = 32 * 1024 * 1024;
 
-export type WidgetExportAction = "copy" | "download";
-export type WidgetExportResult = "png" | "html" | "rerender-required";
-
-type WidgetSnapshotReply = {
-  type?: unknown;
-  id?: unknown;
-  dataUrl?: unknown;
-  error?: unknown;
-};
-
+type WidgetSnapshotReply = { type?: unknown; id?: unknown; dataUrl?: unknown; error?: unknown };
 type WidgetExportRuntime = {
   timeoutMs?: number;
   requestSnapshot?: typeof requestWidgetSnapshot;
-  copyImage?: typeof copyWidgetImage;
+  copyImage?: (dataUrl: Promise<string>) => Promise<void>;
   download?: typeof downloadHref;
   fetch?: typeof globalThis.fetch;
 };
 
 class WidgetSnapshotUnavailableError extends Error {}
 
-function createSnapshotRequestId(): string {
-  const values = crypto.getRandomValues(new Uint32Array(4));
-  return Array.from(values, (value) => value.toString(16).padStart(8, "0")).join("");
-}
-
-export function validateWidgetSnapshotDataUrl(dataUrl: unknown): dataUrl is string {
-  return (
-    typeof dataUrl === "string" &&
-    dataUrl.startsWith("data:image/png;base64,") &&
-    dataUrl.length <= WIDGET_SNAPSHOT_MAX_DATA_URL_CHARS
-  );
-}
-
-export function sanitizeWidgetExportTitle(title: string | undefined): string {
-  const sanitized = (title ?? "")
-    .trim()
-    .replace(/[<>:"/\\|?*\u0000-\u001f\u007f]+/g, "-")
-    .replace(/\s+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^[. -]+|[. -]+$/g, "")
-    .slice(0, 120)
-    .replace(/[. -]+$/g, "");
-  return sanitized || "widget";
-}
-
-export function requestWidgetSnapshot(
+function requestWidgetSnapshot(
   frame: HTMLIFrameElement,
   options: { id?: string; timeoutMs?: number } = {},
 ): Promise<string> {
@@ -56,16 +22,17 @@ export function requestWidgetSnapshot(
   if (!target) {
     return Promise.reject(new Error("widget frame is unavailable"));
   }
-  const id = options.id ?? createSnapshotRequestId();
+  const id =
+    options.id ??
+    Array.from(crypto.getRandomValues(new Uint32Array(4)), (value) =>
+      value.toString(16).padStart(8, "0"),
+    ).join("");
   const timeoutMs = options.timeoutMs ?? WIDGET_SNAPSHOT_TIMEOUT_MS;
 
   return new Promise((resolve, reject) => {
-    let timeout: ReturnType<typeof globalThis.setTimeout> | undefined;
     const cleanup = () => {
       window.removeEventListener("message", handleMessage);
-      if (timeout !== undefined) {
-        globalThis.clearTimeout(timeout);
-      }
+      globalThis.clearTimeout(timeout);
     };
     const fail = (error: Error) => {
       cleanup();
@@ -81,18 +48,20 @@ export function requestWidgetSnapshot(
       }
       if (typeof payload.error === "string") {
         fail(new Error(payload.error));
-        return;
-      }
-      if (!validateWidgetSnapshotDataUrl(payload.dataUrl)) {
+      } else if (
+        typeof payload.dataUrl !== "string" ||
+        !payload.dataUrl.startsWith("data:image/png;base64,") ||
+        payload.dataUrl.length > WIDGET_SNAPSHOT_MAX_DATA_URL_CHARS
+      ) {
         fail(new Error("widget returned an invalid snapshot"));
-        return;
+      } else {
+        cleanup();
+        resolve(payload.dataUrl);
       }
-      cleanup();
-      resolve(payload.dataUrl);
     };
 
     window.addEventListener("message", handleMessage);
-    timeout = globalThis.setTimeout(
+    const timeout = globalThis.setTimeout(
       () => fail(new WidgetSnapshotUnavailableError("widget snapshot request timed out")),
       timeoutMs,
     );
@@ -104,19 +73,6 @@ export function requestWidgetSnapshot(
   });
 }
 
-function copyWidgetImage(dataUrl: Promise<string>): Promise<void> {
-  const blob = dataUrl.then(async (value) => {
-    const response = await fetch(value);
-    return response.blob();
-  });
-  // If clipboard construction itself fails, it will not adopt the promised
-  // representation, so keep a rejection from surfacing as unhandled.
-  void blob.catch(() => {});
-  // Start the permission-gated write while the menu selection still carries
-  // transient user activation; ClipboardItem resolves the PNG afterward.
-  return navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
-}
-
 function downloadHref(href: string, filename: string): void {
   const link = document.createElement("a");
   link.href = href;
@@ -124,47 +80,41 @@ function downloadHref(href: string, filename: string): void {
   link.click();
 }
 
-async function downloadLegacyWidgetDocument(
-  frame: HTMLIFrameElement,
-  filename: string,
-  runtime: Pick<WidgetExportRuntime, "fetch" | "download">,
-): Promise<void> {
-  const src = frame.getAttribute("src");
-  if (!src) {
-    throw new Error("widget document URL is unavailable");
-  }
-  const url = new URL(src, window.location.href);
-  if (url.origin !== window.location.origin) {
-    throw new Error("widget document URL is not same-origin");
-  }
-  const fetchDocument = runtime.fetch ?? globalThis.fetch;
-  const response = await fetchDocument(url.href);
-  if (!response.ok) {
-    throw new Error(`widget document download failed (${response.status})`);
-  }
-  const objectUrl = URL.createObjectURL(await response.blob());
-  try {
-    (runtime.download ?? downloadHref)(objectUrl, `${filename}.html`);
-  } finally {
-    URL.revokeObjectURL(objectUrl);
-  }
-}
-
 export async function exportWidget(
-  action: WidgetExportAction,
+  action: "copy" | "download",
   frame: HTMLIFrameElement,
   title: string | undefined,
   runtime: WidgetExportRuntime = {},
-): Promise<WidgetExportResult> {
-  const filename = sanitizeWidgetExportTitle(title);
+): Promise<"png" | "html" | "rerender-required"> {
+  const filename =
+    Array.from((title ?? "").trim(), (character) => {
+      const codePoint = character.codePointAt(0) ?? 0;
+      return codePoint <= 0x1f || codePoint === 0x7f || '<>:"/\\|?*'.includes(character)
+        ? "-"
+        : character;
+    })
+      .join("")
+      .replace(/\s+/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^[. -]+|[. -]+$/g, "")
+      .slice(0, 120)
+      .replace(/[. -]+$/g, "") || "widget";
   const snapshot = (runtime.requestSnapshot ?? requestWidgetSnapshot)(
     frame,
     runtime.timeoutMs === undefined ? {} : { timeoutMs: runtime.timeoutMs },
   );
 
   if (action === "copy") {
+    const copyImage =
+      runtime.copyImage ??
+      ((dataUrl: Promise<string>) => {
+        const blob = dataUrl.then(async (value) => (await fetch(value)).blob());
+        void blob.catch(() => {});
+        // ClipboardItem keeps the click's transient activation while its PNG promise resolves.
+        return navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+      });
     try {
-      await (runtime.copyImage ?? copyWidgetImage)(snapshot);
+      await copyImage(snapshot);
       return "png";
     } catch (error) {
       const snapshotError = await snapshot.then(
@@ -186,7 +136,24 @@ export async function exportWidget(
     if (!(error instanceof WidgetSnapshotUnavailableError)) {
       throw error;
     }
-    await downloadLegacyWidgetDocument(frame, filename, runtime);
+    const src = frame.getAttribute("src");
+    if (!src) {
+      throw new Error("widget document URL is unavailable", { cause: error });
+    }
+    const url = new URL(src, window.location.href);
+    if (url.origin !== window.location.origin) {
+      throw new Error("widget document URL is not same-origin", { cause: error });
+    }
+    const response = await (runtime.fetch ?? globalThis.fetch)(url.href);
+    if (!response.ok) {
+      throw new Error(`widget document download failed (${response.status})`, { cause: error });
+    }
+    const objectUrl = URL.createObjectURL(await response.blob());
+    try {
+      (runtime.download ?? downloadHref)(objectUrl, `${filename}.html`);
+    } finally {
+      URL.revokeObjectURL(objectUrl);
+    }
     return "html";
   }
 }
