@@ -244,14 +244,18 @@ describe("channel setup wizard account scoping", () => {
       options: { secretInputMode: "plaintext" as const },
     });
 
+    const accountId = result.accountId;
+    if (!accountId) {
+      throw new Error("expected the wizard to resolve an account id");
+    }
     const channel = getChannelConfig(result.cfg);
     expect(channel).not.toHaveProperty("botId");
     expect(channel).not.toHaveProperty("secret");
-    expect(channel.accounts?.[result.accountId]).toEqual({
+    expect(channel.accounts?.[accountId]).toEqual({
       botId: "test-new-bot-id",
       secret: "mock-secret",
     });
-    expect(Object.keys(channel.accounts ?? {})).toEqual([result.accountId]);
+    expect(Object.keys(channel.accounts ?? {})).toEqual([accountId]);
   });
 
   it("replaces credentials only in the selected existing account after rejecting keep", async () => {
