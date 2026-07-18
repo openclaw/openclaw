@@ -219,13 +219,10 @@ function associateAssignmentFailureOwners(params: {
       owner.ownerKind === "account" && activeAuthOwnerIds.has(owner.ownerId)
         ? ("auth-store" as const)
         : ("config" as const);
-    if (validationFailures.length > 0 && source !== "auth-store") {
-      return [];
-    }
     const ownerKey = `${source}\0${owner.ownerKind}\0${owner.ownerId}`;
-    // Collected auth assignments are authoritative for the intended store. Retain the active
-    // fallback only when this preparation excluded that store and cannot supersede its owner.
-    if (ownerKeys.has(ownerKey) || (source === "auth-store" && collectedOwnerKeys.has(ownerKey))) {
+    // Current assignments are authoritative. Retain active co-owners only for runtime surfaces
+    // that strict assignment validation prevented this preparation from reaching.
+    if (ownerKeys.has(ownerKey) || collectedOwnerKeys.has(ownerKey)) {
       return [];
     }
     const refs = owner.refKeys.flatMap((refKey) => {

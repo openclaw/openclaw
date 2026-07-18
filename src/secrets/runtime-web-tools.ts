@@ -39,7 +39,6 @@ import {
   isRecord,
   resolveRuntimeWebProviderSurface,
   resolveRuntimeWebProviderSelection,
-  RuntimeWebProviderUnavailableError,
   type RuntimeWebProviderSelectionResult,
   type RuntimeWebSecretOwner,
   type RuntimeWebUnavailableProvider,
@@ -51,7 +50,7 @@ import type {
   RuntimeWebSearchMetadata,
   RuntimeWebToolsMetadata,
 } from "./runtime-web-tools.types.js";
-import { assertExpectedResolvedSecretValue } from "./secret-value.js";
+import { isExpectedResolvedSecretValue } from "./secret-value.js";
 
 const loadRuntimeWebToolsFallbackProviders = createLazyRuntimeSurface(
   () => import("./runtime-web-tools-fallback.runtime.js"),
@@ -123,11 +122,12 @@ function toWebSecretOwnerRefState(
 function associateWebProviderResolutionError(params: {
   kind: "search" | "fetch";
   config: OpenClawConfig;
-  error: RuntimeWebProviderUnavailableError;
+  error: unknown;
+  unavailableProviders: RuntimeWebUnavailableProvider[];
 }): void {
   associateSecretResolutionErrorOwners(
     params.error,
-    params.error.unavailableProviders.map((unavailable) => {
+    params.unavailableProviders.map((unavailable) => {
       const owner = createUnavailableWebProviderOwner({ kind: params.kind, unavailable });
       return {
         ...owner,
@@ -280,6 +280,8 @@ function readNonEmptyEnvValue(
 }
 
 async function resolveSecretInputWithEnvFallback(params: {
+  kind: "search" | "fetch";
+  providerId: string;
   sourceConfig: OpenClawConfig;
   context: ResolverContext;
   defaults: SecretDefaults | undefined;
@@ -335,11 +337,24 @@ async function resolveSecretInputWithEnvFallback(params: {
         manifestRegistry: params.context.manifestRegistry,
       });
       const resolvedValue = resolved.get(secretRefKey(ref));
-      assertExpectedResolvedSecretValue({
-        value: resolvedValue,
-        expected: "string",
-        errorMessage: `${params.path} resolved to a non-string or empty value.`,
-      });
+      if (!isExpectedResolvedSecretValue(resolvedValue, "string")) {
+        const error = new Error(`${params.path} resolved to a non-string or empty value.`);
+        associateWebProviderResolutionError({
+          kind: params.kind,
+          config: params.sourceConfig,
+          error,
+          unavailableProviders: [
+            {
+              providerId: params.providerId,
+              path: params.path,
+              ref,
+              refKey: secretRefKey(ref),
+              reason: "resolved secret value was invalid",
+            },
+          ],
+        });
+        throw error;
+      }
       resolvedFromRef = normalizeSecretInput(resolvedValue);
     } catch (error) {
       const reason = describeSecretResolutionError(error);
@@ -617,6 +632,8 @@ export async function resolveRuntimeWebTools(params: {
     const legacyXSearchSourceRecord = legacyXSearchSource as Record<string, unknown>;
     const legacyXSearchResolvedRecord = legacyXSearchResolved as Record<string, unknown>;
     const resolution = await resolveSecretInputWithEnvFallback({
+      kind: "search",
+      providerId: "grok",
       sourceConfig: params.sourceConfig,
       context: params.context,
       defaults,
@@ -735,6 +752,7 @@ export async function resolveRuntimeWebTools(params: {
           kind: "search",
           config: params.sourceConfig,
           error,
+          unavailableProviders: error.unavailableProviders,
         }),
       noFallbackCode: "WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK",
       autoDetectSelectedCode: "WEB_SEARCH_AUTODETECT_SELECTED",
@@ -750,8 +768,10 @@ export async function resolveRuntimeWebTools(params: {
           config,
           search: toolConfig,
         }),
-      resolveSecretInput: ({ value, path, envVars }) =>
+      resolveSecretInput: ({ providerId, value, path, envVars }) =>
         resolveSecretInputWithEnvFallback({
+          kind: "search",
+          providerId,
           sourceConfig: params.sourceConfig,
           context: params.context,
           defaults,
@@ -863,6 +883,7 @@ export async function resolveRuntimeWebTools(params: {
           kind: "fetch",
           config: params.sourceConfig,
           error,
+          unavailableProviders: error.unavailableProviders,
         }),
       noFallbackCode: "WEB_FETCH_PROVIDER_KEY_UNRESOLVED_NO_FALLBACK",
       autoDetectSelectedCode: "WEB_FETCH_AUTODETECT_SELECTED",
@@ -878,8 +899,10 @@ export async function resolveRuntimeWebTools(params: {
           config,
           fetch: toolConfig,
         }),
-      resolveSecretInput: ({ value, path, envVars }) =>
+      resolveSecretInput: ({ providerId, value, path, envVars }) =>
         resolveSecretInputWithEnvFallback({
+          kind: "fetch",
+          providerId,
           sourceConfig: params.sourceConfig,
           context: params.context,
           defaults,

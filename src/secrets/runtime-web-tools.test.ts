@@ -5,6 +5,7 @@ import type {
   PluginWebFetchProviderEntry,
   PluginWebSearchProviderEntry,
 } from "../plugins/types.js";
+import { listSecretResolutionErrorOwners } from "./runtime-degraded-state.js";
 
 type ProviderUnderTest = "brave" | "gemini" | "grok" | "kimi" | "perplexity" | "duckduckgo";
 
@@ -1615,6 +1616,45 @@ describe("runtime web tools resolution", () => {
     );
     expect(message).not.toContain(refId);
     expect(message).not.toContain("fixture-api-key");
+    expect(listSecretResolutionErrorOwners(error)).toEqual([
+      expect.objectContaining({
+        ownerKind: "capability",
+        ownerId: "web-fetch:firecrawl",
+        reason: "resolved secret value was invalid",
+        degradationState: "cold",
+        failureMatched: true,
+        source: "config",
+      }),
+    ]);
+  });
+
+  it("attributes an invalid legacy x_search value to the Grok capability", async () => {
+    const refId = "X_SEARCH_KEY_REF";
+    const resolveSpy = vi
+      .spyOn(secretResolve, "resolveSecretRefValues")
+      .mockResolvedValue(new Map([[`env:default:${refId}`, { value: "fixture-api-key" }]]));
+    restoreResolveSecretRefValuesSpy = () => resolveSpy.mockRestore();
+
+    const error = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            x_search: {
+              apiKey: { source: "env", provider: "default", id: refId },
+            },
+          },
+        },
+      }),
+    }).catch((caught: unknown) => caught);
+
+    expect(listSecretResolutionErrorOwners(error)).toEqual([
+      expect.objectContaining({
+        ownerKind: "capability",
+        ownerId: "web-search:grok",
+        reason: "resolved secret value was invalid",
+        failureMatched: true,
+      }),
+    ]);
   });
 
   it("preserves a denied-provider reason without exposing its ref", async () => {

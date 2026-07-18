@@ -396,6 +396,70 @@ describe("secrets runtime degraded-owner attribution", () => {
     );
   });
 
+  it("includes active web-tool co-owners when a shared resolved value is invalid", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const root = tempDirs.make("openclaw-invalid-web-co-owner-");
+    const secretsPath = path.join(root, "secrets.json");
+    await fs.writeFile(secretsPath, JSON.stringify({ shared: "dummy" }), "utf8");
+    await fs.chmod(secretsPath, 0o600);
+    const sharedRef = { source: "file" as const, provider: "shared", id: "/shared" };
+    const config = asConfig({
+      secrets: {
+        providers: {
+          shared: { source: "file", path: secretsPath, mode: "json" },
+        },
+      },
+      models: {
+        providers: {
+          example: {
+            apiKey: sharedRef,
+            baseUrl: "https://example.invalid/v1",
+            models: [],
+          },
+        },
+      },
+      tools: { web: { search: { provider: "gemini" } } },
+      plugins: {
+        entries: {
+          google: { config: { webSearch: { apiKey: sharedRef } } },
+        },
+      },
+    });
+    const active = await prepareSecretsRuntimeSnapshot({
+      config,
+      includeAuthStoreRefs: false,
+      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+    });
+    activateSecretsRuntimeSnapshotState({
+      snapshot: active,
+      refreshContext: null,
+      refreshHandler: null,
+    });
+    await fs.writeFile(secretsPath, JSON.stringify({ shared: { invalid: true } }), "utf8");
+
+    const error = await prepareSecretsRuntimeSnapshot({
+      config,
+      includeAuthStoreRefs: false,
+      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+    }).catch((failure: unknown) => failure);
+
+    expect(listSecretResolutionErrorOwners(error)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ ownerKind: "provider", ownerId: "example" }),
+        expect.objectContaining({
+          ownerKind: "capability",
+          ownerId: "web-search:gemini",
+          reason: "resolved secret value was invalid",
+          degradationState: "stale",
+          failureMatched: true,
+          source: "config",
+        }),
+      ]),
+    );
+  });
+
   it("keeps TTS SecretRefs that resolve to non-strings fail-closed", async () => {
     if (process.platform === "win32") {
       return;
