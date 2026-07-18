@@ -267,9 +267,67 @@ describe("discoverAuthStorage", () => {
 
     expect(credentials.openrouter).toBeUndefined();
     expect(credentials.anthropic).toBeUndefined();
-    expect(discoveryCredentials.openrouter?.type).toBe("api_key");
-    expect(discoveryCredentials.anthropic?.type).toBe("api_key");
+    // Read-only discovery must keep configured SecretRef markers, not drop the
+    // provider when resolveAuthProfileOrder runs in readinessMode "read-only".
+    expect(discoveryCredentials.openrouter).toEqual({
+      type: "api_key",
+      key: "openclaw-secret-ref-configured",
+    });
+    expect(discoveryCredentials.anthropic).toEqual({
+      type: "api_key",
+      key: "openclaw-secret-ref-configured",
+    });
     expect(discoveryCredentials.expired).toBeUndefined();
+  });
+
+  it("keeps keyRef-only profiles through ordered read-only discovery", () => {
+    // Regression for SecretRef-backed providers: ordering must not filter
+    // unresolved_ref profiles when discovery requests placeholders.
+    const store = {
+      version: 1 as const,
+      profiles: {
+        "openai:ref-only": {
+          type: "api_key" as const,
+          provider: "openai",
+          keyRef: { source: "env" as const, provider: "default", id: "OPENAI_API_KEY" },
+        },
+        "openai:literal-second": {
+          type: "api_key" as const,
+          provider: "openai",
+          key: "sk-literal-fallback",
+        },
+      },
+    };
+    const executionMap = resolveAgentCredentialMapFromStore(store, {
+      config: {
+        auth: {
+          order: {
+            openai: ["openai:ref-only", "openai:literal-second"],
+          },
+        },
+      } as never,
+    });
+    const readOnlyMap = resolveAgentCredentialMapFromStore(store, {
+      includeSecretRefPlaceholders: true,
+      config: {
+        auth: {
+          order: {
+            openai: ["openai:ref-only", "openai:literal-second"],
+          },
+        },
+      } as never,
+    });
+
+    // Execution mode cannot resolve the SecretRef, so it falls through.
+    expect(executionMap.openai).toEqual({
+      type: "api_key",
+      key: "sk-literal-fallback",
+    });
+    // Read-only discovery keeps the ordered keyRef profile as the configured marker.
+    expect(readOnlyMap.openai).toEqual({
+      type: "api_key",
+      key: "openclaw-secret-ref-configured",
+    });
   });
 
   it("marks keyRef-only auth profiles configured for read-only model discovery", async () => {
