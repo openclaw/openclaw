@@ -30,8 +30,8 @@ export type ServerUiPrefs = {
   chatSendShortcut?: ChatSendShortcut;
 };
 
-const THEMES: readonly ThemeName[] = ["claw", "knot", "dash", "custom"];
-const THEME_MODES: readonly ThemeMode[] = ["light", "dark", "system"];
+const THEMES: ReadonlySet<ThemeName> = new Set(["claw", "knot", "dash", "custom"]);
+const THEME_MODES: ReadonlySet<ThemeMode> = new Set(["light", "dark", "system"]);
 
 export function extractServerUiPrefs(configObject: unknown): ServerUiPrefs {
   const prefs = asRecord(asRecord(asRecord(configObject)?.ui)?.prefs);
@@ -39,10 +39,10 @@ export function extractServerUiPrefs(configObject: unknown): ServerUiPrefs {
     return {};
   }
   const result: ServerUiPrefs = {};
-  if (THEMES.includes(prefs.theme as ThemeName)) {
+  if (THEMES.has(prefs.theme as ThemeName)) {
     result.theme = prefs.theme as ThemeName;
   }
-  if (THEME_MODES.includes(prefs.themeMode as ThemeMode)) {
+  if (THEME_MODES.has(prefs.themeMode as ThemeMode)) {
     result.themeMode = prefs.themeMode as ThemeMode;
   }
   if (TEXT_SCALE_STOPS.includes(prefs.textScale as TextScaleStop)) {
@@ -136,27 +136,71 @@ export function changedServerUiPrefs(previous: UiSettings, next: UiSettings): Se
   return Object.keys(prefs).length > 0 ? prefs : null;
 }
 
-// Last server value this client reconciled against. Applying only on a server
-// *delta* keeps an unpushable local edit (viewer scope) from being reverted by
-// every later snapshot carrying the same old server value.
+// Last server value this client reconciled against, persisted per gateway
+// scope. Applying only on a server *delta* keeps an unpushable local edit
+// (viewer scope) from being reverted by every later snapshot — including the
+// first snapshot after a reload or reconnect — carrying the same old value.
+const LAST_SEEN_STORAGE_KEY = "openclaw.control.serverPrefs.v1";
+
+let lastSeenScope = "";
 let lastSeenServerPrefsKey: string | null = null;
+// Config hashes our patches replaced. A snapshot still carrying one of these
+// hashes was fetched before the patch landed; applying it would revert the
+// pushed value as if the server had changed it back. CAS guarantees the
+// replaced config had exactly the base hash, so this check is precise.
+const staleConfigHashes = new Set<string>();
+const STALE_CONFIG_HASH_LIMIT = 8;
 let applyingServerPrefs = false;
 
+function loadLastSeenKey(scope: string): string | null {
+  if (scope !== lastSeenScope) {
+    lastSeenScope = scope;
+    try {
+      lastSeenServerPrefsKey = globalThis.localStorage?.getItem(
+        `${LAST_SEEN_STORAGE_KEY}:${scope}`,
+      );
+    } catch {
+      lastSeenServerPrefsKey = null;
+    }
+  }
+  return lastSeenServerPrefsKey;
+}
+
+function storeLastSeenKey(scope: string, key: string) {
+  lastSeenScope = scope;
+  lastSeenServerPrefsKey = key;
+  try {
+    globalThis.localStorage?.setItem(`${LAST_SEEN_STORAGE_KEY}:${scope}`, key);
+  } catch {
+    // Quota/security failures degrade to in-memory tracking for this session.
+  }
+}
+
 export function resetServerUiPrefsSync() {
+  lastSeenScope = "";
   lastSeenServerPrefsKey = null;
+  staleConfigHashes.clear();
   applyingServerPrefs = false;
 }
 
 export function applyServerUiPrefs(
   configObject: unknown,
-  hooks: { onApplied: (patch: Partial<UiSettings>) => void },
+  hooks: {
+    scope?: string;
+    snapshotHash?: string;
+    onApplied: (patch: Partial<UiSettings>) => void;
+  },
 ): boolean {
-  const prefs = extractServerUiPrefs(configObject);
-  const key = JSON.stringify(prefs);
-  if (key === lastSeenServerPrefsKey) {
+  if (hooks.snapshotHash && staleConfigHashes.has(hooks.snapshotHash)) {
     return false;
   }
-  lastSeenServerPrefsKey = key;
+  const scope = hooks.scope ?? "";
+  const prefs = extractServerUiPrefs(configObject);
+  const key = JSON.stringify(prefs);
+  if (key === loadLastSeenKey(scope)) {
+    return false;
+  }
+  storeLastSeenKey(scope, key);
   const patch = serverPrefsLocalPatch(prefs, loadSettings());
   if (!patch) {
     return false;
@@ -175,13 +219,15 @@ export function isApplyingServerUiPrefs(): boolean {
   return applyingServerPrefs;
 }
 
-/**
- * Best-effort write-through of a local pref change to config ui.prefs.
- * Silent on failure by design: clients without operator.admin (or offline)
- * keep the change device-local. One retry absorbs a CAS hash race.
- */
-export function pushServerUiPrefs(client: GatewayBrowserClient, prefs: ServerUiPrefs): void {
-  void (async () => {
+// Pending deltas coalesce into one object and drain serially, so rapid
+// changes cannot race each other's CAS hash and silently drop an update.
+let queuedPrefs: ServerUiPrefs | null = null;
+let pushDraining = false;
+
+async function drainPrefsQueue(client: GatewayBrowserClient): Promise<void> {
+  while (queuedPrefs) {
+    const prefs = queuedPrefs;
+    queuedPrefs = null;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const snapshot = (await client.request("config.get", {})) as { hash?: string } | null;
       const baseHash = snapshot?.hash;
@@ -194,15 +240,14 @@ export function pushServerUiPrefs(client: GatewayBrowserClient, prefs: ServerUiP
           raw: JSON.stringify({ ui: { prefs } }),
           note: "control-ui prefs sync",
         });
-        // Fold the pushed partial into the last-seen server value so a stale
-        // snapshot (fetched before this patch) cannot revert the change.
-        const lastSeen = lastSeenServerPrefsKey
-          ? (JSON.parse(lastSeenServerPrefsKey) as ServerUiPrefs)
-          : {};
-        lastSeenServerPrefsKey = JSON.stringify(
-          extractServerUiPrefs({ ui: { prefs: { ...lastSeen, ...prefs } } }),
-        );
-        return;
+        staleConfigHashes.add(baseHash);
+        if (staleConfigHashes.size > STALE_CONFIG_HASH_LIMIT) {
+          const oldest = staleConfigHashes.values().next().value;
+          if (oldest !== undefined) {
+            staleConfigHashes.delete(oldest);
+          }
+        }
+        break;
       } catch (error) {
         if (attempt === 0 && String(error).toLowerCase().includes("hash")) {
           continue;
@@ -210,5 +255,23 @@ export function pushServerUiPrefs(client: GatewayBrowserClient, prefs: ServerUiP
         return;
       }
     }
-  })().catch(() => undefined);
+  }
+}
+
+/**
+ * Best-effort write-through of a local pref change to config ui.prefs.
+ * Silent on failure by design: clients without operator.admin (or offline)
+ * keep the change device-local.
+ */
+export function pushServerUiPrefs(client: GatewayBrowserClient, prefs: ServerUiPrefs): void {
+  queuedPrefs = { ...queuedPrefs, ...prefs };
+  if (pushDraining) {
+    return;
+  }
+  pushDraining = true;
+  void drainPrefsQueue(client)
+    .catch(() => undefined)
+    .finally(() => {
+      pushDraining = false;
+    });
 }

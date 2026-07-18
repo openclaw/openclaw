@@ -54,8 +54,10 @@ describe("system-agent config write parity", () => {
   });
 
   it("allows installed-plugin toggles but not install/load policy", () => {
+    // plugin-entry writes still get the active-route ownership check in
+    // assertConfigWriteDoesNotBypassInferenceVerification before applying.
     expect(classifyInferenceRouteConfigPath(["plugins", "entries", "memory-wiki", "enabled"])).toBe(
-      "allowed",
+      "plugin-entry",
     );
     expect(classifyInferenceRouteConfigPath(["plugins"])).toBe("blocked");
     expect(classifyInferenceRouteConfigPath(["plugins", "load"])).toBe("blocked");

@@ -70,6 +70,19 @@ describe("applyServerUiPrefs", () => {
     expect(loadSettings().themeMode).toBe("light");
   });
 
+  it("keeps an unpushed local edit across a sync reset (reload/reconnect)", () => {
+    const onApplied = vi.fn();
+    const config = configWithPrefs({ themeMode: "dark" });
+    applyServerUiPrefs(config, { scope: "ws://gw", onApplied });
+    patchSettings({ themeMode: "light" });
+
+    // The last-seen server value persists per gateway scope, so the same old
+    // server snapshot after a reload is not treated as a fresh change.
+    resetServerUiPrefsSync();
+    expect(applyServerUiPrefs(config, { scope: "ws://gw", onApplied })).toBe(false);
+    expect(loadSettings().themeMode).toBe("light");
+  });
+
   it("applies again when the server value actually changes", () => {
     const onApplied = vi.fn();
     applyServerUiPrefs(configWithPrefs({ themeMode: "dark" }), { onApplied });
@@ -96,7 +109,7 @@ describe("changedServerUiPrefs", () => {
 });
 
 describe("pushServerUiPrefs", () => {
-  it("patches config with the current hash and folds the push into last-seen", async () => {
+  it("patches config and marks the replaced hash so stale snapshots cannot revert", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "config.get") {
         return { hash: "hash-1" };
@@ -114,11 +127,53 @@ describe("pushServerUiPrefs", () => {
       });
     });
 
-    // A stale snapshot carrying the pre-push value must not revert the change.
+    // A snapshot still carrying the replaced hash predates the patch.
     const onApplied = vi.fn();
     patchSettings({ themeMode: "dark" });
-    expect(applyServerUiPrefs(configWithPrefs({ themeMode: "dark" }), { onApplied })).toBe(false);
+    expect(
+      applyServerUiPrefs(configWithPrefs({ themeMode: "light" }), {
+        snapshotHash: "hash-1",
+        onApplied,
+      }),
+    ).toBe(false);
     expect(onApplied).not.toHaveBeenCalled();
+    expect(loadSettings().themeMode).toBe("dark");
+
+    // A post-patch snapshot (any other hash) stays authoritative.
+    expect(
+      applyServerUiPrefs(configWithPrefs({ themeMode: "system" }), {
+        snapshotHash: "hash-2",
+        onApplied,
+      }),
+    ).toBe(true);
+    expect(loadSettings().themeMode).toBe("system");
+  });
+
+  it("coalesces rapid changes into serial patches instead of racing the hash", async () => {
+    let hash = 0;
+    const patched: unknown[] = [];
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "config.get") {
+        return { hash: `hash-${hash}` };
+      }
+      hash += 1;
+      patched.push((params as { raw: string }).raw);
+      return {};
+    });
+    const client = { request } as unknown as Parameters<typeof pushServerUiPrefs>[0];
+
+    pushServerUiPrefs(client, { themeMode: "dark" });
+    pushServerUiPrefs(client, { textScale: 125 });
+    pushServerUiPrefs(client, { themeMode: "light" });
+
+    await vi.waitFor(() => {
+      expect(request.mock.calls.filter(([method]) => method === "config.patch").length).toBe(2);
+    });
+    // The first patch carries the first delta; the rest coalesce into one.
+    expect(patched[0]).toBe(JSON.stringify({ ui: { prefs: { themeMode: "dark" } } }));
+    expect(patched[1]).toBe(
+      JSON.stringify({ ui: { prefs: { textScale: 125, themeMode: "light" } } }),
+    );
   });
 
   it("retries once on a hash conflict and gives up silently otherwise", async () => {

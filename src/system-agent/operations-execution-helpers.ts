@@ -326,7 +326,7 @@ export const SYSTEM_AGENT_CONFIG_WRITE_DENYLIST: Readonly<Record<string, string>
   secrets: "secret providers; edit openclaw.json in a trusted shell",
 };
 
-export type InferenceRoutePathVerdict = "allowed" | "blocked" | "agent-route";
+export type InferenceRoutePathVerdict = "allowed" | "blocked" | "agent-route" | "plugin-entry";
 
 export function classifyInferenceRouteConfigPath(
   path: readonly string[],
@@ -338,9 +338,10 @@ export function classifyInferenceRouteConfigPath(
   }
   // Plugin enable/disable/config of installed plugins is an operator toggle;
   // install sources and load policy keep their trust boundary in
-  // plugin_install (`plugins.entries.*` only).
+  // plugin_install (`plugins.entries.*` only). The caller still verifies the
+  // entry does not back the active inference route, mirroring plugin_uninstall.
   if (root === "plugins") {
-    return scope === "entries" && ownerOrField ? "allowed" : "blocked";
+    return scope === "entries" && ownerOrField ? "plugin-entry" : "blocked";
   }
   if (root !== "agents") {
     return "allowed";
@@ -409,6 +410,17 @@ export async function assertConfigWriteDoesNotBypassInferenceVerification(
   // session, and set_default_model live-tests the default route instead.
   if (verdict === "agent-route" && !(await isDefaultAgentListPath(segments))) {
     return;
+  }
+  // Same invariant as plugin_uninstall: a plugins.entries write may not touch
+  // the plugin backing the active default route (e.g. disabling it).
+  if (verdict === "plugin-entry") {
+    const pluginId = segments.filter((segment) => segment.trim())[2] ?? "";
+    if (!(await isPluginBackingDefaultInferenceRoute(pluginId))) {
+      return;
+    }
+    throw new Error(
+      `Direct config writes cannot change plugin "${pluginId}" because it may back OpenClaw's own active inference route. Exit OpenClaw and edit it from a terminal.`,
+    );
   }
   throw new Error(
     "Direct config writes cannot change the default inference route or include alternate config. Use `set_default_model` (optionally with agentId) for an already configured route, or exit OpenClaw and run `openclaw onboard` to change provider/auth access.",
@@ -656,7 +668,11 @@ export async function executeSetDefaultModel(
         },
       });
       ctx.runtime.log(`Updated ${result.path}`);
-      ctx.runtime.log(`Default model: ${persistedVerification.modelRef}`);
+      ctx.runtime.log(
+        targetAgentId
+          ? `Agent ${targetAgentId} model: ${persistedVerification.modelRef}`
+          : `Default model: ${persistedVerification.modelRef}`,
+      );
       return {
         summary: targetAgentId
           ? `Set agent ${targetAgentId} model to ${operation.model}`

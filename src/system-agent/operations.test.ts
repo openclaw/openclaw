@@ -829,6 +829,23 @@ describe("parseSystemAgentOperation", () => {
     expect(runConfigSet).toHaveBeenCalledOnce();
   });
 
+  it("fails closed on plugin-entry writes when route ownership cannot be proven", async () => {
+    // Same invariant as plugin_uninstall: without a readable config the entry
+    // cannot be proven off the active inference route.
+    mockConfig.missing("/tmp/openclaw.json");
+    const { runtime } = createSystemAgentTestRuntime();
+    const runConfigSet = vi.fn(async () => {});
+
+    await expect(
+      executeSystemAgentOperation(
+        { kind: "config-set", path: "plugins.entries.codex.enabled", value: "false" },
+        runtime,
+        { approved: true, deps: { runConfigSet } },
+      ),
+    ).rejects.toThrow("active inference route");
+    expect(runConfigSet).not.toHaveBeenCalled();
+  });
+
   it("still blocks per-agent routing writes that hit the default agent", async () => {
     const tempDir = opTempDirs.make("openclaw-default-agent-route-");
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);

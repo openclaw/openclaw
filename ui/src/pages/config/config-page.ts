@@ -347,6 +347,15 @@ export class ConfigPage extends OpenClawLightDomElement {
     const selection = this.routeData
       ? normalizeConfigSelection(this.pageId, this.routeData.section, null)
       : configSelectionFromSearch(this.pageId, globalThis.location?.search ?? "");
+    // Pre-restructure deep links like /config?section=env opened the General
+    // page's Advanced mode; those sections now live on the Advanced page.
+    if (this.pageId === "config" && selection.activeSection) {
+      this.context?.navigate("advanced", {
+        search: `?section=${encodeURIComponent(selection.activeSection)}`,
+        hash: globalThis.location?.hash ?? "",
+      });
+      return;
+    }
     this.selections = { ...this.selections, [this.pageId]: selection };
     const targetBlockId =
       this.routeData?.targetBlockId ?? configTargetIdFromHash(globalThis.location?.hash ?? "");

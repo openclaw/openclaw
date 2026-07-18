@@ -567,12 +567,14 @@ class OpenClawShell extends OpenClawLightDomElement {
    * lands (connect, settings pages, reloads).
    */
   private reconcileServerUiPrefs(runtimeConfig: ApplicationContext["runtimeConfig"]) {
-    const config = runtimeConfig.state.configSnapshot?.config;
+    const snapshot = runtimeConfig.state.configSnapshot;
     const context = this.context;
-    if (!config || !context) {
+    if (!snapshot?.config || !context) {
       return;
     }
-    applyServerUiPrefs(config, {
+    applyServerUiPrefs(snapshot.config, {
+      scope: context.gateway.connection.gatewayUrl,
+      snapshotHash: snapshot.hash ?? undefined,
       onApplied: (patch) => {
         if (isSupportedLocale(patch.locale)) {
           void i18n.setLocale(patch.locale);
