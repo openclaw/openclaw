@@ -244,6 +244,38 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  // Regression: the .strict() compaction schema rejected `enabled` even
+  // though the settings manager (settings-manager.ts:667) reads it to
+  // control auto-compaction on/off. Users trying `compaction.enabled: false`
+  // got their entire config rejected as invalid.
+  it("accepts agents.defaults.compaction.enabled", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          compaction: {
+            enabled: false,
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("still rejects unknown compaction fields to maintain strictness", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          compaction: {
+            nonexistentField: true,
+          },
+        },
+      },
+    } as unknown as Record<string, unknown>);
+
+    expect(res.ok).toBe(false);
+  });
+
   it("accepts Matrix queue byChannel overrides", () => {
     const res = validateConfigObject({
       messages: {

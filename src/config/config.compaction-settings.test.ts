@@ -94,4 +94,22 @@ describe("config compaction settings", () => {
 
     expect(compaction?.qualityGuard?.maxRetries).toBe(99);
   });
+
+  it("accepts compaction.enabled toggle", () => {
+    // Regression: the config schema rejected compaction.enabled because
+    // the .strict() Zod object omitted it, even though the runtime reads
+    // it (settings-manager.ts:667). Users trying to disable auto-compaction
+    // got "Invalid config" for a field the code was written to accept.
+    const compaction = materializeCompactionConfig({
+      enabled: false,
+    });
+    expect(compaction?.enabled).toBe(false);
+  });
+
+  it("defaults compaction.enabled to undefined when absent", () => {
+    // Absent compaction entirely must not fail config validation, and
+    // the runtime's `?? true` default path correctly enables compaction.
+    const compaction = materializeCompactionConfig({});
+    expect(compaction?.enabled).toBeUndefined();
+  });
 });
