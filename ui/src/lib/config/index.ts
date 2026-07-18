@@ -1,5 +1,4 @@
 // Control UI runtime config capability and shared config-domain mutations.
-import JSON5 from "json5";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSchemaResponse, ConfigSnapshot, ConfigUiHints } from "../../api/types.ts";
 import { schemaType, type JsonSchema } from "../../components/config-form.shared.ts";
@@ -12,6 +11,7 @@ import {
   serializeConfigForm,
   setPathValue,
 } from "../config-form-utils.ts";
+import { parseJson5Text, warmJson5 } from "../json5-runtime.ts";
 import { createAppliedConfigRefreshController } from "./applied-refresh.ts";
 
 export type ConfigAutoSaveStatus = "idle" | "saving" | "saved" | "error" | "conflict";
@@ -44,6 +44,7 @@ type ConfigState = {
   configLoading: boolean;
   configRaw: string;
   configRawOriginal: string;
+  configRawOriginalParsed: Record<string, unknown> | null;
   configValid: boolean | null;
   configIssues: unknown[];
   configSaving: boolean;
@@ -150,6 +151,7 @@ function createInitialConfigState(snapshot?: Partial<RuntimeConfigGatewaySnapsho
     configLoading: false,
     configRaw: "{\n}\n",
     configRawOriginal: "",
+    configRawOriginalParsed: null,
     configValid: null,
     configIssues: [],
     configSaving: false,
@@ -347,7 +349,7 @@ function applyConfigSnapshot(
   if (!preservePendingChanges) {
     state.configForm = cloneConfigObject(editableConfig ?? {});
     state.configFormOriginal = cloneConfigObject(editableConfig ?? {});
-    state.configRawOriginal = rawFromSnapshot;
+    setConfigRawOriginal(state, rawFromSnapshot);
     state.configFormDirty = false;
     state.configFormMode = "form";
     state.configDraftBaseHash = snapshot.hash ?? null;
@@ -529,7 +531,7 @@ function serializeFormForSubmit(state: ConfigState): string {
   const sanitized = sanitizeRedactedFormForSubmit(
     form,
     state.configFormOriginal,
-    state.configRawOriginal,
+    state.configRawOriginalParsed,
   );
   return serializeConfigForm(sanitized);
 }
@@ -558,7 +560,7 @@ function adoptConfigSetAck(state: ConfigState, submittedRaw: string, ackHash: st
   };
   state.configValid = true;
   state.configIssues = [];
-  state.configRawOriginal = submittedRaw;
+  setConfigRawOriginal(state, submittedRaw);
   if (parsed) {
     state.configFormOriginal = cloneConfigObject(parsed);
   }
@@ -869,13 +871,35 @@ async function lookupConfigSchemaPath(
 
 function parseConfigRawDraft(raw: string): Record<string, unknown> | null {
   try {
-    const parsed = JSON5.parse(raw) as unknown;
+    const parsed = parseJson5Text(raw);
     return parsed && typeof parsed === "object" && !Array.isArray(parsed)
       ? (parsed as Record<string, unknown>)
       : null;
   } catch {
     return null;
   }
+}
+
+// Parse the authoritative raw once at ingestion so submit-time sanitizing
+// stays synchronous and never races the lazy JSON5 parser.
+function setConfigRawOriginal(state: ConfigState, raw: string) {
+  state.configRawOriginal = raw;
+  try {
+    state.configRawOriginalParsed = asConfigRecord(JSON.parse(raw));
+    return;
+  } catch {
+    state.configRawOriginalParsed = null;
+  }
+  void warmJson5().then((json5) => {
+    if (state.configRawOriginal !== raw) {
+      return;
+    }
+    try {
+      state.configRawOriginalParsed = asConfigRecord(json5.parse(raw));
+    } catch {
+      state.configRawOriginalParsed = null;
+    }
+  });
 }
 
 function mutateConfigForm(state: ConfigState, mutate: (draft: Record<string, unknown>) => void) {
@@ -986,6 +1010,9 @@ function updateConfigFormValue(state: ConfigState, path: Array<string | number>,
 }
 
 function updateConfigRawValue(state: ConfigState, value: string) {
+  // Raw drafts may carry JSON5 comments; warm the parser before any
+  // mutateConfigForm/diff path needs it synchronously.
+  void warmJson5();
   state.configRaw = value;
   // A raw-text edit becomes the authoritative draft; without this,
   // serializeFormForSubmit would submit the stale form and drop raw edits.

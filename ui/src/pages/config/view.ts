@@ -1,6 +1,5 @@
 // Control UI view renders config screen content.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import JSON5 from "json5";
 import { html, nothing } from "lit";
 import type { QueueMode } from "../../../../src/auto-reply/reply/queue/types.js";
 import type { ConfigUiHints } from "../../api/types.ts";
@@ -25,12 +24,12 @@ import {
   schemaType,
   type JsonSchema,
 } from "../../components/config-form.shared.ts";
-import "../../components/tooltip.ts";
 import {
   analyzeConfigSchema,
   renderConfigForm,
   type ConfigSchemaAnalysis,
 } from "../../components/config-form.ts";
+import "../../components/tooltip.ts";
 import { icons } from "../../components/icons.ts";
 import { getLobsterdex, getLobsterdexEntries } from "../../components/lobster-dex.ts";
 import {
@@ -47,12 +46,17 @@ import {
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import type { ConfigAutoSaveStatus } from "../../lib/config/index.ts";
+import { parseJson5Text, warmJson5 } from "../../lib/json5-runtime.ts";
 import type { RealtimeTalkInputDevice } from "../chat/realtime-talk-input.ts";
 import { renderSettingsSelectRow } from "./settings-select-row.ts";
 import {
   APPEARANCE_SETTINGS_TARGET_IDS,
   COMMUNICATION_SETTINGS_TARGET_IDS,
 } from "./settings-targets.ts";
+
+// The config editor is where JSON5 text first appears; warm the parser with
+// the page instead of racing the first raw-draft keystroke.
+void warmJson5();
 
 const TEXT_SCALE_LABELS: Record<TextScaleStop, string> = {
   90: "configView.textSizes.small",
@@ -746,8 +750,8 @@ function computeRawDiff(
     return viewState.rawDiffCache.diff;
   }
   try {
-    const originalValue = JSON5.parse(original) as unknown;
-    const currentValue = JSON5.parse(current) as unknown;
+    const originalValue = parseJson5Text(original);
+    const currentValue = parseJson5Text(current);
     if (
       !originalValue ||
       !currentValue ||
