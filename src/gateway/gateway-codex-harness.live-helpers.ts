@@ -181,7 +181,10 @@ export function requireSuccessfulNativeCommandExecution(
       data.isError === false &&
       result !== null &&
       typeof result === "object" &&
-      (result as { exitCode?: unknown }).exitCode === 0
+      // App-server commandExecution.exitCode is optional. Completed + !isError is
+      // authoritative when Codex cannot supply it; a present nonzero code still fails.
+      ((result as { exitCode?: unknown }).exitCode === undefined ||
+        (result as { exitCode?: unknown }).exitCode === 0)
     );
   });
   if (resultIndex < 0) {

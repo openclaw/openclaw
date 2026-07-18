@@ -136,6 +136,38 @@ describe("gateway codex harness live helpers", () => {
     ).toThrow("missing native bash command start for marker OPENCLAW-LARGE-OUTPUT-ABC");
   });
 
+  it("accepts a completed native command when Codex omits its optional exit code", () => {
+    const expectedCommand = "node -e OPENCLAW-NO-EXIT-CODE";
+    const events = [
+      {
+        stream: "tool",
+        data: {
+          phase: "start",
+          name: "bash",
+          itemId: "item-no-exit-code",
+          args: { command: expectedCommand },
+        },
+      },
+      {
+        stream: "tool",
+        data: {
+          phase: "result",
+          itemId: "item-no-exit-code",
+          status: "completed",
+          isError: false,
+          result: { status: "completed" },
+        },
+      },
+    ];
+
+    expect(
+      requireSuccessfulNativeCommandExecution(events, {
+        commandMarker: "OPENCLAW-NO-EXIT-CODE",
+        expectedCommand,
+      }),
+    ).toEqual({ itemId: "item-no-exit-code", resultIndex: 1, startIndex: 0 });
+  });
+
   it("reports a missing native command start explicitly", () => {
     expect(() =>
       requireSuccessfulNativeCommandExecution([], {
