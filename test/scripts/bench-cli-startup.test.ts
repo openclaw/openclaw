@@ -33,6 +33,45 @@ async function waitForFile(filePath: string, timeoutMs: number): Promise<void> {
   }
 }
 
+async function waitForChildExit(
+  child: ReturnType<typeof spawn>,
+  timeoutMs: number,
+): Promise<boolean> {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return true;
+  }
+  return await new Promise<boolean>((resolveWait) => {
+    const onClose = () => {
+      clearTimeout(timeout);
+      resolveWait(true);
+    };
+    const timeout = setTimeout(() => {
+      child.off("close", onClose);
+      resolveWait(false);
+    }, timeoutMs);
+    child.once("close", onClose);
+    if (child.exitCode !== null || child.signalCode !== null) {
+      child.off("close", onClose);
+      clearTimeout(timeout);
+      resolveWait(true);
+    }
+  });
+}
+
+async function stopChild(child: ReturnType<typeof spawn>): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return;
+  }
+  child.kill("SIGTERM");
+  if (await waitForChildExit(child, 1_000)) {
+    return;
+  }
+  child.kill("SIGKILL");
+  if (!(await waitForChildExit(child, 1_000))) {
+    child.unref();
+  }
+}
+
 describe("bench-cli-startup", () => {
   it("rejects unknown CLI options before running benchmarks", () => {
     expect(() => testing.validateCliArgs(["--wat"])).toThrow("Unknown argument: --wat");
@@ -199,6 +238,7 @@ describe("bench-cli-startup", () => {
       const descendantPidPath = join(tmpDir, "descendant.pid");
       let samplePid: number | undefined;
       let descendantPid: number | undefined;
+      let driver: ReturnType<typeof spawn> | undefined;
       try {
         writeFileSync(
           entryPath,
@@ -218,7 +258,7 @@ describe("bench-cli-startup", () => {
           "utf8",
         );
 
-        const driver = spawn(
+        const runningDriver = spawn(
           process.execPath,
           [
             "--import",
@@ -246,15 +286,16 @@ describe("bench-cli-startup", () => {
             stdio: "ignore",
           },
         );
+        driver = runningDriver;
 
         await waitForFile(descendantPidPath, 5_000);
         samplePid = Number(readFileSync(samplePidPath, "utf8"));
         descendantPid = Number(readFileSync(descendantPidPath, "utf8"));
-        driver.kill("SIGTERM");
+        runningDriver.kill("SIGTERM");
         const result = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
           (resolveResult, rejectResult) => {
-            driver.once("error", rejectResult);
-            driver.once("close", (code, signal) => resolveResult({ code, signal }));
+            runningDriver.once("error", rejectResult);
+            runningDriver.once("close", (code, signal) => resolveResult({ code, signal }));
           },
         );
 
@@ -262,6 +303,15 @@ describe("bench-cli-startup", () => {
         expect(isProcessAlive(samplePid)).toBe(false);
         expect(isProcessAlive(descendantPid)).toBe(false);
       } finally {
+        if (driver) {
+          await stopChild(driver);
+        }
+        if (samplePid === undefined && existsSync(samplePidPath)) {
+          samplePid = Number(readFileSync(samplePidPath, "utf8"));
+        }
+        if (descendantPid === undefined && existsSync(descendantPidPath)) {
+          descendantPid = Number(readFileSync(descendantPidPath, "utf8"));
+        }
         if (samplePid !== undefined && isProcessAlive(samplePid)) {
           process.kill(-samplePid, "SIGKILL");
         } else if (descendantPid !== undefined && isProcessAlive(descendantPid)) {

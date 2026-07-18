@@ -9,6 +9,8 @@ const CLI_STARTUP_BENCH_FIXTURE_PATH = "test/fixtures/cli-startup-bench.json";
 const DEFAULT_BENCHMARK_TIMEOUT_KILL_GRACE_MS = 1_000;
 const DEFAULT_BENCHMARK_PROCESS_CLEANUP_GRACE_MS = 5_000;
 const FORWARDED_SIGNALS = ["SIGHUP", "SIGINT", "SIGTERM"];
+const ACTIVE_SAMPLE_MESSAGE_KIND = "openclaw-cli-startup-bench-active-sample";
+const CLEARED_SAMPLE_MESSAGE_KIND = "openclaw-cli-startup-bench-cleared-sample";
 // A timed-out sample can spend one grace before SIGKILL and another reaping its process group.
 // Keep these preset counts aligned with COMMAND_CASES or a valid fixture run can be cut short.
 const BENCHMARK_TIMEOUT_CLEANUP_WINDOWS = 2;
@@ -59,7 +61,7 @@ async function runBenchmarkDriver(args, opts) {
   );
   const child = spawn(process.execPath, args, {
     cwd: process.cwd(),
-    stdio: "inherit",
+    stdio: ["inherit", "inherit", "inherit", "ipc"],
     env: process.env,
     detached: process.platform !== "win32",
   });
@@ -69,8 +71,41 @@ async function runBenchmarkDriver(args, opts) {
     let timedOut = false;
     let receivedSignal;
     let forceKillTimer;
+    let forceKillSettleTimer;
+    let activeSamplePid;
     const signalHandlers = new Map();
-    const finish = (status, signal) => {
+    const onMessage = (message) => {
+      if (
+        message?.kind === ACTIVE_SAMPLE_MESSAGE_KIND &&
+        Number.isSafeInteger(message.pid) &&
+        message.pid > 1
+      ) {
+        activeSamplePid = message.pid;
+      } else if (message?.kind === CLEARED_SAMPLE_MESSAGE_KIND && message.pid === activeSamplePid) {
+        activeSamplePid = undefined;
+      }
+    };
+    const terminateActiveSample = () => {
+      if (!activeSamplePid) {
+        return;
+      }
+      const pid = activeSamplePid;
+      activeSamplePid = undefined;
+      terminateManagedChild(
+        {
+          pid,
+          kill: (signal) => {
+            try {
+              return process.kill(pid, signal);
+            } catch {
+              return false;
+            }
+          },
+        },
+        "SIGKILL",
+      );
+    };
+    const finish = (status, signal, abandonChild = false) => {
       if (settled) {
         return;
       }
@@ -79,19 +114,48 @@ async function runBenchmarkDriver(args, opts) {
       if (forceKillTimer) {
         clearTimeout(forceKillTimer);
       }
+      if (forceKillSettleTimer) {
+        clearTimeout(forceKillSettleTimer);
+      }
       for (const [forwardedSignal, handler] of signalHandlers) {
         process.off(forwardedSignal, handler);
       }
+      child.off("error", onError);
+      child.off("close", onClose);
+      child.off("message", onMessage);
+      if (abandonChild) {
+        try {
+          if (child.connected) {
+            child.disconnect();
+          }
+        } catch {
+          // The child may close its IPC channel while the settle deadline fires.
+        }
+        child.unref();
+      }
       resolve({ receivedSignal, signal, status, timedOut });
+    };
+    const forceKillDriver = () => {
+      terminateActiveSample();
+      terminateManagedChild(child, "SIGKILL");
+      forceKillSettleTimer ??= setTimeout(() => {
+        // Signal delivery does not prove process exit. Drop the final parent
+        // references so even an uninterruptible child cannot hang this updater.
+        terminateActiveSample();
+        finish(null, null, true);
+      }, terminationGraceMs);
     };
     const terminateDriver = (signal) => {
       terminateManagedChild(child, signal);
       if (forceKillTimer) {
-        terminateManagedChild(child, "SIGKILL");
+        clearTimeout(forceKillTimer);
+        forceKillTimer = undefined;
+        forceKillDriver();
         return;
       }
       forceKillTimer = setTimeout(() => {
-        terminateManagedChild(child, "SIGKILL");
+        forceKillTimer = undefined;
+        forceKillDriver();
       }, terminationGraceMs);
     };
     for (const signal of FORWARDED_SIGNALS) {
@@ -109,8 +173,16 @@ async function runBenchmarkDriver(args, opts) {
       terminateDriver("SIGTERM");
     }, timeoutMs);
 
-    child.once("error", () => finish(null, null));
-    child.once("close", (status, signal) => finish(status, signal));
+    const onError = () => finish(null, null);
+    const onClose = (status, signal) => {
+      if (timedOut || receivedSignal) {
+        terminateActiveSample();
+      }
+      finish(status, signal);
+    };
+    child.once("error", onError);
+    child.once("close", onClose);
+    child.on("message", onMessage);
   });
 }
 

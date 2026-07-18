@@ -111,10 +111,23 @@ const DEFAULT_TIMEOUT_KILL_GRACE_MS = 1_000;
 const TIMEOUT_KILL_GRACE_MS = resolveTimeoutKillGraceMs(process.env);
 const PROCESS_GROUP_EXIT_POLL_MS = 25;
 const TERMINATION_SIGNALS = ["SIGHUP", "SIGINT", "SIGTERM"] as const;
+const ACTIVE_SAMPLE_MESSAGE_KIND = "openclaw-cli-startup-bench-active-sample";
+const CLEARED_SAMPLE_MESSAGE_KIND = "openclaw-cli-startup-bench-cleared-sample";
 const DEFAULT_ENTRY = "openclaw.mjs";
 const MAX_RSS_MARKER = "__OPENCLAW_MAX_RSS_KB__=";
 let activeSampleProcess: ReturnType<typeof spawn> | undefined;
 let requestedTerminationSignal: NodeJS.Signals | undefined;
+
+function notifySampleProcess(kind: string, pid: number | undefined): void {
+  if (!pid || typeof process.send !== "function") {
+    return;
+  }
+  try {
+    process.send({ kind, pid }, () => {});
+  } catch {
+    // The updater may close its IPC channel while force-terminating this driver.
+  }
+}
 
 class BenchmarkTerminationError extends Error {
   constructor(readonly signal: NodeJS.Signals) {
@@ -805,6 +818,7 @@ async function runSample(params: {
         stdio: ["ignore", "pipe", "pipe"],
       });
       activeSampleProcess = proc;
+      notifySampleProcess(ACTIVE_SAMPLE_MESSAGE_KIND, proc.pid);
 
       const finish = (sample: Omit<Sample, "ms" | "firstOutputMs" | "maxRssMb">) => {
         if (settled) {
@@ -818,6 +832,7 @@ async function runSample(params: {
         if (activeSampleProcess === proc) {
           activeSampleProcess = undefined;
         }
+        notifySampleProcess(CLEARED_SAMPLE_MESSAGE_KIND, proc.pid);
         const ms = Number(process.hrtime.bigint() - started) / 1e6;
         resolve({
           ms,

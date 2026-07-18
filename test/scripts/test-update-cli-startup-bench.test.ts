@@ -25,6 +25,8 @@ vi.mock("../../scripts/lib/managed-child-process.mjs", () => ({
 
 const UPDATE_SCRIPT_PATH = path.resolve(process.cwd(), "scripts/test-update-cli-startup-bench.mjs");
 const originalArgv = [...process.argv];
+const originalExitCode = process.exitCode;
+const originalVitest = process.env.VITEST;
 const originalTimeoutCleanupGrace = process.env.OPENCLAW_TEST_CLI_STARTUP_TIMEOUT_KILL_GRACE_MS;
 const originalProcessCleanupGrace =
   process.env.OPENCLAW_TEST_CLI_STARTUP_BENCH_PROCESS_CLEANUP_GRACE_MS;
@@ -43,6 +45,12 @@ function countBenchmarkCases(preset: "startup" | "real" | "all"): number {
 
 afterEach(() => {
   process.argv = [...originalArgv];
+  process.exitCode = originalExitCode;
+  if (originalVitest === undefined) {
+    delete process.env.VITEST;
+  } else {
+    process.env.VITEST = originalVitest;
+  }
   if (originalTimeoutCleanupGrace === undefined) {
     delete process.env.OPENCLAW_TEST_CLI_STARTUP_TIMEOUT_KILL_GRACE_MS;
   } else {
@@ -102,11 +110,72 @@ describe("test-update-cli-startup-bench", () => {
         const internalBudgetMs = countBenchmarkCases(preset) * (2 + 1) * (100 + 2 * 1_000);
         expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), internalBudgetMs + 5_000);
         expect(options?.detached).toBe(process.platform !== "win32");
+        expect(options?.stdio).toEqual(["inherit", "inherit", "inherit", "ipc"]);
         expect(args.at(-1)).not.toBe(outputPath);
         expect(path.dirname(args.at(-1) ?? "")).toBe(path.dirname(outputPath));
         expect(readFileSync(outputPath, "utf8")).toBe("{}\n");
         vi.resetModules();
       }
+    } finally {
+      rmSync(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("settles after force kill even when the driver never emits close", async () => {
+    process.env.VITEST = "true";
+    process.env.OPENCLAW_TEST_CLI_STARTUP_TIMEOUT_KILL_GRACE_MS = "0";
+    process.env.OPENCLAW_TEST_CLI_STARTUP_BENCH_PROCESS_CLEANUP_GRACE_MS = "10";
+    const fixtureRoot = mkdtempSync(path.join(process.cwd(), ".tmp-cli-startup-no-close-"));
+    const outputPath = path.join(fixtureRoot, "cli-startup-bench.json");
+    const child = Object.assign(new EventEmitter(), {
+      connected: true,
+      disconnect: vi.fn(),
+      pid: 123_456,
+      kill: vi.fn(),
+      unref: vi.fn(),
+    });
+    child.disconnect.mockImplementation(() => {
+      child.connected = false;
+    });
+    spawnMock.mockImplementation(() => {
+      queueMicrotask(() => {
+        child.emit("message", {
+          kind: "openclaw-cli-startup-bench-active-sample",
+          pid: 654_321,
+        });
+      });
+      return child;
+    });
+    process.argv = [
+      process.execPath,
+      UPDATE_SCRIPT_PATH,
+      "--out",
+      outputPath,
+      "--preset",
+      "startup",
+      "--runs",
+      "1",
+      "--warmup",
+      "0",
+      "--timeout-ms",
+      "1",
+    ];
+
+    try {
+      const startedAt = Date.now();
+      await import(pathToFileURL(UPDATE_SCRIPT_PATH).href);
+
+      expect(Date.now() - startedAt).toBeLessThan(1_000);
+      expect(process.exitCode).toBe(1);
+      expect(terminateManagedChildMock).toHaveBeenCalledWith(child, "SIGTERM");
+      expect(terminateManagedChildMock).toHaveBeenCalledWith(child, "SIGKILL");
+      expect(terminateManagedChildMock).toHaveBeenCalledWith(
+        expect.objectContaining({ pid: 654_321 }),
+        "SIGKILL",
+      );
+      expect(child.disconnect).toHaveBeenCalledOnce();
+      expect(child.unref).toHaveBeenCalledOnce();
+      expect(existsSync(outputPath)).toBe(false);
     } finally {
       rmSync(fixtureRoot, { recursive: true, force: true });
     }
