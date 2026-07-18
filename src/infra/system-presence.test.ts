@@ -1,7 +1,61 @@
 // Covers in-memory system presence merging and expiry behavior.
+import os from "node:os";
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+const spawnSyncMock = vi.hoisted(() => {
+  const fn = vi.fn();
+  // Safe default so the module-level initSelfPresence() probe at import time
+  // (which runs a real sysctl/sw_vers on darwin) never produces an undefined
+  // stdout that would break normalizeOptionalString.
+  fn.mockReturnValue({
+    stdout: "",
+    stderr: "",
+    pid: 1,
+    output: [],
+    status: 0,
+    signal: null,
+  });
+  return fn;
+});
+
+vi.mock("node:child_process", async () => {
+  const { mockNodeChildProcessSpawnSync } = await import("openclaw/plugin-sdk/test-node-mocks");
+  return mockNodeChildProcessSpawnSync(spawnSyncMock, () =>
+    vi.importActual<typeof import("node:child_process")>("node:child_process"),
+  );
+});
+
 import { listSystemPresence, updateSystemPresence, upsertPresence } from "./system-presence.js";
+
+describe("system-presence macOS probe bounds", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("passes a timeout to the sysctl and sw_vers presence probes", () => {
+    vi.spyOn(os, "platform").mockReturnValue("darwin");
+    spawnSyncMock.mockReturnValue({
+      stdout: "MacBookPro18,1\n",
+      stderr: "",
+      pid: 1,
+      output: [],
+      status: 0,
+      signal: null,
+    });
+
+    // initSelfPresence runs at import; re-trigger by forcing a repopulate path.
+    upsertPresence(randomUUID(), { host: "probe-host", mode: "ui", reason: "connect" });
+
+    const probedCommands = spawnSyncMock.mock.calls
+      .filter(([cmd]) => cmd === "sysctl" || cmd === "sw_vers")
+      .map(([, , opts]) => opts);
+    expect(probedCommands.length).toBeGreaterThan(0);
+    for (const opts of probedCommands) {
+      expect(opts?.timeout).toBeGreaterThan(0);
+    }
+  });
+});
 
 describe("system-presence", () => {
   afterEach(() => {
