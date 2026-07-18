@@ -22,6 +22,7 @@ import {
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveStoredSessionOwnerAgentId } from "../gateway/session-store-key.js";
+import { readRegularFileSync } from "../infra/regular-file.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { closeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db.js";
 import { compactDoctorSessionSqliteTarget } from "./doctor-session-sqlite-compact.js";
@@ -75,6 +76,11 @@ export type {
   DoctorSessionSqliteRestoreReport,
   DoctorSessionSqliteTargetReport,
 } from "./doctor-session-sqlite-types.js";
+
+// Intentional 16 MiB support ceiling for legacy sessions.json (aligned with
+// other doctor/state caps). Oversized stores fail closed as store_unreadable
+// instead of allocating an unbounded JSON string during doctor.
+const LEGACY_SESSION_STORE_MAX_BYTES = 16 * 1024 * 1024;
 
 type LegacySessionRecord = {
   entry: SessionEntry;
@@ -355,12 +361,30 @@ function readLegacySessionRecords(
 ): LegacySessionRecord[] {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(fs.readFileSync(target.storePath, "utf-8"));
+    const { buffer } = readRegularFileSync({
+      filePath: target.storePath,
+      maxBytes: LEGACY_SESSION_STORE_MAX_BYTES,
+    });
+    parsed = JSON.parse(buffer.toString("utf-8"));
   } catch (err) {
     if (
       options.allowMissingStore === true &&
       (err as NodeJS.ErrnoException | undefined)?.code === "ENOENT"
     ) {
+      return [];
+    }
+    const errMessage = err instanceof Error ? err.message : String(err);
+    // Name the support ceiling and recovery path so operators do not treat a
+    // valid oversized store as corruption or keep retrying migrate blindly.
+    if (errMessage.startsWith("File exceeds")) {
+      issues.push({
+        code: "store_unreadable",
+        message:
+          `${target.storePath}: exceeds the ${LEGACY_SESSION_STORE_MAX_BYTES}-byte ` +
+          `(16 MiB) legacy sessions.json support limit. Doctor will not migrate or ` +
+          `import this store until it is reduced (back up the file, prune with ` +
+          `openclaw sessions cleanup, then retry; or remove the oversized store after backup).`,
+      });
       return [];
     }
     issues.push({

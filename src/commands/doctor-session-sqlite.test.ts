@@ -117,6 +117,37 @@ describe("runDoctorSessionSqlite", () => {
     expect(fs.existsSync(report.targets[0]?.sqlitePath ?? "")).toBe(false);
   });
 
+  for (const mode of ["inspect", "dry-run", "import"] as const) {
+    it(`fail-closes ${mode} when legacy sessions.json exceeds the 16 MiB support limit`, async () => {
+      const store = createLegacyStore();
+      // Must stay above LEGACY_SESSION_STORE_MAX_BYTES in doctor-session-sqlite.ts.
+      const oversizedBytes = 16 * 1024 * 1024 + 1;
+      fs.writeFileSync(store.storePath, Buffer.alloc(oversizedBytes, 0x7b), { mode: 0o600 });
+
+      const report = await runDoctorSessionSqlite({
+        env: store.env,
+        mode,
+        store: store.storePath,
+      });
+
+      expect(report.totals.issues).toBeGreaterThanOrEqual(1);
+      expect(report.totals.legacyEntries).toBe(0);
+      expect(report.totals.importedEntries).toBe(0);
+      expect(report.targets[0]?.issues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            code: "store_unreadable",
+            message: expect.stringMatching(/16 MiB.*support limit/s),
+          }),
+        ]),
+      );
+      expect(report.targets[0]?.archivedLegacyStoreFiles ?? []).toEqual([]);
+      expect(report.targets[0]?.archivedTranscriptFiles ?? []).toEqual([]);
+      expect(fs.existsSync(report.targets[0]?.sqlitePath ?? "")).toBe(false);
+      expect(fs.existsSync(store.storePath)).toBe(true);
+    });
+  }
+
   it("inspects SQLite-only all-agent targets without requiring a legacy store", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-session-sqlite-"));
     try {

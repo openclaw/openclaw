@@ -297,6 +297,12 @@ openclaw doctor --session-sqlite compact --session-sqlite-all-agents
 openclaw doctor --session-sqlite recover --github-issue
 ```
 
+Legacy `sessions.json` files larger than 16 MiB exceed doctor's supported read
+ceiling for that migration source. `inspect`, `dry-run`, `import`, and
+`validate` fail closed with `store_unreadable` and do not create SQLite rows or
+archive the store. Back up the file, reduce it (for example with
+`openclaw sessions cleanup`), then retry.
+
 Back up the OpenClaw state directory before running `import` on an install with
 important history. `validate` exits non-zero when a selected legacy entry is
 missing from SQLite, a session id differs, or a transcript event count differs.
