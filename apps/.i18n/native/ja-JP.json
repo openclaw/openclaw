@@ -10439,6 +10439,11 @@
       "translated": "worktree で新規チャット"
     },
     {
+      "id": "native.apple.a1b0d289758e2213",
+      "source": "Sessions…",
+      "translated": "セッション…"
+    },
+    {
       "id": "native.apple.17c13312e7532c89",
       "source": "Background Tasks",
       "translated": "バックグラウンドタスク"
@@ -10447,6 +10452,11 @@
       "id": "native.apple.ced228bb4d20a726",
       "source": "Export Transcript",
       "translated": "トランスクリプトをエクスポート"
+    },
+    {
+      "id": "native.apple.f26cef22f417abb4",
+      "source": "Show reasoning & tool activity",
+      "translated": "推論とツールのアクティビティを表示"
     },
     {
       "id": "native.apple.940e1f943750c94b",
@@ -22734,6 +22744,41 @@
       "translated": "%@トークンを使用"
     },
     {
+      "id": "native.apple.ccfd6ae994d82449",
+      "source": "Loading full message…",
+      "translated": "メッセージ全文を読み込み中…"
+    },
+    {
+      "id": "native.apple.669ad52de4a26b87",
+      "source": "Full message unavailable",
+      "translated": "メッセージ全文を利用できません"
+    },
+    {
+      "id": "native.apple.6f79794ee74caf99",
+      "source": "Full Message",
+      "translated": "メッセージ全文"
+    },
+    {
+      "id": "native.apple.d648251591db5dec",
+      "source": "Close",
+      "translated": "閉じる"
+    },
+    {
+      "id": "native.apple.ba3963204bda5e84",
+      "source": "The full message is no longer available.",
+      "translated": "メッセージ全文は利用できなくなりました。"
+    },
+    {
+      "id": "native.apple.8bb98bd86ae85c1c",
+      "source": "The full message has no readable text.",
+      "translated": "メッセージ全文に読み取れるテキストがありません。"
+    },
+    {
+      "id": "native.apple.2f43669d87c0e26d",
+      "source": "The full message could not be loaded.",
+      "translated": "メッセージ全文を読み込めませんでした。"
+    },
+    {
       "id": "native.apple.2c865ac4a69645d3",
       "source": "Widget unavailable",
       "translated": "ウィジェットを利用できません"
@@ -23119,9 +23164,29 @@
       "translated": "聞く"
     },
     {
+      "id": "native.apple.f84b674ad395b694",
+      "source": "Jump to latest",
+      "translated": "最新に移動"
+    },
+    {
+      "id": "native.apple.429d825201b2cb85",
+      "source": "Jump to latest reply",
+      "translated": "最新の返信に移動"
+    },
+    {
+      "id": "native.apple.9ab586b85834705c",
+      "source": "Refresh",
+      "translated": "更新"
+    },
+    {
       "id": "native.apple.fe9f30f12f1dcfaf",
       "source": "Copy Message",
       "translated": "メッセージをコピー"
+    },
+    {
+      "id": "native.apple.90bc8a8045e7017e",
+      "source": "Open Full Message",
+      "translated": "メッセージ全文を開く"
     },
     {
       "id": "native.apple.b37ec7bd7dc1579a",
@@ -23137,21 +23202,6 @@
       "id": "native.apple.3b44a67aa284886f",
       "source": "Assistant",
       "translated": "アシスタント"
-    },
-    {
-      "id": "native.apple.f84b674ad395b694",
-      "source": "Jump to latest",
-      "translated": "最新に移動"
-    },
-    {
-      "id": "native.apple.429d825201b2cb85",
-      "source": "Jump to latest reply",
-      "translated": "最新の返信に移動"
-    },
-    {
-      "id": "native.apple.9ab586b85834705c",
-      "source": "Refresh",
-      "translated": "更新"
     },
     {
       "id": "native.apple.28c2691c03030434",
@@ -23364,9 +23414,14 @@
       "translated": "トランスクリプトをエクスポート…"
     },
     {
-      "id": "native.apple.3294ababd29c4457",
-      "source": "Show reasoning & tool activity",
-      "translated": "推論とツールのアクティビティを表示"
+      "id": "native.apple.ebb130189022c7ec",
+      "source": "Show Reasoning",
+      "translated": "推論を表示"
+    },
+    {
+      "id": "native.apple.d0dba9aad550fa6e",
+      "source": "Show Tool Activity",
+      "translated": "ツールのアクティビティを表示"
     },
     {
       "id": "native.apple.4b24d792545e5086",

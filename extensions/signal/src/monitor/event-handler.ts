@@ -332,6 +332,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       },
       route: {
         agentId: route.agentId,
+        dmScope: route.dmScope,
         accountId: route.accountId,
         routeSessionKey: route.sessionKey,
       },

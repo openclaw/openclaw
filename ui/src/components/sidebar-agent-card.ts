@@ -5,9 +5,9 @@ import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { icons } from "./icons.ts";
 import "./tooltip.ts";
 
-/** Sidebar identity card: the agent IS the main session. The body opens the
-    agent's rolling main conversation; the trailing button opens the agent
-    menu owned by app-sidebar (labeled as a switcher with 2+ agents). */
+/** Sidebar identity row: who you're talking to. The whole body opens the
+    agent menu (switcher + utilities) — the conversation itself lives on the
+    Home page row, so this row carries profile semantics only. */
 class SidebarAgentCard extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) agentName = "";
   @property({ attribute: false }) avatarUrl: string | null = null;
@@ -15,50 +15,26 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) connected = false;
   @property({ attribute: false }) statusLabel = "";
   @property({ attribute: false }) subtitle = "";
-  /** The main session is the currently open chat route. */
-  @property({ attribute: false }) activeSession = false;
-  /** Main session has an active run; shows the working spinner. */
-  @property({ attribute: false }) running = false;
-  /** Main session has unread activity. */
-  @property({ attribute: false }) unread = false;
   @property({ attribute: false }) menuOpen = false;
-  /** Unread sessions exist on non-active agents; surfaces on the switcher. */
+  /** Unread sessions exist on non-active agents; surfaces next to the name. */
   @property({ attribute: false }) menuUnread = false;
-  /** More than one agent is configured; single-agent setups hide the switcher. */
+  /** More than one agent is configured; labels the menu as a switcher. */
   @property({ attribute: false }) switcherAvailable = false;
-  @property({ attribute: false }) onOpenMain?: () => void;
   @property({ attribute: false }) onToggleMenu?: (trigger: HTMLElement) => void;
 
-  private renderState() {
-    if (this.running) {
-      return html`<span
-        class="session-run-spinner sidebar-agent-card__state"
-        role="img"
-        aria-label=${t("sessionsView.activeRun")}
-        title=${t("sessionsView.activeRun")}
-      ></span>`;
-    }
-    if (this.unread) {
-      return html`<span
-        class="session-unread-dot sidebar-agent-card__state"
-        role="img"
-        aria-label=${t("sessionsView.unread")}
-      ></span>`;
-    }
-    return nothing;
-  }
-
   override render() {
+    const menuLabel = this.switcherAvailable
+      ? t("agentChip.switchAgent")
+      : t("agentChip.menuLabel");
     return html`
-      <div class="sidebar-agent-card ${this.activeSession ? "sidebar-agent-card--active" : ""}">
+      <div class="sidebar-agent-card ${this.menuOpen ? "sidebar-agent-card--open" : ""}">
         <button
           type="button"
           class="sidebar-agent-card__main"
-          aria-current=${this.activeSession ? "page" : nothing}
-          aria-label=${this.connected
-            ? t("agentChip.openChat", { name: this.agentName })
-            : t("agentChip.offlineOpenSettings")}
-          @click=${() => this.onOpenMain?.()}
+          aria-haspopup="menu"
+          aria-expanded=${String(this.menuOpen)}
+          aria-label="${this.agentName} · ${menuLabel}"
+          @click=${(event: MouseEvent) => this.onToggleMenu?.(event.currentTarget as HTMLElement)}
         >
           <span class="sidebar-agent-card__avatar">
             ${this.avatarUrl
@@ -83,38 +59,24 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
             ></span>
           </span>
           <span class="sidebar-agent-card__text">
-            <span class="sidebar-agent-card__name">${this.agentName}</span>
+            <span class="sidebar-agent-card__name">
+              ${this.agentName}
+              <span class="sidebar-agent-card__chevron" aria-hidden="true"
+                >${icons.chevronDown}</span
+              >
+            </span>
             ${this.subtitle
               ? html`<span class="sidebar-agent-card__subtitle">${this.subtitle}</span>`
               : nothing}
           </span>
-          ${this.renderState()}
+          ${this.menuUnread && !this.menuOpen
+            ? html`<span
+                class="session-unread-dot sidebar-agent-card__menu-unread"
+                role="img"
+                aria-label=${t("sessionsView.unread")}
+              ></span>`
+            : nothing}
         </button>
-        <openclaw-tooltip
-          .content=${this.switcherAvailable ? t("agentChip.switchAgent") : t("agentChip.menuLabel")}
-        >
-          <button
-            type="button"
-            class="sidebar-agent-card__switcher ${this.menuOpen
-              ? "sidebar-agent-card__switcher--open"
-              : ""}"
-            aria-haspopup="menu"
-            aria-expanded=${String(this.menuOpen)}
-            aria-label=${this.switcherAvailable
-              ? t("agentChip.switchAgent")
-              : t("agentChip.menuLabel")}
-            @click=${(event: MouseEvent) => this.onToggleMenu?.(event.currentTarget as HTMLElement)}
-          >
-            ${icons.chevronDown}
-            ${this.menuUnread && !this.menuOpen
-              ? html`<span
-                  class="session-unread-dot sidebar-agent-card__switcher-unread"
-                  role="img"
-                  aria-label=${t("sessionsView.unread")}
-                ></span>`
-              : nothing}
-          </button>
-        </openclaw-tooltip>
       </div>
     `;
   }

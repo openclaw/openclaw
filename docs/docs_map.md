@@ -8638,6 +8638,18 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: License
   - H2: Related
 
+## reference/database-schemas.md
+
+- Route: /reference/database-schemas
+- Headings:
+  - H2: Database layout
+  - H2: Versioning contract
+  - H2: Agent schema history
+  - H2: State schema history
+  - H2: Integrity checks
+  - H2: Downgrades are unsupported
+  - H3: Example: agent schema 11 to 9
+
 ## reference/device-models.md
 
 - Route: /reference/device-models
@@ -10428,6 +10440,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Quick start
   - H2: Tool parameters
+  - H2: Result
   - H2: How it works
   - H2: Progress updates
   - H2: Config
@@ -10444,6 +10457,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Quick start
   - H2: Choosing a provider
   - H3: Provider comparison
+  - H2: Result shape
   - H2: Auto-detection
   - H2: Native OpenAI web search
   - H2: Native Codex web search

@@ -13,7 +13,10 @@ import {
 } from "../../test-helpers/application-context.ts";
 import "./custodian-page.ts";
 
-type TestCustodianPage = HTMLElement & { updateComplete: Promise<boolean> };
+type TestCustodianPage = HTMLElement & {
+  onboarding: boolean;
+  updateComplete: Promise<boolean>;
+};
 
 type ContextHarness = {
   context: ApplicationContext;
@@ -91,12 +94,16 @@ function createContext(request: ReturnType<typeof vi.fn>): ContextHarness {
   };
 }
 
-async function mountPage(context: ApplicationContext): Promise<{
+async function mountPage(
+  context: ApplicationContext,
+  options: { onboarding?: boolean } = {},
+): Promise<{
   page: TestCustodianPage;
   provider: ApplicationContextProvider;
 }> {
   const provider = createApplicationContextProvider(context);
   const page = document.createElement("openclaw-custodian-page") as TestCustodianPage;
+  page.onboarding = options.onboarding ?? true;
   provider.append(page);
   document.body.append(provider);
   await page.updateComplete;
@@ -561,6 +568,57 @@ describe("custodian page", () => {
     );
   });
 
+  it("requests the normal caretaker greeting outside onboarding", async () => {
+    const request = vi.fn().mockResolvedValue({
+      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+      reply: "OpenClaw here. Everything is healthy.",
+      action: "none",
+    });
+    const { context } = createContext(request);
+    const { page } = await mountPage(context, { onboarding: false });
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    await page.updateComplete;
+
+    // The onboarding variant seeds the first-run setup proposal; permanent
+    // presence visits must not re-enter that flow.
+    expect(request.mock.calls[0]?.[1]).not.toHaveProperty("welcomeVariant");
+
+    const composer = page.querySelector<HTMLTextAreaElement>("textarea")!;
+    composer.value = "status";
+    composer.dispatchEvent(new Event("input"));
+    await page.updateComplete;
+    page.querySelector<HTMLButtonElement>(".custodian__composer button")!.click();
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    expect(request.mock.calls[1]?.[1]).not.toHaveProperty("welcomeVariant");
+    expect(request.mock.calls[1]?.[1]).toMatchObject({ message: "status" });
+  });
+
+  it("starts a fresh welcome when onboarding mode changes", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+        reply: "Normal caretaker conversation.",
+        action: "none",
+      })
+      .mockResolvedValueOnce({
+        sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+        reply: "Onboarding proposal.",
+        action: "none",
+      });
+    const { context } = createContext(request);
+    const { page } = await mountPage(context, { onboarding: false });
+    await vi.waitFor(() => expect(page.textContent).toContain("Normal caretaker conversation."));
+
+    page.onboarding = true;
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(page.textContent).toContain("Onboarding proposal."));
+
+    expect(page.textContent).not.toContain("Normal caretaker conversation.");
+    expect(request.mock.calls[1]?.[1]).toMatchObject({ welcomeVariant: "onboarding" });
+    expect(request.mock.calls[1]?.[1]).not.toHaveProperty("message");
+  });
+
   it("exits setup through normal chat navigation", async () => {
     const request = vi.fn().mockResolvedValue({
       sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
@@ -569,6 +627,7 @@ describe("custodian page", () => {
     });
     const { context } = createContext(request);
     const { page } = await mountPage(context);
+    page.onboarding = true;
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
     await page.updateComplete;
 

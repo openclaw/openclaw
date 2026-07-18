@@ -368,6 +368,7 @@ export async function buildWhatsAppInboundContext(params: {
     },
     route: {
       agentId: params.route.agentId,
+      dmScope: params.route.dmScope,
       accountId: params.route.accountId,
       routeSessionKey: params.route.sessionKey,
     },

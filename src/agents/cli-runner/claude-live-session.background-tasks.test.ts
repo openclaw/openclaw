@@ -8,6 +8,7 @@ import {
   BLOCKED_TOOL_CALL_ABORT_FLOOR_MS,
   getDiagnosticSessionActivitySnapshot,
   resetDiagnosticRunActivityForTest,
+  startDiagnosticRunActivityTracking,
 } from "../../logging/diagnostic-run-activity.js";
 import type { getProcessSupervisor } from "../../process/supervisor/index.js";
 import {
@@ -31,6 +32,7 @@ type SupervisorSpawnFn = ProcessSupervisor["spawn"];
 beforeEach(() => {
   setDiagnosticsEnabledForProcess(true);
   resetDiagnosticRunActivityForTest();
+  startDiagnosticRunActivityTracking();
   resetClaudeLiveSessionsForTest();
   restoreCliRunnerPrepareTestDeps();
   setCliRunnerExecuteTestDeps({ writeCliSystemPromptFile });

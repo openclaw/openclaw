@@ -10439,6 +10439,11 @@
       "translated": "Trò chuyện mới trong Worktree"
     },
     {
+      "id": "native.apple.a1b0d289758e2213",
+      "source": "Sessions…",
+      "translated": "Phiên…"
+    },
+    {
       "id": "native.apple.17c13312e7532c89",
       "source": "Background Tasks",
       "translated": "Tác vụ nền"
@@ -10447,6 +10452,11 @@
       "id": "native.apple.ced228bb4d20a726",
       "source": "Export Transcript",
       "translated": "Xuất bản ghi cuộc trò chuyện"
+    },
+    {
+      "id": "native.apple.f26cef22f417abb4",
+      "source": "Show reasoning & tool activity",
+      "translated": "Hiển thị quá trình suy luận và hoạt động của công cụ"
     },
     {
       "id": "native.apple.940e1f943750c94b",
@@ -22734,6 +22744,41 @@
       "translated": "Đã sử dụng %@ token"
     },
     {
+      "id": "native.apple.ccfd6ae994d82449",
+      "source": "Loading full message…",
+      "translated": "Đang tải toàn bộ tin nhắn…"
+    },
+    {
+      "id": "native.apple.669ad52de4a26b87",
+      "source": "Full message unavailable",
+      "translated": "Không có toàn bộ tin nhắn"
+    },
+    {
+      "id": "native.apple.6f79794ee74caf99",
+      "source": "Full Message",
+      "translated": "Toàn bộ tin nhắn"
+    },
+    {
+      "id": "native.apple.d648251591db5dec",
+      "source": "Close",
+      "translated": "Đóng"
+    },
+    {
+      "id": "native.apple.ba3963204bda5e84",
+      "source": "The full message is no longer available.",
+      "translated": "Toàn bộ tin nhắn không còn khả dụng."
+    },
+    {
+      "id": "native.apple.8bb98bd86ae85c1c",
+      "source": "The full message has no readable text.",
+      "translated": "Toàn bộ tin nhắn không có văn bản có thể đọc được."
+    },
+    {
+      "id": "native.apple.2f43669d87c0e26d",
+      "source": "The full message could not be loaded.",
+      "translated": "Không thể tải toàn bộ tin nhắn."
+    },
+    {
       "id": "native.apple.2c865ac4a69645d3",
       "source": "Widget unavailable",
       "translated": "Tiện ích không khả dụng"
@@ -23119,9 +23164,29 @@
       "translated": "Nghe"
     },
     {
+      "id": "native.apple.f84b674ad395b694",
+      "source": "Jump to latest",
+      "translated": "Chuyển đến mới nhất"
+    },
+    {
+      "id": "native.apple.429d825201b2cb85",
+      "source": "Jump to latest reply",
+      "translated": "Chuyển đến phản hồi mới nhất"
+    },
+    {
+      "id": "native.apple.9ab586b85834705c",
+      "source": "Refresh",
+      "translated": "Làm mới"
+    },
+    {
       "id": "native.apple.fe9f30f12f1dcfaf",
       "source": "Copy Message",
       "translated": "Sao chép tin nhắn"
+    },
+    {
+      "id": "native.apple.90bc8a8045e7017e",
+      "source": "Open Full Message",
+      "translated": "Mở toàn bộ tin nhắn"
     },
     {
       "id": "native.apple.b37ec7bd7dc1579a",
@@ -23137,21 +23202,6 @@
       "id": "native.apple.3b44a67aa284886f",
       "source": "Assistant",
       "translated": "Trợ lý"
-    },
-    {
-      "id": "native.apple.f84b674ad395b694",
-      "source": "Jump to latest",
-      "translated": "Chuyển đến mới nhất"
-    },
-    {
-      "id": "native.apple.429d825201b2cb85",
-      "source": "Jump to latest reply",
-      "translated": "Chuyển đến phản hồi mới nhất"
-    },
-    {
-      "id": "native.apple.9ab586b85834705c",
-      "source": "Refresh",
-      "translated": "Làm mới"
     },
     {
       "id": "native.apple.28c2691c03030434",
@@ -23364,9 +23414,14 @@
       "translated": "Xuất Bản ghi…"
     },
     {
-      "id": "native.apple.3294ababd29c4457",
-      "source": "Show reasoning & tool activity",
-      "translated": "Hiển thị quá trình suy luận và hoạt động của công cụ"
+      "id": "native.apple.ebb130189022c7ec",
+      "source": "Show Reasoning",
+      "translated": "Hiển thị lập luận"
+    },
+    {
+      "id": "native.apple.d0dba9aad550fa6e",
+      "source": "Show Tool Activity",
+      "translated": "Hiển thị hoạt động của công cụ"
     },
     {
       "id": "native.apple.4b24d792545e5086",

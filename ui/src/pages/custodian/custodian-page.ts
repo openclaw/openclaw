@@ -1,7 +1,7 @@
 import { consume } from "@lit/context";
 import type { SystemAgentChatParams, SystemAgentChatResult } from "@openclaw/gateway-protocol";
 import { html, nothing, type PropertyValues } from "lit";
-import { state } from "lit/decorators.js";
+import { property, state } from "lit/decorators.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
@@ -42,6 +42,9 @@ function errorMessage(error: unknown): string {
 export class CustodianPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
+
+  /** Onboarding mode shows the Exit setup control; the route view sets this. */
+  @property({ attribute: false }) onboarding = false;
 
   @state() private messages: CustodianMessage[] = [];
   @state() private input = "";
@@ -102,10 +105,16 @@ export class CustodianPage extends OpenClawLightDomElement {
     return JSON.stringify([gatewayUrl, token, password, bootstrapToken, this.lastHelloDeviceToken]);
   }
 
+  private currentSessionScopeKey(): string {
+    // Mode selects the welcome contract, so changing it starts a new session
+    // instead of carrying the previous route's transcript across modes.
+    return JSON.stringify([this.onboarding, this.connectionScopeKey()]);
+  }
+
   private synchronizeClient(): void {
     const snapshot = this.context.gateway.snapshot;
     const client = snapshot.connected ? snapshot.client : null;
-    const scopeKey = this.connectionScopeKey();
+    const scopeKey = this.currentSessionScopeKey();
     const scopeChanged = this.sessionScopeKey !== null && this.sessionScopeKey !== scopeKey;
     if (client === this.activeClient && !scopeChanged) {
       return;
@@ -140,7 +149,12 @@ export class CustodianPage extends OpenClawLightDomElement {
     this.sessionScopeKey = scopeKey;
     this.sessionStarted = true;
     this.clearConversation();
-    void this.requestReply(client, { sessionId: this.sessionId, welcomeVariant: "onboarding" });
+    // The onboarding variant seeds the first-run setup proposal; the permanent
+    // presence surface gets the normal caretaker greeting instead.
+    void this.requestReply(client, {
+      sessionId: this.sessionId,
+      ...(this.onboarding ? { welcomeVariant: "onboarding" as const } : {}),
+    });
   }
 
   private clearConversation(): void {
@@ -220,7 +234,7 @@ export class CustodianPage extends OpenClawLightDomElement {
     this.input = "";
     void this.requestReply(client, {
       sessionId: this.sessionId,
-      welcomeVariant: "onboarding",
+      ...(this.onboarding ? { welcomeVariant: "onboarding" as const } : {}),
       message,
     });
   }
@@ -293,9 +307,11 @@ export class CustodianPage extends OpenClawLightDomElement {
               <p>${t("custodian.subtitle")}</p>
             </div>
           </div>
-          <button class="btn btn--ghost" type="button" @click=${() => this.exitSetup()}>
-            ${t("custodian.exitSetup")}
-          </button>
+          ${this.onboarding
+            ? html`<button class="btn btn--ghost" type="button" @click=${() => this.exitSetup()}>
+                ${t("custodian.exitSetup")}
+              </button>`
+            : nothing}
         </header>
 
         <div class="custodian__messages" aria-live="polite">

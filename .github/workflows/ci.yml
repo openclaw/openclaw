@@ -53,22 +53,20 @@ run-name: ${{ github.event_name == 'workflow_dispatch' && inputs.dispatch_id != 
 
 concurrency:
   group: ${{ github.event_name == 'workflow_dispatch' && format('{0}-manual-v1-{1}', github.workflow, github.run_id) || (github.event_name == 'pull_request' && format('{0}-v7-{1}', github.workflow, github.event.pull_request.number) || (github.repository == 'openclaw/openclaw' && format('{0}-v7-{1}', github.workflow, github.ref) || format('{0}-v7-{1}-{2}', github.workflow, github.ref, github.sha))) }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main') }}
+  # PRs want newest-head feedback. Canonical main instead runs one complete
+  # integration cycle while GitHub's single pending slot coalesces later pushes.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
-  # Keep the canonical main queue quiet long enough for a follow-up push to
-  # cancel this run before it registers the Blacksmith matrix.
   # Preflight: establish routing truth and job matrices once, then let real
   # work fan out from a single source of truth.
   preflight:
     permissions:
       contents: read
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-    env:
-      OPENCLAW_MAIN_CI_DEBOUNCE_SECONDS: "90"
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
     outputs:
@@ -116,10 +114,6 @@ jobs:
       run_protocol_event_coverage: ${{ steps.manifest.outputs.run_protocol_event_coverage }}
       android_matrix: ${{ steps.manifest.outputs.android_matrix }}
     steps:
-      - name: Record debounce epoch
-        if: github.event_name == 'push' && github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main'
-        run: echo "OPENCLAW_DEBOUNCE_EPOCH=$(date +%s)" >> "$GITHUB_ENV"
-
       - name: Validate release-gate dispatch
         if: github.event_name == 'workflow_dispatch' && inputs.release_gate
         env:
@@ -750,23 +744,6 @@ jobs:
       - name: Check mobile protocol event coverage
         if: steps.manifest.outputs.run_protocol_event_coverage == 'true'
         run: node scripts/check-protocol-event-coverage.mjs
-
-      # Fan-out debounce: every heavy job needs preflight, so holding this job
-      # open until the debounce window elapses lets a superseding main push
-      # cancel the run while only one 4 vCPU runner has been spent. Preflight's
-      # own work usually exceeds the window, making the residual sleep zero.
-      - name: Debounce canonical main fan-out
-        if: github.event_name == 'push' && github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main'
-        run: |
-          set -euo pipefail
-          elapsed=$(( $(date +%s) - OPENCLAW_DEBOUNCE_EPOCH ))
-          remaining=$(( OPENCLAW_MAIN_CI_DEBOUNCE_SECONDS - elapsed ))
-          if [ "$remaining" -gt 0 ]; then
-            echo "Holding fan-out ${remaining}s for a superseding main push"
-            sleep "$remaining"
-          else
-            echo "Debounce window already elapsed (${elapsed}s)"
-          fi
 
   # Run dependency-free security checks on a hosted runner in parallel with
   # scope detection. No downstream job waits for Python/pre-commit setup.
@@ -1818,8 +1795,8 @@ jobs:
     timeout-minutes: ${{ matrix.timeout_minutes || 60 }}
     strategy:
       fail-fast: false
-      # The canonical main path waits for the admission debounce above, so
-      # widen this large matrix within the current runner-registration budget.
+      # Canonical main admits only one complete run at a time, so widen this
+      # matrix within the current runner-registration budget.
       max-parallel: 28
       matrix: ${{ fromJson(needs.preflight.outputs.checks_node_core_nondist_matrix) }}
     steps:

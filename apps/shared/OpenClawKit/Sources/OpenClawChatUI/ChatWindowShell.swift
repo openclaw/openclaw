@@ -9,7 +9,9 @@ import UniformTypeIdentifiers
 /// window experience.
 @MainActor
 public struct OpenClawChatWindowShell: View {
-    public static let assistantTraceDefaultsKey = "openclaw.webchat.showAssistantTrace"
+    public nonisolated static let assistantTraceDefaultsKey = "openclaw.webchat.showAssistantTrace"
+    public nonisolated static let assistantReasoningDefaultsKey = "openclaw.webchat.showAssistantReasoning"
+    public nonisolated static let assistantToolActivityDefaultsKey = "openclaw.webchat.showAssistantToolActivity"
 
     @State private var viewModel: OpenClawChatViewModel
     @State private var sessionQuery = ""
@@ -19,16 +21,18 @@ public struct OpenClawChatWindowShell: View {
     @State private var renameSessionKey: String?
     @State private var renameText = ""
     private let userAccent: Color?
-    private let showsAssistantTrace: Bool
+    private let displayOptions: OpenClawChatDisplayOptions
     private let emptyAssistantIntro: String?
     private let emptyAssistantPrompts: [OpenClawChatView.StarterPrompt]
     private let talkControl: OpenClawChatTalkControl?
     private let voiceNoteControl: OpenClawChatVoiceNoteControl?
     private let speech: OpenClawChatSpeechController?
 
+    /// `showsAssistantTrace` remains as a source-compatible convenience that sets both display options.
     public init(
         viewModel: OpenClawChatViewModel,
         userAccent: Color? = nil,
+        displayOptions: OpenClawChatDisplayOptions? = nil,
         showsAssistantTrace: Bool = false,
         emptyAssistantIntro: String? = nil,
         emptyAssistantPrompts: [OpenClawChatView.StarterPrompt] = [],
@@ -38,7 +42,7 @@ public struct OpenClawChatWindowShell: View {
     {
         _viewModel = State(initialValue: viewModel)
         self.userAccent = userAccent
-        self.showsAssistantTrace = showsAssistantTrace
+        self.displayOptions = displayOptions ?? .assistantTrace(showsAssistantTrace)
         self.emptyAssistantIntro = emptyAssistantIntro
         self.emptyAssistantPrompts = emptyAssistantPrompts
         self.talkControl = talkControl
@@ -57,7 +61,7 @@ public struct OpenClawChatWindowShell: View {
                 viewModel: self.viewModel,
                 drawsBackground: false,
                 userAccent: self.userAccent,
-                showsAssistantTrace: self.showsAssistantTrace,
+                displayOptions: self.displayOptions,
                 composerChrome: .clean,
                 emptyAssistantIntro: self.emptyAssistantIntro,
                 emptyAssistantPrompts: self.emptyAssistantPrompts,
@@ -378,15 +382,27 @@ public struct OpenClawChatWindowShell: View {
             .disabled(self.viewModel.messages.isEmpty)
 
             Toggle(isOn: Binding(
-                get: { self.showsAssistantTrace },
+                get: { self.displayOptions.contains(.reasoning) },
                 set: {
                     UserDefaults.standard.set(
                         $0,
-                        forKey: Self.assistantTraceDefaultsKey)
+                        forKey: Self.assistantReasoningDefaultsKey)
                 })) {
                     chatWindowActionLabel(
-                        "Show reasoning & tool activity",
+                        "Show Reasoning",
                         systemImage: "brain.head.profile")
+                }
+
+            Toggle(isOn: Binding(
+                get: { self.displayOptions.contains(.toolActivity) },
+                set: {
+                    UserDefaults.standard.set(
+                        $0,
+                        forKey: Self.assistantToolActivityDefaultsKey)
+                })) {
+                    chatWindowActionLabel(
+                        "Show Tool Activity",
+                        systemImage: "hammer")
                 }
 
             Divider()

@@ -35,18 +35,15 @@ export type SidebarSessionSection<Row> = {
 };
 
 /**
- * Sections that render a header (and therefore can collapse). Threads
- * ("ungrouped") only shows its header in category grouping; the flat mode
- * keeps it headerless. Shared by the renderer and keyboard-order walker so
- * collapse behavior cannot drift between them.
+ * Sections that render a header (and therefore can collapse). Every zone
+ * shows one — Threads hosts the sort and new-session actions on its header.
+ * Shared by the renderer and keyboard-order walker so collapse behavior
+ * cannot drift between them.
  */
 export function sidebarSectionHasHeader(
-  sectionId: string,
-  grouping: SidebarSessionsGrouping,
+  _sectionId: string,
+  _grouping: SidebarSessionsGrouping,
 ): boolean {
-  if (sectionId === "ungrouped") {
-    return grouping === "category";
-  }
   return true;
 }
 

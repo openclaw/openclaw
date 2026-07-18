@@ -2022,8 +2022,11 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("retires the shared Codex app-server client after one-shot cleanup turns", async () => {
-    const retireSpy = vi.spyOn(sharedClientModule, "retireSharedCodexAppServerClientIfCurrent");
-    retireSpy.mockReturnValue({ activeLeases: 0, closed: true });
+    const retireSpy = vi.spyOn(
+      sharedClientModule,
+      "clearSharedCodexAppServerClientIfCurrentAndUnclaimed",
+    );
+    retireSpy.mockReturnValue({ found: true, activeLeases: 0, pendingAcquires: 0, closed: true });
     const events: string[] = [];
     const closeAndWait = vi.fn(async () => {
       events.push("closeAndWait");
@@ -2086,8 +2089,11 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("retires the shared Codex app-server client after one-shot turn start failures", async () => {
-    const retireSpy = vi.spyOn(sharedClientModule, "retireSharedCodexAppServerClientIfCurrent");
-    retireSpy.mockReturnValue({ activeLeases: 0, closed: true });
+    const retireSpy = vi.spyOn(
+      sharedClientModule,
+      "clearSharedCodexAppServerClientIfCurrentAndUnclaimed",
+    );
+    retireSpy.mockReturnValue({ found: true, activeLeases: 0, pendingAcquires: 0, closed: true });
     const events: string[] = [];
     const closeAndWait = vi.fn(async () => {
       events.push("closeAndWait");
@@ -2132,7 +2138,10 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("keeps the shared Codex app-server client warm without one-shot cleanup", async () => {
-    const retireSpy = vi.spyOn(sharedClientModule, "retireSharedCodexAppServerClientIfCurrent");
+    const retireSpy = vi.spyOn(
+      sharedClientModule,
+      "clearSharedCodexAppServerClientIfCurrentAndUnclaimed",
+    );
     const closeAndWait = vi.fn(async () => true);
     let notify: ((notification: CodexServerNotification) => Promise<void>) | undefined;
     const request = vi.fn(async (method: string) => {

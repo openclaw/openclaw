@@ -90,6 +90,7 @@ const assistantAttachmentAvailabilityCache = new Map<string, AssistantAttachment
 const assistantAttachmentRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const pairingQrExpiryRefreshTimers = new Map<string, PairingQrExpiryRefreshTimer>();
 const ASSISTANT_ATTACHMENT_UNAVAILABLE_RETRY_MS = 5_000;
+const ASSISTANT_ATTACHMENT_METADATA_FETCH_TIMEOUT_MS = 30_000;
 const ASSISTANT_ATTACHMENT_MEDIA_TICKET_REFRESH_SKEW_MS = 30_000;
 let assistantAttachmentAvailabilityRenderVersion = 0;
 
@@ -1683,10 +1684,19 @@ function resolveAssistantAttachmentAvailability(
     if (normalizedAuthToken) {
       headers.set("Authorization", `Bearer ${normalizedAuthToken}`);
     }
+    const controller = new AbortController();
+    const timeout = setTimeout(
+      () =>
+        controller.abort(
+          new DOMException("assistant attachment metadata fetch timed out", "TimeoutError"),
+        ),
+      ASSISTANT_ATTACHMENT_METADATA_FETCH_TIMEOUT_MS,
+    );
     void fetch(buildAssistantAttachmentMetaUrl(source, basePath), {
       method: "GET",
       headers,
       credentials: "same-origin",
+      signal: controller.signal,
     })
       .then(async (res) => {
         const payload = (await res.json().catch(() => null)) as {
@@ -1731,6 +1741,7 @@ function resolveAssistantAttachmentAvailability(
         });
       })
       .finally(() => {
+        clearTimeout(timeout);
         onRequestUpdate?.();
       });
   }
