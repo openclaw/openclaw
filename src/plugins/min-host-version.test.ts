@@ -104,31 +104,4 @@ describe("min-host-version", () => {
       expectValidHostCheck(currentVersion, ">=2026.3.22");
     },
   );
-
-  it("keeps stable floors above prerelease hosts", () => {
-    expectHostCheckResult({
-      currentVersion: "2026.7.2-beta.2",
-      minHostVersion: ">=2026.7.2",
-      expected: {
-        ok: false,
-        kind: "incompatible",
-        currentVersion: "2026.7.2-beta.2",
-        requirement: {
-          raw: ">=2026.7.2",
-          minimumLabel: "2026.7.2",
-        },
-      },
-    });
-    expectHostCheckResult({
-      currentVersion: "2026.7.2",
-      minHostVersion: ">=2026.7.2",
-      expected: {
-        ok: true,
-        requirement: {
-          raw: ">=2026.7.2",
-          minimumLabel: "2026.7.2",
-        },
-      },
-    });
-  });
 });

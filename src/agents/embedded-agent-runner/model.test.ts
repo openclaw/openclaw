@@ -263,7 +263,7 @@ function resolveModelForTest(
   });
 }
 
-function mockDiscoveredGroqModel() {
+function mockDiscoveredGroqModel(maxTokensSource?: "configured" | "discovered") {
   mockDiscoveredModel(discoverModels, {
     provider: "groq",
     modelId: "llama-3.3-70b-versatile",
@@ -278,6 +278,7 @@ function mockDiscoveredGroqModel() {
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 131_072,
       maxTokens: 32_768,
+      ...(maxTokensSource ? { maxTokensSource } : {}),
     },
   });
 }
@@ -1422,6 +1423,18 @@ describe("resolveModel", () => {
       cfg,
       workspaceDir: expect.any(String),
       includeRuntimeDiscovery: true,
+    });
+  });
+
+  it("preserves configured maxTokens provenance from model discovery", () => {
+    mockDiscoveredGroqModel("configured");
+
+    const result = resolveModelForTest("groq", "llama-3.3-70b-versatile", "/tmp/agent");
+    const model = expectResolvedModel(result);
+
+    expectRecordFields(model, {
+      maxTokens: 32_768,
+      maxTokensSource: "configured",
     });
   });
 

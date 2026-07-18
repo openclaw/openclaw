@@ -797,7 +797,7 @@
           "clawhubSpec": "clawhub:@openclaw/groq-provider",
           "npmSpec": "@openclaw/groq-provider",
           "defaultChoice": "npm",
-          "minHostVersion": ">=2026.7.2"
+          "minHostVersion": ">=2026.6.8"
         }
       }
     },
