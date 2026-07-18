@@ -475,8 +475,9 @@ describe("createSynologyChatPlugin", () => {
               text: "hello",
               to: "user1",
             });
-            expect(result?.receipt.parts[0]?.kind).toBe("text");
-            expect(result?.receipt.platformMessageIds).toHaveLength(1);
+            expect(result?.messageId).toBe("");
+            expect(result?.receipt.platformMessageIds).toHaveLength(0);
+            expect(result?.receipt.parts).toHaveLength(0);
           },
           media: async () => {
             const result = await plugin.message.send?.media?.({
@@ -485,8 +486,9 @@ describe("createSynologyChatPlugin", () => {
               mediaUrl: "https://example.com/img.png",
               to: "user1",
             });
-            expect(result?.receipt.parts[0]?.kind).toBe("media");
-            expect(result?.receipt.platformMessageIds).toHaveLength(1);
+            expect(result?.messageId).toBe("");
+            expect(result?.receipt.platformMessageIds).toHaveLength(0);
+            expect(result?.receipt.parts).toHaveLength(0);
           },
           messageSendingHooks: () => {
             expect(plugin.message.durableFinal?.capabilities?.messageSendingHooks).toBe(true);
@@ -517,7 +519,7 @@ describe("createSynologyChatPlugin", () => {
       ).rejects.toThrow("not configured");
     });
 
-    it("sendText returns OutboundDeliveryResult on success", async () => {
+    it("sendText returns an honest empty-id result on success", async () => {
       const plugin = synologyChatPlugin;
       const result = await plugin.outbound.sendText({
         cfg: {
@@ -535,9 +537,37 @@ describe("createSynologyChatPlugin", () => {
       });
       expect(result.channel).toBe("synology-chat");
       expect(result.chatId).toBe("user1");
-      expect(result.messageId).toMatch(/^sc-\d+$/);
-      expect(result.receipt.primaryPlatformMessageId).toBe(result.messageId);
-      expect(result.receipt.parts[0]?.kind).toBe("text");
+      // The webhook ack carries no platform message id; the result must not fabricate one.
+      expect(result.messageId).toBe("");
+      expect(result.receipt.primaryPlatformMessageId).toBeUndefined();
+      expect(result.receipt.platformMessageIds).toHaveLength(0);
+      expect(result.receipt.parts).toHaveLength(0);
+      expect(result.receipt.threadId).toBe("user1");
+    });
+
+    it("sendMedia returns an honest empty-id result on success", async () => {
+      const plugin = synologyChatPlugin;
+      const result = await plugin.outbound.sendMedia({
+        cfg: {
+          channels: {
+            "synology-chat": {
+              enabled: true,
+              token: "t",
+              incomingUrl: "https://nas/incoming",
+              allowInsecureSsl: true,
+            },
+          },
+        },
+        mediaUrl: "https://example.com/img.png",
+        to: "user1",
+      });
+      expect(result.channel).toBe("synology-chat");
+      expect(result.chatId).toBe("user1");
+      expect(result.messageId).toBe("");
+      expect(result.receipt.primaryPlatformMessageId).toBeUndefined();
+      expect(result.receipt.platformMessageIds).toHaveLength(0);
+      expect(result.receipt.parts).toHaveLength(0);
+      expect(result.receipt.threadId).toBe("user1");
     });
 
     it("sendMedia throws when missing incomingUrl", async () => {
