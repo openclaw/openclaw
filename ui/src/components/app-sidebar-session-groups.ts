@@ -103,13 +103,6 @@ export abstract class AppSidebarSessionGroupsElement extends AppSidebarSessionMu
     }
     event.preventDefault();
     event.stopPropagation();
-    const sessionKey = readSessionDragData(event.dataTransfer);
-    if (sessionKey) {
-      const session = this.findSidebarSessionByKey(sessionKey);
-      if (session && !session.pinned) {
-        void this.patchSession(session, { pinned: true });
-      }
-    }
     const current = this.reconciledSidebarZone().sidebarEntries.filter(
       (candidate) => candidate !== entry,
     );
@@ -123,7 +116,19 @@ export abstract class AppSidebarSessionGroupsElement extends AppSidebarSessionMu
       this.finishSidebarEntryDrag();
       return;
     }
-    this.onUpdateSidebarEntries?.(current);
+    const sessionKey = readSessionDragData(event.dataTransfer);
+    const session = sessionKey ? this.findSidebarSessionByKey(sessionKey) : undefined;
+    if (session && !session.pinned) {
+      // Persist the dropped slot only once the pin lands; a failed patch must
+      // not leave an unpinned session's slot in the synced order.
+      void this.patchSession(session, { pinned: true }).then((result) => {
+        if (result === "completed") {
+          this.onUpdateSidebarEntries?.(current);
+        }
+      });
+    } else {
+      this.onUpdateSidebarEntries?.(current);
+    }
     this.finishSidebarEntryDrag();
   }
 

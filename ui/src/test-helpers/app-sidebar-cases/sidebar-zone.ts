@@ -230,11 +230,14 @@ describe("AppSidebar interleaved zone", () => {
       { pinned: true },
       { agentId: "main" },
     );
-    expect(onUpdate).toHaveBeenCalledWith([
-      "route:usage",
-      "session:agent:main:alpha",
-      "route:plugins",
-    ]);
+    // The slot write waits for the pin patch to land.
+    await waitForFast(() =>
+      expect(onUpdate).toHaveBeenCalledWith([
+        "route:usage",
+        "session:agent:main:alpha",
+        "route:plugins",
+      ]),
+    );
   });
 
   it("hides a route dropped into the session-list region", async () => {
