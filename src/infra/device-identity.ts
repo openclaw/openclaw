@@ -107,10 +107,12 @@ function withDeviceIdentityCoordinator<T>(
     try {
       coordinator.release();
     } catch (releaseError) {
-      throw new AggregateError(
+      const aggregateError = new AggregateError(
         [operationError, releaseError],
         "device identity operation and coordinator release both failed",
+        { cause: releaseError },
       );
+      throw aggregateError;
     }
     throw operationError;
   }
