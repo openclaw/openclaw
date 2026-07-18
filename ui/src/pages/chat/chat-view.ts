@@ -196,9 +196,19 @@ export type ChatProps = {
   onChatScroll?: (event: Event) => void;
   basePath?: string;
   composerControls?: TemplateResult | typeof nothing;
-  replyTarget?: { messageId: string; text: string; senderLabel?: string | null } | null;
+  replyTarget?: {
+    messageId: string;
+    text: string;
+    senderLabel?: string | null;
+    sourceMessageId?: string | null;
+  } | null;
   onClearReply?: () => void;
-  onSetReply?: (target: { messageId: string; text: string; senderLabel?: string | null }) => void;
+  onSetReply?: (target: {
+    messageId: string;
+    text: string;
+    senderLabel?: string | null;
+    sourceMessageId?: string | null;
+  }) => void;
   onRewindMessage?: (entryId: string) => Promise<boolean> | boolean;
   onForkMessage?: (entryId: string) => Promise<void> | void;
   sessionWorkspace?: SessionWorkspaceProps;

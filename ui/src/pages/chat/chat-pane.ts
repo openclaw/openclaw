@@ -2602,7 +2602,7 @@ class ChatPane extends OpenClawLightDomElement {
         ...(agentId ? { agentId } : {}),
       });
       if (!result.ok) {
-        this.publishHeaderError(result.error ?? "Failed to reveal session workspace.");
+        this.publishHeaderError(result.error ?? "Failed to reveal thread workspace.");
       }
     } catch (error) {
       this.publishHeaderError(error);

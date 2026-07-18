@@ -130,14 +130,16 @@ For ACP-specific behavior, see [ACP Agents](/tools/acp-agents).
 
 Session tools are scoped to limit what the agent can see:
 
-| Level   | Scope                                    |
-| ------- | ---------------------------------------- |
-| `self`  | Only the current session                 |
-| `tree`  | Current session + spawned sub-agents     |
-| `agent` | All sessions for this agent              |
-| `all`   | All sessions (cross-agent if configured) |
+| Level   | Scope                                                      |
+| ------- | ---------------------------------------------------------- |
+| `self`  | Only the current session                                   |
+| `tree`  | Current + spawned; reads include watched same-agent groups |
+| `agent` | All sessions for this agent                                |
+| `all`   | All sessions (cross-agent if configured)                   |
 
 Default is `tree`. Sandboxed sessions are clamped to `tree` regardless of config.
+With the default `session.dmScope: "main"`, group activity makes watched
+same-agent group sessions readable from the main session.
 
 ## Further reading
 

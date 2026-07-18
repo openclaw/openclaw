@@ -65,6 +65,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Quick start
   - H2: How cron works
   - H2: Schedule types
+  - H3: Dynamic cadence (pacing)
   - H3: Day-of-month and day-of-week use OR logic
   - H2: Event triggers (condition watchers)
   - H2: Payloads
@@ -7373,6 +7374,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /plugins/sdk-channel-outbound
 - Headings:
+  - H2: Durable ingress monitors
   - H2: Adapter
   - H2: Plain-text sanitization
   - H2: Delivery Evidence
@@ -7389,6 +7391,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Message adapter
   - H3: Inbound ingress (experimental)
   - H3: Durable ingress and replay dedupe
+  - H4: Transport classes and retention
   - H4: At-least-once side effects
   - H4: Account-scoped restart contract
   - H3: Typing indicators
@@ -10550,6 +10553,26 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Blank Control UI page
   - H2: Debugging/testing: dev server + remote Gateway
   - H2: Related
+
+## web/dashboard-architecture.md
+
+- Route: /web/dashboard-architecture
+- Headings:
+  - H2: Vision
+  - H2: Concepts
+  - H2: UX flows
+  - H2: Interaction tiers
+  - H2: Widget model and hosting
+  - H3: Widgets host content; MCP apps are one content kind
+  - H3: Transcript display: one widget card
+  - H3: Server-sourced widgets (pinned MCP apps)
+  - H2: Layout: fluid grid
+  - H2: Data model (per-agent DB)
+  - H2: Protocol surface
+  - H2: Agent tools
+  - H2: What this replaces
+  - H2: Non-goals (this program)
+  - H2: Implementation plan
 
 ## web/dashboard.md
 

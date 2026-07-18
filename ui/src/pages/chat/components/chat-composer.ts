@@ -108,7 +108,12 @@ type ChatComposerProps = {
   followUpMode?: ControlUiFollowUpMode;
   attachments?: ChatAttachment[];
   getAttachments?: () => ChatAttachment[];
-  replyTarget?: { messageId: string; text: string; senderLabel?: string | null } | null;
+  replyTarget?: {
+    messageId: string;
+    text: string;
+    senderLabel?: string | null;
+    sourceMessageId?: string | null;
+  } | null;
   realtimeTalkActive?: boolean;
   realtimeTalkStatus?: RealtimeTalkStatus;
   realtimeTalkDetail?: string | null;

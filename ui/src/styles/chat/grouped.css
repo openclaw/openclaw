@@ -718,11 +718,22 @@ details.msg-meta:not([open]) .msg-meta__details {
   color: var(--destructive-foreground);
 }
 
+:root[data-theme="openknot"] .chat-delete-confirm__yes,
+:root[data-theme="dash"] .chat-delete-confirm__yes {
+  background: var(--destructive);
+  color: var(--destructive-foreground);
+}
+
 .chat-delete-confirm__yes:hover {
   background: #dc2626;
 }
 
 :root[data-theme="dark"] .chat-delete-confirm__yes:hover {
+  background: var(--destructive-hover);
+}
+
+:root[data-theme="openknot"] .chat-delete-confirm__yes:hover,
+:root[data-theme="dash"] .chat-delete-confirm__yes:hover {
   background: var(--destructive-hover);
 }
 

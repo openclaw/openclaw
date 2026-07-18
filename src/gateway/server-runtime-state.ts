@@ -10,6 +10,7 @@ import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
 import { WebSocketServer } from "ws";
 import { resolveMcpAppSandboxPort } from "../agents/mcp-app-sandbox.js";
+import { isCoreCanvasHostEnabled } from "../canvas/config.js";
 import { resolveCanvasNodeCapability } from "../canvas/constants.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
@@ -95,6 +96,7 @@ const loadGatewayPluginsHttpModule = async () => await import("./server/plugins-
 /** Creates the HTTP/WebSocket runtime state and pinned plugin registries for one gateway start. */
 export async function createGatewayRuntimeState(params: {
   cfg: import("../config/config.js").OpenClawConfig;
+  getRuntimeConfig?: () => import("../config/config.js").OpenClawConfig;
   bindHost: string;
   port: number;
   controlUiEnabled: boolean;
@@ -165,6 +167,7 @@ export async function createGatewayRuntimeState(params: {
     releasePinnedPluginChannelRegistry();
   }
   try {
+    const loadRuntimeConfig = params.getRuntimeConfig ?? (() => params.cfg);
     const resolvePluginRouteRegistry = () =>
       params.getPluginRouteRegistry?.() ?? params.pluginRegistry;
     const clients = new Set<GatewayWsClient>();
@@ -254,7 +257,9 @@ export async function createGatewayRuntimeState(params: {
       return shouldEnforceGatewayAuthForPluginPath(resolvePluginRouteRegistry(), pathContext);
     };
     const resolvePluginNodeCapabilityRoute = (pathContext: PluginRoutePathContext) => {
-      const coreCanvasCapability = resolveCanvasNodeCapability(pathContext.candidates);
+      const coreCanvasCapability = isCoreCanvasHostEnabled(loadRuntimeConfig())
+        ? resolveCanvasNodeCapability(pathContext.candidates)
+        : undefined;
       if (coreCanvasCapability) {
         return coreCanvasCapability;
       }
@@ -309,6 +314,7 @@ export async function createGatewayRuntimeState(params: {
         getResolvedAuth: params.getResolvedAuth,
         rateLimiter: params.rateLimiter,
         getReadiness: params.getReadiness,
+        getRuntimeConfig: loadRuntimeConfig,
         isTerminalEnabled: params.isTerminalEnabled,
         tlsOptions: params.gatewayTls?.enabled ? params.gatewayTls.tlsOptions : undefined,
       });

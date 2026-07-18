@@ -44,7 +44,7 @@
 
 .config-mode-toggle__btn.active {
   background: var(--primary);
-  color: white;
+  color: var(--primary-foreground);
   box-shadow: 0 1px 3px var(--accent-subtle);
 }
 

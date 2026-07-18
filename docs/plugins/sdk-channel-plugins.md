@@ -96,14 +96,17 @@ ownership boundary, and test expectations.
 
 ### Durable ingress and replay dedupe
 
-Channels adopting the durable ingress drain follow the Telegram reference
-pattern: enqueue the raw transport envelope at a single receive chokepoint
-(no normalization at receive time), gate the transport ack on the durable
-append for webhook transports, derive one serialized lane per conversation,
-and mark the event complete at dispatch adoption. The queue's primary key is
-`(queue_name, event_id)` and completion tombstones the row instead of
-deleting it, so a late platform redelivery of the same `event_id` is rejected
-durably for the tombstone retention window.
+Channels adopting durable ingress should use `createChannelIngressMonitor`
+from `openclaw/plugin-sdk/channel-outbound` unless they need a materially
+different admission or pump contract. Enqueue the raw transport envelope at a
+single receive chokepoint (no normalization at receive time), gate the
+transport ack on the durable append for webhook transports, derive one
+serialized lane per conversation, and mark the event complete at dispatch
+adoption. The queue's primary key is `(queue_name, event_id)` and completion
+tombstones the row instead of deleting it, so a late platform redelivery of
+the same `event_id` is rejected durably for the tombstone retention window.
+See [Channel outbound API](/plugins/sdk-channel-outbound#durable-ingress-monitors)
+for the monitor API and shutdown contract.
 
 That tombstone is the layering rule for replay guards
 (`openclaw/plugin-sdk/persistent-dedupe`): a drained channel keeps a separate
@@ -115,6 +118,34 @@ retention. If your guard key would equal the drain `event_id`, delete the
 guard when adopting the drain and size `completedTtlMs`/`completedMaxEntries`
 to cover the old guard window instead. Non-dedupe protections (age fences,
 outbound echo caches) are unrelated to this rule and stay.
+
+#### Transport classes and retention
+
+Classify a transport by the recovery guarantee at its receive boundary:
+
+- **Ack-gated webhook or event delivery:** acknowledge or return success only
+  after the durable append. An append failure must leave the delivery eligible
+  for retry or fail the receive boundary. This class includes Slack, SMS, Zalo,
+  Microsoft Teams, Google Chat, LINE, and Synology Chat.
+- **Awaited polling or stream delivery:** advance the remote cursor or send the
+  transport ack only after the append. When no explicit cursor exists, keep the
+  receive callback serialized and awaited so an append failure cannot let the
+  receive loop run ahead. Telegram polling, Signal, and Tlon use this class;
+  Telegram webhook delivery follows the ack-gated rule above.
+- **Non-replay sockets:** IRC, Mattermost, Twitch, and Zalo Personal cannot ask
+  the platform to redeliver an accepted event. Their durable queue protects the
+  process crash window and supports local restart recovery; completion
+  tombstones are near-inert against platform replay.
+
+Use 30 days as the fleet tombstone-TTL convention, not as an SDK default. A
+high-volume redelivery window normally uses a 20,000-entry completed cap;
+lower-volume awaited and non-replay transports normally use 1,000-2,000.
+Current exceptions include LINE's 4,096-entry caps, SMS's 24-hour completed
+TTL, and Tlon's cap-only completed retention. Failed-row caps may also be lower
+than completed caps. TTL and cap both prune rows, so effective retention ends
+when the first bound is reached. Deviate only for a documented platform retry
+horizon, preserved shipped replay-guard window, expected volume or disk budget,
+or non-replay transport, and cover the retention contract with tests.
 
 #### At-least-once side effects
 

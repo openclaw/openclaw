@@ -476,11 +476,11 @@ async function runClaudeCliHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   noteClaudeCliHealth(ctx.cfg);
 }
 
-async function runCoreContributionHealthRepair(
+async function runCoreContributionHealth(
   ctx: DoctorHealthFlowContext,
   checkIds: readonly string[],
 ): Promise<void> {
-  if (!ctx.prompter.shouldRepair || checkIds.length === 0) {
+  if (checkIds.length === 0) {
     return;
   }
   const { CORE_HEALTH_CHECKS } = await import("./doctor-core-checks.js");
@@ -495,6 +495,7 @@ async function runCoreContributionHealthRepair(
     return;
   }
   const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg));
+  const dryRun = !ctx.prompter.shouldRepair;
   const result = await runDoctorHealthRepairs(
     {
       mode: "fix",
@@ -502,10 +503,12 @@ async function runCoreContributionHealthRepair(
       cfg: ctx.cfg,
       cwd: workspaceDir,
       configPath: ctx.configPath,
+      dryRun,
     },
-    { checks },
+    { checks, dryRun },
   );
   ctx.cfg = result.config;
+  renderStructuredHealthFindings(ctx, dryRun ? result.findings : result.remainingFindings);
   if (result.changes.length > 0) {
     note(result.changes.join("\n"), "Doctor changes");
   }
@@ -520,7 +523,7 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
   const { note } = await loadNoteModule();
   // Settle retired-plugin state cleanup (may replace ctx.cfg) before the
   // legacy-state detect/migrate pair reads the config.
-  await runCoreContributionHealthRepair(ctx, ["core/doctor/removed-workspaces-state"]);
+  await runCoreContributionHealth(ctx, ["core/doctor/removed-workspaces-state"]);
   const doctorOnlyStateMigrations = ctx.options.repair === true || ctx.options.yes === true;
   const legacyState = await detectLegacyStateMigrations({
     cfg: ctx.cfg,
@@ -769,7 +772,7 @@ async function runWebFetchProxyHealth(ctx: DoctorHealthFlowContext): Promise<voi
 
 async function runBrowserHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteChromeMcpBrowserReadiness } = await import("../commands/doctor-browser.js");
-  await runCoreContributionHealthRepair(ctx, ["core/doctor/browser-clawd-profile-residue"]);
+  await runCoreContributionHealth(ctx, ["core/doctor/browser-clawd-profile-residue"]);
   await noteChromeMcpBrowserReadiness(ctx.cfg);
 }
 

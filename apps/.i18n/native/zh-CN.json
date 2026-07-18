@@ -24154,6 +24154,11 @@
       "translated": "结束语音输入"
     },
     {
+      "id": "native.apple.95eeae0399fbc990",
+      "source": "Cancel",
+      "translated": "取消"
+    },
+    {
       "id": "native.apple.5a0793d2827b9399",
       "source": "Transcribe speech into the message",
       "translated": "将语音转写到消息中。"

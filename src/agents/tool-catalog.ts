@@ -4,6 +4,7 @@
  * for OpenClaw-owned tools.
  */
 import {
+  ASK_USER_TOOL_DISPLAY_SUMMARY,
   CRON_TOOL_DISPLAY_SUMMARY,
   EXEC_TOOL_DISPLAY_SUMMARY,
   PROCESS_TOOL_DISPLAY_SUMMARY,
@@ -388,6 +389,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     description: UPDATE_PLAN_TOOL_DISPLAY_SUMMARY,
     sectionId: "agents",
     profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "ask_user",
+    label: "ask_user",
+    description: ASK_USER_TOOL_DISPLAY_SUMMARY,
+    sectionId: "agents",
+    profiles: ["coding", "messaging"],
     includeInOpenClawGroup: true,
   },
   {

@@ -89,7 +89,7 @@ const buildChatItemsMock = vi.hoisted(() =>
             key: "divider:compaction:test",
             label: "Compacted history",
             description:
-              "The compacted transcript is preserved as a checkpoint. Open session checkpoints to branch or restore from that compacted view.",
+              "The compacted transcript is preserved as a checkpoint. Open thread checkpoints to branch or restore from that compacted view.",
             action: {
               kind: "session-checkpoints",
               label: "Open checkpoints",
@@ -698,7 +698,7 @@ describe("chat compaction divider", () => {
       "Compacted history",
     );
     expect(container.querySelector(".chat-divider__description")?.textContent?.trim()).toBe(
-      "The compacted transcript is preserved as a checkpoint. Open session checkpoints to branch or restore from that compacted view.",
+      "The compacted transcript is preserved as a checkpoint. Open thread checkpoints to branch or restore from that compacted view.",
     );
     const button = container.querySelector<HTMLButtonElement>(".chat-divider__action");
     expect(button?.textContent?.trim()).toBe("Open checkpoints");
@@ -1434,7 +1434,7 @@ describe("chat composer workbench", () => {
     expect(browserFileButton?.disabled).toBe(false);
     browserFileButton?.click();
     const collapseToggle = container.querySelector<HTMLButtonElement>(
-      'button[aria-label="Collapse session workspace"]',
+      'button[aria-label="Collapse thread workspace"]',
     );
     expect(collapseToggle?.getAttribute("aria-keyshortcuts")).toBe("Meta+Shift+B");
     collapseToggle?.click();
@@ -1444,7 +1444,7 @@ describe("chat composer workbench", () => {
     expect(onCopyPath).toHaveBeenCalledWith("/workspace/AGENTS.md");
     expect(onBrowsePath).toHaveBeenCalledWith("ui");
     expect(onToggleCollapsed).toHaveBeenCalledTimes(1);
-    expect(container.querySelector('button[aria-label="Session workspace"]')).toBeNull();
+    expect(container.querySelector('button[aria-label="Thread workspace"]')).toBeNull();
   });
 
   it("stacks the detail sidebar under the thread with a horizontal divider on narrow panes", () => {
@@ -4165,7 +4165,7 @@ describe("chat model controls", () => {
     );
 
     expect(container.querySelector(".chat-controls__locked-model-value")?.textContent).toBe(
-      "Session model",
+      "Thread model",
     );
     expect(container.textContent).not.toContain("Codex-controlled model");
   });

@@ -1307,7 +1307,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await trigger.waitFor({ timeout: 10_000 });
       expect((await trigger.textContent())?.trim()).toBe("~95%");
       expect(await trigger.getAttribute("aria-label")).toBe(
-        "Session context usage: ~190k of 200k (~95%)",
+        "Thread context usage: ~190k of 200k (~95%)",
       );
       expect(
         await trigger.evaluate((element) => element.classList.contains("context-ring--warning")),
@@ -3474,15 +3474,15 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         .evaluate((label) => getComputedStyle(label).fontWeight);
       expect(activeWeight).toBe(inactiveWeight);
 
-      await page.getByRole("button", { name: "Sort sessions" }).click();
+      await page.getByRole("button", { name: "Sort threads" }).click();
       await page.getByRole("menuitemradio", { name: "Last updated" }).click();
       await expect.poll(() => sidebarSessionOrder(page)).toEqual(updatedOrder);
 
-      await page.getByRole("button", { name: "Sort sessions" }).click();
+      await page.getByRole("button", { name: "Sort threads" }).click();
       await page.getByRole("menuitemradio", { name: "Created" }).click();
       await expect.poll(() => sidebarSessionOrder(page)).toEqual(createdOrder);
 
-      await page.getByRole("button", { name: "Sort sessions" }).click();
+      await page.getByRole("button", { name: "Sort threads" }).click();
       await page.getByRole("main").click();
       await expect.poll(() => page.getByRole("menuitemradio", { name: "Created" }).count()).toBe(0);
     } finally {
@@ -3572,7 +3572,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
       const listCountBeforePatch = (await gateway.getRequests("sessions.list")).length;
       await row.hover();
-      await row.getByRole("button", { name: "Pin session" }).click();
+      await row.getByRole("button", { name: "Pin thread" }).click();
 
       const patchRequest = await gateway.waitForRequest("sessions.patch");
       expect(requireRecord(patchRequest.params)).toMatchObject({

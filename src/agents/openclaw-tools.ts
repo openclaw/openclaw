@@ -4,6 +4,7 @@ import type {
   SourceReplyDeliveryMode,
   TaskSuggestionDeliveryMode,
 } from "../auto-reply/get-reply-options.types.js";
+import { isCoreCanvasHostEnabled } from "../canvas/config.js";
 import { createShowWidgetTool } from "../canvas/widget-tool.js";
 import type { ChatType } from "../channels/chat-type.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
@@ -178,7 +179,7 @@ export function createOpenClawTools(
     senderIsOwner?: boolean;
     /** Server-owned operation-local origin for conversation-read visibility policy. */
     conversationReadOrigin?: ConversationReadInvocationOrigin;
-    /** Restrict the cron tool to self-removing this active cron job. */
+    /** Restrict cron operations to the active cron job's self-scoped surface. */
     cronSelfRemoveOnlyJobId?: string;
     /** Require explicit message targets (no implicit last-route sends). */
     requireExplicitMessageTarget?: boolean;
@@ -496,6 +497,7 @@ export function createOpenClawTools(
               threadId: options?.currentThreadTs ?? options?.agentThreadId,
             },
             creatorToolAllowlist: options?.cronCreatorToolAllowlist,
+            runId: options?.runId,
             ...(options?.cronSelfRemoveOnlyJobId
               ? { selfRemoveOnlyJobId: options.cronSelfRemoveOnlyJobId }
               : {}),
@@ -527,7 +529,7 @@ export function createOpenClawTools(
     ...(messageTool && includeMessageTool ? [messageTool] : []),
     // Discord sessions get the Discord plugin's own show_widget (Activities
     // delivery); registering the core tool there would collide on the name.
-    ...(options?.agentChannel === "discord"
+    ...(options?.agentChannel === "discord" || !isCoreCanvasHostEnabled(resolvedConfig)
       ? []
       : [
           createShowWidgetTool({
@@ -591,6 +593,7 @@ export function createOpenClawTools(
           createAskUserTool({
             agentId: sessionAgentId,
             sessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+            runId: options?.runId,
           }),
         ]
       : []),
