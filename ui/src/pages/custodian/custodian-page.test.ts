@@ -729,6 +729,72 @@ describe("custodian page", () => {
     expect(page.querySelector(".custodian__nudge")?.textContent).toContain("Telegram is degraded");
   });
 
+  it("reports a failed restart after an earlier clean stop", async () => {
+    const request = vi.fn().mockResolvedValue({
+      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+      reply: "Everything is healthy.",
+      action: "none",
+    });
+    const { context, emitGatewayEvent } = createContext(request);
+    const { page } = await mountPage(context, { onboarding: false });
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+
+    emitGatewayEvent({
+      event: "health",
+      payload: {
+        channelLabels: { telegram: "Telegram" },
+        channels: {
+          telegram: {
+            configured: true,
+            enabled: true,
+            running: false,
+            restartPending: false,
+            reconnectAttempts: 0,
+            healthState: "not-running",
+            lastStopAt: 1_700_000_000_000,
+            lastStartAt: 1_700_000_001_000,
+            lastError: "failed to initialize transport",
+          },
+        },
+      },
+    });
+    await page.updateComplete;
+    expect(page.querySelector(".custodian__nudge")?.textContent).toContain("Telegram is degraded");
+  });
+
+  it("reports a current failed probe for an intentionally stopped channel", async () => {
+    const request = vi.fn().mockResolvedValue({
+      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+      reply: "Everything is healthy.",
+      action: "none",
+    });
+    const { context, emitGatewayEvent } = createContext(request);
+    const { page } = await mountPage(context, { onboarding: false });
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+
+    emitGatewayEvent({
+      event: "health",
+      payload: {
+        channelLabels: { telegram: "Telegram" },
+        channels: {
+          telegram: {
+            configured: true,
+            enabled: true,
+            running: false,
+            restartPending: false,
+            reconnectAttempts: 0,
+            healthState: "not-running",
+            lastStopAt: 1_700_000_001_000,
+            lastStartAt: 1_700_000_000_000,
+            probe: { ok: false },
+          },
+        },
+      },
+    });
+    await page.updateComplete;
+    expect(page.querySelector(".custodian__nudge")?.textContent).toContain("Telegram is degraded");
+  });
+
   it("shows a channel disconnect from the aggregate health row", async () => {
     const request = vi.fn().mockResolvedValue({
       sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",

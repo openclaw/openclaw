@@ -64,20 +64,7 @@ function classifyChannelAccount(
       message: `what happened with ${canonical}?`,
     };
   }
-  if (healthState === "not-running" && account.running === false) {
-    const reconnectAttempts =
-      typeof account.reconnectAttempts === "number" ? account.reconnectAttempts : 0;
-    if (
-      account.restartPending === false &&
-      typeof account.lastStopAt === "number" &&
-      reconnectAttempts < 10
-    ) {
-      // server-channels only leaves this low-count, non-retrying shape after a clean/manual stop.
-      // Startup failures lack lastStopAt; post-start failures retry, terminate, or reach 10 attempts.
-      return null;
-    }
-  }
-  if (typeof account.lastError === "string" && account.lastError.trim()) {
+  if (hasFailedProbe(account)) {
     return {
       severity: 3,
       kind: "channel-degraded",
@@ -85,7 +72,23 @@ function classifyChannelAccount(
       message: `what happened with ${canonical}?`,
     };
   }
-  if (hasFailedProbe(account)) {
+  if (healthState === "not-running" && account.running === false) {
+    const reconnectAttempts =
+      typeof account.reconnectAttempts === "number" ? account.reconnectAttempts : 0;
+    const lastStartAt = typeof account.lastStartAt === "number" ? account.lastStartAt : undefined;
+    const lastStopAt = typeof account.lastStopAt === "number" ? account.lastStopAt : undefined;
+    if (
+      account.restartPending === false &&
+      lastStopAt !== undefined &&
+      (lastStartAt === undefined || lastStopAt >= lastStartAt) &&
+      reconnectAttempts < 10
+    ) {
+      // server-channels only leaves this low-count, non-retrying shape after a clean/manual stop.
+      // A newer start timestamp means a pre-handoff startup failed after an earlier clean stop.
+      return null;
+    }
+  }
+  if (typeof account.lastError === "string" && account.lastError.trim()) {
     return {
       severity: 3,
       kind: "channel-degraded",
