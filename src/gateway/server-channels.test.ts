@@ -2,7 +2,11 @@
  * Server channel lifecycle tests.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelGatewayContext, ChannelId, ChannelPlugin } from "../channels/plugins/types.js";
+import type {
+  ChannelGatewayContext,
+  ChannelId,
+  ChannelPlugin,
+} from "../channels/plugins/types.public.js";
 import {
   createSubsystemLogger,
   type SubsystemLogger,
@@ -14,6 +18,7 @@ import { createRuntimeChannel } from "../plugins/runtime/runtime-channel.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { setActiveDegradedSecretOwners } from "../secrets/runtime-degraded-state.js";
 import { createChannelManager, type ChannelManager } from "./server-channels.js";
 
 const hoisted = vi.hoisted(() => {
@@ -251,6 +256,7 @@ describe("server-channels auto restart", () => {
     hoisted.sleepWithAbort.mockClear();
     hoisted.startChannelApprovalHandlerBootstrap.mockReset();
     hoisted.startChannelApprovalHandlerBootstrap.mockResolvedValue(async () => {});
+    setActiveDegradedSecretOwners([]);
   });
 
   afterEach(async () => {
@@ -264,6 +270,7 @@ describe("server-channels auto restart", () => {
     await flushMicrotasks();
     vi.clearAllTimers();
     vi.useRealTimers();
+    setActiveDegradedSecretOwners([]);
     setActivePluginRegistry(previousRegistry ?? createEmptyPluginRegistry());
   });
 
@@ -1270,6 +1277,45 @@ describe("server-channels auto restart", () => {
     expect(succeedingStart).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps only the degraded channel account cold", async () => {
+    const discordStart = vi.fn(async (_context: ChannelGatewayContext<TestAccount>) => {});
+    const slackStart = vi.fn(async () => {});
+    const discordResolve = vi.fn(() => ({ enabled: true, configured: true }));
+    installTestRegistry(
+      createTestPlugin({
+        id: "discord",
+        order: 1,
+        listAccountIds: () => ["broken", "healthy"],
+        resolveAccount: discordResolve,
+        startAccount: discordStart,
+      }),
+      createTestPlugin({ id: "slack", order: 2, startAccount: slackStart }),
+    );
+    setActiveDegradedSecretOwners([
+      {
+        ownerKind: "account",
+        ownerId: "discord:broken",
+        state: "unavailable",
+        paths: ["channels.discord.accounts.broken.token"],
+        refKeys: ["env:default:BROKEN_TOKEN"],
+        reason: "secret reference was not found",
+      },
+    ]);
+    const manager = createManager({ channelIds: ["discord", "slack"] });
+
+    await expect(manager.startChannels()).resolves.toBeUndefined();
+
+    expect(discordStart.mock.calls.map(([context]) => context.accountId)).toEqual(["healthy"]);
+    expect(discordResolve).toHaveBeenCalledOnce();
+    expect(discordResolve).toHaveBeenCalledWith(expect.anything(), "healthy");
+    expect(slackStart).toHaveBeenCalledTimes(1);
+    expect(manager.getRuntimeSnapshot().channelAccounts.discord?.broken).toMatchObject({
+      running: false,
+      lastError:
+        "Secret owner account:discord:broken is configured but unavailable (secret reference was not found).",
+    });
+  });
+
   it("uses fallback logger and runtime when a channel is missing startup wiring", async () => {
     const startAccount = vi.fn(async () => {
       throw new Error("invalid_auth");
@@ -1650,3 +1696,4 @@ describe("server-channels auto restart", () => {
     expect(manager.isHealthMonitorEnabled("discord", "")).toBe(true);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

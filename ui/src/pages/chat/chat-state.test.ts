@@ -1,11 +1,12 @@
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { SLASH_COMMANDS } from "../../lib/chat/commands.ts";
-import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
-  applyRemoteSlashCommandsResult,
-  resetChatSlashCommandMetadataForTest,
-} from "./chat-commands.ts";
+  buildFallbackSlashCommands,
+  replaceSlashCommands,
+  SLASH_COMMANDS,
+} from "../../lib/chat/commands.ts";
+import { createStorageMock } from "../../test-helpers/storage.ts";
+import { applyRemoteSlashCommandsResult } from "./chat-commands.ts";
 import {
   admitQueuedMessageForSession,
   removeQueuedMessage,
@@ -14,6 +15,7 @@ import {
 } from "./chat-queue.ts";
 import {
   ChatStateController,
+  handlePageGatewayEvent,
   refreshChatMetadata,
   resetChatStateForRouteSession,
   retryChatComposerMemoryFallback,
@@ -39,12 +41,105 @@ vi.mock("../../app/assistant-identity.ts", async (importOriginal) => ({
 }));
 
 afterEach(() => {
-  resetChatSlashCommandMetadataForTest();
+  replaceSlashCommands(buildFallbackSlashCommands());
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
 describe("ChatStateController render lifecycle", () => {
+  it("coalesces stream invalidations into one animation frame", () => {
+    let nextFrame = 1;
+    const frames = new Map<number, FrameRequestCallback>();
+    vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation((callback) => {
+      const id = nextFrame++;
+      frames.set(id, callback);
+      return id;
+    });
+    const cancelFrame = vi.spyOn(globalThis, "cancelAnimationFrame").mockImplementation((id) => {
+      frames.delete(id);
+    });
+    const requestUpdate = vi.fn();
+    const state = {
+      chatMessages: [],
+      chatMessagesBySession: new Map(),
+      chatRunId: "run-1",
+      chatStream: null,
+      chatStreamRenderFrame: null,
+      chatStreamStartedAt: 1,
+      lastError: null,
+      pendingSessionMessageReloadSessionKey: null,
+      requestUpdate,
+      sessionKey: "main",
+    } as unknown as ChatPageHost;
+
+    for (const deltaText of ["A", "B", "C"]) {
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "chat",
+        payload: { state: "delta", runId: "run-1", sessionKey: "main", deltaText },
+      });
+    }
+
+    expect(frames.size).toBe(1);
+    expect(requestUpdate).not.toHaveBeenCalled();
+    const firstFrame = frames.get(1);
+    frames.delete(1);
+    firstFrame?.(0);
+    expect(requestUpdate).toHaveBeenCalledOnce();
+    expect(state.chatStreamRenderFrame).toBeNull();
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "chat",
+      payload: { state: "delta", runId: "run-1", sessionKey: "main", deltaText: "D" },
+    });
+    const staleFrame = frames.get(2);
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "session.operation",
+      payload: {},
+    });
+    staleFrame?.(0);
+
+    expect(cancelFrame).toHaveBeenCalledWith(2);
+    expect(requestUpdate).toHaveBeenCalledTimes(2);
+    expect(state.chatStreamRenderFrame).toBeNull();
+  });
+
+  it("keeps every chat delta while batching their render", () => {
+    let scheduledFrame: FrameRequestCallback | undefined;
+    vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation((callback) => {
+      scheduledFrame = callback;
+      return 1;
+    });
+    const requestUpdate = vi.fn();
+    const state = {
+      chatMessages: [],
+      chatMessagesBySession: new Map(),
+      chatRunId: "run-1",
+      chatStream: null,
+      chatStreamRenderFrame: null,
+      chatStreamStartedAt: 1,
+      lastError: null,
+      pendingSessionMessageReloadSessionKey: null,
+      requestUpdate,
+      sessionKey: "main",
+    } as unknown as ChatPageHost;
+
+    for (const deltaText of ["A", "B", "C"]) {
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "chat",
+        payload: { state: "delta", runId: "run-1", sessionKey: "main", deltaText },
+      });
+    }
+
+    expect(state.chatStream).toBe("ABC");
+    expect(requestUpdate).not.toHaveBeenCalled();
+    scheduledFrame?.(0);
+    expect(requestUpdate).toHaveBeenCalledOnce();
+  });
+
   it("requests a render before selecting the commit promise", async () => {
     let resolveCommit: (value: boolean) => void = () => {};
     const nextCommit = new Promise<boolean>((resolve) => {
@@ -222,6 +317,29 @@ describe("route composer fallback", () => {
     } as unknown as ChatPageHost;
     return { resetChatInputHistoryNavigation, resetChatScroll, state };
   }
+
+  it("restores one atomic history snapshot when returning to a session", () => {
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    const { state } = createRouteState("");
+    state.chatMessages = [{ role: "assistant", content: "first session" }];
+    state.chatHistoryPagination = { hasMore: true, nextOffset: 400, totalMessages: 718 };
+    state.currentSessionId = "session-first";
+
+    resetChatStateForRouteSession(state, "agent:main:second");
+    state.chatMessages = [{ role: "assistant", content: "second session" }];
+    state.chatHistoryPagination = { hasMore: false, totalMessages: 1 };
+    state.currentSessionId = "session-second";
+
+    resetChatStateForRouteSession(state, "agent:main:first");
+
+    expect(state.chatMessages).toEqual([{ role: "assistant", content: "first session" }]);
+    expect(state.chatHistoryPagination).toEqual({
+      hasMore: true,
+      nextOffset: 400,
+      totalMessages: 718,
+    });
+    expect(state.currentSessionId).toBe("session-first");
+  });
 
   it("reapplies a live send projection when a subscribed pane switches into its scope", () => {
     vi.stubGlobal("sessionStorage", createStorageMock());
@@ -1250,3 +1368,4 @@ describe("refreshChatMetadata", () => {
     expect(SLASH_COMMANDS.some((command) => command.name === "work-command")).toBe(false);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

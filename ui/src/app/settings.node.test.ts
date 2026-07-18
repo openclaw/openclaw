@@ -6,12 +6,12 @@ import {
   loadLocalUserIdentity,
   loadSettings,
   persistSessionToken,
-  resetUnpersistedSettingsForTest,
   resolvePageGatewaySettings,
-  resolveApplicationStartupSettings,
+  saveLocalUserIdentity,
   saveSettings,
   type UiSettings,
 } from "./settings.ts";
+import { resolveApplicationStartupSettings } from "./startup-settings.ts";
 
 function setTestLocation(params: { protocol: string; host: string; pathname: string }) {
   vi.stubGlobal("location", {
@@ -106,7 +106,6 @@ describe("resolveApplicationStartupSettings", () => {
 
 describe("loadSettings default gateway URL derivation", () => {
   beforeEach(() => {
-    resetUnpersistedSettingsForTest();
     vi.stubGlobal("localStorage", createStorageMock());
     vi.stubGlobal("sessionStorage", createStorageMock());
     vi.stubGlobal("navigator", { language: "en-US" } as Navigator);
@@ -116,8 +115,12 @@ describe("loadSettings default gateway URL derivation", () => {
   });
 
   afterEach(() => {
-    resetUnpersistedSettingsForTest();
     vi.restoreAllMocks();
+    vi.stubGlobal("localStorage", createStorageMock());
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    vi.stubGlobal("navigator", { language: "en-US" } as Navigator);
+    setTestLocation({ protocol: "https:", host: "gateway.example", pathname: "/" });
+    saveSettings(loadSettings());
     setControlUiBasePath(undefined);
     vi.unstubAllGlobals();
   });
@@ -363,7 +366,7 @@ describe("loadSettings default gateway URL derivation", () => {
     expect(sessionStorage.length).toBe(1);
   });
 
-  it("persists sidebar customization across save and load, normalizing bad values", () => {
+  it("persists custodian unpinning across save and load, normalizing bad values", () => {
     setTestLocation({
       protocol: "https:",
       host: "gateway.example:8443",
@@ -400,8 +403,43 @@ describe("loadSettings default gateway URL derivation", () => {
     persisted.navWidth = 220;
     localStorage.setItem(scopedKey, JSON.stringify(persisted));
 
-    expect(loadSettings().sidebarPinnedRoutes).toEqual(["usage", "cron", "plugins"]);
+    expect(loadSettings().sidebarPinnedRoutes).toEqual(["custodian", "usage", "cron", "plugins"]);
     expect(loadSettings().navWidth).toBe(258);
+  });
+
+  it("persists pinned agents and drops malformed or duplicate entries", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/",
+    });
+
+    const gwUrl = expectedGatewayUrl("");
+    saveSettings({
+      gatewayUrl: gwUrl,
+      token: "",
+      sessionKey: "main",
+      lastActiveSessionKey: "main",
+      theme: "claw",
+      themeMode: "system",
+      chatShowThinking: true,
+      chatShowToolCalls: true,
+      splitRatio: 0.6,
+      navCollapsed: false,
+      navWidth: 258,
+      sidebarPinnedRoutes: [],
+      pinnedAgentIds: ["main", "research"],
+    });
+    expect(loadSettings().pinnedAgentIds).toEqual(["main", "research"]);
+
+    const scopedKey = `openclaw.control.settings.v1:${gwUrl}`;
+    const persisted = JSON.parse(localStorage.getItem(scopedKey) ?? "{}") as Record<
+      string,
+      unknown
+    >;
+    persisted.pinnedAgentIds = ["main", "main", 7, "  ", " research "];
+    localStorage.setItem(scopedKey, JSON.stringify(persisted));
+    expect(loadSettings().pinnedAgentIds).toEqual(["main", "research"]);
   });
 
   it("normalizes persisted text scale to the nearest supported stop", () => {
@@ -469,6 +507,60 @@ describe("loadSettings default gateway URL derivation", () => {
       JSON.stringify({ gatewayUrl: gwUrl, chatSendShortcut: "unsupported" }),
     );
     expect(loadSettings().chatSendShortcut).toBe("enter");
+  });
+
+  it("persists only explicit chat follow-up overrides", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/",
+    });
+
+    const gwUrl = expectedGatewayUrl("");
+    const scopedKey = `openclaw.control.settings.v1:${gwUrl}`;
+    expect(loadSettings().chatFollowUpMode).toBeUndefined();
+    saveSettings({ ...loadSettings(), chatFollowUpMode: "queue" });
+    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}").chatFollowUpMode).toBe("queue");
+    expect(loadSettings().chatFollowUpMode).toBe("queue");
+
+    saveSettings({ ...loadSettings(), chatFollowUpMode: "steer" });
+    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}").chatFollowUpMode).toBe("steer");
+    expect(loadSettings().chatFollowUpMode).toBe("steer");
+
+    saveSettings({ ...loadSettings(), chatFollowUpMode: undefined });
+    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}")).not.toHaveProperty(
+      "chatFollowUpMode",
+    );
+    localStorage.setItem(
+      scopedKey,
+      JSON.stringify({ gatewayUrl: gwUrl, chatFollowUpMode: "interrupt" }),
+    );
+    expect(loadSettings().chatFollowUpMode).toBeUndefined();
+  });
+
+  it("persists only the non-default catalog open target", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/",
+    });
+
+    const gwUrl = expectedGatewayUrl("");
+    const scopedKey = `openclaw.control.settings.v1:${gwUrl}`;
+    expect(loadSettings().catalogOpenTarget).toBe("viewer");
+    saveSettings({ ...loadSettings(), catalogOpenTarget: "terminal" });
+    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}").catalogOpenTarget).toBe("terminal");
+    expect(loadSettings().catalogOpenTarget).toBe("terminal");
+
+    saveSettings({ ...loadSettings(), catalogOpenTarget: "viewer" });
+    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}")).not.toHaveProperty(
+      "catalogOpenTarget",
+    );
+    localStorage.setItem(
+      scopedKey,
+      JSON.stringify({ gatewayUrl: gwUrl, catalogOpenTarget: "shell" }),
+    );
+    expect(loadSettings().catalogOpenTarget).toBe("viewer");
   });
 
   it("persists only a normalized realtime Talk microphone id", () => {
@@ -819,6 +911,20 @@ describe("loadSettings default gateway URL derivation", () => {
       name: "Buns",
       avatar: "🦞",
     });
+  });
+
+  it("persists and clears normalized local user identity", () => {
+    expect(saveLocalUserIdentity({ name: " Buns ", avatar: " 🦞 " })).toEqual({
+      name: "Buns",
+      avatar: "🦞",
+    });
+    expect(loadLocalUserIdentity()).toEqual({ name: "Buns", avatar: "🦞" });
+
+    expect(saveLocalUserIdentity({ name: null, avatar: null })).toEqual({
+      name: null,
+      avatar: null,
+    });
+    expect(localStorage.getItem("openclaw.control.user.v1")).toBeNull();
   });
 
   it("normalizes invalid local user identity values on load", () => {

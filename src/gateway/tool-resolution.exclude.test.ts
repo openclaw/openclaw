@@ -150,8 +150,32 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     ]);
     expect(nonOwnerResult.tools.map((tool) => tool.name)).toEqual(["read", "sessions_spawn"]);
     const args = readCreateToolsArgs(1);
-    expect(args.pluginToolDenylist).toEqual(["cron", "gateway", "nodes", "computer"]);
-    expect(args.inheritedToolDenylist).toEqual(["cron", "gateway", "nodes", "computer"]);
+    expect(args.pluginToolDenylist).toEqual([
+      "cron",
+      "gateway",
+      "sessions",
+      "screen",
+      "terminal",
+      "conversations_list",
+      "conversations_send",
+      "conversations_turn",
+      "nodes",
+      "computer",
+      "openclaw",
+    ]);
+    expect(args.inheritedToolDenylist).toEqual([
+      "cron",
+      "gateway",
+      "sessions",
+      "screen",
+      "terminal",
+      "conversations_list",
+      "conversations_send",
+      "conversations_turn",
+      "nodes",
+      "computer",
+      "openclaw",
+    ]);
   });
 
   it("keeps real gateway deny policy inheritable while excluding native dedup tools", () => {

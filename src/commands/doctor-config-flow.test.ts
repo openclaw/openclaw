@@ -1538,30 +1538,6 @@ describe("doctor config flow", () => {
     runDoctorConfigPreflightOptionsMock.mockClear();
   });
 
-  it("grants config preflight cross-state imports only with repair and direct capability", async () => {
-    await runDoctorConfigWithInput({
-      config: {},
-      repair: true,
-      run: ({ options, confirm }) =>
-        loadAndMaybeMigrateDoctorConfig({
-          options: { ...options, crossStateDirImports: true },
-          confirm: async () => confirm(),
-        }),
-    });
-    expect(runDoctorConfigPreflightOptionsMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({ crossStateDirImports: true }),
-    );
-
-    await runDoctorConfigWithInput({
-      config: {},
-      repair: true,
-      run: loadAndMaybeMigrateDoctorConfig,
-    });
-    expect(runDoctorConfigPreflightOptionsMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({ crossStateDirImports: false }),
-    );
-  });
-
   it("preserves invalid config for doctor repairs", async () => {
     const result = await runDoctorConfigWithInput({
       config: {
@@ -3166,3 +3142,4 @@ describe("doctor config flow", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

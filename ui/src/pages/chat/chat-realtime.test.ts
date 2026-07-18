@@ -1,16 +1,18 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
-import { loadSettings, resetUnpersistedSettingsForTest, saveSettings } from "../../app/settings.ts";
+import { loadSettings, saveSettings } from "../../app/settings.ts";
 import {
   attachChatRealtimeActions,
   createInitialChatRealtimeState,
   type ChatRealtimeState,
 } from "./chat-realtime.ts";
-import { RealtimeTalkSession, type RealtimeTalkCallbacks } from "./realtime-talk.ts";
+import type { RealtimeTalkCallbacks } from "./realtime-talk-shared.ts";
+import { RealtimeTalkSession } from "./realtime-talk.ts";
 
 type InspectableRealtimeTalkSession = {
   callbacks: RealtimeTalkCallbacks;
-  localOptions: { inputDeviceId?: string };
+  options: { provider?: string; transport?: string; capabilities?: string[] };
+  localOptions: { inputDeviceId?: string; videoEnabled?: boolean };
 };
 
 function inspectSession(state: ChatRealtimeState): InspectableRealtimeTalkSession {
@@ -42,7 +44,6 @@ describe("chat realtime actions", () => {
   let startSpy: MockInstance<RealtimeTalkSession["start"]>;
 
   beforeEach(() => {
-    resetUnpersistedSettingsForTest();
     vi.stubGlobal("localStorage", window.localStorage);
     localStorage.clear();
     startSpy = vi.spyOn(RealtimeTalkSession.prototype, "start").mockResolvedValue(undefined);
@@ -50,8 +51,9 @@ describe("chat realtime actions", () => {
   });
 
   afterEach(() => {
-    resetUnpersistedSettingsForTest();
     vi.restoreAllMocks();
+    saveSettings(loadSettings());
+    localStorage.clear();
     vi.unstubAllGlobals();
   });
 
@@ -63,6 +65,24 @@ describe("chat realtime actions", () => {
 
     expect(inspectSession(state).localOptions.inputDeviceId).toBe("usb-mic");
     expect(startSpy).toHaveBeenCalledOnce();
+  });
+
+  it("launches video talk through the configured provider and owns the preview stream", async () => {
+    const state = createState();
+
+    await state.toggleRealtimeTalk({ video: true });
+    const session = inspectSession(state);
+    const stream = {} as MediaStream;
+    session.callbacks.onVideoStream?.(stream);
+
+    expect(session.options.provider).toBeUndefined();
+    expect(session.options.transport).toBeUndefined();
+    expect(session.options.capabilities).toEqual(["camera-frame"]);
+    expect(session.localOptions.videoEnabled).toBe(true);
+    expect(state.realtimeTalkVideoStream).toBe(stream);
+
+    await state.toggleRealtimeTalk();
+    expect(state.realtimeTalkVideoStream).toBeNull();
   });
 
   it("re-reads the persisted microphone on every launch instead of caching it", async () => {
@@ -106,6 +126,37 @@ describe("chat realtime actions", () => {
 
     callbacks.onStatus?.("error", "capture failed");
     expect(state.realtimeTalkInputLevel.value).toBe(0);
+  });
+
+  it("keeps a late final rewrite in its original user bubble", async () => {
+    const state = createState();
+    await state.toggleRealtimeTalk();
+    const { callbacks } = inspectSession(state);
+
+    callbacks.onTranscript?.({ role: "user", text: "Can you tack", final: false });
+    callbacks.onTranscript?.({ role: "assistant", text: "Checking", final: false });
+    callbacks.onTranscript?.({ role: "user", text: "Can you check?", final: true });
+
+    expect(state.realtimeTalkConversation).toMatchObject([
+      { role: "user", text: "Can you check?", isStreaming: false },
+      { role: "assistant", text: "Checking", isStreaming: true },
+    ]);
+  });
+
+  it("starts a new user bubble after assistant output for a distinct final turn", async () => {
+    const state = createState();
+    await state.toggleRealtimeTalk();
+    const { callbacks } = inspectSession(state);
+
+    callbacks.onTranscript?.({ role: "user", text: "First request", final: false });
+    callbacks.onTranscript?.({ role: "assistant", text: "Checking", final: false });
+    callbacks.onTranscript?.({ role: "user", text: "Second request", final: true });
+
+    expect(state.realtimeTalkConversation).toMatchObject([
+      { role: "user", text: "First request", isStreaming: false },
+      { role: "assistant", text: "Checking", isStreaming: false },
+      { role: "user", text: "Second request", isStreaming: false },
+    ]);
   });
 
   it("ignores a stopped session that rejects after its replacement starts", async () => {

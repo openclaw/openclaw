@@ -11,9 +11,9 @@ import {
   resolveEnvelopeFormatOptions,
   runChannelInboundEvent,
   shouldDebounceTextInbound,
+  type ChannelInboundTurnPlan,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
-  deliverInboundReplyWithMessageSendContext,
   createChannelMessageReplyPipeline,
   resolveChannelStreamingBlockEnabled,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -23,15 +23,12 @@ import {
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
 } from "openclaw/plugin-sdk/conversation-runtime";
-import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { normalizeScpRemoteHost } from "openclaw/plugin-sdk/host-runtime";
 import { isInboundPathAllowed, kindFromMime } from "openclaw/plugin-sdk/media-runtime";
+import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { resolveTextChunkLimit, type GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
-import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
-import { createReplyDispatcherWithTyping } from "openclaw/plugin-sdk/reply-runtime";
-import { settleReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { getRuntimeConfig, type OpenClawConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, logVerbose, shouldLogVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
@@ -79,6 +76,7 @@ import {
 import { repairIMessageConversationAnchor } from "./conversation-repair.js";
 import { createIMessageEchoCachingSend, deliverReplies } from "./deliver.js";
 import { resolveIMessageDmHistoryContext, resolveIMessageDmHistoryLimit } from "./dm-history.js";
+import { createIMessageThrottledDropDiagnosticCache } from "./drop-diagnostic-cache.js";
 import { createSentMessageCache } from "./echo-cache.js";
 import {
   warnGroupAllowlistDropPerChatOnce,
@@ -86,14 +84,11 @@ import {
 } from "./group-allowlist-warnings.js";
 import {
   buildIMessageInboundReplayKey,
-  claimIMessageInboundReplay,
-  commitIMessageInboundReplay,
   createIMessageInboundReplayGuard,
   IMESSAGE_RECOVERY_MAX_AGE_MS,
   IMESSAGE_RECOVERY_MAX_ROWS,
   IMESSAGE_STALE_INBOUND_THRESHOLD_MS,
   isStaleIMessageBacklog,
-  releaseIMessageInboundReplay,
 } from "./inbound-dedupe.js";
 import {
   buildDirectIMessageReplyTarget,
@@ -165,7 +160,7 @@ function isIMessagePluginPayloadAttachment(attachment: {
   );
 }
 
-export function resolveIMessageInboundMediaInput(params: {
+function resolveIMessageInboundMediaInput(params: {
   messageText: string;
   attachments: IMessageAttachment[];
   effectiveAttachmentRoots: readonly string[];
@@ -208,7 +203,7 @@ export function resolveIMessageInboundMediaInput(params: {
   };
 }
 
-export function formatIMessageInboundMediaBody(params: {
+function formatIMessageInboundMediaBody(params: {
   messageText: string;
   optimisticPlaceholder: string;
   mediaAttachments: Array<{ contentType?: string }>;
@@ -360,11 +355,11 @@ const IMESSAGE_DIAGNOSTIC_DROP_REASONS = new Set([
 ]);
 const IMESSAGE_THROTTLED_DIAGNOSTIC_DROP_REASONS = new Set(["from me"]);
 
-export function shouldThrottleIMessageInboundDropDiagnostic(reason: string): boolean {
+function shouldThrottleIMessageInboundDropDiagnostic(reason: string): boolean {
   return IMESSAGE_THROTTLED_DIAGNOSTIC_DROP_REASONS.has(reason);
 }
 
-export function describeIMessageInboundDropDiagnostic(params: {
+function describeIMessageInboundDropDiagnostic(params: {
   accountId: string;
   reason: string;
   message: Pick<IMessagePayload, "chat_id" | "created_at" | "guid" | "id" | "is_group">;
@@ -526,7 +521,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   // replay aggressively without the old catchup cursor/retry bookkeeping.
   const inboundReplayGuard = createIMessageInboundReplayGuard();
   let staleBacklogSuppressed = 0;
-  const loggedThrottledDropDiagnostics = new Set<string>();
+  const loggedThrottledDropDiagnostics = createIMessageThrottledDropDiagnosticCache();
 
   // Downtime recovery. We pass the persisted recovery cursor (the last
   // dispatched rowid) to watch.subscribe as since_rowid so imsg replays the rows
@@ -685,11 +680,9 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
 
   const { debouncer: inboundDebouncer } = createChannelInboundDebouncer<{
     message: IMessagePayload;
-    // Exact replay-guard key claimed for this row at ingestion (GUID or, for a
-    // GUID-less row, the composite fallback). Carried through so flush commits
-    // or releases the same key it claimed, even after a debounce merge rewrites
-    // the payload identity. null when the row had no derivable key (fail open).
-    replayKey: string | null;
+    // The ingestion claim owns the exact GUID/composite key even when debounce
+    // later rewrites the payload identity. Missing handles fail open.
+    replayClaim?: ChannelReplayClaimHandle;
   }>({
     cfg,
     channel: "imessage",
@@ -746,28 +739,21 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       // dispatch throws so a transient failure can retry on a later re-emit. Per
       // unit so a failure in one bucket entry cannot strand another's claim.
       const dispatchUnit = async (
-        unitEntries: { message: IMessagePayload; replayKey: string | null }[],
+        unitEntries: { message: IMessagePayload; replayClaim?: ChannelReplayClaimHandle }[],
         message: IMessagePayload,
       ) => {
-        const keys = unitEntries
-          .map((entry) => entry.replayKey)
-          .filter((key): key is string => key !== null);
+        const replayClaims = unitEntries
+          .map((entry) => entry.replayClaim)
+          .filter((claim): claim is ChannelReplayClaimHandle => claim !== undefined);
         try {
           await handleMessageNow(message);
-          await commitIMessageInboundReplay({
-            guard: inboundReplayGuard,
-            accountId: accountInfo.accountId,
-            keys,
-          });
+          await Promise.all(replayClaims.map((claim) => claim.commit()));
           advanceRecoveryCursorAfterHandled(unitEntries);
         } catch (err) {
           holdRecoveryCursorBeforeFailedRows(unitEntries);
-          releaseIMessageInboundReplay({
-            guard: inboundReplayGuard,
-            accountId: accountInfo.accountId,
-            keys,
-            error: err,
-          });
+          for (const claim of replayClaims) {
+            claim.release({ error: err });
+          }
           runtime.error?.(`imessage: inbound dispatch failed: ${String(err)}`);
         }
       };
@@ -791,7 +777,10 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       // Standalone URL preview rows merge with the immediately preceding row;
       // already-complete URL messages flush any pending ordinary row first.
       if (messages.some(hasIMessageUrlBalloonBundleID)) {
-        let pending: { message: IMessagePayload; replayKey: string | null } | null = null;
+        let pending: {
+          message: IMessagePayload;
+          replayClaim?: ChannelReplayClaimHandle;
+        } | null = null;
         for (const entry of entries) {
           if (isStandaloneIMessageUrlPreviewPayload(entry.message) && pending) {
             const unitEntries = [pending, entry];
@@ -1057,10 +1046,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         const shouldThrottleDiagnostic = shouldThrottleIMessageInboundDropDiagnostic(
           decision.reason,
         );
-        if (!shouldThrottleDiagnostic || !loggedThrottledDropDiagnostics.has(throttleKey)) {
-          if (shouldThrottleDiagnostic) {
-            loggedThrottledDropDiagnostics.add(throttleKey);
-          }
+        if (!shouldThrottleDiagnostic || !loggedThrottledDropDiagnostics.check(throttleKey)) {
           runtime.log?.(warn(diagnostic));
         }
       }
@@ -1367,39 +1353,26 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           : undefined,
     });
 
-    const {
-      dispatcher,
-      replyOptions: typingReplyOptions,
-      markDispatchIdle,
-    } = createReplyDispatcherWithTyping({
+    const dispatcherOptions = {
       ...replyPipeline,
       humanDelay: resolveHumanDelayConfig(cfg, decision.route.agentId),
-      deliver: async (payload, info) => {
+    };
+    const delivery: ChannelInboundTurnPlan["delivery"] = {
+      durable: ctxPayload.To
+        ? {
+            to: ctxPayload.To,
+            deps: {
+              imessage: createIMessageEchoCachingSend({
+                accountId: accountInfo.accountId,
+                sentMessageCache,
+              }),
+            },
+          }
+        : false,
+      deliver: async (payload: Parameters<typeof deliverReplies>[0]["replies"][number]) => {
         const target = ctxPayload.To;
         if (!target) {
           runtime.error?.(danger("imessage: missing delivery target"));
-          return;
-        }
-        const durable = await deliverInboundReplyWithMessageSendContext({
-          cfg,
-          channel: "imessage",
-          accountId: accountInfo.accountId,
-          agentId: decision.route.agentId,
-          ctxPayload,
-          payload,
-          info,
-          to: target,
-          deps: {
-            imessage: createIMessageEchoCachingSend({
-              accountId: accountInfo.accountId,
-              sentMessageCache,
-            }),
-          },
-        });
-        if (durable.status === "failed") {
-          throw durable.error;
-        }
-        if (durable.status === "handled_visible" || durable.status === "handled_no_send") {
           return;
         }
         await deliverReplies({
@@ -1416,7 +1389,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       onError: (err, info) => {
         runtime.error?.(danger(`imessage ${info.kind} reply failed: ${String(err)}`));
       },
-    });
+    };
     let directTypingController: IMessageTypingController | undefined;
     const directToolTypingOptions = shouldUseDirectToolTypingOptions
       ? ({
@@ -1430,7 +1403,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           allowProgressCallbacksWhenSourceDeliverySuppressed: true,
           onTypingController: (typing: IMessageTypingController) => {
             directTypingController = typing;
-            typingReplyOptions.onTypingController?.(typing);
           },
           ...(supportsTyping
             ? {
@@ -1461,12 +1433,14 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           raw: decision,
         }),
         resolveTurn: () => ({
+          cfg,
           channel: "imessage",
           accountId: decision.route.accountId,
-          routeSessionKey: decision.route.sessionKey,
-          storePath,
+          route: {
+            agentId: decision.route.agentId,
+            sessionKey: decision.route.sessionKey,
+          },
           ctxPayload,
-          recordInboundSession,
           record: {
             updateLastRoute:
               !decision.isGroup && updateTarget
@@ -1501,35 +1475,19 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
             historyMap: groupHistories,
             limit: historyLimit,
           },
-          onPreDispatchFailure: () => {
-            stopEarlyDirectTyping?.();
-            void settleReplyDispatcher({
-              dispatcher,
-              onSettled: () => markDispatchIdle(),
-            });
+          delivery,
+          dispatcherOptions: {
+            ...dispatcherOptions,
+            onSettled: () => stopEarlyDirectTyping?.(),
           },
-          runDispatch: async () => {
-            try {
-              return await dispatchInboundMessage({
-                ctx: ctxPayload,
-                cfg,
-                dispatcher,
-                replyOptions: {
-                  ...typingReplyOptions,
-                  disableBlockStreaming:
-                    typeof configuredBlockStreaming === "boolean"
-                      ? !configuredBlockStreaming
-                      : undefined,
-                  onModelSelected,
-                  ...directToolTypingOptions,
-                },
-              });
-            } finally {
-              markDispatchIdle();
-              stopEarlyDirectTyping?.();
-            }
+          replyOptions: {
+            disableBlockStreaming:
+              typeof configuredBlockStreaming === "boolean" ? !configuredBlockStreaming : undefined,
+            onModelSelected,
+            ...directToolTypingOptions,
           },
         }),
+        onFinalize: () => stopEarlyDirectTyping?.(),
       },
     });
   }
@@ -1587,8 +1545,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         message,
       });
       if (suppressedKey) {
-        await commitIMessageInboundReplay({
-          guard: inboundReplayGuard,
+        await inboundReplayGuard.shouldProcess({
           accountId: accountInfo.accountId,
           keys: [suppressedKey],
         });
@@ -1606,19 +1563,21 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     // transient dispatch failure (see handleMessageNow) so a failed message can
     // still retry on a later re-emit. Claimed only once we will actually enqueue
     // so a dropped row never leaks an uncommitted claim.
-    const replay = await claimIMessageInboundReplay({
-      guard: inboundReplayGuard,
+    const replay = await inboundReplayGuard.claim({
       accountId: accountInfo.accountId,
       message: repairedMessage,
     });
-    if (!replay.claimed) {
+    if (replay.kind === "duplicate" || replay.kind === "inflight") {
       logVerbose(
         `imessage: dropping duplicate inbound notification account=${accountInfo.accountId}`,
       );
       return;
     }
     trackPendingRecoveryReplayRow(repairedMessage);
-    await inboundDebouncer.enqueue({ message: repairedMessage, replayKey: replay.key });
+    await inboundDebouncer.enqueue({
+      message: repairedMessage,
+      ...(replay.kind === "claimed" ? { replayClaim: replay.handle } : {}),
+    });
   };
 
   await waitForTransportReady({
@@ -1876,3 +1835,4 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     await activeClient.stop();
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

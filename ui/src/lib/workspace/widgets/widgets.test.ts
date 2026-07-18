@@ -1,21 +1,25 @@
-// Data-shape mapping tests for the L4 builtin widgets: each `map*` turns an RPC
-// payload fixture into the rendered view model. The render fns are exercised
-// separately (empty/populated) to lock the empty/loading/error affordances.
+// Focused renderer tests for builtin data shapes and empty/error affordances.
 
-import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { WorkspaceWidget } from "../types.ts";
-import { mapActivity, renderActivity } from "./activity.ts";
-import { mapCron, renderCron } from "./cron.ts";
-import { evaluateEmbedUrl, renderIframeEmbed } from "./iframe-embed.ts";
-import { mapInstances, renderInstances } from "./instances.ts";
-import { mapMarkdownSource, renderMarkdown } from "./markdown.ts";
-import { mapSessions, renderSessions } from "./sessions.ts";
-import { mapStatCard, renderStatCard } from "./stat-card.ts";
-import { mapTable, renderTable } from "./table.ts";
+import { renderActivity } from "./activity.ts";
+import { renderAgentStatus } from "./agent-status.ts";
+import { renderChart } from "./chart.ts";
+import { renderCron } from "./cron.ts";
+import {
+  buildCustomWidgetApprovalsSource,
+  renderCustomWidgetApprovals,
+} from "./custom-widget-approvals.ts";
+import { renderIframeEmbed } from "./iframe-embed.ts";
+import { renderInstances } from "./instances.ts";
+import { renderMarkdown } from "./markdown.ts";
+import { renderPreview } from "./preview.ts";
+import { renderSessions } from "./sessions.ts";
+import { renderStatCard } from "./stat-card.ts";
+import { renderTable } from "./table.ts";
 import type { BuiltinWidgetContext } from "./types.ts";
-import { mapUsage, renderUsage } from "./usage.ts";
+import { renderUsage } from "./usage.ts";
 
 function widget(overrides: Partial<WorkspaceWidget> = {}): WorkspaceWidget {
   return {
@@ -37,38 +41,101 @@ function renderToContainer(template: unknown): HTMLElement {
 const STRICT_EMBED: BuiltinWidgetContext = {
   basePath: "",
   embed: { embedSandboxMode: "strict", allowExternalEmbedUrls: false },
+  preview: { getViewport: (_widgetId, fallback) => fallback, setViewport: vi.fn() },
 };
 
-describe("stat-card mapping", () => {
-  it("selects a metric from a structured usage.cost payload", () => {
-    const model = mapStatCard(
-      widget({ title: "Cost Today", props: { metric: "todayCost", format: "usd" } }),
-      { totals: { totalCost: 12.5, totalTokens: 4000 } },
+describe("agent-status mapping", () => {
+  it("maps only keyed sessions and clamps goal progress", () => {
+    const container = renderToContainer(
+      renderAgentStatus(widget({ props: { limit: 2 } }), {
+        sessions: [
+          {
+            key: "agent:one",
+            displayName: "One",
+            hasActiveRun: true,
+            goal: { objective: "Ship the workspace", tokensUsed: 125, tokenBudget: 100 },
+          },
+          { key: "agent:two", status: "idle" },
+          { displayName: "missing key" },
+        ],
+      }),
     );
-    expect(model.display).toBe("$12.50");
+    expect(container.querySelectorAll(".workspace-list__row")).toHaveLength(2);
+    expect(container.textContent).toContain("Ship the workspace");
+    expect(container.textContent).toContain("100");
+    expect(container.textContent).not.toContain("missing key");
   });
 
-  it("formats integer token counts", () => {
-    const model = mapStatCard(widget({ props: { metric: "todayTokens", format: "int" } }), {
-      totals: { totalTokens: 1234567 },
-    });
-    expect(model.display).toBe("1,234,567");
-  });
-
-  it("drops the inner label when it repeats the widget title (#6 nit)", () => {
+  it("renders accessible status text and an empty state", () => {
+    const populated = renderToContainer(
+      renderAgentStatus(widget(), { sessions: [{ key: "agent:one", hasActiveRun: true }] }),
+    );
     expect(
-      mapStatCard(widget({ title: "Revenue", props: { label: "Revenue" } }), 1).label,
-    ).toBeNull();
-    expect(mapStatCard(widget({ title: "Revenue", props: { label: "Q3" } }), 1).label).toBe("Q3");
+      populated.querySelector("[data-test-id='workspace-agent-status']")?.textContent,
+    ).toContain("Busy");
+    const empty = renderToContainer(renderAgentStatus(widget(), { sessions: [] }));
+    expect(empty.querySelector(".workspace-widget__placeholder")).not.toBeNull();
   });
+});
 
-  it("falls back to props.value and yields null for missing data", () => {
-    expect(mapStatCard(widget({ props: { value: 5, format: "raw" } }), undefined).display).toBe(
-      "5",
+describe("custom-widget-approvals mapping", () => {
+  it("exposes only pending custom-widget registry entries", () => {
+    const decisions: Array<[string, "approved" | "rejected"]> = [];
+    const source = buildCustomWidgetApprovalsSource(
+      {
+        schemaVersion: 1,
+        workspaceVersion: 3,
+        tabs: [],
+        prefs: { tabOrder: [] },
+        widgetsRegistry: {
+          pending: { status: "pending", createdBy: "agent:builder" },
+          approved: { status: "approved", createdBy: "agent:builder" },
+        },
+      },
+      new Set(),
+      (name, decision) => decisions.push([name, decision]),
     );
-    expect(mapStatCard(widget(), undefined).display).toBeNull();
+    expect(source.pending).toEqual([
+      { id: "pending", title: "pending", requestedBy: "builder", deciding: false },
+    ]);
+    source.onDecide?.(source.pending[0]!, "reject");
+    expect(decisions).toEqual([["pending", "rejected"]]);
   });
 
+  it("limits rows and renders permission-aware decision controls", () => {
+    const source = {
+      pending: [
+        { id: "one", title: "one", requestedBy: null, deciding: false },
+        { id: "two", title: "two", requestedBy: "builder", deciding: false },
+      ],
+      onDecide: () => undefined,
+    };
+    const container = renderToContainer(
+      renderCustomWidgetApprovals(widget({ props: { limit: 1 } }), undefined, {
+        ...STRICT_EMBED,
+        customWidgetApprovals: source,
+      }),
+    );
+    expect(container.querySelectorAll(".workspace-list__row")).toHaveLength(1);
+    expect(container.querySelectorAll("button")).toHaveLength(2);
+    expect(container.querySelector("button")?.disabled).toBe(false);
+    expect(container.textContent).toContain("Approve");
+    expect(container.textContent).toContain("Reject");
+
+    const restricted = renderToContainer(
+      renderCustomWidgetApprovals(widget(), undefined, {
+        ...STRICT_EMBED,
+        customWidgetApprovals: { pending: source.pending },
+      }),
+    );
+    expect(
+      Array.from(restricted.querySelectorAll("button")).every((button) => button.disabled),
+    ).toBe(true);
+    expect(restricted.textContent).toContain("Approval permission required");
+  });
+});
+
+describe("stat-card mapping", () => {
   it("renders the value and omits a duplicate label", () => {
     const container = renderToContainer(
       renderStatCard(widget({ title: "Cost", props: { label: "Cost", format: "usd" } }), 9),
@@ -79,14 +146,6 @@ describe("stat-card mapping", () => {
 });
 
 describe("markdown mapping", () => {
-  it("prefers the binding value, then props.markdown/text", () => {
-    expect(mapMarkdownSource(widget(), "# from binding")).toBe("# from binding");
-    expect(mapMarkdownSource(widget({ props: { markdown: "# props" } }), undefined)).toBe(
-      "# props",
-    );
-    expect(mapMarkdownSource(widget({ props: { text: "plain" } }), undefined)).toBe("plain");
-  });
-
   it("renders an empty state when there is no content", () => {
     const container = renderToContainer(renderMarkdown(widget(), ""));
     expect(container.querySelector(".workspace-widget__placeholder")).not.toBeNull();
@@ -100,18 +159,6 @@ describe("table mapping", () => {
     { name: "c", cost: 3 },
   ];
 
-  it("derives columns from the first row and limits rows with a footer count", () => {
-    const model = mapTable(widget({ props: { limit: 2 } }), rows);
-    expect(model.columns).toEqual(["name", "cost"]);
-    expect(model.shown).toBe(2);
-    expect(model.total).toBe(3);
-  });
-
-  it("honors an explicit columns picklist", () => {
-    const model = mapTable(widget({ props: { columns: ["cost"] } }), rows);
-    expect(model.columns).toEqual(["cost"]);
-  });
-
   it("accepts { rows } payloads and renders a +N more footer", () => {
     const container = renderToContainer(renderTable(widget({ props: { limit: 2 } }), { rows }));
     expect(container.querySelector(".workspace-table__footer")?.textContent).toContain("1");
@@ -124,19 +171,6 @@ describe("table mapping", () => {
 });
 
 describe("sessions mapping", () => {
-  it("maps sessions.list rows with a live-run flag and chat link", () => {
-    const model = mapSessions(widget(), {
-      sessions: [
-        { key: "main:1", displayName: "One", hasActiveRun: true, updatedAt: 1000 },
-        { key: "main:2", label: "Two", status: "idle", updatedAt: 2000 },
-        { key: "" }, // dropped: no key
-      ],
-    });
-    expect(model.rows.map((r) => r.key)).toEqual(["main:1", "main:2"]);
-    expect(expectDefined(model.rows[0], "first session row").active).toBe(true);
-    expect(expectDefined(model.rows[1], "second session row").active).toBe(false);
-  });
-
   it("renders a link per session and an empty state", () => {
     const populated = renderToContainer(
       renderSessions(widget(), { sessions: [{ key: "main:1", displayName: "One" }] }, "/openclaw"),
@@ -150,18 +184,6 @@ describe("sessions mapping", () => {
 });
 
 describe("usage mapping", () => {
-  it("reads today cost + tokens from usage.cost totals", () => {
-    const model = mapUsage(widget(), { totals: { totalCost: 3.2, totalTokens: 999 } });
-    expect(model.cost).toBe(3.2);
-    expect(model.tokens).toBe(999);
-  });
-
-  it("defaults to zero on an empty payload", () => {
-    const model = mapUsage(widget(), {});
-    expect(model.cost).toBe(0);
-    expect(model.tokens).toBe(0);
-  });
-
   it("renders both cost and token metrics", () => {
     const container = renderToContainer(
       renderUsage(widget(), { totals: { totalCost: 5, totalTokens: 2000 } }),
@@ -174,22 +196,6 @@ describe("usage mapping", () => {
 });
 
 describe("cron mapping", () => {
-  it("maps cron.list jobs to next-run + last-status", () => {
-    const model = mapCron(widget(), {
-      jobs: [
-        {
-          id: "j1",
-          name: "Nightly",
-          enabled: true,
-          state: { nextRunAtMs: 5000, lastRunStatus: "ok" },
-        },
-        { id: "j2", name: "Off", enabled: false, state: { lastStatus: "error" } },
-      ],
-    });
-    expect(model.jobs[0]).toMatchObject({ id: "j1", nextRunAtMs: 5000, lastStatus: "ok" });
-    expect(model.jobs[1]).toMatchObject({ id: "j2", enabled: false, lastStatus: "error" });
-  });
-
   it("renders an empty state without jobs", () => {
     const container = renderToContainer(renderCron(widget(), { jobs: [] }));
     expect(container.querySelector(".workspace-widget__placeholder")).not.toBeNull();
@@ -197,17 +203,6 @@ describe("cron mapping", () => {
 });
 
 describe("instances mapping", () => {
-  it("maps system-presence entries to health dots", () => {
-    const model = mapInstances(widget(), [
-      { instanceId: "gw-1", mode: "gateway", lastInputSeconds: 5 },
-      { host: "node-2", lastInputSeconds: 600 },
-      {}, // dropped: no id
-    ]);
-    expect(model.instances).toHaveLength(2);
-    expect(model.instances[0]).toMatchObject({ id: "gw-1", healthy: true });
-    expect(model.instances[1]).toMatchObject({ id: "node-2", healthy: false });
-  });
-
   it("accepts a { presence } wrapper and renders an empty state", () => {
     const populated = renderToContainer(
       renderInstances(widget(), { presence: [{ instanceId: "gw-1" }] }),
@@ -219,59 +214,146 @@ describe("instances mapping", () => {
 });
 
 describe("activity mapping", () => {
-  it("maps cron.runs entries to a compact feed", () => {
-    const model = mapActivity(widget(), {
-      entries: [
-        { ts: 1000, jobName: "Nightly", status: "ok", summary: "done" },
-        { ts: 2000, jobId: "j2", status: "error", error: "boom" },
-      ],
-    });
-    expect(model.entries[0]).toMatchObject({ title: "Nightly", status: "ok", detail: "done" });
-    expect(model.entries[1]).toMatchObject({ title: "j2", status: "error", detail: "boom" });
-  });
-
   it("renders an empty state for no entries", () => {
     const container = renderToContainer(renderActivity(widget(), { entries: [] }));
     expect(container.querySelector(".workspace-widget__placeholder")).not.toBeNull();
   });
 });
 
-describe("iframe-embed URL policy", () => {
-  const origin = "https://control.example";
+describe("chart mapping", () => {
+  it("renders single-point and constant series visibly", () => {
+    const line = renderToContainer(renderChart(widget({ props: { type: "line" } }), [5]));
+    expect(line.querySelector(".workspace-chart__point")).not.toBeNull();
 
-  it("allows internal (same-origin / relative) URLs regardless of external policy", () => {
-    expect(evaluateEmbedUrl("/report", { allowExternalEmbedUrls: false }, origin)).toEqual({
-      status: "ok",
-      url: "/report",
-      external: false,
-    });
+    const bars = renderToContainer(renderChart(widget({ props: { type: "bar" } }), [5, 5]));
     expect(
-      evaluateEmbedUrl("https://control.example/x", { allowExternalEmbedUrls: false }, origin),
-    ).toMatchObject({ status: "ok", external: false });
+      [...bars.querySelectorAll(".workspace-chart__bars rect")].every(
+        (bar) => Number(bar.getAttribute("height")) > 0.5,
+      ),
+    ).toBe(true);
+
+    const zeroBars = renderToContainer(renderChart(widget({ props: { type: "bar" } }), [0, 0]));
+    expect(
+      [...zeroBars.querySelectorAll(".workspace-chart__bars rect")].every(
+        (bar) => Number(bar.getAttribute("height")) === 0,
+      ),
+    ).toBe(true);
   });
 
-  it("blocks external http(s) URLs unless allowExternalEmbedUrls", () => {
-    expect(
-      evaluateEmbedUrl("https://evil.example", { allowExternalEmbedUrls: false }, origin),
-    ).toEqual({ status: "blocked", reason: "external", url: "https://evil.example" });
-    expect(
-      evaluateEmbedUrl("https://evil.example", { allowExternalEmbedUrls: true }, origin),
-    ).toMatchObject({ status: "ok", external: true });
+  it("keeps extreme finite ranges within valid SVG coordinates", () => {
+    const container = renderToContainer(
+      renderChart(widget(), [-Number.MAX_VALUE, Number.MAX_VALUE]),
+    );
+    const points = container.querySelector("polyline")?.getAttribute("points") ?? "";
+    expect(points).not.toMatch(/NaN|Infinity/);
+
+    const constant = renderToContainer(renderChart(widget(), [Number.MAX_VALUE]));
+    expect(constant.querySelector("circle")?.outerHTML).not.toMatch(/NaN|Infinity/);
+
+    const gauge = renderToContainer(
+      renderChart(widget({ props: { type: "gauge" } }), [-Number.MAX_VALUE, Number.MAX_VALUE]),
+    );
+    expect(gauge.querySelector(".workspace-chart__gauge")?.outerHTML).not.toMatch(/NaN|Infinity/);
+
+    const bounded = renderToContainer(renderChart(widget({ props: { min: 0, max: 1 } }), [1e308]));
+    expect(bounded.querySelector("svg")?.outerHTML).not.toMatch(/NaN|Infinity/);
+
+    const subnormalMin = renderToContainer(
+      renderChart(widget({ props: { min: Number.MIN_VALUE } }), [Number.MIN_VALUE]),
+    );
+    expect(subnormalMin.querySelector("svg")?.outerHTML).not.toMatch(/NaN|Infinity/);
+
+    const subnormalMax = renderToContainer(
+      renderChart(widget({ props: { max: -Number.MIN_VALUE } }), [-Number.MIN_VALUE]),
+    );
+    expect(subnormalMax.querySelector("svg")?.outerHTML).not.toMatch(/NaN|Infinity/);
+
+    for (const [props, values] of [
+      [{ min: 10 }, [1, 2]],
+      [{ max: -10 }, [-2, -1]],
+    ] as const) {
+      const oneSided = renderToContainer(renderChart(widget({ props }), values));
+      expect(oneSided.querySelector("svg")?.outerHTML).not.toMatch(/NaN|Infinity/);
+      expect(oneSided.querySelector('[data-test-id="workspace-chart-error"]')).toBeNull();
+    }
   });
 
-  it("rejects non-http(s) schemes outright", () => {
-    expect(
-      evaluateEmbedUrl("javascript:alert(1)", { allowExternalEmbedUrls: true }, origin),
-    ).toMatchObject({ status: "blocked", reason: "scheme" });
-    expect(
-      evaluateEmbedUrl("data:text/html,x", { allowExternalEmbedUrls: true }, origin),
-    ).toMatchObject({ status: "blocked", reason: "scheme" });
+  it("announces data extrema rather than configured axis bounds", () => {
+    const container = renderToContainer(
+      renderChart(widget({ title: "Revenue", props: { min: 0, max: 10 } }), [2, 7]),
+    );
+    expect(container.querySelector("svg")?.getAttribute("aria-label")).toContain(
+      "ranging from 2 to 7",
+    );
   });
 
-  it("reports missing when no url is set", () => {
-    expect(evaluateEmbedUrl(undefined, { allowExternalEmbedUrls: true }, origin)).toEqual({
-      status: "missing",
-    });
+  it("renders responsive accessible line, bar, area, sparkline, and gauge charts", () => {
+    for (const type of ["line", "bar", "area", "sparkline", "gauge"] as const) {
+      const container = renderToContainer(
+        renderChart(widget({ title: "Revenue", props: { type, min: 0, max: 10 } }), [2, 7]),
+      );
+      const svg = container.querySelector('[data-test-id="workspace-chart"]');
+      expect(svg?.getAttribute("role")).toBe("img");
+      expect(svg?.getAttribute("aria-label")).toContain("Revenue");
+      expect(svg?.getAttribute("viewBox")).toBe("0 0 100 40");
+      expect(container.querySelector(`.workspace-chart--${type}`)).not.toBeNull();
+    }
+  });
+
+  it("renders localized empty and invalid-data states without an svg", () => {
+    const empty = renderToContainer(renderChart(widget(), []));
+    expect(empty.querySelector('[data-test-id="workspace-chart-empty"]')).not.toBeNull();
+    expect(empty.querySelector("svg")).toBeNull();
+
+    for (const props of [{ min: "bad" }, { min: 10, max: 2 }, { min: 4, max: 4 }]) {
+      const invalidEmpty = renderToContainer(renderChart(widget({ props }), []));
+      expect(invalidEmpty.querySelector('[data-test-id="workspace-chart-error"]')).not.toBeNull();
+      expect(invalidEmpty.querySelector("svg")).toBeNull();
+    }
+
+    const invalid = renderToContainer(renderChart(widget(), [1, "bad"]));
+    expect(invalid.querySelector('[data-test-id="workspace-chart-error"]')).not.toBeNull();
+    expect(invalid.querySelector("svg")).toBeNull();
+
+    for (const [configuredWidget, value] of [
+      [widget({ props: { type: "pie" } }), [1]],
+      [widget({ props: { type: null } }), [1]],
+      [widget({ props: { min: 10, max: 2 } }), [4]],
+      [widget(), { points: [{ label: "missing value" }] }],
+      [widget(), { points: Array.from({ length: 501 }, () => 1) }],
+    ] as const) {
+      const error = renderToContainer(renderChart(configuredWidget, value));
+      expect(error.querySelector('[data-test-id="workspace-chart-error"]')).not.toBeNull();
+      expect(error.querySelector("svg")).toBeNull();
+    }
+  });
+
+  it("accepts the documented point shapes through the 500-point limit", () => {
+    const wrapped = renderToContainer(
+      renderChart(widget(), { points: [1, { y: 2 }, { value: 3 }] }),
+    );
+    expect(wrapped.querySelector('[data-test-id="workspace-chart"]')).not.toBeNull();
+
+    const capped = renderToContainer(
+      renderChart(
+        widget(),
+        Array.from({ length: 500 }, () => 1),
+      ),
+    );
+    expect(capped.querySelector('[data-test-id="workspace-chart"]')).not.toBeNull();
+
+    const denseBars = renderToContainer(
+      renderChart(
+        widget({ props: { type: "bar" } }),
+        Array.from({ length: 500 }, (_, index) => index % 2),
+      ),
+    );
+    const slotWidth = (100 - 2 * 2) / 500;
+    expect(
+      [...denseBars.querySelectorAll("rect")].every(
+        (bar) => Number(bar.getAttribute("width")) <= slotWidth,
+      ),
+    ).toBe(true);
   });
 });
 
@@ -292,6 +374,7 @@ describe("iframe-embed render × sandbox mode", () => {
       renderIframeEmbed(widget({ props: { url: "/preview" } }), null, {
         basePath: "",
         embed: { embedSandboxMode: "scripts", allowExternalEmbedUrls: false },
+        preview: STRICT_EMBED.preview,
       }),
     );
     const frame = container.querySelector<HTMLIFrameElement>(
@@ -307,6 +390,7 @@ describe("iframe-embed render × sandbox mode", () => {
       renderIframeEmbed(widget({ props: { url: "/preview" } }), null, {
         basePath: "",
         embed: { embedSandboxMode: "trusted", allowExternalEmbedUrls: false },
+        preview: STRICT_EMBED.preview,
       }),
     );
     const frame = container.querySelector<HTMLIFrameElement>(
@@ -322,5 +406,180 @@ describe("iframe-embed render × sandbox mode", () => {
     );
     expect(container.querySelector('[data-test-id="workspace-embed-blocked"]')).not.toBeNull();
     expect(container.querySelector('[data-test-id="workspace-embed-frame"]')).toBeNull();
+  });
+});
+
+describe("preview widget", () => {
+  it("renders its URL with the workspace embed sandbox ceiling", () => {
+    const container = renderToContainer(
+      renderPreview(widget({ props: { url: "/preview" } }), undefined, {
+        basePath: "",
+        embed: { embedSandboxMode: "trusted", allowExternalEmbedUrls: false },
+        preview: STRICT_EMBED.preview,
+      }),
+    );
+    const frame = container.querySelector<HTMLIFrameElement>(
+      '[data-test-id="workspace-preview-frame"]',
+    );
+    expect(frame?.getAttribute("src")).toBe("/preview");
+    expect(frame?.getAttribute("sandbox")).toBe("allow-scripts");
+    expect(frame?.getAttribute("sandbox")).not.toContain("allow-same-origin");
+    expect(frame?.getAttribute("referrerpolicy")).toBe("no-referrer");
+  });
+
+  it("reloads the mounted frame without reading its content window", () => {
+    const container = renderToContainer(
+      renderPreview(widget({ props: { url: "/preview" } }), undefined, STRICT_EMBED),
+    );
+    const frame = container.querySelector<HTMLIFrameElement>(
+      '[data-test-id="workspace-preview-frame"]',
+    );
+    expect(frame).not.toBeNull();
+    const setAttribute = vi.spyOn(frame!, "setAttribute");
+    container
+      .querySelector<HTMLButtonElement>('[data-test-id="workspace-preview-reload"]')
+      ?.click();
+    expect(setAttribute).toHaveBeenCalledWith("src", "/preview");
+  });
+
+  it("exposes labeled controls and updates the selected viewport state", () => {
+    let selected: "desktop" | "tablet" | "mobile" | undefined;
+    const context: BuiltinWidgetContext = {
+      ...STRICT_EMBED,
+      preview: {
+        getViewport: (_widgetId, fallback) => selected ?? fallback,
+        setViewport: (_widgetId, viewport) => {
+          selected = viewport;
+        },
+      },
+    };
+    const previewWidget = widget({ props: { url: "/preview", defaultViewport: "tablet" } });
+    const container = renderToContainer(renderPreview(previewWidget, undefined, context));
+    expect(container.querySelector('[role="toolbar"]')?.getAttribute("aria-label")).toBeTruthy();
+    expect(container.querySelector('[role="group"]')?.getAttribute("aria-label")).toBeTruthy();
+    const tablet = container.querySelector<HTMLButtonElement>(
+      '[data-test-id="workspace-preview-viewport-tablet"]',
+    );
+    const mobile = container.querySelector<HTMLButtonElement>(
+      '[data-test-id="workspace-preview-viewport-mobile"]',
+    );
+    expect(tablet?.getAttribute("aria-pressed")).toBe("true");
+    expect(mobile?.getAttribute("aria-pressed")).toBe("false");
+    mobile?.click();
+    expect(selected).toBe("mobile");
+    render(renderPreview(previewWidget, undefined, context), container);
+    expect(
+      container
+        .querySelector('[data-test-id="workspace-preview-viewport-tablet"]')
+        ?.getAttribute("aria-pressed"),
+    ).toBe("false");
+    expect(
+      container
+        .querySelector('[data-test-id="workspace-preview-viewport-mobile"]')
+        ?.getAttribute("aria-pressed"),
+    ).toBe("true");
+    expect(container.querySelector(".workspace-preview__frame-wrap")?.className).toContain(
+      "workspace-preview__frame-wrap--mobile",
+    );
+  });
+
+  it.each(["bogus", 42])("defaults malformed viewport prop %j to desktop", (defaultViewport) => {
+    const container = renderToContainer(
+      renderPreview(
+        widget({ props: { url: "/preview", defaultViewport } }),
+        undefined,
+        STRICT_EMBED,
+      ),
+    );
+
+    expect(container.querySelector(".workspace-preview__frame-wrap")?.className).toContain(
+      "workspace-preview__frame-wrap--desktop",
+    );
+  });
+
+  it("uses a bound URL instead of props and does not hide malformed binding data", () => {
+    const bound = renderToContainer(
+      renderPreview(
+        widget({
+          props: { url: "/stale" },
+          bindings: { value: { source: "static", value: "/bound" } },
+        }),
+        "/bound",
+        STRICT_EMBED,
+      ),
+    );
+    expect(
+      bound.querySelector('[data-test-id="workspace-preview-frame"]')?.getAttribute("src"),
+    ).toBe("/bound");
+
+    const malformed = renderToContainer(
+      renderPreview(
+        widget({
+          props: { url: "/fallback" },
+          bindings: { value: { source: "static", value: 42 } },
+        }),
+        42,
+        STRICT_EMBED,
+      ),
+    );
+    expect(malformed.querySelector('[data-test-id="workspace-preview-frame"]')).toBeNull();
+
+    const missing = renderToContainer(
+      renderPreview(
+        widget({
+          props: { url: "/fallback" },
+          bindings: { value: { source: "static" } },
+        }),
+        undefined,
+        STRICT_EMBED,
+      ),
+    );
+    expect(missing.querySelector('[data-test-id="workspace-preview-frame"]')).toBeNull();
+
+    const unrelated = renderToContainer(
+      renderPreview(
+        widget({
+          props: { url: "/configured" },
+          bindings: { other: { source: "static", value: "/ignored" } },
+        }),
+        "/ignored",
+        STRICT_EMBED,
+      ),
+    );
+    expect(
+      unrelated.querySelector('[data-test-id="workspace-preview-frame"]')?.getAttribute("src"),
+    ).toBe("/configured");
+  });
+
+  it("allows policy-approved external URLs and blocks external or unsafe URLs by default", () => {
+    const allowed = renderToContainer(
+      renderPreview(
+        widget({
+          bindings: {
+            value: { source: "static", value: "https://preview.example" },
+          },
+        }),
+        "https://preview.example",
+        {
+          ...STRICT_EMBED,
+          embed: { embedSandboxMode: "strict", allowExternalEmbedUrls: true },
+        },
+      ),
+    );
+    expect(
+      allowed.querySelector('[data-test-id="workspace-preview-frame"]')?.getAttribute("src"),
+    ).toBe("https://preview.example");
+
+    for (const value of [undefined, 42, "https://evil.example", "javascript:alert(1)"]) {
+      const container = renderToContainer(
+        renderPreview(
+          widget({ bindings: { value: { source: "static", value } } }),
+          value,
+          STRICT_EMBED,
+        ),
+      );
+      expect(container.querySelector('[data-test-id="workspace-preview-frame"]')).toBeNull();
+      expect(container.querySelector(".workspace-widget__placeholder")).not.toBeNull();
+    }
   });
 });

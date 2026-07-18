@@ -38,6 +38,32 @@ final class OpenClawSnapshotUITests: XCTestCase {
         }
     }
 
+    func testAutomationManagementScreenshot() {
+        self.launchApp(for: ScreenshotTarget(
+            initialTab: "control",
+            initialDestination: "cron",
+            name: "automation-management"))
+
+        XCTAssertTrue(self.app?.staticTexts["Release briefing"].waitForExistence(timeout: 8) == true)
+        XCTAssertTrue(self.app?.staticTexts["Weekly project review"].exists == true)
+        self.attachScreenshot(named: "automation-management")
+    }
+
+    func testSkillsManagementScreenshot() throws {
+        self.launchApp(for: ScreenshotTarget(
+            initialTab: "settings",
+            initialDestination: "settings",
+            name: "skills-management"))
+
+        let skills = try XCTUnwrap(
+            self.app?.buttons.containing(.staticText, identifier: "Skills").firstMatch)
+        XCTAssertTrue(skills.waitForExistence(timeout: 8))
+        skills.tap()
+        XCTAssertTrue(self.app?.staticTexts["github"].waitForExistence(timeout: 8) == true)
+        XCTAssertTrue(self.app?.staticTexts["calendar"].exists == true)
+        self.attachScreenshot(named: "skills-management")
+    }
+
     func testOnboardingExplainsCapabilitiesAndTrust() {
         let app = XCUIApplication()
         app.launchArguments += ["--openclaw-reset-onboarding"]
@@ -608,6 +634,19 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.attachScreenshot(named: "agent-toolbar-filter")
     }
 
+    func testLiveGatewayFreshInstallSetupAndRelaunch() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone setup proof only")
+        let app = try self.launchPairedLiveGatewayApp(initialTab: "chat", initialDestination: "chat")
+        XCTAssertEqual(app.state, .runningForeground)
+
+        let controlApp = self.relaunchConnectedLiveGatewayApp(
+            initialTab: "control",
+            initialDestination: "control")
+        let overview = controlApp.buttons.containing(.staticText, identifier: "Overview").firstMatch
+        XCTAssertTrue(overview.waitForExistence(timeout: 8))
+        XCTAssertEqual(controlApp.state, .runningForeground)
+    }
+
     func testLiveGatewayChatRoundTripAndControlOverview() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone chat proof only")
         let app = try launchPairedLiveGatewayApp(initialTab: "chat", initialDestination: "chat")
@@ -755,6 +794,23 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(limitedStatus.waitForExistence(timeout: 8))
         XCTAssertEqual(self.app?.buttons["privacy-access-photos-action"].label, "Manage Access")
         self.attachScreenshot(named: "photos-limited-access")
+    }
+
+    func testAppleHealthDisclosureIsVisible() throws {
+        self.launchApp(for: ScreenshotTarget(
+            initialTab: "settings",
+            initialDestination: "settings",
+            name: "apple-health-disclosure"))
+
+        let permissions = try XCTUnwrap(
+            self.app?.buttons.containing(.staticText, identifier: "Permissions").firstMatch)
+        XCTAssertTrue(permissions.waitForExistence(timeout: 8))
+        permissions.tap()
+
+        let appleHealth = try XCTUnwrap(self.app?.staticTexts["Apple Health Summaries"])
+        XCTAssertTrue(appleHealth.waitForExistence(timeout: 8))
+        XCTAssertTrue(self.app?.staticTexts["Apple Health"].exists == true)
+        self.attachScreenshot(named: "apple-health-disclosure")
     }
 
     private func launchApp(

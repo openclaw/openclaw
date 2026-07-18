@@ -3,13 +3,9 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getRuntimeAuthProfileStoreCredentialsRevision } from "../agents/auth-profiles/runtime-snapshots.js";
-import {
-  addSession,
-  markBackgrounded,
-  markExited,
-  resetProcessRegistryForTests,
-} from "../agents/bash-process-registry.js";
+import { addSession, markBackgrounded, markExited } from "../agents/bash-process-registry.js";
 import { createProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
+import { resetProcessRegistryForTests } from "../agents/bash-process-registry.test-support.js";
 import { prepareConfigRuntimeEnv } from "../config/config-env-vars.js";
 import type { ConfigWriteNotification } from "../config/config.js";
 import {
@@ -22,8 +18,9 @@ import {
   isGatewaySigusr1RestartExternallyAllowed,
   markGatewaySigusr1RestartHandled,
   requestGatewayRestartWithSignalAdmission,
+  resetGatewayRestartStateForInProcessRestart,
   setGatewaySigusr1RestartPolicy,
-  testing as restartTesting,
+  setPreRestartDeferralCheck,
 } from "../infra/restart.js";
 import {
   pinActivePluginChannelRegistry,
@@ -35,10 +32,10 @@ import {
   setCommandLaneConcurrency,
 } from "../process/command-queue.js";
 import {
+  getActiveGatewayRootWorkCount,
   isGatewayWorkAdmissionClosed,
   resetGatewayWorkAdmission,
   runWithGatewayIndependentRootWorkAdmission,
-  tryBeginGatewayIndependentRootWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
@@ -64,11 +61,28 @@ import {
   createGatewayReloadHandlers as createGatewayReloadHandlersImpl,
   startManagedGatewayConfigReloader as startManagedGatewayConfigReloaderImpl,
 } from "./server-reload-handlers.js";
-import { setCurrentSharedGatewaySessionGeneration } from "./server-shared-auth-generation.js";
+import { enforceSharedGatewaySessionGenerationForConfigWrite } from "./server-shared-auth-generation.js";
 import { createTerminalLaunchPolicy } from "./terminal/launch.js";
 
 type ReloadHandlerParams = Parameters<typeof createGatewayReloadHandlersImpl>[0];
 type ManagedReloaderParams = Parameters<typeof startManagedGatewayConfigReloaderImpl>[0];
+
+function waitForFast<T>(
+  callback: () => T | Promise<T>,
+  options: { timeout?: number; interval?: number } = {},
+) {
+  return vi.waitFor(callback, { interval: 1, ...options });
+}
+
+const restartTesting = {
+  resetSigusr1State() {
+    resetGatewayRestartStateForInProcessRestart();
+    markGatewaySigusr1RestartHandled();
+    setGatewaySigusr1RestartPolicy({ allowExternal: false });
+    setPreRestartDeferralCheck(() => 0);
+    resetGatewayWorkAdmission();
+  },
+};
 
 function createGatewayReloadHandlers(
   params: Omit<ReloadHandlerParams, "cronReconciliation" | "requestRecoveryRestart"> & {
@@ -587,10 +601,12 @@ function createManagedRestartSequenceHarness(
     reconcileTerminalSessions: vi.fn(() => {
       if (options.invalidateGenerationOnReconcile && !generationInvalidated) {
         generationInvalidated = true;
-        setCurrentSharedGatewaySessionGeneration(
-          sharedGatewaySessionGenerationState,
-          "concurrent-generation",
-        );
+        enforceSharedGatewaySessionGenerationForConfigWrite({
+          state: sharedGatewaySessionGenerationState,
+          nextConfig: {},
+          resolveRuntimeSnapshotGeneration: () => "concurrent-generation",
+          clients: [],
+        });
       }
     }),
     commitTerminalConfig: terminalPolicy.commitConfig,
@@ -927,8 +943,8 @@ describe("gateway hot reload model state", () => {
     expect(cron.stop).toHaveBeenCalledTimes(1);
     expect(stopExitWatchers).toHaveBeenCalledTimes(1);
     expect(newCron.start).toHaveBeenCalledTimes(1);
-    await vi.waitFor(() => expect(newReconcileExitWatchers).toHaveBeenCalledTimes(1));
-    await vi.waitFor(() => expect(order.at(-1)).toBe("hook"));
+    await waitForFast(() => expect(newReconcileExitWatchers).toHaveBeenCalledTimes(1));
+    await waitForFast(() => expect(order.at(-1)).toBe("hook"));
     expect(order).toEqual([
       "build-new",
       "invalidate-old",
@@ -966,7 +982,7 @@ describe("gateway hot reload model state", () => {
       await applyHotReload(createCronRestartPlan(), nextConfig);
     });
 
-    await vi.waitFor(() => expect(cronReconciliation.complete).toHaveBeenCalledTimes(1));
+    await waitForFast(() => expect(cronReconciliation.complete).toHaveBeenCalledTimes(1));
     expect(cronReconciliation.arm).toHaveBeenCalledWith({
       reason: "reload",
       config: nextConfig,
@@ -1076,7 +1092,7 @@ describe("gateway hot reload model state", () => {
       ).resolves.toBeUndefined();
 
       expect(setState).toHaveBeenCalledOnce();
-      await vi.waitFor(() => expect(signalSpy).toHaveBeenCalledOnce());
+      await waitForFast(() => expect(signalSpy).toHaveBeenCalledOnce());
       expect(logReload.warn).toHaveBeenCalledWith(
         "cron reload failed after config commit: cron start failed; restarting gateway",
       );
@@ -1120,10 +1136,10 @@ describe("gateway hot reload model state", () => {
 
     await withGatewayRestartSignal(async (signalSpy) => {
       await applyHotReload(createCronRestartPlan(), { cron: { enabled: true } });
-      await vi.waitFor(() => expect(firstCronState.cron.start).toHaveBeenCalledOnce());
+      await waitForFast(() => expect(firstCronState.cron.start).toHaveBeenCalledOnce());
       await applyHotReload(createCronRestartPlan(), { cron: { enabled: true } });
       rejectFirstStart?.(new Error("superseded start failed"));
-      await vi.waitFor(() =>
+      await waitForFast(() =>
         expect(logCron.error).toHaveBeenCalledWith(
           "failed to start: Error: superseded start failed",
         ),
@@ -1624,6 +1640,34 @@ describe("gateway hot reload superseded tail recovery", () => {
     expect(startChannel).toHaveBeenCalledWith("discord");
     expect(requestRecoveryRestart).not.toHaveBeenCalled();
   });
+
+  it.each(["discord", "telegram"] as const)(
+    "starts the %s channel outside the config-reload request admission",
+    async (channel) => {
+      const startRootCounts: number[] = [];
+      const handlers = createReloadHandlersForTest(undefined, {
+        start: vi.fn(async () => {
+          startRootCounts.push(getActiveGatewayRootWorkCount({ excludeCurrent: true }));
+        }),
+        stop: vi.fn(async () => {}),
+      });
+      const root = tryBeginGatewayRootWorkAdmission();
+      expect(root).not.toBeNull();
+
+      try {
+        await root?.run(async () => {
+          await handlers.applyHotReload(
+            createHotTailPlan({ restartChannels: new Set([channel]) }),
+            {},
+          );
+        });
+      } finally {
+        root?.release();
+      }
+
+      expect(startRootCounts).toEqual([1]);
+    },
+  );
 });
 
 describe("gateway hot reload commit policy", () => {
@@ -1928,6 +1972,40 @@ describe("gateway restart deferral preflight", () => {
     }
   });
 
+  it("reports restart debt until a replacement config retires it", () => {
+    const requestRecoveryRestart = vi
+      .fn<NonNullable<ReloadHandlerParams["requestRecoveryRestart"]>>()
+      .mockReturnValue({ status: "failed" });
+    const handlers = createReloadHandlersForTest(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      requestRecoveryRestart,
+    );
+    const restartPlan = {
+      ...createHotTailPlan(),
+      changedPaths: ["gateway.port"],
+      restartGateway: true,
+      restartReasons: ["gateway.port"],
+      hotReasons: [],
+    } satisfies GatewayReloadPlan;
+
+    try {
+      expect(handlers.hasOutstandingGatewayRestart()).toBe(false);
+      const restart = handlers.requestGatewayRestart(restartPlan, {
+        gateway: { port: 19_001 },
+      });
+      restart.settle("rejected");
+      expect(handlers.hasOutstandingGatewayRestart()).toBe(true);
+
+      expect(handlers.acceptRestartConfig({})).toEqual({ retireRejectedRestart: true });
+      expect(handlers.hasOutstandingGatewayRestart()).toBe(false);
+    } finally {
+      handlers.stopRestartRetries();
+    }
+  });
+
   it("preserves deferred hot-recovery debt across unrelated accepted config changes", async () => {
     const requestRecoveryRestart = vi.fn<
       NonNullable<ReloadHandlerParams["requestRecoveryRestart"]>
@@ -2053,6 +2131,7 @@ describe("gateway restart deferral preflight", () => {
       acceptRestartConfig,
       applyHotReload,
       beginGatewayRestartLifecycle,
+      hasOutstandingGatewayRestart,
       pauseGatewayRestartForConfigCandidate,
       requestGatewayRestart,
       stopRestartRetries,
@@ -2101,6 +2180,7 @@ describe("gateway restart deferral preflight", () => {
       pauseGatewayRestartForConfigCandidate();
       const accepted = acceptRestartConfig(configA);
       expect(accepted).toEqual({ retireRejectedRestart: true });
+      expect(hasOutstandingGatewayRestart()).toBe(false);
     } finally {
       hoisted.activeTaskBlockers.length = 0;
       stopRestartRetries();
@@ -2447,7 +2527,7 @@ describe("gateway restart deferral preflight", () => {
     resetGatewayWorkAdmission();
     const logReload = { info: vi.fn(), warn: vi.fn() };
     const { requestGatewayRestart } = createReloadHandlersForTest(logReload);
-    const handoff = tryBeginGatewayIndependentRootWorkAdmission();
+    const handoff = tryBeginGatewayRootWorkAdmission();
     const signalSpy = vi.fn();
     process.once("SIGUSR1", signalSpy);
     vi.useFakeTimers();
@@ -3998,11 +4078,10 @@ describe("gateway Gmail hot reload handlers", () => {
       const deferredPlan = buildGatewayReloadPlan(
         diffConfigPaths(harness.initialConfig, harness.deferredConfig),
       );
-      await vi.waitFor(() =>
-        expect(harness.requestRecoveryRestart.mock.calls).toEqual([
-          [`config reload: ${deferredPlan.restartReasons.join(", ")}`, undefined],
-        ]),
-      );
+      await vi.advanceTimersByTimeAsync(500);
+      expect(harness.requestRecoveryRestart.mock.calls).toEqual([
+        [`config reload: ${deferredPlan.restartReasons.join(", ")}`, undefined],
+      ]);
     } finally {
       hoisted.activeTaskBlockers.length = 0;
       await harness.reloader.stop();
@@ -4099,9 +4178,9 @@ describe("gateway Gmail hot reload handlers", () => {
         harness.writeConfig(acceptedConfig, `accepted-after-${_kind}`, 3);
         await vi.advanceTimersByTimeAsync(0);
         await acceptedPromotion;
-        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(500);
 
-        await vi.waitFor(() => expect(harness.requestRecoveryRestart).toHaveBeenCalledOnce());
+        expect(harness.requestRecoveryRestart).toHaveBeenCalledOnce();
       } finally {
         hoisted.activeTaskBlockers.length = 0;
         await harness.reloader.stop();
@@ -4248,11 +4327,10 @@ describe("gateway Gmail hot reload handlers", () => {
         reason: "restart-check",
         activate: false,
       });
-      await vi.waitFor(() =>
-        expect(harness.requestRecoveryRestart.mock.calls).toEqual([
-          [`config reload: ${deferredPlan.restartReasons.join(", ")}`, undefined],
-        ]),
-      );
+      await vi.advanceTimersByTimeAsync(500);
+      expect(harness.requestRecoveryRestart.mock.calls).toEqual([
+        [`config reload: ${deferredPlan.restartReasons.join(", ")}`, undefined],
+      ]);
     } finally {
       releaseEmissionPreflight();
       hoisted.activeTaskBlockers.length = 0;
@@ -5563,8 +5641,10 @@ describe("gateway plugin hot reload handlers", () => {
     const setState = vi.fn();
     const logChannels = { info: vi.fn(), error: vi.fn() };
     const events: string[] = [];
+    const startRootCounts: number[] = [];
     const startChannel = vi.fn(async (channel: ChannelKind) => {
       events.push(`start:${channel}`);
+      startRootCounts.push(getActiveGatewayRootWorkCount({ excludeCurrent: true }));
     });
     const stopChannel = vi.fn(async (channel: ChannelKind) => {
       events.push(`stop:${channel}`);
@@ -5606,32 +5686,37 @@ describe("gateway plugin hot reload handlers", () => {
       createHealthMonitor: () => null,
     });
 
+    const root = tryBeginGatewayRootWorkAdmission();
+    expect(root).not.toBeNull();
     try {
       await expect(
-        applyHotReload(
-          {
-            changedPaths: ["plugins.enabled"],
-            restartGateway: false,
-            restartReasons: [],
-            hotReasons: ["plugins.enabled"],
-            reloadHooks: false,
-            restartGmailWatcher: false,
-            restartCron: false,
-            restartHeartbeat: false,
-            restartHealthMonitor: false,
-            reloadPlugins: true,
-            restartChannels: new Set(),
-            disposeMcpRuntimes: false,
-            noopPaths: [],
-          },
-          {
-            plugins: {
-              enabled: false,
+        root?.run(async () => {
+          await applyHotReload(
+            {
+              changedPaths: ["plugins.enabled"],
+              restartGateway: false,
+              restartReasons: [],
+              hotReasons: ["plugins.enabled"],
+              reloadHooks: false,
+              restartGmailWatcher: false,
+              restartCron: false,
+              restartHeartbeat: false,
+              restartHealthMonitor: false,
+              reloadPlugins: true,
+              restartChannels: new Set(),
+              disposeMcpRuntimes: false,
+              noopPaths: [],
             },
-          },
-        ),
+            {
+              plugins: {
+                enabled: false,
+              },
+            },
+          );
+        }),
       ).rejects.toThrow("failed to stop channels before plugin reload: discord");
     } finally {
+      root?.release();
       if (previousSkipChannels === undefined) {
         delete process.env.OPENCLAW_SKIP_CHANNELS;
       } else {
@@ -5656,6 +5741,7 @@ describe("gateway plugin hot reload handlers", () => {
     );
     expect(startChannel).toHaveBeenCalledWith("telegram");
     expect(startChannel).toHaveBeenCalledWith("discord");
+    expect(startRootCounts).toEqual([1, 1]);
     expect(setState).not.toHaveBeenCalled();
   });
 
@@ -6388,3 +6474,4 @@ describe("deferred channel reload abort generation", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

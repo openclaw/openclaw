@@ -51,7 +51,6 @@ import { buildSlackNativeDataDeliveryPlan } from "./native-data-fallback.js";
 import { recordSlackThreadParticipation } from "./sent-thread-cache.js";
 import { canonicalizeSlackApiTargetId, parseSlackTarget } from "./target-parsing.js";
 import { normalizeSlackThreadTsCandidate, resolveSlackThreadTsValue } from "./thread-ts.js";
-import { resolveSlackBotToken } from "./token.js";
 import { truncateSlackText } from "./truncate.js";
 const SLACK_DM_CHANNEL_CACHE_MAX = 1024;
 const SLACK_DELIVERY_METADATA_EVENT = "openclaw_delivery";
@@ -64,7 +63,7 @@ const SLACK_RECONCILE_CLOCK_SKEW_MS = 5 * 60_000;
 const SLACK_RECONCILE_LIMIT = 100;
 const SLACK_RECONCILE_MAX_PAGES = 10;
 const SLACK_ENTERPRISE_LISTENER_QUEUE_CREDENTIAL = "listener-scoped-enterprise";
-const slackDmChannelCache = new Map<string, string>();
+const slackDmChannelCaches = new WeakMap<WebClient, Map<string, string>>();
 const slackSendQueue = new KeyedAsyncQueue();
 
 type SlackRecipient =
@@ -318,20 +317,18 @@ function resolveToken(params: {
   fallbackToken?: string;
   fallbackSource?: SlackTokenSource;
 }) {
-  const explicit = resolveSlackBotToken(params.explicit);
+  const explicit = normalizeOptionalString(params.explicit);
   if (explicit) {
     return explicit;
   }
-  const fallback = resolveSlackBotToken(params.fallbackToken);
+  const fallback = normalizeOptionalString(params.fallbackToken);
   if (!fallback) {
     logVerbose(
-      `slack send: missing bot token for account=${params.accountId} explicit=${Boolean(
+      `slack send: missing write token for account=${params.accountId} explicit=${Boolean(
         params.explicit,
       )} source=${params.fallbackSource ?? "unknown"}`,
     );
-    throw new Error(
-      `Slack bot token missing for account "${params.accountId}" (set channels.slack.accounts.${params.accountId}.botToken or SLACK_BOT_TOKEN for default).`,
-    );
+    throw new Error(`Slack write token missing for account "${params.accountId}".`);
   }
   return fallback;
 }
@@ -450,16 +447,26 @@ function createSlackDmCacheKey(params: {
   }`;
 }
 
-function setSlackDmChannelCache(key: string, channelId: string): void {
-  if (slackDmChannelCache.has(key)) {
-    slackDmChannelCache.delete(key);
-  } else if (slackDmChannelCache.size >= SLACK_DM_CHANNEL_CACHE_MAX) {
-    const oldest = slackDmChannelCache.keys().next().value;
+function getSlackDmChannelCache(client: WebClient): Map<string, string> {
+  const existing = slackDmChannelCaches.get(client);
+  if (existing) {
+    return existing;
+  }
+  const cache = new Map<string, string>();
+  slackDmChannelCaches.set(client, cache);
+  return cache;
+}
+
+function setSlackDmChannelCache(cache: Map<string, string>, key: string, channelId: string): void {
+  if (cache.has(key)) {
+    cache.delete(key);
+  } else if (cache.size >= SLACK_DM_CHANNEL_CACHE_MAX) {
+    const oldest = cache.keys().next().value;
     if (oldest) {
-      slackDmChannelCache.delete(oldest);
+      cache.delete(oldest);
     }
   }
-  slackDmChannelCache.set(key, channelId);
+  cache.set(key, channelId);
 }
 
 function isSlackUserRecipient(recipient: SlackRecipient): boolean {
@@ -502,7 +509,8 @@ async function resolveChannelId(
     token: params.token,
     recipientId: recipient.id,
   });
-  const cachedChannelId = slackDmChannelCache.get(cacheKey);
+  const cache = getSlackDmChannelCache(client);
+  const cachedChannelId = cache.get(cacheKey);
   if (cachedChannelId) {
     return { channelId: cachedChannelId, isDm: true, cacheHit: true };
   }
@@ -513,7 +521,7 @@ async function resolveChannelId(
   if (!channelId) {
     throw new Error("Failed to open Slack DM channel");
   }
-  setSlackDmChannelCache(cacheKey, channelId);
+  setSlackDmChannelCache(cache, cacheKey, channelId);
   return { channelId, isDm: true, cacheHit: false };
 }
 
@@ -529,14 +537,6 @@ export async function resolveSlackDmChannelId(params: {
     { accountId: params.accountId, token: params.token },
   );
   return resolved.channelId;
-}
-
-export function clearSlackDmChannelCache(): void {
-  slackDmChannelCache.clear();
-}
-
-export function clearSlackDefaultSendIdentitiesForTest(): void {
-  slackDefaultSendIdentities.clear();
 }
 
 function createSlackDeliveryMetadataId(queueId?: string): string | undefined {
@@ -988,8 +988,9 @@ export async function sendMessageSlack(
     : resolveToken({
         explicit: opts.token,
         accountId: account.accountId,
-        fallbackToken: account.botToken,
-        fallbackSource: account.botTokenSource,
+        fallbackToken: resolveSlackOperationToken(account, "write"),
+        fallbackSource:
+          account.identity === "user" ? account.userTokenSource : account.botTokenSource,
       });
   const recipient = enterpriseDelivery ? parseEnterpriseEventRecipient(to) : parseRecipient(to);
   const queueKey = createSlackSendQueueKey({
@@ -1410,3 +1411,4 @@ async function sendMessageSlackQueuedInner(params: {
     }),
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -42,7 +42,9 @@ import {
   resolveManagedUnsetPathsForWrite,
   resolveWriteEnvSnapshotForPath,
 } from "./io.write-prepare.js";
+import { warnIfJSON5CommentsWillBeStripped } from "./json5-comments.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
+import type { ConfigMutationBase } from "./mutation-types.js";
 import { assertConfigWriteAllowedInCurrentMode } from "./nix-mode-write-guard.js";
 import { resolveConfigPath } from "./paths.js";
 import {
@@ -63,9 +65,6 @@ import {
 } from "./runtime-snapshot.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
-
-/** Selects whether a mutation starts from runtime or source config shape. */
-export type ConfigMutationBase = "runtime" | "source";
 
 const CONFIG_MUTATION_LOCK_OPTIONS = {
   retries: {
@@ -556,6 +555,7 @@ async function writeRootBoundJsonFile(params: {
   rootSnapshot: ConfigFileSnapshot;
   assertConfigPathForWrite: () => void;
   preCommitRuntimePreflight?: () => Promise<unknown>;
+  skipOutputLogs?: boolean;
 }): Promise<void> {
   params.assertConfigPathForWrite();
   const targetBeforeBackup = await resolveExpectedRootBoundIncludeFile({
@@ -587,9 +587,15 @@ async function writeRootBoundJsonFile(params: {
   }
   const content = formatJsonFileValue(params.value);
   // The include fast path bypasses writeConfigFile(); keep its authority guard
-  // on the final conflict-checked target with no later await before the write.
+  // and comment warning on the final conflict-checked target. No later await may
+  // run before the write.
   await params.preCommitRuntimePreflight?.();
   params.assertConfigPathForWrite();
+  warnIfJSON5CommentsWillBeStripped({
+    raw: currentRaw,
+    filePath: targetAtCommit.absolutePath,
+    skipOutputLogs: params.skipOutputLogs,
+  });
   await targetAtCommit.root.write(targetAtCommit.relativePath, content, {
     mkdir: true,
     mode: 0o600,
@@ -794,6 +800,7 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
     expectedRaw: includeRawAtCommit,
     rootSnapshot: params.snapshot,
     assertConfigPathForWrite,
+    skipOutputLogs: params.writeOptions?.skipOutputLogs,
     preCommitRuntimePreflight:
       runtimeEnvBaseline || callerPreCommit
         ? async () => {
@@ -1238,3 +1245,4 @@ export async function mutateConfigFileWithRetry<T = void>(params: {
     },
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -27,15 +27,15 @@ import type {
 } from "./device-pairing.types.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 
-export type DevicePairingStoreState = {
+type DevicePairingStoreState = {
   pendingById: Record<string, DevicePairingPendingRecord>;
   pairedByDeviceId: Record<string, PairedDevice>;
 };
 
-export type DevicePairingStoreTarget = "pending" | "paired" | "both";
+type DevicePairingStoreTarget = "pending" | "paired" | "both";
 
 /** Route an explicit pairing base dir (tests, alternate state roots) to that dir's DB. */
-export function resolveDevicePairingStateDbOptions(baseDir?: string): OpenClawStateDatabaseOptions {
+function resolveDevicePairingStateDbOptions(baseDir?: string): OpenClawStateDatabaseOptions {
   return baseDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: baseDir } } : {};
 }
 
@@ -82,6 +82,7 @@ function toPendingRow(record: DevicePairingPendingRecord): DevicePairingPending 
     device_family: record.deviceFamily ?? null,
     client_id: record.clientId ?? null,
     client_mode: record.clientMode ?? null,
+    browser_origin: record.browserOrigin ?? null,
     role: record.role ?? null,
     roles_json: toJsonColumn(record.roles),
     scopes_json: toJsonColumn(record.scopes),
@@ -103,6 +104,7 @@ function fromPendingRow(row: DevicePairingPending): DevicePairingPendingRecord {
     ...optional("deviceFamily", row.device_family),
     ...optional("clientId", row.client_id),
     ...optional("clientMode", row.client_mode),
+    ...optional("browserOrigin", row.browser_origin),
     ...optional("role", row.role),
     ...optional("roles", fromJsonColumn<string[]>(row.roles_json) ?? null),
     ...optional("scopes", fromJsonColumn<string[]>(row.scopes_json) ?? null),
@@ -124,6 +126,7 @@ function toPairedRow(device: PairedDevice): DevicePairingPaired {
     device_family: device.deviceFamily ?? null,
     client_id: device.clientId ?? null,
     client_mode: device.clientMode ?? null,
+    browser_origin: device.browserOrigin ?? null,
     role: device.role ?? null,
     roles_json: toJsonColumn(device.roles),
     scopes_json: toJsonColumn(device.scopes),
@@ -154,6 +157,7 @@ function fromPairedRow(row: DevicePairingPaired): PairedDevice {
     ...optional("deviceFamily", row.device_family),
     ...optional("clientId", row.client_id),
     ...optional("clientMode", row.client_mode),
+    ...optional("browserOrigin", row.browser_origin),
     ...optional("role", row.role),
     ...optional("roles", fromJsonColumn<string[]>(row.roles_json) ?? null),
     ...optional("scopes", fromJsonColumn<string[]>(row.scopes_json) ?? null),

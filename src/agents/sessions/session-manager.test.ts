@@ -17,13 +17,17 @@ import * as Logger from "../../logger.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../shared/transcript-only-openclaw-assistant.js";
 import { prepareSessionManagerForRun } from "../embedded-agent-runner/session-manager-init.js";
 import { repairSessionFileIfNeeded } from "../session-file-repair.js";
+import { loadSqliteMarkedSessionFile } from "./session-manager-file.js";
 import {
+  buildSessionContext,
   CURRENT_SESSION_VERSION,
   findMostRecentSession,
   loadEntriesFromFile,
   parseSessionEntries,
   SessionManager,
+  type FileEntry,
   type SessionEntry,
+  type SessionMessageEntry,
 } from "./session-manager.js";
 
 const tempPaths: string[] = [];
@@ -145,6 +149,91 @@ describe("SessionManager.open", () => {
         expect.objectContaining({ id: compactionId, type: "compaction" }),
       ]),
     );
+  });
+
+  it("preserves root-to-leaf ordering across session branches", () => {
+    const entries = [
+      {
+        type: "message",
+        id: "root",
+        parentId: null,
+        timestamp: "2026-07-16T00:00:00.000Z",
+        message: { role: "user", content: "root", timestamp: 1 },
+      },
+      {
+        type: "message",
+        id: "main-leaf",
+        parentId: "root",
+        timestamp: "2026-07-16T00:00:01.000Z",
+        message: { role: "user", content: "main", timestamp: 2 },
+      },
+      {
+        type: "message",
+        id: "side-middle",
+        parentId: "root",
+        timestamp: "2026-07-16T00:00:02.000Z",
+        message: { role: "user", content: "side middle", timestamp: 3 },
+      },
+      {
+        type: "message",
+        id: "side-leaf",
+        parentId: "side-middle",
+        timestamp: "2026-07-16T00:00:03.000Z",
+        message: { role: "user", content: "side leaf", timestamp: 4 },
+      },
+    ] satisfies SessionMessageEntry[];
+    const manager = SessionManager.inMemory();
+    for (const entry of entries) {
+      manager.appendMessage(entry.message);
+      if (entry.id === "main-leaf") {
+        manager.branch(manager.getBranch().at(0)!.id);
+      }
+    }
+
+    expect(buildSessionContext(entries, "side-leaf").messages).toMatchObject([
+      { content: "root" },
+      { content: "side middle" },
+      { content: "side leaf" },
+    ]);
+    expect(
+      manager
+        .getBranch()
+        .filter((entry) => entry.type === "message")
+        .map((entry) => entry.message),
+    ).toMatchObject([{ content: "root" }, { content: "side middle" }, { content: "side leaf" }]);
+  });
+
+  it("normalizes session names to one line", () => {
+    const manager = SessionManager.inMemory();
+
+    manager.appendSessionInfo("  first\nsecond\r\nthird  ");
+
+    expect(manager.getSessionName()).toBe("first second third");
+  });
+
+  it("ignores opaque SQLite rows while resolving the session cwd", async () => {
+    const dir = await makeTempDir();
+    const storePath = path.join(dir, "sessions.json");
+    const sessionId = "sqlite-opaque-header";
+    const sessionKey = "agent:main:dashboard:sqlite-opaque-header";
+    const marker = formatSqliteSessionFileMarker({ agentId: "main", sessionId, storePath });
+    await upsertSessionEntry(
+      { agentId: "main", sessionKey, storePath },
+      { sessionFile: marker, sessionId, updatedAt: 10 },
+    );
+
+    const loaded = loadSqliteMarkedSessionFile(marker, () => [
+      null as unknown as FileEntry,
+      {
+        type: "session",
+        version: CURRENT_SESSION_VERSION,
+        id: sessionId,
+        timestamp: "2026-07-14T00:00:00.000Z",
+        cwd: dir,
+      },
+    ]);
+
+    expect(loaded?.cwd).toBe(dir);
   });
 
   it("persists prompt-released leaf controls through SQLite markers", async () => {
@@ -2820,6 +2909,22 @@ describe("SessionManager.open", () => {
     expect(records.find((entry) => entry.id === "side-delivery")?.parentId).toBe(metadata.id);
   });
 
+  it("clears label timestamps when starting a replacement session", async () => {
+    const dir = await makeTempDir();
+    const sessionManager = SessionManager.create(dir, dir);
+    const answerId = sessionManager.appendMessage(buildAssistantMessage("answer"));
+    sessionManager.appendLabelChange(answerId, "saved");
+    const state = sessionManager as unknown as {
+      labelTimestampsById: Map<string, string>;
+    };
+
+    expect(state.labelTimestampsById.size).toBe(1);
+
+    sessionManager.newSession();
+
+    expect(state.labelTimestampsById.size).toBe(0);
+  });
+
   it("removes leaf controls that target regenerated labels when branching", async () => {
     const dir = await makeTempDir();
     const sessionFile = path.join(dir, "session.jsonl");
@@ -3243,3 +3348,4 @@ function buildMessageEntry(index: number, parentId: string | null): SessionEntry
     message: { role: "user", content: `message ${index}`, timestamp: index },
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

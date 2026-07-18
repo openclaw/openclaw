@@ -34,7 +34,6 @@ import {
 import {
   createWorkerEnvironmentService,
   type WorkerEnvironmentService,
-  type WorkerEnvironmentServiceOptions,
 } from "../gateway/worker-environments/service.js";
 import {
   createWorkerEnvironmentStore,
@@ -42,7 +41,13 @@ import {
 } from "../gateway/worker-environments/store.js";
 import { createWorkerTranscriptCommitStore } from "../gateway/worker-environments/transcript-commit-store.js";
 import { createWorkerTranscriptCommitter } from "../gateway/worker-environments/transcript-commit.js";
-import { onAgentRuntimeEvent } from "../infra/agent-events.js";
+import {
+  claimAgentRunContext,
+  clearAgentRunContext,
+  getAgentEventLifecycleGeneration,
+  getAgentRunContext,
+  onAgentRuntimeEvent,
+} from "../infra/agent-events.js";
 import { rawDataToString } from "../infra/ws.js";
 import type { WorkerProvider, WorkerSshEndpoint } from "../plugins/types.js";
 import {
@@ -84,6 +89,7 @@ const HANDSHAKE = {
   openclawVersion: "fault-test",
   protocolFeatures: [...WORKER_PROTOCOL_FEATURES],
 };
+type WorkerEnvironmentServiceOptions = Parameters<typeof createWorkerEnvironmentService>[0];
 const BUNDLE_ARTIFACT = {
   install: "bundle" as const,
   bundleHash: BUNDLE_HASH,
@@ -320,6 +326,7 @@ class ComposedGatewayHarness {
       baseLeafId?: string | null;
       initialSeq?: number;
       initialAckedSeq?: number;
+      runId?: string;
     } = {},
   ): WorkerClients {
     const epoch = params.epoch ?? this.epoch;
@@ -336,12 +343,13 @@ class ComposedGatewayHarness {
         handshake: HANDSHAKE,
       },
       assignment: {
-        runId: RUN_ID,
+        runId: params.runId ?? RUN_ID,
         turnId: "fault-turn",
         prompt: "fault injection",
         workspaceDir: this.root,
         modelRef: MODEL_REF,
         inferenceOptions: {},
+        suppressPromptTranscript: false,
         initialMessages: [],
         transcript: { baseLeafId: params.baseLeafId ?? null, nextSeq: params.initialSeq ?? 1 },
         liveEvents: {
@@ -797,6 +805,10 @@ describe("cloud worker milestone 2 fault injection", () => {
         payload: { text: delta, delta },
       }),
     );
+    // The restart fault fires when the gated commit response drains; make sure the
+    // pre-restart tail-a live request reached the gateway first or the lost-window
+    // replay assertion below becomes timing-dependent.
+    await vi.waitFor(() => expect(harness.requestParams("worker.live-event")).toHaveLength(2));
     commitRelease.resolve();
 
     await expect(commit).resolves.toMatchObject({ entryIds: [expect.any(String)] });
@@ -810,17 +822,20 @@ describe("cloud worker milestone 2 fault injection", () => {
       sessionId: SESSION_ID,
     });
     expect(harness.liveDeltas).toEqual(["acked", "tail-a", "tail-b"]);
-    expect(
-      harness.requestParams("worker.live-event").map((request) => {
-        const live = request as WorkerLiveEventParams;
-        return [live.seq, live.lastAckedSeq];
-      }),
-    ).toEqual([
-      [1, 0],
-      [2, 1],
+    const liveRequests = harness.requestParams("worker.live-event").map((request) => {
+      const live = request as WorkerLiveEventParams;
+      return [live.seq, live.lastAckedSeq];
+    });
+    // Pre-restart prefix is deterministic (the waitFor above pins tail-a's send).
+    expect(liveRequests.slice(0, 2)).toEqual([
       [1, 0],
       [2, 1],
     ]);
+    // Whether tail-a's ack beats the socket teardown is a legitimate race, so the
+    // exact retry trace varies; what must hold is that the cleared window forced a
+    // resync replay renumbered from the fresh ack state.
+    expect(liveRequests.length).toBeGreaterThanOrEqual(4);
+    expect(liveRequests.slice(2)).toContainEqual([1, 0]);
     expect(SessionManager.open(harness.sessionFile).getEntries()).toHaveLength(1);
     providerRelease.resolve(doneOutcome("late stale provider result"));
   });
@@ -850,10 +865,13 @@ describe("cloud worker milestone 2 fault injection", () => {
     await oldInferenceRejected;
 
     harness.providerPlan = { kind: "immediate", text: "new owner reply" };
+    // Milestone-3 admission binds the worker to a single run; the fresh owner
+    // must be admitted for the run it executes.
     const fresh = harness.createClients({
       admissionProof: REPLACEMENT_CREDENTIAL,
       epoch: newEpoch,
       baseLeafId: oldCommit.newLeafId,
+      runId: "fresh-run",
     });
     clients.push(fresh);
     await fresh.connection.start();
@@ -906,6 +924,43 @@ describe("cloud worker milestone 2 fault injection", () => {
     ).rejects.toMatchObject({ name: "WorkerTranscriptCommitError" });
     expect(harness.requestParams("worker.transcript.commit")).toHaveLength(2);
     expect(SessionManager.open(harness.sessionFile).getEntries()).toHaveLength(1);
+  });
+
+  it("advances a worker live stream whose run context is dispatch-owned and visible", async () => {
+    const current = harness.createClients();
+    clients.push(current);
+    // A visible turn's run context is claimed by the gateway dispatch before the
+    // turn hands off to the worker. The worker's first live event must adopt that
+    // dispatch-owned context (seq advances from 1) and keep the run visible.
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    claimAgentRunContext(RUN_ID, {
+      agentId: "main",
+      sessionId: SESSION_ID,
+      sessionKey: SESSION_KEY,
+      isControlUiVisible: true,
+      lifecycleGeneration,
+    });
+    try {
+      await current.connection.start();
+
+      await expect(
+        Promise.all(
+          ["one", "two"].map((delta) =>
+            current.live.emit(RUN_ID, { kind: "assistant", payload: { text: delta, delta } }),
+          ),
+        ),
+      ).resolves.toHaveLength(2);
+
+      expect(harness.liveDeltas).toEqual(["one", "two"]);
+      expect(
+        harness
+          .requestParams("worker.live-event")
+          .map((request) => (request as WorkerLiveEventParams).seq),
+      ).toEqual([1, 2]);
+      expect(getAgentRunContext(RUN_ID)?.isControlUiVisible).toBe(true);
+    } finally {
+      clearAgentRunContext(RUN_ID);
+    }
   });
 
   it("settles stop during an in-flight commit without retrying or spinning", async () => {

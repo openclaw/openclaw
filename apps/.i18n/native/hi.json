@@ -114,14 +114,14 @@
       "translated": "चालू"
     },
     {
-      "id": "native.android.9f31cc0fcf527ed2",
-      "source": "Cron job is not due yet.",
-      "translated": "Cron जॉब का समय अभी नहीं हुआ है।"
+      "id": "native.android.198617f355636373",
+      "source": "Automation is not due yet.",
+      "translated": "ऑटोमेशन का समय अभी नहीं हुआ है।"
     },
     {
-      "id": "native.android.fc2c0e26482b32cd",
-      "source": "Cron job is already running.",
-      "translated": "Cron जॉब पहले से चल रहा है।"
+      "id": "native.android.68d8213dbeaf4480",
+      "source": "Automation is already running.",
+      "translated": "ऑटोमेशन पहले से चल रहा है।"
     },
     {
       "id": "native.android.e1bb423a2260ee6d",
@@ -129,9 +129,9 @@
       "translated": "Gateway पुनः आरंभ रिकवरी अभी भी जारी है।"
     },
     {
-      "id": "native.android.341ad86c38a5d3d5",
-      "source": "Cron job has an invalid configuration.",
-      "translated": "Cron जॉब का कॉन्फ़िगरेशन अमान्य है।"
+      "id": "native.android.7f330978f4d02d88",
+      "source": "Automation has an invalid configuration.",
+      "translated": "ऑटोमेशन का कॉन्फ़िगरेशन अमान्य है।"
     },
     {
       "id": "native.android.83640045de441512",
@@ -139,24 +139,24 @@
       "translated": "Cron शेड्यूलर रुका हुआ है।"
     },
     {
-      "id": "native.android.df0b9434fa41904f",
-      "source": "Cron run finished.",
-      "translated": "Cron रन पूरा हुआ।"
+      "id": "native.android.5b73964f29df42a7",
+      "source": "Automation run finished.",
+      "translated": "ऑटोमेशन रन पूरा हुआ।"
     },
     {
-      "id": "native.android.c709d0617063c061",
-      "source": "Cron run skipped.",
-      "translated": "Cron रन छोड़ दिया गया।"
+      "id": "native.android.37a3fea89f09fd4f",
+      "source": "Automation run skipped.",
+      "translated": "ऑटोमेशन रन छोड़ दिया गया।"
     },
     {
-      "id": "native.android.b9f5c536c5a42514",
-      "source": "Cron run failed.",
-      "translated": "Cron रन विफल रहा।"
+      "id": "native.android.b257b623a2508db3",
+      "source": "Automation run failed.",
+      "translated": "ऑटोमेशन रन विफल रहा।"
     },
     {
-      "id": "native.android.a42d3ae97bf79bbe",
-      "source": "Cron run finished with an unknown status.",
-      "translated": "Cron रन अज्ञात स्थिति के साथ पूरा हुआ।"
+      "id": "native.android.fe6882d37530dbb3",
+      "source": "Automation run finished with an unknown status.",
+      "translated": "ऑटोमेशन रन अज्ञात स्थिति के साथ पूरा हुआ।"
     },
     {
       "id": "native.android.d00110fa302427ec",
@@ -524,49 +524,49 @@
       "translated": "कनेक्टेड (ऑपरेटर: $operator)"
     },
     {
-      "id": "native.android.5fe7f7afb77851ff",
-      "source": "This cron job already has a queued run.",
-      "translated": "इस cron जॉब का एक रन पहले से कतार में है।"
+      "id": "native.android.d21aada33a4f9af2",
+      "source": "This automation already has a queued run.",
+      "translated": "इस ऑटोमेशन का एक रन पहले से कतार में है।"
     },
     {
-      "id": "native.android.1ebef3822941cdb6",
-      "source": "Cron job started.",
-      "translated": "Cron job शुरू हुआ।"
+      "id": "native.android.d6f67c67daa0cf8b",
+      "source": "Automation run queued.",
+      "translated": "ऑटोमेशन रन कतार में जोड़ा गया।"
     },
     {
-      "id": "native.android.d8ba5136a17f7618",
-      "source": "Cron run queued.",
-      "translated": "Cron run कतार में है।"
+      "id": "native.android.33a3252703380d25",
+      "source": "Automation started.",
+      "translated": "ऑटोमेशन शुरू हुआ।"
     },
     {
-      "id": "native.android.9bc7e4ad0b917a5f",
-      "source": "Gateway rejected the cron run.",
-      "translated": "Gateway ने cron रन अस्वीकार कर दिया।"
+      "id": "native.android.2366805fa2d53539",
+      "source": "Gateway rejected the automation run.",
+      "translated": "Gateway ने ऑटोमेशन रन अस्वीकार कर दिया।"
     },
     {
-      "id": "native.android.8a758d2851f3db17",
-      "source": "Cron job disabled.",
-      "translated": "Cron job अक्षम किया गया।"
+      "id": "native.android.f2afad6e17c1e4f5",
+      "source": "Automation enabled.",
+      "translated": "ऑटोमेशन सक्षम किया गया।"
     },
     {
-      "id": "native.android.fda9390dc0d4bdea",
-      "source": "Cron job enabled.",
-      "translated": "Cron job सक्षम किया गया।"
+      "id": "native.android.e9523d30c1f4484c",
+      "source": "Automation paused.",
+      "translated": "ऑटोमेशन रोका गया।"
     },
     {
-      "id": "native.android.a9aa7171558f8412",
-      "source": "This cron job changed on the gateway. Review the latest version before saving again.",
-      "translated": "यह cron जॉब Gateway पर बदल गया है। दोबारा सहेजने से पहले नवीनतम संस्करण की समीक्षा करें।"
+      "id": "native.android.ee1570aa6c242586",
+      "source": "This automation changed on the gateway. Review the latest version before saving again.",
+      "translated": "यह ऑटोमेशन Gateway पर बदल गया है। दोबारा सहेजने से पहले नवीनतम संस्करण की समीक्षा करें।"
     },
     {
-      "id": "native.android.4562b415164529af",
-      "source": "Cron job updated.",
-      "translated": "Cron जॉब अपडेट किया गया।"
+      "id": "native.android.c8b760a913d0cb66",
+      "source": "Automation updated.",
+      "translated": "ऑटोमेशन अपडेट किया गया।"
     },
     {
-      "id": "native.android.937a9a77deeef115",
-      "source": "Cron job deleted.",
-      "translated": "Cron जॉब हटाया गया।"
+      "id": "native.android.1c494df0976b57ed",
+      "source": "Automation deleted.",
+      "translated": "ऑटोमेशन हटा दिया गया।"
     },
     {
       "id": "native.android.9c4af565f4ffe18c",
@@ -587,6 +587,21 @@
       "id": "native.android.4de14726a5ec0b73",
       "source": "No canvas update yet. Tap to retry.",
       "translated": "अभी तक कोई कैनवास अपडेट नहीं है। पुनः प्रयास करने के लिए टैप करें।"
+    },
+    {
+      "id": "native.android.00a2531a39904d08",
+      "source": "Connect to a Gateway to save wake words",
+      "translated": "वेक वर्ड सहेजने के लिए Gateway से कनेक्ट करें"
+    },
+    {
+      "id": "native.android.538201c75b85068f",
+      "source": "Wake words saved",
+      "translated": "वेक वर्ड सहेजे गए"
+    },
+    {
+      "id": "native.android.b367e85de3a7148f",
+      "source": "Could not save wake words",
+      "translated": "वेक वर्ड सहेजे नहीं जा सके"
     },
     {
       "id": "native.android.4b07456682e725d9",
@@ -634,34 +649,34 @@
       "translated": "प्रदाता मॉडल लोड हो गए हैं, लेकिन तत्परता की जानकारी उपलब्ध नहीं है।"
     },
     {
-      "id": "native.android.0e1e5786e4cfc894",
-      "source": "Could not load cron jobs.",
-      "translated": "क्रॉन जॉब लोड नहीं किए जा सके।"
+      "id": "native.android.76a4ea6fbd0e9ec9",
+      "source": "Could not load automations.",
+      "translated": "ऑटोमेशन लोड नहीं किए जा सके।"
     },
     {
-      "id": "native.android.5288d0e2cd5ab8e6",
-      "source": "Connect the gateway to inspect cron jobs.",
-      "translated": "क्रॉन जॉब की जाँच करने के लिए Gateway कनेक्ट करें।"
+      "id": "native.android.38e0abd9a93954ee",
+      "source": "Connect the gateway to inspect automations.",
+      "translated": "ऑटोमेशन की जाँच करने के लिए Gateway कनेक्ट करें।"
     },
     {
-      "id": "native.android.09ac6b21e791abb2",
-      "source": "Gateway returned an invalid cron job.",
-      "translated": "Gateway ने एक अमान्य क्रॉन जॉब लौटाया।"
+      "id": "native.android.c90da365e3dae626",
+      "source": "Gateway returned an invalid automation.",
+      "translated": "Gateway ने एक अमान्य ऑटोमेशन लौटाया।"
     },
     {
-      "id": "native.android.db2fbde400d1e692",
-      "source": "Could not load cron job.",
-      "translated": "क्रॉन जॉब लोड नहीं किया जा सका।"
+      "id": "native.android.d6714e6f74a2cb86",
+      "source": "Could not load automation.",
+      "translated": "ऑटोमेशन लोड नहीं किया जा सका।"
     },
     {
-      "id": "native.android.1c986c7849e0094a",
-      "source": "Connect the gateway to inspect cron run history.",
-      "translated": "क्रॉन रन का इतिहास देखने के लिए Gateway कनेक्ट करें।"
+      "id": "native.android.892451834e038518",
+      "source": "Connect the gateway to inspect automation run history.",
+      "translated": "ऑटोमेशन रन का इतिहास देखने के लिए Gateway कनेक्ट करें।"
     },
     {
-      "id": "native.android.5de73d7e34c4dfda",
-      "source": "Could not load cron run history.",
-      "translated": "क्रॉन रन का इतिहास लोड नहीं किया जा सका।"
+      "id": "native.android.c25d29539ca8e4ff",
+      "source": "Could not load automation run history.",
+      "translated": "ऑटोमेशन रन का इतिहास लोड नहीं किया जा सका।"
     },
     {
       "id": "native.android.153ffc5ce4132479",
@@ -669,9 +684,9 @@
       "translated": "क्रॉन में बदलाव के लिए operator.admin एक्सेस आवश्यक है।"
     },
     {
-      "id": "native.android.31b0570face9a32e",
-      "source": "Connect the gateway to manage cron jobs.",
-      "translated": "क्रॉन जॉब प्रबंधित करने के लिए Gateway कनेक्ट करें।"
+      "id": "native.android.74e54edba88f9531",
+      "source": "Connect the gateway to manage automations.",
+      "translated": "ऑटोमेशन प्रबंधित करने के लिए Gateway कनेक्ट करें।"
     },
     {
       "id": "native.android.c050b799c39b1fd9",
@@ -1074,6 +1089,11 @@
       "translated": "मॉडल अपडेट नहीं किया जा सका।"
     },
     {
+      "id": "native.android.e4ab8aaa795ba79f",
+      "source": "Could not update thinking level.",
+      "translated": "चिंतन स्तर अपडेट नहीं किया जा सका।"
+    },
+    {
       "id": "native.android.956a394937480f8a",
       "source": "Chat failed before the run started; try again.",
       "translated": "रन शुरू होने से पहले चैट विफल हो गई; फिर से कोशिश करें।"
@@ -1082,11 +1102,6 @@
       "id": "native.android.2db6d419791ce6a7",
       "source": "Could not stage an attachment for sending.",
       "translated": "भेजने के लिए अटैचमेंट तैयार नहीं किया जा सका।"
-    },
-    {
-      "id": "native.android.0b29275eefad9863",
-      "source": "Could not queue message for later delivery.",
-      "translated": "बाद में डिलीवरी के लिए संदेश को कतार में नहीं लगाया जा सका।"
     },
     {
       "id": "native.android.c3899241029d152c",
@@ -1107,6 +1122,11 @@
       "id": "native.android.84af66e78ec02fa3",
       "source": "Gateway health not OK; cannot send",
       "translated": "Gateway की स्थिति ठीक नहीं है; भेजा नहीं जा सकता"
+    },
+    {
+      "id": "native.android.0b29275eefad9863",
+      "source": "Could not queue message for later delivery.",
+      "translated": "बाद में डिलीवरी के लिए संदेश को कतार में नहीं लगाया जा सका।"
     },
     {
       "id": "native.android.8c2ff49af3e78aee",
@@ -1167,11 +1187,6 @@
       "id": "native.android.a79d6ccab877c9ca",
       "source": "OpenClaw Active",
       "translated": "OpenClaw सक्रिय"
-    },
-    {
-      "id": "native.android.f7a4f3bbcb0b2090",
-      "source": "${firstLine.take(157)}…",
-      "translated": "${firstLine.take(157)}…"
     },
     {
       "id": "native.android.356609f717b92350",
@@ -1539,24 +1554,24 @@
       "translated": "रद्द करें"
     },
     {
-      "id": "native.android.ec06722578a6027e",
-      "source": "Delete cron job?",
-      "translated": "cron job हटाएं?"
+      "id": "native.android.0e3e55624d2b9cc7",
+      "source": "Delete automation?",
+      "translated": "ऑटोमेशन हटाएँ?"
     },
     {
-      "id": "native.android.362073d4e1e4624d",
-      "source": "This permanently removes the scheduled job from the gateway.",
-      "translated": "यह अनुसूचित job को gateway से स्थायी रूप से हटा देता है।"
+      "id": "native.android.a239813fcaf37275",
+      "source": "This permanently removes the automation and its schedule from the gateway.",
+      "translated": "इससे ऑटोमेशन और उसका शेड्यूल Gateway से स्थायी रूप से हट जाएगा।"
     },
     {
-      "id": "native.android.a3fcfa20dc395b87",
-      "source": "This job changed while you were editing. Revert to the latest gateway version before saving.",
-      "translated": "आपके संपादन के दौरान यह जॉब बदल गया। सहेजने से पहले नवीनतम Gateway संस्करण पर वापस जाएँ।"
+      "id": "native.android.dfbb2ffdd097891e",
+      "source": "This automation changed while you were editing. Revert to the latest gateway version before saving.",
+      "translated": "आपके संपादन के दौरान यह ऑटोमेशन बदल गया। सेव करने से पहले Gateway के नवीनतम संस्करण पर वापस जाएँ।"
     },
     {
-      "id": "native.android.db9f08d611b4c508",
-      "source": "Save or revert your edits before running, enabling, disabling, deleting, or refreshing this job.",
-      "translated": "इस जॉब को चलाने, सक्षम करने, अक्षम करने, हटाने या रीफ़्रेश करने से पहले अपने संपादन सहेजें या वापस लें।"
+      "id": "native.android.35f50ae04278c068",
+      "source": "Save or revert your edits before running, enabling, disabling, deleting, or refreshing this automation.",
+      "translated": "इस ऑटोमेशन को चलाने, सक्षम करने, अक्षम करने, हटाने या रीफ़्रेश करने से पहले अपने संपादन सेव करें या उन्हें वापस लाएँ।"
     },
     {
       "id": "native.android.212889821e40127e",
@@ -1589,14 +1604,14 @@
       "translated": "सक्षम करें"
     },
     {
-      "id": "native.android.1fed5d5912a9679c",
-      "source": "Delete Job",
-      "translated": "Job हटाएं"
+      "id": "native.android.eb4763f9d83f71b5",
+      "source": "Delete Automation",
+      "translated": "ऑटोमेशन हटाएँ"
     },
     {
-      "id": "native.android.da9ecf342cbd7035",
-      "source": "Edit Job",
-      "translated": "Job संपादित करें"
+      "id": "native.android.6cf371a6c39142be",
+      "source": "Edit Automation",
+      "translated": "ऑटोमेशन संपादित करें"
     },
     {
       "id": "native.android.006f60922ae98063",
@@ -1604,9 +1619,9 @@
       "translated": "सक्षम"
     },
     {
-      "id": "native.android.8b967e5cba1edfd8",
-      "source": "Allow the scheduler to run this job.",
-      "translated": "शेड्यूलर को यह जॉब चलाने की अनुमति दें।"
+      "id": "native.android.cdfd111ea8c90d0f",
+      "source": "Allow the scheduler to run this automation.",
+      "translated": "शेड्यूलर को यह ऑटोमेशन चलाने की अनुमति दें।"
     },
     {
       "id": "native.android.f5fe0e769a9df4f8",
@@ -1614,14 +1629,14 @@
       "translated": "चलाने के बाद हटाएं"
     },
     {
-      "id": "native.android.9ed8d09744263540",
-      "source": "Remove this job after a successful one-shot run.",
-      "translated": "सफल वन-शॉट रन के बाद इस जॉब को हटाएं।"
+      "id": "native.android.1a6d5883c1e661ba",
+      "source": "Remove this automation after a successful one-shot run.",
+      "translated": "एक बार सफलतापूर्वक चलने के बाद इस ऑटोमेशन को हटा दें।"
     },
     {
-      "id": "native.android.8faa8ae2ea76fe52",
-      "source": "Job name",
-      "translated": "जॉब नाम"
+      "id": "native.android.7681a20f499488a8",
+      "source": "Automation name",
+      "translated": "ऑटोमेशन का नाम"
     },
     {
       "id": "native.android.e3a12cf55b2caea3",
@@ -3869,34 +3884,39 @@
       "translated": "जब आपका Gateway उन्हें रिपोर्ट करेगा, तो प्रदाता सीमाएँ यहाँ दिखाई देंगी।"
     },
     {
-      "id": "native.android.962a15bdb26cb6e1",
-      "source": "Cron Jobs",
-      "translated": "Cron जॉब्स"
-    },
-    {
       "id": "native.android.5e3e4cd42004cb28",
       "source": "Scheduled OpenClaw work from your gateway.",
       "translated": "आपके gateway से निर्धारित OpenClaw कार्य।"
     },
     {
-      "id": "native.android.f9a5f09bd7436aa6",
-      "source": "Jobs",
-      "translated": "जॉब"
+      "id": "native.android.31a5440e22667f02",
+      "source": "Automations",
+      "translated": "ऑटोमेशन"
     },
     {
-      "id": "native.android.3cd22006987fde12",
-      "source": "Open a job to inspect its configuration and run history. Admin-scoped connections can also run, edit, enable, disable, or delete it.",
-      "translated": "किसी जॉब को उसका कॉन्फ़िगरेशन और रन इतिहास देखने के लिए खोलें। Admin-स्कोप वाले कनेक्शन इसे चला, संपादित, सक्षम, अक्षम या हटा भी सकते हैं।"
+      "id": "native.android.6e803f5130583ef7",
+      "source": "Search automations",
+      "translated": "ऑटोमेशन खोजें"
     },
     {
-      "id": "native.android.9354a5bf1e4ce5a5",
-      "source": "Connect the gateway to load cron jobs.",
-      "translated": "Cron Jobs लोड करने के लिए Gateway कनेक्ट करें।"
+      "id": "native.android.ba3859394e1d84ad",
+      "source": "Search",
+      "translated": "खोजें"
     },
     {
-      "id": "native.android.239e2598dab8a8b1",
-      "source": "No scheduled jobs.",
-      "translated": "कोई निर्धारित जॉब नहीं।"
+      "id": "native.android.02b3c78b09d0bbf5",
+      "source": "Open an automation to inspect its configuration and run history. Admin-scoped connections can also run, edit, enable, disable, or delete it.",
+      "translated": "किसी ऑटोमेशन का कॉन्फ़िगरेशन और रन इतिहास देखने के लिए उसे खोलें। एडमिन-स्कोप वाले कनेक्शन उसे चला, संपादित, सक्षम, अक्षम या हटा भी सकते हैं।"
+    },
+    {
+      "id": "native.android.93757bcd5a888e9b",
+      "source": "Connect the gateway to load automations.",
+      "translated": "ऑटोमेशन लोड करने के लिए Gateway कनेक्ट करें।"
+    },
+    {
+      "id": "native.android.64a9b78fdbb526db",
+      "source": "No automations yet.",
+      "translated": "अभी कोई ऑटोमेशन नहीं है।"
     },
     {
       "id": "native.android.bc88f537cd309fcb",
@@ -3904,34 +3924,34 @@
       "translated": "gateway पर बनाया गया शेड्यूल किया गया कार्य यहां दिखाई देगा।"
     },
     {
-      "id": "native.android.2fbb66cd888e9543",
-      "source": "Cron Job",
-      "translated": "Cron जॉब"
+      "id": "native.android.de64e737e58cc949",
+      "source": "No matching automations.",
+      "translated": "कोई मेल खाता ऑटोमेशन नहीं मिला।"
     },
     {
-      "id": "native.android.f6dd71419863574c",
-      "source": "Inspect scheduled gateway work.",
-      "translated": "निर्धारित gateway कार्य का निरीक्षण करें।"
+      "id": "native.android.9e3164ae5cb0527a",
+      "source": "Automation",
+      "translated": "ऑटोमेशन"
     },
     {
-      "id": "native.android.e3a6337e3c28d3f5",
-      "source": "Connect the gateway to inspect cron jobs.",
-      "translated": "cron jobs का निरीक्षण करने के लिए Gateway कनेक्ट करें।"
+      "id": "native.android.5d9806af18054700",
+      "source": "Inspect and manage scheduled gateway work.",
+      "translated": "शेड्यूल किए गए Gateway कार्य का निरीक्षण और प्रबंधन करें।"
     },
     {
-      "id": "native.android.2d3daa5032913461",
-      "source": "Cron job not loaded.",
-      "translated": "Cron job लोड नहीं हुआ।"
+      "id": "native.android.c6faada8886de13f",
+      "source": "Connect the gateway to inspect automations.",
+      "translated": "ऑटोमेशन का निरीक्षण करने के लिए Gateway से कनेक्ट करें।"
     },
     {
-      "id": "native.android.401993832e04f790",
-      "source": "Loading cron job…",
-      "translated": "cron job लोड हो रहा है…"
+      "id": "native.android.4530f9bf73d3155f",
+      "source": "Automation not loaded.",
+      "translated": "ऑटोमेशन लोड नहीं हुआ।"
     },
     {
-      "id": "native.android.6da97c8c6e1a3d3a",
-      "source": "Agents",
-      "translated": "एजेंट"
+      "id": "native.android.ba65a945fa8b0fc5",
+      "source": "Loading automation…",
+      "translated": "ऑटोमेशन लोड हो रहा है…"
     },
     {
       "id": "native.android.0f33ca43db97b2a9",
@@ -4044,9 +4064,89 @@
       "translated": "प्रोफ़ाइल सेव करें"
     },
     {
-      "id": "native.android.19f0834b4dbcc85a",
-      "source": "Configure voice, transport, and playback.",
-      "translated": "आवाज़, ट्रांसपोर्ट, और प्लेबैक कॉन्फ़िगर करें।"
+      "id": "native.android.deda55df7ca328fc",
+      "source": "Configure wake words, talk, and playback.",
+      "translated": "वेक वर्ड, बातचीत और प्लेबैक कॉन्फ़िगर करें।"
+    },
+    {
+      "id": "native.android.2ae2282617282586",
+      "source": "Voice",
+      "translated": "वॉइस"
+    },
+    {
+      "id": "native.android.3f54d9356234744e",
+      "source": "Voice Wake",
+      "translated": "वॉइस वेक"
+    },
+    {
+      "id": "native.android.34ec8a3bc017cbd5",
+      "source": "Listen for wake words",
+      "translated": "वेक वर्ड सुनें"
+    },
+    {
+      "id": "native.android.6e58157abced395f",
+      "source": "Runs on-device while OpenClaw is visible.",
+      "translated": "OpenClaw दिखाई देने के दौरान डिवाइस पर चलता है।"
+    },
+    {
+      "id": "native.android.6464166ab71fde3f",
+      "source": "On-device speech recognition is unavailable.",
+      "translated": "डिवाइस पर स्पीच रिकग्निशन उपलब्ध नहीं है।"
+    },
+    {
+      "id": "native.android.35d996c1bc693bb9",
+      "source": "Wake listener",
+      "translated": "वेक लिसनर"
+    },
+    {
+      "id": "native.android.12fd2cd4e7d1d778",
+      "source": "Last command: $command",
+      "translated": "पिछला कमांड: $command"
+    },
+    {
+      "id": "native.android.a36f052c5f1691d6",
+      "source": "Pauses during other voice activity.",
+      "translated": "अन्य वॉइस गतिविधि के दौरान रुक जाता है।"
+    },
+    {
+      "id": "native.android.a5272caac136694c",
+      "source": "Wake words",
+      "translated": "वेक वर्ड"
+    },
+    {
+      "id": "native.android.37e7e27c16eca7fe",
+      "source": "Add one wake word or phrase per field. Then say one before your command.",
+      "translated": "हर फ़ील्ड में एक वेक वर्ड या वाक्यांश जोड़ें। फिर अपना कमांड देने से पहले उनमें से एक बोलें।"
+    },
+    {
+      "id": "native.android.95e42f0b4b6d4092",
+      "source": "Wake word or phrase",
+      "translated": "वेक वर्ड या वाक्यांश"
+    },
+    {
+      "id": "native.android.0b35023a9220d572",
+      "source": "Remove wake phrase",
+      "translated": "वेक वाक्यांश हटाएँ"
+    },
+    {
+      "id": "native.android.0bff8c1428b32178",
+      "source": "Add wake phrase",
+      "translated": "वेक वाक्यांश जोड़ें"
+    },
+    {
+      "id": "native.android.dfb84902f6a483d0",
+      "source": "Save wake words",
+      "translated": "वेक वर्ड सहेजें"
+    },
+    {
+      "id": "native.android.5ab6829fa57f662d",
+      "source": "Saving…",
+      "translated": "सहेजा जा रहा है…"
+    },
+    {
+      "id": "native.android.672382a4b7900ee6",
+      "source": "Connect to a Gateway to save wake words",
+      "translated": "वेक वर्ड सहेजने के लिए Gateway से कनेक्ट करें"
     },
     {
       "id": "native.android.8d0458a4fe154e9b",
@@ -4134,14 +4234,14 @@
       "translated": "OpenClaw चयनित अलर्ट प्राप्त कर सकता है।"
     },
     {
-      "id": "native.android.fef97bfb2cd5d228",
-      "source": "$quietStart to $quietEnd",
-      "translated": "$quietStart से $quietEnd"
-    },
-    {
       "id": "native.android.a04ee29c0a3b68f5",
       "source": "Quiet Hours",
       "translated": "शांत समय"
+    },
+    {
+      "id": "native.android.fef97bfb2cd5d228",
+      "source": "$quietStart to $quietEnd",
+      "translated": "$quietStart से $quietEnd"
     },
     {
       "id": "native.android.db3ed951c0462727",
@@ -4157,11 +4257,6 @@
       "id": "native.android.609413bd24d4dfe6",
       "source": "Rate Limit",
       "translated": "दर सीमा"
-    },
-    {
-      "id": "native.android.62fe76eb7c0dbddc",
-      "source": "Access",
-      "translated": "पहुँच"
     },
     {
       "id": "native.android.ebeec52e498bc128",
@@ -4429,14 +4524,44 @@
       "translated": "ऑनलाइन"
     },
     {
+      "id": "native.android.62fe76eb7c0dbddc",
+      "source": "Access",
+      "translated": "पहुँच"
+    },
+    {
       "id": "native.android.a8958b5432344ded",
       "source": "Address",
       "translated": "पता"
     },
     {
-      "id": "native.android.573f216f8bc83d12",
-      "source": "Not available",
-      "translated": "उपलब्ध नहीं"
+      "id": "native.android.7f63838c1aaa496a",
+      "source": "Discovered",
+      "translated": "खोजा गया"
+    },
+    {
+      "id": "native.android.b1c378e882375bba",
+      "source": "Default Agent",
+      "translated": "डिफ़ॉल्ट एजेंट"
+    },
+    {
+      "id": "native.android.6da97c8c6e1a3d3a",
+      "source": "Agents",
+      "translated": "एजेंट"
+    },
+    {
+      "id": "native.android.f2c8ad44786cc3b8",
+      "source": "Instance ID",
+      "translated": "इंस्टेंस ID"
+    },
+    {
+      "id": "native.android.27b4b0e04eca357c",
+      "source": "Scan QR to Pair",
+      "translated": "पेयर करने के लिए QR स्कैन करें"
+    },
+    {
+      "id": "native.android.6926684139f297b5",
+      "source": "Limited Gateway access",
+      "translated": "सीमित Gateway एक्सेस"
     },
     {
       "id": "native.android.7b12195e02ebcc34",
@@ -4447,6 +4572,51 @@
       "id": "native.android.e11f54696b376155",
       "source": "Disconnect",
       "translated": "डिस्कनेक्ट करें"
+    },
+    {
+      "id": "native.android.4dd409fe93b28258",
+      "source": "Diagnose",
+      "translated": "समस्या का निदान करें"
+    },
+    {
+      "id": "native.android.3901b9fb63225af4",
+      "source": "Add Gateway",
+      "translated": "Gateway जोड़ें"
+    },
+    {
+      "id": "native.android.c040d4ee72a810e0",
+      "source": "Scan or paste a setup code to add another gateway.",
+      "translated": "कोई और gateway जोड़ने के लिए सेटअप कोड स्कैन करें या पेस्ट करें।"
+    },
+    {
+      "id": "native.android.d869cbfce570d83c",
+      "source": "Scan QR",
+      "translated": "QR स्कैन करें"
+    },
+    {
+      "id": "native.android.1fcfa6e7f5daac35",
+      "source": "Setup code",
+      "translated": "सेटअप कोड"
+    },
+    {
+      "id": "native.android.c73418c6ff187c8e",
+      "source": "Where do I get a setup code?",
+      "translated": "मुझे सेटअप कोड कहाँ मिलेगा?"
+    },
+    {
+      "id": "native.android.de12fd162a566974",
+      "source": "Android can scan or paste an existing setup code, but this gateway does not expose setup-code generation to the app yet. Generate the QR/code on the gateway host with openclaw qr, then scan it here or paste the setup code below.",
+      "translated": "Android मौजूदा सेटअप कोड को स्कैन या पेस्ट कर सकता है, लेकिन यह gateway अभी ऐप को सेटअप-कोड जनरेशन उपलब्ध नहीं कराता है। gateway host पर openclaw qr के साथ QR/कोड जनरेट करें, फिर उसे यहाँ स्कैन करें या नीचे सेटअप कोड पेस्ट करें।"
+    },
+    {
+      "id": "native.android.ac1032dabe06ab02",
+      "source": "No gateways found yet. Use manual setup if discovery is blocked.",
+      "translated": "अभी तक कोई Gateway नहीं मिला। यदि खोज अवरुद्ध है, तो मैन्युअल सेटअप का उपयोग करें।"
+    },
+    {
+      "id": "native.android.bb6a50133b74967d",
+      "source": "Connect",
+      "translated": "कनेक्ट करें"
     },
     {
       "id": "native.android.87eee1e2bafbf13b",
@@ -4464,39 +4634,9 @@
       "translated": "भूलें"
     },
     {
-      "id": "native.android.56e98811c4e9b027",
-      "source": "Gateway setup",
-      "translated": "Gateway सेटअप"
-    },
-    {
-      "id": "native.android.c040d4ee72a810e0",
-      "source": "Scan or paste a setup code to add another gateway.",
-      "translated": "कोई और gateway जोड़ने के लिए सेटअप कोड स्कैन करें या पेस्ट करें।"
-    },
-    {
-      "id": "native.android.a7c243ff3f1d6447",
-      "source": "Add gateway",
-      "translated": "Gateway जोड़ें"
-    },
-    {
-      "id": "native.android.77a03c8c22155ec5",
-      "source": "Setup Code",
-      "translated": "सेटअप कोड"
-    },
-    {
-      "id": "native.android.de12fd162a566974",
-      "source": "Android can scan or paste an existing setup code, but this gateway does not expose setup-code generation to the app yet. Generate the QR/code on the gateway host with openclaw qr, then scan it here or paste the setup code below.",
-      "translated": "Android मौजूदा सेटअप कोड को स्कैन या पेस्ट कर सकता है, लेकिन यह gateway अभी ऐप को सेटअप-कोड जनरेशन उपलब्ध नहीं कराता है। gateway host पर openclaw qr के साथ QR/कोड जनरेट करें, फिर उसे यहाँ स्कैन करें या नीचे सेटअप कोड पेस्ट करें।"
-    },
-    {
-      "id": "native.android.0e8f4c02f7aa20e9",
-      "source": "Connection Setup",
-      "translated": "कनेक्शन सेटअप"
-    },
-    {
-      "id": "native.android.1fcfa6e7f5daac35",
-      "source": "Setup code",
-      "translated": "सेटअप कोड"
+      "id": "native.android.ec5f17e1a1fa0515",
+      "source": "Manual Gateway",
+      "translated": "मैन्युअल Gateway"
     },
     {
       "id": "native.android.29fe804ebbaed339",
@@ -4547,6 +4687,26 @@
       "id": "native.android.633d0dcf4b6d6ed8",
       "source": "Enter a valid setup code or gateway address.",
       "translated": "मान्य सेटअप कोड या gateway पता दर्ज करें।"
+    },
+    {
+      "id": "native.android.573f216f8bc83d12",
+      "source": "Not available",
+      "translated": "उपलब्ध नहीं"
+    },
+    {
+      "id": "native.android.feac408f68bedd1c",
+      "source": "Full",
+      "translated": "पूर्ण"
+    },
+    {
+      "id": "native.android.c39ba12c18acb958",
+      "source": "Limited",
+      "translated": "सीमित"
+    },
+    {
+      "id": "native.android.f6ab96d066bd583c",
+      "source": "Use a secure wss:// or Tailscale Serve Gateway, generate a full-access setup code in the Control UI or with openclaw qr, then scan or paste it below and reconnect to enable settings and upgrades.",
+      "translated": "एक सुरक्षित wss:// या Tailscale Serve Gateway का उपयोग करें, Control UI में या openclaw qr के साथ एक फुल-एक्सेस सेटअप कोड जनरेट करें, फिर उसे नीचे स्कैन या पेस्ट करें और सेटिंग्स तथा अपग्रेड सक्षम करने के लिए फिर से कनेक्ट करें।"
     },
     {
       "id": "native.android.5311e446ce2bf857",
@@ -4829,9 +4989,9 @@
       "translated": "समीक्षा करें"
     },
     {
-      "id": "native.android.9664ff3f205c25d6",
-      "source": "Open cron job detail",
-      "translated": "क्रॉन जॉब का विवरण खोलें"
+      "id": "native.android.bee982da282e0887",
+      "source": "Open automation detail",
+      "translated": "ऑटोमेशन का विवरण खोलें"
     },
     {
       "id": "native.android.4a583b7a36684ed7",
@@ -4989,6 +5149,11 @@
       "translated": "डिफ़ॉल्ट"
     },
     {
+      "id": "native.android.66baf6f63dafa213",
+      "source": "${endpoint.host}:${endpoint.port}",
+      "translated": "${endpoint.host}:${endpoint.port}"
+    },
+    {
       "id": "native.android.f154617fd2233082",
       "source": "Action Request",
       "translated": "कार्रवाई का अनुरोध"
@@ -5062,6 +5227,21 @@
       "id": "native.android.98b1e19bdbc1e640",
       "source": "${job.scheduleLabel} · ${formatCronWake(job.nextRunAtMs)} · ${job.promptPreview}",
       "translated": "${job.scheduleLabel} · ${formatCronWake(job.nextRunAtMs)} · ${job.promptPreview}"
+    },
+    {
+      "id": "native.android.ec82506ef939dc0e",
+      "source": "All",
+      "translated": "सभी"
+    },
+    {
+      "id": "native.android.f281f6a848fd8ff5",
+      "source": "Active",
+      "translated": "सक्रिय"
+    },
+    {
+      "id": "native.android.48080c472857781d",
+      "source": "Paused",
+      "translated": "रोके गए"
     },
     {
       "id": "native.android.c45aa61a985005d9",
@@ -5504,9 +5684,9 @@
       "translated": "अनुमोदन"
     },
     {
-      "id": "native.android.dd2def654c56b026",
-      "source": "Cron Jobs",
-      "translated": "Cron जॉब्स"
+      "id": "native.android.9cb21c6f0cbc9adc",
+      "source": "Automations",
+      "translated": "ऑटोमेशन"
     },
     {
       "id": "native.android.20833251ed61ca65",
@@ -6849,9 +7029,94 @@
       "translated": "इस इमेज को डिकोड नहीं किया जा सका."
     },
     {
+      "id": "native.android.e2004e8205154dd2",
+      "source": "Couldn’t load background tasks",
+      "translated": "बैकग्राउंड टास्क लोड नहीं किए जा सके"
+    },
+    {
+      "id": "native.android.bfa286f1b0a3c526",
+      "source": "Couldn’t load task details",
+      "translated": "टास्क का विवरण लोड नहीं किया जा सका"
+    },
+    {
+      "id": "native.android.6811e525782306c1",
+      "source": "Background tasks",
+      "translated": "बैकग्राउंड टास्क"
+    },
+    {
+      "id": "native.android.754676bf2d2a50e7",
+      "source": "Refresh background tasks",
+      "translated": "बैकग्राउंड टास्क रीफ़्रेश करें"
+    },
+    {
+      "id": "native.android.99e93f4520a61356",
+      "source": "No background tasks for this agent.",
+      "translated": "इस एजेंट के लिए कोई बैकग्राउंड टास्क नहीं है।"
+    },
+    {
+      "id": "native.android.26f0aae060212535",
+      "source": "Finished",
+      "translated": "समाप्त"
+    },
+    {
+      "id": "native.android.6f4ef7e03dd153f5",
+      "source": "Back to background tasks",
+      "translated": "बैकग्राउंड टास्क पर वापस जाएँ"
+    },
+    {
+      "id": "native.android.193a6c8583fe0dfb",
+      "source": "${statusLabel} · ${task.runtime}",
+      "translated": "${statusLabel} · ${task.runtime}"
+    },
+    {
+      "id": "native.android.c00ea0e2c7802a9f",
+      "source": "Prompt",
+      "translated": "प्रॉम्प्ट"
+    },
+    {
+      "id": "native.android.4cdf83cd30fac87e",
+      "source": "Prompt unavailable",
+      "translated": "प्रॉम्प्ट उपलब्ध नहीं है"
+    },
+    {
+      "id": "native.android.a093c342398c1d62",
+      "source": "No output yet",
+      "translated": "अभी तक कोई आउटपुट नहीं है"
+    },
+    {
+      "id": "native.android.3adeec85d4a8e797",
+      "source": "Output",
+      "translated": "आउटपुट"
+    },
+    {
+      "id": "native.android.e378f4d3069dc5f4",
+      "source": "Queued",
+      "translated": "कतार में"
+    },
+    {
+      "id": "native.android.7e4ab752e691e19a",
+      "source": "Running",
+      "translated": "चल रहा है"
+    },
+    {
+      "id": "native.android.c3b1223090fc9f15",
+      "source": "Completed",
+      "translated": "पूर्ण"
+    },
+    {
+      "id": "native.android.7a5134f615d03ff9",
+      "source": "Failed",
+      "translated": "विफल"
+    },
+    {
       "id": "native.android.6384b9802cfdacfe",
       "source": "$text ",
       "translated": "$text "
+    },
+    {
+      "id": "native.android.d1712183ebf86197",
+      "source": "Widget unavailable",
+      "translated": "विजेट उपलब्ध नहीं है"
     },
     {
       "id": "native.android.cd2033b0a82a72dd",
@@ -7114,9 +7379,9 @@
       "translated": "ऑफ़लाइन"
     },
     {
-      "id": "native.android.6b0f8ea129bca167",
-      "source": "More new chat options",
-      "translated": "नए चैट के और विकल्प"
+      "id": "native.android.6c2e520fd54edeb4",
+      "source": "Chat actions",
+      "translated": "चैट की कार्रवाइयाँ"
     },
     {
       "id": "native.android.0066c3883e9eff15",
@@ -7124,9 +7389,24 @@
       "translated": "चैट रीफ़्रेश करें"
     },
     {
+      "id": "native.android.b57a1b542cff8f55",
+      "source": "Background tasks",
+      "translated": "बैकग्राउंड टास्क"
+    },
+    {
       "id": "native.android.707eccff20a79f65",
       "source": "Chat",
       "translated": "चैट"
+    },
+    {
+      "id": "native.android.ec49cca2ed03f9f9",
+      "source": "Messages to recover",
+      "translated": "Messages to recover"
+    },
+    {
+      "id": "native.android.7983bb6667118aa1",
+      "source": "${item.count} message(s) need recovery. Re-enter anything you want to keep, then delete these rows.",
+      "translated": "${item.count} message(s) need recovery. Re-enter anything you want to keep, then delete these rows."
     },
     {
       "id": "native.android.882cc14a58e7e105",
@@ -7272,6 +7552,21 @@
       "id": "native.android.98a0d4d5bba788c4",
       "source": "OpenClaw is preparing a response.",
       "translated": "OpenClaw जवाब तैयार कर रहा है।"
+    },
+    {
+      "id": "native.android.22d747642a3887cd",
+      "source": "$completedCount/${steps.size}",
+      "translated": "$completedCount/${steps.size}"
+    },
+    {
+      "id": "native.android.5d9378441e3bb86e",
+      "source": "Collapse plan checklist",
+      "translated": "योजना चेकलिस्ट संक्षिप्त करें"
+    },
+    {
+      "id": "native.android.cc46adc71637695d",
+      "source": "Expand plan checklist",
+      "translated": "योजना चेकलिस्ट विस्तृत करें"
     },
     {
       "id": "native.android.f3806d79e43f568f",
@@ -7794,6 +8089,56 @@
       "translated": "वाक् त्रुटि ($error)"
     },
     {
+      "id": "native.android.11d70a2e3419e346",
+      "source": "Off",
+      "translated": "बंद"
+    },
+    {
+      "id": "native.android.b21cacf24f03d772",
+      "source": "On-device speech recognition unavailable",
+      "translated": "डिवाइस पर वाक् पहचान उपलब्ध नहीं है"
+    },
+    {
+      "id": "native.android.c379aa335b932db2",
+      "source": "Paused",
+      "translated": "रोका गया"
+    },
+    {
+      "id": "native.android.d0c22c4961346923",
+      "source": "Listening",
+      "translated": "सुना जा रहा है"
+    },
+    {
+      "id": "native.android.894062d81447a410",
+      "source": "Microphone permission required",
+      "translated": "माइक्रोफ़ोन की अनुमति आवश्यक है"
+    },
+    {
+      "id": "native.android.d404b3d5f084f5d2",
+      "source": "Device language not supported",
+      "translated": "डिवाइस की भाषा समर्थित नहीं है"
+    },
+    {
+      "id": "native.android.d559a0a3f32701b8",
+      "source": "On-device language model unavailable",
+      "translated": "डिवाइस पर भाषा मॉडल उपलब्ध नहीं है"
+    },
+    {
+      "id": "native.android.269915b38b1486c0",
+      "source": "Triggered",
+      "translated": "ट्रिगर किया गया"
+    },
+    {
+      "id": "native.android.9a0753f5ae9394ab",
+      "source": "Gateway unavailable",
+      "translated": "Gateway उपलब्ध नहीं है"
+    },
+    {
+      "id": "native.android.eef69ee3eb23cc1b",
+      "source": "Starting…",
+      "translated": "शुरू हो रहा है…"
+    },
+    {
       "id": "native.android.f392ee2d50d6b7ce",
       "source": "ask OpenClaw $prompt",
       "translated": "OpenClaw से $prompt पूछें"
@@ -7982,6 +8327,691 @@
       "id": "native.apple.a811eb3e4d2174d5",
       "source": "that request",
       "translated": "वह अनुरोध"
+    },
+    {
+      "id": "native.apple.1696cec8c3c6a511",
+      "source": "Settings",
+      "translated": "सेटिंग्स"
+    },
+    {
+      "id": "native.apple.d66c2f42a01fdcc6",
+      "source": "History",
+      "translated": "इतिहास"
+    },
+    {
+      "id": "native.apple.18f4b0e25c9ca42f",
+      "source": "Automation",
+      "translated": "ऑटोमेशन"
+    },
+    {
+      "id": "native.apple.f8791c06b9eea7c9",
+      "source": "Close",
+      "translated": "बंद करें"
+    },
+    {
+      "id": "native.apple.35f5bb05688e822d",
+      "source": "Refresh automation",
+      "translated": "ऑटोमेशन रीफ़्रेश करें"
+    },
+    {
+      "id": "native.apple.725e459c8dd8ba4c",
+      "source": "Delete this automation?",
+      "translated": "इस ऑटोमेशन को हटाएँ?"
+    },
+    {
+      "id": "native.apple.50255322e1b2c13b",
+      "source": "Delete Automation",
+      "translated": "ऑटोमेशन हटाएँ"
+    },
+    {
+      "id": "native.apple.d4cb0f4dc6c1058f",
+      "source": "Cancel",
+      "translated": "रद्द करें"
+    },
+    {
+      "id": "native.apple.ff9d5755b4f93f5d",
+      "source": "This permanently removes the automation and its schedule from the Gateway.",
+      "translated": "इससे ऑटोमेशन और उसका शेड्यूल Gateway से स्थायी रूप से हट जाएगा।"
+    },
+    {
+      "id": "native.apple.881fc358341a1df5",
+      "source": "active",
+      "translated": "सक्रिय"
+    },
+    {
+      "id": "native.apple.4bc22f0f6856a7c5",
+      "source": "paused",
+      "translated": "रोका गया"
+    },
+    {
+      "id": "native.apple.8fb3a1cb0aeb5dfe",
+      "source": "Next run",
+      "translated": "अगला रन"
+    },
+    {
+      "id": "native.apple.57e96e8d8fd5c342",
+      "source": "Last run",
+      "translated": "पिछला रन"
+    },
+    {
+      "id": "native.apple.cb17c8f476ef9637",
+      "source": "Automation detail",
+      "translated": "ऑटोमेशन का विवरण"
+    },
+    {
+      "id": "native.apple.125f2fbe90c80642",
+      "source": "Editing unavailable",
+      "translated": "संपादन उपलब्ध नहीं है"
+    },
+    {
+      "id": "native.apple.aa17216c6a622bcc",
+      "source": "Details",
+      "translated": "विवरण"
+    },
+    {
+      "id": "native.apple.adba197735c909a7",
+      "source": "Name",
+      "translated": "नाम"
+    },
+    {
+      "id": "native.apple.1de7b0cbc64f235e",
+      "source": "Automation name",
+      "translated": "ऑटोमेशन का नाम"
+    },
+    {
+      "id": "native.apple.22c0b187b1d0ed60",
+      "source": "Description",
+      "translated": "विवरण"
+    },
+    {
+      "id": "native.apple.ea1c2fa8bee66cde",
+      "source": "Optional context",
+      "translated": "वैकल्पिक संदर्भ"
+    },
+    {
+      "id": "native.apple.555170e9a9b3c867",
+      "source": "Schedule",
+      "translated": "शेड्यूल"
+    },
+    {
+      "id": "native.apple.23ffc415d7625e1d",
+      "source": "Delete after successful run",
+      "translated": "सफल रन के बाद हटाएँ"
+    },
+    {
+      "id": "native.apple.9fe4b2423471d0f1",
+      "source": "Useful for one-time automations.",
+      "translated": "एक बार चलने वाले ऑटोमेशन के लिए उपयोगी।"
+    },
+    {
+      "id": "native.apple.84cd065063e9703c",
+      "source": "ISO date and time",
+      "translated": "ISO दिनांक और समय"
+    },
+    {
+      "id": "native.apple.23830e2ba37b8769",
+      "source": "2030-01-15T09:00:00Z",
+      "translated": "2030-01-15T09:00:00Z"
+    },
+    {
+      "id": "native.apple.e1399c7c254d8dbb",
+      "source": "Interval (milliseconds)",
+      "translated": "अंतराल (मिलीसेकंड)"
+    },
+    {
+      "id": "native.apple.74aa65bb399fb736",
+      "source": "Anchor (milliseconds)",
+      "translated": "एंकर (मिलीसेकंड)"
+    },
+    {
+      "id": "native.apple.bcafe4b14750497b",
+      "source": "Cron expression",
+      "translated": "Cron एक्सप्रेशन"
+    },
+    {
+      "id": "native.apple.a16790dec1a5f2b4",
+      "source": "Time zone",
+      "translated": "समय क्षेत्र"
+    },
+    {
+      "id": "native.apple.c2c5bed70319ae16",
+      "source": "America/Los_Angeles",
+      "translated": "America/Los_Angeles"
+    },
+    {
+      "id": "native.apple.9336c989fdd5d6fa",
+      "source": "Stagger (milliseconds)",
+      "translated": "क्रमिक विलंब (मिलीसेकंड)"
+    },
+    {
+      "id": "native.apple.e03877d6332b324c",
+      "source": "Command to watch",
+      "translated": "निगरानी के लिए कमांड"
+    },
+    {
+      "id": "native.apple.9fe4c10ddbf241e2",
+      "source": "pnpm build",
+      "translated": "pnpm build"
+    },
+    {
+      "id": "native.apple.585f47ef8c7223e1",
+      "source": "Action",
+      "translated": "कार्रवाई"
+    },
+    {
+      "id": "native.apple.6260eb77ea71ba28",
+      "source": "Event text",
+      "translated": "इवेंट टेक्स्ट"
+    },
+    {
+      "id": "native.apple.2878cb40276871ce",
+      "source": "What should the agent know?",
+      "translated": "एजेंट को क्या पता होना चाहिए?"
+    },
+    {
+      "id": "native.apple.364fc52b3c80ff57",
+      "source": "Message",
+      "translated": "संदेश"
+    },
+    {
+      "id": "native.apple.feac3b85bf40c7af",
+      "source": "What should the agent do?",
+      "translated": "एजेंट को क्या करना चाहिए?"
+    },
+    {
+      "id": "native.apple.ab59900232a65c71",
+      "source": "Model",
+      "translated": "मॉडल"
+    },
+    {
+      "id": "native.apple.8a9349d85eeb22d2",
+      "source": "Thinking",
+      "translated": "विचार प्रक्रिया"
+    },
+    {
+      "id": "native.apple.7450fbb4246506d1",
+      "source": "Gateway default",
+      "translated": "Gateway डिफ़ॉल्ट"
+    },
+    {
+      "id": "native.apple.9e19b04a68638b23",
+      "source": "Arguments (JSON array)",
+      "translated": "आर्ग्युमेंट (JSON ऐरे)"
+    },
+    {
+      "id": "native.apple.cdde064f118b68ea",
+      "source": "Working directory",
+      "translated": "कार्यशील डायरेक्टरी"
+    },
+    {
+      "id": "native.apple.20547b640f816b97",
+      "source": "Optional",
+      "translated": "वैकल्पिक"
+    },
+    {
+      "id": "native.apple.4ff623573733f360",
+      "source": "Execution",
+      "translated": "निष्पादन"
+    },
+    {
+      "id": "native.apple.d93a77ec4f005d00",
+      "source": "Session target",
+      "translated": "सेशन लक्ष्य"
+    },
+    {
+      "id": "native.apple.71ee518c108734d5",
+      "source": "main, isolated, current, or session:<id>",
+      "translated": "main, isolated, current, या session:<id>"
+    },
+    {
+      "id": "native.apple.34106ad50c7b87e8",
+      "source": "Wake mode",
+      "translated": "वेक मोड"
+    },
+    {
+      "id": "native.apple.0f5ba1612a172b31",
+      "source": "now or next-heartbeat",
+      "translated": "now या next-heartbeat"
+    },
+    {
+      "id": "native.apple.2314f13a102a3e2c",
+      "source": "Delivery and failure routing remain visible and editable in the Control UI.",
+      "translated": "डिलीवरी और विफलता रूटिंग Control UI में दृश्यमान और संपादन योग्य रहती हैं।"
+    },
+    {
+      "id": "native.apple.c52518b79660be2e",
+      "source": "Manage",
+      "translated": "प्रबंधित करें"
+    },
+    {
+      "id": "native.apple.61cf5b73d3be8b9e",
+      "source": "Admin scope is required to change, run, or delete automations.",
+      "translated": "ऑटोमेशन बदलने, चलाने या हटाने के लिए एडमिन स्कोप आवश्यक है।"
+    },
+    {
+      "id": "native.apple.63450040c4cdc79d",
+      "source": "Save",
+      "translated": "सहेजें"
+    },
+    {
+      "id": "native.apple.4e4304768b282ed0",
+      "source": "Run Now",
+      "translated": "अभी चलाएँ"
+    },
+    {
+      "id": "native.apple.4b893a030daf831b",
+      "source": "Running",
+      "translated": "चल रहा है"
+    },
+    {
+      "id": "native.apple.252a740ded4f5747",
+      "source": "Enable",
+      "translated": "सक्षम करें"
+    },
+    {
+      "id": "native.apple.b0394e53e163e4d0",
+      "source": "Pause",
+      "translated": "रोकें"
+    },
+    {
+      "id": "native.apple.03266f8398b57057",
+      "source": "Delete",
+      "translated": "हटाएँ"
+    },
+    {
+      "id": "native.apple.4dcf36018847481d",
+      "source": "Save or discard edits before running, pausing, or enabling this automation.",
+      "translated": "इस ऑटोमेशन को चलाने, रोकने या सक्षम करने से पहले बदलाव सहेजें या छोड़ें।"
+    },
+    {
+      "id": "native.apple.9fb34a87dc5dd407",
+      "source": "Recent runs",
+      "translated": "हाल के रन"
+    },
+    {
+      "id": "native.apple.3f31602868b5d915",
+      "source": "Loading",
+      "translated": "लोड हो रहा है"
+    },
+    {
+      "id": "native.apple.eff430620ea4d6e0",
+      "source": "Refresh",
+      "translated": "रीफ़्रेश करें"
+    },
+    {
+      "id": "native.apple.522ed52c5d6f2cf6",
+      "source": "No runs yet",
+      "translated": "अभी तक कोई रन नहीं"
+    },
+    {
+      "id": "native.apple.a0b71e211aa932c5",
+      "source": "Completed runs and delivery outcomes will appear here.",
+      "translated": "पूरे हो चुके रन और डिलीवरी के परिणाम यहाँ दिखाई देंगे।"
+    },
+    {
+      "id": "native.apple.4cb9a754ceb21346",
+      "source": "Schedule configured",
+      "translated": "शेड्यूल कॉन्फ़िगर किया गया"
+    },
+    {
+      "id": "native.apple.592cd2b7c16fa91f",
+      "source": "One time",
+      "translated": "एक बार"
+    },
+    {
+      "id": "native.apple.fde9e0a6a8b23b7d",
+      "source": "Every %@",
+      "translated": "हर %@"
+    },
+    {
+      "id": "native.apple.ed053c0e3d827ba3",
+      "source": "Interval",
+      "translated": "अंतराल"
+    },
+    {
+      "id": "native.apple.fe7237d5293453ff",
+      "source": "After command exits",
+      "translated": "कमांड समाप्त होने के बाद"
+    },
+    {
+      "id": "native.apple.439c8dea4cc485bb",
+      "source": "Unsaved changes",
+      "translated": "सहेजे नहीं गए बदलाव"
+    },
+    {
+      "id": "native.apple.81846df87f4be1be",
+      "source": "Save or close this automation before refreshing.",
+      "translated": "रीफ़्रेश करने से पहले इस ऑटोमेशन को सहेजें या बंद करें।"
+    },
+    {
+      "id": "native.apple.1be30cb60c21d3fe",
+      "source": "Edits preserved",
+      "translated": "संपादन सुरक्षित रखे गए"
+    },
+    {
+      "id": "native.apple.8d87d696c6e912dd",
+      "source": "Gateway data changed while you edited. Save will validate the current revision.",
+      "translated": "आपके संपादन के दौरान Gateway का डेटा बदल गया। सहेजने पर वर्तमान संशोधन की पुष्टि की जाएगी।"
+    },
+    {
+      "id": "native.apple.d5c62307493aacbc",
+      "source": "Could not load automation",
+      "translated": "ऑटोमेशन लोड नहीं किया जा सका"
+    },
+    {
+      "id": "native.apple.ce3928fc379e2daf",
+      "source": "Could not load run history",
+      "translated": "रन इतिहास लोड नहीं किया जा सका"
+    },
+    {
+      "id": "native.apple.e84cad019bdb54c0",
+      "source": "Saving automation",
+      "translated": "ऑटोमेशन सहेजा जा रहा है"
+    },
+    {
+      "id": "native.apple.0e8f64ab2aae550c",
+      "source": "Automation saved",
+      "translated": "ऑटोमेशन सहेजा गया"
+    },
+    {
+      "id": "native.apple.a237e22c861da698",
+      "source": "The Gateway accepted the latest revision.",
+      "translated": "Gateway ने नवीनतम संशोधन स्वीकार कर लिया।"
+    },
+    {
+      "id": "native.apple.b74b1f32135775e7",
+      "source": "Enabling automation",
+      "translated": "ऑटोमेशन सक्षम किया जा रहा है"
+    },
+    {
+      "id": "native.apple.5d2466224b7f83cd",
+      "source": "Pausing automation",
+      "translated": "ऑटोमेशन रोका जा रहा है"
+    },
+    {
+      "id": "native.apple.d2b1cc3738a2d411",
+      "source": "Automation enabled",
+      "translated": "ऑटोमेशन सक्षम किया गया"
+    },
+    {
+      "id": "native.apple.1755a139d97def18",
+      "source": "Automation paused",
+      "translated": "ऑटोमेशन रोक दिया गया"
+    },
+    {
+      "id": "native.apple.92fd1af6e77e2b7d",
+      "source": "Future runs are active.",
+      "translated": "भविष्य के रन सक्रिय हैं।"
+    },
+    {
+      "id": "native.apple.1429ded16eab70ba",
+      "source": "Future scheduled runs are paused.",
+      "translated": "भविष्य के निर्धारित रन रोके गए हैं।"
+    },
+    {
+      "id": "native.apple.93b93b980c47d0ac",
+      "source": "Queueing run",
+      "translated": "रन कतार में जोड़ा जा रहा है"
+    },
+    {
+      "id": "native.apple.e15e1406fcc112fb",
+      "source": "Run queued",
+      "translated": "रन कतार में जोड़ा गया"
+    },
+    {
+      "id": "native.apple.6a6c77e2f6d11ec9",
+      "source": "Refresh History to follow the result.",
+      "translated": "परिणाम देखने के लिए इतिहास रीफ़्रेश करें।"
+    },
+    {
+      "id": "native.apple.9482a1efdfc47e7f",
+      "source": "This run stays tracked until its exact result appears.",
+      "translated": "सटीक परिणाम दिखाई देने तक इस रन को ट्रैक किया जाएगा।"
+    },
+    {
+      "id": "native.apple.7586bdc989075ffd",
+      "source": "Run still pending",
+      "translated": "रन अभी भी लंबित है"
+    },
+    {
+      "id": "native.apple.8f764528fa10c8eb",
+      "source": "The Gateway has not reported a result yet. Refresh History later.",
+      "translated": "Gateway ने अभी तक कोई परिणाम नहीं दिया है। इतिहास को बाद में रीफ़्रेश करें।"
+    },
+    {
+      "id": "native.apple.3120beddc3ef9928",
+      "source": "Run finished",
+      "translated": "रन पूरा हुआ"
+    },
+    {
+      "id": "native.apple.7bf6ec0bc48196b0",
+      "source": "History now shows the completed result.",
+      "translated": "इतिहास अब पूर्ण परिणाम दिखाता है।"
+    },
+    {
+      "id": "native.apple.421eedc59a44514c",
+      "source": "Run skipped",
+      "translated": "रन छोड़ दिया गया"
+    },
+    {
+      "id": "native.apple.a0bf404e9bcb5ba3",
+      "source": "The Gateway skipped this run. History shows the result.",
+      "translated": "Gateway ने यह रन छोड़ दिया। इतिहास परिणाम दिखाता है।"
+    },
+    {
+      "id": "native.apple.2e2f77f95cff0717",
+      "source": "Run failed",
+      "translated": "रन विफल रहा"
+    },
+    {
+      "id": "native.apple.4932b01670c6bb36",
+      "source": "History shows the failure details.",
+      "translated": "इतिहास विफलता का विवरण दिखाता है।"
+    },
+    {
+      "id": "native.apple.af47a77871426a34",
+      "source": "Run result available",
+      "translated": "रन का परिणाम उपलब्ध है"
+    },
+    {
+      "id": "native.apple.b3aa40fc12a403ef",
+      "source": "History shows the Gateway result.",
+      "translated": "इतिहास Gateway का परिणाम दिखाता है।"
+    },
+    {
+      "id": "native.apple.2a8eb4abb58e4c6a",
+      "source": "Deleting automation",
+      "translated": "ऑटोमेशन हटाया जा रहा है"
+    },
+    {
+      "id": "native.apple.dd3271c4e94641a2",
+      "source": "Automation action failed",
+      "translated": "ऑटोमेशन कार्रवाई विफल रही"
+    },
+    {
+      "id": "native.apple.32e3f08284bb3007",
+      "source": "This automation is not due yet.",
+      "translated": "इस ऑटोमेशन का समय अभी नहीं आया है।"
+    },
+    {
+      "id": "native.apple.5927a803625f5dbb",
+      "source": "This automation is already running.",
+      "translated": "यह ऑटोमेशन पहले से चल रहा है।"
+    },
+    {
+      "id": "native.apple.4aad892e27b4ddd1",
+      "source": "Gateway restart recovery is still in progress.",
+      "translated": "Gateway को पुनः आरंभ करने के बाद रिकवरी अभी भी जारी है।"
+    },
+    {
+      "id": "native.apple.81308ff798cb8ff3",
+      "source": "This automation has an invalid configuration.",
+      "translated": "इस ऑटोमेशन का कॉन्फ़िगरेशन अमान्य है।"
+    },
+    {
+      "id": "native.apple.a88f71792ad4beaa",
+      "source": "The automation scheduler is stopped.",
+      "translated": "ऑटोमेशन शेड्यूलर रुका हुआ है।"
+    },
+    {
+      "id": "native.apple.11923296a8287615",
+      "source": "The Gateway did not start this automation.",
+      "translated": "Gateway ने यह ऑटोमेशन शुरू नहीं किया।"
+    },
+    {
+      "id": "native.apple.0c744cad13a3927f",
+      "source": "not scheduled",
+      "translated": "शेड्यूल नहीं किया गया"
+    },
+    {
+      "id": "native.apple.0bece6f361967bb7",
+      "source": "Could not track queued run",
+      "translated": "कतारबद्ध रन को ट्रैक नहीं किया जा सका"
+    },
+    {
+      "id": "native.apple.fcc8d9fb5363552a",
+      "source": "One time",
+      "translated": "एक बार"
+    },
+    {
+      "id": "native.apple.e36565ab0cbc27fc",
+      "source": "Interval",
+      "translated": "अंतराल"
+    },
+    {
+      "id": "native.apple.4e409ac7b3902ef1",
+      "source": "Cron expression",
+      "translated": "Cron एक्सप्रेशन"
+    },
+    {
+      "id": "native.apple.17b0f1a44e8b54f8",
+      "source": "On command exit",
+      "translated": "कमांड समाप्त होने पर"
+    },
+    {
+      "id": "native.apple.681114b86c1b4fc7",
+      "source": "System event",
+      "translated": "सिस्टम इवेंट"
+    },
+    {
+      "id": "native.apple.11ac31e919c88aaf",
+      "source": "Agent turn",
+      "translated": "एजेंट टर्न"
+    },
+    {
+      "id": "native.apple.9f1a73fdf9e6fb74",
+      "source": "Command",
+      "translated": "कमांड"
+    },
+    {
+      "id": "native.apple.78e698f721570440",
+      "source": "This automation uses fields this app cannot edit safely.",
+      "translated": "यह ऑटोमेशन ऐसे फ़ील्ड का उपयोग करता है जिन्हें यह ऐप सुरक्षित रूप से संपादित नहीं कर सकता।"
+    },
+    {
+      "id": "native.apple.01a8e1daa343aa0c",
+      "source": "Update the Gateway before saving automation changes from iOS.",
+      "translated": "iOS से ऑटोमेशन में किए गए बदलाव सहेजने से पहले Gateway को अपडेट करें।"
+    },
+    {
+      "id": "native.apple.eedad26d49890fd0",
+      "source": "No automation changes to save.",
+      "translated": "सहेजने के लिए ऑटोमेशन में कोई बदलाव नहीं है।"
+    },
+    {
+      "id": "native.apple.468285718bc65cf9",
+      "source": "Automation name is required.",
+      "translated": "ऑटोमेशन का नाम आवश्यक है।"
+    },
+    {
+      "id": "native.apple.3b2cf513983fd309",
+      "source": "Session target must be main, isolated, current, or session:<id>.",
+      "translated": "सेशन लक्ष्य main, isolated, current या session:<id> होना चाहिए।"
+    },
+    {
+      "id": "native.apple.097835fd2547d9d3",
+      "source": "Wake mode must be now or next-heartbeat.",
+      "translated": "वेक मोड now या next-heartbeat होना चाहिए।"
+    },
+    {
+      "id": "native.apple.cf32f85b7d927b14",
+      "source": "The connected Gateway changed. Refresh Automations and try again.",
+      "translated": "कनेक्ट किया गया Gateway बदल गया है। ऑटोमेशन रीफ़्रेश करें और फिर से प्रयास करें।"
+    },
+    {
+      "id": "native.apple.6e9fc11db7a84ccd",
+      "source": "The Gateway changed after the request was sent. Check current state before retrying.",
+      "translated": "अनुरोध भेजे जाने के बाद Gateway बदल गया। फिर से प्रयास करने से पहले वर्तमान स्थिति जाँचें।"
+    },
+    {
+      "id": "native.apple.8334ace07b5a8769",
+      "source": "The Gateway returned an unexpected automation response.",
+      "translated": "Gateway ने ऑटोमेशन के लिए एक अनपेक्षित प्रतिक्रिया दी।"
+    },
+    {
+      "id": "native.apple.d15e02f352f095b5",
+      "source": "One-time automations need an ISO time.",
+      "translated": "एक बार चलने वाले ऑटोमेशन के लिए ISO समय आवश्यक है।"
+    },
+    {
+      "id": "native.apple.217ae5784e8a790c",
+      "source": "Interval must be a positive number of milliseconds.",
+      "translated": "अंतराल मिलीसेकंड की धनात्मक संख्या होना चाहिए।"
+    },
+    {
+      "id": "native.apple.5d1437fb94b0c2fd",
+      "source": "Anchor must be a non-negative number of milliseconds.",
+      "translated": "एंकर मिलीसेकंड की गैर-ऋणात्मक संख्या होना चाहिए।"
+    },
+    {
+      "id": "native.apple.74979b1b3f3fd0cb",
+      "source": "Cron expression is required.",
+      "translated": "Cron एक्सप्रेशन आवश्यक है।"
+    },
+    {
+      "id": "native.apple.d674e9211880efdd",
+      "source": "Stagger must be a non-negative number of milliseconds.",
+      "translated": "स्टैगर मिलीसेकंड की गैर-ऋणात्मक संख्या होना चाहिए।"
+    },
+    {
+      "id": "native.apple.ecf986d82e845e3d",
+      "source": "On-exit automations need a command.",
+      "translated": "ऑन-एग्ज़िट ऑटोमेशन के लिए एक कमांड आवश्यक है।"
+    },
+    {
+      "id": "native.apple.f9a8e11940df3708",
+      "source": "Changing schedule type is available in the Control UI.",
+      "translated": "शेड्यूल का प्रकार बदलने का विकल्प Control UI में उपलब्ध है।"
+    },
+    {
+      "id": "native.apple.15d3d90d9e55055c",
+      "source": "System event text is required.",
+      "translated": "सिस्टम इवेंट टेक्स्ट आवश्यक है।"
+    },
+    {
+      "id": "native.apple.f9e96a64787cfd1e",
+      "source": "Agent message is required.",
+      "translated": "एजेंट संदेश आवश्यक है।"
+    },
+    {
+      "id": "native.apple.866cd35476800bb0",
+      "source": "Command arguments must be a JSON array of non-empty strings.",
+      "translated": "कमांड आर्ग्युमेंट गैर-रिक्त स्ट्रिंग की JSON ऐरे होनी चाहिए।"
+    },
+    {
+      "id": "native.apple.62a94efde347e48b",
+      "source": "The Gateway can change this command path but cannot clear it.",
+      "translated": "Gateway इस कमांड पाथ को बदल सकता है, लेकिन इसे खाली नहीं कर सकता।"
+    },
+    {
+      "id": "native.apple.80a46289c6ed4e6f",
+      "source": "Changing action type is available in the Control UI.",
+      "translated": "ऐक्शन प्रकार बदलने का विकल्प Control UI में उपलब्ध है।"
+    },
+    {
+      "id": "native.apple.d848c7c83ca56e87",
+      "source": "Could not encode automation changes.",
+      "translated": "ऑटोमेशन के बदलावों को एन्कोड नहीं किया जा सका।"
     },
     {
       "id": "native.apple.6507fad2526215fc",
@@ -8449,9 +9479,44 @@
       "translated": "अगला"
     },
     {
-      "id": "native.apple.265fe9a6fd48774a",
-      "source": "Jobs",
-      "translated": "जॉब्स"
+      "id": "native.apple.0716c9afeacc4d94",
+      "source": "Automations",
+      "translated": "ऑटोमेशन"
+    },
+    {
+      "id": "native.apple.afaf94d79c41f401",
+      "source": "Search automations",
+      "translated": "ऑटोमेशन खोजें"
+    },
+    {
+      "id": "native.apple.873168b1830c60c8",
+      "source": "Automation status",
+      "translated": "ऑटोमेशन की स्थिति"
+    },
+    {
+      "id": "native.apple.0147a12ccae4382f",
+      "source": "No automations yet",
+      "translated": "अभी तक कोई ऑटोमेशन नहीं है"
+    },
+    {
+      "id": "native.apple.904fc50cb40466e6",
+      "source": "No matching automations",
+      "translated": "कोई मेल खाता ऑटोमेशन नहीं मिला"
+    },
+    {
+      "id": "native.apple.e114f7974019ead5",
+      "source": "Scheduled work created on the gateway will appear here.",
+      "translated": "Gateway पर बनाया गया शेड्यूल किया हुआ कार्य यहाँ दिखाई देगा।"
+    },
+    {
+      "id": "native.apple.50668445ecd01096",
+      "source": "Try another search or status filter.",
+      "translated": "कोई अन्य खोज या स्थिति फ़िल्टर आज़माएँ।"
+    },
+    {
+      "id": "native.apple.d3df6fbbaafcc29f",
+      "source": "Edit",
+      "translated": "संपादित करें"
     },
     {
       "id": "native.apple.e8964650f824c877",
@@ -8469,9 +9534,14 @@
       "translated": "रोकें"
     },
     {
-      "id": "native.apple.7323dffbc056bdcd",
-      "source": "Queued %@.",
-      "translated": "%@ को कतार में जोड़ा गया।"
+      "id": "native.apple.bdd438ba675d7562",
+      "source": "Tracking %@ in run history.",
+      "translated": "रन इतिहास में %@ को ट्रैक किया जा रहा है।"
+    },
+    {
+      "id": "native.apple.a3cfbe05c4013cac",
+      "source": "Ran %@. Open Edit for run history.",
+      "translated": "%@ चलाया गया। रन इतिहास के लिए संपादित करें खोलें।"
     },
     {
       "id": "native.apple.424e352a747453ed",
@@ -8484,6 +9554,36 @@
       "translated": "%@ रोका गया।"
     },
     {
+      "id": "native.apple.1b3a26abc61c570d",
+      "source": "This automation is not due yet.",
+      "translated": "इस ऑटोमेशन का समय अभी नहीं हुआ है।"
+    },
+    {
+      "id": "native.apple.c77dec246ca2f051",
+      "source": "This automation is already running.",
+      "translated": "यह ऑटोमेशन पहले से चल रहा है।"
+    },
+    {
+      "id": "native.apple.2a91173216fc13a0",
+      "source": "Gateway restart recovery is still in progress.",
+      "translated": "Gateway रीस्टार्ट रिकवरी अभी भी जारी है।"
+    },
+    {
+      "id": "native.apple.9d416b662fe79a2d",
+      "source": "This automation has an invalid configuration.",
+      "translated": "इस ऑटोमेशन का कॉन्फ़िगरेशन अमान्य है।"
+    },
+    {
+      "id": "native.apple.74db101b9d066f9b",
+      "source": "The automation scheduler is stopped.",
+      "translated": "स्वचालन शेड्यूलर बंद है।"
+    },
+    {
+      "id": "native.apple.a68b3d18073f246f",
+      "source": "The Gateway did not start this automation.",
+      "translated": "Gateway ने यह स्वचालन शुरू नहीं किया।"
+    },
+    {
       "id": "native.apple.a373bf2332f0ab6a",
       "source": "Search agents",
       "translated": "एजेंट खोजें"
@@ -8494,9 +9594,9 @@
       "translated": "Skills"
     },
     {
-      "id": "native.apple.45c3f045dd9a3507",
-      "source": "Cron Jobs",
-      "translated": "Cron Jobs"
+      "id": "native.apple.bed79f8c977be1cd",
+      "source": "Automations",
+      "translated": "स्वचालन"
     },
     {
       "id": "native.apple.4bee0220d011ab53",
@@ -8609,9 +9709,9 @@
       "translated": "ड्रीमिंग"
     },
     {
-      "id": "native.apple.4999264d74844f21",
-      "source": "Scheduled Work",
-      "translated": "निर्धारित कार्य"
+      "id": "native.apple.22a5389054110057",
+      "source": "Automations",
+      "translated": "स्वचालन"
     },
     {
       "id": "native.apple.13245a5075869f14",
@@ -8624,19 +9724,19 @@
       "translated": "इस एजेंट को चुनता है"
     },
     {
-      "id": "native.apple.4f053bb46f35a802",
-      "source": "No scheduled jobs",
-      "translated": "कोई शेड्यूल किए गए जॉब नहीं"
+      "id": "native.apple.e0a5458b9b128e21",
+      "source": "No automations yet",
+      "translated": "अभी कोई स्वचालन नहीं है"
     },
     {
-      "id": "native.apple.e347d159f30bca34",
-      "source": "Cron unavailable",
-      "translated": "Cron उपलब्ध नहीं है"
+      "id": "native.apple.b2e8f8831767ae0e",
+      "source": "Automations unavailable",
+      "translated": "स्वचालन उपलब्ध नहीं हैं"
     },
     {
-      "id": "native.apple.0cd04bacdbcd8fa5",
-      "source": "The gateway has no visible cron jobs.",
-      "translated": "Gateway में कोई दृश्यमान cron जॉब नहीं है।"
+      "id": "native.apple.36277ae5feb079fd",
+      "source": "Scheduled work created on the gateway will appear here.",
+      "translated": "Gateway पर बनाया गया शेड्यूल किया हुआ कार्य यहाँ दिखाई देगा।"
     },
     {
       "id": "native.apple.ae4aa2339b285164",
@@ -9134,11 +10234,6 @@
       "translated": "अवरुद्ध"
     },
     {
-      "id": "native.apple.c1520bfdcd827e55",
-      "source": "All",
-      "translated": "सभी"
-    },
-    {
       "id": "native.apple.2be2d2e1fb0c140a",
       "source": "Online",
       "translated": "ऑनलाइन"
@@ -9147,6 +10242,21 @@
       "id": "native.apple.a97cdae7c8e13f0e",
       "source": "Ready",
       "translated": "तैयार"
+    },
+    {
+      "id": "native.apple.c1520bfdcd827e55",
+      "source": "All",
+      "translated": "सभी"
+    },
+    {
+      "id": "native.apple.6761fe33fbf18cb3",
+      "source": "Active",
+      "translated": "सक्रिय"
+    },
+    {
+      "id": "native.apple.c10177d9487a27d5",
+      "source": "Paused",
+      "translated": "रोका गया"
     },
     {
       "id": "native.apple.9c4e8b82edf0b324",
@@ -9182,6 +10292,111 @@
       "id": "native.apple.8218f673399060cc",
       "source": "OK",
       "translated": "ठीक है"
+    },
+    {
+      "id": "native.apple.013dc12863bed23b",
+      "source": "Background task",
+      "translated": "बैकग्राउंड टास्क"
+    },
+    {
+      "id": "native.apple.d33ca570a77c6d6f",
+      "source": "Queued",
+      "translated": "कतार में"
+    },
+    {
+      "id": "native.apple.4e4498e6144974b7",
+      "source": "Completed",
+      "translated": "पूर्ण"
+    },
+    {
+      "id": "native.apple.8773684d27996e83",
+      "source": "Failed",
+      "translated": "विफल"
+    },
+    {
+      "id": "native.apple.92f69cf86443d64d",
+      "source": "Subagent",
+      "translated": "उप-एजेंट"
+    },
+    {
+      "id": "native.apple.924830db78883b2d",
+      "source": "Cron",
+      "translated": "Cron"
+    },
+    {
+      "id": "native.apple.d5433fcd3232cd16",
+      "source": "Task",
+      "translated": "कार्य"
+    },
+    {
+      "id": "native.apple.0b972513797e7385",
+      "source": "Loading background tasks…",
+      "translated": "बैकग्राउंड कार्य लोड हो रहे हैं…"
+    },
+    {
+      "id": "native.apple.fb3147cbc796dd3a",
+      "source": "Tasks for this agent will appear here.",
+      "translated": "इस एजेंट के कार्य यहाँ दिखाई देंगे।"
+    },
+    {
+      "id": "native.apple.336cf64ef5611816",
+      "source": "No running tasks",
+      "translated": "कोई कार्य जारी नहीं है"
+    },
+    {
+      "id": "native.apple.d5955a199881b73e",
+      "source": "Running",
+      "translated": "जारी"
+    },
+    {
+      "id": "native.apple.a3c63b936f7f31a9",
+      "source": "No finished tasks",
+      "translated": "कोई पूर्ण कार्य नहीं है"
+    },
+    {
+      "id": "native.apple.889ef61e5911c728",
+      "source": "Finished",
+      "translated": "पूर्ण"
+    },
+    {
+      "id": "native.apple.bb086e78b05fff33",
+      "source": "Background Tasks",
+      "translated": "बैकग्राउंड कार्य"
+    },
+    {
+      "id": "native.apple.b109300cc5265643",
+      "source": "Refresh",
+      "translated": "रीफ़्रेश करें"
+    },
+    {
+      "id": "native.apple.51dd4026b0e770aa",
+      "source": "Prompt",
+      "translated": "प्रॉम्प्ट"
+    },
+    {
+      "id": "native.apple.e3268d00448fe1e3",
+      "source": "Loading…",
+      "translated": "लोड हो रहा है…"
+    },
+    {
+      "id": "native.apple.56b9f7324f04a28d",
+      "source": "Prompt unavailable.",
+      "translated": "प्रॉम्प्ट उपलब्ध नहीं है।"
+    },
+    {
+      "id": "native.apple.f8ed60c4d4b277ed",
+      "source": "Output",
+      "translated": "आउटपुट"
+    },
+    {
+      "id": "native.apple.f4545f1ff911f4e2",
+      "source": "No output yet.",
+      "translated": "अभी कोई आउटपुट नहीं है।"
+    },
+    {
+      "id": "native.apple.e2c229b2828a7152",
+      "source": "Task Details",
+      "translated": "कार्य का विवरण"
     },
     {
       "id": "native.apple.e5524d5756a62744",
@@ -9224,9 +10439,24 @@
       "translated": "Worktree में नया चैट"
     },
     {
+      "id": "native.apple.a1b0d289758e2213",
+      "source": "Sessions…",
+      "translated": "सत्र…"
+    },
+    {
+      "id": "native.apple.17c13312e7532c89",
+      "source": "Background Tasks",
+      "translated": "बैकग्राउंड कार्य"
+    },
+    {
       "id": "native.apple.ced228bb4d20a726",
       "source": "Export Transcript",
       "translated": "प्रतिलेख निर्यात करें"
+    },
+    {
+      "id": "native.apple.f26cef22f417abb4",
+      "source": "Show reasoning & tool activity",
+      "translated": "तर्क और टूल गतिविधि दिखाएँ"
     },
     {
       "id": "native.apple.940e1f943750c94b",
@@ -10434,9 +11664,9 @@
       "translated": "उपयोग"
     },
     {
-      "id": "native.apple.9eb33a11fb81796b",
-      "source": "Cron Jobs",
-      "translated": "Cron Jobs"
+      "id": "native.apple.f21bf1e3b5ec896c",
+      "source": "Automations",
+      "translated": "स्वचालन"
     },
     {
       "id": "native.apple.57587fec1ca582ec",
@@ -11339,6 +12569,41 @@
       "translated": "एजेंट"
     },
     {
+      "id": "native.apple.412973e8b46051ca",
+      "source": "Access",
+      "translated": "एक्सेस"
+    },
+    {
+      "id": "native.apple.77609c6953ae454f",
+      "source": "Full",
+      "translated": "पूर्ण"
+    },
+    {
+      "id": "native.apple.5dd76b852cf24f49",
+      "source": "Limited",
+      "translated": "सीमित"
+    },
+    {
+      "id": "native.apple.5b56380d4922e78b",
+      "source": "Upgrade access",
+      "translated": "एक्सेस अपग्रेड करें"
+    },
+    {
+      "id": "native.apple.7221013549a7c1b3",
+      "source": "This phone has limited Gateway access.",
+      "translated": "इस फ़ोन के पास सीमित Gateway एक्सेस है।"
+    },
+    {
+      "id": "native.apple.7793f5de6975faef",
+      "source": "Use a secure wss:// or Tailscale Serve Gateway, then scan a full-access setup code from the Control UI or openclaw qr and reconnect to enable settings and upgrades.",
+      "translated": "एक सुरक्षित wss:// या Tailscale Serve Gateway का उपयोग करें, फिर Control UI या openclaw qr से एक फुल-एक्सेस सेटअप कोड स्कैन करें और सेटिंग्स तथा अपग्रेड सक्षम करने के लिए फिर से कनेक्ट करें।"
+    },
+    {
+      "id": "native.apple.666cea428e126188",
+      "source": "Scan Full-Access Code",
+      "translated": "फुल-एक्सेस कोड स्कैन करें"
+    },
+    {
       "id": "native.apple.5c4427c5a67068d6",
       "source": "Gateway",
       "translated": "Gateway"
@@ -11854,6 +13119,11 @@
       "translated": "शेयर सेल्फ़-टेस्ट चलाएँ"
     },
     {
+      "id": "native.apple.c2cab769e36ad25d",
+      "source": "Apple Health",
+      "translated": "Apple Health"
+    },
+    {
       "id": "native.apple.dfbbe0f7c038894a",
       "source": "Discovery Debug Logs",
       "translated": "डिस्कवरी डीबग लॉग"
@@ -12354,6 +13624,16 @@
       "translated": "सेटअप आवश्यक है"
     },
     {
+      "id": "native.apple.0c8eb8bda0a17689",
+      "source": "Any binary: %@",
+      "translated": "कोई भी बाइनरी: %@"
+    },
+    {
+      "id": "native.apple.5242f6eeb0ffe658",
+      "source": "OS: %@",
+      "translated": "OS: %@"
+    },
+    {
       "id": "native.apple.113dacafa42bb62e",
       "source": "Missing: %@",
       "translated": "अनुपलब्ध: %@"
@@ -12647,6 +13927,21 @@
       "id": "native.apple.cc304ba214b8a9df",
       "source": "Review this exec request before continuing. Your decision will be sent back to the gateway.",
       "translated": "जारी रखने से पहले इस exec अनुरोध की समीक्षा करें। आपका निर्णय gateway को वापस भेजा जाएगा।"
+    },
+    {
+      "id": "native.apple.d861d4796fad795b",
+      "source": "Plugin",
+      "translated": "प्लगइन"
+    },
+    {
+      "id": "native.apple.3e8bff33a33da259",
+      "source": "Tool",
+      "translated": "टूल"
+    },
+    {
+      "id": "native.apple.0122ae27422ef135",
+      "source": "Severity",
+      "translated": "गंभीरता"
     },
     {
       "id": "native.apple.1f2576ef69108e39",
@@ -13019,6 +14314,36 @@
       "translated": "फिर से न दिखाएँ"
     },
     {
+      "id": "native.apple.e80408b30ca670f4",
+      "source": "Apple Health Summaries",
+      "translated": "Apple Health सारांश"
+    },
+    {
+      "id": "native.apple.1d9253b4d79e1a6b",
+      "source": "Apple Health data is unavailable on this device.",
+      "translated": "इस डिवाइस पर Apple Health डेटा उपलब्ध नहीं है।"
+    },
+    {
+      "id": "native.apple.f332b4fb6215a12a",
+      "source": "Reads steps, sleep, resting heart rate, and workouts from Apple Health only when a summary is requested. Only the aggregate leaves this device through your Gateway to your configured AI provider; raw samples stay on this device and results may remain in chat history.",
+      "translated": "केवल सारांश का अनुरोध किए जाने पर Apple Health से कदमों की संख्या, नींद, विश्राम की हृदय गति और वर्कआउट पढ़ता है। केवल समेकित डेटा ही आपके Gateway के माध्यम से आपके कॉन्फ़िगर किए गए AI प्रदाता को इस डिवाइस से भेजा जाता है; कच्चे नमूने इस डिवाइस पर ही रहते हैं और परिणाम चैट इतिहास में बने रह सकते हैं।"
+    },
+    {
+      "id": "native.apple.279758eb7531d811",
+      "source": "Creates read-only summaries from the Apple Health app for steps, sleep, resting heart rate, and workouts. Only requested summaries leave this device through your Gateway to your configured AI provider; raw samples stay on this device.",
+      "translated": "कदमों, नींद, आराम की हृदय गति और वर्कआउट के लिए Apple Health ऐप से केवल-पढ़ने योग्य सारांश बनाता है। केवल अनुरोधित सारांश ही आपके Gateway के माध्यम से आपके कॉन्फ़िगर किए गए AI प्रदाता तक इस डिवाइस से बाहर जाते हैं; मूल नमूने इस डिवाइस पर ही रहते हैं।"
+    },
+    {
+      "id": "native.apple.9e29919ede21527e",
+      "source": "Turn Off Summaries",
+      "translated": "सारांश बंद करें"
+    },
+    {
+      "id": "native.apple.c229e9c6fa7bac3b",
+      "source": "Enable Apple Health Summaries",
+      "translated": "Apple Health सारांश सक्षम करें"
+    },
+    {
       "id": "native.apple.cf820096080f7031",
       "source": "OpenClaw uses your calendars to show events and scheduling context when you enable calendar access.",
       "translated": "जब आप कैलेंडर एक्सेस सक्षम करते हैं, तो OpenClaw इवेंट और शेड्यूलिंग संदर्भ दिखाने के लिए आपके कैलेंडर का उपयोग करता है."
@@ -13064,9 +14389,14 @@
       "translated": "OpenClaw device-aware इंटरैक्शन और ऑटोमेशन का समर्थन करने के लिए motion data का उपयोग कर सकता है."
     },
     {
-      "id": "native.apple.c86f7ba5b3762eb7",
-      "source": "After you enable Health Summaries, OpenClaw reads steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider.",
-      "translated": "स्वास्थ्य सारांश चालू करने के बाद, OpenClaw अनुरोधित समेकित डेटा को आपके कॉन्फ़िगर किए गए AI प्रदाता के साथ साझा करने के लिए कदम, नींद, आराम की हृदय गति और वर्कआउट पढ़ता है।"
+      "id": "native.apple.1d3a6099d7e11895",
+      "source": "OpenClaw reads your steps, sleep, resting heart rate, and workouts from the Apple Health app to create summaries you request and send them through your Gateway to your configured AI provider.",
+      "translated": "OpenClaw आपके अनुरोधित सारांश बनाने के लिए Apple Health ऐप से आपके कदमों, नींद, आराम की हृदय गति और वर्कआउट को पढ़ता है और उन्हें आपके Gateway के माध्यम से आपके कॉन्फ़िगर किए गए AI प्रदाता को भेजता है।"
+    },
+    {
+      "id": "native.apple.c90a204b3232c401",
+      "source": "OpenClaw does not write to the Apple Health app. It uses read-only data to create summaries you request and send them through your Gateway to your configured AI provider.",
+      "translated": "OpenClaw Apple Health ऐप में कुछ भी नहीं लिखता है। यह आपके अनुरोधित सारांश बनाने के लिए केवल-पढ़ने योग्य डेटा का उपयोग करता है और उन्हें आपके Gateway के माध्यम से आपके कॉन्फ़िगर किए गए AI प्रदाता को भेजता है।"
     },
     {
       "id": "native.apple.40ed4259ec869f1b",
@@ -14009,9 +15339,9 @@
       "translated": "उपयोग"
     },
     {
-      "id": "native.apple.db0d9af6d0855d18",
-      "source": "Cron Jobs",
-      "translated": "Cron Jobs"
+      "id": "native.apple.8c4e07b06e938527",
+      "source": "Automations",
+      "translated": "स्वचालन"
     },
     {
       "id": "native.apple.20f4753fc51c5341",
@@ -14119,9 +15449,9 @@
       "translated": "उपयोग"
     },
     {
-      "id": "native.apple.0b4e807d2449e93f",
-      "source": "Cron Jobs",
-      "translated": "Cron Jobs"
+      "id": "native.apple.fca6a390e072ada9",
+      "source": "Automations",
+      "translated": "स्वचालन"
     },
     {
       "id": "native.apple.b3b5114b91a8db8f",
@@ -14234,11 +15564,6 @@
       "translated": "केवल जोड़ें"
     },
     {
-      "id": "native.apple.33df187e4402065a",
-      "source": "Health Summaries",
-      "translated": "स्वास्थ्य सारांश"
-    },
-    {
       "id": "native.apple.0b10201d7e452dc4",
       "source": "Allow",
       "translated": "अनुमति दें"
@@ -14247,31 +15572,6 @@
       "id": "native.apple.3cb9ed2ae352f95c",
       "source": "Open Settings",
       "translated": "सेटिंग्स खोलें"
-    },
-    {
-      "id": "native.apple.3f902cdb4d4e9176",
-      "source": "Health data is unavailable on this device.",
-      "translated": "इस डिवाइस पर स्वास्थ्य डेटा उपलब्ध नहीं है।"
-    },
-    {
-      "id": "native.apple.33316ec020810816",
-      "source": "Shares only requested step, sleep, resting heart rate, and workout aggregates through your Gateway with your configured AI provider. Results may remain in chat history.",
-      "translated": "आपके Gateway के माध्यम से आपके कॉन्फ़िगर किए गए AI प्रदाता के साथ केवल कदम, नींद, आराम की हृदय गति और वर्कआउट का अनुरोधित समेकित डेटा साझा करता है। परिणाम चैट इतिहास में रह सकते हैं।"
-    },
-    {
-      "id": "native.apple.53fb25cb6e6aae6e",
-      "source": "Off by default. Enabling lets requested aggregates leave this iPhone through your Gateway and configured AI provider.",
-      "translated": "डिफ़ॉल्ट रूप से बंद। चालू करने पर अनुरोधित समेकित डेटा इस iPhone से आपके Gateway और कॉन्फ़िगर किए गए AI प्रदाता के माध्यम से बाहर जा सकता है।"
-    },
-    {
-      "id": "native.apple.6c2be9b001fb95b0",
-      "source": "Disable",
-      "translated": "बंद करें"
-    },
-    {
-      "id": "native.apple.9eab20fbad55a0a9",
-      "source": "Enable & Share Summaries",
-      "translated": "सारांश चालू करके साझा करें"
     },
     {
       "id": "native.apple.d9f9a74e25431256",
@@ -15974,6 +17274,36 @@
       "translated": "Gateway \\(found) ऐप \\(required) से मेल नहीं खाता। सेटअप इसे अपडेट करेगा।"
     },
     {
+      "id": "native.apple.86e7c86924ad0c70",
+      "source": "Repairing the OpenClaw Gateway update…",
+      "translated": "OpenClaw Gateway अपडेट की मरम्मत की जा रही है…"
+    },
+    {
+      "id": "native.apple.b59713e1e3e7ee65",
+      "source": "Updating the OpenClaw Gateway to \\(targetVersion)…",
+      "translated": "OpenClaw Gateway को \\(targetVersion) पर अपडेट किया जा रहा है…"
+    },
+    {
+      "id": "native.apple.7772913c171b78ac",
+      "source": "Gateway update needs attention.",
+      "translated": "Gateway अपडेट पर ध्यान देने की आवश्यकता है।"
+    },
+    {
+      "id": "native.apple.e831aa3b0ced39d4",
+      "source": "Gateway update failed.",
+      "translated": "Gateway अपडेट विफल रहा।"
+    },
+    {
+      "id": "native.apple.681e41736dc87c67",
+      "source": "Gateway update finished, but verification failed.",
+      "translated": "Gateway अपडेट पूरा हो गया, लेकिन सत्यापन विफल रहा।"
+    },
+    {
+      "id": "native.apple.66f44c526206f5de",
+      "source": "OpenClaw Gateway \\(installedVersion) is installed.",
+      "translated": "OpenClaw Gateway \\(installedVersion) इंस्टॉल है।"
+    },
+    {
       "id": "native.apple.6f14c557e2573526",
       "source": "Camera",
       "translated": "कैमरा"
@@ -16352,26 +17682,6 @@
       "id": "native.apple.936bfd42a2f08232",
       "source": "Partial: \\(self.summary.totals.missingCostEntries) entries missing cost",
       "translated": "आंशिक: \\(self.summary.totals.missingCostEntries) प्रविष्टियों में लागत नहीं है"
-    },
-    {
-      "id": "native.apple.84f1d9ae4965cfe0",
-      "source": "Crestodian",
-      "translated": "Crestodian"
-    },
-    {
-      "id": "native.apple.4398066b42292ca3",
-      "source": "Your AI-powered setup helper. It can check status, fix config, switch models, and connect channels.",
-      "translated": "Your AI-powered setup helper. It can check status, fix config, switch models, and connect channels."
-    },
-    {
-      "id": "native.apple.648423d89aec0c13",
-      "source": "Chat",
-      "translated": "चैट"
-    },
-    {
-      "id": "native.apple.bd180b943ee89cfe",
-      "source": "Tip: try “status”, “doctor”, “set default model …”, or “connect telegram”.",
-      "translated": "सुझाव: “status”, “doctor”, “set default model …”, या “connect telegram” आज़माएँ।"
     },
     {
       "id": "native.apple.779f488d2ddd9eaf",
@@ -17474,6 +18784,26 @@
       "translated": "स्टेटस आइकन पर निष्क्रिय ब्लिंक और विगल सक्षम करें।"
     },
     {
+      "id": "native.apple.093df96ad9d52a40",
+      "source": "Quick Chat",
+      "translated": "त्वरित चैट"
+    },
+    {
+      "id": "native.apple.a66e340b4e1bd972",
+      "source": "Show a floating composer for quick messages, summoned with a global shortcut.",
+      "translated": "त्वरित संदेशों के लिए एक फ़्लोटिंग कंपोज़र दिखाएँ, जिसे ग्लोबल शॉर्टकट से खोला जा सकता है।"
+    },
+    {
+      "id": "native.apple.d908ab245711bbd2",
+      "source": "Quick Chat shortcut",
+      "translated": "क्विक चैट शॉर्टकट"
+    },
+    {
+      "id": "native.apple.6ae77665b5f4490f",
+      "source": "Global shortcut that opens a floating chat bar for the main session.",
+      "translated": "मुख्य सत्र के लिए फ़्लोटिंग चैट बार खोलने वाला ग्लोबल शॉर्टकट।"
+    },
+    {
       "id": "native.apple.a66c725f98bfa823",
       "source": "Capabilities",
       "translated": "क्षमताएँ"
@@ -17514,9 +18844,9 @@
       "translated": "Peekaboo Bridge सक्षम करें"
     },
     {
-      "id": "native.apple.82e287000e34b51e",
-      "source": "Allow signed tools (e.g. `peekaboo`) to drive UI automation via PeekabooBridge.",
-      "translated": "हस्ताक्षरित टूल (जैसे `peekaboo`) को PeekabooBridge के माध्यम से UI ऑटोमेशन चलाने की अनुमति दें।"
+      "id": "native.apple.9465b8cd1bc4a5ec",
+      "source": "Allow signed tools (e.g. `peekaboo`) to drive UI automation via PeekabooBridge. Requires Computer Control; otherwise run Peekaboo's own Mac app.",
+      "translated": "हस्ताक्षरित टूल (उदा. `peekaboo`) को PeekabooBridge के माध्यम से UI automation चलाने की अनुमति दें। इसके लिए Computer Control आवश्यक है; अन्यथा Peekaboo का अपना Mac app चलाएँ।"
     },
     {
       "id": "native.apple.72b24ed86295d6fa",
@@ -18049,6 +19379,11 @@
       "translated": "गंभीर"
     },
     {
+      "id": "native.apple.75102378a6775180",
+      "source": "New Session",
+      "translated": "नया सत्र"
+    },
+    {
       "id": "native.apple.185a1b27c9859cc0",
       "source": "Settings...",
       "translated": "सेटिंग्स..."
@@ -18062,6 +19397,11 @@
       "id": "native.apple.c19b0989064c0020",
       "source": "Forward",
       "translated": "आगे"
+    },
+    {
+      "id": "native.apple.ef646bce7927b2f0",
+      "source": "Command Palette…",
+      "translated": "कमांड पैलेट…"
     },
     {
       "id": "native.apple.13a7356f48278757",
@@ -18147,6 +19487,11 @@
       "id": "native.apple.723e0d2283af1458",
       "source": "Open Chat",
       "translated": "Chat खोलें"
+    },
+    {
+      "id": "native.apple.22334935d637c907",
+      "source": "Quick Chat",
+      "translated": "क्विक चैट"
     },
     {
       "id": "native.apple.5e3cd7734f27f447",
@@ -18484,9 +19829,9 @@
       "translated": "किसी भी inference सेटिंग को बदलने से पहले OpenClaw फिर से जाँच करेगा।"
     },
     {
-      "id": "native.apple.c7a02803addf11fa",
-      "source": "Checking for Claude Code, Codex, Gemini, and saved API keys.",
-      "translated": "Claude Code, Codex, Gemini, और सहेजी गई API कुंजियों की जाँच हो रही है।"
+      "id": "native.apple.a0a8f45082d0ba99",
+      "source": "Checking CLI logins, saved API keys, and local model servers on the Gateway.",
+      "translated": "Gateway पर CLI लॉगिन, सहेजी गई API कुंजियों और स्थानीय मॉडल सर्वरों की जाँच की जा रही है।"
     },
     {
       "id": "native.apple.0fd3e5267cdf8250",
@@ -18494,9 +19839,9 @@
       "translated": "इस Gateway पर AI खातों की जाँच नहीं की जा सकी"
     },
     {
-      "id": "native.apple.0af61b95d249c351",
-      "source": "Couldn’t check this Mac for AI accounts",
-      "translated": "इस Mac पर AI खातों की जाँच नहीं की जा सकी"
+      "id": "native.apple.82ba8c9a69fbb84b",
+      "source": "Couldn’t check this Gateway for AI access",
+      "translated": "इस Gateway पर AI एक्सेस की जाँच नहीं की जा सकी"
     },
     {
       "id": "native.apple.ab05bb1569f89077",
@@ -18519,9 +19864,9 @@
       "translated": "विवरण ऊपर प्रत्येक विकल्प पर सूचीबद्ध हैं। आप लॉगिन ठीक करके फिर से प्रयास कर सकते हैं, या नीचे API key या token से कनेक्ट कर सकते हैं।"
     },
     {
-      "id": "native.apple.11383227f922aaec",
-      "source": "Need help? Chat with Crestodian",
-      "translated": "मदद चाहिए? Crestodian के साथ चैट करें"
+      "id": "native.apple.a0431b20c0650139",
+      "source": "Need help? Chat with OpenClaw",
+      "translated": "मदद चाहिए? OpenClaw से चैट करें"
     },
     {
       "id": "native.apple.6526ced182e1fe50",
@@ -18539,14 +19884,34 @@
       "translated": "सेटअप विवरण कॉपी करें"
     },
     {
-      "id": "native.apple.f5a157404f7a0eff",
-      "source": "No AI accounts found on this Mac",
-      "translated": "इस Mac पर कोई AI खाता नहीं मिला"
+      "id": "native.apple.e0458fcb8c0536ea",
+      "source": "No usable AI access found on this Gateway",
+      "translated": "इस Gateway पर उपयोग योग्य AI एक्सेस नहीं मिला"
     },
     {
-      "id": "native.apple.76072d0308a553ca",
-      "source": "That’s fine — you can connect one with an API key or token. If you use Claude Code, Codex, or the Gemini CLI on this Mac, sign in there first and hit “Check again”.",
-      "translated": "कोई बात नहीं — आप इसे API key या token से कनेक्ट कर सकते हैं। यदि आप इस Mac पर Claude Code, Codex, या Gemini CLI का उपयोग करते हैं, तो पहले वहाँ साइन इन करें और “फिर से जाँचें” दबाएँ।"
+      "id": "native.apple.1833f355381b12f3",
+      "source": "Connect a provider below with an API key or token, then check again.",
+      "translated": "नीचे किसी प्रदाता को API key या token से कनेक्ट करें, फिर दोबारा जाँचें।"
+    },
+    {
+      "id": "native.apple.7345ff41fe96eaed",
+      "source": "Install one of these tools, then check again. You can also connect a provider below.",
+      "translated": "इनमें से कोई एक टूल इंस्टॉल करें, फिर दोबारा जाँचें। आप नीचे किसी प्रदाता को भी कनेक्ट कर सकते हैं।"
+    },
+    {
+      "id": "native.apple.14b8c3e061779615",
+      "source": "Recommended installs",
+      "translated": "अनुशंसित इंस्टॉलेशन"
+    },
+    {
+      "id": "native.apple.e2749739df556643",
+      "source": "Detected, but not auto-tested",
+      "translated": "पता चला, लेकिन स्वचालित रूप से जाँचा नहीं गया"
+    },
+    {
+      "id": "native.apple.5f604e17336ca8a7",
+      "source": "\\(candidate.label) — \\(candidate.detail)",
+      "translated": "\\(candidate.label) — \\(candidate.detail)"
     },
     {
       "id": "native.apple.5f28927fe23c11cb",
@@ -18564,11 +19929,6 @@
       "translated": "फिर से जाँचें"
     },
     {
-      "id": "native.apple.f179b0447a18bbf4",
-      "source": "Connect with an API key or token instead…",
-      "translated": "इसके बजाय API key या token से कनेक्ट करें…"
-    },
-    {
       "id": "native.apple.7fc409b6aaa6d3b9",
       "source": "Sign in with a provider",
       "translated": "किसी प्रदाता से साइन इन करें"
@@ -18582,6 +19942,11 @@
       "id": "native.apple.14b23c357d7a9eff",
       "source": "More sign-in options",
       "translated": "अधिक साइन-इन विकल्प"
+    },
+    {
+      "id": "native.apple.634c5b2f1e8ec40f",
+      "source": "API Keys",
+      "translated": "API Keys"
     },
     {
       "id": "native.apple.10971b41012d4f36",
@@ -18689,9 +20054,9 @@
       "translated": "वह कुंजी काम नहीं आई"
     },
     {
-      "id": "native.apple.18c6f84a21b9d92f",
-      "source": "Crestodian — setup helper",
-      "translated": "Crestodian — सेटअप सहायक"
+      "id": "native.apple.e874bd0fad63f012",
+      "source": "OpenClaw — setup helper",
+      "translated": "OpenClaw — सेटअप सहायक"
     },
     {
       "id": "native.apple.bea852c8622c8214",
@@ -18719,39 +20084,59 @@
       "translated": "त्रुटि कॉपी करें"
     },
     {
-      "id": "native.apple.6f51ff950befb37a",
+      "id": "native.apple.7dee24e5bf088dd5",
+      "source": "\\(incomplete) \\(Self.memoryNoun(incomplete)) could not be imported.",
+      "translated": "\\(incomplete) \\(Self.memoryNoun(incomplete)) आयात नहीं की जा सकीं।"
+    },
+    {
+      "id": "native.apple.84189c39ea5803c6",
+      "source": "The Gateway returned an inconsistent provider plan. Try planning again.",
+      "translated": "Gateway ने एक असंगत प्रदाता योजना लौटाई। फिर से योजना बनाने की कोशिश करें।"
+    },
+    {
+      "id": "native.apple.4c9e75d64cbc5cc2",
+      "source": "The Gateway did not return a usable import plan. Try planning again.",
+      "translated": "Gateway ने उपयोग योग्य आयात योजना नहीं लौटाई। फिर से योजना बनाने की कोशिश करें।"
+    },
+    {
+      "id": "native.apple.2070bf43a67680ee",
+      "source": "The Gateway could not plan \\(plan.summary.errors) \\(Self.memoryNoun(plan.summary.errors)). Try again.",
+      "translated": "Gateway, \\(plan.summary.errors) \\(Self.memoryNoun(plan.summary.errors)) के लिए योजना नहीं बना सका। फिर से कोशिश करें।"
+    },
+    {
+      "id": "native.apple.1400567a01a8d7c0",
       "source": "<redacted secret>",
-      "translated": "<redacted secret>"
+      "translated": "<गोपनीय जानकारी हटाई गई>"
     },
     {
-      "id": "native.apple.722995710f90cfc6",
-      "source": "Crestodian was interrupted. Restart to try again.",
-      "translated": "Crestodian बाधित हो गया। पुनः प्रयास के लिए रीस्टार्ट करें।"
+      "id": "native.apple.b92f94ddc6bbc8e5",
+      "source": "OpenClaw was interrupted. Restart to try again.",
+      "translated": "OpenClaw बाधित हो गया था। फिर से कोशिश करने के लिए रीस्टार्ट करें।"
     },
     {
-      "id": "native.apple.6596e00d4333081e",
-      "source": "The Gateway connection changed. Restart Crestodian to reconnect.",
-      "translated": "Gateway कनेक्शन बदल गया। पुनः कनेक्ट करने के लिए Crestodian रीस्टार्ट करें।"
+      "id": "native.apple.829845818e97978a",
+      "source": "The Gateway connection changed. Restart OpenClaw to reconnect.",
+      "translated": "Gateway कनेक्शन बदल गया है। फिर से कनेक्ट करने के लिए OpenClaw को रीस्टार्ट करें।"
     },
     {
-      "id": "native.apple.6124d93872cfcfe4",
-      "source": "Crestodian is working…",
-      "translated": "Crestodian काम कर रहा है…"
+      "id": "native.apple.012861f82eff0ca9",
+      "source": "OpenClaw is working…",
+      "translated": "OpenClaw काम कर रहा है…"
     },
     {
-      "id": "native.apple.105683a219ce17d7",
+      "id": "native.apple.2f7ad21b747fbc15",
       "source": "Restart",
-      "translated": "Restart"
+      "translated": "रीस्टार्ट करें"
     },
     {
-      "id": "native.apple.839da8db3e4256b2",
+      "id": "native.apple.08f121b0b5f02195",
       "source": "Enter secret…",
-      "translated": "सीक्रेट दर्ज करें…"
+      "translated": "गोपनीय जानकारी दर्ज करें…"
     },
     {
-      "id": "native.apple.3e9e9347173fffbc",
-      "source": "Reply to Crestodian… (yes sets everything up)",
-      "translated": "Crestodian को जवाब दें… (yes सब कुछ सेट कर देता है)"
+      "id": "native.apple.35a542956f4f5497",
+      "source": "Reply to OpenClaw… (yes sets everything up)",
+      "translated": "OpenClaw को जवाब दें… (हाँ कहने पर सब कुछ सेट हो जाएगा)"
     },
     {
       "id": "native.apple.78d1ad73762a7ce8",
@@ -18762,6 +20147,106 @@
       "id": "native.apple.c8a2f8dc424fe447",
       "source": "Back",
       "translated": "वापस"
+    },
+    {
+      "id": "native.apple.7ca0977d5f73356d",
+      "source": "Bring your memories along",
+      "translated": "अपनी यादें साथ लाएँ"
+    },
+    {
+      "id": "native.apple.b57ee4f83cff23f3",
+      "source": "OpenClaw can bring useful context from AI tools you already use into your new assistant.",
+      "translated": "OpenClaw आपके पहले से उपयोग किए जा रहे AI टूल्स से उपयोगी संदर्भ आपके नए सहायक में ला सकता है।"
+    },
+    {
+      "id": "native.apple.46cab71d748860b8",
+      "source": "Looking for memories…",
+      "translated": "यादें खोजी जा रही हैं…"
+    },
+    {
+      "id": "native.apple.c9e5f1aebe85e201",
+      "source": "Checking supported AI tools on this Mac.",
+      "translated": "इस Mac पर समर्थित AI टूल्स की जाँच की जा रही है।"
+    },
+    {
+      "id": "native.apple.77290f36f36f00e5",
+      "source": "No memories to import",
+      "translated": "आयात करने के लिए कोई यादें नहीं हैं"
+    },
+    {
+      "id": "native.apple.e5cca7b9f082ace9",
+      "source": "You can import memories later from the dashboard.",
+      "translated": "आप बाद में डैशबोर्ड से यादें आयात कर सकते हैं।"
+    },
+    {
+      "id": "native.apple.963add2f12fd18cb",
+      "source": "Import memories",
+      "translated": "यादें आयात करें"
+    },
+    {
+      "id": "native.apple.9db369e036a38a29",
+      "source": "Importing memories…",
+      "translated": "यादें आयात की जा रही हैं…"
+    },
+    {
+      "id": "native.apple.71b8e38a5e7040ef",
+      "source": "Refresh plan",
+      "translated": "योजना रीफ़्रेश करें"
+    },
+    {
+      "id": "native.apple.e87bec72cb9c9dbf",
+      "source": "Retry pending imports before refreshing the plan.",
+      "translated": "योजना रीफ़्रेश करने से पहले लंबित आयातों का फिर से प्रयास करें।"
+    },
+    {
+      "id": "native.apple.f678888102fded6e",
+      "source": "You can skip this and import later from the dashboard’s Memory import page.",
+      "translated": "आप इसे छोड़ सकते हैं और बाद में डैशबोर्ड के यादें आयात करें पेज से आयात कर सकते हैं।"
+    },
+    {
+      "id": "native.apple.36108528c6acc448",
+      "source": "\\(provider.alreadyImportedCount) already imported",
+      "translated": "\\(provider.alreadyImportedCount) पहले ही आयात की जा चुकी हैं"
+    },
+    {
+      "id": "native.apple.9b3444de8c9b2acc",
+      "source": "Imported \\(result.migrated) \\(self.memoryLabel(result.migrated)).",
+      "translated": "\\(result.migrated) \\(self.memoryLabel(result.migrated)) आयात की गईं।"
+    },
+    {
+      "id": "native.apple.3252fea4dac8669a",
+      "source": "Couldn’t check for memories",
+      "translated": "यादों की जाँच नहीं की जा सकी"
+    },
+    {
+      "id": "native.apple.d371deb696de9e6b",
+      "source": "Retry",
+      "translated": "फिर से कोशिश करें"
+    },
+    {
+      "id": "native.apple.406ae454540725d0",
+      "source": "You can do this later from the dashboard’s Memory import page.",
+      "translated": "आप यह बाद में डैशबोर्ड के यादें आयात करें पेज से कर सकते हैं।"
+    },
+    {
+      "id": "native.apple.d1b5d99f67dae42e",
+      "source": "Your memories are ready",
+      "translated": "आपकी यादें तैयार हैं"
+    },
+    {
+      "id": "native.apple.6dbe5b174271b62a",
+      "source": "Imported \\(imported) \\(self.memoryLabel(imported)) into OpenClaw.",
+      "translated": "\\(imported) \\(self.memoryLabel(imported)) को OpenClaw में आयात किया गया।"
+    },
+    {
+      "id": "native.apple.d47b887f98e13e24",
+      "source": "\\(result.migrated) imported",
+      "translated": "\\(result.migrated) आयात किए गए"
+    },
+    {
+      "id": "native.apple.6ac3d513f0ec5da7",
+      "source": "You can manage imported memories anytime from the dashboard.",
+      "translated": "आप आयात की गई यादों को डैशबोर्ड से कभी भी प्रबंधित कर सकते हैं।"
     },
     {
       "id": "native.apple.ea8beaeecef15e54",
@@ -19114,9 +20599,9 @@
       "translated": "मेनू बार पैनल खोलें"
     },
     {
-      "id": "native.apple.f99e39e248dbc8ed",
-      "source": "Click the OpenClaw menu bar icon for quick chat and status.",
-      "translated": "त्वरित चैट और स्थिति के लिए OpenClaw मेनू बार आइकन पर क्लिक करें।"
+      "id": "native.apple.409bfb3a6e0f9f7c",
+      "source": "Click the OpenClaw menu bar icon for the compact chat panel and status.",
+      "translated": "कॉम्पैक्ट चैट पैनल और स्थिति के लिए OpenClaw मेनू बार आइकन पर क्लिक करें।"
     },
     {
       "id": "native.apple.1b6cfcf3be8765c2",
@@ -19149,9 +20634,9 @@
       "translated": "पैनल + Canvas का उपयोग करें"
     },
     {
-      "id": "native.apple.774cf9fe7e3e289e",
-      "source": "Open the menu bar panel for quick chat; the agent can show previews and richer visuals in Canvas.",
-      "translated": "Open the menu bar panel for quick chat; the agent can show previews and richer visuals in Canvas."
+      "id": "native.apple.6022f5a79ed93235",
+      "source": "Open the compact chat panel; the agent can show previews and richer visuals in Canvas.",
+      "translated": "कॉम्पैक्ट चैट पैनल खोलें; एजेंट Canvas में पूर्वावलोकन और अधिक समृद्ध विज़ुअल दिखा सकता है।"
     },
     {
       "id": "native.apple.9b44b38b75a868d8",
@@ -19279,6 +20764,16 @@
       "translated": "Mac"
     },
     {
+      "id": "native.apple.fb09a404bfd12fa9",
+      "source": "Device",
+      "translated": "डिवाइस"
+    },
+    {
+      "id": "native.apple.7ed2af81aa7647fb",
+      "source": "Node",
+      "translated": "नोड"
+    },
+    {
       "id": "native.apple.6223e5f12aa9464b",
       "source": "Permissions",
       "translated": "अनुमतियाँ"
@@ -19292,6 +20787,11 @@
       "id": "native.apple.d103265c3c4586f2",
       "source": "System Access",
       "translated": "सिस्टम एक्सेस"
+    },
+    {
+      "id": "native.apple.fee0f3732a447f35",
+      "source": "Location",
+      "translated": "Location"
     },
     {
       "id": "native.apple.89a4f5934df8268a",
@@ -19409,46 +20909,6 @@
       "translated": "एक्सेस का अनुरोध करें"
     },
     {
-      "id": "native.apple.8d8386041799d2b0",
-      "source": "Automation (AppleScript)",
-      "translated": "Automation (AppleScript)"
-    },
-    {
-      "id": "native.apple.bc935384479c2f48",
-      "source": "Notifications",
-      "translated": "Notifications"
-    },
-    {
-      "id": "native.apple.922a8b5e049ef146",
-      "source": "Accessibility",
-      "translated": "Accessibility"
-    },
-    {
-      "id": "native.apple.c2f2fac8ab1ef9c0",
-      "source": "Screen Recording",
-      "translated": "Screen Recording"
-    },
-    {
-      "id": "native.apple.5ec94fe5a6864de7",
-      "source": "Microphone",
-      "translated": "Microphone"
-    },
-    {
-      "id": "native.apple.b27a5cb9cffe05f0",
-      "source": "Speech Recognition",
-      "translated": "Speech Recognition"
-    },
-    {
-      "id": "native.apple.3639c706ed77975c",
-      "source": "Camera",
-      "translated": "Camera"
-    },
-    {
-      "id": "native.apple.fee0f3732a447f35",
-      "source": "Location",
-      "translated": "Location"
-    },
-    {
       "id": "native.apple.4a4c10ca63e99590",
       "source": "Control other apps (e.g. Terminal) for automation actions",
       "translated": "ऑटोमेशन क्रियाओं के लिए अन्य ऐप्स (जैसे Terminal) को नियंत्रित करें"
@@ -19487,6 +20947,211 @@
       "id": "native.apple.1f5015480ea0f783",
       "source": "Share location when requested by the agent",
       "translated": "एजेंट द्वारा अनुरोध किए जाने पर स्थान साझा करें"
+    },
+    {
+      "id": "native.apple.65c21de72f06fd33",
+      "source": "OpenClaw updated",
+      "translated": "OpenClaw अपडेट हो गया"
+    },
+    {
+      "id": "native.apple.6197fc2d1ebd6b2e",
+      "source": "Finishing your OpenClaw update",
+      "translated": "आपका OpenClaw अपडेट पूरा किया जा रहा है"
+    },
+    {
+      "id": "native.apple.226b698fbbfc3cc4",
+      "source": "Checking the Mac app and Gateway…",
+      "translated": "Mac ऐप और Gateway की जाँच की जा रही है…"
+    },
+    {
+      "id": "native.apple.e9b1899627402a15",
+      "source": "Gateway recovery failed.",
+      "translated": "Gateway रिकवरी विफल रही।"
+    },
+    {
+      "id": "native.apple.91debe404bb7affc",
+      "source": "The managed OpenClaw runtime could not be reinstalled.",
+      "translated": "प्रबंधित OpenClaw रनटाइम को फिर से इंस्टॉल नहीं किया जा सका।"
+    },
+    {
+      "id": "native.apple.1cc391ec928070c4",
+      "source": "Restarting and verifying the Gateway…",
+      "translated": "Gateway को पुनः आरंभ और सत्यापित किया जा रहा है…"
+    },
+    {
+      "id": "native.apple.37fe23aa33d9e76b",
+      "source": "Verifying the Mac node runtime…",
+      "translated": "Mac नोड रनटाइम सत्यापित किया जा रहा है…"
+    },
+    {
+      "id": "native.apple.73e001baeae8e873",
+      "source": "Letting your agent know you’re back…",
+      "translated": "आपके एजेंट को बताया जा रहा है कि आप वापस आ गए हैं…"
+    },
+    {
+      "id": "native.apple.3b2db6e4144742dd",
+      "source": "Welcome back",
+      "translated": "वापसी पर स्वागत है"
+    },
+    {
+      "id": "native.apple.69b54e24b90414dd",
+      "source": "OpenClaw \\(receipt.toVersion) and its Gateway are ready.",
+      "translated": "OpenClaw \\(receipt.toVersion) और इसका Gateway तैयार हैं।"
+    },
+    {
+      "id": "native.apple.f9d6fa6d7aaf23b6",
+      "source": "OpenClaw \\(receipt.toVersion) and its Mac node runtime are ready.",
+      "translated": "OpenClaw \\(receipt.toVersion) और इसका Mac नोड रनटाइम तैयार हैं।"
+    },
+    {
+      "id": "native.apple.a3fa88f5fd3c2732",
+      "source": "Your agent could not be notified yet. OpenClaw will retry after the next app launch.",
+      "translated": "आपके एजेंट को अभी सूचित नहीं किया जा सका। अगली बार ऐप लॉन्च होने के बाद OpenClaw फिर से प्रयास करेगा।"
+    },
+    {
+      "id": "native.apple.e9020028ddab1ba6",
+      "source": "OpenClaw could not notify your agent automatically. The app and Gateway update are complete.",
+      "translated": "OpenClaw आपके एजेंट को स्वचालित रूप से सूचित नहीं कर सका। ऐप और Gateway का अपडेट पूरा हो गया है।"
+    },
+    {
+      "id": "native.apple.afc120cf0a96ea30",
+      "source": "OpenClaw could not notify your agent automatically. The app and Mac node update are complete.",
+      "translated": "OpenClaw आपके एजेंट को स्वचालित रूप से सूचित नहीं कर सका। ऐप और Mac नोड का अपडेट पूरा हो गया है।"
+    },
+    {
+      "id": "native.apple.71ad85442725f45c",
+      "source": "OpenClaw could not confirm the agent notification. It will not retry, to avoid a duplicate welcome.",
+      "translated": "OpenClaw एजेंट की सूचना की पुष्टि नहीं कर सका। डुप्लिकेट स्वागत संदेश से बचने के लिए यह दोबारा प्रयास नहीं करेगा।"
+    },
+    {
+      "id": "native.apple.a3deea03e4870dd0",
+      "source": "The remote Gateway is older than this Mac app, so OpenClaw skipped the agent notification.",
+      "translated": "रिमोट Gateway इस Mac ऐप से पुराना है, इसलिए OpenClaw ने एजेंट की सूचना छोड़ दी।"
+    },
+    {
+      "id": "native.apple.3636a8b503ff00d2",
+      "source": "The Gateway remains paused, so OpenClaw did not wake your agent.",
+      "translated": "Gateway अभी भी रुका हुआ है, इसलिए OpenClaw ने आपके एजेंट को सक्रिय नहीं किया।"
+    },
+    {
+      "id": "native.apple.0f533623878f3d67",
+      "source": "Gateway verification failed.",
+      "translated": "Gateway का सत्यापन विफल रहा।"
+    },
+    {
+      "id": "native.apple.3ab92d342b4fa00b",
+      "source": "The managed runtime does not match the updated Mac app.",
+      "translated": "प्रबंधित रनटाइम अपडेट किए गए Mac ऐप से मेल नहीं खाता।"
+    },
+    {
+      "id": "native.apple.2cfad583503a9a41",
+      "source": "The Mac node did not restart.",
+      "translated": "Mac नोड पुनः आरंभ नहीं हुआ।"
+    },
+    {
+      "id": "native.apple.5b9061db451b644a",
+      "source": "The Mac node did not become ready.",
+      "translated": "Mac नोड तैयार नहीं हुआ।"
+    },
+    {
+      "id": "native.apple.54e76dabec1eb1c1",
+      "source": "The node service restarted but did not remain running.",
+      "translated": "नोड सेवा पुनः आरंभ हुई, लेकिन चलती नहीं रही।"
+    },
+    {
+      "id": "native.apple.51fe0a453f99f5ad",
+      "source": "The Gateway did not start.",
+      "translated": "Gateway शुरू नहीं हुआ।"
+    },
+    {
+      "id": "native.apple.9e9e4278e553c144",
+      "source": "The update is installed, but Gateway health did not become ready.",
+      "translated": "अपडेट इंस्टॉल हो गया है, लेकिन Gateway की स्थिति तैयार नहीं हुई।"
+    },
+    {
+      "id": "native.apple.91a105faed454e5a",
+      "source": "The Gateway could not reconnect.",
+      "translated": "Gateway दोबारा कनेक्ट नहीं हो सका।"
+    },
+    {
+      "id": "native.apple.9ac2dfa295929a92",
+      "source": "OpenClaw installed the update but could not verify the Gateway connection.",
+      "translated": "OpenClaw ने अपडेट इंस्टॉल कर दिया, लेकिन Gateway कनेक्शन सत्यापित नहीं कर सका।"
+    },
+    {
+      "id": "native.apple.3abafcfb64b362fb",
+      "source": "The Gateway could not be checked.",
+      "translated": "Gateway की जाँच नहीं की जा सकी।"
+    },
+    {
+      "id": "native.apple.00e3d2037782506c",
+      "source": "OpenClaw could not read the Gateway service ownership record. Retry after checking the Gateway LaunchAgent.",
+      "translated": "OpenClaw, Gateway सेवा के स्वामित्व का रिकॉर्ड नहीं पढ़ सका। Gateway LaunchAgent की जाँच करने के बाद फिर से प्रयास करें।"
+    },
+    {
+      "id": "native.apple.c4b8806a570dad31",
+      "source": "The Mac node could not be checked.",
+      "translated": "Mac नोड की जाँच नहीं की जा सकी।"
+    },
+    {
+      "id": "native.apple.0483bf19d612560b",
+      "source": "OpenClaw could not read the node service ownership record. Retry after checking the node LaunchAgent.",
+      "translated": "OpenClaw, नोड सेवा के स्वामित्व का रिकॉर्ड नहीं पढ़ सका। नोड LaunchAgent की जाँच करने के बाद फिर से प्रयास करें।"
+    },
+    {
+      "id": "native.apple.d0f712a2ed470a3e",
+      "source": "Gateway update needs help",
+      "translated": "Gateway अपडेट के लिए सहायता चाहिए"
+    },
+    {
+      "id": "native.apple.e2ffc7753f75e1b8",
+      "source": "Update guide",
+      "translated": "अपडेट गाइड"
+    },
+    {
+      "id": "native.apple.3a6aaa0aa0be82e7",
+      "source": "Ask Discord",
+      "translated": "Discord से पूछें"
+    },
+    {
+      "id": "native.apple.11b9ee23142b1060",
+      "source": "Retry",
+      "translated": "पुनः प्रयास करें"
+    },
+    {
+      "id": "native.apple.144b21229f65f2a4",
+      "source": "Continue",
+      "translated": "जारी रखें"
+    },
+    {
+      "id": "native.apple.b3700cf60f4520dc",
+      "source": "Message \\(self.model.agentDisplay.name)",
+      "translated": "\\(self.model.agentDisplay.name) को संदेश भेजें"
+    },
+    {
+      "id": "native.apple.edf12ff583307f43",
+      "source": "Send a window screenshot",
+      "translated": "विंडो का स्क्रीनशॉट भेजें"
+    },
+    {
+      "id": "native.apple.136cef9f750d3803",
+      "source": "Send message",
+      "translated": "संदेश भेजें"
+    },
+    {
+      "id": "native.apple.024725d220e79697",
+      "source": "Needs additional permissions",
+      "translated": "अतिरिक्त अनुमतियाँ आवश्यक हैं"
+    },
+    {
+      "id": "native.apple.84027c0f438c7aaa",
+      "source": "Grant",
+      "translated": "अनुमति दें"
+    },
+    {
+      "id": "native.apple.a3332fa4db187973",
+      "source": "Not now",
+      "translated": "अभी नहीं"
     },
     {
       "id": "native.apple.1eeca02c45d3db5a",
@@ -19799,9 +21464,9 @@
       "translated": "वॉइस और टॉक"
     },
     {
-      "id": "native.apple.f5aa19bc071cf585",
-      "source": "Crestodian",
-      "translated": "Crestodian"
+      "id": "native.apple.59bed721dff1a25f",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
     },
     {
       "id": "native.apple.04b9c8402f19b8ce",
@@ -20004,6 +21669,11 @@
       "translated": "अनुपस्थित बाइनरी: \\(self.missingBins.joined(separator: \", \"))"
     },
     {
+      "id": "native.apple.98ac6e8935a9fee5",
+      "source": "Needs any binary: \\(self.missingAnyBins.joined(separator: \", \"))",
+      "translated": "इनमें से कोई भी बाइनरी आवश्यक है: \\(self.missingAnyBins.joined(separator: \", \"))"
+    },
+    {
       "id": "native.apple.1ffd9ad47f1dd74a",
       "source": "Missing env: \\(self.missingEnv.joined(separator: \", \"))",
       "translated": "अनुपलब्ध env: \\(self.missingEnv.joined(separator: \", \"))"
@@ -20012,6 +21682,11 @@
       "id": "native.apple.c9ef14276ce395c1",
       "source": "Requires config: \\(self.missingConfig.joined(separator: \", \"))",
       "translated": "config आवश्यक है: \\(self.missingConfig.joined(separator: \", \"))"
+    },
+    {
+      "id": "native.apple.1f939d96ce8464dc",
+      "source": "Requires OS: \\(self.missingOS.joined(separator: \", \"))",
+      "translated": "आवश्यक OS: \\(self.missingOS.joined(separator: \", \"))"
     },
     {
       "id": "native.apple.c588ae10b9fae52b",
@@ -20077,6 +21752,26 @@
       "id": "native.apple.5bea2c67b8d4ccf9",
       "source": "Bundled",
       "translated": "Bundled"
+    },
+    {
+      "id": "native.apple.4b27b3be5f3f1f66",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
+      "id": "native.apple.9427da914cdbfbf3",
+      "source": "Your AI-powered setup helper. It can check status, fix config, switch models, and connect channels.",
+      "translated": "आपका AI-संचालित सेटअप सहायक। यह स्थिति जाँच सकता है, कॉन्फ़िग ठीक कर सकता है, मॉडल बदल सकता है और चैनल कनेक्ट कर सकता है।"
+    },
+    {
+      "id": "native.apple.ce77d7e393a4b860",
+      "source": "Chat",
+      "translated": "चैट"
+    },
+    {
+      "id": "native.apple.61bddd6a136b5e8b",
+      "source": "Tip: try “status”, “doctor”, “set default model …”, or “connect telegram”.",
+      "translated": "सुझाव: “status”, “doctor”, “set default model …” या “connect telegram” आज़माएँ।"
     },
     {
       "id": "native.apple.9df0af709d3b38bf",
@@ -20739,6 +22434,71 @@
       "translated": "वॉयस वेक पहचाना गया!"
     },
     {
+      "id": "native.apple.282d11786f2f4c4b",
+      "source": "Talk mode off",
+      "translated": "बातचीत मोड बंद है"
+    },
+    {
+      "id": "native.apple.133d737c2b59e66d",
+      "source": "Talk mode paused",
+      "translated": "बातचीत मोड रुका हुआ है"
+    },
+    {
+      "id": "native.apple.c11a8fc78a7b2cf8",
+      "source": "Talk mode ready",
+      "translated": "बातचीत मोड तैयार है"
+    },
+    {
+      "id": "native.apple.62a4d588f4259d54",
+      "source": "Listening",
+      "translated": "सुन रहा है"
+    },
+    {
+      "id": "native.apple.d602e6304c3ef523",
+      "source": "Thinking",
+      "translated": "सोच रहा है"
+    },
+    {
+      "id": "native.apple.2328556b7443e453",
+      "source": "Speaking",
+      "translated": "बोल रहा है"
+    },
+    {
+      "id": "native.apple.b42b8777035baf64",
+      "source": "What would you like to work on?",
+      "translated": "आप किस पर काम करना चाहेंगे?"
+    },
+    {
+      "id": "native.apple.448dfe21a7f3a883",
+      "source": "Check OpenClaw status",
+      "translated": "OpenClaw की स्थिति जाँचें"
+    },
+    {
+      "id": "native.apple.00f4977e0123ce7a",
+      "source": "Summarize the current OpenClaw status and tell me what needs attention.",
+      "translated": "OpenClaw की मौजूदा स्थिति का सारांश दें और बताएँ कि किन बातों पर ध्यान देने की आवश्यकता है।"
+    },
+    {
+      "id": "native.apple.9c1a9be47ac92727",
+      "source": "What can you do?",
+      "translated": "आप क्या कर सकते हैं?"
+    },
+    {
+      "id": "native.apple.5101b6cab56c0faf",
+      "source": "Show me what you can help with on this Mac right now.",
+      "translated": "मुझे दिखाएँ कि आप अभी इस Mac पर किन कामों में मदद कर सकते हैं।"
+    },
+    {
+      "id": "native.apple.070fa91f6622e6cf",
+      "source": "Catch me up",
+      "translated": "मुझे अब तक की जानकारी दें"
+    },
+    {
+      "id": "native.apple.234ec45f4231edc4",
+      "source": "Summarize what happened in my sessions since yesterday.",
+      "translated": "कल से अब तक मेरे सत्रों में जो हुआ उसका सारांश दें।"
+    },
+    {
       "id": "native.apple.c5d8bca2d78e1b9b",
       "source": " (local filtered)",
       "translated": " (स्थानीय फ़िल्टर किया गया)"
@@ -20984,6 +22744,11 @@
       "translated": "%@ टोकन उपयोग किए गए"
     },
     {
+      "id": "native.apple.2c865ac4a69645d3",
+      "source": "Widget unavailable",
+      "translated": "विजेट उपलब्ध नहीं है"
+    },
+    {
       "id": "native.apple.769b7dcea4708c40",
       "source": "Image",
       "translated": "Image"
@@ -21054,6 +22819,156 @@
       "translated": "टूल चल रहे हैं…"
     },
     {
+      "id": "native.apple.3b932a47b4223a43",
+      "source": "Collapse plan",
+      "translated": "योजना संक्षिप्त करें"
+    },
+    {
+      "id": "native.apple.b6b3b9af4c618060",
+      "source": "Expand plan",
+      "translated": "योजना विस्तृत करें"
+    },
+    {
+      "id": "native.apple.7cd6fb01b9f5d14a",
+      "source": "User",
+      "translated": "उपयोगकर्ता"
+    },
+    {
+      "id": "native.apple.8ec708a3605a2cc3",
+      "source": "Search sessions",
+      "translated": "सत्र खोजें"
+    },
+    {
+      "id": "native.apple.23b069b4e7f97039",
+      "source": "No Sessions",
+      "translated": "कोई सत्र नहीं"
+    },
+    {
+      "id": "native.apple.2d4ee298bdd1c05d",
+      "source": "No Results",
+      "translated": "कोई परिणाम नहीं"
+    },
+    {
+      "id": "native.apple.0058923f2ce8a3ec",
+      "source": "New Session",
+      "translated": "नया सत्र"
+    },
+    {
+      "id": "native.apple.66ba42960eb4135b",
+      "source": "New session",
+      "translated": "नया सत्र"
+    },
+    {
+      "id": "native.apple.36753ef2f1ed4264",
+      "source": "Rename Session",
+      "translated": "सत्र का नाम बदलें"
+    },
+    {
+      "id": "native.apple.c9de0a1510ef475f",
+      "source": "Session name",
+      "translated": "सत्र का नाम"
+    },
+    {
+      "id": "native.apple.6ec5a13c0e6c20d9",
+      "source": "Rename",
+      "translated": "नाम बदलें"
+    },
+    {
+      "id": "native.apple.4c76665d89af4bec",
+      "source": "Cancel",
+      "translated": "रद्द करें"
+    },
+    {
+      "id": "native.apple.afb4e6c99c63a28d",
+      "source": "Delete Session",
+      "translated": "सत्र हटाएँ"
+    },
+    {
+      "id": "native.apple.3d4ef32e42f136a4",
+      "source": "The session and its transcript are removed from the gateway.",
+      "translated": "सत्र और उसकी ट्रांसक्रिप्ट Gateway से हटा दिए जाते हैं।"
+    },
+    {
+      "id": "native.apple.90bcad5f067b4be1",
+      "source": "Delete “%@”?",
+      "translated": "“%@” को हटाएँ?"
+    },
+    {
+      "id": "native.apple.9a7dca238fba628d",
+      "source": "Session running",
+      "translated": "सत्र चल रहा है"
+    },
+    {
+      "id": "native.apple.fcfbfe5e97a95e9c",
+      "source": "Session failed",
+      "translated": "सत्र विफल रहा"
+    },
+    {
+      "id": "native.apple.ac85292b16a7465f",
+      "source": "Unread",
+      "translated": "अपठित"
+    },
+    {
+      "id": "native.apple.a174cb1027a9b881",
+      "source": "Rename…",
+      "translated": "नाम बदलें…"
+    },
+    {
+      "id": "native.apple.134d6bf84d58fb38",
+      "source": "Pin",
+      "translated": "पिन करें"
+    },
+    {
+      "id": "native.apple.e7815cc4ba359513",
+      "source": "Unpin",
+      "translated": "पिन हटाएँ"
+    },
+    {
+      "id": "native.apple.83f9f2db7eef6a19",
+      "source": "Fork",
+      "translated": "फ़ोर्क करें"
+    },
+    {
+      "id": "native.apple.235614194dc19df2",
+      "source": "Mark Read",
+      "translated": "पढ़ा हुआ चिह्नित करें"
+    },
+    {
+      "id": "native.apple.bc71f0d20b7f72a0",
+      "source": "Mark Unread",
+      "translated": "अपठित चिह्नित करें"
+    },
+    {
+      "id": "native.apple.c9e118f6aae18d97",
+      "source": "Archive",
+      "translated": "संग्रहित करें"
+    },
+    {
+      "id": "native.apple.10365a351a1b58b3",
+      "source": "Restore",
+      "translated": "पुनर्स्थापित करें"
+    },
+    {
+      "id": "native.apple.660f63319b89bd8e",
+      "source": "Copy Session Key",
+      "translated": "सत्र कुंजी कॉपी करें"
+    },
+    {
+      "id": "native.apple.4aeb7c14c26dabac",
+      "source": "Delete Session…",
+      "translated": "सत्र हटाएँ…"
+    },
+    {
+      "id": "native.apple.6a3425ea2811ff88",
+      "source": "Gateway connected",
+      "translated": "Gateway कनेक्ट हो गया"
+    },
+    {
+      "id": "native.apple.e3958d1053259f1d",
+      "source": "Connecting…",
+      "translated": "कनेक्ट हो रहा है…"
+    },
+    {
       "id": "native.apple.63320b6d5138c0db",
       "source": "Pinned",
       "translated": "पिन किया गया"
@@ -21109,6 +23024,16 @@
       "translated": "कोई सत्र नहीं मिला"
     },
     {
+      "id": "native.apple.f0e9d8f69c1d9190",
+      "source": "Restore",
+      "translated": "पुनर्स्थापित करें"
+    },
+    {
+      "id": "native.apple.666ba6eb696e649f",
+      "source": "Archive",
+      "translated": "संग्रहित करें"
+    },
+    {
       "id": "native.apple.05cb1fecc5844b69",
       "source": "Pinned",
       "translated": "पिन किया गया"
@@ -21129,14 +23054,34 @@
       "translated": "अनपिन करें"
     },
     {
-      "id": "native.apple.666ba6eb696e649f",
-      "source": "Archive",
-      "translated": "संग्रहित करें"
+      "id": "native.apple.6de479e9d780869a",
+      "source": "Fork",
+      "translated": "फ़ोर्क करें"
     },
     {
-      "id": "native.apple.34b910911a05110e",
-      "source": "Unarchive",
-      "translated": "संग्रह से हटाएं"
+      "id": "native.apple.1398a2f69867f22d",
+      "source": "Mark Read",
+      "translated": "पठित चिह्नित करें"
+    },
+    {
+      "id": "native.apple.4f259c4409cfcc75",
+      "source": "Mark Unread",
+      "translated": "अपठित चिह्नित करें"
+    },
+    {
+      "id": "native.apple.946b677d8dbf0f37",
+      "source": "Hide talk transcript",
+      "translated": "बातचीत का ट्रांसक्रिप्ट छिपाएँ"
+    },
+    {
+      "id": "native.apple.cb1d1c999a859927",
+      "source": "Show talk transcript",
+      "translated": "बातचीत का ट्रांसक्रिप्ट दिखाएँ"
+    },
+    {
+      "id": "native.apple.e7beeef6043ffd2a",
+      "source": "System Default",
+      "translated": "सिस्टम डिफ़ॉल्ट"
     },
     {
       "id": "native.apple.c4e808a2ec8d49f5",
@@ -21187,6 +23132,21 @@
       "id": "native.apple.fe9f30f12f1dcfaf",
       "source": "Copy Message",
       "translated": "संदेश कॉपी करें"
+    },
+    {
+      "id": "native.apple.b37ec7bd7dc1579a",
+      "source": "Reply",
+      "translated": "जवाब दें"
+    },
+    {
+      "id": "native.apple.8d80a6bb3d6e99b0",
+      "source": "You",
+      "translated": "आप"
+    },
+    {
+      "id": "native.apple.3b44a67aa284886f",
+      "source": "Assistant",
+      "translated": "सहायक"
     },
     {
       "id": "native.apple.f84b674ad395b694",
@@ -21289,9 +23249,34 @@
       "translated": "यह %@ के लिए बातचीत रीसेट करता है। सेशन कुंजी वही रहती है।"
     },
     {
+      "id": "native.apple.a92e96bed98bd553",
+      "source": "Rename Session",
+      "translated": "सत्र का नाम बदलें"
+    },
+    {
+      "id": "native.apple.848e2388f3466f40",
+      "source": "Session name",
+      "translated": "सत्र का नाम"
+    },
+    {
+      "id": "native.apple.8d636ca6b4764418",
+      "source": "Rename",
+      "translated": "नाम बदलें"
+    },
+    {
+      "id": "native.apple.32b4a79f1b889aa6",
+      "source": "Cancel",
+      "translated": "रद्द करें"
+    },
+    {
       "id": "native.apple.2ee7858b00a47c42",
       "source": "Export Transcript",
       "translated": "ट्रांसक्रिप्ट निर्यात करें"
+    },
+    {
+      "id": "native.apple.4af0f566d39d7041",
+      "source": "Sessions",
+      "translated": "सत्र"
     },
     {
       "id": "native.apple.b1f10b5e9113881d",
@@ -21324,14 +23309,74 @@
       "translated": "मॉडल"
     },
     {
+      "id": "native.apple.eb58552e43c8dde2",
+      "source": "New Session",
+      "translated": "नया सेशन"
+    },
+    {
       "id": "native.apple.5361129a24118af6",
       "source": "Refresh",
       "translated": "रीफ़्रेश करें"
     },
     {
+      "id": "native.apple.2bcff4a8fa503739",
+      "source": "Sessions…",
+      "translated": "सत्र…"
+    },
+    {
+      "id": "native.apple.c36e008b051adb38",
+      "source": "Rename Session…",
+      "translated": "सत्र का नाम बदलें…"
+    },
+    {
+      "id": "native.apple.ea0ef95a159bffe0",
+      "source": "Fork Session",
+      "translated": "सत्र को फ़ोर्क करें"
+    },
+    {
+      "id": "native.apple.8768f9ed198edc54",
+      "source": "Unpin",
+      "translated": "अनपिन करें"
+    },
+    {
+      "id": "native.apple.a8a2f4b248663f97",
+      "source": "Pin",
+      "translated": "पिन करें"
+    },
+    {
+      "id": "native.apple.e53f1d7e094dc542",
+      "source": "Mark Read",
+      "translated": "पठित चिह्नित करें"
+    },
+    {
+      "id": "native.apple.99579b05ec001672",
+      "source": "Mark Unread",
+      "translated": "अपठित चिह्नित करें"
+    },
+    {
+      "id": "native.apple.b39c58e213137cc8",
+      "source": "Restore",
+      "translated": "पुनर्स्थापित करें"
+    },
+    {
+      "id": "native.apple.6f5686f621b44307",
+      "source": "Archive",
+      "translated": "संग्रहित करें"
+    },
+    {
+      "id": "native.apple.27ddbe5e4643b60f",
+      "source": "Copy Session Key",
+      "translated": "सत्र कुंजी कॉपी करें"
+    },
+    {
       "id": "native.apple.9b2ad72143b931bf",
       "source": "Export Transcript…",
       "translated": "ट्रांसक्रिप्ट निर्यात करें…"
+    },
+    {
+      "id": "native.apple.3294ababd29c4457",
+      "source": "Show reasoning & tool activity",
+      "translated": "तर्क और टूल गतिविधि दिखाएँ"
     },
     {
       "id": "native.apple.4b24d792545e5086",
@@ -21357,76 +23402,6 @@
       "id": "native.apple.f0a4720df5f5f403",
       "source": "Compact Session",
       "translated": "सेशन कॉम्पैक्ट करें"
-    },
-    {
-      "id": "native.apple.0b9fc81ff2031799",
-      "source": "Search sessions",
-      "translated": "सेशन खोजें"
-    },
-    {
-      "id": "native.apple.f10d5ccfd0530fec",
-      "source": "No Results",
-      "translated": "कोई परिणाम नहीं"
-    },
-    {
-      "id": "native.apple.42b0ee4c8b3326b6",
-      "source": "No Sessions",
-      "translated": "कोई सेशन नहीं"
-    },
-    {
-      "id": "native.apple.eb58552e43c8dde2",
-      "source": "New Session",
-      "translated": "नया सेशन"
-    },
-    {
-      "id": "native.apple.247771e4350c006f",
-      "source": "New session",
-      "translated": "नया सत्र"
-    },
-    {
-      "id": "native.apple.d9a72d07e8d95d35",
-      "source": "Delete Session",
-      "translated": "सत्र हटाएं"
-    },
-    {
-      "id": "native.apple.499537ec30a28ae0",
-      "source": "The session and its transcript are removed from the gateway.",
-      "translated": "सत्र और उसका ट्रांसक्रिप्ट Gateway से हटा दिए गए हैं।"
-    },
-    {
-      "id": "native.apple.1bd1b747fd161df5",
-      "source": "Unread",
-      "translated": "अपठित"
-    },
-    {
-      "id": "native.apple.a8a2f4b248663f97",
-      "source": "Pin",
-      "translated": "पिन करें"
-    },
-    {
-      "id": "native.apple.8768f9ed198edc54",
-      "source": "Unpin",
-      "translated": "अनपिन करें"
-    },
-    {
-      "id": "native.apple.27ddbe5e4643b60f",
-      "source": "Copy Session Key",
-      "translated": "सत्र कुंजी कॉपी करें"
-    },
-    {
-      "id": "native.apple.a994d072ab35cb35",
-      "source": "Delete Session…",
-      "translated": "सत्र हटाएं…"
-    },
-    {
-      "id": "native.apple.22d5ce71e22a7f73",
-      "source": "Connecting…",
-      "translated": "कनेक्ट हो रहा है…"
-    },
-    {
-      "id": "native.apple.8d0606ab1a2c0f44",
-      "source": "Gateway connected",
-      "translated": "Gateway कनेक्ट हो गया"
     },
     {
       "id": "native.apple.f74d150ce05205dd",

@@ -26,8 +26,8 @@ import {
   createWorkerTranscriptRuntime,
   toAgentMessage,
   toWorkerInferenceContext,
-  toWorkerTranscriptMessage,
 } from "./embedded-agent-transcript.runtime.js";
+import { toWorkerTranscriptMessage } from "./transcript-message.js";
 
 const LOCAL_WORKER_TOOL_NAMES = [
   "read",
@@ -75,6 +75,7 @@ type RunWorkerEmbeddedTurnParams = {
   transcript: WorkerEmbeddedTranscriptClient;
   live: WorkerEmbeddedLiveClient;
   initialMessages?: WorkerTranscriptMessage[];
+  suppressPromptTranscript?: boolean;
   systemPrompt?: string;
   inferenceOptions?: WorkerInferenceOptions;
   signal?: AbortSignal;
@@ -110,7 +111,7 @@ export async function runWorkerEmbeddedTurn(
     noPromptTemplates: true,
     noThemes: true,
     noContextFiles: true,
-    ...(params.systemPrompt === undefined ? {} : { systemPrompt: params.systemPrompt }),
+    ...(params.systemPrompt === undefined ? {} : { appendSystemPrompt: [params.systemPrompt] }),
     agentsFilesOverride: () => ({ agentsFiles: contextFiles }),
   });
   await resourceLoader.reload();
@@ -122,6 +123,7 @@ export async function runWorkerEmbeddedTurn(
 
   const transcriptRuntime = createWorkerTranscriptRuntime(params.transcript);
   const sessionManager = guardSessionManager(baseSessionManager, {
+    suppressNextUserMessagePersistence: params.suppressPromptTranscript,
     onMessagePersisted: transcriptRuntime.onMessagePersisted,
   });
 
@@ -221,13 +223,14 @@ export async function runWorkerEmbeddedTurn(
 
   let finalTranscriptFailure: Error | undefined;
   try {
-    if (!params.signal?.aborted) {
-      try {
-        await transcriptRuntime.withSessionWriteLock(() => undefined);
-      } catch (error) {
-        finalTranscriptFailure = toError(error, "Worker transcript flush failed.");
-      }
-      await liveRuntime.flush();
+    try {
+      await transcriptRuntime.withSessionWriteLock(() => undefined);
+    } catch (error) {
+      finalTranscriptFailure = toError(error, "Worker transcript flush failed.");
+    }
+    await liveRuntime.flush();
+    if (finalTranscriptFailure === undefined) {
+      await liveRuntime.emitTerminal();
     }
   } finally {
     params.signal?.removeEventListener("abort", abortTurn);

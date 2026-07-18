@@ -38,33 +38,20 @@ import {
   requireOpenAllowFrom,
 } from "./zod-schema.core.js";
 import {
+  DiscordDmSchema,
+  DiscordIdSchema,
+  DiscordIdListSchema,
+  DiscordPresenceEventsSchema,
+  DiscordSnowflakeStringSchema,
+} from "./zod-schema.discord.js";
+import { ChannelImplicitMentionsSchema } from "./zod-schema.implicit-mentions.js";
+import {
   validateSlackSigningSecretRequirements,
   validateTelegramWebhookSecretRequirements,
 } from "./zod-schema.secret-input-validation.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
 const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional();
-
-const DiscordIdSchema = z
-  .union([z.string(), z.number()])
-  .transform((value, ctx) => {
-    if (typeof value === "number") {
-      if (!Number.isSafeInteger(value) || value < 0) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message:
-            `Discord ID "${String(value)}" is not a valid non-negative safe integer. ` +
-            `Wrap it in quotes in your config file.`,
-        });
-        return z.NEVER;
-      }
-      return String(value);
-    }
-    return value;
-  })
-  .pipe(z.string());
-const DiscordIdListSchema = z.array(DiscordIdSchema);
-const DiscordSnowflakeStringSchema = z.string().regex(/^\d+$/, "Discord user ID must be numeric");
 
 const TelegramInlineButtonsScopeSchema = z.enum(["off", "dm", "group", "all", "allowlist"]);
 const TelegramIdListSchema = z.array(z.union([z.string(), z.number()]));
@@ -146,7 +133,7 @@ const TelegramCustomCommandConfig = {
   pattern: TelegramCommandNamePattern,
   patternDescription: "use a-z, 0-9, underscore; max 32 chars",
 } as const;
-export const TelegramTopicSchema = z
+const TelegramTopicSchema = z
   .object({
     requireMention: z.boolean().optional(),
     ingest: z.boolean().optional(),
@@ -162,7 +149,7 @@ export const TelegramTopicSchema = z
   })
   .strict();
 
-export const TelegramGroupSchema = z
+const TelegramGroupSchema = z
   .object({
     requireMention: z.boolean().optional(),
     ingest: z.boolean().optional(),
@@ -192,7 +179,7 @@ const AutoTopicLabelSchema = z
   ])
   .optional();
 
-export const TelegramDirectSchema = z
+const TelegramDirectSchema = z
   .object({
     dmPolicy: DmPolicySchema.optional(),
     tools: ToolPolicySchema,
@@ -238,7 +225,7 @@ const validateTelegramCustomCommands = (
   }
 };
 
-export const TelegramAccountSchemaBase = z
+const TelegramAccountSchemaBase = z
   .object({
     name: z.string().optional(),
     capabilities: TelegramCapabilitiesSchema.optional(),
@@ -385,7 +372,7 @@ export const TelegramAccountSchemaBase = z
   })
   .strict();
 
-export const TelegramAccountSchema = TelegramAccountSchemaBase.superRefine((value, ctx) => {
+const TelegramAccountSchema = TelegramAccountSchemaBase.superRefine((value, ctx) => {
   // Account-level schemas skip allowFrom validation because accounts inherit
   // allowFrom from the parent channel config at runtime (resolveTelegramAccount
   // shallow-merges top-level and account values in src/telegram/accounts.ts).
@@ -476,23 +463,13 @@ export const TelegramConfigSchema = TelegramAccountSchemaBase.extend({
   validateTelegramWebhookSecretRequirements(value, ctx);
 });
 
-export const DiscordDmSchema = z
-  .object({
-    enabled: z.boolean().optional(),
-    policy: DmPolicySchema.optional(),
-    allowFrom: DiscordIdListSchema.optional(),
-    groupEnabled: z.boolean().optional(),
-    groupChannels: DiscordIdListSchema.optional(),
-  })
-  .strict();
-
-export const DiscordThreadSchema = z
+const DiscordThreadSchema = z
   .object({
     inheritParent: z.boolean().optional(),
   })
   .strict();
 
-export const DiscordGuildChannelSchema = z
+const DiscordGuildChannelSchema = z
   .object({
     requireMention: z.boolean().optional(),
     ignoreOtherMentions: z.boolean().optional(),
@@ -520,7 +497,7 @@ export const DiscordGuildChannelSchema = z
   })
   .strict();
 
-export const DiscordGuildSchema = z
+const DiscordGuildSchema = z
   .object({
     slug: z.string().optional(),
     requireMention: z.boolean().optional(),
@@ -530,6 +507,7 @@ export const DiscordGuildSchema = z
     reactionNotifications: z.enum(["off", "own", "all", "allowlist"]).optional(),
     users: DiscordIdListSchema.optional(),
     roles: DiscordIdListSchema.optional(),
+    presenceEvents: DiscordPresenceEventsSchema.optional(),
     channels: z.record(z.string(), DiscordGuildChannelSchema.optional()).optional(),
   })
   .strict();
@@ -630,7 +608,7 @@ const DiscordVoiceSchema = z
   .strict()
   .optional();
 
-export const DiscordAccountSchema = z
+const DiscordAccountSchema = z
   .object({
     name: z.string().optional(),
     capabilities: z.array(z.string()).optional(),
@@ -640,6 +618,13 @@ export const DiscordAccountSchema = z
     configWrites: z.boolean().optional(),
     token: SecretInputSchema.optional().register(sensitive),
     applicationId: DiscordIdSchema.optional(),
+    activities: z
+      .object({
+        clientSecret: z.string().min(1).optional().register(sensitive),
+        applicationId: DiscordSnowflakeStringSchema.optional(),
+      })
+      .strict()
+      .optional(),
     proxy: z.string().optional(),
     gatewayInfoTimeoutMs: z.number().int().positive().max(120_000).optional(),
     gatewayReadyTimeoutMs: z.number().int().positive().max(120_000).optional(),
@@ -737,6 +722,7 @@ export const DiscordAccountSchema = z
       })
       .strict()
       .optional(),
+    subagentProgress: z.boolean().optional(),
     intents: z
       .object({
         presence: z.boolean().optional(),
@@ -896,7 +882,7 @@ export const DiscordConfigSchema = DiscordAccountSchema.extend({
   }
 });
 
-export const SlackDmSchema = z
+const SlackDmSchema = z
   .object({
     enabled: z.boolean().optional(),
     policy: DmPolicySchema.optional(),
@@ -907,7 +893,13 @@ export const SlackDmSchema = z
   })
   .strict();
 
-export const SlackChannelSchema = z
+const SlackPresenceEventsSchema = z
+  .object({
+    mode: z.enum(["off", "auto", "on"]).optional(),
+  })
+  .strict();
+
+const SlackChannelSchema = z
   .object({
     enabled: z.boolean().optional(),
     requireMention: z.boolean().optional(),
@@ -920,15 +912,15 @@ export const SlackChannelSchema = z
     users: z.array(z.union([z.string(), z.number()])).optional(),
     skills: z.array(z.string()).optional(),
     systemPrompt: z.string().optional(),
+    presenceEvents: SlackPresenceEventsSchema.optional(),
   })
   .strict();
 
-export const SlackThreadSchema = z
+const SlackThreadSchema = z
   .object({
     historyScope: z.enum(["thread", "channel"]).optional(),
     inheritParent: z.boolean().optional(),
     initialHistoryLimit: z.number().int().min(0).optional(),
-    requireExplicitMention: z.boolean().optional(),
   })
   .strict();
 
@@ -947,7 +939,7 @@ const DirectGroupReplyToModeByChatTypeSchema = z
   })
   .strict();
 
-export const SlackSocketModeSchema = z
+const SlackSocketModeSchema = z
   .object({
     clientPingTimeout: z.number().int().positive().optional(),
     serverPingTimeout: z.number().int().positive().optional(),
@@ -955,7 +947,7 @@ export const SlackSocketModeSchema = z
   })
   .strict();
 
-export const SlackRelaySchema = z
+const SlackRelaySchema = z
   .object({
     url: z.string().optional(),
     authToken: SecretInputSchema.optional().register(sensitive),
@@ -963,9 +955,12 @@ export const SlackRelaySchema = z
   })
   .strict();
 
-export const SlackAccountSchema = z
+const SlackIdentitySchema = z.enum(["bot", "user"]);
+
+const SlackAccountSchema = z
   .object({
     name: z.string().optional(),
+    identity: SlackIdentitySchema.default("bot"),
     mode: z.enum(["socket", "http", "relay"]).optional(),
     enterpriseOrgInstall: z.boolean().optional(),
     socketMode: SlackSocketModeSchema.optional(),
@@ -995,6 +990,7 @@ export const SlackAccountSchema = z
     botLoopProtection: BotLoopProtectionSchema.optional(),
     dangerouslyAllowNameMatching: z.boolean().optional(),
     requireMention: z.boolean().optional(),
+    implicitMentions: ChannelImplicitMentionsSchema.optional(),
     groupPolicy: GroupPolicySchema.optional(),
     mentionPatterns: MentionPatternsPolicySchema.optional(),
     contextVisibility: ContextVisibilityModeSchema.optional(),
@@ -1011,6 +1007,7 @@ export const SlackAccountSchema = z
     replyToMode: ReplyToModeSchema.optional(),
     replyToModeByChatType: ReplyToModeByChatTypeSchema.optional(),
     thread: SlackThreadSchema.optional(),
+    presenceEvents: SlackPresenceEventsSchema.optional(),
     actions: z
       .object({
         reactions: z.boolean().optional(),
@@ -1046,11 +1043,13 @@ export const SlackAccountSchema = z
     ackReaction: z.string().optional(),
     typingReaction: z.string().optional(),
   })
-  .strict()
-  .superRefine(() => {
-    // DM allowlist validation is enforced at SlackConfigSchema so account entries
-    // can inherit top-level allowFrom via runtime shallow merge.
-  });
+  .strict();
+
+// Account entries leave identity unset to inherit the top-level default. DM allowlist
+// validation stays at SlackConfigSchema so entries can also inherit top-level allowFrom.
+const SlackAccountEntrySchema = SlackAccountSchema.extend({
+  identity: SlackIdentitySchema.optional(),
+});
 
 export const SlackConfigSchema = SlackAccountSchema.safeExtend({
   mode: z.enum(["socket", "http", "relay"]).optional().default("socket"),
@@ -1059,7 +1058,7 @@ export const SlackConfigSchema = SlackAccountSchema.safeExtend({
   groupPolicy: GroupPolicySchema.optional().default("allowlist"),
   mentionPatterns: MentionPatternsPolicySchema.optional(),
   contextVisibility: ContextVisibilityModeSchema.optional(),
-  accounts: z.record(z.string(), SlackAccountSchema.optional()).optional(),
+  accounts: z.record(z.string(), SlackAccountEntrySchema.optional()).optional(),
   defaultAccount: z.string().optional(),
 }).superRefine((value, ctx) => {
   const dmPolicy = value.dmPolicy ?? value.dm?.policy ?? "pairing";
@@ -1111,6 +1110,7 @@ export const SlackConfigSchema = SlackAccountSchema.safeExtend({
   };
 
   const baseMode = value.mode ?? "socket";
+  const accountIds = value.accounts ? Object.keys(value.accounts) : [];
   if (!value.accounts) {
     if (baseMode === "relay") {
       requireRelayConfig(value.relay, ["relay"]);
@@ -1118,7 +1118,8 @@ export const SlackConfigSchema = SlackAccountSchema.safeExtend({
     validateSlackSigningSecretRequirements(value, ctx);
     return;
   }
-  for (const [accountId, account] of Object.entries(value.accounts)) {
+  for (const accountId of accountIds) {
+    const account = value.accounts[accountId];
     if (!account) {
       continue;
     }
@@ -1171,7 +1172,7 @@ const SignalGroupEntrySchema = z
 
 const SignalGroupsSchema = z.record(z.string(), SignalGroupEntrySchema.optional()).optional();
 
-export const SignalAccountSchemaBase = z
+const SignalAccountSchemaBase = z
   .object({
     name: z.string().optional(),
     capabilities: z.array(z.string()).optional(),
@@ -1272,141 +1273,6 @@ export const SignalConfigSchema = SignalAccountSchemaBase.extend({
     });
   }
 });
-
-export const IrcGroupSchema = z
-  .object({
-    requireMention: z.boolean().optional(),
-    tools: ToolPolicySchema,
-    toolsBySender: ToolPolicyBySenderSchema,
-    skills: z.array(z.string()).optional(),
-    enabled: z.boolean().optional(),
-    allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
-    systemPrompt: z.string().optional(),
-  })
-  .strict();
-
-export const IrcNickServSchema = z
-  .object({
-    enabled: z.boolean().optional(),
-    service: z.string().optional(),
-    password: SecretInputSchema.optional().register(sensitive),
-    passwordFile: z.string().optional(),
-    register: z.boolean().optional(),
-    registerEmail: z.string().optional(),
-  })
-  .strict();
-
-export const IrcAccountSchemaBase = z
-  .object({
-    name: z.string().optional(),
-    capabilities: z.array(z.string()).optional(),
-    markdown: MarkdownConfigSchema,
-    enabled: z.boolean().optional(),
-    configWrites: z.boolean().optional(),
-    host: z.string().optional(),
-    port: z.number().int().min(1).max(65535).optional(),
-    tls: z.boolean().optional(),
-    nick: z.string().optional(),
-    username: z.string().optional(),
-    realname: z.string().optional(),
-    password: SecretInputSchema.optional().register(sensitive),
-    passwordFile: z.string().optional(),
-    nickserv: IrcNickServSchema.optional(),
-    channels: z.array(z.string()).optional(),
-    dmPolicy: DmPolicySchema.optional().default("pairing"),
-    allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
-    defaultTo: z.string().optional(),
-    groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
-    groupPolicy: GroupPolicySchema.optional().default("allowlist"),
-    contextVisibility: ContextVisibilityModeSchema.optional(),
-    groups: z.record(z.string(), IrcGroupSchema.optional()).optional(),
-    mentionPatterns: z.array(z.string()).optional(),
-    historyLimit: z.number().int().min(0).optional(),
-    dmHistoryLimit: z.number().int().min(0).optional(),
-    dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
-    textChunkLimit: z.number().int().positive().optional(),
-    streaming: ChannelDeliveryStreamingConfigSchema.optional(),
-    mediaMaxMb: z.number().positive().optional(),
-    heartbeat: ChannelHeartbeatVisibilitySchema,
-    healthMonitor: ChannelHealthMonitorSchema,
-    responsePrefix: z.string().optional(),
-  })
-  .strict();
-
-type IrcBaseConfig = z.infer<typeof IrcAccountSchemaBase>;
-
-function refineIrcAllowFromAndNickserv(value: IrcBaseConfig, ctx: z.RefinementCtx): void {
-  requireOpenAllowFrom({
-    policy: value.dmPolicy,
-    allowFrom: value.allowFrom,
-    ctx,
-    path: ["allowFrom"],
-    message: 'channels.irc.dmPolicy="open" requires channels.irc.allowFrom to include "*"',
-  });
-  requireAllowlistAllowFrom({
-    policy: value.dmPolicy,
-    allowFrom: value.allowFrom,
-    ctx,
-    path: ["allowFrom"],
-    message:
-      'channels.irc.dmPolicy="allowlist" requires channels.irc.allowFrom to contain at least one sender ID',
-  });
-  if (value.nickserv?.register && !value.nickserv.registerEmail?.trim()) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["nickserv", "registerEmail"],
-      message: "channels.irc.nickserv.register=true requires channels.irc.nickserv.registerEmail",
-    });
-  }
-}
-
-// Account-level schemas skip allowFrom validation because accounts inherit
-// allowFrom from the parent channel config at runtime.
-// Validation is enforced at the top-level IrcConfigSchema instead.
-export const IrcAccountSchema = IrcAccountSchemaBase.superRefine((value, ctx) => {
-  // Only validate nickserv at account level, not allowFrom (inherited from parent).
-  if (value.nickserv?.register && !value.nickserv.registerEmail?.trim()) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["nickserv", "registerEmail"],
-      message: "channels.irc.nickserv.register=true requires channels.irc.nickserv.registerEmail",
-    });
-  }
-});
-
-export const IrcConfigSchema = IrcAccountSchemaBase.extend({
-  accounts: z.record(z.string(), IrcAccountSchema.optional()).optional(),
-  defaultAccount: z.string().optional(),
-}).superRefine((value, ctx) => {
-  refineIrcAllowFromAndNickserv(value, ctx);
-  if (!value.accounts) {
-    return;
-  }
-  for (const [accountId, account] of Object.entries(value.accounts)) {
-    if (!account) {
-      continue;
-    }
-    const effectivePolicy = account.dmPolicy ?? value.dmPolicy;
-    const effectiveAllowFrom = account.allowFrom ?? value.allowFrom;
-    requireOpenAllowFrom({
-      policy: effectivePolicy,
-      allowFrom: effectiveAllowFrom,
-      ctx,
-      path: ["accounts", accountId, "allowFrom"],
-      message:
-        'channels.irc.accounts.*.dmPolicy="open" requires channels.irc.accounts.*.allowFrom (or channels.irc.allowFrom) to include "*"',
-    });
-    requireAllowlistAllowFrom({
-      policy: effectivePolicy,
-      allowFrom: effectiveAllowFrom,
-      ctx,
-      path: ["accounts", accountId, "allowFrom"],
-      message:
-        'channels.irc.accounts.*.dmPolicy="allowlist" requires channels.irc.accounts.*.allowFrom (or channels.irc.allowFrom) to contain at least one sender ID',
-    });
-  }
-});
-
 const IMessageActionSchema = z
   .object({
     reactions: z.boolean().optional(),
@@ -1425,7 +1291,7 @@ const IMessageActionSchema = z
   .strict()
   .optional();
 
-export const IMessageAccountSchemaBase = z
+const IMessageAccountSchemaBase = z
   .object({
     name: z.string().optional(),
     capabilities: z.array(z.string()).optional(),
@@ -1546,7 +1412,7 @@ export const IMessageConfigSchema = IMessageAccountSchemaBase.extend({
   }
 });
 
-export const MSTeamsChannelSchema = z
+const MSTeamsChannelSchema = z
   .object({
     requireMention: z.boolean().optional(),
     tools: ToolPolicySchema,
@@ -1555,7 +1421,7 @@ export const MSTeamsChannelSchema = z
   })
   .strict();
 
-export const MSTeamsTeamSchema = z
+const MSTeamsTeamSchema = z
   .object({
     requireMention: z.boolean().optional(),
     tools: ToolPolicySchema,
@@ -1746,3 +1612,4 @@ export const MSTeamsConfigSchema = z
     // so we cannot require them in the config object itself.
     // Runtime validation happens in resolveMSTeamsCredentials().
   });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

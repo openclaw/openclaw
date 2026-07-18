@@ -26,6 +26,8 @@ class ConnectionManager(
   private val callLogAvailable: () -> Boolean,
   private val photosAvailable: () -> Boolean,
   private val installedAppsSharingEnabled: () -> Boolean,
+  private val voiceWakeAvailable: () -> Boolean,
+  private val inlineWidgetsAvailable: () -> Boolean,
   private val manualTls: (GatewayEndpoint) -> Boolean,
 ) {
   companion object {
@@ -46,6 +48,8 @@ class ConnectionManager(
         "operator.talk.secrets",
         "operator.write",
       )
+
+    internal const val INLINE_WIDGETS_CLIENT_CAPABILITY = "inline-widgets"
 
     internal fun operatorScopesForStoredDeviceToken(storedScopes: List<String>): List<String> {
       val normalized =
@@ -141,6 +145,7 @@ class ConnectionManager(
       motionPedometerAvailable = motionPedometerAvailable(),
       installedAppsSharingEnabled = installedAppsSharingEnabled(),
       debugBuild = BuildConfig.DEBUG,
+      voiceWakeEnabled = prefs.voiceWakeEnabled.value && voiceWakeAvailable(),
     )
 
   /** Builds the gateway-advertised node.invoke command list from current permission and feature state. */
@@ -216,7 +221,7 @@ class ConnectionManager(
     GatewayConnectOptions(
       role = "operator",
       scopes = scopes,
-      caps = emptyList(),
+      caps = if (inlineWidgetsAvailable()) listOf(INLINE_WIDGETS_CLIENT_CAPABILITY) else emptyList(),
       commands = emptyList(),
       permissions = emptyMap(),
       client = buildClientInfo(clientId = "openclaw-android", clientMode = "ui"),

@@ -254,6 +254,7 @@ describe("command-startup-policy", () => {
     expect(shouldBypassConfigGuardForCommandPath(["worker"])).toBe(true);
     expect(policy.hideBanner).toBe(true);
     expect(policy.loadPlugins).toBe(false);
+    expect(policy.suppressDoctorStdout).toBe(true);
   });
 
   it("suppresses startup stdout for the bare acp protocol", () => {

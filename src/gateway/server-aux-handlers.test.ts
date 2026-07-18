@@ -16,7 +16,19 @@ import {
 } from "../secrets/runtime.js";
 import type { GatewayReloadPlan } from "./config-reload.js";
 import { createGatewayAuxHandlers } from "./server-aux-handlers.js";
-import { replaceSharedGatewaySessionGenerationState } from "./server-shared-auth-generation.js";
+import { enforceSharedGatewaySessionGenerationForConfigWrite } from "./server-shared-auth-generation.js";
+
+function publishSharedGatewayGeneration(
+  state: { current: string | undefined; required: string | undefined | null },
+  generation: string,
+) {
+  enforceSharedGatewaySessionGenerationForConfigWrite({
+    state,
+    nextConfig: { gateway: { reload: { mode: "off" } } },
+    resolveRuntimeSnapshotGeneration: () => generation,
+    clients: [],
+  });
+}
 
 function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
@@ -488,10 +500,7 @@ describe("gateway aux handlers", () => {
       .fn()
       .mockImplementationOnce(async () => {
         activateSecretsRuntimeSnapshot(concurrent);
-        replaceSharedGatewaySessionGenerationState(sharedGatewaySessionGenerationState, {
-          current: "gen-concurrent",
-          required: "gen-concurrent",
-        });
+        publishSharedGatewayGeneration(sharedGatewaySessionGenerationState, "gen-concurrent");
         throw new Error("slack refused to start");
       })
       .mockResolvedValue(undefined);
@@ -527,10 +536,7 @@ describe("gateway aux handlers", () => {
     const startChannel = vi
       .fn()
       .mockImplementationOnce(async () => {
-        replaceSharedGatewaySessionGenerationState(sharedGatewaySessionGenerationState, {
-          current: "gen-concurrent",
-          required: "gen-concurrent",
-        });
+        publishSharedGatewayGeneration(sharedGatewaySessionGenerationState, "gen-concurrent");
         throw new Error("slack refused to start");
       })
       .mockResolvedValue(undefined);

@@ -32,10 +32,6 @@ import {
 import { createCopilotByokAuth, resolveCopilotAuth } from "./auth-bridge.js";
 import { createCopilotByokProxy } from "./byok-proxy.js";
 import {
-  createInfiniteSessionConfig,
-  type CopilotInfiniteSessionOptions,
-} from "./compaction-bridge.js";
-import {
   attachCopilotMirrorIdentity,
   dualWriteCopilotTranscriptBestEffort,
 } from "./dual-write-transcripts.js";
@@ -104,7 +100,7 @@ type AttemptParamsLike = AgentHarnessAttemptParams & {
   cwd?: string;
   enableSessionTelemetry?: boolean;
   hooksConfig?: CopilotHooksConfig;
-  infiniteSessionConfig?: CopilotInfiniteSessionOptions;
+  infiniteSessionConfig?: SessionConfig["infiniteSessions"];
   initialReplayState?: AgentHarnessAttemptParams["initialReplayState"] & { sdkSessionId?: string };
   messages?: AgentMessage[];
   model?: string | { api?: string; id?: string; input?: string[]; provider?: string };
@@ -368,10 +364,10 @@ export async function runCopilotAttempt(
   const attemptStartedAt = now();
   const input = params as AttemptParamsLike;
   const createToolBridge = deps.createToolBridge ?? createCopilotToolBridge;
-  const hostCrestodianActive =
-    deps.isHostScopedToolActive?.("crestodian") ?? isHostScopedAgentToolActive("crestodian");
-  const ringZeroCrestodianRun =
-    hostCrestodianActive && isCrestodianOnlyToolAllowlist(input.toolsAllow);
+  const hostSystemAgentActive =
+    deps.isHostScopedToolActive?.("openclaw") ?? isHostScopedAgentToolActive("openclaw");
+  const ringZeroSystemAgentRun =
+    hostSystemAgentActive && isSystemAgentOnlyToolAllowlist(input.toolsAllow);
   const messages = getMessagesSnapshotInput(input);
   const modelRef = resolveModelRef(input);
   const resolvedWorkspaceForSandbox =
@@ -480,6 +476,17 @@ export async function runCopilotAttempt(
   // behavior. See `EmbeddedRunAttemptResult.yieldDetected` at
   // `src/agents/pi-embedded-runner/run/types.ts:139`.
   let yieldDetected = false;
+  let lastToolError: AgentHarnessAttemptResult["lastToolError"];
+  const hostObserveToolTerminal = input.observeToolTerminal;
+  // Copilot reports facts only; the host observer owns mutation/recovery policy.
+  // Retain its returned state so shared terminal preparation sees the same outcome.
+  const observeToolTerminal = hostObserveToolTerminal
+    ? (observation: Parameters<typeof hostObserveToolTerminal>[0]) => {
+        const terminal = hostObserveToolTerminal(observation);
+        lastToolError = terminal.lastToolError;
+        return terminal;
+      }
+    : undefined;
 
   const markExternalAbort = () => {
     abortRequested = true;
@@ -651,7 +658,7 @@ export async function runCopilotAttempt(
         // (identity, owner-only allowlist, auth-profile store,
         // channel/routing, model context, run hooks). See
         // tool-bridge.ts buildOpenClawCodingToolsOptions().
-        attemptParams: input,
+        attemptParams: observeToolTerminal ? { ...input, observeToolTerminal } : input,
         computerContextEpoch,
         sessionRef,
         onYieldDetected: () => {
@@ -776,7 +783,7 @@ export async function runCopilotAttempt(
                 emitLlmInput(prompt, additionalContext),
             }
           : undefined,
-        includeAskUser: !ringZeroCrestodianRun,
+        includeAskUser: !ringZeroSystemAgentRun,
       },
     );
     const compactionSessionConfig = byokProxy
@@ -797,7 +804,7 @@ export async function runCopilotAttempt(
                     emitLlmInput(prompt, additionalContext),
                 }
               : undefined,
-            includeAskUser: !ringZeroCrestodianRun,
+            includeAskUser: !ringZeroSystemAgentRun,
           },
         )
       : sessionConfig;
@@ -1193,6 +1200,7 @@ export async function runCopilotAttempt(
       startedCount: snap?.startedCount ?? 0,
     },
     lastAssistant,
+    lastToolError,
     messagesSnapshot,
     now,
     promptError,
@@ -1249,6 +1257,7 @@ function createResult(
     externalAbort?: boolean;
     itemLifecycle?: { activeCount: number; completedCount: number; startedCount: number };
     lastAssistant?: AssistantMessage;
+    lastToolError?: AgentHarnessAttemptResult["lastToolError"];
     messagesSnapshot: AgentMessage[];
     now: () => number;
     promptError: Error | undefined;
@@ -1289,6 +1298,7 @@ function createResult(
       startedCount: 0,
     },
     lastAssistant: state.lastAssistant,
+    ...(state.lastToolError ? { lastToolError: state.lastToolError } : {}),
     messagesSnapshot: state.messagesSnapshot,
     messagingToolSentMediaUrls: [],
     messagingToolSentTargets: [],
@@ -1331,7 +1341,6 @@ function createSessionConfig(
 ): CopilotSessionConfig {
   const permissionPolicy = params.permissionPolicy ?? rejectAllPolicy;
   const hooks = createHooksBridge(params.hooksConfig, options.hooksBridgeOptions);
-  const infiniteSessions = createInfiniteSessionConfig(params.infiniteSessionConfig);
   return {
     model: sdkModelId,
     // Permission decisions for SDK built-in tool kinds (shell, write,
@@ -1371,16 +1380,13 @@ function createSessionConfig(
     ...(typeof params.enableSessionTelemetry === "boolean"
       ? { enableSessionTelemetry: params.enableSessionTelemetry }
       : {}),
-    // Infinite sessions / background compaction: only attach when the
-    // host provided an InfiniteSessionConfig. SDK defaults
-    // (`enabled: true`, background 0.80, buffer 0.95) apply when
-    // omitted. See compaction-bridge.ts.
-    ...(infiniteSessions ? { infiniteSessions } : {}),
+    // The SDK owns defaulting and validation for this native config block.
+    ...(params.infiniteSessionConfig ? { infiniteSessions: params.infiniteSessionConfig } : {}),
     reasoningEffort: params.reasoningEffort,
     tools: sdkTools,
     // Restrict the SDK's tool catalog to the bridged tool names returned
     // by `createCopilotToolBridge`, plus the built-in `ask_user` tool for
-    // normal runs. Ring-zero Crestodian runs expose only Crestodian. Without this, the SDK
+    // normal runs. Ring-zero OpenClaw runs expose only OpenClaw. Without this, the SDK
     // would still expose its native read/write/shell/url/mcp/memory/
     // hook tools to the model alongside our overrides, which would
     // bypass OpenClaw's wrapped-tool enforcement under any permissive
@@ -1449,8 +1455,8 @@ function buildCopilotAvailableTools(sdkTools: SdkTool[], includeAskUser: boolean
   return [...new Set(availableTools)];
 }
 
-function isCrestodianOnlyToolAllowlist(toolsAllow: readonly string[] | undefined): boolean {
-  return toolsAllow?.length === 1 && toolsAllow[0]?.trim().toLowerCase() === "crestodian";
+function isSystemAgentOnlyToolAllowlist(toolsAllow: readonly string[] | undefined): boolean {
+  return toolsAllow?.length === 1 && toolsAllow[0]?.trim().toLowerCase() === "openclaw";
 }
 
 async function createMessageOptions(
@@ -1791,3 +1797,4 @@ function isSdkSendAndWaitTimeoutError(error: unknown): boolean {
   }
   return /^Timeout after \d+ms waiting for session\.idle$/.test(message);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

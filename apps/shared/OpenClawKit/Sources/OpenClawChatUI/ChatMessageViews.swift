@@ -213,6 +213,10 @@ struct ChatMessageBubble: View {
     let showsAssistantAvatar: Bool
     let isClean: Bool
     let contextWindowTokens: Int?
+    let inlineWidgetResolverReady: Bool
+    let inlineWidgetResourceResolver: @MainActor @Sendable (
+        String,
+        OpenClawChatWidgetResource?) async -> OpenClawChatWidgetResource?
 
     var body: some View {
         if self.isUser {
@@ -251,7 +255,9 @@ struct ChatMessageBubble: View {
             userAccent: self.userAccent,
             showsAssistantTrace: self.showsAssistantTrace,
             isClean: self.isClean,
-            contextWindowTokens: self.contextWindowTokens)
+            contextWindowTokens: self.contextWindowTokens,
+            inlineWidgetResolverReady: self.inlineWidgetResolverReady,
+            inlineWidgetResourceResolver: self.inlineWidgetResourceResolver)
     }
 }
 
@@ -266,6 +272,10 @@ private struct ChatMessageBody: View {
     let showsAssistantTrace: Bool
     let isClean: Bool
     let contextWindowTokens: Int?
+    let inlineWidgetResolverReady: Bool
+    let inlineWidgetResourceResolver: @MainActor @Sendable (
+        String,
+        OpenClawChatWidgetResource?) async -> OpenClawChatWidgetResource?
 
     var body: some View {
         let text = self.primaryText
@@ -323,6 +333,13 @@ private struct ChatMessageBody: View {
                 ForEach(self.inlineAttachments.indices, id: \.self) { idx in
                     AttachmentRow(att: self.inlineAttachments[idx], isUser: self.isUser)
                 }
+            }
+
+            ForEach(self.inlineWidgets.indices, id: \.self) { idx in
+                ChatInlineWidgetView(
+                    preview: self.inlineWidgets[idx],
+                    resolverReady: self.inlineWidgetResolverReady,
+                    resolveResource: self.inlineWidgetResourceResolver)
             }
 
             if self.showsAssistantTrace, !self.toolCalls.isEmpty {
@@ -391,6 +408,17 @@ private struct ChatMessageBody: View {
             default:
                 false
             }
+        }
+    }
+
+    private var inlineWidgets: [OpenClawChatCanvasPreview] {
+        guard self.message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "assistant"
+        else { return [] }
+        return self.message.content.compactMap { content in
+            guard (content.type ?? "").lowercased() == "canvas",
+                  content.preview?.inlineWidgetPath != nil
+            else { return nil }
+            return content.preview
         }
     }
 

@@ -9,6 +9,7 @@ export type SessionArchiveReason = "bak" | "reset" | "deleted";
 
 const ARCHIVE_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}(?:\.\d{3})?Z$/;
 const LEGACY_STORE_BACKUP_RE = /^sessions\.json\.bak\.\d+$/;
+const MIGRATION_ARCHIVE_RE = /\.migrated(?:\.\d+)?$/u;
 const COMPACTION_CHECKPOINT_TRANSCRIPT_RE =
   /^(.+)\.checkpoint\.([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.jsonl$/i;
 
@@ -35,6 +36,11 @@ export function isSessionArchiveArtifactName(fileName: string): boolean {
     hasArchiveSuffix(fileName, "reset") ||
     hasArchiveSuffix(fileName, "bak")
   );
+}
+
+/** Returns true for migration rollback archives retained beside their legacy source. */
+export function isMigrationArchiveArtifactName(fileName: string): boolean {
+  return MIGRATION_ARCHIVE_RE.test(fileName);
 }
 
 // Compiled-pattern cache keyed by store basename. A disk sweep calls the matcher
@@ -72,7 +78,7 @@ export function isSessionStoreTempArtifactName(fileName: string, storeBasename: 
 }
 
 /** Parses a compaction checkpoint transcript filename into session/checkpoint ids. */
-export function parseCompactionCheckpointTranscriptFileName(fileName: string): {
+function parseCompactionCheckpointTranscriptFileName(fileName: string): {
   sessionId: string;
   checkpointId: string;
 } | null {
@@ -88,12 +94,12 @@ export function isCompactionCheckpointTranscriptFileName(fileName: string): bool
 }
 
 /** Returns true for trajectory runtime jsonl artifacts. */
-export function isTrajectoryRuntimeArtifactName(fileName: string): boolean {
+function isTrajectoryRuntimeArtifactName(fileName: string): boolean {
   return fileName.endsWith(".trajectory.jsonl");
 }
 
 /** Returns true for trajectory pointer artifacts. */
-export function isTrajectoryPointerArtifactName(fileName: string): boolean {
+function isTrajectoryPointerArtifactName(fileName: string): boolean {
   return fileName.endsWith(".trajectory-path.json");
 }
 

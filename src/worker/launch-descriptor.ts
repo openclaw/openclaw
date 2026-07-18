@@ -31,6 +31,7 @@ type WorkerLaunchAssignment = {
   runId: string;
   turnId: string;
   prompt: string;
+  suppressPromptTranscript: boolean;
   workspaceDir: string;
   modelRef: WorkerInferenceModelRef;
   inferenceOptions: WorkerInferenceOptions;
@@ -46,7 +47,7 @@ type WorkerLaunchAssignment = {
   };
 };
 
-type WorkerLaunchAdmission = WorkerConnectParams["admission"] & {
+type WorkerLaunchAdmission = Omit<WorkerConnectParams["admission"], "runId"> & {
   sessionId: string;
 };
 
@@ -94,6 +95,7 @@ function parseAssignment(value: unknown): WorkerLaunchAssignment | undefined {
         "runId",
         "turnId",
         "prompt",
+        "suppressPromptTranscript",
         "workspaceDir",
         "modelRef",
         "inferenceOptions",
@@ -110,6 +112,7 @@ function parseAssignment(value: unknown): WorkerLaunchAssignment | undefined {
     !isIdentifier(value.runId) ||
     !isIdentifier(value.turnId) ||
     typeof value.prompt !== "string" ||
+    typeof value.suppressPromptTranscript !== "boolean" ||
     !isIdentifier(value.workspaceDir) ||
     !path.isAbsolute(value.workspaceDir) ||
     (value.systemPrompt !== undefined && typeof value.systemPrompt !== "string") ||
@@ -146,7 +149,7 @@ function parseAssignment(value: unknown): WorkerLaunchAssignment | undefined {
 }
 
 export function buildWorkerConnectParams(
-  descriptor: Pick<WorkerLaunchDescriptor, "admission">,
+  descriptor: Pick<WorkerLaunchDescriptor, "admission" | "assignment">,
 ): WorkerConnectParams {
   return {
     minProtocol: PROTOCOL_VERSION,
@@ -158,7 +161,10 @@ export function buildWorkerConnectParams(
       mode: GATEWAY_CLIENT_MODES.WORKER,
     },
     role: "worker",
-    admission: descriptor.admission,
+    admission: {
+      ...descriptor.admission,
+      runId: descriptor.assignment.runId,
+    },
   };
 }
 

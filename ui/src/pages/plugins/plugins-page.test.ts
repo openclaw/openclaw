@@ -1,34 +1,25 @@
 /* @vitest-environment jsdom */
 
-import { ContextProvider } from "@lit/context";
 import { expectDefined } from "@openclaw/normalization-core";
-import { LitElement } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import {
-  applicationContext,
-  type ApplicationContext,
-  type ApplicationGateway,
-  type ApplicationGatewaySnapshot,
+import type {
+  ApplicationContext,
+  ApplicationGateway,
+  ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
-import type { PluginCatalogItem, PluginListResult } from "../../lib/plugins/index.ts";
+import type {
+  PluginCatalogItem,
+  PluginListResult,
+  PluginMutationResult,
+} from "../../lib/plugins/index.ts";
+import {
+  createApplicationContextProvider,
+  type ApplicationContextProvider,
+} from "../../test-helpers/application-context.ts";
 import type { PluginsRouteData } from "./plugins-page.ts";
 import "./plugins-page.ts";
-
-const PROVIDER_TAG = "test-plugins-page-context-provider";
-
-class PluginsPageContextProvider extends LitElement {
-  private readonly provider = new ContextProvider(this, { context: applicationContext });
-
-  setContext(context: ApplicationContext) {
-    this.provider.setValue(context);
-  }
-}
-
-if (!customElements.get(PROVIDER_TAG)) {
-  customElements.define(PROVIDER_TAG, PluginsPageContextProvider);
-}
 
 type RequestHandler = (method: string, params: unknown) => Promise<unknown>;
 
@@ -44,6 +35,7 @@ type TestPluginsPage = HTMLElement & {
   loading: boolean;
   busy: Record<string, boolean>;
   activeTab: "installed" | "discover";
+  applyMutationResult: (result: PluginMutationResult) => void;
 };
 
 type RuntimeConfigTestState = {
@@ -191,11 +183,10 @@ function createContext(
 async function mountPage(
   context: ApplicationContext,
   routeData?: PluginsRouteData,
-): Promise<{ page: TestPluginsPage; provider: PluginsPageContextProvider }> {
-  const provider = document.createElement(PROVIDER_TAG) as PluginsPageContextProvider;
+): Promise<{ page: TestPluginsPage; provider: ApplicationContextProvider }> {
+  const provider = createApplicationContextProvider(context);
   const page = document.createElement("openclaw-plugins-page") as unknown as TestPluginsPage;
   page.routeData = routeData;
-  provider.setContext(context);
   provider.append(page);
   document.body.append(provider);
   await page.updateComplete;
@@ -227,6 +218,7 @@ describe("PluginsPage", () => {
     document.body.replaceChildren();
     vi.useRealTimers();
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it("accepts matching route data without issuing a duplicate list request", async () => {
@@ -255,6 +247,131 @@ describe("PluginsPage", () => {
     expect(page.querySelector("h1")?.textContent).toBe("Plugins");
   });
 
+  it("fetches proxied icons with auth fallback and revokes their blob URLs", async () => {
+    const createObjectURL = vi.fn(() => "blob:firecrawl-icon");
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal(
+      "URL",
+      class extends URL {
+        static override createObjectURL = createObjectURL;
+        static override revokeObjectURL = revokeObjectURL;
+      },
+    );
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(null, { status: 401 }))
+      .mockResolvedValueOnce(
+        new Response(
+          new Blob(
+            [
+              new Uint8Array([
+                0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0, 0x49, 0x48, 0x44, 0x52,
+                0, 0, 0, 2, 0, 0, 0, 1,
+              ]),
+            ],
+            { type: "image/png" },
+          ),
+          {
+            status: 200,
+            headers: { "content-type": "image/png" },
+          },
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const { client } = createClient(async () => createResult());
+    const harness = createGateway(client);
+    harness.gateway.connection.gatewayUrl = window.location.origin.replace(/^http/u, "ws");
+    harness.gateway.connection.token = "first";
+    harness.gateway.connection.password = "second";
+    const result = createResult(
+      createPlugin({ id: "remote-icon", name: "FireCrawl", hasIcon: true }),
+    );
+    const routeData: PluginsRouteData = {
+      gateway: harness.gateway,
+      gatewaySnapshot: harness.gateway.snapshot,
+      initialTab: null,
+      result,
+      error: null,
+    };
+
+    const { page } = await mountPage(
+      createContext(
+        harness.gateway,
+        vi.fn(async () => undefined),
+      ),
+      routeData,
+    );
+
+    await vi.waitFor(() => {
+      expect(
+        page.querySelector('[data-plugin-id="remote-icon"] img.plugins-icon')?.getAttribute("src"),
+      ).toBe("blob:firecrawl-icon");
+    });
+    expect(
+      fetchMock.mock.calls.map(([, init]) => new Headers(init?.headers).get("Authorization")),
+    ).toEqual(["Bearer first", "Bearer second"]);
+    page.applyMutationResult({
+      ok: true,
+      plugin: createPlugin({ id: "other-plugin", name: "Other Plugin" }),
+      restartRequired: false,
+    });
+    expect(revokeObjectURL).not.toHaveBeenCalled();
+
+    page.remove();
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:firecrawl-icon");
+  });
+
+  it("keeps the monogram fallback when a proxied SVG exceeds the safe icon subset", async () => {
+    const createObjectURL = vi.fn();
+    vi.stubGlobal(
+      "URL",
+      class extends URL {
+        static override createObjectURL = createObjectURL;
+        static override revokeObjectURL = vi.fn();
+      },
+    );
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(
+          new Blob(
+            [
+              `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><filter id="work"><feTurbulence /></filter><path filter="url(#work)" d="M0 0h24v24H0z"/></svg>`,
+            ],
+            { type: "image/svg+xml" },
+          ),
+          { status: 200, headers: { "content-type": "image/svg+xml" } },
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const { client } = createClient(async () => createResult());
+    const harness = createGateway(client);
+    harness.gateway.connection.gatewayUrl = window.location.origin.replace(/^http/u, "ws");
+    const result = createResult(
+      createPlugin({ id: "unsafe-icon", name: "Unsafe Icon", hasIcon: true }),
+    );
+
+    const { page } = await mountPage(
+      createContext(
+        harness.gateway,
+        vi.fn(async () => undefined),
+      ),
+      {
+        gateway: harness.gateway,
+        gatewaySnapshot: harness.gateway.snapshot,
+        initialTab: null,
+        result,
+        error: null,
+      },
+    );
+
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    expect(createObjectURL).not.toHaveBeenCalled();
+    expect(
+      page.querySelector('[data-plugin-id="unsafe-icon"] .plugins-tile--fallback')?.textContent,
+    ).toContain("UI");
+  });
+
   it("applies a ?tab=discover deep link from route data", async () => {
     const { client } = createClient(async () => createResult());
     const harness = createGateway(client);
@@ -274,7 +391,13 @@ describe("PluginsPage", () => {
     );
 
     expect(page.activeTab).toBe("discover");
-    expect(page.querySelector("#plugins-tab-discover")?.getAttribute("aria-selected")).toBe("true");
+    const tabGroup = page.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
+      "wa-tab-group",
+    );
+    await tabGroup?.updateComplete;
+    expect(
+      page.querySelector<HTMLElement & { active: boolean }>("#plugins-tab-discover")?.active,
+    ).toBe(true);
   });
 
   it("routes the skills and workshop hub tabs through navigation", async () => {
@@ -740,7 +863,7 @@ describe("PluginsPage", () => {
     );
 
     const addButton = [
-      ...page.querySelectorAll<HTMLButtonElement>(".plugins-group__actions .btn"),
+      ...page.querySelectorAll<HTMLButtonElement>(".settings-section__actions .btn"),
     ].find((button) => button.textContent?.includes("Add server"));
     addButton?.click();
     await page.updateComplete;
@@ -856,7 +979,7 @@ describe("PluginsPage", () => {
     await page.updateComplete;
     page
       .querySelector<HTMLButtonElement>(
-        '[data-connector-id="context7"] .plugins-card__footer button',
+        '[data-connector-id="context7"] .settings-row__control button',
       )
       ?.click();
 
@@ -866,7 +989,7 @@ describe("PluginsPage", () => {
       ).toContain("rate limit exceeded"),
     );
     // The MCP-section message stays clear; the failure belongs to the card.
-    expect(page.querySelector("#plugins-group-mcp")).toBeNull();
+    expect(page.querySelector(".plugins-group-message")).toBeNull();
   });
 
   it("rejects invalid MCP server names before touching config", async () => {
@@ -893,7 +1016,7 @@ describe("PluginsPage", () => {
     );
 
     const addButton = [
-      ...page.querySelectorAll<HTMLButtonElement>(".plugins-group__actions .btn"),
+      ...page.querySelectorAll<HTMLButtonElement>(".settings-section__actions .btn"),
     ].find((button) => button.textContent?.includes("Add server"));
     addButton?.click();
     await page.updateComplete;

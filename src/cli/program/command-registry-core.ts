@@ -12,15 +12,12 @@ import type { ProgramContext } from "./context.js";
 import {
   getCoreCliCommandDescriptors,
   getCoreCliCommandNames as getCoreDescriptorNames,
-  getCoreCliCommandsWithSubcommands,
 } from "./core-command-descriptors.js";
 import {
   registerCommandGroupByName,
   registerCommandGroups,
   type CommandGroupEntry,
 } from "./register-command-groups.js";
-
-export { getCoreCliCommandsWithSubcommands };
 
 type CommandRegisterParams = {
   program: Command;
@@ -48,12 +45,7 @@ const coreEntrySpecs: readonly CommandGroupDescriptorSpec<
   ...withProgramOnlySpecs(
     defineImportedProgramCommandGroupSpecs([
       {
-        commandNames: ["crestodian"],
-        loadModule: () => import("./register.crestodian.js"),
-        exportName: "registerCrestodianCommand",
-      },
-      {
-        commandNames: ["setup"],
+        commandNames: ["setup", "crestodian"], // hidden alias
         loadModule: () => import("./register.setup.js"),
         exportName: "registerSetupCommand",
       },

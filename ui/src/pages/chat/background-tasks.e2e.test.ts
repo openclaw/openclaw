@@ -15,7 +15,7 @@ const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/chat-background-tasks");
-const baseTime = Date.parse("2026-07-05T18:00:00.000Z");
+const baseTime = Date.now();
 
 const runningSubagent = {
   id: "task-subagent",
@@ -52,13 +52,13 @@ const finishedCli = {
   taskId: "task-cli",
   kind: "cli",
   runtime: "cli",
-  status: "completed",
+  status: "failed",
   title: "Generate media index",
   agentId: "main",
   sessionKey: "agent:main:cli:media",
   createdAt: baseTime - 30_000,
   updatedAt: baseTime - 20_000,
-  terminalSummary: "Index generated",
+  error: "Index generation failed",
 };
 
 let server: ControlUiE2eServer;
@@ -99,7 +99,31 @@ describeControlUiE2e("Control UI chat background-tasks rail mocked Gateway E2E",
           },
         ],
         methodResponses: {
+          "chat.history": {
+            cases: [
+              {
+                match: { sessionKey: runningSubagent.childSessionKey },
+                response: {
+                  messages: [
+                    {
+                      content: [{ type: "text", text: "Subagent transcript proof." }],
+                      role: "assistant",
+                      timestamp: Date.now(),
+                    },
+                  ],
+                  sessionId: "subagent-transcript",
+                  thinkingLevel: null,
+                },
+              },
+            ],
+          },
           "tasks.list": { tasks: [runningSubagent, queuedCron, finishedCli] },
+          "tasks.get": {
+            task: {
+              ...runningSubagent,
+              prompt: "Trace model routing across provider and session boundaries.",
+            },
+          },
           "tasks.cancel": {
             found: true,
             cancelled: true,
@@ -135,6 +159,19 @@ describeControlUiE2e("Control UI chat background-tasks rail mocked Gateway E2E",
       }
       await page.screenshot({ path: path.join(artifactDir, "01-rail-open.png"), fullPage: true });
 
+      await rail
+        .locator('[data-task-id="task-subagent"]')
+        .getByRole("button", { name: "Show details for Map model routing code" })
+        .click();
+      await rail.getByText("Trace model routing across provider and session boundaries.").waitFor();
+      expect(await rail.textContent()).toContain("Reading provider catalogs");
+      const detailRequest = await gateway.waitForRequest("tasks.get");
+      expect(detailRequest.params).toEqual({ taskId: "task-subagent" });
+      await page.screenshot({
+        path: path.join(artifactDir, "02-task-detail.png"),
+        fullPage: true,
+      });
+
       await gateway.emitGatewayEvent("task", {
         action: "upserted",
         task: {
@@ -152,7 +189,7 @@ describeControlUiE2e("Control UI chat background-tasks rail mocked Gateway E2E",
         .waitFor({ state: "detached" });
       expect(await rail.textContent()).toContain("Routing map complete");
       await page.screenshot({
-        path: path.join(artifactDir, "02-pushed-completion.png"),
+        path: path.join(artifactDir, "03-pushed-completion.png"),
         fullPage: true,
       });
 
@@ -170,6 +207,21 @@ describeControlUiE2e("Control UI chat background-tasks rail mocked Gateway E2E",
       await expect
         .poll(() => new URL(page.url()).searchParams.get("session"))
         .toBe("agent:main:subagent:routing");
+      await page.getByText("Subagent transcript proof.").waitFor({ state: "visible" });
+      await page.getByText("Background tasks rail proof.").waitFor({ state: "detached" });
+      await expect
+        .poll(async () =>
+          (await gateway.getRequests("chat.history")).some(
+            (request) =>
+              (request.params as { sessionKey?: string }).sessionKey ===
+              runningSubagent.childSessionKey,
+          ),
+        )
+        .toBe(true);
+      await page.screenshot({
+        path: path.join(artifactDir, "04-transcript-open.png"),
+        fullPage: true,
+      });
     } finally {
       await context.close();
     }

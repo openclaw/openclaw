@@ -28,15 +28,26 @@
 /* --- Tab strip ----------------------------------------------------------- */
 
 .workspace-tabs {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
+  --track-width: 0;
+  --indicator-color: var(--accent);
+  display: block;
   border-bottom: 1px solid var(--border);
   padding-bottom: 8px;
 }
 
-.workspace-tab {
+.workspace-tabs::part(tabs) {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.workspace-tabs::part(body) {
+  display: none;
+}
+
+.workspace-tab::part(base),
+button.workspace-tab {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -53,12 +64,13 @@
     color 120ms var(--ease-out);
 }
 
-.workspace-tab:hover {
+.workspace-tab:hover::part(base),
+button.workspace-tab:hover {
   background: var(--bg-hover);
   color: var(--text);
 }
 
-.workspace-tab--active {
+.workspace-tab[active]::part(base) {
   background: color-mix(in srgb, var(--accent) 16%, transparent);
   border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
   color: var(--text);
@@ -78,14 +90,6 @@
   margin-inline-start: auto;
 }
 
-.workspace-tabs__hidden summary {
-  list-style: none;
-}
-
-.workspace-tabs__hidden summary::-webkit-details-marker {
-  display: none;
-}
-
 .workspace-tab--overflow {
   color: var(--text-muted, var(--text));
   /* #6 nit: keep the "Hidden (N)" affordance a compact single-line chip — the
@@ -99,36 +103,18 @@
   height: 15px;
 }
 
-.workspace-tabs__hidden-menu {
-  position: absolute;
-  /* #18: keep a small gap from the viewport edge so the chip menu never kisses
-     the right border of the scroll container. */
-  inset-inline-end: 4px;
-  margin-top: 4px;
+.workspace-tabs__hidden::part(menu) {
   min-width: 160px;
-  display: flex;
-  flex-direction: column;
   padding: 4px;
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-md);
-  z-index: 20;
 }
 
 .workspace-tabs__hidden-item {
-  text-align: start;
-  padding: 6px 8px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: transparent;
   color: var(--text);
   font: inherit;
-  cursor: pointer;
-}
-
-.workspace-tabs__hidden-item:hover {
-  background: var(--bg-hover);
 }
 
 /* --- Grid ---------------------------------------------------------------- */
@@ -141,6 +127,20 @@
   align-content: start;
   flex: 1;
   min-height: 0;
+}
+
+.workspace-fullbleed {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+.workspace-fullbleed > .workspace-widget__custom,
+.workspace-fullbleed > .workspace-embed__frame {
+  width: 100%;
+  height: 100%;
+  min-height: 480px;
 }
 
 /* --- Widget cell --------------------------------------------------------- */
@@ -282,33 +282,21 @@
 }
 
 .workspace-widget__menu {
-  position: absolute;
-  inset-inline-end: 6px;
-  top: 34px;
+  z-index: 30;
+}
+
+.workspace-widget__menu::part(menu) {
   min-width: 160px;
-  display: flex;
-  flex-direction: column;
   padding: 4px;
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-md);
-  z-index: 30;
 }
 
 .workspace-widget__menu-item {
   text-align: start;
-  padding: 6px 8px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: transparent;
   color: var(--text);
-  font: inherit;
-  cursor: pointer;
-}
-
-.workspace-widget__menu-item:hover {
-  background: var(--bg-hover);
 }
 
 .workspace-widget__menu-item--danger {
@@ -552,6 +540,31 @@
   white-space: nowrap;
 }
 
+.workspace-custom-widget-approvals__row {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.workspace-custom-widget-approvals__actions {
+  display: flex;
+  grid-column: 3;
+  grid-row: 1 / span 2;
+  gap: 6px;
+}
+
+.workspace-custom-widget-approvals__requested-by,
+.workspace-custom-widget-approvals__permission {
+  grid-column: 1 / 3;
+  grid-row: 2;
+  white-space: normal;
+}
+
+.workspace-custom-widget-approvals__permission {
+  grid-column: 1 / -1;
+  grid-row: 3;
+}
+
 /* Live-run / health status dot. */
 .workspace-dot {
   flex: none;
@@ -597,6 +610,61 @@
 .workspace-badge--muted {
   background: var(--bg-muted);
   color: var(--text-muted, var(--text));
+}
+
+/* Chart widget: dependency-free responsive SVG visuals. */
+.workspace-chart {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-height: 40px;
+}
+
+.workspace-chart__svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.workspace-chart__line {
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.workspace-chart__point {
+  fill: var(--accent);
+}
+
+.workspace-chart__area {
+  fill: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.workspace-chart__bars rect {
+  fill: var(--accent);
+}
+
+.workspace-chart__gauge-track,
+.workspace-chart__gauge-fill {
+  stroke-width: 3;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.workspace-chart__gauge-track {
+  stroke: var(--bg-muted);
+}
+
+.workspace-chart__gauge-fill {
+  stroke: var(--accent);
+}
+
+.workspace-chart__gauge-needle {
+  stroke: var(--text);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
 }
 
 /* Usage mini-summary. */
@@ -688,12 +756,76 @@
 
 /* iframe-embed widget. */
 .workspace-embed__frame {
+  display: block;
   width: 100%;
   height: 100%;
   min-height: 120px;
   border: none;
   border-radius: var(--radius-sm);
   background: var(--bg-muted);
+}
+
+.workspace-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.workspace-preview__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.workspace-preview__viewports {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.workspace-preview__viewport,
+.workspace-preview__reload {
+  padding: 2px 8px;
+  font-size: var(--font-size-xs, 12px);
+  color: var(--text-muted, var(--text));
+  background: var(--bg-muted);
+  border: 1px solid var(--border, var(--bg-muted));
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.workspace-preview__viewport:hover,
+.workspace-preview__reload:hover,
+.workspace-preview__viewport[aria-pressed="true"] {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.workspace-preview__viewport:focus-visible,
+.workspace-preview__reload:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.workspace-preview__frame-wrap {
+  flex: 1 1 auto;
+  display: flex;
+  justify-content: center;
+  min-height: 120px;
+}
+
+.workspace-preview__frame-wrap--tablet .workspace-preview__frame {
+  width: 768px;
+  max-width: 100%;
+}
+
+.workspace-preview__frame-wrap--mobile .workspace-preview__frame {
+  width: 375px;
+  max-width: 100%;
 }
 
 /* --- Responsive: single column below ~900px ------------------------------ */

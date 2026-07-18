@@ -50,7 +50,6 @@ const grepSchema = Type.Object({
   ),
   limit: Type.Optional(Type.Number({ description: "Max matches; default 100." })),
 });
-export type { GrepToolDetails, GrepToolInput } from "./tool-contracts.js";
 const DEFAULT_LIMIT = 100;
 
 /**
