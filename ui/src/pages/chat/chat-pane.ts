@@ -173,6 +173,7 @@ import {
 import { exportChatMarkdown } from "./export.ts";
 import {
   hasAbortableSessionRun,
+  isChatStopCommand,
   reconcileStaleChatRunAfterSessionStatePublication,
 } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
@@ -2525,9 +2526,11 @@ class ChatPane extends OpenClawLightDomElement {
         state.requestUpdate?.();
       },
       onSend: (messageOverride) =>
-        catalogKey
-          ? void this.continueCatalogSession(catalogKey)
-          : void state.handleSendChat(messageOverride),
+        messageOverride && isChatStopCommand(messageOverride)
+          ? void state.handleSendChat(messageOverride)
+          : catalogKey
+            ? void this.continueCatalogSession(catalogKey)
+            : void state.handleSendChat(messageOverride),
       onCompact: () => void state.handleSendChat("/compact"),
       onOpenSessionCheckpoints: () => {
         const search = new URLSearchParams({ session: state.sessionKey });

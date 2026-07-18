@@ -396,6 +396,88 @@ describe("agent event handler", () => {
     });
   });
 
+  it("does not restore validation diagnostics from a stale tool event", () => {
+    const updateRunToolErrorSummary = vi.fn();
+    const { agentRunSeq, chatRunState, handler } = createHarness({ updateRunToolErrorSummary });
+    chatRunState.registry.add("provider-run", {
+      sessionKey: "session-1",
+      clientRunId: "client-run",
+    });
+
+    handler({
+      runId: "provider-run",
+      seq: 2,
+      stream: "tool",
+      ts: 1_000,
+      data: {
+        phase: "result",
+        name: "edit",
+        isError: true,
+        toolErrorSummary: "edit tool validation failed: invalid arguments",
+      },
+    });
+    handler({
+      runId: "provider-run",
+      seq: 3,
+      stream: "assistant",
+      ts: 1_100,
+      data: { text: "Recovered" },
+    });
+    handler({
+      runId: "provider-run",
+      seq: 2,
+      stream: "tool",
+      ts: 1_050,
+      data: {
+        phase: "result",
+        name: "edit",
+        isError: true,
+        toolErrorSummary: "edit tool validation failed: stale arguments",
+      },
+    });
+
+    expect(updateRunToolErrorSummary).toHaveBeenLastCalledWith({
+      runId: "provider-run",
+      clientRunId: "client-run",
+      summary: undefined,
+    });
+    expect(chatRunState.registry.peek("provider-run")?.toolErrorSummary).toBeUndefined();
+    expect(agentRunSeq.get("provider-run")).toBe(3);
+  });
+
+  it("does not clear a newer validation diagnostic from a stale lifecycle start", () => {
+    const updateRunToolErrorSummary = vi.fn();
+    const { agentRunSeq, chatRunState, handler } = createHarness({ updateRunToolErrorSummary });
+    chatRunState.registry.add("provider-run", {
+      sessionKey: "session-1",
+      clientRunId: "client-run",
+    });
+    const summary = "edit tool validation failed: invalid arguments";
+
+    handler({
+      runId: "provider-run",
+      seq: 2,
+      stream: "tool",
+      ts: 1_100,
+      data: { phase: "result", name: "edit", isError: true, toolErrorSummary: summary },
+    });
+    handler({
+      runId: "provider-run",
+      seq: 1,
+      stream: "lifecycle",
+      ts: 1_000,
+      data: { phase: "start" },
+    });
+
+    expect(updateRunToolErrorSummary).toHaveBeenLastCalledWith({
+      runId: "provider-run",
+      clientRunId: "client-run",
+      summary,
+    });
+    expect(chatRunState.registry.peek("provider-run")?.toolErrorSummary).toBe(summary);
+    expect(agentRunSeq.get("provider-run")).toBe(2);
+  });
+
   function sessionAgentCalls(nodeSendToSession: ReturnType<typeof vi.fn>) {
     return nodeSendToSession.mock.calls.filter(([, event]) => event === "agent");
   }

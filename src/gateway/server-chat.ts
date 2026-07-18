@@ -1351,21 +1351,6 @@ export function createAgentEventHandler({
       }
       return;
     }
-    if (lifecyclePhase === "start") {
-      if (chatLink) {
-        chatLink.toolErrorSummary = undefined;
-      }
-      updateRunToolErrorSummary?.({ runId: evt.runId, clientRunId, summary: undefined });
-    } else if (toolValidationSummary) {
-      if (chatLink) {
-        chatLink.toolErrorSummary = toolValidationSummary;
-      }
-      updateRunToolErrorSummary?.({
-        runId: evt.runId,
-        clientRunId,
-        summary: toolValidationSummary,
-      });
-    }
     if (lifecyclePhase !== null && lifecyclePhase !== "error") {
       clearPendingTerminalLifecycleError(evt.runId);
     }
@@ -1389,6 +1374,22 @@ export function createAgentEventHandler({
         0
       : false;
     const last = agentRunSeq.get(evt.runId) ?? 0;
+    const isNewerEvent = evt.seq > last;
+    if (isNewerEvent && lifecyclePhase === "start") {
+      if (chatLink) {
+        chatLink.toolErrorSummary = undefined;
+      }
+      updateRunToolErrorSummary?.({ runId: evt.runId, clientRunId, summary: undefined });
+    } else if (isNewerEvent && toolValidationSummary) {
+      if (chatLink) {
+        chatLink.toolErrorSummary = toolValidationSummary;
+      }
+      updateRunToolErrorSummary?.({
+        runId: evt.runId,
+        clientRunId,
+        summary: toolValidationSummary,
+      });
+    }
     const isToolEvent = evt.stream === "tool";
     const isItemEvent = evt.stream === "item";
     const toolVerbose = isToolEvent ? resolveToolVerboseLevel(evt.runId, sessionKey) : "off";
@@ -1430,8 +1431,8 @@ export function createAgentEventHandler({
         },
       );
     }
-    agentRunSeq.set(evt.runId, evt.seq);
-    if (evt.stream === "assistant") {
+    agentRunSeq.set(evt.runId, Math.max(last, evt.seq));
+    if (isNewerEvent && evt.stream === "assistant") {
       if (chatLink) {
         chatLink.toolErrorSummary = undefined;
       }
@@ -1452,7 +1453,7 @@ export function createAgentEventHandler({
     }
     if (isToolEvent) {
       const toolPhase = typeof evt.data?.phase === "string" ? evt.data.phase : "";
-      if (toolPhase === "start") {
+      if (isNewerEvent && toolPhase === "start") {
         if (chatLink) {
           chatLink.toolErrorSummary = undefined;
         }
