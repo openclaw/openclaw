@@ -960,16 +960,6 @@ CREATE TABLE IF NOT EXISTS agent_databases (
   PRIMARY KEY (agent_id, path)
 ) STRICT;
 
--- Additive derived cache: older builds safely ignore this table.
--- Keep state schema v3 so verification never makes downgrades refuse startup.
-CREATE TABLE IF NOT EXISTS database_verifications (
-  path TEXT NOT NULL PRIMARY KEY,
-  kind TEXT NOT NULL,
-  verified_at INTEGER NOT NULL,
-  result TEXT NOT NULL,
-  error TEXT
-) STRICT;
-
 CREATE TABLE IF NOT EXISTS plugin_state_entries (
   plugin_id TEXT NOT NULL,
   namespace TEXT NOT NULL,
