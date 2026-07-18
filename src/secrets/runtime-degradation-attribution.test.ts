@@ -228,7 +228,7 @@ describe("secrets runtime degraded-owner attribution", () => {
     }
     const root = tempDirs.make("openclaw-secret-provider-active-co-owner-");
     const provider = "missing";
-    const candidateRef = { source: "file" as const, provider, id: "/candidate" };
+    const apiKeyRef = { source: "file" as const, provider, id: "/candidate" };
     const activeRef = { source: "file" as const, provider, id: "/active" };
     const config = asConfig({
       secrets: {
@@ -243,7 +243,7 @@ describe("secrets runtime degraded-owner attribution", () => {
       models: {
         providers: {
           example: {
-            apiKey: candidateRef,
+            apiKey: apiKeyRef,
             baseUrl: "https://example.invalid/v1",
             models: [],
           },
