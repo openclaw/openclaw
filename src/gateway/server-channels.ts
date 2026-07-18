@@ -994,15 +994,21 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       Array.from(knownIds.values()).map(async (id) => {
         const abort = store.aborts.get(id);
         const task = store.tasks.get(id);
-        if (!abort && !task && !plugin?.gateway?.stopAccount) {
+        const hadLiveState = Boolean(
+          abort || task || store.starting.has(id) || store.runtimes.get(id)?.running,
+        );
+        if (!hadLiveState && !plugin?.gateway?.stopAccount) {
           return;
         }
         const rKey = restartKey(channelId, id);
+        const accountRestartPending = markRestartPending && hadLiveState;
         if (manual) {
           manuallyStopped.add(rKey);
           restartDeferredToCaller.delete(rKey);
-        } else {
+        } else if (hadLiveState) {
           restartDeferredToCaller.add(rKey);
+        } else {
+          restartDeferredToCaller.delete(rKey);
         }
         abort?.abort();
         const log = ensureChannelLog(channelId);
@@ -1029,7 +1035,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             `[${id}] channel stop exceeded ${CHANNEL_STOP_ABORT_TIMEOUT_MS}ms after abort; continuing shutdown`,
           );
           const stoppedPatch = {
-            restartPending: markRestartPending,
+            restartPending: accountRestartPending,
             lastError: `channel stop timed out after ${CHANNEL_STOP_ABORT_TIMEOUT_MS}ms`,
           };
           if (manual) {
@@ -1041,7 +1047,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           } else {
             setStoppedRuntime(channelId, id, stoppedPatch);
           }
-          if (!manual && markRestartPending) {
+          if (!manual && accountRestartPending) {
             restartDeferredToCaller.delete(rKey);
             recoveryStopTimedOut.add(rKey);
           }
@@ -1052,7 +1058,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         store.aborts.delete(id);
         store.tasks.delete(id);
         setStoppedRuntime(channelId, id, {
-          restartPending: markRestartPending,
+          restartPending: accountRestartPending,
           lastStopAt: Date.now(),
         });
       }),
