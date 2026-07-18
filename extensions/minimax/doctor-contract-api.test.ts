@@ -4,12 +4,18 @@ import { describe, expect, it } from "vitest";
 import { legacyConfigRules, normalizeCompatibilityConfig } from "./doctor-contract-api.js";
 
 describe("MiniMax doctor contract", () => {
-  it("migrates only the official API-key provider and preserves Portal OAuth", () => {
+  it("migrates both official API-key provider keys and preserves Portal OAuth", () => {
     const config = {
       models: {
         providers: {
           minimax: {
             baseUrl: "https://api.minimax.io/anthropic/",
+            api: "anthropic-messages",
+            authHeader: true,
+            models: [],
+          },
+          "minimax-cn": {
+            baseUrl: "https://api.minimaxi.com/anthropic",
             api: "anthropic-messages",
             authHeader: true,
             models: [],
@@ -25,15 +31,19 @@ describe("MiniMax doctor contract", () => {
     } as OpenClawConfig;
 
     expect(legacyConfigRules[0]?.match(config.models?.providers?.minimax)).toBe(true);
+    expect(legacyConfigRules[1]?.match(config.models?.providers?.["minimax-cn"])).toBe(true);
 
     const result = normalizeCompatibilityConfig({ cfg: config });
 
     expect(result.config).not.toBe(config);
     expect(result.config.models?.providers?.minimax?.authHeader).toBe(false);
+    expect(result.config.models?.providers?.["minimax-cn"]?.authHeader).toBe(false);
     expect(result.config.models?.providers?.["minimax-portal"]?.authHeader).toBe(true);
     expect(config.models?.providers?.minimax?.authHeader).toBe(true);
+    expect(config.models?.providers?.["minimax-cn"]?.authHeader).toBe(true);
     expect(result.changes).toEqual([
       "Updated models.providers.minimax.authHeader from true to false for X-Api-Key authentication.",
+      "Updated models.providers.minimax-cn.authHeader from true to false for X-Api-Key authentication.",
     ]);
     expect(normalizeCompatibilityConfig({ cfg: result.config })).toEqual({
       config: result.config,
@@ -57,7 +67,7 @@ describe("MiniMax doctor contract", () => {
     const corrected = {
       models: {
         providers: {
-          minimax: {
+          "minimax-cn": {
             baseUrl: "https://api.minimaxi.com/anthropic",
             api: "anthropic-messages",
             authHeader: false,

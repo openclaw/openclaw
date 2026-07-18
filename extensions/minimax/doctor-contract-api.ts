@@ -11,6 +11,7 @@ const OFFICIAL_MINIMAX_ANTHROPIC_BASE_URLS = new Set([
   "https://api.minimax.io/anthropic",
   "https://api.minimaxi.com/anthropic",
 ]);
+const MINIMAX_API_KEY_PROVIDER_IDS = ["minimax", "minimax-cn"] as const;
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -35,34 +36,36 @@ function hasLegacyMinimaxApiKeyAuthHeader(value: unknown): boolean {
   return baseUrl !== undefined && OFFICIAL_MINIMAX_ANTHROPIC_BASE_URLS.has(baseUrl);
 }
 
-export const legacyConfigRules: LegacyConfigRule[] = [
-  {
-    path: ["models", "providers", "minimax"],
-    message:
-      'models.providers.minimax.authHeader uses the retired Bearer mode for MiniMax API keys; run "openclaw doctor --fix" to restore X-Api-Key authentication.',
+export const legacyConfigRules: LegacyConfigRule[] = MINIMAX_API_KEY_PROVIDER_IDS.map(
+  (providerId) => ({
+    path: ["models", "providers", providerId],
+    message: `models.providers.${providerId}.authHeader uses the retired Bearer mode for MiniMax API keys; run "openclaw doctor --fix" to restore X-Api-Key authentication.`,
     match: hasLegacyMinimaxApiKeyAuthHeader,
-  },
-];
+  }),
+);
 
 export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): {
   config: OpenClawConfig;
   changes: string[];
 } {
-  const provider = cfg.models?.providers?.minimax;
-  if (!hasLegacyMinimaxApiKeyAuthHeader(provider)) {
+  const providerIds = MINIMAX_API_KEY_PROVIDER_IDS.filter((providerId) =>
+    hasLegacyMinimaxApiKeyAuthHeader(cfg.models?.providers?.[providerId]),
+  );
+  if (providerIds.length === 0) {
     return { config: cfg, changes: [] };
   }
 
   const next = structuredClone(cfg);
-  const nextProvider = next.models?.providers?.minimax;
-  if (!nextProvider) {
-    return { config: cfg, changes: [] };
+  const changes: string[] = [];
+  for (const providerId of providerIds) {
+    const nextProvider = next.models?.providers?.[providerId];
+    if (!nextProvider) {
+      continue;
+    }
+    nextProvider.authHeader = false;
+    changes.push(
+      `Updated models.providers.${providerId}.authHeader from true to false for X-Api-Key authentication.`,
+    );
   }
-  nextProvider.authHeader = false;
-  return {
-    config: next,
-    changes: [
-      "Updated models.providers.minimax.authHeader from true to false for X-Api-Key authentication.",
-    ],
-  };
+  return { config: next, changes };
 }
