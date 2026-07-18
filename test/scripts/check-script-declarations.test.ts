@@ -172,6 +172,27 @@ describe("script declaration contracts", () => {
     ).toEqual({ checked: 1, issues: [] });
   });
 
+  it("fails closed on cyclic star graphs", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-script-declarations-"));
+    tempDirs.push(root);
+    fs.mkdirSync(path.join(root, "scripts"), { recursive: true });
+    fs.writeFileSync(path.join(root, "scripts", "a.mjs"), 'export * from "./b.mjs";\n');
+    fs.writeFileSync(
+      path.join(root, "scripts", "b.mjs"),
+      'export const value = 1;\nexport * from "./a.mjs";\n',
+    );
+    fs.writeFileSync(path.join(root, "scripts", "a.d.mts"), "export const value: 1;\n");
+    fs.writeFileSync(path.join(root, "scripts", "b.d.mts"), "export const value: 1;\n");
+
+    const result = verifyScriptDeclarationContracts({
+      root,
+      files: ["scripts/a.d.mts", "scripts/a.mjs", "scripts/b.d.mts", "scripts/b.mjs"],
+    });
+    expect(result.checked).toBe(2);
+    expect(result.issues).toHaveLength(2);
+    expect(result.issues.every((issue) => issue.includes("cyclic star re-export"))).toBe(true);
+  });
+
   it("fails closed on explicit re-exports of ambiguous bindings", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-script-declarations-"));
     tempDirs.push(root);

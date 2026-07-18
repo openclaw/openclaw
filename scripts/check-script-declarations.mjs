@@ -352,6 +352,8 @@ function collectValueExports(filePath, fsImpl, state) {
     return cached;
   }
   if (state.visiting.has(normalizedFilePath)) {
+    // Full cyclic star resolution requires a fixed point. Fail closed instead of
+    // caching a partial map; script barrels can break the cycle with explicit exports.
     return {
       ambiguous: new Set(),
       exports: new Map(),
