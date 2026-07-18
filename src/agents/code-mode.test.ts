@@ -476,6 +476,35 @@ describe("Code Mode", () => {
     expect(description).not.toContain("additional OpenClaw/plugin tools omitted");
   });
 
+  it("keeps declared-output tools indexed when truncation drops unknown-output lines", () => {
+    const { config, catalogRef, tools } = createCodeModeHarness();
+    const pluginId = `fake-${"x".repeat(120)}`;
+    const catalogTools = Array.from({ length: 100 }, (_, index) =>
+      pluginTool(`fake_${index.toString().padStart(3, "0")}`, "Deferred", pluginId),
+    );
+    // Alphabetically last, but carries a declared output contract.
+    const contracted = pluginTool("zzz_contracted_tool", "Deferred", pluginId);
+    (contracted as { outputSchema?: unknown }).outputSchema = Type.Object(
+      { ok: Type.Boolean() },
+      { additionalProperties: false },
+    );
+    const compacted = applyCodeModeCatalog({
+      tools: [...tools, ...catalogTools, contracted],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const description = compacted.tools[0]?.description ?? "";
+    const indexStart = description.indexOf("OpenClaw/plugin tool quick index");
+    const index = indexStart >= 0 ? description.slice(indexStart) : "";
+    expect(index).toContain("additional OpenClaw/plugin tools omitted");
+    expect(index).toContain("zzz_contracted_tool");
+    expect(index).toContain("-> { ok: boolean }");
+  });
+
   it("bounds the model-visible native tool index", () => {
     const { config, catalogRef, tools } = createCodeModeHarness();
     const pluginId = `fake-${"x".repeat(120)}`;

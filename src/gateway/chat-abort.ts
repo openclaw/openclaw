@@ -392,7 +392,11 @@ export type ChatAbortOps = {
   ) => { sessionKey: string; agentId?: string; clientRunId: string } | undefined;
   agentRunSeq: Map<string, number>;
   getRuntimeConfig?: () => OpenClawConfig;
-  broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
+  broadcast: (
+    event: string,
+    payload: unknown,
+    opts?: { dropIfSlow?: boolean; sessionKeys?: readonly string[] },
+  ) => void;
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
 };
 
@@ -484,12 +488,9 @@ function broadcastChatAborted(
         }
       : undefined,
   };
-  ops.broadcast("chat", payload);
-  for (const deliverySessionKey of resolveChatAbortDeliverySessionKeys(
-    ops,
-    sessionKey,
-    payloadAgentId,
-  )) {
+  const deliverySessionKeys = resolveChatAbortDeliverySessionKeys(ops, sessionKey, payloadAgentId);
+  ops.broadcast("chat", payload, { sessionKeys: deliverySessionKeys });
+  for (const deliverySessionKey of deliverySessionKeys) {
     ops.nodeSendToSession(deliverySessionKey, "chat", payload);
   }
 }

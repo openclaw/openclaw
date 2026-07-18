@@ -1644,8 +1644,9 @@ export async function executePreparedCliRun(
           const stderrHash = crypto.createHash("sha256");
           let stderrParseExceeded = false;
           const consumeStdout = (chunk: string) => {
-            claudeModelCallDiagnostics?.observeCliOutput(chunk, "stdout");
-            stdoutBytes += Buffer.byteLength(chunk);
+            const chunkBytes = Buffer.byteLength(chunk);
+            claudeModelCallDiagnostics?.observeCliOutput(chunk, "stdout", chunkBytes);
+            stdoutBytes += chunkBytes;
             stdoutHash.update(chunk);
             stdoutTail = appendCliOutputTail(stdoutTail, chunk);
             if (!stdoutParseExceeded) {

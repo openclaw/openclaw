@@ -1342,10 +1342,10 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   per vault/run id instead of writing `.openclaw-wiki/import-runs/*.json`.
   Rollback snapshots remain explicit vault files until import-run snapshot
   archival is moved into blob storage.
-- Memory Wiki compiled digests now store SQLite plugin blob rows instead of
-  writing `.openclaw-wiki/cache/agent-digest.json` and
-  `.openclaw-wiki/cache/claims.jsonl`. The migration provider imports old cache
-  files and removes the cache directory when it becomes empty.
+- Memory Wiki compiled digests now store compressed SQLite plugin-blob rows
+  instead of writing `.openclaw-wiki/cache/agent-digest.json` and
+  `.openclaw-wiki/cache/claims.jsonl`. The cache is rebuildable, so doctor
+  deletes old cache files without importing them.
 - ClawHub skill install tracking now stores one SQLite plugin-state row per
   workspace/skill instead of writing or reading `.clawhub/lock.json` and
   `.clawhub/origin.json` sidecars at runtime. Runtime code uses tracked-install

@@ -53,38 +53,19 @@ run-name: ${{ github.event_name == 'workflow_dispatch' && inputs.dispatch_id != 
 
 concurrency:
   group: ${{ github.event_name == 'workflow_dispatch' && format('{0}-manual-v1-{1}', github.workflow, github.run_id) || (github.event_name == 'pull_request' && format('{0}-v7-{1}', github.workflow, github.event.pull_request.number) || (github.repository == 'openclaw/openclaw' && format('{0}-v7-{1}', github.workflow, github.ref) || format('{0}-v7-{1}-{2}', github.workflow, github.ref, github.sha))) }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main') }}
+  # PRs want newest-head feedback. Canonical main instead runs one complete
+  # integration cycle while GitHub's single pending slot coalesces later pushes.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
-  # Keep the canonical main queue quiet long enough for a follow-up push to
-  # cancel this run before it registers the Blacksmith matrix.
-  runner-admission:
-    permissions:
-      contents: read
-    runs-on: ubuntu-24.04
-    timeout-minutes: 3
-    env:
-      OPENCLAW_MAIN_CI_DEBOUNCE_SECONDS: "90"
-    steps:
-      - name: Debounce canonical main pushes
-        if: github.event_name == 'push' && github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main'
-        run: |
-          set -euo pipefail
-          echo "Waiting ${OPENCLAW_MAIN_CI_DEBOUNCE_SECONDS}s for a superseding main push before Blacksmith admission"
-          sleep "${OPENCLAW_MAIN_CI_DEBOUNCE_SECONDS}"
-      - name: Admit non-main CI runs immediately
-        if: github.event_name != 'push' || github.repository != 'openclaw/openclaw' || github.ref != 'refs/heads/main'
-        run: echo "No canonical main debounce required"
-
   # Preflight: establish routing truth and job matrices once, then let real
   # work fan out from a single source of truth.
   preflight:
     permissions:
       contents: read
-    needs: [runner-admission]
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
@@ -574,6 +555,12 @@ jobs:
           }
 
           const compactPullRequest = isCanonicalRepository && eventName === "pull_request";
+          // Canonical pushes also use compact bins: 80+ single-group jobs
+          // drain the runner pool for minutes, and per-shard check names on
+          // main have no branch-protection consumers. Dispatch (release
+          // validation) keeps the full named matrix.
+          const compactPlan =
+            isCanonicalRepository && (eventName === "pull_request" || eventName === "push");
           let changedNodeTestShards = null;
           if (
             compactPullRequest &&
@@ -617,7 +604,7 @@ jobs:
               ? changedNodeTestShards
               : createNodeTestPlan({
                   includeReleaseOnlyPluginShards: false,
-                  compact: compactPullRequest,
+                  compact: compactPlan,
                 })
             : [];
           const assignVitestFsCacheWriter =
@@ -763,7 +750,6 @@ jobs:
   security-fast:
     permissions:
       contents: read
-    needs: [runner-admission]
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -1809,8 +1795,8 @@ jobs:
     timeout-minutes: ${{ matrix.timeout_minutes || 60 }}
     strategy:
       fail-fast: false
-      # The canonical main path waits for the admission debounce above, so
-      # widen this large matrix within the current runner-registration budget.
+      # Canonical main admits only one complete run at a time, so widen this
+      # matrix within the current runner-registration budget.
       max-parallel: 28
       matrix: ${{ fromJson(needs.preflight.outputs.checks_node_core_nondist_matrix) }}
     steps:
@@ -2041,6 +2027,7 @@ jobs:
           case "$TASK" in
             guards)
               pnpm check:no-conflict-markers
+              pnpm check:script-declarations
               pnpm tool-display:check
               pnpm check:host-env-policy:swift
               pnpm dup:check:coverage
@@ -3256,7 +3243,6 @@ jobs:
       contents: read
     name: openclaw/ci-gate
     needs:
-      - runner-admission
       - preflight
       - security-fast
       - pnpm-store-warmup
@@ -3287,7 +3273,6 @@ jobs:
         shell: bash
         env:
           REQUIRED_RESULTS: |
-            runner-admission=${{ needs.runner-admission.result }}
             preflight=${{ needs.preflight.result }}
             security-fast=${{ needs.security-fast.result }}
           SELECTED_RESULTS: |

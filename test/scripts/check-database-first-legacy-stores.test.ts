@@ -8662,23 +8662,7 @@ describe("check-database-first-legacy-stores", () => {
     expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 668 }]);
   });
 
-  it("allows current legacy-debt writes after harmless line movement", () => {
-    const content = [
-      `import { fsRoot } from "@openclaw/fs-safe/root";`,
-      `const relativePath = ".openclaw-wiki/cache/claims.jsonl";`,
-      `const root = await fsRoot(rootDir);`,
-      ...Array.from({ length: 8 }, () => ""),
-      `await root.write(relativePath, content);`,
-    ].join("\n");
-    const violations = collectDatabaseFirstLegacyStoreViolations(
-      content,
-      "extensions/memory-wiki/src/compile.ts",
-    );
-
-    expect(violations).toEqual([]);
-  });
-
-  it("flags duplicate copies of current legacy-debt writes", () => {
+  it("flags duplicate copies when one current legacy-debt write is allowed", () => {
     const relativePath = "extensions/memory-wiki/src/compile.ts";
     const allowedWrite = `fs.writeFileSync("sessions.json", "{}\\n")`;
     const currentLegacyWriteAllowances = new Map([
@@ -8691,18 +8675,6 @@ describe("check-database-first-legacy-stores", () => {
     );
 
     expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 3 }]);
-  });
-
-  it("flags stale current legacy-debt allowlist entries during full scans", () => {
-    const violations = collectDatabaseFirstLegacyStoreViolations(
-      `
-        export const CLAIMS_DIGEST_PATH = ".openclaw-wiki/cache/claims.jsonl";
-      `,
-      "extensions/memory-wiki/src/compile.ts",
-      { enforceCurrentLegacyAllowlist: true },
-    );
-
-    expect(violations).toEqual([{ kind: "stale current legacy write allowlist", line: 1 }]);
   });
 
   it("allows doctor and migration owners to import or archive legacy files", () => {

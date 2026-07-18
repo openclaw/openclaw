@@ -21,6 +21,7 @@ import {
   formatAutoEnabledActivationReason,
   formatMissingPluginRegisterError,
   markPluginActivationDisabled,
+  recordPluginConfiguredUnavailable,
   recordPluginError,
 } from "./loader-records.js";
 import { resolvePluginRegistrationPlan } from "./loader-registration-plan.js";
@@ -50,6 +51,11 @@ import {
   resolvePluginRuntimeArtifact,
 } from "./plugin-runtime-artifact-resolution.js";
 import type { createPluginRegistry, PluginRecord } from "./registry.js";
+import {
+  clearActiveDegradedPlugin,
+  degradedPluginMatchesRoot,
+  findActiveDegradedPlugin,
+} from "./runtime-degraded-state.js";
 import { recordImportedPluginId } from "./runtime.js";
 import { hasKind, kindsEqual } from "./slots.js";
 import type { OpenClawPluginModule, PluginLogger } from "./types.js";
@@ -145,6 +151,26 @@ export function loadRuntimePluginCandidate(params: {
     activationState,
   });
   applyPluginManifestRecordDetails(record, manifestRecord);
+  const pluginRoot = safeRealpathOrResolve(candidate.rootDir);
+  const degradedPluginForId = findActiveDegradedPlugin(pluginId);
+  const degradedPlugin =
+    degradedPluginForId && degradedPluginMatchesRoot(degradedPluginForId, pluginRoot)
+      ? degradedPluginForId
+      : undefined;
+  const clearMismatchedQuarantineAfterLoad =
+    enableState.enabled && Boolean(degradedPluginForId) && !degradedPlugin;
+  if (enableState.enabled && degradedPlugin) {
+    // Startup verification owns this boot-stable quarantine. Return before
+    // artifact resolution so no top-level plugin code can execute this boot.
+    recordPluginConfiguredUnavailable({
+      registry,
+      record,
+      seenIds: state.seenIds,
+      origin: candidate.origin,
+      degradedPlugin,
+    });
+    return;
+  }
   const localSetupBasePolicyBlock = resolveManifestOwnerBasePolicyBlock({
     plugin: { id: pluginId },
     normalizedConfig: context.normalized,
@@ -186,7 +212,6 @@ export function loadRuntimePluginCandidate(params: {
     return;
   }
 
-  const pluginRoot = safeRealpathOrResolve(candidate.rootDir);
   const runtimeCandidateEntry = resolvePluginRuntimeArtifact({
     pluginId,
     entryKind: "runtime",
@@ -507,6 +532,11 @@ export function loadRuntimePluginCandidate(params: {
     registry.plugins.push(record);
     state.seenIds.set(pluginId, candidate.origin);
     transaction.commit({ activate: context.shouldActivate });
+    if (clearMismatchedQuarantineAfterLoad) {
+      // Plugin ids can intentionally shadow an installed source via load.paths.
+      // Clear stale install state only after the selected override registers.
+      clearActiveDegradedPlugin(pluginId);
+    }
   } catch (error) {
     transaction.rollback();
     recordPluginError({

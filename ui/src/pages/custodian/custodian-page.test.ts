@@ -13,9 +13,10 @@ import {
 } from "../../test-helpers/application-context.ts";
 import "./custodian-page.ts";
 
-const CUSTODIAN_QUESTION_MARKER = "openclaw-user-input";
-
-type TestCustodianPage = HTMLElement & { updateComplete: Promise<boolean> };
+type TestCustodianPage = HTMLElement & {
+  onboarding: boolean;
+  updateComplete: Promise<boolean>;
+};
 
 type ContextHarness = {
   context: ApplicationContext;
@@ -93,12 +94,16 @@ function createContext(request: ReturnType<typeof vi.fn>): ContextHarness {
   };
 }
 
-async function mountPage(context: ApplicationContext): Promise<{
+async function mountPage(
+  context: ApplicationContext,
+  options: { onboarding?: boolean } = {},
+): Promise<{
   page: TestCustodianPage;
   provider: ApplicationContextProvider;
 }> {
   const provider = createApplicationContextProvider(context);
   const page = document.createElement("openclaw-custodian-page") as TestCustodianPage;
+  page.onboarding = options.onboarding ?? true;
   provider.append(page);
   document.body.append(provider);
   await page.updateComplete;
@@ -115,27 +120,33 @@ describe("custodian page", () => {
     vi.restoreAllMocks();
   });
 
-  it("starts onboarding chat, renders marked choices, and replies with the exact label", async () => {
+  it("starts onboarding chat, renders typed choices, and sends the option reply", async () => {
     const question = {
-      id: "access",
-      header: "Access",
-      question: "How should OpenClaw work?",
+      id: "onboarding-next-step",
+      header: "Next step",
+      question: "What would you like to do first?",
       options: [
-        { label: "Full access", description: "Use announced defaults", recommended: true },
-        { label: "Ask first" },
+        {
+          label: "Talk to my agent",
+          reply: "talk to agent",
+          description: "Meet your agent.",
+          recommended: true,
+        },
+        { label: "Connect WhatsApp", reply: "connect whatsapp" },
       ],
-      isOther: false,
+      isOther: true,
     };
     const request = vi
       .fn()
       .mockResolvedValueOnce({
         sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
-        reply: `Choose one.\n<!-- ${CUSTODIAN_QUESTION_MARKER}\n${JSON.stringify(question)}\n-->`,
+        reply: "Welcome aboard.",
         action: "none",
+        question,
       })
       .mockResolvedValueOnce({
         sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
-        reply: "Good choice.",
+        reply: "Connecting WhatsApp.",
         action: "none",
       });
     const { context } = createContext(request);
@@ -146,21 +157,23 @@ describe("custodian page", () => {
     const card = page.querySelector("openclaw-option-card")!;
     await card.updateComplete;
     expect(page.querySelector(".option-card__choice--recommended")?.textContent).toContain(
-      "Full access",
+      "Talk to my agent",
     );
-    page.querySelector<HTMLButtonElement>('[data-option-value="Ask first"]')!.click();
+    page.querySelector<HTMLButtonElement>('[data-option-value="Connect WhatsApp"]')!.click();
 
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
     await page.updateComplete;
     expect(request.mock.calls[0]?.[0]).toBe("openclaw.chat");
     expect(request.mock.calls[0]?.[1]).toMatchObject({ welcomeVariant: "onboarding" });
+    // The engine receives the parseable reply text; the transcript shows the label.
     expect(request.mock.calls[1]?.[1]).toMatchObject({
       welcomeVariant: "onboarding",
-      message: "Ask first",
+      message: "connect whatsapp",
     });
-    expect(page.querySelector<HTMLButtonElement>('[data-option-value="Ask first"]')?.disabled).toBe(
-      true,
-    );
+    expect(page.textContent).toContain("Connect WhatsApp");
+    expect(
+      page.querySelector<HTMLButtonElement>('[data-option-value="Connect WhatsApp"]')?.disabled,
+    ).toBe(true);
   });
 
   it("keeps failed sensitive replies masked for correction and retry", async () => {
@@ -493,8 +506,9 @@ describe("custodian page", () => {
       .fn()
       .mockResolvedValueOnce({
         sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
-        reply: `Choose one.\n<!-- ${CUSTODIAN_QUESTION_MARKER}\n${JSON.stringify(question)}\n-->`,
+        reply: "Choose one.",
         action: "none",
+        question,
       })
       .mockResolvedValueOnce({
         sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
@@ -526,8 +540,9 @@ describe("custodian page", () => {
       .fn()
       .mockResolvedValueOnce({
         sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
-        reply: `Choose one.\n<!-- ${CUSTODIAN_QUESTION_MARKER}\n${JSON.stringify(question)}\n-->`,
+        reply: "Choose one.",
         action: "none",
+        question,
       })
       .mockResolvedValueOnce({
         sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
@@ -553,6 +568,57 @@ describe("custodian page", () => {
     );
   });
 
+  it("requests the normal caretaker greeting outside onboarding", async () => {
+    const request = vi.fn().mockResolvedValue({
+      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+      reply: "OpenClaw here. Everything is healthy.",
+      action: "none",
+    });
+    const { context } = createContext(request);
+    const { page } = await mountPage(context, { onboarding: false });
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    await page.updateComplete;
+
+    // The onboarding variant seeds the first-run setup proposal; permanent
+    // presence visits must not re-enter that flow.
+    expect(request.mock.calls[0]?.[1]).not.toHaveProperty("welcomeVariant");
+
+    const composer = page.querySelector<HTMLTextAreaElement>("textarea")!;
+    composer.value = "status";
+    composer.dispatchEvent(new Event("input"));
+    await page.updateComplete;
+    page.querySelector<HTMLButtonElement>(".custodian__composer button")!.click();
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    expect(request.mock.calls[1]?.[1]).not.toHaveProperty("welcomeVariant");
+    expect(request.mock.calls[1]?.[1]).toMatchObject({ message: "status" });
+  });
+
+  it("starts a fresh welcome when onboarding mode changes", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+        reply: "Normal caretaker conversation.",
+        action: "none",
+      })
+      .mockResolvedValueOnce({
+        sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+        reply: "Onboarding proposal.",
+        action: "none",
+      });
+    const { context } = createContext(request);
+    const { page } = await mountPage(context, { onboarding: false });
+    await vi.waitFor(() => expect(page.textContent).toContain("Normal caretaker conversation."));
+
+    page.onboarding = true;
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(page.textContent).toContain("Onboarding proposal."));
+
+    expect(page.textContent).not.toContain("Normal caretaker conversation.");
+    expect(request.mock.calls[1]?.[1]).toMatchObject({ welcomeVariant: "onboarding" });
+    expect(request.mock.calls[1]?.[1]).not.toHaveProperty("message");
+  });
+
   it("exits setup through normal chat navigation", async () => {
     const request = vi.fn().mockResolvedValue({
       sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
@@ -561,6 +627,7 @@ describe("custodian page", () => {
     });
     const { context } = createContext(request);
     const { page } = await mountPage(context);
+    page.onboarding = true;
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
     await page.updateComplete;
 

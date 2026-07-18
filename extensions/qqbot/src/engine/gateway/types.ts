@@ -21,7 +21,12 @@ export interface GatewayPluginRuntime {
         channel: string;
         accountId: string;
         peer: { kind: "group" | "direct"; id: string };
-      }) => { sessionKey: string; accountId: string; agentId?: string };
+      }) => {
+        sessionKey: string;
+        accountId: string;
+        agentId?: string;
+        dmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
+      };
     };
     commands?: {
       isControlCommandMessage?: (text?: string, cfg?: unknown) => boolean;

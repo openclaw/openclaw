@@ -7,28 +7,17 @@ import type { PluginBundleFormat } from "../../plugins/manifest-types.js";
 import { resolvePackageExtensionEntries, type PackageManifest } from "../../plugins/manifest.js";
 import { validatePackageExtensionEntriesForInstall } from "../../plugins/package-entry-resolution.js";
 import { auditOpenClawPeerDependencyLink } from "../../plugins/plugin-peer-link.js";
+import type { PluginVerificationFailureReason } from "../../plugins/runtime-degraded-state.js";
 import { resolveUserPath } from "../../utils.js";
-
-type PluginPayloadSmokeFailureReason =
-  | "missing-install-path"
-  | "missing-package-dir"
-  | "missing-package-json"
-  | "unreadable-package-json"
-  | "invalid-package-json"
-  | "missing-bundle-manifest"
-  | "invalid-bundle-manifest"
-  | "missing-main-entry"
-  | "missing-extension-entry"
-  | "missing-openclaw-peer-link";
 
 export type PluginPayloadSmokeFailure = {
   pluginId: string;
   installPath?: string;
-  reason: PluginPayloadSmokeFailureReason;
+  reason: PluginVerificationFailureReason;
   detail: string;
 };
 
-type PluginPayloadSmokeResult = {
+export type PluginPayloadSmokeResult = {
   checked: string[];
   failures: PluginPayloadSmokeFailure[];
 };
