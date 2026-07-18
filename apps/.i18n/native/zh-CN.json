@@ -7114,6 +7114,46 @@
       "translated": "$text "
     },
     {
+      "id": "native.android.d0d3975e637ca1a0",
+      "source": "Stop Dictation",
+      "translated": "停止听写"
+    },
+    {
+      "id": "native.android.6349fe65bab3c7f5",
+      "source": "Dictation",
+      "translated": "听写"
+    },
+    {
+      "id": "native.android.0a166c48e7cd6443",
+      "source": "On-device speech recognition is unavailable.",
+      "translated": "设备端语音识别不可用。"
+    },
+    {
+      "id": "native.android.2c4742b33e272b13",
+      "source": "Microphone permission is required.",
+      "translated": "需要麦克风权限。"
+    },
+    {
+      "id": "native.android.956057c06c3421af",
+      "source": "Recognizer busy",
+      "translated": "识别器正忙"
+    },
+    {
+      "id": "native.android.d33751c0ac92fe33",
+      "source": "Network error",
+      "translated": "网络错误"
+    },
+    {
+      "id": "native.android.53593582608e9873",
+      "source": "No matches",
+      "translated": "无匹配项"
+    },
+    {
+      "id": "native.android.ec1c1e50397faf58",
+      "source": "Speech recognition",
+      "translated": "语音识别"
+    },
+    {
       "id": "native.android.d1712183ebf86197",
       "source": "Widget unavailable",
       "translated": "小组件不可用"
@@ -7679,9 +7719,14 @@
       "translated": "向 OpenClaw 发送消息"
     },
     {
-      "id": "native.android.97602a28629a331f",
-      "source": "Open voice",
-      "translated": "打开语音"
+      "id": "native.android.9b42791ed9da90d3",
+      "source": "End Talk",
+      "translated": "结束对话"
+    },
+    {
+      "id": "native.android.1d55fe6bab0d3f74",
+      "source": "Start Talk",
+      "translated": "开始语音对话"
     },
     {
       "id": "native.android.6f4dc5330b262dea",

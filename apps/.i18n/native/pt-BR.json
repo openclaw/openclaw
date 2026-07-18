@@ -7114,6 +7114,46 @@
       "translated": "$text "
     },
     {
+      "id": "native.android.d0d3975e637ca1a0",
+      "source": "Stop Dictation",
+      "translated": "Parar ditado"
+    },
+    {
+      "id": "native.android.6349fe65bab3c7f5",
+      "source": "Dictation",
+      "translated": "Ditado"
+    },
+    {
+      "id": "native.android.0a166c48e7cd6443",
+      "source": "On-device speech recognition is unavailable.",
+      "translated": "O reconhecimento de fala no dispositivo não está disponível."
+    },
+    {
+      "id": "native.android.2c4742b33e272b13",
+      "source": "Microphone permission is required.",
+      "translated": "É necessário conceder permissão para usar o microfone."
+    },
+    {
+      "id": "native.android.956057c06c3421af",
+      "source": "Recognizer busy",
+      "translated": "Reconhecedor ocupado"
+    },
+    {
+      "id": "native.android.d33751c0ac92fe33",
+      "source": "Network error",
+      "translated": "Erro de rede"
+    },
+    {
+      "id": "native.android.53593582608e9873",
+      "source": "No matches",
+      "translated": "Nenhum resultado"
+    },
+    {
+      "id": "native.android.ec1c1e50397faf58",
+      "source": "Speech recognition",
+      "translated": "Reconhecimento de fala"
+    },
+    {
       "id": "native.android.d1712183ebf86197",
       "source": "Widget unavailable",
       "translated": "Widget indisponível"
@@ -7679,9 +7719,14 @@
       "translated": "Mensagem para o OpenClaw"
     },
     {
-      "id": "native.android.97602a28629a331f",
-      "source": "Open voice",
-      "translated": "Abrir voz"
+      "id": "native.android.9b42791ed9da90d3",
+      "source": "End Talk",
+      "translated": "Encerrar conversa"
+    },
+    {
+      "id": "native.android.1d55fe6bab0d3f74",
+      "source": "Start Talk",
+      "translated": "Iniciar conversa"
     },
     {
       "id": "native.android.6f4dc5330b262dea",

@@ -503,6 +503,7 @@ export type GatewaySessionRow = {
   archivedAt?: number;
   pinned?: boolean;
   pinnedAt?: number;
+  icon?: string;
   sessionId?: string;
   systemSent?: boolean;
   abortedLastRun?: boolean;

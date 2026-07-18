@@ -12,7 +12,7 @@ import {
 import "../../components/app-sidebar.ts";
 
 describe("AppSidebar update card wiring", () => {
-  it("shows OpenClaw in the default pinned routes", async () => {
+  it("shows OpenClaw in the default sidebar entries", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
 

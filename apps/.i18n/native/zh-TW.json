@@ -7114,6 +7114,46 @@
       "translated": "$text "
     },
     {
+      "id": "native.android.d0d3975e637ca1a0",
+      "source": "Stop Dictation",
+      "translated": "停止聽寫"
+    },
+    {
+      "id": "native.android.6349fe65bab3c7f5",
+      "source": "Dictation",
+      "translated": "聽寫"
+    },
+    {
+      "id": "native.android.0a166c48e7cd6443",
+      "source": "On-device speech recognition is unavailable.",
+      "translated": "無法使用裝置端語音辨識。"
+    },
+    {
+      "id": "native.android.2c4742b33e272b13",
+      "source": "Microphone permission is required.",
+      "translated": "需要麥克風權限。"
+    },
+    {
+      "id": "native.android.956057c06c3421af",
+      "source": "Recognizer busy",
+      "translated": "辨識器忙碌中"
+    },
+    {
+      "id": "native.android.d33751c0ac92fe33",
+      "source": "Network error",
+      "translated": "網路錯誤"
+    },
+    {
+      "id": "native.android.53593582608e9873",
+      "source": "No matches",
+      "translated": "沒有相符項目"
+    },
+    {
+      "id": "native.android.ec1c1e50397faf58",
+      "source": "Speech recognition",
+      "translated": "語音辨識"
+    },
+    {
       "id": "native.android.d1712183ebf86197",
       "source": "Widget unavailable",
       "translated": "小工具無法使用"
@@ -7679,9 +7719,14 @@
       "translated": "傳送訊息給 OpenClaw"
     },
     {
-      "id": "native.android.97602a28629a331f",
-      "source": "Open voice",
-      "translated": "開啟語音"
+      "id": "native.android.9b42791ed9da90d3",
+      "source": "End Talk",
+      "translated": "結束對話"
+    },
+    {
+      "id": "native.android.1d55fe6bab0d3f74",
+      "source": "Start Talk",
+      "translated": "開始對話"
     },
     {
       "id": "native.android.6f4dc5330b262dea",

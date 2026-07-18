@@ -7114,6 +7114,46 @@
       "translated": "$text "
     },
     {
+      "id": "native.android.d0d3975e637ca1a0",
+      "source": "Stop Dictation",
+      "translated": "받아쓰기 중지"
+    },
+    {
+      "id": "native.android.6349fe65bab3c7f5",
+      "source": "Dictation",
+      "translated": "받아쓰기"
+    },
+    {
+      "id": "native.android.0a166c48e7cd6443",
+      "source": "On-device speech recognition is unavailable.",
+      "translated": "기기 내 음성 인식을 사용할 수 없습니다."
+    },
+    {
+      "id": "native.android.2c4742b33e272b13",
+      "source": "Microphone permission is required.",
+      "translated": "마이크 권한이 필요합니다."
+    },
+    {
+      "id": "native.android.956057c06c3421af",
+      "source": "Recognizer busy",
+      "translated": "음성 인식기가 사용 중입니다"
+    },
+    {
+      "id": "native.android.d33751c0ac92fe33",
+      "source": "Network error",
+      "translated": "네트워크 오류"
+    },
+    {
+      "id": "native.android.53593582608e9873",
+      "source": "No matches",
+      "translated": "일치하는 항목 없음"
+    },
+    {
+      "id": "native.android.ec1c1e50397faf58",
+      "source": "Speech recognition",
+      "translated": "음성 인식"
+    },
+    {
       "id": "native.android.d1712183ebf86197",
       "source": "Widget unavailable",
       "translated": "위젯을 사용할 수 없음"
@@ -7679,9 +7719,14 @@
       "translated": "OpenClaw에 메시지 보내기"
     },
     {
-      "id": "native.android.97602a28629a331f",
-      "source": "Open voice",
-      "translated": "음성 열기"
+      "id": "native.android.9b42791ed9da90d3",
+      "source": "End Talk",
+      "translated": "대화 종료"
+    },
+    {
+      "id": "native.android.1d55fe6bab0d3f74",
+      "source": "Start Talk",
+      "translated": "대화 시작"
     },
     {
       "id": "native.android.6f4dc5330b262dea",

@@ -62,7 +62,7 @@ function makeSettings(gatewayUrl: string, overrides: Partial<UiSettings> = {}): 
     splitRatio: 0.6,
     navCollapsed: false,
     navWidth: 258,
-    sidebarPinnedRoutes: [],
+    sidebarEntries: [],
     ...overrides,
   };
 }
@@ -264,7 +264,7 @@ describe("loadSettings default gateway URL derivation", () => {
       splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 258,
-      sidebarPinnedRoutes: [],
+      sidebarEntries: [],
       textScale: 100,
     });
 
@@ -294,7 +294,7 @@ describe("loadSettings default gateway URL derivation", () => {
       splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 258,
-      sidebarPinnedRoutes: [],
+      sidebarEntries: [],
     });
 
     saveSettings({
@@ -309,7 +309,7 @@ describe("loadSettings default gateway URL derivation", () => {
       splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 258,
-      sidebarPinnedRoutes: [],
+      sidebarEntries: [],
     });
 
     const settings = loadSettings();
@@ -337,7 +337,7 @@ describe("loadSettings default gateway URL derivation", () => {
       splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 258,
-      sidebarPinnedRoutes: [],
+      sidebarEntries: [],
     });
     const settings = loadSettings();
     expect(settings.gatewayUrl).toBe(gwUrl);
@@ -354,7 +354,7 @@ describe("loadSettings default gateway URL derivation", () => {
       splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 258,
-      sidebarPinnedRoutes: [],
+      sidebarEntries: [],
       textScale: 100,
       sessionsByGateway: {
         [gwUrl]: {
@@ -386,11 +386,11 @@ describe("loadSettings default gateway URL derivation", () => {
       splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 258,
-      sidebarPinnedRoutes: ["tasks", "cron"],
+      sidebarEntries: ["route:tasks", "route:cron"],
       textScale: 100,
     });
 
-    expect(loadSettings().sidebarPinnedRoutes).toEqual(["tasks", "cron"]);
+    expect(loadSettings().sidebarEntries).toEqual(["route:tasks", "route:cron"]);
     expect(loadSettings().navWidth).toBe(258);
 
     // Corrupt the persisted list; load falls back to the default pinned set.
@@ -399,12 +399,36 @@ describe("loadSettings default gateway URL derivation", () => {
       string,
       unknown
     >;
-    persisted.sidebarPinnedRoutes = "tasks";
+    persisted.sidebarEntries = "route:tasks";
     persisted.navWidth = 220;
     localStorage.setItem(scopedKey, JSON.stringify(persisted));
 
-    expect(loadSettings().sidebarPinnedRoutes).toEqual(["custodian", "usage", "cron", "plugins"]);
+    expect(loadSettings().sidebarEntries).toEqual([
+      "route:custodian",
+      "route:usage",
+      "route:cron",
+      "route:plugins",
+    ]);
     expect(loadSettings().navWidth).toBe(258);
+  });
+
+  it("migrates the legacy route-only list once and writes only sidebarEntries", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/",
+    });
+    const gwUrl = expectedGatewayUrl("");
+    const scopedKey = `openclaw.control.settings.v1:${gwUrl}`;
+    const legacy = makeSettings(gwUrl) as unknown as Record<string, unknown>;
+    delete legacy.sidebarEntries;
+    legacy.sidebarPinnedRoutes = ["usage", "tasks", "usage", "worktrees", 7];
+    localStorage.setItem(scopedKey, JSON.stringify(legacy));
+
+    expect(loadSettings().sidebarEntries).toEqual(["route:usage", "route:tasks"]);
+    const migrated = JSON.parse(localStorage.getItem(scopedKey) ?? "{}") as Record<string, unknown>;
+    expect(migrated.sidebarEntries).toEqual(["route:usage", "route:tasks"]);
+    expect(migrated).not.toHaveProperty("sidebarPinnedRoutes");
   });
 
   it("persists pinned agents and drops malformed or duplicate entries", () => {
@@ -427,7 +451,7 @@ describe("loadSettings default gateway URL derivation", () => {
       splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 258,
-      sidebarPinnedRoutes: [],
+      sidebarEntries: [],
       pinnedAgentIds: ["main", "research"],
     });
     expect(loadSettings().pinnedAgentIds).toEqual(["main", "research"]);
@@ -604,7 +628,7 @@ describe("loadSettings default gateway URL derivation", () => {
       splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 258,
-      sidebarPinnedRoutes: [],
+      sidebarEntries: [],
     });
     saveSettings({
       gatewayUrl: gwUrl,
@@ -618,7 +642,7 @@ describe("loadSettings default gateway URL derivation", () => {
       splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 258,
-      sidebarPinnedRoutes: [],
+      sidebarEntries: [],
     });
 
     expect(loadSettings().token).toBe("");
@@ -645,7 +669,7 @@ describe("loadSettings default gateway URL derivation", () => {
       splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 320,
-      sidebarPinnedRoutes: [],
+      sidebarEntries: [],
     });
 
     const scopedKey = `openclaw.control.settings.v1:${gwUrl}`;
@@ -715,7 +739,7 @@ describe("loadSettings default gateway URL derivation", () => {
       splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 258,
-      sidebarPinnedRoutes: [],
+      sidebarEntries: [],
       customTheme,
     });
 
@@ -744,7 +768,7 @@ describe("loadSettings default gateway URL derivation", () => {
         splitRatio: 0.6,
         navCollapsed: false,
         navWidth: 258,
-        sidebarPinnedRoutes: [],
+        sidebarEntries: [],
         customTheme: {
           sourceUrl: "https://tweakcn.com/themes/broken",
           themeId: "broken",
@@ -787,7 +811,7 @@ describe("loadSettings default gateway URL derivation", () => {
       splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 258,
-      sidebarPinnedRoutes: [],
+      sidebarEntries: [],
     });
 
     const settings = loadSettings();
@@ -829,7 +853,7 @@ describe("loadSettings default gateway URL derivation", () => {
       splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 258,
-      sidebarPinnedRoutes: [],
+      sidebarEntries: [],
     });
 
     const persisted = JSON.parse(localStorage.getItem(scopedKey) ?? "{}");

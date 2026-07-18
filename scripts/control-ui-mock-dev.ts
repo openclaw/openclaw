@@ -996,10 +996,12 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
       status: "running",
       childSessions: ["agent:main:subagent:tax-receipts"],
       pinned: true,
+      icon: "name:spark",
     }),
     mainChildRow,
     sessionRow("agent:main:home-server", "Home server migration", baseTime - 240_000, {
       pinned: true,
+      icon: "🛠️",
     }),
     sessionRow("agent:main:whatsapp:group:family", "Family", baseTime - 90_000, {
       kind: "group",

@@ -364,6 +364,11 @@ export const SessionsPatchParamsSchema = closedObject({
   label: Type.Optional(Type.Union([SessionLabelString, Type.Null()])),
   /** User-defined organization bucket ("category", not chat-group); null clears it. */
   category: Type.Optional(Type.Union([SessionLabelString, Type.Null()])),
+  icon: Type.Optional(
+    Type.Union([NonEmptyString, Type.Null()], {
+      description: "Sidebar icon: one emoji, name:<id>, or svg:<svg ...>...</svg>.",
+    }),
+  ),
   archived: Type.Optional(Type.Boolean()),
   pinned: Type.Optional(Type.Boolean()),
   unread: Type.Optional(
