@@ -9,9 +9,14 @@ import { FsSafeError, pathExists, root as fsRoot } from "openclaw/plugin-sdk/sec
 import {
   activateMemoryWikiCompiledCacheOwner,
   invalidateMemoryWikiCompiledCache,
+  reconcileMemoryWikiCompiledCacheOwner,
 } from "./compiled-cache.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
-import { appendMemoryWikiLog, ensureMemoryWikiVaultGeneration } from "./log.js";
+import {
+  appendMemoryWikiLog,
+  ensureMemoryWikiVaultGeneration,
+  loadMemoryWikiValidatedVaultIdentity,
+} from "./log.js";
 import { WIKI_RAW_SOURCE_MARKER } from "./markdown.js";
 import { resolveMemoryWikiTimestamp } from "./time.js";
 
@@ -151,7 +156,16 @@ export async function initializeMemoryWikiVault(
       },
     });
   }
-  activateMemoryWikiCompiledCacheOwner(config, await ensureMemoryWikiVaultGeneration(rootDir));
+  const vaultGeneration = await ensureMemoryWikiVaultGeneration(rootDir);
+  const identity = await loadMemoryWikiValidatedVaultIdentity(rootDir);
+  activateMemoryWikiCompiledCacheOwner(
+    config,
+    vaultGeneration,
+    identity.compiledCachePublicationId,
+  );
+  await reconcileMemoryWikiCompiledCacheOwner(config, () =>
+    loadMemoryWikiValidatedVaultIdentity(rootDir),
+  );
 
   return {
     rootDir,

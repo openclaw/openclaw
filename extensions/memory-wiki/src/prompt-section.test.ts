@@ -9,7 +9,10 @@ import type { OpenClawConfig } from "../api.js";
 import {
   activateMemoryWikiCompiledCacheOwner,
   configureMemoryWikiCompiledCacheStore,
+  createMemoryWikiCompiledCachePublicationId,
+  resolveMemoryWikiCompiledCacheGeneration,
   writeMemoryWikiCompiledCache,
+  type MemoryWikiCompiledCacheSnapshot,
   type MemoryWikiCompiledDigestClaim,
   type MemoryWikiCompiledDigestPage,
 } from "./compiled-cache.js";
@@ -18,7 +21,13 @@ import {
   resolveMemoryWikiConfig,
   type ResolvedMemoryWikiConfig,
 } from "./config.js";
-import { ensureMemoryWikiVaultGeneration } from "./log.js";
+import {
+  appendMemoryWikiLog,
+  ensureMemoryWikiVaultGeneration,
+  loadMemoryWikiValidatedVaultIdentity,
+  loadMemoryWikiVaultIdentity,
+  resolveMemoryWikiVaultSourceGeneration,
+} from "./log.js";
 import {
   createWikiPromptSectionBuilder,
   createWikiPromptSectionPreparer,
@@ -64,7 +73,7 @@ async function seedCompiledDigest(params: {
     params.config,
     await ensureMemoryWikiVaultGeneration(params.config.vault.path),
   );
-  await writeMemoryWikiCompiledCache(params.config, {
+  const snapshot: MemoryWikiCompiledCacheSnapshot = {
     digest: {
       claimCount: params.claimCount,
       contradictionCount: params.contradictionCount ?? 0,
@@ -85,7 +94,39 @@ async function seedCompiledDigest(params: {
       })),
     },
     claims: [],
+  };
+  const publicationId = createMemoryWikiCompiledCachePublicationId();
+  const reservationId = createMemoryWikiCompiledCachePublicationId();
+  const parentPublicationId = (await loadMemoryWikiVaultIdentity(params.config.vault.path))
+    .compiledCachePublicationId;
+  await appendMemoryWikiLog(params.config.vault.path, {
+    type: "compile",
+    timestamp: "2026-07-17T00:00:00.000Z",
+    details: { compiledCacheReservationId: reservationId },
   });
+  const sourceGeneration = await resolveMemoryWikiVaultSourceGeneration(
+    params.config.vault.path,
+  );
+  await appendMemoryWikiLog(params.config.vault.path, {
+    type: "compile",
+    timestamp: "2026-07-17T00:00:00.000Z",
+    details: {
+      compiledCachePublicationId: publicationId,
+      compiledCacheParentPublicationId: parentPublicationId,
+      compiledCacheReservationId: reservationId,
+      compiledCacheSourceGeneration: sourceGeneration,
+    },
+  });
+  await writeMemoryWikiCompiledCache(
+    params.config,
+    snapshot,
+    resolveMemoryWikiCompiledCacheGeneration(snapshot),
+    publicationId,
+    parentPublicationId,
+    async () => {},
+    async () => {},
+    () => loadMemoryWikiValidatedVaultIdentity(params.config.vault.path),
+  );
 }
 
 function createStaticPreparer(config: ResolvedMemoryWikiConfig) {

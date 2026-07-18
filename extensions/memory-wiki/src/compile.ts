@@ -28,11 +28,18 @@ import {
   type WikiPageContradictionCluster,
 } from "./claim-health.js";
 import {
+  createMemoryWikiCompiledCachePublicationId,
+  resolveMemoryWikiCompiledCacheGeneration,
   writeMemoryWikiCompiledCache,
   type MemoryWikiCompiledCacheSnapshot,
 } from "./compiled-cache.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
-import { appendMemoryWikiLog } from "./log.js";
+import {
+  appendMemoryWikiLog,
+  loadMemoryWikiValidatedVaultIdentity,
+  loadMemoryWikiVaultIdentity,
+  resolveMemoryWikiVaultSourceGeneration,
+} from "./log.js";
 import {
   formatWikiLink,
   isUnmanagedRawSourceSummary,
@@ -1224,6 +1231,27 @@ async function compileMemoryWikiVaultUnlocked(
 ): Promise<CompileMemoryWikiResult> {
   await initializeMemoryWikiVault(config);
   const rootDir = config.vault.path;
+  const compiledInputIdentity = await loadMemoryWikiVaultIdentity(rootDir);
+  if (!compiledInputIdentity.vaultGeneration) {
+    throw new Error(`Memory Wiki vault generation is missing: ${rootDir}`);
+  }
+  const compiledCacheReservationId = createMemoryWikiCompiledCachePublicationId();
+  await appendMemoryWikiLog(rootDir, {
+    type: "compile",
+    timestamp: new Date().toISOString(),
+    details: {
+      compiledCacheReservationId,
+      compiledCacheParentPublicationId: compiledInputIdentity.compiledCachePublicationId,
+    },
+  });
+  const reservedIdentity = await loadMemoryWikiVaultIdentity(rootDir);
+  if (
+    reservedIdentity.vaultGeneration !== compiledInputIdentity.vaultGeneration ||
+    reservedIdentity.compiledCacheReservationId !== compiledCacheReservationId ||
+    reservedIdentity.compiledCachePublicationId !== compiledInputIdentity.compiledCachePublicationId
+  ) {
+    throw new Error("Memory Wiki vault changed before its compiled cache scan began.");
+  }
   const sourceSyncState = await readMemoryWikiSourceSyncState(rootDir);
   const managedImportedSourcePagePaths = new Set(
     Object.values(sourceSyncState.entries).map((entry) => entry.pagePath.split(path.sep).join("/")),
@@ -1247,7 +1275,10 @@ async function compileMemoryWikiVaultUnlocked(
     pages = scan.pages;
   }
   const counts = buildPageCounts(pages);
-  await writeMemoryWikiCompiledCache(config, buildCompiledCacheSnapshot(pages));
+  const compiledSnapshot = buildCompiledCacheSnapshot(pages);
+  const compiledCacheGeneration = resolveMemoryWikiCompiledCacheGeneration(compiledSnapshot);
+  const compiledCachePublicationId = createMemoryWikiCompiledCachePublicationId();
+  let compiledCacheSourceGeneration: string | undefined;
 
   const rootIndexPath = path.join(rootDir, "index.md");
   if (
@@ -1280,16 +1311,72 @@ async function compileMemoryWikiVaultUnlocked(
     }
   }
 
-  if (updatedFiles.length > 0) {
-    await appendMemoryWikiLog(rootDir, {
-      type: "compile",
-      timestamp: new Date().toISOString(),
-      details: {
-        pageCounts: counts,
-        updatedFiles: updatedFiles.map((filePath) => path.relative(rootDir, filePath)),
-      },
-    });
-  }
+  // Persist an immutable candidate, then commit its causal publication. A stale
+  // compiler cannot overwrite the accepted row or activate before validation.
+  await writeMemoryWikiCompiledCache(
+    config,
+    compiledSnapshot,
+    compiledCacheGeneration,
+    compiledCachePublicationId,
+    compiledInputIdentity.compiledCachePublicationId,
+    async () => {
+      const currentIdentity = await loadMemoryWikiVaultIdentity(rootDir);
+      if (
+        currentIdentity.vaultGeneration !== compiledInputIdentity.vaultGeneration ||
+        currentIdentity.compiledCacheReservationId !== compiledCacheReservationId ||
+        currentIdentity.compiledCachePublicationId !==
+          compiledInputIdentity.compiledCachePublicationId
+      ) {
+        throw new Error("Memory Wiki vault changed while its compiled cache was being built.");
+      }
+      const sourceGenerationBeforeScan = await resolveMemoryWikiVaultSourceGeneration(rootDir);
+      const verifiedScan = await readPageSummaries(rootDir);
+      const verifiedGeneration = resolveMemoryWikiCompiledCacheGeneration(
+        buildCompiledCacheSnapshot(verifiedScan.pages),
+      );
+      const sourceGenerationAfterScan = await resolveMemoryWikiVaultSourceGeneration(rootDir);
+      if (
+        verifiedGeneration !== compiledCacheGeneration ||
+        sourceGenerationAfterScan !== sourceGenerationBeforeScan
+      ) {
+        throw new Error("Memory Wiki vault changed while its compiled cache was being published.");
+      }
+      compiledCacheSourceGeneration = sourceGenerationAfterScan;
+      const verifiedIdentity = await loadMemoryWikiVaultIdentity(rootDir);
+      if (
+        verifiedIdentity.vaultGeneration !== compiledInputIdentity.vaultGeneration ||
+        verifiedIdentity.compiledCacheReservationId !== compiledCacheReservationId ||
+        verifiedIdentity.compiledCachePublicationId !==
+          compiledInputIdentity.compiledCachePublicationId
+      ) {
+        throw new Error("Memory Wiki vault changed while its compiled cache was being verified.");
+      }
+    },
+    async () => {
+      if (!compiledCacheSourceGeneration) {
+        throw new Error("Memory Wiki compiled cache source generation is missing.");
+      }
+      await appendMemoryWikiLog(rootDir, {
+        type: "compile",
+        timestamp: new Date().toISOString(),
+        details: {
+          compiledCachePublicationId,
+          compiledCacheParentPublicationId: compiledInputIdentity.compiledCachePublicationId,
+          compiledCacheReservationId,
+          compiledCacheSourceGeneration,
+        },
+      });
+    },
+    () => loadMemoryWikiValidatedVaultIdentity(rootDir),
+  );
+  await appendMemoryWikiLog(rootDir, {
+    type: "compile",
+    timestamp: new Date().toISOString(),
+    details: {
+      pageCounts: counts,
+      updatedFiles: updatedFiles.map((filePath) => path.relative(rootDir, filePath)),
+    },
+  });
 
   return {
     vaultRoot: rootDir,

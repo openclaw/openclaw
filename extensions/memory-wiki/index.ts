@@ -8,6 +8,7 @@ import {
   configureMemoryWikiCompiledCacheStore,
   createMemoryWikiCompiledCacheStore,
   deactivateMemoryWikiCompiledCacheOwnersExcept,
+  reconcileMemoryWikiCompiledCacheOwner,
   resolveMemoryWikiCompiledCacheOwnerId,
 } from "./src/compiled-cache.js";
 import {
@@ -23,7 +24,10 @@ import {
   configureMemoryWikiImportRunStateStore,
   createMemoryWikiImportRunStateStore,
 } from "./src/import-runs-state.js";
-import { ensureMemoryWikiVaultGeneration, loadMemoryWikiVaultGeneration } from "./src/log.js";
+import {
+  ensureMemoryWikiVaultGeneration,
+  loadMemoryWikiValidatedVaultIdentity,
+} from "./src/log.js";
 import {
   createWikiPromptSectionBuilder,
   createWikiPromptSectionPreparer,
@@ -40,10 +44,16 @@ import {
   createWikiStatusTool,
 } from "./src/tool.js";
 
-async function loadConfiguredVaultGeneration(vaultRoot: string): Promise<string | null> {
-  const generation = await loadMemoryWikiVaultGeneration(vaultRoot);
-  if (generation) {
-    return generation;
+async function loadConfiguredVaultIdentity(vaultRoot: string): Promise<{
+  vaultGeneration: string;
+  compiledCachePublicationId: string | null;
+} | null> {
+  const identity = await loadMemoryWikiValidatedVaultIdentity(vaultRoot);
+  if (identity.vaultGeneration) {
+    return {
+      vaultGeneration: identity.vaultGeneration,
+      compiledCachePublicationId: identity.compiledCachePublicationId,
+    };
   }
   try {
     const stat = await fs.stat(path.join(vaultRoot, ".openclaw-wiki", "log.jsonl"));
@@ -58,7 +68,10 @@ async function loadConfiguredVaultGeneration(vaultRoot: string): Promise<string 
   }
   // Cache data is rebuildable, but an initialized pre-generation vault still
   // needs a stable owner identity before an external compiler can publish it.
-  return ensureMemoryWikiVaultGeneration(vaultRoot);
+  return {
+    vaultGeneration: await ensureMemoryWikiVaultGeneration(vaultRoot),
+    compiledCachePublicationId: null,
+  };
 }
 
 export default definePluginEntry({
@@ -106,14 +119,38 @@ export default definePluginEntry({
             : resolveMemoryWikiConfiguredAgentIds(appConfig).map((agentId) =>
                 resolveConfig(agentId, appConfig),
               );
-        const activeOwnerIds = new Set<string>();
+        // Clear every previously trusted owner before fallible vault reads. A failed
+        // lifecycle refresh must leave prompt preparation closed, not stale-but-active.
+        deactivateMemoryWikiCompiledCacheOwnersExcept(new Set());
+        const preparedOwners: Array<{
+          config: ReturnType<MemoryWikiConfigResolver>;
+          identity: {
+            vaultGeneration: string;
+            compiledCachePublicationId: string | null;
+          };
+        }> = [];
         for (const activeConfig of activeConfigs) {
-          const generation = await loadConfiguredVaultGeneration(activeConfig.vault.path);
-          if (!generation) {
-            continue;
+          const identity = await loadConfiguredVaultIdentity(activeConfig.vault.path);
+          if (identity) {
+            preparedOwners.push({ config: activeConfig, identity });
           }
-          activateMemoryWikiCompiledCacheOwner(activeConfig, generation);
-          activeOwnerIds.add(resolveMemoryWikiCompiledCacheOwnerId(activeConfig));
+        }
+        const activeOwnerIds = new Set<string>();
+        try {
+          for (const { config: activeConfig, identity } of preparedOwners) {
+            activateMemoryWikiCompiledCacheOwner(
+              activeConfig,
+              identity.vaultGeneration,
+              identity.compiledCachePublicationId,
+            );
+            await reconcileMemoryWikiCompiledCacheOwner(activeConfig, () =>
+              loadMemoryWikiValidatedVaultIdentity(activeConfig.vault.path),
+            );
+            activeOwnerIds.add(resolveMemoryWikiCompiledCacheOwnerId(activeConfig));
+          }
+        } catch (error) {
+          deactivateMemoryWikiCompiledCacheOwnersExcept(new Set());
+          throw error;
         }
         deactivateMemoryWikiCompiledCacheOwnersExcept(activeOwnerIds);
         await compiledCacheStore.deleteOwnersExcept(activeOwnerIds);

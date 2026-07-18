@@ -198,11 +198,23 @@ claims:
 
 Compile reads wiki pages, normalizes summaries, and persists a machine-facing
 snapshot in OpenClaw's shared SQLite plugin state. Runtime code uses the
-lifecycle-owned in-memory snapshot instead of scraping Markdown or reading
-cache files on request.
+lifecycle-owned owner snapshot to load SQLite during async prompt preparation;
+synchronous prompt assembly never scrapes Markdown or reads cache files.
 Compiled output also powers first-pass wiki indexing for search/get, claim-id
 lookup back to owning pages, compact prompt supplements, and report
 generation.
+
+Source edits and vault restores become machine-facing only after the next
+compile. Restarting or refreshing the plugin lifecycle compares the vault's
+causally chained compile publication with SQLite and rejects a snapshot from a
+newer, rolled-back state. A compiler that started before the rollback cannot
+publish against the restored predecessor. Prompt preparation does not poll the
+vault or install file watchers.
+After rollback quarantine, a compile in the running process clears the owner
+immediately; a separate compiler process requires plugin lifecycle refresh so
+the daemon can confirm the new durable publication.
+Compiled caches are rebuildable: cache rows from before publication epochs are
+treated as misses and replaced by the next compile; they are not migrated.
 
 ## Dashboards and health reports
 
