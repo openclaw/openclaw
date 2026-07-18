@@ -48,7 +48,7 @@ export function extractServerUiPrefs(configObject: unknown): ServerUiPrefs {
   if (TEXT_SCALE_STOPS.includes(prefs.textScale as TextScaleStop)) {
     result.textScale = normalizeTextScale(prefs.textScale);
   }
-  if (isSupportedLocale(prefs.locale)) {
+  if (typeof prefs.locale === "string" && isSupportedLocale(prefs.locale)) {
     result.locale = prefs.locale;
   }
   if (typeof prefs.chatShowThinking === "boolean") {

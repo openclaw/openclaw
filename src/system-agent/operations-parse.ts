@@ -57,7 +57,6 @@ export type SystemAgentCommandDeps = {
   runGatewayStop?: () => Promise<void>;
   runPluginInstall?: (spec: string, runtime: RuntimeEnv) => Promise<void>;
   runPluginUninstall?: (pluginId: string, runtime: RuntimeEnv) => Promise<void>;
-  runPluginUninstall?: (pluginId: string, runtime: RuntimeEnv) => Promise<void>;
   runPluginsList?: (runtime: RuntimeEnv) => Promise<void>;
   runPluginsSearch?: (query: string, runtime: RuntimeEnv) => Promise<void>;
   runTui?: (opts: {
