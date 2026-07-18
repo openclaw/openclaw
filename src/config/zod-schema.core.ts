@@ -248,13 +248,13 @@ const ModelCompatSchema = z
     requiresMistralToolIds: z.boolean().optional(),
     requiresOpenAiAnthropicToolPayload: z.boolean().optional(),
     supportsLongCacheRetention: z.boolean().optional(),
-    openRouterRouting: z.record(z.string(), z.unknown()).optional(),
-    vercelGatewayRouting: z.record(z.string(), z.unknown()).optional(),
+    openRouterRouting: z.any().optional(),
+    vercelGatewayRouting: z.any().optional(),
     cacheControlFormat: z.literal("anthropic").optional(),
     sendSessionIdHeader: z.boolean().optional(),
     supportsEagerToolInputStreaming: z.boolean().optional(),
     sendSessionAffinityHeaders: z.boolean().optional(),
-    zaiToolStream: z.record(z.string(), z.unknown()).optional(),
+    zaiToolStream: z.any().optional(),
   })
   .strict()
   .optional();
