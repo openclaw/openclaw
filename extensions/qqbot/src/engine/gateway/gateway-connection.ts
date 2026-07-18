@@ -93,8 +93,8 @@ export class GatewayConnection {
       log: this.ctx.log,
       dispatch: (message, lifecycle) => this.dispatchIngressMessage(message, lifecycle, slashCtx),
     });
-    const stopped = new Promise<void>((resolve) => {
-      const stop = () => void this.shutdown().finally(resolve);
+    const stopped = new Promise<void>((resolve, reject) => {
+      const stop = () => void this.shutdown().then(resolve, reject);
       if (this.ctx.abortSignal.aborted) {
         stop();
         return;
@@ -136,18 +136,36 @@ export class GatewayConnection {
   private shutdown(): Promise<void> {
     this.shutdownTask ??= (async () => {
       const { account } = this.ctx;
+      const errors: unknown[] = [];
+      const runCleanup = async (
+        label: string,
+        cleanup: () => void | Promise<void>,
+      ): Promise<void> => {
+        try {
+          await cleanup();
+        } catch (error) {
+          errors.push(error);
+          this.ctx.log?.error(`QQBot gateway shutdown ${label} failed: ${String(error)}`);
+        }
+      };
       this.isAborted = true;
       if (this.reconnectTimer) {
         clearTimeout(this.reconnectTimer);
         this.reconnectTimer = null;
       }
-      this.cleanup();
-      await this.ingress?.stop();
-      await this.socketMessageTail;
-      await this.msgQueue.stop();
-      stopBackgroundTokenRefresh(account.appId);
-      flushKnownUsers();
-      flushRefIndex();
+      await runCleanup("socket cleanup", () => this.cleanup());
+      await runCleanup("ingress stop", () => this.ingress?.stop());
+      await runCleanup("socket drain", () => this.socketMessageTail);
+      await runCleanup("message queue stop", () => this.msgQueue.stop());
+      await runCleanup("token refresh stop", () => stopBackgroundTokenRefresh(account.appId));
+      await runCleanup("known-user flush", () => flushKnownUsers());
+      await runCleanup("reference-index flush", () => flushRefIndex());
+      if (errors.length === 1) {
+        throw errors[0];
+      }
+      if (errors.length > 1) {
+        throw new AggregateError(errors, "QQBot gateway shutdown failed.");
+      }
     })();
     return this.shutdownTask;
   }

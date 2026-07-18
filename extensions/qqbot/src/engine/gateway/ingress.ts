@@ -14,6 +14,7 @@ import {
   parseQQBotClaimedEnvelope,
   QQBotIngressPayloadError,
 } from "./ingress-envelope.js";
+import { isQQBotAuthenticationFailure } from "./ingress-errors.js";
 import type { QueuedMessage } from "./message-queue.js";
 import type { EngineLogger, GatewayPluginRuntime, QQBotIngressLifecycle } from "./types.js";
 
@@ -46,32 +47,6 @@ export class QQBotIngressAdmissionError extends Error {
     super(message, options);
     this.name = "QQBotIngressAdmissionError";
   }
-}
-
-function isQQBotAuthenticationFailure(error: unknown): boolean {
-  let current: unknown = error;
-  const seen = new Set<unknown>();
-  while (current && typeof current === "object" && !seen.has(current)) {
-    seen.add(current);
-    const candidate = current as {
-      httpStatus?: unknown;
-      status?: unknown;
-      statusCode?: unknown;
-      cause?: unknown;
-    };
-    if (
-      candidate.httpStatus === 401 ||
-      candidate.httpStatus === 403 ||
-      candidate.status === 401 ||
-      candidate.status === 403 ||
-      candidate.statusCode === 401 ||
-      candidate.statusCode === 403
-    ) {
-      return true;
-    }
-    current = candidate.cause;
-  }
-  return false;
 }
 
 export type QQBotIngressMonitor = {

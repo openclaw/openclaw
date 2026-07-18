@@ -2,6 +2,7 @@
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { formatErrorMessage } from "../utils/format.js";
+import { isQQBotAuthenticationFailure } from "./ingress-errors.js";
 import { buildQQBotMergedIngressLifecycle } from "./message-queue-ingress.js";
 import type { QQBotIngressLifecycle } from "./types.js";
 
@@ -266,7 +267,10 @@ export function createMessageQueue(ctx: MessageQueueContext): MessageQueue {
     try {
       await handleMessageFnRef!(msg);
     } catch (err) {
-      await trackIngressSettlement(msg, "abandoned");
+      const permanentFailure = isQQBotAuthenticationFailure(err);
+      // Deferred lifecycles cannot return errors to the drain. Permanent auth failures must
+      // tombstone here because releasing them would replay a turn that cannot succeed.
+      await trackIngressSettlement(msg, permanentFailure ? "completed" : "abandoned");
       log?.error(`${label} error for ${peerId}: ${formatErrorMessage(err)}`);
     }
   };

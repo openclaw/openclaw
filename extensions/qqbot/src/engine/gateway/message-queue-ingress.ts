@@ -2,6 +2,46 @@
 import type { QueuedMessage } from "./message-queue.js";
 import type { QQBotIngressLifecycle } from "./types.js";
 
+async function settleAll(
+  lifecycles: readonly QQBotIngressLifecycle[],
+  label: string,
+  settle: (lifecycle: QQBotIngressLifecycle) => void | Promise<void>,
+): Promise<void> {
+  const results = await Promise.allSettled(
+    lifecycles.map(async (lifecycle) => await settle(lifecycle)),
+  );
+  const errors = results
+    .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+    .map((result) => result.reason);
+  if (errors.length === 1) {
+    throw errors[0];
+  }
+  if (errors.length > 1) {
+    throw new AggregateError(errors, `QQBot merged ingress ${label} failed.`);
+  }
+}
+
+function notifyAll(
+  lifecycles: readonly QQBotIngressLifecycle[],
+  label: string,
+  notify: (lifecycle: QQBotIngressLifecycle) => void,
+): void {
+  const errors: unknown[] = [];
+  for (const lifecycle of lifecycles) {
+    try {
+      notify(lifecycle);
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  if (errors.length === 1) {
+    throw errors[0];
+  }
+  if (errors.length > 1) {
+    throw new AggregateError(errors, `QQBot merged ingress ${label} failed.`);
+  }
+}
+
 export function buildQQBotMergedIngressLifecycle(
   messages: readonly QueuedMessage[],
 ): QQBotIngressLifecycle | undefined {
@@ -17,25 +57,15 @@ export function buildQQBotMergedIngressLifecycle(
   }
   return {
     abortSignal: AbortSignal.any(lifecycles.map((lifecycle) => lifecycle.abortSignal)),
-    onAdopted: async () => {
-      for (const lifecycle of lifecycles) {
-        await lifecycle.onAdopted();
-      }
-    },
+    onAdopted: () => settleAll(lifecycles, "adoption", (lifecycle) => lifecycle.onAdopted()),
     onDeferred: () => {
-      for (const lifecycle of lifecycles) {
-        lifecycle.onDeferred();
-      }
+      notifyAll(lifecycles, "deferral", (lifecycle) => lifecycle.onDeferred());
     },
     onAdoptionFinalizing: () => {
-      for (const lifecycle of lifecycles) {
-        lifecycle.onAdoptionFinalizing();
-      }
+      notifyAll(lifecycles, "adoption finalization", (lifecycle) =>
+        lifecycle.onAdoptionFinalizing(),
+      );
     },
-    onAbandoned: async () => {
-      for (const lifecycle of lifecycles) {
-        await lifecycle.onAbandoned();
-      }
-    },
+    onAbandoned: () => settleAll(lifecycles, "abandonment", (lifecycle) => lifecycle.onAbandoned()),
   };
 }

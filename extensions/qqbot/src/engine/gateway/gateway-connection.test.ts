@@ -3,6 +3,9 @@ import { EventEmitter } from "node:events";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EngineAdapters } from "../adapter/index.js";
+import { stopBackgroundTokenRefresh } from "../messaging/sender.js";
+import { flushRefIndex } from "../ref/store.js";
+import { flushKnownUsers } from "../session/known-users.js";
 import { GatewayEvent, GatewayOp, MAX_RECONNECT_ATTEMPTS } from "./constants.js";
 import { GatewayConnection } from "./gateway-connection.js";
 import { QQBotIngressAdmissionError, type QQBotIngressMonitor } from "./ingress.js";
@@ -287,6 +290,28 @@ describe("GatewayConnection disconnect status", () => {
 
     expect(onDisconnected).not.toHaveBeenCalled();
     await started;
+  });
+
+  it("continues shutdown cleanup and rejects when one cleanup step fails", async () => {
+    const cleanupError = new Error("ingress stop failed");
+    const stop = vi.fn(async () => {
+      throw cleanupError;
+    });
+    const { controller, started } = await startConnection({
+      createIngressMonitor: () => ({
+        receive: vi.fn(async () => {}),
+        stop,
+        waitForIdle: vi.fn(async () => {}),
+      }),
+    });
+
+    controller.abort();
+
+    await expect(started).rejects.toBe(cleanupError);
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(stopBackgroundTokenRefresh).toHaveBeenCalledWith("test-app");
+    expect(flushKnownUsers).toHaveBeenCalledTimes(1);
+    expect(flushRefIndex).toHaveBeenCalledTimes(1);
   });
 
   it("terminates the socket when durable admission fails closed", async () => {

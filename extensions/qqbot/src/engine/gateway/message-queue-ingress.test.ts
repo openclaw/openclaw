@@ -1,5 +1,6 @@
 // QQBot queue ingress tests cover merged lifecycle fan-out and shutdown release.
 import { describe, expect, it, vi } from "vitest";
+import { buildQQBotMergedIngressLifecycle } from "./message-queue-ingress.js";
 import { createMessageQueue, type QueuedMessage } from "./message-queue.js";
 import type { QQBotIngressLifecycle } from "./types.js";
 
@@ -58,6 +59,49 @@ describe("QQBot message queue ingress lifecycle", () => {
       expect(first.adopted).toHaveBeenCalledTimes(1);
       expect(second.adopted).toHaveBeenCalledTimes(1);
     });
+    await queue.stop();
+  });
+
+  it("settles every merged claim when one adoption callback fails", async () => {
+    const adoptionError = new Error("first adoption failed");
+    const first = testLifecycle();
+    const second = testLifecycle();
+    first.adopted.mockRejectedValueOnce(adoptionError);
+    const lifecycle = buildQQBotMergedIngressLifecycle([
+      groupMessage("first", first.lifecycle),
+      groupMessage("second", second.lifecycle),
+    ]);
+
+    await expect(lifecycle?.onAdopted()).rejects.toBe(adoptionError);
+    expect(first.adopted).toHaveBeenCalledTimes(1);
+    expect(second.adopted).toHaveBeenCalledTimes(1);
+  });
+
+  it("settles every merged claim when one abandonment callback fails", async () => {
+    const abandonmentError = new Error("first abandonment failed");
+    const first = testLifecycle();
+    const second = testLifecycle();
+    first.abandoned.mockRejectedValueOnce(abandonmentError);
+    const lifecycle = buildQQBotMergedIngressLifecycle([
+      groupMessage("first", first.lifecycle),
+      groupMessage("second", second.lifecycle),
+    ]);
+
+    await expect(lifecycle?.onAbandoned()).rejects.toBe(abandonmentError);
+    expect(first.abandoned).toHaveBeenCalledTimes(1);
+    expect(second.abandoned).toHaveBeenCalledTimes(1);
+  });
+
+  it("tombstones deferred permanent auth failures instead of releasing them", async () => {
+    const tracked = testLifecycle();
+    const queue = createMessageQueue({ accountId: "default", isAborted: () => false });
+    queue.startProcessor(async () => {
+      throw Object.assign(new Error("unauthorized"), { httpStatus: 401 });
+    });
+    queue.enqueue(groupMessage("auth-failure", tracked.lifecycle));
+
+    await vi.waitFor(() => expect(tracked.adopted).toHaveBeenCalledTimes(1));
+    expect(tracked.abandoned).not.toHaveBeenCalled();
     await queue.stop();
   });
 
