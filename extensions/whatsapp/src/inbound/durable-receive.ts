@@ -52,7 +52,7 @@ type WhatsAppIngressFacts = {
   laneKey: string;
 };
 
-export class WhatsAppIngressPermanentError extends Error {
+class WhatsAppIngressPermanentError extends Error {
   constructor(
     readonly reason: "invalid-payload" | "missing-message-key" | "event-id-mismatch",
     message: string,
@@ -74,7 +74,7 @@ export function createWhatsAppDurableInboundMessageId(params: {
   return createHash("sha256").update(`${params.remoteJid}\n${params.id}`).digest("hex");
 }
 
-export function serializeWhatsAppDurableInboundMessage(
+function serializeWhatsAppDurableInboundMessage(
   message: WAMessage,
 ): SerializedWhatsAppDurableInboundMessage {
   const timestamp = message.messageTimestamp;
@@ -94,7 +94,7 @@ export function serializeWhatsAppDurableInboundMessage(
   return JSON.parse(JSON.stringify(serializedMessage, BufferJSON.replacer)) as PluginJsonValue;
 }
 
-export function deserializeWhatsAppDurableInboundMessage(
+function deserializeWhatsAppDurableInboundMessage(
   message: SerializedWhatsAppDurableInboundMessage,
 ): WAMessage {
   try {
