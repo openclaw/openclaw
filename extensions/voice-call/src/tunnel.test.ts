@@ -381,4 +381,46 @@ describe("voice-call tunnels", () => {
     await expect(tunnel.stop()).resolves.toBeUndefined();
     expect(proc.killedWith).toBeNull();
   });
+
+  it("unrefs the ngrok startup timeout so it cannot keep the host process alive", async () => {
+    const unrefSpy = vi.fn();
+    const setTimeoutOriginal = globalThis.setTimeout.bind(globalThis);
+    const setTimeoutSpy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockImplementation((handler: TimerHandler, timeout?: number) => {
+        const id = Reflect.apply(setTimeoutOriginal, globalThis, [handler, timeout]);
+        Object.defineProperty(id, "unref", { value: unrefSpy, configurable: true });
+        return id;
+      });
+    try {
+      const proc = nextProcess();
+      const result = startNgrokTunnel({ port: 3334, path: "/hook" });
+      emitNgrokUrl(proc, "https://unref.ngrok.io");
+      await result;
+      expect(unrefSpy).toHaveBeenCalled();
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
+  it("rejects and kills the process when the ngrok url never arrives", async () => {
+    let timeoutHandler: (() => void) | undefined;
+    const setTimeoutOriginal = globalThis.setTimeout.bind(globalThis);
+    const setTimeoutSpy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockImplementation((handler: TimerHandler) => {
+        timeoutHandler = handler as () => void;
+        return Reflect.apply(setTimeoutOriginal, globalThis, [() => {}, 30_000]);
+      });
+    try {
+      const proc = nextProcess();
+      const result = startNgrokTunnel({ port: 3334, path: "/hook" });
+      expect(timeoutHandler).toBeTypeOf("function");
+      timeoutHandler!();
+      await expect(result).rejects.toThrow(/timed out/i);
+      expect(proc.killedWith).toBe("SIGTERM");
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
 });
