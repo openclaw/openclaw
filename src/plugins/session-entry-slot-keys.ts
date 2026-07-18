@@ -18,6 +18,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "updatedAt",
   "archivedAt",
   "pinnedAt",
+  "icon",
   "lastReadAt",
   "markedUnreadAt",
   "lastActivityAt",

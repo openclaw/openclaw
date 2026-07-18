@@ -43,7 +43,7 @@
 }
 
 .config-mode-toggle__btn.active {
-  background: var(--accent);
+  background: var(--primary);
   color: white;
   box-shadow: 0 1px 3px var(--accent-subtle);
 }
@@ -224,6 +224,17 @@
   padding: 20px 22px;
   min-width: 0;
   scroll-behavior: smooth;
+}
+
+/* The schema form nests a full settings-page inside this scroller; both carry
+   top padding, which stacks into a dead band between the accordion nav and
+   the first section. Keep one spacing owner. */
+.config-lead + .config-content {
+  padding-top: 0;
+}
+
+.config-content > .settings-page {
+  padding-top: 0;
 }
 
 /* ===========================================

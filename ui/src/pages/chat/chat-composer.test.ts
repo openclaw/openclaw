@@ -6,7 +6,15 @@ import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { renderChatComposer, resetChatComposerState } from "./components/chat-composer.ts";
 
-vi.mock("../../components/icons.ts", () => ({ icons: {} }));
+vi.mock("../../components/icons.ts", async () => {
+  const { html: litHtml } = await import("lit");
+  return {
+    icons: {
+      camera: litHtml`<svg data-icon="camera"></svg>`,
+      cameraOff: litHtml`<svg data-icon="camera-off"></svg>`,
+    },
+  };
+});
 
 type ComposerProps = Parameters<typeof renderChatComposer>[0];
 
@@ -163,6 +171,21 @@ describe("renderChatComposer controls", () => {
     expect(button(failed.container, t("chat.composer.turnCameraOn")).disabled).toBe(true);
   });
 
+  it("renders the camera-off glyph while the talk camera is enabled", () => {
+    const { container } = renderComposer({
+      onToggleRealtimeTalk: vi.fn(),
+      onToggleRealtimeCamera: vi.fn(),
+      realtimeTalkActive: true,
+      realtimeTalkStatus: "listening",
+      realtimeTalkVideoCapable: true,
+      realtimeTalkVideoStream: {} as MediaStream,
+    });
+
+    const cameraToggle = button(container, t("chat.composer.turnCameraOff"));
+    expect(cameraToggle.querySelector('[data-icon="camera-off"]')).not.toBeNull();
+    expect(cameraToggle.querySelector('[data-icon="camera"]')).toBeNull();
+  });
+
   it("sends attachment-only drafts instead of starting voice", () => {
     const onSend = vi.fn();
     const onToggleRealtimeTalk = vi.fn();
@@ -290,6 +313,71 @@ describe("renderChatComposer controls", () => {
 });
 
 describe("renderChatComposer status", () => {
+  it("swaps the expanded question with the composer and restores its draft and focus", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const prompt = questionPrompt("question-swap", "Choose a release target");
+    const composerProps = props({
+      paneId: "question-swap-pane",
+      sessionKey: "queue-test",
+      draft: "Keep this draft",
+      gatewayQuestionPrompts: [],
+      composerControls: html`<button type="button">Model</button>`,
+      onRequestUpdate: vi.fn(),
+    });
+    composerProps.onDraftChange = (next) => {
+      composerProps.draft = next;
+    };
+    const draw = () => render(renderChatComposer(composerProps), container);
+
+    draw();
+    const initialTextarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
+    initialTextarea.focus();
+    expect(document.activeElement).toBe(initialTextarea);
+    initialTextarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    initialTextarea.value = "Keep this draft while composing";
+    initialTextarea.dispatchEvent(
+      new InputEvent("input", { bubbles: true, inputType: "insertCompositionText" }),
+    );
+
+    composerProps.gatewayQuestionPrompts = [prompt];
+    draw();
+    let panel = container.querySelector("openclaw-chat-question-panel") as HTMLElement & {
+      updateComplete: Promise<unknown>;
+    };
+    await panel.updateComplete;
+    expect(container.querySelector(".agent-chat__input")).toBeNull();
+    expect(container.querySelector(".agent-chat__composer-footer")).toBeNull();
+    expect(document.activeElement).toBe(panel.querySelector(".chat-question-panel"));
+    expect(composerProps.draft).toBe("Keep this draft while composing");
+
+    composerProps.draft = "Host updated this draft while the question was open";
+
+    panel.querySelector<HTMLButtonElement>(".chat-question-panel__collapse")?.click();
+    draw();
+    await Promise.resolve();
+    let textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
+    expect(textarea.value).toBe("Host updated this draft while the question was open");
+    expect(document.activeElement).toBe(textarea);
+
+    panel = container.querySelector("openclaw-chat-question-panel") as typeof panel;
+    panel.querySelector<HTMLButtonElement>(".chat-question-panel__collapsed-button")?.click();
+    draw();
+    await panel.updateComplete;
+    expect(container.querySelector(".agent-chat__input")).toBeNull();
+    expect(document.activeElement).toBe(panel.querySelector(".chat-question-panel"));
+
+    prompt.status = "answered";
+    draw();
+    await Promise.resolve();
+    textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
+    expect(textarea.value).toBe("Host updated this draft while the question was open");
+    expect(document.activeElement).toBe(textarea);
+    expect(container.querySelector("openclaw-chat-question-panel")).toBeNull();
+
+    container.remove();
+  });
+
   it("keeps every concurrent gateway question reachable", async () => {
     const container = document.createElement("div");
     const onRequestUpdate = vi.fn();
@@ -445,7 +533,7 @@ describe("renderChatComposer status", () => {
       },
     });
     expect(container.querySelector(".context-ring")?.getAttribute("aria-label")).toBe(
-      "Session context usage: 46k of 200k (23%)",
+      "Thread context usage: 46k of 200k (23%)",
     );
     expect(container.querySelector(".context-usage__plan-header")?.textContent).toContain(
       "Plan usage",

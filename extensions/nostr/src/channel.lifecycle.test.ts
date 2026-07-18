@@ -23,7 +23,7 @@ vi.mock("./nostr-bus.js", () => ({
 function createMockBus() {
   return {
     sendDm: vi.fn(async () => {}),
-    close: vi.fn(),
+    close: vi.fn(async () => {}),
     getMetrics: vi.fn(() => ({ counters: {} })),
     publishProfile: vi.fn(),
     getProfileState: vi.fn(async () => null),

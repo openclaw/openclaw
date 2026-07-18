@@ -6,6 +6,11 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.ts";
 import type { SecretRef } from "../config/types.secrets.js";
 import { resolveAuthProfileSecretOwnerId } from "./runtime-auth-profile-owner.js";
 import { listSecretResolutionErrorOwners } from "./runtime-degraded-state.js";
+import {
+  canonicalizeSecretRefsForOwnerContract,
+  combineSecretOwnerContractDigests,
+  digestSecretOwnerContract,
+} from "./runtime-owner-contract.js";
 import { activateSecretsRuntimeSnapshotState } from "./runtime-state.js";
 import { asConfig, setupSecretsRuntimeSnapshotTestHooks } from "./runtime.test-support.ts";
 
@@ -284,6 +289,23 @@ describe("secrets runtime degraded-owner attribution", () => {
         ownerKind: "account",
         ownerId: accountOwnerId,
         refKeys: ["file:missing:/active"],
+        contractDigest: combineSecretOwnerContractDigests([
+          digestSecretOwnerContract(
+            canonicalizeSecretRefsForOwnerContract(
+              {
+                profile: {
+                  type: "api_key",
+                  provider: "openai",
+                  key: "dummy",
+                  keyRef: activeRef,
+                },
+                providerId: "openai",
+                configuredProvider: undefined,
+              },
+              undefined,
+            ),
+          ),
+        ]),
       },
     ];
     activateSecretsRuntimeSnapshotState({

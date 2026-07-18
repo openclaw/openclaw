@@ -169,6 +169,7 @@ describe("mcp-app-view localization", () => {
 
     for (const content of [
       [{ type: "text", text: "/approve" }],
+      [{ type: "text", text: "!pwd" }],
       [{ type: "text", text: "   " }],
       [{ type: "text", text: "x".repeat(4_001) }],
       [{ type: "image" }],
@@ -179,6 +180,8 @@ describe("mcp-app-view localization", () => {
     ]) {
       expect(await send(content)).toEqual({ isError: true });
     }
+    expect(confirm).toHaveBeenCalledTimes(2);
+    expect(received).toEqual(["Show details"]);
 
     for (let index = 2; index <= 9; index += 1) {
       expect(await send([{ type: "text", text: `Prompt ${index}` }])).toEqual({});

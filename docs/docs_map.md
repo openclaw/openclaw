@@ -65,6 +65,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Quick start
   - H2: How cron works
   - H2: Schedule types
+  - H3: Dynamic cadence (pacing)
   - H3: Day-of-month and day-of-week use OR logic
   - H2: Event triggers (condition watchers)
   - H2: Payloads
@@ -1143,6 +1144,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Naming
   - H2: Finding IDs (directory)
   - H2: Limits
+  - H2: Inbound durability
   - H2: Access control (DMs)
   - H2: Group access (optional)
   - H3: Group mention gating
@@ -2470,6 +2472,17 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Highlights
   - H2: Full list
+  - H2: Related
+
+## concepts/main-session.md
+
+- Route: /concepts/main-session
+- Headings:
+  - H2: Home
+  - H2: What flows into the main session
+  - H2: Memory across resets and conversations
+  - H2: A rolling session, not an immortal one
+  - H2: When you want isolation instead
   - H2: Related
 
 ## concepts/managed-worktrees.md
@@ -7377,6 +7390,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Message adapter
   - H3: Inbound ingress (experimental)
   - H3: Durable ingress and replay dedupe
+  - H4: Transport classes and retention
+  - H4: At-least-once side effects
   - H4: Account-scoped restart contract
   - H3: Typing indicators
   - H3: Media source params
@@ -9517,6 +9532,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /tools/ask-user
 - Headings:
   - H2: Answer a question
+  - H2: Platform behavior
   - H2: Timeout and no answer
   - H2: Tool schema
   - H2: Model guidance
@@ -10183,6 +10199,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /tools/show-widget
 - Headings:
   - H2: How widgets work
+  - H2: Design system
   - H2: Use the tool
   - H2: Interactive widgets
   - H2: Security and storage
@@ -10510,6 +10527,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Gateway host status
   - H2: Language support
   - H2: Appearance themes
+  - H2: OpenClaw system care
   - H2: Manage plugins
   - H2: Apps and extensions
   - H2: Sidebar navigation
@@ -10534,6 +10552,26 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Blank Control UI page
   - H2: Debugging/testing: dev server + remote Gateway
   - H2: Related
+
+## web/dashboard-architecture.md
+
+- Route: /web/dashboard-architecture
+- Headings:
+  - H2: Vision
+  - H2: Concepts
+  - H2: UX flows
+  - H2: Interaction tiers
+  - H2: Widget model and hosting
+  - H3: Widgets host content; MCP apps are one content kind
+  - H3: Transcript display: one widget card
+  - H3: Server-sourced widgets (pinned MCP apps)
+  - H2: Layout: fluid grid
+  - H2: Data model (per-agent DB)
+  - H2: Protocol surface
+  - H2: Agent tools
+  - H2: What this replaces
+  - H2: Non-goals (this program)
+  - H2: Implementation plan
 
 ## web/dashboard.md
 

@@ -1053,6 +1053,7 @@ class NodeRuntime private constructor(
   private val voiceCaptureOwnershipLock = Any()
   private var voiceWakeSuppressionRevision = 0L
   private var voiceNoteOwnsMic = false
+  private var dictationOwnsMic = false
   private var cameraAudioOwnsMic = false
   private val voiceReplySpeechDepth = AtomicInteger(0)
   private val voiceCapturePreparationMutex = Mutex()
@@ -2433,6 +2434,8 @@ class NodeRuntime private constructor(
     answers: Map<String, List<String>>,
   ) = chat.resolveQuestion(id, answers)
 
+  fun skipChatQuestion(id: String) = chat.skipQuestion(id)
+
   private fun applyScreenshotFixture() {
     check(BuildConfig.DEBUG) { "Android screenshot fixtures require a debug build" }
     _serverName.value = "OpenClaw Gateway"
@@ -2885,7 +2888,7 @@ class NodeRuntime private constructor(
   internal fun tryAcquireVoiceNoteMic(): Boolean {
     val suppressionUpdate =
       synchronized(voiceCaptureOwnershipLock) {
-        if (voiceNoteOwnsMic || !isVoiceCaptureModeActive(VoiceCaptureMode.Off)) return false
+        if (voiceNoteOwnsMic || dictationOwnsMic || !isVoiceCaptureModeActive(VoiceCaptureMode.Off)) return false
         voiceNoteOwnsMic = true
         createVoiceWakeSuppressionUpdateLocked(VoiceWakeSuppressionReason.VoiceNote, true)
       }
@@ -2898,6 +2901,33 @@ class NodeRuntime private constructor(
       synchronized(voiceCaptureOwnershipLock) {
         voiceNoteOwnsMic = false
         createVoiceWakeSuppressionUpdateLocked(VoiceWakeSuppressionReason.VoiceNote, false)
+      }
+    applyVoiceWakeSuppression(suppressionUpdate)
+  }
+
+  internal fun tryAcquireDictationMic(): Boolean {
+    val suppressionUpdate =
+      synchronized(voiceCaptureOwnershipLock) {
+        if (
+          dictationOwnsMic ||
+          voiceNoteOwnsMic ||
+          cameraAudioOwnsMic ||
+          !isVoiceCaptureModeActive(VoiceCaptureMode.Off)
+        ) {
+          return false
+        }
+        dictationOwnsMic = true
+        createVoiceWakeSuppressionUpdateLocked(VoiceWakeSuppressionReason.Dictation, true)
+      }
+    applyVoiceWakeSuppression(suppressionUpdate)
+    return true
+  }
+
+  internal fun releaseDictationMic() {
+    val suppressionUpdate =
+      synchronized(voiceCaptureOwnershipLock) {
+        dictationOwnsMic = false
+        createVoiceWakeSuppressionUpdateLocked(VoiceWakeSuppressionReason.Dictation, false)
       }
     applyVoiceWakeSuppression(suppressionUpdate)
   }
@@ -3063,6 +3093,9 @@ class NodeRuntime private constructor(
           }
           if (voiceNoteOwnsMic) {
             throw IllegalStateException("MIC_BUSY: voice note recording is active")
+          }
+          if (dictationOwnsMic) {
+            throw IllegalStateException("MIC_BUSY: dictation is active")
           }
           if (cameraAudioOwnsMic) {
             throw IllegalStateException("MIC_BUSY: camera audio recording is active")
@@ -3392,7 +3425,7 @@ class NodeRuntime private constructor(
     var startAfterSuppression: VoiceCaptureMode? = null
     val suppressionUpdate =
       synchronized(voiceCaptureOwnershipLock) {
-        if (mode != VoiceCaptureMode.Off && voiceNoteOwnsMic) return
+        if (mode != VoiceCaptureMode.Off && (voiceNoteOwnsMic || dictationOwnsMic)) return
         if (mode != VoiceCaptureMode.Off && cameraAudioOwnsMic) return
         talkPttCommandEpoch.incrementAndGet()
         voiceCaptureOwnershipEpoch.incrementAndGet()
@@ -3496,7 +3529,12 @@ class NodeRuntime private constructor(
     val suppressionUpdate =
       synchronized(voiceCaptureOwnershipLock) {
         if (active) {
-          if (cameraAudioOwnsMic || voiceNoteOwnsMic || !isVoiceCaptureModeActive(VoiceCaptureMode.Off)) {
+          if (
+            cameraAudioOwnsMic ||
+            voiceNoteOwnsMic ||
+            dictationOwnsMic ||
+            !isVoiceCaptureModeActive(VoiceCaptureMode.Off)
+          ) {
             return false
           }
           cameraAudioOwnsMic = true

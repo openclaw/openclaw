@@ -2,8 +2,10 @@
 import "../../styles/lobster-pet.css";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
+import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { QueueMode } from "../../../../src/auto-reply/reply/queue/types.js";
 import type { ConfigUiHints } from "../../api/types.ts";
+import type { NativeNotificationsPermission } from "../../app/native-notifications.ts";
 import {
   normalizeChatFollowUpMode,
   normalizeChatSendShortcut,
@@ -38,6 +40,7 @@ import {
   canonicalLobsterLook,
   renderLobsterSvg,
 } from "../../components/lobster-pet.ts";
+import { highlightJsonHtml } from "../../components/markdown.ts";
 import {
   renderSettingsRow,
   renderSettingsSegmented,
@@ -49,11 +52,9 @@ import { t } from "../../i18n/index.ts";
 import type { ConfigAutoSaveStatus } from "../../lib/config/index.ts";
 import { isJson5Warm, parseJson5Text, warmJson5 } from "../../lib/json5-runtime.ts";
 import type { RealtimeTalkInputDevice } from "../chat/realtime-talk-input.ts";
+import { renderNotificationsSection, type WebPushUiState } from "./notifications-section.ts";
 import { renderSettingsSelectRow } from "./settings-select-row.ts";
-import {
-  APPEARANCE_SETTINGS_TARGET_IDS,
-  COMMUNICATION_SETTINGS_TARGET_IDS,
-} from "./settings-targets.ts";
+import { APPEARANCE_SETTINGS_TARGET_IDS } from "./settings-targets.ts";
 
 // The config editor is where JSON5 text first appears; warm the parser with
 // the page instead of racing the first raw-draft keystroke.
@@ -65,14 +66,6 @@ const TEXT_SCALE_LABELS: Record<TextScaleStop, string> = {
   110: "configView.textSizes.large",
   125: "configView.textSizes.xl",
   140: "configView.textSizes.xxl",
-};
-
-type WebPushUiState = {
-  supported: boolean;
-  permission: NotificationPermission | "unsupported";
-  subscribed: boolean;
-  loading: boolean;
-  error?: string | null;
 };
 
 type SettingsMicrophoneState = {
@@ -146,6 +139,9 @@ export type ConfigProps = {
   viewState: ConfigViewState;
   rawAvailable?: boolean;
   showModeToggle?: boolean;
+  /** Set when the form renders under a composite page's custom rows; an empty
+   *  schema section stays silent instead of claiming the page is empty. */
+  embeddedEditor?: boolean;
   formValue: Record<string, unknown> | null;
   originalValue: Record<string, unknown> | null;
   activeSection: string | null;
@@ -203,6 +199,9 @@ export type ConfigProps = {
   includeVirtualSections?: boolean;
   /** Layout mode: "tabs" (default flat scroll) or "accordion" (grouped collapsible). */
   settingsLayout?: "tabs" | "accordion";
+  nativeNotifications?: { permission: NativeNotificationsPermission | "unknown" };
+  onNativeNotificationsRequestPermission?: () => void;
+  onNativeNotificationsSendTest?: () => void;
   webPush?: WebPushUiState;
   onWebPushSubscribe?: () => void;
   onWebPushUnsubscribe?: () => void;
@@ -871,7 +870,9 @@ const BUILTIN_THEME_OPTIONS: ThemeOption[] = [
    back to the spark icon otherwise. */
 function renderThemeCardVisual(id: ThemeName, activeTheme: ThemeName) {
   if (id === "custom" && activeTheme !== "custom") {
-    return html`<span class="settings-theme-card__icon" aria-hidden="true">${icons.spark}</span>`;
+    return html`<span class="settings-theme-card__icon" aria-hidden="true"
+      >${icons.download}</span
+    >`;
   }
   return html`
     <span class="settings-theme-card__palette" aria-hidden="true">
@@ -906,156 +907,6 @@ function focusCustomThemeImportInput() {
     input.focus();
     input.select();
   });
-}
-
-function renderNotificationsSection(props: ConfigProps) {
-  const push = props.webPush;
-  if (!push) {
-    return html`
-      <div class="settings-page">
-        <section class="settings-section" id=${COMMUNICATION_SETTINGS_TARGET_IDS.notifications}>
-          <div class="settings-section__header">
-            <h2 class="settings-section__heading">${t("configView.notifications.title")}</h2>
-            <div class="settings-section__actions">
-              ${renderSettingsStatus({
-                kind: "muted",
-                label: t("configView.notifications.unavailable"),
-              })}
-            </div>
-          </div>
-          <div class="settings-group">
-            <div class="settings-row">
-              <div class="settings-row__text">
-                <span class="settings-row__desc">
-                  ${t("configView.notifications.unavailableHint")}
-                </span>
-              </div>
-            </div>
-          </div>
-        </section>
-      </div>
-    `;
-  }
-
-  const permissionLabel =
-    push.permission === "granted"
-      ? t("configView.notifications.granted")
-      : push.permission === "denied"
-        ? t("configView.notifications.denied")
-        : push.permission === "default"
-          ? t("configView.notifications.notRequested")
-          : t("configView.notifications.unsupported");
-  const subscriptionLabel = push.subscribed
-    ? t("configView.notifications.subscribed")
-    : t("configView.notifications.notSubscribed");
-  const statusLabel = !push.supported
-    ? t("configView.notifications.unsupported")
-    : push.permission === "denied"
-      ? t("configView.notifications.blocked")
-      : push.subscribed
-        ? t("configView.notifications.subscribed")
-        : t("configView.notifications.ready");
-  const statusKind = !push.supported
-    ? ("muted" as const)
-    : push.permission === "denied"
-      ? ("danger" as const)
-      : push.subscribed
-        ? ("ok" as const)
-        : ("accent" as const);
-
-  const actionButtons =
-    push.supported && push.permission !== "denied"
-      ? push.subscribed
-        ? html`
-            <button
-              class="btn"
-              ?disabled=${push.loading || !props.connected}
-              @click=${() => props.onWebPushUnsubscribe?.()}
-            >
-              ${icons.x} ${t("configView.notifications.unsubscribe")}
-            </button>
-            <button
-              class="btn primary"
-              ?disabled=${push.loading || !props.connected}
-              @click=${() => props.onWebPushTest?.()}
-            >
-              ${icons.send} ${t("configView.notifications.sendTest")}
-            </button>
-          `
-        : html`
-            <button
-              class="btn primary"
-              ?disabled=${push.loading || !props.connected}
-              @click=${() => props.onWebPushSubscribe?.()}
-            >
-              ${push.loading ? icons.loader : nothing}
-              ${push.loading
-                ? t("configView.notifications.subscribing")
-                : t("configView.notifications.enable")}
-            </button>
-          `
-      : nothing;
-
-  return html`
-    <div class="settings-page">
-      <section class="settings-section" id=${COMMUNICATION_SETTINGS_TARGET_IDS.notifications}>
-        <div class="settings-section__header">
-          <h2 class="settings-section__heading">${t("configView.notifications.title")}</h2>
-          <div class="settings-section__actions">
-            ${renderSettingsStatus({ kind: statusKind, label: statusLabel })}
-          </div>
-        </div>
-        <p class="settings-section__desc">${t("configView.notifications.hint")}</p>
-        <div class="settings-group">
-          ${renderSettingsRow({
-            title: t("configView.notifications.browserSupport"),
-            control: renderSettingsValue(
-              push.supported
-                ? t("configView.notifications.available")
-                : t("configView.notifications.notSupported"),
-            ),
-          })}
-          ${renderSettingsRow({
-            title: t("configView.notifications.permission"),
-            control: renderSettingsValue(permissionLabel),
-          })}
-          ${renderSettingsRow({
-            title: t("configView.notifications.status"),
-            control: renderSettingsStatus({
-              kind: push.subscribed ? "ok" : "muted",
-              label: subscriptionLabel,
-            }),
-          })}
-          ${actionButtons !== nothing
-            ? html`
-                <div class="settings-row">
-                  <div class="settings-row__control">${actionButtons}</div>
-                </div>
-              `
-            : nothing}
-          ${push.permission === "denied"
-            ? renderSettingsRow({
-                title: t("configView.notifications.blocked"),
-                description: t("configView.notifications.blockedHint"),
-                control: renderSettingsStatus({
-                  kind: "danger",
-                  label: t("configView.notifications.denied"),
-                }),
-              })
-            : nothing}
-          ${push.error
-            ? html`
-                <div class="settings-row">
-                  <div class="settings-row__text">
-                    <span class="cfg-field__error">${push.error}</span>
-                  </div>
-                </div>
-              `
-            : nothing}
-        </div>
-      </section>
-    </div>
-  `;
 }
 
 function renderSettingsMicrophoneField(props: ConfigProps) {
@@ -2041,6 +1892,7 @@ export function renderConfig(props: ConfigProps) {
                       schema: analysis.schema,
                       uiHints: props.uiHints,
                       value: props.formValue,
+                      embedded: props.embeddedEditor === true,
                       rawAvailable,
                       disabled: configBusy || !props.formValue,
                       unsupportedPaths: analysis.unsupportedPaths,
@@ -2182,7 +2034,8 @@ export function renderConfig(props: ConfigProps) {
               })()}
       ${props.issues.length > 0
         ? html`<div class="callout danger" style="margin-top: 12px;">
-            <pre class="code-block">${JSON.stringify(props.issues, null, 2)}</pre>
+            <pre class="code-block">
+${unsafeHTML(highlightJsonHtml(JSON.stringify(props.issues, null, 2)))}</pre>
           </div>`
         : nothing}
     </div>

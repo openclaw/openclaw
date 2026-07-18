@@ -847,6 +847,88 @@ describe("openclaw state database", () => {
     ).toBeUndefined();
   });
 
+  it("adopts a canonical device identity seed database without losing the identity", () => {
+    const stateDir = createTempStateDir();
+    const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+    fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+    const { DatabaseSync } = requireNodeSqlite();
+    const seed = new DatabaseSync(databasePath);
+    seed.exec(`
+CREATE TABLE device_identities (
+  identity_key TEXT NOT NULL PRIMARY KEY,
+  device_id TEXT NOT NULL,
+  public_key_pem TEXT NOT NULL,
+  private_key_pem TEXT NOT NULL,
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL
+) STRICT;
+CREATE INDEX idx_device_identities_device
+  ON device_identities(device_id, updated_at_ms DESC);
+INSERT INTO device_identities VALUES (
+  'primary', 'device-1', 'public-key', 'private-key', 10, 20
+);
+`);
+    seed.close();
+
+    const database = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+
+    expect(
+      database.db.prepare("SELECT * FROM device_identities WHERE identity_key = 'primary'").get(),
+    ).toEqual({
+      identity_key: "primary",
+      device_id: "device-1",
+      public_key_pem: "public-key",
+      private_key_pem: "private-key",
+      created_at_ms: 10,
+      updated_at_ms: 20,
+    });
+    expect(readSqliteNumberPragma(database.db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+    expect(collectSqliteSchemaShape(database.db)).toEqual(
+      createSqliteSchemaShapeFromSql(new URL("./openclaw-state-schema.sql", import.meta.url)),
+    );
+  });
+
+  it("adopts a canonical native PortGuardian seed without losing records", () => {
+    const stateDir = createTempStateDir();
+    const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+    fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+    const { DatabaseSync } = requireNodeSqlite();
+    const seed = new DatabaseSync(databasePath);
+    seed.exec(`
+CREATE TABLE macos_port_guardian_records (
+  pid INTEGER NOT NULL PRIMARY KEY,
+  port INTEGER NOT NULL,
+  command TEXT NOT NULL,
+  mode TEXT NOT NULL,
+  timestamp REAL NOT NULL
+) STRICT;
+CREATE INDEX idx_macos_port_guardian_records_port
+  ON macos_port_guardian_records(port, timestamp DESC);
+INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 'remote', 42.5);
+`);
+    seed.close();
+
+    const database = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+
+    expect(
+      database.db.prepare("SELECT * FROM macos_port_guardian_records WHERE pid = 4242").get(),
+    ).toEqual({
+      pid: 4242,
+      port: 18789,
+      command: "/usr/bin/ssh",
+      mode: "remote",
+      timestamp: 42.5,
+    });
+    expect(readSqliteNumberPragma(database.db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+    expect(collectSqliteSchemaShape(database.db)).toEqual(
+      createSqliteSchemaShapeFromSql(new URL("./openclaw-state-schema.sql", import.meta.url)),
+    );
+  });
+
   it("doctor migrates existing APNs tombstone tables to STRICT without losing rows", () => {
     const stateDir = createTempStateDir();
     const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
@@ -2127,6 +2209,34 @@ describe("openclaw state database", () => {
       )
       .get() as { name?: string } | undefined;
     expect(credentialTable?.name).toBe("worker_environment_credentials");
+  });
+
+  it("adds staged worker-result refs during the v5 state migration", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const databasePath = openOpenClawStateDatabase(options).path;
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacyDb = new DatabaseSync(databasePath);
+    legacyDb.exec(`
+      ALTER TABLE worker_workspace_pending_results DROP COLUMN staged_result_ref;
+      PRAGMA user_version = 4;
+      UPDATE schema_meta SET schema_version = 4 WHERE meta_key = 'primary';
+    `);
+    legacyDb.close();
+
+    const reopened = openOpenClawStateDatabase(options);
+    const columns = reopened.db
+      .prepare("PRAGMA table_info(worker_workspace_pending_results)")
+      .all() as Array<{ name?: string }>;
+    expect(columns.map((column) => column.name)).toContain("staged_result_ref");
+    expect(readSqliteNumberPragma(reopened.db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+    expect(
+      reopened.db
+        .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
+        .get(),
+    ).toEqual({ schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
   });
 
   it("adds worker transcript commit tables to existing state databases", () => {

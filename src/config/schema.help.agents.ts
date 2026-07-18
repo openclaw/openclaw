@@ -76,6 +76,10 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "agents.list.*.utilityModel":
     "Optional per-agent utility model override for short internal tasks. Overrides agents.defaults.utilityModel.",
   "agents.list.*.models": "Per-agent model catalog overrides keyed by full provider/model IDs.",
+  "agents.list.*.modelPolicy":
+    "Per-agent model override policy. An explicit allow list replaces the default policy for this agent.",
+  "agents.list.*.modelPolicy.allow":
+    'Allowed model override refs for this agent. Accepts aliases, full "provider/model" refs, and provider wildcards; empty permits any model.',
   "agents.list.*.models.*.agentRuntime":
     "Optional per-model runtime policy for this agent. Use this for agent-specific model exceptions instead of setting a whole-agent runtime.",
   "agents.list.*.models.*.agentRuntime.id":

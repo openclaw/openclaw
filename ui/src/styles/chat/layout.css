@@ -1592,7 +1592,7 @@ openclaw-chat-page {
   border: 0;
 }
 
-.agent-chat__composer-combobox > textarea {
+.agent-chat__composer-combobox > :is(textarea, input) {
   width: 100%;
   min-height: 36px;
   max-height: calc(7em + 24px);
@@ -1609,16 +1609,16 @@ openclaw-chat-page {
   box-sizing: border-box;
 }
 
-.agent-chat__composer-combobox > textarea:focus-visible {
+.agent-chat__composer-combobox > :is(textarea, input):focus-visible {
   box-shadow: none;
 }
 
-.agent-chat__composer-combobox > textarea::placeholder {
+.agent-chat__composer-combobox > :is(textarea, input)::placeholder {
   color: var(--muted);
 }
 
 @media (hover: none) and (pointer: coarse) {
-  .agent-chat__composer-combobox > textarea {
+  .agent-chat__composer-combobox > :is(textarea, input) {
     font-size: var(--control-ui-input-text-size);
   }
 }
@@ -2211,7 +2211,7 @@ openclaw-chat-page {
   height: 36px;
   border-radius: var(--radius-full);
   border: none;
-  background: var(--accent);
+  background: var(--primary);
   color: var(--primary-foreground);
   box-shadow: 0 1px 3px var(--accent-subtle);
   flex-shrink: 0;
@@ -2249,6 +2249,10 @@ openclaw-chat-page {
 .chat-send-btn:hover:not(:disabled) {
   background: var(--accent-hover);
   box-shadow: 0 2px 12px var(--accent-glow);
+}
+
+:root[data-theme="dark"] .chat-send-btn:hover:not(:disabled) {
+  background: var(--primary-hover);
 }
 
 /* Outline (not box-shadow) so the hover rules' higher-specificity box-shadow
@@ -2406,7 +2410,7 @@ openclaw-chat-page {
 }
 
 @media (min-width: 1600px) {
-  .agent-chat__composer-combobox > textarea {
+  .agent-chat__composer-combobox > :is(textarea, input) {
     max-height: calc(7em + 12px);
   }
 
@@ -2447,7 +2451,7 @@ openclaw-chat-page {
     align-self: stretch;
   }
 
-  .agent-chat__composer-combobox > textarea {
+  .agent-chat__composer-combobox > :is(textarea, input) {
     flex: 1 1 auto;
     min-height: 44px;
     max-height: calc(7em + var(--chat-box-inset) + var(--chat-box-inset));
@@ -2563,7 +2567,7 @@ openclaw-chat-page {
     background: var(--card);
   }
 
-  .agent-chat__composer-combobox > textarea {
+  .agent-chat__composer-combobox > :is(textarea, input) {
     min-height: 48px;
     max-height: 56px;
     overflow-y: auto;
@@ -3899,7 +3903,7 @@ openclaw-chat-page {
     gap: 6px;
   }
 
-  .agent-chat__composer-shell:has(.agent-chat__composer-combobox > textarea:focus) {
+  .agent-chat__composer-shell:has(.agent-chat__composer-combobox > :is(textarea, input):focus) {
     margin-bottom: 0;
   }
 
@@ -3919,7 +3923,7 @@ openclaw-chat-page {
     margin-bottom: calc(14px + max(var(--safe-area-bottom), 34px));
   }
 
-  .agent-chat__composer-shell:has(.agent-chat__composer-combobox > textarea:focus) {
+  .agent-chat__composer-shell:has(.agent-chat__composer-combobox > :is(textarea, input):focus) {
     margin-bottom: 0;
   }
 }
