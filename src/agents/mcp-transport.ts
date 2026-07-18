@@ -13,6 +13,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import type { FetchLike, Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logDebug } from "../logger.js";
+import { truncateUtf8Suffix } from "../utils/utf8-truncate.js";
 import { resolveMcpAuthProfileId, withMcpAuthProfileBearer } from "./mcp-auth-profile.js";
 import {
   buildMcpHttpFetch,
@@ -33,6 +34,11 @@ type ResolvedMcpTransport = {
   detachStderr?: () => void;
 };
 
+// MCP servers may emit progress output without newlines. Keep the diagnostic tail
+// bounded so one noisy server cannot grow the gateway heap indefinitely.
+const MAX_MCP_STDERR_PENDING_LINE_BYTES = 8 * 1024;
+const MCP_STDERR_TRUNCATED_PREFIX = "[stderr line truncated] ";
+
 function attachStderrLogging(serverName: string, transport: OpenClawStdioClientTransport) {
   const stderr = transport.stderr;
   if (!stderr || typeof stderr.on !== "function") {
@@ -40,9 +46,11 @@ function attachStderrLogging(serverName: string, transport: OpenClawStdioClientT
   }
   const decoder = new StringDecoder("utf8");
   let pendingLine = "";
+  let pendingLineTruncated = false;
   let detached = false;
-  const logLine = (line: string) => {
-    const trimmed = line.trim();
+  let finalized = false;
+  const logLine = (line: string, truncated = false) => {
+    const trimmed = `${truncated ? MCP_STDERR_TRUNCATED_PREFIX : ""}${line}`.trim();
     if (trimmed) {
       logDebug(`bundle-mcp:${serverName}: ${trimmed}`);
     }
@@ -52,13 +60,34 @@ function attachStderrLogging(serverName: string, transport: OpenClawStdioClientT
     if (!message) {
       return;
     }
+    const hadTruncatedCarry = pendingLineTruncated;
     const lines = (pendingLine + message).split(/\r?\n/);
     pendingLine = lines.pop() ?? "";
-    for (const line of lines) {
-      logLine(line);
+    pendingLineTruncated = lines.length === 0 && hadTruncatedCarry;
+    for (const [index, line] of lines.entries()) {
+      const boundedLine = truncateUtf8Suffix(line, MAX_MCP_STDERR_PENDING_LINE_BYTES);
+      logLine(boundedLine, (index === 0 && hadTruncatedCarry) || boundedLine !== line);
+    }
+    const boundedPendingLine = truncateUtf8Suffix(pendingLine, MAX_MCP_STDERR_PENDING_LINE_BYTES);
+    if (boundedPendingLine !== pendingLine) {
+      pendingLine = boundedPendingLine;
+      pendingLineTruncated = true;
     }
   };
+  // Natural end covers MCP crashes; close is a fallback for abrupt stream teardown.
+  // Explicit detach shares the same finalizer and removes listeners first.
+  const finalize = () => {
+    if (finalized) {
+      return;
+    }
+    finalized = true;
+    logLine(pendingLine + decoder.end(), pendingLineTruncated);
+    pendingLine = "";
+    pendingLineTruncated = false;
+  };
   stderr.on("data", onData);
+  stderr.on("end", finalize);
+  stderr.on("close", finalize);
   return () => {
     if (detached) {
       return;
@@ -66,11 +95,14 @@ function attachStderrLogging(serverName: string, transport: OpenClawStdioClientT
     detached = true;
     if (typeof stderr.off === "function") {
       stderr.off("data", onData);
+      stderr.off("end", finalize);
+      stderr.off("close", finalize);
     } else if (typeof stderr.removeListener === "function") {
       stderr.removeListener("data", onData);
+      stderr.removeListener("end", finalize);
+      stderr.removeListener("close", finalize);
     }
-    logLine(pendingLine + decoder.end());
-    pendingLine = "";
+    finalize();
   };
 }
 
