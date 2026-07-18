@@ -157,9 +157,10 @@
   pointer-events: auto;
 }
 
-.chat-group:hover .chat-group-footer button:disabled {
+.chat-group:hover .chat-group-footer button:disabled,
+.chat-reply-context-menu button:disabled {
   opacity: 0.3;
-  cursor: not-allowed;
+  pointer-events: none;
 }
 
 .chat-group-footer button:hover,
