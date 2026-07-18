@@ -24,12 +24,12 @@ import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-ke
 import { visitSessionMessagesAsync } from "../session-transcript-readers.js";
 import { loadSessionEntry } from "../session-utils.js";
 import {
+  execOpenPath,
   formatOpenPathError,
   isHeadlessOpenPathError,
   resolveOpenPathCommand,
   sanitizePathForLog,
 } from "./open-path.js";
-import { execSessionWorkspaceOpen } from "./session-files-reveal-open.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 import {
@@ -828,7 +828,7 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      await execSessionWorkspaceOpen(resolveOpenPathCommand(workspaceRoot));
+      await execOpenPath(resolveOpenPathCommand(workspaceRoot));
       respond(true, { ok: true, path: workspaceRoot });
     } catch (error) {
       const errorMessage = formatOpenPathError(error);

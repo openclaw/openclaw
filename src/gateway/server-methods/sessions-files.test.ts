@@ -10,16 +10,17 @@ import { sessionsFilesHandlers } from "./sessions-files.js";
 import { updateWorkspaceFile } from "./workspace-fs.js";
 
 const hoisted = vi.hoisted(() => ({
-  execSessionWorkspaceOpen: vi.fn(),
+  execOpenPath: vi.fn(),
   loadSessionEntry: vi.fn(),
   resolveAgentWorkspaceDir: vi.fn(),
   resolveDefaultAgentId: vi.fn(),
   visitSessionMessagesAsync: vi.fn(),
 }));
 
-vi.mock("./session-files-reveal-open.js", () => ({
-  execSessionWorkspaceOpen: hoisted.execSessionWorkspaceOpen,
-}));
+vi.mock("./open-path.js", async () => {
+  const actual = await vi.importActual<typeof import("./open-path.js")>("./open-path.js");
+  return { ...actual, execOpenPath: hoisted.execOpenPath };
+});
 
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveAgentWorkspaceDir: hoisted.resolveAgentWorkspaceDir,
@@ -121,7 +122,7 @@ describe("sessions.files RPC handlers", () => {
     workspaceRoot = fs.mkdtempSync(path.join(tempRoot, "openclaw-session-files-test-"));
     hoisted.resolveDefaultAgentId.mockReturnValue("main");
     hoisted.resolveAgentWorkspaceDir.mockReturnValue(workspaceRoot);
-    hoisted.execSessionWorkspaceOpen.mockResolvedValue(undefined);
+    hoisted.execOpenPath.mockResolvedValue(undefined);
     writeWorkspaceFile(workspaceRoot, "package.json", '{"name":"openclaw-test"}\n');
     writeWorkspaceFile(workspaceRoot, "src/readme.md", "# Read me\n");
     writeWorkspaceFile(workspaceRoot, "ui/chat.ts", "export const chat = true;\n");
@@ -195,7 +196,7 @@ describe("sessions.files RPC handlers", () => {
     expect(revealPayload).toEqual({ ok: true, path: listPayload.root });
     // Compare against the resolver's own output so the assertion holds on
     // every supported platform (open / xdg-open / PowerShell Start-Process).
-    expect(hoisted.execSessionWorkspaceOpen).toHaveBeenCalledWith(
+    expect(hoisted.execOpenPath).toHaveBeenCalledWith(
       resolveOpenPathCommand(listPayload.root as string),
     );
   });
@@ -215,7 +216,7 @@ describe("sessions.files RPC handlers", () => {
 
     expect(payload).toMatchObject({ ok: false, path: workspaceRoot });
     expect(payload.error).toContain("runs remotely");
-    expect(hoisted.execSessionWorkspaceOpen).not.toHaveBeenCalled();
+    expect(hoisted.execOpenPath).not.toHaveBeenCalled();
   });
 
   it("refuses to reveal an exec-node session workspace", async () => {
@@ -237,7 +238,7 @@ describe("sessions.files RPC handlers", () => {
 
     expect(payload).toMatchObject({ ok: false, path: workspaceRoot });
     expect(payload.error).toContain("exec node");
-    expect(hoisted.execSessionWorkspaceOpen).not.toHaveBeenCalled();
+    expect(hoisted.execOpenPath).not.toHaveBeenCalled();
   });
 
   it("refuses to reveal when the session has no workspace root", async () => {
@@ -257,14 +258,12 @@ describe("sessions.files RPC handlers", () => {
       ok: false,
       error: "No workspace root is available for this session.",
     });
-    expect(hoisted.execSessionWorkspaceOpen).not.toHaveBeenCalled();
+    expect(hoisted.execOpenPath).not.toHaveBeenCalled();
   });
 
   it("returns opener failures as successful RPC results", async () => {
     const warn = vi.fn();
-    hoisted.execSessionWorkspaceOpen.mockRejectedValueOnce(
-      new Error("xdg-open: no method available"),
-    );
+    hoisted.execOpenPath.mockRejectedValueOnce(new Error("xdg-open: no method available"));
 
     const payload = expectOkPayload(
       await invokeSessionFilesHandler(

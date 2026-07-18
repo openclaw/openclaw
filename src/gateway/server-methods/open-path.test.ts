@@ -11,7 +11,7 @@ vi.mock("../../process/exec.js", () => ({
   spawnCommand: spawnCommandMock,
 }));
 
-import { execSessionWorkspaceOpen } from "./session-files-reveal-open.js";
+import { execOpenPath, resolveOpenPathCommand } from "./open-path.js";
 
 function fakeChild(result: Promise<unknown>) {
   const unref = vi.fn();
@@ -30,7 +30,35 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-describe("execSessionWorkspaceOpen", () => {
+describe("resolveOpenPathCommand", () => {
+  it("uses open on macOS", () => {
+    expect(resolveOpenPathCommand("/tmp/openclaw.json", "darwin")).toEqual({
+      command: "open",
+      args: ["/tmp/openclaw.json"],
+    });
+  });
+
+  it("uses xdg-open on Linux", () => {
+    expect(resolveOpenPathCommand("/tmp/openclaw.json", "linux")).toEqual({
+      command: "xdg-open",
+      args: ["/tmp/openclaw.json"],
+    });
+  });
+
+  it("uses a quoted PowerShell FilePath on Windows", () => {
+    expect(resolveOpenPathCommand(String.raw`C:\tmp\o'hai & calc.json`, "win32")).toEqual({
+      command: "powershell.exe",
+      args: [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        String.raw`Start-Process -FilePath 'C:\tmp\o''hai & calc.json'`,
+      ],
+    });
+  });
+});
+
+describe("execOpenPath", () => {
   it.each(["darwin", "win32"] as const)("bounds the %s launcher wait", async (platform) => {
     runExecMock.mockResolvedValue({ stdout: "", stderr: "" });
     const command = {
@@ -38,7 +66,7 @@ describe("execSessionWorkspaceOpen", () => {
       args: ["/tmp/workspace"],
     };
 
-    await execSessionWorkspaceOpen(command, platform);
+    await execOpenPath(command, platform);
 
     expect(runExecMock).toHaveBeenCalledWith(command.command, command.args, {
       logOutput: false,
@@ -50,7 +78,7 @@ describe("execSessionWorkspaceOpen", () => {
     const spawned = fakeChild(Promise.resolve({ failed: false }));
     spawnCommandMock.mockReturnValue(spawned.child);
 
-    await execSessionWorkspaceOpen({ command: "xdg-open", args: ["/tmp/workspace"] }, "linux");
+    await execOpenPath({ command: "xdg-open", args: ["/tmp/workspace"] }, "linux");
 
     expect(spawnCommandMock).toHaveBeenCalledWith(["xdg-open", "/tmp/workspace"], {
       buffer: false,
@@ -72,12 +100,11 @@ describe("execSessionWorkspaceOpen", () => {
     spawnCommandMock.mockReturnValue(spawned.child);
     let settled = false;
 
-    const execution = execSessionWorkspaceOpen(
-      { command: "xdg-open", args: ["/tmp/workspace"] },
-      "linux",
-    ).then(() => {
-      settled = true;
-    });
+    const execution = execOpenPath({ command: "xdg-open", args: ["/tmp/workspace"] }, "linux").then(
+      () => {
+        settled = true;
+      },
+    );
 
     await vi.advanceTimersByTimeAsync(4_999);
     expect(settled).toBe(false);
@@ -93,7 +120,7 @@ describe("execSessionWorkspaceOpen", () => {
     expect(spawned.stderr.destroyed).toBe(true);
   });
 
-  it("propagates an immediate Linux launcher failure", async () => {
+  it("propagates an immediate Linux launcher failure with bounded stderr", async () => {
     let rejectChild: (error: Error) => void = () => {};
     const spawned = fakeChild(
       new Promise((_, reject) => {
@@ -102,10 +129,7 @@ describe("execSessionWorkspaceOpen", () => {
     );
     spawnCommandMock.mockReturnValue(spawned.child);
 
-    const execution = execSessionWorkspaceOpen(
-      { command: "xdg-open", args: ["/tmp/workspace"] },
-      "linux",
-    );
+    const execution = execOpenPath({ command: "xdg-open", args: ["/tmp/workspace"] }, "linux");
     spawned.stderr.write("xdg-open: no method available for opening '/tmp/workspace'");
     rejectChild(new Error("Command failed with exit code 3: xdg-open"));
 
