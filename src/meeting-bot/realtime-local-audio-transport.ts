@@ -69,6 +69,7 @@ function attachStderrLineLogger(params: {
     params.stderr.on("data", () => {});
     return;
   }
+  const debug = params.debug;
   const decoder = new StringDecoder("utf8");
   let pendingLine = "";
   let flushed = false;
@@ -84,7 +85,7 @@ function attachStderrLineLogger(params: {
     const lines = combined.split(/\r\n|[\r\n]/u);
     pendingLine = truncateUtf8Suffix(lines.pop() ?? "", MAX_LOCAL_AUDIO_STDERR_PENDING_BYTES);
     for (const line of lines) {
-      params.debug(`${params.prefix}: ${line.trim()}`);
+      debug(`${params.prefix}: ${line.trim()}`);
     }
   };
   const flush = () => {
@@ -94,7 +95,7 @@ function attachStderrLineLogger(params: {
     flushed = true;
     append(decoder.end());
     if (pendingLine.length > 0) {
-      params.debug(`${params.prefix}: ${pendingLine.trim()}`);
+      debug(`${params.prefix}: ${pendingLine.trim()}`);
       pendingLine = "";
     }
   };
