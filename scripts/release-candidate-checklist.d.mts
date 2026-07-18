@@ -199,6 +199,17 @@ export function validateNpmPreflightRunSource({
   headSha: string;
   workflowRef: string;
 };
+export function validateTrustedToolingPin({
+  toolingSha,
+  pinnedToolingSha,
+  latestTrustedToolingSha,
+  isAncestor,
+}: {
+  toolingSha: string;
+  pinnedToolingSha: string;
+  latestTrustedToolingSha: string;
+  isAncestor?: ((ancestor: string, target: string) => boolean) | undefined;
+}): string;
 export function candidateParallelsArgs(
   tarballPath: unknown,
   dependencyTarballPaths?: unknown[],
