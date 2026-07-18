@@ -7,8 +7,10 @@ import {
   validateSessionsRewindParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { listRegisteredAgentHarnesses } from "../../agents/harness/registry.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import {
+  deleteSessionEntryLifecycle,
   forkSessionAtMessage,
   listSessionBranches,
   rewindSessionToMessage,
@@ -21,7 +23,11 @@ import {
   isCompetingSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
-import { readSessionUpstreamLink } from "../../sessions/session-upstream-links.js";
+import {
+  readSessionUpstreamLink,
+  upsertSessionUpstreamLink,
+  type SessionUpstreamLink,
+} from "../../sessions/session-upstream-links.js";
 import {
   buildDashboardSessionKey,
   resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId,
@@ -41,6 +47,13 @@ type MessageCutAction = "fork" | "rewind" | "switch";
 
 const EXTERNAL_CONVERSATION_ERROR =
   "Session history changes are unavailable because this session is owned by an external agent harness.";
+
+function resolveUpstreamForkHarness(link: SessionUpstreamLink) {
+  const matches = listRegisteredAgentHarnesses().filter((entry) =>
+    entry.harness.sessionFork?.upstreamKinds.includes(link.upstreamKind),
+  );
+  return matches.length === 1 ? matches[0]?.harness.sessionFork : undefined;
+}
 
 export const sessionRewindHandlers: GatewayRequestHandlers = {
   "sessions.branches.list": async (options) => {
@@ -179,7 +192,8 @@ async function mutateSessionAtMessage(
   }
   const initialSessionId = initial.entry.sessionId;
   const initialLifecycleRevision = initial.entry.lifecycleRevision;
-  if (readSessionUpstreamLink(initial.canonicalKey, initial.target.agentId)) {
+  const initialUpstreamLink = readSessionUpstreamLink(initial.canonicalKey, initial.target.agentId);
+  if (initialUpstreamLink && action === "rewind") {
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, EXTERNAL_CONVERSATION_ERROR));
     return;
   }
@@ -273,7 +287,8 @@ async function mutateSessionAtMessage(
         );
         return;
       }
-      if (readSessionUpstreamLink(current.canonicalKey, current.target.agentId)) {
+      const upstreamLink = readSessionUpstreamLink(current.canonicalKey, current.target.agentId);
+      if (upstreamLink && action === "rewind") {
         respond(
           false,
           undefined,
@@ -293,33 +308,155 @@ async function mutateSessionAtMessage(
       }
       const targetKey =
         action === "fork" ? buildDashboardSessionKey(current.target.agentId) : current.canonicalKey;
-      const result = await (action === "fork"
-        ? forkSessionAtMessage({
-            agentId: current.target.agentId,
-            entryId,
-            sessionKey: current.canonicalKey,
-            sessionStoreKey: current.sessionStoreKey,
-            storePath: current.storePath,
-            targetKey,
-          })
-        : action === "rewind"
-          ? rewindSessionToMessage({
+      const upstreamForkHarness = upstreamLink
+        ? resolveUpstreamForkHarness(upstreamLink)
+        : undefined;
+      if (upstreamLink && !upstreamForkHarness) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, EXTERNAL_CONVERSATION_ERROR),
+        );
+        return;
+      }
+      const upstreamFork =
+        upstreamLink && upstreamForkHarness
+          ? await upstreamForkHarness.fork({
+              source: {
+                agentId: current.target.agentId,
+                sessionId: current.entry.sessionId,
+                sessionKey: current.canonicalKey,
+                storePath: current.storePath,
+                entryId,
+              },
+              upstream: {
+                kind: upstreamLink.upstreamKind,
+                threadId: upstreamLink.threadId,
+                ref: upstreamLink.upstreamRef,
+              },
+            })
+          : undefined;
+      if (upstreamFork?.status === "failed") {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            upstreamFork.code === "upstream-unavailable"
+              ? ErrorCodes.UNAVAILABLE
+              : ErrorCodes.INVALID_REQUEST,
+            upstreamFork.message,
+            { details: { reason: upstreamFork.code } },
+          ),
+        );
+        return;
+      }
+      let result: SessionMessageCutMutationResult | SessionBranchSwitchMutationResult;
+      try {
+        result = await (action === "fork"
+          ? forkSessionAtMessage({
               agentId: current.target.agentId,
               entryId,
               sessionKey: current.canonicalKey,
               sessionStoreKey: current.sessionStoreKey,
               storePath: current.storePath,
+              targetKey,
             })
-          : switchSessionBranch({
-              agentId: current.target.agentId,
-              leafEntryId: entryId,
-              sessionKey: current.canonicalKey,
-              sessionStoreKey: current.sessionStoreKey,
-              storePath: current.storePath,
-            }));
+          : action === "rewind"
+            ? rewindSessionToMessage({
+                agentId: current.target.agentId,
+                entryId,
+                sessionKey: current.canonicalKey,
+                sessionStoreKey: current.sessionStoreKey,
+                storePath: current.storePath,
+              })
+            : switchSessionBranch({
+                agentId: current.target.agentId,
+                leafEntryId: entryId,
+                sessionKey: current.canonicalKey,
+                sessionStoreKey: current.sessionStoreKey,
+                storePath: current.storePath,
+              }));
+      } catch {
+        if (upstreamFork?.status === "forked") {
+          await upstreamFork.archive().catch(() => undefined);
+        }
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.UNAVAILABLE, `Failed to ${action} the local session. Try again.`),
+        );
+        return;
+      }
       if (result.status !== "created") {
+        if (upstreamFork?.status === "forked") {
+          // The upstream fork commits before SQLite by contract; archive it if the local mirror
+          // cannot commit so a failed OpenClaw action does not leave an unmanaged Codex thread.
+          await upstreamFork.archive().catch(() => undefined);
+        }
         respondMessageCutError(result, action, entryId, respond);
         return;
+      }
+      if (upstreamLink && upstreamFork?.status === "forked") {
+        try {
+          await upstreamFork.attach({
+            agentId: current.target.agentId,
+            sessionId: result.entry.sessionId,
+            sessionKey: result.key,
+          });
+        } catch {
+          await upstreamFork.archive().catch(() => undefined);
+          await deleteSessionEntryLifecycle({
+            agentId: current.target.agentId,
+            archiveTranscript: true,
+            expectedEntry: result.entry,
+            expectedSessionId: result.entry.sessionId,
+            expectedUpdatedAt: result.entry.updatedAt,
+            storePath: current.storePath,
+            target: { canonicalKey: result.key, storeKeys: [result.key] },
+          }).catch(() => undefined);
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.UNAVAILABLE,
+              "The Codex fork was created but could not be attached. Refresh sessions and try again.",
+              { details: { reason: "upstream-unavailable" } },
+            ),
+          );
+          return;
+        }
+        const linked = upsertSessionUpstreamLink({
+          sessionKey: result.key,
+          agentId: current.target.agentId,
+          catalogId: upstreamLink.catalogId,
+          hostId: upstreamLink.hostId,
+          threadId: upstreamFork.upstream.threadId,
+          upstreamKind: upstreamLink.upstreamKind,
+          upstreamRef: upstreamFork.upstream.ref,
+          marker: upstreamFork.upstream.marker,
+        });
+        if (!linked) {
+          await upstreamFork.archive().catch(() => undefined);
+          await deleteSessionEntryLifecycle({
+            agentId: current.target.agentId,
+            archiveTranscript: true,
+            expectedEntry: result.entry,
+            expectedSessionId: result.entry.sessionId,
+            expectedUpdatedAt: result.entry.updatedAt,
+            storePath: current.storePath,
+            target: { canonicalKey: result.key, storeKeys: [result.key] },
+          }).catch(() => undefined);
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.UNAVAILABLE,
+              "The Codex fork could not be linked to the new session. Refresh sessions and try again.",
+              { details: { reason: "upstream-unavailable" } },
+            ),
+          );
+          return;
+        }
       }
       if (action !== "fork") {
         clearSessionQueues(lifecycleIdentities);

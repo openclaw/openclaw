@@ -16,8 +16,11 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./app-server/config.js";
 import { buildCodexAppServerConnectionFingerprint } from "./app-server/plugin-app-cache-key.js";
+import { assertCodexThreadForkParams } from "./app-server/protocol-validators.js";
 import type {
   CodexThread,
+  CodexThreadForkParams,
+  CodexThreadForkResponse,
   CodexThreadListParams,
   CodexThreadListResponse,
   CodexThreadTurnsListParams,
@@ -123,6 +126,7 @@ type CodexSessionCatalogRequestSnapshot = {
   requestTimeoutMs: number;
   listThreads(params: CodexThreadListParams, timeoutMs: number): Promise<CodexThreadListResponse>;
   listThreadTurns(params: CodexThreadTurnsListParams): Promise<CodexThreadTurnsListResponse>;
+  forkThread(params: CodexThreadForkParams): Promise<CodexThreadForkResponse>;
   readThread(threadId: string, includeTurns: boolean): Promise<CodexThread>;
   archiveThread(threadId: string): Promise<void>;
 };
@@ -213,6 +217,9 @@ function createCodexSessionCatalogControlFromRequests(params: {
       const response = await params.createRequestSnapshot().listThreadTurns(listParams);
       return response;
     },
+    async forkThread(forkParams) {
+      return await params.createRequestSnapshot().forkThread(forkParams);
+    },
     async archiveThread(threadId) {
       await params.createRequestSnapshot().archiveThread(threadId);
     },
@@ -255,6 +262,13 @@ export function createCodexSessionCatalogControl(params: {
           pluginConfig,
           CODEX_CONTROL_METHODS.listThreadTurns,
           listParams,
+          requestOptions,
+        ),
+      forkThread: async (forkParams) =>
+        await codexControlRequest(
+          pluginConfig,
+          CODEX_CONTROL_METHODS.forkThread,
+          assertCodexThreadForkParams(forkParams),
           requestOptions,
         ),
       archiveThread: async (threadId) => {
@@ -304,6 +318,14 @@ export function createCodexSessionCatalogControl(params: {
             client,
             method: CODEX_CONTROL_METHODS.listThreadTurns,
             requestParams: listParams,
+            config: runtimeConfig,
+            timeoutMs: runtime.requestTimeoutMs,
+          }),
+        forkThread: async (forkParams) =>
+          await requestCodexAppServerClientJson<CodexThreadForkResponse>({
+            client,
+            method: CODEX_CONTROL_METHODS.forkThread,
+            requestParams: assertCodexThreadForkParams(forkParams),
             config: runtimeConfig,
             timeoutMs: runtime.requestTimeoutMs,
           }),

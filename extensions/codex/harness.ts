@@ -9,6 +9,7 @@ import type {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { CodexAppServerBindingStore } from "./src/app-server/session-binding.js";
+import type { CodexSessionCatalogControl } from "./src/session-catalog-types.js";
 
 // `codex` is legacy input only until Part 2 doctor migration rewrites stored refs.
 // New runtime identity uses the `openai` provider.
@@ -51,6 +52,7 @@ export function createCodexAppServerAgentHarness(options: {
   resolvePluginConfig?: () => unknown;
   resolveConfig?: () => OpenClawConfig | undefined;
   bindingStore: CodexAppServerBindingStore;
+  sessionCatalogControl?: CodexSessionCatalogControl;
 }): AgentHarness {
   const harnessRuntimeId = options?.id ?? "codex";
   const normalizedHarnessRuntimeId = harnessRuntimeId.trim().toLowerCase();
@@ -59,6 +61,7 @@ export function createCodexAppServerAgentHarness(options: {
       id.trim().toLowerCase(),
     ),
   );
+  const sessionCatalogControl = options.sessionCatalogControl;
   const harness: CodexAppServerAgentHarness = {
     id: harnessRuntimeId,
     label: options?.label ?? "Codex agent harness",
@@ -69,6 +72,22 @@ export function createCodexAppServerAgentHarness(options: {
       visibleReplies: "message_tool",
     },
     authBootstrap: "harness",
+    ...(sessionCatalogControl
+      ? {
+          sessionFork: {
+            upstreamKinds: ["codex-app-server"] as const,
+            fork: async (params) => {
+              const { forkCodexUpstreamSession } =
+                await import("./src/app-server/upstream-session-fork.js");
+              return await forkCodexUpstreamSession(params, {
+                bindingStore: options.bindingStore,
+                control: sessionCatalogControl,
+                resolveConfig: options.resolveConfig,
+              });
+            },
+          },
+        }
+      : {}),
     authBinding: {
       fingerprint: async (params) => {
         const { fingerprintCodexAppServerAuthBinding } =
