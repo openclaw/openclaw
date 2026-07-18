@@ -1,6 +1,6 @@
 // Control UI component renders exec approval.
 import { html, nothing } from "lit";
-import { property } from "lit/decorators.js";
+import { property, query } from "lit/decorators.js";
 import { formatApprovalDisplayPath } from "../../../src/infra/approval-display-paths.ts";
 import type {
   ExecApprovalDecision,
@@ -10,6 +10,7 @@ import type {
 import "./modal-dialog.ts";
 import { t } from "../i18n/index.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
+import type { OpenClawModalDialog } from "./modal-dialog.ts";
 
 const DEFAULT_EXEC_APPROVAL_DECISIONS = [
   "allow-once",
@@ -177,8 +178,8 @@ function renderExecApprovalPrompt(props: ExecApprovalProps) {
       ? t("execApproval.expiresIn", { time: formatRemaining(remainingMs) })
       : t("execApproval.expired");
   const queueCount = props.queue.length;
-  const isPlugin = active.kind === "plugin";
-  const title = isPlugin
+  const isStructured = active.kind !== "exec";
+  const title = isStructured
     ? (active.pluginTitle ?? t("execApproval.pluginApprovalNeeded"))
     : t("execApproval.execApprovalNeeded");
   const titleId = "exec-approval-title";
@@ -203,7 +204,7 @@ function renderExecApprovalPrompt(props: ExecApprovalProps) {
               </div>`
             : nothing}
         </div>
-        ${isPlugin ? renderPluginBody(active) : renderExecBody(request)}
+        ${isStructured ? renderPluginBody(active) : renderExecBody(request)}
         ${renderUnavailableDecisionWarning(active, decisions)}
         ${props.error ? html`<div class="exec-approval-error">${props.error}</div>` : nothing}
         <div class="exec-approval-actions">
@@ -226,6 +227,11 @@ function renderExecApprovalPrompt(props: ExecApprovalProps) {
 
 class ExecApproval extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) props?: ExecApprovalProps;
+  @query("openclaw-modal-dialog") private dialog?: OpenClawModalDialog;
+
+  show(): void {
+    void this.updateComplete.then(() => this.dialog?.show());
+  }
 
   override render() {
     return this.props ? renderExecApprovalPrompt(this.props) : nothing;

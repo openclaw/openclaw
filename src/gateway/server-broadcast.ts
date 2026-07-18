@@ -1,10 +1,16 @@
+import {
+  GATEWAY_CLIENT_CAPS,
+  hasGatewayClientCap,
+} from "../../packages/gateway-protocol/src/client-info.js";
 // Gateway WebSocket broadcaster.
 // Applies event scope guards and slow-consumer handling before sending frames.
 import { logRejectedLargePayload } from "../logging/diagnostic-payload.js";
+import { isBrowserCopilotClient } from "../utils/message-channel.js";
 import {
   ADMIN_SCOPE,
   APPROVALS_SCOPE,
   PAIRING_SCOPE,
+  QUESTIONS_SCOPE,
   READ_SCOPE,
   WRITE_SCOPE,
 } from "./method-scopes.js";
@@ -12,7 +18,11 @@ import type {
   GatewayBroadcastFn,
   GatewayBroadcastOpts,
   GatewayBroadcastToConnIdsFn,
+  GatewayBufferedAmountFn,
+  GatewayPluginEventBroadcastFn,
+  GatewayPluginEventScope,
 } from "./server-broadcast-types.js";
+import type { SessionMessageSubscriberRegistry } from "./server-chat-state.js";
 import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { logWs, shouldLogWs, summarizeAgentEventForWsLog } from "./ws-log.js";
@@ -23,15 +33,20 @@ import { logWs, shouldLogWs, summarizeAgentEventForWsLog } from "./ws-log.js";
 const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   agent: [READ_SCOPE],
   chat: [READ_SCOPE],
+  "ui.command": [READ_SCOPE],
   "chat.send_timing": [READ_SCOPE],
   "chat.side_result": [READ_SCOPE],
   cron: [READ_SCOPE],
   health: [],
   "exec.approval.requested": [APPROVALS_SCOPE],
   "exec.approval.resolved": [APPROVALS_SCOPE],
+  "question.requested": [QUESTIONS_SCOPE],
+  "question.resolved": [QUESTIONS_SCOPE],
   heartbeat: [],
   "plugin.approval.requested": [APPROVALS_SCOPE],
   "plugin.approval.resolved": [APPROVALS_SCOPE],
+  "openclaw.approval.requested": [APPROVALS_SCOPE],
+  "openclaw.approval.resolved": [APPROVALS_SCOPE],
   presence: [],
   shutdown: [],
   tick: [],
@@ -40,6 +55,9 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   task: [READ_SCOPE],
   "task.suggestion": [READ_SCOPE],
   "update.available": [],
+  // Hash-only change notice after a persisted config write; content stays
+  // behind the operator-scoped config.get.
+  "config.changed": [READ_SCOPE],
   "voicewake.changed": [READ_SCOPE],
   "voicewake.routing.changed": [READ_SCOPE],
   "device.pair.requested": [PAIRING_SCOPE],
@@ -47,6 +65,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "node.pair.requested": [PAIRING_SCOPE],
   "node.pair.resolved": [PAIRING_SCOPE],
   "node.presence": [READ_SCOPE],
+  "sessions.catalog.host": [READ_SCOPE],
   "sessions.changed": [READ_SCOPE],
   "session.approval": [APPROVALS_SCOPE],
   "session.message": [READ_SCOPE],
@@ -63,6 +82,10 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
 // (e.g. reconfiguring wake-word triggers).
 const NODE_ALLOWED_EVENTS = new Set<string>(["voicewake.changed", "voicewake.routing.changed"]);
 
+// Opt-in scoped clients never receive session-bearing broadcasts without an
+// authoritative registry key, including malformed/sessionless agent events.
+const SESSION_SUBSCRIPTION_EVENTS = new Set(["agent", "chat", "chat.side_result"]);
+
 function serializeFrameField(name: "payload" | "stateVersion", value: unknown): string {
   // Serialize one field through JSON.stringify so embedded values keep JSON
   // escaping, then splice it into the shared per-client frame body.
@@ -72,9 +95,25 @@ function serializeFrameField(name: "payload" | "stateVersion", value: unknown): 
   return fieldJSON.startsWith(prefix) ? `,${keyJSON}:${fieldJSON.slice(prefix.length, -1)}` : "";
 }
 
-function hasEventScope(client: GatewayWsClient, event: string): boolean {
+function hasEventScope(
+  client: GatewayWsClient,
+  event: string,
+  explicitPluginScope?: GatewayPluginEventScope,
+): boolean {
   if (client.connectionKind === "worker") {
     return false;
+  }
+  if (explicitPluginScope) {
+    if ((client.connect.role ?? "operator") !== "operator") {
+      return false;
+    }
+    const scopes = Array.isArray(client.connect.scopes) ? client.connect.scopes : [];
+    if (scopes.includes(ADMIN_SCOPE)) {
+      return true;
+    }
+    return explicitPluginScope === READ_SCOPE
+      ? scopes.includes(READ_SCOPE) || scopes.includes(WRITE_SCOPE)
+      : explicitPluginScope === WRITE_SCOPE && scopes.includes(WRITE_SCOPE);
   }
   const required = EVENT_SCOPE_GUARDS[event];
   // Plugin-defined gateway broadcast events (plugin.* namespace) are allowed
@@ -108,7 +147,10 @@ function hasEventScope(client: GatewayWsClient, event: string): boolean {
   return required.some((scope) => scopes.includes(scope));
 }
 
-export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient> }) {
+export function createGatewayBroadcaster(params: {
+  clients: Set<GatewayWsClient>;
+  sessionMessageSubscribers?: SessionMessageSubscriberRegistry;
+}) {
   const clientSeq = new WeakMap<GatewayWsClient, number>();
   const reportedSlowPayloadClients = new WeakSet<GatewayWsClient>();
 
@@ -117,6 +159,7 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
     payload: unknown,
     opts?: GatewayBroadcastOpts,
     targetConnIds?: ReadonlySet<string>,
+    explicitPluginScope?: GatewayPluginEventScope,
   ) => {
     if (params.clients.size === 0) {
       return;
@@ -161,7 +204,20 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
       if (targetConnIds && !targetConnIds.has(c.connId)) {
         continue;
       }
-      if (!hasEventScope(c, event)) {
+      if (!hasEventScope(c, event, explicitPluginScope)) {
+        continue;
+      }
+      if (
+        (isBrowserCopilotClient(c.connect.client) ||
+          hasGatewayClientCap(c.connect.caps, GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS)) &&
+        SESSION_SUBSCRIPTION_EVENTS.has(event) &&
+        (!opts?.sessionKeys?.length ||
+          !opts.sessionKeys.some((sessionKey) =>
+            params.sessionMessageSubscribers?.get(sessionKey).has(c.connId),
+          ))
+      ) {
+        // Scoped clients opt out of legacy broadcast fanout. The server-side
+        // subscription registry is the authority, so client filtering cannot leak a sibling tab.
         continue;
       }
       const nextSeq = (clientSeq.get(c) ?? 0) + 1;
@@ -216,5 +272,24 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
     broadcastInternal(event, payload, opts, connIds);
   };
 
-  return { broadcast, broadcastToConnIds };
+  const getBufferedAmount: GatewayBufferedAmountFn = (connId) => {
+    for (const client of params.clients) {
+      if (client.connId === connId) {
+        return client.socket.bufferedAmount;
+      }
+    }
+    return undefined;
+  };
+
+  const broadcastPluginEvent: GatewayPluginEventBroadcastFn = (event, payload, scope) => {
+    if (!event.startsWith("plugin.") || event.startsWith("plugin.approval.")) {
+      throw new Error(`invalid plugin gateway event: ${event}`);
+    }
+    if (scope !== READ_SCOPE && scope !== WRITE_SCOPE && scope !== ADMIN_SCOPE) {
+      throw new Error("invalid plugin gateway event scope");
+    }
+    broadcastInternal(event, payload, undefined, undefined, scope);
+  };
+
+  return { broadcast, broadcastToConnIds, broadcastPluginEvent, getBufferedAmount };
 }

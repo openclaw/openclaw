@@ -16,7 +16,7 @@ type ModelRouteObservation = {
   baseUrl?: unknown;
 };
 
-export type DefaultModelAuthStatus = {
+type DefaultModelAuthStatus = {
   provider: string;
   model: string;
 } & (
@@ -112,7 +112,7 @@ function catalogRouteObservation(
   };
 }
 
-export type DefaultModelCatalogFacts = {
+type DefaultModelCatalogFacts = {
   found: boolean;
   observedRoutes?: readonly ModelRouteObservation[];
 };

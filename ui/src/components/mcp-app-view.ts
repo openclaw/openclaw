@@ -12,23 +12,27 @@ import { createRef, ref } from "lit/directives/ref.js";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { I18nController, t } from "../i18n/index.ts";
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
+import {
+  buildMcpAppHostCapabilities,
+  dispatchWidgetPrompt,
+  resolveMcpAppSandboxUrl,
+  type McpAppHostSandboxCsp,
+} from "./mcp-app-security.ts";
 
 type McpAppViewPayload = {
   sandboxUrl: string;
   sandboxPort: number;
   sandboxOrigin?: string;
   html: string;
-  csp?: HostSandboxCsp;
+  csp?: McpAppHostSandboxCsp;
   toolInput: unknown;
   toolResult: unknown;
+  messageSupported?: boolean;
 };
 
 type HostContext = NonNullable<
   NonNullable<ConstructorParameters<typeof AppBridge>[3]>["hostContext"]
 >;
-type HostCapabilities = ConstructorParameters<typeof AppBridge>[2];
-type HostSandboxCsp = NonNullable<NonNullable<HostCapabilities["sandbox"]>["csp"]>;
-
 type ScheduleFrame = (callback: FrameRequestCallback) => number;
 type ScheduleFallback = (callback: () => void, delayMs: number) => number;
 
@@ -51,8 +55,14 @@ async function waitForMcpAppHandlerRegistration(
 function hostContext(element: Element | undefined, height: number): HostContext {
   const rect = element?.getBoundingClientRect();
   const touch = navigator.maxTouchPoints > 0 || window.matchMedia?.("(pointer: coarse)").matches;
+  const themeMode = document.documentElement.dataset.themeMode;
   return {
-    theme: window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light",
+    theme:
+      themeMode === "light" || themeMode === "dark"
+        ? themeMode
+        : window.matchMedia?.("(prefers-color-scheme: dark)").matches
+          ? "dark"
+          : "light",
     displayMode: "inline",
     availableDisplayModes: ["inline"],
     containerDimensions: {
@@ -70,64 +80,11 @@ function hostContext(element: Element | undefined, height: number): HostContext 
   };
 }
 
-export function buildMcpAppHostCapabilities(csp?: HostSandboxCsp): HostCapabilities {
-  return {
-    openLinks: {},
-    serverResources: {},
-    serverTools: {},
-    sandbox: { csp: csp ?? {} },
-  };
-}
-
-export function resolveMcpAppSandboxUrl(
-  value: string,
-  sandboxPort: number,
-  sandboxOrigin: string | undefined,
-  gatewayUrl: string,
-  hostOrigin = window.location.origin,
-): string {
-  if (!Number.isInteger(sandboxPort) || sandboxPort < 1 || sandboxPort > 65535) {
-    throw new Error("MCP App sandbox port is invalid");
-  }
-  const gateway = new URL(gatewayUrl || hostOrigin, hostOrigin);
-  if (gateway.protocol === "ws:") {
-    gateway.protocol = "http:";
-  } else if (gateway.protocol === "wss:") {
-    gateway.protocol = "https:";
-  }
-  if (gateway.protocol !== "http:" && gateway.protocol !== "https:") {
-    throw new Error("MCP App sandbox URL is invalid");
-  }
-  const activeGatewayOrigin = gateway.origin;
-  const base = sandboxOrigin ? new URL(sandboxOrigin) : new URL(activeGatewayOrigin);
-  if (sandboxOrigin) {
-    if (
-      base.origin !== sandboxOrigin.replace(/\/$/u, "") ||
-      base.username !== "" ||
-      base.password !== ""
-    ) {
-      throw new Error("MCP App sandbox URL is invalid");
-    }
-  } else {
-    base.port = String(sandboxPort);
-  }
-  base.pathname = "/";
-  base.search = "";
-  base.hash = "";
-  const resolved = new URL(value, base);
-  if (
-    (base.protocol !== "http:" && base.protocol !== "https:") ||
-    base.origin === new URL(hostOrigin).origin ||
-    base.origin === activeGatewayOrigin ||
-    resolved.origin !== base.origin ||
-    resolved.pathname !== "/mcp-app-sandbox"
-  ) {
-    throw new Error("MCP App sandbox URL is invalid");
-  }
-  return resolved.href;
-}
-
 class OpenClawAppBridge extends AppBridge {
+  setMessageHandler(handler: NonNullable<AppBridge["onmessage"]>) {
+    Reflect.set(this, "onmessage", handler);
+  }
+
   setListToolsHandler(handler: (params: ListToolsRequest["params"]) => Promise<ListToolsResult>) {
     this.replaceRequestHandler(ListToolsRequestSchema, (request) => handler(request.params));
   }
@@ -173,6 +130,8 @@ export class McpAppView extends LitElement {
   private bridge: AppBridge | null = null;
   private iframe: HTMLIFrameElement | null = null;
   private transport: { close(): Promise<void> } | null = null;
+  private hostContextCleanup: (() => void) | null = null;
+  private hostResizeObserver: ResizeObserver | null = null;
   private setupKey = "";
   private setupClient: object | null = null;
   private setupGeneration = 0;
@@ -212,11 +171,17 @@ export class McpAppView extends LitElement {
     const bridge = this.bridge;
     const transport = this.transport;
     const iframe = this.iframe;
+    const hostContextCleanup = this.hostContextCleanup;
+    const hostResizeObserver = this.hostResizeObserver;
     this.bridge = null;
     this.transport = null;
     this.iframe = null;
+    this.hostContextCleanup = null;
+    this.hostResizeObserver = null;
     // Clear ownership before awaiting: a stale teardown must never close a
     // replacement setup that installs its resources during the handshake.
+    hostContextCleanup?.();
+    hostResizeObserver?.disconnect();
     iframe?.remove();
     if (bridge) {
       await Promise.race([
@@ -275,18 +240,31 @@ export class McpAppView extends LitElement {
         payload.sandboxPort,
         payload.sandboxOrigin,
         this.context?.gateway.connection.gatewayUrl ?? "",
+        window.location.origin,
       );
       await proxyReady;
       if (!iframe.contentWindow || generation !== this.setupGeneration) {
         return;
       }
 
+      let frameHeight = this.height;
       const bridge = new OpenClawAppBridge(
         null,
         { name: "OpenClaw", version: "1.0.0" },
-        buildMcpAppHostCapabilities(payload.csp),
+        buildMcpAppHostCapabilities(payload.csp, payload.messageSupported === true),
         { hostContext: hostContext(mount, this.height) },
       );
+      if (payload.messageSupported === true) {
+        const promptRateKey = `${this.sessionKey}\0${this.viewId}`;
+        bridge.setMessageHandler(async ({ content }) => {
+          const block = content.length === 1 ? content[0] : undefined;
+          const text = block?.type === "text" ? block.text : null;
+          const accepted = dispatchWidgetPrompt(iframe, text, promptRateKey, (prompt) =>
+            window.confirm(`${t("common.confirm")}:\n\n${prompt}`),
+          );
+          return accepted ? {} : { isError: true };
+        });
+      }
       bridge.oncalltool = async (params) =>
         (await this.request("mcp.app.callTool", {
           toolName: params.name,
@@ -315,6 +293,7 @@ export class McpAppView extends LitElement {
       bridge.onsizechange = ({ height }) => {
         if (height !== undefined) {
           const nextHeight = Math.min(1200, Math.max(160, Math.round(height)));
+          frameHeight = nextHeight;
           iframe.style.height = `${nextHeight}px`;
           bridge.setHostContext(hostContext(mount, nextHeight));
         }
@@ -336,6 +315,15 @@ export class McpAppView extends LitElement {
           window.setTimeout(() => reject(new Error("MCP App initialization timed out")), 15_000);
         }),
       ]);
+      if (generation !== this.setupGeneration) {
+        return;
+      }
+      const updateHostContext = () => bridge.setHostContext(hostContext(mount, frameHeight));
+      this.hostContextCleanup = this.context?.theme.subscribe(updateHostContext) ?? null;
+      if (typeof ResizeObserver !== "undefined") {
+        this.hostResizeObserver = new ResizeObserver(updateHostContext);
+        this.hostResizeObserver.observe(mount);
+      }
       await waitForMcpAppHandlerRegistration();
       if (generation !== this.setupGeneration) {
         return;
@@ -366,10 +354,6 @@ export class McpAppView extends LitElement {
         ? html`<div class="error">${t("mcpApp.unavailable", { error: this.error })}</div>`
         : nothing}`;
   }
-}
-
-if (!customElements.get("mcp-app-view")) {
-  customElements.define("mcp-app-view", McpAppView);
 }
 
 declare global {

@@ -16,11 +16,29 @@ import {
   type TrustedToolExecutionEvent,
 } from "../../infra/diagnostic-events.js";
 import type { getProcessSupervisor } from "../../process/supervisor/index.js";
-import { createManagedRun, supervisorSpawnMock } from "../cli-runner.test-support.js";
 import { findCliMaxTurnsError } from "../failover-error.js";
 import { getCliMessagingDeliveryEvidence } from "./delivery-evidence.js";
 import { executePreparedCliRun } from "./execute.js";
+import { createManagedRun, supervisorSpawnMock } from "./execute.test-support.js";
 import type { PreparedCliRunContext } from "./types.js";
+
+// Gateway unit coverage owns quiet-admission timing. These integration cases only
+// need to drain calls already in flight, so skip the repeated 250 ms quiet window.
+vi.mock("../../gateway/mcp-http.loopback-runtime.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../gateway/mcp-http.loopback-runtime.js")>();
+  return {
+    ...actual,
+    waitForMcpLoopbackToolCallCaptureIdle: (
+      captureKey: string,
+      options: Parameters<typeof actual.waitForMcpLoopbackToolCallCaptureIdle>[1],
+    ) =>
+      actual.waitForMcpLoopbackToolCallCaptureIdle(captureKey, {
+        ...options,
+        admissionGraceMs: 0,
+      }),
+  };
+});
 
 type ProcessSupervisor = ReturnType<typeof getProcessSupervisor>;
 type SupervisorSpawnInput = Parameters<ProcessSupervisor["spawn"]>[0];
@@ -128,6 +146,7 @@ function requireSupervisorSpawnInput(): SupervisorSpawnInput {
 }
 
 beforeEach(() => {
+  vi.unstubAllEnvs();
   resetAgentEventsForTest();
   resetDiagnosticEventsForTest();
   supervisorSpawnMock.mockReset();
@@ -634,9 +653,9 @@ describe("executePreparedCliRun supervisor output capture", () => {
     });
 
     try {
-      const result = await executePreparedCliRun(
-        buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" }),
-      );
+      const context = buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" });
+      context.params.onExecutionPhase = vi.fn();
+      const result = await executePreparedCliRun(context);
       const spawnInput = requireSupervisorSpawnInput();
 
       expect(spawnInput.captureOutput).toBe(false);
@@ -645,6 +664,13 @@ describe("executePreparedCliRun supervisor output capture", () => {
         { text: "Hello", delta: "Hello" },
         { text: "Hello world", delta: " world" },
       ]);
+      expect(context.params.onExecutionPhase).toHaveBeenCalledTimes(2);
+      expect(context.params.onExecutionPhase).toHaveBeenNthCalledWith(2, {
+        phase: "assistant_output_started",
+        provider: "claude-cli",
+        model: "model",
+        backend: "claude-cli",
+      });
     } finally {
       stop();
     }
@@ -1362,7 +1388,24 @@ describe("executePreparedCliRun supervisor output capture", () => {
     try {
       const context = buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" });
       context.mcpDeliveryCapture = true;
-      await expect(executePreparedCliRun(context)).rejects.toThrow("exceeded timeout");
+      context.params.onExecutionPhase = vi.fn();
+      await expect(executePreparedCliRun(context)).rejects.toMatchObject({
+        message: expect.stringMatching(/exceeded timeout/i),
+        code: "cli_overall_timeout",
+        cliTimeout: {
+          mode: "overall",
+          timeoutSeconds: 1,
+          observedActivity: true,
+          activeToolCount: 1,
+          backgroundTaskCount: 0,
+        },
+      });
+      expect(context.params.onExecutionPhase).toHaveBeenCalledWith({
+        phase: "tool_execution_started",
+        provider: "claude-cli",
+        model: "model",
+        backend: "claude-cli",
+      });
     } finally {
       stop();
     }
@@ -2321,3 +2364,4 @@ describe("executePreparedCliRun supervisor output capture", () => {
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

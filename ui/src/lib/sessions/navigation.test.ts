@@ -29,6 +29,31 @@ describe("resolveSessionNavigation", () => {
     expect(navigation.activeRowKey).toBe("agent:main:recent-3");
   });
 
+  it("hides cron sessions unless showCron opts in", () => {
+    const rows: GatewaySessionRow[] = [
+      { key: "agent:main:chat", kind: "direct", updatedAt: 300 },
+      { key: "agent:main:cron:job", kind: "cron", updatedAt: 200 },
+    ];
+
+    const hidden = resolveSessionNavigation({
+      result: sessionsResult(rows),
+      resultAgentId: "main",
+      sessionKey: "agent:main:chat",
+    });
+    expect(hidden.visibleSessions.map((row) => row.key)).toEqual(["agent:main:chat"]);
+
+    const shown = resolveSessionNavigation({
+      result: sessionsResult(rows),
+      resultAgentId: "main",
+      sessionKey: "agent:main:chat",
+      showCron: true,
+    });
+    expect(shown.visibleSessions.map((row) => row.key)).toEqual([
+      "agent:main:chat",
+      "agent:main:cron:job",
+    ]);
+  });
+
   it("uses the caller's sort order before applying the recent-session projection", () => {
     const navigation = resolveSessionNavigation({
       result: sessionsResult([

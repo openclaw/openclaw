@@ -708,25 +708,16 @@ describe("plugin sdk alias helpers", () => {
     expect(subpaths).toEqual(["core", "qa-channel", "qa-channel-protocol", "qa-lab", "qa-runtime"]);
   });
 
-  it("resolves public QA plugin-sdk aliases without enabling private QA mode", () => {
+  it("resolves the public QA runner alias without enabling private QA mode", () => {
     const fixture = createPluginSdkAliasFixture({
       packageExports: {
         "./plugin-sdk/core": { default: "./dist/plugin-sdk/core.js" },
-        "./plugin-sdk/qa-live-transport-scenarios": {
-          default: "./dist/plugin-sdk/qa-live-transport-scenarios.js",
-        },
         "./plugin-sdk/qa-runner-runtime": { default: "./dist/plugin-sdk/qa-runner-runtime.js" },
       },
     });
     writePluginSdkSubpathArtifacts(fixture.root, ["core"]);
     const sourceRootAlias = path.join(fixture.root, "src", "plugin-sdk", "root-alias.cjs");
     const sourceQaRunnerPath = path.join(fixture.root, "src", "plugin-sdk", "qa-runner-runtime.ts");
-    const distQaLiveTransportScenariosPath = path.join(
-      fixture.root,
-      "dist",
-      "plugin-sdk",
-      "qa-live-transport-scenarios.js",
-    );
     const sourcePrivateQaRuntimePath = path.join(
       fixture.root,
       "src",
@@ -735,11 +726,6 @@ describe("plugin sdk alias helpers", () => {
     );
     fs.writeFileSync(sourceRootAlias, "module.exports = {};\n", "utf-8");
     fs.writeFileSync(sourceQaRunnerPath, "export const qaRunnerRuntime = true;\n", "utf-8");
-    fs.writeFileSync(
-      distQaLiveTransportScenariosPath,
-      "export const qaLiveTransportScenarios = true;\n",
-      "utf-8",
-    );
     fs.writeFileSync(sourcePrivateQaRuntimePath, "export const qaRuntime = true;\n", "utf-8");
     const sourcePluginEntry = writePluginEntry(
       fixture.root,
@@ -754,15 +740,12 @@ describe("plugin sdk alias helpers", () => {
       () => buildPluginLoaderAliasMap(sourcePluginEntry),
     );
 
-    expect(subpaths).toEqual(["core", "qa-live-transport-scenarios", "qa-runner-runtime"]);
+    expect(subpaths).toEqual(["core", "qa-runner-runtime"]);
     expect(fs.realpathSync(aliases["openclaw/plugin-sdk"] ?? "")).toBe(
       fs.realpathSync(sourceRootAlias),
     );
     expect(fs.realpathSync(aliases["openclaw/plugin-sdk/qa-runner-runtime"] ?? "")).toBe(
       fs.realpathSync(sourceQaRunnerPath),
-    );
-    expect(fs.realpathSync(aliases["openclaw/plugin-sdk/qa-live-transport-scenarios"] ?? "")).toBe(
-      fs.realpathSync(distQaLiveTransportScenariosPath),
     );
     expect(aliases["openclaw/plugin-sdk/qa-runtime"]).toBeUndefined();
   });
@@ -1013,7 +996,7 @@ describe("plugin sdk alias helpers", () => {
     fs.writeFileSync(distQaLabPath, "export const qaLab = true;\n", "utf-8");
     const sourcePluginEntry = writePluginEntry(
       fixture.root,
-      bundledPluginFile("qa-matrix", "src/index.ts"),
+      bundledPluginFile("qa-runner-fixture", "src/index.ts"),
     );
 
     const aliases = withEnv({ OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1", NODE_ENV: undefined }, () =>
@@ -1565,6 +1548,12 @@ describe("plugin sdk alias helpers", () => {
       srcFile: "result.ts",
       distFile: "result.mjs",
     });
+    const normalizationAgentId = writeWorkspacePackageEntry({
+      root: fixture.root,
+      packageDir: "normalization-core",
+      srcFile: "agent-id.ts",
+      distFile: "agent-id.mjs",
+    });
     const normalizationStringCoerce = writeWorkspacePackageEntry({
       root: fixture.root,
       packageDir: "normalization-core",
@@ -1641,6 +1630,7 @@ describe("plugin sdk alias helpers", () => {
     fs.rmSync(normalizationCore.distFile);
     fs.rmSync(normalizationBooleanCoercion.distFile);
     fs.rmSync(normalizationResult.distFile);
+    fs.rmSync(normalizationAgentId.distFile);
     fs.rmSync(normalizationStringCoerce.distFile);
     fs.rmSync(retry.distFile);
     fs.rmSync(terminalCore.distFile);
@@ -1705,6 +1695,9 @@ describe("plugin sdk alias helpers", () => {
     );
     expect(fs.realpathSync(aliases["@openclaw/normalization-core/result"] ?? "")).toBe(
       fs.realpathSync(normalizationResult.srcFile),
+    );
+    expect(fs.realpathSync(aliases["@openclaw/normalization-core/agent-id"] ?? "")).toBe(
+      fs.realpathSync(normalizationAgentId.srcFile),
     );
     expect(fs.realpathSync(aliases["@openclaw/normalization-core/string-coerce"] ?? "")).toBe(
       fs.realpathSync(normalizationStringCoerce.srcFile),
@@ -1860,7 +1853,7 @@ describe("plugin sdk alias helpers", () => {
     ).toBe(fs.realpathSync(modelCatalogCore.distFile));
   });
 
-  it("derives acp-core aliases from packaged root dist when package metadata is absent", () => {
+  it("derives workspace aliases from packaged root dist when package metadata is absent", () => {
     const fixture = createPluginSdkAliasFixture();
     const sourcePluginEntry = writePluginEntry(
       fixture.root,
@@ -1869,6 +1862,14 @@ describe("plugin sdk alias helpers", () => {
     const acpRuntimeErrors = path.join(fixture.root, "dist", "acp-core", "runtime", "errors.js");
     mkdirSafeDir(path.dirname(acpRuntimeErrors));
     fs.writeFileSync(acpRuntimeErrors, "export {};\n", "utf-8");
+    const normalizationAgentId = path.join(
+      fixture.root,
+      "dist",
+      "normalization-core",
+      "agent-id.js",
+    );
+    mkdirSafeDir(path.dirname(normalizationAgentId));
+    fs.writeFileSync(normalizationAgentId, "export {};\n", "utf-8");
     const cwdWithoutOpenClawPackage = makeTempDir();
 
     const aliases = withCwd(cwdWithoutOpenClawPackage, () =>
@@ -1879,6 +1880,9 @@ describe("plugin sdk alias helpers", () => {
 
     expect(fs.realpathSync(aliases["@openclaw/acp-core/runtime/errors"] ?? "")).toBe(
       fs.realpathSync(acpRuntimeErrors),
+    );
+    expect(fs.realpathSync(aliases["@openclaw/normalization-core/agent-id"] ?? "")).toBe(
+      fs.realpathSync(normalizationAgentId),
     );
   });
 
@@ -2784,3 +2788,4 @@ describe("buildPluginLoaderJitiOptions", () => {
     expect(buildPluginLoaderJitiOptions({})).not.toHaveProperty("alias");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

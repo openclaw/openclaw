@@ -21,7 +21,12 @@ export interface GatewayPluginRuntime {
         channel: string;
         accountId: string;
         peer: { kind: "group" | "direct"; id: string };
-      }) => { sessionKey: string; accountId: string; agentId?: string };
+      }) => {
+        sessionKey: string;
+        accountId: string;
+        agentId?: string;
+        dmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
+      };
     };
     commands?: {
       isControlCommandMessage?: (text?: string, cfg?: unknown) => boolean;
@@ -69,8 +74,6 @@ export interface GatewayPluginRuntime {
     }) => Promise<unknown>;
   };
 }
-
-export type { ProcessedAttachments } from "./inbound-attachments.js";
 
 export interface OutboundResult {
   channel: string;
@@ -201,11 +204,6 @@ interface GatewayGroupOptions {
     accountId: string;
     groupId: string;
   }) => string | undefined;
-  /**
-   * Session-store reader for the `/activation` command override. When
-   * omitted, the engine loads a default node-based reader lazily.
-   */
-  sessionStoreReader?: import("../group/activation.js").SessionStoreReader;
 }
 
 /** Full gateway startup context. */

@@ -369,14 +369,12 @@ export {
   acpManagerRuntimeMocks,
   acpMocks,
   agentEventMocks,
-  conversationBindingMocks,
   diagnosticMocks,
   globalMocks,
   hookMocks,
   internalHookMocks,
   messageAuditMocks,
   mocks,
-  pluginConversationBindingMocks,
   replyMediaPathMocks,
   runtimePluginMocks,
   sessionBindingMocks,
@@ -765,3 +763,4 @@ export function createHookCtx() {
     SessionKey: "agent:test:session",
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

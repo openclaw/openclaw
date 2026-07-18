@@ -6,8 +6,8 @@ import { completeDeferredSessionMcpRuntimeRetirement } from "./agent-bundle-mcp-
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { type McpAppCsp, normalizeMcpAppCsp } from "./mcp-app-sandbox.js";
 
-export const MCP_APP_RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
-export const MCP_APP_RESOURCE_MAX_BYTES = 2 * 1024 * 1024;
+const MCP_APP_RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
+const MCP_APP_RESOURCE_MAX_BYTES = 2 * 1024 * 1024;
 const MCP_APP_VIEW_TTL_MS = 10 * 60_000;
 const MCP_APP_VIEW_MAX_ENTRIES = 32;
 const MCP_APP_VIEW_MAX_BYTES = 6 * 1024 * 1024;
@@ -29,6 +29,7 @@ export type McpAppViewLease = {
   csp?: McpAppCsp;
   permissions?: McpAppPermissions;
   allowedAppToolNames?: ReadonlySet<string>;
+  readOnly?: true;
   toolInput: unknown;
   toolResult: CallToolResult;
   expiresAtMs: number;
@@ -201,6 +202,7 @@ export async function fetchMcpAppView(params: {
   toolInput: unknown;
   toolResult: CallToolResult;
   allowedAppToolNames?: ReadonlySet<string>;
+  readOnly?: true;
   viewId?: string;
 }): Promise<
   | {
@@ -260,6 +262,7 @@ export async function fetchMcpAppView(params: {
       ...(params.allowedAppToolNames
         ? { allowedAppToolNames: new Set(params.allowedAppToolNames) }
         : {}),
+      ...(params.readOnly ? { readOnly: true as const } : {}),
       toolInput: params.toolInput,
       toolResult: params.toolResult,
       expiresAtMs: Date.now() + MCP_APP_VIEW_TTL_MS,
@@ -362,10 +365,15 @@ export function buildMcpAppCanvasPayload(view: {
   };
 }
 
-export const testing = {
+const testing = {
   clearViewStore() {
     for (const [viewId, view] of getViewStore()) {
       deleteView(viewId, view);
     }
   },
 };
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.mcpUiResourceTestApi")] =
+    testing;
+}

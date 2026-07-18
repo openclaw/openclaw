@@ -3,6 +3,7 @@
  *
  * Reads bounded, redacted session transcript history after session visibility filtering.
  */
+import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
@@ -43,6 +44,32 @@ const SessionsHistoryToolSchema = Type.Object({
   sessionId: Type.Optional(Type.String({ minLength: 1 })),
   includeTools: Type.Optional(Type.Boolean()),
 });
+
+const SessionsHistoryOutputSchema = Type.Union([
+  Type.Object(
+    {
+      sessionKey: Type.String(),
+      messages: Type.Array(Type.Unknown()),
+      truncated: Type.Boolean(),
+      droppedMessages: Type.Boolean(),
+      contentTruncated: Type.Boolean(),
+      contentRedacted: Type.Boolean(),
+      bytes: Type.Number(),
+      offset: Type.Optional(Type.Number()),
+      nextOffset: Type.Optional(Type.Number()),
+      hasMore: Type.Optional(Type.Boolean()),
+      totalMessages: Type.Optional(Type.Number()),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      status: Type.Union([Type.Literal("error"), Type.Literal("forbidden")]),
+      error: Type.String(),
+    },
+    { additionalProperties: false },
+  ),
+]);
 
 const SESSIONS_HISTORY_MAX_BYTES = 80 * 1024;
 const SESSIONS_HISTORY_TEXT_MAX_CHARS = 4000;
@@ -123,7 +150,8 @@ function sanitizeHistoryContentBlock(block: unknown): {
   }
   if (type === "image") {
     const data = readStringValue(entry.data);
-    const bytes = data ? data.length : undefined;
+    const existingBytes = typeof entry.bytes === "number" ? entry.bytes : undefined;
+    const bytes = data === undefined ? existingBytes : estimateBase64DecodedBytes(data);
     if ("data" in entry) {
       delete entry.data;
       truncated = true;
@@ -355,6 +383,7 @@ export function createSessionsHistoryTool(opts?: {
     displaySummary: SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY,
     description: describeSessionsHistoryTool(),
     parameters: SessionsHistoryToolSchema,
+    outputSchema: SessionsHistoryOutputSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const gatewayCall = opts?.callGateway ?? callGateway;

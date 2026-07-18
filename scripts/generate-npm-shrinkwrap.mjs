@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isMainThread, parentPort, Worker, workerData } from "node:worker_threads";
+import pMap from "p-map";
 import { parse as parseYaml } from "yaml";
 import { listChangedPathsFromGit, listStagedChangedPaths } from "./changed-lanes.mjs";
 import { resolveNpmRunner } from "./npm-runner.mjs";
@@ -1348,21 +1349,6 @@ function updateOrCheckPackage(packageDir, check, changedPaths = []) {
 }
 
 /** @internal Directly tested script implementation detail. */
-export async function runBoundedTasks(items, jobs, runTask) {
-  const results = Array.from({ length: items.length });
-  let nextIndex = 0;
-  const workers = Array.from({ length: Math.min(jobs, items.length) }, async () => {
-    while (nextIndex < items.length) {
-      const index = nextIndex;
-      nextIndex += 1;
-      results[index] = await runTask(items[index], index);
-    }
-  });
-  await Promise.all(workers);
-  return results;
-}
-
-/** @internal Directly tested script implementation detail. */
 export function resolveShrinkwrapJobs(
   rawValue,
   env = process.env,
@@ -1407,19 +1393,23 @@ async function runPackageWorker(packageDir, check, changedPaths) {
 }
 
 async function updateOrCheckPackages({ check, changedPaths, jobs, packageDirs }) {
-  const outcomes = await runBoundedTasks(packageDirs, jobs, async (packageDir) => {
-    try {
-      const output =
-        jobs === 1
-          ? updateOrCheckPackage(packageDir, check, changedPaths)
-          : await runPackageWorker(packageDir, check, changedPaths);
-      return { output };
-    } catch (error) {
-      return {
-        error: error instanceof Error ? error.message : String(error),
-      };
-    }
-  });
+  const outcomes = await pMap(
+    packageDirs,
+    async (packageDir) => {
+      try {
+        const output =
+          jobs === 1
+            ? updateOrCheckPackage(packageDir, check, changedPaths)
+            : await runPackageWorker(packageDir, check, changedPaths);
+        return { output };
+      } catch (error) {
+        return {
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    },
+    { concurrency: jobs, stopOnError: false },
+  );
 
   const errors = [];
   for (const outcome of outcomes) {

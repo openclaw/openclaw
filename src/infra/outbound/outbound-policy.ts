@@ -16,7 +16,7 @@ import { formatTargetDisplay, lookupDirectoryDisplay } from "./target-resolver.j
 /**
  * Builds a channel-native presentation for forwarded cross-context text.
  */
-export type CrossContextPresentationBuilder = (message: string) => MessagePresentation;
+type CrossContextPresentationBuilder = (message: string) => MessagePresentation;
 
 /**
  * Text and optional rich-presentation wrapper for cross-context outbound sends.
@@ -233,10 +233,8 @@ export function enforceCrossContextPolicy(params: {
     cfg: params.cfg,
     agentId: params.agentId,
   });
-  if (messageConfig?.allowCrossContextSend) {
-    return;
-  }
-
+  // Doctor moves the shipped allowCrossContextSend flag into this canonical policy.
+  // Runtime must not keep a second legacy interpretation path here.
   const currentProvider = params.toolContext?.currentChannelProvider;
   const allowWithinProvider = messageConfig?.crossContext?.allowWithinProvider !== false;
   const allowAcrossProviders = messageConfig?.crossContext?.allowAcrossProviders === true;

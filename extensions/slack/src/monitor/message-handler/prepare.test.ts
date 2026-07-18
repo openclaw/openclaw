@@ -20,19 +20,16 @@ import {
   recordSlackThreadParticipation,
 } from "../../sent-thread-cache.js";
 import type { SlackMessageEvent } from "../../types.js";
-import { clearSlackAllowFromCacheForTest } from "../auth.js";
 import type { SlackMonitorContext } from "../context.js";
 import type { SlackEventScope } from "../event-scope.js";
 import { resetSlackThreadStarterCacheForTest } from "../thread.js";
 import { resolveSlackMessageContent } from "./prepare-content.js";
-import { testing as slackRoutingTesting } from "./prepare-routing.js";
 import { prepareSlackMessage } from "./prepare.js";
 import {
   createInboundSlackTestContext,
   createSlackSessionStoreFixture,
   createSlackTestAccount,
 } from "./prepare.test-helpers.js";
-import { clearSlackSubteamMentionCacheForTest } from "./subteam-mentions.js";
 
 const {
   enqueueSystemEventMock,
@@ -80,8 +77,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
   beforeEach(() => {
     resetSlackThreadStarterCacheForTest();
     clearSlackThreadParticipationCache();
-    clearSlackAllowFromCacheForTest();
-    clearSlackSubteamMentionCacheForTest();
     enqueueSystemEventMock.mockClear();
     logVerboseMock.mockClear();
     sendDurableMessageBatchMock.mockReset();
@@ -121,6 +116,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
   const defaultAccount: ResolvedSlackAccount = {
     accountId: "default",
     enabled: true,
+    identity: "bot",
     botTokenSource: "config",
     appTokenSource: "config",
     userTokenSource: "none",
@@ -661,6 +657,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     return {
       accountId: "default",
       enabled: true,
+      identity: "bot",
       botTokenSource: "config",
       appTokenSource: "config",
       userTokenSource: "none",
@@ -2076,7 +2073,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     },
   ] as const)(
     "matches route bindings that use Slack target syntax for $peer.kind peers (#41608)",
-    (testCase) => {
+    async (testCase) => {
       const cfg = {
         session: { dmScope: "per-peer" },
         agents: {
@@ -2090,19 +2087,13 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
         ],
         channels: { slack: { enabled: true, groupPolicy: "open" } },
       } as OpenClawConfig;
-      const route = resolveAgentRoute({
-        cfg: slackRoutingTesting.normalizeSlackRouteBindingConfig(cfg),
-        channel: "slack",
-        accountId: "default",
-        teamId: "T1",
-        peer: {
-          kind: testCase.message.channel_type === "im" ? "direct" : "channel",
-          id:
-            testCase.message.channel_type === "im"
-              ? (testCase.message.user ?? "unknown")
-              : testCase.message.channel,
-        },
-      });
+      const prepared = await prepareMessageWith(
+        createInboundSlackCtx({ cfg, defaultRequireMention: false }),
+        defaultAccount,
+        testCase.message,
+      );
+      assertPrepared(prepared);
+      const route = prepared.route;
 
       expect(route.agentId).toBe("strategist");
       expect(route.matchedBy).toBe("binding.peer");
@@ -4325,15 +4316,12 @@ describe("prepareSlackMessage sender prefix", () => {
       replyToMode: "off",
       threadHistoryScope: "channel",
       threadInheritParent: false,
-      threadRequireExplicitMention: false,
       slashCommand: params.slashCommand,
       textLimit: 2000,
       ackReactionScope: "off",
       mediaMaxBytes: 1000,
       removeAckAfterReply: false,
       logger: { info: vi.fn(), warn: vi.fn() },
-      markMessageSeen: () => false,
-      releaseSeenMessage: () => {},
       shouldDropMismatchedSlackEvent: () => false,
       resolveSlackSystemEventSessionKey: () => "agent:main:slack:channel:c1",
       isChannelAllowed: () => true,
@@ -4503,7 +4491,7 @@ describe("prepareSlackMessage sender prefix", () => {
   });
 });
 
-describe("slack thread.requireExplicitMention", () => {
+describe("slack implicit mention policy", () => {
   const storeFixture = createSlackSessionStoreFixture("openclaw-slack-explicit-mention-");
 
   beforeAll(() => {
@@ -4514,20 +4502,22 @@ describe("slack thread.requireExplicitMention", () => {
     storeFixture.cleanup();
   });
 
-  function createCtxWithExplicitMention(requireExplicitMention: boolean) {
+  function createCtxWithImplicitMentions(implicitMentions?: {
+    replyToBot?: boolean;
+    threadParticipation?: boolean;
+  }) {
     const ctx = createInboundSlackTestContext({
       cfg: {
-        channels: { slack: { enabled: true } },
+        channels: { slack: { enabled: true, implicitMentions } },
         session: {},
       } as OpenClawConfig,
-      threadRequireExplicitMention: requireExplicitMention,
     });
     ctx.resolveUserName = async () => ({ name: "Alice" });
     return ctx;
   }
 
-  it("drops thread reply without explicit mention when requireExplicitMention is true", async () => {
-    const ctx = createCtxWithExplicitMention(true);
+  it("drops a reply to the bot when replyToBot is disabled", async () => {
+    const ctx = createCtxWithImplicitMentions({ replyToBot: false });
     const { storePath } = storeFixture.makeTmpStorePath();
     vi.spyOn(
       await import("openclaw/plugin-sdk/session-store-runtime"),
@@ -4553,8 +4543,11 @@ describe("slack thread.requireExplicitMention", () => {
     expect(result).toBeNull();
   });
 
-  it("allows thread reply with explicit @mention when requireExplicitMention is true", async () => {
-    const ctx = createCtxWithExplicitMention(true);
+  it("allows an explicit mention when all implicit thread signals are disabled", async () => {
+    const ctx = createCtxWithImplicitMentions({
+      replyToBot: false,
+      threadParticipation: false,
+    });
     const { storePath } = storeFixture.makeTmpStorePath();
     vi.spyOn(
       await import("openclaw/plugin-sdk/session-store-runtime"),
@@ -4582,8 +4575,10 @@ describe("slack thread.requireExplicitMention", () => {
     }
   });
 
-  it("allows thread reply without explicit mention when requireExplicitMention is false (default)", async () => {
-    const ctx = createCtxWithExplicitMention(false);
+  it("controls persisted thread participation independently from replies to the bot", async () => {
+    const threadTs = "1700000000.000000";
+    recordSlackThreadParticipation("default", "C123", threadTs);
+    const ctx = createCtxWithImplicitMentions({ threadParticipation: false });
     const { storePath } = storeFixture.makeTmpStorePath();
     vi.spyOn(
       await import("openclaw/plugin-sdk/session-store-runtime"),
@@ -4597,8 +4592,8 @@ describe("slack thread.requireExplicitMention", () => {
       user: "U1",
       text: "hello",
       ts: "1700000001.000003",
-      thread_ts: "1700000000.000000",
-      parent_user_id: "B1",
+      thread_ts: threadTs,
+      parent_user_id: "U2",
     };
     const result = await prepareSlackMessage({
       ctx,
@@ -4606,8 +4601,7 @@ describe("slack thread.requireExplicitMention", () => {
       message,
       opts: { source: "message" },
     });
-    if (!result) {
-      throw new Error("expected Slack thread reply message");
-    }
+    expect(result).toBeNull();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
