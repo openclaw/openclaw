@@ -35,6 +35,8 @@ export type ResolveAgentRouteInput = {
   cfg: OpenClawConfig;
   channel: string;
   accountId?: string | null;
+  /** Provider conversation/chat id used only for exact route bindings. */
+  conversationId?: string | null;
   peer?: RoutePeer | null;
   /** Parent peer for threads — used for binding inheritance when peer doesn't match directly. */
   parentPeer?: RoutePeer | null;
@@ -46,6 +48,8 @@ export type ResolveAgentRouteInput = {
 
 export type ResolvedAgentRoute = {
   agentId: string;
+  /** Exact conversation binding target before legacy missing-agent fallback. */
+  bindingTargetAgentId?: string;
   channel: string;
   accountId: string;
   /** Effective direct-message scope after a matching binding override. */
@@ -58,6 +62,7 @@ export type ResolvedAgentRoute = {
   lastRoutePolicy: "main" | "session";
   /** Match description for debugging/logging. */
   matchedBy:
+    | "binding.conversation"
     | "binding.peer"
     | "binding.peer.parent"
     | "binding.peer.wildcard"
@@ -179,6 +184,7 @@ type NormalizedPeerConstraint =
 
 type NormalizedBindingMatch = {
   accountPattern: string;
+  conversationId: string | null;
   peer: NormalizedPeerConstraint;
   guildId: string | null;
   teamId: string | null;
@@ -192,6 +198,7 @@ type EvaluatedBinding = {
 };
 
 type BindingScope = {
+  conversationId: string;
   peer: RoutePeer | null;
   guildId: string;
   teamId: string;
@@ -219,6 +226,7 @@ const resolvedRouteCacheByCfg = new WeakMap<
 const MAX_RESOLVED_ROUTE_CACHE_KEYS = 4000;
 
 type EvaluatedBindingsIndex = {
+  byConversation: Map<string, EvaluatedBinding[]>;
   byPeer: Map<string, EvaluatedBinding[]>;
   byPeerWildcard: EvaluatedBinding[];
   byGuildWithRoles: Map<string, EvaluatedBinding[]>;
@@ -375,6 +383,7 @@ function collectPeerIndexedBindings(
 }
 
 function buildEvaluatedBindingsIndex(bindings: EvaluatedBinding[]): EvaluatedBindingsIndex {
+  const byConversation = new Map<string, EvaluatedBinding[]>();
   const byPeer = new Map<string, EvaluatedBinding[]>();
   const byPeerWildcard: EvaluatedBinding[] = [];
   const byGuildWithRoles = new Map<string, EvaluatedBinding[]>();
@@ -384,6 +393,10 @@ function buildEvaluatedBindingsIndex(bindings: EvaluatedBinding[]): EvaluatedBin
   const byChannel: EvaluatedBinding[] = [];
 
   for (const binding of bindings) {
+    if (binding.match.conversationId) {
+      pushToIndexMap(byConversation, binding.match.conversationId, binding);
+      continue;
+    }
     if (binding.match.peer.state === "valid") {
       for (const key of peerLookupKeys(binding.match.peer.kind, binding.match.peer.id)) {
         pushToIndexMap(byPeer, key, binding);
@@ -414,6 +427,7 @@ function buildEvaluatedBindingsIndex(bindings: EvaluatedBinding[]): EvaluatedBin
   }
 
   return {
+    byConversation,
     byPeer,
     byPeerWildcard,
     byGuildWithRoles,
@@ -505,6 +519,7 @@ function normalizeBindingMatch(
   match:
     | {
         accountId?: string | undefined;
+        conversationId?: string | undefined;
         peer?: { kind?: string; id?: string } | undefined;
         guildId?: string | undefined;
         teamId?: string | undefined;
@@ -515,6 +530,7 @@ function normalizeBindingMatch(
   const rawRoles = match?.roles;
   return {
     accountPattern: (match?.accountId ?? "").trim(),
+    conversationId: normalizeId(match?.conversationId) || null,
     peer: normalizePeerConstraint(match?.peer),
     guildId: normalizeId(match?.guildId) || null,
     teamId: normalizeId(match?.teamId) || null,
@@ -568,6 +584,7 @@ function formatRoleIdsCacheKey(roleIds: string[]): string {
 function buildResolvedRouteCacheKey(params: {
   channel: string;
   accountId: string;
+  conversationId: string;
   peer: RoutePeer | null;
   parentPeer: RoutePeer | null;
   guildId: string;
@@ -575,7 +592,7 @@ function buildResolvedRouteCacheKey(params: {
   memberRoleIds: string[];
   dmScope: string;
 }): string {
-  return `${params.channel}\t${params.accountId}\t${formatRouteCachePeer(params.peer)}\t${formatRouteCachePeer(params.parentPeer)}\t${params.guildId || "-"}\t${params.teamId || "-"}\t${formatRoleIdsCacheKey(params.memberRoleIds)}\t${params.dmScope}`;
+  return `${params.channel}\t${params.accountId}\t${params.conversationId || "-"}\t${formatRouteCachePeer(params.peer)}\t${formatRouteCachePeer(params.parentPeer)}\t${params.guildId || "-"}\t${params.teamId || "-"}\t${formatRoleIdsCacheKey(params.memberRoleIds)}\t${params.dmScope}`;
 }
 
 function hasGuildConstraint(match: NormalizedBindingMatch): boolean {
@@ -591,6 +608,9 @@ function hasRolesConstraint(match: NormalizedBindingMatch): boolean {
 }
 
 function matchesBindingScope(match: NormalizedBindingMatch, scope: BindingScope): boolean {
+  if (match.conversationId && match.conversationId !== scope.conversationId) {
+    return false;
+  }
   if (match.peer.state === "invalid") {
     return false;
   }
@@ -614,6 +634,7 @@ function matchesBindingScope(match: NormalizedBindingMatch, scope: BindingScope)
 export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentRoute {
   const channel = normalizeToken(input.channel);
   const accountId = normalizeAccountId(input.accountId);
+  const conversationId = normalizeId(input.conversationId);
   const peer = input.peer
     ? {
         kind: normalizeChatType(input.peer.kind) ?? input.peer.kind,
@@ -640,6 +661,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
     ? buildResolvedRouteCacheKey({
         channel,
         accountId,
+        conversationId,
         peer,
         parentPeer,
         guildId,
@@ -682,6 +704,9 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
     );
     const route = {
       agentId: resolvedAgentId,
+      ...(matchedBy === "binding.conversation"
+        ? { bindingTargetAgentId: normalizeAgentId(agentId) }
+        : {}),
       channel,
       accountId,
       dmScope: effectiveDmScope,
@@ -717,16 +742,17 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
 
   if (shouldLogDebug) {
     logDebug(
-      `[routing] resolveAgentRoute: channel=${channel} accountId=${accountId} peer=${formatPeer(peer)} guildId=${guildId || "none"} teamId=${teamId || "none"} bindings=${bindings.length}`,
+      `[routing] resolveAgentRoute: channel=${channel} accountId=${accountId} conversationId=${conversationId ? "present" : "none"} peer=${formatPeer(peer)} guildId=${guildId || "none"} teamId=${teamId || "none"} bindings=${bindings.length}`,
     );
     for (const entry of bindings) {
       logDebug(
-        `[routing] binding: agentId=${entry.binding.agentId} accountPattern=${entry.match.accountPattern || "default"} peer=${formatNormalizedPeer(entry.match.peer)} guildId=${entry.match.guildId ?? "none"} teamId=${entry.match.teamId ?? "none"} roles=${entry.match.roles?.length ?? 0}`,
+        `[routing] binding: agentId=${entry.binding.agentId} accountPattern=${entry.match.accountPattern || "default"} conversationId=${entry.match.conversationId ? "present" : "none"} peer=${formatNormalizedPeer(entry.match.peer)} guildId=${entry.match.guildId ?? "none"} teamId=${entry.match.teamId ?? "none"} roles=${entry.match.roles?.length ?? 0}`,
       );
     }
   }
   // Thread parent inheritance: if peer (thread) didn't match, check parent peer binding
   const baseScope = {
+    conversationId,
     guildId,
     teamId,
     memberRoleIds: memberRoleIdSet,
@@ -739,6 +765,13 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
     candidates: EvaluatedBinding[];
     predicate: (candidate: EvaluatedBinding) => boolean;
   }> = [
+    {
+      matchedBy: "binding.conversation",
+      enabled: Boolean(conversationId),
+      scopePeer: peer,
+      candidates: conversationId ? (bindingsIndex.byConversation.get(conversationId) ?? []) : [],
+      predicate: (candidate) => Boolean(candidate.match.conversationId),
+    },
     {
       matchedBy: "binding.peer",
       enabled: Boolean(peer),

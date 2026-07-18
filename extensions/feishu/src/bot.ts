@@ -89,6 +89,25 @@ const groupNameCache = new Map<string, { name: string; expiresAt: number }>();
 const GROUP_NAME_CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
 const GROUP_NAME_CACHE_MAX_SIZE = 500; // hard cap
 
+type FeishuRouteRejectionReason = "agent_not_found" | "conversation_id_missing" | "unmatched";
+
+class FeishuRouteRejectionError extends Error {
+  readonly code = "no_route";
+
+  constructor(readonly reason: FeishuRouteRejectionReason) {
+    super(`Feishu route rejected: no_route (${reason})`);
+    this.name = "FeishuRouteRejectionError";
+  }
+}
+
+function hasConfiguredRouteAgent(cfg: ClawdbotConfig, agentId: string): boolean {
+  const normalizedAgentId = normalizeAgentId(agentId);
+  const configuredAgentIds = (cfg.agents?.list ?? []).map((agent) => normalizeAgentId(agent.id));
+  return configuredAgentIds.length === 0
+    ? normalizedAgentId === "main"
+    : configuredAgentIds.includes(normalizedAgentId);
+}
+
 function shouldSendNoVisibleReplyFallback(dispatchResult: {
   counts: { final?: number };
   failedCounts?: { final?: number };
@@ -763,6 +782,7 @@ export async function handleFeishuMessage(params: {
       return {
         cfg: candidateCfg,
         dmPolicy: candidateDmPolicy,
+        dmRouteFailClosed: candidateAccount.config.dmRouteFailClosed === true,
         configAllowFrom: candidateConfigAllowFrom,
         ingress,
         shouldComputeCommandAuthorized: shouldComputeCommand,
@@ -811,6 +831,8 @@ export async function handleFeishuMessage(params: {
       return;
     }
     let effectiveDmPolicy = directAuthorization?.dmPolicy ?? dmPolicy;
+    let effectiveDmRouteFailClosed =
+      directAuthorization?.dmRouteFailClosed ?? feishuCfg.dmRouteFailClosed === true;
     let effectiveConfigAllowFrom = directAuthorization?.configAllowFrom ?? configAllowFrom;
     let effectiveDmIngress = dmIngress;
     let effectiveShouldComputeCommandAuthorized =
@@ -826,6 +848,7 @@ export async function handleFeishuMessage(params: {
         }
         effectiveCfg = currentCfg;
         effectiveDmPolicy = currentAuthorization.dmPolicy;
+        effectiveDmRouteFailClosed = currentAuthorization.dmRouteFailClosed;
         effectiveConfigAllowFrom = currentAuthorization.configAllowFrom;
         effectiveDmIngress = currentAuthorization.ingress;
         effectiveShouldComputeCommandAuthorized =
@@ -862,6 +885,7 @@ export async function handleFeishuMessage(params: {
       cfg: effectiveCfg,
       channel: "feishu",
       accountId: account.accountId,
+      conversationId: isGroup ? undefined : ctx.chatId,
       peer: {
         kind: isGroup ? "group" : "direct",
         id: peerId,
@@ -871,7 +895,7 @@ export async function handleFeishuMessage(params: {
 
     // Refresh a binding written after this request snapshot, or create the DM's
     // dynamic agent when the current account policy enables it.
-    if (!isGroup && route.matchedBy === "default") {
+    if (!isGroup && route.matchedBy === "default" && !effectiveDmRouteFailClosed) {
       const runtimeLocal = getFeishuRuntime();
       const result = await maybeCreateDynamicAgent({
         cfg: effectiveCfg,
@@ -895,6 +919,7 @@ export async function handleFeishuMessage(params: {
         }
         effectiveCfg = result.updatedCfg;
         effectiveDmPolicy = refreshedAuthorization.dmPolicy;
+        effectiveDmRouteFailClosed = refreshedAuthorization.dmRouteFailClosed;
         effectiveConfigAllowFrom = refreshedAuthorization.configAllowFrom;
         effectiveDmIngress = refreshedAuthorization.ingress;
         effectiveShouldComputeCommandAuthorized =
@@ -903,6 +928,7 @@ export async function handleFeishuMessage(params: {
           cfg: result.updatedCfg,
           channel: "feishu",
           accountId: account.accountId,
+          conversationId: ctx.chatId,
           peer: { kind: "direct", id: ctx.senderOpenId },
         });
         if (result.created) {
@@ -913,6 +939,9 @@ export async function handleFeishuMessage(params: {
       }
     }
 
+    const coreConversationBindingTargetAgentId =
+      route.matchedBy === "binding.conversation" ? route.bindingTargetAgentId : undefined;
+
     const commandAllowFrom = isGroup
       ? (groupConfig?.allowFrom ?? effectiveConfigAllowFrom)
       : (effectiveDmIngress?.senderAccess.effectiveAllowFrom ?? effectiveConfigAllowFrom);
@@ -920,6 +949,9 @@ export async function handleFeishuMessage(params: {
     const currentConversationId = peerId;
     const parentConversationId = isGroup ? (parentPeer?.id ?? ctx.chatId) : undefined;
     let configuredBinding = null;
+    let configuredConversationRouteMatched = false;
+    let runtimeConversationRouteMatched = false;
+    let overlayTargetAgentId: string | undefined;
     if (feishuAcpConversationSupported) {
       const configuredRoute = resolveConfiguredBindingRoute({
         cfg: effectiveCfg,
@@ -932,6 +964,8 @@ export async function handleFeishuMessage(params: {
         },
       });
       configuredBinding = configuredRoute.bindingResolution;
+      configuredConversationRouteMatched = Boolean(configuredRoute.boundAgentId?.trim());
+      overlayTargetAgentId = configuredRoute.boundAgentId;
       route = configuredRoute.route;
 
       // Bound Feishu conversations intentionally require an exact live conversation-id match.
@@ -947,6 +981,10 @@ export async function handleFeishuMessage(params: {
         },
       });
       route = runtimeRoute.route;
+      runtimeConversationRouteMatched = Boolean(runtimeRoute.boundAgentId?.trim());
+      overlayTargetAgentId = runtimeRoute.boundAgentId?.trim()
+        ? runtimeRoute.boundAgentId
+        : overlayTargetAgentId;
       if (runtimeRoute.bindingRecord) {
         configuredBinding = null;
         log(
@@ -954,6 +992,26 @@ export async function handleFeishuMessage(params: {
             ? `feishu[${account.accountId}]: routed via bound conversation ${currentConversationId} -> ${runtimeRoute.boundSessionKey}`
             : `feishu[${account.accountId}]: plugin-bound conversation ${currentConversationId}`,
         );
+      }
+    }
+
+    if (!isGroup && effectiveDmRouteFailClosed) {
+      if (!ctx.chatId.trim()) {
+        throw new FeishuRouteRejectionError("conversation_id_missing");
+      }
+      const overlayMatched = configuredConversationRouteMatched || runtimeConversationRouteMatched;
+      if (!coreConversationBindingTargetAgentId && !overlayMatched) {
+        throw new FeishuRouteRejectionError("unmatched");
+      }
+      const requiredAgentId = overlayMatched
+        ? (overlayTargetAgentId ?? route.agentId)
+        : coreConversationBindingTargetAgentId;
+      if (
+        !requiredAgentId ||
+        !hasConfiguredRouteAgent(effectiveCfg, requiredAgentId) ||
+        (!overlayMatched && normalizeAgentId(route.agentId) !== normalizeAgentId(requiredAgentId))
+      ) {
+        throw new FeishuRouteRejectionError("agent_not_found");
       }
     }
 

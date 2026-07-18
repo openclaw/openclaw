@@ -44,6 +44,8 @@ export type AgentBindingMatch = {
    * - Any other string: matches that specific account id.
    */
   accountId?: string;
+  /** Exact provider conversation/chat id for route bindings. */
+  conversationId?: string;
   peer?: { kind: ChatType; id: string };
   guildId?: string;
   teamId?: string;
@@ -67,7 +69,7 @@ export type AgentAcpBinding = {
   type: "acp";
   agentId: string;
   comment?: string;
-  match: AgentBindingMatch;
+  match: Omit<AgentBindingMatch, "conversationId">;
   acp?: {
     mode?: "persistent" | "oneshot";
     label?: string;
