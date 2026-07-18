@@ -341,10 +341,16 @@ describe("approval queue ordering and countdown timer", () => {
         vi.fn<RequestFn>(async () => ({})),
         [],
       );
-      enqueueExecApprovalPrompt(state, createExecApproval({ id: "approval-a", createdAtMs: 1_000 }));
+      enqueueExecApprovalPrompt(
+        state,
+        createExecApproval({ id: "approval-a", createdAtMs: 1_000 }),
+      );
       state.execApprovalErrors.set("approval-a", "Approval failed: Error: gateway unavailable");
 
-      enqueueExecApprovalPrompt(state, createExecApproval({ id: "approval-b", createdAtMs: 2_000 }));
+      enqueueExecApprovalPrompt(
+        state,
+        createExecApproval({ id: "approval-b", createdAtMs: 2_000 }),
+      );
       expect(state.execApprovalErrors.get("approval-a")).toBe(
         "Approval failed: Error: gateway unavailable",
       );
