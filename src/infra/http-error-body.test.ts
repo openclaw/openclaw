@@ -11,8 +11,6 @@ vi.mock("../logging/subsystem.js", () => ({
 import { readResponseBodySnippet } from "./http-error-body.js";
 
 function bodyLessResponse(text: string): Response {
-  return {
-function bodyLessResponse(text: string): Response {
   const encoder = new TextEncoder();
   return {
     body: null,
