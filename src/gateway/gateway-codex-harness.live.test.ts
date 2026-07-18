@@ -859,27 +859,53 @@ async function verifyCodexCompactionStress(params: {
     const acknowledgement = `CODEX-LARGE-OUTPUT-${turn}-${randomBytes(3)
       .toString("hex")
       .toUpperCase()}`;
+    const largeOutputCommand = `node -e 'for(let i=0;i<${outputLines};i++){console.log(i.toString(36).padStart(8,"0")+"-"+((i*2654435761)>>>0).toString(16).padStart(8,"0")+"-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789")}'`;
     const { text, events, compactionCount } = await requestAgentTextWithEvents({
       client: params.client,
-      eventPrefixes: ["codex_app_server.", "compaction"],
+      eventPrefixes: ["codex_app_server.", "compaction", "tool"],
       sessionKey: params.sessionKey,
       message: [
         "Large-output compaction probe.",
         "Use the native exec_command tool exactly once.",
-        `Run this exact command: node -e 'for(let i=0;i<${outputLines};i++){console.log(i.toString(36).padStart(8,"0")+"-"+((i*2654435761)>>>0).toString(16).padStart(8,"0")+"-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789")}'`,
+        `Run this exact command: ${largeOutputCommand}`,
         "Set max_output_tokens to 10000.",
         `After the tool completes, reply exactly ${acknowledgement} and nothing else.`,
       ].join("\n"),
     });
     expect(text).toContain(acknowledgement);
     recordCodexAttemptIdentity({ events, sessionKey: params.sessionKey });
-    completedCompactions += events.filter(
+    const turnCompletedCompactions = events.filter(
       (event) =>
         event.stream === "compaction" &&
         event.data?.phase === "end" &&
         event.data?.completed === true,
     ).length;
+    completedCompactions += turnCompletedCompactions;
     reportedCompactions += compactionCount;
+    const commandStartIndex = events.findIndex(
+      (event) =>
+        event.stream === "tool" &&
+        event.data?.phase === "start" &&
+        event.data?.name === "bash" &&
+        event.data?.args &&
+        typeof event.data.args === "object" &&
+        (event.data.args as { command?: unknown }).command === largeOutputCommand,
+    );
+    const commandItemId = events[commandStartIndex]?.data?.itemId;
+    const commandResultIndex = events.findIndex(
+      (event, index) =>
+        index > commandStartIndex &&
+        event.stream === "tool" &&
+        event.data?.phase === "result" &&
+        event.data?.itemId === commandItemId &&
+        event.data?.status === "completed" &&
+        event.data?.isError === false &&
+        event.data?.exitCode === 0,
+    );
+    expect(
+      commandResultIndex,
+      `large-output turn did not successfully complete the exact native command; events=${JSON.stringify(events)}`,
+    ).toBeGreaterThan(commandStartIndex);
 
     const history: { messages?: unknown[] } = await params.client.request("chat.history", {
       sessionKey: params.sessionKey,
@@ -889,9 +915,18 @@ async function verifyCodexCompactionStress(params: {
     const originalLengths = Array.from(serialized.matchAll(/original (\d+) chars/gu), (match) =>
       Number(match[1]),
     );
+    const hasTruncatedToolResult = originalLengths.some((length) => length > 10_000);
+    const postCommandCompaction = events.some(
+      (event, index) =>
+        index > commandResultIndex &&
+        event.stream === "compaction" &&
+        event.data?.phase === "end" &&
+        event.data?.completed === true,
+    );
+    // Native compaction can replace the command row after the successful large-output result.
     expect(
-      originalLengths.some((length) => length > 10_000),
-      `expected a truncated large native tool result; lengths=${JSON.stringify(originalLengths)}`,
+      hasTruncatedToolResult || postCommandCompaction,
+      `expected a truncated large native tool result or its later native compaction; lengths=${JSON.stringify(originalLengths)}`,
     ).toBe(true);
   }
 
