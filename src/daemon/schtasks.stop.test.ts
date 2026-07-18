@@ -544,4 +544,69 @@ describe("Scheduled Task stop/restart cleanup", () => {
       expect(schtasksCalls.at(-1)).toEqual(["/Run", "/TN", "OpenClaw Gateway"]);
     });
   });
+
+  it("uses killSignal SIGKILL for tasklist.exe probe so stalled Windows PID probes do not hang", async () => {
+    // Regression: spawnSync defaults killSignal to SIGTERM, which an unresponsive
+    // tasklist.exe can ignore. Matching #109243 and #109731, the probe must use
+    // SIGKILL so the 1.5s deadline actually reaps the child.
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+    try {
+      await withPreparedGatewayTask(async ({ env, stdout }) => {
+        pushSuccessfulSchtasksResponses(3);
+        findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4242]);
+        inspectPortUsage
+          .mockResolvedValueOnce(busyPortUsage(4242))
+          .mockResolvedValueOnce(freePortUsage());
+
+        // taskkill.exe succeeds; tasklist.exe returns no matching PID ("missing");
+        // PowerShell snapshot fails so probeProcessState falls through to tasklist.
+        spawnSync.mockImplementation((cmd: string) => {
+          if (typeof cmd === "string" && cmd.endsWith("tasklist.exe")) {
+            return {
+              pid: 0,
+              output: [null, "", ""],
+              stdout: "",
+              stderr: "",
+              status: 0,
+              signal: null,
+            };
+          }
+          if (typeof cmd === "string" && cmd.endsWith("taskkill.exe")) {
+            return {
+              pid: 0,
+              output: [null, "", ""],
+              stdout: "",
+              stderr: "",
+              status: 0,
+              signal: null,
+            };
+          }
+          return {
+            pid: 0,
+            output: [null, "", ""],
+            stdout: "",
+            stderr: "",
+            status: 1,
+            signal: null,
+          };
+        });
+
+        await stopScheduledTask({ env, stdout });
+
+        const tasklistCall = spawnSync.mock.calls.find(
+          ([cmd]) => typeof cmd === "string" && cmd.endsWith("tasklist.exe"),
+        );
+        expect(tasklistCall).toBeDefined();
+        expect(tasklistCall?.[2]).toMatchObject({
+          encoding: "utf8",
+          timeout: 1_500,
+          killSignal: "SIGKILL",
+          windowsHide: true,
+        });
+      });
+    } finally {
+      Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+    }
+  });
 });

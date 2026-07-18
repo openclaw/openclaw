@@ -789,7 +789,7 @@ function probeProcessState(pid: number): "alive" | "missing" | "unknown" {
     const tasklist = spawnSync(
       getWindowsSystem32ExePath("tasklist.exe"),
       ["/FI", `PID eq ${pid}`, "/FO", "CSV", "/NH"],
-      { encoding: "utf8", timeout: 1_500, windowsHide: true },
+      { encoding: "utf8", timeout: 1_500, killSignal: "SIGKILL", windowsHide: true },
     );
     if (tasklist.error || tasklist.status !== 0) {
       return "unknown";
