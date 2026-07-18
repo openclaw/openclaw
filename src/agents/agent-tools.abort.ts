@@ -13,6 +13,37 @@ function throwAbortError(): never {
   throw createAbortError("Aborted");
 }
 
+/**
+ * Races a tool execute promise against the combined abort signal so an abort
+ * settles the wrapped call immediately instead of awaiting the tool forever.
+ * JavaScript cannot cancel a running promise: a tool that never observes the
+ * signal keeps executing in the background and may settle later, but its late
+ * settlement is detached here so the result never lands in an aborted run.
+ * Tool settlements pass through untouched to preserve tool error semantics.
+ */
+function raceWithAbortSignal<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) {
+    return Promise.reject(createAbortError("Aborted"));
+  }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      signal.removeEventListener("abort", onAbort);
+      reject(createAbortError("Aborted"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
 /** Wrap a tool so every execute call observes the supplied run abort signal. */
 export function wrapToolWithAbortSignal(
   tool: AnyAgentTool,
@@ -32,7 +63,10 @@ export function wrapToolWithAbortSignal(
       if (combinedSignal.aborted) {
         throwAbortError();
       }
-      return await execute(toolCallId, params, combinedSignal, onUpdate);
+      return await raceWithAbortSignal(
+        execute(toolCallId, params, combinedSignal, onUpdate),
+        combinedSignal,
+      );
     },
   };
   copyPluginToolMeta(tool, wrappedTool);
