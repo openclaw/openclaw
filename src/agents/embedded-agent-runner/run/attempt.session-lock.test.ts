@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { resolveSessionTranscriptPathInDir } from "../../../config/sessions/paths.js";
 import {
   loadTranscriptEvents,
@@ -42,6 +43,7 @@ const lockOptions = {
 };
 
 const tempDirs: string[] = [];
+const autoTempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(async () => {
   vi.restoreAllMocks();
   resetEmbeddedAttemptSessionFileOwnersForTest();
@@ -2227,8 +2229,7 @@ describe("embedded attempt session lock lifecycle", () => {
   });
 
   it("persists compaction through the SQLite transcript owner without a JSONL append fence", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attempt-sqlite-compaction-"));
-    tempDirs.push(dir);
+    const dir = autoTempDirs.make("openclaw-attempt-sqlite-compaction-");
     const sessionId = "sqlite-compaction-session";
     const sessionKey = "sqlite-compaction";
     const storePath = path.join(dir, "openclaw-agent.sqlite");
