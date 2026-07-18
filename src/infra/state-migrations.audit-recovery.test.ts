@@ -489,7 +489,7 @@ describe("legacy audit recovery byte handling", () => {
         summary: "Repeated operation",
       };
       await fs.mkdir(path.dirname(sourcePath), { recursive: true });
-      await fs.writeFile(sourcePath, `${JSON.stringify(event)}\n`);
+      await fs.writeFile(sourcePath, `${JSON.stringify(event)}\n\n${JSON.stringify(event)}\n`);
       await migrateLegacyAuditLogs({
         detected: detectLegacyAuditLogs({ stateDir, doctorOnlyStateMigrations: true }),
         stateDir,
@@ -506,11 +506,11 @@ describe("legacy audit recovery byte handling", () => {
         listSystemAgentAuditEntriesForTests({
           env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
         }).map((entry) => entry.value.summary),
-      ).toEqual(["Repeated operation", "Repeated operation"]);
+      ).toEqual(["Repeated operation", "Repeated operation", "Repeated operation"]);
       const sanitizedRows = (await fs.readFile(`${sourcePath}.migrated`, "utf8"))
         .trim()
         .split("\n");
-      expect(sanitizedRows).toHaveLength(2);
+      expect(sanitizedRows).toHaveLength(3);
 
       runOpenClawStateWriteTransaction(
         (database) => {
@@ -533,9 +533,9 @@ describe("legacy audit recovery byte handling", () => {
         listSystemAgentAuditEntriesForTests({
           env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
         }),
-      ).toHaveLength(2);
+      ).toHaveLength(3);
       expect((await fs.readFile(`${sourcePath}.migrated`, "utf8")).trim().split("\n")).toHaveLength(
-        2,
+        3,
       );
     });
   });

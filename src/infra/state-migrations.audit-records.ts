@@ -72,8 +72,9 @@ export function prepareLegacyAuditRecords(
         ? sanitizeConfigAuditRecord(parsed as ConfigAuditRecord)
         : (redactSecrets(parsed) as SystemAgentAuditEntry);
     const digest = createHash("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 16);
+    const recordOrdinal = sourceOrdinalBase + records.length + 1;
     records.push({
-      key: `legacy:${source.kind}:${sourceGeneration}:${sourceOrdinalBase + index + 1}:${digest}`,
+      key: `legacy:${source.kind}:${sourceGeneration}:${recordOrdinal}:${digest}`,
       value,
       createdAt: legacyAuditRecordCreatedAt(source, value),
     });
