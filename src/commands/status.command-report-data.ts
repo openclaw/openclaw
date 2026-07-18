@@ -89,6 +89,7 @@ export async function buildStatusCommandReportData(
     accentDim: (value: string) => string;
     updateValue?: string;
     updateRestartValue?: string | null;
+    updateRollbackValue?: string | null;
     theme: {
       heading: (value: string) => string;
       muted: (value: string) => string;
@@ -119,6 +120,7 @@ export async function buildStatusCommandReportData(
     resolveMemoryCacheSummary: params.resolveMemoryCacheSummary,
     updateValue: params.updateValue,
     updateRestartValue: params.updateRestartValue,
+    updateRollbackValue: params.updateRollbackValue,
   });
 
   const sessionsColumns = [

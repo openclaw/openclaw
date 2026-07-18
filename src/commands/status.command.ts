@@ -11,6 +11,10 @@ import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text
 import { withProgress } from "../cli/progress.js";
 import { OPENCLAW_WRAPPER_ENV_KEY } from "../daemon/program-args.js";
 import { readRestartSentinel } from "../infra/restart-sentinel.js";
+import {
+  formatUpdateRollbackNarration,
+  readUpdateRollbackTransaction,
+} from "../infra/update-rollback.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { runStatusJsonCommand } from "./status-json-command.ts";
@@ -331,6 +335,9 @@ export async function statusCommand(
       formatTimeAgo,
     },
   );
+  const updateRollbackValue = formatUpdateRollbackNarration(
+    await readUpdateRollbackTransaction().catch(() => null),
+  );
   const lines = await buildStatusCommandReportLines(
     await buildStatusCommandReportData({
       opts,
@@ -371,6 +378,7 @@ export async function statusCommand(
         ? warn(`available · ${updateSurface.updateLine}`)
         : updateSurface.updateLine,
       updateRestartValue,
+      updateRollbackValue,
     }),
   );
   for (const line of lines) {

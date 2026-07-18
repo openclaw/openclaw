@@ -32,6 +32,7 @@ import {
   type NpmGlobalPrefixLayout,
   type ResolvedGlobalInstallTarget,
 } from "./update-global.js";
+import { retainCurrentPackageForUpdate } from "./update-retention.js";
 
 const PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS = "allow" as const;
 
@@ -831,17 +832,20 @@ export async function runGlobalPackageUpdateSteps(params: {
   timeoutMs: number;
   env?: NodeJS.ProcessEnv;
   installCwd?: string;
+  retainPreviousPackage?: boolean;
   postVerifyStep?: (packageRoot: string) => Promise<PackageUpdateStepResult | null>;
 }): Promise<{
   steps: PackageUpdateStepResult[];
   verifiedPackageRoot: string | null;
   afterVersion: string | null;
   failedStep: PackageUpdateStepResult | null;
+  retainedPackageRoot?: string;
 }> {
   let stagedInstall: StagedNpmInstall | null | undefined;
   let packedInstallDir: string | null = null;
 
   try {
+    const steps: PackageUpdateStepResult[] = [];
     const pnpmPreflight = await validatePnpmIsolatedUpdate({
       installTarget: params.installTarget,
       packageName: params.packageName,
@@ -856,6 +860,28 @@ export async function runGlobalPackageUpdateSteps(params: {
         afterVersion: null,
         failedStep: pnpmPreflight.failedStep,
       };
+    }
+    const currentPackageRoot = params.packageRoot ?? params.installTarget.packageRoot;
+    let retainedPackageRoot: string | undefined;
+    if (currentPackageRoot && params.retainPreviousPackage === true) {
+      const retained = await retainCurrentPackageForUpdate({
+        packageRoot: currentPackageRoot,
+        globalRoot: params.installTarget.globalRoot,
+        expectedVersion: await readPackageVersionIfPresent(currentPackageRoot),
+        runCommand: params.runCommand,
+        timeoutMs: params.timeoutMs,
+        env: params.env,
+      });
+      steps.push(retained.step);
+      if (!retained.retainedRoot) {
+        return {
+          steps,
+          verifiedPackageRoot: currentPackageRoot,
+          afterVersion: null,
+          failedStep: retained.step,
+        };
+      }
+      retainedPackageRoot = retained.retainedRoot;
     }
     // Keep the preflight and mutation on the same pnpm executable. `pnpm bin -g`
     // already verifies its reported bin is on PATH, so no PATH rewrite is needed.
@@ -878,15 +904,15 @@ export async function runGlobalPackageUpdateSteps(params: {
     );
     stagedInstall = preparedInstall.stagedInstall;
     if (preparedInstall.failedStep) {
+      steps.push(preparedInstall.failedStep);
       return {
-        steps: [preparedInstall.failedStep],
+        steps,
         verifiedPackageRoot: params.packageRoot ?? null,
         afterVersion: null,
         failedStep: preparedInstall.failedStep,
       };
     }
 
-    const steps: PackageUpdateStepResult[] = [];
     const installCommandTarget = stagedInstall?.installTarget ?? resolvedInstallTarget;
     const preparedSpec = await prepareNpmGitSourceInstallSpec({
       installTarget: installCommandTarget,
@@ -1202,6 +1228,7 @@ export async function runGlobalPackageUpdateSteps(params: {
       verifiedPackageRoot,
       afterVersion,
       failedStep,
+      ...(retainedPackageRoot ? { retainedPackageRoot } : {}),
     };
   } finally {
     await cleanupStagedNpmInstall(stagedInstall ?? null);

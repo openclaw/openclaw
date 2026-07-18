@@ -6,6 +6,11 @@ import { readConfigFileSnapshot, resolveGatewayPort } from "../../config/config.
 import { readLastGatewayErrorLine } from "../../daemon/diagnostics.js";
 import { inspectPortUsage } from "../../infra/ports.js";
 import { readRestartSentinel } from "../../infra/restart-sentinel.js";
+import {
+  formatUpdateRollbackNarration,
+  readUpdateRollbackTransaction,
+  type UpdateRollbackTransaction,
+} from "../../infra/update-rollback.js";
 import { buildPluginCompatibilityNotices } from "../../plugins/status.js";
 import { buildWorkspaceSkillStatus } from "../../skills/discovery/status.js";
 import { getRemoteSkillEligibility } from "../../skills/runtime/remote.js";
@@ -57,6 +62,7 @@ async function resolveStatusAllLocalDiagnosis(params: {
     remoteUrlMissing: boolean;
     secretDiagnostics: StatusScanOverviewResult["secretDiagnostics"];
     sentinel: Awaited<ReturnType<typeof readRestartSentinel>> | null;
+    updateRollback: UpdateRollbackTransaction | null;
     lastErr: string | null;
     port: number;
     portUsage: Awaited<ReturnType<typeof inspectPortUsage>> | null;
@@ -104,6 +110,7 @@ async function resolveStatusAllLocalDiagnosis(params: {
   params.progress.setLabel("Checking local state…");
   // These probes are intentionally best-effort so status-all can still print a partial report.
   const sentinel = await readRestartSentinel().catch(() => null);
+  const updateRollback = await readUpdateRollbackTransaction().catch(() => null);
   const lastErr = await readLastGatewayErrorLine(process.env).catch(() => null);
   const port = resolveGatewayPort(overview.cfg);
   const portUsage = await inspectPortUsage(port).catch(() => null);
@@ -147,6 +154,7 @@ async function resolveStatusAllLocalDiagnosis(params: {
       remoteUrlMissing: overview.gatewaySnapshot.remoteUrlMissing,
       secretDiagnostics: overview.secretDiagnostics,
       sentinel,
+      updateRollback,
       lastErr,
       port,
       portUsage,
@@ -203,6 +211,7 @@ export async function buildStatusAllReportData(params: {
     configPath,
     secretDiagnosticsCount: params.overview.secretDiagnostics.length,
     updateRestartValue: formatUpdateRestartStatusValue(diagnosis.sentinel?.payload),
+    updateRollbackValue: formatUpdateRollbackNarration(diagnosis.updateRollback),
     agentStatus: params.overview.agentStatus,
     tailscaleBackendState: diagnosis.tailscale.backendState,
   });

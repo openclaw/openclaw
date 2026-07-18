@@ -174,6 +174,29 @@ Package-manager updates additionally verify the restarted Gateway reports the
 expected package version; git-checkout updates verify gateway health and
 service readiness after the rebuild.
 
+For a restart-enabled package-manager update of an owned macOS launchd or Linux
+systemd Gateway service, OpenClaw also keeps one launch-verified copy of the
+previous package. The refreshed service gets 60 seconds to reach `/readyz` on
+its first post-update start. If the new process exits or never becomes ready,
+the service wrapper restores that retained package and starts it without
+exiting through the supervisor, so launchd/systemd cannot race the fallback.
+The next `openclaw status`, `openclaw doctor`, and custodian greeting name the
+failed and restored versions and show the retry command. A later successful
+update replaces the one retained copy and clears the rollback notice after the
+new Gateway becomes ready.
+
+The handshake uses one owner-only product marker at
+`$OPENCLAW_STATE_DIR/update-rollback`. It contains only transaction state,
+versions, package roots, the Gateway port, and a bounded failure summary. The
+POSIX service wrapper parses it before launching Node; it is not general
+runtime state and no second rollback sidecar is written.
+
+This rollback handshake is default-on and has no config key. Set
+`OPENCLAW_UPDATE_NO_ROLLBACK=1` in the managed service environment to bypass
+retention and the first-start handshake. `--no-restart`, git/source updates,
+Windows services, and services OpenClaw cannot prove it owns keep the existing
+update behavior; they do not arm this package rollback transaction.
+
 Package-manager updates normally keep using the Node binary recorded in the
 managed service. If that Node cannot run the target release, but the current
 CLI Node can and the service is proven to belong to the package being updated,
