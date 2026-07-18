@@ -153,6 +153,9 @@ function readPositiveInteger(value: unknown): number | undefined {
       : typeof value === "string" && /^(?:0|[1-9]\d*)$/.test(value)
         ? Number(value)
         : undefined;
+  if (number === undefined) {
+    return undefined;
+  }
   return Number.isSafeInteger(number) && number > 0 ? number : undefined;
 }
 
