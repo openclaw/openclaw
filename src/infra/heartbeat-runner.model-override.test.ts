@@ -237,14 +237,6 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
     });
   });
 
-  it("preserves an unlimited default agent timeout for heartbeat runs", async () => {
-    const replyOpts = await runDefaultsHeartbeat({ defaultTimeoutSeconds: 0, every: "30m" });
-    expectReplyOptions(replyOpts, {
-      isHeartbeat: true,
-      timeoutOverrideSeconds: 0,
-    });
-  });
-
   it("passes bootstrapContextMode when heartbeat lightContext is enabled", async () => {
     const replyOpts = await runDefaultsHeartbeat({ lightContext: true });
     expectReplyOptions(replyOpts, {

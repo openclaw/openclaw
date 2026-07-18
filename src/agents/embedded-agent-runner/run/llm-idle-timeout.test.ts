@@ -12,7 +12,6 @@ import type { StreamFn } from "../../runtime/index.js";
 import { resolveLlmIdleTimeoutMs, streamWithIdleTimeout } from "./llm-idle-timeout.js";
 
 const DEFAULT_LLM_IDLE_TIMEOUT_MS = 120_000;
-const SELF_HOSTED_LLM_IDLE_TIMEOUT_MS = 300_000;
 const CRON_LLM_IDLE_TIMEOUT_MS = 60_000;
 
 describe("resolveLlmIdleTimeoutMs", () => {
@@ -192,28 +191,8 @@ describe("resolveLlmIdleTimeoutMs", () => {
     ).toBe(CRON_LLM_IDLE_TIMEOUT_MS);
   });
 
-  it.each([
-    [
-      "cloud",
-      { provider: "openai", baseUrl: "https://api.openai.com/v1" },
-      DEFAULT_LLM_IDLE_TIMEOUT_MS,
-    ],
-    [
-      "self-hosted",
-      { provider: "vllm", baseUrl: "https://gpu.example.com/v1" },
-      SELF_HOSTED_LLM_IDLE_TIMEOUT_MS,
-    ],
-  ])("uses the provider-class idle default for no-timeout %s models", (_label, model, expected) => {
-    expect(resolveLlmIdleTimeoutMs({ runTimeoutMs: MAX_TIMER_TIMEOUT_MS, model })).toBe(expected);
-  });
-
-  it("keeps local base URLs opted out under no-timeout runs", () => {
-    expect(
-      resolveLlmIdleTimeoutMs({
-        runTimeoutMs: MAX_TIMER_TIMEOUT_MS,
-        model: { baseUrl: "http://127.0.0.1:11434" },
-      }),
-    ).toBe(0);
+  it("disables the idle watchdog when an explicit run timeout disables timeouts", () => {
+    expect(resolveLlmIdleTimeoutMs({ runTimeoutMs: MAX_TIMER_TIMEOUT_MS })).toBe(0);
   });
 
   it("honors an explicit models.providers.<id>.timeoutSeconds for cloud providers (#77744, #78361)", () => {
@@ -467,57 +446,6 @@ describe("resolveLlmIdleTimeoutMs", () => {
       30_000,
     );
   });
-
-  it.each([
-    ["local keeps no class ceiling", { baseUrl: "http://127.0.0.1:11434" }, 3_600_000],
-    [
-      "self-hosted keeps the 300s tier",
-      { provider: "vllm", baseUrl: "https://gpu.example.com/v1" },
-      300_000,
-    ],
-    ["cloud keeps the 120s default", { provider: "openai" }, 120_000],
-  ])("large agents.defaults.timeoutSeconds: %s", (_label, model, expected) => {
-    const cfg = { agents: { defaults: { timeoutSeconds: 3_600 } } } as OpenClawConfig;
-    expect(resolveLlmIdleTimeoutMs({ cfg, model })).toBe(expected);
-  });
-
-  it.each([
-    ["local keeps no class ceiling", { baseUrl: "http://127.0.0.1:11434" }, 900_000],
-    [
-      "self-hosted keeps the 300s tier",
-      { provider: "vllm", baseUrl: "https://gpu.example.com/v1" },
-      300_000,
-    ],
-    ["cloud keeps the 120s default", { provider: "openai" }, 120_000],
-  ])("explicit run timeout above the tiers: %s", (_label, model, expected) => {
-    expect(resolveLlmIdleTimeoutMs({ runTimeoutMs: 900_000, model })).toBe(expected);
-  });
-
-  it("explicit run timeouts below the class tier still bound self-hosted idle", () => {
-    expect(
-      resolveLlmIdleTimeoutMs({
-        runTimeoutMs: 90_000,
-        model: { provider: "vllm", baseUrl: "https://gpu.example.com/v1" },
-      }),
-    ).toBe(90_000);
-  });
-
-  it("cron exempts provider-id self-hosted models from the 60s clamp", () => {
-    expect(
-      resolveLlmIdleTimeoutMs({
-        trigger: "cron",
-        runTimeoutMs: 900_000,
-        model: { provider: "vllm", baseUrl: "https://gpu.example.com/v1" },
-      }),
-    ).toBe(900_000);
-    expect(
-      resolveLlmIdleTimeoutMs({
-        trigger: "cron",
-        runTimeoutMs: 900_000,
-        model: { provider: "openai" },
-      }),
-    ).toBe(60_000);
-  });
 });
 
 describe("streamWithIdleTimeout", () => {
@@ -606,47 +534,6 @@ describe("streamWithIdleTimeout", () => {
     const next = expect(iterator.next()).rejects.toThrow(/LLM idle timeout/);
     await vi.advanceTimersByTimeAsync(50);
     await next;
-  });
-
-  it("creation-only scope bounds stream creation but not iterator gaps", async () => {
-    vi.useFakeTimers();
-    // Creation hang: still rejected at the deadline.
-    const hangingCreate = vi.fn(
-      () => new Promise<AssistantMessageEventStream>(() => {}),
-    ) as unknown as Parameters<typeof streamWithIdleTimeout>[0];
-    const onIdleTimeout = vi.fn();
-    const wrappedCreate = streamWithIdleTimeout(hangingCreate, 50, onIdleTimeout, {
-      scope: "creation-only",
-    });
-    const model = {} as Parameters<typeof hangingCreate>[0];
-    const context = {} as Parameters<typeof hangingCreate>[1];
-    const options = {} as Parameters<typeof hangingCreate>[2];
-    const pending = expect(wrappedCreate(model, context, options)).rejects.toThrow(
-      /LLM idle timeout/,
-    );
-    await vi.advanceTimersByTimeAsync(50);
-    await pending;
-    expect(onIdleTimeout).toHaveBeenCalledTimes(1);
-
-    // Iterator gap: never bounded — local providers own their stream pacing.
-    const slowStream = createNeverYieldingStream();
-    const slowFn = vi.fn().mockReturnValue(slowStream);
-    const wrappedGaps = streamWithIdleTimeout(slowFn, 50, onIdleTimeout, {
-      scope: "creation-only",
-    });
-    const stream = wrappedGaps(
-      model as Parameters<typeof slowFn>[0],
-      context as Parameters<typeof slowFn>[1],
-      options as Parameters<typeof slowFn>[2],
-    ) as AsyncIterable<unknown>;
-    const iterator = stream[Symbol.asyncIterator]();
-    let settled = false;
-    void iterator.next().finally(() => {
-      settled = true;
-    });
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(settled).toBe(false);
-    expect(onIdleTimeout).toHaveBeenCalledTimes(1);
   });
 
   it("clears the connection timer when stream setup rejects", async () => {

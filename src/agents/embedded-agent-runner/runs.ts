@@ -4,7 +4,6 @@
 import {
   abortActiveReplyRuns,
   abortReplyRunBySessionId,
-  expireStaleReplyRunBySessionId,
   forceClearReplyRunBySessionId,
   isReplyRunEvidenceStaleBySessionId,
   isReplyRunActiveForSessionId,
@@ -727,19 +726,7 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
   reason?: string;
 }): Promise<AbortAndDrainEmbeddedAgentRunResult> {
   const settleMs = params.settleMs ?? 15_000;
-  // Stuck recovery is a staleness expiry. Stamp run_stalled before aborting the
-  // handle so synchronous abort callbacks cannot misattribute it to the user.
-  const expiredReplyRun =
-    params.reason === "stuck_recovery" &&
-    expireStaleReplyRunBySessionId(params.sessionId, "stuck_recovery");
-  if (expiredReplyRun && !ACTIVE_EMBEDDED_RUNS.has(params.sessionId)) {
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    const drained = await waitForEmbeddedAgentRunEnd(params.sessionId, settleMs);
-    return { aborted: true, drained, forceCleared: false };
-  }
-  const aborted = abortEmbeddedAgentRun(params.sessionId) || expiredReplyRun;
+  const aborted = abortEmbeddedAgentRun(params.sessionId);
   const drained = aborted ? await waitForEmbeddedAgentRunEnd(params.sessionId, settleMs) : false;
   const forceCleared =
     params.forceClear === true && (!aborted || !drained)

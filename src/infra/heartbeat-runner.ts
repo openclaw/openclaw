@@ -272,9 +272,6 @@ function resolveHeartbeatTimeoutOverrideSeconds(cfg: OpenClawConfig, heartbeat?:
     typeof agentDefaultTimeoutSeconds === "number" &&
     Number.isFinite(agentDefaultTimeoutSeconds)
   ) {
-    if (agentDefaultTimeoutSeconds === 0) {
-      return 0;
-    }
     return Math.max(1, Math.floor(agentDefaultTimeoutSeconds));
   }
   // The wake dispatcher awaits heartbeat turns serially. Keep unset heartbeat

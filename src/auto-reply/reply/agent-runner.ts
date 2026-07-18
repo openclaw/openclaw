@@ -1293,8 +1293,6 @@ export async function runReplyAgent(params: {
       },
     );
     if (steerOutcome.queued) {
-      const activeReplyOperation = sessionKey ? replyRunRegistry.get(sessionKey) : undefined;
-      activeReplyOperation?.recordActivity();
       await touchActiveSessionEntry();
       typing.cleanup();
       return undefined;

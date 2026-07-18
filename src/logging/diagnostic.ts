@@ -178,20 +178,10 @@ async function recoverStuckSession(
     });
 }
 
-/**
- * @deprecated Unused by core since the dispatch-side recovery loop was removed
- * (#101910); reply admission owns stale-run reclaim now. Kept only because the
- * plugin SDK re-exports this module; scheduled for removal in the next SDK major.
- */
 export function isStuckSessionRecoveryEnabled(config?: OpenClawConfig): boolean {
   return areDiagnosticsEnabledForProcess() && isDiagnosticsEnabled(config);
 }
 
-/**
- * @deprecated Unused by core since the dispatch-side recovery loop was removed
- * (#101910); reply admission owns stale-run reclaim now. Kept only because the
- * plugin SDK re-exports this module; scheduled for removal in the next SDK major.
- */
 export async function requestStuckDiagnosticSessionRecovery(
   params: StuckSessionRecoveryRequest,
 ): Promise<StuckSessionRecoveryOutcome | undefined> {

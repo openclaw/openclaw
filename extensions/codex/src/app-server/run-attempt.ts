@@ -2857,7 +2857,6 @@ export async function runCodexAppServerAttempt(
           threadId: thread.threadId,
           turnId: activeTurnId,
           reason: String(runAbortController.signal.reason ?? "timeout"),
-          suspectPhysicalClient: turnWatchTimeoutKind === "terminal",
         });
       })().finally(() => {
         resolveCompletion?.();
