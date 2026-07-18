@@ -341,6 +341,12 @@ function stateStatus(plugin: PluginCatalogItem) {
   return renderSettingsStatus({ kind, label: stateLabel(plugin) });
 }
 
+/** Rows pair the status with an Enable/Disable button that already implies the
+ * healthy states, so only the error status earns a pill next to the actions. */
+function rowStateStatus(plugin: PluginCatalogItem) {
+  return plugin.state === "error" ? stateStatus(plugin) : nothing;
+}
+
 function originLabel(origin: string): string {
   switch (origin) {
     case "bundled":
@@ -614,7 +620,7 @@ function renderInstalledRow(plugin: PluginCatalogItem, props: PluginsViewProps):
         ])}
       </div>
       <div class="settings-row__control">
-        ${stateStatus(plugin)} ${renderCatalogActions(plugin, props, busy, key)}
+        ${rowStateStatus(plugin)} ${renderCatalogActions(plugin, props, busy, key)}
       </div>
       ${plugin.error
         ? html`<div class="plugins-row-message plugins-row-message--error" role="alert">
@@ -697,10 +703,6 @@ function renderMcpRow(server: McpServerSummary, props: PluginsViewProps): Templa
         ])}
       </div>
       <div class="settings-row__control">
-        ${renderSettingsStatus({
-          kind: server.enabled ? "ok" : "muted",
-          label: server.enabled ? t("pluginsPage.enabled") : t("pluginsPage.disabled"),
-        })}
         ${renderToggleButton(props, props.mcpBusy, {
           enabled: server.enabled,
           onToggle: (enabled) => props.onMcpToggle(server.name, enabled),
@@ -821,7 +823,7 @@ function renderCatalogRow(plugin: PluginCatalogItem, props: PluginsViewProps): T
         ${renderMetaLine([plugin.origin ? originLabel(plugin.origin) : nothing])}
       </div>
       <div class="settings-row__control">
-        ${plugin.installed ? stateStatus(plugin) : nothing}
+        ${plugin.installed ? rowStateStatus(plugin) : nothing}
         ${renderCatalogActions(plugin, props, busy, key)}
       </div>
       ${plugin.error
@@ -966,7 +968,7 @@ function renderClawHubResult(item: PluginSearchResult, props: PluginsViewProps):
       </div>
       <div class="settings-row__control">
         ${installed
-          ? html`${stateStatus(installed)}${renderCatalogActions(installed, props, busy, key)}`
+          ? html`${rowStateStatus(installed)}${renderCatalogActions(installed, props, busy, key)}`
           : renderInstallButton(props, busy, key, pkg.displayName, {
               source: "clawhub",
               packageName: pkg.name,

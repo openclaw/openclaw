@@ -96,26 +96,28 @@
   min-width: 0;
 }
 
+/* Header and description indent to var(--space-4) so the eyebrow label lines
+   up with the row content inside the group surface below it. */
 .settings-section__header {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: var(--space-3);
-  padding: 0 var(--space-1);
+  padding: 0 var(--space-4);
 }
 
 .settings-section__heading {
   margin: 0;
-  font-size: var(--control-ui-text-sm);
+  font-size: var(--control-ui-text-xs);
   font-weight: 600;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.06em;
   color: var(--muted-strong);
   text-transform: uppercase;
 }
 
 .settings-section__desc {
   margin: calc(-1 * var(--space-2)) 0 0;
-  padding: 0 var(--space-1);
+  padding: 0 var(--space-4);
   font-size: var(--control-ui-text-sm);
   line-height: 1.5;
   color: var(--muted);
@@ -408,6 +410,35 @@ wa-radio-group.settings-segmented::part(radios) {
 .settings-segmented__btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* ── Web Awesome tab strips reusing the segmented look (hub tabs) ──
+   wa-tab-group ships an underline track/indicator and 1em tab padding in its
+   shadow DOM; both would stack on top of the pill styling above, so they are
+   neutralized and the pill metrics come from the host classes instead. */
+
+wa-tab-group.settings-segmented {
+  --track-color: transparent;
+  --indicator-color: transparent;
+}
+
+wa-tab-group.settings-segmented::part(body) {
+  display: none;
+}
+
+wa-tab-group.settings-segmented::part(tabs) {
+  gap: 2px;
+}
+
+wa-tab.settings-segmented__btn::part(base) {
+  padding: 0;
+  gap: 6px;
+  font: inherit;
+  color: inherit;
+}
+
+wa-tab.settings-segmented__btn:focus-visible::part(base) {
+  outline: none;
 }
 
 .settings-input,
