@@ -398,6 +398,102 @@ class ChatQuestionTest {
 
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)
+  fun successfulRefreshRecordsApplyWhenAnotherFallbackFails() =
+    runTest {
+      val json = Json { ignoreUnknownKeys = true }
+      val listedPending = record(id = "ask_listed")
+      val recoveredPending = record(id = "ask_recovered")
+      val failingPending = record(id = "ask_failing")
+      val newlyMissingPending = record(id = "ask_newly_missing")
+      val listedAnswered =
+        listedPending.copy(
+          status = "answered",
+          answers = QuestionAnswers(mapOf("meal" to QuestionAnswersAnswersValue(listOf("Tacos")))),
+        )
+      val recoveredAnswered = recoveredPending.copy(status = "answered")
+      val failingAnswered = failingPending.copy(status = "answered")
+      val newlyMissingAnswered = newlyMissingPending.copy(status = "answered")
+      val getCalls = mutableMapOf<String, Int>()
+      var fallbackFailed = false
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, params ->
+            when (method) {
+              "question.list" -> {
+                val records =
+                  if (!fallbackFailed) {
+                    listOf(listedAnswered, newlyMissingPending)
+                  } else {
+                    listOf(listedAnswered)
+                  }
+                json.encodeToString(QuestionListResult(records))
+              }
+              "question.get" -> {
+                val id =
+                  json
+                    .parseToJsonElement(checkNotNull(params))
+                    .jsonObject
+                    .getValue("id")
+                    .jsonPrimitive
+                    .content
+                getCalls[id] = getCalls.getOrDefault(id, 0) + 1
+                when (id) {
+                  recoveredPending.id -> json.encodeToString(QuestionGetResult(recoveredAnswered))
+                  newlyMissingPending.id -> json.encodeToString(QuestionGetResult(newlyMissingAnswered))
+                  failingPending.id -> {
+                    if (getCalls.getValue(id) == 1) {
+                      fallbackFailed = true
+                      error("temporary question.get failure")
+                    }
+                    json.encodeToString(QuestionGetResult(failingAnswered))
+                  }
+                  else -> error("unexpected question id")
+                }
+              }
+              else -> "{}"
+            }
+          },
+        )
+
+      controller.handleGatewayEvent("question.requested", json.encodeToString(listedPending))
+      controller.handleGatewayEvent("question.requested", json.encodeToString(recoveredPending))
+      controller.handleGatewayEvent("question.requested", json.encodeToString(failingPending))
+      controller.handleGatewayEvent("question.requested", json.encodeToString(newlyMissingPending))
+      runCurrent()
+
+      val prompts = controller.questions.value.associateBy { it.record.id }
+      assertEquals(ChatQuestionStatus.AnsweredElsewhere, prompts.getValue("ask_listed").status())
+      assertEquals(
+        listOf("Tacos"),
+        prompts
+          .getValue("ask_listed")
+          .record
+          .answers
+          ?.answers
+          ?.get("meal")
+          ?.answers,
+      )
+      assertEquals(ChatQuestionStatus.AnsweredElsewhere, prompts.getValue("ask_recovered").status())
+      assertEquals(ChatQuestionStatus.Pending, prompts.getValue("ask_failing").status())
+      assertEquals(ChatQuestionStatus.Pending, prompts.getValue("ask_newly_missing").status())
+
+      advanceTimeBy(1_000)
+      runCurrent()
+      assertEquals(1, getCalls["ask_recovered"])
+      assertEquals(2, getCalls["ask_failing"])
+      assertEquals(1, getCalls["ask_newly_missing"])
+      assertEquals(
+        ChatQuestionStatus.AnsweredElsewhere,
+        controller.questions.value
+          .single { it.record.id == "ask_newly_missing" }
+          .status(),
+      )
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
   fun locallyExpiredMissingQuestionUsesPerIdGetFallback() =
     runTest {
       val json = Json { ignoreUnknownKeys = true }

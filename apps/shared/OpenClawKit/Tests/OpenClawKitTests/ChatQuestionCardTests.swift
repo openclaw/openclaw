@@ -115,6 +115,18 @@ private func questionRecord(
 }
 
 @MainActor
+@Test func `question card preserves submitted answers across answerless resolved event`() throws {
+    let model = OpenClawQuestionCardModel(record: questionRecord())
+    model.toggleOption(questionID: "meal", label: "Pizza")
+    let answers = try #require(model.beginSubmission())
+    model.markAnsweredLocally(answers: answers)
+
+    model.apply(resolved: .init(id: model.id, status: .answered))
+
+    #expect(model.terminalSummaryText(for: model.record.questions[0]) == "Pizza")
+}
+
+@MainActor
 @Test func `question card locally expired state remains terminal`() {
     let expiresAt = Date(timeIntervalSince1970: 1500)
     let model = OpenClawQuestionCardModel(record: questionRecord(expiresAtMs: 1_500_000))

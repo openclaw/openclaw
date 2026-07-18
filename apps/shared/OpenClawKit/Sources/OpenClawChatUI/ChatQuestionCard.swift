@@ -208,7 +208,7 @@ public final class OpenClawQuestionCardModel: Identifiable {
             createdatms: self.record.createdatms,
             expiresatms: self.record.expiresatms,
             status: resolved.status,
-            answers: resolved.answers,
+            answers: resolved.answers ?? self.record.answers,
             resolvedby: self.record.resolvedby)
     }
 
@@ -382,10 +382,14 @@ struct OpenClawQuestionCard: View {
         .focusable()
         .focused(self.$focusedQuestionID, equals: question.id)
         .onKeyPress(characters: .decimalDigits) { keyPress in
-            self.handleNumberKey(keyPress, question: question, now: now)
+            guard self.focusedQuestionID == question.id else { return .ignored }
+            return self.handleNumberKey(keyPress, question: question, now: now)
         }
         .onKeyPress(.return) {
-            guard self.model.status(at: now) == .pending, self.model.canSubmit else { return .ignored }
+            guard self.focusedQuestionID == question.id,
+                  self.model.status(at: now) == .pending,
+                  self.model.canSubmit
+            else { return .ignored }
             Task { await self.onSubmit(self.model) }
             return .handled
         }

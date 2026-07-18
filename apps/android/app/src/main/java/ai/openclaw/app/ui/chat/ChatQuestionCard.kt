@@ -104,9 +104,9 @@ private fun ChatQuestionSummary(
       verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
       prompt.record.questions.forEach { question ->
-        Row {
+        Column {
           Text(
-            text = question.header + ':' + ' ',
+            text = question.header + ':',
             style = ClawTheme.type.caption,
             color = ClawTheme.colors.text,
             fontWeight = FontWeight.SemiBold,
