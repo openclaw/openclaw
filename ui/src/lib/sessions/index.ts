@@ -98,12 +98,14 @@ export type { SessionPatch } from "./patch.ts";
 type SessionDeleteOptions = {
   agentId?: string;
   deleteTranscript?: boolean;
+  archivedOnly?: boolean;
 };
 
 type SessionDeleteTarget = {
   key: string;
   agentId?: string;
   deleteTranscript?: boolean;
+  archivedOnly?: boolean;
 };
 
 /** Dirty/unpushed checkouts survive session deletion; callers surface them. */
@@ -361,6 +363,7 @@ function requestSessionDelete(
   return client.request<SessionDeleteResponse>("sessions.delete", {
     ...buildSessionRequestParams(key, options.agentId),
     deleteTranscript: options.deleteTranscript ?? true,
+    ...(options.archivedOnly === true ? { archivedOnly: true } : {}),
   });
 }
 

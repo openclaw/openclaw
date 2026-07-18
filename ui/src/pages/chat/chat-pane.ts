@@ -658,6 +658,29 @@ class ChatPane extends OpenClawLightDomElement {
     });
   }
 
+  private async restoreArchivedSession(sessionKey: string) {
+    const scope = this.captureConnectionScope();
+    if (!scope || scope.state.sessionKey !== sessionKey) {
+      return;
+    }
+    const agentId = parseAgentSessionKey(sessionKey)?.agentId ?? resolveChatAgentId(scope.state);
+    let failure: string | null = null;
+    try {
+      // The patch can resolve falsy on failure; the capability error explains it.
+      const patched = await scope.sessions.patch(sessionKey, { archived: false }, { agentId });
+      if (!patched) {
+        failure = scope.sessions.state.error;
+      }
+    } catch (error) {
+      failure = error instanceof Error ? error.message : String(error);
+    }
+    if (failure && this.isConnectionScopeCurrent(scope) && scope.state.sessionKey === sessionKey) {
+      scope.state.lastError = failure;
+      scope.state.chatError = failure;
+      scope.state.requestUpdate?.();
+    }
+  }
+
   private setPaneSessionKey(sessionKey: string): string | null {
     const state = this.state;
     if (!state) {
@@ -2343,6 +2366,12 @@ class ChatPane extends OpenClawLightDomElement {
       connected: state.connected,
       canSend: catalogKey ? this.catalogSession?.canContinue === true : !selectedSessionArchived,
       disabledReason: catalogDisabledReason ?? disabledReason,
+      disabledActionLabel:
+        selectedSessionArchived && !catalogDisabledReason ? t("common.restore") : null,
+      onDisabledAction:
+        selectedSessionArchived && !catalogDisabledReason
+          ? () => void this.restoreArchivedSession(state.sessionKey)
+          : null,
       error: state.lastError,
       sessions: state.sessionsResult,
       sessionHost: {
