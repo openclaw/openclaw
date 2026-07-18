@@ -1,8 +1,7 @@
-// Feishu inbound replay protection rides the core claimable dedupe: Feishu
-// redelivers events after reconnects/restarts and multi-account groups receive
-// the same event once per bot, so handlers claim a dedupe key before
-// processing, commit once handling is dispatched, and release on retryable
-// failure so the event can be redelivered.
+// PERMANENT logical-identity guard above durable event_id tombstones. Feishu
+// can redeliver one text message with a fresh message_id/event_id (#46778),
+// and multi-account groups receive one logical broadcast per bot account.
+// Queue tombstones cannot cover either twin; claims commit at turn adoption.
 import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
 import { feishuDedupeState } from "./dedup-state.js";
 

@@ -6,7 +6,10 @@ import {
   resolveEnvelopeFormatOptions,
   toInboundMediaFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { resolveAgentOutboundIdentity } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  bindIngressLifecycleToReplyOptions,
+  resolveAgentOutboundIdentity,
+} from "openclaw/plugin-sdk/channel-outbound";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import {
   ensureConfiguredBindingRouteReady,
@@ -81,6 +84,7 @@ import { getMessageFeishu, listFeishuThreadMessages, sendMessageFeishu } from ".
 import { getFeishuSyntheticDirectPreDispatchTarget } from "./synthetic-event-target.js";
 export type { FeishuBotAddedEvent, FeishuMessageEvent } from "./event-types.js";
 import type { FeishuMessageEvent } from "./event-types.js";
+import type { FeishuIngressLifecycle } from "./feishu-ingress.js";
 import {
   isFeishuGroupChatType,
   type FeishuMessageContext,
@@ -286,6 +290,7 @@ export async function handleFeishuMessage(params: {
   accountId?: string;
   processingClaim?: FeishuMessageProcessingClaim;
   messageDedupeKey?: string;
+  turnAdoptionLifecycle?: FeishuIngressLifecycle;
 }): Promise<void> {
   const {
     cfg,
@@ -298,6 +303,7 @@ export async function handleFeishuMessage(params: {
     accountId,
     processingClaim,
     messageDedupeKey: messageDedupeKeyOverride,
+    turnAdoptionLifecycle,
   } = params;
 
   // Resolve account with merged config
@@ -310,6 +316,7 @@ export async function handleFeishuMessage(params: {
   const messageId = event.message.message_id;
   const messageDedupeKey = messageDedupeKeyOverride ?? resolveFeishuMessageDedupeKey(event);
   if (
+    !turnAdoptionLifecycle &&
     !(await finalizeFeishuMessageProcessing({
       messageId: messageDedupeKey,
       namespace: account.accountId,
@@ -1603,7 +1610,12 @@ export async function handleFeishuMessage(params: {
                 record: agentRecord,
                 dispatcherOptions,
                 delivery,
-                replyOptions,
+                replyOptions: {
+                  ...replyOptions,
+                  ...(turnAdoptionLifecycle
+                    ? bindIngressLifecycleToReplyOptions(turnAdoptionLifecycle)
+                    : {}),
+                },
               }),
             },
           });
@@ -1766,7 +1778,12 @@ export async function handleFeishuMessage(params: {
             },
             dispatcherOptions,
             delivery,
-            replyOptions,
+            replyOptions: {
+              ...replyOptions,
+              ...(turnAdoptionLifecycle
+                ? bindIngressLifecycleToReplyOptions(turnAdoptionLifecycle)
+                : {}),
+            },
           }),
         },
       });
@@ -1785,6 +1802,9 @@ export async function handleFeishuMessage(params: {
     }
   } catch (err) {
     error(`feishu[${account.accountId}]: failed to dispatch message: ${String(err)}`);
+    if (turnAdoptionLifecycle) {
+      throw err;
+    }
   }
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
