@@ -3220,6 +3220,28 @@ describe("spawnAcpDirect", () => {
     );
   });
 
+  it("preserves the ACP failure code when run registration fails", async () => {
+    hoisted.registerSubagentRunMock.mockImplementationOnce(() => {
+      throw new Error("registry unavailable");
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    const failed = expectFailedSpawn(result, "error");
+    expect(failed.errorCode).toBe("spawn_failed");
+    expect(failed.error).toContain("registry unavailable");
+    expect(failed.runId).toBe("run-1");
+    expect(hoisted.cleanupFailedAcpSpawnMock).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects streamTo="parent" without requester session context', async () => {
     const result = await spawnAcpDirect(
       {

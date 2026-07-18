@@ -225,7 +225,7 @@ type SpawnAcpAcceptedResult = SpawnAcpResultFields & {
 type SpawnAcpFailedResult = SpawnAcpResultFields & {
   status: "forbidden" | "error";
   error: string;
-  errorCode?: SpawnAcpErrorCode;
+  errorCode: SpawnAcpErrorCode;
 };
 
 export type SpawnAcpResult = SpawnAcpAcceptedResult | SpawnAcpFailedResult;
@@ -516,12 +516,14 @@ function createAcpSpawnFailure(params: {
   errorCode: SpawnAcpErrorCode;
   error: string;
   childSessionKey?: string;
+  runId?: string;
 }): SpawnAcpFailedResult {
   return {
     status: params.status,
     errorCode: params.errorCode,
     error: params.error,
     ...(params.childSessionKey ? { childSessionKey: params.childSessionKey } : {}),
+    ...(params.runId ? { runId: params.runId } : {}),
   };
 }
 
@@ -1452,12 +1454,13 @@ export async function spawnAcpDirect(
         childSessionKey: sessionKey,
       });
     }
-    return {
+    return createAcpSpawnFailure({
       status: "error",
+      errorCode: "spawn_failed",
       error: `Failed to register ACP run: ${summarizeSpawnError(pipelineResult.error)}. Cleanup was attempted, but the already-started ACP run may still finish in the background.`,
       childSessionKey: sessionKey,
       runId: pipelineResult.runId,
-    };
+    });
   }
   const childRunId = pipelineResult.runId;
   const deliveryPlan = pipelineResult.state.deliveryPlan;
