@@ -1274,8 +1274,8 @@ export async function handleOpenResponsesHttpRequest(
       // Fallback: if no streaming deltas were received, send the full response as text
       if (!sawAssistantDelta) {
         const content =
-          accumulatedText ||
           resultPayloadText ||
+          accumulatedText ||
           bufferedReplaceableAssistantContent ||
           "No response from OpenClaw.";
 
