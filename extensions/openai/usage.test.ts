@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { fetchOpenAIUsage, resolveOpenAIUsageAuth } from "./usage.js";
 
 function requestUrl(input: string | URL | Request): URL {
@@ -31,7 +31,14 @@ async function fetchAdminUsage(params: {
 }
 
 describe("OpenAI provider usage", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("aggregates provider-reported costs, tokens, models, and categories", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-18T12:00:00.000Z"));
+
     const fetchFn = vi.fn(async (input: string | URL | Request, _init?: RequestInit) => {
       const url = requestUrl(input);
       if (url.pathname.endsWith("/organization/costs")) {
