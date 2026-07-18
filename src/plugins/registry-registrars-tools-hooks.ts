@@ -224,6 +224,7 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
     const timeoutMs = resolveTypedHookTimeoutMs({ hookName: "after_tool_call", policy });
     const safeHandler: AgentToolResultMiddleware = async (event, ctx) => {
       try {
+        // fs-safe bounds only this await; it cannot cancel plugin work, so late side effects remain possible.
         return await withTimeout(
           Promise.resolve(handler(event, ctx)),
           timeoutMs ?? 0,
