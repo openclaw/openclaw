@@ -15,7 +15,6 @@ import {
   type StoredDeviceIdentity,
 } from "./device-identity-store.js";
 import {
-  deriveEd25519PublicKeyRaw,
   normalizeEd25519PublicKeyBase64Url,
   publicKeyRawBase64UrlFromEd25519Pem,
   signEd25519Payload,
@@ -36,11 +35,6 @@ export class DeviceIdentityMigrationRequiredError extends Error {
     );
     this.name = "DeviceIdentityMigrationRequiredError";
   }
-}
-
-function fingerprintPublicKey(publicKeyPem: string): string {
-  const raw = deriveEd25519PublicKeyRaw(publicKeyPem);
-  return crypto.createHash("sha256").update(raw).digest("hex");
 }
 
 function toDeviceIdentity(stored: StoredDeviceIdentity): DeviceIdentity {
