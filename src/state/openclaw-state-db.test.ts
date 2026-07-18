@@ -2336,6 +2336,56 @@ describe("openclaw state database", () => {
     );
   });
 
+  it("backfills diagnostic event sequences in legacy creation order", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const databasePath = openOpenClawStateDatabase(options).path;
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacyDb = new DatabaseSync(databasePath);
+    legacyDb.exec(`
+      DROP INDEX idx_diagnostic_events_scope_sequence;
+      ALTER TABLE diagnostic_events DROP COLUMN sequence;
+      CREATE INDEX idx_diagnostic_events_scope_created
+        ON diagnostic_events(scope, created_at, event_key);
+      INSERT INTO diagnostic_events (scope, event_key, payload_json, created_at) VALUES
+        ('alpha', 'late', '{}', 20),
+        ('alpha', 'tie-first', '{}', 10),
+        ('alpha', 'tie-second', '{}', 10),
+        ('beta', 'only', '{}', 30);
+    `);
+    legacyDb.close();
+
+    const reopened = openOpenClawStateDatabase(options);
+    const rows = reopened.db
+      .prepare(
+        `SELECT scope, event_key, sequence
+           FROM diagnostic_events
+          ORDER BY scope, sequence`,
+      )
+      .all();
+    expect(rows).toEqual([
+      { scope: "alpha", event_key: "tie-first", sequence: 1 },
+      { scope: "alpha", event_key: "tie-second", sequence: 2 },
+      { scope: "alpha", event_key: "late", sequence: 3 },
+      { scope: "beta", event_key: "only", sequence: 1 },
+    ]);
+    const indexes = reopened.db.prepare("PRAGMA index_list(diagnostic_events)").all() as Array<{
+      name?: unknown;
+    }>;
+    expect(indexes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "idx_diagnostic_events_scope_sequence" }),
+      ]),
+    );
+    expect(indexes).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "idx_diagnostic_events_scope_created" }),
+      ]),
+    );
+  });
+
   it("adds relay origins to existing APNs registration tables", () => {
     const stateDir = createTempStateDir();
     const options = { env: { OPENCLAW_STATE_DIR: stateDir } };

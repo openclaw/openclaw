@@ -667,7 +667,7 @@ function createReloaderHarness(
       nextConfig: OpenClawConfig,
       ownership: GatewayConfigReloadTransactionOwnership,
       sourceConfig: OpenClawConfig,
-    ) => Promise<() => Promise<void>>;
+    ) => Promise<{ rollback: () => Promise<void>; commit?: () => void }>;
     onConfigApplied?: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
     onConfigRevisionApplied?: (hash: string) => void;
     onConfigChange?: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
@@ -703,7 +703,7 @@ function createReloaderHarness(
   const onConfigAccepted = vi.fn(options.onConfigAccepted ?? (async () => {}));
   const onConfigRevisionApplied = vi.fn(options.onConfigRevisionApplied ?? (() => {}));
   const onEffectiveConfigUnchanged = vi.fn(
-    options.onEffectiveConfigUnchanged ?? (async () => async () => {}),
+    options.onEffectiveConfigUnchanged ?? (async () => ({ rollback: async () => {} })),
   );
   const onNoopConfigCommit = vi.fn(
     options.onNoopConfigCommit ??
@@ -3021,6 +3021,8 @@ describe("startGatewayConfigReloader", () => {
       ...initialConfig,
       logging: { level: "debug" as const },
     } satisfies OpenClawConfig;
+    const publicationEvents: string[] = [];
+    let publicationId = 0;
     const rollbackSource = vi.fn(async () => {});
     let emitSupersedingChange = () => {};
     const harness = createReloaderHarness(
@@ -3032,7 +3034,18 @@ describe("startGatewayConfigReloader", () => {
           queueMicrotask(emitSupersedingChange);
           return rollback;
         },
-        onEffectiveConfigUnchanged: async () => rollbackSource,
+        onEffectiveConfigUnchanged: async () => {
+          const id = publicationId++;
+          return {
+            rollback: async () => {
+              publicationEvents.push(`rollback:${id}`);
+              await rollbackSource();
+            },
+            commit: () => {
+              publicationEvents.push(`commit:${id}`);
+            },
+          };
+        },
       },
     );
     emitSupersedingChange = () => {
@@ -3063,6 +3076,7 @@ describe("startGatewayConfigReloader", () => {
       initialConfig,
     ]);
     expect(rollbackSource).toHaveBeenCalledOnce();
+    expect(publicationEvents).toEqual(["rollback:0", "commit:1"]);
 
     await harness.reloader.stop();
   });

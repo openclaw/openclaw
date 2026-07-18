@@ -286,7 +286,7 @@ describe("getStatusSummary", () => {
         state: "unavailable",
         paths: ["channels.discord.accounts.ops.token"],
         refKeys: ["env:default:PRIVATE_REF_ID"],
-        reason: "secret reference was not found",
+        reason: "provider SecretRef is unresolved (env:default:PRIVATE_REF_ID)",
       },
     ]);
 
@@ -298,7 +298,7 @@ describe("getStatusSummary", () => {
         ownerId: "discord:ops",
         state: "unavailable",
         paths: ["channels.discord.accounts.ops.token"],
-        reason: "secret reference was not found",
+        reason: "secret resolution failed",
       },
     ]);
     expect(JSON.stringify(summary.degradedSecretOwners)).not.toContain("PRIVATE_REF_ID");

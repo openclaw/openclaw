@@ -289,6 +289,10 @@ function createLegacyStateMigrationDetectionResult(params?: {
       sourcePath: "/tmp/state/commitments/commitments.json",
       hasLegacy: false,
     },
+    auditLogs: {
+      sources: [],
+      hasLegacy: false,
+    },
     acpReplayLedger: {
       sourcePath: "/tmp/state/acp/event-ledger.json",
       hasLegacy: false,

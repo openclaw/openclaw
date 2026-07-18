@@ -264,6 +264,9 @@ export function createGatewayAuxHandlers(params: {
                     {
                       reason: "reload",
                       activate: false,
+                      publishFailureAsDegraded: true,
+                      canPublishFailureAsDegraded: () =>
+                        getActiveSecretsRuntimeSnapshotRevision() === previousSnapshotRevision,
                     },
                   );
                   const plan = buildReloadPlan(
