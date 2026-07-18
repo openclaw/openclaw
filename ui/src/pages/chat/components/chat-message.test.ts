@@ -3200,7 +3200,7 @@ function installRelativeFetchBridge(serverUrl: string): void {
   const base = serverUrl.replace(/\/$/, "");
   const realFetch = globalThis.fetch.bind(globalThis);
   vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = typeof input === "string" ? input : String(input);
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     const absolute = url.startsWith("http") ? url : `${base}${url}`;
     return realFetch(absolute, init);
   });
