@@ -49,7 +49,7 @@ import {
 import { t } from "../../i18n/index.ts";
 import type { ConfigAutoSaveStatus } from "../../lib/config/index.ts";
 import type { RealtimeTalkInputDevice } from "../chat/realtime-talk-input.ts";
-import { renderNotificationsSection } from "./notifications-section.ts";
+import { renderNotificationsSection, type WebPushUiState } from "./notifications-section.ts";
 import { renderSettingsSelectRow } from "./settings-select-row.ts";
 import { APPEARANCE_SETTINGS_TARGET_IDS } from "./settings-targets.ts";
 
@@ -59,14 +59,6 @@ const TEXT_SCALE_LABELS: Record<TextScaleStop, string> = {
   110: "configView.textSizes.large",
   125: "configView.textSizes.xl",
   140: "configView.textSizes.xxl",
-};
-
-type WebPushUiState = {
-  supported: boolean;
-  permission: NotificationPermission | "unsupported";
-  subscribed: boolean;
-  loading: boolean;
-  error?: string | null;
 };
 
 type SettingsMicrophoneState = {

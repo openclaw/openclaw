@@ -3,9 +3,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createNativeNotificationsCapability,
-  NATIVE_NOTIFICATIONS_STATUS_EVENT,
   type NativeNotificationsCapability,
 } from "./native-notifications.ts";
+
+// Wire contract shared with the Mac app bridge; asserted literally on purpose.
+const NATIVE_NOTIFICATIONS_STATUS_EVENT = "openclaw:native-notifications-status";
 
 type NativeNotificationsMessage = {
   type: "status" | "request-permission" | "send-test";
@@ -51,7 +53,7 @@ describe("native notifications", () => {
 
   it("seeds status from the native snapshot", () => {
     installBridge();
-    (window as NativeNotificationsTestWindow).__OPENCLAW_NATIVE_NOTIFICATIONS__ = {
+    (window as NativeNotificationsTestWindow)["__OPENCLAW_NATIVE_NOTIFICATIONS__"] = {
       permission: "granted",
     };
 

@@ -8,7 +8,28 @@ import {
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { COMMUNICATION_SETTINGS_TARGET_IDS } from "./settings-targets.ts";
-import type { ConfigProps } from "./view.ts";
+
+export type WebPushUiState = {
+  supported: boolean;
+  permission: NotificationPermission | "unsupported";
+  subscribed: boolean;
+  loading: boolean;
+  error?: string | null;
+};
+
+// Leaf props contract: view.ts imports this module, so importing ConfigProps
+// back from view.ts would create an import cycle. ConfigProps is structurally
+// assignable to this subset.
+type NotificationsSectionProps = {
+  connected: boolean;
+  nativeNotifications?: { permission: NativeNotificationsPermission | "unknown" };
+  onNativeNotificationsRequestPermission?: () => void;
+  onNativeNotificationsSendTest?: () => void;
+  webPush?: WebPushUiState;
+  onWebPushSubscribe?: () => void;
+  onWebPushUnsubscribe?: () => void;
+  onWebPushTest?: () => void;
+};
 
 function nativeNotificationsStatus(permission: NativeNotificationsPermission | "unknown"): {
   kind: "ok" | "danger" | "accent" | "muted";
@@ -21,12 +42,12 @@ function nativeNotificationsStatus(permission: NativeNotificationsPermission | "
       return { kind: "danger", label: t("configView.notifications.denied") };
     case "notDetermined":
       return { kind: "accent", label: t("configView.notifications.notRequested") };
-    case "unknown":
+    default:
       return { kind: "muted", label: t("configView.notifications.checking") };
   }
 }
 
-export function renderNotificationsSection(props: ConfigProps) {
+export function renderNotificationsSection(props: NotificationsSectionProps) {
   const native = props.nativeNotifications;
   if (native) {
     const status = nativeNotificationsStatus(native.permission);

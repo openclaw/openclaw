@@ -22,7 +22,8 @@ type NativeNotificationsWindow = Window & {
   };
 };
 
-export const NATIVE_NOTIFICATIONS_STATUS_EVENT = "openclaw:native-notifications-status";
+// Wire contract with the Mac app's dashboard bridge (DashboardWindowController+Notifications.swift).
+const NATIVE_NOTIFICATIONS_STATUS_EVENT = "openclaw:native-notifications-status";
 
 export type NativeNotificationsCapability = {
   readonly snapshot: NativeNotificationsSnapshot;
@@ -63,7 +64,7 @@ export function createNativeNotificationsCapability(): NativeNotificationsCapabi
   }
 
   const nativeWindow = window as NativeNotificationsWindow;
-  let snapshot = snapshotFrom(nativeWindow.__OPENCLAW_NATIVE_NOTIFICATIONS__) ?? {
+  let snapshot = snapshotFrom(nativeWindow["__OPENCLAW_NATIVE_NOTIFICATIONS__"]) ?? {
     permission: "unknown" as const,
   };
   const listeners = new Set<(snapshot: NativeNotificationsSnapshot) => void>();
