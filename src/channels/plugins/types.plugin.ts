@@ -70,8 +70,9 @@ export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknow
     noopPrefixes?: string[];
     /**
      * Opt into restarting only the changed non-default named account.
-     * Set only when sibling account resolution and runtime lifecycle are isolated;
-     * default, shared, removed, or unresolved account changes still restart the channel.
+     * Set only when sibling account resolution and lifecycle state are isolated and
+     * account stop fully settles owned work. Shared, default, removed, or unresolved
+     * account changes still restart the whole channel.
      */
     accountScopedRestart?: boolean;
   };

@@ -874,6 +874,8 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     const hasLiveChannelTargets = [...channelTargets].some(
       (channel) => !channelsStoppedBeforePluginReload.has(channel),
     );
+    // Plugin replacement can admit new agent work while an account monitor stays live.
+    // Recheck that work here; durable ingress replay remains owned by the fresh monitor drain.
     if (!pluginReloadAborted && hasLiveChannelTargets && !shouldSkipChannelRestart) {
       pluginReloadAborted = await waitForActiveWorkBeforeChannelReload(
         channelTargets,

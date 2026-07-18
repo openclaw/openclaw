@@ -7385,6 +7385,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Message adapter
   - H3: Inbound ingress (experimental)
   - H3: Durable ingress and replay dedupe
+  - H4: Account-scoped restart contract
   - H3: Typing indicators
   - H3: Media source params
   - H3: Native payload shaping
@@ -7397,7 +7398,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Narrower approval runtime subpaths
   - H3: Setup subpaths
   - H3: Other narrow channel subpaths
-  - H2: Account-scoped config reloads
   - H2: Inbound mention policy
   - H2: Walkthrough
   - H2: File structure

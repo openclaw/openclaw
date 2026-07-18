@@ -531,6 +531,7 @@ export function startGatewayConfigReloader(opts: {
     const plan = buildGatewayReloadPlan(changedPaths, {
       noopPaths: pluginInstallTimestampNoopPaths,
       forceChangedPaths: pluginInstallWholeRecordPaths,
+      candidateConfig: nextConfig,
     });
     if (nextSettings.mode === "off") {
       opts.log.info("config reload disabled (gateway.reload.mode=off)");

@@ -1,6 +1,11 @@
 // Gateway config reload planner.
 // Maps changed config paths to hot-reload actions, no-ops, or full restarts.
-import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
+import {
+  type ChannelId,
+  type ChannelPlugin,
+  listChannelPlugins,
+} from "../channels/plugins/index.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   getActivePluginChannelRegistryVersion,
   getActivePluginHttpRouteRegistry,
@@ -33,6 +38,7 @@ type ReloadRule = {
   prefix: string;
   kind: "restart" | "hot" | "none";
   actions?: ReloadAction[];
+  accountScopedPlugin?: ChannelPlugin;
 };
 
 type ConfigReloadMetadata = {
@@ -53,6 +59,8 @@ type ReloadAction =
 type GatewayReloadPlanOptions = {
   noopPaths?: Iterable<string>;
   forceChangedPaths?: Iterable<string>;
+  /** Candidate config used to reject removed, unknown, or unresolvable account targets. */
+  candidateConfig?: OpenClawConfig;
 };
 
 const PLUGIN_INSTALL_TIMESTAMP_KEYS = ["installedAt", "resolvedAt"] as const;
@@ -188,13 +196,17 @@ function listReloadRules(): ReloadRule[] {
       ? (`restart-channel-account:${plugin.id}` as ReloadAction)
       : (`restart-channel:${plugin.id}` as ReloadAction);
     return (plugin.reload?.configPrefixes ?? [])
-      .map(
-        (prefix): ReloadRule => ({
+      .map((prefix): ReloadRule => {
+        const rule: ReloadRule = {
           prefix,
           kind: "hot",
           actions: [restartAction],
-        }),
-      )
+        };
+        if (plugin.reload?.accountScopedRestart) {
+          rule.accountScopedPlugin = plugin;
+        }
+        return rule;
+      })
       .concat(
         (plugin.reload?.noopPrefixes ?? []).map(
           (prefix): ReloadRule => ({
@@ -366,6 +378,25 @@ function extractAccountIdFromPath(channel: ChannelId, path: string): string | nu
   return id;
 }
 
+function isResolvableChannelAccount(params: {
+  plugin: ChannelPlugin | undefined;
+  accountId: string;
+  config: OpenClawConfig;
+}): boolean {
+  if (!params.plugin) {
+    return false;
+  }
+  try {
+    if (!params.plugin.config.listAccountIds(params.config).includes(params.accountId)) {
+      return false;
+    }
+    params.plugin.config.resolveAccount(params.config, params.accountId);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function buildGatewayReloadPlan(
   changedPaths: string[],
   options: GatewayReloadPlanOptions = {},
@@ -390,11 +421,26 @@ export function buildGatewayReloadPlan(
     noopPaths: [],
   };
 
-  const applyAction = (action: ReloadAction, originatingPath: string) => {
+  const applyAction = (
+    action: ReloadAction,
+    originatingPath: string,
+    accountScopedPlugin?: ChannelPlugin,
+  ) => {
     if (action.startsWith("restart-channel-account:")) {
       const channel = action.slice("restart-channel-account:".length) as ChannelId;
       const accountId = extractAccountIdFromPath(channel, originatingPath);
       if (accountId !== null) {
+        if (
+          options.candidateConfig &&
+          !isResolvableChannelAccount({
+            plugin: accountScopedPlugin,
+            accountId,
+            config: options.candidateConfig,
+          })
+        ) {
+          plan.restartChannels.add(channel);
+          return;
+        }
         let set = restartChannelAccounts.get(channel);
         if (!set) {
           set = new Set<string>();
@@ -463,7 +509,7 @@ export function buildGatewayReloadPlan(
     }
     plan.hotReasons.push(path);
     for (const action of rule.actions ?? []) {
-      applyAction(action, path);
+      applyAction(action, path, rule.accountScopedPlugin);
     }
   }
 

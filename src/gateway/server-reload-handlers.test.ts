@@ -3164,9 +3164,11 @@ describe("gateway channel hot reload handlers", () => {
   it("restarts only the changed account", async () => {
     const events: string[] = [];
     const startRootCounts: number[] = [];
+    const accountStopSettled = createDeferredVoid();
     const channels = {
       stop: vi.fn(async (channel: ChannelKind, accountId?: string) => {
         events.push(`stop:${channel}:${accountId}`);
+        await accountStopSettled.promise;
       }),
       start: vi.fn(async (channel: ChannelKind, accountId?: string) => {
         events.push(`start:${channel}:${accountId}`);
@@ -3176,21 +3178,31 @@ describe("gateway channel hot reload handlers", () => {
     const { applyHotReload } = createReloadHandlersForTest(undefined, channels);
     const root = tryBeginGatewayRootWorkAdmission();
     expect(root).not.toBeNull();
+    let reload: Promise<void> | undefined;
 
     try {
       await root?.run(async () => {
         await withChannelReloadsEnabled(async () => {
           await withDiscordAccounts(["default", "alpha", "beta"], async () => {
-            await applyHotReload(createAccountReloadPlan(["alpha"]), {});
+            reload = applyHotReload(createAccountReloadPlan(["alpha"]), {});
+            await waitForFast(() => expect(events).toEqual(["stop:discord:alpha"]));
+            expect(channels.start).not.toHaveBeenCalled();
+
+            accountStopSettled.resolve();
+            await reload;
           });
         });
       });
     } finally {
+      accountStopSettled.resolve();
+      await reload?.catch(() => {});
       root?.release();
     }
 
     expect(events).toEqual(["stop:discord:alpha", "start:discord:alpha"]);
     expect(startRootCounts).toEqual([1]);
+    expect(channels.stop).toHaveBeenCalledOnce();
+    expect(channels.start).toHaveBeenCalledOnce();
   });
 
   it("continues targeted restarts after an account failure", async () => {
@@ -3407,7 +3419,7 @@ describe("gateway channel hot reload handlers", () => {
     expect(events).toEqual(["stop:discord:alpha"]);
   });
 
-  it("re-drains account work admitted after plugin reload leaves the channel running", async () => {
+  it("rechecks agent work admitted after plugin reload leaves the channel running", async () => {
     const events: string[] = [];
     const channels = {
       stop: vi.fn(async (channel: ChannelKind, accountId?: string) => {

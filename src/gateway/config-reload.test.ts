@@ -29,7 +29,11 @@ import {
 } from "../skills/runtime/refresh-state.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { diffConfigPaths, diffGatewayReloadPaths } from "./config-diff.js";
-import { buildGatewayReloadPlan, resolveConfigReloadMetadata } from "./config-reload-plan.js";
+import {
+  buildGatewayReloadPlan,
+  type ChannelKind,
+  resolveConfigReloadMetadata,
+} from "./config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "./config-reload-settings.js";
 import {
   type GatewayConfigReloadTransactionOwnership,
@@ -191,7 +195,7 @@ describe("buildGatewayReloadPlan", () => {
     },
     capabilities: { chatTypes: ["direct"] },
     config: {
-      listAccountIds: () => [],
+      listAccountIds: (cfg) => Object.keys(cfg.channels?.mattermost?.accounts ?? {}),
       resolveAccount: () => ({}),
     },
     reload: { configPrefixes: ["channels.mattermost"], accountScopedRestart: true },
@@ -391,34 +395,73 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.restartChannels).toEqual(new Set(["telegram"]));
   });
 
-  it("targets only changed non-default channel accounts", () => {
-    const plan = buildGatewayReloadPlan([
-      "channels.mattermost.accounts.alpha.enabled",
-      "channels.mattermost.accounts.beta.commands",
-    ]);
+  const mattermostAccountConfig = {
+    channels: {
+      mattermost: {
+        accounts: {
+          alpha: { enabled: true },
+          beta: { enabled: true },
+        },
+      },
+    },
+  } as OpenClawConfig;
 
-    expect(plan.restartChannels).toEqual(new Set());
-    expect(plan.restartChannelAccounts).toEqual(
-      new Map([["mattermost", new Set(["alpha", "beta"])]]),
-    );
-  });
+  it.each([
+    {
+      label: "targets changed named accounts",
+      paths: [
+        "channels.mattermost.accounts.alpha.enabled",
+        "channels.mattermost.accounts.beta.commands",
+      ],
+      expectedChannels: new Set<ChannelKind>(),
+      expectedAccounts: new Map<ChannelKind, Set<string>>([
+        ["mattermost", new Set(["alpha", "beta"])],
+      ]),
+    },
+    {
+      label: "promotes accounts.default changes",
+      paths: ["channels.mattermost.accounts.default.commands"],
+      expectedChannels: new Set<ChannelKind>(["mattermost"]),
+      expectedAccounts: new Map<ChannelKind, Set<string>>(),
+    },
+    {
+      label: "promotes channel-global changes",
+      paths: ["channels.mattermost.botToken"],
+      expectedChannels: new Set<ChannelKind>(["mattermost"]),
+      expectedAccounts: new Map<ChannelKind, Set<string>>(),
+    },
+    {
+      label: "promotes unlisted account changes",
+      paths: ["channels.mattermost.accounts.removed.enabled"],
+      expectedChannels: new Set<ChannelKind>(["mattermost"]),
+      expectedAccounts: new Map<ChannelKind, Set<string>>(),
+    },
+    {
+      label: "lets an unlisted account replace earlier scoped targets",
+      paths: [
+        "channels.mattermost.accounts.alpha.enabled",
+        "channels.mattermost.accounts.removed.enabled",
+      ],
+      expectedChannels: new Set<ChannelKind>(["mattermost"]),
+      expectedAccounts: new Map<ChannelKind, Set<string>>(),
+    },
+    {
+      label: "lets a mixed global change replace scoped targets",
+      paths: ["channels.mattermost.accounts.alpha.enabled", "channels.mattermost.botToken"],
+      expectedChannels: new Set<ChannelKind>(["mattermost"]),
+      expectedAccounts: new Map<ChannelKind, Set<string>>(),
+    },
+    {
+      label: "keeps non-opted-in channels wholesale",
+      paths: ["channels.telegram.accounts.alpha.enabled"],
+      expectedChannels: new Set<ChannelKind>(["telegram"]),
+      expectedAccounts: new Map<ChannelKind, Set<string>>(),
+    },
+  ])("$label", ({ paths, expectedChannels, expectedAccounts }) => {
+    const plan = buildGatewayReloadPlan(paths, { candidateConfig: mattermostAccountConfig });
 
-  it("keeps non-isolated channel account changes on the wholesale path", () => {
-    const plan = buildGatewayReloadPlan(["channels.telegram.accounts.alpha.enabled"]);
-
-    expect(plan.restartChannels).toEqual(new Set(["telegram"]));
-    expect(plan.restartChannelAccounts).toEqual(new Map());
-  });
-
-  it("keeps default account and channel-wide changes on the wholesale path", () => {
-    const plan = buildGatewayReloadPlan([
-      "channels.mattermost.accounts.alpha.enabled",
-      "channels.mattermost.accounts.default.commands",
-      "channels.mattermost.botToken",
-    ]);
-
-    expect(plan.restartChannels).toEqual(new Set(["mattermost"]));
-    expect(plan.restartChannelAccounts).toEqual(new Map());
+    expect(plan.restartChannels).toEqual(expectedChannels);
+    expect(plan.restartChannelAccounts).toEqual(expectedAccounts);
   });
 
   it("restarts every channel whose config prefix matches", () => {
