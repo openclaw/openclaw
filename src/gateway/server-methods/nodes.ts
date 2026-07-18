@@ -69,7 +69,7 @@ import {
 import { applyPluginNodeInvokePolicy } from "../node-invoke-plugin-policy.js";
 import { sanitizeNodeInvokeParamsForForwarding } from "../node-invoke-sanitize.js";
 import type { NodeSession } from "../node-registry.js";
-import { ADMIN_SCOPE } from "../operator-scopes.js";
+import { ADMIN_SCOPE, PAIRING_SCOPE } from "../operator-scopes.js";
 import {
   hasAuthorizedClientPluginNodeCapabilityUrl,
   pluginNodeCapabilityScopedHostUrlsConflict,
@@ -1023,7 +1023,10 @@ export const nodeHandlers: GatewayRequestHandlers = {
           undefined,
           missingScopeErrorShape({
             missingScope: approved.missingScope,
-            requiredScopes: [approved.missingScope],
+            requiredScopes:
+              approved.missingScope === PAIRING_SCOPE
+                ? [PAIRING_SCOPE]
+                : [PAIRING_SCOPE, approved.missingScope],
           }),
         );
         return;
