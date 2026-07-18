@@ -39,6 +39,21 @@ describe("normalizeMediaReferenceForComparison", () => {
     expect(normalizeMediaReferenceForComparison("file://server/share.png")).not.toBe(
       normalizeMediaReferenceForComparison("server/share.png"),
     );
+    expect(normalizeMediaReferenceForComparison("//cdn.example/share.png")).toBe(
+      "//cdn.example/share.png",
+    );
+    expect(normalizeMediaReferenceForComparison("//cdn.example/share.png")).not.toBe(
+      normalizeMediaReferenceForComparison("/cdn.example/share.png"),
+    );
+    expect(normalizeMediaReferenceForComparison("file:////cdn.example/share.png")).not.toBe(
+      normalizeMediaReferenceForComparison("//cdn.example/share.png"),
+    );
+    expect(normalizeMediaReferenceForComparison("file:////cdn.example/share.png")).not.toBe(
+      normalizeMediaReferenceForComparison("/cdn.example/share.png"),
+    );
+    expect(normalizeMediaReferenceForComparison("file:////cdn.example/a//share.png")).toBe(
+      normalizeMediaReferenceForComparison("file:////cdn.example/a/share.png"),
+    );
   });
 
   it("keeps malformed local file URLs comparable with their paths", () => {
