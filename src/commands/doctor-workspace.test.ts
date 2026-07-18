@@ -311,6 +311,56 @@ describe("root memory repair", () => {
     expect(repairNote?.[1]).toBe("Doctor changes");
   });
 
+  it("skips without mutation when legacy memory cannot be archived atomically", async () => {
+    const canonicalPath = path.join(tmpDir, "MEMORY.md");
+    const legacyPath = path.join(tmpDir, "memory.md");
+    await fs.writeFile(canonicalPath, "# Canonical\n", "utf8");
+    await fs.writeFile(legacyPath, "# Legacy\n", "utf8");
+    const rename = vi
+      .spyOn(fs, "rename")
+      .mockRejectedValueOnce(Object.assign(new Error("cross-device rename"), { code: "EXDEV" }));
+
+    try {
+      const migration = await migrateLegacyRootMemoryFile(tmpDir);
+
+      expect(migration.changed).toBe(false);
+      expect(migration.removedLegacy).toBe(false);
+      expect(migration.mergedLegacy).toBe(false);
+      expect(migration.archiveError).toBe(true);
+      await expect(fs.readFile(canonicalPath, "utf8")).resolves.toBe("# Canonical\n");
+      await expect(fs.readFile(legacyPath, "utf8")).resolves.toBe("# Legacy\n");
+    } finally {
+      rename.mockRestore();
+    }
+  });
+
+  it("reports when legacy memory cannot be archived atomically", async () => {
+    await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Canonical\n", "utf8");
+    await fs.writeFile(path.join(tmpDir, "memory.md"), "# Legacy\n", "utf8");
+    const cfg = { agents: { defaults: { workspace: tmpDir } } } as OpenClawConfig;
+    const prompter = {
+      confirmRuntimeRepair: vi.fn(async () => true),
+    } as unknown as DoctorPrompter;
+    const rename = vi
+      .spyOn(fs, "rename")
+      .mockRejectedValueOnce(Object.assign(new Error("cross-device rename"), { code: "EXDEV" }));
+
+    try {
+      await maybeRepairWorkspaceMemoryHealth({ cfg, prompter });
+    } finally {
+      rename.mockRestore();
+    }
+
+    const repairNote = firstNoteCall();
+    const repairLines = String(repairNote?.[0] ?? "").split("\n");
+    expect(repairLines[0]).toBe(
+      "Workspace memory root repair skipped (legacy memory could not be archived atomically):",
+    );
+    expect(repairLines).toContain(`- canonical: ${path.join(tmpDir, "MEMORY.md")}`);
+    expect(repairLines).toContain(`- legacy: ${path.join(tmpDir, "memory.md")}`);
+    expect(repairNote?.[1]).toBe("Doctor changes");
+  });
+
   it("reports a preserved archive when a failed repair cannot restore legacy", async () => {
     const canonicalPath = path.join(tmpDir, "MEMORY.md");
     const legacyPath = path.join(tmpDir, "memory.md");

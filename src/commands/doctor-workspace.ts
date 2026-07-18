@@ -169,6 +169,8 @@ export type RootMemoryMigrationResult = {
   readLimitExceeded?: boolean;
   /** True when the repair was skipped because a file could not be read. */
   readError?: boolean;
+  /** True when the legacy file could not be archived atomically. */
+  archiveError?: boolean;
 };
 
 async function moveLegacyRootMemoryFileToArchive(params: {
@@ -252,10 +254,22 @@ export async function migrateLegacyRootMemoryFile(
   } catch (err) {
     return skippedForReadFailure(err);
   }
-  const archivedLegacyPath = await moveLegacyRootMemoryFileToArchive({
-    workspaceDir: detection.workspaceDir,
-    legacyPath: detection.legacyPath,
-  });
+  let archivedLegacyPath: string;
+  try {
+    archivedLegacyPath = await moveLegacyRootMemoryFileToArchive({
+      workspaceDir: detection.workspaceDir,
+      legacyPath: detection.legacyPath,
+    });
+  } catch {
+    return {
+      changed: false,
+      canonicalPath: detection.canonicalPath,
+      legacyPath: detection.legacyPath,
+      removedLegacy: false,
+      mergedLegacy: false,
+      archiveError: true,
+    };
+  }
   let canonicalText: string;
   let legacyText: string;
   try {
@@ -364,6 +378,17 @@ export async function maybeRepairWorkspaceMemoryHealth(params: {
         ]
           .filter((line): line is string => Boolean(line))
           .join("\n"),
+        "Doctor changes",
+      );
+      return;
+    }
+    if (migration.archiveError) {
+      note(
+        [
+          "Workspace memory root repair skipped (legacy memory could not be archived atomically):",
+          `- canonical: ${migration.canonicalPath}`,
+          `- legacy: ${migration.legacyPath}`,
+        ].join("\n"),
         "Doctor changes",
       );
       return;
