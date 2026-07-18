@@ -198,52 +198,90 @@ describe("createPluginRuntimeMock", () => {
     );
   });
 
-  it("assembles routed prepared turns before dispatch", async () => {
-    const resolveStorePath = vi.fn(() => "/tmp/routed-sessions.json");
+  it("rejects top-level adoption lifecycles for prepared turns", async () => {
     const recordInboundSession = vi.fn(async () => undefined);
     const runDispatch = vi.fn(async () => ({ visibleReplySent: true }));
     const runtime = createPluginRuntimeMock({
       channel: {
-        session: { resolveStorePath, recordInboundSession },
+        session: { recordInboundSession },
       },
     });
+
+    await expect(
+      runtime.channel.inbound.run({
+        channel: "test",
+        raw: { id: "m1" },
+        turnAdoptionLifecycle: { onAdopted: vi.fn(async () => undefined) },
+        adapter: {
+          ingest: vi.fn(() => ({ id: "m1", rawText: "hello" })),
+          resolveTurn: vi.fn(() => ({
+            channel: "test",
+            routeSessionKey: "agent:main:test:direct:u1",
+            storePath: "/tmp/routed-sessions.json",
+            ctxPayload: {
+              Body: "hello",
+              CommandAuthorized: false,
+              SessionKey: "agent:main:test:direct:u1",
+            },
+            recordInboundSession,
+            runDispatch,
+          })),
+        },
+      }),
+    ).rejects.toThrow(
+      "runChannelInboundEvent cannot apply turnAdoptionLifecycle to a prepared turn",
+    );
+
+    expect(recordInboundSession).not.toHaveBeenCalled();
+    expect(runDispatch).not.toHaveBeenCalled();
+  });
+
+  it("threads top-level lifecycles and masks observe-only delivery", async () => {
+    const runtime = createPluginRuntimeMock();
+    const onAdopted = vi.fn(async () => undefined);
+    const deliver = vi.fn(async () => ({ visibleReplySent: true }));
+    vi.mocked(runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher).mockImplementation(
+      async (params) => {
+        await params.replyOptions?.turnAdoptionLifecycle?.onAdopted();
+        await params.dispatcherOptions.deliver({ text: "hidden" }, { kind: "final" });
+        return {
+          queuedFinal: true,
+          counts: { tool: 0, block: 0, final: 1 },
+        };
+      },
+    );
 
     const result = await runtime.channel.inbound.run({
       channel: "test",
       raw: { id: "m1" },
+      turnAdoptionLifecycle: { onAdopted },
       adapter: {
         ingest: vi.fn(() => ({ id: "m1", rawText: "hello" })),
+        preflight: vi.fn(() => ({ kind: "observeOnly" as const, reason: "broadcast-observer" })),
         resolveTurn: vi.fn(() => ({
           cfg: {},
-          route: {
-            agentId: "main",
-            sessionKey: "agent:main:test:direct:u1",
-          },
+          route: { agentId: "main", sessionKey: "agent:main:test:direct:u1" },
           channel: "test",
           ctxPayload: {
             Body: "hello",
             CommandAuthorized: false,
             SessionKey: "agent:main:test:direct:u1",
           },
-          runDispatch,
+          delivery: { deliver },
         })),
       },
     });
 
-    expect(resolveStorePath).toHaveBeenCalledWith(undefined, { agentId: "main" });
-    expect(recordInboundSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        storePath: "/tmp/routed-sessions.json",
-        sessionKey: "agent:main:test:direct:u1",
-      }),
-    );
-    expect(runDispatch).toHaveBeenCalledOnce();
-    expect(result).toEqual(
-      expect.objectContaining({
-        admission: { kind: "dispatch" },
-        dispatched: true,
-      }),
-    );
+    expect(onAdopted).toHaveBeenCalledOnce();
+    expect(deliver).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      admission: { kind: "observeOnly", reason: "broadcast-observer" },
+      dispatched: true,
+      dispatchResult: {
+        queuedFinal: false,
+        counts: { tool: 0, block: 0, final: 0 },
+      },
+    });
   });
 
   it("assembles routed prepared turns before dispatch", async () => {

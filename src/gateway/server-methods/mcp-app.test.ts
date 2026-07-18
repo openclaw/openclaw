@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   getMcpAppViewLease: vi.fn(),
   peekSessionMcpRuntime: vi.fn(),
   restoreMcpAppView: vi.fn(),
+  createMcpAppStandaloneTicket: vi.fn(),
 }));
 
 vi.mock("../../agents/mcp-ui-resource.js", () => ({
@@ -21,6 +22,9 @@ vi.mock("../../agents/agent-bundle-mcp-runtime.js", () => ({
 }));
 vi.mock("../mcp-app-reconstruction.js", () => ({
   restoreMcpAppView: mocks.restoreMcpAppView,
+}));
+vi.mock("../mcp-app-standalone.js", () => ({
+  createMcpAppStandaloneTicket: mocks.createMcpAppStandaloneTicket,
 }));
 
 import { mcpAppHandlers } from "./mcp-app.js";
@@ -109,6 +113,11 @@ describe("MCP App gateway bridge", () => {
     mocks.completeDeferredSessionMcpRuntimeRetirement.mockReset().mockResolvedValue(false);
     mocks.peekSessionMcpRuntime.mockReset().mockReturnValue(runtime());
     mocks.restoreMcpAppView.mockReset().mockResolvedValue(undefined);
+    mocks.createMcpAppStandaloneTicket.mockReset().mockReturnValue({
+      ticket: "ticket",
+      url: "/__openclaw__/mcp-app#ticket",
+      expiresAtMs: 1_800_000_120_000,
+    });
   });
 
   it("returns the ephemeral view payload only for the bound session", async () => {
@@ -124,13 +133,33 @@ describe("MCP App gateway bridge", () => {
         sandboxOrigin: "https://apps.example.com",
         html: "<html>demo</html>",
         toolInput: { city: "Paris" },
+        standaloneUrl: "/__openclaw__/mcp-app#ticket",
+        standaloneExpiresAtMs: 1_800_000_120_000,
       }),
     );
     expect(mocks.getMcpAppViewLease).toHaveBeenCalledWith("cv_app", expect.any(Object));
+    expect(mocks.createMcpAppStandaloneTicket).toHaveBeenCalledWith({
+      sessionKey: "agent:main:main",
+      view,
+    });
     const activeRuntime = mocks.peekSessionMcpRuntime.mock.results[0]?.value;
     expect(activeRuntime.acquireLease).toHaveBeenCalledOnce();
     expect(activeRuntime.acquireLease.mock.results[0]?.value).toHaveBeenCalledOnce();
     expect(mocks.completeDeferredSessionMcpRuntimeRetirement).toHaveBeenCalledWith(activeRuntime);
+  });
+
+  it("preserves the existing view payload when standalone ticket issuance is unavailable", async () => {
+    mocks.createMcpAppStandaloneTicket.mockImplementation(() => {
+      throw new Error("ticket unavailable");
+    });
+    const respond = await invoke("mcp.app.view", {
+      sessionKey: "agent:main:main",
+      viewId: "cv_app",
+    });
+
+    expect(respond.mock.calls[0]?.[0]).toBe(true);
+    expect(respond.mock.calls[0]?.[1]).toMatchObject({ html: "<html>demo</html>" });
+    expect(respond.mock.calls[0]?.[1]).not.toHaveProperty("standaloneUrl");
   });
 
   it("does not replace a completed bridge response with a cleanup error", async () => {

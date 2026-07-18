@@ -1352,7 +1352,7 @@ jobs:
               exit 1
             fi
             if [[ "$mergeable" == "true" ]] &&
-              git fetch --no-tags --depth=2 origin \
+              timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=2 origin \
                 "+refs/pull/${PULL_REQUEST_NUMBER}/merge:refs/remotes/origin/ci-max-lines-merge"; then
               merge_sha="$(git rev-parse refs/remotes/origin/ci-max-lines-merge)"
               read -r merge_base merge_head extra_parent <<<"$(git show -s --format=%P "$merge_sha")"
@@ -1430,11 +1430,11 @@ jobs:
                   exit 1
                 fi
                 merge_base="${merge_parents[0]}"
-                git fetch --no-tags --depth=1 origin \
+                timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=1 origin \
                   "+${merge_base}:refs/remotes/origin/ci-max-lines-base"
                 base_ref="refs/remotes/origin/ci-max-lines-base"
               elif [[ -n "$base_sha" ]]; then
-                git fetch --no-tags --depth=1 origin \
+                timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=1 origin \
                   "+${base_sha}:refs/remotes/origin/ci-max-lines-base"
                 base_ref="refs/remotes/origin/ci-max-lines-base"
               elif [[ -n "${RATCHET_MANUAL_TARGET_SHA:-}" ]]; then
@@ -1455,12 +1455,12 @@ jobs:
                   echo "Could not resolve the manual target merge base for the max-lines ratchet." >&2
                   exit 1
                 fi
-                git fetch --no-tags --depth=1 origin \
+                timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=1 origin \
                   "+${merge_base_sha}:refs/remotes/origin/ci-max-lines-base"
                 base_ref="refs/remotes/origin/ci-max-lines-base"
               else
                 default_branch="${RATCHET_DEFAULT_BRANCH:-main}"
-                git fetch --no-tags --depth=1 origin \
+                timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=1 origin \
                   "+refs/heads/${default_branch}:refs/remotes/origin/ci-max-lines-base"
                 base_ref="refs/remotes/origin/ci-max-lines-base"
               fi
@@ -1896,7 +1896,7 @@ jobs:
             fi
             harness_root="${RUNNER_TEMP}/openclaw-ci-shard-runner"
             workflow_remote="https://github.com/${job_workflow_repository}.git"
-            git fetch --no-tags --depth=1 "$workflow_remote" "$job_workflow_sha"
+            timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=1 "$workflow_remote" "$job_workflow_sha"
             for file in \
               scripts/ci-run-node-test-shard.mjs \
               scripts/lib/direct-run.mjs \
@@ -2032,7 +2032,7 @@ jobs:
               pnpm check:host-env-policy:swift
               pnpm dup:check:coverage
               if [ -n "$PR_BASE_SHA" ]; then
-                git fetch --no-tags --depth=1 origin "+${PR_BASE_SHA}:refs/remotes/origin/ci-base"
+                timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=1 origin "+${PR_BASE_SHA}:refs/remotes/origin/ci-base"
                 node scripts/report-test-temp-creations.mjs --base refs/remotes/origin/ci-base --head HEAD --no-merge-base
               fi
               pnpm deps:patches:check
