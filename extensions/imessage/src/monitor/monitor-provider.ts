@@ -1459,6 +1459,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         );
         // Returning completes the durable GUID claim. A later restart cannot
         // reinterpret this live-fence suppression under the wider replay fence.
+        // Accepted overlap: a legacy-catchup redelivery of this GUID stays
+        // tombstone-blocked, so Push-flush backlog suppressed here is not
+        // recoverable via catchup either. The window is narrow (downtime
+        // backlog + catchup enabled) and preferring it over releasable
+        // suppressions keeps restart replay deterministic.
         return;
       }
       const repairedMessage = await repairMessageConversationAnchor(message);
