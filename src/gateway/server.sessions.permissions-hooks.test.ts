@@ -174,7 +174,15 @@ test("webchat session mutations follow operator scope policy", async () => {
   for (const mutation of deniedMutations) {
     const result = await rpcReq(ws, mutation.method, mutation.params);
     expect(result.ok, mutation.method).toBe(false);
-    expect(result.error?.message, mutation.method).toBe(`missing scope: ${mutation.missingScope}`);
+    expect(result.error, mutation.method).toEqual({
+      code: "FORBIDDEN",
+      message: `missing scope: ${mutation.missingScope}`,
+      details: {
+        code: "MISSING_SCOPE",
+        missingScope: mutation.missingScope,
+        requiredScopes: [mutation.missingScope],
+      },
+    });
   }
 
   expect(

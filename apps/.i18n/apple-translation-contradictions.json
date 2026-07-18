@@ -9099,6 +9099,14 @@
       ]
     },
     {
+      "locale": "ja-JP",
+      "source": "Unavailable",
+      "translations": [
+        "利用できません",
+        "利用不可"
+      ]
+    },
+    {
       "locale": "sv",
       "source": "Unavailable",
       "translations": [

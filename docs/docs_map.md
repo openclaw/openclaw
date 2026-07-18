@@ -9530,6 +9530,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /tools/ask-user
 - Headings:
   - H2: Answer a question
+  - H2: Platform behavior
   - H2: Timeout and no answer
   - H2: Tool schema
   - H2: Model guidance

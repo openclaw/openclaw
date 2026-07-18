@@ -90,8 +90,10 @@ public final class OpenClawChatViewModel {
     public internal(set) var questionCards: [OpenClawQuestionCardModel] = []
     var questionRefreshGeneration: UInt64 = 0
     var questionStateRevision: UInt64 = 0
-    var questionEvictionTasks: [String: Task<Void, Never>] = [:]
-    var questionEvictionDeadlines: [String: Date] = [:]
+    var questionExpiryTasks: [String: Task<Void, Never>] = [:]
+    var questionExpiryDeadlines: [String: Date] = [:]
+    var questionRefreshRetryTask: Task<Void, Never>?
+    var questionRefreshRetryDelaysMs: [Int64] = [1000, 2000, 4000]
     var hasActiveSessionRunWithoutChatSnapshot = false
 
     public private(set) var sessionKey: String {
@@ -498,7 +500,8 @@ public final class OpenClawChatViewModel {
         self.outboxRetryTask?.cancel()
         self.outboxChangesTask?.cancel()
         self.activeSessionRunIndicatorTimeoutTask?.cancel()
-        for (_, task) in self.questionEvictionTasks {
+        self.questionRefreshRetryTask?.cancel()
+        for (_, task) in self.questionExpiryTasks {
             task.cancel()
         }
         for (_, task) in self.pendingRunOwnerTasks {

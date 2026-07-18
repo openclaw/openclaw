@@ -353,6 +353,37 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(self.app?.keyboards.firstMatch.waitForNonExistence(timeout: 3) == true)
     }
 
+    func testKeyboardOpenSendFollowsLiveEdge() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone keyboard proof only")
+        self.launchApp(for: ScreenshotTarget(
+            initialTab: "chat",
+            initialDestination: "chat",
+            name: "keyboard-follow"))
+        let app = try XCTUnwrap(self.app)
+
+        let input = app.textFields["chat-message-input"]
+        XCTAssertTrue(input.waitForExistence(timeout: 8))
+        input.tap()
+        input.typeText(
+            "Give me a long, detailed status update covering the release plan, review feedback, " +
+                "open follow-ups, and the next steps for the team.")
+        let send = app.buttons["chat-send-message"]
+        XCTAssertTrue(send.waitForExistence(timeout: 5))
+        send.tap()
+
+        // Regression proof for #108692: with the keyboard still up, the reply must scroll into
+        // view above the keyboard on its own — no jump affordance, no manual scrolling.
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertTrue(keyboard.exists)
+        let reply = app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS %@", "keep the mobile workflow connected to the gateway"))
+            .firstMatch
+        XCTAssertTrue(reply.waitForExistence(timeout: 8))
+        Thread.sleep(forTimeInterval: 1.0)
+        XCTAssertLessThanOrEqual(reply.frame.maxY, keyboard.frame.minY + 1)
+        XCTAssertFalse(app.buttons["Jump to latest reply"].exists)
+    }
+
     func testChatPresentationInLightAppearance() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone chat proof only")
         self.launchApp(
