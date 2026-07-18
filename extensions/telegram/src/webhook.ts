@@ -42,10 +42,6 @@ import {
   resolveTelegramIngressSpoolDir,
   writeTelegramSpooledUpdate,
 } from "./telegram-ingress-spool.js";
-import {
-  buildTelegramReplyFenceLaneKey,
-  supersedeTelegramReplyFenceLane,
-} from "./telegram-reply-fence.js";
 import { runTelegramWebhookShutdownPhases } from "./webhook-shutdown.js";
 import { createTelegramWebhookStatusPublisher } from "./webhook-status.js";
 
