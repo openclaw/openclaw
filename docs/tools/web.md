@@ -140,7 +140,6 @@ type WebSearchOutput =
       kind: "results";
       provider: string;
       query: string;
-      queryTerms?: string[];
       count: number;
       tookMs?: number;
       results: Array<{
@@ -154,7 +153,7 @@ type WebSearchOutput =
         untrusted: true;
         source: "web_search";
         wrapped: true;
-        provider?: string;
+        provider: string;
       };
       cached?: true;
     }
@@ -169,7 +168,7 @@ type WebSearchOutput =
         untrusted: true;
         source: "web_search";
         wrapped: true;
-        provider?: string;
+        provider: string;
       };
       cached?: true;
     }
@@ -188,10 +187,14 @@ offsets, model ids, or session metadata are not passed through on normalized
 branches. Use a provider's dedicated tool when its richer response is part of
 your workflow.
 
-`externalContent.wrapped: true` is a trust marker, not decoration: when a
-provider did not wrap its own strings in untrusted-content markers, the core
-boundary wraps `title`, `snippet`, `content`, and citation titles itself before
-stamping. Raw passthrough payloads keep whatever markers the provider set.
+`externalContent.wrapped: true` is a trust marker the boundary itself makes
+true: provider prose (`title`, `snippet`, `siteName`, `content`, citation
+titles, error `message`) is stripped of any pre-existing envelope lines and
+re-wrapped exactly once at the core boundary, so no provider metadata can spoof
+the marker. `query` is always the requested query, citation and result URLs
+must parse as http(s), `published` must be ISO-date shaped, and a payload
+carrying an `error` key is always reported as `kind: "error"`. Raw passthrough
+payloads keep whatever markers the provider set.
 
 ## Auto-detection
 

@@ -165,6 +165,25 @@ export function normalizeWebSearchOutput(params: {
   // untrusted text and add nothing the model does not already know.
   const query = params.query;
 
+  // A declared error always wins: providers never mix an error key into
+  // success payloads, so treating it as failure first prevents an error plus
+  // empty results from masquerading as a successful search.
+  if (Object.hasOwn(result, "error")) {
+    // Error branches carry no externalContent marker, so nothing free-form may
+    // pass unwrapped: codes are charset-gated, docs must parse as http(s), and
+    // the human-readable message gets the untrusted envelope.
+    const rawError = typeof result.error === "string" ? result.error : "provider_error";
+    const error = ERROR_CODE_RE.test(rawError) ? rawError : "provider_error";
+    const rawMessage = typeof result.message === "string" ? result.message : rawError;
+    return {
+      kind: "error",
+      provider,
+      error,
+      message: wrapProse(rawMessage),
+      ...(typeof result.docs === "string" && isHttpUrl(result.docs) ? { docs: result.docs } : {}),
+    };
+  }
+
   // A results branch requires conforming rows; anything else is preserved as
   // raw so nonstandard external payloads are never silently gutted.
   const rows = Array.isArray(result.results) ? result.results : undefined;
@@ -220,22 +239,6 @@ export function normalizeWebSearchOutput(params: {
       ...(citations !== undefined ? { citations } : {}),
       externalContent: externalContentStamp(provider),
       ...(cached ? { cached } : {}),
-    };
-  }
-
-  if (Object.hasOwn(result, "error")) {
-    // Error branches carry no externalContent marker, so nothing free-form may
-    // pass unwrapped: codes are charset-gated, docs must parse as http(s), and
-    // the human-readable message gets the untrusted envelope.
-    const rawError = typeof result.error === "string" ? result.error : "provider_error";
-    const error = ERROR_CODE_RE.test(rawError) ? rawError : "provider_error";
-    const rawMessage = typeof result.message === "string" ? result.message : rawError;
-    return {
-      kind: "error",
-      provider,
-      error,
-      message: wrapProse(rawMessage),
-      ...(typeof result.docs === "string" && isHttpUrl(result.docs) ? { docs: result.docs } : {}),
     };
   }
 

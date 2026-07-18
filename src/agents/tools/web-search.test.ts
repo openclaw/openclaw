@@ -706,6 +706,19 @@ describe("web_search normalized output contract", () => {
     expect(normalized.citations).toEqual([{ url: "https://example.com/ok" }]);
   });
 
+  it("reports a declared error even when an empty results array is present", () => {
+    const normalized = normalizeWebSearchOutput({
+      provider: "external-demo",
+      query: "error precedence",
+      result: { error: "rate_limited", results: [] },
+    });
+
+    expect(normalized.kind).toBe("error");
+    if (normalized.kind === "error") {
+      expect(normalized.error).toBe("rate_limited");
+    }
+  });
+
   it("preserves nonconforming result rows as a raw payload", () => {
     const payload = {
       results: [{ name: "Custom", link: "https://example.com/custom" }],
