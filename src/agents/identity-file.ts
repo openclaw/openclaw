@@ -3,6 +3,7 @@
  * The parser accepts human-authored markdown, while the writer only updates
  * stable rich identity fields.
  */
+import fs from "node:fs";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { readRegularFile, readRegularFileSync } from "../infra/regular-file.js";
@@ -211,8 +212,9 @@ export function mergeIdentityMarkdownContent(
 
 function loadIdentityFromFile(identityPath: string): AgentIdentityFile | null {
   try {
+    const resolvedPath = fs.realpathSync(identityPath);
     const { buffer } = readRegularFileSync({
-      filePath: identityPath,
+      filePath: resolvedPath,
       maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
     });
     const parsed = parseIdentityMarkdown(buffer.toString("utf-8"));
@@ -230,8 +232,9 @@ export async function loadAgentIdentityFromFile(
   identityPath: string,
 ): Promise<AgentIdentityFile | null> {
   try {
+    const resolvedPath = await fs.promises.realpath(identityPath);
     const { buffer } = await readRegularFile({
-      filePath: identityPath,
+      filePath: resolvedPath,
       maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
     });
     const parsed = parseIdentityMarkdown(buffer.toString("utf-8"));

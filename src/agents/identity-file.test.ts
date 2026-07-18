@@ -163,6 +163,31 @@ describe("loadAgentIdentityFromWorkspace", () => {
     });
   });
 
+  it("loads identity values from a symlinked IDENTITY.md", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const targetPath = path.join(tempDir, "REAL_IDENTITY.md");
+    fs.writeFileSync(targetPath, "- **Name:** Linked Agent", "utf-8");
+    fs.symlinkSync(targetPath, path.join(tempDir, "IDENTITY.md"));
+
+    expect(loadAgentIdentityFromWorkspace(tempDir)).toEqual({ name: "Linked Agent" });
+  });
+
+  it("loads an explicit identity file through a symlink", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const targetPath = path.join(tempDir, "REAL_IDENTITY.md");
+    const identityPath = path.join(tempDir, "identity-link.md");
+    fs.writeFileSync(targetPath, "- **Name:** Linked Agent", "utf-8");
+    fs.symlinkSync(targetPath, identityPath);
+
+    await expect(loadAgentIdentityFromFile(identityPath)).resolves.toEqual({
+      name: "Linked Agent",
+    });
+  });
+
   it("returns null when IDENTITY.md exceeds the size cap", () => {
     fs.writeFileSync(
       path.join(tempDir, "IDENTITY.md"),
