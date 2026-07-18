@@ -79,7 +79,7 @@ describe("check-workflows", () => {
     expect(preCommitArgs).toContain(".github/workflows/windows-testbox-probe.yml");
   });
 
-  it("fails with an actionable timeout when a workflow command hangs", () => {
+  it("fails with an actionable timeout when a workflow command ignores SIGTERM", () => {
     const tempDir = makeTempDir(tempDirs, "check-workflows-");
     const binDir = path.join(tempDir, "bin");
     mkdirSync(binDir);
@@ -88,7 +88,8 @@ describe("check-workflows", () => {
       [
         `#!${process.execPath}`,
         'if (process.argv[2] === "--version") process.exit(0);',
-        "setTimeout(() => {}, 10_000);",
+        'process.on("SIGTERM", () => {});',
+        "setInterval(() => {}, 10_000);",
         "",
       ].join("\n"),
       { mode: 0o755 },
@@ -101,8 +102,10 @@ describe("check-workflows", () => {
         OPENCLAW_CHECK_WORKFLOWS_COMMAND_TIMEOUT_MS: "500",
         PATH: binDir,
       },
+      timeout: 5_000,
     });
 
+    expect(result.error).toBeUndefined();
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("[check-workflows] timed out after 500ms: actionlint");
     expect(result.stderr).toContain(".github/workflows/ci.yml");

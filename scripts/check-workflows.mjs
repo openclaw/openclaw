@@ -2,7 +2,7 @@
 // Runs local workflow sanity checks.
 // Uses installed tools when present, otherwise falls back to pinned hooks where
 // possible, then runs repo-specific workflow guards.
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,6 +12,7 @@ const PRE_COMMIT_VERSION = "4.2.0";
 const WORKFLOW_DIR = ".github/workflows";
 const DEFAULT_COMMAND_TIMEOUT_MS = 5 * 60_000;
 const MAX_COMMAND_TIMEOUT_MS = 30 * 60_000;
+const COMMAND_TIMEOUT_KILL_GRACE_MS = 1_000;
 const COMMAND_TIMEOUT_ENV = "OPENCLAW_CHECK_WORKFLOWS_COMMAND_TIMEOUT_MS";
 
 function resolveCommandTimeoutMs() {
@@ -32,10 +33,70 @@ function commandLabel(command, args) {
   return [command, ...args].join(" ");
 }
 
+function killProcessTree(child, signal) {
+  const killChild = () => {
+    try {
+      child.kill(signal);
+    } catch (error) {
+      if (error?.code !== "ESRCH") {
+        throw error;
+      }
+    }
+  };
+  if (process.platform === "win32") {
+    killChild();
+    return;
+  }
+  try {
+    process.kill(-child.pid, signal);
+  } catch (error) {
+    if (error?.code !== "ESRCH") {
+      killChild();
+    }
+  }
+}
+
 function spawnCommand(command, args, options = {}) {
-  return spawnSync(command, args, {
-    ...options,
-    timeout: commandTimeoutMs,
+  return new Promise((resolve) => {
+    // Node's sync timeout waits for SIGTERM handlers to exit. Run POSIX tools in
+    // a process group so timeout escalation can terminate non-cooperative scans.
+    const child = spawn(command, args, {
+      ...options,
+      detached: process.platform !== "win32",
+    });
+    let settled = false;
+    let timedOut = false;
+    let killTimer;
+    const timeoutTimer = setTimeout(() => {
+      timedOut = true;
+      killProcessTree(child, "SIGTERM");
+      killTimer = setTimeout(() => {
+        killProcessTree(child, "SIGKILL");
+      }, COMMAND_TIMEOUT_KILL_GRACE_MS);
+    }, commandTimeoutMs);
+
+    child.on("error", (error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeoutTimer);
+      clearTimeout(killTimer);
+      resolve({ error, status: null, timedOut });
+    });
+
+    child.on("exit", (status, signal) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeoutTimer);
+      clearTimeout(killTimer);
+      const error = timedOut
+        ? Object.assign(new Error("Command timed out"), { code: "ETIMEDOUT" })
+        : null;
+      resolve({ error, signal, status, timedOut });
+    });
   });
 }
 
@@ -46,13 +107,13 @@ function commandFailureMessage(command, args, error) {
   return `[check-workflows] failed to run ${command}: ${error?.message ?? "unknown error"}`;
 }
 
-function commandExists(command, args = ["--version"]) {
-  const result = spawnCommand(command, args, { stdio: "ignore" });
+async function commandExists(command, args = ["--version"]) {
+  const result = await spawnCommand(command, args, { stdio: "ignore" });
   return !result.error && result.status === 0;
 }
 
-function run(command, args) {
-  const result = spawnCommand(command, args, { stdio: "inherit" });
+async function run(command, args) {
+  const result = await spawnCommand(command, args, { stdio: "inherit" });
   if (result.error) {
     console.error(commandFailureMessage(command, args, result.error));
     process.exit(1);
@@ -62,8 +123,8 @@ function run(command, args) {
   }
 }
 
-function runChecked(command, args) {
-  const result = spawnCommand(command, args, { stdio: "inherit" });
+async function runChecked(command, args) {
+  const result = await spawnCommand(command, args, { stdio: "inherit" });
   if (result.error) {
     return {
       message: commandFailureMessage(command, args, result.error),
@@ -86,19 +147,19 @@ function exitWithFailure(failure) {
   process.exit(failure.status);
 }
 
-function runPreCommitFromTempVenv(hook, hookArgs) {
-  if (!commandExists("python3", ["--version"])) {
+async function runPreCommitFromTempVenv(hook, hookArgs) {
+  if (!(await commandExists("python3", ["--version"]))) {
     return false;
   }
   const venvDir = mkdtempSync(join(tmpdir(), "openclaw-check-workflows-pre-commit-"));
   const python = join(venvDir, process.platform === "win32" ? "Scripts/python.exe" : "bin/python");
   let postVenvFailure;
   try {
-    const venvFailure = runChecked("python3", ["-m", "venv", venvDir]);
+    const venvFailure = await runChecked("python3", ["-m", "venv", venvDir]);
     if (venvFailure) {
       return false;
     }
-    postVenvFailure = runChecked(python, [
+    postVenvFailure = await runChecked(python, [
       "-m",
       "pip",
       "install",
@@ -108,7 +169,7 @@ function runPreCommitFromTempVenv(hook, hookArgs) {
     if (postVenvFailure) {
       return false;
     }
-    postVenvFailure = runChecked(python, ["-m", "pre_commit", ...hookArgs]);
+    postVenvFailure = await runChecked(python, ["-m", "pre_commit", ...hookArgs]);
     if (postVenvFailure) {
       return false;
     }
@@ -128,17 +189,17 @@ function workflowFiles() {
     .map((file) => join(WORKFLOW_DIR, file));
 }
 
-function runPreCommitHook(hook, files) {
+async function runPreCommitHook(hook, files) {
   const hookArgs = ["run", "--config", ".pre-commit-config.yaml", hook, "--files", ...files];
-  if (commandExists("pre-commit")) {
-    run("pre-commit", hookArgs);
+  if (await commandExists("pre-commit")) {
+    await run("pre-commit", hookArgs);
     return;
   }
-  if (commandExists("python3", ["-m", "pre_commit", "--version"])) {
-    run("python3", ["-m", "pre_commit", ...hookArgs]);
+  if (await commandExists("python3", ["-m", "pre_commit", "--version"])) {
+    await run("python3", ["-m", "pre_commit", ...hookArgs]);
     return;
   }
-  if (runPreCommitFromTempVenv(hook, hookArgs)) {
+  if (await runPreCommitFromTempVenv(hook, hookArgs)) {
     return;
   }
 
@@ -150,16 +211,16 @@ function runPreCommitHook(hook, files) {
 
 const workflows = workflowFiles();
 
-if (commandExists("actionlint")) {
-  run("actionlint", workflows);
-} else if (commandExists("go", ["version"])) {
-  run("go", ["run", `github.com/rhysd/actionlint/cmd/actionlint@v${ACTIONLINT_VERSION}`]);
+if (await commandExists("actionlint")) {
+  await run("actionlint", workflows);
+} else if (await commandExists("go", ["version"])) {
+  await run("go", ["run", `github.com/rhysd/actionlint/cmd/actionlint@v${ACTIONLINT_VERSION}`]);
 } else if (
-  commandExists("pre-commit") ||
-  commandExists("python3", ["-m", "pre_commit", "--version"]) ||
-  commandExists("python3", ["--version"])
+  (await commandExists("pre-commit")) ||
+  (await commandExists("python3", ["-m", "pre_commit", "--version"])) ||
+  (await commandExists("python3", ["--version"]))
 ) {
-  runPreCommitHook("actionlint", workflows);
+  await runPreCommitHook("actionlint", workflows);
 } else {
   console.error(
     `[check-workflows] missing workflow linter: install actionlint, Go ${ACTIONLINT_VERSION} fallback support, or pre-commit.`,
@@ -167,7 +228,7 @@ if (commandExists("actionlint")) {
   process.exit(1);
 }
 
-runPreCommitHook("zizmor", workflows);
+await runPreCommitHook("zizmor", workflows);
 
-run("python3", ["scripts/check-composite-action-input-interpolation.py"]);
-run("node", ["scripts/check-no-conflict-markers.mjs"]);
+await run("python3", ["scripts/check-composite-action-input-interpolation.py"]);
+await run("node", ["scripts/check-no-conflict-markers.mjs"]);
