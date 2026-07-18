@@ -122,14 +122,15 @@ so a no-config user still gets the protection.
 
 ## Logs and expected behavior
 
-When a loop is detected, OpenClaw logs a loop event and either warns or blocks
-the next tool-cycle depending on severity, protecting against runaway token
-spend and lockups while preserving normal tool access.
+When a loop is detected, OpenClaw logs a loop event and either warns or ends the
+current run as blocked, protecting against runaway token spend and lockups while
+preserving the session for a later user turn.
 
 - Warnings come first.
-- Blocking follows once a pattern persists past the warning threshold.
-- Critical thresholds block the next tool-cycle and surface a clear
-  loop-detection reason in the run record.
+- Critical thresholds reject the triggering tool call, abort the active attempt,
+  and end the current run without trying another provider attempt.
+- The blocked run surfaces a clear loop-detection reason; the session remains
+  available for the next user turn.
 - The post-compaction guard emits `compaction_loop_persisted` errors naming
   the offending tool and identical-call count.
 

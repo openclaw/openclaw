@@ -1249,14 +1249,16 @@ describe("Codex app-server dynamic tool build", () => {
     });
   });
 
-  it("forwards tool outcome ordering into Codex dynamic tools", async () => {
+  it("forwards terminal loop signals and tool outcome ordering into Codex dynamic tools", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(sessionFile, workspaceDir);
     const onToolOutcome = vi.fn();
+    const onCriticalToolLoop = vi.fn();
     const allocateToolOutcomeOrdinal = vi.fn(() => 0);
     params.disableTools = false;
     params.onToolOutcome = onToolOutcome;
+    params.onCriticalToolLoop = onCriticalToolLoop;
     params.allocateToolOutcomeOrdinal = allocateToolOutcomeOrdinal;
     params.runtimePlan = createCodexRuntimePlanFixture();
     const factoryOptions: unknown[] = [];
@@ -1269,6 +1271,7 @@ describe("Codex app-server dynamic tool build", () => {
 
     expect(factoryOptions[0]).toMatchObject({
       onToolOutcome,
+      onCriticalToolLoop,
       allocateToolOutcomeOrdinal,
     });
   });

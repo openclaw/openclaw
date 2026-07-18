@@ -1326,6 +1326,93 @@ describe("native hook relay registry", () => {
     });
   });
 
+  it("forwards a critical native tool loop through the relay observer", async () => {
+    const onCriticalToolLoop = vi.fn();
+    const sessionKey = `agent:main:native-critical-${randomUUID()}`;
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-native-critical",
+      sessionKey,
+      runId: "run-native-critical",
+      allowedEvents: ["pre_tool_use", "post_tool_use"],
+      config: {
+        tools: {
+          loopDetection: {
+            enabled: true,
+            warningThreshold: 1,
+            criticalThreshold: 2,
+            globalCircuitBreakerThreshold: 3,
+          },
+        },
+      },
+      onCriticalToolLoop,
+    });
+    expect(relay.shouldRelayEvent("post_tool_use")).toBe(true);
+    const invokeRepeatedTool = async (toolUseId: string) =>
+      await invokeNativeHookRelay({
+        provider: "codex",
+        relayId: relay.relayId,
+        event: "pre_tool_use",
+        rawPayload: {
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_use_id: toolUseId,
+          tool_input: { command: "pnpm test" },
+        },
+      });
+    const recordRepeatedOutcome = async (toolUseId: string) =>
+      await invokeNativeHookRelay({
+        provider: "codex",
+        relayId: relay.relayId,
+        event: "post_tool_use",
+        rawPayload: {
+          hook_event_name: "PostToolUse",
+          tool_name: "Bash",
+          tool_use_id: toolUseId,
+          tool_input: { command: "pnpm test" },
+          tool_response: { output: "still running", exit_code: 0 },
+        },
+      });
+
+    expect(await invokeRepeatedTool("native-critical-1")).toEqual({
+      stdout: "",
+      stderr: "",
+      exitCode: 0,
+    });
+    expect(await invokeRepeatedTool("native-critical-1")).toEqual({
+      stdout: "",
+      stderr: "",
+      exitCode: 0,
+    });
+    await recordRepeatedOutcome("native-critical-1");
+    expect(await invokeRepeatedTool("native-critical-2")).toEqual({
+      stdout: "",
+      stderr: "",
+      exitCode: 0,
+    });
+    expect(await invokeRepeatedTool("native-critical-2")).toEqual({
+      stdout: "",
+      stderr: "",
+      exitCode: 0,
+    });
+    await recordRepeatedOutcome("native-critical-2");
+    const response = await invokeRepeatedTool("native-critical-3");
+
+    expect(onCriticalToolLoop).toHaveBeenCalledOnce();
+    expect(onCriticalToolLoop).toHaveBeenCalledWith({
+      detector: "generic_repeat",
+      count: 2,
+      toolName: "exec",
+      message: expect.stringContaining("CRITICAL"),
+    });
+    expect(JSON.parse(response.stdout)).toMatchObject({
+      hookSpecificOutput: {
+        permissionDecision: "deny",
+        permissionDecisionReason: expect.stringContaining("CRITICAL"),
+      },
+    });
+  });
+
   it("reports whether a relay already observed a tool use invocation", async () => {
     const relay = registerNativeHookRelay({
       provider: "codex",

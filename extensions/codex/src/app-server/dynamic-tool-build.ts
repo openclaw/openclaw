@@ -330,6 +330,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
       toolBuildStages.mark(name);
     },
     onToolOutcome: params.onToolOutcome,
+    onCriticalToolLoop: params.onCriticalToolLoop,
     allocateToolOutcomeOrdinal: params.allocateToolOutcomeOrdinal,
   });
   const codexScopedTools = addCodexMessageToolOnlyFinalControl(

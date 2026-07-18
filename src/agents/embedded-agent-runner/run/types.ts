@@ -12,7 +12,10 @@ import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-con
 import type { AssistantMessage, Model } from "../../../llm/types.js";
 import type { AgentHarnessTaskRuntimeScope } from "../../../tasks/agent-harness-task-runtime-scope.js";
 import type { AcceptedSessionSpawn } from "../../accepted-session-spawn.js";
-import type { ToolOutcomeObserver } from "../../agent-tools.before-tool-call.js";
+import type {
+  CriticalToolLoopObserver,
+  ToolOutcomeObserver,
+} from "../../agent-tools.before-tool-call.js";
 import type { AuthProfileStore } from "../../auth-profiles/types.js";
 import type { DelegationCapability } from "../../delegation-capability.js";
 import type {
@@ -138,6 +141,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   trajectoryRecorder?: EmbeddedRunAttemptTrajectoryRecorder | null;
   /** Live observer called after wrapped tool outcomes are recorded. */
   onToolOutcome?: ToolOutcomeObserver;
+  /** Trusted terminal signal emitted when loop detection blocks at the critical threshold. */
+  onCriticalToolLoop?: CriticalToolLoopObserver;
   /** Signals that the attempt's own run-timeout watchdog is active. */
   onAttemptTimeoutArmed?: () => void;
   /** Signals that this attempt's timeout has fired and must unwind promptly. */

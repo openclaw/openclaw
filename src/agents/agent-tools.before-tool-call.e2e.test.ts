@@ -34,6 +34,7 @@ import {
   getBeforeToolCallFailureDisposition,
   getBeforeToolCallPolicyDiagnosticState,
   runBeforeToolCallHook,
+  type CriticalToolLoopObserver,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
@@ -257,13 +258,16 @@ describe("before_tool_call loop detection behavior", () => {
     }
   }
 
-  function createGenericReadRepeatFixture() {
+  function createGenericReadRepeatFixture(onCriticalToolLoop?: CriticalToolLoopObserver) {
     const execute = vi.fn().mockResolvedValue({
       content: [{ type: "text", text: "same output" }],
       details: { ok: true },
     });
     return {
-      tool: createWrappedTool("read", execute),
+      tool: createWrappedTool("read", execute, {
+        ...enabledLoopDetectionContext,
+        onCriticalToolLoop,
+      }),
       params: { path: "/tmp/file" },
     };
   }
@@ -422,14 +426,23 @@ describe("before_tool_call loop detection behavior", () => {
   });
 
   it("blocks generic repeated no-progress calls at critical threshold", async () => {
-    const { tool, params } = createGenericReadRepeatFixture();
+    const onCriticalToolLoop = vi.fn<CriticalToolLoopObserver>();
+    const { tool, params } = createGenericReadRepeatFixture(onCriticalToolLoop);
 
     for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
       await expectUnblockedToolExecution(tool, `read-${i}`, params);
     }
+    expect(onCriticalToolLoop).not.toHaveBeenCalled();
 
     const result = await tool.execute(`read-${CRITICAL_THRESHOLD}`, params, undefined, undefined);
     expectToolLoopBlockedResult(result, "identical outcomes");
+    expect(onCriticalToolLoop).toHaveBeenCalledOnce();
+    expect(onCriticalToolLoop).toHaveBeenCalledWith({
+      detector: "generic_repeat",
+      count: CRITICAL_THRESHOLD,
+      toolName: "read",
+      message: expect.stringContaining("identical outcomes"),
+    });
   });
 
   it("does not carry loop history across run ids", async () => {

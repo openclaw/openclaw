@@ -143,6 +143,7 @@ export function createCodexNativeHookRelay(params: {
   turnStartTimeoutMs: number;
   loopDetectionPreToolUseRelay: boolean;
   signal: AbortSignal;
+  onCriticalToolLoop?: EmbeddedRunAttemptParams["onCriticalToolLoop"];
   onPreToolUseFailure: (failure: CodexNativePreToolUseFailure) => void | Promise<void>;
 }): NativeHookRelayRegistrationHandle | undefined {
   if (params.options?.enabled === false) {
@@ -175,6 +176,7 @@ export function createCodexNativeHookRelay(params: {
       turnStartTimeoutMs: params.turnStartTimeoutMs,
     }),
     signal: params.signal,
+    ...(params.onCriticalToolLoop ? { onCriticalToolLoop: params.onCriticalToolLoop } : {}),
     onPreToolUseFailure: params.onPreToolUseFailure,
     command: {
       // Hook relay subprocesses are observational for most tool events; keep

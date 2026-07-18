@@ -7,7 +7,7 @@ export function buildEmbeddedRunBlockedResult(input: {
   errorMessage: string;
   durationMs: number;
   agentMeta: EmbeddedAgentMeta;
-  attempt: EmbeddedRunAttemptResult;
+  attempt?: EmbeddedRunAttemptResult;
   replayInvalid: boolean;
   finalPromptText?: string;
 }): EmbeddedAgentRunResult {
@@ -16,7 +16,7 @@ export function buildEmbeddedRunBlockedResult(input: {
     meta: {
       durationMs: input.durationMs,
       agentMeta: input.agentMeta,
-      systemPromptReport: input.attempt.systemPromptReport,
+      systemPromptReport: input.attempt?.systemPromptReport,
       finalAssistantVisibleText: input.text,
       finalAssistantRawText: input.text,
       finalPromptText: input.finalPromptText,

@@ -303,6 +303,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
           authProfileStore: attempt.authProfileStore,
           recordToolPrepStage: params.markCoreToolStage,
           onToolOutcome: attempt.onToolOutcome,
+          onCriticalToolLoop: attempt.onCriticalToolLoop,
           allocateToolOutcomeOrdinal: attempt.allocateToolOutcomeOrdinal,
           skillsSnapshot: params.skillsSnapshot,
           skillUsagePaths: params.skillUsagePaths,

@@ -2278,6 +2278,159 @@ describe("runCodexAppServerSideQuestion", () => {
     });
   });
 
+  it("interrupts the side turn when an OpenClaw tool reports a critical loop", async () => {
+    const client = createFakeClient();
+    const criticalMessage = "CRITICAL: repeated side tool outcomes";
+    let toolSignal: AbortSignal | undefined;
+    let toolFactoryOptions:
+      | {
+          onCriticalToolLoop?: (signal: {
+            detector: "generic_repeat";
+            count: number;
+            toolName: string;
+            message: string;
+          }) => void;
+        }
+      | undefined;
+    createOpenClawCodingToolsMock.mockImplementation((options: unknown) => {
+      toolFactoryOptions = options as typeof toolFactoryOptions;
+      return [
+        {
+          name: "wiki_status",
+          description: "Check wiki status",
+          parameters: { type: "object", properties: {} },
+          execute: vi.fn(async (_callId: string, _args: unknown, signal?: AbortSignal) => {
+            toolSignal = signal;
+            toolFactoryOptions?.onCriticalToolLoop?.({
+              detector: "generic_repeat",
+              count: 20,
+              toolName: "wiki_status",
+              message: criticalMessage,
+            });
+            return { content: [{ type: "text", text: "sibling success" }] };
+          }),
+        },
+      ];
+    });
+    client.request.mockImplementation(async (method: string) => {
+      if (method === "thread/fork") {
+        return threadResult("side-thread");
+      }
+      if (method === "thread/inject_items") {
+        return {};
+      }
+      if (method === "turn/start") {
+        setTimeout(() => {
+          void client
+            .handleRequest({
+              id: 44,
+              method: "item/tool/call",
+              params: {
+                threadId: "side-thread",
+                turnId: "turn-1",
+                callId: "critical-loop-tool",
+                tool: "wiki_status",
+                arguments: { topic: "AGENTS.md" },
+              },
+            })
+            .catch(() => {});
+        }, 0);
+        return turnStartResult("turn-1");
+      }
+      if (method === "thread/unsubscribe" || method === "turn/interrupt") {
+        return {};
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+
+    await expect(
+      runCodexAppServerSideQuestion(
+        sideParams({ cfg: { tools: { loopDetection: { enabled: true } } } as never }),
+      ),
+    ).rejects.toThrow(criticalMessage);
+
+    expect(toolFactoryOptions?.onCriticalToolLoop).toBeTypeOf("function");
+    expect(toolSignal?.aborted).toBe(true);
+    expect(toolSignal?.reason).toMatchObject({
+      name: "CriticalToolLoopError",
+      detector: "generic_repeat",
+      count: 20,
+      toolName: "wiki_status",
+      message: criticalMessage,
+    });
+    expect(client.request).toHaveBeenCalledWith(
+      "turn/interrupt",
+      { threadId: "side-thread", turnId: "turn-1" },
+      expect.any(Object),
+    );
+    expect(client.request).toHaveBeenCalledWith(
+      "thread/unsubscribe",
+      { threadId: "side-thread" },
+      expect.any(Object),
+    );
+  });
+
+  it("interrupts the side turn when the native relay reports a critical loop", async () => {
+    const client = createFakeClient();
+    const criticalMessage = "CRITICAL: repeated native side tool outcomes";
+    let reportCriticalToolLoop:
+      | NonNullable<NativeHookRelayRegistrationHandle["onCriticalToolLoop"]>
+      | undefined;
+    client.request.mockImplementation(async (method: string, requestParams: unknown) => {
+      if (method === "thread/fork") {
+        const relayId = extractRelayIdFromThreadConfig(
+          (requestParams as { config?: Record<string, unknown> }).config,
+        );
+        reportCriticalToolLoop =
+          nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(
+            relayId,
+          )?.onCriticalToolLoop;
+        return threadResult("side-thread");
+      }
+      if (method === "thread/inject_items") {
+        return {};
+      }
+      if (method === "turn/start") {
+        if (!reportCriticalToolLoop) {
+          throw new Error("Expected native critical-loop observer");
+        }
+        setTimeout(() => {
+          reportCriticalToolLoop?.({
+            detector: "generic_repeat",
+            count: 20,
+            toolName: "exec",
+            message: criticalMessage,
+          });
+        }, 0);
+        return turnStartResult("turn-1");
+      }
+      if (method === "thread/unsubscribe" || method === "turn/interrupt") {
+        return {};
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+
+    await expect(
+      runCodexAppServerSideQuestion(sideParams(), {
+        nativeHookRelay: { enabled: true },
+      }),
+    ).rejects.toThrow(criticalMessage);
+
+    expect(reportCriticalToolLoop).toBeTypeOf("function");
+    expect(client.request).toHaveBeenCalledWith(
+      "turn/interrupt",
+      { threadId: "side-thread", turnId: "turn-1" },
+      expect.any(Object),
+    );
+    expect(client.request).toHaveBeenCalledWith(
+      "thread/unsubscribe",
+      { threadId: "side-thread" },
+      expect.any(Object),
+    );
+  });
+
   it("omits computer control from side threads without a compaction owner", async () => {
     const client = createFakeClient();
     const computerExecute = vi.fn();

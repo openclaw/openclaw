@@ -118,6 +118,22 @@ const SIDE_QUESTION_COMPLETION_TIMEOUT_MS = 600_000;
 class CodexSideQuestionTimeoutError extends Error {
   override name = "TimeoutError";
 }
+type CriticalToolLoopSignal = Parameters<
+  NonNullable<EmbeddedRunAttemptParams["onCriticalToolLoop"]>
+>[0];
+class CodexSideQuestionCriticalToolLoopError extends Error {
+  override name = "CriticalToolLoopError";
+  readonly detector: CriticalToolLoopSignal["detector"];
+  readonly count: number;
+  readonly toolName: string;
+
+  constructor(signal: CriticalToolLoopSignal) {
+    super(signal.message);
+    this.detector = signal.detector;
+    this.count = signal.count;
+    this.toolName = signal.toolName;
+  }
+}
 const CODEX_SIDE_NATIVE_HOOK_RELAY_MIN_TTL_MS = 30 * 60_000;
 const CODEX_SIDE_NATIVE_HOOK_RELAY_TTL_GRACE_MS = 5 * 60_000;
 const CODEX_SIDE_NATIVE_HOOK_RELAY_STARTUP_REQUEST_COUNT = 3;
@@ -300,6 +316,16 @@ export async function runCodexAppServerSideQuestion(
   const clientLease: CodexAppServerClientLease = { client };
   const collector = new CodexSideQuestionCollector(params, () => readRecentCodexRateLimits(client));
   const runAbortController = new AbortController();
+  const abortForCriticalToolLoop = (signal: CriticalToolLoopSignal): void => {
+    if (runAbortController.signal.aborted || collector.completed) {
+      return;
+    }
+    const error = new CodexSideQuestionCriticalToolLoopError(signal);
+    // The collector owns the user-visible side-run result. Fail it before
+    // aborting tools so the detector message wins over generic cancellation.
+    collector.fail(error);
+    runAbortController.abort(error);
+  };
   let nativeToolLifecycleProjector: CodexNativeToolLifecycleProjector | undefined;
   const pendingNativeToolNotifications: CodexServerNotification[] = [];
   const pendingNativePreToolUseFailures: CodexNativePreToolUseFailure[] = [];
@@ -410,6 +436,7 @@ export async function runCodexAppServerSideQuestion(
       nativeProviderWebSearchSupport,
       runId,
       signal: runAbortController.signal,
+      onCriticalToolLoop: abortForCriticalToolLoop,
     });
     // Auth refresh is client-owned; keep one shared handler per physical client.
     ensureCodexAppServerClientRuntime(client, {
@@ -559,6 +586,7 @@ export async function runCodexAppServerSideQuestion(
           ),
           loopDetectionPreToolUseRelay: appServer.loopDetectionPreToolUseRelay,
           signal: runAbortController.signal,
+          onCriticalToolLoop: abortForCriticalToolLoop,
           onPreToolUseFailure: (failure) => {
             if (nativePreToolUseFailureFallbackActive) {
               emitNativePreToolUseFailure(failure);
@@ -793,6 +821,7 @@ function registerCodexSideNativeHookRelay(params: {
   completionTimeoutMs: number;
   loopDetectionPreToolUseRelay: boolean;
   signal: AbortSignal;
+  onCriticalToolLoop: NonNullable<EmbeddedRunAttemptParams["onCriticalToolLoop"]>;
   onPreToolUseFailure: (failure: CodexNativePreToolUseFailure) => void;
 }): NativeHookRelayRegistrationHandle | undefined {
   if (params.options.enabled === false) {
@@ -814,6 +843,7 @@ function registerCodexSideNativeHookRelay(params: {
       completionTimeoutMs: params.completionTimeoutMs,
     }),
     signal: params.signal,
+    onCriticalToolLoop: params.onCriticalToolLoop,
     onPreToolUseFailure: params.onPreToolUseFailure,
     command: {
       timeoutMs: params.options.gatewayTimeoutMs,
@@ -909,6 +939,7 @@ async function createCodexSideToolBridge(input: {
   nativeProviderWebSearchSupport: CodexNativeWebSearchSupport;
   runId: string;
   signal: AbortSignal;
+  onCriticalToolLoop: NonNullable<EmbeddedRunAttemptParams["onCriticalToolLoop"]>;
 }): Promise<{ toolBridge: CodexDynamicToolBridge; webSearchPlan: CodexWebSearchPlan }> {
   const runtimeModel =
     input.params.runtimeModel ??
@@ -999,6 +1030,7 @@ async function createCodexSideToolBridge(input: {
       }).channelId,
       sandbox,
       emitBeforeToolCallDiagnostics: false,
+      onCriticalToolLoop: input.onCriticalToolLoop,
       modelHasVision: runtimeModel.input?.includes("image") ?? false,
       requireExplicitMessageTarget: true,
     });
@@ -1045,6 +1077,7 @@ async function createCodexSideToolBridge(input: {
         sessionId: input.params.sessionId,
         sessionKey: input.params.sessionKey,
         runId: input.runId,
+        onCriticalToolLoop: input.onCriticalToolLoop,
         currentChannelProvider: messageToolProvider,
         ...hookChannelFields,
       },
@@ -1167,6 +1200,10 @@ class CodexSideQuestionCollector {
     for (const notification of pending) {
       this.handleNotification(notification);
     }
+  }
+
+  fail(error: Error): void {
+    this.reject(error);
   }
 
   handleNotification(notification: CodexServerNotification): void {

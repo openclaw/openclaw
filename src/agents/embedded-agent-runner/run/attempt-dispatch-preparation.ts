@@ -36,12 +36,19 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
   bootstrapPromptWarningSignaturesSeen: string[];
   resolveRuntimeFallbackReason: () => string | null;
   observeToolOutcome: Parameters<typeof dispatchEmbeddedRunAttempt>[0]["control"]["onToolOutcome"];
+  onCriticalToolLoop: Parameters<
+    typeof dispatchEmbeddedRunAttempt
+  >[0]["control"]["onCriticalToolLoop"];
   allocateToolOutcomeOrdinal: Parameters<
     typeof dispatchEmbeddedRunAttempt
   >[0]["control"]["allocateToolOutcomeOrdinal"];
-  getPostCompactionAbortError: () => Error | undefined;
-  setPostCompactionAbortController: (controller: AbortController | undefined) => void;
-  clearPostCompactionAbortController: (controller: AbortController) => void;
+  getTerminalAbort: Parameters<typeof dispatchEmbeddedRunAttempt>[0]["control"]["getTerminalAbort"];
+  setTerminalAbortController: Parameters<
+    typeof dispatchEmbeddedRunAttempt
+  >[0]["control"]["setTerminalAbortController"];
+  clearTerminalAbortController: Parameters<
+    typeof dispatchEmbeddedRunAttempt
+  >[0]["control"]["clearTerminalAbortController"];
 }) {
   const {
     runInput,
@@ -218,6 +225,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
       laneTaskReleaseController,
       noteLaneTaskProgress,
       onToolOutcome: input.observeToolOutcome,
+      onCriticalToolLoop: input.onCriticalToolLoop,
       allocateToolOutcomeOrdinal: input.allocateToolOutcomeOrdinal,
       onToolStreamBoundary: maybeAnnounceFastModeAutoOff,
       onRunProgress: notifyRunProgress,
@@ -227,9 +235,9 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
       onUserMessagePersistenceInvalidated: () => {
         sessionPromptState.activePrompt.persisted = false;
       },
-      getPostCompactionAbortError: input.getPostCompactionAbortError,
-      setPostCompactionAbortController: input.setPostCompactionAbortController,
-      clearPostCompactionAbortController: input.clearPostCompactionAbortController,
+      getTerminalAbort: input.getTerminalAbort,
+      setTerminalAbortController: input.setTerminalAbortController,
+      clearTerminalAbortController: input.clearTerminalAbortController,
     },
     bootstrapPromptWarningSignaturesSeen: input.bootstrapPromptWarningSignaturesSeen,
     suppressNextUserMessagePersistence: sessionPromptState.suppressNextUserMessagePersistence,

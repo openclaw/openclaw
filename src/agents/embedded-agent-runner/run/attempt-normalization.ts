@@ -31,6 +31,7 @@ import {
 } from "./run-attempt-result.js";
 import type { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
 import type { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
+import type { CriticalToolLoopTerminalAbort } from "./terminal-abort.js";
 import {
   isEmbeddedRunTerminalAbort,
   isEmbeddedRunTerminalInterrupted,
@@ -65,6 +66,18 @@ export async function normalizeEmbeddedRunAttempt(input: {
       lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
       lastTurnTotal: number | undefined;
       replayState: ReplayState;
+    }
+  | {
+      action: "terminal_abort";
+      terminalAbort: CriticalToolLoopTerminalAbort;
+      bootstrapPromptWarningSignaturesSeen: string[];
+      lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
+      lastTurnTotal: number | undefined;
+      replayState: ReplayState;
+      attempt: ReturnType<typeof normalizeEmbeddedRunAttemptResult>;
+      setTerminalLifecycleMeta: NonNullable<
+        ReturnType<typeof normalizeEmbeddedRunAttemptResult>["setTerminalLifecycleMeta"]
+      >;
     }
   | {
       action: "proceed";
@@ -209,7 +222,7 @@ export async function normalizeEmbeddedRunAttempt(input: {
     completedModelProgress: hasCompletedModelProgressForIdleBreaker(attempt),
     outputTokens: attemptUsage?.output,
   });
-  if (breakerStep.tripped) {
+  if (breakerStep.tripped && !dispatchedAttempt.terminalAbort) {
     const message =
       `Idle-timeout cost-runaway breaker tripped: ${breakerStep.consecutive} consecutive idle timeouts ` +
       `without completed model progress (cap=${MAX_CONSECUTIVE_IDLE_TIMEOUTS_BEFORE_OUTPUT}). ` +
@@ -288,6 +301,19 @@ export async function normalizeEmbeddedRunAttempt(input: {
     sessionAssistantForCandidate?.stopReason === "error"
       ? sessionAssistantForCandidate.errorMessage?.trim() || formattedAssistantErrorText
       : undefined;
+  if (dispatchedAttempt.terminalAbort && !signalOwnedInterruption) {
+    replayState.replayInvalid = true;
+    return {
+      action: "terminal_abort",
+      terminalAbort: dispatchedAttempt.terminalAbort,
+      bootstrapPromptWarningSignaturesSeen,
+      lastRunPromptUsage,
+      lastTurnTotal,
+      replayState,
+      attempt,
+      setTerminalLifecycleMeta,
+    };
+  }
   if (!signalOwnedInterruption && !preparedRuntime.nativeModelOwned && preflightRecovery?.handled) {
     const retryingFromTranscript = preflightRecovery.source === "mid-turn";
     log.info(
