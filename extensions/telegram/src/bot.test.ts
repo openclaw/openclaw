@@ -1,10 +1,13 @@
+import fs from "node:fs";
 import { rm } from "node:fs/promises";
+import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   clearPluginInteractiveHandlers,
   registerPluginInteractiveHandler,
 } from "openclaw/plugin-sdk/plugin-runtime";
 import {
+  closeOpenClawStateDatabaseForTest,
   createPluginStateKeyedStoreForTests,
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
@@ -12,6 +15,7 @@ import {
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { listSessionEntries, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildTelegramApprovalCallbackData } from "./approval-callback-data.js";
@@ -377,6 +381,8 @@ function systemEventOptions(index = 0) {
 }
 
 const ORIGINAL_TZ = process.env.TZ;
+const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
+let scopedStateDir: string | undefined;
 
 describe("createTelegramBot", () => {
   beforeAll(async () => {
@@ -384,12 +390,30 @@ describe("createTelegramBot", () => {
   });
   beforeAll(() => {
     process.env.TZ = "UTC";
+    // Isolate persistent state from the operator's real ~/.openclaw: assembled
+    // turns resolve session/agent bindings through the state DB, and an ambient
+    // Codex session binding fails its generation reclaim, so the embedded agent
+    // drops the turn without replying and reply-wait tests hang to timeout.
+    closeOpenClawStateDatabaseForTest();
+    scopedStateDir = fs.realpathSync(
+      fs.mkdtempSync(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-telegram-bot-state-")),
+    );
+    process.env.OPENCLAW_STATE_DIR = scopedStateDir;
   });
   afterAll(() => {
     if (ORIGINAL_TZ === undefined) {
       delete process.env.TZ;
     } else {
       process.env.TZ = ORIGINAL_TZ;
+    }
+    closeOpenClawStateDatabaseForTest();
+    if (ORIGINAL_STATE_DIR === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
+    }
+    if (scopedStateDir) {
+      fs.rmSync(scopedStateDir, { recursive: true, force: true });
     }
   });
 
