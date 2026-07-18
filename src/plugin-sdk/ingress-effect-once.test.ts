@@ -1,3 +1,4 @@
+import { mkdirSync, rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -207,7 +208,51 @@ describe("createIngressEffectOnce", () => {
 
     await expect(first).rejects.toThrow("Failed to open the plugin state database");
     await expect(waiter).rejects.toThrow("Failed to open the plugin state database");
-    expect(onDiskError).toHaveBeenCalledTimes(2);
+    expect(onDiskError).toHaveBeenCalledOnce();
+    expect(run).toHaveBeenCalledOnce();
+    expect(waiterRun).not.toHaveBeenCalled();
+  });
+
+  it("propagates a transient commit failure to its in-flight waiter", async () => {
+    let repairedStateDir = false;
+    const onDiskError = vi.fn(() => {
+      if (repairedStateDir) {
+        return;
+      }
+      repairedStateDir = true;
+      rmSync(stateDir, { recursive: true, force: true });
+      mkdirSync(stateDir, { recursive: true });
+    });
+    let finish!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const run = vi.fn(async () => {
+      await gate;
+      resetPluginStateStoreForTests();
+      await fs.rm(stateDir, { recursive: true, force: true });
+      await fs.writeFile(stateDir, "not a directory");
+      return "already-visible";
+    });
+    const waiterRun = vi.fn(async () => "unsafe-retry");
+    const effectOnce = createIngressEffectOnce({ ...EFFECT_ONCE_PARAMS, onDiskError });
+
+    const first = effectOnce.runOnce({
+      eventId: "event-transient-write-error",
+      effect: "visible-ack",
+      run,
+    });
+    await vi.waitFor(() => expect(run).toHaveBeenCalledOnce());
+    const waiter = effectOnce.runOnce({
+      eventId: "event-transient-write-error",
+      effect: "visible-ack",
+      run: waiterRun,
+    });
+    finish();
+
+    await expect(first).rejects.toThrow("Failed to open the plugin state database");
+    await expect(waiter).rejects.toThrow("Failed to open the plugin state database");
+    expect(onDiskError).toHaveBeenCalledOnce();
     expect(run).toHaveBeenCalledOnce();
     expect(waiterRun).not.toHaveBeenCalled();
   });

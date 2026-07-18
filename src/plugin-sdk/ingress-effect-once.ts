@@ -1,5 +1,12 @@
 import { createClaimableDedupe } from "./persistent-dedupe.js";
 
+class IngressEffectRunFailedError extends Error {
+  constructor() {
+    super("ingress effect failed before its durable commit");
+    this.name = "IngressEffectRunFailedError";
+  }
+}
+
 /**
  * Create a durable per-event side-effect guard for channel ingress drains.
  *
@@ -55,10 +62,12 @@ export function createIngressEffectOnce(params: {
           try {
             await claim.pending;
             return { kind: "replayed" };
-          } catch {
-            // A failed commit clears its optimistic memory marker in the owner continuation.
-            await Promise.resolve();
-            continue;
+          } catch (error) {
+            // Only an effect failure is safe to retry; commit failures may follow a visible effect.
+            if (error instanceof IngressEffectRunFailedError) {
+              continue;
+            }
+            throw error;
           }
         }
 
@@ -66,7 +75,7 @@ export function createIngressEffectOnce(params: {
         try {
           value = await effectParams.run();
         } catch (error) {
-          dedupe.release(key, { error });
+          dedupe.release(key, { error: new IngressEffectRunFailedError() });
           throw error;
         }
         try {
