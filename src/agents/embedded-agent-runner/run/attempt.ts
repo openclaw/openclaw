@@ -461,6 +461,8 @@ export async function runEmbeddedAttempt(
         buildAbortSettlePromise,
         trajectoryRecorder,
         trajectoryEndRecorded: executionState.trajectoryEndRecorded,
+        trajectoryTerminalStatus: executionState.trajectoryTerminalStatus,
+        trajectoryTerminalError: executionState.trajectoryTerminalError,
         cleanupYieldAborted: terminal.cleanupYieldAborted,
         emitDiagnosticRunCompleted,
         readState: () => ({

@@ -427,4 +427,38 @@ describe("trajectory runtime", () => {
 
     expect(recorder).toBeNull();
   });
+
+  it("records session.ended timestamp later than model.completed when recorded after a delay", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-08T12:00:00.000Z"));
+    const writes: string[] = [];
+    const recorder = createTrajectoryRuntimeRecorder({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile: "/tmp/session.jsonl",
+      writer: {
+        filePath: "/tmp/session.trajectory.jsonl",
+        write: (line) => {
+          writes.push(line);
+        },
+        flush: async () => undefined,
+      },
+    });
+    const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
+
+    runtimeRecorder.recordEvent("model.completed", { status: "success" });
+    vi.advanceTimersByTime(500);
+    runtimeRecorder.recordEvent("session.ended", { status: "success" });
+
+    const events = writes.map((line) => JSON.parse(line.trim()) as { type: string; ts: string });
+    const modelCompletedTs = expectDefined(
+      events.find((event) => event.type === "model.completed")?.ts,
+      "model.completed ts",
+    );
+    const sessionEndedTs = expectDefined(
+      events.find((event) => event.type === "session.ended")?.ts,
+      "session.ended ts",
+    );
+    expect(Date.parse(sessionEndedTs)).toBeGreaterThan(Date.parse(modelCompletedTs));
+  });
 });
