@@ -338,12 +338,12 @@ describe("readResponseText", () => {
     expect(text).toHaveBeenCalledTimes(1);
   });
 
-  it("returns empty when res.text() produces U+FFFD replacement characters", async () => {
-    const corrupted = "valid prefix" + "�" + "suffix";
-    const text = vi.fn(async () => corrupted);
+  it("returns empty when arrayBuffer provides malformed UTF-8 bytes", async () => {
+    const malformed = new Uint8Array([0x48, 0x65, 0x6c, 0x6c, 0x6f, 0xff, 0x21]);
+    const arrayBuffer = vi.fn(async () => malformed.buffer);
     const response = {
       headers: new Headers(),
-      text,
+      arrayBuffer,
     } as unknown as Response;
 
     await expect(readResponseText(response)).resolves.toEqual({
@@ -353,7 +353,22 @@ describe("readResponseText", () => {
     });
   });
 
-  it("returns empty when res.text() rejects instead of swallowing the error", async () => {
+  it("preserves legitimate U+FFFD when server intentionally sends it", async () => {
+    // U+FFFD encoded as valid UTF-8: 0xEF 0xBF 0xBD
+    const validUfffd = new Uint8Array([0x48, 0x69, 0xef, 0xbf, 0xbd, 0x21]);
+    const arrayBuffer = vi.fn(async () => validUfffd.buffer);
+    const response = {
+      headers: new Headers(),
+      arrayBuffer,
+    } as unknown as Response;
+
+    await expect(readResponseText(response)).resolves.toMatchObject({
+      text: expect.stringContaining("�") as unknown,
+      truncated: false,
+    });
+  });
+
+  it("returns empty when text() fallback rejects instead of swallowing the error", async () => {
     const text = vi.fn(async () => {
       throw new Error("network failure");
     });
