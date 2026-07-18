@@ -5,6 +5,7 @@ import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 
 const QuestionIdSchema = Type.String({ pattern: "^[a-z][a-z0-9_]*$" });
+// UI chip/tag display cap shared by every question input and output shape.
 const QuestionHeaderSchema = Type.String({ maxLength: 12 });
 
 export const QuestionOptionSchema = closedObject({
@@ -13,8 +14,8 @@ export const QuestionOptionSchema = closedObject({
 });
 
 const QuestionInputFields = {
-  id: QuestionIdSchema,
-  header: Type.String(),
+  questionId: QuestionIdSchema,
+  header: QuestionHeaderSchema,
   question: NonEmptyString,
   options: Type.Array(QuestionOptionSchema, { maxItems: 4 }),
   multiSelect: Type.Optional(Type.Boolean()),
@@ -27,14 +28,13 @@ export const QuestionRequestQuestionSchema = closedObject(QuestionInputFields);
 
 const QuestionFields = {
   ...QuestionInputFields,
-  header: QuestionHeaderSchema,
 };
 
 /** Canonical normalized question shown to an operator. */
 export const QuestionSchema = closedObject(QuestionFields);
 
 export const QuestionAnswersSchema = closedObject({
-  answers: Type.Record(QuestionIdSchema, closedObject({ answers: Type.Array(Type.String()) })),
+  answers: Type.Record(QuestionIdSchema, Type.Array(Type.String())),
 });
 
 export const QuestionStatusSchema = Type.Union([

@@ -1325,7 +1325,7 @@ private func chatQuestionRecord(
         id: id,
         questions: [
             Question(
-                id: "choice",
+                questionid: "choice",
                 header: "Choice",
                 question: "Choose",
                 options: [QuestionOption(label: "One"), QuestionOption(label: "Two")]),

@@ -95,7 +95,7 @@ public enum OpenClawChatGatewayRequests {
         id: String,
         answers: [String: [String]]) -> OpenClawChatGatewayRequest
     {
-        let values = answers.mapValues { AnyCodable(["answers": AnyCodable($0)]) }
+        let values = answers.mapValues(AnyCodable.init)
         return OpenClawChatGatewayRequest(
             method: "question.resolve",
             params: [

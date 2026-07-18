@@ -30,7 +30,7 @@ import org.junit.Test
 class ChatQuestionTest {
   private val question =
     Question(
-      id = "meal",
+      questionId = "meal",
       header = "Meal",
       question = "Choose dinner",
       options = listOf(QuestionOption("Pizza"), QuestionOption("Tacos")),

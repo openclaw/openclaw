@@ -2144,7 +2144,7 @@ class ChatController internal constructor(
                     "answers",
                     buildJsonObject {
                       answers.orEmpty().forEach { (questionId, values) ->
-                        put(questionId, buildJsonObject { put("answers", JsonArray(values.map(::JsonPrimitive))) })
+                        put(questionId, JsonArray(values.map(::JsonPrimitive)))
                       }
                     },
                   )

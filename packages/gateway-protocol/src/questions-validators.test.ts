@@ -13,7 +13,7 @@ import {
 } from "./index.js";
 
 const question = {
-  id: "choice",
+  questionId: "choice",
   header: "Choice",
   question: "Which option?",
   options: [{ label: "One", description: "First" }, { label: "Two" }],
@@ -21,7 +21,7 @@ const question = {
   isOther: true,
   isSecret: false,
 };
-const answers = { answers: { choice: { answers: ["Two"] } } };
+const answers = { answers: { choice: ["Two"] } };
 const pendingRecord = {
   id: "question-uuid",
   questions: [question],
@@ -60,12 +60,12 @@ describe("question protocol validators", () => {
     expect(validateQuestionResolvedEvent({ id: "question-uuid", status: "expired" })).toBe(true);
   });
 
-  it("keeps records normalized while allowing request-boundary header truncation", () => {
+  it("enforces the shared question header cap", () => {
     expect(
       validateQuestionRequestParams({
         questions: [{ ...question, header: "longer than twelve" }],
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       validateQuestionRequestedEvent({
         ...pendingRecord,
