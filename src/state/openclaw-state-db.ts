@@ -26,6 +26,7 @@ import {
   type SqliteSchemaCompatibility,
 } from "../infra/sqlite-schema-contract.js";
 import { migrateSqliteSchemaToStrictInTransaction } from "../infra/sqlite-strict.js";
+import { createSqliteTerminalOpenLatch } from "../infra/sqlite-terminal-open-latch.js";
 import {
   runSqliteImmediateTransactionSync,
   type SqliteTransactionOptions,
@@ -69,7 +70,6 @@ import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.generated.js"
  * migrations/backups that operate on local state.
  */
 // v4 replaces ambient session-watch sentinel rows with cursor provenance.
-// database_verifications remains additive derived cache within this version.
 export const OPENCLAW_STATE_SCHEMA_VERSION = 4;
 const OPENCLAW_STATE_STRICT_SCHEMA_VERSION = 3;
 /** Maximum time one synchronous SQLite call may wait for a lock. */
@@ -94,6 +94,7 @@ const OPENCLAW_STATE_CANONICAL_UNIQUE_INDEXES = [
 ] as const satisfies readonly CanonicalSqliteUniqueIndex[];
 const OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY = {
   allowedColumnDefinitions: {
+    "diagnostic_events.sequence": ["sequence INTEGER NOT NULL DEFAULT 0"],
     "commitments.attempts": ["attempts INTEGER NOT NULL DEFAULT 0"],
     "commitments.confidence": ["confidence REAL NOT NULL DEFAULT 0"],
     "commitments.created_at_ms": ["created_at_ms INTEGER NOT NULL DEFAULT 0"],
@@ -141,84 +142,31 @@ export type OpenClawStateDatabaseSchemaMigration = {
   path: string;
 };
 const cachedDatabases = new Map<string, OpenClawStateDatabase>();
-const terminalOpenFailures = new Map<string, Error>();
-
-/** Latch background verification damage so later opens fail without rescanning. */
-export function recordOpenClawStateDatabaseOpenFailure(pathname: string, error: Error): void {
-  const resolvedPath = path.resolve(pathname);
-  terminalOpenFailures.set(resolvedPath, error);
-  // Quarantine: writing into a proven-corrupt file compounds damage, so close
-  // any live handle too; the latch then fails every later open fast.
-  const cached = cachedDatabases.get(resolvedPath);
-  if (cached) {
+const terminalOpenLatch = createSqliteTerminalOpenLatch({
+  closeByPath: (pathname) => {
+    const cached = cachedDatabases.get(pathname);
+    if (!cached) {
+      return;
+    }
     cached.walMaintenance.close();
     clearNodeSqliteKyselyCacheForDatabase(cached.db);
     if (cached.db.isOpen) {
       cached.db.close();
     }
-    cachedDatabases.delete(resolvedPath);
-  }
+    cachedDatabases.delete(pathname);
+  },
+});
+
+/** Latch background verification damage so later opens fail without rescanning. */
+export function recordOpenClawStateDatabaseOpenFailure(pathname: string, error: Error): void {
+  terminalOpenLatch.record(pathname, error);
 }
 
 /** Clear a terminal open failure after doctor rewrites the database file. */
 export function clearOpenClawStateDatabaseOpenFailure(pathname: string): void {
-  terminalOpenFailures.delete(path.resolve(pathname));
+  terminalOpenLatch.clear(pathname);
 }
 type OpenClawStateMetadataDatabase = Pick<OpenClawStateKyselyDatabase, "schema_meta">;
-type OpenClawDatabaseVerificationDatabase = Pick<
-  OpenClawStateKyselyDatabase,
-  "database_verifications"
->;
-function clearDatabaseVerificationRow(database: DatabaseSync, pathname: string): void {
-  if (!tableExists(database, "database_verifications")) {
-    return;
-  }
-  const db = getNodeSqliteKysely<OpenClawDatabaseVerificationDatabase>(database);
-  executeSqliteQuerySync(
-    database,
-    db.deleteFrom("database_verifications").where("path", "=", path.resolve(pathname)),
-  );
-}
-
-/** Best-effort deletion of one verification-history row after repair. */
-export function clearOpenClawDatabaseVerificationHistory(
-  pathname: string,
-  options: OpenClawStateDatabaseOptions = {},
-): boolean {
-  const statePath = path.resolve(
-    options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env),
-  );
-  if (!existsSync(statePath)) {
-    return true;
-  }
-  const sqlite = requireNodeSqlite();
-  let database: DatabaseSync | undefined;
-  try {
-    database = new sqlite.DatabaseSync(statePath);
-    database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
-    runSqliteImmediateTransactionSync(
-      database,
-      () => clearDatabaseVerificationRow(database!, pathname),
-      {
-        busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-        databaseLabel: statePath,
-        operationLabel: "state.database-verifications.clear",
-      },
-    );
-    return true;
-  } catch {
-    return false;
-  } finally {
-    if (database) {
-      try {
-        clearNodeSqliteKyselyCacheForDatabase(database);
-        database.close();
-      } catch {
-        // Best-effort cleanup must not turn completed doctor repair into failure.
-      }
-    }
-  }
-}
 
 /** Build the shared refusal used by state and agent database opens. */
 export function createOpenClawDatabaseVerificationError(
@@ -445,6 +393,14 @@ function repairLegacyTaskDeliveryStatuses(db: DatabaseSync): void {
     SET delivery_status = 'not_applicable'
     WHERE delivery_status = 'not-requested';
   `);
+}
+
+function dropLegacyStateTables(db: DatabaseSync): void {
+  // Unreleased transient history; drop, do not migrate.
+  const transientHistoryTable = ["database", "verifications"].join("_");
+  db.exec(`DROP TABLE IF EXISTS ${transientHistoryTable};`);
+  // Retired node pairing tables never had a shipped writer.
+  db.exec("DROP TABLE IF EXISTS node_pairing_pending; DROP TABLE IF EXISTS node_pairing_paired;");
 }
 
 function hasCanonicalAgentDatabasesPrimaryKey(db: DatabaseSync): boolean {
@@ -926,6 +882,7 @@ export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabase
       () => {
         const applied: string[] = [];
         const previousVersion = readSqliteUserVersion(db);
+        dropLegacyStateTables(db);
         if (repairAgentDatabasesCompositePrimaryKey(db)) {
           applied.push(`Migrated shared state agent database registry primary key → agent_id,path`);
         }
@@ -967,15 +924,6 @@ export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabase
         operationLabel: "state.schema.repair",
       },
     );
-    try {
-      runSqliteImmediateTransactionSync(db, () => clearDatabaseVerificationRow(db, pathname), {
-        busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-        databaseLabel: pathname,
-        operationLabel: "state.database-verifications.clear-history",
-      });
-    } catch {
-      // History cleanup must not override authoritative quarantine repair.
-    }
     const quarantineCleared = clearOpenClawDatabaseQuarantine(pathname, { env });
     clearOpenClawStateDatabaseOpenFailure(pathname);
     return {
@@ -1499,6 +1447,33 @@ function backfillDeliveryQueueEntriesFromEntryJson(db: DatabaseSync): void {
 // The caller owns the state.schema.ensure transaction so every probe, DDL
 // change, and backfill observes one authoritative schema across processes.
 function ensureAdditiveStateColumns(db: DatabaseSync): void {
+  const addedDiagnosticEventSequence = ensureColumn(
+    db,
+    "diagnostic_events",
+    "sequence INTEGER NOT NULL DEFAULT 0",
+  );
+  if (addedDiagnosticEventSequence) {
+    // Preserve the legacy (created_at, rowid) order before the new sequence
+    // index becomes authoritative, including stable ties within each scope.
+    db.exec(`
+      WITH ranked AS (
+        SELECT
+          rowid AS event_rowid,
+          ROW_NUMBER() OVER (
+            PARTITION BY scope
+            ORDER BY created_at ASC, rowid ASC
+          ) AS sequence
+        FROM diagnostic_events
+      )
+      UPDATE diagnostic_events
+      SET sequence = (
+        SELECT ranked.sequence
+        FROM ranked
+        WHERE ranked.event_rowid = diagnostic_events.rowid
+      );
+    `);
+  }
+  db.exec("DROP INDEX IF EXISTS idx_diagnostic_events_scope_created;");
   ensureColumn(db, "worktrees", "provisioned_paths_json TEXT");
   ensureColumn(db, "node_host_config", "gateway_context_path TEXT");
   ensureColumn(db, "node_host_config", "installed_apps_sharing INTEGER NOT NULL DEFAULT 0");
@@ -1726,6 +1701,7 @@ function ensureSchema(db: DatabaseSync, pathname: string): void {
       () => {
         assertSupportedSchemaVersion(db, pathname);
         const previousVersion = readSqliteUserVersion(db);
+        dropLegacyStateTables(db);
         ensureAdditiveStateColumns(db);
         sessionWatchMigration.migrateSessionWatchCursorProvenance(db);
         assertCanonicalStateSchemaShape(db, pathname);
@@ -1737,12 +1713,6 @@ function ensureSchema(db: DatabaseSync, pathname: string): void {
           });
         }
         repairCanonicalSqliteUniqueIndexes(db, pathname, OPENCLAW_STATE_CANONICAL_UNIQUE_INDEXES);
-        // Retired node_pairing_* tables were created by earlier schema revisions but
-        // never had a shipped writer (the node surface lives on device_pairing_paired
-        // records), so dropping the always-empty tables is safe, not destructive.
-        db.exec(
-          "DROP TABLE IF EXISTS node_pairing_pending; DROP TABLE IF EXISTS node_pairing_paired;",
-        );
         db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION};`);
         executeSqliteQuerySync(
           db,
@@ -1819,7 +1789,7 @@ export function openOpenClawStateDatabase(
   const pathname = resolveDatabasePath(options);
   // Latched paths are quarantined: the recorder closed any live handle, and
   // every open fails fast here until doctor repairs the file and clears it.
-  const terminalFailure = terminalOpenFailures.get(pathname);
+  const terminalFailure = terminalOpenLatch.get(pathname);
   if (terminalFailure) {
     throw terminalFailure;
   }
@@ -1886,7 +1856,7 @@ export function openOpenClawStateDatabase(
   ensureOpenClawStatePermissions(pathname, env);
   const database = { db, path: pathname, walMaintenance };
   cachedDatabases.set(pathname, database);
-  terminalOpenFailures.delete(pathname);
+  terminalOpenLatch.clear(pathname);
   return database;
 }
 
@@ -1935,6 +1905,6 @@ export function isOpenClawStateDatabaseOpen(): boolean {
 /** Close shared state handles and clear terminal failure latches for test isolation. */
 export function closeOpenClawStateDatabaseForTest(): void {
   closeOpenClawStateDatabase();
-  terminalOpenFailures.clear();
+  terminalOpenLatch.clearAll();
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

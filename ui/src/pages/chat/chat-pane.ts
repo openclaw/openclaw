@@ -31,6 +31,7 @@ import {
 } from "../../app/context.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import {
+  cancelQuestionPrompt,
   createQuestionPromptState,
   disposeQuestionPromptState,
   handleQuestionPromptEvent,
@@ -1860,6 +1861,9 @@ class ChatPane extends OpenClawLightDomElement {
       state.realtimeTalkSession = null;
       state.realtimeTalkActive = false;
       state.realtimeTalkVideoStream = null;
+      state.realtimeTalkVideoCapable = false;
+      state.realtimeTalkVideoPending = false;
+      state.realtimeTalkCameraError = false;
       state.realtimeTalkStatus = "idle";
       state.realtimeTalkInputLevel.set(0);
       state.resetToolStream();
@@ -2300,7 +2304,6 @@ class ChatPane extends OpenClawLightDomElement {
       compactionStatus: state.compactionStatus,
       fallbackStatus: state.fallbackStatus,
       planStatus: state.planStatus,
-      questionStatus: state.questionStatus,
       gatewayQuestionPrompts: catalogKey ? [] : this.questionPrompts,
       onGatewayQuestionChange: () => {
         this.questionPrompts = [...this.questionPrompts];
@@ -2308,6 +2311,7 @@ class ChatPane extends OpenClawLightDomElement {
       },
       onGatewayQuestionSubmit: (id, answers) =>
         submitQuestionPrompt(this.questionPromptState, id, answers),
+      onGatewayQuestionSkip: (id) => cancelQuestionPrompt(this.questionPromptState, id),
       messages: catalogKey ? this.catalogMessages : state.chatMessages,
       historyPagination:
         catalogKey || state.chatHistoryPagination?.hasMore || this.loadingOlder
@@ -2333,6 +2337,9 @@ class ChatPane extends OpenClawLightDomElement {
       realtimeTalkInputLevel: state.realtimeTalkInputLevel,
       realtimeTalkConversation: state.realtimeTalkConversation,
       realtimeTalkVideoStream: state.realtimeTalkVideoStream,
+      realtimeTalkVideoCapable: state.realtimeTalkVideoCapable,
+      realtimeTalkVideoPending: state.realtimeTalkVideoPending,
+      realtimeTalkCameraError: state.realtimeTalkCameraError,
       connected: state.connected,
       canSend: catalogKey ? this.catalogSession?.canContinue === true : !selectedSessionArchived,
       disabledReason: catalogDisabledReason ?? disabledReason,
@@ -2450,7 +2457,7 @@ class ChatPane extends OpenClawLightDomElement {
         this.context.navigate("sessions", { search: `?${search.toString()}` });
       },
       onToggleRealtimeTalk: () => void state.toggleRealtimeTalk(),
-      onToggleRealtimeVideo: () => void state.toggleRealtimeTalk({ video: true }),
+      onToggleRealtimeCamera: () => void state.toggleRealtimeTalkCamera(),
       onDismissError: () => {
         dismissChatError(state as never);
         state.requestUpdate?.();
@@ -2464,11 +2471,6 @@ class ChatPane extends OpenClawLightDomElement {
       onQueueRetry: (id) => void state.retryQueuedChatMessage(id),
       onQueueSteer: (id) => void state.steerQueuedChatMessage(id),
       onGoalCommand: (command) => void state.handleSendChat(command),
-      onQuestionSubmit: (actionToken, answers, onRejected) =>
-        void state.handleSendChat(
-          `/codex answer ${actionToken} answers:${encodeURIComponent(JSON.stringify(answers))}`,
-          { onLocalCommandSendRejected: onRejected },
-        ),
       onSideQuestion: (command, displayQuestion, onSendRejected) =>
         void state.handleSendChat(command, {
           ...(displayQuestion ? { sideQuestionDisplayText: displayQuestion } : {}),

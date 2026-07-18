@@ -32,6 +32,7 @@ let acceptedTimer = null;
 let visibilitySequence = 0;
 let popoverSequence = 0;
 let sendError = "";
+let gatewayState = "down";
 let openPopover = null;
 let menuIndex = 0;
 let capturingShortcut = false;
@@ -48,9 +49,32 @@ function setError(message = "") {
   elements.composer.classList.toggle("has-error", Boolean(message));
 }
 
+function renderStatus() {
+  if (gatewayState === "pairing-required") {
+    setError("Pair this device from the dashboard");
+    return;
+  }
+  if (gatewayState === "tls-failure") {
+    setError("Gateway TLS trust failed — check the certificate fingerprint");
+    return;
+  }
+  setError(gatewayState === "up" ? sendError : "Gateway unreachable — retrying");
+}
+
+function setGatewayState(payload) {
+  const wasUp = gatewayState === "up";
+  gatewayState = payload?.state || "down";
+  renderStatus();
+  updateSendButton();
+  if (gatewayState === "up" && !wasUp) {
+    void refreshAgents();
+  }
+}
+
 function updateSendButton() {
   const empty = !elements.input.value.trim();
-  elements.send.disabled = empty || selectingAgent || sending || accepted;
+  elements.send.disabled =
+    gatewayState !== "up" || empty || selectingAgent || sending || accepted;
   elements.send.classList.toggle("sending", sending);
   elements.send.classList.toggle("accepted", accepted);
   elements.sendIcon.textContent = sending ? "" : accepted ? "✓" : "↑";
@@ -160,7 +184,7 @@ async function selectAgent(agentId) {
     closePopover();
   } catch (error) {
     sendError = friendlyError(error, "Could not select that agent.");
-    setError(sendError);
+    renderStatus();
   } finally {
     selectingAgent = false;
     updateSendButton();
@@ -194,7 +218,7 @@ async function openNamedPopover(kind) {
     await invoke("quickchat_set_expanded", { expanded: true });
   } catch (error) {
     sendError = friendlyError(error, "Could not open Quick Chat settings.");
-    setError(sendError);
+    renderStatus();
     return;
   }
   if (sequence !== popoverSequence) {
@@ -311,7 +335,7 @@ async function requestHide(force = false) {
       } catch (error) {
         if (visibilitySequence === hideSequence) {
           sendError = friendlyError(error);
-          setError(sendError);
+          renderStatus();
           document.body.classList.add("shown");
           elements.input.focus();
         }
@@ -334,25 +358,27 @@ function reveal() {
   }
   hiding = false;
   setPopoverVisibility(null);
-  setError(sendError);
+  renderStatus();
   updateSendButton();
   document.body.classList.remove("shown");
   window.requestAnimationFrame(() => {
     document.body.classList.add("shown");
     elements.input.focus();
   });
-  void refreshAgents();
+  if (gatewayState === "up") {
+    void refreshAgents();
+  }
   void refreshShortcutStatus();
 }
 
 async function send(openDashboard) {
   const message = elements.input.value.trim();
-  if (!message || selectingAgent || sending || accepted) {
+  if (gatewayState !== "up" || !message || selectingAgent || sending || accepted) {
     return;
   }
   sending = true;
   sendError = "";
-  setError();
+  renderStatus();
   updateSendButton();
   try {
     await invoke("quickchat_send", { message });
@@ -372,7 +398,7 @@ async function send(openDashboard) {
   } catch (error) {
     sending = false;
     sendError = friendlyError(error);
-    setError(sendError);
+    renderStatus();
     updateSendButton();
     elements.input.focus();
     // A strict send failure can mean the pinned agent vanished; re-sync the chip.
@@ -382,7 +408,7 @@ async function send(openDashboard) {
 
 elements.input.addEventListener("input", () => {
   sendError = "";
-  setError();
+  renderStatus();
   updateSendButton();
 });
 elements.input.addEventListener("keydown", (event) => {
@@ -480,6 +506,9 @@ await listen("quickchat:shown", () => {
 });
 await listen("quickchat:hide-requested", () => {
   void requestHide();
+});
+await listen("quickchat:gateway-state", (event) => {
+  setGatewayState(event.payload);
 });
 
 const readySequence = visibilitySequence;

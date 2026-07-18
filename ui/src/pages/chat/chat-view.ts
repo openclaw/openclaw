@@ -59,12 +59,7 @@ import type { RealtimeTalkConversationEntry } from "./realtime-talk-conversation
 import type { RealtimeTalkLevelSignal } from "./realtime-talk-level.ts";
 import type { RealtimeTalkStatus } from "./realtime-talk.ts";
 import type { ChatRunUiStatus } from "./run-lifecycle.ts";
-import type {
-  CompactionStatus,
-  FallbackStatus,
-  PlanStatus,
-  QuestionStatus,
-} from "./tool-stream.ts";
+import type { CompactionStatus, FallbackStatus, PlanStatus } from "./tool-stream.ts";
 import "../../components/resizable-divider.ts";
 
 function isFileDrag(dataTransfer: DataTransfer | null): boolean {
@@ -87,10 +82,10 @@ export type ChatProps = {
   compactionStatus?: CompactionStatus | null;
   fallbackStatus?: FallbackStatus | null;
   planStatus?: PlanStatus | null;
-  questionStatus?: QuestionStatus | null;
   gatewayQuestionPrompts?: readonly QuestionPrompt[];
   onGatewayQuestionChange?: () => void;
   onGatewayQuestionSubmit?: (id: string, answers: Record<string, string[]>) => void | Promise<void>;
+  onGatewayQuestionSkip?: (id: string) => void | Promise<void>;
   messages: unknown[];
   historyPagination?: {
     loading: boolean;
@@ -111,6 +106,9 @@ export type ChatProps = {
   realtimeTalkInputLevel?: RealtimeTalkLevelSignal;
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];
   realtimeTalkVideoStream?: MediaStream | null;
+  realtimeTalkVideoCapable?: boolean;
+  realtimeTalkVideoPending?: boolean;
+  realtimeTalkCameraError?: boolean;
   connected: boolean;
   canSend: boolean;
   disabledReason: string | null;
@@ -159,7 +157,7 @@ export type ChatProps = {
   onCompact?: () => void | Promise<void>;
   onOpenSessionCheckpoints?: () => void | Promise<void>;
   onToggleRealtimeTalk?: () => void;
-  onToggleRealtimeVideo?: () => void;
+  onToggleRealtimeCamera?: () => void;
   onDismissError?: () => void;
   onDismissRealtimeTalkError?: () => void;
   onAbort?: () => void;
@@ -167,11 +165,6 @@ export type ChatProps = {
   onQueueRetry?: (id: string) => void;
   onQueueSteer?: (id: string) => void;
   onGoalCommand?: (command: string) => void;
-  onQuestionSubmit?: (
-    actionToken: string,
-    answers: Record<string, string>,
-    onRejected: () => void,
-  ) => void;
   onHistoryIntent?: (event: Event) => void;
   /** Sends a detached /btw side question (selection popup or side-chat
    * follow-up). `displayQuestion` overrides the pending-turn display when the
@@ -311,8 +304,6 @@ export function renderChat(props: ChatProps) {
       onOpenSessionCheckpoints: props.onOpenSessionCheckpoints,
       onAssistantAttachmentLoaded: props.onAssistantAttachmentLoaded,
       onRequestUpdate: requestUpdate,
-      onQuestionChange: props.onGatewayQuestionChange,
-      onQuestionSubmit: props.onGatewayQuestionSubmit,
       onChatScroll: props.onChatScroll,
       onHistoryIntent: props.onHistoryIntent,
       onDraftChange: props.onDraftChange,
@@ -345,7 +336,7 @@ export function renderChat(props: ChatProps) {
     compactionStatus: props.compactionStatus,
     fallbackStatus: props.fallbackStatus,
     planStatus: props.planStatus,
-    questionStatus: props.questionStatus,
+    gatewayQuestionPrompts: props.gatewayQuestionPrompts,
     messages: props.messages,
     stream: props.stream,
     queue: props.queue,
@@ -364,6 +355,9 @@ export function renderChat(props: ChatProps) {
     realtimeTalkInputLevel: props.realtimeTalkInputLevel,
     realtimeTalkConversation: props.realtimeTalkConversation,
     realtimeTalkVideoStream: props.realtimeTalkVideoStream,
+    realtimeTalkVideoCapable: props.realtimeTalkVideoCapable,
+    realtimeTalkVideoPending: props.realtimeTalkVideoPending,
+    realtimeTalkCameraError: props.realtimeTalkCameraError,
     composerControls: props.composerControls,
     getDraft: props.getDraft,
     onDraftChange: props.onDraftChange,
@@ -373,14 +367,16 @@ export function renderChat(props: ChatProps) {
     onSend: props.onSend,
     onCompact: props.onCompact,
     onToggleRealtimeTalk: props.onToggleRealtimeTalk,
-    onToggleRealtimeVideo: props.onToggleRealtimeVideo,
+    onToggleRealtimeCamera: props.onToggleRealtimeCamera,
     onDismissRealtimeTalkError: props.onDismissRealtimeTalkError,
     onAbort: props.onAbort,
     onQueueRemove: props.onQueueRemove,
     onQueueRetry: props.onQueueRetry,
     onQueueSteer: props.onQueueSteer,
     onGoalCommand: props.onGoalCommand,
-    onQuestionSubmit: props.onQuestionSubmit,
+    onGatewayQuestionChange: props.onGatewayQuestionChange,
+    onGatewayQuestionSubmit: props.onGatewayQuestionSubmit,
+    onGatewayQuestionSkip: props.onGatewayQuestionSkip,
     onNewSession: props.onNewSession,
     onClearReply: props.onClearReply,
     onAttachmentsChange: props.onAttachmentsChange,

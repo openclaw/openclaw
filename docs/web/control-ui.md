@@ -115,7 +115,7 @@ Imported themes are stored only in the current browser profile; they are not wri
 
 Appearance also has a Text size setting. It applies to chat text, composer text, tool cards, and chat sidebars, and keeps text inputs at least 16px so mobile Safari does not auto-zoom on focus.
 
-Theme, theme mode, text size, language, and chat display preferences sync through the gateway config (`ui.prefs`), so they follow you across devices and agents can change them through the approval gate. Each browser keeps a local mirror for instant boot; clients that cannot write config (viewer scope, offline) keep changes device-local. See [Configuration reference](/gateway/configuration-reference#ui).
+Theme, theme mode, text size, language, and chat display preferences sync through the gateway config (`ui.prefs`), so they follow you across devices and agents can change them through the approval gate — connected clients apply changes live via the gateway's `config.changed` notice. Each browser keeps a local mirror for instant boot; clients that cannot write config (viewer scope, offline) keep changes device-local. See [Configuration reference](/gateway/configuration-reference#ui).
 
 ## Manage plugins
 
@@ -172,6 +172,18 @@ required. OAuth-backed MCP connectors need a one-time
 The page intentionally focuses on inventory, discovery, install, enablement,
 and removal. Use [`openclaw plugins`](/cli/plugins) for arbitrary npm, git, or
 local-path sources, updates, and advanced plugin configuration.
+
+## Apps and extensions
+
+Open **Apps** from the sidebar **More** menu, the command palette, or the
+sidebar agent menu (**Get the apps**), or use `/apps` relative to the
+configured Control UI base path. The page collects install links for every
+OpenClaw companion surface: the [iOS](/platforms/ios) and
+[Android](/platforms/android) apps, the Apple Watch and Wear OS companions
+bundled with them, the [macOS](/platforms/macos), [Windows](/platforms/windows),
+and [Linux](/platforms/linux) desktop apps, the
+[Chrome extension](/tools/chrome-extension), the in-app Plugins hub with
+[ClawHub](https://clawhub.ai), and the Discord community and docs.
 
 ## Sidebar navigation
 

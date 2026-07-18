@@ -58,7 +58,7 @@ import { getSafeLocalStorage } from "../../../local-storage.ts";
 import { renderChatAvatar } from "../chat-avatar.ts";
 import type { PlanStatus } from "../tool-stream.ts";
 import { renderChatPlanChecklist } from "./chat-plan-checklist.ts";
-import { renderChatQuestionCard } from "./chat-question-card.ts";
+import { renderChatQuestionSummary } from "./chat-question-card.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
 import {
   isRunningToolCard,
@@ -267,6 +267,7 @@ const managedImageBlobUrlResolvedCache = new Map<string, string>();
 const managedImageBlobUrlMissCache = new Map<string, number>();
 const MANAGED_IMAGE_BLOB_URL_CACHE_MAX_ENTRIES = 64;
 const MANAGED_IMAGE_BLOB_URL_MISS_RETRY_MS = 5_000;
+const MANAGED_OUTGOING_IMAGE_FETCH_TIMEOUT_MS = 30_000;
 
 function readManagedImageBlobUrl(cacheKey: string): string | undefined {
   const cached = managedImageBlobUrlResolvedCache.get(cacheKey);
@@ -639,8 +640,6 @@ type StreamGroupOptions = {
   planStatus?: PlanStatus | null;
   planActive?: boolean;
   questionPrompts?: ReadonlyMap<string, QuestionPrompt>;
-  onQuestionChange?: () => void;
-  onQuestionSubmit?: (id: string, answers: Record<string, string[]>) => void | Promise<void>;
 };
 
 function renderQuestionStreamPart(
@@ -648,13 +647,7 @@ function renderQuestionStreamPart(
   opts: StreamGroupOptions,
 ) {
   const prompt = opts.questionPrompts?.get(part.questionId);
-  return prompt
-    ? renderChatQuestionCard(prompt, {
-        nowMs: Date.now(),
-        onChange: opts.onQuestionChange ?? (() => {}),
-        onSubmit: (answers) => opts.onQuestionSubmit?.(prompt.id, answers),
-      })
-    : nothing;
+  return prompt ? renderChatQuestionSummary(prompt) : nothing;
 }
 
 // One assistant group per contiguous run of streaming items: a reply that
@@ -1677,23 +1670,39 @@ async function resolveManagedOutgoingImageBlobUrl(
       if (requesterSessionKey) {
         headers.set("x-openclaw-requester-session-key", requesterSessionKey);
       }
-      const res = await fetch(fetchUrl, {
-        method: "GET",
-        headers,
-        credentials: "same-origin",
-      });
-      if (!res.ok) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => {
+        controller.abort(
+          new DOMException("managed outgoing image fetch timed out", "TimeoutError"),
+        );
+      }, MANAGED_OUTGOING_IMAGE_FETCH_TIMEOUT_MS);
+      try {
+        const res = await fetch(fetchUrl, {
+          method: "GET",
+          headers,
+          credentials: "same-origin",
+          signal: controller.signal,
+        });
+        if (!res.ok) {
+          cacheManagedImageBlobUrlMiss(cacheKey);
+          return null;
+        }
+        const blob = await res.blob();
+        if (!blob.type.startsWith("image/")) {
+          cacheManagedImageBlobUrlMiss(cacheKey);
+          return null;
+        }
+        const blobUrl = URL.createObjectURL(blob);
+        cacheManagedImageBlobUrl(cacheKey, blobUrl);
+        return blobUrl;
+      } catch {
+        // The render path treats a missing preview as `nothing`; never reject
+        // its `until` promise for an optional image fetch or body failure.
         cacheManagedImageBlobUrlMiss(cacheKey);
         return null;
+      } finally {
+        clearTimeout(timeout);
       }
-      const blob = await res.blob();
-      if (!blob.type.startsWith("image/")) {
-        cacheManagedImageBlobUrlMiss(cacheKey);
-        return null;
-      }
-      const blobUrl = URL.createObjectURL(blob);
-      cacheManagedImageBlobUrl(cacheKey, blobUrl);
-      return blobUrl;
     })().finally(() => {
       managedImageBlobUrlCache.delete(cacheKey);
     });

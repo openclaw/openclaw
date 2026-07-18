@@ -294,7 +294,6 @@ export async function writeConfigFileFromContext(
     nextStat?: fs.Stats | null,
   ) => {
     await appendConfigAuditRecord({
-      fs: deps.fs,
       env: deps.env,
       homedir: deps.homedir,
       record: finalizeConfigWriteAuditRecord({
