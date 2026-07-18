@@ -19,6 +19,7 @@ describe("normalizeElevenLabsBaseUrl", () => {
     // actionably here so the request cannot target an unintended host, and so a
     // downstream `new URL(...)` never throws an opaque TypeError.
     expect(() => normalizeElevenLabsBaseUrl("not a url")).toThrow(/Invalid ElevenLabs baseUrl/);
+    expect(() => normalizeElevenLabsBaseUrl("////")).toThrow(/Invalid ElevenLabs baseUrl/);
   });
 
   it("rejects a parseable but unsupported (non-HTTP(S)) scheme", () => {

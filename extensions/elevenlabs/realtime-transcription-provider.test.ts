@@ -110,4 +110,18 @@ describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
     expect(url).toContain("commit_strategy=vad");
     expect(url).toContain("language_code=en");
   });
+
+  it("preserves an explicit secure WebSocket base URL", () => {
+    const url = testing.toElevenLabsRealtimeWsUrl({
+      apiKey: "eleven-key",
+      baseUrl: "wss://realtime.example.com/",
+      providerConfig: {},
+      modelId: "scribe_v2_realtime",
+      audioFormat: "ulaw_8000",
+      sampleRate: 8000,
+      commitStrategy: "vad",
+    });
+
+    expect(url).toContain("wss://realtime.example.com/v1/speech-to-text/realtime?");
+  });
 });
