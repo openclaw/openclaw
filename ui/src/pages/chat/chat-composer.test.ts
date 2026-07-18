@@ -12,6 +12,7 @@ vi.mock("../../components/icons.ts", async () => {
     icons: {
       camera: litHtml`<svg data-icon="camera"></svg>`,
       cameraOff: litHtml`<svg data-icon="camera-off"></svg>`,
+      switchCamera: litHtml`<svg data-icon="switch-camera"></svg>`,
     },
   };
 });
@@ -184,6 +185,57 @@ describe("renderChatComposer controls", () => {
     const cameraToggle = button(container, t("chat.composer.turnCameraOff"));
     expect(cameraToggle.querySelector('[data-icon="camera-off"]')).not.toBeNull();
     expect(cameraToggle.querySelector('[data-icon="camera"]')).toBeNull();
+  });
+
+  it("offers camera switching only for a live preview with multiple cameras", () => {
+    const onSwitchRealtimeCamera = vi.fn();
+    const stream = {
+      getVideoTracks: () => [
+        {
+          getSettings: () => ({ facingMode: "user" }),
+        } as MediaStreamTrack,
+      ],
+    } as unknown as MediaStream;
+    const { container } = renderComposer({
+      realtimeTalkVideoStream: stream,
+      realtimeTalkCameraDevices: [
+        { deviceId: "front", label: "Front Camera" },
+        { deviceId: "back", label: "Back Camera" },
+      ],
+      onSwitchRealtimeCamera,
+    });
+
+    button(container, t("chat.composer.switchCamera")).click();
+    expect(onSwitchRealtimeCamera).toHaveBeenCalledOnce();
+    expect(container.querySelector("video")?.classList).toContain(
+      "agent-chat__video-preview-mirrored",
+    );
+
+    const singleCamera = renderComposer({
+      realtimeTalkVideoStream: stream,
+      realtimeTalkCameraDevices: [{ deviceId: "front", label: "Front Camera" }],
+      onSwitchRealtimeCamera,
+    });
+    expect(
+      singleCamera.container.querySelector(
+        `button[aria-label="${t("chat.composer.switchCamera")}"]`,
+      ),
+    ).toBeNull();
+  });
+
+  it("does not mirror an environment-facing camera preview", () => {
+    const stream = {
+      getVideoTracks: () => [
+        {
+          getSettings: () => ({ facingMode: "environment" }),
+        } as MediaStreamTrack,
+      ],
+    } as unknown as MediaStream;
+    const { container } = renderComposer({ realtimeTalkVideoStream: stream });
+
+    expect(container.querySelector("video")?.classList).not.toContain(
+      "agent-chat__video-preview-mirrored",
+    );
   });
 
   it("sends attachment-only drafts instead of starting voice", () => {

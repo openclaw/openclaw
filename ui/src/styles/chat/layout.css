@@ -2291,6 +2291,7 @@ openclaw-chat-page {
 }
 
 .agent-chat__video-preview {
+  position: relative;
   align-self: flex-end;
   width: min(240px, 45vw);
   margin: 4px 8px 0;
@@ -2306,7 +2307,44 @@ openclaw-chat-page {
   width: 100%;
   aspect-ratio: 16 / 9;
   object-fit: cover;
+}
+
+.agent-chat__video-preview video.agent-chat__video-preview-mirrored {
   transform: scaleX(-1);
+}
+
+.agent-chat__video-preview-switch-tooltip {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+}
+
+.agent-chat__video-preview-switch {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  padding: 7px;
+  border: 1px solid color-mix(in srgb, white 28%, transparent);
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, #000 68%, transparent);
+  color: white;
+  cursor: pointer;
+  place-items: center;
+  backdrop-filter: blur(8px);
+}
+
+.agent-chat__video-preview-switch:hover:not(:disabled) {
+  background: color-mix(in srgb, #000 82%, transparent);
+}
+
+.agent-chat__video-preview-switch:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.agent-chat__video-preview-switch svg {
+  width: 100%;
+  height: 100%;
 }
 
 /* Live voice input: the level meter itself is the control. Keeping it accent

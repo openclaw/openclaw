@@ -213,6 +213,14 @@ export const icons = {
       <circle cx="12" cy="12" r="2" />
     </svg>
   `,
+  switchCamera: html`
+    <svg viewBox="0 0 24 24">
+      <path d="M11 19H6.5a4.5 4.5 0 0 1 0-9H8" />
+      <path d="m8 16 3 3-3 3" />
+      <path d="M13 5h4.5a4.5 4.5 0 0 1 0 9H16" />
+      <path d="m16 8-3-3 3-3" />
+    </svg>
+  `,
   archive: html`
     <svg viewBox="0 0 24 24">
       <rect width="20" height="5" x="2" y="3" rx="1" />

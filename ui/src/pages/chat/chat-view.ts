@@ -56,6 +56,7 @@ import {
 } from "./components/chat-thread.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./input-history.ts";
 import type { RealtimeTalkConversationEntry } from "./realtime-talk-conversation.ts";
+import type { RealtimeTalkCameraDevice } from "./realtime-talk-input.ts";
 import type { RealtimeTalkLevelSignal } from "./realtime-talk-level.ts";
 import type { RealtimeTalkStatus } from "./realtime-talk.ts";
 import type { ChatRunUiStatus } from "./run-lifecycle.ts";
@@ -106,6 +107,7 @@ export type ChatProps = {
   realtimeTalkInputLevel?: RealtimeTalkLevelSignal;
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];
   realtimeTalkVideoStream?: MediaStream | null;
+  realtimeTalkCameraDevices?: RealtimeTalkCameraDevice[];
   realtimeTalkVideoCapable?: boolean;
   realtimeTalkVideoPending?: boolean;
   realtimeTalkCameraError?: boolean;
@@ -160,6 +162,7 @@ export type ChatProps = {
   onOpenSessionCheckpoints?: () => void | Promise<void>;
   onToggleRealtimeTalk?: () => void;
   onToggleRealtimeCamera?: () => void;
+  onSwitchRealtimeCamera?: () => void;
   onDismissError?: () => void;
   onDismissRealtimeTalkError?: () => void;
   onAbort?: () => void;
@@ -395,6 +398,7 @@ export function renderChat(props: ChatProps) {
     realtimeTalkInputLevel: props.realtimeTalkInputLevel,
     realtimeTalkConversation: props.realtimeTalkConversation,
     realtimeTalkVideoStream: props.realtimeTalkVideoStream,
+    realtimeTalkCameraDevices: props.realtimeTalkCameraDevices,
     realtimeTalkVideoCapable: props.realtimeTalkVideoCapable,
     realtimeTalkVideoPending: props.realtimeTalkVideoPending,
     realtimeTalkCameraError: props.realtimeTalkCameraError,
@@ -408,6 +412,7 @@ export function renderChat(props: ChatProps) {
     onCompact: props.onCompact,
     onToggleRealtimeTalk: props.onToggleRealtimeTalk,
     onToggleRealtimeCamera: props.onToggleRealtimeCamera,
+    onSwitchRealtimeCamera: props.onSwitchRealtimeCamera,
     onDismissRealtimeTalkError: props.onDismissRealtimeTalkError,
     onAbort: props.onAbort,
     onQueueRemove: props.onQueueRemove,

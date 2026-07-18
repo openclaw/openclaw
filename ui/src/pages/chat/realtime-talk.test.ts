@@ -10,6 +10,8 @@ const {
   webRtcStop,
   googleSetVideoEnabled,
   webRtcSetVideoEnabled,
+  googleSwitchCamera,
+  webRtcSwitchCamera,
   googleCtor,
   relayCtor,
   webRtcCtor,
@@ -22,14 +24,26 @@ const {
   webRtcStop: vi.fn(),
   googleSetVideoEnabled: vi.fn(async () => undefined),
   webRtcSetVideoEnabled: vi.fn(async () => undefined),
+  googleSwitchCamera: vi.fn(async () => undefined),
+  webRtcSwitchCamera: vi.fn(async () => undefined),
   googleCtor: vi.fn(function () {
-    return { start: googleStart, stop: googleStop, setVideoEnabled: googleSetVideoEnabled };
+    return {
+      start: googleStart,
+      stop: googleStop,
+      setVideoEnabled: googleSetVideoEnabled,
+      switchCamera: googleSwitchCamera,
+    };
   }),
   relayCtor: vi.fn(function () {
     return { start: relayStart, stop: relayStop };
   }),
   webRtcCtor: vi.fn(function () {
-    return { start: webRtcStart, stop: webRtcStop, setVideoEnabled: webRtcSetVideoEnabled };
+    return {
+      start: webRtcStart,
+      stop: webRtcStop,
+      setVideoEnabled: webRtcSetVideoEnabled,
+      switchCamera: webRtcSwitchCamera,
+    };
   }),
 }));
 
@@ -45,7 +59,7 @@ vi.mock("./realtime-talk-webrtc.ts", () => ({
   WebRtcSdpRealtimeTalkTransport: webRtcCtor,
 }));
 
-import { RealtimeTalkSession } from "./realtime-talk.ts";
+import { RealtimeTalkSession, switchActiveRealtimeTalkCameras } from "./realtime-talk.ts";
 
 describe("RealtimeTalkSession", () => {
   beforeEach(() => {
@@ -57,6 +71,8 @@ describe("RealtimeTalkSession", () => {
     webRtcStop.mockClear();
     googleSetVideoEnabled.mockClear();
     webRtcSetVideoEnabled.mockClear();
+    googleSwitchCamera.mockClear();
+    webRtcSwitchCamera.mockClear();
     googleCtor.mockClear();
     relayCtor.mockClear();
     webRtcCtor.mockClear();
@@ -299,7 +315,7 @@ describe("RealtimeTalkSession", () => {
         prefixPaddingMs: 250,
         reasoningEffort: "low",
       },
-      { inputDeviceId: "usb-mic" },
+      { inputDeviceId: "usb-mic", videoDeviceId: "desk-camera" },
     );
 
     await session.start();
@@ -317,7 +333,7 @@ describe("RealtimeTalkSession", () => {
     });
     expect(webRtcCtor).toHaveBeenCalledWith(
       expect.any(Object),
-      expect.objectContaining({ inputDeviceId: "usb-mic" }),
+      expect.objectContaining({ inputDeviceId: "usb-mic", videoDeviceId: "desk-camera" }),
     );
   });
 
@@ -357,6 +373,73 @@ describe("RealtimeTalkSession", () => {
 
     await session.setVideoEnabled(true);
     expect(webRtcSetVideoEnabled).toHaveBeenCalledWith(true);
+
+    await session.switchCamera("back-camera");
+    expect(webRtcSwitchCamera).toHaveBeenCalledWith("back-camera");
+    session.stop();
+  });
+
+  it("applies a Settings camera selection to an active video session", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "talk.catalog") {
+        return {
+          realtime: {
+            activeProvider: "openai",
+            providers: [{ id: "openai", label: "OpenAI", supportsVideoFrames: true }],
+          },
+        };
+      }
+      return {
+        provider: "openai",
+        transport: "webrtc",
+        clientSecret: "secret",
+      };
+    });
+    const session = new RealtimeTalkSession({ request } as never, "main", {
+      onVideoCapability: vi.fn(),
+    });
+
+    await session.start();
+    await session.setVideoEnabled(true);
+    await switchActiveRealtimeTalkCameras("back-camera");
+
+    expect(webRtcSwitchCamera).toHaveBeenCalledWith("back-camera");
+    session.stop();
+  });
+
+  it("tracks a pending camera enable without retaining a stopped session", async () => {
+    let resolveEnable: (value: undefined) => void = () => undefined;
+    webRtcSetVideoEnabled.mockImplementationOnce(
+      () =>
+        new Promise<undefined>((resolve) => {
+          resolveEnable = resolve;
+        }),
+    );
+    const request = vi.fn(async (method: string) => {
+      if (method === "talk.catalog") {
+        return {
+          realtime: {
+            activeProvider: "openai",
+            providers: [{ id: "openai", label: "OpenAI", supportsVideoFrames: true }],
+          },
+        };
+      }
+      return { provider: "openai", transport: "webrtc", clientSecret: "secret" };
+    });
+    const session = new RealtimeTalkSession({ request } as never, "main", {
+      onVideoCapability: vi.fn(),
+    });
+
+    await session.start();
+    const enabling = session.setVideoEnabled(true);
+    await switchActiveRealtimeTalkCameras("back-camera");
+    expect(webRtcSwitchCamera).toHaveBeenCalledOnce();
+
+    session.stop();
+    resolveEnable(undefined);
+    await enabling;
+    await switchActiveRealtimeTalkCameras("desk-camera");
+    expect(webRtcSwitchCamera).toHaveBeenCalledOnce();
   });
 
   it("does not request camera-frame for a provider without video-frame support", async () => {

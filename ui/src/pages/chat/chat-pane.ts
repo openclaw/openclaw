@@ -2334,6 +2334,7 @@ class ChatPane extends OpenClawLightDomElement {
       state.realtimeTalkSession = null;
       state.realtimeTalkActive = false;
       state.realtimeTalkVideoStream = null;
+      state.realtimeTalkCameraDevices = [];
       state.realtimeTalkVideoCapable = false;
       state.realtimeTalkVideoPending = false;
       state.realtimeTalkCameraError = false;
@@ -2841,6 +2842,7 @@ class ChatPane extends OpenClawLightDomElement {
       realtimeTalkInputLevel: state.realtimeTalkInputLevel,
       realtimeTalkConversation: state.realtimeTalkConversation,
       realtimeTalkVideoStream: state.realtimeTalkVideoStream,
+      realtimeTalkCameraDevices: state.realtimeTalkCameraDevices,
       realtimeTalkVideoCapable: state.realtimeTalkVideoCapable,
       realtimeTalkVideoPending: state.realtimeTalkVideoPending,
       realtimeTalkCameraError: state.realtimeTalkCameraError,
@@ -2968,6 +2970,7 @@ class ChatPane extends OpenClawLightDomElement {
       },
       onToggleRealtimeTalk: () => void state.toggleRealtimeTalk(),
       onToggleRealtimeCamera: () => void state.toggleRealtimeTalkCamera(),
+      onSwitchRealtimeCamera: () => void state.switchRealtimeTalkCamera(),
       onDismissError: () => {
         dismissChatError(state as never);
         state.requestUpdate?.();

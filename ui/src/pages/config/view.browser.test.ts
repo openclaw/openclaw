@@ -1301,6 +1301,14 @@ describe("config view", () => {
       },
       onMicrophoneSelect: vi.fn(),
       onMicrophoneRefresh: vi.fn(),
+      camera: {
+        devices: [{ deviceId: "camera-1", label: "Desk Camera" }],
+        selectedDeviceId: "camera-1",
+        loading: false,
+        error: null,
+      },
+      onCameraSelect: vi.fn(),
+      onCameraRefresh: vi.fn(),
     });
 
     const shortcutSelect = queryRequired(
@@ -1328,6 +1336,12 @@ describe("config view", () => {
       HTMLSelectElement,
     );
     expect(microphoneSelect.getAttribute("aria-label")).toBe("Microphone input");
+    const cameraSelect = queryRequired(container, "[data-settings-camera]", HTMLSelectElement);
+    expect(cameraSelect.getAttribute("aria-label")).toBe("Camera");
+    expect(Array.from(cameraSelect.options, (option) => option.textContent?.trim())).toEqual([
+      "System default",
+      "Desk Camera",
+    ]);
   });
 
   it("marks browser follow-up overrides and resets them to the server", () => {

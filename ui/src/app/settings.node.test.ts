@@ -495,15 +495,25 @@ describe("loadSettings default gateway URL derivation", () => {
     const setItem = vi.spyOn(localStorage, "setItem").mockImplementation(() => {
       throw new DOMException("blocked", "SecurityError");
     });
-    saveSettings({ ...loadSettings(), realtimeTalkInputDeviceId: "usb-mic" });
+    saveSettings({
+      ...loadSettings(),
+      realtimeTalkInputDeviceId: "usb-mic",
+      realtimeTalkVideoDeviceId: "desk-camera",
+    });
 
     // Same-tab reads (e.g. a talk session launched from chat) must observe
     // the selection even though localStorage rejected the write.
     expect(loadSettings().realtimeTalkInputDeviceId).toBe("usb-mic");
+    expect(loadSettings().realtimeTalkVideoDeviceId).toBe("desk-camera");
 
     setItem.mockRestore();
-    saveSettings({ ...loadSettings(), realtimeTalkInputDeviceId: undefined });
+    saveSettings({
+      ...loadSettings(),
+      realtimeTalkInputDeviceId: undefined,
+      realtimeTalkVideoDeviceId: undefined,
+    });
     expect(loadSettings().realtimeTalkInputDeviceId).toBeUndefined();
+    expect(loadSettings().realtimeTalkVideoDeviceId).toBeUndefined();
   });
 
   it("persists only the non-default chat send shortcut", () => {
@@ -605,6 +615,27 @@ describe("loadSettings default gateway URL derivation", () => {
     saveSettings({ ...loadSettings(), realtimeTalkInputDeviceId: "" });
     expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}")).not.toHaveProperty(
       "realtimeTalkInputDeviceId",
+    );
+  });
+
+  it("persists only a normalized realtime Talk camera id", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/",
+    });
+
+    const gwUrl = expectedGatewayUrl("");
+    const scopedKey = `openclaw.control.settings.v1:${gwUrl}`;
+    saveSettings({ ...loadSettings(), realtimeTalkVideoDeviceId: " back-camera " });
+    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}").realtimeTalkVideoDeviceId).toBe(
+      "back-camera",
+    );
+    expect(loadSettings().realtimeTalkVideoDeviceId).toBe("back-camera");
+
+    saveSettings({ ...loadSettings(), realtimeTalkVideoDeviceId: "" });
+    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}")).not.toHaveProperty(
+      "realtimeTalkVideoDeviceId",
     );
   });
 

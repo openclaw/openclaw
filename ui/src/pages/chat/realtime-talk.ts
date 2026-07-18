@@ -31,7 +31,30 @@ type RealtimeTalkLaunchOptions = {
 
 type RealtimeTalkLocalOptions = {
   inputDeviceId?: string;
+  videoDeviceId?: string;
 };
+
+const activeRealtimeTalkSessions = new Set<RealtimeTalkSession>();
+
+export async function switchActiveRealtimeTalkCameras(
+  videoDeviceId: string | undefined,
+): Promise<void> {
+  let failed = false;
+  let firstError: unknown;
+  await Promise.all(
+    [...activeRealtimeTalkSessions].map(async (session) => {
+      try {
+        await session.switchCameraIfEnabled(videoDeviceId);
+      } catch (error) {
+        failed = true;
+        firstError ??= error;
+      }
+    }),
+  );
+  if (failed) {
+    throw firstError;
+  }
+}
 
 type RealtimeTalkLaunchTransport = NonNullable<RealtimeTalkLaunchOptions["transport"]>;
 
@@ -101,6 +124,8 @@ function compactLaunchParams(
 export class RealtimeTalkSession {
   private transport: RealtimeTalkTransport | null = null;
   private closed = false;
+  private videoEnabled = false;
+  private videoOperation = 0;
 
   constructor(
     private readonly client: GatewayBrowserClient,
@@ -128,6 +153,7 @@ export class RealtimeTalkSession {
       sessionKey: this.sessionKey,
       callbacks: this.callbacks,
       inputDeviceId: this.localOptions.inputDeviceId,
+      videoDeviceId: this.localOptions.videoDeviceId,
       consultThinkingLevel: session.consultThinkingLevel,
       consultFastMode: session.consultFastMode,
     });
@@ -213,15 +239,64 @@ export class RealtimeTalkSession {
 
   stop(): void {
     this.closed = true;
+    this.videoOperation += 1;
+    this.videoEnabled = false;
+    activeRealtimeTalkSessions.delete(this);
     this.callbacks.onStatus?.("idle");
     this.transport?.stop();
     this.transport = null;
   }
 
   async setVideoEnabled(enabled: boolean): Promise<void> {
-    if (this.closed || !this.transport?.setVideoEnabled) {
+    const transport = this.transport;
+    if (this.closed || !transport?.setVideoEnabled) {
       throw new Error("Camera is unavailable for this realtime session");
     }
-    await this.transport.setVideoEnabled(enabled);
+    const operation = ++this.videoOperation;
+    const previousEnabled = this.videoEnabled;
+    this.videoEnabled = enabled;
+    if (enabled) {
+      activeRealtimeTalkSessions.add(this);
+    } else {
+      activeRealtimeTalkSessions.delete(this);
+    }
+    try {
+      await transport.setVideoEnabled(enabled);
+    } catch (error) {
+      if (operation === this.videoOperation && !this.closed && this.transport === transport) {
+        this.videoEnabled = previousEnabled;
+        if (previousEnabled) {
+          activeRealtimeTalkSessions.add(this);
+        } else {
+          activeRealtimeTalkSessions.delete(this);
+        }
+      }
+      throw error;
+    }
+    if (operation === this.videoOperation && (this.closed || this.transport !== transport)) {
+      this.videoEnabled = false;
+      activeRealtimeTalkSessions.delete(this);
+    }
+  }
+
+  async switchCamera(videoDeviceId: string | undefined): Promise<void> {
+    const normalizedDeviceId = videoDeviceId?.trim() || undefined;
+    this.localOptions.videoDeviceId = normalizedDeviceId;
+    if (this.closed || !this.transport?.switchCamera) {
+      throw new Error("Camera switching is unavailable for this realtime session");
+    }
+    await this.transport.switchCamera(normalizedDeviceId);
+  }
+
+  async switchCameraIfEnabled(videoDeviceId: string | undefined): Promise<void> {
+    if (!this.videoEnabled) {
+      return;
+    }
+    try {
+      await this.switchCamera(videoDeviceId);
+    } catch (error) {
+      this.callbacks.onVideoError?.(error);
+      throw error;
+    }
   }
 }

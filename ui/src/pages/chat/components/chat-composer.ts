@@ -44,6 +44,7 @@ import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { exportChatMarkdown } from "../export.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../input-history.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
+import type { RealtimeTalkCameraDevice } from "../realtime-talk-input.ts";
 import type { RealtimeTalkLevelSignal } from "../realtime-talk-level.ts";
 import type { RealtimeTalkStatus } from "../realtime-talk.ts";
 import { CHAT_RUN_STATUS_TOAST_DURATION_MS, type ChatRunUiStatus } from "../run-lifecycle.ts";
@@ -120,6 +121,7 @@ type ChatComposerProps = {
   realtimeTalkInputLevel?: RealtimeTalkLevelSignal;
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];
   realtimeTalkVideoStream?: MediaStream | null;
+  realtimeTalkCameraDevices?: RealtimeTalkCameraDevice[];
   realtimeTalkVideoCapable?: boolean;
   realtimeTalkVideoPending?: boolean;
   realtimeTalkCameraError?: boolean;
@@ -133,6 +135,7 @@ type ChatComposerProps = {
   onCompact?: () => void | Promise<void>;
   onToggleRealtimeTalk?: () => void;
   onToggleRealtimeCamera?: () => void;
+  onSwitchRealtimeCamera?: () => void;
   onDismissRealtimeTalkError?: () => void;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
@@ -2342,6 +2345,10 @@ export function renderChatComposer(props: ChatComposerProps) {
     onToggleVoice: props.onToggleRealtimeTalk ? handleVoicePrimaryAction : undefined,
     onToggleCamera: props.onToggleRealtimeCamera,
   };
+  const cameraFacingMode = props.realtimeTalkVideoStream
+    ?.getVideoTracks?.()[0]
+    ?.getSettings?.().facingMode;
+  const mirrorCameraPreview = cameraFacingMode !== "environment";
   const slashMenuVisible = props.connected && canCompose && isSlashMenuVisible(state);
   const activeSlashMenuOptionId = getActiveSlashMenuOptionId(state, props.paneId);
   const activeSlashMenuOptionLabel = getActiveSlashMenuOptionLabel(state);
@@ -2441,6 +2448,7 @@ export function renderChatComposer(props: ChatComposerProps) {
               ? html`
                   <div class="agent-chat__video-preview">
                     <video
+                      class=${mirrorCameraPreview ? "agent-chat__video-preview-mirrored" : nothing}
                       autoplay
                       .muted=${true}
                       playsinline
@@ -2451,6 +2459,26 @@ export function renderChatComposer(props: ChatComposerProps) {
                         }
                       })}
                     ></video>
+                    ${props.realtimeTalkCameraDevices &&
+                    props.realtimeTalkCameraDevices.length >= 2 &&
+                    props.onSwitchRealtimeCamera
+                      ? html`
+                          <openclaw-tooltip
+                            class="agent-chat__video-preview-switch-tooltip"
+                            .content=${t("chat.composer.switchCamera")}
+                          >
+                            <button
+                              type="button"
+                              class="agent-chat__video-preview-switch"
+                              aria-label=${t("chat.composer.switchCamera")}
+                              ?disabled=${props.realtimeTalkVideoPending}
+                              @click=${props.onSwitchRealtimeCamera}
+                            >
+                              ${icons.switchCamera}
+                            </button>
+                          </openclaw-tooltip>
+                        `
+                      : nothing}
                   </div>
                 `
               : nothing}
