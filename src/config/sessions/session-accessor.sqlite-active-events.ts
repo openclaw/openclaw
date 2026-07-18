@@ -75,6 +75,7 @@ export type SessionTranscriptVisibleMessagePageResult =
       generation: string;
       hasMore: boolean;
       kind: "page";
+      rawTranscriptSeq: number;
       totalMessages: number;
     }
   | {
@@ -262,6 +263,7 @@ function withCurrentProjectionSnapshot<T>(
 }
 
 function parseMessageEventRow(row: {
+  event_seq: number;
   event_json: string;
   message_position: number | null;
 }): SessionTranscriptMessageEvent {
@@ -270,9 +272,9 @@ function parseMessageEventRow(row: {
   }
   return {
     event: JSON.parse(row.event_json) as TranscriptEvent,
-    // Gateway cursors use the visible-message ordinal, matching the JSONL index.
-    // Raw event seq includes headers/control rows and would make pages overlap.
-    seq: row.message_position + 1,
+    // Public history metadata is the one-based raw transcript row. Projection
+    // positions remain separate so paging can skip headers and control rows.
+    seq: row.event_seq + 1,
   };
 }
 
@@ -302,7 +304,7 @@ function readMessageRange(
           .onRef("event.session_id", "=", "active.session_id")
           .onRef("event.seq", "=", "active.event_seq"),
       )
-      .select(["active.message_position", "event.event_json"])
+      .select(["active.event_seq", "active.message_position", "event.event_json"])
       .where("active.session_id", "=", projection.resolved.sessionId)
       .where("active.message_position", "is not", null)
       .where("active.message_position", ">=", start)
@@ -633,6 +635,7 @@ export function readSessionTranscriptVisibleMessagePage(
       generation,
       hasMore: (rows.at(-1)?.message_position ?? 0) > 0,
       kind: "page",
+      rawTranscriptSeq: projection.state.indexedSeq + 1,
       totalMessages: projection.state.activeMessageCount,
     };
   });
@@ -664,7 +667,7 @@ export function readSessionTranscriptMessageEventById(
             .onRef("event.session_id", "=", "active.session_id")
             .onRef("event.seq", "=", "active.event_seq"),
         )
-        .select(["active.message_position", "event.event_json"])
+        .select(["active.event_seq", "active.message_position", "event.event_json"])
         .where("identity.session_id", "=", projection.resolved.sessionId)
         .where("identity.event_id", "=", messageId)
         .where("active.message_position", "is not", null),

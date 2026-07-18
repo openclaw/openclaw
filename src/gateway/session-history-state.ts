@@ -272,9 +272,18 @@ async function readLegacySessionHistorySnapshot(params: {
           allowResetArchiveFallback: true,
         })
       : undefined;
+  const rawMessages = boundedSnapshot?.messages ?? fullSnapshot?.messages ?? [];
+  // Shipped numeric cursors addressed the visible-message ordinal. Preserve
+  // that one-window contract even though current metadata uses raw row seq.
+  const paginatedMessages =
+    resolveCursorSeq(params.cursor) === undefined
+      ? rawMessages
+      : rawMessages.map((message, index) =>
+          attachOpenClawTranscriptMeta(message, { seq: index + 1 }),
+        );
   return {
     ...buildSessionHistorySnapshot({
-      rawMessages: boundedSnapshot?.messages ?? fullSnapshot?.messages ?? [],
+      rawMessages: paginatedMessages,
       maxChars: params.maxChars,
       limit: params.limit,
       cursor: params.cursor,
@@ -339,7 +348,7 @@ export async function readSessionHistorySnapshotAsync(params: {
     rawMessages: page.messages,
     maxChars,
     limit: params.limit,
-    rawTranscriptSeq: page.totalMessages,
+    rawTranscriptSeq: page.rawTranscriptSeq,
   });
   const hasMore = snapshot.history.hasMore || page.hasMore;
   const firstVisibleSeq = resolveMessageSeq(snapshot.history.messages[0]);

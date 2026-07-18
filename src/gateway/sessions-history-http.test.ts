@@ -691,7 +691,7 @@ describe("session history HTTP endpoints", () => {
         "second message",
         "third message",
       ]);
-      expect(firstBody.messages?.map((message) => message["__openclaw"]?.seq)).toEqual([2, 3]);
+      expect(firstBody.messages?.map((message) => message["__openclaw"]?.seq)).toEqual([3, 4]);
       expect(firstBody.hasMore).toBe(true);
       expect(firstBody.nextCursor).toEqual(expect.any(String));
       expect(firstBody.nextCursor).not.toBe("3");
@@ -720,7 +720,7 @@ describe("session history HTTP endpoints", () => {
       expect(secondBody.items?.map((message) => message.content?.[0]?.text)).toEqual([
         "first message",
       ]);
-      expect(secondBody.messages?.map((message) => message["__openclaw"]?.seq)).toEqual([1]);
+      expect(secondBody.messages?.map((message) => message["__openclaw"]?.seq)).toEqual([2]);
       expect(secondBody.hasMore).toBe(false);
       expect(secondBody.nextCursor).toBeUndefined();
     });
