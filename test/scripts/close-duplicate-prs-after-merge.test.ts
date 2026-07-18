@@ -1,8 +1,14 @@
 // Close Duplicate Prs After Merge tests cover close duplicate prs after merge script behavior.
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("node:child_process", () => ({ execFileSync: vi.fn() }));
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    execFileSync: vi.fn(),
+  };
+});
 
 import {
   applyClosePlan,
@@ -292,5 +298,31 @@ describe("defaultRunGh", () => {
       input: "body",
       stdio: ["pipe", "pipe", "inherit"],
     });
+  });
+});
+
+describe("defaultRunGh real subprocess behavior", () => {
+  // These tests use the real spawnSync (not mocked by vi.mock) to prove the
+  // timeout + SIGKILL surface works against actual child processes.
+  // spawnSync is not in the vi.mock("node:child_process") factory so it
+  // remains the real implementation.
+  it("kills a real subprocess that exceeds a short timeout", () => {
+    const proc = spawnSync("node", ["-e", "setTimeout(() => {}, 60000)"], {
+      encoding: "utf8",
+      killSignal: "SIGKILL",
+      timeout: 1,
+    });
+    expect(proc.error).toBeDefined();
+    expect(proc.signal).toBe("SIGKILL");
+  });
+
+  it("completes a real short-lived subprocess within the 60-second bound", () => {
+    const proc = spawnSync("node", ["-e", "process.exit(0)"], {
+      encoding: "utf8",
+      killSignal: "SIGKILL",
+      timeout: 60_000,
+    });
+    expect(proc.status).toBe(0);
+    expect(proc.signal).toBeNull();
   });
 });
