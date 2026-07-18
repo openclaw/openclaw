@@ -171,7 +171,10 @@ describe("show_widget", () => {
     const broadcast = vi.fn();
     const handlers = createBoardHandlers(store);
     const title = "Release Status ".repeat(8).trim();
-    const callGateway: InProcessGatewayCaller = async <T>(method, params) => {
+    const callGateway: InProcessGatewayCaller = async <T>(
+      method: string,
+      params: Record<string, unknown>,
+    ): Promise<T> => {
       let result: unknown;
       let failure: unknown;
       const respond: RespondFn = (ok, payload, error) => {
@@ -229,7 +232,10 @@ describe("show_widget", () => {
 
   it("keeps generated pin names distinct when titles cannot fit a plain slug", async () => {
     const stateDir = await createStateDir();
-    const callGateway: InProcessGatewayCaller = async <T>(_method, params) => {
+    const callGateway: InProcessGatewayCaller = async <T>(
+      _method: string,
+      params: Record<string, unknown>,
+    ): Promise<T> => {
       const request = params as { name: string; sessionKey: string };
       return {
         sessionKey: request.sessionKey,

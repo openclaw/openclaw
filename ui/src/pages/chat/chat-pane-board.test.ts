@@ -376,7 +376,7 @@ describe("chat pane board shell", () => {
     const container = document.createElement("div");
     container.append(previous, divider, next);
     divider.addEventListener("resize", (event) => {
-      pane.handleBoardDockResize("right", event as CustomEvent<{ splitRatio: number }>);
+      pane.handleBoardDockResize("right", event as unknown as CustomEvent<{ splitRatio: number }>);
     });
     divider.dispatchEvent(new CustomEvent("resize", { detail: { splitRatio: 0.65 } }));
 
