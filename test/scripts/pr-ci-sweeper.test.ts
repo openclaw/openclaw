@@ -136,40 +136,40 @@ function fakeGithub(options: {
     calls.push({ method, args });
   };
   const github = {
-    paginate: (endpoint: { __name: string }, args: Record<string, unknown>) => {
-      record(endpoint.__name, args);
-      if (endpoint.__name === "pulls.list") {
+    paginate: (endpoint: { endpointName: string }, args: Record<string, unknown>) => {
+      record(endpoint.endpointName, args);
+      if (endpoint.endpointName === "pulls.list") {
         return Promise.resolve(options.prs);
       }
-      if (endpoint.__name === "actions.listWorkflowRuns") {
+      if (endpoint.endpointName === "actions.listWorkflowRuns") {
         return Promise.resolve(
           (options.runsBySha[args.head_sha as string] ?? []).map((run) => ({
-            event: "pull_request",
-            ...run,
+            event: run.event ?? "pull_request",
+            conclusion: run.conclusion,
           })),
         );
       }
-      if (endpoint.__name === "issues.listEvents") {
+      if (endpoint.endpointName === "issues.listEvents") {
         return Promise.resolve(options.events ?? []);
       }
-      throw new Error(`unexpected paginate ${endpoint.__name}`);
+      throw new Error(`unexpected paginate ${endpoint.endpointName}`);
     },
     rest: {
       pulls: {
-        list: { __name: "pulls.list" },
+        list: { endpointName: "pulls.list" },
         get: (args: Record<string, unknown>) => {
           record("pulls.get", args);
-          const pr = options.prs.find((entry) => entry.number === args.pull_number);
-          return Promise.resolve({ data: pr });
+          const match = options.prs.find((entry) => entry.number === args.pull_number);
+          return Promise.resolve({ data: match });
         },
         update: (args: Record<string, unknown>) => {
           record("pulls.update", args);
           return Promise.resolve({});
         },
       },
-      actions: { listWorkflowRuns: { __name: "actions.listWorkflowRuns" } },
+      actions: { listWorkflowRuns: { endpointName: "actions.listWorkflowRuns" } },
       issues: {
-        listEvents: { __name: "issues.listEvents" },
+        listEvents: { endpointName: "issues.listEvents" },
         createComment: (args: Record<string, unknown>) => {
           record("issues.createComment", args);
           return Promise.resolve({});
