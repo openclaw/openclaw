@@ -1,7 +1,7 @@
 // Imported by loader.test.ts to keep its mocked suite in one Vitest module graph.
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { withEnv } from "../test-utils/env.js";
 import { createHookRunner } from "./hooks.js";
 import { loadOpenClawPlugins } from "./loader.js";
@@ -19,6 +19,7 @@ import {
   createSetupEntryChannelPluginFixture,
   globalAfterEach0,
   globalAfterAll1,
+  updatePluginManifest,
 } from "./loader.test-harness.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 
@@ -1691,6 +1692,76 @@ describe("loadOpenClawPlugins", () => {
       before_model_resolve: 750,
       before_agent_start: 250,
     });
+  });
+
+  it("bounds agent tool-result middleware with configured typed hook timeout", async () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "tool-result-middleware-timeout",
+      filename: "tool-result-middleware-timeout.cjs",
+      body: `module.exports = { id: "tool-result-middleware-timeout", register(api) {
+    api.registerAgentToolResultMiddleware(() => new Promise(() => {}), {
+      runtimes: ["openclaw"],
+    });
+  } };`,
+    });
+    updatePluginManifest(plugin, {
+      contracts: { agentToolResultMiddleware: ["openclaw"] },
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["tool-result-middleware-timeout"],
+        entries: {
+          "tool-result-middleware-timeout": {
+            hooks: {
+              timeoutMs: 250,
+              timeouts: { after_tool_call: 25 },
+            },
+          },
+        },
+      },
+    });
+    const middleware = registry.agentToolResultMiddlewares[0];
+    if (!middleware) {
+      throw new Error("expected tool-result middleware registration");
+    }
+
+    vi.useFakeTimers();
+    try {
+      const middlewareRun = middleware.handler(
+        {
+          toolCallId: "call-1",
+          toolName: "exec",
+          args: {},
+          result: { content: [{ type: "text", text: "raw" }], details: {} },
+        },
+        { runtime: "openclaw" },
+      );
+      const outcome = Promise.race([
+        Promise.resolve(middlewareRun).then(
+          () => ({ status: "resolved" as const }),
+          (error: unknown) => ({
+            status: "rejected" as const,
+            message: error instanceof Error ? error.message : String(error),
+          }),
+        ),
+        new Promise<{ status: "blocked" }>((resolve) => {
+          setTimeout(() => resolve({ status: "blocked" }), 1_000);
+        }),
+      ]);
+
+      await vi.runAllTimersAsync();
+
+      await expect(outcome).resolves.toEqual({
+        status: "rejected",
+        message:
+          "agent tool result middleware for tool-result-middleware-timeout timed out after 25ms",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("blocks conversation typed hooks for non-bundled plugins unless explicitly allowed", () => {

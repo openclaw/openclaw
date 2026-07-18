@@ -239,7 +239,7 @@ export function createPluginApiFactory(
                 registerCodexAppServerExtensionFactory(record, factory);
               },
               registerAgentToolResultMiddleware: (handler, options) => {
-                registerAgentToolResultMiddleware(record, handler, options);
+                registerAgentToolResultMiddleware(record, handler, options, params.hookPolicy);
               },
               registerSessionExtension: (extension) => registerSessionExtension(record, extension),
               enqueueNextTurnInjection: (injection) => {
