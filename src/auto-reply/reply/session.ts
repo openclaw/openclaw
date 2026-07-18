@@ -1082,7 +1082,6 @@ async function initSessionStateAttemptLocked(
       agentId,
       entry: sessionEntry,
       dmScope: ctx.DmScope ?? sessionCfg?.dmScope ?? "main",
-      mainKey,
     });
   }
   const sessionStore = committed.sessionStoreView;

@@ -869,7 +869,6 @@ export function registerMainSessionGroupWatch(
     agentId: string;
     entry?: SessionEntry;
     dmScope: DmScope;
-    mainKey?: string;
   },
   options: OpenClawStateDatabaseOptions & { now?: number } = {},
 ): boolean {
@@ -879,9 +878,10 @@ export function registerMainSessionGroupWatch(
   ) {
     return false;
   }
+  // Config normalization retires custom mainKey values; use the canonical main
+  // identity so notice delivery and the read carve-out resolve the same queue.
   const watcherSessionKey = buildAgentMainSessionKey({
     agentId: params.agentId,
-    mainKey: params.mainKey,
   });
   // The watch is the durable ownership edge: it drives both ambient notices and
   // the matching read carve-out without deriving policy from a channel id.
