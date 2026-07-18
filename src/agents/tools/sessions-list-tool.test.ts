@@ -29,7 +29,7 @@ vi.mock("../../gateway/call.js", () => ({
 vi.mock("../../sessions/session-state-events.js", () => ({
   getSessionStateVersions: (refs: Array<{ sessionKey: string; agentId: string }>) =>
     mocks.getSessionStateVersions(refs),
-  listSessionStateWatchTargets: () => new Set<string>(),
+  listAmbientGroupWatchTargets: () => new Set<string>(),
 }));
 
 vi.mock("./sessions-helpers.js", async (importActual) => {

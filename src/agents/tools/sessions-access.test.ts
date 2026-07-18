@@ -12,7 +12,8 @@ import {
   resolveSessionToolsVisibility,
 } from "../../plugin-sdk/session-visibility.js";
 import {
-  listSessionStateWatchTargets,
+  listAmbientGroupWatchTargets,
+  registerMainSessionGroupWatch,
   registerSessionStateWatch,
 } from "../../sessions/session-state-events.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
@@ -240,9 +241,11 @@ describe("createSessionVisibilityGuard", () => {
       const requesterSessionKey = "agent:main:main";
       const watchedSessionKey = "agent:main:telegram:group:watched";
       expect(
-        registerSessionStateWatch({
-          watcherSessionKey: requesterSessionKey,
-          targetSessionKey: watchedSessionKey,
+        registerMainSessionGroupWatch({
+          sessionKey: watchedSessionKey,
+          agentId: "main",
+          entry: { sessionId: "watched", updatedAt: Date.now(), chatType: "group" },
+          dmScope: "main",
         }),
       ).toBe(true);
       const crossAgentSessionKey = "agent:ops:telegram:group:watched";
@@ -250,8 +253,13 @@ describe("createSessionVisibilityGuard", () => {
         watcherSessionKey: requesterSessionKey,
         targetSessionKey: crossAgentSessionKey,
       });
-      expect(listSessionStateWatchTargets(requesterSessionKey)).toEqual(
-        new Set([watchedSessionKey, crossAgentSessionKey]),
+      const explicitDirectSessionKey = "agent:main:coordinator";
+      registerSessionStateWatch({
+        watcherSessionKey: requesterSessionKey,
+        targetSessionKey: explicitDirectSessionKey,
+      });
+      expect(listAmbientGroupWatchTargets(requesterSessionKey)).toEqual(
+        new Set([watchedSessionKey]),
       );
       const guard = createSessionVisibilityRowChecker({
         action: "history",
@@ -262,6 +270,12 @@ describe("createSessionVisibilityGuard", () => {
 
       expect(guard.check({ key: watchedSessionKey })).toEqual({ allowed: true });
       expect(guard.check({ key: "agent:main:telegram:group:unwatched" })).toEqual({
+        allowed: false,
+        status: "forbidden",
+        error:
+          "Session history visibility is restricted to the current session tree (tools.sessions.visibility=tree).",
+      });
+      expect(guard.check({ key: explicitDirectSessionKey })).toEqual({
         allowed: false,
         status: "forbidden",
         error:

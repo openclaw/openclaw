@@ -7,7 +7,7 @@ import { normalizeTrimmedStringList } from "../../packages/normalization-core/sr
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway as defaultCallGateway } from "../gateway/call.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
-import { listSessionStateWatchTargets } from "../sessions/session-state-events.js";
+import { listAmbientGroupWatchTargets } from "../sessions/session-state-events.js";
 
 type GatewayCaller = typeof defaultCallGateway;
 
@@ -324,13 +324,14 @@ export function createSessionVisibilityRowChecker(params: {
     const targetAgentId = row.agentId ?? resolveAgentIdFromSessionKey(targetSessionKey);
     const isRequesterSession =
       targetSessionKey === params.requesterSessionKey || targetSessionKey === "current";
-    // An actual durable cursor makes a watched session ownership-equivalent for
-    // same-agent reads; absent rows and cross-agent targets remain fail-closed.
+    // Only a durable ambient-group marker makes the paired target
+    // ownership-equivalent for same-agent reads. Explicit A2A watches, absent
+    // markers, send access, and cross-agent targets remain fail-closed.
     const isWatchedRead =
       params.action !== "send" &&
       params.visibility === "tree" &&
       targetAgentId === requesterAgentId &&
-      (watchedSessionKeys ??= listSessionStateWatchTargets(params.requesterSessionKey)).has(
+      (watchedSessionKeys ??= listAmbientGroupWatchTargets(params.requesterSessionKey)).has(
         targetSessionKey,
       );
     const isRequesterOwned = rowOwnedByRequester(row, params.requesterSessionKey) || isWatchedRead;

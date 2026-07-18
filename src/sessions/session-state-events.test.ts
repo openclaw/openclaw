@@ -19,6 +19,7 @@ import {
   getSessionStateVersion,
   handleSessionStateSessionDeleted,
   handleSessionStateSessionReset,
+  listAmbientGroupWatchTargets,
   listSessionStateEventsSince,
   recordSessionCompacted,
   recordSessionGoalChanged,
@@ -558,9 +559,10 @@ describe("session state events", () => {
     const rows = openOpenClawStateDatabase(database)
       .db.prepare(
         `SELECT watcher_session_key, target_session_key, updated_at
-         FROM session_watch_cursors`,
+         FROM session_watch_cursors
+         WHERE watcher_session_key = ?`,
       )
-      .all();
+      .all(watcher);
     expect(rows).toEqual([
       {
         watcher_session_key: watcher,
@@ -568,6 +570,14 @@ describe("session state events", () => {
         updated_at: 100,
       },
     ]);
+    expect(listAmbientGroupWatchTargets(watcher, database)).toEqual(new Set([group]));
+    openOpenClawStateDatabase(database)
+      .db.prepare(
+        `DELETE FROM session_watch_cursors
+         WHERE watcher_session_key = ? AND target_session_key = ?`,
+      )
+      .run(watcher, group);
+    expect(listAmbientGroupWatchTargets(watcher, database)).toEqual(new Set());
   });
 
   it("records and coalesces group activity without an immediate wake", async () => {
@@ -604,6 +614,39 @@ describe("session state events", () => {
     expect(wakes).not.toHaveBeenCalled();
   });
 
+  it("prunes orphaned ambient markers while retaining markers for active cursors", () => {
+    const database = createDatabaseOptions();
+    const dormantGroup = "agent:main:slack:channel:dormant";
+    const registeredAt = 100;
+    registerMainSessionGroupWatch(
+      { sessionKey: group, agentId: "main", dmScope: "main" },
+      { ...database, now: registeredAt },
+    );
+    registerMainSessionGroupWatch(
+      { sessionKey: dormantGroup, agentId: "main", dmScope: "main" },
+      { ...database, now: registeredAt },
+    );
+
+    const activeAt = registeredAt + SESSION_STATE_RETENTION_MS + 1;
+    recordSessionHumanDirectMessage(
+      {
+        sessionKey: group,
+        entry: { sessionId: "session-group", updatedAt: activeAt, chatType: "group" },
+        agentId: "main",
+        actor: { actorType: "human", actorId: "human-1" },
+        channel: "telegram",
+      },
+      { ...database, now: activeAt },
+    );
+    sweepSessionStateWatchNotices({ ...database, now: activeAt });
+
+    expect(listAmbientGroupWatchTargets(watcher, database)).toEqual(new Set([group]));
+    const cursors = openOpenClawStateDatabase(database)
+      .db.prepare("SELECT COUNT(*) AS count FROM session_watch_cursors")
+      .get() as { count: number };
+    expect(cursors.count).toBe(2);
+  });
+
   it("keeps explicit A2A group watches on the immediate wake path", async () => {
     vi.useFakeTimers();
     const wakes = vi.fn(async () => ({ status: "ran" as const, durationMs: 1 }));
@@ -630,6 +673,43 @@ describe("session state events", () => {
     await vi.advanceTimersByTimeAsync(300);
 
     expect(peekSystemEventEntries(coordinator)).toHaveLength(1);
+    expect(wakes).toHaveBeenCalledTimes(1);
+  });
+
+  it("promotes an ambient main-to-group watch to explicit immediate delivery", async () => {
+    vi.useFakeTimers();
+    const wakes = vi.fn(async () => ({ status: "ran" as const, durationMs: 1 }));
+    disposeHeartbeatWakeHandler = setHeartbeatWakeHandler(wakes);
+    await vi.advanceTimersByTimeAsync(300);
+    wakes.mockClear();
+    const database = createDatabaseOptions();
+    registerMainSessionGroupWatch(
+      { sessionKey: group, agentId: "main", dmScope: "main" },
+      database,
+    );
+    expect(listAmbientGroupWatchTargets(watcher, database)).toEqual(new Set([group]));
+
+    registerSessionStateWatch({ watcherSessionKey: watcher, targetSessionKey: group }, database);
+    expect(listAmbientGroupWatchTargets(watcher, database)).toEqual(new Set());
+    // Later inbound group registration must not downgrade the explicit watch.
+    registerMainSessionGroupWatch(
+      { sessionKey: group, agentId: "main", dmScope: "main" },
+      database,
+    );
+
+    recordSessionHumanDirectMessage(
+      {
+        sessionKey: group,
+        entry: { sessionId: "session-group", updatedAt: Date.now(), chatType: "group" },
+        agentId: "main",
+        actor: { actorType: "human", actorId: "human-1" },
+        channel: "telegram",
+      },
+      database,
+    );
+    await vi.advanceTimersByTimeAsync(300);
+
+    expect(peekSystemEventEntries(watcher)).toHaveLength(1);
     expect(wakes).toHaveBeenCalledTimes(1);
   });
 

@@ -38,7 +38,7 @@ const resolveUsableCustomProviderApiKeyMock = vi.hoisted(() =>
 const getSessionStateVersionMock = vi.hoisted(() =>
   vi.fn((_sessionKey: string, _agentId: string) => 0),
 );
-const listSessionStateWatchTargetsMock = vi.hoisted(() =>
+const listAmbientGroupWatchTargetsMock = vi.hoisted(() =>
   vi.fn((_watcherSessionKey: string) => new Set<string>()),
 );
 const listSessionStateEventsSinceMock = vi.hoisted(() =>
@@ -360,8 +360,8 @@ vi.mock("../tasks/task-owner-access.js", () => ({
 vi.mock("../sessions/session-state-events.js", () => ({
   getSessionStateVersion: (sessionKey: string, agentId: string) =>
     getSessionStateVersionMock(sessionKey, agentId),
-  listSessionStateWatchTargets: (watcherSessionKey: string) =>
-    listSessionStateWatchTargetsMock(watcherSessionKey),
+  listAmbientGroupWatchTargets: (watcherSessionKey: string) =>
+    listAmbientGroupWatchTargetsMock(watcherSessionKey),
   listSessionStateEventsSince: (
     sessionKey: string,
     agentId: string,
@@ -401,8 +401,8 @@ function resetSessionStore(store: Record<string, SessionEntry>) {
   listTasksForRelatedSessionKeyForOwnerMock.mockReturnValue([]);
   getSessionStateVersionMock.mockReset();
   getSessionStateVersionMock.mockReturnValue(0);
-  listSessionStateWatchTargetsMock.mockReset();
-  listSessionStateWatchTargetsMock.mockReturnValue(new Set());
+  listAmbientGroupWatchTargetsMock.mockReset();
+  listAmbientGroupWatchTargetsMock.mockReturnValue(new Set());
   listSessionStateEventsSinceMock.mockReset();
   listSessionStateEventsSinceMock.mockReturnValue({
     events: [],
@@ -592,7 +592,7 @@ describe("session_status tool", () => {
         agentToAgent: { enabled: false },
       },
     };
-    listSessionStateWatchTargetsMock.mockReturnValue(new Set([groupSessionKey]));
+    listAmbientGroupWatchTargetsMock.mockReturnValue(new Set([groupSessionKey]));
     getSessionStateVersionMock.mockReturnValue(9);
     listSessionStateEventsSinceMock.mockReturnValue({
       events: [
@@ -608,7 +608,7 @@ describe("session_status tool", () => {
       changesSince: 4,
     });
 
-    expect(listSessionStateWatchTargetsMock).toHaveBeenCalledWith("agent:main:main");
+    expect(listAmbientGroupWatchTargetsMock).toHaveBeenCalledWith("agent:main:main");
     expect(listSessionStateEventsSinceMock).toHaveBeenCalledWith(groupSessionKey, "main", 4, 200);
     expect(result.details).toMatchObject({
       ok: true,

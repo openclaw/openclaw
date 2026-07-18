@@ -1,14 +1,7 @@
 /** Stale-state notice text, coalescing keys, and watcher eligibility. */
-import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
-import {
-  buildAgentMainSessionKey,
-  isSubagentSessionKey,
-  parseAgentSessionKey,
-  resolveAgentIdFromSessionKey,
-} from "../routing/session-key.js";
-import { classifySessionKind } from "./classify-session-kind.js";
+import { isSubagentSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
 
 const SESSION_STATE_CONTEXT_PREFIX = "session-state:";
 
@@ -38,38 +31,12 @@ function shouldWakeWatcher(watcherSessionKey: string): boolean {
   return !isSubagentSessionKey(watcherSessionKey);
 }
 
-function isAmbientMainGroupNotice(params: {
-  watcherSessionKey: string;
-  targetSessionKey: string;
-}): boolean {
-  if (isSubagentSessionKey(params.targetSessionKey)) {
-    return false;
-  }
-  const targetAgentId = resolveAgentIdFromSessionKey(params.targetSessionKey);
-  if (params.watcherSessionKey !== buildAgentMainSessionKey({ agentId: targetAgentId })) {
-    return false;
-  }
-  if (classifySessionKind(params.targetSessionKey) === "group") {
-    return true;
-  }
-  try {
-    return (
-      classifySessionKind(
-        params.targetSessionKey,
-        loadSessionEntry({ sessionKey: params.targetSessionKey, clone: false }),
-      ) === "group"
-    );
-  } catch {
-    return false;
-  }
-}
-
 // Bare keys (session.scope="global") are store-local per agent, but cursors, the
 // system-event queue, and heartbeat wakes are keyed by session key alone. A notice
 // for one agent's child could be drained and acknowledged by another agent's global
 // turn — a cross-A2A metadata leak plus a lost notification. Until watcher identity
 // is agent-scoped end-to-end, such watchers get durable events and changesSince but
-// no notices or cursors.
+// no notices. Non-notifiable ambient marker rows are also deliberately ignored.
 export function isNotifiableWatcherKey(watcherSessionKey: string): boolean {
   return parseAgentSessionKey(watcherSessionKey) != null;
 }
@@ -78,16 +45,16 @@ export function enqueueSessionStateNotice(params: {
   watcherSessionKey: string;
   targetSessionKey: string;
   lastSeenSequence: number;
+  queueOnly?: boolean;
 }): void {
-  const groupActivity = isAmbientMainGroupNotice(params);
   enqueueSystemEvent(sessionStateNoticeText(params.targetSessionKey, params.lastSeenSequence), {
     sessionKey: params.watcherSessionKey,
     contextKey: `${SESSION_STATE_CONTEXT_PREFIX}${encodeNoticeTarget(params.targetSessionKey)}`,
-    ...(groupActivity ? { replace: true } : {}),
+    ...(params.queueOnly ? { replace: true } : {}),
   });
   // Group activity is ambient context. Coalesce it for the next main turn instead
   // of waking the personal agent once per inbound group message.
-  if (groupActivity) {
+  if (params.queueOnly) {
     return;
   }
   if (!shouldWakeWatcher(params.watcherSessionKey)) {
