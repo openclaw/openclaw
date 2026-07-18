@@ -71,7 +71,11 @@ export async function monitorIrcProvider(
     accountId: account.accountId,
     runtime,
     ...(opts.ingressQueue ? { queue: opts.ingressQueue } : {}),
-    dispatch: async (message, turnAdoptionLifecycle: IrcIngressLifecycle) => {
+    dispatch: async (
+      message,
+      turnAdoptionLifecycle: IrcIngressLifecycle,
+      context: { connectedNick: string },
+    ) => {
       const activeClient = client;
       if (!activeClient || stopped || monitorAbort.signal.aborted) {
         return {
@@ -81,7 +85,7 @@ export async function monitorIrcProvider(
       }
       if (
         normalizeLowercaseStringOrEmpty(message.senderNick) ===
-        normalizeLowercaseStringOrEmpty(activeClient.nick)
+        normalizeLowercaseStringOrEmpty(context.connectedNick)
       ) {
         return { kind: "completed" };
       }
@@ -94,10 +98,14 @@ export async function monitorIrcProvider(
         account,
         config: cfg,
         runtime,
-        connectedNick: activeClient.nick,
+        connectedNick: context.connectedNick,
         turnAdoptionLifecycle,
         sendReply: async (target, text) => {
-          activeClient.sendPrivmsg(target, text);
+          const replyClient = client;
+          if (!replyClient || !replyClient.isReady() || stopped || monitorAbort.signal.aborted) {
+            throw new Error("IRC transport disconnected before reply send.");
+          }
+          replyClient.sendPrivmsg(target, text);
           opts.statusSink?.({ lastOutboundAt: Date.now() });
           core.channel.activity.record({
             channel: "irc",
@@ -160,7 +168,7 @@ export async function monitorIrcProvider(
           scheduleReconnect();
         },
         onPrivmsg: async (event) => {
-          await ingressConnection.accept(event.rawLine);
+          await ingressConnection.accept(event.rawLine, event.connectedNick);
           core.channel.activity.record({
             channel: "irc",
             accountId: account.accountId,

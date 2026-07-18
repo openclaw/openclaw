@@ -25,6 +25,7 @@ type IrcIngressPayload = {
   version: 1;
   eventId: string;
   receivedAt: number;
+  connectedNick: string;
   rawLine: string;
 };
 
@@ -44,6 +45,7 @@ export type IrcIngressDispatchResult =
 type IrcIngressDispatch = (
   message: IrcInboundMessage,
   lifecycle: IrcIngressLifecycle,
+  context: { connectedNick: string },
 ) => Promise<IrcIngressDispatchResult | void> | IrcIngressDispatchResult | void;
 
 class IrcIngressPayloadError extends Error {
@@ -85,7 +87,13 @@ function inspectRawPrivmsg(rawLine: string): {
   };
 }
 
-function parseClaimedMessage(payload: unknown, claimedId: string): IrcInboundMessage {
+function parseClaimedEvent(
+  payload: unknown,
+  claimedId: string,
+): {
+  message: IrcInboundMessage;
+  connectedNick: string;
+} {
   if (
     !payload ||
     typeof payload !== "object" ||
@@ -94,6 +102,8 @@ function parseClaimedMessage(payload: unknown, claimedId: string): IrcInboundMes
     (payload as Partial<IrcIngressPayload>).eventId !== claimedId ||
     !Number.isSafeInteger((payload as Partial<IrcIngressPayload>).receivedAt) ||
     ((payload as Partial<IrcIngressPayload>).receivedAt ?? 0) <= 0 ||
+    typeof (payload as Partial<IrcIngressPayload>).connectedNick !== "string" ||
+    !(payload as Partial<IrcIngressPayload>).connectedNick?.trim() ||
     typeof (payload as Partial<IrcIngressPayload>).rawLine !== "string"
   ) {
     throw new IrcIngressPayloadError(`IRC ingress row ${claimedId} has invalid metadata.`);
@@ -101,9 +111,12 @@ function parseClaimedMessage(payload: unknown, claimedId: string): IrcInboundMes
   const validPayload = payload as IrcIngressPayload;
   const inspected = inspectRawPrivmsg(validPayload.rawLine);
   return {
-    ...inspected.message,
-    messageId: claimedId,
-    timestamp: validPayload.receivedAt,
+    message: {
+      ...inspected.message,
+      messageId: claimedId,
+      timestamp: validPayload.receivedAt,
+    },
+    connectedNick: validPayload.connectedNick.trim(),
   };
 }
 
@@ -114,7 +127,7 @@ function resolveIrcIngressNonRetryableFailure(error: unknown) {
 }
 
 type IrcIngressConnection = {
-  accept: (rawLine: string) => Promise<void>;
+  accept: (rawLine: string, connectedNick: string) => Promise<void>;
 };
 
 export type IrcIngressMonitor = {
@@ -168,10 +181,10 @@ export function createIrcIngressMonitor(options: {
             error: new Error("IRC ingress stopped before dispatch."),
           };
         }
-        const result = await options.dispatch(
-          parseClaimedMessage(record.payload, record.id),
-          lifecycle,
-        );
+        const claimed = parseClaimedEvent(record.payload, record.id);
+        const result = await options.dispatch(claimed.message, lifecycle, {
+          connectedNick: claimed.connectedNick,
+        });
         if (shutdown.signal.aborted && result?.kind !== "deferred") {
           return {
             kind: "failed-retryable",
@@ -237,7 +250,12 @@ export function createIrcIngressMonitor(options: {
     eventId: string;
     rawLine: string;
     receivedAt: number;
+    connectedNick: string;
   }): Promise<void> => {
+    const connectedNick = params.connectedNick.trim();
+    if (!connectedNick) {
+      throw new Error("IRC ingress connected nickname is required.");
+    }
     let laneKey: string;
     try {
       // Receive-time inspection extracts queue metadata only. The persisted
@@ -267,6 +285,7 @@ export function createIrcIngressMonitor(options: {
             version: IRC_INGRESS_PAYLOAD_VERSION,
             eventId: params.eventId,
             receivedAt: params.receivedAt,
+            connectedNick,
             rawLine: params.rawLine,
           },
           { receivedAt: params.receivedAt, laneKey },
@@ -288,7 +307,7 @@ export function createIrcIngressMonitor(options: {
       }
       let sequence = 0;
       return {
-        accept: (rawLine) => {
+        accept: (rawLine, connectedNick) => {
           if (stopped) {
             return Promise.reject(new Error("IRC ingress is stopped."));
           }
@@ -298,7 +317,7 @@ export function createIrcIngressMonitor(options: {
           const eventId = `local:${epoch}:${String(sequence).padStart(12, "0")}`;
           const receivedAt = Date.now();
           const admission = admissionTail.then(async () => {
-            await admitOnce({ eventId, rawLine, receivedAt });
+            await admitOnce({ eventId, rawLine, receivedAt, connectedNick });
           });
           admissionTail = admission.catch(() => undefined);
           return admission;

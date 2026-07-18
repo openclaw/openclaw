@@ -71,9 +71,9 @@ describe("IRC durable ingress", () => {
       const dispatch = vi.fn();
       const ingress = startIngress(failingQueue, dispatch);
       try {
-        await expect(ingress.openConnection("connection-a").accept(CHANNEL_LINE)).rejects.toBe(
-          appendError,
-        );
+        await expect(
+          ingress.openConnection("connection-a").accept(CHANNEL_LINE, "bot"),
+        ).rejects.toBe(appendError);
         expect(failingQueue.enqueue).toHaveBeenCalledTimes(3);
         expect(dispatch).not.toHaveBeenCalled();
       } finally {
@@ -91,7 +91,7 @@ describe("IRC durable ingress", () => {
         dispatch: interruptedDispatch,
         runtime: { error: vi.fn(), log: vi.fn() },
       });
-      await interrupted.openConnection("connection-restart").accept(CHANNEL_LINE);
+      await interrupted.openConnection("connection-restart").accept(CHANNEL_LINE, "receipt-bot");
       expect(await queue.listPending({ limit: "all" })).toEqual([
         expect.objectContaining({
           id: "local:connection-restart:000000000001",
@@ -119,6 +119,7 @@ describe("IRC durable ingress", () => {
           text: "hello",
           isGroup: true,
         });
+        expect(recoveredDispatch.mock.calls[0]?.[2]).toEqual({ connectedNick: "receipt-bot" });
       } finally {
         await recovered.stop();
       }
@@ -132,9 +133,9 @@ describe("IRC durable ingress", () => {
       });
       const ingress = startIngress(queue, dispatch);
       try {
-        await ingress.openConnection("connection-duplicate").accept(CHANNEL_LINE);
+        await ingress.openConnection("connection-duplicate").accept(CHANNEL_LINE, "bot");
         await ingress.waitForIdle();
-        await ingress.openConnection("connection-duplicate").accept(CHANNEL_LINE);
+        await ingress.openConnection("connection-duplicate").accept(CHANNEL_LINE, "bot");
         await ingress.waitForIdle();
         expect(dispatch).toHaveBeenCalledTimes(1);
       } finally {
@@ -153,8 +154,8 @@ describe("IRC durable ingress", () => {
       const ingress = startIngress(queue, dispatch);
       try {
         const connection = ingress.openConnection("connection-identical");
-        await connection.accept(CHANNEL_LINE);
-        await connection.accept(CHANNEL_LINE);
+        await connection.accept(CHANNEL_LINE, "bot");
+        await connection.accept(CHANNEL_LINE, "bot");
         await ingress.waitForIdle();
         expect(messageIds).toEqual([
           "local:connection-identical:000000000001",
@@ -177,7 +178,7 @@ describe("IRC durable ingress", () => {
       try {
         await ingress
           .openConnection("connection-dm")
-          .accept(":Alice!ident@example.org PRIVMSG openclaw-bot :hello");
+          .accept(":Alice!ident@example.org PRIVMSG openclaw-bot :hello", "bot");
         expect(await queue.listPending({ limit: "all" })).toEqual([
           expect.objectContaining({ laneKey: "direct:alice" }),
         ]);
@@ -200,7 +201,7 @@ describe("IRC durable ingress", () => {
       };
       const dispatch = vi.fn();
       const ingress = startIngress(queue, dispatch);
-      const admitting = ingress.openConnection("connection-stop").accept(CHANNEL_LINE);
+      const admitting = ingress.openConnection("connection-stop").accept(CHANNEL_LINE, "bot");
       await admissionStored.promise;
 
       let stopSettled = false;
@@ -223,7 +224,7 @@ describe("IRC durable ingress", () => {
       const dispatch = vi.fn();
       const ingress = startIngress(queue, dispatch);
       try {
-        await ingress.openConnection("connection-bad").accept("not an IRC message");
+        await ingress.openConnection("connection-bad").accept("not an IRC message", "bot");
         await ingress.waitForIdle();
         expect((await queue.enqueue(eventId, {} as IrcIngressPayload)).kind).toBe("failed");
         expect(dispatch).not.toHaveBeenCalled();
