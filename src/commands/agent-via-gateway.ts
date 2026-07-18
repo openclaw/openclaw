@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 // Gateway-first agent CLI implementation with embedded fallback for local/runtime failures.
-import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
 import { TextDecoder } from "node:util";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
@@ -203,41 +202,26 @@ function formatMessageFileReadFailure(messageFile: string, err: unknown): string
 const AGENT_MESSAGE_FILE_MAX_BYTES = 4 * 1024 * 1024;
 
 async function readAgentMessageFile(messageFile: string): Promise<string> {
-  // Preserve the legacy fs.readFile behavior of following symlinks by resolving
-  // the full chain first, then stat the final target. The byte cap applies to
-  // the resolved target, not the symlink path.
-  let resolvedPath: string;
-  let stat: Stats;
-  try {
-    resolvedPath = await fs.realpath(messageFile);
-    stat = await fs.stat(resolvedPath);
-  } catch (err) {
-    throw new Error(formatMessageFileReadFailure(messageFile, err), { cause: err });
-  }
-  if (stat.isDirectory()) {
-    // Keep the legacy fs.readFile directory UX; a generic non-regular-file
-    // rejection would regress the EISDIR message callers see today.
-    throw Object.assign(new Error(`Message file is a directory: ${messageFile}`), {
-      code: "EISDIR",
-    });
-  }
-  // Regular files fail fast on the recorded size. FIFOs and other streaming
-  // targets report size 0, so the bounded descriptor read below enforces the
-  // same cap byte-by-byte; without it, --message-file would stop accepting
-  // FIFOs the pre-PR fs.readFile path could drain until EOF.
-  if (stat.isFile() && stat.size > AGENT_MESSAGE_FILE_MAX_BYTES) {
-    throw new Error(
-      `Unable to read message file ${messageFile}: File exceeds ${AGENT_MESSAGE_FILE_MAX_BYTES} bytes: ${resolvedPath}`,
-    );
-  }
+  // Open the original path so the kernel preserves symlink and procfs magic-link
+  // behavior (notably piped /dev/stdin), then inspect that exact descriptor.
   let handle: Awaited<ReturnType<typeof fs.open>>;
   try {
-    handle = await fs.open(resolvedPath, "r");
+    handle = await fs.open(messageFile, "r");
   } catch (err) {
     throw new Error(formatMessageFileReadFailure(messageFile, err), { cause: err });
   }
   let buffer: Buffer;
   try {
+    const stat = await handle.stat();
+    if (stat.isDirectory()) {
+      // Keep the legacy fs.readFile directory UX.
+      throw Object.assign(new Error("Message file is a directory"), { code: "EISDIR" });
+    }
+    // Regular files fail fast. Streams report size 0, so the descriptor reader
+    // enforces the same limit byte-by-byte while preserving FIFO behavior.
+    if (stat.isFile() && stat.size > AGENT_MESSAGE_FILE_MAX_BYTES) {
+      throw new Error(`File exceeds ${AGENT_MESSAGE_FILE_MAX_BYTES} bytes: ${messageFile}`);
+    }
     buffer = await readFileDescriptorBounded(handle.fd, AGENT_MESSAGE_FILE_MAX_BYTES);
   } catch (err) {
     throw new Error(formatMessageFileReadFailure(messageFile, err), { cause: err });

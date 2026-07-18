@@ -475,6 +475,37 @@ describe("agentCliCommand", () => {
     });
   });
 
+  it.skipIf(process.platform !== "linux")(
+    "reads a procfs file-descriptor link without resolving it to a pathname",
+    async () => {
+      await withTempStore(async ({ dir }) => {
+        const realFile = path.join(dir, "procfs-source.md");
+        fs.writeFileSync(realFile, "hello from procfs descriptor", "utf-8");
+        const sourceHandle = await fs.promises.open(realFile, "r");
+        fs.unlinkSync(realFile);
+        try {
+          await agentCliCommand(
+            {
+              messageFile: `/proc/self/fd/${sourceHandle.fd}`,
+              sessionKey: "agent:main:incident-42",
+            },
+            runtime,
+          );
+        } finally {
+          await sourceHandle.close();
+        }
+
+        expect(callGateway).toHaveBeenCalledTimes(1);
+        const request = requireRecord(
+          requireFirstCallArg(callGateway, "gateway"),
+          "gateway request",
+        );
+        const params = requireRecord(request.params, "gateway request params");
+        expect(params.message).toBe("hello from procfs descriptor");
+      });
+    },
+  );
+
   // FIFOs have no stat-able size; the bounded descriptor read must drain them
   // until EOF like the legacy fs.readFile path did. Windows lacks mkfifo.
   it.skipIf(process.platform === "win32")("reads a FIFO message file until EOF", async () => {
