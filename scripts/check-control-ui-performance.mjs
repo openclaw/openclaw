@@ -13,9 +13,11 @@ export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze({
   startupJsRequests: 18,
   startupCssRequests: 1,
   startupJsGzipBytes: 310 * KIB,
-  startupCssGzipBytes: 42 * KIB,
+  // Identical input can move by a few bytes across zlib builds. Keep 1 KiB of
+  // headroom so the budget measures bundle growth instead of compressor drift.
+  startupCssGzipBytes: 43 * KIB,
   largestJsGzipBytes: 215 * KIB,
-  largestCssGzipBytes: 42 * KIB,
+  largestCssGzipBytes: 43 * KIB,
 });
 
 function controlUiAssetPathFromUrl(value) {
@@ -156,7 +158,11 @@ function formatViolation(violation) {
     violation.unit === "bytes"
       ? formatControlUiPerformanceBytes(violation.limit)
       : String(violation.limit);
-  return `${violation.metric}: ${actual} exceeds ${limit}`;
+  const exactBytes =
+    violation.unit === "bytes" && actual === limit
+      ? ` (${violation.actual} B vs ${violation.limit} B)`
+      : "";
+  return `${violation.metric}: ${actual} exceeds ${limit}${exactBytes}`;
 }
 
 export function formatControlUiPerformanceReport(
