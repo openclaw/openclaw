@@ -27,6 +27,7 @@ async function fetchJson<T>(url: string, timeoutMs = QA_SUITE_FETCH_JSON_TIMEOUT
   });
   try {
     if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
       throw new Error(`request failed ${response.status}: ${url}`);
     }
     return await readProviderJsonResponse<T>(response, "qa-lab-suite-fetch-json");
@@ -49,6 +50,7 @@ async function waitForGatewayHealthy(env: Pick<QaSuiteRuntimeEnv, "gateway">, ti
         if (response.ok) {
           return;
         }
+        await response.body?.cancel().catch(() => undefined);
       } finally {
         await release();
       }

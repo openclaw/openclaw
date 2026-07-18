@@ -158,6 +158,53 @@ describe("qa suite gateway helpers", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  it("cancels failed suite gateway JSON response bodies before releasing their guard", async () => {
+    const cancelBody = vi.fn();
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
+        new ReadableStream<Uint8Array>({
+          cancel: cancelBody,
+        }),
+        { status: 503 },
+      ),
+      release,
+    });
+
+    await expect(fetchJson("http://127.0.0.1:43123/config")).rejects.toThrow(
+      "request failed 503: http://127.0.0.1:43123/config",
+    );
+    expect(cancelBody).toHaveBeenCalledTimes(1);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels failed gateway health responses before retrying", async () => {
+    const cancelBody = vi.fn();
+    const failedRelease = vi.fn(async () => {});
+    const successRelease = vi.fn(async () => {});
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce({
+        response: new Response(
+          new ReadableStream<Uint8Array>({
+            cancel: cancelBody,
+          }),
+          { status: 503 },
+        ),
+        release: failedRelease,
+      })
+      .mockResolvedValueOnce({
+        response: new Response(null, { status: 200 }),
+        release: successRelease,
+      });
+
+    await expect(
+      waitForGatewayHealthy({ gateway: { baseUrl: "http://127.0.0.1:43123" } } as never, 1_000),
+    ).resolves.toBeUndefined();
+    expect(cancelBody).toHaveBeenCalledTimes(1);
+    expect(failedRelease).toHaveBeenCalledTimes(1);
+    expect(successRelease).toHaveBeenCalledTimes(1);
+  });
+
   it("bounds a hung gateway health request by the remaining readiness deadline", async () => {
     vi.useFakeTimers();
     fetchWithSsrFGuardMock.mockImplementation(
