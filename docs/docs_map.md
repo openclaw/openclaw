@@ -4204,6 +4204,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /help/testing-live
 - Headings:
+  - H2: Live tests vs your real gateway
   - H2: Live: local smoke commands
   - H2: Live: Android node capability sweep
   - H2: Live: model smoke (profile keys)
