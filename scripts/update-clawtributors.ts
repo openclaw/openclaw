@@ -1,8 +1,10 @@
 // Update Clawtributors script supports OpenClaw repository automation.
-import { execFileSync, execSync } from "node:child_process";
+import { execSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import pMap, { pMapSkip } from "p-map";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
+import { execPlainGh } from "./lib/plain-gh.mjs";
 import type { ApiContributor, Entry, MapConfig, User } from "./update-clawtributors.types.js";
 
 const REPO = "openclaw/openclaw";
@@ -11,6 +13,9 @@ const AVATAR_PROBE_SIZE = 40;
 const AVATAR_PROBE_MAX_BYTES = 256 * 1024;
 const AVATAR_PROBE_TIMEOUT_MS = 8000;
 const AVATAR_SIZE = 48;
+// The 5,000-PR history query can take about a minute; preserve healthy pagination
+// headroom while bounding a stalled GitHub CLI process.
+const GH_COMMAND_TIMEOUT_MS = 120_000;
 const CLAWTRIBUTORS_START = "<!-- clawtributors:start -->";
 const CLAWTRIBUTORS_END = "<!-- clawtributors:end -->";
 const CLAWTRIBUTORS_HIDDEN_START = "<!-- clawtributors:hidden:start";
@@ -29,7 +34,7 @@ const seedCommit = mapConfig.seedCommit ?? null;
 const seedEntries = seedCommit ? parseReadmeEntries(run(`git show ${seedCommit}:README.md`)) : [];
 const currentReadme = readFileSync(readmePath, "utf8");
 const hiddenReadmeLogins = new Set(parseHiddenReadmeLogins(currentReadme));
-const raw = run(`gh api "repos/${REPO}/contributors?per_page=100&anon=1" --paginate`);
+const raw = runGh(["api", `repos/${REPO}/contributors?per_page=100&anon=1`, "--paginate"]);
 const contributors = parsePaginatedJson(raw) as ApiContributor[];
 const apiByLogin = new Map<string, User>();
 const contributionsByLogin = new Map<string, number>();
@@ -128,9 +133,20 @@ for (const login of ensureLogins) {
 }
 
 const prsByLogin = new Map<string, number>();
-const prRaw = run(
-  `gh pr list -R ${REPO} --state merged --limit 5000 --json author --jq '.[].author.login'`,
-);
+const prRaw = runGh([
+  "pr",
+  "list",
+  "-R",
+  REPO,
+  "--state",
+  "merged",
+  "--limit",
+  "5000",
+  "--json",
+  "author",
+  "--jq",
+  ".[].author.login",
+]);
 for (const login of prRaw.split("\n")) {
   const trimmed = login.trim().toLowerCase();
   if (!trimmed) {
@@ -348,6 +364,16 @@ function run(cmd: string): string {
   }).trim();
 }
 
+function runGh(args: string[]): string {
+  return execPlainGh(args, {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    maxBuffer: 1024 * 1024 * 200,
+    timeout: GH_COMMAND_TIMEOUT_MS,
+    killSignal: "SIGKILL",
+  }).trim();
+}
+
 function parsePaginatedJson(rawLocal: string): unknown[] {
   const items: unknown[] = [];
   for (const line of rawLocal.split("\n")) {
@@ -422,10 +448,7 @@ function fetchUser(login: string): User | null {
     return null;
   }
   try {
-    const data = execFileSync("gh", ["api", `users/${normalized}`], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    const data = runGh(["api", `users/${normalized}`]);
     const parsed = JSON.parse(data);
     if (!parsed?.login || !parsed?.html_url || !parsed?.avatar_url) {
       return null;
@@ -625,39 +648,21 @@ async function filterVisibleEntries(
   entriesResult: Entry[],
   hiddenLogins: ReadonlySet<string>,
 ): Promise<Entry[]> {
-  const results = await mapConcurrent(entriesResult, 8, async (entry) => {
-    const login = entry.login ?? entry.key;
-    if (!login) {
-      return entry;
-    }
-    const normalized = normalizeLogin(login)?.toLowerCase();
-    if (normalized && hiddenLogins.has(normalized)) {
-      return null;
-    }
-    return (await isDefaultGitHubAvatar(login)) ? null : entry;
-  });
-  return results.filter((entry): entry is Entry => entry !== null);
-}
-
-async function mapConcurrent<T, R>(
-  items: T[],
-  limit: number,
-  mapper: (item: T, index: number) => Promise<R>,
-): Promise<R[]> {
-  const results: R[] = [];
-  results.length = items.length;
-  let nextIndex = 0;
-  const workers = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {
-    while (nextIndex < items.length) {
-      const index = nextIndex++;
-      results[index] = await mapper(
-        expectDefined(items[index], `clawtributor concurrency input at index ${index}`),
-        index,
-      );
-    }
-  });
-  await Promise.all(workers);
-  return results;
+  return await pMap(
+    entriesResult,
+    async (entry) => {
+      const login = entry.login ?? entry.key;
+      if (!login) {
+        return entry;
+      }
+      const normalized = normalizeLogin(login)?.toLowerCase();
+      if (normalized && hiddenLogins.has(normalized)) {
+        return pMapSkip;
+      }
+      return (await isDefaultGitHubAvatar(login)) ? pMapSkip : entry;
+    },
+    { concurrency: 8, stopOnError: true },
+  );
 }
 
 function readImageDimensions(buffer: Buffer): { width: number; height: number } | null {

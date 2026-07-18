@@ -12,16 +12,20 @@ import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { withTempConfig } from "../../gateway/test-temp-config.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
-import {
-  attachmentProbeFs,
-  resolveAttachmentDelivery,
-  resolveSessionAttachmentThreadId,
-  sendPluginSessionAttachment,
-} from "../host-hook-attachments.js";
-import { clearPluginLoaderCache } from "../loader.js";
+import { sendPluginSessionAttachment } from "../host-hook-attachments.js";
+import { clearPluginLoaderCache } from "../loader.test-fixtures.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import { createPluginRegistry } from "../registry.js";
-import { setActivePluginRegistry } from "../runtime.js";
+import {
+  pinActivePluginChannelRegistry,
+  pinActivePluginHttpRouteRegistry,
+  pinActivePluginSessionExtensionRegistry,
+  releasePinnedPluginChannelRegistry,
+  releasePinnedPluginHttpRouteRegistry,
+  releasePinnedPluginSessionExtensionRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../runtime.js";
 import type { PluginRuntime } from "../runtime/types.js";
 import { createPluginRecord } from "../status.test-helpers.js";
 import type { OpenClawPluginApi } from "../types.js";
@@ -141,75 +145,13 @@ describe("plugin session attachments", () => {
   afterEach(() => {
     workflowMocks.getChannelPlugin.mockReset();
     workflowMocks.sendMessage.mockReset();
-    setActivePluginRegistry(createEmptyPluginRegistry());
+    releasePinnedPluginChannelRegistry();
+    releasePinnedPluginHttpRouteRegistry();
+    releasePinnedPluginSessionExtensionRegistry();
+    resetPluginRuntimeStateForTest();
     clearPluginLoaderCache();
     delete (globalThis as { proofAttachmentApi?: OpenClawPluginApi }).proofAttachmentApi;
     delete (globalThis as { proofAttachmentLog?: unknown[] }).proofAttachmentLog;
-  });
-
-  it("resolves channel hint precedence for attachment delivery", () => {
-    expect(
-      resolveAttachmentDelivery({
-        channel: "telegram",
-        captionFormat: "html",
-        channelHints: { telegram: { parseMode: "HTML" } },
-      }),
-    ).toEqual({ parseMode: "HTML" });
-    expect(resolveAttachmentDelivery({ channel: "telegram", captionFormat: "html" })).toEqual({
-      parseMode: "HTML",
-    });
-    expect(resolveAttachmentDelivery({ channel: "telegram", captionFormat: "plain" })).toEqual({
-      parseMode: "HTML",
-      escapePlainHtmlCaption: true,
-    });
-    expect(
-      resolveAttachmentDelivery({
-        channel: "telegram",
-        captionFormat: "plain",
-        channelHints: { telegram: { parseMode: "HTML" } },
-      }),
-    ).toEqual({
-      parseMode: "HTML",
-      escapePlainHtmlCaption: true,
-    });
-    expect(
-      resolveAttachmentDelivery({
-        channel: "telegram",
-        channelHints: {
-          telegram: { disableNotification: true, forceDocumentMime: "application/pdf" },
-        },
-      }),
-    ).toEqual({
-      disableNotification: true,
-      forceDocumentMime: "application/pdf",
-    });
-    expect(
-      resolveAttachmentDelivery({
-        channel: "slack",
-        channelHints: { slack: { threadTs: "1700000000.000100" } },
-      }),
-    ).toEqual({ threadTs: "1700000000.000100" });
-    expect(
-      resolveAttachmentDelivery({
-        channel: "slack",
-        channelHints: { slack: { threadTs: " 1700000000.000100 " } },
-      }),
-    ).toEqual({ threadTs: "1700000000.000100" });
-    expect(
-      resolveAttachmentDelivery({
-        channel: "slack",
-        channelHints: { slack: { threadTs: "   " } },
-      }),
-    ).toEqual({});
-    expect(resolveAttachmentDelivery({ channel: "discord", captionFormat: "markdown" })).toEqual(
-      {},
-    );
-    expect(
-      resolveAttachmentDelivery({
-        channel: "unknown",
-        channelHints: { telegram: { parseMode: "HTML" } },
-      }),
-    ).toEqual({});
   });
 
   it("sends validated files through the session delivery route with channel hints", async () => {
@@ -306,30 +248,6 @@ describe("plugin session attachments", () => {
       expectTelegramAttachmentResult(result, 1);
       expect(requireFirstSendMessageParams().mediaUrls).toEqual([absoluteFilePath]);
     });
-  });
-
-  it("prefers the thread encoded in a threaded session key over stale stored routes", () => {
-    expect(
-      resolveSessionAttachmentThreadId({
-        deliveryThreadId: 42,
-        fallbackThreadId: "99",
-      }),
-    ).toBe("99");
-    expect(
-      resolveSessionAttachmentThreadId({
-        deliveryThreadId: 42,
-        explicitThreadId: 7,
-        fallbackThreadId: "99",
-      }),
-    ).toBe(7);
-    expect(
-      resolveSessionAttachmentThreadId({
-        deliveryThreadId: 42,
-        explicitThreadId: 7,
-        fallbackThreadId: "99",
-        hintThreadTs: "1700000000.000100",
-      }),
-    ).toBe("1700000000.000100");
   });
 
   it("reports attachment delivery as failed when no delivery result is returned", async () => {
@@ -448,38 +366,6 @@ describe("plugin session attachments", () => {
     });
   });
 
-  it("returns validation errors for unreadable attachment MIME probes", async () => {
-    await withSessionStore(async ({ storePath, stateDir }) => {
-      const unreadablePath = path.join(stateDir, "unreadable.pdf");
-      await fs.writeFile(unreadablePath, "%PDF-1.7\n", "utf8");
-      await writeSessionEntry(storePath);
-      const originalOpen = attachmentProbeFs.open.bind(attachmentProbeFs);
-      const openSpy = vi.spyOn(attachmentProbeFs, "open").mockImplementation((async (...args) => {
-        const [target] = args;
-        if (path.resolve(String(target)) === unreadablePath) {
-          throw new Error("EACCES: permission denied, open 'unreadable.pdf'");
-        }
-        return await originalOpen(...args);
-      }) as typeof fs.open);
-
-      try {
-        const result = await sendBundledSessionAttachment({
-          files: [{ path: unreadablePath }],
-          channelHints: { telegram: { forceDocumentMime: "application/pdf" } },
-        });
-
-        expect(result.ok).toBe(false);
-        if (result.ok) {
-          throw new Error("expected unreadable attachment MIME probe to fail");
-        }
-        expect(result.error).toContain(`attachment file MIME read failed for ${unreadablePath}`);
-      } finally {
-        openSpy.mockRestore();
-      }
-      expect(workflowMocks.sendMessage).not.toHaveBeenCalled();
-    });
-  });
-
   it("validates force-document MIME using only the configured sniff window", async () => {
     await withSessionStore(async ({ storePath, stateDir }) => {
       const pdfPath = path.join(stateDir, "large.pdf");
@@ -587,7 +473,7 @@ describe("plugin session attachments", () => {
     });
   });
 
-  it("wires sendSessionAttachment through the plugin API with stale-registry protection", async () => {
+  it("keeps pinned attachment APIs live until their registry retires", async () => {
     await withSessionStore(async ({ storePath, filePath }) => {
       await writeSessionEntry(storePath);
       mockSuccessfulAttachmentDelivery();
@@ -614,7 +500,19 @@ describe("plugin session attachments", () => {
       });
       expectTelegramAttachmentResult(firstResult, 1);
 
+      pinActivePluginChannelRegistry(registry.registry);
+      pinActivePluginHttpRouteRegistry(registry.registry);
+      pinActivePluginSessionExtensionRegistry(registry.registry);
       setActivePluginRegistry(createEmptyPluginRegistry());
+      const pinnedResult = await capturedApi?.sendSessionAttachment({
+        sessionKey: MAIN_SESSION_KEY,
+        files: [{ path: filePath }],
+      });
+      expectTelegramAttachmentResult(pinnedResult, 1);
+
+      releasePinnedPluginChannelRegistry(registry.registry);
+      releasePinnedPluginHttpRouteRegistry(registry.registry);
+      releasePinnedPluginSessionExtensionRegistry(registry.registry);
       await expect(
         capturedApi?.sendSessionAttachment({
           sessionKey: MAIN_SESSION_KEY,

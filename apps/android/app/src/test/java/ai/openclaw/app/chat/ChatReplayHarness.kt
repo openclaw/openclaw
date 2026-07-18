@@ -104,6 +104,9 @@ internal fun historyResponse(
   sessionId: String,
   messages: List<ReplayHistoryMessage>,
   inFlightRun: Pair<String, String>? = null,
+  inFlightPlan: ChatPlanSnapshot? = null,
+  hasActiveRun: Boolean? = inFlightRun?.let { true },
+  activeRunIds: List<String>? = inFlightRun?.let { listOf(it.first) },
 ): String =
   buildJsonObject {
     put("sessionId", JsonPrimitive(sessionId))
@@ -113,9 +116,47 @@ internal fun historyResponse(
         buildJsonObject {
           put("runId", JsonPrimitive(inFlightRun.first))
           put("text", JsonPrimitive(inFlightRun.second))
+          if (inFlightPlan != null) {
+            put(
+              "plan",
+              buildJsonObject {
+                put(
+                  "steps",
+                  JsonArray(
+                    inFlightPlan.steps.map { step ->
+                      buildJsonObject {
+                        put("step", JsonPrimitive(step.step))
+                        put(
+                          "status",
+                          JsonPrimitive(
+                            when (step.status) {
+                              ChatPlanStepStatus.Pending -> "pending"
+                              ChatPlanStepStatus.InProgress -> "in_progress"
+                              ChatPlanStepStatus.Completed -> "completed"
+                            },
+                          ),
+                        )
+                      }
+                    },
+                  ),
+                )
+                inFlightPlan.explanation?.let { put("explanation", JsonPrimitive(it)) }
+              },
+            )
+          }
         },
       )
-      put("sessionInfo", buildJsonObject { put("hasActiveRun", JsonPrimitive(true)) })
+    }
+    if (hasActiveRun != null || activeRunIds != null) {
+      put(
+        "sessionInfo",
+        buildJsonObject {
+          hasActiveRun?.let { put("hasActiveRun", JsonPrimitive(it)) }
+          activeRunIds?.let { ids ->
+            put("activeRunIds", JsonArray(ids.map(::JsonPrimitive)))
+          }
+        },
+      )
     }
     put(
       "messages",
@@ -134,12 +175,12 @@ internal fun historyResponse(
     )
   }.toString()
 
-/** Protocol-valid gateway delta carrying both the incremental chunk and accumulated snapshot. */
+/** Gateway delta carrying the accumulated snapshot plus the v4 incremental chunk when present. */
 internal fun chatDeltaPayload(
   sessionKey: String,
   runId: String,
   seq: Int,
-  deltaText: String,
+  deltaText: String?,
   accumulatedText: String,
 ): String =
   buildJsonObject {
@@ -147,7 +188,7 @@ internal fun chatDeltaPayload(
     put("runId", JsonPrimitive(runId))
     put("seq", JsonPrimitive(seq))
     put("state", JsonPrimitive("delta"))
-    put("deltaText", JsonPrimitive(deltaText))
+    if (deltaText != null) put("deltaText", JsonPrimitive(deltaText))
     put(
       "message",
       buildJsonObject {

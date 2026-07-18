@@ -1,4 +1,5 @@
 // Shared summary types returned by gateway health and rendered by the CLI.
+import type { GatewayModelPricingHealth } from "../gateway/model-pricing-cache.types.js";
 /** Health snapshot for one configured channel account. */
 export type ChannelAccountHealthSummary = {
   accountId: string;
@@ -39,6 +40,15 @@ export type PluginHealthErrorSummary = {
 export type PluginHealthSummary = {
   loaded: string[];
   errors: PluginHealthErrorSummary[];
+  unavailable?: Array<{
+    id: string;
+    state: "configured-unavailable";
+    diagnostic: {
+      kind: "plugin-verification";
+      reason: import("../plugins/runtime-degraded-state.js").PluginVerificationFailureReason;
+      detail: string;
+    };
+  }>;
 };
 
 /** Context engine quarantine entry included in health output. */
@@ -65,11 +75,10 @@ export type DeliveryQueueHealthSummary = {
 };
 
 /** Optional model pricing cache health reported by the gateway. */
-type ModelPricingHealthSummary =
-  import("../gateway/model-pricing-cache-state.js").GatewayModelPricingHealth;
+type ModelPricingHealthSummary = GatewayModelPricingHealth;
 
 /** Config hot-reload watcher status, present only when a reloader is running. */
-export type ConfigReloadHealthSummary = {
+type ConfigReloadHealthSummary = {
   hotReloadStatus: import("../gateway/config-reload-status.types.js").GatewayHotReloadStatus;
 };
 

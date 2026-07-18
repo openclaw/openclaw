@@ -81,6 +81,30 @@ export const EXPECTED_CODEX_MODELS_COMMAND_TEXT = [
   "Current OpenClaw session status reports the active model as:",
 ] as const;
 
+export function shouldUseCodexHarnessSubagentOnlyFastPath(params: {
+  chatImageProbe: boolean;
+  codeModeOnly: boolean;
+  compactionStress: boolean;
+  explicitOptOut: boolean;
+  guardianProbe: boolean;
+  imageProbe: boolean;
+  mcpProbe: boolean;
+  resumeStress: boolean;
+  subagentProbe: boolean;
+}): boolean {
+  return (
+    params.subagentProbe &&
+    !params.chatImageProbe &&
+    !params.codeModeOnly &&
+    !params.compactionStress &&
+    !params.guardianProbe &&
+    !params.imageProbe &&
+    !params.mcpProbe &&
+    !params.resumeStress &&
+    !params.explicitOptOut
+  );
+}
+
 const HEALTHY_CODEX_MODELS_COMMAND_TEXT = [
   "Codex models:",
   "Available Codex models",

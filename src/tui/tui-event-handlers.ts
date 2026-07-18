@@ -12,6 +12,12 @@ import {
   sanitizeRenderableText,
 } from "./tui-formatters.js";
 import { TuiStreamAssembler } from "./tui-stream-assembler.js";
+import {
+  clearPendingSubmit,
+  clearPendingSubmitDraft,
+  getPendingSubmitAcceptedRunId,
+  hasPendingSubmit,
+} from "./tui-submit-state.js";
 import type {
   AgentEvent,
   BtwEvent,
@@ -161,12 +167,7 @@ export function createEventHandlers(context: EventHandlerContext) {
   };
 
   const flushPendingHistoryRefreshIfIdle = () => {
-    if (
-      !pendingHistoryRefresh ||
-      state.activeChatRunId ||
-      state.pendingChatRunId ||
-      state.pendingOptimisticUserMessage
-    ) {
+    if (!pendingHistoryRefresh || state.activeChatRunId || hasPendingSubmit(state)) {
       return;
     }
     pendingHistoryRefresh = false;
@@ -219,9 +220,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     toolValidationDiagnostics.clear();
     streamAssembler = new TuiStreamAssembler();
     pendingHistoryRefresh = false;
-    state.pendingOptimisticUserMessage = false;
-    state.pendingChatRunId = null;
-    state.pendingSubmitDraft = null;
+    clearPendingSubmit(state);
     reconnectPendingRunId = null;
     clearLocalRunIds?.();
     clearLocalBtwRunIds?.();
@@ -291,7 +290,7 @@ export function createEventHandlers(context: EventHandlerContext) {
       return;
     }
     lastSessionKey = state.currentSessionKey;
-    if (state.activeChatRunId || state.pendingChatRunId || state.pendingOptimisticUserMessage) {
+    if (state.activeChatRunId || hasPendingSubmit(state)) {
       return;
     }
     clearTrackedRunState();
@@ -350,9 +349,7 @@ export function createEventHandlers(context: EventHandlerContext) {
   };
 
   const markSubmittedRunRegistered = (runId: string) => {
-    if (state.pendingSubmitDraft?.runId === runId) {
-      state.pendingSubmitDraft = null;
-    }
+    clearPendingSubmitDraft(state, runId);
   };
 
   const noteFinalizedRun = (runId: string, opts?: { displayedFinal?: boolean }) => {
@@ -500,7 +497,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (
       params.requireActiveOrPending === true &&
       !wasActiveRun &&
-      state.pendingChatRunId !== runId
+      getPendingSubmitAcceptedRunId(state) !== runId
     ) {
       return false;
     }
@@ -545,7 +542,8 @@ export function createEventHandlers(context: EventHandlerContext) {
       wasPendingChatRun?: boolean;
     },
   ) => {
-    const isPendingChatRun = opts?.wasPendingChatRun === true || state.pendingChatRunId === runId;
+    const isPendingChatRun =
+      opts?.wasPendingChatRun === true || getPendingSubmitAcceptedRunId(state) === runId;
     const isLocalRun = isLocalRunId?.(runId) ?? false;
     if (isLocalRun) {
       forgetLocalRunId?.(runId);
@@ -560,7 +558,7 @@ export function createEventHandlers(context: EventHandlerContext) {
         return;
       }
     }
-    if (!isPendingChatRun && (state.pendingChatRunId || state.pendingOptimisticUserMessage)) {
+    if (!isPendingChatRun && hasPendingSubmit(state)) {
       pendingHistoryRefresh = true;
       return;
     }
@@ -722,22 +720,22 @@ export function createEventHandlers(context: EventHandlerContext) {
     chatLog.dismissPendingSystem(evt.runId);
     noteSessionRun(evt.runId);
     markSubmittedRunRegistered(evt.runId);
-    const isPendingChatRun = state.pendingChatRunId === evt.runId;
+    const isPendingChatRun = getPendingSubmitAcceptedRunId(state) === evt.runId;
     const isLocalChatRun = isLocalRunId?.(evt.runId) ?? false;
     const isLocalBtwRun = isLocalBtwRunId?.(evt.runId) ?? false;
     const isNewOptimisticRun =
-      state.pendingOptimisticUserMessage &&
+      hasPendingSubmit(state) &&
       !isLocalBtwRun &&
       (isPendingChatRun || (isLocalChatRun && evt.runId !== state.activeChatRunId));
     if (isNewOptimisticRun) {
       noteLocalRunId?.(evt.runId);
-      state.pendingOptimisticUserMessage = false;
+      clearPendingSubmit(state, evt.runId);
     }
     if (!state.activeChatRunId && !isLocalBtwRun) {
       state.activeChatRunId = evt.runId;
     }
     if (isPendingChatRun) {
-      state.pendingChatRunId = null;
+      clearPendingSubmit(state, evt.runId);
     }
     if (evt.state === "delta") {
       // Arm watchdog and mark streaming on every delta, even when the visible
@@ -914,8 +912,9 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (state.activeChatRunId) {
       runIds.add(state.activeChatRunId);
     }
-    if (state.pendingChatRunId) {
-      runIds.add(state.pendingChatRunId);
+    const pendingRunId = getPendingSubmitAcceptedRunId(state);
+    if (pendingRunId) {
+      runIds.add(pendingRunId);
     }
     const finalizedRunIds = new Set(finalizedRuns.keys());
     const displayedRunIds = new Set(finalizedRunsWithDisplay.keys());
@@ -1030,7 +1029,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     // when none is held, so a concurrent user run keeps the indicator.
     const isUntrackedRun =
       evt.runId !== state.activeChatRunId &&
-      evt.runId !== state.pendingChatRunId &&
+      evt.runId !== getPendingSubmitAcceptedRunId(state) &&
       !sessionRuns.has(evt.runId) &&
       !finalizedRuns.has(evt.runId);
     if (
@@ -1052,7 +1051,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     // active chat run id, not the session id. Tool results can arrive after the chat
     // final event, so accept finalized runs for tool updates.
     const isActiveRun = evt.runId === state.activeChatRunId;
-    const isPendingRun = evt.runId === state.pendingChatRunId;
+    const isPendingRun = evt.runId === getPendingSubmitAcceptedRunId(state);
     const isSessionRun = sessionRuns.has(evt.runId);
     if ((isActiveRun || isPendingRun || isSessionRun) && applyFallbackStepModelUpdate(evt)) {
       if (isActiveRun) {
@@ -1105,14 +1104,12 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
     if (evt.stream === "lifecycle") {
       if (isPendingRun) {
+        // Exact run ownership matters: concurrent clients share this event stream.
         noteSessionRun(evt.runId);
         markSubmittedRunRegistered(evt.runId);
         state.activeChatRunId = evt.runId;
-        state.pendingChatRunId = null;
-        if (state.pendingOptimisticUserMessage) {
-          noteLocalRunId?.(evt.runId);
-          state.pendingOptimisticUserMessage = false;
-        }
+        noteLocalRunId?.(evt.runId);
+        clearPendingSubmit(state, evt.runId);
       }
       const phase = typeof evt.data?.phase === "string" ? evt.data.phase : "";
       if (phase && phase !== "error") {
@@ -1244,3 +1241,4 @@ export function createEventHandlers(context: EventHandlerContext) {
     dispose,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

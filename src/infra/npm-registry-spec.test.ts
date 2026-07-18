@@ -5,7 +5,6 @@ import {
   formatPrereleaseResolutionError,
   isExactSemverVersion,
   isOpenClawOrgNpmSpec,
-  isOpenClawStableCorrectionVersion,
   isPrereleaseSemverVersion,
   isPrereleaseResolutionAllowed,
   parseRegistryNpmSpec,
@@ -136,20 +135,13 @@ describe("npm registry spec parsing helpers", () => {
   });
 
   it.each([
-    { value: "2026.5.3-1", expected: true },
-    { value: "2026.5.3-2", expected: true },
-    { value: "2026.5.3-beta.1", expected: false },
-    { value: "1.2.3-1", expected: false },
-    { value: "2026.2.30-1", expected: true },
-  ])("detects OpenClaw stable correction versions for %s", ({ value, expected }) => {
-    expect(isOpenClawStableCorrectionVersion(value)).toBe(expected);
-  });
-
-  it.each([
     { left: "2026.5.3-1", right: "2026.5.3", expected: 1 },
     { left: "2026.5.3-2", right: "2026.5.3-1", expected: 1 },
     { left: "2026.5.3", right: "2026.5.3-beta.3", expected: 1 },
     { left: "2026.5.3-beta.3", right: "2026.5.3-alpha.9", expected: 1 },
+    { left: "2026.5.3-alpha.10", right: "2026.5.3-alpha.2", expected: 1 },
+    { left: "2026.5.3-0", right: "2026.5.3", expected: null },
+    { left: "2026.5.3+build", right: "2026.5.3", expected: null },
     { left: "1.2.3-1", right: "1.2.3", expected: null },
   ])("compares OpenClaw release versions for %s and %s", ({ left, right, expected }) => {
     expect(compareOpenClawReleaseVersions(left, right)).toBe(expected);

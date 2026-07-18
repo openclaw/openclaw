@@ -1,3 +1,4 @@
+import type { AgentPlanStep } from "../channels/streaming.js";
 // Gateway chat run state registries.
 // Tracks active runs, delta buffers, tool recipients, and session subscribers.
 import type { AgentEventPayload } from "../infra/agent-events.js";
@@ -82,6 +83,11 @@ export type BufferedAgentEvent = {
   payload: AgentEventPayload & { spawnedBy?: string };
 };
 
+export type ChatRunPlanSnapshot = {
+  steps: AgentPlanStep[];
+  explanation?: string;
+};
+
 export type ChatRunRegistry = {
   add: (sessionId: string, entry: ChatRunRegistration) => void;
   peek: (sessionId: string) => ChatRunEntry | undefined;
@@ -148,6 +154,7 @@ export type ChatRunState = {
   registry: ChatRunRegistry;
   rawBuffers: Map<string, string>;
   buffers: Map<string, string>;
+  planSnapshots: Map<string, ChatRunPlanSnapshot>;
   /** Last time any buffered assistant text changed, including suppressed raw buffers. */
   bufferUpdatedAt: Map<string, number>;
   deltaSentAt: Map<string, number>;
@@ -166,6 +173,7 @@ export function createChatRunState(): ChatRunState {
   const registry = createChatRunRegistry();
   const rawBuffers = new Map<string, string>();
   const buffers = new Map<string, string>();
+  const planSnapshots = new Map<string, ChatRunPlanSnapshot>();
   const bufferUpdatedAt = new Map<string, number>();
   const deltaSentAt = new Map<string, number>();
   const deltaLastBroadcastLen = new Map<string, number>();
@@ -177,6 +185,7 @@ export function createChatRunState(): ChatRunState {
   const clearRun = (runId: string) => {
     rawBuffers.delete(runId);
     buffers.delete(runId);
+    planSnapshots.delete(runId);
     bufferUpdatedAt.delete(runId);
     deltaSentAt.delete(runId);
     deltaLastBroadcastLen.delete(runId);
@@ -191,6 +200,7 @@ export function createChatRunState(): ChatRunState {
     registry.clear();
     rawBuffers.clear();
     buffers.clear();
+    planSnapshots.clear();
     bufferUpdatedAt.clear();
     deltaSentAt.clear();
     deltaLastBroadcastLen.clear();
@@ -204,6 +214,7 @@ export function createChatRunState(): ChatRunState {
     registry,
     rawBuffers,
     buffers,
+    planSnapshots,
     bufferUpdatedAt,
     deltaSentAt,
     deltaLastBroadcastLen,

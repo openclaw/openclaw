@@ -8,10 +8,7 @@ import type {
 } from "../../plugin-sdk/provider-model-types.js";
 import type { AgentHarnessRuntimeArtifactBinding } from "./runtime-artifact.types.js";
 
-export type {
-  AgentHarnessRuntimeArtifactBinding,
-  ExpectedAgentHarnessRuntimeArtifact,
-} from "./runtime-artifact.types.js";
+export type { AgentHarnessRuntimeArtifactBinding } from "./runtime-artifact.types.js";
 
 export type AgentHarnessPreparedAuthSupport = {
   source: "profile" | "direct" | "harness" | "none";
@@ -62,14 +59,6 @@ export type AgentHarnessAuthBindingFingerprintParams = {
   agentDir: string;
   config?: import("../../config/types.openclaw.js").OpenClawConfig;
 };
-export type AgentHarnessSideQuestionPreparedRuntimeAuth = {
-  plan: import("../runtime-plan/types.js").AgentRuntimeAuthPlan;
-  authProfileStore: import("../auth-profiles/types.js").AuthProfileStore;
-  authStorage: import("../sessions/index.js").AuthStorage;
-  modelRegistry: import("../sessions/index.js").ModelRegistry;
-  /** Resolved host credential for an immutable API-key route only. */
-  resolvedApiKey?: string;
-};
 export type AgentHarnessSideQuestionParams = {
   cfg: import("../../config/types.openclaw.js").OpenClawConfig;
   agentDir: string;
@@ -77,7 +66,14 @@ export type AgentHarnessSideQuestionParams = {
   model: string;
   runtimeModel?: import("openclaw/plugin-sdk/llm").Model<import("openclaw/plugin-sdk/llm").Api>;
   /** One atomic route/profile/store snapshot prepared before native dispatch. */
-  preparedRuntimeAuth: AgentHarnessSideQuestionPreparedRuntimeAuth;
+  preparedRuntimeAuth: {
+    plan: import("../runtime-plan/types.js").AgentRuntimeAuthPlan;
+    authProfileStore: import("../auth-profiles/types.js").AuthProfileStore;
+    authStorage: import("../sessions/index.js").AuthStorage;
+    modelRegistry: import("../sessions/index.js").ModelRegistry;
+    /** Resolved host credential for an immutable API-key route only. */
+    resolvedApiKey?: string;
+  };
   question: string;
   sessionEntry: import("../../config/sessions.js").SessionEntry;
   sessionStore?: Record<string, import("../../config/sessions.js").SessionEntry>;
@@ -137,9 +133,10 @@ export type AgentHarnessResultClassification =
   | NonNullable<AgentHarnessAttemptResult["agentHarnessResultClassification"]>;
 
 export type AgentHarnessDeliveryDefaults = {
+  /** Default visible-reply policy when config does not override the harness. */
+  visibleReplies?: "automatic" | "message_tool";
   /**
-   * @deprecated Prefer `messages.visibleReplies` / `messages.groupChat.visibleReplies`
-   * config. Kept for existing harness plugins.
+   * @deprecated Use visibleReplies. Kept for existing harness plugins.
    */
   sourceVisibleReplies?: "automatic" | "message_tool";
 };
@@ -148,6 +145,11 @@ type AgentHarnessRunCapability = {
   id: string;
   label: string;
   pluginId?: string;
+  /**
+   * Exhaustive provider ids eligible for automatic selection. Omitting this hint preserves
+   * dynamic probing; an empty list marks an explicit-only harness.
+   */
+  autoSelection?: { providerIds: readonly string[] };
   /**
    * Plugin ids this harness owner permits to execute its locked sessions.
    * Delegates receive work admission and execution only; session mutation stays owner-only.
@@ -200,12 +202,29 @@ type AgentHarnessAuthBindingCapability = {
   };
 };
 
+type AgentHarnessProviderUsageCapability = {
+  /**
+   * Contributes runtime-owned quota data without registering a text provider.
+   * Provider usage hooks remain authoritative when both surfaces exist.
+   */
+  fetchUsageSnapshot?: (
+    ctx: import("../../plugins/provider-runtime.types.js").ProviderFetchUsageSnapshotContext,
+  ) =>
+    | Promise<
+        import("../../infra/provider-usage.types.js").ProviderUsageSnapshot | null | undefined
+      >
+    | import("../../infra/provider-usage.types.js").ProviderUsageSnapshot
+    | null
+    | undefined;
+};
+
 export type AgentHarness = AgentHarnessRunCapability &
   AgentHarnessSideQuestionCapability &
   AgentHarnessClassificationCapability &
   AgentHarnessCompactionCapability &
   AgentHarnessRuntimeArtifactCapability &
   AgentHarnessAuthBindingCapability &
+  AgentHarnessProviderUsageCapability &
   AgentHarnessSessionLifecycleCapability;
 
 export type RegisteredAgentHarness = {

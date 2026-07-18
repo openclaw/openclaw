@@ -496,7 +496,7 @@ function removeAuthOrderKeys(cfg: OpenClawConfig, providers: ReadonlySet<string>
 }
 
 /** Find nonempty config orders that only reference removed profiles. */
-export function scanStaleConfiguredAuthOrders(params: {
+function scanStaleConfiguredAuthOrders(params: {
   cfg: OpenClawConfig;
   stores: readonly AuthProfileStore[];
   activeStores?: readonly AuthProfileStore[];
@@ -558,7 +558,7 @@ export function scanStaleConfiguredAuthOrders(params: {
 }
 
 /** Remove provably stale config orders and restore per-agent automatic selection. */
-export function repairStaleConfiguredAuthOrders(params: {
+function repairStaleConfiguredAuthOrders(params: {
   cfg: OpenClawConfig;
   stores: readonly AuthProfileStore[];
   activeStores?: readonly AuthProfileStore[];
@@ -615,4 +615,10 @@ export function collectStaleConfiguredAuthOrderWarnings(params: {
     (hit) =>
       `- auth.order.${hit.provider} references only missing profiles while compatible stored credentials exist; run ${params.doctorFixCommand} to remove the stale override and restore automatic selection.`,
   );
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.staleAuthOrderTestApi")] = {
+    repairStaleConfiguredAuthOrders,
+  };
 }
