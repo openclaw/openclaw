@@ -15,12 +15,55 @@ const EXACT_NPM_ALIAS_PATTERN =
 const PINNED_GIT_PATTERN = /(?:#|\/commit\/)[0-9a-f]{40}$/iu;
 const PINNED_GITHUB_TARBALL_PATTERN =
   /^https:\/\/codeload\.github\.com\/[^/\s]+\/[^/\s]+\/tar\.gz\/[0-9a-f]{40}$/iu;
+const DEFAULT_GIT_TIMEOUT_MS = 60_000;
+const MAX_GIT_TIMEOUT_MS = 10 * 60_000;
+const GIT_TIMEOUT_ENV = "OPENCLAW_DEPENDENCY_PINS_GIT_TIMEOUT_MS";
+
+function resolveGitTimeoutMs(env = process.env) {
+  const raw = env[GIT_TIMEOUT_ENV]?.trim();
+  if (!raw) {
+    return DEFAULT_GIT_TIMEOUT_MS;
+  }
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    return DEFAULT_GIT_TIMEOUT_MS;
+  }
+  return Math.min(parsed, MAX_GIT_TIMEOUT_MS);
+}
+
+const gitTimeoutMs = resolveGitTimeoutMs();
+
+function formatGitArgs(args) {
+  return args.join(" ");
+}
+
+function createGitError(args, error) {
+  const timedOut =
+    error?.code === "ETIMEDOUT" ||
+    error?.signal === "SIGTERM" ||
+    /timed out|timeout/i.test(String(error?.message ?? ""));
+  return new Error(
+    timedOut
+      ? `dependency pin guard: git ${formatGitArgs(args)} timed out after ${gitTimeoutMs}ms.`
+      : `dependency pin guard: git ${formatGitArgs(args)} failed.`,
+    { cause: error },
+  );
+}
+
+function runGit(cwd, args) {
+  try {
+    return execFileSync("git", args, {
+      cwd,
+      encoding: "utf8",
+      timeout: gitTimeoutMs,
+    });
+  } catch (error) {
+    throw createGitError(args, error);
+  }
+}
 
 function listTrackedPackageJsonFiles(cwd) {
-  return execFileSync("git", ["ls-files", "-z", "--", "*package.json"], {
-    cwd,
-    encoding: "utf8",
-  })
+  return runGit(cwd, ["ls-files", "-z", "--", "*package.json"])
     .split("\0")
     .filter(Boolean)
     .toSorted((left, right) => left.localeCompare(right));
@@ -35,12 +78,7 @@ function readTrackedJson(cwd, relativePath) {
   if (fs.existsSync(filePath)) {
     return readJson(filePath);
   }
-  return JSON.parse(
-    execFileSync("git", ["show", `:${relativePath}`], {
-      cwd,
-      encoding: "utf8",
-    }),
-  );
+  return JSON.parse(runGit(cwd, ["show", `:${relativePath}`]));
 }
 
 function isAllowedPinnedSpec(spec) {
@@ -166,7 +204,7 @@ export async function main() {
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main().catch(
     /** @param {unknown} error */ (error) => {
-      console.error(error);
+      console.error(error instanceof Error ? error.message : String(error));
       process.exit(1);
     },
   );

@@ -1,5 +1,5 @@
 // Check Dependency Pins tests cover check dependency pins script behavior.
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -7,6 +7,7 @@ import { collectDependencyPinViolations } from "../../scripts/check-dependency-p
 import { cleanupTempDirs, makeTempRepoRoot } from "../helpers/temp-repo.js";
 
 const tempDirs: string[] = [];
+const scriptPath = path.resolve("scripts/check-dependency-pins.mjs");
 
 const nestedGitEnvKeys = [
   "GIT_ALTERNATE_OBJECT_DIRECTORIES",
@@ -159,6 +160,36 @@ packageExtensions:
     rmSync(path.join(dir, "qa"), { recursive: true, force: true });
 
     expect(collectDependencyPinViolations(dir)).toEqual([]);
+  });
+
+  it("fails with an actionable timeout when git ls-files hangs", () => {
+    const tempDir = makeTempRepoRoot(tempDirs, "openclaw-dependency-pins-timeout-");
+    const binDir = path.join(tempDir, "bin");
+    mkdirSync(binDir);
+    writeFileSync(
+      path.join(binDir, "git"),
+      [
+        `#!${process.execPath}`,
+        'if (process.argv[2] === "ls-files") { setTimeout(() => {}, 10_000); }',
+        "else { process.exit(0); }",
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+
+    const result = spawnSync(process.execPath, [scriptPath], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OPENCLAW_DEPENDENCY_PINS_GIT_TIMEOUT_MS: "500",
+        PATH: binDir,
+      },
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "dependency pin guard: git ls-files -z -- *package.json timed out after 500ms.",
+    );
   });
 
   it("rejects floating workspace overrides and package extension dependencies", () => {
