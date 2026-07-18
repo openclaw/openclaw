@@ -8,7 +8,7 @@ import {
   streamOpenAICodexResponses,
 } from "./openai-chatgpt-responses.js";
 
-function createJwt(payload: Record<string, unknown>): string {
+function createTestJwt(payload: Record<string, unknown>): string {
   const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
   const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
   return `${header}.${body}.signature`;
@@ -41,7 +41,7 @@ describe("streamOpenAICodexResponses retry classification", () => {
     messages: [{ role: "user", content: "hi", timestamp: 1 }],
   } satisfies Context;
 
-  const apiKey = createJwt({
+  const jwt = createTestJwt({
     "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
   });
 
@@ -62,7 +62,7 @@ describe("streamOpenAICodexResponses retry classification", () => {
       const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
 
       const result = await streamOpenAICodexResponses(model, context, {
-        apiKey,
+        apiKey: jwt,
         transport: "sse",
       }).result();
 
@@ -90,7 +90,7 @@ describe("streamOpenAICodexResponses retry classification", () => {
     });
 
     const result = await streamOpenAICodexResponses(model, context, {
-      apiKey,
+      apiKey: jwt,
       transport: "sse",
     }).result();
 
@@ -106,7 +106,7 @@ describe("streamOpenAICodexResponses retry classification", () => {
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
 
     const result = await streamOpenAICodexResponses(model, context, {
-      apiKey,
+      apiKey: jwt,
       transport: "sse",
     }).result();
 
