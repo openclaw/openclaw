@@ -150,7 +150,7 @@ function formatHookMissingSummary(hook: HookStatusEntry): string {
 function exitHooksCliWithError(err: unknown): never {
   defaultRuntime.error(`${theme.error("Error:")} ${formatErrorMessage(err)}`);
   defaultRuntime.exit(1);
-  throw new Error("unreachable"); // satisfies never return type, tests when mocked
+  throw new Error("unreachable");
 }
 
 function writeHooksOutput(value: string, json: boolean | undefined): void {

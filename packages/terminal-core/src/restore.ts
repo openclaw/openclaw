@@ -74,7 +74,7 @@ export function restoreTerminalState(
     try {
       resetStream.write(RESET_SEQUENCE);
     } catch (err) {
-      reportRestoreFailure("stdout reset", err, reason);
+      reportRestoreFailure("terminal reset", err, reason);
     }
   }
 }

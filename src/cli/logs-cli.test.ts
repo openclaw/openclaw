@@ -1,6 +1,7 @@
 // Logs CLI tests cover log command routing and runtime log output behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayTransportError } from "../gateway/call.js";
+import type { RuntimeExitOptions } from "../runtime.js";
 import { runRegisteredCli } from "../test-utils/command-runner.js";
 import { formatLogTimestamp, registerLogsCli } from "./logs-cli.js";
 
@@ -105,9 +106,7 @@ vi.mock("../runtime.js", async () => {
     ...actual,
     defaultRuntime: {
       ...actual.defaultRuntime,
-      // Override exit to not throw after process.exit — tests mock process.exit
-      // so the unreachable throw in the real exit would escape unhandled.
-      exit: vi.fn((code: number, opts?: { resetStream?: NodeJS.WriteStream }) => {
+      exit: vi.fn((code: number, opts?: RuntimeExitOptions) => {
         terminalRestore.restoreTerminalState("runtime exit", {
           resumeStdinIfPaused: false,
           resetStream: opts?.resetStream,

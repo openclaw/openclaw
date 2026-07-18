@@ -2,6 +2,11 @@
 import { clearActiveProgressLine } from "../packages/terminal-core/src/progress-line.js";
 import { restoreTerminalState } from "../packages/terminal-core/src/restore.js";
 
+export type RuntimeExitOptions = {
+  /** Route ANSI terminal-reset bytes away from structured stdout when needed. */
+  resetStream?: NodeJS.WriteStream;
+};
+
 export type RuntimeEnv = {
   log: (...args: unknown[]) => void;
   error: (...args: unknown[]) => void;
@@ -10,7 +15,7 @@ export type RuntimeEnv = {
    * Pass `resetStream` to route the ANSI reset sequence to a specific
    * stream (e.g. stderr) when structured output on stdout must stay clean.
    */
-  exit: (code: number, opts?: { resetStream?: NodeJS.WriteStream }) => void;
+  exit: (code: number, opts?: RuntimeExitOptions) => void;
 };
 
 export type OutputRuntimeEnv = RuntimeEnv & {
@@ -117,7 +122,7 @@ export class ExitError extends Error {
 export function createNonExitingRuntime(): OutputRuntimeEnv {
   return {
     ...createRuntimeIo(),
-    exit: (code: number, _opts?: { resetStream?: NodeJS.WriteStream }) => {
+    exit: (code: number, _opts?: RuntimeExitOptions) => {
       throw new ExitError(code);
     },
   };
