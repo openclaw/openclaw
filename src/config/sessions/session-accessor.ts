@@ -88,6 +88,9 @@ export type {
   SessionTranscriptTurnPersistResult,
   SessionTranscriptTurnUpdateMode,
   SessionTranscriptTurnWriteContext,
+  SessionTranscriptVisibleMessageDeltaLimits,
+  SessionTranscriptVisibleMessageDeltaResult,
+  SessionTranscriptVisibleMessageEventRow,
   SessionTranscriptWriteLockAccessorContext,
   SessionTranscriptWriteScope,
   SessionTranscriptWriteTransactionContext,
@@ -195,6 +198,7 @@ export {
   readSessionTranscriptMessageEventCount,
   readSessionTranscriptMessageEventPage,
   readSessionTranscriptMessageEvents,
+  readSessionTranscriptVisibleMessageDelta,
   SessionTranscriptProjectionUnavailableError,
 } from "./session-accessor.sqlite-active-events.js";
 export type {

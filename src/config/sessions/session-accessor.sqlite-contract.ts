@@ -89,6 +89,8 @@ export type SessionTranscriptEventRow = {
 export type {
   SessionTranscriptRawDeltaLimits,
   SessionTranscriptRawDeltaResult,
+  SessionTranscriptVisibleMessageDeltaLimits,
+  SessionTranscriptVisibleMessageDeltaResult,
 } from "./session-accessor.types.js";
 
 export type TranscriptMessageAppendOptions<TMessage> = {

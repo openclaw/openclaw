@@ -272,7 +272,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // Harvest: internal question runtime exports -2.
       // +1: ingress-effect-once factory.
       // +3: bounded raw transcript cursor request, result, and reader.
-      8161,
+      // +3: bounded visible transcript cursor request, result, and reader.
+      8164,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -314,7 +315,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // Harvest: internal question runtime callable -1.
       // +1: ingress-effect-once factory.
       // +1: bounded raw transcript cursor reader.
-      4541,
+      // +1: bounded visible transcript cursor reader.
+      4542,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

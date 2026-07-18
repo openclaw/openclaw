@@ -1,10 +1,12 @@
 import { redactTranscriptMessage } from "../agents/transcript-redact.js";
 import {
   appendTranscriptMessage,
+  isSessionTranscriptProjectionUnavailableError,
   loadSessionEntry,
   loadTranscriptEvents,
   publishTranscriptUpdate,
   readTranscriptRawDelta,
+  readSessionTranscriptVisibleMessageDelta as readVisibleMessageDelta,
   readLatestTranscriptAssistantText,
   resolveSessionTranscriptRuntimeReadTarget,
   resolveSessionTranscriptRuntimeTarget,
@@ -14,6 +16,7 @@ import {
   type TranscriptUpdatePayload,
   type SessionTranscriptRawDeltaLimits,
   type SessionTranscriptRawDeltaResult,
+  type SessionTranscriptVisibleMessageDeltaLimits,
 } from "../config/sessions/session-accessor.js";
 import { resolveMirroredTranscriptText } from "../config/sessions/transcript-mirror.js";
 import {
@@ -65,6 +68,40 @@ export type SessionTranscriptTargetParams = SessionTranscriptReadParams;
 export type SessionTranscriptRawDeltaParams = SessionTranscriptTargetParams &
   SessionTranscriptRawDeltaLimits;
 export type { SessionTranscriptRawDeltaResult };
+
+/** Scoped target and bounds for one active-path visible-message page. */
+export type SessionTranscriptVisibleMessageDeltaParams = SessionTranscriptTargetParams &
+  SessionTranscriptVisibleMessageDeltaLimits;
+
+/** Generation-aware outcome for one bounded visible-message read. */
+export type SessionTranscriptVisibleMessageDeltaResult =
+  | {
+      kind: "page";
+      /** Opaque cursor positioned after the last returned visible message. */
+      cursor: string;
+      /** Ordered active-path message entries selected for this page. */
+      entries: SessionTranscriptMessageEntry[];
+      /** True when another visible message remains after this page. */
+      hasMore: boolean;
+      /** First unread event size when it cannot fit under maxBytes. */
+      requiredBytes?: number;
+      /** Stored JSONL bytes represented by entries. */
+      serializedBytes: number;
+    }
+  | {
+      kind: "reset";
+      /** Fresh opaque bootstrap cursor for the current visible generation. */
+      cursor: string;
+      /** Stable discontinuity that invalidated the supplied cursor. */
+      reason:
+        | "anchor_missing"
+        | "anchor_moved"
+        | "generation_mismatch"
+        | "invalid_cursor"
+        | "scope_mismatch";
+    }
+  | { kind: "unavailable"; reason: "projection_rebuilding" }
+  | { kind: "missing" };
 
 export type SessionTranscriptMessageEntry = {
   /** Stable transcript event id for this message entry. */
@@ -165,6 +202,40 @@ export async function readSessionTranscriptRawDelta(
     ...(maxBytes !== undefined ? { maxBytes } : {}),
     ...(maxEvents !== undefined ? { maxEvents } : {}),
   });
+}
+
+/** Reads one bounded active-path page that resumes appends and resets after discontinuities. */
+export async function readSessionTranscriptVisibleMessageDelta(
+  params: SessionTranscriptVisibleMessageDeltaParams,
+): Promise<SessionTranscriptVisibleMessageDeltaResult> {
+  const { cursor, maxBytes, maxMessages, ...target } = params;
+  let result: ReturnType<typeof readVisibleMessageDelta>;
+  try {
+    result = readVisibleMessageDelta(target, {
+      ...(cursor !== undefined ? { cursor } : {}),
+      ...(maxBytes !== undefined ? { maxBytes } : {}),
+      ...(maxMessages !== undefined ? { maxMessages } : {}),
+    });
+  } catch (error) {
+    if (isSessionTranscriptProjectionUnavailableError(error)) {
+      return { kind: "unavailable", reason: "projection_rebuilding" };
+    }
+    throw error;
+  }
+  if (result.kind !== "page") {
+    return result;
+  }
+  const { events, ...page } = result;
+  return {
+    ...page,
+    entries: events.flatMap((entry) =>
+      projectVisibleMessageEntry({
+        event: entry.event,
+        parentId: entry.parentId,
+        seq: entry.seq,
+      }),
+    ),
+  };
 }
 
 /**
