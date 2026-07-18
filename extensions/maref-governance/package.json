@@ -1,0 +1,27 @@
+{
+  "name": "@openclaw/maref-governance",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MAREF Governance Plugin — AI agent safety enforcement with fail-closed guardrails via external MAREF sidecar",
+  "type": "module",
+  "dependencies": {
+    "@maref-org/sdk": "^0.2.0"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.7.2"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "openclaw": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "id": "maref-governance",
+  "name": "MAREF Governance",
+  "description": "Multi-Agent Recursive Evolution Framework governance enforcement. Intercepts file writes and command execution to enforce policies via a MAREF sidecar.",
+  "kind": "plugin",
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "sidecarUrl": {
+        "type": "string",
+        "description": "MAREF sidecar URL (default: http://localhost:8000)",
+        "default": "http://localhost:8000"
+      },
+      "mode": {
+        "type": "string",
+        "enum": ["enforcing", "advisory", "logging"],
+        "description": "Governance enforcement mode",
+        "default": "enforcing"
+      },
+      "failClosed": {
+        "type": "boolean",
+        "description": "Block operations when sidecar is unreachable (enforcing mode only)",
+        "default": true
+      },
+      "sensitivePaths": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Additional sensitive file patterns for read protection",
+        "default": []
+      }
+    }
+  }
+}
