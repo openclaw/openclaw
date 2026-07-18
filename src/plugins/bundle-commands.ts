@@ -109,7 +109,13 @@ function loadBundleCommandsFromRoot(params: {
       raw = readRegularFileSync({ filePath, maxBytes: BUNDLE_COMMAND_MAX_BYTES }).buffer.toString(
         "utf-8",
       );
-    } catch {
+    } catch (error) {
+      // Log oversized or unreadable command files so upgrades do not
+      // silently remove installed commands; still skip and continue.
+      console.warn(
+        `[bundle-commands] skipping unreadable command file: ${filePath}`,
+        error instanceof Error ? error.message : String(error),
+      );
       continue;
     }
     const frontmatter = parseFrontmatterBlock(raw);
