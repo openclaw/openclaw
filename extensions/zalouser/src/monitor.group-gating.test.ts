@@ -439,7 +439,12 @@ describe("zalouser monitor group mention gating", () => {
   ) {
     installRuntime({ commandAuthorized: false });
     const abortController = new AbortController();
-    abortController.abort();
+    // Let preflight finish, then stop during listener startup so this helper
+    // still exercises startup resolution instead of the pre-abort return.
+    startZaloListenerMock.mockImplementationOnce(async () => {
+      abortController.abort();
+      return { stop: vi.fn() };
+    });
     await monitorZalouserProvider({
       account: {
         ...createAccount(),

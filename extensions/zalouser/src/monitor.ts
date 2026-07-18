@@ -764,6 +764,12 @@ export async function monitorZalouserProvider(
   );
   const groupHistories = new Map<string, HistoryEntry[]>();
 
+  // AbortSignal does not replay past aborts; shutdown must win before any
+  // startup API calls or listener restoration.
+  if (abortSignal.aborted) {
+    return { stop: () => undefined };
+  }
+
   try {
     const profile = account.profile;
     const allowFromEntries = (account.config.allowFrom ?? [])
@@ -855,6 +861,12 @@ export async function monitorZalouserProvider(
     }
   } catch (err) {
     runtime.log?.(`zalouser resolve failed; using config entries. ${String(err)}`);
+  }
+
+  // Preflight is async and not cancellable, so recheck before restoring the listener.
+  // No await occurs between this guard and abort listener registration below.
+  if (abortSignal.aborted) {
+    return { stop: () => undefined };
   }
 
   let listenerStop: (() => void) | null = null;
