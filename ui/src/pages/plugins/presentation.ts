@@ -85,6 +85,7 @@ const PLUGIN_ART_SLUGS: ReadonlySet<string> = new Set([
   "litellm",
   "llama-cpp",
   "llm-task",
+  "llmtr",
   "lmstudio",
   "lobster",
   "logbook",

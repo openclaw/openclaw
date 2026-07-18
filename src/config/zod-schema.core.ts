@@ -464,6 +464,7 @@ const BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS = new Set([
   "kimi",
   "kimi-coding",
   "litellm",
+  "llmtr",
   "lmstudio",
   "meta",
   "microsoft-foundry",
