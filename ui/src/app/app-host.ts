@@ -1502,8 +1502,7 @@ class OpenClawShell extends OpenClawLightDomElement {
           .props=${{
             queue: overlaySnapshot.approvalQueue,
             busy: overlaySnapshot.approvalBusy,
-            error: overlaySnapshot.approvalError,
-            errorId: overlaySnapshot.approvalErrorId,
+            errors: overlaySnapshot.approvalErrors,
             nowMs: overlaySnapshot.approvalNowMs,
             inlineApprovalId: inlineApproval?.id ?? null,
             onDecision: (

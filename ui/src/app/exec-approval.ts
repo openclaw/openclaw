@@ -45,8 +45,7 @@ export type ExecApprovalPromptState = {
   } | null;
   execApprovalQueue: ExecApprovalRequest[];
   execApprovalBusy: boolean;
-  execApprovalError: string | null;
-  execApprovalErrorId?: string | null;
+  execApprovalErrors: Map<string, string>;
   execApprovalNowMs?: number;
   execApprovalRefreshes?: Set<{ removedIds: Set<string> }>;
   execApprovalExpiryTimers?: Map<string, ReturnType<typeof globalThis.setTimeout>>;
@@ -423,15 +422,17 @@ function scheduleApprovalExpiryPrune(
 
 function removeExecApprovalFromState(state: ExecApprovalPromptState, id: string): void {
   clearApprovalExpiryTimer(state, id);
-  const activeId = state.execApprovalQueue[0]?.id ?? null;
   state.execApprovalQueue = removeExecApproval(state.execApprovalQueue, id);
+  state.execApprovalErrors.delete(id);
   synchronizeApprovalCountdownTimer(state);
-  if (
-    state.execApprovalErrorId === id ||
-    (!state.execApprovalErrorId && activeId !== (state.execApprovalQueue[0]?.id ?? null))
-  ) {
-    state.execApprovalError = null;
-    state.execApprovalErrorId = null;
+}
+
+function pruneExecApprovalErrors(state: ExecApprovalPromptState): void {
+  const pendingIds = new Set(state.execApprovalQueue.map((entry) => entry.id));
+  for (const id of state.execApprovalErrors.keys()) {
+    if (!pendingIds.has(id)) {
+      state.execApprovalErrors.delete(id);
+    }
   }
 }
 
@@ -448,16 +449,6 @@ export function enqueueExecApprovalPrompt(
   entry: ExecApprovalRequest,
 ): void {
   state.execApprovalQueue = addExecApproval(state.execApprovalQueue, entry);
-  // Oldest-first: a new arrival does not displace the active request, so a
-  // failure already shown for it must survive; errors are scoped by errorId
-  // and cleared when their request leaves the queue.
-  if (
-    state.execApprovalErrorId &&
-    !state.execApprovalQueue.some((item) => item.id === state.execApprovalErrorId)
-  ) {
-    state.execApprovalError = null;
-    state.execApprovalErrorId = null;
-  }
   scheduleApprovalExpiryPrune(state, entry);
   synchronizeApprovalCountdownTimer(state);
 }
@@ -507,6 +498,7 @@ export async function refreshPendingApprovalQueue(
       return false;
     }
     state.execApprovalQueue = refreshed;
+    pruneExecApprovalErrors(state);
     const refreshedIds = new Set(refreshed.map((entry) => entry.id));
     for (const id of state.execApprovalExpiryTimers?.keys() ?? []) {
       if (!refreshedIds.has(id)) {
@@ -526,9 +518,6 @@ export async function refreshPendingApprovalQueue(
   }
 }
 
-// Errors are cleared per-id inside removeExecApprovalFromState; clearing them
-// unconditionally here would erase another pending request's diagnostic when
-// an unrelated approval settles.
 export function clearResolvedExecApprovalPrompt(state: ExecApprovalPromptState, id: string): void {
   removeExecApprovalFromState(state, id);
   for (const refresh of state.execApprovalRefreshes ?? []) {

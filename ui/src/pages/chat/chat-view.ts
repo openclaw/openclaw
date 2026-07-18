@@ -124,7 +124,7 @@ export type ChatProps = {
   error: string | null;
   inlineApproval?: ExecApprovalRequest | null;
   approvalBusy?: boolean;
-  approvalError?: string | null;
+  approvalErrors?: ReadonlyMap<string, string>;
   approvalNowMs?: number;
   onApprovalDecision?: (approvalId: string, decision: ExecApprovalDecision) => void | Promise<void>;
   sessions: SessionsListResult | null;
@@ -596,7 +596,7 @@ export function renderChat(props: ChatProps) {
                     ${renderExecApprovalCard({
                       approval: props.inlineApproval,
                       busy: props.approvalBusy === true,
-                      error: props.approvalError ?? null,
+                      error: props.approvalErrors?.get(props.inlineApproval.id) ?? null,
                       nowMs: props.approvalNowMs ?? Date.now(),
                       variant: "inline",
                       onDecision: props.onApprovalDecision,

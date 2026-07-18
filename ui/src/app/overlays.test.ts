@@ -200,9 +200,70 @@ describe("application approval overlays", () => {
       "approval-active",
       "approval-newer",
     ]);
-    expect(overlays.snapshot.approvalError).toBe("Approval failed: gateway unavailable");
-    expect(overlays.snapshot.approvalErrorId).toBe("approval-active");
+    expect(overlays.snapshot.approvalErrors.get("approval-active")).toBe(
+      "Approval failed: gateway unavailable",
+    );
     expect(overlays.snapshot.approvalBusy).toBe(false);
+    overlays.dispose();
+  });
+
+  it("keeps A's failure visible after deciding B successfully", async () => {
+    const firstResolve = deferred();
+    const secondResolve = deferred();
+    let resolveCalls = 0;
+    const request = vi.fn<RequestFn>((method) => {
+      if (method.endsWith(".list")) {
+        return Promise.resolve([]);
+      }
+      resolveCalls += 1;
+      return resolveCalls === 1 ? firstResolve.promise : secondResolve.promise;
+    });
+    const harness = createGatewayHarness(client(request));
+    const overlays = createApplicationOverlays(harness.gateway);
+
+    harness.emitApproval("approval-a", 1_000);
+    harness.emitApproval("approval-b", 2_000);
+    const firstDecision = overlays.decideApproval("allow-once", "approval-a");
+    firstResolve.reject(new Error("gateway unavailable"));
+    await firstDecision;
+    expect(overlays.snapshot.approvalErrors.get("approval-a")).toBe(
+      "Approval failed: gateway unavailable",
+    );
+
+    const secondDecision = overlays.decideApproval("deny", "approval-b");
+    secondResolve.resolve({ ok: true });
+    await secondDecision;
+
+    expect(overlays.snapshot.approvalQueue.map((entry) => entry.id)).toEqual(["approval-a"]);
+    expect(overlays.snapshot.approvalErrors.get("approval-a")).toBe(
+      "Approval failed: gateway unavailable",
+    );
+    overlays.dispose();
+  });
+
+  it("clears an approval's error when that approval is retried", async () => {
+    const firstResolve = deferred();
+    let resolveCalls = 0;
+    const request = vi.fn<RequestFn>((method) => {
+      if (method.endsWith(".list")) {
+        return Promise.resolve([]);
+      }
+      resolveCalls += 1;
+      return resolveCalls === 1 ? firstResolve.promise : Promise.resolve({ ok: true });
+    });
+    const harness = createGatewayHarness(client(request));
+    const overlays = createApplicationOverlays(harness.gateway);
+
+    harness.emitApproval("approval-a", 1_000);
+    const failedDecision = overlays.decideApproval("allow-once");
+    firstResolve.reject(new Error("gateway unavailable"));
+    await failedDecision;
+    expect(overlays.snapshot.approvalErrors.has("approval-a")).toBe(true);
+
+    await overlays.decideApproval("allow-once");
+
+    expect(overlays.snapshot.approvalQueue).toEqual([]);
+    expect(overlays.snapshot.approvalErrors.has("approval-a")).toBe(false);
     overlays.dispose();
   });
 
@@ -250,7 +311,7 @@ describe("application approval overlays", () => {
     oldResolve.reject(new Error("gateway client stopped"));
     await oldDecision;
     expect(overlays.snapshot.approvalBusy).toBe(true);
-    expect(overlays.snapshot.approvalError).toBeNull();
+    expect(overlays.snapshot.approvalErrors).toEqual(new Map());
 
     newResolve.resolve({ ok: true });
     await newDecision;
@@ -297,7 +358,7 @@ describe("application approval overlays", () => {
     resolveAttempt.reject(new Error("disposed"));
     await decision;
 
-    expect(overlays.snapshot.approvalError).toBeNull();
+    expect(overlays.snapshot.approvalErrors).toEqual(new Map());
   });
 });
 

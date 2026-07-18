@@ -41,8 +41,7 @@ type ApplicationOverlaySnapshot = {
   updateStatusBanner: ApplicationStatusBanner | null;
   approvalQueue: readonly ExecApprovalRequest[];
   approvalBusy: boolean;
-  approvalError: string | null;
-  approvalErrorId: string | null;
+  approvalErrors: ReadonlyMap<string, string>;
   approvalNowMs: number;
   devicePairSetupOpen: boolean;
   devicePairSetupLoading: boolean;
@@ -223,8 +222,7 @@ export function createApplicationOverlays(
     updateStatusBanner: null,
     approvalQueue: [],
     approvalBusy: false,
-    approvalError: null,
-    approvalErrorId: null,
+    approvalErrors: new Map(),
     approvalNowMs: Date.now(),
     devicePairSetupOpen: false,
     devicePairSetupLoading: false,
@@ -259,8 +257,7 @@ export function createApplicationOverlays(
     client: activeClient,
     execApprovalQueue: [],
     execApprovalBusy: false,
-    execApprovalError: null,
-    execApprovalErrorId: null,
+    execApprovalErrors: new Map(),
     execApprovalNowMs: Date.now(),
     execApprovalExpiryTimers: new Map(),
   };
@@ -275,8 +272,7 @@ export function createApplicationOverlays(
       updateStatusBanner: snapshot.updateStatusBanner,
       approvalQueue: promptState.execApprovalQueue,
       approvalBusy: promptState.execApprovalBusy,
-      approvalError: promptState.execApprovalError,
-      approvalErrorId: promptState.execApprovalErrorId ?? null,
+      approvalErrors: new Map(promptState.execApprovalErrors),
       approvalNowMs: promptState.execApprovalNowMs ?? Date.now(),
       ...readDevicePairSetupSnapshot(devicePairSetupState),
     };
@@ -484,8 +480,7 @@ export function createApplicationOverlays(
     if (!next.connected || !next.client) {
       promptState.execApprovalQueue = [];
       promptState.execApprovalBusy = false;
-      promptState.execApprovalError = null;
-      promptState.execApprovalErrorId = null;
+      promptState.execApprovalErrors.clear();
       snapshot = { ...snapshot, updateAvailable: null, updateRunning: false };
       clearExecApprovalTimers(promptState);
       publish();
@@ -643,8 +638,7 @@ export function createApplicationOverlays(
         return;
       }
       promptState.execApprovalBusy = true;
-      promptState.execApprovalError = null;
-      promptState.execApprovalErrorId = null;
+      promptState.execApprovalErrors.delete(active.id);
       const operation = { client, epoch: connectedEpoch, id: active.id };
       approvalDecision = operation;
       const isCurrentOperation = () =>
@@ -675,8 +669,10 @@ export function createApplicationOverlays(
           isCurrentOperation() &&
           promptState.execApprovalQueue.some((entry) => entry.id === active.id)
         ) {
-          promptState.execApprovalError = `Approval failed: ${error instanceof Error ? error.message : String(error)}`;
-          promptState.execApprovalErrorId = active.id;
+          promptState.execApprovalErrors.set(
+            active.id,
+            `Approval failed: ${error instanceof Error ? error.message : String(error)}`,
+          );
         }
       } finally {
         // Reconnect can admit a new decision while this request is still settling.
@@ -726,6 +722,7 @@ export function createApplicationOverlays(
       stopGateway();
       stopEvents();
       clearExecApprovalTimers(promptState);
+      promptState.execApprovalErrors.clear();
       listeners.clear();
     },
   };

@@ -704,6 +704,7 @@ describe("inline approval card", () => {
     const container = renderChatView({
       inlineApproval,
       approvalNowMs: 1_000,
+      approvalErrors: new Map([["approval-inline", "Approval failed: gateway unavailable"]]),
       onApprovalDecision,
     });
 
@@ -718,6 +719,9 @@ describe("inline approval card", () => {
       "expires in 01:00",
     );
     expect(container.querySelector(".exec-approval-command-span")?.textContent).toBe("rm -r");
+    expect(container.querySelector(".exec-approval-error")?.textContent).toBe(
+      "Approval failed: gateway unavailable",
+    );
     container.querySelector<HTMLButtonElement>(".exec-approval-actions button")?.click();
     expect(onApprovalDecision).toHaveBeenCalledWith("approval-inline", "allow-once");
   });

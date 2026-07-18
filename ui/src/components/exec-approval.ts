@@ -34,8 +34,7 @@ const APPROVAL_DECISION_SHORTCUTS: Record<ExecApprovalDecision, string> = {
 type ExecApprovalProps = {
   queue: readonly ExecApprovalRequest[];
   busy: boolean;
-  error: string | null;
-  errorId: string | null;
+  errors: ReadonlyMap<string, string>;
   nowMs: number;
   inlineApprovalId?: string | null;
   onDecision: (approvalId: string, decision: ExecApprovalDecision) => void | Promise<void>;
@@ -350,14 +349,9 @@ class ExecApproval extends OpenClawLightDomContentsElement {
     // Pin the presented request: late-arriving older approvals re-sort the
     // queue, and swapping the card mid-read (or mid-decision) could attach the
     // user's answer or a failure message to a request they never saw.
-    if (
-      this.selectedApprovalId &&
-      !this.props?.queue.some((entry) => entry.id === this.selectedApprovalId)
-    ) {
-      this.selectedApprovalId = null;
-    }
-    if (!this.selectedApprovalId) {
-      this.selectedApprovalId = this.displayedQueue().at(0)?.id ?? null;
+    const displayedQueue = this.displayedQueue();
+    if (!displayedQueue.some((entry) => entry.id === this.selectedApprovalId)) {
+      this.selectedApprovalId = displayedQueue.at(0)?.id ?? null;
     }
   }
 
@@ -385,7 +379,7 @@ class ExecApproval extends OpenClawLightDomContentsElement {
           ${renderExecApprovalCard({
             approval: active,
             busy: props.busy,
-            error: props.errorId === active.id ? props.error : null,
+            error: props.errors.get(active.id) ?? null,
             nowMs: props.nowMs,
             variant: "modal",
             queueCount: queue.length,

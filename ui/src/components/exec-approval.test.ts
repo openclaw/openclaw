@@ -29,8 +29,7 @@ async function renderApproval(
   requestOrQueue: ExecApprovalRequest | ExecApprovalRequest[],
   overrides: Partial<{
     busy: boolean;
-    error: string | null;
-    errorId: string | null;
+    errors: ReadonlyMap<string, string>;
     nowMs: number;
     inlineApprovalId: string | null;
     onDecision: ReturnType<typeof vi.fn>;
@@ -43,8 +42,7 @@ async function renderApproval(
       .props=${{
         queue,
         busy: overrides.busy ?? false,
-        error: overrides.error ?? null,
-        errorId: overrides.errorId ?? null,
+        errors: overrides.errors ?? new Map(),
         nowMs: overrides.nowMs ?? Date.now(),
         inlineApprovalId: overrides.inlineApprovalId ?? null,
         onDecision,
@@ -214,6 +212,34 @@ describe("openclaw-exec-approval", () => {
     await approval.updateComplete;
     expect(container.querySelector(".exec-approval-card")?.getAttribute("data-approval-id")).toBe(
       "approval-older",
+    );
+  });
+
+  it("repins the modal card when its selection becomes inline", async () => {
+    const selected = createExecRequest({ id: "approval-selected", createdAtMs: 2_000 });
+    const displayedHead = createExecRequest({ id: "approval-head", createdAtMs: 1_000 });
+    const olderArrival = createExecRequest({ id: "approval-older", createdAtMs: 500 });
+    const { approval } = await renderApproval([displayedHead, selected]);
+    await getRenderedModalDialog(container);
+
+    container.querySelector<HTMLButtonElement>(".exec-approval-list__item")?.click();
+    await approval.updateComplete;
+    expect(container.querySelector(".exec-approval-card")?.getAttribute("data-approval-id")).toBe(
+      "approval-selected",
+    );
+
+    await renderApproval([displayedHead, selected], { inlineApprovalId: selected.id });
+    await approval.updateComplete;
+    expect(container.querySelector(".exec-approval-card")?.getAttribute("data-approval-id")).toBe(
+      "approval-head",
+    );
+
+    await renderApproval([olderArrival, displayedHead, selected], {
+      inlineApprovalId: selected.id,
+    });
+    await approval.updateComplete;
+    expect(container.querySelector(".exec-approval-card")?.getAttribute("data-approval-id")).toBe(
+      "approval-head",
     );
   });
 
