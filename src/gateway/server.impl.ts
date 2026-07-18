@@ -574,12 +574,20 @@ export async function startGatewayServer(
   opts: GatewayServerOptions = {},
 ): Promise<GatewayServer> {
   normalizeStateDirEnv(process.env);
-  const [databasePreflight, agentDatabase, stateDatabase] = await Promise.all([
+  const [
+    {
+      OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
+      OpenClawDatabaseSchemaPreflightError,
+      preflightOpenClawDatabaseSchemas,
+    },
+    agentDatabase,
+    stateDatabase,
+  ] = await Promise.all([
     import("../state/openclaw-database-preflight.js"),
     import("../state/openclaw-agent-db.js"),
     import("../state/openclaw-state-db.js"),
   ]);
-  const databaseSchemas = databasePreflight.preflightOpenClawDatabaseSchemas({
+  const databaseSchemas = preflightOpenClawDatabaseSchemas({
     env: process.env,
     supportedVersions: {
       state: stateDatabase.OPENCLAW_STATE_SCHEMA_VERSION,
@@ -595,17 +603,17 @@ export async function startGatewayServer(
         foundVersion: database.foundVersion,
         supportedVersion: database.supportedVersion,
         writerAppVersion: database.writerAppVersion ?? "unknown",
-        docsUrl: databasePreflight.OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
+        docsUrl: OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
       });
     }
-    throw new databasePreflight.OpenClawDatabaseSchemaPreflightError(databaseSchemas.incompatible);
+    throw new OpenClawDatabaseSchemaPreflightError(databaseSchemas.incompatible);
   }
   for (const database of databaseSchemas.indeterminate) {
     log.warn("database schema preflight could not inspect database; continuing to real open", {
       kind: database.kind,
       path: database.path,
       reason: database.reason,
-      docsUrl: databasePreflight.OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
+      docsUrl: OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
     });
   }
   const { bootstrapGatewayNetworkRuntime } = await import("./server-network-runtime.js");

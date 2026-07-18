@@ -162,7 +162,7 @@ type OpenClawDatabaseVerificationDatabase = Pick<
   OpenClawStateKyselyDatabase,
   "database_verifications"
 >;
-export type OpenClawDatabaseVerification = {
+type OpenClawDatabaseVerification = {
   error: string | null;
   result: string;
 };

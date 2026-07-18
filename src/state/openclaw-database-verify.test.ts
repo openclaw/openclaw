@@ -10,8 +10,8 @@ import {
 } from "./openclaw-agent-db.js";
 import {
   applyOpenClawDatabaseVerificationResults,
-  runOpenClawDatabaseVerificationWorker,
-} from "./openclaw-database-verify.js";
+  runDatabaseVerifyWorker,
+} from "./openclaw-database-verify.impl.js";
 import {
   type OpenClawDatabaseVerifyTarget,
   verifyOpenClawDatabases,
@@ -80,7 +80,7 @@ describe("OpenClaw database integrity verifier", () => {
         terminal: true,
       },
     ]);
-    await expect(runOpenClawDatabaseVerificationWorker(targets)).resolves.toEqual(directResults);
+    await expect(runDatabaseVerifyWorker(targets)).resolves.toEqual(directResults);
 
     // The drift lives outside schema_meta, so the rescoped open still succeeds;
     // the recorder must then quarantine this live handle, not just future opens.
