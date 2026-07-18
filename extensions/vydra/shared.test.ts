@@ -142,6 +142,34 @@ describe("downloadVydraAsset", () => {
     expect(result).toMatchObject({ name: "ProviderHttpError", status: 304, statusCode: 304 });
   });
 
+  it("preserves HTTP metadata when the error body stream fails", async () => {
+    const result = await downloadVydraAsset({
+      url: "https://cdn.vydra.example/generated/test.png",
+      kind: "image",
+      timeoutMs: 250,
+      fetchFn: async () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.error(new Error("broken error body"));
+            },
+          }),
+          {
+            status: 502,
+            headers: { "x-request-id": "req-vydra-broken-body" },
+          },
+        ),
+      maxBytes: 1024 * 1024,
+    }).catch((error: unknown) => error);
+
+    expect(result).toMatchObject({
+      name: "ProviderHttpError",
+      status: 502,
+      statusCode: 502,
+      requestId: "req-vydra-broken-body",
+    });
+  });
+
   it("does not bound a dripping body when only chunk idle timeout is used", async () => {
     // Negative control: chunkTimeoutMs resets on every drip, so idle alone never fires.
     server = http.createServer((_req, res) => {

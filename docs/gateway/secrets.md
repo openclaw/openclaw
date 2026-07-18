@@ -706,7 +706,7 @@ If you save a plan instead of applying during `configure`, apply that saved plan
 
     - Scrub matching static credentials from `auth-profiles.json` for targeted providers.
     - Scrub legacy static `api_key` entries from `auth.json`.
-    - Scrub matching known secret lines from `<config-dir>/.env`.
+    - Scrub matching known secret lines from the effective state and active-config `.env` files (deduplicated when both paths match).
 
   </Accordion>
   <Accordion title="secrets apply">
