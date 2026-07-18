@@ -133,7 +133,24 @@ export async function directoryContainsOnlyDerivedWorkspaceEntries(
   directory: string,
 ): Promise<boolean> {
   const names = await fs.readdir(localPath(root, directory));
-  return names.length > 0 && names.every((name) => isDerivedWorkspacePath(`${directory}/${name}`));
+  let foundDerivedEntry = false;
+  for (const name of names) {
+    const child = `${directory}/${name}`;
+    if (isDerivedWorkspacePath(child)) {
+      foundDerivedEntry = true;
+      continue;
+    }
+    const stats = await fs.lstat(localPath(root, child));
+    if (
+      !stats.isDirectory() ||
+      stats.isSymbolicLink() ||
+      !(await directoryContainsOnlyDerivedWorkspaceEntries(root, child))
+    ) {
+      return false;
+    }
+    foundDerivedEntry = true;
+  }
+  return foundDerivedEntry;
 }
 
 export async function clearTemporaryWorkspace(repositoryRoot: string): Promise<void> {

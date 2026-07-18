@@ -30,6 +30,12 @@ async function removeDerivedWorkspaceDescendants(
     }
     if (entry.isDirectory) {
       await removeDerivedWorkspaceDescendants(root, child);
+      if ((await root.list(child)).length === 0) {
+        // This traversal only runs beneath a manifest non-directory replacing
+        // relativeDirectory. Every empty descendant belongs to that old namespace,
+        // and pruning it unconditionally keeps interrupted cleanup resumable.
+        await root.remove(child);
+      }
     }
   }
 }

@@ -130,13 +130,6 @@ async function preflightWorkspaceApply(params: {
   const baseByPath = new Map(baseEntries.map((entry) => [entry.path, entry]));
   const currentByPath = new Map(currentEntries.map((entry) => [entry.path, entry]));
   const baseDirectories = new Set(reconciliationDirectories(params.base.directories));
-  const baseNonemptyDirectories = new Set<string>();
-  for (const entry of params.base.entries) {
-    const segments = entry.path.split("/");
-    for (let index = 1; index < segments.length; index += 1) {
-      baseNonemptyDirectories.add(segments.slice(0, index).join("/"));
-    }
-  }
   const directoryContainsOnlyBase = async (entryPath: string): Promise<boolean> => {
     const pending = [entryPath];
     while (pending.length > 0) {
@@ -194,7 +187,6 @@ async function preflightWorkspaceApply(params: {
       existing?.isDirectory() &&
       !existing.isSymbolicLink() &&
       baseDirectories.has(entry.path) &&
-      baseNonemptyDirectories.has(entry.path) &&
       (await directoryContainsOnlyBase(entry.path))
     ) {
       continue;

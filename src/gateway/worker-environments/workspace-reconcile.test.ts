@@ -229,9 +229,23 @@ describe("worker workspace reconciliation", () => {
     const local = await temporaryDirectory("workspace-derived-directory-replacement");
     const staged = await temporaryDirectory("workspace-derived-directory-replacement-staged");
     await gitInit(local);
-    await fs.mkdir(path.join(local, "src", "__pycache__"), { recursive: true });
-    await fs.writeFile(path.join(local, "src", "__pycache__", "old.pyc"), "local cache");
-    const base = await manifestFor(local);
+    await fs.mkdir(path.join(local, "src", "pkg", "__pycache__"), { recursive: true });
+    await fs.mkdir(path.join(local, "src", "empty"));
+    await fs.writeFile(path.join(local, "src", "pkg", "__pycache__", "old.pyc"), "local cache");
+    const rawBase = await manifestFor(local);
+    const encodedBase = encodeManifest({
+      version: rawBase.version,
+      baseCommit: rawBase.baseCommit,
+      entries: [
+        ...(rawBase.directories ?? []).map((entryPath) => ({
+          path: entryPath,
+          type: "directory",
+          mode: 0o700,
+        })),
+        ...rawBase.entries,
+      ].toSorted((left, right) => left.path.localeCompare(right.path)),
+    });
+    const base = parseWorkerWorkspaceManifest(encodedBase.raw, encodedBase.ref);
     await fs.writeFile(path.join(staged, "src"), "replacement");
     const current = await manifestFor(staged);
 
@@ -283,8 +297,8 @@ describe("worker workspace reconciliation", () => {
         journal = value;
       },
     });
-    await fs.mkdir(path.join(local, "src", "__pycache__"), { recursive: true });
-    await fs.writeFile(path.join(local, "src", "__pycache__", "remote.pyc"), "local cache");
+    await fs.mkdir(path.join(local, "src", "pkg", "__pycache__"), { recursive: true });
+    await fs.writeFile(path.join(local, "src", "pkg", "__pycache__", "remote.pyc"), "local cache");
 
     await recoverWorkerWorkspaceReconciliation({ root: local, journal: journal! });
 
