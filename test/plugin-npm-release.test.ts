@@ -489,7 +489,7 @@ describe("collectPluginReleaseDependencyFreshnessErrors", () => {
         timeout: 60_000,
       });
       throw Object.assign(new Error("spawnSync npm ETIMEDOUT"), { code: "ETIMEDOUT" });
-    }) as ExecFileSync;
+    }) as unknown as ExecFileSync;
 
     expect(collectPluginReleaseDependencyFreshnessErrors([plugin])).toEqual([
       "@openclaw/codex@2026.6.11: could not resolve npm latest for @openai/codex: npm view timed out after 60000ms.",
@@ -531,7 +531,7 @@ describe("collectPluginReleasePlan", () => {
         expect.stringContaining("openclaw-plugin-npm-view-"),
       ]);
       throw Object.assign(new Error("spawnSync npm ETIMEDOUT"), { code: "ETIMEDOUT" });
-    }) as ExecFileSync;
+    }) as unknown as ExecFileSync;
 
     expect(() => collectPluginReleasePlan({ rootDir: repoDir })).toThrow(
       "npm view timed out after 60000ms.",
