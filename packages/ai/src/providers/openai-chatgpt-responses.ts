@@ -135,6 +135,13 @@ interface RequestBody {
 // Retry Helpers
 // ============================================================================
 
+/**
+ * Marks a provider response the retry loop already classified as non-retryable, so the
+ * surrounding catch (which treats unknown failures as retryable network errors) rethrows
+ * it untouched instead of resending the request.
+ */
+class NonRetryableCodexResponseError extends Error {}
+
 function isRetryableError(status: number, errorText: string): boolean {
   if (status === 429 || status === 500 || status === 502 || status === 503 || status === 504) {
     return true;
@@ -426,8 +433,11 @@ export const streamOpenAICodexResponses: StreamFunction<
             statusText: response.statusText,
           });
           const info = await parseErrorResponse(fakeResponse);
-          throw new Error(info.friendlyMessage || info.message);
+          throw new NonRetryableCodexResponseError(info.friendlyMessage || info.message);
         } catch (error) {
+          if (error instanceof NonRetryableCodexResponseError) {
+            throw error;
+          }
           if (error instanceof Error) {
             if (
               isRequestTimeoutError(
