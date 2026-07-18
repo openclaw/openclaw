@@ -37,10 +37,10 @@ import {
   normalizeUpdateChannel,
   type UpdateChannel,
 } from "../../infra/update-channels.js";
+import { fetchNpmPackageTargetStatus } from "../../infra/update-check-package-target.js";
 import {
   checkUpdateStatus,
   compareSemverStrings,
-  fetchNpmPackageTargetStatus,
   resolveExtendedStablePackage,
   resolveNpmChannelTag,
 } from "../../infra/update-check.js";

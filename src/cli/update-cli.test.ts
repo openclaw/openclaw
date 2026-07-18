@@ -185,10 +185,13 @@ vi.mock("../infra/update-check.js", () => ({
     }
     return 0;
   }),
-  fetchNpmPackageTargetStatus: vi.fn(),
   fetchNpmTagVersion: vi.fn(),
   resolveExtendedStablePackage: vi.fn(),
   resolveNpmChannelTag: vi.fn(),
+}));
+
+vi.mock("../infra/update-check-package-target.js", () => ({
+  fetchNpmPackageTargetStatus: vi.fn(),
 }));
 
 vi.mock("../infra/runtime-guard.js", () => ({
@@ -424,11 +427,11 @@ const {
 } = await import("../config/config.js");
 const {
   checkUpdateStatus,
-  fetchNpmPackageTargetStatus,
   fetchNpmTagVersion,
   resolveExtendedStablePackage,
   resolveNpmChannelTag,
 } = await import("../infra/update-check.js");
+const { fetchNpmPackageTargetStatus } = await import("../infra/update-check-package-target.js");
 const { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } =
   await import("../infra/update-control-plane-sentinel.js");
 const { runCommandWithTimeout, runExec } = await import("../process/exec.js");
