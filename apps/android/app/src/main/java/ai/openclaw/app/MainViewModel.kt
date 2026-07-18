@@ -90,6 +90,7 @@ internal data class PendingAssistantAutoSend(
 private data class AssistantAutoSendOperation(
   var owner: ChatComposerOwner,
   val pendingId: String,
+  val composerSendId: String,
 )
 
 internal fun clearCompletedAssistantAutoSend(
@@ -741,9 +742,9 @@ class MainViewModel private constructor(
     chatComposerState.removeMediaOwners(matches)
     chatShareDraftQueue.removeOwners(matches)
     synchronized(assistantAutoSendLock) {
-      // Read the live operation owner while its start/finally paths are excluded; a stale owner
-      // would either resurrect a completed gate or remove the gate from a newly started send.
-      chatComposerState.removeOwners(matches, assistantAutoSendOperation?.owner)
+      // Read the live operation id while its start/finally paths are excluded so cleanup retains
+      // exactly that gate after removing other state owned by the retired identity.
+      chatComposerState.removeOwners(matches, assistantAutoSendOperation?.composerSendId)
     }
     pendingAssistantAutoSendMutable.update { pending ->
       pending?.takeIf { !matches(it.owner) }
@@ -1027,11 +1028,17 @@ class MainViewModel private constructor(
           _assistantAutoSendInFlight.value = false
           return
         }
-        if (!chatComposerState.tryBeginTrackedSend(pending.owner)) {
+        val composerSendId = chatComposerState.tryBeginTrackedSend(pending.owner)
+        if (composerSendId == null) {
           _assistantAutoSendInFlight.value = false
           return
         }
-        val started = AssistantAutoSendOperation(owner = pending.owner, pendingId = pending.id)
+        val started =
+          AssistantAutoSendOperation(
+            owner = pending.owner,
+            pendingId = pending.id,
+            composerSendId = composerSendId,
+          )
         assistantAutoSendOperation = started
         started
       }
@@ -1061,7 +1068,7 @@ class MainViewModel private constructor(
       } finally {
         synchronized(assistantAutoSendLock) {
           if (assistantAutoSendOperation === operation) {
-            chatComposerState.finishTrackedSend(operation.owner)
+            chatComposerState.finishTrackedSend(operation.composerSendId)
             assistantAutoSendOperation = null
             // Observable releases wake a prompt blocked by this or a manual send admission.
             _assistantAutoSendInFlight.value = false

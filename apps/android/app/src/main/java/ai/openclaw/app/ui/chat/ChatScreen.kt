@@ -254,7 +254,7 @@ fun ChatScreen(
     }
   val shareStaging =
     chatShareDraft?.let { viewModel.chatShareDraftTargetsOwner(it.id, composerOwner, mainSessionKey) } == true
-  val sendAdmissionId = sendStates[composerOwner]
+  val pendingSendAdmissionIds = sendStates[composerOwner]?.pendingAdmissionIds.orEmpty()
   val currentPickerOwner by rememberUpdatedState(composerOwner)
   val currentPickerMainSessionKey by rememberUpdatedState(mainSessionKey)
   val sendInFlight = composerOwner in sendStates
@@ -400,9 +400,10 @@ fun ChatScreen(
       mergeChatDraft(draft = claimed, currentInput = input, currentOwner = composerOwner) ?: return@LaunchedEffect
   }
 
-  LaunchedEffect(composerOwner, sendAdmissionId) {
-    val admissionId = sendAdmissionId ?: return@LaunchedEffect
-    viewModel.acknowledgeChatComposerSendAdmission(composerOwner, admissionId)
+  LaunchedEffect(composerOwner, pendingSendAdmissionIds) {
+    pendingSendAdmissionIds.forEach { admissionId ->
+      viewModel.acknowledgeChatComposerSendAdmission(composerOwner, admissionId)
+    }
   }
 
   // The process queue remembers the first owner; only an explicit alias/identity resolution

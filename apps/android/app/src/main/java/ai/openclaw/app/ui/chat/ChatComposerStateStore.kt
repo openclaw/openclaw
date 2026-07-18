@@ -31,6 +31,14 @@ internal data class ChatComposerSendStart(
   val request: ChatComposerSendRequest? = null,
 )
 
+internal data class ChatComposerSendState(
+  // Stable ids let each completion release its own operation after owner aliases merge.
+  val activeOperationIds: Set<String> = emptySet(),
+  val pendingAdmissionIds: Set<String> = emptySet(),
+) {
+  val isEmpty: Boolean get() = activeOperationIds.isEmpty() && pendingAdmissionIds.isEmpty()
+}
+
 /** Owns all mutable state keyed by a composer owner and resolves aliases as one transaction. */
 internal class ChatComposerStateStore(
   initialDrafts: ChatComposerDraftSnapshot = ChatComposerDraftSnapshot(),
@@ -53,12 +61,13 @@ internal class ChatComposerStateStore(
     attachmentNoticesState.asStateFlow()
 
   private val recoveredSends = textDrafts.pendingAdmissions()
-  // Null means actively sending; a non-null id waits for one UI observation before release.
   private val sendStatesState =
-    MutableStateFlow<Map<ChatComposerOwner, String?>>(
-      recoveredSends.associate { pending -> pending.owner to null },
+    MutableStateFlow(
+      recoveredSends
+        .groupBy(PendingChatComposerSend::owner, PendingChatComposerSend::commandId)
+        .mapValues { (_, commandIds) -> ChatComposerSendState(activeOperationIds = commandIds.toSet()) },
     )
-  val sendStates: StateFlow<Map<ChatComposerOwner, String?>> = sendStatesState.asStateFlow()
+  val sendStates: StateFlow<Map<ChatComposerOwner, ChatComposerSendState>> = sendStatesState.asStateFlow()
 
   fun recoveredSends(): List<PendingChatComposerSend> = recoveredSends
 
@@ -69,22 +78,32 @@ internal class ChatComposerStateStore(
   ) {
     synchronized(lock) {
       val resolvedOwner = textDrafts.resolveAdmission(commandId, admitted)?.owner ?: fallbackOwner
-      sendStatesState.value = sendStatesState.value - fallbackOwner - resolvedOwner
+      finishActiveSendLocked(setOf(fallbackOwner, resolvedOwner), resolvedOwner, commandId)
     }
   }
 
-  fun tryBeginTrackedSend(owner: ChatComposerOwner): Boolean =
+  fun tryBeginTrackedSend(owner: ChatComposerOwner): String? =
     synchronized(lock) {
-      if (hasActiveSendLocked(owner)) return@synchronized false
-      sendStatesState.value = sendStatesState.value + (owner to null)
-      true
+      if (hasSendGateLocked(owner)) return@synchronized null
+      UUID.randomUUID().toString().also { id ->
+        sendStatesState.value =
+          sendStatesState.value + (owner to ChatComposerSendState(activeOperationIds = setOf(id)))
+      }
     }
 
-  fun finishTrackedSend(owner: ChatComposerOwner) = synchronized(lock) { sendStatesState.value = sendStatesState.value - owner }
+  fun finishTrackedSend(id: String) {
+    synchronized(lock) {
+      val (owner, current) =
+        sendStatesState.value.entries.firstOrNull { (_, state) -> id in state.activeOperationIds } ?: return
+      val next = current.copy(activeOperationIds = current.activeOperationIds - id)
+      sendStatesState.value =
+        if (next.isEmpty) sendStatesState.value - owner else sendStatesState.value + (owner to next)
+    }
+  }
 
   fun beginSend(owner: ChatComposerOwner): ChatComposerSendStart =
     synchronized(lock) {
-      if (hasActiveSendLocked(owner)) {
+      if (hasSendGateLocked(owner)) {
         return@synchronized ChatComposerSendStart(ChatComposerSendStartResult.Unavailable)
       }
       val inputSnapshot = textDrafts[owner]
@@ -99,7 +118,9 @@ internal class ChatComposerStateStore(
       if (!textDrafts.beginAdmission(commandId, owner, inputSnapshot)) {
         return@synchronized ChatComposerSendStart(ChatComposerSendStartResult.CheckpointFull)
       }
-      sendStatesState.value = sendStatesState.value + (owner to null)
+      sendStatesState.value =
+        sendStatesState.value +
+          (owner to ChatComposerSendState(activeOperationIds = setOf(commandId)))
       ChatComposerSendStart(
         result = ChatComposerSendStartResult.Started,
         request = ChatComposerSendRequest(commandId, owner, inputSnapshot, inputSnapshot.trim(), attachments),
@@ -113,13 +134,13 @@ internal class ChatComposerStateStore(
     synchronized(lock) {
       if (accepted == null) {
         val currentOwner = textDrafts.pendingAdmission(request.commandId)?.owner ?: request.owner
-        sendStatesState.value = sendStatesState.value - currentOwner
+        finishActiveSendLocked(setOf(request.owner, currentOwner), currentOwner, request.commandId)
         return
       }
       val pending = textDrafts.resolveAdmission(request.commandId, accepted)
       val resolvedOwner = pending?.owner ?: request.owner
       if (pending == null) {
-        sendStatesState.value = sendStatesState.value - request.owner
+        finishActiveSendLocked(setOf(request.owner), request.owner, request.commandId)
         return
       }
       if (accepted) {
@@ -128,9 +149,12 @@ internal class ChatComposerStateStore(
           request.attachments.mapTo(linkedSetOf()) { attachment -> attachment.id },
         )
       }
-      sendStatesState.value =
-        (sendStatesState.value - request.owner - resolvedOwner) +
-          (resolvedOwner to request.commandId)
+      finishActiveSendLocked(
+        owners = setOf(request.owner, resolvedOwner),
+        resolvedOwner = resolvedOwner,
+        activeOperationId = request.commandId,
+        pendingAdmissionId = request.commandId,
+      )
     }
   }
 
@@ -139,8 +163,11 @@ internal class ChatComposerStateStore(
     id: String,
   ) {
     synchronized(lock) {
-      if (sendStatesState.value[owner] != id) return
-      sendStatesState.value = sendStatesState.value - owner
+      val current = sendStatesState.value[owner] ?: return
+      if (id !in current.pendingAdmissionIds) return
+      val next = current.copy(pendingAdmissionIds = current.pendingAdmissionIds - id)
+      sendStatesState.value =
+        if (next.isEmpty) sendStatesState.value - owner else sendStatesState.value + (owner to next)
     }
   }
 
@@ -246,10 +273,9 @@ internal class ChatComposerStateStore(
       val sources = textSources + attachmentMigration.sources + sendSources + mediaSources + noticeSources
 
       if (sendSources.isNotEmpty()) {
-        sendStatesState.value =
-          sendStatesState.value.entries
-            .groupBy({ (owner) -> if (owner in sendSources) to else owner }, { (_, admissionId) -> admissionId })
-            .mapValues { (_, admissionIds) -> admissionIds.filterNotNull().maxOrNull() }
+        val owners = sendSources + to
+        val merged = mergeSendStatesLocked(owners)
+        sendStatesState.value = (sendStatesState.value - owners) + (to to merged)
       }
 
       val currentNotices = attachmentNoticesState.value
@@ -275,20 +301,59 @@ internal class ChatComposerStateStore(
 
   fun removeOwners(
     matches: (ChatComposerOwner) -> Boolean,
-    retainedSendOwner: ChatComposerOwner? = null,
+    retainedSendId: String? = null,
   ) {
     synchronized(lock) {
       removeMediaOwnersLocked(matches)
       textDrafts.removeOwners(matches)
-      sendStatesState.value =
-        sendStatesState.value
-          .filterKeys { !matches(it) }
-          .let { retained -> retainedSendOwner?.let { retained + (it to null) } ?: retained }
+      val currentSendStates = sendStatesState.value
+      var nextSendStates = currentSendStates.filterKeys { !matches(it) }
+      val retainedEntry =
+        retainedSendId?.let { id ->
+          currentSendStates.entries.firstOrNull { (_, state) -> id in state.activeOperationIds }
+        }
+      if (retainedEntry != null && matches(retainedEntry.key)) {
+        val retainedState =
+          ChatComposerSendState(activeOperationIds = setOf(requireNotNull(retainedSendId)))
+        nextSendStates += retainedEntry.key to retainedState
+      }
+      sendStatesState.value = nextSendStates
       attachmentNoticesState.value = attachmentNoticesState.value.filterKeys { !matches(it) }
     }
   }
 
-  private fun hasActiveSendLocked(owner: ChatComposerOwner): Boolean = owner in sendStatesState.value
+  private fun hasSendGateLocked(owner: ChatComposerOwner): Boolean = owner in sendStatesState.value
+
+  private fun finishActiveSendLocked(
+    owners: Set<ChatComposerOwner>,
+    resolvedOwner: ChatComposerOwner,
+    activeOperationId: String,
+    pendingAdmissionId: String? = null,
+  ) {
+    val sources = owners + resolvedOwner
+    val merged = mergeSendStatesLocked(sources)
+    val pendingAdmissionIds =
+      pendingAdmissionId?.let { merged.pendingAdmissionIds + it } ?: merged.pendingAdmissionIds
+    val next =
+      merged.copy(
+        activeOperationIds = merged.activeOperationIds - activeOperationId,
+        pendingAdmissionIds = pendingAdmissionIds,
+      )
+    sendStatesState.value =
+      (sendStatesState.value - sources).let { retained ->
+        if (next.isEmpty) retained else retained + (resolvedOwner to next)
+      }
+  }
+
+  private fun mergeSendStatesLocked(owners: Set<ChatComposerOwner>): ChatComposerSendState =
+    owners
+      .mapNotNull(sendStatesState.value::get)
+      .fold(ChatComposerSendState()) { merged, current ->
+        ChatComposerSendState(
+          activeOperationIds = merged.activeOperationIds + current.activeOperationIds,
+          pendingAdmissionIds = merged.pendingAdmissionIds + current.pendingAdmissionIds,
+        )
+      }
 
   private fun removeMediaOwnersLocked(matches: (ChatComposerOwner) -> Boolean) {
     mediaOwners.entries.removeAll { matches(it.value) }

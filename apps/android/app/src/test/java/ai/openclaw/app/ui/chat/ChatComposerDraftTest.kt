@@ -15,6 +15,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -323,6 +325,49 @@ class ChatComposerDraftTest {
     store.migrate(from = alias, to = canonical)
 
     assertEquals("saved canonical draft\n\ntyped while connecting", store[canonical])
+  }
+
+  @Test
+  fun aliasResolutionPreservesEveryActiveSendAndPendingAcknowledgement() {
+    val alias = ChatComposerOwner("gateway-a", "main", "main")
+    val provisional = ChatComposerOwner("gateway-a", "main", "main", routingVerified = false)
+    val canonical = ChatComposerOwner("gateway-a", "main", "agent:main:device")
+    val state = ChatComposerStateStore()
+    state.textDrafts[alias] = "manual send"
+    val manualRequest = requireNotNull(state.beginSend(alias).request)
+    state.completeSend(manualRequest, accepted = true)
+    val trackedSendId = requireNotNull(state.tryBeginTrackedSend(provisional))
+    state.textDrafts[canonical] = "second manual send"
+    val activeManualRequest = requireNotNull(state.beginSend(canonical).request)
+
+    state.resolveAliases(canonical, canonical.sessionKey)
+
+    assertEquals(
+      ChatComposerSendState(
+        activeOperationIds = setOf(trackedSendId, activeManualRequest.commandId),
+        pendingAdmissionIds = setOf(manualRequest.commandId),
+      ),
+      state.sendStates.value[canonical],
+    )
+    state.acknowledgeSendAdmission(canonical, manualRequest.commandId)
+    assertEquals(
+      ChatComposerSendState(activeOperationIds = setOf(trackedSendId, activeManualRequest.commandId)),
+      state.sendStates.value[canonical],
+    )
+    assertNull(state.tryBeginTrackedSend(canonical))
+
+    state.finishTrackedSend(trackedSendId)
+    assertEquals(
+      ChatComposerSendState(activeOperationIds = setOf(activeManualRequest.commandId)),
+      state.sendStates.value[canonical],
+    )
+    state.completeSend(activeManualRequest, accepted = true)
+    assertEquals(
+      ChatComposerSendState(pendingAdmissionIds = setOf(activeManualRequest.commandId)),
+      state.sendStates.value[canonical],
+    )
+    state.acknowledgeSendAdmission(canonical, activeManualRequest.commandId)
+    assertNotNull(state.tryBeginTrackedSend(canonical))
   }
 
   @Test

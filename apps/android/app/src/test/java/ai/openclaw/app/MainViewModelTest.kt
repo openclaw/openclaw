@@ -225,10 +225,10 @@ class MainViewModelTest {
     val owner = ChatComposerOwner("gateway", "main", "agent:main:device")
     val state = ChatComposerStateStore()
 
-    assertTrue(state.tryBeginTrackedSend(owner))
-    assertFalse(state.tryBeginTrackedSend(owner))
-    state.finishTrackedSend(owner)
-    assertTrue(state.tryBeginTrackedSend(owner))
+    val sendId = requireNotNull(state.tryBeginTrackedSend(owner))
+    assertNull(state.tryBeginTrackedSend(owner))
+    state.finishTrackedSend(sendId)
+    assertNotNull(state.tryBeginTrackedSend(owner))
   }
 
   @Test
