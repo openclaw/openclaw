@@ -55,12 +55,8 @@ enum QuickChatFocusedTextCollector {
         let maximumDepth = max(0, limits.maximumDepth)
         let maximumElements = max(1, limits.maximumElements)
         let maximumCharacters = max(1, limits.maximumCharacters)
-        var stack: [(node: any QuickChatTextTreeNode, depth: Int)] = [(root, 0)]
+        var stack: [(node: any QuickChatTextTreeNode, depth: Int, parentTexts: [String])] = [(root, 0, [])]
         var visitedNodeIDs = Set<UInt64>()
-        // Only the parent/child echo is de-duplicated (an element repeating its parent's
-        // text); equal text from unrelated elements (table cells, repeated lines) is real
-        // document content and must be preserved.
-        var lastEmittedText: String?
         var rendered = ""
         var visitedElementCount = 0
         var textEntryCount = 0
@@ -81,11 +77,16 @@ enum QuickChatFocusedTextCollector {
             }
             visitedElementCount += 1
 
+            // Suppress only the parent/child echo (an element repeating its ancestor's
+            // text) and same-node repeats; equal text from siblings (table cells,
+            // repeated lines) is real document content and must be preserved.
+            var ownTexts: [String] = []
             for rawCandidate in [next.node.stringValue(), next.node.computedName()] {
-                guard let candidate = Self.normalized(rawCandidate), candidate != lastEmittedText else {
-                    continue
-                }
-                lastEmittedText = candidate
+                guard let candidate = Self.normalized(rawCandidate),
+                      !next.parentTexts.contains(candidate),
+                      !ownTexts.contains(candidate)
+                else { continue }
+                ownTexts.append(candidate)
                 let piece = rendered.isEmpty ? candidate : "\n\(candidate)"
                 let remaining = maximumCharacters + 1 - rendered.count
                 guard remaining > 0 else {
@@ -114,7 +115,7 @@ enum QuickChatFocusedTextCollector {
                 wasStructurallyTruncated = true
             }
             for child in childResult.nodes.reversed() {
-                stack.append((child, next.depth + 1))
+                stack.append((child, next.depth + 1, ownTexts))
             }
         }
 
@@ -190,6 +191,9 @@ enum QuickChatFocusedTextCaptureService {
         appName: String) async -> QuickChatTextContextCaptureOutcome
     {
         let appElement = AXUIElementCreateApplication(application.processIdentifier)
+        // Bound the very first read too; the focused-window copy below otherwise waits
+        // for the system default (~6s) on a hung target.
+        AXUIElementSetMessagingTimeout(appElement, 1.0)
         var focusedWindowValue: CFTypeRef?
         let focusedWindowError = AXUIElementCopyAttributeValue(
             appElement,
@@ -204,8 +208,6 @@ enum QuickChatFocusedTextCaptureService {
         let focusedWindow = unsafeDowncast(focusedWindowValue, to: AXUIElement.self)
         // A hung target app would otherwise block each AX message for the system default
         // (~6s); a short per-message timeout keeps worst-case walks near the deadline.
-        AXUIElementSetMessagingTimeout(appElement, 1.0)
-        AXUIElementSetMessagingTimeout(focusedWindow, 1.0)
         let root = QuickChatAXTextTreeNode(element: focusedWindow)
 
         // AX reads are synchronous and can be expensive. Keep the bounded walk off the
@@ -248,6 +250,13 @@ enum QuickChatFocusedTextCaptureService {
 
 private struct QuickChatAXTextTreeNode: QuickChatTextTreeNode, Sendable {
     let element: AXUIElement
+
+    init(element: AXUIElement) {
+        // Messaging timeouts are per element reference; every wrapped descendant needs
+        // its own or an unresponsive target stalls each read for the system default.
+        AXUIElementSetMessagingTimeout(element, 1.0)
+        self.element = element
+    }
 
     var identity: UInt64 {
         UInt64(CFHash(self.element))
