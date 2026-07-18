@@ -610,6 +610,230 @@ describe("listThinkingLevels", () => {
     ).toBe(true);
   });
 
+  it("honors catalog compat reasoning efforts for openai-completions custom providers", () => {
+    const catalog = [
+      {
+        provider: "free",
+        id: "gpt-5.5",
+        name: "free gpt-5.5",
+        api: "openai-completions",
+        reasoning: true,
+        compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
+      },
+    ];
+
+    expect(listThinkingLevels("free", "gpt-5.5", catalog)).toEqual([
+      "off",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+    ]);
+    expect(
+      isThinkingLevelSupported({
+        provider: "free",
+        model: "gpt-5.5",
+        level: "medium",
+        catalog,
+      }),
+    ).toBe(true);
+    expect(
+      resolveSupportedThinkingLevel({
+        provider: "free",
+        model: "gpt-5.5",
+        level: "medium",
+        catalog,
+      }),
+    ).toBe("medium");
+  });
+
+  it("treats explicit compat reasoning-effort disable as off-only for openai-completions", () => {
+    const catalog = [
+      {
+        provider: "free",
+        id: "gpt-5.5",
+        api: "openai-completions",
+        reasoning: false,
+        compat: { supportsReasoningEffort: false, supportedReasoningEfforts: [] },
+      },
+    ];
+
+    expect(listThinkingLevels("free", "gpt-5.5", catalog)).toEqual(["off"]);
+  });
+
+  it("treats flag-only explicit reasoning-effort disable as off-only", () => {
+    const catalog = [
+      {
+        provider: "free",
+        id: "gpt-5.5",
+        api: "openai-completions",
+        reasoning: true,
+        compat: { supportsReasoningEffort: false },
+      },
+    ];
+
+    expect(listThinkingLevels("free", "gpt-5.5", catalog)).toEqual(["off"]);
+    expect(
+      resolveSupportedThinkingLevel({
+        provider: "free",
+        model: "gpt-5.5",
+        level: "medium",
+        catalog,
+      }),
+    ).toBe("off");
+  });
+
+  it("honors reasoningEffortMap for provider-native OpenAI-compatible effort labels", () => {
+    const catalog = [
+      {
+        provider: "groq",
+        id: "qwen/qwen3-32b",
+        api: "openai-completions",
+        reasoning: true,
+        compat: {
+          supportedReasoningEfforts: ["none", "default"],
+          reasoningEffortMap: {
+            off: "none",
+            low: "default",
+            medium: "default",
+            high: "default",
+            xhigh: "default",
+          },
+        },
+      },
+    ];
+
+    expect(listThinkingLevels("groq", "qwen/qwen3-32b", catalog)).toEqual([
+      "off",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+    ]);
+    expect(
+      resolveSupportedThinkingLevel({
+        provider: "groq",
+        model: "qwen/qwen3-32b",
+        level: "medium",
+        catalog,
+      }),
+    ).toBe("medium");
+  });
+
+  it("uses the canonical request resolver for subset-effort fallback on openai-completions", () => {
+    const catalog = [
+      {
+        provider: "free",
+        id: "gpt-5.5",
+        api: "openai-completions",
+        reasoning: true,
+        compat: { supportedReasoningEfforts: ["medium", "high"] },
+      },
+    ];
+
+    // Request resolver falls low -> medium when medium is supported.
+    expect(
+      resolveSupportedThinkingLevel({
+        provider: "free",
+        model: "gpt-5.5",
+        level: "low",
+        catalog,
+      }),
+    ).toBe("medium");
+
+    // Request resolver falls minimal -> medium when medium is supported.
+    expect(
+      resolveSupportedThinkingLevel({
+        provider: "free",
+        model: "gpt-5.5",
+        level: "minimal",
+        catalog,
+      }),
+    ).toBe("medium");
+
+    // xhigh falls back to high.
+    expect(
+      resolveSupportedThinkingLevel({
+        provider: "free",
+        model: "gpt-5.5",
+        level: "xhigh",
+        catalog,
+      }),
+    ).toBe("high");
+  });
+
+  it("preserves reasoningEffortMap parity for subset-effort fallback", () => {
+    const catalog = [
+      {
+        provider: "groq",
+        id: "qwen/qwen3-32b",
+        api: "openai-completions",
+        reasoning: true,
+        compat: {
+          supportedReasoningEfforts: ["none", "default"],
+          reasoningEffortMap: {
+            off: "none",
+            low: "default",
+            medium: "default",
+            high: "default",
+            xhigh: "default",
+          },
+        },
+      },
+    ];
+
+    // Request resolver maps minimal -> default (supported); inverse map returns
+    // the closest canonical key, which is low.
+    expect(
+      resolveSupportedThinkingLevel({
+        provider: "groq",
+        model: "qwen/qwen3-32b",
+        level: "minimal",
+        catalog,
+      }),
+    ).toBe("low");
+  });
+
+  it("treats an empty supportedReasoningEfforts array like an omitted one", () => {
+    const catalog = [
+      {
+        provider: "free",
+        id: "gpt-5.5",
+        api: "openai-completions",
+        reasoning: true,
+        compat: { supportedReasoningEfforts: [] },
+      },
+    ];
+
+    // The profile falls back to the generic base shape because an empty array is
+    // treated as "not provided" by the canonical request resolver. Fallback
+    // clamping still delegates to that resolver, which uses model-id defaults for
+    // a gpt-5.5 id and therefore accepts xhigh.
+    expect(listThinkingLevels("free", "gpt-5.5", catalog)).toEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+    ]);
+    expect(
+      resolveSupportedThinkingLevel({
+        provider: "free",
+        model: "gpt-5.5",
+        level: "medium",
+        catalog,
+      }),
+    ).toBe("medium");
+    expect(
+      resolveSupportedThinkingLevel({
+        provider: "free",
+        model: "gpt-5.5",
+        level: "xhigh",
+        catalog,
+      }),
+    ).toBe("xhigh");
+  });
+
   it("does not let catalog xhigh compat override binary thinking providers", () => {
     providerRuntimeMocks.resolveProviderBinaryThinking.mockReturnValue(true);
     const catalog = [

@@ -1,3 +1,4 @@
+import { resolveOpenAIReasoningEffortForModel } from "@openclaw/ai/internal/openai";
 // Thinking/reasoning level catalog helpers for auto-reply model controls.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveClaudeThinkingProfile } from "../plugins/provider-claude-thinking.js";
@@ -105,6 +106,117 @@ function catalogSupportsXHigh(compat: ThinkingCatalogEntry["compat"]): boolean {
     return false;
   }
   return efforts.some((effort) => normalizeThinkLevel(effort) === "xhigh");
+}
+
+function buildOpenAICompatThinkingProfile(params: {
+  compat: ThinkingCatalogEntry["compat"];
+  defaultLevel?: ThinkLevel | null;
+}): ResolvedThinkingProfile | undefined {
+  // Explicit reasoning-effort disable takes precedence even when no supported
+  // efforts array is supplied.
+  if (params.compat?.supportsReasoningEffort === false) {
+    return buildOffOnlyThinkingProfile();
+  }
+  const efforts = params.compat?.supportedReasoningEfforts;
+  if (!Array.isArray(efforts) || efforts.length === 0) {
+    // Empty array is treated as "not provided" by the canonical request resolver,
+    // which then falls back to model-id defaults. Match that parity here.
+    return undefined;
+  }
+  const supportedEfforts = new Set(
+    efforts.filter((value): value is string => typeof value === "string"),
+  );
+  const levels = new Map<ThinkLevel, RankedThinkingLevelOption>([
+    ["off", { id: "off", label: "off", rank: THINKING_LEVEL_RANKS.off }],
+  ]);
+  function addCanonicalLevel(level: ThinkLevel) {
+    if (level === "off" || levels.has(level)) {
+      return;
+    }
+    levels.set(level, { id: level, label: level, rank: THINKING_LEVEL_RANKS[level] });
+  }
+  // Provider-native labels that already match canonical effort names.
+  for (const raw of supportedEfforts) {
+    const effort = normalizeThinkLevel(raw);
+    if (effort) {
+      addCanonicalLevel(effort);
+    }
+  }
+  // Provider-native labels reached only through a reasoning-effort map.
+  const effortMap = params.compat?.reasoningEffortMap;
+  if (effortMap && typeof effortMap === "object") {
+    for (const raw of Object.keys(effortMap)) {
+      const level = normalizeThinkLevel(raw);
+      const mapped = effortMap[raw];
+      if (level && typeof mapped === "string" && supportedEfforts.has(mapped)) {
+        addCanonicalLevel(level);
+      }
+    }
+  }
+  if (levels.size <= 1) {
+    return buildOffOnlyThinkingProfile();
+  }
+  const sorted = [...levels.values()].toSorted((a, b) => a.rank - b.rank);
+  const defaultLevel =
+    params.defaultLevel && levels.has(params.defaultLevel) ? params.defaultLevel : undefined;
+  return { levels: sorted, defaultLevel };
+}
+
+function resolveOpenAICompatSupportedThinkingLevel(params: {
+  context: ReturnType<typeof resolveThinkingPolicyContext>;
+  level: ThinkLevel;
+}): ThinkLevel | undefined {
+  const { context, level } = params;
+  if (!context.normalizedProvider || !context.modelId) {
+    return undefined;
+  }
+  const compat = context.compat;
+  if (!compat || typeof compat !== "object") {
+    return undefined;
+  }
+  const effortMap =
+    compat.reasoningEffortMap && typeof compat.reasoningEffortMap === "object"
+      ? compat.reasoningEffortMap
+      : undefined;
+  const resolvedEffort = resolveOpenAIReasoningEffortForModel({
+    model: {
+      provider: context.normalizedProvider,
+      id: context.modelId,
+      api: context.api,
+      compat,
+    },
+    effort: level,
+    fallbackMap: effortMap,
+  });
+  if (resolvedEffort === undefined) {
+    return "off";
+  }
+  // Direct canonical match.
+  const direct = normalizeThinkLevel(resolvedEffort);
+  if (direct) {
+    return direct;
+  }
+  // Inverse reasoning-effort map: choose the key that matches the requested
+  // level if possible, otherwise the closest rank.
+  if (effortMap) {
+    const candidates = Object.entries(effortMap)
+      .filter(([, value]) => value === resolvedEffort)
+      .map(([key]) => normalizeThinkLevel(key))
+      .filter((lvl): lvl is ThinkLevel => lvl !== undefined);
+    if (candidates.length > 0) {
+      if (candidates.includes(level)) {
+        return level;
+      }
+      const requestedRank = THINKING_LEVEL_RANKS[level];
+      const closest = candidates.toSorted(
+        (a, b) =>
+          Math.abs(THINKING_LEVEL_RANKS[a] - requestedRank) -
+          Math.abs(THINKING_LEVEL_RANKS[b] - requestedRank),
+      )[0];
+      return closest;
+    }
+  }
+  return undefined;
 }
 
 function normalizeProfileLevel(
@@ -227,6 +339,29 @@ export function resolveThinkingProfile(params: {
   }
   if (context.reasoning === false) {
     return buildOffOnlyThinkingProfile();
+  }
+
+  // OpenAI-compatible transports advertise exact accepted reasoning efforts via
+  // compat.supportedReasoningEfforts. Use that contract for custom providers on
+  // this transport so session-level thinking controls stay consistent with the
+  // request-time reasoning-effort normalization path.
+  if (context.api === "openai-completions") {
+    const compatProfile = buildOpenAICompatThinkingProfile({
+      compat: context.compat,
+      defaultLevel:
+        resolveProviderDefaultThinkingLevel({
+          provider: context.normalizedProvider,
+          context: providerContext,
+        }) ??
+        resolveThinkingDefaultForModelFallback({
+          provider: context.normalizedProvider,
+          model: context.modelId,
+          catalog: params.catalog,
+        }),
+    });
+    if (compatProfile) {
+      return compatProfile;
+    }
   }
 
   const defaultLevel = resolveProviderDefaultThinkingLevel({
@@ -386,6 +521,7 @@ export function resolveSupportedThinkingLevel(params: {
   agentRuntime?: string | null;
   providerPolicySource?: "active" | "active-or-bundled";
 }): ThinkLevel {
+  const context = resolveThinkingPolicyContext(params);
   const profile = resolveThinkingProfile({
     provider: params.provider,
     model: params.model,
@@ -393,5 +529,20 @@ export function resolveSupportedThinkingLevel(params: {
     agentRuntime: params.agentRuntime,
     providerPolicySource: params.providerPolicySource,
   });
+  if (profile.levels.some((entry) => entry.id === params.level)) {
+    return params.level;
+  }
+  // For OpenAI-compatible transports, delegate fallback to the canonical request
+  // resolver so session-level clamping matches the reasoning_effort that would be
+  // sent at request time.
+  if (context.api === "openai-completions") {
+    const compatLevel = resolveOpenAICompatSupportedThinkingLevel({
+      context,
+      level: params.level,
+    });
+    if (compatLevel !== undefined) {
+      return compatLevel;
+    }
+  }
   return resolveSupportedThinkingLevelFromProfile(profile, params.level);
 }

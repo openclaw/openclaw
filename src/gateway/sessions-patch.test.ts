@@ -1053,6 +1053,75 @@ describe("gateway sessions patch", () => {
     expect(entry.thinkingLevel).toBe("xhigh");
   });
 
+  test("accepts medium thinking patches for custom openai-completions models", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: {
+          agents: {
+            defaults: {
+              model: { primary: "free/gpt-5.5" },
+            },
+          },
+        } as OpenClawConfig,
+        patch: {
+          key: MAIN_SESSION_KEY,
+          thinkingLevel: "medium",
+        },
+        loadGatewayModelCatalog: async () => [
+          {
+            provider: "free",
+            id: "gpt-5.5",
+            name: "free gpt-5.5",
+            api: "openai-completions",
+            reasoning: true,
+            compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
+          },
+        ],
+      }),
+    );
+
+    expect(entry.thinkingLevel).toBe("medium");
+  });
+
+  test("accepts thinking patches mapped through reasoningEffortMap", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: {
+          agents: {
+            defaults: {
+              model: { primary: "groq/qwen/qwen3-32b" },
+            },
+          },
+        } as OpenClawConfig,
+        patch: {
+          key: MAIN_SESSION_KEY,
+          thinkingLevel: "medium",
+        },
+        loadGatewayModelCatalog: async () => [
+          {
+            provider: "groq",
+            id: "qwen/qwen3-32b",
+            name: "Groq Qwen3 32B",
+            api: "openai-completions",
+            reasoning: true,
+            compat: {
+              supportedReasoningEfforts: ["none", "default"],
+              reasoningEffortMap: {
+                off: "none",
+                low: "default",
+                medium: "default",
+                high: "default",
+                xhigh: "default",
+              },
+            },
+          },
+        ],
+      }),
+    );
+
+    expect(entry.thinkingLevel).toBe("medium");
+  });
+
   test("validates global patches against the selected agent", async () => {
     const entry = expectPatchOk(
       await runPatch({
