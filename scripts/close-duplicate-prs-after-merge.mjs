@@ -92,6 +92,7 @@ function ghJson(args, runGh) {
 function defaultRunGh(args, options = {}) {
   return execFileSync("gh", args, {
     encoding: "utf8",
+    timeout: 30_000,
     stdio: options.input ? ["pipe", "pipe", "inherit"] : ["ignore", "pipe", "inherit"],
     ...(options.input ? { input: options.input } : {}),
   });
