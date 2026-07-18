@@ -1808,6 +1808,13 @@ export function renderConfig(props: ConfigProps) {
     formMode === "raw" && hasRawChanges && viewState.rawDiffOpen
       ? computeRawDiff(viewState, props.originalRaw, props.raw)
       : [];
+  if (formMode === "raw" && hasRawChanges && viewState.rawDiffOpen && !isJson5Warm()) {
+    // First diff open can race the lazy JSON5 parser; re-render when it lands
+    // so the pending-changes list fills in instead of staying empty.
+    void warmJson5()
+      .then(() => requestUpdate())
+      .catch(() => undefined);
+  }
   // Includes the app updater: writes are suspended while it runs, so raw
   // Save/Discard must read busy instead of silently no-opping.
   const configBusy = props.loading || props.saving || props.applying || props.updating;
