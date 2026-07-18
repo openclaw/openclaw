@@ -390,6 +390,7 @@ function getNoProgressStreak(
 ): { count: number; latestResultHash?: string } {
   let streak = 0;
   let latestResultHash: string | undefined;
+  let pendingLoopVetoes = 0;
 
   for (let i = history.length - 1; i >= 0; i -= 1) {
     const record = history[i];
@@ -397,7 +398,7 @@ function getNoProgressStreak(
       continue;
     }
     if (record.resultHash === LOOP_VETO_RESULT_HASH) {
-      streak += 1;
+      pendingLoopVetoes += 1;
       continue;
     }
     if (typeof record.resultHash !== "string" || !record.resultHash) {
@@ -405,13 +406,15 @@ function getNoProgressStreak(
     }
     if (!latestResultHash) {
       latestResultHash = record.resultHash;
-      streak += 1;
+      streak += 1 + pendingLoopVetoes;
+      pendingLoopVetoes = 0;
       continue;
     }
     if (record.resultHash !== latestResultHash) {
       break;
     }
-    streak += 1;
+    streak += 1 + pendingLoopVetoes;
+    pendingLoopVetoes = 0;
   }
 
   return { count: streak, latestResultHash };
