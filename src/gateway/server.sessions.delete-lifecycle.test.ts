@@ -12,7 +12,6 @@ import {
 } from "../acp/runtime/session-meta.js";
 import { getRegistryWorktree } from "../agents/worktrees/registry.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
-import { SqliteBoardStore } from "../boards/sqlite-board-store.js";
 import {
   loadSessionEntry,
   loadTranscriptEvents,
@@ -23,7 +22,6 @@ import {
   beginSessionWorkAdmission,
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { embeddedRunMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
@@ -72,7 +70,6 @@ async function initializeRemoteBackedGitWorkspace(root: string): Promise<string>
 }
 
 afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
 });
 
@@ -262,35 +259,6 @@ test("sessions.delete rejects main and aborts active runs", async () => {
   expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledWith({
     targetSessionKey: "agent:main:discord:group:dev",
     reason: "session-delete",
-  });
-});
-
-test("sessions.delete removes the session board from its agent database", async () => {
-  const { dir } = await createSessionStoreDir();
-  await writeSingleLineSession(dir, "sess-board", "hello");
-  await writeSessionStore({
-    entries: {
-      "discord:group:board-delete": sessionStoreEntry("sess-board"),
-    },
-  });
-  const sessionKey = "agent:main:discord:group:board-delete";
-  const store = new SqliteBoardStore({
-    resolveAgentId: () => "main",
-    env: process.env,
-  });
-  store.putWidget({
-    sessionKey,
-    name: "status",
-    content: { kind: "html", html: "ok" },
-  });
-
-  await expectSessionDeleteSucceeds({ key: "discord:group:board-delete" });
-
-  expect(store.getSnapshot(sessionKey)).toEqual({
-    sessionKey,
-    revision: 0,
-    tabs: [],
-    widgets: [],
   });
 });
 
