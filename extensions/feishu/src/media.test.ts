@@ -267,6 +267,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     expect(ffmpegArgs).toContain("mjpeg");
     expect(ffmpegArgs.slice(-3, -1)).toEqual(["-f", "image2"]);
     expect(ffmpegArgs.at(-1)).toContain("preview.jpg");
+    expect(mockCallArg(runFfmpegMock, 0, 1)).toEqual({ timeoutMs: 5_000 });
     const messageData = callData<{ content?: string; msg_type?: string }>(messageCreateMock);
     expect(messageData.msg_type).toBe("media");
     expect(JSON.parse(messageData.content ?? "{}")).toEqual({
@@ -287,6 +288,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     });
 
     expect(imageCreateMock).not.toHaveBeenCalled();
+    expect(mockCallArg(runFfmpegMock, 0, 1)).toEqual({ timeoutMs: 5_000 });
     expect(JSON.parse(callData<{ content?: string }>(messageCreateMock).content ?? "{}")).toEqual({
       file_key: "file_key_1",
     });
@@ -391,6 +393,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     });
     const ffmpegArgs = mockCallArg<string[]>(runFfmpegMock, 0, 0);
     expect(ffmpegArgs.at(-1)).toContain("preview.jpg");
+    expect(mockCallArg(runFfmpegMock, 0, 1)).toEqual({ timeoutMs: 5_000 });
   });
 
   it("falls back to generic file for unsupported audio formats", async () => {

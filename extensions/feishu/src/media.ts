@@ -39,6 +39,7 @@ const FEISHU_VOICE_SAMPLE_RATE_HZ = 48_000;
 const FEISHU_VOICE_BITRATE = "64k";
 const FEISHU_VIDEO_PREVIEW_FILE_NAME = "preview.jpg";
 const FEISHU_VIDEO_PREVIEW_SEEK_SECONDS = "0.5";
+const FEISHU_VIDEO_PREVIEW_TIMEOUT_MS = 5_000;
 
 const FEISHU_TRANSCODABLE_AUDIO_EXTS = new Set([
   ".aac",
@@ -866,25 +867,28 @@ async function renderFeishuVideoPreviewFrame(params: {
           rootDir: workspace.dir,
           path: FEISHU_VIDEO_PREVIEW_FILE_NAME,
           write: async (outputPath) => {
-            await runFfmpeg([
-              "-hide_banner",
-              "-loglevel",
-              "error",
-              "-y",
-              "-ss",
-              FEISHU_VIDEO_PREVIEW_SEEK_SECONDS,
-              "-i",
-              inputPath,
-              "-frames:v",
-              "1",
-              "-c:v",
-              "mjpeg",
-              "-q:v",
-              "3",
-              "-f",
-              "image2",
-              outputPath,
-            ]);
+            await runFfmpeg(
+              [
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-ss",
+                FEISHU_VIDEO_PREVIEW_SEEK_SECONDS,
+                "-i",
+                inputPath,
+                "-frames:v",
+                "1",
+                "-c:v",
+                "mjpeg",
+                "-q:v",
+                "3",
+                "-f",
+                "image2",
+                outputPath,
+              ],
+              { timeoutMs: FEISHU_VIDEO_PREVIEW_TIMEOUT_MS },
+            );
           },
         });
         return await workspace.read(FEISHU_VIDEO_PREVIEW_FILE_NAME);
