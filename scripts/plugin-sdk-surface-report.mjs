@@ -215,7 +215,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: speech-settings keeps agent prompt imports off the synthesis/runtime graph.
       // +1: meeting-runtime barrel: browser meeting-bot core behind MeetingPlatformAdapter.
       // +1: question-gateway-runtime resolves ask_user choices for channel plugins.
-      331,
+      // +1: ingress-effect-once gives drained channels a narrow durable side-effect guard.
+      332,
       env,
     ),
     // ScopeTree adds six channel-policy exports, mirrored by compat, including three functions.
@@ -269,7 +270,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: centralized remember-across-conversations effective-default resolver.
       // +4: gateway-backed harness question runner, claim/cancel helpers, and caller type.
       // Harvest: internal question runtime exports -2.
-      8157,
+      // +1: ingress-effect-once factory.
+      8158,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -309,7 +311,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: centralized remember-across-conversations effective-default resolver.
       // +3: gateway-backed harness question runner and claim/cancel helpers.
       // Harvest: internal question runtime callable -1.
-      4539,
+      // +1: ingress-effect-once factory.
+      4540,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
