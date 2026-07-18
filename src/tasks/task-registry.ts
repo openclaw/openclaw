@@ -23,6 +23,7 @@ import { createLazyPromiseLoader } from "../shared/lazy-runtime.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
 import { isBackgroundExecTask } from "./background-exec-task-contract.js";
+import { tryCancelCodexNativeSubagent } from "./codex-native-subagent-cancel-handle.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "./detached-task-runtime-contract.js";
 import { isChildlessNativeSubagentTask } from "./native-subagent-task.js";
 import {
@@ -2383,9 +2384,28 @@ export async function cancelTaskById(params: {
         // The live cron service owns the abort signal; registry finalization below
         // keeps CLI/Gateway callers aligned while the run unwinds.
       } else if (!childSessionKey) {
-        // Codex native subagents are mirrored from the Codex app server and do
-        // not have OpenClaw child sessions to terminate. Cancellation clears
-        // the stale task-registry record only.
+        // Childless codex-native tasks try to interrupt the live Codex thread
+        // via the registered callback. When no live monitor is found (stale),
+        // fall through to registry-only cleanup.
+        const runId = task.runId?.trim();
+        const childId = runId?.startsWith("codex-thread:")
+          ? runId.slice("codex-thread:".length)
+          : undefined;
+        if (childId) {
+          const result = await tryCancelCodexNativeSubagent(childId);
+          if (result.found) {
+            if (result.cancelled) {
+              isProvisionalSubagentKill = true;
+            } else {
+              return {
+                found: true,
+                cancelled: false,
+                reason: result.reason ?? "Codex native subagent thread was not running.",
+                task: cloneTaskRecord(tasks.get(task.taskId) ?? task),
+              };
+            }
+          }
+        }
       } else if (task.runtime === "acp") {
         const { getAcpSessionManager } = await loadTaskRegistryControlRuntime();
         await getAcpSessionManager().cancelSession({
