@@ -17,7 +17,7 @@ function normalizeMalformedLocalFileUrl(value: string): string | undefined {
   if (process.platform === "win32" && /^\/[a-z]:[\\/]/iu.test(localPath)) {
     localPath = localPath.slice(1);
   }
-  return path.normalize(localPath);
+  return PATH_PARENT_SEGMENT_RE.test(localPath) ? localPath : path.normalize(localPath);
 }
 
 /** Canonicalizes equivalent local media references without resolving the filesystem. */

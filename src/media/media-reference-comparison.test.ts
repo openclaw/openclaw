@@ -45,5 +45,8 @@ describe("normalizeMediaReferenceForComparison", () => {
     expect(normalizeMediaReferenceForComparison("file:///tmp/100%.png")).toBe(
       normalizeMediaReferenceForComparison("/tmp/100%.png"),
     );
+    expect(normalizeMediaReferenceForComparison("file:///tmp/link/../asset%.png")).toBe(
+      "/tmp/link/../asset%.png",
+    );
   });
 });
