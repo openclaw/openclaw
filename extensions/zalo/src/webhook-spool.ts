@@ -157,7 +157,7 @@ function isZaloAuthenticationFailure(error: unknown): boolean {
   return false;
 }
 
-export function createZaloWebhookIngress(options: {
+function createZaloWebhookIngress(options: {
   accountId: string;
   runtime: Pick<ZaloRuntimeEnv, "error" | "log">;
   deliver: (update: ZaloUpdate, lifecycle: ZaloWebhookIngressLifecycle) => Promise<void>;
@@ -360,3 +360,5 @@ export function createZaloWebhookIngress(options: {
     },
   };
 }
+
+export const zaloWebhookIngressRuntime = { createZaloWebhookIngress };

@@ -7,11 +7,11 @@ import {
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { expect, vi } from "vitest";
-import type { createZaloWebhookIngress } from "./webhook-spool.js";
+import type { zaloWebhookIngressRuntime } from "./webhook-spool.js";
 
-export type ZaloWebhookTestQueue = NonNullable<
-  Parameters<typeof createZaloWebhookIngress>[0]["queue"]
->;
+type CreateZaloWebhookIngress = (typeof zaloWebhookIngressRuntime)["createZaloWebhookIngress"];
+
+type ZaloWebhookTestQueue = NonNullable<Parameters<CreateZaloWebhookIngress>[0]["queue"]>;
 export type ZaloWebhookTestPayload = Parameters<ZaloWebhookTestQueue["enqueue"]>[1];
 
 export function createZaloWebhookTestEvent(params?: {

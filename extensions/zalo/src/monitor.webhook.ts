@@ -42,16 +42,16 @@ const webhookAnomalyTracker = createWebhookAnomalyTracker({
   logEvery: WEBHOOK_ANOMALY_COUNTER_DEFAULTS.logEvery,
 });
 
-export function clearZaloWebhookSecurityStateForTest(): void {
+function clearZaloWebhookSecurityStateForTest(): void {
   webhookRateLimiter.clear();
   webhookAnomalyTracker.clear();
 }
 
-export function getZaloWebhookRateLimitStateSizeForTest(): number {
+function getZaloWebhookRateLimitStateSizeForTest(): number {
   return webhookRateLimiter.size();
 }
 
-export function getZaloWebhookStatusCounterSizeForTest(): number {
+function getZaloWebhookStatusCounterSizeForTest(): number {
   return webhookAnomalyTracker.size();
 }
 
@@ -73,7 +73,7 @@ function headerValue(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
 }
 
-export function registerZaloWebhookTarget(
+function registerZaloWebhookTarget(
   target: ZaloWebhookTarget,
   opts?: {
     route?: RegisterWebhookPluginRouteOptions;
@@ -93,7 +93,7 @@ export function registerZaloWebhookTarget(
   return registerWebhookTarget(webhookTargets, target, opts).unregister;
 }
 
-export async function handleZaloWebhookRequest(
+async function handleZaloWebhookRequest(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<boolean> {
@@ -183,3 +183,11 @@ export async function handleZaloWebhookRequest(
     },
   });
 }
+
+export const zaloWebhookRuntime = {
+  clearZaloWebhookSecurityStateForTest,
+  getZaloWebhookRateLimitStateSizeForTest,
+  getZaloWebhookStatusCounterSizeForTest,
+  handleZaloWebhookRequest,
+  registerZaloWebhookTarget,
+};

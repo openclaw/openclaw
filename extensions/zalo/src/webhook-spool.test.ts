@@ -2,13 +2,15 @@
 import type { ChannelIngressQueue } from "openclaw/plugin-sdk/channel-outbound";
 import { closeOpenClawStateDatabaseForTest } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createZaloWebhookIngress } from "./webhook-spool.js";
+import { zaloWebhookIngressRuntime } from "./webhook-spool.js";
 import {
   createZaloWebhookTestEvent,
   waitForZaloWebhookVerdict,
   withZaloWebhookTestQueue,
   type ZaloWebhookTestPayload,
 } from "./webhook-spool.test-support.js";
+
+const { createZaloWebhookIngress } = zaloWebhookIngressRuntime;
 
 function runtime() {
   return { error: vi.fn(), log: vi.fn() };

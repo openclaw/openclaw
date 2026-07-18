@@ -8,7 +8,10 @@ import {
 import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import {
+  createLazyRuntimeModule,
+  createLazyRuntimeNamedExport,
+} from "openclaw/plugin-sdk/lazy-runtime";
 import {
   deliverTextOrMediaReply,
   resolveSendableOutboundReplyParts,
@@ -108,13 +111,18 @@ function resolveZaloTimestampMs(date: number | undefined): number | undefined {
   return date >= UNIX_MILLISECONDS_THRESHOLD ? date : date * 1000;
 }
 
-const loadZaloWebhookModule = createLazyRuntimeModule(async () => {
-  const [webhook, spool] = await Promise.all([
-    import("./monitor.webhook.js"),
-    import("./webhook-spool.js"),
-  ]);
-  return { ...webhook, ...spool };
-});
+const loadZaloWebhookRuntime = createLazyRuntimeNamedExport(
+  () => import("./monitor.webhook.js"),
+  "zaloWebhookRuntime",
+);
+const loadZaloWebhookIngressRuntime = createLazyRuntimeNamedExport(
+  () => import("./webhook-spool.js"),
+  "zaloWebhookIngressRuntime",
+);
+const loadZaloWebhookModule = createLazyRuntimeModule(async () => ({
+  ...(await loadZaloWebhookRuntime()),
+  ...(await loadZaloWebhookIngressRuntime()),
+}));
 
 function releaseSharedHostedMediaRouteRef(routePath: string): void {
   const current = hostedMediaRouteRefs.get(routePath);

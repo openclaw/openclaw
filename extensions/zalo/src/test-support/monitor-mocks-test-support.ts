@@ -126,7 +126,7 @@ export async function resetLifecycleTestState() {
     previousLifecycleStateDir = undefined;
   }
   vi.clearAllMocks();
-  (await importCachedWebhookModule()).clearZaloWebhookSecurityStateForTest();
+  (await importCachedWebhookModule()).zaloWebhookRuntime.clearZaloWebhookSecurityStateForTest();
   setActivePluginRegistry(createEmptyPluginRegistry());
 }
 

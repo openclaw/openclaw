@@ -8,15 +8,17 @@ import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import type { ZaloRuntimeEnv } from "./monitor.types.js";
-import {
+import { zaloWebhookRuntime } from "./monitor.webhook.js";
+import type { ResolvedZaloAccount } from "./types.js";
+import { ZaloWebhookPayloadError } from "./webhook-spool.js";
+
+const {
   clearZaloWebhookSecurityStateForTest,
   getZaloWebhookRateLimitStateSizeForTest,
   getZaloWebhookStatusCounterSizeForTest,
-  handleZaloWebhookRequest as handleZaloWebhookRequestInternal,
+  handleZaloWebhookRequest: handleZaloWebhookRequestInternal,
   registerZaloWebhookTarget,
-} from "./monitor.webhook.js";
-import type { ResolvedZaloAccount } from "./types.js";
-import { ZaloWebhookPayloadError } from "./webhook-spool.js";
+} = zaloWebhookRuntime;
 
 const DEFAULT_ACCOUNT: ResolvedZaloAccount = {
   accountId: "default",
