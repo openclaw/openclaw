@@ -217,6 +217,32 @@ describe("Mattermost durable ingress", () => {
     });
   });
 
+  it("preserves same-channel arrival order across an append retry backoff", async () => {
+    await withQueue(async (queue) => {
+      let failFirst = true;
+      const enqueue = queue.enqueue.bind(queue);
+      queue.enqueue = async (...args) => {
+        if (failFirst) {
+          failFirst = false;
+          throw new Error("sqlite busy");
+        }
+        return await enqueue(...args);
+      };
+      const ingress = startMonitor(queue, vi.fn());
+      try {
+        // A's first append fails into backoff; B arrives concurrently. The
+        // admission chain must hold B until A commits, or lane order inverts.
+        const admitA = ingress.receive(postedEvent({ postId: "post-A" }));
+        const admitB = ingress.receive(postedEvent({ postId: "post-B" }));
+        await Promise.all([admitA, admitB]);
+        const pending = await queue.listPending({ limit: "all", orderBy: "received" });
+        expect(pending.map((row) => row.id)).toEqual(["post-A", "post-B"]);
+      } finally {
+        await ingress.stop();
+      }
+    });
+  });
+
   it("never dispatches from a pump racing stop through the async prune", async () => {
     await withQueue(async (queue) => {
       let releasePrune = () => {};

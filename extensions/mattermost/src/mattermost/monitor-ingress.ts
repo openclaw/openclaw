@@ -320,38 +320,49 @@ export function createMattermostIngressMonitor(options: {
   timer.unref?.();
   requestDrain();
 
-  return {
-    receive: async (rawEvent) => {
-      const facts = inspectMattermostIngressEvent(rawEvent);
-      if (!facts) {
+  // Serialize admissions: WS message callbacks run concurrently, and a post
+  // stuck in append-retry backoff must delay its successors or same-channel
+  // arrival order inverts in the queue (order over latency).
+  let admissionTail: Promise<void> = Promise.resolve();
+
+  const admitOnce = async (rawEvent: string): Promise<void> => {
+    const facts = inspectMattermostIngressEvent(rawEvent);
+    if (!facts) {
+      return;
+    }
+    const receivedAt = Date.now();
+    // Websockets have no nack: a dropped append is a lost post (reconnect
+    // never replays). Retry transient failures before letting the error
+    // escalate to the socket teardown in monitor-websocket.
+    let lastError: unknown;
+    for (const delayMs of [0, 100, 300]) {
+      if (delayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+      try {
+        await getQueue().enqueue(
+          facts.eventId,
+          {
+            version: MATTERMOST_INGRESS_PAYLOAD_VERSION,
+            receivedAt,
+            rawEvent,
+          },
+          { receivedAt, laneKey: facts.laneKey },
+        );
+        requestDrain();
         return;
+      } catch (error) {
+        lastError = error;
       }
-      const receivedAt = Date.now();
-      // Websockets have no nack: a dropped append is a lost post (reconnect
-      // never replays). Retry transient failures before letting the error
-      // escalate to the socket teardown in monitor-websocket.
-      let lastError: unknown;
-      for (const delayMs of [0, 100, 300]) {
-        if (delayMs > 0) {
-          await new Promise((resolve) => setTimeout(resolve, delayMs));
-        }
-        try {
-          await getQueue().enqueue(
-            facts.eventId,
-            {
-              version: MATTERMOST_INGRESS_PAYLOAD_VERSION,
-              receivedAt,
-              rawEvent,
-            },
-            { receivedAt, laneKey: facts.laneKey },
-          );
-          requestDrain();
-          return;
-        } catch (error) {
-          lastError = error;
-        }
-      }
-      throw lastError;
+    }
+    throw lastError;
+  };
+
+  return {
+    receive: (rawEvent) => {
+      const admission = admissionTail.then(() => admitOnce(rawEvent));
+      admissionTail = admission.catch(() => undefined);
+      return admission;
     },
     stop: async () => {
       running = false;
