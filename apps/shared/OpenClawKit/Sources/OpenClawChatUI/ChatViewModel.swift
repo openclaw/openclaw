@@ -1176,21 +1176,50 @@ extension OpenClawChatViewModel {
         self.applySessionSwitch(to: sessionKey, intent: .externalSync)
     }
 
-    func performStartNewSession(worktree: Bool) async {
+    func performStartNewSession(
+        agentID: String? = nil,
+        worktree: Bool,
+        worktreeBaseRef: String? = nil,
+        routeLease: OpenClawChatNewSessionRouteLease? = nil) async
+    {
         guard !self.blocksAttachmentOwnerChange else {
             self.errorText = String(
                 localized: "Remove attachments or wait for delivery to resolve before starting a new chat.")
             return
         }
-        let requested = self.generatedNewSessionKey()
-        let parentSessionKey = self.sessionKey
+        let normalizedAgentID = agentID?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let requestedAgentID = normalizedAgentID?.isEmpty == false ? normalizedAgentID : nil
+        let requested = self.generatedNewSessionKey(agentID: requestedAgentID)
+        let currentAgentID = (
+            OpenClawChatSessionKey.agentID(from: self.sessionKey) ??
+                self.activeAgentId ??
+                OpenClawChatSessionKey.agentID(from: self.resolvedMainSessionKey) ??
+                self.sessions.lazy.compactMap { OpenClawChatSessionKey.agentID(from: $0.key) }.first)?
+            .lowercased()
+        let parentSessionKey = requestedAgentID == nil || requestedAgentID == currentAgentID
+            ? self.sessionKey
+            : nil
         let next: String
         do {
-            let created = try await transport.createSession(
-                key: requested,
-                label: nil,
-                parentSessionKey: parentSessionKey,
-                worktree: worktree ? true : nil)
+            let created = if let routeLease {
+                try await routeLease.createSession(
+                    key: requested,
+                    label: nil,
+                    agentID: requestedAgentID,
+                    parentSessionKey: parentSessionKey,
+                    worktree: worktree ? true : nil,
+                    worktreeBaseRef: worktree ? worktreeBaseRef : nil)
+            } else {
+                try await self.transport.createSession(
+                    key: requested,
+                    label: nil,
+                    agentID: requestedAgentID,
+                    parentSessionKey: parentSessionKey,
+                    worktree: worktree ? true : nil,
+                    worktreeBaseRef: worktree ? worktreeBaseRef : nil)
+            }
             let createdKey = created.key.trimmingCharacters(in: .whitespacesAndNewlines)
             next = createdKey.isEmpty ? requested : createdKey
         } catch {
@@ -1572,9 +1601,10 @@ extension OpenClawChatViewModel {
         return normalized
     }
 
-    private func generatedNewSessionKey() -> String {
+    private func generatedNewSessionKey(agentID explicitAgentID: String? = nil) -> String {
         let baseKey = "ios-\(UUID().uuidString.lowercased())"
-        guard let agentID = OpenClawChatSessionKey.agentID(from: sessionKey) ??
+        guard let agentID = explicitAgentID ??
+            OpenClawChatSessionKey.agentID(from: sessionKey) ??
             activeAgentId ??
             OpenClawChatSessionKey.agentID(from: resolvedMainSessionKey) ??
             sessions.lazy.compactMap({ OpenClawChatSessionKey.agentID(from: $0.key) }).first
