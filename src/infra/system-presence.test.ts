@@ -1,6 +1,6 @@
+import { randomUUID } from "node:crypto";
 // Covers in-memory system presence merging and expiry behavior.
 import os from "node:os";
-import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const spawnSyncMock = vi.hoisted(() => {
@@ -26,14 +26,12 @@ vi.mock("node:child_process", async () => {
   );
 });
 
-import { listSystemPresence, updateSystemPresence, upsertPresence } from "./system-presence.js";
-
 describe("system-presence macOS probe bounds", () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it("passes a timeout to the sysctl and sw_vers presence probes", () => {
+  it("passes a timeout to the sysctl and sw_vers presence probes", async () => {
     vi.spyOn(os, "platform").mockReturnValue("darwin");
     spawnSyncMock.mockReturnValue({
       stdout: "MacBookPro18,1\n",
@@ -44,18 +42,25 @@ describe("system-presence macOS probe bounds", () => {
       signal: null,
     });
 
-    // initSelfPresence runs at import; re-trigger by forcing a repopulate path.
+    vi.resetModules();
+    const { upsertPresence } = await import("./system-presence.js");
+
     upsertPresence(randomUUID(), { host: "probe-host", mode: "ui", reason: "connect" });
 
     const probedCommands = spawnSyncMock.mock.calls
       .filter(([cmd]) => cmd === "sysctl" || cmd === "sw_vers")
-      .map(([, , opts]) => opts);
+      .map((call) => call[2]);
     expect(probedCommands.length).toBeGreaterThan(0);
     for (const opts of probedCommands) {
       expect(opts?.timeout).toBeGreaterThan(0);
+      // Enforceable termination: a child that traps SIGTERM must still be
+      // reaped, so the probe uses SIGKILL rather than relying on SIGTERM.
+      expect(opts?.killSignal).toBe("SIGKILL");
     }
   });
 });
+
+import { listSystemPresence, updateSystemPresence, upsertPresence } from "./system-presence.js";
 
 describe("system-presence", () => {
   afterEach(() => {
