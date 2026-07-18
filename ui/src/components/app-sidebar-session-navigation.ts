@@ -24,8 +24,10 @@ import {
   areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
   isAcpSessionKey,
+  isUiGlobalScopeConfigured,
   normalizeAgentId,
   parseAgentSessionKey,
+  resolveUiCanonicalMainSessionKey,
   resolveUiConfiguredMainKey,
   resolveUiDefaultAgentId,
 } from "../lib/sessions/session-key.ts";
@@ -570,12 +572,18 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
 
   /** Canonical main-session key for the selected (or given) agent. */
   protected selectedAgentMainSessionKey(agentId?: string): string {
+    const host = {
+      agentsList: this.context?.agents.state.agentsList,
+      hello: this.context?.gateway.snapshot.hello,
+    };
+    // Global-scope gateways advertise the canonical main session as the
+    // literal "global" key; a synthesized agent key would never match it.
+    if (isUiGlobalScopeConfigured(host)) {
+      return resolveUiCanonicalMainSessionKey(host);
+    }
     return buildAgentMainSessionKey({
       agentId: agentId ?? this.expandedAgentId(),
-      mainKey: resolveUiConfiguredMainKey({
-        agentsList: this.context?.agents.state.agentsList,
-        hello: this.context?.gateway.snapshot.hello,
-      }),
+      mainKey: resolveUiConfiguredMainKey(host),
     });
   }
 

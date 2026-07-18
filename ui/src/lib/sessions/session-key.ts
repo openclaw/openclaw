@@ -185,7 +185,7 @@ export function isUiGlobalScopeConfigured(
   return isUiGlobalSessionKey(resolveUiCanonicalMainSessionKey(host));
 }
 
-function resolveUiCanonicalMainSessionKey(
+export function resolveUiCanonicalMainSessionKey(
   host: Pick<UiSessionDefaultsHost, "agentsList" | "hello">,
 ): string {
   const defaults = readSessionDefaults(host);

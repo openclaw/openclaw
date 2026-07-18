@@ -522,6 +522,38 @@ describe("AppSidebar agent chip", () => {
     expect(rows[0]?.textContent).toContain("Research task");
   });
 
+  it("treats the global key as the main session under global scope", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const harness = createSessionsHarness("main", ["global"]);
+    const globalAgents = {
+      defaultId: "main",
+      mainKey: "main",
+      scope: "global",
+      agents: [{ id: "main", identity: { name: "Molty" } }],
+    } as AgentsListResult;
+    const { sidebar } = await mountSidebar(gateway, harness.sessions, "panel", globalAgents);
+    harness.publishList({
+      result: {
+        ts: 2,
+        path: "",
+        count: 2,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          { key: "global", kind: "global", updatedAt: 5, unread: true },
+          { key: "agent:main:side-quest", kind: "direct", label: "Side quest", updatedAt: 4 },
+        ],
+      },
+    });
+    await sidebar.updateComplete;
+
+    // The advertised global main hides behind the identity card instead of
+    // leaking into Threads; ordinary sessions still list, and the card
+    // surfaces the global row's unread state.
+    expect(sidebar.querySelector('[data-session-key="global"]')).toBeNull();
+    expect(sidebar.querySelector('[data-session-key="agent:main:side-quest"]')).not.toBeNull();
+    expect(sidebar.querySelector(".sidebar-agent-card__main .session-unread-dot")).not.toBeNull();
+  });
+
   it("promotes main-session children to top-level threads, including alias parent keys", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     // The gateway row uses the unprefixed "main" alias; children index under
