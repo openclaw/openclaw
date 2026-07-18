@@ -372,13 +372,13 @@ describe("cron store", () => {
     expect(dir.some((name) => name.endsWith(".archive.json"))).toBe(true);
   });
 
-  it("prunes oldest archives when the retention limit is exceeded", async () => {
+  it("accumulates archives on repeated overflow without auto-pruning", async () => {
     const { storePath } = await makeStorePath();
     const quarantinePath = resolveCronQuarantinePath(storePath);
     await fs.mkdir(path.dirname(storePath), { recursive: true });
 
-    // Create more quarantine sidecars than the retention limit so the oldest
-    // archives are pruned when each overflow triggers a new archive.
+    // Create 7 quarantine sidecars through overflow recovery. Without
+    // auto-pruning, all archive files are retained for operator inspection.
     const paddingSize = 8 * 1024 * 1024 - 512;
     for (let i = 0; i < 7; i++) {
       const existingJobs = Array.from({ length: 5 }, (_, j) => ({
@@ -397,8 +397,8 @@ describe("cron store", () => {
 
     const dir = await fs.readdir(path.dirname(quarantinePath));
     const archives = dir.filter((name) => name.endsWith(".archive.json"));
-    // At most 5 archives should be retained; the oldest should be pruned.
-    expect(archives.length).toBeLessThanOrEqual(5);
+    // All 7 archives are retained — no auto-pruning.
+    expect(archives.length).toBe(7);
   });
 
   it("does not rewrite quarantine files when every entry is already present", async () => {
