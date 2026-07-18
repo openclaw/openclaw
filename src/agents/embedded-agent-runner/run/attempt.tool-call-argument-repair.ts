@@ -83,26 +83,39 @@ const TOOLCALL_REPAIR_FREEFORM_SUCCESSOR_KEYS: Record<string, string> = {
 // structure and avoids false positives on legitimate \n usage.
 const TOOLCALL_REPAIR_DOUBLE_ESCAPED_CODE_RE = /:\s*\\n\s+\S/s;
 
+// Maps JSON escape chars to their real equivalents. Only applied at
+// fingerprint positions, preserving intentional escapes elsewhere.
+const TOOLCALL_REPAIR_DOUBLE_ESCAPE_MAP: Record<string, string> = {
+  n: "\n",
+  r: "\r",
+  t: "\t",
+};
+
+// Matches a corrupted \n, \t, or \r that sits at a structural code
+// position: after a colon (Python block) or after another literal
+// escape (blank line between blocks). Only these positions are
+// repaired; intentional escapes in string literals are preserved.
+const TOOLCALL_REPAIR_DOUBLE_ESCAPED_REPLACE_RE = /((?::|\\[nrt])\s*)\\([nrt])(?=\s+\S)/gs;
+
+// Code-like tool argument keys eligible for double-escape repair (#109478).
+// Includes exec's "command" which is not in the smart-quote freeform set.
+const TOOLCALL_REPAIR_DOUBLE_ESCAPED_CODE_KEYS = new Set([
+  "command",
+  ...TOOLCALL_REPAIR_FREEFORM_VALUE_KEYS,
+]);
+
 /** Fix double-escaped JSON strings in code-like tool call argument values. */
 function repairDoubleEscapedCodeStrings(args: Record<string, unknown>): void {
   for (const [key, value] of Object.entries(args)) {
     if (typeof value === "string") {
       if (
-        TOOLCALL_REPAIR_FREEFORM_VALUE_KEYS.has(key) &&
+        TOOLCALL_REPAIR_DOUBLE_ESCAPED_CODE_KEYS.has(key) &&
         TOOLCALL_REPAIR_DOUBLE_ESCAPED_CODE_RE.test(value)
       ) {
-        args[key] = value.replace(/\\([nrt])/g, (_match, char) => {
-          switch (char) {
-            case "n":
-              return "\n";
-            case "r":
-              return "\r";
-            case "t":
-              return "\t";
-            default:
-              return char;
-          }
-        });
+        args[key] = value.replace(
+          TOOLCALL_REPAIR_DOUBLE_ESCAPED_REPLACE_RE,
+          (_match, prefix, char) => `${prefix}${TOOLCALL_REPAIR_DOUBLE_ESCAPE_MAP[char] ?? char}`,
+        );
       }
     } else if (value && typeof value === "object" && !Array.isArray(value)) {
       repairDoubleEscapedCodeStrings(value as Record<string, unknown>);
