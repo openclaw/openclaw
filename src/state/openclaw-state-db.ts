@@ -50,12 +50,19 @@ export type OpenClawStateDatabaseOptions = {
   path?: string;
 };
 
+export type OpenClawStateDatabaseLease = {
+  database: OpenClawStateDatabase;
+  release: () => void;
+};
+
 export type OpenClawStateDatabaseSchemaMigration = {
   kind: "agent-databases-composite-primary-key";
   path: string;
 };
 
 const cachedDatabases = new Map<string, OpenClawStateDatabase>();
+const cachedDatabaseLeaseCounts = new Map<string, number>();
+const cachedDatabasePendingClosePaths = new Set<string>();
 
 type OpenClawStateMetadataDatabase = Pick<OpenClawStateKyselyDatabase, "schema_meta">;
 
@@ -936,6 +943,18 @@ function ensureAdditiveStateColumns(db: DatabaseSync): void {
     repairLegacyTaskDeliveryStatuses(db);
   });
   ensureColumn(db, "subagent_runs", "task_name TEXT");
+  ensureColumn(db, "durable_runtime_runs", "parent_runtime_run_id TEXT");
+  ensureColumn(db, "durable_runtime_runs", "parent_step_id TEXT");
+  ensureColumn(db, "durable_runtime_runs", "message_id TEXT");
+  ensureColumn(db, "durable_runtime_runs", "turn_id TEXT");
+  ensureColumn(db, "durable_runtime_runs", "work_unit_id TEXT");
+  ensureColumn(db, "durable_runtime_runs", "report_route_id TEXT");
+  ensureColumn(db, "durable_runtime_runs", "claimed_by TEXT");
+  ensureColumn(db, "durable_runtime_runs", "claim_expires_at INTEGER");
+  ensureColumn(db, "durable_runtime_runs", "heartbeat_at INTEGER");
+  ensureColumn(db, "durable_runtime_steps", "claimed_by TEXT");
+  ensureColumn(db, "durable_runtime_steps", "claim_expires_at INTEGER");
+  ensureColumn(db, "durable_runtime_steps", "heartbeat_at INTEGER");
 }
 
 function ensureSchema(db: DatabaseSync, pathname: string): void {
@@ -991,6 +1010,8 @@ export function openOpenClawStateDatabase(
     cached.walMaintenance.close();
     clearNodeSqliteKyselyCacheForDatabase(cached.db);
     cachedDatabases.delete(pathname);
+    cachedDatabaseLeaseCounts.delete(pathname);
+    cachedDatabasePendingClosePaths.delete(pathname);
   }
 
   ensureOpenClawStatePermissions(pathname, env);
@@ -1017,7 +1038,43 @@ export function openOpenClawStateDatabase(
   ensureOpenClawStatePermissions(pathname, env);
   const database = { db, path: pathname, walMaintenance };
   cachedDatabases.set(pathname, database);
+  cachedDatabaseLeaseCounts.set(pathname, 0);
   return database;
+}
+
+function closeOpenClawStateDatabaseHandle(pathname: string, database: OpenClawStateDatabase): void {
+  database.walMaintenance.close();
+  clearNodeSqliteKyselyCacheForDatabase(database.db);
+  if (database.db.isOpen) {
+    database.db.close();
+  }
+  cachedDatabases.delete(pathname);
+  cachedDatabaseLeaseCounts.delete(pathname);
+  cachedDatabasePendingClosePaths.delete(pathname);
+}
+
+export function acquireOpenClawStateDatabaseLease(
+  options: OpenClawStateDatabaseOptions,
+): OpenClawStateDatabaseLease {
+  const database = openOpenClawStateDatabase(options);
+  const pathname = database.path;
+  cachedDatabaseLeaseCounts.set(pathname, (cachedDatabaseLeaseCounts.get(pathname) ?? 0) + 1);
+  let released = false;
+
+  return {
+    database,
+    release: () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      const leaseCount = Math.max((cachedDatabaseLeaseCounts.get(pathname) ?? 1) - 1, 0);
+      cachedDatabaseLeaseCounts.set(pathname, leaseCount);
+      if (leaseCount === 0 && cachedDatabasePendingClosePaths.has(pathname)) {
+        closeOpenClawStateDatabaseHandle(pathname, database);
+      }
+    },
+  };
 }
 
 /** Run a synchronous immediate transaction against the shared state database. */
@@ -1025,15 +1082,21 @@ export function runOpenClawStateWriteTransaction<T>(
   operation: (database: OpenClawStateDatabase) => T,
   options: OpenClawStateDatabaseOptions = {},
 ): T {
-  const database = openOpenClawStateDatabase(options);
-  const result = runSqliteImmediateTransactionSync(database.db, () => operation(database));
+  const lease = acquireOpenClawStateDatabaseLease(options);
   try {
-    ensureOpenClawStatePermissions(database.path, options.env ?? process.env);
-  } catch {
-    // The write already committed; permission hardening is best-effort here so
-    // callers never retry an operation that is durable in SQLite.
+    const result = runSqliteImmediateTransactionSync(lease.database.db, () =>
+      operation(lease.database),
+    );
+    try {
+      ensureOpenClawStatePermissions(lease.database.path, options.env ?? process.env);
+    } catch {
+      // The write already committed; permission hardening is best-effort here so
+      // callers never retry an operation that is durable in SQLite.
+    }
+    return result;
+  } finally {
+    lease.release();
   }
-  return result;
 }
 
 /** Close all cached shared state database handles. */
@@ -1046,6 +1109,26 @@ export function closeOpenClawStateDatabase(): void {
     }
   }
   cachedDatabases.clear();
+  cachedDatabaseLeaseCounts.clear();
+  cachedDatabasePendingClosePaths.clear();
+}
+
+/** Close one cached shared state database handle resolved from the provided options. */
+export function closeOpenClawStateDatabaseForPath(
+  options: OpenClawStateDatabaseOptions = {},
+): void {
+  const pathname = resolveDatabasePath(options);
+  const database = cachedDatabases.get(pathname);
+  if (!database) {
+    return;
+  }
+  const leaseCount = cachedDatabaseLeaseCounts.get(pathname) ?? 0;
+  if (leaseCount > 0) {
+    cachedDatabasePendingClosePaths.add(pathname);
+    database.walMaintenance.checkpoint();
+    return;
+  }
+  closeOpenClawStateDatabaseHandle(pathname, database);
 }
 
 /** Test whether any cached shared state database handle is still open. */

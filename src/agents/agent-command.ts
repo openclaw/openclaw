@@ -278,6 +278,9 @@ function resolveAgentRunLifecycleEndLogLevel(meta: {
     return undefined;
   }
   if (outcome.reason === "completed") {
+    if (outcome.stopReason === "stop") {
+      return undefined;
+    }
     return "info";
   }
   return outcome.status === "timeout" ? "warn" : "error";

@@ -132,6 +132,10 @@
     "target": "Gateway RPC 参考"
   },
   {
+    "source": "Gateway protocol",
+    "target": "Gateway 协议"
+  },
+  {
     "source": "Secure file operations",
     "target": "安全文件操作"
   },
@@ -178,6 +182,14 @@
   {
     "source": "Diagnostics export",
     "target": "诊断导出"
+  },
+  {
+    "source": "Durable Core Beta 3 Architecture",
+    "target": "Durable Core Beta 3 架构"
+  },
+  {
+    "source": "Durable Core Beta 3 Test Plan",
+    "target": "Durable Core Beta 3 测试计划"
   },
   {
     "source": "Agent harness plugins",

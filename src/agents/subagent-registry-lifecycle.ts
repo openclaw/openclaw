@@ -6,6 +6,7 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
+import { recordDurableSubagentAnnounceDelivery } from "../durable/subagent.js";
 import type { callGateway as defaultCallGateway } from "../gateway/call.js";
 import { formatErrorMessage, readErrorName } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
@@ -634,7 +635,11 @@ export function createSubagentRegistryLifecycleController(params: {
     };
   };
 
-  const markPendingFinalDelivery = (args: { entry: SubagentRunRecord; error?: string }) => {
+  const markPendingFinalDelivery = (args: {
+    entry: SubagentRunRecord;
+    error?: string;
+    countAttempt?: boolean;
+  }) => {
     const now = Date.now();
     const payload: PendingFinalDeliveryPayload = loadPendingFinalDeliveryPayload(args.entry);
 
@@ -642,7 +647,9 @@ export function createSubagentRegistryLifecycleController(params: {
     delivery.status = "pending";
     delivery.createdAt ??= now;
     delivery.lastAttemptAt = now;
-    delivery.attemptCount = (delivery.attemptCount ?? 0) + 1;
+    if (args.countAttempt !== false) {
+      delivery.attemptCount = (delivery.attemptCount ?? 0) + 1;
+    }
     delivery.lastError = args.error ?? null;
     delivery.payload = payload;
   };
@@ -1138,7 +1145,10 @@ export function createSubagentRegistryLifecycleController(params: {
 
     markPendingFinalDelivery({
       entry,
-      error: didAnnounce ? undefined : "announce deferred or direct delivery failed",
+      error: didAnnounce
+        ? undefined
+        : (getDeliveryLastError(entry) ?? "announce deferred or direct delivery failed"),
+      countAttempt: deferredDecision.countAttempt,
     });
     entry.cleanupHandled = false;
     params.resumedRuns.delete(runId);
@@ -1312,6 +1322,20 @@ export function createSubagentRegistryLifecycleController(params: {
             return;
           }
           recordAnnounceDeliveryResult(entry, delivery);
+          recordDurableSubagentAnnounceDelivery({
+            runId: pendingPayload.childRunId,
+            childSessionKey: pendingPayload.childSessionKey,
+            directIdempotencyKey: buildAnnounceIdempotencyKey(
+              buildAnnounceIdFromChildRun({
+                childSessionKey: pendingPayload.childSessionKey,
+                childRunId: pendingPayload.childRunId,
+              }),
+            ),
+            delivered: delivery.delivered,
+            path: delivery.path,
+            error: delivery.delivered ? undefined : formatAnnounceDeliveryError(delivery),
+            reason: delivery.reason,
+          });
           if (delivery.delivered) {
             const deliveryState = ensureDeliveryState(entry);
             if (deliveryState.lastError !== undefined) {

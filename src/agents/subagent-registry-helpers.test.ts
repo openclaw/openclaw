@@ -39,10 +39,12 @@ describe("reconcileOrphanedRun", () => {
     vi.useRealTimers();
   });
 
-  it("preserves timing on orphaned error outcomes", () => {
+  it("keeps completion-required orphaned runs pending for parent-visible delivery", () => {
     vi.useFakeTimers();
     vi.setSystemTime(4_000);
-    const entry = createRunEntry();
+    const entry = createRunEntry({
+      expectsCompletionMessage: true,
+    });
     const runs = new Map([[entry.runId, entry]]);
     const resumedRuns = new Set([entry.runId]);
 
@@ -58,6 +60,52 @@ describe("reconcileOrphanedRun", () => {
     ).toBe(true);
 
     expect(entry.endedAt).toBe(4_000);
+    expect(entry.outcome).toEqual({
+      status: "error",
+      error: "orphaned subagent run (missing-session-id)",
+      startedAt: 1_000,
+      endedAt: 4_000,
+      elapsedMs: 3_000,
+    });
+    expect(entry.execution).toMatchObject({
+      status: "terminal",
+      startedAt: 1_000,
+      endedAt: 4_000,
+    });
+    expect(entry.delivery).toMatchObject({
+      status: "pending",
+      createdAt: 4_000,
+      lastError: "orphaned subagent run (missing-session-id)",
+    });
+    expect(entry.completion).toMatchObject({
+      required: true,
+    });
+    expect(entry.cleanupHandled).toBe(false);
+    expect(entry.cleanupCompletedAt).toBeUndefined();
+    expect(runs.has(entry.runId)).toBe(true);
+    expect(resumedRuns.has(entry.runId)).toBe(false);
+  });
+
+  it("prunes orphaned runs when completion delivery is not required", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(4_000);
+    const entry = createRunEntry({
+      expectsCompletionMessage: false,
+    });
+    const runs = new Map([[entry.runId, entry]]);
+    const resumedRuns = new Set([entry.runId]);
+
+    expect(
+      reconcileOrphanedRun({
+        runId: entry.runId,
+        entry,
+        reason: "missing-session-id",
+        source: "resume",
+        runs,
+        resumedRuns,
+      }),
+    ).toBe(true);
+
     expect(entry.outcome).toEqual({
       status: "error",
       error: "orphaned subagent run (missing-session-id)",
