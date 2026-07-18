@@ -10,7 +10,6 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { GoogleChatEventPayloadError, parseGoogleChatInboundPayload } from "./monitor-event.js";
-import type { GoogleChatRuntimeEnv } from "./monitor-types.js";
 import { getGoogleChatRuntime } from "./runtime.js";
 import type { GoogleChatEvent } from "./types.js";
 
@@ -180,7 +179,10 @@ export function createGoogleChatIngressMonitor(options: {
   accountId: string;
   queue?: ChannelIngressQueue<GoogleChatIngressPayload>;
   dispatch: GoogleChatIngressDispatch;
-  runtime: Pick<GoogleChatRuntimeEnv, "error" | "log">;
+  runtime: {
+    error?: (message: string) => void;
+    log?: (message: string) => void;
+  };
   pollIntervalMs?: number;
   adoptionStallTimeoutMs?: number;
   abortSignal?: AbortSignal;
