@@ -62,7 +62,7 @@ describe("streamOpenAICodexResponses retry handling", () => {
       if (typeof callback === "function") {
         callback();
       }
-      return 0 as ReturnType<typeof setTimeout>;
+      return 0 as unknown as ReturnType<typeof setTimeout>;
     });
 
     const result = await streamOpenAICodexResponses(model, context, {
