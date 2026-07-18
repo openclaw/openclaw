@@ -906,8 +906,8 @@ final class WebChatSwiftUIWindowController {
                     UserDefaults.standard.removeObject(forKey: webChatThinkingLevelDefaultsKey)
                 }
             },
-            onVerboseLevelChanged: { level in
-                UserDefaults.standard.set(level, forKey: webChatVerboseLevelDefaultsKey)
+            onVerbosePreferenceChanged: { level in
+                Self.persistVerbosePreference(level)
             })
         let explicitAgentID = WebChatRoute.normalizedAgentID(explicitAgentID)
         Task { @MainActor [weak vm] in
@@ -1079,6 +1079,14 @@ final class WebChatSwiftUIWindowController {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
         return OpenClawChatViewModel.verboseLevelOptions.contains(stored ?? "") ? stored : nil
+    }
+
+    static func persistVerbosePreference(_ level: String?, defaults: UserDefaults = .standard) {
+        if let level {
+            defaults.set(level, forKey: webChatVerboseLevelDefaultsKey)
+        } else {
+            defaults.removeObject(forKey: webChatVerboseLevelDefaultsKey)
+        }
     }
 
     static func effectiveAgentID(

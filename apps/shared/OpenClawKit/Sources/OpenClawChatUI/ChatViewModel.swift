@@ -44,6 +44,7 @@ public final class OpenClawChatViewModel {
     /// Setter is module-internal for the thinking-level extension only.
     public internal(set) var showsThinkingPicker = true
     public internal(set) var preferredVerboseLevel: String
+    var prefersExplicitVerboseLevel: Bool
     public private(set) var modelSelectionID: String = "__default__"
     public private(set) var modelChoices: [OpenClawChatModelChoice] = []
     private var modelPickerFavorites: [String]
@@ -172,6 +173,7 @@ public final class OpenClawChatViewModel {
     let onThinkingLevelChanged: (@MainActor @Sendable (String) -> Void)?
     let onThinkingPreferenceChanged: (@MainActor @Sendable (String?) -> Void)?
     let onVerboseLevelChanged: (@MainActor @Sendable (String) -> Void)?
+    let onVerbosePreferenceChanged: (@MainActor @Sendable (String?) -> Void)?
     private let diagnosticsLog: (@MainActor @Sendable (String) -> Void)?
     private let attachmentOwnerIsActive: @MainActor () -> Bool
 
@@ -251,7 +253,8 @@ public final class OpenClawChatViewModel {
     var emittedThinkingPreference: ThinkingPreferenceState
     var thinkingPreferenceRequests: [UInt64: ThinkingPreferenceRequest] = [:]
     var nextVerboseSelectionRequestID: UInt64 = 0
-    var confirmedVerboseLevel: String
+    var confirmedVerbosePreference: VerbosePreferenceState
+    var emittedVerbosePreference: VerbosePreferenceState
     var verbosePreferenceRequests: [UInt64: VerbosePreferenceRequest] = [:]
     var acceptedVerboseLevelsByTarget: [ModelPatchTarget: VerboseLevelState] = [:]
     var acceptedFastModesByTarget: [ModelPatchTarget: FastModeState] = [:]
@@ -278,9 +281,14 @@ public final class OpenClawChatViewModel {
         let sessionRoutingContract: String?
     }
 
+    struct VerbosePreferenceState: Equatable {
+        let level: String
+        let isExplicit: Bool
+    }
+
     enum VerbosePreferenceRequest {
-        case pending(String)
-        case succeeded(String)
+        case pending(VerbosePreferenceState)
+        case succeeded(VerbosePreferenceState)
         case failed
     }
 
@@ -406,6 +414,7 @@ public final class OpenClawChatViewModel {
         onThinkingLevelChanged: (@MainActor @Sendable (String) -> Void)? = nil,
         onThinkingPreferenceChanged: (@MainActor @Sendable (String?) -> Void)? = nil,
         onVerboseLevelChanged: (@MainActor @Sendable (String) -> Void)? = nil,
+        onVerbosePreferenceChanged: (@MainActor @Sendable (String?) -> Void)? = nil,
         diagnosticsLog: (@MainActor @Sendable (String) -> Void)? = nil)
     {
         self.sessionKey = sessionKey
@@ -434,13 +443,20 @@ public final class OpenClawChatViewModel {
             isExplicit: normalizedThinkingLevel != nil)
         self.confirmedThinkingPreference = initialThinkingPreference
         self.emittedThinkingPreference = initialThinkingPreference
-        let initialResolvedVerboseLevel = Self.normalizedVerboseLevel(initialVerboseLevel) ?? "off"
+        let normalizedVerboseLevel = Self.normalizedVerboseLevel(initialVerboseLevel)
+        let initialResolvedVerboseLevel = normalizedVerboseLevel ?? "off"
         self.preferredVerboseLevel = initialResolvedVerboseLevel
-        self.confirmedVerboseLevel = initialResolvedVerboseLevel
+        self.prefersExplicitVerboseLevel = normalizedVerboseLevel != nil
+        let initialVerbosePreference = VerbosePreferenceState(
+            level: initialResolvedVerboseLevel,
+            isExplicit: normalizedVerboseLevel != nil)
+        self.confirmedVerbosePreference = initialVerbosePreference
+        self.emittedVerbosePreference = initialVerbosePreference
         self.onSessionChanged = onSessionChanged
         self.onThinkingLevelChanged = onThinkingLevelChanged
         self.onThinkingPreferenceChanged = onThinkingPreferenceChanged
         self.onVerboseLevelChanged = onVerboseLevelChanged
+        self.onVerbosePreferenceChanged = onVerbosePreferenceChanged
         self.diagnosticsLog = diagnosticsLog
         self.attachmentOwnerIsActive = attachmentOwnerIsActive
 

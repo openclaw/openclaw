@@ -20,7 +20,9 @@ extension OpenClawChatViewModel {
             return Self.normalizedVerboseLevel(self.currentSessionEntry()?.verboseLevel)
                 ?? Self.inheritedThinkingSelectionID
         }
-        return self.preferredVerboseLevel
+        return self.prefersExplicitVerboseLevel
+            ? self.preferredVerboseLevel
+            : Self.inheritedThinkingSelectionID
     }
 
     public var fastModeSelectionID: String {
@@ -66,14 +68,13 @@ extension OpenClawChatViewModel {
         }
 
         self.updateCurrentSessionVerboseLevel(next, sessionKey: sessionKey)
-        var verboseRequestID: UInt64?
-        if let next {
-            self.nextVerboseSelectionRequestID &+= 1
-            let requestID = self.nextVerboseSelectionRequestID
-            self.verbosePreferenceRequests[requestID] = .pending(next)
-            self.reconcileVerbosePreferenceRequests()
-            verboseRequestID = requestID
-        }
+        self.nextVerboseSelectionRequestID &+= 1
+        let verboseRequestID = self.nextVerboseSelectionRequestID
+        let requestedPreference = VerbosePreferenceState(
+            level: next ?? self.preferredVerboseLevel,
+            isExplicit: !clearsOverride)
+        self.verbosePreferenceRequests[verboseRequestID] = .pending(requestedPreference)
+        self.reconcileVerbosePreferenceRequests()
         let requestID = self.reserveSessionSettingsRequest(for: target)
         self.enqueueSessionSettingsPatch(requestID: requestID, target: target) { [weak self] routeLease in
             guard let self else { return }
@@ -91,10 +92,10 @@ extension OpenClawChatViewModel {
                     requestID: requestID,
                     target: target,
                     verboseLevelOverride: .some(accepted))
-                if let verboseRequestID, let accepted {
-                    self.verbosePreferenceRequests[verboseRequestID] = .succeeded(accepted)
-                    self.reconcileVerbosePreferenceRequests()
-                }
+                self.verbosePreferenceRequests[verboseRequestID] = .succeeded(VerbosePreferenceState(
+                    level: accepted ?? requestedPreference.level,
+                    isExplicit: !clearsOverride))
+                self.reconcileVerbosePreferenceRequests()
                 if let state = self.modelControlState(for: target, originalSessionKey: sessionKey) {
                     self.updateCurrentSessionVerboseLevel(
                         accepted,
@@ -102,10 +103,8 @@ extension OpenClawChatViewModel {
                         exactMatchOnly: state.exactMatchOnly)
                 }
             } catch {
-                if let verboseRequestID {
-                    self.verbosePreferenceRequests[verboseRequestID] = .failed
-                    self.reconcileVerbosePreferenceRequests()
-                }
+                self.verbosePreferenceRequests[verboseRequestID] = .failed
+                self.reconcileVerbosePreferenceRequests()
                 if let state = self.modelControlState(for: target, originalSessionKey: sessionKey) {
                     self.updateCurrentSessionVerboseLevel(
                         self.acceptedVerboseLevelsByTarget[target]?.level,
@@ -117,21 +116,27 @@ extension OpenClawChatViewModel {
     }
 
     private func reconcileVerbosePreferenceRequests() {
-        let resolved = self.verbosePreferenceRequests.keys.sorted(by: >).compactMap { requestID -> String? in
+        let resolved = self.verbosePreferenceRequests.keys.sorted(by: >).compactMap { requestID
+            -> VerbosePreferenceState? in
             switch self.verbosePreferenceRequests[requestID] {
-            case let .pending(level), let .succeeded(level): level
+            case let .pending(state), let .succeeded(state): state
             case .failed, .none: nil
             }
-        }.first ?? self.confirmedVerboseLevel
-        if resolved != self.preferredVerboseLevel {
-            self.preferredVerboseLevel = resolved
-            self.onVerboseLevelChanged?(resolved)
+        }.first ?? self.confirmedVerbosePreference
+        if resolved.level != self.preferredVerboseLevel {
+            self.preferredVerboseLevel = resolved.level
+            self.onVerboseLevelChanged?(resolved.level)
+        }
+        self.prefersExplicitVerboseLevel = resolved.isExplicit
+        if resolved != self.emittedVerbosePreference {
+            self.emittedVerbosePreference = resolved
+            self.onVerbosePreferenceChanged?(resolved.isExplicit ? resolved.level : nil)
         }
         guard !self.verbosePreferenceRequests.values.contains(where: {
             if case .pending = $0 { return true }
             return false
         }) else { return }
-        self.confirmedVerboseLevel = resolved
+        self.confirmedVerbosePreference = resolved
         self.verbosePreferenceRequests.removeAll()
     }
 

@@ -69,17 +69,11 @@ extension OpenClawChatViewModel {
                     agentID: target.agentID,
                     patch: OpenClawChatSessionSettingsPatch(
                         thinkingLevel: .some(clearsOverride ? nil : next)))
-                let previousResult = self.acceptedSettingsPatchResultsByTarget[target]
                 let acceptedLevel = Self.normalizedThinkingLevel(patchResult?.thinkingLevel) ?? next
-                let acceptedResult = OpenClawChatModelPatchResult(
-                    key: patchResult?.key ?? previousResult?.key ?? target.canonicalSessionKey,
-                    modelProvider: patchResult?.modelProvider ?? previousResult?.modelProvider,
-                    model: patchResult?.model ?? previousResult?.model,
-                    thinkingLevel: acceptedLevel,
-                    thinkingLevels: patchResult?.thinkingLevels ?? previousResult?.thinkingLevels,
-                    fastMode: patchResult?.fastMode ?? previousResult?.fastMode,
-                    effectiveFastMode: patchResult?.effectiveFastMode ?? previousResult?.effectiveFastMode,
-                    verboseLevel: patchResult?.verboseLevel ?? previousResult?.verboseLevel)
+                let acceptedResult = self.mergedThinkingPatchSuccess(
+                    patchResult,
+                    acceptedLevel: acceptedLevel,
+                    target: target)
                 // Older queued successes remain rollback truth, but never replace
                 // a newer optimistic selection in the session row or picker.
                 self.lastSuccessfulSettingsPatchResultsByTarget[target] = acceptedResult
@@ -167,6 +161,27 @@ extension OpenClawChatViewModel {
                     sessionKey: sessionKey)
             }
         }
+    }
+
+    private func mergedThinkingPatchSuccess(
+        _ patchResult: OpenClawChatModelPatchResult?,
+        acceptedLevel: String,
+        target: ModelPatchTarget) -> OpenClawChatModelPatchResult
+    {
+        // Rollback truth can contain newer refreshed model metadata,
+        // while the common success snapshot carries fast/verbosity patches.
+        let accepted = self.acceptedSettingsPatchResultsByTarget[target]
+        let successful = self.lastSuccessfulSettingsPatchResultsByTarget[target]
+        return OpenClawChatModelPatchResult(
+            key: patchResult?.key ?? accepted?.key ?? successful?.key ?? target.canonicalSessionKey,
+            modelProvider: patchResult?.modelProvider ?? accepted?.modelProvider ?? successful?.modelProvider,
+            model: patchResult?.model ?? accepted?.model ?? successful?.model,
+            thinkingLevel: acceptedLevel,
+            thinkingLevels: patchResult?.thinkingLevels ?? accepted?.thinkingLevels ?? successful?.thinkingLevels,
+            fastMode: patchResult?.fastMode ?? successful?.fastMode ?? accepted?.fastMode,
+            effectiveFastMode: patchResult?.effectiveFastMode ?? successful?.effectiveFastMode
+                ?? accepted?.effectiveFastMode,
+            verboseLevel: patchResult?.verboseLevel ?? successful?.verboseLevel ?? accepted?.verboseLevel)
     }
 
     private func reconcileThinkingPreferenceRequests() {

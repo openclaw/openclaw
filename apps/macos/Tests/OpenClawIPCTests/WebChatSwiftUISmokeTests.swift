@@ -139,4 +139,16 @@ struct WebChatSwiftUISmokeTests {
         defaults.set("invalid", forKey: "openclaw.webchat.verboseLevel")
         #expect(WebChatSwiftUIWindowController.persistedVerboseLevel(defaults: defaults) == nil)
     }
+
+    @Test func `inherited verbosity preference clears persisted override`() throws {
+        let suiteName = "WebChatSwiftUISmokeTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        WebChatSwiftUIWindowController.persistVerbosePreference("full", defaults: defaults)
+        WebChatSwiftUIWindowController.persistVerbosePreference(nil, defaults: defaults)
+
+        #expect(WebChatSwiftUIWindowController.persistedVerboseLevel(defaults: defaults) == nil)
+        #expect(defaults.object(forKey: "openclaw.webchat.verboseLevel") == nil)
+    }
 }
