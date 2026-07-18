@@ -844,3 +844,99 @@ describe("validateConfigObjectWithPlugins bundled allowlist compatibility", () =
     expect(mockLoadPluginManifestRegistry).not.toHaveBeenCalled();
   });
 });
+
+describe("validateConfigObjectRawWithPlugins binding channels", () => {
+  const emptyRegistry: PluginManifestRegistry = { diagnostics: [], plugins: [] };
+
+  it("accepts a bundled channel id", () => {
+    const result = validateConfigObjectRawWithPlugins(
+      {
+        bindings: [{ agentId: "main", match: { channel: "telegram" } }],
+      },
+      { pluginMetadataSnapshot: { manifestRegistry: emptyRegistry } },
+    );
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("accepts a registered external plugin channel id", () => {
+    const externalRegistry: PluginManifestRegistry = {
+      diagnostics: [],
+      plugins: [
+        createPluginManifestRecord({
+          id: "external-chat-plugin",
+          origin: "global",
+          channels: ["external-chat"],
+        }),
+      ],
+    };
+    const result = validateConfigObjectRawWithPlugins(
+      {
+        bindings: [{ agentId: "main", match: { channel: "external-chat" } }],
+      },
+      { pluginMetadataSnapshot: { manifestRegistry: externalRegistry } },
+    );
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("rejects a bundled alias that inbound routing does not canonicalize", () => {
+    const result = validateConfigObjectRawWithPlugins(
+      {
+        bindings: [{ agentId: "main", match: { channel: "imsg" } }],
+      },
+      { pluginMetadataSnapshot: { manifestRegistry: emptyRegistry } },
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      issues: [
+        {
+          path: "bindings.0.match.channel",
+          message: 'binding references unknown channel id: "imsg"; use "imessage" instead',
+        },
+      ],
+      warnings: [],
+    });
+  });
+
+  it("rejects an unknown channel id with the binding path", () => {
+    const result = validateConfigObjectRawWithPlugins(
+      {
+        bindings: [{ agentId: "main", match: { channel: "retired-chat" } }],
+      },
+      { pluginMetadataSnapshot: { manifestRegistry: emptyRegistry } },
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      issues: [
+        {
+          path: "bindings.0.match.channel",
+          message: 'binding references unknown channel id: "retired-chat"',
+        },
+      ],
+      warnings: [],
+    });
+  });
+
+  it("suggests imessage for the retired bluebubbles channel id", () => {
+    const result = validateConfigObjectRawWithPlugins(
+      {
+        bindings: [{ agentId: "private", match: { channel: "bluebubbles" } }],
+      },
+      { pluginMetadataSnapshot: { manifestRegistry: emptyRegistry } },
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      issues: [
+        {
+          path: "bindings.0.match.channel",
+          message: 'binding references unknown channel id: "bluebubbles"; use "imessage" instead',
+        },
+      ],
+      warnings: [],
+    });
+  });
+});

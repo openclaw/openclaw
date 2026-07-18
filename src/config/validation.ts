@@ -69,6 +69,9 @@ const LEGACY_REMOVED_PLUGIN_IDS = new Set([
   "skill-workshop",
 ]);
 const BLOCKED_PLUGIN_CANDIDATE_PREFIX = "blocked plugin candidate:";
+// BlueBubbles was removed in favor of the imsg-backed iMessage channel. Keep the
+// documented migration actionable when a retired binding id blocks config load.
+const RETIRED_BINDING_CHANNEL_RENAMES = new Map([["bluebubbles", "imessage"]]);
 
 function formatRemovedPluginConfigWarning(pluginId: string): string {
   if (pluginId === "skill-workshop") {
@@ -1714,6 +1717,45 @@ function validateConfigObjectWithPluginsBase(
   };
 
   const allowedChannels = new Set<string>(["defaults", "modelByChannel", ...bundledChannelIds]);
+
+  if (Array.isArray(config.bindings)) {
+    let registryChannelsLoaded = false;
+    const bindingChannelIds = new Set(bundledChannelIds);
+    const loadRegistryChannels = () => {
+      if (registryChannelsLoaded) {
+        return;
+      }
+      registryChannelsLoaded = true;
+      const { registry } = ensureRegistry();
+      for (const record of registry.plugins) {
+        for (const channelId of record.channels) {
+          const normalized = normalizeLowercaseStringOrEmpty(channelId);
+          if (normalized) {
+            bindingChannelIds.add(normalized);
+          }
+        }
+      }
+    };
+
+    for (const [index, binding] of config.bindings.entries()) {
+      const rawChannelId = binding.match.channel;
+      const channelId = normalizeLowercaseStringOrEmpty(rawChannelId);
+      if (!bindingChannelIds.has(channelId)) {
+        loadRegistryChannels();
+      }
+      if (bindingChannelIds.has(channelId)) {
+        continue;
+      }
+      const canonicalChannelId =
+        bundledChannelAliases.get(channelId) ?? RETIRED_BINDING_CHANNEL_RENAMES.get(channelId);
+      issues.push({
+        path: `bindings.${index}.match.channel`,
+        message:
+          `binding references unknown channel id: ${JSON.stringify(sanitizeForLog(rawChannelId))}` +
+          (canonicalChannelId ? `; use ${JSON.stringify(canonicalChannelId)} instead` : ""),
+      });
+    }
+  }
 
   if (config.channels && isRecord(config.channels)) {
     for (const key of Object.keys(config.channels)) {
