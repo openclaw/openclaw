@@ -882,26 +882,41 @@ async function verifyCodexCompactionStress(params: {
     ).length;
     completedCompactions += turnCompletedCompactions;
     reportedCompactions += compactionCount;
-    const commandStartIndex = events.findIndex(
-      (event) =>
-        event.stream === "tool" &&
-        event.data?.phase === "start" &&
-        event.data?.name === "bash" &&
-        event.data?.args &&
-        typeof event.data.args === "object" &&
-        (event.data.args as { command?: unknown }).command === largeOutputCommand,
-    );
+    const commandStartIndex = events.findIndex((event) => {
+      if (
+        event.stream !== "tool" ||
+        event.data?.phase !== "start" ||
+        event.data?.name !== "bash" ||
+        !event.data?.args ||
+        typeof event.data.args !== "object"
+      ) {
+        return false;
+      }
+      const command = (event.data.args as { command?: unknown }).command;
+      // Codex may preserve the command text or wrap it in a login shell.
+      return (
+        typeof command === "string" &&
+        command.includes("node -e") &&
+        command.includes(`i<${outputLines}`) &&
+        command.includes("2654435761") &&
+        command.includes("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789")
+      );
+    });
     const commandItemId = events[commandStartIndex]?.data?.itemId;
-    const commandResultIndex = events.findIndex(
-      (event, index) =>
+    const commandResultIndex = events.findIndex((event, index) => {
+      const result = event.data?.result;
+      return (
         index > commandStartIndex &&
         event.stream === "tool" &&
         event.data?.phase === "result" &&
         event.data?.itemId === commandItemId &&
         event.data?.status === "completed" &&
         event.data?.isError === false &&
-        event.data?.exitCode === 0,
-    );
+        result !== null &&
+        typeof result === "object" &&
+        (result as { exitCode?: unknown }).exitCode === 0
+      );
+    });
     expect(
       commandResultIndex,
       `large-output turn did not successfully complete the exact native command; events=${JSON.stringify(events)}`,
