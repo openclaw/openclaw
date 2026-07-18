@@ -309,14 +309,18 @@ function matchArgPattern(argPattern: string, argv: string[], platform?: string |
         : argsSlice.join(sep) + sep // trailing sentinel to match pattern format
       : argsSlice.join(sep);
   try {
-    const compiled = compileSafeRegexDetailed(argPattern);
-    if (!compiled.regex) {
-      if (compiled.reason === "unsafe-nested-repetition") {
+    // Safety-check via compileSafeRegexDetailed (nested-repetition / invalid).
+    // That helper trims before compiling, which would change whitespace semantics
+    // of legacy allowlist entries. Reject unsafe patterns, then compile the
+    // original argPattern text so match behavior stays exact.
+    const safety = compileSafeRegexDetailed(argPattern);
+    if (!safety.regex) {
+      if (safety.reason === "unsafe-nested-repetition") {
         console.warn("[exec-approvals] Rejected argPattern with unsafe nested repetition");
       }
       return false;
     }
-    const regex = compiled.regex;
+    const regex = new RegExp(argPattern);
     if (regex.test(argsString)) {
       return true;
     }

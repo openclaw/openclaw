@@ -733,6 +733,19 @@ describe("exec-command-resolution", () => {
       }
     });
 
+    it("preserves leading/trailing whitespace semantics of original argPattern", () => {
+      // compileSafeRegexDetailed trims; compiling the original must not broaden matches.
+      const entry: ExecAllowlistEntry = {
+        pattern: "/usr/bin/python3",
+        argPattern: " script\\.py ",
+      };
+      const entries: ExecAllowlistEntry[] = [entry];
+      // Without surrounding spaces in argv, the untrimmed pattern must not match.
+      expect(matchAllowlist(entries, resolution, ["python3", "script.py"])).toBeNull();
+      // Exact whitespace in the joined args string matches the original pattern.
+      expect(matchAllowlist(entries, resolution, ["python3", " script.py "])).toBe(entry);
+    });
+
     it("does not emit a warning for safe argPattern entries", () => {
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
       try {
