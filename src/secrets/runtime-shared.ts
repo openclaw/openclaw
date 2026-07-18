@@ -78,7 +78,7 @@ export type SecretAssignmentOwner = Pick<
   "ownerKind" | "ownerId" | "requiredForGateway" | "disposition"
 > & {
   /** Complete config that controls where/how this owner uses the credential. */
-  contract: unknown;
+  contract?: unknown;
 };
 
 export type ResolverContext = {
@@ -200,7 +200,7 @@ export function collectRuntimeSecretInputAssignment(params: {
     ownerId: params.owner?.ownerId ?? params.path,
     requiredForGateway: params.owner?.requiredForGateway ?? false,
     disposition: params.owner?.disposition ?? "isolate",
-    ...(params.owner
+    ...(params.owner?.contract !== undefined
       ? {
           ownerContractDigest: digestSecretOwnerContract(
             canonicalizeSecretRefsForOwnerContract(params.owner.contract, params.defaults),
