@@ -64,7 +64,11 @@ export function teamsMeetingStatusCallSource(): string {
           for (const entry of previousBridgeEntries) {
             if (bridgeEntries.includes(entry)) continue;
             for (const source of bridgeSources(entry)) {
-              if (!source?.element || source.muted) continue;
+              if (
+                !source?.element ||
+                source.muted ||
+                !bridgeSourceMatches(source.element, source)
+              ) continue;
               const sourceStillPresent = currentSources.has(source.element);
               const detachedLiveSource = !sourceStillPresent && Boolean(liveStream(source.element));
               if (!sourceStillPresent && !detachedLiveSource) continue;
@@ -73,6 +77,7 @@ export function teamsMeetingStatusCallSource(): string {
                 sessionId: entry.sessionId || sessionId,
                 source: source.element,
                 sourceMuted: false,
+                sourceUrl: mediaSourceUrl(source.element) || source.url,
                 stream: source.element.srcObject,
                 suspended: true,
               });
@@ -82,10 +87,17 @@ export function teamsMeetingStatusCallSource(): string {
             // One bridge owns one Teams playback element. Stream or element replacement
             // retires that bridge so it cannot keep playing or satisfy route verification.
             previousBridgeEntries.filter((entry) => !bridgeEntries.includes(entry)).forEach((entry) => {
-              const sourceRemainsSuspended = bridgeSources(entry).some((source) =>
-                source?.element && suspendedBySource.has(source.element)
-              );
-              retireAudioBridge(entry, !sourceRemainsSuspended);
+              for (const source of bridgeSources(entry)) {
+                if (
+                  !source?.element ||
+                  suspendedBySource.has(source.element) ||
+                  currentSources.has(source.element)
+                ) continue;
+                restoreAudioBridgeSource(source);
+              }
+              // Reused current elements stay silent until this pass confirms their
+              // replacement source; unrelated exact sources were restored above.
+              retireAudioBridge(entry, false);
             });
           }
           const routed = [];
@@ -129,11 +141,13 @@ export function teamsMeetingStatusCallSource(): string {
               if (!hasLoadedPlaybackSource) audioOutputRouteRetryable = true;
               if (canMutateSession && originalMuteBySource.get(element) === false) {
                 // Teams may attach the remote MediaStream after creating its media element.
-                // Retain ownership so the muted element remains eligible on the next poll.
+                // Keep it silent until a later serialized status poll routes that source.
                 suspendedBySource.set(element, {
                   sessionId,
+                  pending: true,
                   source: element,
                   sourceMuted: false,
+                  sourceUrl: mediaSourceUrl(element),
                   stream: element.srcObject,
                   suspended: true,
                 });
@@ -156,6 +170,7 @@ export function teamsMeetingStatusCallSource(): string {
                   sourceMuted: originalMuteBySource.has(element)
                     ? originalMuteBySource.get(element)
                     : Boolean(element.muted),
+                  sourceUrl: mediaSourceUrl(element),
                   stream,
                 };
                 bridgeEntries.push(entry);

@@ -71,29 +71,47 @@ export function teamsMeetingStatusPreludeSource(params: TeamsMeetingStatusPrelud
   const bridgeOwnedBySession = (entry) => Boolean(
     sessionId && (!entry?.sessionId || entry.sessionId === sessionId)
   );
+  const mediaSourceUrl = (element) => String(element?.currentSrc || element?.src || "");
   const bridgeSources = (entry) => Array.isArray(entry?.sources)
     ? entry.sources
     : entry?.source
-      ? [{ element: entry.source, muted: Boolean(entry.sourceMuted), stream: entry.stream }]
+      ? [{ element: entry.source, muted: Boolean(entry.sourceMuted), pending: Boolean(entry.pending), stream: entry.stream, url: entry.sourceUrl }]
       : [];
+  const bridgeSourceMatches = (element, source) => {
+    if (!element) return false;
+    if (source?.pending && mediaSourceIsEmpty(element) && !source.stream && !source.url) return true;
+    if (source?.stream || element.srcObject) return element.srcObject === source?.stream;
+    const currentUrl = mediaSourceUrl(element);
+    return Boolean(source?.url && currentUrl && source.url === currentUrl);
+  };
+  const mediaSourceIsEmpty = (element) => Boolean(
+    element && !element.srcObject && !mediaSourceUrl(element)
+  );
+  const restoreAudioBridgeSource = (source) => {
+    const element = source?.element;
+    // An empty element may receive a replacement source after cleanup. Keep it
+    // silent because there is no source identity that is safe to restore.
+    if (mediaSourceIsEmpty(element)) {
+      element.muted = true;
+      return;
+    }
+    // Teams reuses media elements across source changes. Restore only the exact
+    // source this bridge muted.
+    if (!bridgeSourceMatches(element, source)) return;
+    const detachedLiveSource = Boolean(
+      element.isConnected === false &&
+      element.srcObject?.getAudioTracks?.().some((track) => track.readyState === "live")
+    );
+    if (detachedLiveSource) {
+      element.muted = true;
+      element.pause?.();
+      element.srcObject = null;
+      return;
+    }
+    element.muted = Boolean(source.muted);
+  };
   const restoreAudioBridgeSources = (entry) => {
-    bridgeSources(entry).forEach((source) => {
-      const element = source?.element;
-      // Teams reuses media elements across stream changes. Only the stream this
-      // bridge muted may be restored or detached during cleanup.
-      if (!element || element.srcObject !== source.stream) return;
-      const detachedLiveSource = Boolean(
-        element.isConnected === false &&
-        element.srcObject?.getAudioTracks?.().some((track) => track.readyState === "live")
-      );
-      if (detachedLiveSource) {
-        element.muted = true;
-        element.pause?.();
-        element.srcObject = null;
-        return;
-      }
-      element.muted = Boolean(source.muted);
-    });
+    bridgeSources(entry).forEach(restoreAudioBridgeSource);
   };
   const retireAudioBridge = (entry, restoreSources = true) => {
     if (restoreSources) restoreAudioBridgeSources(entry);
@@ -124,10 +142,15 @@ export function teamsMeetingStatusPreludeSource(params: TeamsMeetingStatusPrelud
     for (const entry of entries) {
       for (const source of bridgeSources(entry)) {
         if (!source?.element || suspendedBySource.has(source.element)) continue;
+        if (!bridgeSourceMatches(source.element, source)) {
+          restoreAudioBridgeSource(source);
+          continue;
+        }
         suspendedBySource.set(source.element, {
           sessionId,
           source: source.element,
           sourceMuted: Boolean(source.muted),
+          sourceUrl: mediaSourceUrl(source.element) || source.url,
           stream: source.element.srcObject,
           suspended: true,
         });
@@ -149,12 +172,26 @@ export function teamsMeetingStatusPreludeSource(params: TeamsMeetingStatusPrelud
         retained.push(entry);
         continue;
       }
+      // This pending entry owns the muted element until a later serialized
+      // status poll sees and routes the attached playback source.
+      if (
+        entry?.pending &&
+        bridgeSources(entry).some((source) => bridgeSourceMatches(source?.element, source))
+      ) {
+        retained.push(entry);
+        continue;
+      }
       for (const source of bridgeSources(entry)) {
         if (!source?.element || suspendedBySource.has(source.element)) continue;
+        if (!bridgeSourceMatches(source.element, source)) {
+          restoreAudioBridgeSource(source);
+          continue;
+        }
         suspendedBySource.set(source.element, {
           sessionId: entry.sessionId || sessionId,
           source: source.element,
           sourceMuted: Boolean(source.muted),
+          sourceUrl: source.url,
           stream: source.element.srcObject,
           suspended: true,
         });

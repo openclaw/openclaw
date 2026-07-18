@@ -106,7 +106,9 @@ describe("meeting browser leave ownership", () => {
           parseLeaveResult: () =>
             evaluation === 1
               ? { departed: false, leaveAction: "leave", urlMatched: true }
-              : { departed: true, sessionMatched: false },
+              : evaluation === 2
+                ? { departed: false, sessionMatched: false, urlMatched: true }
+                : { departed: true, urlMatched: false },
         },
       } as never,
       callBrowser: async (request) => {
@@ -146,7 +148,7 @@ describe("meeting browser leave ownership", () => {
     releaseDelete?.();
     const result = await leaving;
     await concurrent;
-    expect(leaveInitiated).toEqual([false, true]);
+    expect(leaveInitiated).toEqual([false, true, true]);
     expect(deletedTabs).toEqual(["/tabs/target-1"]);
     expect(concurrentStarted).toBe(true);
     expect(result.left).toBe(true);

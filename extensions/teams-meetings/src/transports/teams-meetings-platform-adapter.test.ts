@@ -504,7 +504,7 @@ describe("Microsoft Teams meeting platform adapter", () => {
   });
 
   it("retires only the departing session's audio bridges", () => {
-    const source = { muted: true };
+    const source = { currentSrc: "blob:https://teams.live.com/original", muted: true };
     const bridge = { pause: vi.fn(), remove: vi.fn(), srcObject: {} };
     const detachedSource = {
       isConnected: false,
@@ -522,6 +522,7 @@ describe("Microsoft Teams meeting platform adapter", () => {
           sessionId: "session-1",
           source,
           sourceMuted: false,
+          sourceUrl: source.currentSrc,
         },
         {
           bridge: detachedBridge,
@@ -577,6 +578,57 @@ describe("Microsoft Teams meeting platform adapter", () => {
     expect(source.srcObject).toBe(replacementStream);
     expect(bridge.pause).toHaveBeenCalledOnce();
     expect(bridge.remove).toHaveBeenCalledOnce();
+  });
+
+  it("does not unmute a reused URL-backed element during leave cleanup", () => {
+    const source = { currentSrc: "blob:https://teams.live.com/replacement", muted: true };
+    const bridge = { pause: vi.fn(), remove: vi.fn(), srcObject: null };
+    const { result } = runLeaveScript({
+      postCall: control({ label: "Rejoin" }),
+      priorAudioOutputs: [
+        {
+          bridge,
+          sessionId: "session-1",
+          source,
+          sourceMuted: false,
+          sourceUrl: "blob:https://teams.live.com/original",
+        },
+      ],
+      priorMeeting: {
+        identity: "teams-work:19:meeting_test@thread.v2",
+        sessionId: "session-1",
+      },
+    });
+
+    expect(result).toEqual({ departed: true, sessionMatched: true, urlMatched: true });
+    expect(source.muted).toBe(true);
+    expect(bridge.pause).toHaveBeenCalledOnce();
+    expect(bridge.remove).toHaveBeenCalledOnce();
+  });
+
+  it("restores pending and legacy sources-array entries during leave cleanup", () => {
+    const pending = { muted: true };
+    const legacy = { currentSrc: "blob:https://teams.live.com/legacy", muted: true };
+    const { result } = runLeaveScript({
+      postCall: control({ label: "Rejoin" }),
+      priorAudioOutputs: [
+        {
+          sessionId: "session-1",
+          sources: [
+            { element: pending, muted: false, pending: true },
+            { element: legacy, muted: false },
+          ],
+        },
+      ],
+      priorMeeting: {
+        identity: "teams-work:19:meeting_test@thread.v2",
+        sessionId: "session-1",
+      },
+    });
+
+    expect(result).toEqual({ departed: true, sessionMatched: true, urlMatched: true });
+    expect(pending.muted).toBe(true);
+    expect(legacy.muted).toBe(true);
   });
 
   it("retires the page-owned audio bridge from the required URL-only leave callback", () => {

@@ -38,6 +38,7 @@ async function leaveMeetingInPage<
   const deadline = Date.now() + params.timeoutMs;
   let clickedLeave = false;
   let clickedConfirmation = false;
+  let ownershipRetained = false;
   do {
     const remainingMs = Math.floor(deadline - Date.now());
     if (remainingMs <= 0) {
@@ -62,22 +63,26 @@ async function leaveMeetingInPage<
     clickedLeave ||= step.leaveAction === "leave";
     clickedConfirmation ||= step.leaveAction === "confirm";
     if (step.sessionMatched === false) {
-      const ownershipRetained = clickedLeave && step.sessionConflict !== true;
-      return {
-        departed: ownershipRetained ? step.departed : false,
-        clickedLeave,
-        clickedConfirmation,
-        ownershipRetained,
-        sessionConflict: step.sessionConflict,
-        sessionMatched: false,
-        urlMatched: step.urlMatched,
-      };
+      const stepOwnershipRetained = clickedLeave && step.sessionConflict !== true;
+      if (step.departed || !stepOwnershipRetained) {
+        return {
+          departed: stepOwnershipRetained ? step.departed : false,
+          clickedLeave,
+          clickedConfirmation,
+          ownershipRetained: stepOwnershipRetained,
+          sessionConflict: step.sessionConflict,
+          sessionMatched: false,
+          urlMatched: step.urlMatched,
+        };
+      }
+      ownershipRetained = true;
     }
     if (step.departed || step.urlMatched !== true) {
       return {
         departed: step.departed,
         clickedLeave,
         clickedConfirmation,
+        ...(ownershipRetained && step.sessionConflict !== true ? { ownershipRetained: true } : {}),
         urlMatched: step.urlMatched,
       };
     }
@@ -90,7 +95,13 @@ async function leaveMeetingInPage<
       });
     }
   } while (Date.now() < deadline);
-  return { departed: false, clickedLeave, clickedConfirmation, urlMatched: true };
+  return {
+    departed: false,
+    clickedLeave,
+    clickedConfirmation,
+    ...(ownershipRetained ? { ownershipRetained: true, sessionMatched: false } : {}),
+    urlMatched: true,
+  };
 }
 
 // Leaving acts on the persisted tab identity. Reused tabs remain user-owned;

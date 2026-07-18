@@ -227,14 +227,24 @@ export function teamsMeetingLeaveScript(params: {
         retained.push(entry);
         continue;
       }
+      const mediaSourceUrl = (element) => String(element?.currentSrc || element?.src || "");
       const sources = Array.isArray(entry?.sources)
         ? entry.sources
         : entry?.source
-          ? [{ element: entry.source, muted: Boolean(entry.sourceMuted), stream: entry.stream }]
+          ? [{ element: entry.source, muted: Boolean(entry.sourceMuted), stream: entry.stream, url: entry.sourceUrl }]
           : [];
       for (const source of sources) {
         const element = source?.element;
-        if (!element || element.srcObject !== source.stream) continue;
+        const sourceMatches = source?.stream || element?.srcObject
+          ? element?.srcObject === source?.stream
+          : Boolean(source?.url && mediaSourceUrl(element) === source.url);
+        const sourceIsEmpty = Boolean(element && !element.srcObject && !mediaSourceUrl(element));
+        if (!element) continue;
+        if (sourceIsEmpty) {
+          element.muted = true;
+          continue;
+        }
+        if (!sourceMatches) continue;
         const detachedLiveSource = Boolean(
           element.isConnected === false &&
           element.srcObject?.getAudioTracks?.().some((track) => track.readyState === "live")
