@@ -10,6 +10,10 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import {
+  normalizeLegacyDeviceIdentity,
+  type NormalizedLegacyDeviceIdentity,
+} from "./device-identity-legacy.js";
 import { deriveDeviceIdFromPublicKey } from "./device-identity.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import {
@@ -20,8 +24,6 @@ import {
 import {
   detectLegacyDeviceIdentity,
   migrateLegacyDeviceIdentity,
-  normalizeLegacyDeviceIdentity,
-  type NormalizedLegacyDeviceIdentity,
 } from "./state-migrations.device-identity.js";
 
 type MigrationDatabase = Pick<

@@ -9,6 +9,8 @@ import {
   OPENCLAW_STATE_SCHEMA_VERSION,
 } from "../state/openclaw-state-db.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
+import { normalizeLegacyDeviceIdentity } from "./device-identity-legacy.js";
+import type { DeviceIdentityStoreOptions } from "./device-identity-store.js";
 import {
   deriveDeviceIdFromPublicKey,
   loadDeviceIdentityIfPresent,
@@ -19,9 +21,7 @@ import {
   signDevicePayload,
   verifyDeviceSignature,
   type DeviceIdentity,
-  type DeviceIdentityStoreOptions,
 } from "./device-identity.js";
-import { normalizeLegacyDeviceIdentity } from "./state-migrations.device-identity.js";
 
 const SWIFT_RAW_DEVICE_ID = "56475aa75463474c0285df5dbf2bcab73da651358839e9b77481b2eab107708c";
 const SWIFT_RAW_PUBLIC_KEY = "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=";

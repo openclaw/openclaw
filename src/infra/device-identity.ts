@@ -11,7 +11,7 @@ import {
   readStoredDeviceIdentityReadOnly,
   resolveDeviceIdentityStore,
   type DeviceIdentity,
-  type DeviceIdentityStoreOptions as CanonicalDeviceIdentityStoreOptions,
+  type DeviceIdentityStoreOptions,
   type StoredDeviceIdentity,
 } from "./device-identity-store.js";
 import {
@@ -26,9 +26,7 @@ export type { DeviceIdentity } from "./device-identity-store.js";
 const LEGACY_DEVICE_IDENTITY_RELATIVE_PATH = path.join("identity", "device.json");
 const DOCTOR_CLAIM_SUFFIX = ".doctor-importing";
 
-export type DeviceIdentityStoreOptions = CanonicalDeviceIdentityStoreOptions;
-
-export class DeviceIdentityMigrationRequiredError extends Error {
+class DeviceIdentityMigrationRequiredError extends Error {
   constructor(filePath: string) {
     super(
       `Legacy device identity exists at ${filePath}. Run "openclaw doctor --fix" before starting the gateway or connecting this client.`,
@@ -66,7 +64,7 @@ function resolveLegacyStateDir(options: DeviceIdentityStoreOptions): string {
 }
 
 /** Exact retired file owned by Doctor migration code. */
-export function resolveLegacyDeviceIdentityPath(options: DeviceIdentityStoreOptions = {}): string {
+function resolveLegacyDeviceIdentityPath(options: DeviceIdentityStoreOptions = {}): string {
   return path.join(resolveLegacyStateDir(options), LEGACY_DEVICE_IDENTITY_RELATIVE_PATH);
 }
 

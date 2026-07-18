@@ -22611,7 +22611,7 @@
     },
     {
       "kind": "ui-localized-call-multiline",
-      "line": 1281,
+      "line": 1283,
       "path": "apps/ios/Sources/Gateway/GatewayConnectionController.swift",
       "source": "Can't reach gateway at %1$@:%2$@. Verify Tailscale Serve is enabled and publishes this Gateway.",
       "surface": "apple",
@@ -22619,7 +22619,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1290,
+      "line": 1292,
       "path": "apps/ios/Sources/Gateway/GatewayConnectionController.swift",
       "source": "Can't reach gateway at %1$@:%2$@. Check Tailscale or LAN.",
       "surface": "apple",
@@ -22627,7 +22627,7 @@
     },
     {
       "kind": "ui-localized-call-multiline",
-      "line": 1296,
+      "line": 1298,
       "path": "apps/ios/Sources/Gateway/GatewayConnectionController.swift",
       "source": "TLS fingerprint verification timed out for %1$@:%2$@. Secure endpoint was reached, but TLS did not finish in time.",
       "surface": "apple",
@@ -22635,7 +22635,7 @@
     },
     {
       "kind": "ui-localized-call-multiline",
-      "line": 1304,
+      "line": 1306,
       "path": "apps/ios/Sources/Gateway/GatewayConnectionController.swift",
       "source": "No secure gateway endpoint was detected at %1$@:%2$@. Enable gateway TLS or Tailscale Serve, or use a trusted private LAN address with Unencrypted selected.",
       "surface": "apple",
@@ -22643,7 +22643,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1314,
+      "line": 1316,
       "path": "apps/ios/Sources/Gateway/GatewayConnectionController.swift",
       "source": "Could not read the TLS certificate from %1$@:%2$@.",
       "surface": "apple",
@@ -23507,7 +23507,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 4909,
+      "line": 4917,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Connected",
       "surface": "apple",
@@ -23515,7 +23515,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 4909,
+      "line": 4917,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Offline",
       "surface": "apple",
@@ -23523,7 +23523,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 6075,
+      "line": 6087,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "No chat messages yet",
       "surface": "apple",
@@ -23531,7 +23531,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 6274,
+      "line": 6286,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Connecting…",
       "surface": "apple",
@@ -23539,7 +23539,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 6274,
+      "line": 6286,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Reconnecting…",
       "surface": "apple",
@@ -23547,7 +23547,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 8683,
+      "line": 8695,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Approval",
       "surface": "apple",
@@ -23555,7 +23555,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 8683,
+      "line": 8695,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "This approval was already",
       "surface": "apple",
@@ -23563,7 +23563,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 8689,
+      "line": 8701,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "This approval was already set to Always Allow.",
       "surface": "apple",
@@ -23571,7 +23571,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 8690,
+      "line": 8702,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Approval set to Always Allow.",
       "surface": "apple",
@@ -23579,7 +23579,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 10028,
+      "line": 10040,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "\\(urlText.prefix(500))…",
       "surface": "apple",
@@ -31595,7 +31595,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 385,
+      "line": 389,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Main",
       "surface": "apple",
@@ -31603,7 +31603,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 385,
+      "line": 389,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Other",
       "surface": "apple",
@@ -31611,7 +31611,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 459,
+      "line": 463,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Show pairing requests",
       "surface": "apple",
@@ -31619,7 +31619,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 484,
+      "line": 488,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Refreshing microphones…",
       "surface": "apple",
@@ -31627,7 +31627,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 491,
+      "line": 495,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Microphone",
       "surface": "apple",
@@ -31635,7 +31635,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 516,
+      "line": 520,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Disconnected (using System default)",
       "surface": "apple",
@@ -31779,7 +31779,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 435,
+      "line": 436,
       "path": "apps/macos/Sources/OpenClaw/NodePairingApprovalPrompter.swift",
       "source": "Node pairing approved",
       "surface": "apple",
@@ -31787,7 +31787,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 435,
+      "line": 436,
       "path": "apps/macos/Sources/OpenClaw/NodePairingApprovalPrompter.swift",
       "source": "Node pairing rejected",
       "surface": "apple",
@@ -36235,7 +36235,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 455,
+      "line": 460,
       "path": "apps/macos/Sources/OpenClawMacCLI/WizardCommand.swift",
       "source": " [\\(initial)]",
       "surface": "apple",
@@ -36243,7 +36243,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 502,
+      "line": 507,
       "path": "apps/macos/Sources/OpenClawMacCLI/WizardCommand.swift",
       "source": " — \\(option.hint!)",
       "surface": "apple",
@@ -36251,7 +36251,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 509,
+      "line": 514,
       "path": "apps/macos/Sources/OpenClawMacCLI/WizardCommand.swift",
       "source": " [\\(initialIndices.map(String.init).joined(separator: \",\"))]",
       "surface": "apple",
