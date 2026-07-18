@@ -85,6 +85,7 @@ export function execPlainGh(args, options = {}) {
     ...options,
     env,
     maxBuffer: options.maxBuffer ?? PLAIN_GH_MAX_BUFFER_BYTES,
+    timeout: options.timeout ?? 30_000,
   });
 }
 
@@ -96,6 +97,7 @@ export function execGhApiRead(endpoint, options = {}) {
     ...options,
     env,
     maxBuffer: options.maxBuffer ?? PLAIN_GH_MAX_BUFFER_BYTES,
+    timeout: options.timeout ?? 30_000,
   });
 }
 
@@ -106,5 +108,6 @@ export function spawnPlainGh(args, options = {}) {
     ...options,
     env,
     maxBuffer: options.maxBuffer ?? PLAIN_GH_MAX_BUFFER_BYTES,
+    timeout: options.timeout ?? 30_000,
   });
 }
