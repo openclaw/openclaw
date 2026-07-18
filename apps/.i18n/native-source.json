@@ -34219,7 +34219,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 215,
+      "line": 221,
       "path": "apps/macos/Sources/OpenClaw/QuickChatWindowPicker.swift",
       "source": "Allow OpenClaw to capture windows",
       "surface": "apple",
@@ -34227,7 +34227,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 216,
+      "line": 222,
       "path": "apps/macos/Sources/OpenClaw/QuickChatWindowPicker.swift",
       "source": "Allow OpenClaw to capture a screen area",
       "surface": "apple",
@@ -34235,7 +34235,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 217,
+      "line": 223,
       "path": "apps/macos/Sources/OpenClaw/QuickChatWindowPicker.swift",
       "source": "Sending a screenshot uses macOS Screen Recording access.",
       "surface": "apple",
@@ -34243,7 +34243,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 218,
+      "line": 224,
       "path": "apps/macos/Sources/OpenClaw/QuickChatWindowPicker.swift",
       "source": "Grant Access",
       "surface": "apple",
@@ -34251,7 +34251,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 219,
+      "line": 225,
       "path": "apps/macos/Sources/OpenClaw/QuickChatWindowPicker.swift",
       "source": "Cancel",
       "surface": "apple",
@@ -34259,7 +34259,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 493,
+      "line": 503,
       "path": "apps/macos/Sources/OpenClaw/QuickChatWindowPicker.swift",
       "source": "Selected area",
       "surface": "apple",
