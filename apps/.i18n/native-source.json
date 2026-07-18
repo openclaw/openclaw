@@ -33787,7 +33787,63 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 616,
+      "line": 484,
+      "path": "apps/macos/Sources/OpenClaw/QuickChatController.swift",
+      "source": "Microphone and speech recognition permission required.",
+      "surface": "apple",
+      "id": "native.apple.237f02309f0b9aeb"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 512,
+      "path": "apps/macos/Sources/OpenClaw/QuickChatController.swift",
+      "source": "Dictation stopped because speech recognition failed.",
+      "surface": "apple",
+      "id": "native.apple.6f2679049010dae7"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 517,
+      "path": "apps/macos/Sources/OpenClaw/QuickChatController.swift",
+      "source": "Couldn't start dictation.",
+      "surface": "apple",
+      "id": "native.apple.fd0469907ed8a50c"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 546,
+      "path": "apps/macos/Sources/OpenClaw/QuickChatController.swift",
+      "source": "No app is available to paste into.",
+      "surface": "apple",
+      "id": "native.apple.ec789bf13bcffb61"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 553,
+      "path": "apps/macos/Sources/OpenClaw/QuickChatController.swift",
+      "source": "Choose another app before pasting.",
+      "surface": "apple",
+      "id": "native.apple.bd2b8e99eee923b4"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 568,
+      "path": "apps/macos/Sources/OpenClaw/QuickChatController.swift",
+      "source": "Accessibility permission is required to paste.",
+      "surface": "apple",
+      "id": "native.apple.f7aeeb401f9a4cd1"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 594,
+      "path": "apps/macos/Sources/OpenClaw/QuickChatController.swift",
+      "source": "Couldn't paste the reply.",
+      "surface": "apple",
+      "id": "native.apple.14e9c9f41a9523c0"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 865,
       "path": "apps/macos/Sources/OpenClaw/QuickChatController.swift",
       "source": "Capture Window…",
       "surface": "apple",
@@ -33795,7 +33851,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 617,
+      "line": 866,
       "path": "apps/macos/Sources/OpenClaw/QuickChatController.swift",
       "source": "Capture Area…",
       "surface": "apple",
@@ -33907,7 +33963,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 154,
+      "line": 164,
       "path": "apps/macos/Sources/OpenClaw/QuickChatModel.swift",
       "source": "focused app",
       "surface": "apple",
@@ -33915,7 +33971,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 466,
+      "line": 614,
       "path": "apps/macos/Sources/OpenClaw/QuickChatModel.swift",
       "source": "Couldn't capture that image.",
       "surface": "apple",
@@ -33923,7 +33979,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 488,
+      "line": 636,
       "path": "apps/macos/Sources/OpenClaw/QuickChatModel.swift",
       "source": "Screenshot: \\(label)",
       "surface": "apple",
@@ -33931,11 +33987,83 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 549,
+      "line": 697,
       "path": "apps/macos/Sources/OpenClaw/QuickChatModel.swift",
       "source": "Context from \\(context.appName) — \\(context.windowTitle)",
       "surface": "apple",
       "id": "native.apple.72e5bffb7ee89f19"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 1030,
+      "path": "apps/macos/Sources/OpenClaw/QuickChatModel.swift",
+      "source": "Auto",
+      "surface": "apple",
+      "id": "native.apple.d82159d749697338"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 1038,
+      "path": "apps/macos/Sources/OpenClaw/QuickChatModel.swift",
+      "source": "\\(model) · \\(thinking)",
+      "surface": "apple",
+      "id": "native.apple.4e02ff977e48dfcb"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 1062,
+      "path": "apps/macos/Sources/OpenClaw/QuickChatModel.swift",
+      "source": "Selected reasoning is unavailable for this target.",
+      "surface": "apple",
+      "id": "native.apple.07bd035ae7e799c5"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 1195,
+      "path": "apps/macos/Sources/OpenClaw/QuickChatModel.swift",
+      "source": "Couldn't load model settings.",
+      "surface": "apple",
+      "id": "native.apple.2eb721ed8bffe9aa"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 1206,
+      "path": "apps/macos/Sources/OpenClaw/QuickChatModel.swift",
+      "source": "Couldn't change the model.",
+      "surface": "apple",
+      "id": "native.apple.ef6f4c54f9cfac08"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 44,
+      "path": "apps/macos/Sources/OpenClaw/QuickChatModelMenu.swift",
+      "source": "Model",
+      "surface": "apple",
+      "id": "native.apple.82b81bd0670b0cef"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 51,
+      "path": "apps/macos/Sources/OpenClaw/QuickChatModelMenu.swift",
+      "source": "Session default",
+      "surface": "apple",
+      "id": "native.apple.2eb4c724364c7583"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 80,
+      "path": "apps/macos/Sources/OpenClaw/QuickChatModelMenu.swift",
+      "source": "Reasoning",
+      "surface": "apple",
+      "id": "native.apple.9f1c4db792611774"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 86,
+      "path": "apps/macos/Sources/OpenClaw/QuickChatModelMenu.swift",
+      "source": "Auto",
+      "surface": "apple",
+      "id": "native.apple.25a01f61b4e33ece"
     },
     {
       "kind": "ui-localized-call",
@@ -33947,7 +34075,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 75,
+      "line": 80,
       "path": "apps/macos/Sources/OpenClaw/QuickChatView.swift",
       "source": "Reply in \\(override.displayName)",
       "surface": "apple",
@@ -33955,7 +34083,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 77,
+      "line": 82,
       "path": "apps/macos/Sources/OpenClaw/QuickChatView.swift",
       "source": "Message \\(self.model.agentDisplay.name)",
       "surface": "apple",
@@ -33963,7 +34091,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 116,
+      "line": 130,
       "path": "apps/macos/Sources/OpenClaw/QuickChatView.swift",
       "source": "Continue a recent conversation",
       "surface": "apple",
@@ -33971,7 +34099,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 135,
+      "line": 170,
       "path": "apps/macos/Sources/OpenClaw/QuickChatView.swift",
       "source": "Attach text from \\(self.model.frontmostAppName)",
       "surface": "apple",
@@ -33979,7 +34107,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 146,
+      "line": 181,
       "path": "apps/macos/Sources/OpenClaw/QuickChatView.swift",
       "source": "Capture a screenshot",
       "surface": "apple",
@@ -33987,15 +34115,31 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 170,
+      "line": 205,
       "path": "apps/macos/Sources/OpenClaw/QuickChatView.swift",
       "source": "Send message",
       "surface": "apple",
       "id": "native.apple.136cef9f750d3803"
     },
     {
+      "kind": "ui-modifier",
+      "line": 247,
+      "path": "apps/macos/Sources/OpenClaw/QuickChatView.swift",
+      "source": "Choose model and reasoning",
+      "surface": "apple",
+      "id": "native.apple.b520a305b56a6387"
+    },
+    {
+      "kind": "ui-modifier",
+      "line": 248,
+      "path": "apps/macos/Sources/OpenClaw/QuickChatView.swift",
+      "source": "Model and reasoning",
+      "surface": "apple",
+      "id": "native.apple.1dd50e6126da7179"
+    },
+    {
       "kind": "ui-call",
-      "line": 228,
+      "line": 289,
       "path": "apps/macos/Sources/OpenClaw/QuickChatView.swift",
       "source": "Needs additional permissions",
       "surface": "apple",
@@ -34003,7 +34147,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 235,
+      "line": 296,
       "path": "apps/macos/Sources/OpenClaw/QuickChatView.swift",
       "source": "Grant",
       "surface": "apple",
@@ -34011,7 +34155,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 241,
+      "line": 302,
       "path": "apps/macos/Sources/OpenClaw/QuickChatView.swift",
       "source": "Not now",
       "surface": "apple",
@@ -34019,7 +34163,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 255,
+      "line": 316,
       "path": "apps/macos/Sources/OpenClaw/QuickChatView.swift",
       "source": "\\(context.appName) — \\(context.windowTitle) (\\(context.characterCount) chars)",
       "surface": "apple",
@@ -34027,11 +34171,35 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 264,
+      "line": 325,
       "path": "apps/macos/Sources/OpenClaw/QuickChatView.swift",
       "source": "Remove attached text context",
       "surface": "apple",
       "id": "native.apple.66ec93e9eefd9bd7"
+    },
+    {
+      "kind": "ui-call",
+      "line": 364,
+      "path": "apps/macos/Sources/OpenClaw/QuickChatView.swift",
+      "source": "Paste to \\(self.model.frontmostAppName)",
+      "surface": "apple",
+      "id": "native.apple.00b46fe92d9bb1d4"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 417,
+      "path": "apps/macos/Sources/OpenClaw/QuickChatView.swift",
+      "source": "Stop dictation",
+      "surface": "apple",
+      "id": "native.apple.d2aa2e60ec2f62d8"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 418,
+      "path": "apps/macos/Sources/OpenClaw/QuickChatView.swift",
+      "source": "Start dictation",
+      "surface": "apple",
+      "id": "native.apple.8c4a27a4361d0572"
     },
     {
       "kind": "ui-localized-call",
