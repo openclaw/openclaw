@@ -8,6 +8,9 @@ const OPENAI_STRICT_COMPAT_SCHEMA_MAP_KEYS = new Set([
   "$defs",
   "definitions",
   "dependentSchemas",
+  // Draft-07 dependencies mix schema values with property-name arrays. The
+  // recursive helpers leave scalar array entries untouched.
+  "dependencies",
   "patternProperties",
   "properties",
 ]);
@@ -24,10 +27,12 @@ const OPENAI_NULLABLE_ANNOTATION_KEYS = new Set([
 ]);
 
 const OPENAI_STRICT_COMPAT_SCHEMA_NESTED_KEYS = new Set([
+  "additionalItems",
   "additionalProperties",
   "allOf",
   "anyOf",
   "contains",
+  "contentSchema",
   "else",
   "if",
   "items",
