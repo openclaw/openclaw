@@ -832,7 +832,7 @@ export async function runGlobalPackageUpdateSteps(params: {
   timeoutMs: number;
   env?: NodeJS.ProcessEnv;
   installCwd?: string;
-  retainPreviousPackage?: boolean;
+  retentionNodePath?: string;
   postVerifyStep?: (packageRoot: string) => Promise<PackageUpdateStepResult | null>;
 }): Promise<{
   steps: PackageUpdateStepResult[];
@@ -861,13 +861,14 @@ export async function runGlobalPackageUpdateSteps(params: {
       };
     }
     const currentPackageRoot = params.packageRoot ?? params.installTarget.packageRoot;
-    if (currentPackageRoot && params.retainPreviousPackage === true) {
+    if (currentPackageRoot && params.retentionNodePath) {
       const previousVersion = await readPackageVersionIfPresent(currentPackageRoot);
       const retained = await retainCurrentPackageForUpdate({
         packageRoot: currentPackageRoot,
         globalRoot: params.installTarget.globalRoot,
         expectedVersion: previousVersion,
         runCommand: params.runCommand,
+        nodePath: params.retentionNodePath,
         timeoutMs: params.timeoutMs,
         env: params.env,
       });

@@ -150,7 +150,10 @@ export async function runPackageInstallUpdate(params: {
     packageRoot: pkgRoot,
     runCommand,
     timeoutMs: params.timeoutMs,
-    retainPreviousPackage,
+    retentionNodePath:
+      retainPreviousPackage && coverage.protection === "retention-only"
+        ? coverage.nodePath
+        : undefined,
     ...(installEnv === undefined ? {} : { env: installEnv }),
     runStep: (stepParams) =>
       runUpdateStep({

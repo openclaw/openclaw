@@ -24,13 +24,20 @@ describe("update package retention", () => {
       JSON.stringify({ name: "openclaw", version: "1.9.0" }),
     );
     await fs.writeFile(path.join(packageRoot, "dist", "entry.js"), 'console.log("1.9.0");\n');
+    const managedNodePath = path.join(root, "managed-node");
+    const observedNodePaths: string[] = [];
+    const runWithManagedNode: typeof runCommandWithTimeout = async (argv, options) => {
+      observedNodePaths.push(argv[0] ?? "");
+      return await runCommandWithTimeout([process.execPath, ...argv.slice(1)], options);
+    };
 
     const result = await retainCurrentPackageForUpdate({
       packageRoot,
       globalRoot,
       expectedVersion: "1.9.0",
+      nodePath: managedNodePath,
       runCommand: async (argv, options) => {
-        const command = await runCommandWithTimeout(argv, options);
+        const command = await runWithManagedNode(argv, options);
         return { stdout: command.stdout, stderr: command.stderr, code: command.code };
       },
       timeoutMs: 5_000,
@@ -56,8 +63,9 @@ describe("update package retention", () => {
       packageRoot,
       globalRoot,
       expectedVersion: "2.0.0",
+      nodePath: managedNodePath,
       runCommand: async (argv, options) => {
-        const command = await runCommandWithTimeout(argv, options);
+        const command = await runWithManagedNode(argv, options);
         return { stdout: command.stdout, stderr: command.stderr, code: command.code };
       },
       timeoutMs: 5_000,
@@ -74,5 +82,6 @@ describe("update package retention", () => {
         entry.startsWith(".openclaw-previous"),
       ),
     ).toEqual([".openclaw-previous"]);
+    expect(observedNodePaths).toEqual([managedNodePath, managedNodePath]);
   });
 });

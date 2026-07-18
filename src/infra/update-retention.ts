@@ -30,6 +30,7 @@ export async function retainCurrentPackageForUpdate(params: {
   globalRoot: string | null;
   expectedVersion: string | null;
   runCommand: CommandRunner;
+  nodePath: string;
   timeoutMs: number;
   env?: NodeJS.ProcessEnv;
 }): Promise<RetainedUpdatePackageResult> {
@@ -56,7 +57,7 @@ export async function retainCurrentPackageForUpdate(params: {
     if (!entrypoint) {
       packageErrors.push("retained package has no launchable entrypoint");
     } else {
-      const probe = await params.runCommand([process.execPath, entrypoint, "--version"], {
+      const probe = await params.runCommand([params.nodePath, entrypoint, "--version"], {
         cwd: stagedRoot,
         timeoutMs: params.timeoutMs,
         env: params.env,
