@@ -831,6 +831,51 @@ type ToolResultCapTarget = {
   target?: string;
 };
 
+async function collectCompactionByteGuardFindings(
+  cfg: OpenClawConfig,
+): Promise<readonly HealthFinding[]> {
+  const compaction = cfg.agents?.defaults?.compaction;
+  if (!compaction) {
+    return [];
+  }
+
+  const configured = compaction.maxActiveTranscriptBytes;
+  if (configured === undefined || configured === null) {
+    return [];
+  }
+
+  const str = String(configured).trim();
+  if (str === "" || str === "0") {
+    return [];
+  }
+
+  const truncateEnabled = compaction.truncateAfterCompaction === true;
+  if (truncateEnabled) {
+    return [];
+  }
+
+  return [
+    {
+      checkId: "core/doctor/inactive-compaction-byte-guard",
+      severity: "warning",
+      message: `agents.defaults.compaction.maxActiveTranscriptBytes is set to "${str}" but truncateAfterCompaction is not enabled, so the byte guard has no effect.`,
+      path: "agents.defaults.compaction",
+      requirement: "truncateAfterCompaction enabled when maxActiveTranscriptBytes is configured",
+      fixHint:
+        "Set agents.defaults.compaction.truncateAfterCompaction to true or remove maxActiveTranscriptBytes.",
+    },
+  ];
+}
+
+async function runCompactionByteGuardHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const findings = await collectCompactionByteGuardFindings(ctx.cfg);
+  if (findings.length === 0) {
+    return;
+  }
+  const { note } = await loadNoteModule();
+  note(formatHealthFindings(findings), "Compaction byte guard");
+}
+
 async function collectToolResultCapFindings(
   cfg: OpenClawConfig,
 ): Promise<readonly HealthFinding[]> {
@@ -2059,6 +2104,18 @@ function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       label: "Hooks model",
       healthCheckIds: ["core/doctor/hooks-model"],
       run: runHooksModelHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:compaction-byte-guard",
+      label: "Compaction byte guard",
+      healthChecks: {
+        id: "core/doctor/inactive-compaction-byte-guard",
+        description:
+          "Warn when maxActiveTranscriptBytes is configured but truncateAfterCompaction is not enabled, leaving the byte guard inactive.",
+        defaultEnabled: false,
+        detect: async (ctx) => collectCompactionByteGuardFindings(ctx.cfg),
+      },
+      run: runCompactionByteGuardHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:tool-result-cap",
