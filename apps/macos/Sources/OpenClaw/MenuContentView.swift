@@ -138,12 +138,14 @@ struct MenuContent: View {
             } label: {
                 Label("Open Chat", systemImage: "bubble.left.and.bubble.right")
             }
-            Button {
-                QuickChatController.shared.toggle()
-            } label: {
-                Label("Quick Chat", systemImage: "text.bubble")
+            if self.state.quickChatEnabled {
+                Button {
+                    QuickChatController.shared.toggle()
+                } label: {
+                    Label("Quick Chat", systemImage: "text.bubble")
+                }
+                .globalKeyboardShortcut(.toggleQuickChat)
             }
-            .globalKeyboardShortcut(.toggleQuickChat)
             if self.state.canvasEnabled {
                 Button {
                     AppNavigationActions.toggleCanvas()
@@ -355,8 +357,12 @@ struct MenuContent: View {
         guard self.state.connectionMode != .unconfigured else { return nil }
         guard case .connected = self.controlChannel.state else { return nil }
 
-        let deviceId = DeviceIdentityStore.loadOrCreate(
-            profile: MacNodeModeCoordinator.nodeIdentityProfile).deviceId
+        guard let identity = DeviceIdentityStore.loadOrCreatePersisted(
+            profile: MacNodeModeCoordinator.nodeIdentityProfile)
+        else {
+            return ("Mac identity unavailable", .red)
+        }
+        let deviceId = identity.deviceId
         if let entry = self.nodesStore.nodes.first(where: { $0.nodeId == deviceId }) {
             guard entry.isConnected else {
                 return ("Mac capabilities offline", .orange)

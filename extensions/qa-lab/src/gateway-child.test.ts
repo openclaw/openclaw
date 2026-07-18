@@ -1277,6 +1277,23 @@ describe("buildQaRuntimeEnv", () => {
     },
   );
 
+  it("treats Linux process groups with only dead members as stopped", () => {
+    const stats = [
+      "123 (gateway child) Z 1 123 123 0 -1 0",
+      "124 (helper (worker)) X 1 123 123 0 -1 0",
+      "125 (unrelated) S 1 999 999 0 -1 0",
+    ];
+
+    expect(testing.classifyLinuxProcessGroupStats(123, stats)).toBe(false);
+    expect(
+      testing.classifyLinuxProcessGroupStats(123, [
+        ...stats,
+        "126 (live helper) D 1 123 123 0 -1 0",
+      ]),
+    ).toBe(true);
+    expect(testing.classifyLinuxProcessGroupStats(456, stats)).toBeNull();
+  });
+
   it("force-kills Windows gateway process trees when graceful taskkill fails", () => {
     const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
     const originalSystemRoot = process.env.SystemRoot;
@@ -2175,12 +2192,45 @@ describe("qa bundled plugin dir", () => {
       env: { OPENCLAW_QA_LIVE_PROVIDER_CONFIG_PATH: configPath },
     });
     expect(Object.keys(overrides)).toEqual(["openai"]);
-    expect(overrides["openai"]?.baseUrl).toBe("");
+    expect(overrides["openai"]).not.toHaveProperty("baseUrl");
     expect(overrides["openai"]?.models).toEqual([]);
     expect(overrides["openai"]?.apiKey).toEqual({
       source: "env",
       id: "OPENCLAW_LIVE_CODEX_API_KEY",
     });
+  });
+
+  it("omits empty base URLs without dropping provider configs that inherit auth", async () => {
+    const configPath = path.join(
+      await mkdtemp(path.join(os.tmpdir(), "qa-provider-config-")),
+      "openclaw.json",
+    );
+    cleanups.push(async () => {
+      await rm(path.dirname(configPath), { recursive: true, force: true });
+    });
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "",
+              api: "openai-responses",
+              models: [],
+            },
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    const overrides = await testing.readQaLiveProviderConfigOverrides({
+      providerIds: ["openai"],
+      env: { OPENCLAW_QA_LIVE_PROVIDER_CONFIG_PATH: configPath },
+    });
+    expect(Object.keys(overrides)).toEqual(["openai"]);
+    expect(overrides["openai"]).not.toHaveProperty("baseUrl");
+    expect(overrides["openai"]?.api).toBe("openai-responses");
   });
 
   it("does not copy OpenAI provider configs for custom OpenAI-compatible runs", async () => {

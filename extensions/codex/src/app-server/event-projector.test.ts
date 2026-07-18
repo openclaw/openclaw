@@ -1101,6 +1101,7 @@ describe("CodexAppServerEventProjector", () => {
 
     expect(result.assistantTexts).toStrictEqual([]);
     expect(result.toolMediaUrls).toEqual([savedPath]);
+    expect(result.hostOwnedToolMediaUrls).toEqual([savedPath]);
     expect(result.replayMetadata).toStrictEqual({
       hadPotentialSideEffects: true,
       replaySafe: false,
@@ -1130,6 +1131,7 @@ describe("CodexAppServerEventProjector", () => {
 
     expect(result.assistantTexts).toStrictEqual([]);
     expect(result.toolMediaUrls).toHaveLength(1);
+    expect(result.hostOwnedToolMediaUrls).toEqual(result.toolMediaUrls);
     expect(mediaUrl).toContain(`${path.sep}media${path.sep}tool-image-generation${path.sep}`);
     expect(mediaUrl?.endsWith(".png")).toBe(true);
     await expect(fs.readFile(mediaUrl ?? "")).resolves.toEqual(
@@ -1349,6 +1351,7 @@ describe("CodexAppServerEventProjector", () => {
 
     expect(result.toolMediaUrls).toHaveLength(2);
     expect(new Set(result.toolMediaUrls)).toHaveLength(2);
+    expect(result.hostOwnedToolMediaUrls).toEqual(result.toolMediaUrls);
   });
 
   it("does not append native Codex image-generation media after explicit media delivery", async () => {
@@ -1375,6 +1378,7 @@ describe("CodexAppServerEventProjector", () => {
     });
 
     expect(result.toolMediaUrls).toStrictEqual([]);
+    expect(result.hostOwnedToolMediaUrls).toBeUndefined();
   });
 
   it("propagates message-tool-only source reply delivery telemetry", async () => {
@@ -2996,7 +3000,12 @@ describe("CodexAppServerEventProjector", () => {
     ]);
     expect(JSON.stringify(result.messagesSnapshot[1])).toContain("Codex reasoning");
     expect(JSON.stringify(result.messagesSnapshot[2])).toContain("Codex plan");
-    expect(requireRecord(result.itemLifecycle, "item lifecycle").compactionCount).toBe(1);
+    expect(JSON.stringify(result.messagesSnapshot[2])).toContain("next");
+    expect(JSON.stringify(result.messagesSnapshot[2])).toContain("[in_progress] patch");
+    expect(result.compactionCount).toBe(1);
+    expect(requireRecord(result.itemLifecycle, "item lifecycle")).not.toHaveProperty(
+      "compactionCount",
+    );
     expect(onContextCompacted).toHaveBeenCalledOnce();
   });
 
@@ -6267,6 +6276,121 @@ describe("CodexAppServerEventProjector", () => {
     expect(toolResult.toolCallId).toBe("cmd-declined");
     expect(toolResult.status).toBe("blocked");
     expect(toolResult.isError).toBe(true);
+  });
+
+  it("warns once and preserves projection for an unknown Codex-native item status", async () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
+    const notification = forCurrentTurn("item/completed", {
+      item: {
+        type: "commandExecution",
+        id: "cmd-future-status",
+        command: "pnpm test extensions/codex",
+        cwd: "/workspace",
+        processId: null,
+        source: "agent",
+        status: "pausedByProtocol",
+        commandActions: [],
+        aggregatedOutput: null,
+        exitCode: null,
+        durationMs: null,
+      },
+    });
+
+    await projector.handleNotification(notification);
+    await projector.handleNotification(notification);
+
+    expect(
+      findAgentEvent(onAgentEvent, {
+        stream: "item",
+        phase: "end",
+        itemId: "cmd-future-status",
+      }).data.status,
+    ).toBe("completed");
+    const toolResult = findAgentEvent(onAgentEvent, {
+      stream: "tool",
+      phase: "result",
+      itemId: "cmd-future-status",
+      name: "bash",
+    }).data;
+    expect(toolResult).toMatchObject({ status: "completed", isError: false });
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(
+      "codex app-server item reported unknown status; continuing projection",
+      {
+        itemId: "cmd-future-status",
+        itemType: "commandExecution",
+        status: "pausedByProtocol",
+      },
+    );
+  });
+
+  it("warns once per raw unknown event kind and continues projecting known events", async () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const params = await createParams();
+    const onPartialReply = vi.fn();
+    const projector = await createProjector({ ...params, onPartialReply });
+    await projector.handleNotification(forCurrentTurn("thread/compacted", {}));
+    expect(warn).not.toHaveBeenCalled();
+    const rawEventKind = "item/futureStatus/updated\nforged";
+    const collidingSanitizedEventKind = "item/futureStatus/updated\\nforged";
+    const notification = forCurrentTurn(rawEventKind, {
+      itemId: "future-1",
+    });
+
+    await projector.handleNotification(notification);
+    await projector.handleNotification(notification);
+    await projector.handleNotification(
+      forCurrentTurn(collidingSanitizedEventKind, { itemId: "future-2" }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: { type: "agentMessage", id: "msg-after-unknown", phase: "final_answer", text: "" },
+      }),
+    );
+    await projector.handleNotification(agentMessageDelta("still projects", "msg-after-unknown"));
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "agentMessage",
+          id: "msg-after-unknown",
+          phase: "final_answer",
+          text: "still projects",
+        },
+      }),
+    );
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "agentMessage",
+          id: "msg-after-unknown",
+          phase: "final_answer",
+          text: "still projects",
+        },
+      ]),
+    );
+
+    expect(projector.buildResult(buildEmptyToolTelemetry()).assistantTexts).toEqual([
+      "still projects",
+    ]);
+    expect(onPartialReply).toHaveBeenCalledWith({
+      text: "still projects",
+      delta: "still projects",
+    });
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(warn).toHaveBeenCalledWith(
+      "codex app-server projector received unknown event kind; continuing: item/futureStatus/updated\\nforged",
+      {
+        eventKind: "item/futureStatus/updated\\nforged",
+        activeThreadId: THREAD_ID,
+        activeTurnId: TURN_ID,
+        threadId: THREAD_ID,
+        turnId: TURN_ID,
+        matchesActiveThread: true,
+        matchesActiveTurn: true,
+      },
+    );
   });
 
   it("leaves Codex dynamic tool item progress to item/tool/call normalization", async () => {

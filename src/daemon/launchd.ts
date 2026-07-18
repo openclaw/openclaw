@@ -33,6 +33,7 @@ import { formatLine, toPosixPath, writeFormattedLines } from "./output.js";
 import { resolveGatewayStateDir, resolveHomeDir } from "./paths.js";
 import { resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
+import { createGatewayLifecycleMutationReporter } from "./service-mutation.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import type {
   GatewayServiceCommandConfig,
@@ -607,12 +608,20 @@ async function bootstrapLaunchAgentOrThrow(params: {
   serviceTarget: string;
   plistPath: string;
   actionHint: string;
+  onMutation?: (mode: "enable" | "bootstrap") => void;
+  skipEnable?: boolean;
 }) {
   // `disable` state survives bootout and plist rewrites; explicit start/repair
   // paths must clear it before asking launchd to load the job again.
-  await execLaunchctl(["enable", params.serviceTarget]);
+  if (!params.skipEnable) {
+    const enable = await execLaunchctl(["enable", params.serviceTarget]);
+    if (enable.code === 0) {
+      params.onMutation?.("enable");
+    }
+  }
   const boot = await execLaunchctl(["bootstrap", params.domain, params.plistPath]);
   if (boot.code === 0) {
+    params.onMutation?.("bootstrap");
     return;
   }
   const detail = (boot.stderr || boot.stdout).trim();
@@ -626,6 +635,7 @@ async function bootstrapLaunchAgentOrThrow(params: {
   if (isLaunchctlOperationAlreadyInProgress(detail)) {
     const state = await probeLaunchAgentState(params.serviceTarget);
     if (state.state === "running" || state.state === "stopped") {
+      params.onMutation?.("bootstrap");
       return;
     }
   }
@@ -885,6 +895,7 @@ async function bootoutLaunchAgentOrThrow(params: {
   serviceTarget: string;
   warning: string;
   stdout: NodeJS.WritableStream;
+  onMutation?: () => void;
 }): Promise<void> {
   const bootout = await execLaunchctl(["bootout", params.serviceTarget]);
   if (bootout.code !== 0 && !isLaunchctlNotLoaded(bootout)) {
@@ -892,6 +903,7 @@ async function bootoutLaunchAgentOrThrow(params: {
       `${params.warning}; launchctl bootout failed: ${formatLaunchctlResultDetail(bootout)}`,
     );
   }
+  params.onMutation?.();
   params.stdout.write(`${formatLine("Warning", params.warning)}\n`);
 }
 
@@ -978,11 +990,13 @@ export async function stopLaunchAgent({
   stdout,
   env,
   disable: persistDisable,
+  onMutation,
 }: GatewayServiceControlArgs): Promise<void> {
   const serviceEnv = env ?? (process.env as GatewayServiceEnv);
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env: serviceEnv });
   const serviceTarget = `${domain}/${label}`;
+  const reportMutation = createGatewayLifecycleMutationReporter(onMutation);
 
   if (
     isCurrentProcessLaunchdServiceLabel(label, process.env, { allowConfiguredLabelFallback: false })
@@ -1000,6 +1014,7 @@ export async function stopLaunchAgent({
     if (bootout.code !== 0 && !isLaunchctlNotLoaded(bootout)) {
       throw new Error(`launchctl bootout failed: ${formatLaunchctlResultDetail(bootout)}`);
     }
+    reportMutation("bootout");
     await assertGatewayPortReleasedAfterStop(serviceEnv);
     stdout.write(`${formatLine("Stopped LaunchAgent", serviceTarget)}\n`);
     return;
@@ -1013,11 +1028,13 @@ export async function stopLaunchAgent({
       serviceTarget,
       stdout,
       warning: `launchctl disable failed; used bootout fallback and left service unloaded: ${formatLaunchctlResultDetail(disableResult)}`,
+      onMutation: () => reportMutation("disable-bootout"),
     });
     await assertGatewayPortReleasedAfterStop(serviceEnv);
     stdout.write(`${formatLine("Stopped LaunchAgent (degraded)", serviceTarget)}\n`);
     return;
   }
+  reportMutation("disable");
 
   // `launchctl stop` targets the plain label (not the fully-qualified service target).
   const stop = await execLaunchctl(["stop", label]);
@@ -1026,11 +1043,14 @@ export async function stopLaunchAgent({
       serviceTarget,
       stdout,
       warning: `launchctl stop failed; used bootout fallback and left service unloaded: ${formatLaunchctlResultDetail(stop)}`,
+      onMutation: () => reportMutation("disable-bootout"),
     });
     await assertGatewayPortReleasedAfterStop(serviceEnv);
     stdout.write(`${formatLine("Stopped LaunchAgent (degraded)", serviceTarget)}\n`);
     return;
   }
+
+  reportMutation("disable-stop");
 
   const stopState = await waitForLaunchAgentStopped(serviceTarget);
   if (stopState.state !== "stopped" && stopState.state !== "not-loaded") {
@@ -1038,7 +1058,12 @@ export async function stopLaunchAgent({
       stopState.state === "unknown"
         ? `launchctl print could not confirm stop; used bootout fallback and left service unloaded: ${stopState.detail ?? "unknown error"}`
         : "launchctl stop did not fully stop the service; used bootout fallback and left service unloaded";
-    await bootoutLaunchAgentOrThrow({ serviceTarget, stdout, warning });
+    await bootoutLaunchAgentOrThrow({
+      serviceTarget,
+      stdout,
+      warning,
+      onMutation: () => reportMutation("disable-bootout"),
+    });
     await assertGatewayPortReleasedAfterStop(serviceEnv);
     stdout.write(`${formatLine("Stopped LaunchAgent (degraded)", serviceTarget)}\n`);
     return;
@@ -1213,6 +1238,7 @@ async function ensureLaunchAgentLoadedAfterFailure(params: {
   domain: string;
   serviceTarget: string;
   plistPath: string;
+  onMutation?: (mode: "enable" | "bootstrap") => void;
 }): Promise<void> {
   const probe = await execLaunchctl(["print", params.serviceTarget]);
   if (probe.code === 0) {
@@ -1224,22 +1250,63 @@ async function ensureLaunchAgentLoadedAfterFailure(params: {
       serviceTarget: params.serviceTarget,
       plistPath: params.plistPath,
       actionHint: "openclaw gateway start",
+      onMutation: params.onMutation,
     });
   } catch {
     // Best-effort only. Preserve the original kickstart failure below.
   }
 }
 
+export async function startLaunchAgent({
+  stdout,
+  env,
+  onMutation,
+}: GatewayServiceControlArgs): Promise<void> {
+  const serviceEnv = env ?? (process.env as GatewayServiceEnv);
+  const domain = resolveGuiDomain();
+  const label = resolveLaunchAgentLabel({ env: serviceEnv });
+  const plistPath = resolveLaunchAgentPlistPath(serviceEnv);
+  const serviceTarget = `${domain}/${label}`;
+  const reportMutation = createGatewayLifecycleMutationReporter(onMutation);
+
+  // Enable is an independent mutation; audit it even if the later launch fails.
+  const enable = await execLaunchctl(["enable", serviceTarget]);
+  const enabled = enable.code === 0;
+  if (enabled) {
+    reportMutation("enable");
+  }
+
+  const start = await execLaunchctl(["kickstart", serviceTarget]);
+  if (start.code === 0) {
+    reportMutation("kickstart");
+  } else if (isLaunchctlNotLoaded(start)) {
+    await bootstrapLaunchAgentOrThrow({
+      domain,
+      serviceTarget,
+      plistPath,
+      actionHint: "openclaw gateway start",
+      onMutation: reportMutation,
+      skipEnable: enabled,
+    });
+  } else {
+    throw new Error(`launchctl kickstart failed: ${start.stderr || start.stdout}`.trim());
+  }
+
+  writeLaunchAgentActionLine(stdout, "Started LaunchAgent", serviceTarget);
+}
+
 export async function restartLaunchAgent({
   stdout,
   env,
   warn,
+  onMutation,
 }: GatewayServiceControlArgs): Promise<GatewayServiceRestartResult> {
   const serviceEnv = env ?? (process.env as GatewayServiceEnv);
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env: serviceEnv });
   const plistPath = resolveLaunchAgentPlistPath(serviceEnv);
   const serviceTarget = `${domain}/${label}`;
+  const reportMutation = createGatewayLifecycleMutationReporter(onMutation);
 
   // Restart requests issued from inside the managed gateway process tree need a
   // detached handoff. A direct `kickstart -k` would terminate the caller before
@@ -1260,6 +1327,7 @@ export async function restartLaunchAgent({
     if (!handoff.ok) {
       throw new Error(`launchd restart handoff failed: ${handoff.error}`);
     }
+    reportMutation(plistReloadNeeded ? "handoff-reload" : "handoff-kickstart");
     writeLaunchAgentActionLine(stdout, "Scheduled LaunchAgent restart", serviceTarget);
     return { outcome: "scheduled" };
   }
@@ -1287,18 +1355,25 @@ export async function restartLaunchAgent({
 
   // `openclaw gateway restart` is an explicit operator request to bring the
   // LaunchAgent back, so clear any persisted disabled state before restart.
-  await execLaunchctl(["enable", serviceTarget]);
+  const enable = await execLaunchctl(["enable", serviceTarget]);
+  if (enable.code === 0) {
+    reportMutation("enable");
+  }
 
   if (plistReloadNeeded) {
     const bootout = await execLaunchctl(["bootout", serviceTarget]);
     if (bootout.code !== 0 && !isLaunchctlNotLoaded(bootout)) {
       throw new Error(`launchctl bootout failed: ${formatLaunchctlResultDetail(bootout)}`);
     }
+    if (bootout.code === 0) {
+      reportMutation("bootout");
+    }
     await bootstrapLaunchAgentOrThrow({
       domain,
       serviceTarget,
       plistPath,
       actionHint: "openclaw gateway restart",
+      onMutation: reportMutation,
     });
     writeLaunchAgentActionLine(stdout, "Restarted LaunchAgent", serviceTarget);
     return { outcome: "completed" };
@@ -1306,12 +1381,18 @@ export async function restartLaunchAgent({
 
   const start = await execLaunchctl(["kickstart", "-k", serviceTarget]);
   if (start.code === 0) {
+    reportMutation("kickstart");
     writeLaunchAgentActionLine(stdout, "Restarted LaunchAgent", serviceTarget);
     return { outcome: "completed" };
   }
 
   if (!isLaunchctlNotLoaded(start)) {
-    await ensureLaunchAgentLoadedAfterFailure({ domain, serviceTarget, plistPath });
+    await ensureLaunchAgentLoadedAfterFailure({
+      domain,
+      serviceTarget,
+      plistPath,
+      onMutation: reportMutation,
+    });
     throw new Error(`launchctl kickstart failed: ${start.stderr || start.stdout}`.trim());
   }
 
@@ -1321,6 +1402,7 @@ export async function restartLaunchAgent({
     serviceTarget,
     plistPath,
     actionHint: "openclaw gateway restart",
+    onMutation: reportMutation,
   });
   writeLaunchAgentActionLine(stdout, "Restarted LaunchAgent", serviceTarget);
   return { outcome: "completed" };

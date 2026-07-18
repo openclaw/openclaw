@@ -69,7 +69,7 @@ Add the CLI backend to your fallback list so it only runs when primary models fa
 }
 ```
 
-If you use `agents.defaults.models` as an allowlist, include your CLI backend models there too. When the primary provider fails (auth, rate limits, timeouts), OpenClaw tries the CLI backend next.
+Configured fallbacks remain eligible when the primary provider fails (auth, rate limits, timeouts), even when they are not in `agents.defaults.modelPolicy.allow`. Add a CLI backend model to that policy only when users should also be able to select it directly through `/model`, a session override, or `--model`. `agents.defaults.models` only owns per-model aliases, parameters, and metadata.
 
 ## Configuration
 
@@ -120,6 +120,48 @@ All CLI backends live under `agents.defaults.cliBackends`, keyed by provider id 
 3. Executes the CLI with a session id (if supported) so history stays consistent. The bundled `claude-cli` backend keeps a Claude stdio process alive per OpenClaw session and sends follow-up turns over stream-json stdin.
 4. Parses output (JSON or plain text) and returns the final text.
 5. Persists session ids per backend so follow-ups reuse the same CLI session.
+
+## Timeouts and long-running work
+
+CLI backends have two independent limits:
+
+- `agents.defaults.timeoutSeconds` limits the whole agent turn. Normal Gateway turns inherit the 48-hour default; `0` makes the turn budget unlimited. A stored override such as `600` replaces that default.
+- The CLI no-output watchdog stops a subprocess that remains silent. It uses separate fresh/resume profiles under `agents.defaults.cliBackends.<id>.reliability.watchdog` and remains active even when the overall turn budget is unlimited.
+
+Remove a short overall-timeout override to return to the 48-hour default, or set an explicit budget such as 12 hours:
+
+```bash
+# Return to the 48-hour default:
+openclaw config unset agents.defaults.timeoutSeconds
+
+# Or choose an explicit 12-hour limit:
+openclaw config set agents.defaults.timeoutSeconds 43200
+```
+
+For a CLI that legitimately emits no output for long periods, tune the relevant watchdog profile instead of the overall turn timeout:
+
+```json5
+{
+  agents: {
+    defaults: {
+      cliBackends: {
+        "claude-cli": {
+          reliability: {
+            watchdog: {
+              fresh: { noOutputTimeoutMs: 1800000 },
+              resume: { noOutputTimeoutMs: 1800000 },
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Background work started inside a CLI is still part of that CLI subprocess. If the parent turn reaches its overall limit, OpenClaw stops the subprocess and its CLI-internal background tasks together. For durable long work, use a detached OpenClaw [sub-agent](/tools/subagents) or [ACP agent](/tools/acp-agents); detached sub-agents have no run timeout by default.
+
+The `openclaw agent` command also has its own request deadline. Its 600-second fallback default applies to that command invocation, not to ordinary Gateway turns; see [`openclaw agent`](/cli/agent).
 
 ### Claude CLI specifics
 

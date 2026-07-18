@@ -37,12 +37,6 @@ const hoisted = vi.hoisted(() => {
     marked: 0,
     skipped: 0,
   }));
-  const recoverStartupOrphanedMainSessions = vi.fn(async () => ({
-    marked: 0,
-    recovered: 0,
-    failed: 0,
-    skipped: 0,
-  }));
   const scheduleRestartAbortedMainSessionRecovery = vi.fn();
   const scheduleRestartSentinelWake =
     vi.fn<typeof import("./server-restart-sentinel.js").scheduleRestartSentinelWake>();
@@ -96,7 +90,6 @@ const hoisted = vi.hoisted(() => {
     scheduleSubagentOrphanRecovery,
     markRestartAbortedMainSessionsFromLocks,
     markStartupOrphanedMainSessionsForRecovery,
-    recoverStartupOrphanedMainSessions,
     scheduleRestartAbortedMainSessionRecovery,
     scheduleRestartSentinelWake,
     refreshLatestUpdateRestartSentinel,
@@ -133,7 +126,6 @@ vi.mock("../agents/subagent-registry.js", () => ({
 vi.mock("../agents/main-session-restart-recovery.js", () => ({
   markRestartAbortedMainSessionsFromLocks: hoisted.markRestartAbortedMainSessionsFromLocks,
   markStartupOrphanedMainSessionsForRecovery: hoisted.markStartupOrphanedMainSessionsForRecovery,
-  recoverStartupOrphanedMainSessions: hoisted.recoverStartupOrphanedMainSessions,
   scheduleRestartAbortedMainSessionRecovery: hoisted.scheduleRestartAbortedMainSessionRecovery,
 }));
 
@@ -341,13 +333,6 @@ describe("startGatewayPostAttachRuntime", () => {
     hoisted.markStartupOrphanedMainSessionsForRecovery.mockReset();
     hoisted.markStartupOrphanedMainSessionsForRecovery.mockResolvedValue({
       marked: 0,
-      skipped: 0,
-    });
-    hoisted.recoverStartupOrphanedMainSessions.mockReset();
-    hoisted.recoverStartupOrphanedMainSessions.mockResolvedValue({
-      marked: 0,
-      recovered: 0,
-      failed: 0,
       skipped: 0,
     });
     hoisted.scheduleRestartAbortedMainSessionRecovery.mockClear();

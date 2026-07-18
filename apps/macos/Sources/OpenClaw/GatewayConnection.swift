@@ -155,6 +155,7 @@ actor GatewayConnection {
         case webLoginWait = "web.login.wait"
         case channelsLogout = "channels.logout"
         case modelsList = "models.list"
+        case agentsList = "agents.list"
         case agentIdentityGet = "agent.identity.get"
         case chatHistory = "chat.history"
         case sessionsPreview = "sessions.preview"
@@ -1176,7 +1177,7 @@ extension GatewayConnection {
             {
                 return token
             }
-            let identity = DeviceIdentityStore.loadOrCreate()
+            guard let identity = DeviceIdentityStore.loadOrCreatePersisted() else { return nil }
             return DeviceAuthStore.loadToken(
                 deviceId: identity.deviceId,
                 role: "operator",

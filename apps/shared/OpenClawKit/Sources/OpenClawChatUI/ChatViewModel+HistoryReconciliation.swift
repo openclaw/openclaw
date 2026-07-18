@@ -755,7 +755,7 @@ extension OpenClawChatViewModel {
         self.pruneRunMessageScopes()
         self.rescopeRunsAdoptedAfterHistoryRequest(request)
         self.sessionId = payload.sessionId
-        self.applyInFlightRunSnapshot(payload.inFlightRun, for: request)
+        self.applyInFlightRunSnapshot(payload, for: request)
         // Incomplete refreshes can arrive before durable assistant history.
         // The latest visible user turn must survive answered before it can reject older replies.
         let canInvalidateOlderHistory = if let latestUserTurn = request.latestUserTurn {
@@ -825,52 +825,5 @@ extension OpenClawChatViewModel {
                 self.runMessageScopesByRunID[runId] = self.currentRunMessageScope()
             }
         }
-    }
-
-    private func applyInFlightRunSnapshot(
-        _ snapshot: OpenClawChatInFlightRun?,
-        for request: HistoryRequest)
-    {
-        guard request.runOwnershipGeneration == self.runOwnershipGeneration,
-              request.id >= self.latestAppliedRunSnapshotRequestID
-        else {
-            return
-        }
-        self.latestAppliedRunSnapshotRequestID = request.id
-        guard let snapshot,
-              let runId = Self.normalizedRunID(snapshot.runId)
-        else {
-            return
-        }
-
-        self.isApplyingRunSnapshot = true
-        defer { self.isApplyingRunSnapshot = false }
-        self.updateActiveSessionRunWithoutChatSnapshot(false)
-        self.adoptRun(runId: runId, bufferedText: snapshot.text)
-    }
-
-    func adoptRun(runId: String, bufferedText: String) {
-        let canonicalPendingRuns = Set([runId])
-        if self.pendingRuns != canonicalPendingRuns {
-            // Gateway snapshots and live deltas are canonical for this session.
-            // Replace stale local ownership so only that run consumes later events.
-            clearPendingRuns(reason: nil)
-            self.pendingRuns.insert(runId)
-            self.pendingToolCallsById = [:]
-            self.updateStreamingAssistantText(nil)
-            clearPlan()
-        }
-        if self.runMessageScopesByRunID[runId] == nil {
-            self.runMessageScopesByRunID[runId] = self.currentRunMessageScope()
-        }
-        if self.pendingRunOwnerArmIDs[runId] == nil {
-            armPendingRunOwner(runId: runId)
-        }
-        if !bufferedText.isEmpty {
-            self.updateStreamingAssistantText(bufferedText)
-        }
-        self.logDiagnostic(
-            "chat.ui adopted in-flight run sessionKey=\(self.sessionKey) "
-                + "runId=\(runId) bufferedTextLen=\(bufferedText.count)")
     }
 }

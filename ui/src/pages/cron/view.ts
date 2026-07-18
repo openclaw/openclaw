@@ -1241,19 +1241,23 @@ function describeFormSchedule(form: CronFormState): string | null {
     }
     if (Number(amount) === 1) {
       const singularKey =
-        form.everyUnit === "minutes"
-          ? "cron.form.summaryEveryMinuteOne"
-          : form.everyUnit === "hours"
-            ? "cron.form.summaryEveryHourOne"
-            : "cron.form.summaryEveryDayOne";
+        form.everyUnit === "seconds"
+          ? "cron.form.summaryEverySecondOne"
+          : form.everyUnit === "minutes"
+            ? "cron.form.summaryEveryMinuteOne"
+            : form.everyUnit === "hours"
+              ? "cron.form.summaryEveryHourOne"
+              : "cron.form.summaryEveryDayOne";
       return t(singularKey);
     }
     const key =
-      form.everyUnit === "minutes"
-        ? "cron.form.summaryEveryMinutes"
-        : form.everyUnit === "hours"
-          ? "cron.form.summaryEveryHours"
-          : "cron.form.summaryEveryDays";
+      form.everyUnit === "seconds"
+        ? "cron.form.summaryEverySeconds"
+        : form.everyUnit === "minutes"
+          ? "cron.form.summaryEveryMinutes"
+          : form.everyUnit === "hours"
+            ? "cron.form.summaryEveryHours"
+            : "cron.form.summaryEveryDays";
     return t(key, { amount });
   }
   if (form.scheduleKind === "at") {
@@ -1302,7 +1306,15 @@ function renderScheduleSection(props: CronProps) {
           value: form.scheduleKind,
           options: kinds,
           ariaLabel: t("cron.form.repeat"),
-          onChange: (value) => props.onFormChange({ scheduleKind: value }),
+          onChange: (value) =>
+            props.onFormChange({
+              scheduleKind: value,
+              ...(value === "at" && (form.scheduleKind === "every" || form.scheduleKind === "cron")
+                ? { deleteAfterRun: true }
+                : value === "every" || value === "cron"
+                  ? { deleteAfterRun: false }
+                  : {}),
+            }),
         }),
       })}
       ${form.scheduleKind === "at"
@@ -1361,6 +1373,7 @@ function renderScheduleSection(props: CronProps) {
                         .value as CronFormState["everyUnit"],
                     })}
                 >
+                  <option value="seconds">${t("cron.form.seconds")}</option>
                   <option value="minutes">${t("cron.form.minutes")}</option>
                   <option value="hours">${t("cron.form.hours")}</option>
                   <option value="days">${t("cron.form.days")}</option>
@@ -1608,12 +1621,14 @@ function renderAdvanced(
                 `,
               })
             : nothing}
-          ${renderToggleRow({
-            label: t("cron.form.deleteAfterRun"),
-            checked: props.form.deleteAfterRun,
-            help: t("cron.form.deleteAfterRunHelp"),
-            onChange: (checked) => props.onFormChange({ deleteAfterRun: checked }),
-          })}
+          ${props.form.scheduleKind === "at" || props.form.scheduleKind === "on-exit"
+            ? renderToggleRow({
+                label: t("cron.form.deleteAfterRun"),
+                checked: props.form.deleteAfterRun,
+                help: t("cron.form.deleteAfterRunHelp"),
+                onChange: (checked) => props.onFormChange({ deleteAfterRun: checked }),
+              })
+            : nothing}
           ${renderToggleRow({
             label: t("cron.form.clearAgentOverride"),
             checked: props.form.clearAgent,

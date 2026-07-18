@@ -1232,6 +1232,7 @@
               {
                 "group": "Sessions and memory",
                 "pages": [
+                  "concepts/main-session",
                   "concepts/session",
                   "concepts/session-search",
                   "concepts/channel-docking",
@@ -1358,6 +1359,7 @@
                 "group": "Tools",
                 "pages": [
                   "tools/apply-patch",
+                  "tools/ask-user",
                   "tools/btw",
                   "tools/code-execution",
                   "tools/code-mode",
@@ -1749,7 +1751,6 @@
                 "pages": [
                   "web/index",
                   "web/control-ui",
-                  "web/workspaces",
                   "web/dashboard",
                   "web/webchat",
                   "web/tui",
@@ -1945,6 +1946,7 @@
                   "reference/prompt-caching",
                   "reference/api-usage-costs",
                   "reference/transcript-hygiene",
+                  "reference/database-schemas",
                   "reference/memory-config",
                   "reference/rich-output-protocol",
                   "reference/session-management-compaction",
