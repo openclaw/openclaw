@@ -453,7 +453,7 @@ describe("sendMessageIMessage receipts", () => {
     );
   });
 
-  it("accepts one delayed imsg fallback response after the 150s bridge deadline", async () => {
+  it("floors a configured probe timeout so one delayed imsg fallback can resolve", async () => {
     vi.useFakeTimers();
     const delayedFallbackMs = 158_000;
     const client = {
@@ -474,7 +474,14 @@ describe("sendMessageIMessage receipts", () => {
     } as unknown as IMessageRpcClient;
 
     const send = sendMessageIMessage("chat_id:42", "hello", {
-      config: IMESSAGE_TEST_CFG,
+      config: {
+        channels: {
+          imessage: {
+            ...IMESSAGE_TEST_CFG.channels.imessage,
+            probeTimeoutMs: 10_000,
+          },
+        },
+      },
       client,
     });
     await vi.advanceTimersByTimeAsync(delayedFallbackMs);
