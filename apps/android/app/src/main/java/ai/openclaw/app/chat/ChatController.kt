@@ -2183,16 +2183,28 @@ class ChatController internal constructor(
         questionRefreshGeneration
       }
     scope.launch {
-      for (attempt in 0..QUESTION_REFRESH_RETRY_DELAYS_MS.size) {
+      var retryIndex = 0
+      var retryStateRevision: Long? = null
+      while (true) {
         val expectedStateRevision = questionRefreshCurrentRevision(refreshGeneration, gatewayScope) ?: return@launch
+        if (retryStateRevision != expectedStateRevision) {
+          retryStateRevision = expectedStateRevision
+          retryIndex = 0
+        }
         val complete =
           runCatching {
             refreshQuestions(refreshGeneration, expectedStateRevision, gatewayScope)
           }.getOrDefault(false)
-        if (complete || questionRefreshCurrentRevision(refreshGeneration, gatewayScope) == null) {
-          return@launch
+        if (complete) return@launch
+        val currentStateRevision = questionRefreshCurrentRevision(refreshGeneration, gatewayScope) ?: return@launch
+        if (currentStateRevision != expectedStateRevision) {
+          // A local mutation invalidates the whole lookup snapshot, not one transport attempt.
+          // Restart the bounded budget so the last attempt cannot strand another question.
+          retryStateRevision = currentStateRevision
+          retryIndex = 0
         }
-        val retryDelayMs = QUESTION_REFRESH_RETRY_DELAYS_MS.getOrNull(attempt) ?: return@launch
+        val retryDelayMs = QUESTION_REFRESH_RETRY_DELAYS_MS.getOrNull(retryIndex) ?: return@launch
+        retryIndex += 1
         delay(retryDelayMs)
       }
     }

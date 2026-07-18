@@ -505,7 +505,70 @@ class ChatQuestionTest {
 
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)
-  fun questionGetRetryUsesLatestRevisionAfterAnotherQuestionChanges() =
+  fun questionGetRetryResetsExhaustedBudgetAfterAnotherQuestionChanges() =
+    runTest {
+      val json = Json { ignoreUnknownKeys = true }
+      val recovering = record(id = "ask_recovering")
+      val unrelated = record(id = "ask_unrelated")
+      val recovered = recovering.copy(status = "answered")
+      var getCalls = 0
+      val finalGetStarted = CompletableDeferred<Unit>()
+      val releaseFinalGet = CompletableDeferred<Unit>()
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, _ ->
+            when (method) {
+              "question.list" -> json.encodeToString(QuestionListResult(listOf(unrelated)))
+              "question.get" -> {
+                getCalls += 1
+                if (getCalls < 4) error("temporary question.get failure")
+                if (getCalls == 4) {
+                  finalGetStarted.complete(Unit)
+                  releaseFinalGet.await()
+                }
+                json.encodeToString(QuestionGetResult(recovered))
+              }
+              "question.resolve" -> "{}"
+              else -> "{}"
+            }
+          },
+        )
+
+      controller.handleGatewayEvent("question.requested", json.encodeToString(recovering))
+      controller.handleGatewayEvent("question.requested", json.encodeToString(unrelated))
+      runCurrent()
+      assertEquals(1, getCalls)
+
+      advanceTimeBy(1_000)
+      runCurrent()
+      advanceTimeBy(2_000)
+      runCurrent()
+      advanceTimeBy(4_000)
+      runCurrent()
+      finalGetStarted.await()
+      assertEquals(4, getCalls)
+
+      controller.skipQuestion(unrelated.id)
+      runCurrent()
+      releaseFinalGet.complete(Unit)
+      runCurrent()
+      advanceTimeBy(1_000)
+      runCurrent()
+
+      assertEquals(5, getCalls)
+      assertEquals(
+        ChatQuestionStatus.AnsweredElsewhere,
+        controller.questions.value
+          .single { it.record.id == recovering.id }
+          .status(),
+      )
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun questionGetRetryResetsBudgetWhenRevisionChangesDuringFinalBackoff() =
     runTest {
       val json = Json { ignoreUnknownKeys = true }
       val recovering = record(id = "ask_recovering")
@@ -521,7 +584,7 @@ class ChatQuestionTest {
               "question.list" -> json.encodeToString(QuestionListResult(listOf(unrelated)))
               "question.get" -> {
                 getCalls += 1
-                if (getCalls == 1) error("temporary question.get failure")
+                if (getCalls < 5) error("temporary question.get failure")
                 json.encodeToString(QuestionGetResult(recovered))
               }
               "question.resolve" -> "{}"
@@ -533,14 +596,21 @@ class ChatQuestionTest {
       controller.handleGatewayEvent("question.requested", json.encodeToString(recovering))
       controller.handleGatewayEvent("question.requested", json.encodeToString(unrelated))
       runCurrent()
-      assertEquals(1, getCalls)
+      advanceTimeBy(1_000)
+      runCurrent()
+      advanceTimeBy(2_000)
+      runCurrent()
+      assertEquals(3, getCalls)
 
       controller.skipQuestion(unrelated.id)
       runCurrent()
+      advanceTimeBy(4_000)
+      runCurrent()
+      assertEquals(4, getCalls)
       advanceTimeBy(1_000)
       runCurrent()
 
-      assertEquals(2, getCalls)
+      assertEquals(5, getCalls)
       assertEquals(
         ChatQuestionStatus.AnsweredElsewhere,
         controller.questions.value
