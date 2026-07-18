@@ -189,10 +189,12 @@ describe("runPostCorePluginConvergence", () => {
     expect(mocks.relinkOpenClawPeerDependenciesInManagedNpmRoot).toHaveBeenNthCalledWith(1, {
       npmRoot: "/tmp/openclaw-state/npm",
       logger: {},
+      onPackageReadError: expect.any(Function),
     });
     expect(mocks.relinkOpenClawPeerDependenciesInManagedNpmRoot).toHaveBeenNthCalledWith(2, {
       npmRoot: "/tmp/openclaw-state/npm/projects/codex",
       logger: {},
+      onPackageReadError: expect.any(Function),
     });
     expect(result.changes).toEqual([
       "Repaired OpenClaw host peer link(s) for 1 managed npm plugin package(s).",
@@ -547,6 +549,105 @@ describe("runPostCorePluginConvergence", () => {
       outcomes: [{ pluginId: "brave", status: "error", message }],
       errored: true,
     });
+  });
+
+  it("does not duplicate a package-scoped repair error owned by a smoke failure", async () => {
+    const installPath = "/tmp/openclaw-state/npm/projects/brave/node_modules/brave";
+    mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
+      changes: [],
+      warnings: [],
+      records: { brave: { source: "npm", installPath } },
+    });
+    mocks.relinkOpenClawPeerDependenciesInManagedNpmRoot.mockImplementation(
+      async (params: { onPackageReadError?: (error: unknown, packageDir: string) => void }) => {
+        params.onPackageReadError?.(
+          new Error(`EACCES: permission denied, open '${installPath}/package.json'`),
+          installPath,
+        );
+        return { checked: 0, attempted: 0, repaired: 0, skipped: 1 };
+      },
+    );
+    mocks.runPluginPayloadSmokeCheck.mockResolvedValue({
+      checked: ["brave"],
+      failures: [
+        {
+          pluginId: "brave",
+          installPath,
+          reason: "unreadable-package-json",
+          detail: `Could not read package.json at ${installPath}/package.json: EACCES: permission denied`,
+        },
+      ],
+    });
+
+    const result = await runPostCorePluginConvergence({
+      cfg: {
+        plugins: { entries: { brave: { enabled: true } } },
+      } as unknown as OpenClawConfig,
+      env: { OPENCLAW_STATE_DIR: "/tmp/openclaw-state" },
+    });
+
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toMatchObject({
+      pluginId: "brave",
+      reason: expect.stringContaining("unreadable-package-json"),
+    });
+    expect(result.errored).toBe(true);
+  });
+
+  it("does not promote an inactive package read error into an ownerless blocker", async () => {
+    const installPath = "/tmp/openclaw-state/npm/projects/brave/node_modules/brave";
+    mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
+      changes: [],
+      warnings: [],
+      records: { brave: { source: "npm", installPath } },
+    });
+    mocks.relinkOpenClawPeerDependenciesInManagedNpmRoot.mockImplementation(
+      async (params: { onPackageReadError?: (error: unknown, packageDir: string) => void }) => {
+        params.onPackageReadError?.(
+          new Error(`EACCES: permission denied, open '${installPath}/package.json'`),
+          installPath,
+        );
+        return { checked: 0, attempted: 0, repaired: 0, skipped: 1 };
+      },
+    );
+
+    const result = await runPostCorePluginConvergence({
+      cfg: {
+        plugins: { entries: { brave: { enabled: false } } },
+      } as unknown as OpenClawConfig,
+      env: { OPENCLAW_STATE_DIR: "/tmp/openclaw-state" },
+    });
+
+    expect(mocks.runPluginPayloadSmokeCheck).toHaveBeenCalledWith({
+      records: {},
+      env: expect.any(Object),
+    });
+    expect(result.warnings).toEqual([]);
+    expect(result.errored).toBe(false);
+  });
+
+  it("keeps an unowned package read error visible for startup to block", async () => {
+    const packageDir = "/tmp/openclaw-state/npm/node_modules/untracked";
+    mocks.relinkOpenClawPeerDependenciesInManagedNpmRoot.mockImplementation(
+      async (params: { onPackageReadError?: (error: unknown, packageDir: string) => void }) => {
+        params.onPackageReadError?.(new Error("EACCES: permission denied"), packageDir);
+        return { checked: 0, attempted: 0, repaired: 0, skipped: 1 };
+      },
+    );
+
+    const result = await runPostCorePluginConvergence({
+      cfg: { plugins: { entries: {} } } as unknown as OpenClawConfig,
+      env: { OPENCLAW_STATE_DIR: "/tmp/openclaw-state" },
+    });
+
+    expect(result.warnings).toStrictEqual([
+      {
+        reason: "Failed to repair managed npm OpenClaw host peer links: EACCES: permission denied",
+        message: "Failed to repair managed npm OpenClaw host peer links: EACCES: permission denied",
+        guidance: ["Run `openclaw update repair` to retry plugin repair."],
+      },
+    ]);
+    expect(result.errored).toBe(false);
   });
 
   it("hands repair's post-mutation records straight to the smoke check (no second disk read)", async () => {

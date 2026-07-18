@@ -14,6 +14,7 @@ import {
 } from "../../plugins/official-external-install-records.js";
 import { relinkOpenClawPeerDependenciesInManagedNpmRoot } from "../../plugins/plugin-peer-link.js";
 import { pruneStaleLocalBundledPluginInstallRecords } from "../../plugins/stale-local-bundled-plugin-install-records.js";
+import { resolveUserPath } from "../../utils.js";
 import { VERSION } from "../../version.js";
 import {
   runPluginPayloadSmokeCheck,
@@ -63,9 +64,12 @@ function smokeFailureGuidance(failure: PluginPayloadSmokeFailure): string[] {
   ];
 }
 
-async function repairManagedNpmOpenClawPeerLinks(params: {
-  env: NodeJS.ProcessEnv;
-}): Promise<{ changes: string[]; warnings: PostCoreConvergenceWarning[] }> {
+async function repairManagedNpmOpenClawPeerLinks(params: { env: NodeJS.ProcessEnv }): Promise<{
+  changes: string[];
+  warnings: PostCoreConvergenceWarning[];
+  packageReadFailures: Array<{ error: unknown; packageDir: string }>;
+}> {
+  const packageReadFailures: Array<{ error: unknown; packageDir: string }> = [];
   try {
     const npmRoots = await listManagedPluginNpmRoots(resolveDefaultPluginNpmDir(params.env));
     const results = await Promise.all(
@@ -73,6 +77,9 @@ async function repairManagedNpmOpenClawPeerLinks(params: {
         relinkOpenClawPeerDependenciesInManagedNpmRoot({
           npmRoot,
           logger: {},
+          onPackageReadError: (error, packageDir) => {
+            packageReadFailures.push({ error, packageDir });
+          },
         }),
       ),
     );
@@ -83,6 +90,7 @@ async function repairManagedNpmOpenClawPeerLinks(params: {
           ? [`Repaired OpenClaw host peer link(s) for ${repaired} managed npm plugin package(s).`]
           : [],
       warnings: [],
+      packageReadFailures,
     };
   } catch (err) {
     const message = `Failed to repair managed npm OpenClaw host peer links: ${err instanceof Error ? err.message : String(err)}`;
@@ -95,8 +103,18 @@ async function repairManagedNpmOpenClawPeerLinks(params: {
           guidance: [REPAIR_GUIDANCE],
         },
       ],
+      packageReadFailures,
     };
   }
+}
+
+function formatPeerLinkPackageReadWarning(failure: { error: unknown }): PostCoreConvergenceWarning {
+  const message = `Failed to repair managed npm OpenClaw host peer links: ${failure.error instanceof Error ? failure.error.message : String(failure.error)}`;
+  return {
+    reason: message,
+    message,
+    guidance: [REPAIR_GUIDANCE],
+  };
 }
 
 /**
@@ -167,6 +185,34 @@ export async function runPostCorePluginConvergence(params: {
   // entire update — even though the gateway will never load that plugin.
   const smokeRecords = filterRecordsToActive({ cfg: params.cfg, records });
   const smoke = await runPluginPayloadSmokeCheck({ records: smokeRecords, env });
+  const resolveInstallRecordPaths = (
+    installRecords: Record<string, PluginInstallRecord>,
+  ): Set<string> =>
+    new Set(
+      Object.values(installRecords).flatMap((record) => {
+        const installPath = record.installPath?.trim();
+        return installPath ? [path.resolve(resolveUserPath(installPath, env))] : [];
+      }),
+    );
+  const knownInstallPaths = resolveInstallRecordPaths(records);
+  const activeInstallPaths = resolveInstallRecordPaths(smokeRecords);
+  const smokeFailureInstallPaths = new Set(
+    smoke.failures.flatMap((failure) =>
+      failure.installPath ? [path.resolve(failure.installPath)] : [],
+    ),
+  );
+  for (const failure of peerLinkRepair.packageReadFailures) {
+    // A typed smoke failure owns this exact package and startup quarantines it.
+    // Re-emitting the repair error without that owner would turn it back into
+    // an unknown warning and incorrectly block gateway readiness.
+    const packageDir = path.resolve(failure.packageDir);
+    const hasTypedFailure = smokeFailureInstallPaths.has(packageDir);
+    const belongsToInactivePlugin =
+      knownInstallPaths.has(packageDir) && !activeInstallPaths.has(packageDir);
+    if (!hasTypedFailure && !belongsToInactivePlugin) {
+      warnings.push(formatPeerLinkPackageReadWarning(failure));
+    }
+  }
   for (const failure of smoke.failures) {
     warnings.push({
       pluginId: failure.pluginId,
