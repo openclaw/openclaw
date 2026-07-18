@@ -222,6 +222,96 @@ describe("secrets runtime degraded-owner attribution", () => {
     ]);
   });
 
+  it("includes active co-owners using another ref from a failed provider", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const root = tempDirs.make("openclaw-secret-provider-active-co-owner-");
+    const provider = "missing";
+    const candidateRef = { source: "file" as const, provider, id: "/candidate" };
+    const activeRef = { source: "file" as const, provider, id: "/active" };
+    const config = asConfig({
+      secrets: {
+        providers: {
+          [provider]: {
+            source: "file",
+            path: path.join(root, "missing.json"),
+            mode: "json",
+          },
+        },
+      },
+      models: {
+        providers: {
+          example: {
+            apiKey: candidateRef,
+            baseUrl: "https://example.invalid/v1",
+            models: [],
+          },
+        },
+      },
+    });
+    const agentDir = path.join(root, "agent");
+    const profileId = "openai:provider-failure";
+    const accountOwnerId = resolveAuthProfileSecretOwnerId({
+      agentDir,
+      profileId,
+    });
+    const active = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({}),
+      includeAuthStoreRefs: false,
+      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+    });
+    active.sourceConfig = config;
+    active.config = config;
+    active.authStores = [
+      {
+        agentDir,
+        store: {
+          version: 1,
+          profiles: {
+            [profileId]: {
+              type: "api_key",
+              provider: "openai",
+              key: "dummy",
+              keyRef: activeRef,
+            },
+          },
+        },
+      },
+    ];
+    active.secretOwners = [
+      {
+        ownerKind: "account",
+        ownerId: accountOwnerId,
+        refKeys: ["file:missing:/active"],
+      },
+    ];
+    activateSecretsRuntimeSnapshotState({
+      snapshot: active,
+      refreshContext: null,
+      refreshHandler: null,
+    });
+
+    const error = await prepareSecretsRuntimeSnapshot({
+      config,
+      includeAuthStoreRefs: false,
+      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+    }).catch((failure: unknown) => failure);
+
+    expect(listSecretResolutionErrorOwners(error)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ ownerKind: "provider", ownerId: "example" }),
+        expect.objectContaining({
+          ownerKind: "account",
+          ownerId: accountOwnerId,
+          degradationState: "stale",
+          source: "auth-store",
+          failureMatched: true,
+        }),
+      ]),
+    );
+  });
+
   it("includes active web-tool co-owners when strict resolution fails first", async () => {
     const sharedRef = { source: "env" as const, provider: "default", id: "SHARED_API_KEY" };
     const authAgentDir = "/tmp/shared-secret-co-owner";

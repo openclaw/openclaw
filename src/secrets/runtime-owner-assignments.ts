@@ -195,6 +195,13 @@ function associateAssignmentFailureOwners(params: {
           .filter((assignment) => assignmentMatchesResolutionFailure(assignment, params.error))
           .map((assignment) => [secretRefKey(assignment.ref), assignment.ref] as const),
   );
+  const providerFailure =
+    validationFailures.length === 0 && isProviderScopedSecretResolutionError(params.error)
+      ? params.error
+      : null;
+  const providerRefPrefix = providerFailure
+    ? `${providerFailure.source}:${providerFailure.provider}:`
+    : null;
   const ownerKeys = new Set(
     owners.map((owner) => `${owner.source}\0${owner.ownerKind}\0${owner.ownerId}`),
   );
@@ -223,7 +230,19 @@ function associateAssignmentFailureOwners(params: {
     }
     const refs = owner.refKeys.flatMap((refKey) => {
       const ref = failureRefs.get(refKey);
-      return ref ? [ref] : [];
+      if (ref) {
+        return [ref];
+      }
+      if (!providerFailure || !providerRefPrefix || !refKey.startsWith(providerRefPrefix)) {
+        return [];
+      }
+      return [
+        {
+          source: providerFailure.source,
+          provider: providerFailure.provider,
+          id: refKey.slice(providerRefPrefix.length),
+        },
+      ];
     });
     if (refs.length === 0) {
       return [];
