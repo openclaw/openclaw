@@ -219,7 +219,7 @@ describe("buildJsonChannelConfigSchema", () => {
 
     expect(result.runtime?.safeParse({})).toEqual({
       success: false,
-      issues: [{ path: ["100001"], message: "must have required property '100001'" }],
+      issues: [{ path: ["100001"], message: 'must have required property "100001"' }],
     });
   });
 });

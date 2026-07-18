@@ -450,8 +450,8 @@ export type PluginHookAfterCompactionEvent = {
   tokenCount?: number;
   compactedCount: number;
   sessionFile?: string;
-  /** Physical session generation replaced by this compaction, when it rotated. */
   previousSessionId?: string;
+  reason?: string;
 };
 
 export type PluginHookInboundClaimResult = {

@@ -42,6 +42,7 @@ import {
   validateWakeParams,
   type ValidationError,
 } from "./index.js";
+import { messageReportsUnexpectedProperty } from "./validation-errors.js";
 
 /**
  * Broad protocol validator smoke tests.
@@ -349,7 +350,7 @@ describe("formatValidationErrors", () => {
       params: { additionalProperty: "token" },
     });
 
-    expect(formatValidationErrors([err])).toBe("at root: unexpected property 'token'");
+    expect(formatValidationErrors([err])).toBe('at root: unexpected property "token"');
   });
 
   it("formats additionalProperties with instancePath", () => {
@@ -359,7 +360,7 @@ describe("formatValidationErrors", () => {
       params: { additionalProperty: "token" },
     });
 
-    expect(formatValidationErrors([err])).toBe("at /auth: unexpected property 'token'");
+    expect(formatValidationErrors([err])).toBe('at /auth: unexpected property "token"');
   });
 
   it("formats message with path for other errors", () => {
@@ -372,6 +373,41 @@ describe("formatValidationErrors", () => {
     expect(formatValidationErrors([err])).toBe("at /auth: must have required property 'token'");
   });
 
+  it("formats required-property misses with JSON-compatible double quotes", () => {
+    const err = makeError({
+      keyword: "required",
+      instancePath: "/auth",
+      params: { missingProperty: "token" },
+    });
+
+    expect(formatValidationErrors([err])).toBe('at /auth: must have required property "token"');
+  });
+
+  it("escapes embedded quotes/backslashes in unexpected-property names as valid JSON tokens", () => {
+    const weird = 'weird"key\\path';
+    const err = makeError({
+      keyword: "additionalProperties",
+      params: { additionalProperty: weird },
+    });
+
+    const message = formatValidationErrors([err]);
+    expect(message).toBe(`at root: unexpected property ${JSON.stringify(weird)}`);
+    expect(JSON.parse(message.slice(message.indexOf('"')))).toBe(weird);
+  });
+
+  it("escapes embedded quotes/backslashes in required-property names as valid JSON tokens", () => {
+    const weird = 'weird"key\\path';
+    const err = makeError({
+      keyword: "required",
+      instancePath: "/auth",
+      params: { missingProperty: weird },
+    });
+
+    const message = formatValidationErrors([err]);
+    expect(message).toBe(`at /auth: must have required property ${JSON.stringify(weird)}`);
+    expect(JSON.parse(message.slice(message.indexOf('"')))).toBe(weird);
+  });
+
   it("de-dupes repeated entries", () => {
     const err = makeError({
       keyword: "required",
@@ -381,6 +417,35 @@ describe("formatValidationErrors", () => {
 
     expect(formatValidationErrors([err, err])).toBe(
       "at /auth: must have required property 'token'",
+    );
+  });
+});
+
+describe("messageReportsUnexpectedProperty", () => {
+  it.each([
+    ["legacy single-quoted", "at /auth: unexpected property 'agentRuntimeIdentityToken'"],
+    ["JSON-quoted", 'at /auth: unexpected property "agentRuntimeIdentityToken"'],
+  ])("matches an unexpected-property rejection in %s form", (_label, message) => {
+    expect(messageReportsUnexpectedProperty(message, "agentRuntimeIdentityToken")).toBe(true);
+  });
+
+  it("matches the current formatValidationErrors output for the same property", () => {
+    const message = formatValidationErrors([
+      {
+        keyword: "additionalProperties",
+        instancePath: "/auth",
+        params: { additionalProperty: "timeZone" },
+      },
+    ]);
+    expect(messageReportsUnexpectedProperty(message, "timeZone")).toBe(true);
+  });
+
+  it("does not match a different property or an unrelated failure", () => {
+    expect(
+      messageReportsUnexpectedProperty('at root: unexpected property "timeZone"', "compact"),
+    ).toBe(false);
+    expect(messageReportsUnexpectedProperty("must have required property 'token'", "token")).toBe(
+      false,
     );
   });
 });
@@ -522,7 +587,7 @@ describe("validateTalkClientCreateParams", () => {
       }),
     ).toBe(false);
     expect(formatValidationErrors(validateTalkClientCreateParams.errors)).toContain(
-      "unexpected property 'instructions'",
+      'unexpected property "instructions"',
     );
   });
 
@@ -667,7 +732,7 @@ describe("validateTalkSession", () => {
       }),
     ).toBe(false);
     expect(formatValidationErrors(validateTalkSessionCreateParams.errors)).toContain(
-      "unexpected property 'instructionsOverride'",
+      'unexpected property "instructionsOverride"',
     );
     expect(validateTalkSessionCreateParams({ mode: "realtime", language: "de-DE" })).toBe(false);
   });
