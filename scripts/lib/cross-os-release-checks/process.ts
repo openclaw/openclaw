@@ -246,7 +246,9 @@ function safeTailBytes(buffer: Buffer, maxBytes: number): Buffer {
   }
   const raw = buffer.subarray(buffer.byteLength - maxBytes);
   let start = 0;
-  while (start < raw.length && (raw[start] & 0xc0) === 0x80) {
+  while (start < raw.length) {
+    const byte = raw.at(start);
+    if (byte === undefined || (byte & 0xc0) !== 0x80) break;
     start += 1;
   }
   return start > 0 ? raw.subarray(start) : raw;
@@ -272,7 +274,9 @@ function appendBoundedCommandOutput(current: string, chunk: Uint8Array | string,
     Math.max(0, currentBuffer.byteLength - currentTailBytes),
   );
   let skip = 0;
-  while (skip < currentTail.length && (currentTail[skip] & 0xc0) === 0x80) {
+  while (skip < currentTail.length) {
+    const byte = currentTail.at(skip);
+    if (byte === undefined || (byte & 0xc0) !== 0x80) break;
     skip += 1;
   }
   if (skip > 0) {

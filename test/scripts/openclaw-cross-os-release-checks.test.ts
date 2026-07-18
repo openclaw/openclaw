@@ -2305,7 +2305,11 @@ function appendBoundedCommandOutputFixed(
     if (buffer.byteLength <= limit) return buffer;
     const raw = buffer.subarray(buffer.byteLength - limit);
     let start = 0;
-    while (start < raw.length && (raw[start] & 0xc0) === 0x80) start += 1;
+    while (start < raw.length) {
+      const byte = raw.at(start);
+      if (byte === undefined || (byte & 0xc0) !== 0x80) break;
+      start += 1;
+    }
     return start > 0 ? raw.subarray(start) : raw;
   }
   if (chunkBuffer.byteLength >= maxBytes) {
@@ -2319,7 +2323,11 @@ function appendBoundedCommandOutputFixed(
     Math.max(0, currentBuffer.byteLength - currentTailBytes),
   );
   let skip = 0;
-  while (skip < currentTail.length && (currentTail[skip] & 0xc0) === 0x80) skip += 1;
+  while (skip < currentTail.length) {
+    const byte = currentTail.at(skip);
+    if (byte === undefined || (byte & 0xc0) !== 0x80) break;
+    skip += 1;
+  }
   if (skip > 0) currentTail = currentTail.subarray(skip);
   return Buffer.concat([currentTail, chunkBuffer]).toString("utf8");
 }
