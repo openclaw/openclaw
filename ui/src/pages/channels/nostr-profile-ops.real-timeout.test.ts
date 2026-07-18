@@ -3,13 +3,17 @@ import { createServer } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { putNostrProfile, importNostrProfile } from "./nostr-profile-ops.js";
 
-function installRelativeFetchBridge(serverUrl: string): void {
+function installRelativeFetchBridge(serverUrl: string): () => void {
   const base = serverUrl.replace(/\/$/, "");
-  const realFetch = globalThis.fetch.bind(globalThis);
-  (globalThis as any).fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+  const originalFetch = globalThis.fetch;
+  const realFetch = originalFetch.bind(globalThis);
+  globalThis.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     const absolute = url.startsWith("http") ? url : `${base}${url}`;
     return realFetch(absolute, init);
+  };
+  return () => {
+    globalThis.fetch = originalFetch;
   };
 }
 
@@ -19,6 +23,7 @@ describe("Nostr profile operations with real timeouts", () => {
   let server: Server;
   let serverUrl: string;
   let stall: boolean;
+  let restoreFetch: () => void;
 
   beforeEach(async () => {
     stall = false;
@@ -35,10 +40,11 @@ describe("Nostr profile operations with real timeouts", () => {
     const address = server.address();
     const port = typeof address === "object" && address ? address.port : 0;
     serverUrl = `http://127.0.0.1:${port}`;
-    installRelativeFetchBridge(serverUrl);
+    restoreFetch = installRelativeFetchBridge(serverUrl);
   });
 
   afterEach(() => {
+    restoreFetch();
     server.close();
   });
 
