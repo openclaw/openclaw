@@ -87,6 +87,42 @@ describe("normalizeCronJobCreate", () => {
     expect(blank.schedule).not.toHaveProperty("tz");
   });
 
+  it("isolates system-event jobs that explicitly request announce delivery", () => {
+    // A systemEvent with an explicit announce delivery block but no pinned
+    // sessionTarget used to default to "main" and then be rejected by
+    // assertDeliverySupport ('...only supported for sessionTarget="isolated"').
+    // It should instead become an isolated agent turn so the requested
+    // delivery is honored, carrying the event text into the agent message.
+    const normalized = normalizeCronJobCreate({
+      name: "watch-and-notify",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 30_000 },
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "Check the incident dashboard" },
+      delivery: { mode: "announce", channel: "telegram", to: "100000" },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.sessionTarget).toBe("isolated");
+    expect(normalized.payload).toEqual({
+      kind: "agentTurn",
+      message: "Check the incident dashboard",
+    });
+    expect(normalized.delivery).toMatchObject({ mode: "announce", channel: "telegram" });
+  });
+
+  it("keeps system-event jobs on main when no channel delivery is requested", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "quiet-reminder",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 30_000 },
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "Nightly digest" },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.sessionTarget).toBe("main");
+    expect(normalized.payload).toMatchObject({ kind: "systemEvent", text: "Nightly digest" });
+  });
+
   it("normalizes trigger scripts and preserves patch clears", () => {
     const normalized = normalizeCronJobCreate({
       name: "watcher",

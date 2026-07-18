@@ -525,6 +525,43 @@ function normalizeWakeMode(raw: unknown) {
   return undefined;
 }
 
+/**
+ * True when a not-yet-targeted job carries an explicit announce delivery block.
+ * `delivery` is already coerced by this point, so a normalized `mode` of
+ * "announce" (or a channel/to without an explicit non-announce mode) signals
+ * the caller genuinely wants the result pushed to a channel.
+ */
+function systemEventRequestsAnnounceDelivery(job: UnknownRecord): boolean {
+  const delivery = job.delivery;
+  if (!isRecord(delivery)) {
+    return false;
+  }
+  const mode = typeof delivery.mode === "string" ? delivery.mode : undefined;
+  if (mode === "announce") {
+    return true;
+  }
+  if (mode === "none" || mode === "webhook") {
+    return false;
+  }
+  // Mode omitted but a concrete channel target present: resolveCronDeliveryPlan
+  // treats this as an announce request, so honor it the same way here.
+  return (
+    typeof delivery.channel === "string" ||
+    typeof delivery.to === "string" ||
+    typeof delivery.threadId === "string" ||
+    typeof delivery.accountId === "string"
+  );
+}
+
+/** Returns the trimmed text of a systemEvent payload, or undefined when empty. */
+function extractSystemEventText(payload: unknown): string | undefined {
+  if (!isRecord(payload)) {
+    return undefined;
+  }
+  const text = typeof payload.text === "string" ? payload.text.trim() : "";
+  return text.length > 0 ? text : undefined;
+}
+
 /** Normalizes raw cron job input without deciding whether create-time defaults apply. */
 export function normalizeCronJobInput(
   raw: unknown,
@@ -669,7 +706,25 @@ export function normalizeCronJobInput(
       // Keep create-time defaults explicit: system events join main, while agent
       // turns isolate by default to avoid unbounded token accumulation.
       if (kind === "systemEvent") {
-        next.sessionTarget = "main";
+        // A system event that explicitly asks for channel delivery cannot be
+        // satisfied on the main session: main jobs enqueue their text into the
+        // owning session and never run assertDeliverySupport's announce path,
+        // so today the create call is rejected outright ("cron channel delivery
+        // config is only supported for sessionTarget=\"isolated\""). When the
+        // caller opted into announce delivery but did not pin a session target,
+        // isolate the job and carry the text over as an agent turn so the
+        // requested delivery is actually honored instead of failing closed.
+        if (systemEventRequestsAnnounceDelivery(next)) {
+          const text = extractSystemEventText(next.payload);
+          if (text) {
+            next.payload = { kind: "agentTurn", message: text };
+            next.sessionTarget = "isolated";
+          } else {
+            next.sessionTarget = "main";
+          }
+        } else {
+          next.sessionTarget = "main";
+        }
       } else if (kind === "agentTurn" || kind === "command") {
         next.sessionTarget = "isolated";
       }
