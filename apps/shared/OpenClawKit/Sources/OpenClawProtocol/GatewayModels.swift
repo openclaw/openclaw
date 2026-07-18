@@ -876,6 +876,7 @@ public struct AgentParams: Codable, Sendable {
     public let execapprovalfollowupexpectedsessionid: String?
     public let internalevents: [[String: AnyCodable]]?
     public let inputprovenance: [String: AnyCodable]?
+    public let contextrefs: [[String: AnyCodable]]?
     public let suppresspromptpersistence: Bool?
     public let sessioneffects: AnyCodable?
     public let sourcereplydeliverymode: AnyCodable?
@@ -919,6 +920,7 @@ public struct AgentParams: Codable, Sendable {
         execapprovalfollowupexpectedsessionid: String?,
         internalevents: [[String: AnyCodable]]?,
         inputprovenance: [String: AnyCodable]?,
+        contextrefs: [[String: AnyCodable]]?,
         suppresspromptpersistence: Bool?,
         sessioneffects: AnyCodable?,
         sourcereplydeliverymode: AnyCodable?,
@@ -961,6 +963,7 @@ public struct AgentParams: Codable, Sendable {
         self.execapprovalfollowupexpectedsessionid = execapprovalfollowupexpectedsessionid
         self.internalevents = internalevents
         self.inputprovenance = inputprovenance
+        self.contextrefs = contextrefs
         self.suppresspromptpersistence = suppresspromptpersistence
         self.sessioneffects = sessioneffects
         self.sourcereplydeliverymode = sourcereplydeliverymode
@@ -1005,6 +1008,7 @@ public struct AgentParams: Codable, Sendable {
         case execapprovalfollowupexpectedsessionid = "execApprovalFollowupExpectedSessionId"
         case internalevents = "internalEvents"
         case inputprovenance = "inputProvenance"
+        case contextrefs = "contextRefs"
         case suppresspromptpersistence = "suppressPromptPersistence"
         case sessioneffects = "sessionEffects"
         case sourcereplydeliverymode = "sourceReplyDeliveryMode"
@@ -3442,6 +3446,514 @@ public struct TasksCancelResult: Codable, Sendable {
         case cancelled
         case reason
         case task
+    }
+}
+
+public struct DurableCoordinationGetParams: Codable, Sendable {
+    public let runtimerunid: String
+
+    public init(
+        runtimerunid: String)
+    {
+        self.runtimerunid = runtimerunid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case runtimerunid = "runtimeRunId"
+    }
+}
+
+public struct DurableCoordinationProjection: Codable, Sendable {
+    public let runtimerunid: String
+    public let operationkind: String
+    public let operationversion: String
+    public let status: AnyCodable
+    public let recoverystate: AnyCodable
+    public let sourcetype: String?
+    public let sourceref: String?
+    public let parentruntimerunid: String?
+    public let parentstepid: String?
+    public let workunitid: String?
+    public let reportrouteid: String?
+    public let currentstepid: String?
+    public let waitingreason: AnyCodable?
+    public let heartbeatat: Int?
+    public let updatedat: Int
+    public let completedat: Int?
+    public let refs: [String: AnyCodable]
+    public let external: [String: AnyCodable]
+    public let children: [String: AnyCodable]
+    public let controls: [String: AnyCodable]
+    public let recovery: [String: AnyCodable]?
+
+    public init(
+        runtimerunid: String,
+        operationkind: String,
+        operationversion: String,
+        status: AnyCodable,
+        recoverystate: AnyCodable,
+        sourcetype: String?,
+        sourceref: String?,
+        parentruntimerunid: String?,
+        parentstepid: String?,
+        workunitid: String?,
+        reportrouteid: String?,
+        currentstepid: String?,
+        waitingreason: AnyCodable?,
+        heartbeatat: Int?,
+        updatedat: Int,
+        completedat: Int?,
+        refs: [String: AnyCodable],
+        external: [String: AnyCodable],
+        children: [String: AnyCodable],
+        controls: [String: AnyCodable],
+        recovery: [String: AnyCodable]?)
+    {
+        self.runtimerunid = runtimerunid
+        self.operationkind = operationkind
+        self.operationversion = operationversion
+        self.status = status
+        self.recoverystate = recoverystate
+        self.sourcetype = sourcetype
+        self.sourceref = sourceref
+        self.parentruntimerunid = parentruntimerunid
+        self.parentstepid = parentstepid
+        self.workunitid = workunitid
+        self.reportrouteid = reportrouteid
+        self.currentstepid = currentstepid
+        self.waitingreason = waitingreason
+        self.heartbeatat = heartbeatat
+        self.updatedat = updatedat
+        self.completedat = completedat
+        self.refs = refs
+        self.external = external
+        self.children = children
+        self.controls = controls
+        self.recovery = recovery
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case runtimerunid = "runtimeRunId"
+        case operationkind = "operationKind"
+        case operationversion = "operationVersion"
+        case status
+        case recoverystate = "recoveryState"
+        case sourcetype = "sourceType"
+        case sourceref = "sourceRef"
+        case parentruntimerunid = "parentRuntimeRunId"
+        case parentstepid = "parentStepId"
+        case workunitid = "workUnitId"
+        case reportrouteid = "reportRouteId"
+        case currentstepid = "currentStepId"
+        case waitingreason = "waitingReason"
+        case heartbeatat = "heartbeatAt"
+        case updatedat = "updatedAt"
+        case completedat = "completedAt"
+        case refs
+        case external
+        case children
+        case controls
+        case recovery
+    }
+}
+
+public struct DurableCoordinationGetResult: Codable, Sendable {
+    public let projection: DurableCoordinationProjection
+
+    public init(
+        projection: DurableCoordinationProjection)
+    {
+        self.projection = projection
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case projection
+    }
+}
+
+public struct DurableLimitParams: Codable, Sendable {
+    public let limit: Int?
+
+    public init(
+        limit: Int?)
+    {
+        self.limit = limit
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case limit
+    }
+}
+
+public struct DurableWakeIdParams: Codable, Sendable {
+    public let wakeid: String
+
+    public init(
+        wakeid: String)
+    {
+        self.wakeid = wakeid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case wakeid = "wakeId"
+    }
+}
+
+public struct DurableWakeDeliveryAttemptsListParams: Codable, Sendable {
+    public let wakeid: String
+    public let limit: Int?
+
+    public init(
+        wakeid: String,
+        limit: Int?)
+    {
+        self.wakeid = wakeid
+        self.limit = limit
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case wakeid = "wakeId"
+        case limit
+    }
+}
+
+public struct DurableWake: Codable, Sendable {
+    public let wakeid: String
+    public let parentrunid: String?
+    public let parentsessionkey: String?
+    public let targetagent: String?
+    public let targetsession: String?
+    public let targetchannel: String?
+    public let targetkind: AnyCodable?
+    public let targetref: String?
+    public let ownerkind: AnyCodable?
+    public let ownerref: String?
+    public let reportrouteref: String?
+    public let targetresolutionstatus: AnyCodable?
+    public let targetresolutionreason: String?
+    public let reason: AnyCodable
+    public let factsref: String?
+    public let sourcerunid: String?
+    public let dedupekey: String
+    public let attemptcount: Int
+    public let lastattemptat: Int?
+    public let ackedat: Int?
+    public let failedreason: String?
+    public let status: AnyCodable
+    public let metadata: [String: AnyCodable]?
+    public let createdat: Int
+    public let updatedat: Int
+
+    public init(
+        wakeid: String,
+        parentrunid: String?,
+        parentsessionkey: String?,
+        targetagent: String?,
+        targetsession: String?,
+        targetchannel: String?,
+        targetkind: AnyCodable?,
+        targetref: String?,
+        ownerkind: AnyCodable?,
+        ownerref: String?,
+        reportrouteref: String?,
+        targetresolutionstatus: AnyCodable?,
+        targetresolutionreason: String?,
+        reason: AnyCodable,
+        factsref: String?,
+        sourcerunid: String?,
+        dedupekey: String,
+        attemptcount: Int,
+        lastattemptat: Int?,
+        ackedat: Int?,
+        failedreason: String?,
+        status: AnyCodable,
+        metadata: [String: AnyCodable]?,
+        createdat: Int,
+        updatedat: Int)
+    {
+        self.wakeid = wakeid
+        self.parentrunid = parentrunid
+        self.parentsessionkey = parentsessionkey
+        self.targetagent = targetagent
+        self.targetsession = targetsession
+        self.targetchannel = targetchannel
+        self.targetkind = targetkind
+        self.targetref = targetref
+        self.ownerkind = ownerkind
+        self.ownerref = ownerref
+        self.reportrouteref = reportrouteref
+        self.targetresolutionstatus = targetresolutionstatus
+        self.targetresolutionreason = targetresolutionreason
+        self.reason = reason
+        self.factsref = factsref
+        self.sourcerunid = sourcerunid
+        self.dedupekey = dedupekey
+        self.attemptcount = attemptcount
+        self.lastattemptat = lastattemptat
+        self.ackedat = ackedat
+        self.failedreason = failedreason
+        self.status = status
+        self.metadata = metadata
+        self.createdat = createdat
+        self.updatedat = updatedat
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case wakeid = "wakeId"
+        case parentrunid = "parentRunId"
+        case parentsessionkey = "parentSessionKey"
+        case targetagent = "targetAgent"
+        case targetsession = "targetSession"
+        case targetchannel = "targetChannel"
+        case targetkind = "targetKind"
+        case targetref = "targetRef"
+        case ownerkind = "ownerKind"
+        case ownerref = "ownerRef"
+        case reportrouteref = "reportRouteRef"
+        case targetresolutionstatus = "targetResolutionStatus"
+        case targetresolutionreason = "targetResolutionReason"
+        case reason
+        case factsref = "factsRef"
+        case sourcerunid = "sourceRunId"
+        case dedupekey = "dedupeKey"
+        case attemptcount = "attemptCount"
+        case lastattemptat = "lastAttemptAt"
+        case ackedat = "ackedAt"
+        case failedreason = "failedReason"
+        case status
+        case metadata
+        case createdat = "createdAt"
+        case updatedat = "updatedAt"
+    }
+}
+
+public struct DurableWakeDeliveryAttempt: Codable, Sendable {
+    public let deliveryattemptid: String
+    public let wakeid: String
+    public let dedupekey: String
+    public let replaypassid: String?
+    public let targetkind: AnyCodable?
+    public let targetref: String?
+    public let routekind: AnyCodable?
+    public let routeref: String?
+    public let status: AnyCodable
+    public let evidence: [String: AnyCodable]?
+    public let error: String?
+    public let scheduledat: Int
+    public let attemptedat: Int?
+    public let deliveredat: Int?
+    public let failedat: Int?
+    public let unknownat: Int?
+    public let createdat: Int
+    public let updatedat: Int
+    public let metadata: [String: AnyCodable]?
+
+    public init(
+        deliveryattemptid: String,
+        wakeid: String,
+        dedupekey: String,
+        replaypassid: String?,
+        targetkind: AnyCodable?,
+        targetref: String?,
+        routekind: AnyCodable?,
+        routeref: String?,
+        status: AnyCodable,
+        evidence: [String: AnyCodable]?,
+        error: String?,
+        scheduledat: Int,
+        attemptedat: Int?,
+        deliveredat: Int?,
+        failedat: Int?,
+        unknownat: Int?,
+        createdat: Int,
+        updatedat: Int,
+        metadata: [String: AnyCodable]?)
+    {
+        self.deliveryattemptid = deliveryattemptid
+        self.wakeid = wakeid
+        self.dedupekey = dedupekey
+        self.replaypassid = replaypassid
+        self.targetkind = targetkind
+        self.targetref = targetref
+        self.routekind = routekind
+        self.routeref = routeref
+        self.status = status
+        self.evidence = evidence
+        self.error = error
+        self.scheduledat = scheduledat
+        self.attemptedat = attemptedat
+        self.deliveredat = deliveredat
+        self.failedat = failedat
+        self.unknownat = unknownat
+        self.createdat = createdat
+        self.updatedat = updatedat
+        self.metadata = metadata
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case deliveryattemptid = "deliveryAttemptId"
+        case wakeid = "wakeId"
+        case dedupekey = "dedupeKey"
+        case replaypassid = "replayPassId"
+        case targetkind = "targetKind"
+        case targetref = "targetRef"
+        case routekind = "routeKind"
+        case routeref = "routeRef"
+        case status
+        case evidence
+        case error
+        case scheduledat = "scheduledAt"
+        case attemptedat = "attemptedAt"
+        case deliveredat = "deliveredAt"
+        case failedat = "failedAt"
+        case unknownat = "unknownAt"
+        case createdat = "createdAt"
+        case updatedat = "updatedAt"
+        case metadata
+    }
+}
+
+public struct DurableWakeInspection: Codable, Sendable {
+    public let wake: DurableWake
+    public let targetresolution: [String: AnyCodable]
+    public let deliveryattempts: [DurableWakeDeliveryAttempt]
+    public let unresolveduncertaintyfacts: [[String: AnyCodable]]
+    public let sourcerefs: [String: AnyCodable]
+
+    public init(
+        wake: DurableWake,
+        targetresolution: [String: AnyCodable],
+        deliveryattempts: [DurableWakeDeliveryAttempt],
+        unresolveduncertaintyfacts: [[String: AnyCodable]],
+        sourcerefs: [String: AnyCodable])
+    {
+        self.wake = wake
+        self.targetresolution = targetresolution
+        self.deliveryattempts = deliveryattempts
+        self.unresolveduncertaintyfacts = unresolveduncertaintyfacts
+        self.sourcerefs = sourcerefs
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case wake
+        case targetresolution = "targetResolution"
+        case deliveryattempts = "deliveryAttempts"
+        case unresolveduncertaintyfacts = "unresolvedUncertaintyFacts"
+        case sourcerefs = "sourceRefs"
+    }
+}
+
+public struct DurableUnresolvedObligation: Codable, Sendable {
+    public let obligationid: String
+    public let kind: AnyCodable
+    public let runtimerunid: String?
+    public let stepid: String?
+    public let wakeid: String?
+    public let uncertaintyfactid: String?
+    public let subjectref: String?
+    public let reason: String?
+    public let status: String
+    public let createdat: Int
+    public let updatedat: Int
+    public let metadata: [String: AnyCodable]?
+
+    public init(
+        obligationid: String,
+        kind: AnyCodable,
+        runtimerunid: String?,
+        stepid: String?,
+        wakeid: String?,
+        uncertaintyfactid: String?,
+        subjectref: String?,
+        reason: String?,
+        status: String,
+        createdat: Int,
+        updatedat: Int,
+        metadata: [String: AnyCodable]?)
+    {
+        self.obligationid = obligationid
+        self.kind = kind
+        self.runtimerunid = runtimerunid
+        self.stepid = stepid
+        self.wakeid = wakeid
+        self.uncertaintyfactid = uncertaintyfactid
+        self.subjectref = subjectref
+        self.reason = reason
+        self.status = status
+        self.createdat = createdat
+        self.updatedat = updatedat
+        self.metadata = metadata
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case obligationid = "obligationId"
+        case kind
+        case runtimerunid = "runtimeRunId"
+        case stepid = "stepId"
+        case wakeid = "wakeId"
+        case uncertaintyfactid = "uncertaintyFactId"
+        case subjectref = "subjectRef"
+        case reason
+        case status
+        case createdat = "createdAt"
+        case updatedat = "updatedAt"
+        case metadata
+    }
+}
+
+public struct DurableWakeListResult: Codable, Sendable {
+    public let wakes: [DurableWake]
+
+    public init(
+        wakes: [DurableWake])
+    {
+        self.wakes = wakes
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case wakes
+    }
+}
+
+public struct DurableObligationsListResult: Codable, Sendable {
+    public let obligations: [DurableUnresolvedObligation]
+
+    public init(
+        obligations: [DurableUnresolvedObligation])
+    {
+        self.obligations = obligations
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case obligations
+    }
+}
+
+public struct DurableWakeInspectResult: Codable, Sendable {
+    public let inspection: DurableWakeInspection
+
+    public init(
+        inspection: DurableWakeInspection)
+    {
+        self.inspection = inspection
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case inspection
+    }
+}
+
+public struct DurableWakeDeliveryAttemptsListResult: Codable, Sendable {
+    public let deliveryattempts: [DurableWakeDeliveryAttempt]
+
+    public init(
+        deliveryattempts: [DurableWakeDeliveryAttempt])
+    {
+        self.deliveryattempts = deliveryattempts
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case deliveryattempts = "deliveryAttempts"
     }
 }
 
@@ -8773,6 +9285,7 @@ public struct ChatSendParams: Codable, Sendable {
     public let timeoutms: Int?
     public let systeminputprovenance: [String: AnyCodable]?
     public let systemprovenancereceipt: String?
+    public let contextrefs: [[String: AnyCodable]]?
     public let suppresscommandinterpretation: Bool?
     public let expectedsessionroutingcontract: String?
     public let idempotencykey: String
@@ -8794,6 +9307,7 @@ public struct ChatSendParams: Codable, Sendable {
         timeoutms: Int?,
         systeminputprovenance: [String: AnyCodable]?,
         systemprovenancereceipt: String?,
+        contextrefs: [[String: AnyCodable]]?,
         suppresscommandinterpretation: Bool?,
         expectedsessionroutingcontract: String?,
         idempotencykey: String)
@@ -8814,6 +9328,7 @@ public struct ChatSendParams: Codable, Sendable {
         self.timeoutms = timeoutms
         self.systeminputprovenance = systeminputprovenance
         self.systemprovenancereceipt = systemprovenancereceipt
+        self.contextrefs = contextrefs
         self.suppresscommandinterpretation = suppresscommandinterpretation
         self.expectedsessionroutingcontract = expectedsessionroutingcontract
         self.idempotencykey = idempotencykey
@@ -8835,6 +9350,7 @@ public struct ChatSendParams: Codable, Sendable {
         timeoutms: Int?,
         systeminputprovenance: [String: AnyCodable]?,
         systemprovenancereceipt: String?,
+        contextrefs: [[String: AnyCodable]]?,
         suppresscommandinterpretation: Bool?,
         expectedsessionroutingcontract: String?,
         idempotencykey: String)
@@ -8856,6 +9372,7 @@ public struct ChatSendParams: Codable, Sendable {
             timeoutms: timeoutms,
             systeminputprovenance: systeminputprovenance,
             systemprovenancereceipt: systemprovenancereceipt,
+            contextrefs: contextrefs,
             suppresscommandinterpretation: suppresscommandinterpretation,
             expectedsessionroutingcontract: expectedsessionroutingcontract,
             idempotencykey: idempotencykey)
@@ -8878,6 +9395,7 @@ public struct ChatSendParams: Codable, Sendable {
         case timeoutms = "timeoutMs"
         case systeminputprovenance = "systemInputProvenance"
         case systemprovenancereceipt = "systemProvenanceReceipt"
+        case contextrefs = "contextRefs"
         case suppresscommandinterpretation = "suppressCommandInterpretation"
         case expectedsessionroutingcontract = "expectedSessionRoutingContract"
         case idempotencykey = "idempotencyKey"

@@ -586,7 +586,53 @@ terminal summary, and sanitized error text. `agentId` identifies the agent
 executing the task; `sessionKey` and `ownerKey` preserve requester and control
 context.
 
-## Operator helper methods
+### Durable coordination RPCs
+
+Operator clients may inspect native Durable Runtime coordination state through a
+bounded projection instead of reading the shared OpenClaw state database
+directly. These methods are disabled unless `OPENCLAW_DURABLE_RUNTIME` is
+explicitly enabled. Disabled durable coordination RPCs reject the request before
+opening or migrating durable runtime state.
+
+- `durable.coordination.get` requires `operator.read`.
+  - Params: `{ "runtimeRunId": string }`.
+  - Result: `{ "projection": DurableCoordinationProjection }`.
+  - The projection includes runtime identity, status, recovery state, current
+    step, waiting reason, external task/session/run bindings, child counts, ref
+    summaries, and supported controls.
+- `durable.obligations.list` requires `operator.read`.
+  - Params: optional `{ "limit": number }`, from `1` to `500`.
+  - Result: `{ "obligations": DurableUnresolvedObligation[] }`.
+  - Results include unresolved durable work such as pending wakes, unresolved
+    uncertainty facts, open children, expired claims, and pending result mailbox
+    entries.
+- `durable.wake.list` requires `operator.read`.
+  - Params: optional `{ "limit": number }`, from `1` to `500`.
+  - Result: `{ "wakes": DurableWake[] }`.
+  - Results include pending wake obligations only, ordered by most recently
+    updated wake first.
+- `durable.wake.inspect` requires `operator.read`.
+  - Params: `{ "wakeId": string }`.
+  - Result: `{ "inspection": DurableWakeInspection }`.
+  - The inspection contains the wake row, target-resolution diagnostics,
+    delivery attempts, unresolved uncertainty facts for the source run, and
+    source refs used to correlate persisted state.
+- `durable.wake.deliveryAttempts.list` requires `operator.read`.
+  - Params: `{ "wakeId": string, "limit"?: number }`, with `limit` from `1` to
+    `500`.
+  - Result: `{ "deliveryAttempts": DurableWakeDeliveryAttempt[] }`.
+  - The wake must exist before attempts are listed.
+    Durable wake Gateway RPCs are inspection-first in this release. Public
+    `acknowledge`, `supersede`, and `mark` write controls are intentionally deferred
+    until the lifecycle handoff contract includes explicit write authorization,
+    transition semantics, idempotency, terminal-state rejection, and upgrade proof.
+
+Invalid params return `INVALID_REQUEST` before opening durable state. Disabled
+durable runtime returns `INVALID_REQUEST`. Missing wakes return
+`INVALID_REQUEST` with `durable wake not found: <wakeId>`. Store open or schema
+compatibility failures return `UNAVAILABLE`.
+
+### Operator helper methods
 
 - `commands.list` (`operator.read`) fetches the runtime command inventory for
   an agent.

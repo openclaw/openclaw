@@ -58,6 +58,23 @@ function successAttempt(provider: string, model: string): EmbeddedRunAttemptResu
   });
 }
 
+function yieldAttempt(provider = "anthropic", model = "claude-opus-4-8"): EmbeddedRunAttemptResult {
+  const assistant = {
+    role: "assistant",
+    stopReason: "end_turn",
+    provider,
+    model,
+    content: [],
+    usage: { input: 100, output: 0, totalTokens: 100 },
+  } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+  return makeAttemptResult({
+    assistantTexts: [],
+    lastAssistant: assistant,
+    currentAttemptAssistant: assistant,
+    yieldDetected: true,
+  });
+}
+
 describe("runEmbeddedAgent silent-error retry", () => {
   beforeAll(async () => {
     ({ runEmbeddedAgent } = await loadRunOverflowCompactionHarness());
@@ -306,6 +323,54 @@ describe("runEmbeddedAgent silent-error retry", () => {
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
     expect(result.payloads?.[0]?.isError).toBe(true);
+  });
+
+  it("surfaces a foreground progress notice when sessions_yield pauses without a reply", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(yieldAttempt());
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      runId: "run-foreground-yield-progress",
+      sessionKey: "agent:bo:foreground-yield-progress",
+      trigger: "user",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads?.[0]).toMatchObject({
+      isStatusNotice: true,
+      channelData: {
+        openclawProgressKind: "agent-yield-paused",
+        livenessState: "paused",
+        yielded: true,
+        runId: "run-foreground-yield-progress",
+      },
+    });
+    expect(result.payloads?.[0]?.text).toContain("Still working");
+    expect(result.meta).toMatchObject({
+      livenessState: "paused",
+      yielded: true,
+      terminalReplyKind: "yield-progress",
+    });
+  });
+
+  it("keeps subagent sessions_yield pauses internal instead of emitting fake completion", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(yieldAttempt());
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      runId: "run-subagent-yield-internal",
+      sessionKey: "agent:bo-worker:subagent:yield-internal",
+      spawnedBy: "agent:bo:main",
+      trigger: "user",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads).toBeUndefined();
+    expect(result.meta).toMatchObject({
+      livenessState: "paused",
+      yielded: true,
+    });
+    expect(result.meta.terminalReplyKind).toBeUndefined();
   });
 
   it.each([

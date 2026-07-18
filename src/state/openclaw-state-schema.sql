@@ -1296,6 +1296,357 @@ CREATE INDEX IF NOT EXISTS idx_flow_runs_status ON flow_runs(status);
 CREATE INDEX IF NOT EXISTS idx_flow_runs_owner_key ON flow_runs(owner_key);
 CREATE INDEX IF NOT EXISTS idx_flow_runs_updated_at ON flow_runs(updated_at);
 
+CREATE TABLE IF NOT EXISTS durable_runtime_runs (
+  runtime_run_id TEXT NOT NULL PRIMARY KEY,
+  operation_kind TEXT NOT NULL,
+  operation_version TEXT NOT NULL DEFAULT '1',
+  idempotency_key TEXT,
+  request_hash TEXT,
+  status TEXT NOT NULL,
+  source_type TEXT,
+  source_ref TEXT,
+  input_ref TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  completed_at INTEGER,
+  recovery_state TEXT NOT NULL DEFAULT 'runnable',
+  checkpoint_ref TEXT,
+  parent_runtime_run_id TEXT,
+  parent_step_id TEXT,
+  message_id TEXT,
+  turn_id TEXT,
+  work_unit_id TEXT,
+  report_route_id TEXT,
+  claimed_by TEXT,
+  claim_expires_at INTEGER,
+  heartbeat_at INTEGER,
+  metadata_json TEXT
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_durable_runtime_runs_idempotency
+  ON durable_runtime_runs(operation_kind, idempotency_key)
+  WHERE idempotency_key IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_durable_runtime_runs_status
+  ON durable_runtime_runs(status, updated_at, runtime_run_id);
+
+CREATE INDEX IF NOT EXISTS idx_durable_runtime_runs_work_unit
+  ON durable_runtime_runs(work_unit_id, updated_at, runtime_run_id)
+  WHERE work_unit_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_durable_runtime_runs_report_route
+  ON durable_runtime_runs(report_route_id, updated_at, runtime_run_id)
+  WHERE report_route_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS durable_runtime_events (
+  event_id TEXT NOT NULL UNIQUE,
+  runtime_run_id TEXT NOT NULL,
+  event_seq INTEGER NOT NULL,
+  event_type TEXT NOT NULL,
+  event_time INTEGER NOT NULL,
+  step_id TEXT,
+  agent_invocation_id TEXT,
+  tool_invocation_id TEXT,
+  idempotency_key TEXT,
+  payload_json TEXT,
+  payload_hash TEXT,
+  checkpoint_ref TEXT,
+  causation_event_id TEXT,
+  correlation_id TEXT,
+  recorded_at INTEGER NOT NULL,
+  PRIMARY KEY (runtime_run_id, event_seq),
+  FOREIGN KEY (runtime_run_id) REFERENCES durable_runtime_runs(runtime_run_id)
+    ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_durable_runtime_events_type
+  ON durable_runtime_events(event_type, event_time, runtime_run_id);
+
+CREATE TABLE IF NOT EXISTS durable_runtime_steps (
+  runtime_run_id TEXT NOT NULL,
+  step_id TEXT NOT NULL,
+  parent_step_id TEXT,
+  step_type TEXT NOT NULL,
+  status TEXT NOT NULL,
+  recovery_state TEXT NOT NULL,
+  attempt INTEGER NOT NULL DEFAULT 1,
+  max_attempts INTEGER,
+  idempotency_key TEXT,
+  input_ref TEXT,
+  output_ref TEXT,
+  error_ref TEXT,
+  checkpoint_ref TEXT,
+  claimed_by TEXT,
+  claim_expires_at INTEGER,
+  heartbeat_at INTEGER,
+  created_at INTEGER NOT NULL,
+  started_at INTEGER,
+  updated_at INTEGER NOT NULL,
+  completed_at INTEGER,
+  metadata_json TEXT,
+  PRIMARY KEY (runtime_run_id, step_id),
+  FOREIGN KEY (runtime_run_id) REFERENCES durable_runtime_runs(runtime_run_id)
+    ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_durable_runtime_steps_status
+  ON durable_runtime_steps(status, updated_at, runtime_run_id, step_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_durable_runtime_steps_idempotency
+  ON durable_runtime_steps(runtime_run_id, idempotency_key)
+  WHERE idempotency_key IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS durable_runtime_refs (
+  ref_id TEXT NOT NULL PRIMARY KEY,
+  runtime_run_id TEXT NOT NULL,
+  step_id TEXT,
+  ref_kind TEXT NOT NULL,
+  media_type TEXT,
+  hash TEXT,
+  storage_kind TEXT NOT NULL,
+  storage_uri TEXT,
+  created_at INTEGER NOT NULL,
+  metadata_json TEXT,
+  FOREIGN KEY (runtime_run_id) REFERENCES durable_runtime_runs(runtime_run_id)
+    ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_durable_runtime_refs_run
+  ON durable_runtime_refs(runtime_run_id, ref_kind, created_at);
+
+CREATE TABLE IF NOT EXISTS durable_runtime_links (
+  parent_runtime_run_id TEXT NOT NULL,
+  parent_step_id TEXT NOT NULL,
+  child_runtime_run_id TEXT NOT NULL,
+  link_type TEXT NOT NULL,
+  status TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  metadata_json TEXT,
+  PRIMARY KEY (parent_runtime_run_id, parent_step_id, child_runtime_run_id),
+  FOREIGN KEY (parent_runtime_run_id) REFERENCES durable_runtime_runs(runtime_run_id)
+    ON DELETE CASCADE,
+  FOREIGN KEY (child_runtime_run_id) REFERENCES durable_runtime_runs(runtime_run_id)
+    ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_durable_runtime_links_child
+  ON durable_runtime_links(child_runtime_run_id, status);
+
+CREATE TABLE IF NOT EXISTS durable_runtime_timers (
+  timer_id TEXT NOT NULL PRIMARY KEY,
+  runtime_run_id TEXT NOT NULL,
+  step_id TEXT,
+  timer_type TEXT NOT NULL,
+  due_at INTEGER NOT NULL,
+  status TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  fired_at INTEGER,
+  cancelled_at INTEGER,
+  metadata_json TEXT,
+  FOREIGN KEY (runtime_run_id) REFERENCES durable_runtime_runs(runtime_run_id)
+    ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_durable_runtime_timers_due
+  ON durable_runtime_timers(status, due_at, timer_id);
+
+CREATE TABLE IF NOT EXISTS durable_runtime_signals (
+  signal_id TEXT NOT NULL PRIMARY KEY,
+  runtime_run_id TEXT NOT NULL,
+  step_id TEXT,
+  signal_type TEXT NOT NULL,
+  idempotency_key TEXT,
+  payload_ref TEXT,
+  correlation_id TEXT,
+  received_at INTEGER NOT NULL,
+  consumed_at INTEGER,
+  metadata_json TEXT,
+  FOREIGN KEY (runtime_run_id) REFERENCES durable_runtime_runs(runtime_run_id)
+    ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_durable_runtime_signals_idempotency
+  ON durable_runtime_signals(runtime_run_id, idempotency_key)
+  WHERE idempotency_key IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_durable_runtime_signals_pending
+  ON durable_runtime_signals(consumed_at, received_at, signal_id);
+
+CREATE TABLE IF NOT EXISTS durable_runtime_parent_wakes (
+  wake_id TEXT NOT NULL PRIMARY KEY,
+  parent_run_id TEXT,
+  parent_session_key TEXT,
+  target_agent TEXT,
+  target_session TEXT,
+  target_channel TEXT,
+  target_kind TEXT,
+  target_ref TEXT,
+  owner_kind TEXT,
+  owner_ref TEXT,
+  report_route_ref TEXT,
+  target_resolution_status TEXT,
+  target_resolution_reason TEXT,
+  reason TEXT NOT NULL,
+  facts_ref TEXT,
+  source_run_id TEXT,
+  dedupe_key TEXT NOT NULL,
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  last_attempt_at INTEGER,
+  acked_at INTEGER,
+  failed_reason TEXT,
+  status TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  metadata_json TEXT,
+  CHECK (
+    parent_run_id IS NOT NULL
+    OR parent_session_key IS NOT NULL
+    OR target_ref IS NOT NULL
+    OR report_route_ref IS NOT NULL
+    OR target_resolution_status IN ('ambiguous', 'missing', 'unauthorized', 'inspect_only')
+  )
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_durable_runtime_parent_wakes_dedupe
+  ON durable_runtime_parent_wakes(dedupe_key);
+
+CREATE INDEX IF NOT EXISTS idx_durable_runtime_parent_wakes_status
+  ON durable_runtime_parent_wakes(status, updated_at, wake_id);
+
+CREATE INDEX IF NOT EXISTS idx_durable_runtime_parent_wakes_parent_run
+  ON durable_runtime_parent_wakes(parent_run_id, status, updated_at)
+  WHERE parent_run_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_durable_runtime_parent_wakes_parent_session
+  ON durable_runtime_parent_wakes(parent_session_key, status, updated_at)
+  WHERE parent_session_key IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_durable_runtime_parent_wakes_target
+  ON durable_runtime_parent_wakes(target_kind, target_ref, status, updated_at)
+  WHERE target_ref IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_durable_runtime_parent_wakes_owner
+  ON durable_runtime_parent_wakes(owner_kind, owner_ref, status, updated_at)
+  WHERE owner_ref IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_durable_runtime_parent_wakes_report_route
+  ON durable_runtime_parent_wakes(report_route_ref, status, updated_at)
+  WHERE report_route_ref IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS durable_runtime_wake_delivery_attempts (
+  delivery_attempt_id TEXT NOT NULL PRIMARY KEY,
+  wake_id TEXT NOT NULL,
+  dedupe_key TEXT NOT NULL,
+  replay_pass_id TEXT,
+  target_kind TEXT,
+  target_ref TEXT,
+  route_kind TEXT,
+  route_ref TEXT,
+  status TEXT NOT NULL,
+  evidence_json TEXT,
+  error_message TEXT,
+  scheduled_at INTEGER NOT NULL,
+  attempted_at INTEGER,
+  delivered_at INTEGER,
+  failed_at INTEGER,
+  unknown_at INTEGER,
+  delivery_claimed_by TEXT,
+  delivery_claim_expires_at INTEGER,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  metadata_json TEXT,
+  FOREIGN KEY (wake_id) REFERENCES durable_runtime_parent_wakes(wake_id)
+    ON DELETE CASCADE,
+  UNIQUE (dedupe_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_durable_runtime_wake_delivery_attempts_wake
+  ON durable_runtime_wake_delivery_attempts(wake_id, status, updated_at);
+
+CREATE INDEX IF NOT EXISTS idx_durable_runtime_wake_delivery_attempts_status
+  ON durable_runtime_wake_delivery_attempts(status, scheduled_at, delivery_attempt_id);
+
+CREATE INDEX IF NOT EXISTS idx_durable_runtime_wake_delivery_attempts_claim
+  ON durable_runtime_wake_delivery_attempts(status, delivery_claim_expires_at, updated_at)
+  WHERE status = 'attempted';
+
+CREATE INDEX IF NOT EXISTS idx_durable_runtime_wake_delivery_attempts_route
+  ON durable_runtime_wake_delivery_attempts(route_kind, route_ref, status, scheduled_at)
+  WHERE route_ref IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS durable_runtime_uncertainty_facts (
+  fact_id TEXT NOT NULL PRIMARY KEY,
+  kind TEXT NOT NULL,
+  source_run_id TEXT,
+  step_id TEXT,
+  event_id TEXT,
+  ref_id TEXT,
+  facts_ref TEXT,
+  dedupe_key TEXT,
+  facts_json TEXT,
+  status TEXT NOT NULL,
+  resolution_kind TEXT,
+  resolution_ref TEXT,
+  resolved_at INTEGER,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  metadata_json TEXT
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_durable_runtime_uncertainty_dedupe
+  ON durable_runtime_uncertainty_facts(dedupe_key)
+  WHERE dedupe_key IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_durable_runtime_uncertainty_status
+  ON durable_runtime_uncertainty_facts(status, updated_at, fact_id);
+
+CREATE INDEX IF NOT EXISTS idx_durable_runtime_uncertainty_source
+  ON durable_runtime_uncertainty_facts(source_run_id, status, updated_at)
+  WHERE source_run_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS durable_runtime_continuation_cleanup (
+  cleanup_id TEXT NOT NULL PRIMARY KEY,
+  target_kind TEXT NOT NULL,
+  target_id TEXT NOT NULL,
+  runtime_run_id TEXT,
+  step_id TEXT,
+  superseded_by_ref TEXT,
+  reason TEXT,
+  requested_by TEXT,
+  dedupe_key TEXT NOT NULL,
+  status TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  metadata_json TEXT
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_durable_runtime_cleanup_dedupe
+  ON durable_runtime_continuation_cleanup(dedupe_key);
+
+CREATE INDEX IF NOT EXISTS idx_durable_runtime_cleanup_target
+  ON durable_runtime_continuation_cleanup(target_kind, target_id, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_durable_runtime_cleanup_run
+  ON durable_runtime_continuation_cleanup(runtime_run_id, created_at)
+  WHERE runtime_run_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS durable_runtime_dedupe_ledger (
+  ledger_id TEXT NOT NULL PRIMARY KEY,
+  scope TEXT NOT NULL,
+  dedupe_key TEXT NOT NULL,
+  subject_ref TEXT,
+  operation_kind TEXT,
+  status TEXT NOT NULL,
+  first_seen_at INTEGER NOT NULL,
+  last_seen_at INTEGER NOT NULL,
+  hit_count INTEGER NOT NULL DEFAULT 1,
+  metadata_json TEXT,
+  UNIQUE (scope, dedupe_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_durable_runtime_dedupe_ledger_status
+  ON durable_runtime_dedupe_ledger(scope, status, last_seen_at);
+
 CREATE TABLE IF NOT EXISTS migration_runs (
   id TEXT NOT NULL PRIMARY KEY,
   started_at INTEGER NOT NULL,

@@ -169,6 +169,12 @@ import {
 } from "../chat-queued-turns.js";
 import { stripEnvelopeFromMessage } from "../chat-sanitize.js";
 import { augmentChatHistoryWithCliSessionImports } from "../cli-session-history.js";
+import {
+  appendContextRefsToMsgContext,
+  normalizeGatewayContextRefs,
+  recordDurableChatSendFrontdoorIntake,
+  recordDurableChatSendTerminal,
+} from "../context-refs.js";
 import { isSuppressedControlReplyText } from "../control-reply-text.js";
 import {
   isDashboardSessionTitleCandidate,
@@ -673,6 +679,27 @@ type ChatSendOriginatingRoute = {
   explicitDeliverRoute: boolean;
 };
 
+const ACTIVE_CHAT_SEND_DEDUPE_PREFIX = "chat:active-send";
+
+function resolveActiveChatSendRunId(value: unknown): string | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const runId = (value as { runId?: unknown }).runId;
+  return typeof runId === "string" && runId.trim() ? runId : null;
+}
+
+function clearActiveChatSendDedupeRun(
+  dedupe: GatewayRequestContext["dedupe"],
+  key: string | null,
+  runId: string,
+) {
+  if (!key || resolveActiveChatSendRunId(dedupe.get(key)?.payload) !== runId) {
+    return;
+  }
+  dedupe.delete(key);
+}
+
 function buildAbortedChatSendPayload(params: {
   runId: string;
   endedAt: number;
@@ -685,6 +712,35 @@ function buildAbortedChatSendPayload(params: {
     ...(params.stopReason ? { stopReason: params.stopReason } : {}),
     endedAt: params.endedAt,
   };
+}
+
+function buildActiveChatSendDedupeKey(params: {
+  attachmentCount: number;
+  explicitDeliverRoute: boolean;
+  idempotencyKey: string;
+  message: string;
+  originatingChannel: string;
+  sessionKey: string;
+  systemScope?: string;
+}): string | null {
+  const message = params.message.trim();
+  if (
+    !message ||
+    message.startsWith("/") ||
+    params.attachmentCount > 0 ||
+    params.explicitDeliverRoute ||
+    normalizeMessageChannel(params.originatingChannel) !== INTERNAL_MESSAGE_CHANNEL
+  ) {
+    return null;
+  }
+  const dedupeParts = params.systemScope?.trim()
+    ? [params.sessionKey, params.idempotencyKey, message, params.systemScope.trim()]
+    : [params.sessionKey, params.idempotencyKey, message];
+  const digest = createHash("sha256")
+    .update(JSON.stringify(dedupeParts))
+    .digest("hex")
+    .slice(0, 32);
+  return `${ACTIVE_CHAT_SEND_DEDUPE_PREFIX}:${digest}`;
 }
 
 function validateChatSelectedAgent(params: {
@@ -3733,10 +3789,17 @@ export const chatHandlers: GatewayRequestHandlers = {
       timeoutMs?: number;
       systemInputProvenance?: InputProvenance;
       systemProvenanceReceipt?: string;
+      contextRefs?: unknown;
       suppressCommandInterpretation?: boolean;
       expectedSessionRoutingContract?: string;
       idempotencyKey: string;
     };
+    const contextRefsResult = normalizeGatewayContextRefs(p.contextRefs);
+    if (!contextRefsResult.ok) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, contextRefsResult.error));
+      return;
+    }
+    const contextRefs = contextRefsResult.refs;
     const suppressCommandInterpretation = p.suppressCommandInterpretation === true;
     const explicitOriginResult = normalizeExplicitChatSendOrigin({
       originatingChannel: p.originatingChannel,
@@ -3784,6 +3847,10 @@ export const chatHandlers: GatewayRequestHandlers = {
     const inboundMessage = sanitizedMessageResult.message;
     const systemInputProvenance = normalizeInputProvenance(p.systemInputProvenance);
     const systemProvenanceReceipt = systemReceiptResult.receipt;
+    const systemDedupeScope =
+      systemInputProvenance || systemProvenanceReceipt
+        ? JSON.stringify([systemProvenanceReceipt ?? null, systemInputProvenance ?? null])
+        : undefined;
     const stopCommand = !suppressCommandInterpretation && isChatStopCommandText(inboundMessage);
     const turnKind =
       !suppressCommandInterpretation && isBtwRequestText(inboundMessage) ? "btw" : "main";
@@ -4011,6 +4078,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       model: resolvedSessionModel.model,
       hasAttachments: normalizedAttachments.length > 0,
       hasExplicitOrigin: explicitOriginResult.value !== undefined,
+      hasContextRefs: contextRefs.length > 0,
       hasConnectedClient: client?.connect !== undefined,
     };
     const originatingRoute = resolveChatSendOriginatingRoute({
@@ -4022,6 +4090,27 @@ export const chatHandlers: GatewayRequestHandlers = {
       mainKey: cfg.session?.mainKey,
       sessionKey,
     });
+    const activeChatSendDedupeKey = buildActiveChatSendDedupeKey({
+      attachmentCount: normalizedAttachments.length,
+      explicitDeliverRoute: originatingRoute.explicitDeliverRoute,
+      idempotencyKey: clientRunId,
+      message: rawMessage,
+      originatingChannel: originatingRoute.originatingChannel,
+      sessionKey: activeRunScopeKey,
+      systemScope: systemDedupeScope,
+    });
+    if (activeChatSendDedupeKey) {
+      const activeRunId = resolveActiveChatSendRunId(
+        context.dedupe.get(activeChatSendDedupeKey)?.payload,
+      );
+      if (activeRunId && context.chatAbortControllers.has(activeRunId)) {
+        respond(true, { runId: activeRunId, status: "in_flight" as const }, undefined, {
+          cached: true,
+          runId: activeRunId,
+        });
+        return;
+      }
+    }
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     const pendingAttemptId = randomUUID();
     const pendingExpiresAtMs = resolveChatRunExpiresAtMs({ now, timeoutMs });
@@ -4242,6 +4331,23 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionId: admittedSessionId,
       lifecycleGeneration,
     });
+    if (activeChatSendDedupeKey) {
+      context.dedupe.set(activeChatSendDedupeKey, {
+        ts: now,
+        ok: true,
+        payload: { runId: clientRunId },
+      });
+    }
+    recordDurableChatSendFrontdoorIntake({
+      runId: clientRunId,
+      sessionKey,
+      agentId: selectedAgent.agentId ?? agentId,
+      message: rawMessage,
+      attachmentCount: normalizedAttachments.length,
+      contextRefs,
+      log: context.logGateway,
+      now,
+    });
     const explicitOriginTargetsPlugin = explicitOriginTargetsPluginBinding(
       explicitOriginResult.value,
     );
@@ -4316,6 +4422,14 @@ export const chatHandlers: GatewayRequestHandlers = {
         cleanupAdmittedRun({ force: true });
         clearAgentRunContext(clientRunId, lifecycleGeneration);
         logAttachmentFailure(context.logGateway, "chat.send attachment parse/stage failed", err);
+        recordDurableChatSendTerminal({
+          runId: clientRunId,
+          sessionKey,
+          agentId: selectedAgent.agentId ?? agentId,
+          status: "failed",
+          summary: String(err),
+          log: context.logGateway,
+        });
         respond(
           false,
           undefined,
@@ -4335,6 +4449,16 @@ export const chatHandlers: GatewayRequestHandlers = {
         stopReason,
         endedAt,
       });
+      recordDurableChatSendTerminal({
+        runId: clientRunId,
+        sessionKey,
+        agentId: selectedAgent.agentId ?? agentId,
+        status: "cancelled",
+        summary: stopReason,
+        log: context.logGateway,
+        now: endedAt,
+      });
+      clearActiveChatSendDedupeRun(context.dedupe, activeChatSendDedupeKey, clientRunId);
       setGatewayDedupeEntry({
         dedupe: context.dedupe,
         key: `chat:${clientRunId}`,
@@ -4457,6 +4581,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         idempotencyKey: `${clientRunId}:user`,
         ...(hasGatewayAdminScope(client) ? { senderIsOwner: true } : {}),
         ...(systemInputProvenance ? { provenance: systemInputProvenance } : {}),
+        ...(contextRefs.length > 0 ? { contextRefs } : {}),
       };
       const userTurnInputPromise: Promise<UserTurnInput> = userTurnMediaPromise.then((media) => ({
         ...baseUserTurnInput,
@@ -4543,6 +4668,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           : {}),
         GatewayClientScopes: client?.connect?.scopes ?? [],
       };
+      appendContextRefsToMsgContext(ctx, contextRefs);
       const isInternalTextSlashCommandTurn =
         ctx.Provider === INTERNAL_MESSAGE_CHANNEL && ctx.CommandSource === "text";
       if (mediaPathOffloadPaths.length > 0) {
@@ -4664,11 +4790,15 @@ export const chatHandlers: GatewayRequestHandlers = {
           payloads: [transcriptPayload],
           managedImageLocalRoots: mediaLocalRoots,
           includeSensitiveMedia: transcriptPayload.sensitiveMedia !== true,
+          includeSensitiveDisplay: transcriptPayload.sensitiveMedia === true,
           onLocalAudioAccessDenied: (message) => {
             context.logGateway.warn(`webchat audio embedding denied local path: ${message}`);
           },
           onManagedImagePrepareError: (message) => {
             context.logGateway.warn(`webchat image embedding skipped attachment: ${message}`);
+          },
+          onSensitiveDisplayPrepareError: (message) => {
+            context.logGateway.warn(`webchat sensitive display skipped attachment: ${message}`);
           },
         });
         const mediaMessage = await buildWebchatAssistantMediaMessage([transcriptPayload], {
@@ -5728,6 +5858,16 @@ export const chatHandlers: GatewayRequestHandlers = {
                   },
                 });
               }
+              recordDurableChatSendTerminal({
+                runId: clientRunId,
+                sessionKey,
+                agentId,
+                status: shouldBroadcastAgentError ? "failed" : "succeeded",
+                summary: shouldBroadcastAgentError
+                  ? (returnedAgentErrorMessage ?? "agent returned an error payload")
+                  : "dispatch completed",
+                log: context.logGateway,
+              });
             },
             {
               phase: "agent-turn",
@@ -5821,6 +5961,14 @@ export const chatHandlers: GatewayRequestHandlers = {
             agentId,
             errorMessage,
           });
+          recordDurableChatSendTerminal({
+            runId: clientRunId,
+            sessionKey,
+            agentId,
+            status: "failed",
+            summary: errorMessage,
+            log: context.logGateway,
+          });
         })
         .finally(() => {
           cleanupAdmittedRun();
@@ -5884,6 +6032,14 @@ export const chatHandlers: GatewayRequestHandlers = {
         status: "error" as const,
         summary: String(err),
       };
+      recordDurableChatSendTerminal({
+        runId: clientRunId,
+        sessionKey,
+        agentId,
+        status: "failed",
+        summary: String(err),
+        log: context.logGateway,
+      });
       setGatewayDedupeEntry({
         dedupe: context.dedupe,
         key: `chat:${clientRunId}`,
