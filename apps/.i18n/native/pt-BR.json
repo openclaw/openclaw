@@ -23789,6 +23789,16 @@
       "translated": "Abrir mensagem completa"
     },
     {
+      "id": "native.apple.002bfcede229ad4b",
+      "source": "Rewind to Here",
+      "translated": "Rebobinar até aqui"
+    },
+    {
+      "id": "native.apple.14df2e4997689fb3",
+      "source": "Fork from Here",
+      "translated": "Criar bifurcação a partir daqui"
+    },
+    {
       "id": "native.apple.b37ec7bd7dc1579a",
       "source": "Reply",
       "translated": "Responder"

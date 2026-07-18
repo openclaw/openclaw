@@ -23789,6 +23789,16 @@
       "translated": "पूरा संदेश खोलें"
     },
     {
+      "id": "native.apple.002bfcede229ad4b",
+      "source": "Rewind to Here",
+      "translated": "यहाँ तक रिवाइंड करें"
+    },
+    {
+      "id": "native.apple.14df2e4997689fb3",
+      "source": "Fork from Here",
+      "translated": "यहाँ से फ़ोर्क करें"
+    },
+    {
       "id": "native.apple.b37ec7bd7dc1579a",
       "source": "Reply",
       "translated": "जवाब दें"
