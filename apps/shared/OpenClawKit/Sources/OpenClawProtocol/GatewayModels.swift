@@ -186,6 +186,292 @@ public enum QuestionStatus: String, Codable, Sendable {
     case expired = "expired"
 }
 
+public struct BoardTab: Codable, Sendable {
+    public let tabid: String
+    public let title: String
+    public let position: Int
+    public let chatdock: AnyCodable
+
+    public init(
+        tabid: String,
+        title: String,
+        position: Int,
+        chatdock: AnyCodable)
+    {
+        self.tabid = tabid
+        self.title = title
+        self.position = position
+        self.chatdock = chatdock
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case tabid = "tabId"
+        case title
+        case position
+        case chatdock = "chatDock"
+    }
+}
+
+public struct BoardWidget: Codable, Sendable {
+    public let name: String
+    public let tabid: String
+    public let title: String?
+    public let contentkind: AnyCodable
+    public let sizew: Int
+    public let sizeh: Int
+    public let position: Int
+    public let grantstate: AnyCodable
+    public let revision: Int
+    public let declaredsummary: [String]?
+    public let frameurl: String?
+
+    public init(
+        name: String,
+        tabid: String,
+        title: String? = nil,
+        contentkind: AnyCodable,
+        sizew: Int,
+        sizeh: Int,
+        position: Int,
+        grantstate: AnyCodable,
+        revision: Int,
+        declaredsummary: [String]? = nil,
+        frameurl: String? = nil)
+    {
+        self.name = name
+        self.tabid = tabid
+        self.title = title
+        self.contentkind = contentkind
+        self.sizew = sizew
+        self.sizeh = sizeh
+        self.position = position
+        self.grantstate = grantstate
+        self.revision = revision
+        self.declaredsummary = declaredsummary
+        self.frameurl = frameurl
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case tabid = "tabId"
+        case title
+        case contentkind = "contentKind"
+        case sizew = "sizeW"
+        case sizeh = "sizeH"
+        case position
+        case grantstate = "grantState"
+        case revision
+        case declaredsummary = "declaredSummary"
+        case frameurl = "frameUrl"
+    }
+}
+
+public struct BoardSnapshot: Codable, Sendable {
+    public let sessionkey: String
+    public let revision: Int
+    public let tabs: [BoardTab]
+    public let widgets: [BoardWidget]
+
+    public init(
+        sessionkey: String,
+        revision: Int,
+        tabs: [BoardTab],
+        widgets: [BoardWidget])
+    {
+        self.sessionkey = sessionkey
+        self.revision = revision
+        self.tabs = tabs
+        self.widgets = widgets
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case revision
+        case tabs
+        case widgets
+    }
+}
+
+public struct BoardMcpAppDescriptor: Codable, Sendable {
+    public let servername: String
+    public let toolname: String
+    public let uiresourceuri: String
+    public let originsessionkey: String
+    public let toolcallid: String
+
+    public init(
+        servername: String,
+        toolname: String,
+        uiresourceuri: String,
+        originsessionkey: String,
+        toolcallid: String)
+    {
+        self.servername = servername
+        self.toolname = toolname
+        self.uiresourceuri = uiresourceuri
+        self.originsessionkey = originsessionkey
+        self.toolcallid = toolcallid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case servername = "serverName"
+        case toolname = "toolName"
+        case uiresourceuri = "uiResourceUri"
+        case originsessionkey = "originSessionKey"
+        case toolcallid = "toolCallId"
+    }
+}
+
+public struct BoardGetParams: Codable, Sendable {
+    public let sessionkey: String
+
+    public init(
+        sessionkey: String)
+    {
+        self.sessionkey = sessionkey
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+    }
+}
+
+public struct BoardUpdateParams: Codable, Sendable {
+    public let sessionkey: String
+    public let ops: [BoardOp]
+
+    public init(
+        sessionkey: String,
+        ops: [BoardOp])
+    {
+        self.sessionkey = sessionkey
+        self.ops = ops
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case ops
+    }
+}
+
+public struct BoardWidgetPutParams: Codable, Sendable {
+    public let sessionkey: String
+    public let name: String
+    public let title: String?
+    public let content: BoardWidgetContent
+    public let placement: [String: AnyCodable]?
+    public let declared: [String: AnyCodable]?
+
+    public init(
+        sessionkey: String,
+        name: String,
+        title: String? = nil,
+        content: BoardWidgetContent,
+        placement: [String: AnyCodable]? = nil,
+        declared: [String: AnyCodable]? = nil)
+    {
+        self.sessionkey = sessionkey
+        self.name = name
+        self.title = title
+        self.content = content
+        self.placement = placement
+        self.declared = declared
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case name
+        case title
+        case content
+        case placement
+        case declared
+    }
+}
+
+public struct BoardWidgetGrantParams: Codable, Sendable {
+    public let sessionkey: String
+    public let name: String
+    public let decision: AnyCodable
+
+    public init(
+        sessionkey: String,
+        name: String,
+        decision: AnyCodable)
+    {
+        self.sessionkey = sessionkey
+        self.name = name
+        self.decision = decision
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case name
+        case decision
+    }
+}
+
+public struct BoardEventParams: Codable, Sendable {
+    public let sessionkey: String
+    public let widget: String
+    public let payload: AnyCodable
+
+    public init(
+        sessionkey: String,
+        widget: String,
+        payload: AnyCodable)
+    {
+        self.sessionkey = sessionkey
+        self.widget = widget
+        self.payload = payload
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case widget
+        case payload
+    }
+}
+
+public struct BoardChangedEvent: Codable, Sendable {
+    public let sessionkey: String
+    public let revision: Int
+    public let widget: String?
+
+    public init(
+        sessionkey: String,
+        revision: Int,
+        widget: String? = nil)
+    {
+        self.sessionkey = sessionkey
+        self.revision = revision
+        self.widget = widget
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case revision
+        case widget
+    }
+}
+
+public struct BoardCommandEvent: Codable, Sendable {
+    public let sessionkey: String
+    public let command: BoardCommand
+
+    public init(
+        sessionkey: String,
+        command: BoardCommand)
+    {
+        self.sessionkey = sessionkey
+        self.command = command
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case command
+    }
+}
+
 public struct ConnectParams: Codable, Sendable {
     public let minprotocol: Int
     public let maxprotocol: Int

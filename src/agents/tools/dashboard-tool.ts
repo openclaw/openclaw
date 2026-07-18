@@ -5,7 +5,6 @@ import type {
   BoardOp,
   BoardSnapshot,
 } from "../../../packages/gateway-protocol/src/index.js";
-import type { GatewayRequestContextWithClientLookup } from "../../gateway/server-request-context.js";
 import type { AnyAgentTool } from "./common.js";
 import {
   readNumberParam,
@@ -71,6 +70,13 @@ const DashboardToolSchema = Type.Object(
 );
 
 type DashboardCommandEmitter = (params: { sessionKey: string; command: BoardCommand }) => number;
+
+type DashboardGatewayContext = {
+  getClientConnIds?: (
+    predicate: (client: { connect: { client: { id: string } } }) => boolean,
+  ) => Set<string>;
+  broadcastToConnIds: (event: "board.command", payload: unknown, connIds: Set<string>) => void;
+};
 
 type DashboardToolOptions = {
   agentSessionKey?: string;
@@ -181,9 +187,7 @@ function opForAction(action: string, params: Record<string, unknown>): BoardOp {
 }
 
 function emitBoardCommand(params: { sessionKey: string; command: BoardCommand }): number {
-  const context = getInProcessGatewayToolContext() as
-    | GatewayRequestContextWithClientLookup
-    | undefined;
+  const context = getInProcessGatewayToolContext() as DashboardGatewayContext | undefined;
   if (!context) {
     throw new ToolInputError("dashboard command unavailable outside gateway runtime");
   }

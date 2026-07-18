@@ -24,6 +24,7 @@ const CORE_TOOL_FACTORY_DESCRIPTORS = [
   { name: "conversations_send", family: "openclaw" },
   { name: "conversations_turn", family: "openclaw" },
   { name: "cron", family: "openclaw" },
+  { name: "dashboard", family: "openclaw" },
   { name: "gateway", family: "openclaw" },
   { name: "get_goal", family: "openclaw" },
   { name: "heartbeat_respond", family: "openclaw" },
