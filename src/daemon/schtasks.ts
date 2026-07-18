@@ -1855,13 +1855,18 @@ export async function resumeScheduledTaskAutoStartAfterUpdate(
   return await changeScheduledTaskEnabledState({ env, enabled: true });
 }
 
-export async function stopScheduledTask({ stdout, env }: GatewayServiceControlArgs): Promise<void> {
+export async function stopScheduledTask({
+  stdout,
+  env,
+  onMutation,
+}: GatewayServiceControlArgs): Promise<void> {
   const effectiveEnv = env ?? (process.env as GatewayServiceEnv);
   try {
     await assertSchtasksAvailable();
   } catch (err) {
     if (await isStartupEntryInstalled(effectiveEnv)) {
       await stopStartupEntry(effectiveEnv, stdout);
+      onMutation?.({ mode: "startup-entry-stop" });
       return;
     }
     throw err;
@@ -1869,6 +1874,7 @@ export async function stopScheduledTask({ stdout, env }: GatewayServiceControlAr
   if (!(await isRegisteredScheduledTask(effectiveEnv))) {
     if (await isStartupEntryInstalled(effectiveEnv)) {
       await stopStartupEntry(effectiveEnv, stdout);
+      onMutation?.({ mode: "startup-entry-stop" });
       return;
     }
   }
@@ -1896,6 +1902,7 @@ export async function stopScheduledTask({ stdout, env }: GatewayServiceControlAr
     }
   }
   stdout.write(`${formatLine("Stopped Scheduled Task", taskName)}\n`);
+  onMutation?.({ mode: "schtasks-stop" });
 }
 
 async function restartRegisteredScheduledTask(params: {
@@ -1977,26 +1984,33 @@ async function restartRegisteredScheduledTask(params: {
 export async function restartScheduledTask({
   stdout,
   env,
+  onMutation,
 }: GatewayServiceControlArgs): Promise<GatewayServiceRestartResult> {
   const effectiveEnv = env ?? (process.env as GatewayServiceEnv);
   try {
     await assertSchtasksAvailable();
   } catch (err) {
     if (await isStartupEntryInstalled(effectiveEnv)) {
-      return await restartStartupEntry(effectiveEnv, stdout);
+      const result = await restartStartupEntry(effectiveEnv, stdout);
+      onMutation?.({ mode: "startup-entry-restart" });
+      return result;
     }
     throw err;
   }
   if (!(await isRegisteredScheduledTask(effectiveEnv))) {
     if (await isStartupEntryInstalled(effectiveEnv)) {
-      return await restartStartupEntry(effectiveEnv, stdout);
+      const result = await restartStartupEntry(effectiveEnv, stdout);
+      onMutation?.({ mode: "startup-entry-restart" });
+      return result;
     }
   }
-  return await restartRegisteredScheduledTask({
+  const result = await restartRegisteredScheduledTask({
     env: effectiveEnv,
     stdout,
     mode: { kind: "standard" },
   });
+  onMutation?.({ mode: "schtasks-restart" });
+  return result;
 }
 
 export async function isScheduledTaskInstalled(args: GatewayServiceEnvArgs): Promise<boolean> {

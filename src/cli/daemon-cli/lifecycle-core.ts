@@ -31,6 +31,10 @@ import {
 } from "../config-recovery-hints.js";
 import { resolveGatewayTokenForDriftCheck } from "./gateway-token-drift.js";
 import {
+  appendGatewayLifecycleAudit,
+  createGatewayLifecycleMutationAudit,
+} from "./lifecycle-audit.js";
+import {
   buildDaemonServiceSnapshot,
   createDaemonActionContext,
   type DaemonActionResponse,
@@ -318,6 +322,10 @@ export async function runServiceStart(params: {
         env: process.env,
         stdout,
         warn,
+        onMutation:
+          params.serviceNoun === "Gateway"
+            ? createGatewayLifecycleMutationAudit({ action: "start" })
+            : undefined,
       },
       params.expectedPort,
     );
@@ -329,6 +337,25 @@ export async function runServiceStart(params: {
         renderStartHints: params.renderStartHints,
         json,
         emit,
+      });
+      return;
+    }
+    if (startResult.outcome === "already-running") {
+      const pid = startResult.state.runtime?.pid;
+      const message =
+        pid === undefined
+          ? `${params.serviceNoun} service already running.`
+          : `${params.serviceNoun} service already running (pid ${pid}).`;
+      emitActionMessage({
+        json,
+        emit,
+        payload: {
+          ok: true,
+          result: "already-running",
+          message,
+          service: buildDaemonServiceSnapshot(params.service, true),
+          warnings: warnings.length ? warnings : undefined,
+        },
       });
       return;
     }
@@ -360,6 +387,13 @@ export async function runServiceStart(params: {
           issues: startResult.issues,
         });
         if (handled) {
+          if (params.serviceNoun === "Gateway") {
+            appendGatewayLifecycleAudit({
+              action: "start",
+              source: "cli",
+              mode: "service-repair",
+            });
+          }
           emit({
             ok: true,
             result: handled.result,
@@ -406,6 +440,10 @@ export async function runServiceStop(params: {
 }) {
   const json = Boolean(params.opts?.json);
   const { stdout, emit, fail } = createDaemonActionContext({ action: "stop", json });
+  const gatewayStopAudit =
+    params.serviceNoun === "Gateway"
+      ? createGatewayLifecycleMutationAudit({ action: "stop" })
+      : undefined;
 
   const loaded = await resolveServiceLoadedOrFail({
     serviceNoun: params.serviceNoun,
@@ -425,7 +463,12 @@ export async function runServiceStop(params: {
   if (!loaded) {
     if (params.stopWhenNotLoaded) {
       try {
-        await params.service.stop({ env: process.env, stdout, disable: params.opts?.disable });
+        await params.service.stop({
+          env: process.env,
+          stdout,
+          disable: params.opts?.disable,
+          onMutation: gatewayStopAudit,
+        });
       } catch (err) {
         fail(`${params.serviceNoun} stop failed: ${String(err)}`);
         return;
@@ -468,7 +511,12 @@ export async function runServiceStop(params: {
     return;
   }
   try {
-    await params.service.stop({ env: process.env, stdout, disable: params.opts?.disable });
+    await params.service.stop({
+      env: process.env,
+      stdout,
+      disable: params.opts?.disable,
+      onMutation: gatewayStopAudit,
+    });
   } catch (err) {
     fail(`${params.serviceNoun} stop failed: ${String(err)}`);
     return;
@@ -502,6 +550,10 @@ export async function runServiceRestart(params: {
   const { stdout, warnings, emit, fail } = createDaemonActionContext({ action: "restart", json });
   const warn = json ? (message: string) => warnings.push(message) : undefined;
   const restartIntent = params.opts?.restartIntent;
+  const gatewayRestartAudit =
+    params.serviceNoun === "Gateway"
+      ? createGatewayLifecycleMutationAudit({ action: "restart" })
+      : undefined;
   let handledRecovery: ServiceRecoveryResult | null = null;
   let handledRepair: ServiceRecoveryResult | null = null;
   let recoveredLoadedState: boolean | null = null;
@@ -616,6 +668,14 @@ export async function runServiceRestart(params: {
           );
           return false;
         }
+        if (params.serviceNoun === "Gateway") {
+          appendGatewayLifecycleAudit({
+            action: "restart",
+            source: "cli",
+            mode: "service-repair",
+            pid: state.runtime?.pid,
+          });
+        }
         if (handledRepair.warnings?.length) {
           warnings.push(...handledRepair.warnings);
         }
@@ -669,7 +729,12 @@ export async function runServiceRestart(params: {
     if (loaded && !handledRepair) {
       await prepareGatewayRestartIntent();
       try {
-        restartResult = await params.service.restart({ env: process.env, stdout, warn });
+        restartResult = await params.service.restart({
+          env: process.env,
+          stdout,
+          warn,
+          onMutation: gatewayRestartAudit,
+        });
       } catch (err) {
         clearPreparedRestartIntent();
         throw err;

@@ -337,17 +337,19 @@ describe("Scheduled Task stop/restart cleanup", () => {
 
   it("kills lingering verified gateway listeners after schtasks stop", async () => {
     await withPreparedGatewayTask(async ({ env, stdout }) => {
+      const onMutation = vi.fn();
       pushSuccessfulSchtasksResponses(3);
       findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4242]);
       inspectPortUsage
         .mockResolvedValueOnce(busyPortUsage(4242))
         .mockResolvedValueOnce(freePortUsage());
 
-      await stopScheduledTask({ env, stdout });
+      await stopScheduledTask({ env, stdout, onMutation });
 
       expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(GATEWAY_PORT);
       expectGatewayTermination(4242);
       expect(inspectPortUsage).toHaveBeenCalledTimes(2);
+      expect(onMutation).toHaveBeenCalledWith({ mode: "schtasks-stop" });
     });
   });
 
@@ -418,19 +420,21 @@ describe("Scheduled Task stop/restart cleanup", () => {
 
   it("kills lingering verified gateway listeners and waits for port release before restart", async () => {
     await withPreparedGatewayTask(async ({ env, stdout }) => {
+      const onMutation = vi.fn();
       pushSuccessfulSchtasksResponses(4);
       findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([5151]);
       inspectPortUsage
         .mockResolvedValueOnce(busyPortUsage(5151))
         .mockResolvedValueOnce(freePortUsage());
 
-      await expect(restartScheduledTask({ env, stdout })).resolves.toEqual({
+      await expect(restartScheduledTask({ env, stdout, onMutation })).resolves.toEqual({
         outcome: "completed",
       });
 
       expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(GATEWAY_PORT);
       expectGatewayTermination(5151);
       expect(inspectPortUsage).toHaveBeenCalledTimes(2);
+      expect(onMutation).toHaveBeenCalledWith({ mode: "schtasks-restart" });
       expect(schtasksCalls).toEqual([
         ["/Query"],
         ["/Query", "/TN", "OpenClaw Gateway"],

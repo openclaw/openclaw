@@ -18,6 +18,8 @@ type ForceFreePortResult = {
   escalatedToSigkill: boolean;
 };
 
+type BeforePortSignal = (context: { port: number; pid?: number; signal: NodeJS.Signals }) => void;
+
 type ExecFileError = NodeJS.ErrnoException & {
   status?: number | null;
   stderr?: string | Buffer;
@@ -102,8 +104,13 @@ function parseFuserPidList(output: string): number[] {
   return [...values];
 }
 
-function killPortWithFuser(port: number, signal: "SIGTERM" | "SIGKILL"): PortProcess[] {
+function killPortWithFuser(
+  port: number,
+  signal: "SIGTERM" | "SIGKILL",
+  beforeSignal?: BeforePortSignal,
+): PortProcess[] {
   const args = ["-k", `-${FUSER_SIGNALS[signal]}`, `${port}/tcp`];
+  beforeSignal?.({ port, signal });
   try {
     const stdout = execFileSync("fuser", args, {
       encoding: "utf-8",
@@ -235,10 +242,14 @@ function listPortListeners(port: number): PortProcess[] {
   }
 }
 
-export function forceFreePort(port: number): PortProcess[] {
+export function forceFreePort(
+  port: number,
+  opts: { beforeSignal?: BeforePortSignal } = {},
+): PortProcess[] {
   const listeners = listPortListeners(port);
   for (const proc of listeners) {
     try {
+      opts.beforeSignal?.({ port, pid: proc.pid, signal: "SIGTERM" });
       process.kill(proc.pid, "SIGTERM");
     } catch (err) {
       throw new Error(
@@ -250,9 +261,15 @@ export function forceFreePort(port: number): PortProcess[] {
   return listeners;
 }
 
-function killPids(listeners: PortProcess[], signal: NodeJS.Signals) {
+function killPids(
+  port: number,
+  listeners: PortProcess[],
+  signal: NodeJS.Signals,
+  beforeSignal?: BeforePortSignal,
+) {
   for (const proc of listeners) {
     try {
+      beforeSignal?.({ port, pid: proc.pid, signal });
       process.kill(proc.pid, signal);
     } catch (err) {
       throw new Error(
@@ -272,6 +289,8 @@ export async function forceFreePortAndWait(
     intervalMs?: number;
     /** How long to wait after SIGTERM before escalating to SIGKILL. */
     sigtermTimeoutMs?: number;
+    /** Last-moment ownership guard invoked before each destructive signal. */
+    beforeSignal?: BeforePortSignal;
   } = {},
 ): Promise<ForceFreePortResult> {
   const timeoutMs = resolveTimerTimeoutMs(opts.timeoutMs, 1500, 0);
@@ -285,7 +304,7 @@ export async function forceFreePortAndWait(
   let useFuserFallback = false;
 
   try {
-    killed = forceFreePort(port);
+    killed = forceFreePort(port, opts.beforeSignal ? { beforeSignal: opts.beforeSignal } : {});
   } catch (err) {
     if (!isRecoverableLsofError(err)) {
       throw err;
@@ -296,7 +315,7 @@ export async function forceFreePortAndWait(
       return { killed, waitedMs: 0, escalatedToSigkill: false };
     }
     useFuserFallback = true;
-    killed = killPortWithFuser(port, "SIGTERM");
+    killed = killPortWithFuser(port, "SIGTERM", opts.beforeSignal);
   }
 
   if (killed.length === 0) {
@@ -330,10 +349,10 @@ export async function forceFreePortAndWait(
   }
 
   if (useFuserFallback) {
-    killPortWithFuser(port, "SIGKILL");
+    killPortWithFuser(port, "SIGKILL", opts.beforeSignal);
   } else {
     const remaining = listPortListeners(port);
-    killPids(remaining, "SIGKILL");
+    killPids(port, remaining, "SIGKILL", opts.beforeSignal);
   }
 
   while (waitedMs < timeoutMs) {

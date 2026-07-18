@@ -39,7 +39,15 @@ import { resolveGatewayRestartDeferralTimeoutMs } from "../../infra/restart.js";
 import { defaultRuntime, writeRuntimeJson } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
 import { parseDurationMs } from "../parse-duration.js";
+import {
+  isTerminalInteractive,
+  NON_INTERACTIVE_GATEWAY_STOP_MESSAGE,
+} from "../terminal-interactivity.js";
 import { recoverInstalledLaunchAgent } from "./launchd-recovery.js";
+import {
+  appendGatewayLifecycleAudit,
+  createGatewayLifecycleMutationAudit,
+} from "./lifecycle-audit.js";
 import {
   runServiceRestart,
   runServiceStart,
@@ -169,13 +177,21 @@ async function handleSystemScopeSystemdGateway(
   }
   const stdout = createNullWriter();
   if (action === "stop") {
-    await stopSystemdService({ stdout, env: process.env });
+    await stopSystemdService({
+      stdout,
+      env: process.env,
+      onMutation: createGatewayLifecycleMutationAudit({ action: "stop" }),
+    });
     return {
       result: "stopped",
       message: `Gateway stopped via system-scope systemd unit ${installed.unitName}.`,
     };
   }
-  await restartSystemdService({ stdout, env: process.env });
+  await restartSystemdService({
+    stdout,
+    env: process.env,
+    onMutation: createGatewayLifecycleMutationAudit({ action: "restart" }),
+  });
   return {
     result: "restarted",
     message: `Gateway restarted via system-scope systemd unit ${installed.unitName}.`,
@@ -193,6 +209,12 @@ async function stopGatewayWithoutServiceManager(port: number) {
   }
   for (const pid of pids) {
     signalVerifiedGatewayPidSync(pid, "SIGTERM");
+    appendGatewayLifecycleAudit({
+      action: "stop",
+      source: "cli",
+      mode: "sigterm",
+      pid,
+    });
   }
   return {
     result: "stopped" as const,
@@ -275,6 +297,12 @@ async function requestSafeGatewayRestart(opts: DaemonLifecycleOptions): Promise<
     params,
     timeoutMs: 10_000,
   });
+  appendGatewayLifecycleAudit({
+    action: "restart",
+    source: "safe-rpc",
+    mode: result.status,
+    pid: result.restart.pid,
+  });
   const message =
     result.status === "coalesced"
       ? "safe restart request joined an existing pending gateway restart"
@@ -310,6 +338,7 @@ async function signalGatewayRestart(
     enforceRestartConfig: boolean;
     processLabel: string;
     requireLockIdentity?: boolean;
+    auditSource: "cli" | "supervisor";
   },
 ) {
   if (params.enforceRestartConfig) {
@@ -404,6 +433,12 @@ async function signalGatewayRestart(
     }
     throw err;
   }
+  appendGatewayLifecycleAudit({
+    action: "restart",
+    source: params.auditSource,
+    mode: isWindows ? "rpc" : "sigusr1",
+    pid,
+  });
   return {
     result: "restarted" as const,
     pid,
@@ -424,6 +459,7 @@ async function restartGatewayWithoutServiceManager(
     restartIntent,
     enforceRestartConfig: true,
     processLabel: "unmanaged",
+    auditSource: "cli",
   });
 }
 
@@ -452,6 +488,7 @@ async function runExternalSupervisorRestart(opts: DaemonLifecycleOptions): Promi
       enforceRestartConfig: false,
       processLabel: "externally supervised",
       requireLockIdentity: true,
+      auditSource: "supervisor",
     });
   } catch (err) {
     fail(`Gateway restart failed: ${String(err)}`);
@@ -512,7 +549,17 @@ export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
     renderStartHints: renderGatewayServiceStartHints,
     onNotLoaded:
       process.platform === "darwin"
-        ? async () => await recoverInstalledLaunchAgent({ result: "started" })
+        ? async () => {
+            const recovered = await recoverInstalledLaunchAgent({ result: "started" });
+            if (recovered) {
+              appendGatewayLifecycleAudit({
+                action: "start",
+                source: "cli",
+                mode: "launchd-bootstrap",
+              });
+            }
+            return recovered;
+          }
         : undefined,
     repairLoadedService: async ({ json, stdout, warn, state, issues }) =>
       await repairLoadedGatewayServiceForStart({
@@ -531,6 +578,11 @@ export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
 
 /** Stop the managed Gateway service or verified unmanaged listener fallback. */
 export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
+  if (!isTerminalInteractive() && !opts.force) {
+    const { fail } = createDaemonActionContext({ action: "stop", json: Boolean(opts.json) });
+    fail(NON_INTERACTIVE_GATEWAY_STOP_MESSAGE);
+    return;
+  }
   assertGatewayServiceMutationAllowed("stop the gateway");
   const service = resolveGatewayService();
   let gatewayPortPromise: Promise<number> | undefined;
@@ -545,7 +597,11 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
         if (runtime?.status === "running") {
           // systemd can run a disabled unit with Restart=always. Stop it through
           // systemctl so a process-level SIGTERM cannot trigger a respawn.
-          await service.stop({ env: process.env, stdout });
+          await service.stop({
+            env: process.env,
+            stdout,
+            onMutation: createGatewayLifecycleMutationAudit({ action: "stop" }),
+          });
           return { result: "stopped" };
         }
       }
@@ -622,6 +678,11 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       if (process.platform === "darwin") {
         const recovered = await recoverInstalledLaunchAgent({ result: "restarted" });
         if (recovered) {
+          appendGatewayLifecycleAudit({
+            action: "restart",
+            source: "cli",
+            mode: "launchd-bootstrap",
+          });
           return recovered;
         }
       }
@@ -698,7 +759,12 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         }
 
         await terminateStaleGatewayPids(health.staleGatewayPids);
-        const retryRestart = await service.restart({ env: process.env, stdout, warn });
+        const retryRestart = await service.restart({
+          env: process.env,
+          stdout,
+          warn,
+          onMutation: createGatewayLifecycleMutationAudit({ action: "restart" }),
+        });
         if (retryRestart.outcome === "scheduled") {
           return retryRestart;
         }

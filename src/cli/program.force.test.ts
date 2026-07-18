@@ -258,12 +258,14 @@ describe("gateway --force helpers", () => {
     });
 
     const killMock = vi.fn();
+    const beforeSignal = vi.fn();
     process.kill = killMock;
 
     const promise = forceFreePortAndWait(18789, {
       timeoutMs: 800,
       intervalMs: 100,
       sigtermTimeoutMs: 300,
+      beforeSignal,
     });
 
     await vi.runAllTimersAsync();
@@ -271,6 +273,8 @@ describe("gateway --force helpers", () => {
 
     expect(killMock).toHaveBeenCalledWith(42, "SIGTERM");
     expect(killMock).toHaveBeenCalledWith(42, "SIGKILL");
+    expect(beforeSignal).toHaveBeenCalledWith({ port: 18789, pid: 42, signal: "SIGTERM" });
+    expect(beforeSignal).toHaveBeenCalledWith({ port: 18789, pid: 42, signal: "SIGKILL" });
     expect(res.escalatedToSigkill).toBe(true);
 
     vi.useRealTimers();

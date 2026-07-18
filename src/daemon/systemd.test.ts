@@ -2179,12 +2179,14 @@ describe("systemd service control", () => {
         cb(null, "", "");
       });
     const write = vi.fn();
+    const onMutation = vi.fn();
     const stdout = { write } as unknown as NodeJS.WritableStream;
 
-    await stopSystemdService({ stdout, env: {} });
+    await stopSystemdService({ stdout, env: {}, onMutation });
 
     expect(write).toHaveBeenCalledTimes(1);
     expect(requireFirstWrite(write)).toContain("Stopped systemd service");
+    expect(onMutation).toHaveBeenCalledWith({ mode: "systemctl-stop" });
   });
 
   it("allows stop when systemd status is degraded but available", async () => {

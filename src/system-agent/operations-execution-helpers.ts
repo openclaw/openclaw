@@ -92,7 +92,9 @@ export async function runGatewayLifecycle(
     return;
   }
   if (operation === "stop") {
-    await lifecycle.runDaemonStop();
+    // The system-agent approval gate is the non-interactive equivalent of an
+    // operator passing --force after explicitly approving the mutation.
+    await lifecycle.runDaemonStop({ force: true });
     return;
   }
   return await lifecycle.runDaemonRestart();

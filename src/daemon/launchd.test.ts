@@ -1955,9 +1955,11 @@ describe("launchd install", () => {
       ...createDefaultLaunchdEnv(),
       OPENCLAW_GATEWAY_PORT: "18789",
     };
+    const onMutation = vi.fn();
     const result = await restartLaunchAgent({
       env,
       stdout: new PassThrough(),
+      onMutation,
     });
 
     const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
@@ -1971,6 +1973,7 @@ describe("launchd install", () => {
     ]);
     expect(launchctlCommandNames()).not.toContain("bootout");
     expect(launchctlCommandNames()).not.toContain("bootstrap");
+    expect(onMutation).toHaveBeenCalledWith({ mode: "kickstart" });
   });
 
   it("reloads launchd after rewriting an existing plist", async () => {
@@ -1999,9 +2002,11 @@ describe("launchd install", () => {
       ].join("\n"),
     );
 
+    const onMutation = vi.fn();
     await restartLaunchAgent({
       env,
       stdout: new PassThrough(),
+      onMutation,
     });
 
     const plist = state.files.get(plistPath) ?? "";
@@ -2010,6 +2015,7 @@ describe("launchd install", () => {
     expect(plist).toContain("<string>/Users/test/Library/Logs/openclaw/gateway.log</string>");
     expect(launchctlCommandNames()).toEqual(["enable", "bootout", "enable", "bootstrap"]);
     expect(launchctlCommandNames()).not.toContain("kickstart");
+    expect(onMutation).toHaveBeenCalledWith({ mode: "bootout-bootstrap" });
   });
 
   it("treats a concurrent launchd bootstrap as success when the service is loaded", async () => {

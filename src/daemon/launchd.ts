@@ -978,6 +978,7 @@ export async function stopLaunchAgent({
   stdout,
   env,
   disable: persistDisable,
+  onMutation,
 }: GatewayServiceControlArgs): Promise<void> {
   const serviceEnv = env ?? (process.env as GatewayServiceEnv);
   const domain = resolveGuiDomain();
@@ -1002,6 +1003,7 @@ export async function stopLaunchAgent({
     }
     await assertGatewayPortReleasedAfterStop(serviceEnv);
     stdout.write(`${formatLine("Stopped LaunchAgent", serviceTarget)}\n`);
+    onMutation?.({ mode: "bootout" });
     return;
   }
 
@@ -1016,6 +1018,7 @@ export async function stopLaunchAgent({
     });
     await assertGatewayPortReleasedAfterStop(serviceEnv);
     stdout.write(`${formatLine("Stopped LaunchAgent (degraded)", serviceTarget)}\n`);
+    onMutation?.({ mode: "disable-bootout" });
     return;
   }
 
@@ -1029,6 +1032,7 @@ export async function stopLaunchAgent({
     });
     await assertGatewayPortReleasedAfterStop(serviceEnv);
     stdout.write(`${formatLine("Stopped LaunchAgent (degraded)", serviceTarget)}\n`);
+    onMutation?.({ mode: "disable-bootout" });
     return;
   }
 
@@ -1041,11 +1045,13 @@ export async function stopLaunchAgent({
     await bootoutLaunchAgentOrThrow({ serviceTarget, stdout, warning });
     await assertGatewayPortReleasedAfterStop(serviceEnv);
     stdout.write(`${formatLine("Stopped LaunchAgent (degraded)", serviceTarget)}\n`);
+    onMutation?.({ mode: "disable-bootout" });
     return;
   }
 
   await assertGatewayPortReleasedAfterStop(serviceEnv);
   stdout.write(`${formatLine("Stopped LaunchAgent", serviceTarget)}\n`);
+  onMutation?.({ mode: "disable-stop" });
 }
 
 async function writeLaunchAgentPlist({
@@ -1234,6 +1240,7 @@ export async function restartLaunchAgent({
   stdout,
   env,
   warn,
+  onMutation,
 }: GatewayServiceControlArgs): Promise<GatewayServiceRestartResult> {
   const serviceEnv = env ?? (process.env as GatewayServiceEnv);
   const domain = resolveGuiDomain();
@@ -1261,6 +1268,7 @@ export async function restartLaunchAgent({
       throw new Error(`launchd restart handoff failed: ${handoff.error}`);
     }
     writeLaunchAgentActionLine(stdout, "Scheduled LaunchAgent restart", serviceTarget);
+    onMutation?.({ mode: plistReloadNeeded ? "handoff-reload" : "handoff-kickstart" });
     return { outcome: "scheduled" };
   }
 
@@ -1301,12 +1309,14 @@ export async function restartLaunchAgent({
       actionHint: "openclaw gateway restart",
     });
     writeLaunchAgentActionLine(stdout, "Restarted LaunchAgent", serviceTarget);
+    onMutation?.({ mode: "bootout-bootstrap" });
     return { outcome: "completed" };
   }
 
   const start = await execLaunchctl(["kickstart", "-k", serviceTarget]);
   if (start.code === 0) {
     writeLaunchAgentActionLine(stdout, "Restarted LaunchAgent", serviceTarget);
+    onMutation?.({ mode: "kickstart" });
     return { outcome: "completed" };
   }
 
@@ -1323,6 +1333,7 @@ export async function restartLaunchAgent({
     actionHint: "openclaw gateway restart",
   });
   writeLaunchAgentActionLine(stdout, "Restarted LaunchAgent", serviceTarget);
+  onMutation?.({ mode: "bootstrap" });
   return { outcome: "completed" };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

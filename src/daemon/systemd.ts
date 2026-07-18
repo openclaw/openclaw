@@ -1382,6 +1382,7 @@ async function runSystemdServiceAction(params: {
 export async function stopSystemdService({
   stdout,
   env,
+  onMutation,
 }: GatewayServiceControlArgs): Promise<void> {
   await runSystemdServiceAction({
     stdout,
@@ -1389,11 +1390,13 @@ export async function stopSystemdService({
     action: "stop",
     label: "Stopped systemd service",
   });
+  onMutation?.({ mode: "systemctl-stop" });
 }
 
 export async function restartSystemdService({
   stdout,
   env,
+  onMutation,
 }: GatewayServiceControlArgs): Promise<GatewayServiceRestartResult> {
   await runSystemdServiceAction({
     stdout,
@@ -1401,6 +1404,7 @@ export async function restartSystemdService({
     action: "restart",
     label: "Restarted systemd service",
   });
+  onMutation?.({ mode: "systemctl-restart" });
   return { outcome: "completed" };
 }
 
