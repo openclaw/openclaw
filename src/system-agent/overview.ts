@@ -58,7 +58,7 @@ export type SystemAgentOverview = {
     reachable: boolean;
     error?: string;
   };
-  updateRollback: string | null;
+  updateRollback?: string | null;
   references: {
     docsPath?: string;
     docsUrl: string;

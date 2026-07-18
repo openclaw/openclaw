@@ -5,7 +5,6 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   formatUpdateRollbackNarration,
-  parseUpdateRollbackMarker,
   readUpdateRollbackTransaction,
   resolveUpdateRollbackMarkerPath,
   writeUpdateRollbackTransaction,
@@ -49,12 +48,17 @@ describe("update rollback marker", () => {
     );
   });
 
-  it("rejects malformed, duplicate, and root-path marker fields", () => {
-    expect(parseUpdateRollbackMarker("version=1\nstate=pending\n")).toBeNull();
-    expect(
-      parseUpdateRollbackMarker(
-        "version=1\nversion=1\nstate=pending\nnew_version=2\nprevious_version=1\ncurrent_root=/\nretained_root=/tmp/old\ngateway_port=1\n",
-      ),
-    ).toBeNull();
+  it("rejects malformed, duplicate, and root-path marker fields", async () => {
+    const stateDir = await temporaryStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const markerPath = resolveUpdateRollbackMarkerPath(env);
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(markerPath, "version=1\nstate=pending\n");
+    expect(await readUpdateRollbackTransaction(env)).toBeNull();
+    await fs.writeFile(
+      markerPath,
+      "version=1\nversion=1\nstate=pending\nnew_version=2\nprevious_version=1\ncurrent_root=/\nretained_root=/tmp/old\ngateway_port=1\n",
+    );
+    expect(await readUpdateRollbackTransaction(env)).toBeNull();
   });
 });

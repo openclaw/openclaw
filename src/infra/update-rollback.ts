@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 
-export const UPDATE_ROLLBACK_MARKER_FILENAME = "update-rollback";
+const UPDATE_ROLLBACK_MARKER_FILENAME = "update-rollback";
 const UPDATE_ROLLBACK_MARKER_VERSION = "1";
 const UPDATE_ROLLBACK_MARKER_MAX_BYTES = 8 * 1024;
 const UPDATE_ROLLBACK_ERROR_MAX_LENGTH = 500;
@@ -15,6 +15,7 @@ export type UpdateRollbackTransaction = {
   currentRoot: string;
   retainedRoot: string;
   gatewayPort: number;
+  nodePath?: string;
   error?: string;
 };
 
@@ -24,7 +25,7 @@ export function resolveUpdateRollbackMarkerPath(env: NodeJS.ProcessEnv = process
 
 function normalizeMarkerValue(value: string, maxLength: number): string | null {
   const trimmed = value.trim();
-  if (!trimmed || trimmed.length > maxLength || /[\u0000-\u001f\u007f]/u.test(trimmed)) {
+  if (!trimmed || trimmed.length > maxLength || /\p{Cc}/u.test(trimmed)) {
     return null;
   }
   return trimmed;
@@ -38,7 +39,7 @@ function normalizeRoot(value: string): string | null {
   return path.resolve(normalized);
 }
 
-export function parseUpdateRollbackMarker(raw: string): UpdateRollbackTransaction | null {
+function parseUpdateRollbackMarker(raw: string): UpdateRollbackTransaction | null {
   if (Buffer.byteLength(raw, "utf8") > UPDATE_ROLLBACK_MARKER_MAX_BYTES) {
     return null;
   }
@@ -65,6 +66,8 @@ export function parseUpdateRollbackMarker(raw: string): UpdateRollbackTransactio
   const previousVersion = normalizeMarkerValue(fields.get("previous_version") ?? "", 128);
   const currentRoot = normalizeRoot(fields.get("current_root") ?? "");
   const retainedRoot = normalizeRoot(fields.get("retained_root") ?? "");
+  const nodePathValue = fields.get("node_path");
+  const nodePath = nodePathValue ? normalizeRoot(nodePathValue) : null;
   const gatewayPort = Number(fields.get("gateway_port"));
   const errorValue = fields.get("error");
   const error = errorValue
@@ -80,7 +83,8 @@ export function parseUpdateRollbackMarker(raw: string): UpdateRollbackTransactio
     !Number.isInteger(gatewayPort) ||
     gatewayPort < 1 ||
     gatewayPort > 65_535 ||
-    (state === "rolled_back" && !error)
+    (state === "rolled_back" && !error) ||
+    (nodePathValue !== undefined && !nodePath)
   ) {
     return null;
   }
@@ -91,11 +95,12 @@ export function parseUpdateRollbackMarker(raw: string): UpdateRollbackTransactio
     currentRoot,
     retainedRoot,
     gatewayPort,
+    ...(nodePath ? { nodePath } : {}),
     ...(error ? { error } : {}),
   };
 }
 
-export function serializeUpdateRollbackMarker(transaction: UpdateRollbackTransaction): string {
+function serializeUpdateRollbackMarker(transaction: UpdateRollbackTransaction): string {
   const parsed = parseUpdateRollbackMarker(
     [
       `version=${UPDATE_ROLLBACK_MARKER_VERSION}`,
@@ -105,6 +110,7 @@ export function serializeUpdateRollbackMarker(transaction: UpdateRollbackTransac
       `current_root=${transaction.currentRoot}`,
       `retained_root=${transaction.retainedRoot}`,
       `gateway_port=${transaction.gatewayPort}`,
+      ...(transaction.nodePath ? [`node_path=${transaction.nodePath}`] : []),
       ...(transaction.error ? [`error=${transaction.error}`] : []),
       "",
     ].join("\n"),
@@ -120,6 +126,7 @@ export function serializeUpdateRollbackMarker(transaction: UpdateRollbackTransac
     `current_root=${parsed.currentRoot}`,
     `retained_root=${parsed.retainedRoot}`,
     `gateway_port=${parsed.gatewayPort}`,
+    ...(parsed.nodePath ? [`node_path=${parsed.nodePath}`] : []),
     ...(parsed.error ? [`error=${parsed.error}`] : []),
     "",
   ].join("\n");

@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   readUpdateRollbackTransaction,
+  resolveUpdateRollbackMarkerPath,
   writeUpdateRollbackTransaction,
 } from "../infra/update-rollback.js";
 import { buildUpdateRollbackSupervisorScript } from "./update-rollback-wrapper.js";
@@ -24,7 +25,9 @@ async function waitForPath(targetPath: string): Promise<void> {
     ) {
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
   }
   throw new Error(`timed out waiting for ${targetPath}`);
 }
@@ -34,6 +37,15 @@ afterEach(async () => {
 });
 
 describe("update rollback service wrapper", () => {
+  it("keeps the PATH Node probe fallback for version-1 markers", () => {
+    const script = buildUpdateRollbackSupervisorScript({
+      markerPath: "/tmp/openclaw-update-rollback",
+    });
+
+    expect(script).toContain("if command -v node >/dev/null 2>&1; then");
+    expect(script).toContain('node -e \'const http=require("node:http")');
+  });
+
   it.runIf(process.platform !== "win32")(
     "restores and launches the retained package after first-start failure",
     async () => {
@@ -46,6 +58,7 @@ describe("update rollback service wrapper", () => {
       const gatewayRelativePath = "gateway.sh";
       await fs.mkdir(currentRoot, { recursive: true });
       await fs.mkdir(retainedRoot, { recursive: true });
+      await fs.mkdir(stateDir, { recursive: true });
       await fs.writeFile(path.join(currentRoot, gatewayRelativePath), "#!/bin/sh\nexit 23\n", {
         mode: 0o700,
       });
@@ -70,7 +83,7 @@ describe("update rollback service wrapper", () => {
       await fs.writeFile(
         wrapperPath,
         buildUpdateRollbackSupervisorScript({
-          markerPath: path.join(stateDir, "update-rollback"),
+          markerPath: resolveUpdateRollbackMarkerPath(env),
           healthTimeoutSeconds: 2,
         }),
         { mode: 0o700 },
@@ -123,7 +136,7 @@ describe("update rollback service wrapper", () => {
       await fs.writeFile(
         wrapperPath,
         buildUpdateRollbackSupervisorScript({
-          markerPath: path.join(stateDir, "update-rollback"),
+          markerPath: resolveUpdateRollbackMarkerPath(env),
           healthTimeoutSeconds: 1,
         }),
         { mode: 0o700 },
@@ -177,7 +190,7 @@ describe("update rollback service wrapper", () => {
       await fs.writeFile(
         wrapperPath,
         buildUpdateRollbackSupervisorScript({
-          markerPath: path.join(stateDir, "update-rollback"),
+          markerPath: resolveUpdateRollbackMarkerPath(env),
           healthTimeoutSeconds: 5,
         }),
         { mode: 0o700 },

@@ -41,6 +41,27 @@ Only work that cannot finish inside the drain budget (or any run interrupted
 by a forced restart or a crash) is aborted — and before that happens, each
 affected session is marked for recovery.
 
+### Update rollback recovery
+
+An owned launchd/systemd Gateway installed through the local-prefix npm
+installer gets a separate update transaction. Before package mutation,
+OpenClaw retains one launchable package. The supervisor requires the replacement
+Gateway to reach `/readyz` within 60 seconds. Failure restores the package,
+restarts the previous Gateway, and leaves a plain rollback notice for `status`,
+Doctor, and the custodian overview. Ordinary npm-global, pnpm, Git, Windows, and
+unowned service layouts receive a warning and manual recovery instructions
+instead of automatic package swapping.
+
+This transaction uses one owner-only `update-rollback` marker in the state
+directory. It is not a replacement for SQLite runtime state. There is no config
+surface; `OPENCLAW_UPDATE_NO_ROLLBACK=1` is the only escape. State
+snapshot/restore is not enabled. The current updater still runs package
+lifecycle/Doctor migration before restart confirmation, so package rollback
+does not undo a completed data migration. Resident old/new Gateway handover and
+its exclusive channel pause/resume and delivery/human confirmation tiers also
+remain disabled until that ordering can change without running two exclusive
+channel transports concurrently.
+
 ## How interrupted work is detected
 
 Three complementary mechanisms mark sessions whose turn did not finish:

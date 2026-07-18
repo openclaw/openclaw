@@ -33,6 +33,7 @@ import {
   shouldResumePostCoreUpdateInFreshProcess,
   writeControlPlaneUpdateRestartSentinelBestEffort,
 } from "./update-command-post-core.js";
+import { armManagedServiceUpdateRollback } from "./update-command-rollback.js";
 import {
   gatewayServiceCommandUsesRoot,
   maybeRestartService,
@@ -388,6 +389,24 @@ export async function finishUpdate(params: {
   if (!(await restoreWindowsTaskAutoStartOrExit(params.preManagedServiceStop))) {
     return;
   }
+
+  await armManagedServiceUpdateRollback({
+    enabled:
+      params.shouldRestart &&
+      params.preManagedServiceStop?.serviceMatchesMutationRoot === true &&
+      process.platform !== "win32" &&
+      (params.preManagedServiceStop.serviceEnv?.OPENCLAW_UPDATE_NO_ROLLBACK ??
+        process.env.OPENCLAW_UPDATE_NO_ROLLBACK) !== "1",
+    result: resultWithPostUpdate,
+    currentRoot: resultWithPostUpdate.root ?? postUpdateRoot,
+    gatewayPort,
+    serviceEnv: gatewayServiceEnv ?? params.preManagedServiceStop?.serviceEnv,
+  }).catch((error) => {
+    // The package update armed the marker before mutation. A best-effort
+    // metadata refresh must never strand the already-stopped service.
+    defaultRuntime.error(`Warning: could not refresh update rollback metadata: ${String(error)}`);
+    return null;
+  });
   const restartOk = await maybeRestartService({
     shouldRestart: params.shouldRestart,
     result: resultWithPostUpdate,

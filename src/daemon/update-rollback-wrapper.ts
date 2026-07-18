@@ -39,6 +39,7 @@ previous_version=
 current_root=
 retained_root=
 gateway_port=
+node_path=
 rollback_error=
 while IFS='=' read -r marker_key marker_value; do
   case "$marker_key" in
@@ -49,12 +50,14 @@ while IFS='=' read -r marker_key marker_value; do
     current_root) current_root="$marker_value" ;;
     retained_root) retained_root="$marker_value" ;;
     gateway_port) gateway_port="$marker_value" ;;
+    node_path) node_path="$marker_value" ;;
     error) rollback_error="$marker_value" ;;
   esac
 done < "$marker_path"
 
 case "$current_root" in /*) ;; *) exec "$@" ;; esac
 case "$retained_root" in /*) ;; *) exec "$@" ;; esac
+if [ -n "$node_path" ]; then case "$node_path" in /*) ;; *) exec "$@" ;; esac; fi
 case "$gateway_port" in ''|*[!0-9]*) exec "$@" ;; esac
 if [ "$marker_version" != 1 ] || [ "$current_root" = / ] || [ "$retained_root" = / ] || [ "$current_root" = "$retained_root" ]; then
   exec "$@"
@@ -85,6 +88,11 @@ probe_ready() {
     curl --fail --silent --show-error --max-time 2 "http://127.0.0.1:$gateway_port/readyz" >/dev/null 2>&1
     return $?
   fi
+  if [ -n "$node_path" ] && [ -x "$node_path" ]; then
+    "$node_path" -e 'const http=require("node:http");const req=http.get({hostname:"127.0.0.1",port:Number(process.argv[1]),path:"/readyz"},(res)=>{res.resume();process.exit(res.statusCode===200?0:1)});req.setTimeout(2000,()=>req.destroy());req.on("error",()=>process.exit(1));' "$gateway_port" >/dev/null 2>&1
+    return $?
+  fi
+  # Version-1 markers created before node_path was added remain valid.
   if command -v node >/dev/null 2>&1; then
     node -e 'const http=require("node:http");const req=http.get({hostname:"127.0.0.1",port:Number(process.argv[1]),path:"/readyz"},(res)=>{res.resume();process.exit(res.statusCode===200?0:1)});req.setTimeout(2000,()=>req.destroy());req.on("error",()=>process.exit(1));' "$gateway_port" >/dev/null 2>&1
     return $?
@@ -95,8 +103,8 @@ probe_ready() {
 "$@" &
 gateway_pid=$!
 healthy=0
-attempt=0
-while [ "$attempt" -lt ${timeout} ]; do
+deadline=$(( $(date +%s) + ${timeout} ))
+while [ "$(date +%s)" -lt "$deadline" ]; do
   if ! kill -0 "$gateway_pid" 2>/dev/null; then
     wait "$gateway_pid" || gateway_exit=$?
     if [ "$shutdown_requested" = 1 ]; then
@@ -109,7 +117,6 @@ while [ "$attempt" -lt ${timeout} ]; do
     healthy=1
     break
   fi
-  attempt=$((attempt + 1))
   sleep 1
 done
 
@@ -130,9 +137,10 @@ fi
 kill "$gateway_pid" 2>/dev/null || true
 wait "$gateway_pid" 2>/dev/null || true
 
-# Package replacement is one short critical section. The service manager can
-# still force-kill the whole job after its normal stop timeout.
+# Package replacement is a short critical section. The service
+# manager can still force-kill the whole job after its normal stop timeout.
 trap '' TERM INT HUP
+
 restore_root="\${current_root}.openclaw-restore-$$"
 failed_root="\${current_root}.openclaw-failed-$$"
 rm -rf "$restore_root" "$failed_root"
@@ -160,6 +168,7 @@ marker_tmp="\${marker_path}.$$"
   printf 'current_root=%s\n' "$current_root"
   printf 'retained_root=%s\n' "$retained_root"
   printf 'gateway_port=%s\n' "$gateway_port"
+  [ -z "$node_path" ] || printf 'node_path=%s\n' "$node_path"
   printf 'error=%s\n' "$rollback_error"
 } > "$marker_tmp"
 chmod 600 "$marker_tmp"

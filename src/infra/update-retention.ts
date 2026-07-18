@@ -4,10 +4,11 @@ import path from "node:path";
 import { resolveGatewayInstallEntrypoint } from "../daemon/gateway-entrypoint.js";
 import { formatErrorMessage } from "./errors.js";
 import { collectInstalledGlobalPackageErrors, type CommandRunner } from "./update-global.js";
+import { readUpdateRollbackTransaction } from "./update-rollback.js";
 
-export const RETAINED_UPDATE_PACKAGE_DIRNAME = ".openclaw-previous";
+const RETAINED_UPDATE_PACKAGE_DIRNAME = ".openclaw-previous";
 
-export type RetainedUpdatePackageResult = {
+type RetainedUpdatePackageResult = {
   retainedRoot: string | null;
   step: {
     name: string;
@@ -32,6 +33,7 @@ export async function retainCurrentPackageForUpdate(params: {
   runCommand: CommandRunner;
   timeoutMs: number;
   env?: NodeJS.ProcessEnv;
+  transactionEnv?: NodeJS.ProcessEnv;
 }): Promise<RetainedUpdatePackageResult> {
   const startedAt = Date.now();
   const ownerRoot = path.resolve(params.globalRoot ?? path.dirname(params.packageRoot));
@@ -40,6 +42,14 @@ export async function retainCurrentPackageForUpdate(params: {
   const stagedRoot = `${retainedRoot}.stage-${process.pid}-${Date.now()}`;
   const command = `retain ${params.packageRoot} -> ${retainedRoot}`;
   try {
+    const activeTransaction = await readUpdateRollbackTransaction(
+      params.transactionEnv ?? params.env ?? process.env,
+    );
+    if (activeTransaction?.state === "pending") {
+      throw new Error(
+        `an update rollback transaction is already pending for ${activeTransaction.newVersion}`,
+      );
+    }
     await fs.mkdir(retentionParent, { recursive: true });
     await removeTree(stagedRoot);
     await fs.cp(params.packageRoot, stagedRoot, {

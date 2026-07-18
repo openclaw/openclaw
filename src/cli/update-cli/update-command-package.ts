@@ -7,6 +7,8 @@ import {
   UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV,
   UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART_ENV,
 } from "../../commands/doctor/shared/update-phase.js";
+import { resolveGatewayPort } from "../../config/paths.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import { createLowDiskSpaceWarning } from "../../infra/disk-space.js";
 import {
@@ -25,10 +27,15 @@ import {
   resolveGlobalInstallTarget,
   type ResolvedGlobalInstallTarget,
 } from "../../infra/update-global.js";
+import { writeUpdateRollbackTransaction } from "../../infra/update-rollback.js";
 import {
   resolveUpdateDoctorExecutionPolicy,
   type UpdateRunResult,
 } from "../../infra/update-runner.js";
+import {
+  formatUpdateSwapCoverageWarning,
+  resolveUpdateSwapCoverage,
+} from "../../infra/update-swap-coverage.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveCliName } from "../cli-name.js";
 import { createUpdateProgress } from "./progress.js";
@@ -63,6 +70,7 @@ export async function runPackageInstallUpdate(params: {
   nodeRunner?: string;
   installEnv?: NodeJS.ProcessEnv;
   installTarget?: ResolvedGlobalInstallTarget;
+  rollbackConfig?: OpenClawConfig;
 }): Promise<UpdateRunResult> {
   const installEnv = params.installEnv ?? (await createGlobalInstallEnv());
   const runCommand = createGlobalCommandRunner();
@@ -94,6 +102,28 @@ export async function runPackageInstallUpdate(params: {
     });
 
   const beforeVersion = pkgRoot ? await readPackageVersion(pkgRoot) : null;
+  const swapCoverage = pkgRoot
+    ? await resolveUpdateSwapCoverage({ packageRoot: pkgRoot, manager: installTarget.manager })
+    : await resolveUpdateSwapCoverage({ packageRoot: params.root, manager: "unknown" });
+  const rollbackEnv = params.managedServiceEnv ?? installEnv ?? process.env;
+  const rollbackEnabled =
+    swapCoverage.protection === "swap" &&
+    params.allowGatewayServiceRepair &&
+    params.allowGatewayActivation &&
+    rollbackEnv.OPENCLAW_UPDATE_NO_ROLLBACK !== "1";
+  const swapWarning = formatUpdateSwapCoverageWarning(swapCoverage);
+  if (swapWarning) {
+    defaultRuntime.error(`Warning: ${swapWarning}`);
+  } else if (!rollbackEnabled && rollbackEnv.OPENCLAW_UPDATE_NO_ROLLBACK !== "1") {
+    const reason = !params.allowGatewayServiceRepair
+      ? "the Gateway service is not owned by this install"
+      : !params.allowGatewayActivation
+        ? "the Gateway service was not stopped for this update"
+        : "the update cannot activate the protected service";
+    defaultRuntime.error(
+      `Warning: Automatic update rollback is unavailable: ${reason}. If startup fails, reinstall the previous version manually.`,
+    );
+  }
   if (pkgRoot) {
     await cleanupGlobalRenameDirs({
       globalRoot: path.dirname(pkgRoot),
@@ -120,7 +150,47 @@ export async function runPackageInstallUpdate(params: {
     packageRoot: pkgRoot,
     runCommand,
     timeoutMs: params.timeoutMs,
+    retainPreviousPackage: rollbackEnabled,
+    beforeMutation: rollbackEnabled
+      ? async ({ retainedPackageRoot, currentPackageRoot, previousVersion }) => {
+          const startedAt = Date.now();
+          try {
+            await writeUpdateRollbackTransaction({
+              env: rollbackEnv,
+              transaction: {
+                state: "pending",
+                newVersion: params.installSpec ?? params.tag,
+                previousVersion: previousVersion ?? "unknown",
+                currentRoot: currentPackageRoot,
+                retainedRoot: retainedPackageRoot,
+                gatewayPort: resolveGatewayPort(params.rollbackConfig ?? {}, rollbackEnv),
+                nodePath: swapCoverage.protection === "swap" ? swapCoverage.nodePath : undefined,
+              },
+            });
+            return {
+              name: "arm update rollback",
+              command: "write update rollback marker",
+              cwd: currentPackageRoot,
+              durationMs: Date.now() - startedAt,
+              exitCode: 0,
+              stdoutTail: "package rollback armed",
+              stderrTail: null,
+            };
+          } catch (error) {
+            return {
+              name: "arm update rollback",
+              command: "write update rollback marker",
+              cwd: currentPackageRoot,
+              durationMs: Date.now() - startedAt,
+              exitCode: 1,
+              stdoutTail: null,
+              stderrTail: String(error),
+            };
+          }
+        }
+      : undefined,
     ...(installEnv === undefined ? {} : { env: installEnv }),
+    rollbackEnv: params.managedServiceEnv,
     runStep: (stepParams) =>
       runUpdateStep({
         ...stepParams,
@@ -204,5 +274,8 @@ export async function runPackageInstallUpdate(params: {
     after: { version: packageUpdate.afterVersion ?? beforeVersion },
     steps: packageUpdate.steps,
     durationMs: Date.now() - params.startedAt,
+    ...(packageUpdate.retainedPackageRoot
+      ? { rollback: { retainedPackageRoot: packageUpdate.retainedPackageRoot } }
+      : {}),
   };
 }

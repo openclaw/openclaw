@@ -1,5 +1,6 @@
 /** Arms the POSIX managed-service rollback transaction after package finalization. */
 import {
+  readUpdateRollbackTransaction,
   writeUpdateRollbackTransaction,
   type UpdateRollbackTransaction,
 } from "../../infra/update-rollback.js";
@@ -21,7 +22,9 @@ export async function armManagedServiceUpdateRollback(params: {
   ) {
     return null;
   }
+  const existing = await readUpdateRollbackTransaction(params.serviceEnv ?? process.env);
   const transaction: UpdateRollbackTransaction = {
+    ...existing,
     state: "pending",
     newVersion: params.result.after?.version ?? "unknown",
     previousVersion: params.result.before?.version ?? "unknown",

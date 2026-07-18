@@ -831,8 +831,14 @@ export async function runGlobalPackageUpdateSteps(params: {
   runStep: PackageUpdateStepRunner;
   timeoutMs: number;
   env?: NodeJS.ProcessEnv;
+  rollbackEnv?: NodeJS.ProcessEnv;
   installCwd?: string;
   retainPreviousPackage?: boolean;
+  beforeMutation?: (params: {
+    retainedPackageRoot: string;
+    currentPackageRoot: string;
+    previousVersion: string | null;
+  }) => Promise<PackageUpdateStepResult | null>;
   postVerifyStep?: (packageRoot: string) => Promise<PackageUpdateStepResult | null>;
 }): Promise<{
   steps: PackageUpdateStepResult[];
@@ -864,13 +870,15 @@ export async function runGlobalPackageUpdateSteps(params: {
     const currentPackageRoot = params.packageRoot ?? params.installTarget.packageRoot;
     let retainedPackageRoot: string | undefined;
     if (currentPackageRoot && params.retainPreviousPackage === true) {
+      const previousVersion = await readPackageVersionIfPresent(currentPackageRoot);
       const retained = await retainCurrentPackageForUpdate({
         packageRoot: currentPackageRoot,
         globalRoot: params.installTarget.globalRoot,
-        expectedVersion: await readPackageVersionIfPresent(currentPackageRoot),
+        expectedVersion: previousVersion,
         runCommand: params.runCommand,
         timeoutMs: params.timeoutMs,
         env: params.env,
+        transactionEnv: params.rollbackEnv,
       });
       steps.push(retained.step);
       if (!retained.retainedRoot) {
@@ -882,6 +890,23 @@ export async function runGlobalPackageUpdateSteps(params: {
         };
       }
       retainedPackageRoot = retained.retainedRoot;
+      const beforeMutationStep = await params.beforeMutation?.({
+        retainedPackageRoot,
+        currentPackageRoot,
+        previousVersion,
+      });
+      if (beforeMutationStep) {
+        steps.push(beforeMutationStep);
+        if (beforeMutationStep.exitCode !== 0) {
+          return {
+            steps,
+            verifiedPackageRoot: currentPackageRoot,
+            afterVersion: null,
+            failedStep: beforeMutationStep,
+            retainedPackageRoot,
+          };
+        }
+      }
     }
     // Keep the preflight and mutation on the same pnpm executable. `pnpm bin -g`
     // already verifies its reported bin is on PATH, so no PATH rewrite is needed.
