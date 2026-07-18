@@ -218,10 +218,8 @@ export async function processMessage(params: {
   preflightAudioTranscript?: string | null;
 }) {
   const admission = requireWhatsAppInboundAdmission(params.msg);
-  if (
-    admission.turnAdmission.kind !== "dispatch" &&
-    admission.turnAdmission.kind !== "observeOnly"
-  ) {
+  const turnAdmission = admission.turnAdmission;
+  if (turnAdmission.kind !== "dispatch" && turnAdmission.kind !== "observeOnly") {
     return false;
   }
   const conversationId = admission.conversation.id;
@@ -553,7 +551,7 @@ export async function processMessage(params: {
           accountId: params.route.accountId,
           route: { agentId: params.route.agentId, sessionKey: params.route.sessionKey },
           ctxPayload,
-          admission: admission.turnAdmission,
+          admission: turnAdmission,
           record: {
             onRecordError: (err) => {
               params.replyLogger.warn(
@@ -569,7 +567,9 @@ export async function processMessage(params: {
               trackBackgroundTask(params.backgroundTasks, task);
             },
           },
-          ...(admission.turnAdmission.kind === "dispatch" &&
+          // Core observe-only plans may resolve the agent with no-op delivery. Only actual
+          // dispatch turns own successful group-history finalization.
+          ...(turnAdmission.kind === "dispatch" &&
           conversationKind === "group" &&
           params.suppressGroupHistoryClear !== true
             ? {

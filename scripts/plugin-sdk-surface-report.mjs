@@ -292,7 +292,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: lifecycle-owned prepared model catalog sync and async readers.
       // Harvest: retired tuning-knob config types -10.
       // Harvest: removed process-global API-provider publication functions -2.
-      8180,
+      // +1: canonical ingress-decision to turn-admission mapper.
+      8181,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -342,7 +343,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +6: outbound echo record/query helpers across channel-outbound and mirrors.
       // +2: lifecycle-owned prepared model catalog sync and async readers.
       // Harvest: removed process-global API-provider publication functions -2.
-      4555,
+      // +1: canonical ingress-decision to turn-admission mapper.
+      4556,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

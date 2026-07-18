@@ -55,6 +55,11 @@ const makeMsg = (overrides: TestMessageOverrides): AdmittedWebInboundMessage => 
         id: conversationId,
         ...overrides.admission?.sender,
       },
+      senderAccess: {
+        reasonCode:
+          conversationKind === "direct" ? "dm_policy_allowlisted" : "group_policy_allowed",
+        ...overrides.admission?.senderAccess,
+      },
     },
     group: {
       mentions: {

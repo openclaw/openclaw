@@ -8,7 +8,8 @@ const {
   resolvePolicyMock,
   buildContextMock,
   isControlCommandMessageMock,
-  dispatchBufferedReplyMock,
+  deliverReplyMock,
+  replyResolverMock,
   runMessageReceivedMock,
   shouldComputeCommandAuthorizedMock,
   trackBackgroundTaskMock,
@@ -16,10 +17,8 @@ const {
   resolvePolicyMock: vi.fn(),
   buildContextMock: vi.fn(),
   isControlCommandMessageMock: vi.fn(() => false),
-  dispatchBufferedReplyMock: vi.fn(async (_params?: unknown) => ({
-    queuedFinal: false,
-    counts: { tool: 0, block: 0, final: 0 },
-  })),
+  deliverReplyMock: vi.fn(async () => ({ visibleReplySent: true })),
+  replyResolverMock: vi.fn(async () => undefined),
   runMessageReceivedMock: vi.fn(async () => undefined),
   shouldComputeCommandAuthorizedMock: vi.fn(() => false),
   trackBackgroundTaskMock: vi.fn(),
@@ -41,13 +40,12 @@ vi.mock("./inbound-dispatch.js", async (importOriginal) => {
     buildWhatsAppInboundContext: buildContextMock,
     createWhatsAppReplyPlan: (...args: unknown[]) => {
       const params = args[0] as { replyResolver?: unknown };
-      void dispatchBufferedReplyMock(params);
       return {
         dispatcherOptions: {},
-        delivery: { deliver: async () => {} },
+        delivery: { deliver: deliverReplyMock },
         replyOptions: {},
         replyResolver: params.replyResolver,
-        finalize: () => true,
+        finalize: (result: { queuedFinal?: boolean }) => result.queuedFinal === true,
       };
     },
     resolveWhatsAppDmRouteTarget: () => null,
@@ -213,6 +211,9 @@ function makeBaseMsg(overrides: { body?: string; commandBody?: string } = {}) {
       sender: {
         id: "+15550002222",
       },
+      senderAccess: {
+        reasonCode: "group_policy_allowed",
+      },
     },
     group: {
       subject: "Test Group",
@@ -248,7 +249,7 @@ function callProcessMessage(
     connectionId: "conn-1",
     verbose: false,
     maxMediaBytes: 1024,
-    replyResolver: (async () => undefined) as never,
+    replyResolver: replyResolverMock as never,
     replyLogger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} } as never,
     backgroundTasks: new Set(),
     rememberSentText: () => {},
@@ -276,7 +277,9 @@ function mockCallArg(mockFn: ReturnType<typeof vi.fn>, label: string, callIndex 
 describe("processMessage group system prompt wiring", () => {
   beforeEach(() => {
     buildContextMock.mockReset();
-    dispatchBufferedReplyMock.mockClear();
+    deliverReplyMock.mockClear();
+    replyResolverMock.mockReset();
+    replyResolverMock.mockResolvedValue(undefined);
     isControlCommandMessageMock.mockReset();
     isControlCommandMessageMock.mockReturnValue(false);
     resolvePolicyMock.mockReset();
@@ -556,26 +559,23 @@ describe("processMessage group system prompt wiring", () => {
   });
 
   it.each([
-    { label: "silent", dispatchResult: false },
-    { label: "visible", dispatchResult: true },
-  ])(
-    "clears pending group history after a successful $label dispatch",
-    async ({ dispatchResult }) => {
-      resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
-      dispatchBufferedReplyMock.mockResolvedValueOnce(dispatchResult as never);
-      const historyKey = "whatsapp:default:group:123@g.us";
-      const groupHistories = new Map<string, unknown[]>([
-        [historyKey, [{ sender: "Alice", body: "pending" }]],
-      ]);
+    { label: "silent", reply: undefined },
+    { label: "visible", reply: { text: "reply" } },
+  ])("clears pending group history after a successful $label dispatch", async ({ reply }) => {
+    resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
+    replyResolverMock.mockResolvedValueOnce(reply);
+    const historyKey = "whatsapp:default:group:123@g.us";
+    const groupHistories = new Map<string, unknown[]>([
+      [historyKey, [{ sender: "Alice", body: "pending" }]],
+    ]);
 
-      await callProcessMessage({ groupHistories });
+    await callProcessMessage({ groupHistories });
 
-      expect(dispatchBufferedReplyMock).toHaveBeenCalledTimes(1);
-      expect(groupHistories.get(historyKey)).toEqual([]);
-    },
-  );
+    expect(replyResolverMock).toHaveBeenCalledTimes(1);
+    expect(groupHistories.get(historyKey)).toEqual([]);
+  });
 
-  it("suppresses observe-only dispatch without clearing pending group history", async () => {
+  it("suppresses observe-only delivery without clearing pending group history", async () => {
     resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
     const historyKey = "whatsapp:default:group:123@g.us";
     const pending = [{ sender: "Alice", body: "pending" }];
@@ -591,19 +591,28 @@ describe("processMessage group system prompt wiring", () => {
             decision: "allow",
             reasonCode: "activation_skipped",
           },
+          senderAccess: {
+            reasonCode: "group_policy_allowed",
+          },
+          activationAccess: {
+            allowed: false,
+            shouldSkip: true,
+            reasonCode: "activation_skipped",
+          },
         },
       }),
     });
 
     expect(result).toBe(false);
-    expect(dispatchBufferedReplyMock).not.toHaveBeenCalled();
+    expect(replyResolverMock).toHaveBeenCalledTimes(1);
+    expect(deliverReplyMock).not.toHaveBeenCalled();
     expect(groupHistories.get(historyKey)).toBe(pending);
   });
 
   it("retains pending group history when dispatch fails", async () => {
     resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
     const failure = new Error("dispatch failed");
-    dispatchBufferedReplyMock.mockRejectedValueOnce(failure);
+    replyResolverMock.mockRejectedValueOnce(failure);
     const historyKey = "whatsapp:default:group:123@g.us";
     const pending = [{ sender: "Alice", body: "pending" }];
     const groupHistories = new Map<string, unknown[]>([[historyKey, pending]]);
@@ -632,6 +641,16 @@ describe("processMessage group system prompt wiring", () => {
             decision: "block",
             reasonCode: "dm_policy_not_allowlisted",
           },
+          senderAccess: {
+            allowed: false,
+            decision: "block",
+            reasonCode: "dm_policy_not_allowlisted",
+          },
+          activationAccess: {
+            allowed: false,
+            shouldSkip: true,
+            reasonCode: "dm_policy_not_allowlisted",
+          },
         },
       }),
     });
@@ -639,7 +658,7 @@ describe("processMessage group system prompt wiring", () => {
     expect(result).toBe(false);
     expect(buildContextMock).not.toHaveBeenCalled();
     expect(trackBackgroundTaskMock).not.toHaveBeenCalled();
-    expect(dispatchBufferedReplyMock).not.toHaveBeenCalled();
+    expect(replyResolverMock).not.toHaveBeenCalled();
     expect(runMessageReceivedMock).not.toHaveBeenCalled();
   });
 });

@@ -36,6 +36,9 @@ function makeUnregisteredGroupMsg(
       sender: {
         id: "+15550000002",
       },
+      senderAccess: {
+        reasonCode: "group_policy_allowed",
+      },
     },
   });
 }

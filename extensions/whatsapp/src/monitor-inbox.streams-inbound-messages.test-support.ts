@@ -305,6 +305,10 @@ describe("web monitor inbox", () => {
       sender: {
         id: "+999",
       },
+      senderAccess: {
+        allowed: true,
+        decision: "allow",
+      },
     });
     expectDeprecatedAdmissionAliases(inbound);
     expect(sock.readMessages).toHaveBeenCalledWith([

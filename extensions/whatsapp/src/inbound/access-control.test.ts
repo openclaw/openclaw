@@ -113,6 +113,9 @@ async function checkCommandAuthorizedForGroup(params: {
         sender: {
           id: params.senderE164 ?? "+15550001111",
         },
+        senderAccess: {
+          reasonCode: "group_policy_allowed",
+        },
       },
     }) as never,
   });

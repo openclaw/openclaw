@@ -4,7 +4,6 @@ import {
   mapChannelIngressDecisionToTurnAdmission,
   resolveChannelMessageIngress,
   type ChannelIngressIdentityDescriptor,
-  type ChannelIngressSideEffectResult,
   type ResolveChannelMessageIngressParams,
 } from "./channel-ingress-runtime.js";
 
@@ -27,14 +26,13 @@ async function resolve(input: Partial<ResolveChannelMessageIngressParams> = {}) 
 }
 
 describe("plugin-sdk/channel-ingress-runtime", () => {
-  it("maps ingress decisions into turn admissions", async () => {
-    const allowed = await resolve();
-    const sideEffect = { kind: "none" } satisfies ChannelIngressSideEffectResult;
-
-    expect(mapChannelIngressDecisionToTurnAdmission(allowed.ingress, sideEffect)).toEqual({
-      kind: "dispatch",
-      reason: "activation_allowed",
-    });
+  it.each([
+    ["dispatch", "activation_allowed", { kind: "dispatch", reason: "activation_allowed" }],
+    ["observe", "activation_allowed", { kind: "observeOnly", reason: "activation_allowed" }],
+    ["skip", "activation_skipped", { kind: "handled", reason: "activation_skipped" }],
+    ["drop", "route_blocked", { kind: "drop", reason: "route_blocked", recordHistory: false }],
+  ] as const)("maps %s ingress decisions", (admission, reasonCode, expected) => {
+    expect(mapChannelIngressDecisionToTurnAdmission({ admission, reasonCode })).toEqual(expected);
   });
 
   it("derives store allowlists, command auth, sender separation, and redaction", async () => {

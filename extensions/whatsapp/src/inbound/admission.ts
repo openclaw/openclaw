@@ -1,6 +1,6 @@
-import type {
+import {
   mapChannelIngressDecisionToTurnAdmission,
-  ResolvedChannelMessageIngress,
+  type ResolvedChannelMessageIngress,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import type { WhatsAppIdentity } from "../identity.js";
@@ -128,7 +128,6 @@ function copyAccount(
 export function buildWhatsAppInboundAdmission(params: {
   policy: WhatsAppInboundAdmissionPolicy;
   access: WhatsAppInboundAdmissionAccess;
-  turnAdmission: WhatsAppInboundTurnAdmission;
   isGroup: boolean;
   conversationId: string;
   senderId: string;
@@ -170,7 +169,7 @@ export function buildWhatsAppInboundAdmission(params: {
       shouldSkip: params.access.activationAccess.shouldSkip,
       reasonCode: params.access.activationAccess.reasonCode,
     },
-    turnAdmission: params.turnAdmission,
+    turnAdmission: mapChannelIngressDecisionToTurnAdmission(params.access.ingress),
   };
 }
 
@@ -198,6 +197,12 @@ export function buildDeprecatedFlatWhatsAppInboundAdmission(
       ? "group_policy_allowed"
       : "dm_policy_allowlisted"
     : "no_policy_match";
+  const ingress: WhatsAppInboundIngressDecision = {
+    admission: admitted ? "dispatch" : "drop",
+    decision: admitted ? "allow" : "block",
+    decisiveGateId: "legacy-flat-compat",
+    reasonCode,
+  };
 
   // Compatibility only: flat listenerFactory inputs predate SDK ingress, so
   // construct their legacy admission directly instead of inventing an access graph.
@@ -218,12 +223,7 @@ export function buildDeprecatedFlatWhatsAppInboundAdmission(
       id: senderId,
       isSamePhone: false,
     },
-    ingress: {
-      admission: admitted ? "dispatch" : "drop",
-      decision: admitted ? "allow" : "block",
-      decisiveGateId: "legacy-flat-compat",
-      reasonCode,
-    },
+    ingress,
     senderAccess: {
       allowed: admitted,
       decision: admitted ? "allow" : "block",
@@ -242,9 +242,7 @@ export function buildDeprecatedFlatWhatsAppInboundAdmission(
       shouldSkip: !admitted,
       reasonCode: admitted ? "activation_allowed" : "activation_skipped",
     },
-    turnAdmission: admitted
-      ? { kind: "dispatch", reason: reasonCode }
-      : { kind: "drop", reason: reasonCode, recordHistory: false },
+    turnAdmission: mapChannelIngressDecisionToTurnAdmission(ingress),
   };
 }
 

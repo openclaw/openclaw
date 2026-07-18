@@ -34,7 +34,6 @@ export type {
   ChannelIngressRouteDescriptor,
   ChannelIngressResolver,
   ChannelIngressResolverMessageParams,
-  ChannelIngressSideEffectResult,
   ChannelIngressStateInput,
   ChannelIngressState,
   ChannelMessageIngressCommandInput,
