@@ -118,6 +118,10 @@ function normalizeCreatedAtMs(value: unknown): number | null {
   return asDateTimestampMs(timestampMs) ?? null;
 }
 
+function parseFiniteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
 function parseModality(modality: string | null): Array<"text" | "image"> {
   if (!modality) {
     return ["text"];
@@ -244,19 +248,18 @@ async function fetchOpenRouterModels(
             return null;
           }
           const name = typeof obj.name === "string" && obj.name.trim() ? obj.name.trim() : id;
+          const topProvider =
+            obj.top_provider && typeof obj.top_provider === "object"
+              ? (obj.top_provider as Record<string, unknown>)
+              : undefined;
 
           const contextLength =
-            typeof obj.context_length === "number" && Number.isFinite(obj.context_length)
-              ? obj.context_length
-              : null;
+            parseFiniteNumber(topProvider?.context_length) ?? parseFiniteNumber(obj.context_length);
 
           const maxCompletionTokens =
-            typeof obj.max_completion_tokens === "number" &&
-            Number.isFinite(obj.max_completion_tokens)
-              ? obj.max_completion_tokens
-              : typeof obj.max_output_tokens === "number" && Number.isFinite(obj.max_output_tokens)
-                ? obj.max_output_tokens
-                : null;
+            parseFiniteNumber(topProvider?.max_completion_tokens) ??
+            parseFiniteNumber(obj.max_completion_tokens) ??
+            parseFiniteNumber(obj.max_output_tokens);
 
           const supportedParameters = Array.isArray(obj.supported_parameters)
             ? normalizeStringEntries(
