@@ -18,6 +18,7 @@ import type {
 import { resolveProviderOnboardAuthFlags } from "../../plugins/provider-auth-choices.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { formatCliCommand } from "../command-format.js";
+import { parseGatewayPortOption } from "../gateway-port-option.js";
 import { parsePort } from "../shared/parse-port.js";
 
 export function resolveInstallDaemonFlag(command: Command): boolean | undefined {
@@ -205,7 +206,9 @@ export function registerOnboardCommand(program: Command): void {
   registerOnboardAuthOptions(command);
 
   command
-    .option("--gateway-port <port>", "Gateway port")
+    .option("--gateway-port <port>", "Gateway port", (value) =>
+      parseGatewayPortOption(value, "--gateway-port"),
+    )
     .option("--gateway-bind <mode>", "Gateway bind: loopback|tailnet|lan|auto|custom")
     .option("--gateway-auth <mode>", "Gateway auth: token|password")
     .option("--gateway-token <token>", "Gateway token (token auth)")
