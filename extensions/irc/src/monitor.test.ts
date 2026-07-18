@@ -154,6 +154,7 @@ async function startInboundIrcServer(
   target?: string,
   welcomeNick = "bot",
   colonlessBody = false,
+  senderNick = "alice",
 ): Promise<InboundIrcServer> {
   const sockets = new Set<net.Socket>();
   const server = net.createServer((socket) => {
@@ -172,7 +173,9 @@ async function startInboundIrcServer(
           if (target) {
             setTimeout(() => {
               const bodySeparator = colonlessBody ? " " : " :";
-              socket.write(`:alice!ident@example.org PRIVMSG ${target}${bodySeparator}hello\r\n`);
+              socket.write(
+                `:${senderNick}!ident@example.org PRIVMSG ${target}${bodySeparator}hello\r\n`,
+              );
             }, 20);
           }
         }
@@ -277,6 +280,7 @@ async function startReconnectingReplyIrcServer(): Promise<ReconnectingReplyIrcSe
 }
 
 function installMonitorRuntime() {
+  const activityRecord = vi.fn();
   setIrcRuntime({
     logging: {
       shouldLogVerbose: vi.fn(() => false),
@@ -289,10 +293,11 @@ function installMonitorRuntime() {
     },
     channel: {
       activity: {
-        record: vi.fn(),
+        record: activityRecord,
       },
     },
   } as never);
+  return activityRecord;
 }
 
 function installPairingMonitorRuntime(
@@ -530,6 +535,50 @@ describe("irc monitor inbound target", () => {
           "expected the replayed self echo to settle",
         );
         expect(onMessage).not.toHaveBeenCalled();
+      } finally {
+        if (monitor) {
+          await monitor.stop();
+        }
+        await server.close();
+      }
+    });
+  });
+
+  it("does not record receipt-time self echoes as inbound activity", async () => {
+    await withIngressQueue(async (ingressQueue) => {
+      const activityRecord = installMonitorRuntime();
+      const enqueueSpy = vi.spyOn(ingressQueue, "enqueue");
+      const server = await startInboundIrcServer("#openclaw", "bot", false, "bot");
+      const onMessage = vi.fn();
+      let monitor: { stop: () => Promise<void> } | undefined;
+      try {
+        monitor = await monitorIrcProvider({
+          config: {
+            channels: {
+              irc: {
+                host: "127.0.0.1",
+                port: server.port,
+                tls: false,
+                nick: "bot",
+                username: "bot",
+                realname: "OpenClaw",
+              },
+            },
+          } as CoreConfig,
+          ingressQueue,
+          onMessage,
+        });
+        await waitForIrcCondition(
+          () => enqueueSpy.mock.calls.length === 1,
+          "expected the receipt-time self echo to enter ingress",
+        );
+        await enqueueSpy.mock.results[0]?.value;
+        await waitForIrcAsyncCondition(
+          async () => (await ingressQueue.listPending({ limit: "all" })).length === 0,
+          "expected the receipt-time self echo to settle",
+        );
+        expect(onMessage).not.toHaveBeenCalled();
+        expect(activityRecord).not.toHaveBeenCalled();
       } finally {
         if (monitor) {
           await monitor.stop();

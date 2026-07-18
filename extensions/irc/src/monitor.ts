@@ -171,6 +171,12 @@ export async function monitorIrcProvider(
         },
         onPrivmsg: async (event) => {
           await ingressConnection.accept(event.rawLine, event.connectedNick);
+          if (
+            normalizeLowercaseStringOrEmpty(event.senderNick) ===
+            normalizeLowercaseStringOrEmpty(event.connectedNick)
+          ) {
+            return;
+          }
           core.channel.activity.record({
             channel: "irc",
             accountId: account.accountId,
