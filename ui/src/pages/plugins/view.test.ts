@@ -331,6 +331,9 @@ describe("renderPlugins", () => {
             transport: "http",
             target: "https://api.githubcopilot.com/mcp/",
             auth: "oauth",
+            toolFilter: false,
+            parallel: false,
+            tls: null,
           },
         ],
         onMcpToggle,
@@ -347,7 +350,7 @@ describe("renderPlugins", () => {
     actionButton(row, "Remove github")?.click();
     expect(onMcpRemove).toHaveBeenCalledWith("github");
 
-    const form = container.querySelector<HTMLFormElement>(".plugins-mcp-form")!;
+    const form = container.querySelector<HTMLFormElement>(".mcp-server-form")!;
     form.querySelector<HTMLInputElement>('[name="mcp-name"]')!.value = "context7";
     form.querySelector<HTMLInputElement>('[name="mcp-target"]')!.value =
       "https://mcp.context7.com/mcp";
@@ -449,7 +452,16 @@ describe("renderPlugins", () => {
       createProps({
         activeTab: "discover",
         mcpServers: [
-          { name: "github", enabled: true, transport: "http", target: "https://x", auth: "oauth" },
+          {
+            name: "github",
+            enabled: true,
+            transport: "http",
+            target: "https://x",
+            auth: "oauth",
+            toolFilter: false,
+            parallel: false,
+            tls: null,
+          },
         ],
       }),
     );

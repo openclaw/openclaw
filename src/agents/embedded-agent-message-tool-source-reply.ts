@@ -37,6 +37,10 @@ function asRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
+function resultConfirmsCurrentSourceRoute(value: unknown): boolean {
+  return asRecord(asRecord(value).details).sourceReplyRoute === "current-source";
+}
+
 function hasStringValue(value: unknown): boolean {
   return typeof value === "string" && value.trim().length > 0;
 }
@@ -563,7 +567,9 @@ export function isDeliveredMessageToolOnlySourceReplyResult(params: {
   if (!isMessageToolSendActionName(args.action) && !sourceRouteReplyAction) {
     return false;
   }
-  if (hasExplicitMessageRoute(args) && params.allowExplicitSourceRoute !== true) {
+  const hasConfirmedExplicitSourceRoute =
+    params.allowExplicitSourceRoute === true || resultConfirmsCurrentSourceRoute(params.result);
+  if (hasExplicitMessageRoute(args) && !hasConfirmedExplicitSourceRoute) {
     return false;
   }
   return isDeliveredMessagingToolResult(params);

@@ -1,6 +1,7 @@
 import type { RuntimeEnv } from "../runtime.js";
 import {
   acknowledgeOnboardingRecommendations,
+  clearOnboardingRecommendations,
   readOnboardingRecommendations,
   type OnboardingRecommendationsRecord,
 } from "../state/onboarding-recommendations.js";
@@ -8,6 +9,7 @@ import {
 type OnboardRecommendationsDeps = {
   read?: () => OnboardingRecommendationsRecord | null;
   acknowledge?: () => OnboardingRecommendationsRecord | null;
+  clear?: () => boolean;
 };
 
 const SAFE_INSTALL_ID_RE = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/iu;
@@ -73,4 +75,16 @@ export function acknowledgeOnboardRecommendationsCommand(
 ): void {
   const record = (deps.acknowledge ?? acknowledgeOnboardingRecommendations)();
   runtime.log(record ? "Onboarding recommendations acknowledged." : "No stored recommendations.");
+}
+
+export function refreshOnboardRecommendationsCommand(
+  runtime: RuntimeEnv,
+  deps: OnboardRecommendationsDeps = {},
+): void {
+  const cleared = (deps.clear ?? clearOnboardingRecommendations)();
+  runtime.log(
+    cleared
+      ? "Onboarding recommendations cleared. The next onboarding run will rescan."
+      : "No stored recommendations.",
+  );
 }

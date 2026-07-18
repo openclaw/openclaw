@@ -295,6 +295,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     profiles: [],
   },
   {
+    id: "show_widget",
+    label: "show_widget",
+    description: "Show an interactive widget on supported chat surfaces",
+    sectionId: "ui",
+    profiles: [],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "message",
     label: "message",
     description: "Send messages",

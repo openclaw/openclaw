@@ -646,7 +646,7 @@ function createChatProps(
     onSend: () => undefined,
     onCompact: () => undefined,
     onToggleRealtimeTalk: () => undefined,
-    onToggleRealtimeVideo: () => undefined,
+    onToggleRealtimeCamera: () => undefined,
     onDismissError: () => undefined,
     onAbort: () => undefined,
     onQueueRemove: () => undefined,
@@ -2158,23 +2158,37 @@ describe("chat voice controls", () => {
     await i18n.setLocale("en");
   });
 
-  it("keeps voice input visible without a second dictation control", () => {
+  it("shows one mic button for starting realtime talk", () => {
     const container = renderChatView();
 
     requireElement(container, '[aria-label="Start voice input"]', "voice input button");
-    requireElement(container, '[aria-label="Start video talk"]', "video talk button");
+    expect(container.querySelector('[aria-label="Start video talk"]')).toBeNull();
     expect(container.querySelector('[aria-label="Voice input"]')).toBeNull();
   });
 
-  it("starts Video Talk separately and renders the live camera preview", () => {
-    const onToggleRealtimeVideo = vi.fn();
+  it("toggles camera inside a video-capable voice session and renders the preview", () => {
+    const onToggleRealtimeCamera = vi.fn();
     const stream = {} as MediaStream;
-    const container = renderChatView({
-      onToggleRealtimeVideo,
-      realtimeTalkVideoStream: stream,
+    let container = renderChatView({
+      realtimeTalkActive: true,
+      realtimeTalkStatus: "listening",
+      realtimeTalkVideoCapable: true,
+      onToggleRealtimeCamera,
     });
 
-    requireElement(container, '[aria-label="Start video talk"]', "video talk button").dispatchEvent(
+    requireElement(container, '[aria-label="Turn camera on"]', "camera on button").dispatchEvent(
+      new MouseEvent("click", { bubbles: true }),
+    );
+    expect(onToggleRealtimeCamera).toHaveBeenCalledOnce();
+
+    container = renderChatView({
+      realtimeTalkActive: true,
+      realtimeTalkStatus: "listening",
+      realtimeTalkVideoCapable: true,
+      realtimeTalkVideoStream: stream,
+      onToggleRealtimeCamera,
+    });
+    requireElement(container, '[aria-label="Turn camera off"]', "camera off button").dispatchEvent(
       new MouseEvent("click", { bubbles: true }),
     );
     const preview = requireElement(
@@ -2183,7 +2197,7 @@ describe("chat voice controls", () => {
       "camera preview",
     ) as HTMLVideoElement;
 
-    expect(onToggleRealtimeVideo).toHaveBeenCalledOnce();
+    expect(onToggleRealtimeCamera).toHaveBeenCalledTimes(2);
     expect(preview.srcObject).toBe(stream);
     expect(preview.autoplay).toBe(true);
     expect(preview.muted).toBe(true);
@@ -4009,6 +4023,39 @@ describe("chat model controls", () => {
     expect(onModelSelect).toHaveBeenCalledWith(modelOption?.dataset.chatModelOption, "main");
   });
 
+  it("marks the inherited default muted and resets an override from the provenance row", () => {
+    const { state } = createChatHeaderState({
+      model: null,
+      models: [
+        { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
+        { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
+      ],
+    });
+    const container = document.createElement("div");
+    render(renderChatModelControls(createChatModelControlsProps(state)), container);
+
+    expect(
+      container.querySelector(".chat-controls__model-provenance-value--inherit"),
+    ).not.toBeNull();
+    expect(container.querySelector("[data-chat-model-reset]")).toBeNull();
+
+    const onModelSelect = vi.fn(async () => true);
+    render(
+      renderChatModelControls({
+        ...createChatModelControlsProps(state),
+        modelOverrides: { main: "openai/gpt-5.4" },
+        onModelSelect,
+      }),
+      container,
+    );
+
+    expect(container.querySelector(".chat-controls__model-provenance-value--inherit")).toBeNull();
+    const reset = container.querySelector<HTMLButtonElement>("[data-chat-model-reset]");
+    expect(reset).toBeInstanceOf(HTMLButtonElement);
+    reset?.click();
+    expect(onModelSelect).toHaveBeenCalledWith("", "main");
+  });
+
   it("hides model choices for locked sessions while preserving reasoning and speed", () => {
     const { state } = createChatHeaderState({
       model: "gpt-5.5",
@@ -5186,6 +5233,67 @@ describe("chat model controls", () => {
 });
 
 describe("right-click Reply", () => {
+  it("adds rewind and fork actions only for persisted user bubbles", () => {
+    const onRewindMessage = vi.fn().mockResolvedValue(true);
+    const onForkMessage = vi.fn();
+    const container = renderChatView({ onRewindMessage, onForkMessage, onSetReply: vi.fn() });
+    const section = container.querySelector<HTMLElement>(".card.chat")!;
+    const group = document.createElement("div");
+    group.className = "chat-group user";
+    const bubble = document.createElement("div");
+    bubble.className = "chat-bubble";
+    bubble.dataset.entryId = "persisted-user";
+    bubble.dataset.messageText = "hello";
+    group.appendChild(bubble);
+    section.querySelector(".chat-thread-inner")!.appendChild(group);
+
+    bubble.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+
+    const labels = [...document.querySelectorAll(".chat-reply-context-menu button")].map((button) =>
+      button.textContent?.trim(),
+    );
+    expect(labels).toEqual(["Reply", "Rewind to here", "Fork from here"]);
+    document.querySelector<HTMLButtonElement>('[aria-label="Fork from here"]')!.click();
+    expect(onForkMessage).toHaveBeenCalledWith("persisted-user");
+
+    group.className = "chat-group assistant";
+    bubble.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    expect(
+      [...document.querySelectorAll(".chat-reply-context-menu button")].map((button) =>
+        button.textContent?.trim(),
+      ),
+    ).toEqual(["Reply"]);
+  });
+
+  it("disables rewind and fork context actions during an active run", () => {
+    const container = renderChatView({
+      canAbort: true,
+      onRewindMessage: vi.fn(),
+      onForkMessage: vi.fn(),
+    });
+    const group = document.createElement("div");
+    group.className = "chat-group user";
+    const bubble = document.createElement("div");
+    bubble.className = "chat-bubble";
+    bubble.dataset.entryId = "persisted-user";
+    group.appendChild(bubble);
+    container.querySelector(".chat-thread-inner")!.appendChild(group);
+
+    bubble.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+
+    expect(
+      document.querySelector<HTMLButtonElement>('[aria-label="Rewind to here"]')?.disabled,
+    ).toBe(true);
+    expect(
+      document.querySelector<HTMLButtonElement>('[aria-label="Fork from here"]')?.disabled,
+    ).toBe(true);
+    expect(
+      document
+        .querySelector<HTMLElement>('[aria-label="Rewind to here"]')
+        ?.closest("openclaw-tooltip")?.content,
+    ).toBe("Rewind is unavailable while the agent is working");
+  });
+
   it("opens context menu and calls onSetReply when Reply is selected", () => {
     const onSetReply = vi.fn();
     const container = renderChatView({ onSetReply });

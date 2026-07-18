@@ -68,6 +68,14 @@ describe("sidebar pinned routes", () => {
     expect(normalizeSidebarPinnedRoutes(["nodes", "usage"])).toEqual(["usage"]);
   });
 
+  it("keeps the apps promo page unpinned by default but customizable", () => {
+    expect(SIDEBAR_NAV_ROUTES).toContain("apps");
+    expect(DEFAULT_SIDEBAR_PINNED_ROUTES).not.toContain("apps");
+    expect(sidebarMoreRoutes(DEFAULT_SIDEBAR_PINNED_ROUTES)).toContain("apps");
+    expect(settingsRoutes).not.toContain("apps");
+    expect(isSettingsNavigationRoute("apps")).toBe(false);
+  });
+
   it("keeps the plugin manager in customizable workspace routes", () => {
     expect(normalizeSidebarPinnedRoutes(["plugins", "usage", "plugins"])).toEqual([
       "plugins",

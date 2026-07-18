@@ -1,3 +1,5 @@
+import "../../styles/config.css";
+import "../../styles/config-quick.css";
 import { consume } from "@lit/context";
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, type PropertyValues } from "lit";
@@ -54,7 +56,13 @@ export type { ConfigPageId } from "./config-sections.ts";
 
 type ConfigFormMode = "form" | "raw";
 type ConfigSelection = { activeSection: string | null; activeSubsection: string | null };
-type LocalUiSetting = "textScale" | "chatSendShortcut" | "chatFollowUpMode" | "catalogOpenTarget";
+// Keys settable through this page's setSetting helper. Whether a key syncs
+// across devices is owned by app/server-prefs.ts, not by this type.
+type ConfigPageSetting =
+  | "textScale"
+  | "chatSendShortcut"
+  | "chatFollowUpMode"
+  | "catalogOpenTarget";
 
 const CONFIG_PAGE_I18N_KEYS = {
   config: "config",
@@ -284,6 +292,10 @@ export class ConfigPage extends OpenClawLightDomElement {
       () => this.context?.gateway,
       (gateway, notify) => gateway.subscribe(notify),
       (gateway) => this.synchronizeSystemInfoGateway(gateway),
+    )
+    .watch(
+      () => this.context?.nativeNotifications ?? undefined,
+      (nativeNotifications, notify) => nativeNotifications.subscribe(notify),
     )
     .watch(
       () => this.context?.webPush,
@@ -621,7 +633,7 @@ export class ConfigPage extends OpenClawLightDomElement {
     });
   }
 
-  private setSetting<K extends LocalUiSetting>(key: K, value: UiSettings[K]) {
+  private setSetting<K extends ConfigPageSetting>(key: K, value: UiSettings[K]) {
     this.applySettings({ ...this.settings, [key]: value });
   }
 
@@ -805,6 +817,10 @@ export class ConfigPage extends OpenClawLightDomElement {
       excludeSections,
       includeVirtualSections: this.pageId === "appearance" || this.pageId === "notifications",
       settingsLayout: this.pageId === "advanced" ? "accordion" : undefined,
+      nativeNotifications: this.context.nativeNotifications?.snapshot,
+      onNativeNotificationsRequestPermission: () =>
+        this.context.nativeNotifications?.requestPermission(),
+      onNativeNotificationsSendTest: () => this.context.nativeNotifications?.sendTest(),
       webPush: this.context.webPush.snapshot,
       onWebPushSubscribe: () => void this.context.webPush.enable(),
       onWebPushUnsubscribe: () => void this.context.webPush.disable(),
@@ -819,7 +835,6 @@ export class ConfigPage extends OpenClawLightDomElement {
           activeSection: "mcp",
           activeSubsection: null,
           showModeToggle: false,
-          includeSections: ["mcp"],
           navRootLabel: "MCP",
         }),
       });

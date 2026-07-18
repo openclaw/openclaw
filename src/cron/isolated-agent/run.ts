@@ -1,7 +1,9 @@
 import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { hasAcceptedSessionSpawn } from "../../agents/accepted-session-spawn.js";
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 import { hasAnyAuthProfileStoreSource } from "../../agents/auth-profiles/source-check.js";
+import { hasCommittedMessagingToolDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-routing.js";
@@ -9,6 +11,7 @@ import { createAgentRunRestartAbortError } from "../../agents/run-termination.js
 import { expandToolGroups, normalizeToolName } from "../../agents/tool-policy.js";
 import { deriveContextPromptTokens } from "../../agents/usage.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -1440,6 +1443,39 @@ async function finalizeCronRun(params: {
       runStartedAt: execution.runStartedAt,
       resolvedDelivery: prepared.resolvedDelivery,
       sourceDeliveryOutcome,
+    });
+  }
+  const hasCommittedTerminalProgress =
+    hasCommittedMessagingToolDeliveryEvidence(finalRunResult) ||
+    finalRunResult.didSendDeterministicApprovalPrompt === true ||
+    hasAcceptedSessionSpawn(finalRunResult.acceptedSessionSpawns) ||
+    (finalRunResult.successfulCronAdds ?? 0) > 0;
+  const hasIntentionalSilentReply =
+    finalRunResult.meta?.terminalReplyKind === "silent-empty" ||
+    isSilentReplyPayloadText(finalRunResult.meta?.finalAssistantRawText) ||
+    isSilentReplyPayloadText(finalRunResult.meta?.finalAssistantVisibleText);
+  if (
+    prepared.deliveryRequested &&
+    !hasFatalErrorPayload &&
+    !sourceDeliveryOutcome.satisfiesSourceDelivery &&
+    !hasCommittedTerminalProgress &&
+    !hasIntentionalSilentReply &&
+    deliveryPayloads.length === 0 &&
+    normalizeOptionalString(synthesizedText) === undefined
+  ) {
+    const error = "cron isolated run completed without a final assistant payload";
+    return prepared.withRunSession({
+      status: "error",
+      error,
+      summary: error,
+      outputText: error,
+      delivered: false,
+      deliveryAttempted: false,
+      diagnostics: mergeCronRunDiagnostics(
+        runDiagnostics,
+        createCronRunDiagnosticsFromError("agent-run", error),
+      ),
+      ...telemetry,
     });
   }
   if (hasFatalStructuredErrorPayload && prepared.deliveryRequested) {

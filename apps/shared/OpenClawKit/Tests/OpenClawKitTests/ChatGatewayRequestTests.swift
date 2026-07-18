@@ -126,11 +126,30 @@ struct ChatGatewayRequestTests {
             agentID: "reviewer",
             label: nil,
             parentSessionKey: "global",
-            worktree: true)
+            worktree: true,
+            worktreeBaseRef: " origin/release ")
         #expect(create.params["key"]?.value as? String == "agent:reviewer:new")
         #expect(create.params["agentId"]?.value as? String == "reviewer")
         #expect(create.params["parentSessionKey"]?.value as? String == "global")
         #expect(create.params["worktree"]?.value as? Bool == true)
+        #expect(create.params["worktreeBaseRef"]?.value as? String == "origin/release")
+    }
+
+    @Test func `session group requests encode exact gateway contracts`() {
+        let list = OpenClawChatGatewayRequests.sessionGroupsList()
+        let put = OpenClawChatGatewayRequests.sessionGroupsPut(names: ["Work", "Personal"])
+        let rename = OpenClawChatGatewayRequests.sessionGroupsRename(name: "Work", to: "Projects")
+        let delete = OpenClawChatGatewayRequests.sessionGroupsDelete(name: "Personal")
+
+        #expect(list.method == "sessions.groups.list")
+        #expect(list.params.isEmpty)
+        #expect(put.method == "sessions.groups.put")
+        #expect(put.params["names"]?.value as? [String] == ["Work", "Personal"])
+        #expect(rename.method == "sessions.groups.rename")
+        #expect(rename.params["name"]?.value as? String == "Work")
+        #expect(rename.params["to"]?.value as? String == "Projects")
+        #expect(delete.method == "sessions.groups.delete")
+        #expect(delete.params["name"]?.value as? String == "Personal")
     }
 
     @Test func `rename clear archive and fork use session mutation contracts`() {
@@ -193,6 +212,20 @@ struct ChatGatewayRequestTests {
         #expect(request.params["timeoutMs"] == nil)
         let encoded = try JSONEncoder().encode(request.params["attachments"])
         #expect(String(decoding: encoded, as: UTF8.self).contains("a.png"))
+    }
+
+    @Test func `question resolve request preserves nested answer contract`() throws {
+        let request = OpenClawChatGatewayRequests.resolveQuestion(
+            id: "ask_123",
+            answers: ["meal": ["Pizza", "Salad"]])
+
+        #expect(request.method == "question.resolve")
+        let data = try JSONEncoder().encode(request.params)
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let answers = try #require(object["answers"] as? [String: Any])
+        let values = try #require(answers["answers"] as? [String: Any])
+        let meal = try #require(values["meal"] as? [String: Any])
+        #expect(meal["answers"] as? [String] == ["Pizza", "Salad"])
     }
 
     @Test func `long running requests share exact gateway timeout margins`() {

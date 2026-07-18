@@ -84,6 +84,7 @@ describe("navigationIconForRoute", () => {
       chat: "messageSquare",
       custodian: "lobster",
       activity: "activity",
+      apps: "smartphone",
       approvals: "shieldCheck",
       workboard: "kanban",
       worktrees: "folder",
@@ -141,6 +142,7 @@ describe("titleForRoute", () => {
       chat: "Chat",
       custodian: "OpenClaw",
       activity: "Activity",
+      apps: "Apps",
       approvals: "Approvals",
       workboard: "Workboard",
       worktrees: "Worktrees",
@@ -163,7 +165,7 @@ describe("titleForRoute", () => {
       mcp: "MCP",
       infrastructure: "Infrastructure",
       about: "About",
-      "ai-agents": "AI & Agents",
+      "ai-agents": "Agent Defaults",
       "model-setup": "Model Setup",
       "model-providers": "Model Providers",
       "memory-import": "Import Memory",
@@ -184,6 +186,7 @@ describe("subtitleForRoute", () => {
       chat: "Gateway chat for quick interventions.",
       custodian: "System setup and care.",
       activity: "Browser-local tool activity summaries.",
+      apps: "Companion apps for phone, watch, desktop, and browser.",
       approvals: "Recent exec, plugin, and system-agent approvals.",
       workboard: "Agent work queue and session handoff.",
       worktrees: "Isolated agent task checkouts and recovery snapshots.",
@@ -198,7 +201,7 @@ describe("subtitleForRoute", () => {
       plugins: "Install and manage optional capabilities.",
       "skill-workshop": "Review, refine, and apply proposals before they become live skills.",
       nodes: "Paired devices, pairing approvals, and exec bindings.",
-      config: "Edit openclaw.json.",
+      config: "Model defaults, language, and gateway host.",
       profile: "Your agent's stats, streaks, and life in the reef.",
       communications: "Channels, messages, and audio settings.",
       appearance: "Theme, UI, and setup wizard settings.",
@@ -206,7 +209,7 @@ describe("subtitleForRoute", () => {
       mcp: "MCP servers, auth, tools, and diagnostics.",
       infrastructure: "Gateway, web, browser, and media settings.",
       about: "Control UI and connected Gateway build identity.",
-      "ai-agents": "Agents, models, skills, tools, memory, session.",
+      "ai-agents": "Global agent defaults: models, skills, tools, memory, session.",
       "model-setup": "Connect a verified AI model",
       "model-providers": "Configured providers with plan, quota, and cost.",
       "memory-import": "Bring Codex and Claude Code memory into an agent workspace.",
@@ -222,6 +225,7 @@ describe("subtitleForRoute", () => {
 describe("pathForRoute", () => {
   it("returns correct path without base", () => {
     expect(pathForRoute("chat")).toBe("/chat");
+    expect(pathForRoute("apps")).toBe("/apps");
     expect(pathForRoute("custodian")).toBe("/custodian");
     expect(pathForRoute("connection")).toBe("/settings/connection");
     expect(pathForRoute("debug")).toBe("/debug");
@@ -256,6 +260,7 @@ describe("routeIdFromPath", () => {
     expect(routeIdFromPath("/settings/connection")).toBe("connection");
     expect(routeIdFromPath("/connection")).toBeNull();
     expect(routeIdFromPath("/activity")).toBe("activity");
+    expect(routeIdFromPath("/apps")).toBe("apps");
     expect(routeIdFromPath("/sessions")).toBe("sessions");
     expect(routeIdFromPath("/debug")).toBe("debug");
     expect(routeIdFromPath("/logs")).toBe("logs");

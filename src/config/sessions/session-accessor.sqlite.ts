@@ -38,6 +38,10 @@ export {
   restoreSqliteCompactionCheckpointSession,
 } from "./session-accessor.sqlite-checkpoint.js";
 export {
+  forkSqliteSessionAtMessage,
+  rewindSqliteSessionToMessage,
+} from "./session-accessor.sqlite-message-cut.js";
+export {
   appendSqliteExpectedSessionTranscriptTurn,
   appendSqliteTranscriptEvent,
   appendSqliteTranscriptEventSync,

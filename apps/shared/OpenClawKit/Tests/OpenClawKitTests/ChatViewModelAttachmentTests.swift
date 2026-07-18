@@ -297,7 +297,7 @@ final class ChatViewModelAttachmentTests: XCTestCase {
     }
 
     @MainActor
-    func testPartialIdentitySyncPreservesTheOtherDeferredComponent() {
+    func testPartialIdentitySyncPreservesTheOtherDeferredComponent() async {
         let oldContract = "per-sender|main|main"
         let newContract = "per-sender|work-main|main"
         let contractViewModel = OpenClawChatViewModel(
@@ -342,7 +342,7 @@ final class ChatViewModelAttachmentTests: XCTestCase {
     }
 
     @MainActor
-    func testAttachmentStagingPinsSessionAndIdentityUntilItFinishes() {
+    func testAttachmentStagingPinsSessionAndIdentityUntilItFinishes() async {
         let viewModel = OpenClawChatViewModel(
             sessionKey: "main",
             transport: AttachmentProcessingTransport(),
@@ -369,7 +369,7 @@ final class ChatViewModelAttachmentTests: XCTestCase {
     }
 
     @MainActor
-    func testRecordingPinsSessionAndIdentityUntilItEnds() {
+    func testRecordingPinsSessionAndIdentityUntilItEnds() async {
         let ownerActivity = AttachmentOwnerActivity()
         let viewModel = OpenClawChatViewModel(
             sessionKey: "main",
