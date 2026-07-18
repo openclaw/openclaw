@@ -60,6 +60,8 @@ Scans OpenClaw state for:
 - generated `agents/*/agent/models.json` residues (provider `apiKey` values and sensitive provider headers)
 - legacy residues (legacy auth store entries, OAuth reminders)
 
+The `.env` scan covers the effective state directory and the directory containing the active config. When both paths name the same file, it is scanned once.
+
 Sensitive provider header detection is name-heuristic based: it flags headers whose name matches common auth/credential fragments (`authorization`, `x-api-key`, `token`, `secret`, `password`, `credential`).
 
 ```bash
@@ -133,7 +135,7 @@ What `apply` may update:
 - `openclaw.json` (SecretRef targets + provider upserts/deletes)
 - `auth-profiles.json` (provider-target scrubbing)
 - legacy `auth.json` residues
-- `~/.openclaw/.env` known secret keys whose values were migrated
+- `.env` files in the effective state and active-config directories, for known secret keys whose values were migrated
 
 Plan contract details (allowed target paths, validation rules, failure semantics): [Secrets Apply Plan Contract](/gateway/secrets-plan-contract).
 

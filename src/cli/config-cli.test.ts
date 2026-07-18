@@ -2418,7 +2418,7 @@ describe("config cli", () => {
     it("rejects --file when the file does not exist", async () => {
       await expect(
         runConfigCommand(["config", "patch", "--file", "/nonexistent/path/patch.json5"]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       expectErrorIncludes("--file not found: /nonexistent/path/patch.json5");
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
