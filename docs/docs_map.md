@@ -7263,14 +7263,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Surface
   - H2: Related docs
 
-## plugins/reference/workspaces.md
-
-- Route: /plugins/reference/workspaces
-- Headings:
-  - H1: Workspaces plugin
-  - H2: Distribution
-  - H2: Surface
-
 ## plugins/reference/xai.md
 
 - Route: /plugins/reference/xai
@@ -7385,6 +7377,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Message adapter
   - H3: Inbound ingress (experimental)
   - H3: Durable ingress and replay dedupe
+  - H4: Account-scoped restart contract
   - H3: Typing indicators
   - H3: Media source params
   - H3: Native payload shaping
@@ -9012,6 +9005,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Where this runs
   - H2: Global rule: image sanitization
   - H2: Global rule: malformed tool calls
+  - H2: Global rule: tool result pairing
   - H2: Global rule: incomplete reasoning-only turns
   - H2: Global rule: inter-session input provenance
   - H2: Provider matrix (current behavior)
@@ -9343,10 +9337,10 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Phase 1 — app recommendations (PR #109668)
   - H3: Phase 2 — CLI custodian spine (PR #109841)
   - H3: Phase 3 — browser-first handoff (PR #110054, merged)
-  - H3: Phase 4 — web custodian surface (planned)
-  - H3: Phase 5 — hatch and bootstrap (planned)
-  - H3: Phase 6 — custodian presence (planned)
-  - H3: Phase 7 — resilience (follow-up)
+  - H3: Phase 4 — web custodian surface (merged: #110141, #110242)
+  - H3: Phase 5 — hatch and bootstrap (merged: #110173, #110331)
+  - H3: Phase 6 — custodian presence (PR1 merged: #110269; commentary/summon are PR2)
+  - H3: Phase 7 — resilience (needs an owner decision before building)
   - H2: Testing and landing playbook (hard-won; read before phases 4-6)
   - H2: Decision log
   - H2: Known gaps and follow-ups
@@ -10517,6 +10511,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Language support
   - H2: Appearance themes
   - H2: Manage plugins
+  - H2: Apps and extensions
   - H2: Sidebar navigation
   - H2: New session page
   - H2: What it can do (today)
@@ -10609,15 +10604,3 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Remote use
   - H2: Configuration reference (WebChat)
   - H2: Related
-
-## web/workspaces.md
-
-- Route: /web/workspaces
-- Headings:
-  - H2: Enable Workspaces
-  - H2: The default workspace
-  - H2: Built-in widgets
-  - H2: Provenance
-  - H2: Custom widgets
-  - H2: CLI
-  - H2: Storage

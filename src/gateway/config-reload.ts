@@ -82,7 +82,8 @@ function isNoopReloadPlan(plan: GatewayReloadPlan): boolean {
     !plan.restartHealthMonitor &&
     !plan.reloadPlugins &&
     !plan.disposeMcpRuntimes &&
-    plan.restartChannels.size === 0
+    plan.restartChannels.size === 0 &&
+    (plan.restartChannelAccounts?.size ?? 0) === 0
   );
 }
 
@@ -530,6 +531,7 @@ export function startGatewayConfigReloader(opts: {
     const plan = buildGatewayReloadPlan(changedPaths, {
       noopPaths: pluginInstallTimestampNoopPaths,
       forceChangedPaths: pluginInstallWholeRecordPaths,
+      candidateConfig: nextConfig,
     });
     if (nextSettings.mode === "off") {
       opts.log.info("config reload disabled (gateway.reload.mode=off)");

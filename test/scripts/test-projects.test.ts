@@ -2868,7 +2868,7 @@ describe("scripts/test-projects changed-target routing", () => {
         includePatterns: expect.arrayContaining(["src/plugin-sdk/access-groups.test.ts"]),
       }),
       expect.objectContaining({
-        config: "test/vitest/vitest.unit-fast-isolated.config.ts",
+        config: "test/vitest/vitest.unit-fast-fake-timers.config.ts",
         includePatterns: ["src/plugin-sdk/memory-host-events.test.ts"],
       }),
       expect.objectContaining({

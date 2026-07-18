@@ -1614,6 +1614,7 @@ export const en: TranslationMap = {
   tabs: {
     agents: "Agents",
     activity: "Activity",
+    apps: "Apps",
     approvals: "Approvals",
     workboard: "Workboard",
     worktrees: "Worktrees",
@@ -1651,6 +1652,7 @@ export const en: TranslationMap = {
   subtitles: {
     agents: "Workspaces, tools, identities.",
     activity: "Browser-local tool activity summaries.",
+    apps: "Companion apps for phone, watch, desktop, and browser.",
     approvals: "Recent exec, plugin, and system-agent approvals.",
     workboard: "Agent work queue and session handoff.",
     worktrees: "Isolated agent task checkouts and recovery snapshots.",
@@ -2035,6 +2037,65 @@ export const en: TranslationMap = {
     gatewayVersionHint:
       "Reported by the active Gateway connection; separate from this Control UI build.",
   },
+  appsPage: {
+    heroTitle: "Take OpenClaw everywhere",
+    heroTagline:
+      "Companion apps for your phone, watch, desktop, and browser — plus plugins to extend what your agent can do.",
+    sectionMobile: "On your phone",
+    sectionWatch: "On your wrist",
+    sectionDesktop: "On your desktop",
+    sectionBrowser: "In your browser",
+    sectionCommunity: "Community",
+    badgeBundledIos: "Included with the iOS app",
+    badgeBundledAndroid: "Included with the Android app",
+    ctaAppStore: "App Store",
+    ctaPlayStore: "Google Play",
+    ctaDownload: "Download",
+    ctaDocs: "Docs",
+    ctaSetupGuide: "Setup guide",
+    ctaOpenPlugins: "Open Plugins",
+    ctaBrowseClawHub: "Browse ClawHub",
+    linkDiscord: "Discord community",
+    linkDocs: "Docs",
+    cards: {
+      ios: {
+        title: "iPhone",
+        desc: "Chat, talk, approve actions, and share into OpenClaw from iOS.",
+      },
+      android: {
+        title: "Android",
+        desc: "Your Android phone as a full OpenClaw node — chat, camera, and Canvas.",
+      },
+      appleWatch: {
+        title: "Apple Watch",
+        desc: "Glanceable chats and quick replies from your wrist.",
+      },
+      wearOs: {
+        title: "Wear OS",
+        desc: "The Android companion extends OpenClaw to your watch.",
+      },
+      macos: {
+        title: "macOS",
+        desc: "Menu bar companion for your Gateway — notifications, approvals, quick chat.",
+      },
+      windows: {
+        title: "Windows",
+        desc: "The Windows companion connects your PC as an OpenClaw node.",
+      },
+      linux: {
+        title: "Linux",
+        desc: "Native desktop app — .deb and AppImage builds.",
+      },
+      chrome: {
+        title: "Chrome extension",
+        desc: "Let OpenClaw drive your existing Chrome — tabs, pages, and forms.",
+      },
+      plugins: {
+        title: "Plugins & ClawHub",
+        desc: "Extend OpenClaw with channels, tools, and skills from the community.",
+      },
+    },
+  },
   profilePage: {
     offline: "Connect to the gateway to meet your agent.",
     loading: "Diving for stats…",
@@ -2369,133 +2430,6 @@ export const en: TranslationMap = {
       submit: "Ask",
     },
   },
-  workspaces: {
-    tabs: {
-      label: "Workspaces",
-      hidden: "Hidden ({count})",
-    },
-    error: {
-      title: "Couldn't load your workspaces",
-      subtitle: "Something went wrong loading your workspaces. Try reloading.",
-      detailSummary: "Show details",
-    },
-    header: {
-      subtitle: "Arrange widgets and tabs for this workspace.",
-    },
-    onboarding: {
-      title: "Build your first workspace tab",
-      primary: "Ask your agent to build a tab.",
-      secondary: "Or create one from the command line:",
-    },
-    empty: {
-      onboardingTitle: "No workspaces yet",
-      onboardingSubtitle:
-        "Ask your agent to build a workspace, or create one from the command line.",
-      onboardingCommand: "openclaw workspaces tabs create --title Main",
-      tabTitle: "This workspace is empty",
-      tabSubtitle: "Ask your agent to add a widget, or add one yourself.",
-      noVisibleTabs: "Every workspace tab is hidden. Restore one from the hidden menu.",
-    },
-    widget: {
-      collapse: "Collapse widget",
-      expand: "Expand widget",
-      moveHandle: "Move widget",
-      resizeHandle: "Resize widget",
-      menuLabel: "Widget options",
-      provenanceChip: "AI",
-      provenanceTooltip: "Built by {agent}",
-      errorTitle: "This widget couldn't load",
-      errorHumane: "This widget ran into a problem while rendering.",
-      errorDetailSummary: "Show details",
-      customPlaceholder: "Custom widget — coming soon.",
-      customLoading: "Loading custom widget…",
-      approval: {
-        title: "Custom widget awaiting approval",
-        byAgent: "Built by {agent}",
-        byUnknown: "Built by an unknown agent",
-        approve: "Approve",
-        reject: "Reject",
-        unavailable:
-          "This custom widget isn't available. Ask your agent to rebuild it, or remove it.",
-      },
-      markdownEmpty: "No content yet.",
-      unknownKind: "Unknown widget type: {kind}",
-      editTitleTitle: "Edit widget title",
-      editTitleLabel: "Widget title",
-      moveToTabTitle: "Move to tab",
-      moveToTabEmpty: "There are no other tabs to move this widget to.",
-      menu: {
-        editTitle: "Edit title",
-        moveToTab: "Move to tab…",
-        hide: "Hide",
-        remove: "Remove",
-      },
-      stat: {
-        empty: "—",
-      },
-      table: {
-        empty: "No rows to show.",
-        more: "+{count} more",
-      },
-      chart: {
-        empty: "No data to chart.",
-        invalid: "This chart has invalid data or options.",
-        label: "Chart",
-        summary: "{title}: {count} data points, ranging from {min} to {max}.",
-      },
-      sessions: {
-        empty: "No sessions yet.",
-      },
-      agentStatus: {
-        empty: "No agents or sessions yet.",
-        busy: "Busy",
-        idle: "Idle",
-        progress: "{percent}% complete",
-      },
-      customWidgetApprovals: {
-        empty: "No custom widgets are awaiting approval.",
-        kind: "Custom widget",
-        requestedBy: "Requested by {agent}",
-        approve: "Approve",
-        reject: "Reject",
-        permissionRequired: "Approval permission required",
-      },
-      usage: {
-        cost: "Cost",
-        tokens: "Tokens",
-      },
-      cron: {
-        empty: "No scheduled jobs.",
-        next: "Next {time}",
-        noNext: "Not scheduled",
-      },
-      instances: {
-        empty: "No connected instances.",
-        idle: "Idle for {duration}",
-      },
-      activity: {
-        empty: "No recent activity.",
-      },
-      embed: {
-        missing: "This embed has no URL yet.",
-        blockedExternal: "External embeds are disabled by your gateway policy.",
-        blockedScheme: "This embed URL uses an unsupported scheme.",
-      },
-      preview: {
-        missing: "This preview has no URL yet.",
-        blockedExternal: "External previews are disabled by your gateway policy.",
-        blockedScheme: "This preview URL uses an unsupported scheme.",
-        toolbar: "Preview controls",
-        reload: "Reload preview",
-        viewport: {
-          label: "Preview viewport",
-          desktop: "Desktop",
-          tablet: "Tablet",
-          mobile: "Mobile",
-        },
-      },
-    },
-  },
   workboard: {
     disabledHelpStart: "Workboard is disabled. Enable",
     enableConfigKey: "plugins.entries.workboard.enabled = true",
@@ -2762,7 +2696,6 @@ export const en: TranslationMap = {
     cronFailed: "{count} cron job(s) failed",
     cronOverdue: "{count} cron job(s) overdue",
     modelAuthExpired: "Model auth expired: {providers}",
-    modelAuthExpiring: "Model auth expiring: {providers}",
     pendingApproval: "{count} pending approval",
     pendingApprovals: "{count} pending approvals",
   },
@@ -2822,6 +2755,7 @@ export const en: TranslationMap = {
       skills: "Skills",
     },
     items: {
+      apps: "Apps",
       sessions: "Sessions",
       scheduled: "Scheduled",
       skills: "Skills",
@@ -3797,10 +3731,11 @@ export const en: TranslationMap = {
         limitHours: "{hours}-hour limit",
       },
       takePhoto: "Take photo",
+      cameraAccessFailed: "Unable to access the camera.",
       cameraBusy: "The camera is busy or unavailable to the browser.",
       cameraNoneFound: "No camera was found.",
       cameraPermissionBlocked:
-        "Camera access is blocked. Allow camera and microphone access in browser site settings.",
+        "Camera access is blocked. Allow camera access in browser site settings.",
       cameraPreview: "Camera preview",
       dismissVoiceInputError: "Dismiss voice input error",
       microphoneAccessFailed: "Unable to access microphone inputs.",
@@ -3817,10 +3752,11 @@ export const en: TranslationMap = {
       selectedMicrophoneUnavailable:
         "The selected microphone is unavailable. Choose another input or System default.",
       startVoiceInput: "Start voice input",
-      startVideoTalk: "Start video talk",
       stillListening: "Still listening",
       stopVoiceInput: "Stop voice input",
       systemDefaultMicrophone: "System default",
+      turnCameraOff: "Turn camera off",
+      turnCameraOn: "Turn camera on",
       voiceTranscript: "Voice transcript",
     },
     selectors: {

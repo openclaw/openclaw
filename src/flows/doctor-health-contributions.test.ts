@@ -576,8 +576,10 @@ describe("doctor health contributions", () => {
       ready: true,
       skipped: false,
     });
-    mocks.runDoctorHealthRepairs.mockResolvedValue({
-      config: {},
+    // Real repairs echo the input config unless they change it; mirror that so
+    // config-identity assertions downstream of a repair stay realistic.
+    mocks.runDoctorHealthRepairs.mockImplementation(async (input: { cfg?: unknown }) => ({
+      config: input.cfg ?? {},
       findings: [],
       remainingFindings: [],
       changes: [],
@@ -587,7 +589,7 @@ describe("doctor health contributions", () => {
       checksRun: 0,
       checksRepaired: 0,
       checksValidated: 0,
-    });
+    }));
     mocks.listHealthChecks.mockReset();
     mocks.listHealthChecks.mockReturnValue([
       { id: "core/example/internal", kind: "core" },
