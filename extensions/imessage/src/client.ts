@@ -170,6 +170,8 @@ export class IMessageRpcClient {
         }),
       ]);
     } finally {
+      // A losing fallback still holds Node's event loop open; clear it when
+      // the child closes first so short-lived RPC clients can exit promptly.
       if (timeout) {
         clearTimeout(timeout);
       }
