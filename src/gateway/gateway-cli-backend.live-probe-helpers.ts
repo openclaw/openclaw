@@ -246,21 +246,39 @@ async function readBoundedResponseText(response: Response, byteLimit: number): P
   if (!reader) {
     return "";
   }
-  const chunks: Buffer[] = [];
-  let totalBytes = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) {
-      break;
+  try {
+    const chunks: Buffer[] = [];
+    let totalBytes = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      totalBytes += value.byteLength;
+      if (totalBytes > byteLimit) {
+        try {
+          await reader.cancel();
+        } catch {
+          // best-effort cancel — releaseLock still runs in finally
+        }
+        throw new Error(`mcp loopback response body exceeded ${byteLimit} bytes`);
+      }
+      chunks.push(Buffer.from(value));
     }
-    totalBytes += value.byteLength;
-    if (totalBytes > byteLimit) {
-      await reader.cancel();
-      throw new Error(`mcp loopback response body exceeded ${byteLimit} bytes`);
+    return Buffer.concat(chunks, totalBytes).toString("utf8");
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {
+      // lock-release must not mask the original error or result
     }
-    chunks.push(Buffer.from(value));
   }
-  return Buffer.concat(chunks, totalBytes).toString("utf8");
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.liveProbeHelpersTestApi")] = {
+    readBoundedResponseText,
+  };
 }
 
 export async function verifyCliCronMcpLoopbackPreflight(params: {

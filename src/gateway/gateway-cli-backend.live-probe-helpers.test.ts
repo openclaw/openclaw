@@ -149,3 +149,56 @@ describe("gateway CLI backend live probe helpers", () => {
     }
   });
 });
+
+// Tests for the private readBoundedResponseText helper are exported via
+// the vitest test API symbol.
+const testApi = (globalThis as Record<PropertyKey, unknown>)[
+  Symbol.for("openclaw.liveProbeHelpersTestApi")
+] as { readBoundedResponseText?: (res: Response, limit: number) => Promise<string> } | undefined;
+
+describe("readBoundedResponseText", () => {
+  it("releases reader lock after a complete bounded read", async () => {
+    const { readBoundedResponseText } = testApi ?? {};
+    if (!readBoundedResponseText) {
+      throw new Error("test API not available");
+    }
+    const releaseLock = vi.fn();
+    const cancel = vi.fn(async () => undefined);
+    const response = {
+      body: {
+        getReader: () => ({
+          read: async () => ({ done: true, value: undefined }) as const,
+          cancel,
+          releaseLock,
+        }),
+      },
+    } as unknown as Response;
+
+    await readBoundedResponseText(response, 64);
+    expect(releaseLock).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases reader lock after exceeding the byte limit", async () => {
+    const { readBoundedResponseText } = testApi ?? {};
+    if (!readBoundedResponseText) {
+      throw new Error("test API not available");
+    }
+    const releaseLock = vi.fn();
+    const cancel = vi.fn(async () => undefined);
+    const response = {
+      body: {
+        getReader: () => ({
+          read: async () =>
+            ({ done: false, value: new TextEncoder().encode("more than 5 bytes") }) as const,
+          cancel,
+          releaseLock,
+        }),
+      },
+    } as unknown as Response;
+
+    await expect(readBoundedResponseText(response, 5)).rejects.toThrow(
+      "mcp loopback response body exceeded 5 bytes",
+    );
+    expect(releaseLock).toHaveBeenCalledTimes(1);
+  });
+});
