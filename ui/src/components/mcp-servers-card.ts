@@ -39,7 +39,7 @@ function tlsLabel(tls: McpServerSummary["tls"]): string | null {
   }
 }
 
-export class McpServersCard extends OpenClawLightDomElement {
+class McpServersCard extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context?: ApplicationContext;
 

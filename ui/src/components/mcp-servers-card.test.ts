@@ -9,8 +9,9 @@ import {
   type ApplicationContextProvider,
 } from "../test-helpers/application-context.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
-import type { McpServersCard } from "./mcp-servers-card.ts";
 import "./mcp-servers-card.ts";
+
+type McpServersCard = HTMLElementTagNameMap["openclaw-mcp-servers-card"];
 
 type RuntimeConfigHarness = {
   runtimeConfig: ApplicationContext["runtimeConfig"];
@@ -94,7 +95,7 @@ async function mountCard(
     basePath: "",
   } as unknown as ApplicationContext;
   const provider = createApplicationContextProvider(context);
-  const card = document.createElement("openclaw-mcp-servers-card") as McpServersCard;
+  const card = document.createElement("openclaw-mcp-servers-card");
   card.pluginsHref = "/settings/plugins";
   provider.append(card);
   document.body.append(provider);

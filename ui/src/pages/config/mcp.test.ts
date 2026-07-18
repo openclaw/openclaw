@@ -2,7 +2,6 @@
 
 import { html, render } from "lit";
 import { describe, expect, it } from "vitest";
-import type { McpServersCard } from "../../components/mcp-servers-card.ts";
 import { renderMcp } from "./mcp.ts";
 
 type McpViewProps = Parameters<typeof renderMcp>[0];
@@ -55,7 +54,7 @@ describe("renderMcp", () => {
     expect(summary?.textContent?.replace(/\s+/gu, " ")).toContain("Filtered 1");
     expect(container.textContent).toContain("openclaw mcp doctor --probe");
 
-    const card = container.querySelector<McpServersCard>("openclaw-mcp-servers-card");
+    const card = container.querySelector("openclaw-mcp-servers-card");
     expect(card).not.toBeNull();
     expect(card?.pluginsHref).toBe("/settings/plugins");
   });
