@@ -13,7 +13,7 @@ const ZERO_USAGE = {
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 } as const;
 
-function buildAssistantToolCall(toolCallId: string): AssistantMessage {
+function buildAssistantToolCall(rawId: string): AssistantMessage {
   return {
     role: "assistant",
     api: "openai-responses",
@@ -22,14 +22,14 @@ function buildAssistantToolCall(toolCallId: string): AssistantMessage {
     usage: ZERO_USAGE,
     stopReason: "toolUse",
     timestamp: 0,
-    content: [{ type: "toolCall", id: toolCallId, name: "gateway", arguments: {} }],
+    content: [{ type: "toolCall", id: rawId, name: "gateway", arguments: {} }],
   };
 }
 
-function buildToolResult(toolCallId: string): ToolResultMessage {
+function buildToolResult(rawId: string): ToolResultMessage {
   return {
     role: "toolResult",
-    toolCallId,
+    toolCallId: rawId,
     toolName: "gateway",
     content: [],
     isError: false,
