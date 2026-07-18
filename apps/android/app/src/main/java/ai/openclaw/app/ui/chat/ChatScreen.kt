@@ -78,7 +78,6 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
-import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.ContentCopy
@@ -1675,7 +1674,7 @@ private fun ChatComposer(
       )
     }
 
-    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
       if (voiceNoteState is VoiceNoteRecorderState.Recording) {
         VoiceNoteRecordingControls(
           elapsedMs = voiceNoteElapsedMs,
@@ -1693,19 +1692,15 @@ private fun ChatComposer(
           onPickImages = onPickImages,
           onStartVoiceNote = onStartVoiceNote,
           recordVoiceNoteEnabled = recordVoiceNoteEnabled,
-          onVoice = onVoice,
           dictationActive = dictationActive,
           dictationEnabled = dictationEnabled,
           onToggleDictation = onToggleDictation,
+          onVoice = onVoice,
           sendEnabled = sendEnabled,
           onSend = onSend,
           modifier = Modifier.weight(1f),
         )
       }
-      SendButton(
-        enabled = sendEnabled,
-        onClick = onSend,
-      )
     }
 
     VoiceNoteRecorderError(voiceNoteState)
@@ -2062,10 +2057,10 @@ private fun ChatInputPill(
   onPickImages: () -> Unit,
   onStartVoiceNote: () -> Unit,
   recordVoiceNoteEnabled: Boolean,
-  onVoice: () -> Unit,
   dictationActive: Boolean,
   dictationEnabled: Boolean,
   onToggleDictation: () -> Unit,
+  onVoice: () -> Unit,
   sendEnabled: Boolean,
   onSend: () -> Unit,
   modifier: Modifier = Modifier,
@@ -2074,7 +2069,7 @@ private fun ChatInputPill(
 
   Surface(
     modifier = modifier.heightIn(min = ClawTheme.spacing.touchTarget),
-    shape = RoundedCornerShape(ClawTheme.radii.control),
+    shape = RoundedCornerShape(ClawTheme.radii.pill),
     color = ClawTheme.colors.surfaceRaised,
     contentColor = ClawTheme.colors.text,
     border = BorderStroke(1.dp, ClawTheme.colors.border),
@@ -2086,18 +2081,9 @@ private fun ChatInputPill(
     ) {
       Surface(onClick = onPickImages, modifier = Modifier.size(ClawTheme.spacing.touchTarget), shape = CircleShape, color = ClawTheme.colors.surfaceRaised, contentColor = ClawTheme.colors.text) {
         Box(contentAlignment = Alignment.Center) {
-          Icon(imageVector = Icons.Default.AttachFile, contentDescription = nativeString("Attach image"), modifier = Modifier.size(16.dp))
+          Icon(imageVector = Icons.Default.Add, contentDescription = nativeString("Attach image"), modifier = Modifier.size(20.dp))
         }
       }
-      VoiceNoteRecordButton(
-        enabled = recordVoiceNoteEnabled,
-        onClick = onStartVoiceNote,
-      )
-      ChatDictationButton(
-        active = dictationActive,
-        enabled = dictationEnabled,
-        onClick = onToggleDictation,
-      )
       Box(modifier = Modifier.weight(1f)) {
         ChatTextFieldValueAdapter(
           value = value,
@@ -2134,17 +2120,33 @@ private fun ChatInputPill(
           )
         }
       }
-      Surface(
-        onClick = onVoice,
-        modifier = Modifier.size(ClawTheme.spacing.touchTarget),
-        shape = CircleShape,
-        color = ClawTheme.colors.surfaceRaised,
-        contentColor = ClawTheme.colors.text,
-      ) {
-        Box(contentAlignment = Alignment.Center) {
-          Icon(imageVector = Icons.Default.GraphicEq, contentDescription = nativeString("Open voice"), modifier = Modifier.size(18.dp))
-        }
+      ChatComposerMicButton(
+        dictationActive = dictationActive,
+        dictationEnabled = dictationEnabled,
+        voiceNoteEnabled = recordVoiceNoteEnabled,
+        onToggleDictation = onToggleDictation,
+        onStartVoiceNote = onStartVoiceNote,
+      )
+      if (sendEnabled) {
+        SendButton(enabled = true, onClick = onSend)
+      } else {
+        LiveTalkButton(onClick = onVoice)
       }
+    }
+  }
+}
+
+@Composable
+private fun LiveTalkButton(onClick: () -> Unit) {
+  Surface(
+    onClick = onClick,
+    modifier = Modifier.size(ClawTheme.spacing.touchTarget),
+    shape = CircleShape,
+    color = ClawTheme.colors.danger,
+    contentColor = Color.White,
+  ) {
+    Box(contentAlignment = Alignment.Center) {
+      Icon(imageVector = Icons.Default.GraphicEq, contentDescription = nativeString("Open voice"), modifier = Modifier.size(20.dp))
     }
   }
 }

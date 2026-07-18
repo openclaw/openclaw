@@ -9,11 +9,12 @@ import android.os.Bundle
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.KeyboardVoice
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
@@ -24,7 +25,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -385,34 +389,59 @@ internal fun rememberChatDictationController(viewModel: MainViewModel): ChatDict
 }
 
 @Composable
-internal fun ChatDictationButton(
-  active: Boolean,
-  enabled: Boolean,
-  onClick: () -> Unit,
+internal fun ChatComposerMicButton(
+  dictationActive: Boolean,
+  dictationEnabled: Boolean,
+  voiceNoteEnabled: Boolean,
+  onToggleDictation: () -> Unit,
+  onStartVoiceNote: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
+  val hapticFeedback = LocalHapticFeedback.current
+  val interactionEnabled = dictationActive || dictationEnabled || voiceNoteEnabled
+  val longPressAction: (() -> Unit)? =
+    if (voiceNoteEnabled) {
+      {
+        hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+        onStartVoiceNote()
+      }
+    } else {
+      null
+    }
+  val dictationActionLabel =
+    if (dictationActive) {
+      nativeString("Stop Dictation")
+    } else {
+      nativeString("Dictation")
+    }
+
   Surface(
-    onClick = onClick,
-    enabled = active || enabled,
-    modifier = modifier.size(ClawTheme.spacing.touchTarget),
+    modifier =
+      modifier
+        .size(ClawTheme.spacing.touchTarget)
+        .combinedClickable(
+          enabled = interactionEnabled,
+          onClickLabel = dictationActionLabel,
+          role = Role.Button,
+          onLongClickLabel = if (voiceNoteEnabled) voiceNoteRecordLabel() else null,
+          onLongClick = longPressAction,
+          onClick = {
+            if (dictationActive || dictationEnabled) onToggleDictation()
+          },
+        ),
     shape = CircleShape,
-    color = if (active) ClawTheme.colors.primary else ClawTheme.colors.surfaceRaised,
+    color = if (dictationActive) ClawTheme.colors.primary else ClawTheme.colors.surfaceRaised,
     contentColor =
       when {
-        active -> ClawTheme.colors.primaryText
-        enabled -> ClawTheme.colors.text
+        dictationActive -> ClawTheme.colors.primaryText
+        dictationEnabled || voiceNoteEnabled -> ClawTheme.colors.text
         else -> ClawTheme.colors.textSubtle
       },
   ) {
     Box(contentAlignment = Alignment.Center) {
       Icon(
-        imageVector = if (active) Icons.Default.Stop else Icons.Default.KeyboardVoice,
-        contentDescription =
-          if (active) {
-            nativeString("Stop Dictation")
-          } else {
-            nativeString("Dictation")
-          },
+        imageVector = if (dictationActive) Icons.Default.Stop else Icons.Default.Mic,
+        contentDescription = null,
         modifier = Modifier.size(18.dp),
       )
     }
