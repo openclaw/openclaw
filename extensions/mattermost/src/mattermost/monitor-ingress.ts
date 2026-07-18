@@ -322,16 +322,31 @@ export function createMattermostIngressMonitor(options: {
         return;
       }
       const receivedAt = Date.now();
-      await getQueue().enqueue(
-        facts.eventId,
-        {
-          version: MATTERMOST_INGRESS_PAYLOAD_VERSION,
-          receivedAt,
-          rawEvent,
-        },
-        { receivedAt, laneKey: facts.laneKey },
-      );
-      requestDrain();
+      // Websockets have no nack: a dropped append is a lost post (reconnect
+      // never replays). Retry transient failures before letting the error
+      // escalate to the socket teardown in monitor-websocket.
+      let lastError: unknown;
+      for (const delayMs of [0, 100, 300]) {
+        if (delayMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+        }
+        try {
+          await getQueue().enqueue(
+            facts.eventId,
+            {
+              version: MATTERMOST_INGRESS_PAYLOAD_VERSION,
+              receivedAt,
+              rawEvent,
+            },
+            { receivedAt, laneKey: facts.laneKey },
+          );
+          requestDrain();
+          return;
+        } catch (error) {
+          lastError = error;
+        }
+      }
+      throw lastError;
     },
     stop: async () => {
       running = false;

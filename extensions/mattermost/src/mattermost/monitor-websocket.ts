@@ -362,7 +362,14 @@ export function createMattermostConnectOnce(
           try {
             await opts.onPosted(raw);
           } catch (err) {
-            opts.runtime.error?.(`mattermost handler failed: ${String(err)}`);
+            // Durable admission failed after retries: this post is lost and the
+            // websocket cannot nack or replay. Tear the connection down loudly
+            // so the outage is operator-visible instead of silently dropping
+            // every subsequent post against a broken store.
+            opts.runtime.error?.(
+              `mattermost durable admission failed; terminating websocket: ${String(err)}`,
+            );
+            ws.terminate();
           }
         });
 

@@ -217,6 +217,34 @@ describe("Mattermost durable ingress", () => {
     });
   });
 
+  it("retries a transient append failure and escalates a persistent one", async () => {
+    await withQueue(async (queue) => {
+      let failures = 2;
+      const enqueue = queue.enqueue.bind(queue);
+      queue.enqueue = async (...args) => {
+        if (failures > 0) {
+          failures -= 1;
+          throw new Error("sqlite busy");
+        }
+        return await enqueue(...args);
+      };
+      const ingress = startMonitor(queue, vi.fn());
+      try {
+        // Two transient failures absorb into the bounded retry.
+        await ingress.receive(postedEvent({ postId: "post-retry" }));
+        expect(await queue.listPending({ limit: "all" })).toHaveLength(1);
+
+        // A persistent failure escalates so the websocket can tear down loudly.
+        failures = Number.POSITIVE_INFINITY;
+        await expect(ingress.receive(postedEvent({ postId: "post-lost" }))).rejects.toThrow(
+          "sqlite busy",
+        );
+      } finally {
+        await ingress.stop();
+      }
+    });
+  });
+
   it("dead-letters malformed persisted payloads without retry", async () => {
     await withQueue(async (queue) => {
       await queue.enqueue(
