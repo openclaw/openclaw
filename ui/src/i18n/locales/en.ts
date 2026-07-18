@@ -479,6 +479,8 @@ export const en: TranslationMap = {
     cloudWorker: "Cloud · {profile}",
     cloudWorkerProvider: "Cloud worker provider: {provider}",
     cloudRequiresWorktree: "Cloud workers require a managed worktree",
+    cloudRequiresOpenClawRuntime:
+      "Cloud workers require the OpenClaw runtime; {runtime} is selected.",
     cloudSecureContextRequired:
       "Cloud workers need a secure browser context so recovery can protect your task.",
     cloudStartFailed: "The session was created locally, but cloud startup failed: {error}",
@@ -613,6 +615,7 @@ export const en: TranslationMap = {
     provider: "Provider",
     runtime: "Runtime",
     runDuration: "Run duration",
+    lastActive: "Last active {time}",
     surface: "Surface",
     subject: "Subject",
     room: "Room",
@@ -1122,7 +1125,7 @@ export const en: TranslationMap = {
   configView: {
     categories: {
       core: "Core",
-      ai: "AI & Agents",
+      ai: "Agent Defaults",
       communication: "Communication",
       security: "Privacy & Security",
       automation: "Automation",
@@ -1611,6 +1614,7 @@ export const en: TranslationMap = {
   tabs: {
     agents: "Agents",
     activity: "Activity",
+    apps: "Apps",
     approvals: "Approvals",
     workboard: "Workboard",
     worktrees: "Worktrees",
@@ -1634,7 +1638,7 @@ export const en: TranslationMap = {
     mcp: "MCP",
     infrastructure: "Infrastructure",
     about: "About",
-    aiAgents: "AI & Agents",
+    aiAgents: "Agent Defaults",
     modelSetup: "Model Setup",
     modelProviders: "Model Providers",
     memoryImport: "Import Memory",
@@ -1648,6 +1652,7 @@ export const en: TranslationMap = {
   subtitles: {
     agents: "Workspaces, tools, identities.",
     activity: "Browser-local tool activity summaries.",
+    apps: "Companion apps for phone, watch, desktop, and browser.",
     approvals: "Recent exec, plugin, and system-agent approvals.",
     workboard: "Agent work queue and session handoff.",
     worktrees: "Isolated agent task checkouts and recovery snapshots.",
@@ -1671,7 +1676,7 @@ export const en: TranslationMap = {
     mcp: "MCP servers, auth, tools, and diagnostics.",
     infrastructure: "Gateway, web, browser, and media settings.",
     about: "Control UI and connected Gateway build identity.",
-    aiAgents: "Agents, models, skills, tools, memory, session.",
+    aiAgents: "Global agent defaults: models, skills, tools, memory, session.",
     modelSetup: "Connect a verified AI model",
     modelProviders: "Configured providers with plan, quota, and cost.",
     memoryImport: "Bring Codex and Claude Code memory into an agent workspace.",
@@ -1832,6 +1837,7 @@ export const en: TranslationMap = {
     title: "OpenClaw",
     subtitle: "Your system setup guide",
     exitSetup: "Exit setup",
+    hatchDraft: "Wake up, my friend!",
     placeholder: "Message OpenClaw…",
     sensitivePlaceholder: "Enter sensitive value…",
     sensitiveReply: "Sensitive reply sent",
@@ -2030,6 +2036,65 @@ export const en: TranslationMap = {
     gatewayVersion: "Connected Gateway version",
     gatewayVersionHint:
       "Reported by the active Gateway connection; separate from this Control UI build.",
+  },
+  appsPage: {
+    heroTitle: "Take OpenClaw everywhere",
+    heroTagline:
+      "Companion apps for your phone, watch, desktop, and browser — plus plugins to extend what your agent can do.",
+    sectionMobile: "On your phone",
+    sectionWatch: "On your wrist",
+    sectionDesktop: "On your desktop",
+    sectionBrowser: "In your browser",
+    sectionCommunity: "Community",
+    badgeBundledIos: "Included with the iOS app",
+    badgeBundledAndroid: "Included with the Android app",
+    ctaAppStore: "App Store",
+    ctaPlayStore: "Google Play",
+    ctaDownload: "Download",
+    ctaDocs: "Docs",
+    ctaSetupGuide: "Setup guide",
+    ctaOpenPlugins: "Open Plugins",
+    ctaBrowseClawHub: "Browse ClawHub",
+    linkDiscord: "Discord community",
+    linkDocs: "Docs",
+    cards: {
+      ios: {
+        title: "iPhone",
+        desc: "Chat, talk, approve actions, and share into OpenClaw from iOS.",
+      },
+      android: {
+        title: "Android",
+        desc: "Your Android phone as a full OpenClaw node — chat, camera, and Canvas.",
+      },
+      appleWatch: {
+        title: "Apple Watch",
+        desc: "Glanceable chats and quick replies from your wrist.",
+      },
+      wearOs: {
+        title: "Wear OS",
+        desc: "The Android companion extends OpenClaw to your watch.",
+      },
+      macos: {
+        title: "macOS",
+        desc: "Menu bar companion for your Gateway — notifications, approvals, quick chat.",
+      },
+      windows: {
+        title: "Windows",
+        desc: "The Windows companion connects your PC as an OpenClaw node.",
+      },
+      linux: {
+        title: "Linux",
+        desc: "Native desktop app — .deb and AppImage builds.",
+      },
+      chrome: {
+        title: "Chrome extension",
+        desc: "Let OpenClaw drive your existing Chrome — tabs, pages, and forms.",
+      },
+      plugins: {
+        title: "Plugins & ClawHub",
+        desc: "Extend OpenClaw with channels, tools, and skills from the community.",
+      },
+    },
   },
   profilePage: {
     offline: "Connect to the gateway to meet your agent.",
@@ -2758,7 +2823,6 @@ export const en: TranslationMap = {
     cronFailed: "{count} cron job(s) failed",
     cronOverdue: "{count} cron job(s) overdue",
     modelAuthExpired: "Model auth expired: {providers}",
-    modelAuthExpiring: "Model auth expiring: {providers}",
     pendingApproval: "{count} pending approval",
     pendingApprovals: "{count} pending approvals",
   },
@@ -2818,6 +2882,7 @@ export const en: TranslationMap = {
       skills: "Skills",
     },
     items: {
+      apps: "Apps",
       sessions: "Sessions",
       scheduled: "Scheduled",
       skills: "Skills",
@@ -3681,10 +3746,18 @@ export const en: TranslationMap = {
     },
     questions: {
       title: "Codex needs input",
-      other: "Type another answer",
-      submit: "Submit answer",
+      other: "Type your own answer here",
+      submit: "Submit",
+      next: "Next",
+      back: "Back",
+      skip: "Skip",
+      skipping: "Skipping…",
+      skipped: "Skipped",
+      collapse: "Collapse question",
+      expand: "Expand question",
       eyebrow: "Question",
       cardLabel: "Question from the assistant",
+      summaryLabel: "Question outcome",
       timeRemaining: "Time remaining",
       ownAnswer: "Your own answer…",
       ownAnswerFor: "Your own answer for {header}",
@@ -3706,6 +3779,9 @@ export const en: TranslationMap = {
       default: "Default",
       reasoning: "Reasoning",
       speed: "Speed",
+      sessionOverride: "Session override",
+      usingDefault: "Using default from Settings",
+      resetToDefault: "Reset to default ({model})",
     },
     sideChat: {
       title: "Side chat",

@@ -28,6 +28,7 @@ import {
   type SqliteSchemaCompatibility,
 } from "../infra/sqlite-schema-contract.js";
 import { migrateSqliteSchemaToStrictInTransaction } from "../infra/sqlite-strict.js";
+import { createSqliteTerminalOpenLatch } from "../infra/sqlite-terminal-open-latch.js";
 import {
   runSqliteImmediateTransactionSync,
   type SqliteTransactionOptions,
@@ -59,14 +60,16 @@ import {
 import type { DB as OpenClawAgentKyselyDatabase } from "./openclaw-agent-db.generated.js";
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.generated.js";
+import {
+  clearOpenClawDatabaseQuarantine,
+  readOpenClawDatabaseQuarantine,
+} from "./openclaw-quarantine-store.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
-  clearOpenClawDatabaseVerification,
   createOpenClawDatabaseVerificationError,
   detectOpenClawStateDatabaseSchemaMigrations,
   OPENCLAW_STATE_SCHEMA_VERSION,
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-  readOpenClawDatabaseVerification,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
@@ -163,15 +166,13 @@ type OpenClawAgentMetadataDatabase = Pick<OpenClawAgentKyselyDatabase, "schema_m
 type OpenClawAgentRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "agent_databases">;
 
 const cachedDatabases = new Map<string, OpenClawAgentDatabase>();
-const terminalOpenFailures = new Map<string, Error>();
+const terminalOpenLatch = createSqliteTerminalOpenLatch({
+  closeByPath: closeOpenClawAgentDatabaseByPath,
+});
 
 /** Latch background verification damage so later opens fail without rescanning. */
 export function recordOpenClawAgentDatabaseOpenFailure(pathname: string, error: Error): void {
-  const resolvedPath = path.resolve(pathname);
-  terminalOpenFailures.set(resolvedPath, error);
-  // Quarantine: writing into a proven-corrupt file compounds damage, so close
-  // any live handle too; the latch then fails every later open fast.
-  closeOpenClawAgentDatabaseByPath(resolvedPath);
+  terminalOpenLatch.record(pathname, error);
 }
 
 /**
@@ -184,8 +185,8 @@ export function clearOpenClawAgentDatabaseOpenFailure(
   options: OpenClawStateDatabaseOptions = {},
 ): boolean {
   const resolvedPath = path.resolve(pathname);
-  const cleared = clearOpenClawDatabaseVerification(resolvedPath, options);
-  terminalOpenFailures.delete(resolvedPath);
+  const cleared = clearOpenClawDatabaseQuarantine(resolvedPath, { env: options.env });
+  terminalOpenLatch.clear(resolvedPath);
   return cleared;
 }
 
@@ -1077,25 +1078,23 @@ export function openOpenClawAgentDatabase(
   }
   // Latched paths are quarantined; every fresh open fails fast here until
   // doctor repairs the file and clears the latch plus the persisted row.
-  const terminalFailure = terminalOpenFailures.get(pathname);
+  const terminalFailure = terminalOpenLatch.get(pathname);
   if (terminalFailure) {
     throw terminalFailure;
   }
   let persistedFailure: Error | undefined;
   try {
-    const verification = readOpenClawDatabaseVerification(pathname, { env: databaseOptions.env });
-    if (verification?.result === "error") {
+    const quarantine = readOpenClawDatabaseQuarantine(pathname, { env: databaseOptions.env });
+    if (quarantine) {
       persistedFailure = createOpenClawDatabaseVerificationError(
         "agent",
         pathname,
-        verification.error,
+        quarantine.reason,
       );
     }
   } catch {
-    // Accepted tradeoff: a locked/unavailable state DB must not block agent
-    // opens, or every transient state hiccup takes all agents down. The
-    // in-process latch still covers this process; a missed cross-process
-    // quarantine is re-detected by the next daily verifier pass.
+    // A broken quarantine store must not brick every agent open.
+    // The process latch and daily verifier still cover known damage.
   }
   if (persistedFailure) {
     recordOpenClawAgentDatabaseOpenFailure(pathname, persistedFailure);
@@ -1151,7 +1150,7 @@ export function openOpenClawAgentDatabase(
     throw error;
   }
   cachedDatabases.set(pathname, database);
-  terminalOpenFailures.delete(pathname);
+  terminalOpenLatch.clear(pathname);
   // Safety net for processes that end without an orderly close: agent DBs have
   // no shutdown owner like the ACP/gateway state DB closes. Closing unregisters.
   unregisterExitClose ??= registerSqliteCacheExitClose(closeOpenClawAgentDatabases);
@@ -1305,6 +1304,6 @@ export function closeOpenClawAgentDatabases(): void {
 /** Close cached agent handles and clear terminal failure latches for test isolation. */
 export function closeOpenClawAgentDatabasesForTest(): void {
   closeOpenClawAgentDatabases();
-  terminalOpenFailures.clear();
+  terminalOpenLatch.clearAll();
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

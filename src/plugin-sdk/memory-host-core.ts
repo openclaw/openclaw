@@ -441,6 +441,7 @@ async function materializeMemoryHostEventExport(params: {
         workspaceRoot,
         relativePath: owner.relativePath,
         expectedIdentity: publishedIdentity,
+        expectedContent: content,
       }))
         ? { absolutePath, relativePath: owner.relativePath }
         : undefined;

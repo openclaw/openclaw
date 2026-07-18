@@ -153,6 +153,7 @@ export async function isMemoryHostEventArtifactAtIdentity(params: {
   workspaceRoot: MemoryHostWorkspaceRoot;
   relativePath: string;
   expectedIdentity: FileIdentityStat;
+  expectedContent?: string;
 }): Promise<boolean> {
   let opened: Awaited<ReturnType<typeof params.workspaceRoot.open>>;
   try {
@@ -164,7 +165,13 @@ export async function isMemoryHostEventArtifactAtIdentity(params: {
     throw error;
   }
   try {
-    return sameFileIdentity(params.expectedIdentity, opened.stat);
+    if (!sameFileIdentity(params.expectedIdentity, opened.stat)) {
+      return false;
+    }
+    return (
+      params.expectedContent === undefined ||
+      (await opened.handle.readFile()).equals(Buffer.from(params.expectedContent, "utf8"))
+    );
   } finally {
     await opened.handle.close().catch(() => undefined);
   }
@@ -216,11 +223,14 @@ export async function publishMemoryHostEventArtifact(params: {
     await syncDirectoryBestEffort(path.dirname(params.absolutePath));
 
     await writePinnedMemoryHostEventArtifact(writable.handle, params.content);
+    // Workspace actors can mutate this inode without replacing the path. Verify
+    // bytes before finalizing the marker so foreign content never gains ownership.
     if (
       !(await isMemoryHostEventArtifactAtIdentity({
         workspaceRoot: params.workspaceRoot,
         relativePath: params.owner.relativePath,
         expectedIdentity: publishedIdentity,
+        expectedContent: params.content,
       }))
     ) {
       return undefined;
@@ -246,6 +256,7 @@ export async function publishMemoryHostEventArtifact(params: {
         workspaceRoot: params.workspaceRoot,
         relativePath: params.owner.relativePath,
         expectedIdentity: publishedIdentity,
+        expectedContent: params.content,
       }))
     ) {
       return undefined;

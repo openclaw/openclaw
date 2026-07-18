@@ -632,7 +632,10 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             },
           ],
         });
-        await page.goto(`${realChatServer.baseUrl}chat`);
+        await page.goto(`${realChatServer.baseUrl}chat`, {
+          waitUntil: "domcontentloaded",
+          timeout: APP_FIRST_RENDER_TIMEOUT_MS,
+        });
         await page
           .getByText("Context hover regression fixture.")
           .waitFor({ timeout: APP_FIRST_RENDER_TIMEOUT_MS });
@@ -711,7 +714,10 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           },
         ],
       });
-      await page.goto(`${realChatServer.baseUrl}chat`);
+      await page.goto(`${realChatServer.baseUrl}chat`, {
+        waitUntil: "domcontentloaded",
+        timeout: APP_FIRST_RENDER_TIMEOUT_MS,
+      });
 
       const image = page.locator("img.chat-message-image");
       const video = page.locator("video");
@@ -1908,7 +1914,10 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           },
         ],
       });
-      await page.goto(`${realChatServer.baseUrl}chat`);
+      await page.goto(`${realChatServer.baseUrl}chat`, {
+        waitUntil: "domcontentloaded",
+        timeout: APP_FIRST_RENDER_TIMEOUT_MS,
+      });
       await page
         .getByText("Short landscape slash command keyboard regression fixture.")
         .waitFor({ timeout: APP_FIRST_RENDER_TIMEOUT_MS });

@@ -34,6 +34,7 @@ const waitForPortBindable = vi.fn(async (_port: number, _opts?: unknown) => 0);
 const findVerifiedGatewayListenerPidsOnPortSync = vi.fn((_port: number) => [] as number[]);
 const formatGatewayPidList = vi.fn((pids: number[]) => pids.join(", "));
 const isTerminalInteractive = vi.fn(() => true);
+const offerInvalidConfigRecovery = vi.fn(async () => ({ status: "declined" as const }));
 const ensureDevGatewayConfig = vi.fn(async (_opts?: unknown) => {});
 type GatewayLoopStart = (params?: { startupStartedAt?: number }) => Promise<unknown>;
 const runGatewayLoop = vi.fn(async ({ start }: { start: GatewayLoopStart }) => {
@@ -331,6 +332,10 @@ vi.mock("../terminal-interactivity.js", () => ({
     "Refusing to kill the operator's running gateway service from a non-interactive shell. Use an isolated dev gateway (openclaw gateway run --dev, or --profile <name> with a free port) for testing.",
 }));
 
+vi.mock("../invalid-config-recovery.js", () => ({
+  offerInvalidConfigRecovery: () => offerInvalidConfigRecovery(),
+}));
+
 vi.mock("../ports.js", () => ({
   forceFreePortAndWait: (port: number, opts: unknown) => forceFreePortAndWait(port, opts),
   waitForPortBindable: (port: number, opts?: unknown) => waitForPortBindable(port, opts),
@@ -399,6 +404,7 @@ describe("gateway run option collisions", () => {
     formatGatewayPidList.mockClear();
     isTerminalInteractive.mockReset();
     isTerminalInteractive.mockReturnValue(true);
+    offerInvalidConfigRecovery.mockClear();
     cleanStaleGatewayProcessesSync.mockClear();
     waitForPortBindable.mockClear();
     ensureDevGatewayConfig.mockClear();
@@ -1644,6 +1650,20 @@ describe("gateway run option collisions", () => {
     const options = gatewayStartOptions();
     expect(options.bind).toBe("loopback");
     expect(options.startupConfigSnapshotRead?.snapshot?.valid).toBe(false);
+  });
+
+  it("does not offer doctor repair after --allow-unconfigured reaches startup", async () => {
+    const { createInvalidConfigError } = await import("../../config/io.invalid-config.js");
+    startGatewayServer.mockRejectedValueOnce(
+      createInvalidConfigError("/tmp/openclaw.json", "gateway.mode: invalid"),
+    );
+
+    await expect(runGatewayCli(["gateway", "run", "--allow-unconfigured"])).rejects.toThrow(
+      "__exit__:78",
+    );
+
+    expect(offerInvalidConfigRecovery).not.toHaveBeenCalled();
+    expect(startGatewayServer).toHaveBeenCalledOnce();
   });
 
   it.each(["none", "trusted-proxy"] as const)("accepts --auth %s override", async (mode) => {
