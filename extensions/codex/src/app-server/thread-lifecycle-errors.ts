@@ -29,3 +29,17 @@ export class CodexAdoptedThreadActiveError extends Error {
     this.name = "CodexAdoptedThreadActiveError";
   }
 }
+
+export class CodexSessionGenerationNotCurrentError extends Error {
+  constructor(identity: { sessionId: string; sessionKey?: string }) {
+    const sessionKey = identity.sessionKey?.trim();
+    // A stable sessionKey pins one OpenClaw session generation, so a run whose sessionId
+    // no longer owns that generation cannot reclaim the key. Give embedded callers an
+    // actionable identity choice instead of the bare reclaim failure.
+    const guidance = sessionKey
+      ? ` A newer OpenClaw session generation owns sessionKey "${sessionKey}", so this run's sessionId is no longer that key's current generation. For isolated embedded runs that rotate sessionId per call, omit sessionKey so each run keeps its own identity; to continue one logical session, reuse the same sessionId instead of rotating it.`
+      : "";
+    super(`Codex session generation is no longer current: ${identity.sessionId}.${guidance}`);
+    this.name = "CodexSessionGenerationNotCurrentError";
+  }
+}

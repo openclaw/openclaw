@@ -45,7 +45,10 @@ import {
   legacyFingerprintUserMcpServersConfigPatch,
   shouldStartTransientNoToolThread,
 } from "./thread-fingerprints.js";
-import { CodexThreadBindingConflictError } from "./thread-lifecycle-errors.js";
+import {
+  CodexSessionGenerationNotCurrentError,
+  CodexThreadBindingConflictError,
+} from "./thread-lifecycle-errors.js";
 import { resumeExistingCodexThread, startFreshCodexThread } from "./thread-lifecycle-io.js";
 import { createCodexThreadLifecycleTimingTracker } from "./thread-lifecycle-timing.js";
 import type {
@@ -194,9 +197,7 @@ export async function startOrResumeThread(
         }),
       );
       if (!reclaimed) {
-        throw new Error(
-          `Codex session generation is no longer current: ${bindingIdentity.sessionId}`,
-        );
+        throw new CodexSessionGenerationNotCurrentError(bindingIdentity);
       }
     }
     if (binding?.pendingSupervisionBranch) {

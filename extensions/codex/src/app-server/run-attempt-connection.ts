@@ -43,6 +43,7 @@ import {
 } from "./session-binding.js";
 import { getLeasedSharedCodexAppServerClient } from "./shared-client.js";
 import { rotateOversizedCodexAppServerStartupBinding } from "./startup-binding.js";
+import { CodexSessionGenerationNotCurrentError } from "./thread-lifecycle-errors.js";
 
 export async function prepareCodexAttemptConnection({ params, options }: CodexRunAttemptInput) {
   const attemptStartedAt = Date.now();
@@ -119,9 +120,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       config: params.config,
     });
     if (!reclaimed) {
-      throw new Error(
-        `Codex session generation is no longer current: ${bindingIdentity.sessionId}`,
-      );
+      throw new CodexSessionGenerationNotCurrentError(bindingIdentity);
     }
     startupBinding = await bindingStore.read(bindingIdentity);
   }
