@@ -59,7 +59,11 @@ function readTrajectoryPointerFile(
     return null;
   }
   try {
-    const parsed: unknown = JSON.parse(readRegularFileSync({ filePath: pointerPath, maxBytes: TRAJECTORY_POINTER_MAX_BYTES }));
+    const { buffer } = readRegularFileSync({
+      filePath: pointerPath,
+      maxBytes: TRAJECTORY_POINTER_MAX_BYTES,
+    });
+    const parsed: unknown = JSON.parse(buffer.toString("utf8"));
     if (!isRecord(parsed)) {
       return null;
     }
