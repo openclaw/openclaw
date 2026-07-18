@@ -482,9 +482,7 @@ describe("openai transport stream", () => {
       model,
     );
 
-    expect(output.content).toMatchObject([
-      { type: "text", text: "TRUNCATED_HALF_SENTENCE" },
-    ]);
+    expect(output.content).toMatchObject([{ type: "text", text: "TRUNCATED_HALF_SENTENCE" }]);
     expect(output.stopReason).toBe("length");
     expectRecordFields(output.usage, { input: 8, output: 4 });
   });
