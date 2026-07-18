@@ -10,12 +10,20 @@ import kotlinx.coroutines.runBlocking
 class WearProxyListenerService : WearableListenerService() {
   override fun onCapabilityChanged(capabilityInfo: CapabilityInfo) {
     if (capabilityInfo.name != WearProtocol.PHONE_CAPABILITY) return
-    val preferredNodeId =
-      capabilityInfo.nodes
-        .sortedWith(compareByDescending<com.google.android.gms.wearable.Node> { it.isNearby }.thenBy { it.id })
-        .firstOrNull()
-        ?.id
-    (application as? WearApplication)?.proxyClient?.updatePreferredPhoneNodeId(preferredNodeId)
+    val preferredNearbyNodeId =
+      selectUniqueNearbyPhoneNodeId(
+        capabilityInfo.nodes.map { node ->
+          WearReachablePhoneNode(id = node.id, isNearby = node.isNearby)
+        },
+      )
+    val proxyClient = (application as? WearApplication)?.proxyClient ?: return
+    if (preferredNearbyNodeId == null) {
+      // Capability callbacks can include disconnected nodes. Drop the cached
+      // choice so the next request performs a FILTER_REACHABLE query.
+      proxyClient.invalidatePreferredPhoneNode()
+    } else {
+      proxyClient.updatePreferredPhoneNodeId(preferredNearbyNodeId)
+    }
   }
 
   override fun onMessageReceived(messageEvent: MessageEvent) {
