@@ -101,6 +101,8 @@ async function startNgrokTunnel(config: {
         reject(new Error("ngrok startup timed out (30s)"));
       }
     }, 30000);
+    // Do not keep the host process alive solely waiting on ngrok startup.
+    timeout.unref();
 
     const rejectIfPending = (message: string, kill = false) => {
       if (!resolved) {
