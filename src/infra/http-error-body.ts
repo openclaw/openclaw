@@ -13,15 +13,13 @@ export async function readResponseBodySnippet(
   try {
     const body = response.body;
     if (!body || typeof body.getReader !== "function") {
-      const text = await response.text();
-      const encoded = new TextEncoder().encode(text);
-      if (encoded.byteLength > limits.maxBytes) {
-        return truncateUtf16Safe(
-          decodeTextPrefix(encoded.subarray(0, limits.maxBytes), { truncated: true }),
-          limits.maxChars,
-        );
-      }
-      return truncateUtf16Safe(text, limits.maxChars);
+      const buf = await response.arrayBuffer();
+      const capped = Buffer.from(buf).subarray(0, limits.maxBytes);
+      const truncated = buf.byteLength > limits.maxBytes;
+      return truncateUtf16Safe(
+        decodeTextPrefix(capped, { truncated }),
+        limits.maxChars,
+      );
     }
 
     const prefix = await readResponseTextPrefix(response, limits.maxBytes);
