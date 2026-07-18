@@ -20194,6 +20194,16 @@
       "translated": "Ответьте OpenClaw… (yes настроит всё)"
     },
     {
+      "id": "native.apple.134b9ae1d8a543df",
+      "source": "Skip for now",
+      "translated": "Пропустить пока"
+    },
+    {
+      "id": "native.apple.5435391fa338f227",
+      "source": "Recommended",
+      "translated": "Рекомендуется"
+    },
+    {
       "id": "native.apple.78d1ad73762a7ce8",
       "source": "Connect your AI",
       "translated": "Подключите свой ИИ"

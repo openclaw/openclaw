@@ -216,6 +216,31 @@ final class SystemAgentOnboardingChatModel {
         return route
     }
 
+    private func send(message: String, displayText: String? = nil) -> Task<Void, Never>? {
+        guard let generation = self.requestGeneration,
+              !message.isEmpty,
+              !self.isSending,
+              self.errorMessage == nil
+        else { return nil }
+        self.retireQuestions()
+        self.input = ""
+        self.messages.append(Message(
+            role: .user,
+            text: displayText ?? (self.expectsSensitiveReply ? "<redacted secret>" : message)))
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.requestReply(message: message, generation: generation)
+        }
+        self.requestTask = task
+        return task
+    }
+
+    private func retireQuestions() {
+        for message in self.messages where message.question != nil {
+            self.retiredQuestionMessageIDs.insert(message.id)
+        }
+    }
+
     private func requestReply(message: String?, generation: UInt64) async {
         guard self.isCurrentRequest(generation) else { return }
         self.isSending = true
@@ -265,31 +290,6 @@ final class SystemAgentOnboardingChatModel {
                 return
             }
             self.errorMessage = error.localizedDescription
-        }
-    }
-
-    private func send(message: String, displayText: String? = nil) -> Task<Void, Never>? {
-        guard let generation = self.requestGeneration,
-              !message.isEmpty,
-              !self.isSending,
-              self.errorMessage == nil
-        else { return nil }
-        self.retireQuestions()
-        self.input = ""
-        self.messages.append(Message(
-            role: .user,
-            text: displayText ?? (self.expectsSensitiveReply ? "<redacted secret>" : message)))
-        let task = Task { [weak self] in
-            guard let self else { return }
-            await self.requestReply(message: message, generation: generation)
-        }
-        self.requestTask = task
-        return task
-    }
-
-    private func retireQuestions() {
-        for message in self.messages where message.question != nil {
-            self.retiredQuestionMessageIDs.insert(message.id)
         }
     }
 }
@@ -463,8 +463,6 @@ private struct SystemAgentChatQuestionCard: View {
         }
         .buttonStyle(.plain)
         .disabled(!self.isEnabled)
-        .accessibilityLabel(option.description.map { "\(option.label). \($0)" } ?? option.label)
-        .accessibilityHint(option.recommended ? "Recommended option" : "")
     }
 }
 
