@@ -81,7 +81,9 @@ describeBrowserE2e("pw-tools-core response bodies e2e", () => {
       }
       await page.close().catch(() => {});
       await browser.close().catch(() => {});
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
     }
   });
 });
