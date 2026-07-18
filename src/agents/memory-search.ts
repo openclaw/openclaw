@@ -226,9 +226,9 @@ function mergeConfig(
   const enabled = overrides?.enabled ?? defaults?.enabled ?? true;
   const rememberAcrossConversations =
     overrides?.rememberAcrossConversations ?? defaults?.rememberAcrossConversations ?? false;
-  const sessionMemory =
-    rememberAcrossConversations ||
-    (overrides?.experimental?.sessionMemory ?? defaults?.experimental?.sessionMemory ?? false);
+  const configuredSessionMemory =
+    overrides?.experimental?.sessionMemory ?? defaults?.experimental?.sessionMemory ?? false;
+  const sessionMemory = rememberAcrossConversations || configuredSessionMemory;
   const rawProvider = overrides?.provider ?? defaults?.provider;
   const provider =
     rawProvider?.trim() === "auto"
@@ -296,7 +296,11 @@ function mergeConfig(
     contextSize: overrides?.local?.contextSize ?? defaults?.local?.contextSize,
   };
   const configuredSources = overrides?.sources ?? defaults?.sources;
-  const searchSources = normalizeSources(configuredSources, sessionMemory);
+  const searchSources = normalizeSources(
+    configuredSources,
+    configuredSessionMemory ||
+      (rememberAcrossConversations && configuredSources?.includes("sessions") === true),
+  );
   const sources = normalizeSources(
     rememberAcrossConversations ? [...searchSources, "sessions"] : configuredSources,
     sessionMemory,
