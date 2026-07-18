@@ -24,7 +24,7 @@ struct NativeStateBootstrapTests {
         INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 'remote', 42.5);
         """)
 
-        _ = try DeviceIdentityStore.loadOrCreate(
+        _ = try DeviceIdentitySQLiteStore.loadOrCreate(
             databaseURL: databaseURL,
             destinationStateDirURL: tempDir,
             profile: .primary)
