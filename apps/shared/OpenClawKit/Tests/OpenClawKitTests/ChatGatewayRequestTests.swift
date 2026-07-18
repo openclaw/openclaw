@@ -94,6 +94,24 @@ struct ChatGatewayRequestTests {
         #expect(request.params["verboseLevel"]?.value as? String == "full")
     }
 
+    @Test func `settings patch request encodes fast values and explicit resets`() {
+        let reset = OpenClawChatGatewayRequests.patchSessionSettings(
+            sessionKey: "main",
+            agentID: nil,
+            thinkingLevel: .some(nil),
+            fastMode: .some(nil),
+            verboseLevel: .some(nil))
+        let automatic = OpenClawChatGatewayRequests.patchSessionSettings(
+            sessionKey: "main",
+            agentID: nil,
+            fastMode: .some(.automatic))
+
+        #expect(reset.params["thinkingLevel"]?.value is NSNull)
+        #expect(reset.params["fastMode"]?.value is NSNull)
+        #expect(reset.params["verboseLevel"]?.value is NSNull)
+        #expect(automatic.params["fastMode"]?.value as? String == "auto")
+    }
+
     @Test func `fork and create requests preserve routing identity`() {
         let fork = OpenClawChatGatewayRequests.forkSession(
             parentSessionKey: "agent:reviewer:telegram:group:1",
@@ -175,6 +193,20 @@ struct ChatGatewayRequestTests {
         #expect(request.params["timeoutMs"] == nil)
         let encoded = try JSONEncoder().encode(request.params["attachments"])
         #expect(String(decoding: encoded, as: UTF8.self).contains("a.png"))
+    }
+
+    @Test func `question resolve request preserves nested answer contract`() throws {
+        let request = OpenClawChatGatewayRequests.resolveQuestion(
+            id: "ask_123",
+            answers: ["meal": ["Pizza", "Salad"]])
+
+        #expect(request.method == "question.resolve")
+        let data = try JSONEncoder().encode(request.params)
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let answers = try #require(object["answers"] as? [String: Any])
+        let values = try #require(answers["answers"] as? [String: Any])
+        let meal = try #require(values["meal"] as? [String: Any])
+        #expect(meal["answers"] as? [String] == ["Pizza", "Salad"])
     }
 
     @Test func `long running requests share exact gateway timeout margins`() {

@@ -51,10 +51,31 @@ dependencies and development commands.
 
 ### Quick Chat
 
-Open Quick Chat with `Ctrl+Shift+Space` or the **Quick Chat** tray item. The
-shortcut is available on X11; on Wayland, use the tray item for now. Quick Chat
-sends the message through the OpenClaw CLI to the default agent's main session,
-then hides. Replies remain in the normal session; open the dashboard to read them.
+Open Quick Chat with `Ctrl+Shift+Space` or the **Quick Chat** tray item. The agent
+chip shows the configured avatar, emoji, or monogram; select it to switch agents.
+Messages use the selected agent's main session and honor global session scope.
+The native Rust client owns a persistent Ed25519 device identity. It uses the
+CLI handoff's shared token or password only to bootstrap pairing, then stores and
+prefers the Gateway-issued device token on later connections. The identity and
+device token live in the app config directory in a mode `0600` file; Quick
+Chat's WebView receives neither credentials nor the WebSocket.
+
+When the native connection is unavailable, Quick Chat shows **Gateway
+unreachable — retrying** and disables send until reconnection. A remote device
+that needs approval shows **Pair this device from the dashboard** instead.
+For TLS Gateways, the CLI hands the app the Gateway certificate's SHA-256
+fingerprint; the native client pins that certificate and reports **Gateway TLS
+trust failed — check the certificate fingerprint** separately from downtime.
+Gateways whose shared secret is configured through a SecretRef omit it from the
+CLI handoff. Existing paired installs keep working through their stored device
+token, but a fresh install cannot create a pending pairing request under shared-secret
+authentication without that bootstrap credential.
+
+On X11, use the gear in Quick Chat to record or reset a custom shortcut. The
+**Quick Chat shortcut** tray toggle enables or disables it without disabling the
+plain **Quick Chat** tray item. Global shortcuts are not available on Wayland, so
+the shortcut settings are hidden and the tray item remains the entry point.
+Replies remain in the normal session; open the dashboard to read them.
 
 ### Canvas
 

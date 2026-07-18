@@ -7344,6 +7344,56 @@
       "translated": "پیوست پشتیبانی‌نشده"
     },
     {
+      "id": "native.android.bf40f9f9a508155d",
+      "source": "Other answer",
+      "translated": "پاسخ دیگر"
+    },
+    {
+      "id": "native.android.fa81739f52e7697f",
+      "source": "Submit",
+      "translated": "ارسال"
+    },
+    {
+      "id": "native.android.f68cd7a84be4089e",
+      "source": "Answered",
+      "translated": "پاسخ داده شده"
+    },
+    {
+      "id": "native.android.a0dc883947c2f980",
+      "source": "Answered elsewhere",
+      "translated": "در جای دیگری پاسخ داده شده"
+    },
+    {
+      "id": "native.android.1a0e6b33059a63aa",
+      "source": "Expired",
+      "translated": "منقضی شده"
+    },
+    {
+      "id": "native.android.d6d8fc83cec68418",
+      "source": "Cancelled",
+      "translated": "لغو شده"
+    },
+    {
+      "id": "native.android.73f64d0d54b7f9c0",
+      "source": "Pending",
+      "translated": "در انتظار"
+    },
+    {
+      "id": "native.android.92dfa7979d04989c",
+      "source": "Submitting…",
+      "translated": "در حال ارسال…"
+    },
+    {
+      "id": "native.android.c5e9ee99f9d9c612",
+      "source": "Expires in ${seconds / 60}m ${seconds % 60}s",
+      "translated": "انقضا تا ${seconds / 60}m ${seconds % 60}s دیگر"
+    },
+    {
+      "id": "native.android.2ca602fbdf96f1e7",
+      "source": "Expires in ${seconds}s",
+      "translated": "انقضا تا ${seconds}s دیگر"
+    },
+    {
       "id": "native.android.118e8d239b18895e",
       "source": "Model",
       "translated": "مدل"
@@ -10439,6 +10489,11 @@
       "translated": "چت جدید در Worktree"
     },
     {
+      "id": "native.apple.a1b0d289758e2213",
+      "source": "Sessions…",
+      "translated": "نشست‌ها…"
+    },
+    {
       "id": "native.apple.17c13312e7532c89",
       "source": "Background Tasks",
       "translated": "وظایف پس‌زمینه"
@@ -10447,6 +10502,11 @@
       "id": "native.apple.ced228bb4d20a726",
       "source": "Export Transcript",
       "translated": "خروجی گرفتن از رونوشت"
+    },
+    {
+      "id": "native.apple.f26cef22f417abb4",
+      "source": "Show reasoning & tool activity",
+      "translated": "نمایش استدلال و فعالیت ابزارها"
     },
     {
       "id": "native.apple.940e1f943750c94b",
@@ -20094,6 +20154,11 @@
       "translated": "Gateway نتوانست برای \\(plan.summary.errors) \\(Self.memoryNoun(plan.summary.errors)) برنامه‌ریزی کند. دوباره تلاش کنید."
     },
     {
+      "id": "native.apple.ba758aa97c24ffe6",
+      "source": "Wake up, my friend!",
+      "translated": "بیدار شو، دوست من!"
+    },
+    {
       "id": "native.apple.1400567a01a8d7c0",
       "source": "<redacted secret>",
       "translated": "<رمز محرمانه حذف‌شده>"
@@ -22544,9 +22609,49 @@
       "translated": "%@%% از زمینه استفاده شده است"
     },
     {
+      "id": "native.apple.e57eb66d14768bdb",
+      "source": "%@ (override)",
+      "translated": "%@ (بازنویسی)"
+    },
+    {
       "id": "native.apple.510c6dfa05924ae2",
       "source": "Thinking",
       "translated": "در حال فکر کردن"
+    },
+    {
+      "id": "native.apple.e47fcaaf47e5d6bc",
+      "source": "Full",
+      "translated": "کامل"
+    },
+    {
+      "id": "native.apple.f434793807b778ce",
+      "source": "Verbosity",
+      "translated": "میزان جزئیات"
+    },
+    {
+      "id": "native.apple.d3426c54f223c4d8",
+      "source": "Default (inherited)",
+      "translated": "پیش‌فرض (ارث‌بری‌شده)"
+    },
+    {
+      "id": "native.apple.575a78c2f3daf366",
+      "source": "On",
+      "translated": "روشن"
+    },
+    {
+      "id": "native.apple.75bebec90215a705",
+      "source": "Off",
+      "translated": "خاموش"
+    },
+    {
+      "id": "native.apple.17481e3865493e34",
+      "source": "Fast",
+      "translated": "سریع"
+    },
+    {
+      "id": "native.apple.e5f91b8690e705e2",
+      "source": "Fast responses",
+      "translated": "پاسخ‌های سریع"
     },
     {
       "id": "native.apple.745b004e0b5b6b80",
@@ -22559,14 +22664,14 @@
       "translated": "اخیر"
     },
     {
-      "id": "native.apple.aa321cf4820426ef",
-      "source": "Models",
-      "translated": "مدل‌ها"
-    },
-    {
       "id": "native.apple.0fce9d743a640218",
       "source": "Model",
       "translated": "مدل"
+    },
+    {
+      "id": "native.apple.6045352c168e07cb",
+      "source": "Default",
+      "translated": "پیش‌فرض"
     },
     {
       "id": "native.apple.75550b03f06d6abc",
@@ -22734,6 +22839,41 @@
       "translated": "%@ توکن استفاده شده است"
     },
     {
+      "id": "native.apple.ccfd6ae994d82449",
+      "source": "Loading full message…",
+      "translated": "در حال بارگذاری پیام کامل…"
+    },
+    {
+      "id": "native.apple.669ad52de4a26b87",
+      "source": "Full message unavailable",
+      "translated": "پیام کامل در دسترس نیست"
+    },
+    {
+      "id": "native.apple.6f79794ee74caf99",
+      "source": "Full Message",
+      "translated": "پیام کامل"
+    },
+    {
+      "id": "native.apple.d648251591db5dec",
+      "source": "Close",
+      "translated": "بستن"
+    },
+    {
+      "id": "native.apple.ba3963204bda5e84",
+      "source": "The full message is no longer available.",
+      "translated": "پیام کامل دیگر در دسترس نیست."
+    },
+    {
+      "id": "native.apple.8bb98bd86ae85c1c",
+      "source": "The full message has no readable text.",
+      "translated": "پیام کامل متن خوانایی ندارد."
+    },
+    {
+      "id": "native.apple.2f43669d87c0e26d",
+      "source": "The full message could not be loaded.",
+      "translated": "پیام کامل بارگذاری نشد."
+    },
+    {
       "id": "native.apple.2c865ac4a69645d3",
       "source": "Widget unavailable",
       "translated": "ویجت در دسترس نیست"
@@ -22809,6 +22949,11 @@
       "translated": "در حال اجرای ابزارها…"
     },
     {
+      "id": "native.apple.51ef5e41f9124819",
+      "source": "Other",
+      "translated": "سایر"
+    },
+    {
       "id": "native.apple.3b932a47b4223a43",
       "source": "Collapse plan",
       "translated": "جمع‌کردن برنامه"
@@ -22817,6 +22962,41 @@
       "id": "native.apple.b6b3b9af4c618060",
       "source": "Expand plan",
       "translated": "بازکردن برنامه"
+    },
+    {
+      "id": "native.apple.da4494f9e875169d",
+      "source": "Other answer",
+      "translated": "پاسخ دیگر"
+    },
+    {
+      "id": "native.apple.e9c3855562d8e4e9",
+      "source": "Not selected",
+      "translated": "انتخاب نشده"
+    },
+    {
+      "id": "native.apple.bd4335213464d4be",
+      "source": "Selected",
+      "translated": "انتخاب شده"
+    },
+    {
+      "id": "native.apple.e3095b651fc46b52",
+      "source": "Submit",
+      "translated": "ارسال"
+    },
+    {
+      "id": "native.apple.6c1adc16e0a846e5",
+      "source": "Submitting…",
+      "translated": "در حال ارسال…"
+    },
+    {
+      "id": "native.apple.698bdb0d6537edb6",
+      "source": "Expires in \\(seconds / 60)m \\(seconds % 60)s",
+      "translated": "انقضا تا \\(seconds / 60)m \\(seconds % 60)s دیگر"
+    },
+    {
+      "id": "native.apple.30e1c342b3345290",
+      "source": "Expires in \\(seconds)s",
+      "translated": "انقضا تا \\(seconds)s دیگر"
     },
     {
       "id": "native.apple.7cd6fb01b9f5d14a",
@@ -23119,9 +23299,29 @@
       "translated": "گوش دادن"
     },
     {
+      "id": "native.apple.f84b674ad395b694",
+      "source": "Jump to latest",
+      "translated": "پرش به آخرین مورد"
+    },
+    {
+      "id": "native.apple.429d825201b2cb85",
+      "source": "Jump to latest reply",
+      "translated": "پرش به آخرین پاسخ"
+    },
+    {
+      "id": "native.apple.9ab586b85834705c",
+      "source": "Refresh",
+      "translated": "تازه‌سازی"
+    },
+    {
       "id": "native.apple.fe9f30f12f1dcfaf",
       "source": "Copy Message",
       "translated": "کپی پیام"
+    },
+    {
+      "id": "native.apple.90bc8a8045e7017e",
+      "source": "Open Full Message",
+      "translated": "باز کردن پیام کامل"
     },
     {
       "id": "native.apple.b37ec7bd7dc1579a",
@@ -23137,21 +23337,6 @@
       "id": "native.apple.3b44a67aa284886f",
       "source": "Assistant",
       "translated": "دستیار"
-    },
-    {
-      "id": "native.apple.f84b674ad395b694",
-      "source": "Jump to latest",
-      "translated": "پرش به آخرین مورد"
-    },
-    {
-      "id": "native.apple.429d825201b2cb85",
-      "source": "Jump to latest reply",
-      "translated": "پرش به آخرین پاسخ"
-    },
-    {
-      "id": "native.apple.9ab586b85834705c",
-      "source": "Refresh",
-      "translated": "تازه‌سازی"
     },
     {
       "id": "native.apple.28c2691c03030434",
@@ -23269,6 +23454,11 @@
       "translated": "جلسه‌ها"
     },
     {
+      "id": "native.apple.c13dbe6b5c01e9bd",
+      "source": "%@ (override)",
+      "translated": "%@ (بازنویسی)"
+    },
+    {
       "id": "native.apple.b1f10b5e9113881d",
       "source": "Thinking",
       "translated": "در حال فکر کردن"
@@ -23277,6 +23467,41 @@
       "id": "native.apple.48dde5fe65b841a3",
       "source": "Thinking level",
       "translated": "سطح تفکر"
+    },
+    {
+      "id": "native.apple.ca556b80c9adcae8",
+      "source": "Full",
+      "translated": "کامل"
+    },
+    {
+      "id": "native.apple.1ae2d7073bba214b",
+      "source": "Verbosity",
+      "translated": "میزان جزئیات"
+    },
+    {
+      "id": "native.apple.b56645c4fa60fe23",
+      "source": "Default (inherited)",
+      "translated": "پیش‌فرض (ارث‌بری‌شده)"
+    },
+    {
+      "id": "native.apple.17277ea10fd23846",
+      "source": "On",
+      "translated": "روشن"
+    },
+    {
+      "id": "native.apple.8f2830ece961d651",
+      "source": "Off",
+      "translated": "خاموش"
+    },
+    {
+      "id": "native.apple.0acac602f7cc68fc",
+      "source": "Fast",
+      "translated": "سریع"
+    },
+    {
+      "id": "native.apple.16e00cf511074484",
+      "source": "Fast responses",
+      "translated": "پاسخ‌های سریع"
     },
     {
       "id": "native.apple.17ea1ddec4a7b7a8",
@@ -23289,14 +23514,14 @@
       "translated": "اخیر"
     },
     {
-      "id": "native.apple.f41f892742244520",
-      "source": "Models",
-      "translated": "مدل‌ها"
-    },
-    {
       "id": "native.apple.273aa7b9194a8d0d",
       "source": "Model",
       "translated": "مدل"
+    },
+    {
+      "id": "native.apple.68c4c3dd439d182b",
+      "source": "Default",
+      "translated": "پیش‌فرض"
     },
     {
       "id": "native.apple.eb58552e43c8dde2",
@@ -23364,9 +23589,14 @@
       "translated": "خروجی گرفتن رونوشت…"
     },
     {
-      "id": "native.apple.3294ababd29c4457",
-      "source": "Show reasoning & tool activity",
-      "translated": "نمایش استدلال و فعالیت ابزارها"
+      "id": "native.apple.ebb130189022c7ec",
+      "source": "Show Reasoning",
+      "translated": "نمایش استدلال"
+    },
+    {
+      "id": "native.apple.d0dba9aad550fa6e",
+      "source": "Show Tool Activity",
+      "translated": "نمایش فعالیت ابزار"
     },
     {
       "id": "native.apple.4b24d792545e5086",

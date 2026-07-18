@@ -357,6 +357,12 @@ export const icons = {
       <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
     </svg>
   `,
+  home: html`
+    <svg viewBox="0 0 24 24">
+      <path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+      <polyline points="9 22 9 12 15 12 15 22" />
+    </svg>
+  `,
   penLine: html`
     <svg viewBox="0 0 24 24">
       <path d="M12 20h9" />

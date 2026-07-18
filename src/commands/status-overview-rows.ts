@@ -115,6 +115,15 @@ export function buildStatusCommandOverviewRows(
             .join(", ")}`,
         )
       : null;
+  const degradedPlugins = params.summary.degradedPlugins ?? [];
+  const degradedPluginsValue =
+    degradedPlugins.length > 0
+      ? params.warn(
+          `${degradedPlugins.length} configured-unavailable · ${degradedPlugins
+            .map((plugin) => plugin.pluginId)
+            .join(", ")}`,
+        )
+      : null;
   const tasksValue = buildStatusTasksValue({
     summary: params.summary,
     warn: params.warn,
@@ -176,6 +185,7 @@ export function buildStatusCommandOverviewRows(
         : []),
       { Item: "Memory", Value: memoryValue },
       ...(degradedSecretsValue ? [{ Item: "Degraded secrets", Value: degradedSecretsValue }] : []),
+      ...(degradedPluginsValue ? [{ Item: "Degraded plugins", Value: degradedPluginsValue }] : []),
       { Item: "Plugin compatibility", Value: pluginCompatibilityValue },
       { Item: "Probes", Value: probesValue },
       { Item: "Events", Value: eventsValue },

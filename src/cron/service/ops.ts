@@ -4,7 +4,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { enqueueCommandInLane } from "../../process/command-queue.js";
+import { enqueueCommandInLane, type CommandLaneTaskMarker } from "../../process/command-queue.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import { CommandLane } from "../../process/lanes.js";
 import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
@@ -500,6 +500,7 @@ function finalizeUpdatedJob(params: {
 
   nextJob.updatedAtMs = now;
   if (schedulingInputsChanged) {
+    nextJob.state.startupCatchupAtMs = undefined;
     if (isJobEnabled(nextJob)) {
       nextJob.state.nextRunAtMs = computeJobNextRunAtMs(nextJob, now);
     } else {
@@ -736,6 +737,7 @@ type PreparedManualRun =
       jobId: string;
       runId?: string;
       terminalTracker?: ManualRunTerminalTracker;
+      owningCronLaneTaskMarker?: CommandLaneTaskMarker;
       reservationAt: number;
       reservationIdentity: object;
       wasEnabled: boolean;
@@ -754,6 +756,7 @@ type ManualRunOptions = {
   runId?: string;
   payload?: CronPayload;
   terminalTracker?: ManualRunTerminalTracker;
+  owningCronLaneTaskMarker?: CommandLaneTaskMarker;
 };
 
 type ManualRunTerminalTracker = { emitted: boolean };
@@ -1008,6 +1011,7 @@ async function prepareManualRun(
       jobId: job.id,
       runId: opts?.runId,
       terminalTracker: opts?.terminalTracker,
+      owningCronLaneTaskMarker: opts?.owningCronLaneTaskMarker,
       reservationAt,
       reservationIdentity,
       wasEnabled: isJobEnabled(job),
@@ -1211,6 +1215,7 @@ async function finishPreparedManualRun(
       coreResult = await executeJobCoreWithTimeout(state, executionJob, {
         runId: taskRunId,
         activeJobMarker: prepared.activeJobMarker,
+        owningCronLaneTaskMarker: prepared.owningCronLaneTaskMarker,
       });
     } catch (err) {
       coreResult = { status: "error", error: normalizeCronRunErrorText(err) };
@@ -1458,8 +1463,12 @@ export async function enqueueRun(state: CronServiceState, id: string, mode?: "du
   void runWithGatewayIndependentRootWorkContinuation(() =>
     enqueueCommandInLane(
       CommandLane.Cron,
-      async () => {
-        const result = await run(state, id, mode, { runId, terminalTracker });
+      async (owningCronLaneTaskMarker) => {
+        const result = await run(state, id, mode, {
+          runId,
+          terminalTracker,
+          owningCronLaneTaskMarker,
+        });
         if (result.ok && "ran" in result && !result.ran) {
           if (result.reason !== "invalid-spec") {
             const finishedAt = state.deps.nowMs();

@@ -577,6 +577,7 @@ async function processMessage(
     },
     route: {
       agentId: route.agentId,
+      dmScope: route.dmScope,
       accountId: route.accountId,
       routeSessionKey: route.sessionKey,
       dispatchSessionKey: route.sessionKey,
@@ -626,7 +627,7 @@ async function processMessage(
     channel: "zalouser",
     accountId: account.accountId,
     cfg: config,
-    route: { agentId: route.agentId, sessionKey: route.sessionKey },
+    route: { agentId: route.agentId, dmScope: route.dmScope, sessionKey: route.sessionKey },
     ctxPayload,
     delivery: {
       preparePayload: (payload) => {
