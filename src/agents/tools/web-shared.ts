@@ -303,22 +303,25 @@ export async function readResponseText(
     try {
       rawBytes = new Uint8Array(await readBytes.call(res));
     } catch {
-      return { text: "", truncated: false, bytesRead: 0 };
+      // arrayBuffer failed — fall back to text() for compatibility
     }
-    const decoded = decodeResponseBytes(res, rawBytes);
-    // If decodeResponseBytes produced U+FFFD, the raw bytes may be malformed
-    // UTF-8. Validate with a strict decoder: if fatal decode succeeds the
-    // U+FFFD bytes (EF BF BD) are legitimate; if it fails the original bytes
-    // were corrupt and we discard the result.
-    if (decoded.includes("�")) {
-      try {
-        new TextDecoder("utf-8", { fatal: true }).decode(rawBytes);
-        // strict decode passed — the U+FFFD is legitimate
-      } catch {
-        return { text: "", truncated: false, bytesRead: 0 };
+    if (rawBytes!) {
+      const decoded = decodeResponseBytes(res, rawBytes);
+      // If decodeResponseBytes produced U+FFFD, validate with the same
+      // charset that decodeResponseBytes resolved rather than hard-coding
+      // UTF-8. This preserves legitimate U+FFFD in non-UTF-8 encodings.
+      if (decoded.includes("�")) {
+        const contentType = responseContentType(res);
+        const charset = readCharsetParam(contentType) ?? "utf-8";
+        try {
+          new TextDecoder(charset, { fatal: true }).decode(rawBytes);
+          // strict decode passed — the U+FFFD is legitimate
+        } catch {
+          return { text: "", truncated: false, bytesRead: 0 };
+        }
       }
+      return { text: decoded, truncated: false, bytesRead: rawBytes.byteLength };
     }
-    return { text: decoded, truncated: false, bytesRead: rawBytes.byteLength };
   }
 
   // No raw-byte access — text() is the only fallback for mock Response objects
