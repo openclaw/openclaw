@@ -1,8 +1,8 @@
 // Opens APNs HTTP/2 sessions with optional managed proxy tunneling.
 import { once } from "node:events";
 import http2 from "node:http2";
-import { StringDecoder } from "node:string_decoder";
 import tls from "node:tls";
+import { decodeTextPrefix } from "@openclaw/normalization-core";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { openProxyConnectTunnel } from "@openclaw/proxyline";
 import { toErrorObject } from "./errors.js";
@@ -223,7 +223,7 @@ export function appendApnsResponseBodyCapture(
     return;
   }
   const slice = buffer.byteLength > remaining ? buffer.subarray(0, remaining) : buffer;
-  capture.chunks.push(slice);
+  capture.chunks.push(Buffer.from(slice));
   capture.capturedBytes += slice.byteLength;
   if (slice.byteLength < buffer.byteLength) {
     capture.truncated = true;
@@ -231,7 +231,9 @@ export function appendApnsResponseBodyCapture(
 }
 
 export function getApnsResponseBodyCaptureText(capture: ApnsResponseBodyCapture): string {
-  return new StringDecoder("utf8").write(Buffer.concat(capture.chunks));
+  return decodeTextPrefix(Buffer.concat(capture.chunks, capture.capturedBytes), {
+    truncated: capture.truncated,
+  });
 }
 
 /** Sends an intentionally invalid APNs push through a proxy to prove HTTP/2 reachability. */
