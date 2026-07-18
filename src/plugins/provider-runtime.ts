@@ -101,6 +101,24 @@ import type {
 const log = createSubsystemLogger("plugins/provider-runtime");
 const PROVIDER_MODEL_CATALOG_AUGMENT_TIMEOUT_MS = 15_000;
 const warnedExternalAuthFallbackPluginIds = new Set<string>();
+type ProviderModelCatalogAugmentHook = NonNullable<ProviderPlugin["augmentModelCatalog"]>;
+type ProviderModelCatalogAugmentOutcome =
+  | {
+      status: "fulfilled";
+      value: Awaited<ReturnType<ProviderModelCatalogAugmentHook>>;
+    }
+  | { status: "rejected"; error: unknown }
+  | { status: "timed-out" };
+type ProviderModelCatalogAugmentInvocation = {
+  controller: AbortController;
+  outcome: Promise<ProviderModelCatalogAugmentOutcome>;
+};
+// Plugin metadata is process-stable. Retain hung calls so uncached retries cannot
+// stack duplicate provider work after the caller's deadline has expired.
+const providerModelCatalogAugmentInFlight = new Map<
+  string,
+  ProviderModelCatalogAugmentInvocation
+>();
 
 function matchesProviderPluginRef(provider: ProviderPlugin, providerId: string): boolean {
   const normalized = normalizeProviderId(providerId);
@@ -179,9 +197,17 @@ function resetExternalAuthFallbackWarningCacheForTest(): void {
   warnedExternalAuthFallbackPluginIds.clear();
 }
 
+function resetProviderModelCatalogAugmentInFlightForTest(): void {
+  for (const invocation of providerModelCatalogAugmentInFlight.values()) {
+    invocation.controller.abort();
+  }
+  providerModelCatalogAugmentInFlight.clear();
+}
+
 export const testing = {
   clearProviderRuntimePluginCacheForTest,
   resetExternalAuthFallbackWarningCacheForTest,
+  resetProviderModelCatalogAugmentInFlightForTest,
 } as const;
 
 function resolveProviderPluginsForCatalogHooks(params: {
@@ -1108,6 +1134,75 @@ export function shouldDeferProviderSyntheticProfileAuthWithPlugin(params: {
   return undefined;
 }
 
+function resolveProviderModelCatalogAugmentKey(plugin: ProviderPlugin): string {
+  return `${plugin.pluginId ?? plugin.id}\0${plugin.id}`;
+}
+
+function resolveProviderModelCatalogAugmentInvocation(params: {
+  plugin: ProviderPlugin;
+  hook: ProviderModelCatalogAugmentHook;
+  context: ProviderAugmentModelCatalogContext;
+}): ProviderModelCatalogAugmentInvocation {
+  const key = resolveProviderModelCatalogAugmentKey(params.plugin);
+  const existing = providerModelCatalogAugmentInFlight.get(key);
+  if (existing) {
+    return existing;
+  }
+
+  const controller = new AbortController();
+  const signal = params.context.signal
+    ? AbortSignal.any([params.context.signal, controller.signal])
+    : controller.signal;
+  const invocation = {
+    controller,
+    outcome: Promise.resolve()
+      .then(() =>
+        params.hook({
+          ...params.context,
+          signal,
+          timeoutMs: PROVIDER_MODEL_CATALOG_AUGMENT_TIMEOUT_MS,
+        }),
+      )
+      .then(
+        (value): ProviderModelCatalogAugmentOutcome =>
+          controller.signal.aborted ? { status: "timed-out" } : { status: "fulfilled", value },
+        (error: unknown): ProviderModelCatalogAugmentOutcome =>
+          controller.signal.aborted ? { status: "timed-out" } : { status: "rejected", error },
+      ),
+  } satisfies ProviderModelCatalogAugmentInvocation;
+  providerModelCatalogAugmentInFlight.set(key, invocation);
+  void invocation.outcome.then(() => {
+    if (providerModelCatalogAugmentInFlight.get(key) === invocation) {
+      providerModelCatalogAugmentInFlight.delete(key);
+    }
+  });
+  return invocation;
+}
+
+function waitForProviderModelCatalogAugment(
+  invocation: ProviderModelCatalogAugmentInvocation,
+): Promise<ProviderModelCatalogAugmentOutcome> {
+  if (invocation.controller.signal.aborted) {
+    return Promise.resolve({ status: "timed-out" });
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const clearTimer = () => {
+    if (timer) {
+      clearTimeout(timer);
+      timer = undefined;
+    }
+  };
+  return Promise.race([
+    invocation.outcome,
+    new Promise<{ status: "timed-out" }>((resolve) => {
+      timer = setTimeout(() => {
+        invocation.controller.abort();
+        resolve({ status: "timed-out" });
+      }, PROVIDER_MODEL_CATALOG_AUGMENT_TIMEOUT_MS);
+    }),
+  ]).finally(clearTimer);
+}
+
 export async function augmentModelCatalogWithProviderPluginsResult(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -1116,54 +1211,40 @@ export async function augmentModelCatalogWithProviderPluginsResult(params: {
 }) {
   const supplemental = [] as ProviderAugmentModelCatalogContext["entries"];
   let authoritative = true;
-  const pending = resolveProviderPluginsForCatalogHooks(params).map((plugin) => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const clearTimer = () => {
-      if (timer) {
-        clearTimeout(timer);
-        timer = undefined;
-      }
-    };
-    const result = Promise.race([
-      Promise.resolve()
-        .then(() => plugin.augmentModelCatalog?.(params.context))
-        .then(
-          (value) => ({ status: "fulfilled", value }) as const,
-          (error: unknown) => ({ status: "rejected", error }) as const,
-        ),
-      new Promise<{ status: "timed-out" }>((resolve) => {
-        timer = setTimeout(
-          () => resolve({ status: "timed-out" }),
-          PROVIDER_MODEL_CATALOG_AUGMENT_TIMEOUT_MS,
-        );
-      }),
-    ]).finally(clearTimer);
-    return { plugin, result, clearTimer };
+  const pending = resolveProviderPluginsForCatalogHooks(params).flatMap((plugin) => {
+    const hook = plugin.augmentModelCatalog;
+    if (!hook) {
+      return [];
+    }
+    const invocation = resolveProviderModelCatalogAugmentInvocation({
+      plugin,
+      hook,
+      context: params.context,
+    });
+    return [{ plugin, result: waitForProviderModelCatalogAugment(invocation) }];
   });
-  try {
-    for (const { plugin, result } of pending) {
-      const outcome = await result;
-      if (outcome.status === "rejected") {
-        throw outcome.error;
-      }
-      if (outcome.status === "timed-out") {
-        authoritative = false;
-        const pluginId = plugin.pluginId ?? plugin.id;
-        log.warn(
-          `Provider plugin "${sanitizeForLog(pluginId)}" augmentModelCatalog hook timed out after ${PROVIDER_MODEL_CATALOG_AUGMENT_TIMEOUT_MS}ms; skipping hook and continuing catalog discovery`,
-        );
-        continue;
-      }
-      const next = outcome.value;
-      if (!next || next.length === 0) {
-        continue;
-      }
-      supplemental.push(...next);
+  const outcomes = await Promise.all(pending.map(({ result }) => result));
+  for (const [index, outcome] of outcomes.entries()) {
+    const plugin = pending[index]?.plugin;
+    if (!plugin) {
+      continue;
     }
-  } finally {
-    for (const item of pending) {
-      item.clearTimer();
+    if (outcome.status === "rejected") {
+      throw outcome.error;
     }
+    if (outcome.status === "timed-out") {
+      authoritative = false;
+      const pluginId = plugin.pluginId ?? plugin.id;
+      log.warn(
+        `Provider plugin "${sanitizeForLog(pluginId)}" augmentModelCatalog hook timed out after ${PROVIDER_MODEL_CATALOG_AUGMENT_TIMEOUT_MS}ms; skipping hook and continuing catalog discovery`,
+      );
+      continue;
+    }
+    const next = outcome.value;
+    if (!next || next.length === 0) {
+      continue;
+    }
+    supplemental.push(...next);
   }
   return { entries: supplemental, authoritative };
 }

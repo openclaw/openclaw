@@ -381,6 +381,7 @@ describe("provider-runtime", () => {
     resetPluginRuntimeStateForTest();
     providerRuntimeTesting.clearProviderRuntimePluginCacheForTest();
     providerRuntimeTesting.resetExternalAuthFallbackWarningCacheForTest();
+    providerRuntimeTesting.resetProviderModelCatalogAugmentInFlightForTest();
     resolvePluginProvidersMock.mockReset();
     resolvePluginProvidersMock.mockReturnValue([]);
     isPluginProvidersLoadInFlightMock.mockReset();
@@ -1158,10 +1159,61 @@ describe("provider-runtime", () => {
     }
   });
 
-  it("propagates catalog hook errors without leaving later deadline timers", async () => {
+  it("does not overlap timed-out catalog hooks across retries", async () => {
+    vi.useFakeTimers();
+    try {
+      const signals: AbortSignal[] = [];
+      const timeoutBudgets: number[] = [];
+      const augmentHungCatalog = vi.fn<NonNullable<ProviderPlugin["augmentModelCatalog"]>>(
+        (context) => {
+          if (context.signal) {
+            signals.push(context.signal);
+          }
+          if (context.timeoutMs) {
+            timeoutBudgets.push(context.timeoutMs);
+          }
+          return new Promise<never>(() => {});
+        },
+      );
+      resolveCatalogHookProviderPluginIdsMock.mockReturnValue(["hung-plugin"]);
+      resolvePluginProvidersMock.mockReturnValue([
+        {
+          id: "hung",
+          pluginId: "hung-plugin",
+          label: "Hung Provider",
+          auth: [],
+          augmentModelCatalog: augmentHungCatalog,
+        },
+      ]);
+
+      const loadCatalog = () =>
+        augmentModelCatalogWithProviderPluginsResult({
+          env: process.env,
+          context: { env: process.env, entries: [] },
+        });
+
+      const firstLoad = loadCatalog();
+      await vi.advanceTimersByTimeAsync(15_000);
+      await expect(firstLoad).resolves.toEqual({ entries: [], authoritative: false });
+
+      const retryLoad = loadCatalog();
+      await vi.advanceTimersByTimeAsync(15_000);
+      await expect(retryLoad).resolves.toEqual({ entries: [], authoritative: false });
+
+      expect(augmentHungCatalog).toHaveBeenCalledTimes(1);
+      expect(signals).toHaveLength(1);
+      expect(signals[0]?.aborted).toBe(true);
+      expect(timeoutBudgets).toEqual([15_000]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("propagates catalog hook errors after later hook deadlines settle", async () => {
     vi.useFakeTimers();
     try {
       const failure = new Error("catalog hook failed");
+      let hungSignal: AbortSignal | undefined;
       resolveCatalogHookProviderPluginIdsMock.mockReturnValue(["broken-plugin", "hung-plugin"]);
       resolvePluginProvidersMock.mockReturnValue([
         {
@@ -1178,16 +1230,35 @@ describe("provider-runtime", () => {
           pluginId: "hung-plugin",
           label: "Hung Provider",
           auth: [],
-          augmentModelCatalog: () => new Promise(() => {}),
+          augmentModelCatalog: (context) => {
+            hungSignal = context.signal;
+            return new Promise(() => {});
+          },
         },
       ]);
 
-      await expect(
-        augmentModelCatalogWithProviderPlugins({
-          env: process.env,
-          context: { env: process.env, entries: [] },
-        }),
-      ).rejects.toBe(failure);
+      let settled = false;
+      let rejection: unknown;
+      void augmentModelCatalogWithProviderPlugins({
+        env: process.env,
+        context: { env: process.env, entries: [] },
+      }).then(
+        () => {
+          settled = true;
+        },
+        (error: unknown) => {
+          settled = true;
+          rejection = error;
+        },
+      );
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(settled).toBe(true);
+      expect(rejection).toBe(failure);
+      expect(hungSignal?.aborted).toBe(true);
       expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
