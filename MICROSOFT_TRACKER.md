@@ -9,7 +9,7 @@
 > - Priority guide: **P0** = crash/blocker/security, **P1** = significant bug/regression, **P2** = minor bug/enhancement, **P3** = nice-to-have/stale
 > - Items marked _(stale)_ have been flagged by the stale bot due to inactivity
 >
-> **Last updated:** 2026-07-17 (post-purge audit: refreshed from currently open GitHub issues/PRs and rebuilt from PR #49126 format)
+> **Last updated:** 2026-07-18 (post-purge audit: refreshed from currently open GitHub issues/PRs and rebuilt from PR #49126 format)
 
 ---
 
@@ -18,11 +18,11 @@
 | Category                  | Issues | PRs    | Total   | Closed | Remaining |
 | ------------------------- | ------ | ------ | ------- | ------ | --------- |
 | MS Teams (channel plugin) | 15     | 41     | 56      | 0      | 56        |
-| Windows platform          | 48     | 27     | 75      | 0      | 75        |
+| Windows platform          | 47     | 29     | 76      | 0      | 76        |
 | WSL                       | 4      | 0      | 4       | 0      | 4         |
-| Azure                     | 12     | 6      | 18      | 0      | 18        |
+| Azure                     | 11     | 5      | 16      | 0      | 16        |
 | SharePoint / M365         | 0      | 0      | 0       | 0      | 0         |
-| **Total**                 | **79** | **74** | **153** | **0**  | **153**   |
+| **Total**                 | **77** | **75** | **152** | **0**  | **152**   |
 
 ---
 
@@ -65,7 +65,6 @@
 | [ ]       | P0       | #92603  | fix(cron): summarize shell failures directly                                                                          | XL   |              |
 | [ ]       | P0       | #91438  | feat(voice-call): Microsoft Teams provider — CVI voice/video calls                                                    | XL   |              |
 | [ ]       | P0       | #87169  | Support separate Teams Graph tenant                                                                                   | S    |              |
-| [ ]       | P0       | #84975  | fix(heartbeat): suppress fallback after route-matched message tool                                                    | XL   | @vincentkoc  |
 | [ ]       | P0       | #77784  | Add Teams delegated auth for plugin tools                                                                             | XL   |              |
 | [ ]       | P0       | #55828  | feat(msteams): add native plugin interactivity parity                                                                 | XL   |              |
 | [ ]       | P1       | #106923 | fix(msteams): keep delegated auth healthy when an expired token can auto-refresh                                      | XS   |              |
@@ -76,13 +75,14 @@
 | [ ]       | P1       | #79185  | fix(tts/xiaomi): support Token Plan TTS endpoint                                                                      | S    |              |
 | [ ]       | P1       | #77921  | feat(inworld): default to inworld-tts-2 (Realtime TTS-2)                                                              | XS   |              |
 | [ ]       | P1       | #59986  | refactor(plugins): add lane-oriented channel interface                                                                | XL   |              |
+| [ ]       | P2       | #110230 | docs: document local TTS on macOS, Linux, and Windows                                                                 | XS   |              |
+| [ ]       | P2       | #109970 | fix(msteams): release failed Graph collection bodies                                                                  | XS   |              |
 | [ ]       | P2       | #109864 | fix(msteams): bound federated certificate file reads                                                                  | S    |              |
 | [ ]       | P2       | #109112 | fix(msteams): ignore blank certificate settings                                                                       | S    |              |
-| [ ]       | P2       | #109030 | fix(msteams): bound remote media saves with header and idle timeouts                                                  | XS   |              |
+| [ ]       | P2       | #109030 | fix(msteams): bound remote media saves with header and idle timeouts                                                  | M    |              |
 | [ ]       | P2       | #107171 | fix: prevent duplicate Teams broker retry turns                                                                       | L    |              |
 | [ ]       | P2       | #107164 | fix: Teams Graph and media work with RFC2544 proxy DNS                                                                | S    |              |
 | [ ]       | P2       | #106461 | fix(msteams): remove unused attachment helper                                                                         | XS   |              |
-| [ ]       | P2       | #106386 | fix(msteams): bound probe token acquisition to request deadline                                                       | S    |              |
 | [ ]       | P2       | #104691 | fix(msteams): proactive sends fail after conversation migration                                                       | S    |              |
 | [ ]       | P2       | #104690 | fix(msteams): reset sessions on app removal lifecycle                                                                 | XL   | @steipete    |
 | [ ]       | P2       | #102379 | fix(msteams): normalize inbound mentions and forwards                                                                 | L    | @galiniliev  |
@@ -118,7 +118,6 @@
 | [ ]       | P1       | #105528 | exec/read tools silently return empty output on Windows (v2026.6.x regression)                                                                                                          | `bug` `docs`                                                                                                                                                                        |             |
 | [ ]       | P1       | #102286 | Windows: multiple gateway-down failure modes (kill-and-rebind restart loop, config-edit no-relaunch, browser launch crash, blocking pricing fetches)                                    | `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-product-decision` `clawsweeper:needs-live-repro` `impact:session-state` `impact:crash-loop` +4 |             |
 | [ ]       | P1       | #100075 | [[Bug]: Windows Companion gives "Auth did not match" and openclaw onboard redirects to MyClaw.ai                                                                                        | `bug` `regression` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-info` `P0` +3                                                               |             |
-| [ ]       | P1       | #96835  | [Bug]: exec tool on Windows (v2026.6.10) pops visible cmd/PowerShell window for every command — regression from v2026.6.8                                                               | `bug` `stale` `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-info` +2                                                                    |             |
 | [ ]       | P1       | #93081  | [Bug]: Ctrl+C not working in Windows install on foreground                                                                                                                              | `bug` `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-info` `impact:crash-loop` +1                                                        |             |
 | [ ]       | P1       | #91675  | fetch failed / UND_ERR_SOCKET on Windows WSL when connecting to Google Gemini                                                                                                           | `bug` `bug:crash` `P1` `clawsweeper:no-new-fix-pr` `clawsweeper:fix-shape-clear` `clawsweeper:needs-maintainer-review` +4                                                           |             |
 | [ ]       | P1       | #91144  | [Bug]: Windows native CLI gateway Scheduled Task does not stay running; foreground window worksWindows native CLI gateway Scheduled Task does not stay running; foreground window works | `bug` `bug:behavior` `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:source-repro` `clawsweeper:linked-pr-open` +2                                                                    |             |
@@ -143,7 +142,7 @@
 | [ ]       | P2       | #106203 | Remote Windows node is connected and system.which works, but Codex/WebChat exposes no node_exec surface                                                                                 | `P2` `issue-rating: 🦪 silver shellfish` `impact:ux-friction`                                                                                                                       |             |
 | [ ]       | P2       | #105696 | [Bug] Liveness Verification Defect (process.kill signal 0) on Windows                                                                                                                   | `P2` `impact:message-loss` `issue-rating: 🦪 silver shellfish`                                                                                                                      |             |
 | [ ]       | P2       | #100955 | fix(plugins): document-extractors API fails to resolve relative paths on Windows                                                                                                        | `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-info` `issue-rating: 🦪 silver shellfish` `impact:other`                                  |             |
-| [ ]       | P2       | #99502  | Windows: openclaw gateway start opens visible terminal window (Scheduled Task LogonType=InteractiveToken)                                                                               | `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-info` `issue-rating: 🦐 gold shrimp` `impact:other` +1                                    |             |
+| [ ]       | P2       | #99502  | Windows: openclaw gateway start opens visible terminal window (Scheduled Task LogonType=InteractiveToken)                                                                               | `stale` `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-info` `issue-rating: 🦐 gold shrimp` +2                                           |             |
 | [ ]       | P2       | #95072  | fix: Windows /restart falls back to in-process restart without changing PID                                                                                                             | `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-product-decision` `clawsweeper:source-repro` `clawsweeper:linked-pr-open` `issue-rating: 🦞 diamond lobster` +1                 |             |
 | [ ]       | P2       | #80650  | [Bug]: [Bug] openclaw backup create 在Windows上失败（退出代码255）                                                                                                                      | `bug` `stale` `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-product-decision` +3                                                        |             |
 | [ ]       | P2       | #79899  | DefaultResourceLoader.reload() blocks event loop for 12-15s on Windows due to synchronous filesystem scanning                                                                           | `stale` `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-product-decision` `clawsweeper:needs-live-repro` +2                               |             |
@@ -173,9 +172,11 @@
 | [ ]       | P0       | #108073 | fix(infra): scope Windows path realpath caches                                        | M    |          |
 | [ ]       | P0       | #101698 | fix(file-transfer): expand Windows-style tilde policy globs                           | XS   |          |
 | [ ]       | P0       | #96164  | fix(exec): resolve PowerShell 7 via where.exe on Windows                              | S    |          |
+| [ ]       | P1       | #110253 | fix(perf): gateway startup benchmark reports n/a CPU/RSS on Windows                   | M    |          |
 | [ ]       | P1       | #97436  | test: make workshop symlink tests compatible with Windows                             | XS   |          |
 | [ ]       | P1       | #94514  | docs: add Windows pnpm fallback for Corepack EPERM                                    | XS   |          |
 | [ ]       | P1       | #69059  | fix: retry sqlite-vec load without .dll suffix on Windows                             | S    |          |
+| [ ]       | P2       | #110198 | fix(process): Windows exec/read empty output when detached spawn leaks                | S    |          |
 | [ ]       | P2       | #109431 | fix(anthropic): complete transcript reverse-scan windows across short reads           | S    |          |
 | [ ]       | P2       | #109163 | fix: PowerShell exec output with BOM renders as text                                  | M    |          |
 | [ ]       | P2       | #108242 | fix(gateway): fill bounded transcript windows across short reads                      | S    |          |
@@ -231,7 +232,6 @@ _No currently open items found._
 | [ ]       | P0       | #79570  | openai-responses adapter is unusable against Azure OpenAI: every turn returns a synthetic 0-token refusal (openai-completions works) | `stale` `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-product-decision` `clawsweeper:needs-security-review` +5           |          |
 | [ ]       | P1       | #100954 | fix(llm): token usage mismatch during early stream aborts on Azure OpenAI models                                                     | `P2` `clawsweeper:needs-live-repro` `impact:auth-provider` `issue-rating: 🐚 platinum hermit`                                                                        |          |
 | [ ]       | P1       | #95894  | Plugin installs crash Express 4.x routes: core npm-shrinkwrap pins path-to-regexp@8.x but no central override covers plugins         | `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-product-decision` `clawsweeper:source-repro` `impact:crash-loop` +1        |          |
-| [ ]       | P1       | #93781  | azure-openai-responses probe/agent route uses OpenAI auth profile instead of Azure credentials                                       | `P1` `clawsweeper:no-new-fix-pr` `clawsweeper:source-repro` `clawsweeper:linked-pr-open` `impact:auth-provider` `issue-rating: 🦞 diamond lobster`                   |          |
 | [ ]       | P1       | #80926  | Azure OpenAI Responses stalls before first event when memory tools are exposed                                                       | `maintainer` `P1` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-product-decision` `clawsweeper:needs-live-repro` +3           |          |
 | [ ]       | P2       | #103067 | Centralize chat-session naming; define subagent session lifetime & cross-channel persistence                                         | `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-product-decision` `clawsweeper:needs-live-repro` `impact:session-state` +3 |          |
 | [ ]       | P2       | #48788  | feat: centralized filename encoding utility for multi-encoding Content-Disposition handling                                          | `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-product-decision` `clawsweeper:source-repro` `impact:data-loss` +1         |          |
@@ -250,14 +250,13 @@ _No currently open items found._
 
 ## 8. Azure (Provider / Infrastructure) — PRs
 
-| Resolved? | Priority | #       | Title                                                                                        | Size | Assignee |
-| --------- | -------- | ------- | -------------------------------------------------------------------------------------------- | ---- | -------- |
-| [ ]       | P0       | #107070 | refactor(whatsapp): centralize inbound turn admission and history finalization               | L    |          |
-| [ ]       | P0       | #70922  | refactor(whatsapp): centralize account policy                                                | L    |          |
-| [ ]       | P1       | #93833  | fix(azure): responses model aliases route correctly                                          | XL   |          |
-| [ ]       | P2       | #109952 | feat(mac): Quick Chat v2 — enable toggle, agent switching, zoom entrance, window screenshots | XL   |          |
-| [ ]       | P2       | #98259  | fix(openai): enable prompt cache keys for Azure                                              | M    |          |
-| [ ]       | P2       | #96000  | fix(session-lock): allow reentrant acquire from inner transcript writers                     | XS   |          |
+| Resolved? | Priority | #       | Title                                                                          | Size | Assignee |
+| --------- | -------- | ------- | ------------------------------------------------------------------------------ | ---- | -------- |
+| [ ]       | P0       | #107070 | refactor(whatsapp): centralize inbound turn admission and history finalization | L    |          |
+| [ ]       | P0       | #70922  | refactor(whatsapp): centralize account policy                                  | L    |          |
+| [ ]       | P2       | #110299 | docs(providers): add Azure OpenAI setup page and directory entry               | XS   |          |
+| [ ]       | P2       | #98259  | fix(openai): enable prompt cache keys for Azure                                | M    |          |
+| [ ]       | P2       | #96000  | fix(session-lock): allow reentrant acquire from inner transcript writers       | XS   |          |
 
 ---
 
@@ -290,7 +289,6 @@ _No currently open items found._
 | MS Teams (channel plugin) | pr    | P0       | #92603  | fix(cron): summarize shell failures directly                                                                                         |
 | MS Teams (channel plugin) | pr    | P0       | #91438  | feat(voice-call): Microsoft Teams provider — CVI voice/video calls                                                                   |
 | MS Teams (channel plugin) | pr    | P0       | #87169  | Support separate Teams Graph tenant                                                                                                  |
-| MS Teams (channel plugin) | pr    | P0       | #84975  | fix(heartbeat): suppress fallback after route-matched message tool                                                                   |
 | MS Teams (channel plugin) | pr    | P0       | #77784  | Add Teams delegated auth for plugin tools                                                                                            |
 | MS Teams (channel plugin) | pr    | P0       | #55828  | feat(msteams): add native plugin interactivity parity                                                                                |
 | Windows platform          | issue | P0       | #105667 | [Bug] Incorrect Sandbox Bind Mount Parsing for Windows Relative Drive-Letter Paths                                                   |
@@ -330,7 +328,6 @@ _No currently open items found._
 | Windows platform          | issue | P1       | #105528 | exec/read tools silently return empty output on Windows (v2026.6.x regression)                                                                                                          |
 | Windows platform          | issue | P1       | #102286 | Windows: multiple gateway-down failure modes (kill-and-rebind restart loop, config-edit no-relaunch, browser launch crash, blocking pricing fetches)                                    |
 | Windows platform          | issue | P1       | #100075 | [[Bug]: Windows Companion gives "Auth did not match" and openclaw onboard redirects to MyClaw.ai                                                                                        |
-| Windows platform          | issue | P1       | #96835  | [Bug]: exec tool on Windows (v2026.6.10) pops visible cmd/PowerShell window for every command — regression from v2026.6.8                                                               |
 | Windows platform          | issue | P1       | #93081  | [Bug]: Ctrl+C not working in Windows install on foreground                                                                                                                              |
 | Windows platform          | issue | P1       | #91675  | fetch failed / UND_ERR_SOCKET on Windows WSL when connecting to Google Gemini                                                                                                           |
 | Windows platform          | issue | P1       | #91144  | [Bug]: Windows native CLI gateway Scheduled Task does not stay running; foreground window worksWindows native CLI gateway Scheduled Task does not stay running; foreground window works |
@@ -351,6 +348,7 @@ _No currently open items found._
 | Windows platform          | issue | P1       | #74378  | [Bug]: OpenClaw CLI commands remain alive as node.exe processes after execution on Windows                                                                                              |
 | Windows platform          | issue | P1       | #71699  | [Bug]: Gateway hard-crashes with 0xC0000409 (STATUS_STACK_BUFFER_OVERRUN) on Windows during Mattermost streaming reply; auto-respawn frequently wedges                                  |
 | Windows platform          | issue | P1       | #63491  | [Bug]: Windows Scheduled Task gateway restart/health becomes inconsistent after ready                                                                                                   |
+| Windows platform          | pr    | P1       | #110253 | fix(perf): gateway startup benchmark reports n/a CPU/RSS on Windows                                                                                                                     |
 | Windows platform          | pr    | P1       | #97436  | test: make workshop symlink tests compatible with Windows                                                                                                                               |
 | Windows platform          | pr    | P1       | #94514  | docs: add Windows pnpm fallback for Corepack EPERM                                                                                                                                      |
 | Windows platform          | pr    | P1       | #69059  | fix: retry sqlite-vec load without .dll suffix on Windows                                                                                                                               |
@@ -359,10 +357,8 @@ _No currently open items found._
 | Azure                     | issue | P1       | #102907 | Azure OpenAI Responses throws 400 when prompt_cache_key is sent to endpoints that do not support it                                                                                     |
 | Azure                     | issue | P1       | #100954 | fix(llm): token usage mismatch during early stream aborts on Azure OpenAI models                                                                                                        |
 | Azure                     | issue | P1       | #95894  | Plugin installs crash Express 4.x routes: core npm-shrinkwrap pins path-to-regexp@8.x but no central override covers plugins                                                            |
-| Azure                     | issue | P1       | #93781  | azure-openai-responses probe/agent route uses OpenAI auth profile instead of Azure credentials                                                                                          |
 | Azure                     | issue | P1       | #80926  | Azure OpenAI Responses stalls before first event when memory tools are exposed                                                                                                          |
 | Azure                     | issue | P1       | #71058  | [Feature]: Support for multiple Azure/Teams bots on a single Openclaw Gateway                                                                                                           |
-| Azure                     | pr    | P1       | #93833  | fix(azure): responses model aliases route correctly                                                                                                                                     |
 
 ## Appendix: Stale Items (Consider Closing)
 
@@ -371,9 +367,7 @@ _No currently open items found._
 | MS Teams (channel plugin) | issue | P2       | #81084 | [Feature]: MSTeams channel-bound agents need opt-out from per-thread sessions                                                                          |
 | MS Teams (channel plugin) | pr    | P0       | #91438 | feat(voice-call): Microsoft Teams provider — CVI voice/video calls                                                                                     |
 | MS Teams (channel plugin) | pr    | P0       | #87169 | Support separate Teams Graph tenant                                                                                                                    |
-| MS Teams (channel plugin) | pr    | P0       | #84975 | fix(heartbeat): suppress fallback after route-matched message tool                                                                                     |
-| MS Teams (channel plugin) | pr    | P2       | #96648 | Fix MSTeams card actions with durable receive before ACK                                                                                               |
-| Windows platform          | issue | P1       | #96835 | [Bug]: exec tool on Windows (v2026.6.10) pops visible cmd/PowerShell window for every command — regression from v2026.6.8                              |
+| MS Teams (channel plugin) | pr    | P2       | #89152 | feat(hooks): add agent turn end hook                                                                                                                   |
 | Windows platform          | issue | P1       | #84213 | [Bug]: openclaw completion -s zsh hangs on native Windows (no WSL)                                                                                     |
 | Windows platform          | issue | P1       | #84203 | [Bug]: Windows — models.authStatus cold latency 10-24s per CLI session (2026.5.18 + Codex 0.131.0)                                                     |
 | Windows platform          | issue | P1       | #84001 | Windows: openclaw status / status --json hangs in 2026.5.18 while status --all succeeds                                                                |
@@ -382,6 +376,7 @@ _No currently open items found._
 | Windows platform          | issue | P1       | #79437 | Prebuilt `node-llama-cpp` Windows binaries crash (0xC0000005) on Intel Alder Lake-N (N95) — qmd LLM half unusable                                      |
 | Windows platform          | issue | P1       | #77443 | [Bug]: WhatsApp event loop blocked (eventLoopDelayMaxMs=12088ms) on first inbound message — 2026.5.3-1 Windows                                         |
 | Windows platform          | issue | P1       | #71699 | [Bug]: Gateway hard-crashes with 0xC0000409 (STATUS_STACK_BUFFER_OVERRUN) on Windows during Mattermost streaming reply; auto-respawn frequently wedges |
+| Windows platform          | issue | P2       | #99502 | Windows: openclaw gateway start opens visible terminal window (Scheduled Task LogonType=InteractiveToken)                                              |
 | Windows platform          | issue | P2       | #80650 | [Bug]: [Bug] openclaw backup create 在Windows上失败（退出代码255）                                                                                     |
 | Windows platform          | issue | P2       | #79899 | DefaultResourceLoader.reload() blocks event loop for 12-15s on Windows due to synchronous filesystem scanning                                          |
 | Windows platform          | issue | P2       | #77730 | [Bug]: file-transfer plugin nodeHostCommands not advertised by Windows node host on live handshake (2026.5.3-1)                                        |
