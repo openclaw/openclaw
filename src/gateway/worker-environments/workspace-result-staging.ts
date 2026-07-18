@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -25,10 +25,9 @@ const WORKER_RESULT_CANDIDATE_REF_PREFIX = "refs/openclaw/worker-result-candidat
 const WORKER_RESULT_CLAIM_ID_PATTERN = /^[A-Za-z0-9-]+$/u;
 const STAGED_RESULT_MESSAGE = "OpenClaw worker workspace result";
 const STAGED_RESULT_METADATA_LIMIT = 128 * 1024 * 1024 + 4_096;
-const DISABLED_GIT_HOOKS_PATH = path.join(
-  os.tmpdir(),
-  `openclaw-disabled-git-hooks-${randomBytes(16).toString("hex")}`,
-);
+// Git documents the platform null device as the per-command way to disable
+// hooks. An unowned path under a shared temp dir could be populated by another user.
+const DISABLED_GIT_HOOKS_PATH = os.devNull;
 
 function gitCommand(cwd: string, args: string[]): string[] {
   return ["git", "-c", `core.hooksPath=${DISABLED_GIT_HOOKS_PATH}`, "-C", cwd, ...args];
