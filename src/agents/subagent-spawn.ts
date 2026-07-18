@@ -1329,6 +1329,7 @@ export async function spawnSubagentDirect(
     adapter,
     hookRunner,
     progressOrigin,
+    progressSessionKey: requesterInternalKey,
     buildRegistration: (_state, runId) => ({
       runId,
       requesterTurnRunId: ctx.requesterTurnRunId,

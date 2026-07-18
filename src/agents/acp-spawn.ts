@@ -1409,6 +1409,7 @@ export async function spawnAcpDirect(
     adapter,
     hookRunner: getGlobalHookRunner(),
     progressOrigin,
+    progressSessionKey: ownership.completionRequesterSessionKey,
     buildRegistration: (state, runId) => {
       const inlineDelivery = state.deliveryPlan?.useInlineDelivery === true;
       return {

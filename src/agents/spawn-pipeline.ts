@@ -43,6 +43,10 @@ export async function runSpawnPipeline<TState>(params: {
   buildRegistration: (state: TState, runId: string) => RegisterSubagentRunInput;
   hookRunner?: SubagentLifecycleHookRunner | null;
   progressOrigin?: SpawnProgressOrigin;
+  /** Session key the started-progress hook fires against. Backends differ on
+      purpose: native passes the controller-side requester key, ACP its
+      historical completion-owner key; do not collapse them. */
+  progressSessionKey: string;
 }): Promise<SpawnPipelineResult<TState>> {
   let state: TState;
   try {
@@ -80,7 +84,7 @@ export async function runSpawnPipeline<TState>(params: {
         {
           runId,
           childSessionKey: registration.childSessionKey,
-          requesterSessionKey: registration.requesterSessionKey,
+          requesterSessionKey: params.progressSessionKey,
         },
       );
     } catch {
