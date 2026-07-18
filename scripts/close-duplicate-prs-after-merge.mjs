@@ -94,6 +94,7 @@ function ghJson(args, runGh) {
 function defaultRunGh(args, options = {}) {
   return execFileSync("gh", args, {
     encoding: "utf8",
+    timeout: CLOSE_DUPES_TIMEOUT_MS,
     stdio: options.input ? ["pipe", "pipe", "inherit"] : ["ignore", "pipe", "inherit"],
     ...(options.input ? { input: options.input } : {}),
   });
@@ -325,3 +326,4 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
     process.exit(1);
   }
 }
+
