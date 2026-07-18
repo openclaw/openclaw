@@ -510,6 +510,21 @@ wa-select.settings-select wa-option:state(current) {
   color: var(--accent-foreground);
 }
 
+/* Forced colors suppresses the box-shadow ring and accent fill that stand in
+   for the outlines removed above, so restore system-color outlines there. */
+@media (forced-colors: active) {
+  wa-select.settings-select[open]::part(combobox),
+  wa-select.settings-select:focus-within::part(combobox) {
+    outline: 2px solid SelectedItem;
+    outline-offset: 2px;
+  }
+
+  wa-select.settings-select wa-option:focus-visible {
+    outline: 2px solid SelectedItem;
+    outline-offset: 2px;
+  }
+}
+
 textarea.settings-input {
   min-height: 88px;
   resize: vertical;
