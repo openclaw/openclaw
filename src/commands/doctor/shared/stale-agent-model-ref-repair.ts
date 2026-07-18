@@ -12,7 +12,7 @@ import type { AgentModelConfig } from "../../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolvePluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.js";
 
-export type StaleAgentModelRefRepair = {
+type StaleAgentModelRefRepair = {
   config: OpenClawConfig;
   changes: string[];
   warnings: string[];
