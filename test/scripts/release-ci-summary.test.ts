@@ -59,18 +59,16 @@ describe("runReleaseCiGh", () => {
     expect(
       runReleaseCiGh(["api", "repos/openclaw/openclaw/actions/runs/1"], { execFileSyncImpl }),
     ).toBe("result");
-    expect(execFileSyncImpl).toHaveBeenCalledTimes(1);
-    const [command, args, options] = expectDefined(
-      execFileSyncImpl.mock.calls[0],
-      "GitHub runner call",
+    expect(execFileSyncImpl).toHaveBeenCalledOnce();
+    expect(execFileSyncImpl).toHaveBeenCalledWith(
+      expect.any(String),
+      ["api", "repos/openclaw/openclaw/actions/runs/1"],
+      expect.objectContaining({
+        encoding: "utf8",
+        killSignal: "SIGKILL",
+        timeout: 60_000,
+      }),
     );
-    expect(command).toBeTypeOf("string");
-    expect(args).toEqual(["api", "repos/openclaw/openclaw/actions/runs/1"]);
-    expect(options).toMatchObject({
-      encoding: "utf8",
-      killSignal: "SIGKILL",
-      timeout: 60_000,
-    });
   });
 
   it("propagates GitHub lookup timeouts", () => {
