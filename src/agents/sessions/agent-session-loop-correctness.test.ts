@@ -156,6 +156,7 @@ async function createTestSession(
     sessionManager?: SessionManager;
     resourceLoader?: ResourceLoader;
     customTools?: ToolDefinition[];
+    contextOverflowRecoveryOwner?: "session" | "caller";
   } = {},
 ) {
   const model = options.model ?? testModel;
@@ -181,6 +182,7 @@ async function createTestSession(
     sessionManager,
     settingsManager,
     modelRegistry,
+    contextOverflowRecoveryOwner: options.contextOverflowRecoveryOwner,
   });
   sessions.push(result.session);
   return { ...result, settingsManager, sessionManager };
@@ -366,6 +368,70 @@ describe("AgentSession loop correctness", () => {
       expect.objectContaining({ type: "compaction_end", reason: "overflow", willRetry: true }),
     );
     expect(session.getLastAssistantText()).toBe("complete retry");
+  });
+
+  it("leaves reactive overflow recovery to the caller when configured", async () => {
+    const settingsManager = SettingsManager.inMemory({
+      compaction: { enabled: true, reserveTokens: 0, keepRecentTokens: 1 },
+      retry: { enabled: false },
+    });
+    const compactionEvents: AgentSessionEvent[] = [];
+    streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
+      createAssistantResultStream({
+        ...createAssistant(activeModel, [], "error", 100),
+        errorMessage: "400 Your input exceeds the context window of this model",
+      }),
+    );
+    const { session } = await createTestSession({
+      settingsManager,
+      resourceLoader: createResourceLoader(createCompactionHandlers()),
+      contextOverflowRecoveryOwner: "caller",
+    });
+    session.subscribe((event) => {
+      if (event.type === "compaction_end") {
+        compactionEvents.push(event);
+      }
+    });
+
+    await session.prompt("long request");
+
+    expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
+    expect(compactionEvents).toEqual([]);
+    expect(session.messages.at(-1)).toMatchObject({
+      role: "assistant",
+      stopReason: "error",
+      errorMessage: "400 Your input exceeds the context window of this model",
+    });
+  });
+
+  it("keeps threshold maintenance session-owned when the caller owns overflow recovery", async () => {
+    const settingsManager = SettingsManager.inMemory({
+      compaction: { enabled: true, reserveTokens: 0, keepRecentTokens: 1 },
+      retry: { enabled: false },
+    });
+    const compactionEvents: AgentSessionEvent[] = [];
+    streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
+      createAssistantResultStream(
+        createAssistant(activeModel, [{ type: "text", text: "complete answer" }], "stop", 100),
+      ),
+    );
+    const { session } = await createTestSession({
+      settingsManager,
+      resourceLoader: createResourceLoader(createCompactionHandlers()),
+      contextOverflowRecoveryOwner: "caller",
+    });
+    session.subscribe((event) => {
+      if (event.type === "compaction_end") {
+        compactionEvents.push(event);
+      }
+    });
+
+    await session.prompt("long request");
+
+    expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
+    expect(compactionEvents).toContainEqual(
+      expect.objectContaining({ type: "compaction_end", reason: "threshold", willRetry: false }),
+    );
   });
 
   it("delivers a pending prompt immediately after pre-prompt compaction", async () => {

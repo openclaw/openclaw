@@ -10,6 +10,7 @@ import {
   loadTranscriptEvents,
   upsertSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
+import { formatSqliteSessionFileMarker } from "../../../config/sessions/sqlite-marker.js";
 import { appendSessionTranscriptMessage } from "../../../config/sessions/transcript-append.test-support.js";
 import {
   runWithOwnedSessionTranscriptWriteLock,
@@ -2221,6 +2222,43 @@ describe("embedded attempt session lock lifecycle", () => {
     await controller.releaseForPrompt();
     sessionManager.appendCompaction("threshold summary", firstKeptEntryId, 160_001);
 
+    await expect(controller.withSessionWriteLock(() => "finalize")).resolves.toBe("finalize");
+    expect(controller.hasSessionTakeover()).toBe(false);
+  });
+
+  it("persists compaction through the SQLite transcript owner without a JSONL append fence", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attempt-sqlite-compaction-"));
+    tempDirs.push(dir);
+    const sessionId = "sqlite-compaction-session";
+    const sessionKey = "sqlite-compaction";
+    const storePath = path.join(dir, "openclaw-agent.sqlite");
+    await upsertSessionEntry(
+      { agentId: "main", sessionKey, storePath },
+      {
+        sessionId,
+        chatType: "direct",
+        spawnedCwd: dir,
+        updatedAt: Date.now(),
+      },
+    );
+    const sessionFile = formatSqliteSessionFileMarker({ agentId: "main", sessionId, storePath });
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+    const sessionManager = guardSessionManager(SessionManager.open(sessionFile));
+    const firstKeptEntryId = sessionManager.appendMessage({
+      role: "user",
+      content: "old question",
+      timestamp: 1,
+    });
+
+    await controller.releaseForPrompt();
+    sessionManager.appendCompaction("sqlite summary", firstKeptEntryId, 160_001);
+
+    expect(await loadTranscriptEvents({ sessionId, sessionKey, storePath })).toContainEqual(
+      expect.objectContaining({ type: "compaction", summary: "sqlite summary" }),
+    );
     await expect(controller.withSessionWriteLock(() => "finalize")).resolves.toBe("finalize");
     expect(controller.hasSessionTakeover()).toBe(false);
   });

@@ -203,7 +203,10 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     expect(hoisted.applyAgentAutoCompactionGuard).toHaveBeenCalledTimes(2);
     expect(hoisted.applyAgentCompactionSettingsFromConfig).toHaveBeenCalledOnce();
     expect(hoisted.createAgentSession).toHaveBeenCalledWith(
-      expect.objectContaining({ resourceLoader: fixture.resourceLoader }),
+      expect.objectContaining({
+        resourceLoader: fixture.resourceLoader,
+        contextOverflowRecoveryOwner: "caller",
+      }),
     );
     expect(fixture.setActiveToolsByName).toHaveBeenCalledWith(fixture.sessionToolAllowlist);
     expect(result).toEqual(
@@ -218,6 +221,20 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     expect(result.hasDeliveredSourceReply()).toBe(false);
     fixture.onDeliveredSourceReply();
     expect(result.hasDeliveredSourceReply()).toBe(true);
+  });
+
+  it("leaves overflow recovery with the session when no model budget was resolved", async () => {
+    const fixture = createInput();
+    fixture.input.attempt = {
+      ...fixture.input.attempt,
+      contextTokenBudget: undefined,
+    };
+
+    await prepareEmbeddedAttemptAgentSession(fixture.input);
+
+    expect(hoisted.createAgentSession).toHaveBeenCalledWith(
+      expect.objectContaining({ contextOverflowRecoveryOwner: "session" }),
+    );
   });
 
   it("publishes session ownership before activation can fail", async () => {

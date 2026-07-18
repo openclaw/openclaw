@@ -161,6 +161,9 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
       : undefined,
     withSessionWriteLock: (operation) =>
       input.sessionLockController.withSessionWriteLock(operation),
+    // The embedded runner owns bounded recovery only when model policy supplied
+    // its budget. Otherwise the session must retain recovery rather than drop it.
+    contextOverflowRecoveryOwner: attempt.contextTokenBudget === undefined ? "session" : "caller",
   });
   const activeSession = createdSession.session;
   if (!activeSession) {

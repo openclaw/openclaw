@@ -160,14 +160,14 @@ describe("provider prompt state", () => {
     clearProviderPromptState(runId);
   });
 
-  it("allows a legitimate identical payload after a matching attempt succeeds", async () => {
-    const runId = "success-clears-rejection";
+  it("keeps a rejected primary identity across successful auxiliary attempts", async () => {
+    const runId = "success-preserves-rejection";
     const state = getProviderPromptState(runId);
     const context = { systemPrompt: "system", messages: [], tools: [] } as Context;
     const rejectedPayload = { input: "rejected", model: model.id };
     const successfulPayload = { input: "successful", model: model.id };
     const payloads = [rejectedPayload, successfulPayload, { ...rejectedPayload }];
-    const stopReasons: Array<"error" | "stop"> = ["error", "stop", "error"];
+    const stopReasons: Array<"error" | "stop"> = ["error", "stop"];
     const transport = vi.fn<StreamFn>(async (_model, _context, options) => {
       const payload = payloads.shift();
       await options?.onPayload?.(payload, model);
@@ -184,9 +184,8 @@ describe("provider prompt state", () => {
     markLastProviderPromptContextRejected(state);
     const successful = await wrapped(model, context);
     await successful.result();
-    const repeated = await wrapped(model, context);
-    await repeated.result();
 
+    await expect(wrapped(model, context)).rejects.toThrow("byte-identical provider payload");
     expect(transport).toHaveBeenCalledTimes(3);
     clearProviderPromptState(runId);
   });

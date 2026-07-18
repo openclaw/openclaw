@@ -113,17 +113,6 @@ export function markLastProviderPromptContextRejected(
   return attempted;
 }
 
-function markProviderPromptSucceeded(
-  state: ProviderPromptState,
-  snapshot: ProviderPromptSnapshot,
-): void {
-  if (state.lastAttempt !== snapshot) {
-    return;
-  }
-  state.lastAttempt = undefined;
-  state.lastRejected = undefined;
-}
-
 /** Observes the request body after every provider wrapper and caller payload hook. */
 export function wrapStreamFnWithProviderPromptState(params: {
   streamFn: StreamFn;
@@ -132,7 +121,6 @@ export function wrapStreamFnWithProviderPromptState(params: {
 }): StreamFn {
   return async (model, context, options) => {
     beginProviderPromptAttempt(params.state);
-    let attemptSnapshot: ProviderPromptSnapshot | undefined;
     const originalOnPayload = options?.onPayload;
     const stream = await params.streamFn(model, context, {
       ...options,
@@ -146,21 +134,9 @@ export function wrapStreamFnWithProviderPromptState(params: {
         });
         assertProviderPromptRetryProgress(params.state, snapshot);
         recordProviderPromptAttempt(params.state, snapshot);
-        attemptSnapshot = snapshot;
         return finalPayload;
       },
     });
-    void stream
-      .result()
-      .then((message) => {
-        if (message.stopReason === "error" || message.stopReason === "aborted") {
-          return;
-        }
-        if (attemptSnapshot) {
-          markProviderPromptSucceeded(params.state, attemptSnapshot);
-        }
-      })
-      .catch(() => undefined);
     return stream;
   };
 }
