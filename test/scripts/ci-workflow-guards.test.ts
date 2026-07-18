@@ -294,6 +294,14 @@ describe("ci workflow guards", () => {
     );
   });
 
+  it("bounds the runner public IP lookup in Mantis Slack desktop smoke", () => {
+    const workflow = readFileSync(".github/workflows/mantis-slack-desktop-smoke.yml", "utf8");
+
+    expect(workflow).toContain(
+      "runner_ip=\"$(curl -fsS --connect-timeout 10 --max-time 30 https://checkip.amazonaws.com | tr -d '[:space:]')\"",
+    );
+  });
+
   it("runs dependency policy guards in PR CI preflight", () => {
     const workflow = readFileSync(".github/workflows/ci.yml", "utf8");
     const preflightGuards = workflow.slice(

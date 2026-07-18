@@ -266,7 +266,8 @@ jobs:
           require_var OPENCLAW_QA_CONVEX_SECRET_CI
           require_var CRABBOX_COORDINATOR_TOKEN
           if [[ -z "${CRABBOX_LEASE_ID:-}" && "$CRABBOX_PROVIDER" == "aws" ]]; then
-            runner_ip="$(curl -fsS https://checkip.amazonaws.com | tr -d '[:space:]')"
+            # Bound the public IP lookup so a stalled metadata endpoint cannot wedge AWS SSH ingress setup.
+            runner_ip="$(curl -fsS --connect-timeout 10 --max-time 30 https://checkip.amazonaws.com | tr -d '[:space:]')"
             if [[ -z "$runner_ip" ]]; then
               echo "Could not resolve GitHub runner public IPv4 for AWS SSH ingress." >&2
               exit 1
