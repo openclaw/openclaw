@@ -214,6 +214,13 @@ export async function startGatewayService(
     };
   }
 
+  if (state.loaded && state.running) {
+    return {
+      outcome: "already-running",
+      state,
+    };
+  }
+
   if (repairIssues.length > 0) {
     return {
       outcome: "repair-required",

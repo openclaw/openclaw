@@ -108,8 +108,11 @@ function setupDeps(params: {
   persistRiskAcknowledgement?: GuidedOnboardingDeps["persistRiskAcknowledgement"];
   runSetupMemoryImportStep?: GuidedOnboardingDeps["runSetupMemoryImportStep"];
   runAppRecommendations?: GuidedOnboardingDeps["runAppRecommendations"];
+  runBrowserHandoff?: GuidedOnboardingDeps["runBrowserHandoff"];
+  probeBrowserHandoffGateway?: GuidedOnboardingDeps["probeBrowserHandoffGateway"];
   applySetup?: GuidedOnboardingDeps["applySetup"];
   handoffMode?: GuidedOnboardingDeps["handoffMode"];
+  platform?: NodeJS.Platform;
 }) {
   const runSystemAgentChat = vi.fn<NonNullable<GuidedOnboardingDeps["runSystemAgentChat"]>>(
     params.runSystemAgentChat ?? (async () => {}),
@@ -144,7 +147,17 @@ function setupDeps(params: {
     persistRiskAcknowledgement: params.persistRiskAcknowledgement ?? vi.fn(async () => undefined),
     runSetupMemoryImportStep: params.runSetupMemoryImportStep ?? vi.fn(async () => undefined),
     runAppRecommendations: params.runAppRecommendations ?? vi.fn(async ({ config }) => config),
+    runBrowserHandoff:
+      params.runBrowserHandoff ??
+      (vi.fn(async () => ({
+        handedOff: false as const,
+        reason: "timeout" as const,
+      })) as GuidedOnboardingDeps["runBrowserHandoff"]),
+    probeBrowserHandoffGateway:
+      params.probeBrowserHandoffGateway ??
+      (vi.fn(async () => ({ ok: false })) as GuidedOnboardingDeps["probeBrowserHandoffGateway"]),
     runSystemAgentChat,
+    platform: params.platform ?? "linux",
     ...(params.handoffMode ? { handoffMode: params.handoffMode } : {}),
   } satisfies GuidedOnboardingDeps;
 }
@@ -258,6 +271,103 @@ describe("runGuidedOnboarding", () => {
     expect(restoreTerminalState.mock.invocationCallOrder[0]).toBeLessThan(
       deps.launchHatchTui.mock.invocationCallOrder[0]!,
     );
+  });
+
+  it("hands the custodian hatch to the browser after apply and recommendations", async () => {
+    const prompter = createWizardPrompter();
+    const applySetup = vi.fn(async () => ({
+      configPath: "/tmp/openclaw.json",
+      configHashBefore: null,
+      configHashAfter: null,
+      lines: [],
+    }));
+    const runAppRecommendations = vi.fn<NonNullable<GuidedOnboardingDeps["runAppRecommendations"]>>(
+      async ({ config }) => config,
+    );
+    const probeBrowserHandoffGateway = vi.fn(async () => ({ ok: true }));
+    const runBrowserHandoff = vi.fn(async () => ({ handedOff: true as const }));
+    const deps = setupDeps({
+      prompter,
+      applySetup,
+      runAppRecommendations,
+      probeBrowserHandoffGateway,
+      runBrowserHandoff,
+      platform: "darwin",
+    });
+
+    await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
+
+    expect(runBrowserHandoff).toHaveBeenCalledWith({ config: {}, prompter });
+    expect(applySetup.mock.invocationCallOrder[0]).toBeLessThan(
+      runAppRecommendations.mock.invocationCallOrder[0]!,
+    );
+    expect(runAppRecommendations.mock.invocationCallOrder[0]).toBeLessThan(
+      runBrowserHandoff.mock.invocationCallOrder[0]!,
+    );
+    expect(deps.launchHatchTui).not.toHaveBeenCalled();
+    expect(prompter.outro).toHaveBeenCalledWith("Your browser is ready — I'll be in Settings.");
+  });
+
+  it("falls through to the terminal hatch when browser handoff does not connect", async () => {
+    const prompter = createWizardPrompter();
+    const runBrowserHandoff = vi.fn(async () => ({
+      handedOff: false as const,
+      reason: "timeout" as const,
+    }));
+    const deps = setupDeps({
+      prompter,
+      runBrowserHandoff,
+      probeBrowserHandoffGateway: vi.fn(async () => ({ ok: true })),
+      platform: "darwin",
+    });
+
+    await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
+
+    expect(runBrowserHandoff).toHaveBeenCalledOnce();
+    expect(deps.launchHatchTui).toHaveBeenCalledWith("/tmp/work");
+    expect(prompter.outro).toHaveBeenCalledWith("Hatching your agent now…");
+  });
+
+  it("uses --tui to skip browser probing and keep the terminal hatch", async () => {
+    const prompter = createWizardPrompter();
+    const probeBrowserHandoffGateway = vi.fn(async () => ({ ok: true }));
+    const runBrowserHandoff = vi.fn(async () => ({ handedOff: true as const }));
+    const deps = setupDeps({
+      prompter,
+      probeBrowserHandoffGateway,
+      runBrowserHandoff,
+      platform: "darwin",
+    });
+
+    await runGuidedOnboarding(
+      { acceptRisk: true, workspace: "/tmp/work", tui: true },
+      makeRuntime(),
+      deps,
+    );
+
+    expect(probeBrowserHandoffGateway).not.toHaveBeenCalled();
+    expect(runBrowserHandoff).not.toHaveBeenCalled();
+    expect(deps.launchHatchTui).toHaveBeenCalledWith("/tmp/work");
+  });
+
+  it("never attempts browser handoff for remote chat onboarding", async () => {
+    const prompter = createWizardPrompter();
+    const probeBrowserHandoffGateway = vi.fn(async () => ({ ok: true }));
+    const runBrowserHandoff = vi.fn(async () => ({ handedOff: true as const }));
+    const deps = setupDeps({
+      prompter,
+      handoffMode: "chat",
+      probeBrowserHandoffGateway,
+      runBrowserHandoff,
+      platform: "darwin",
+    });
+
+    await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
+
+    expect(probeBrowserHandoffGateway).not.toHaveBeenCalled();
+    expect(runBrowserHandoff).not.toHaveBeenCalled();
+    expect(deps.runSystemAgentChat).toHaveBeenCalledOnce();
+    expect(deps.launchHatchTui).not.toHaveBeenCalled();
   });
 
   it("offers memory import after successful inference using the persisted config", async () => {

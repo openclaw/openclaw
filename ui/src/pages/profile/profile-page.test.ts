@@ -117,6 +117,19 @@ function createConnectedContext(request: GatewayBrowserClient["request"]) {
       ensure: async () => undefined,
       subscribe,
     },
+    config: {
+      current: {
+        assistantIdentity: {
+          name: "OpenClaw",
+          avatar: null,
+          avatarSource: null,
+          avatarStatus: null,
+          avatarReason: null,
+        },
+      },
+      subscribe,
+    },
+    basePath: "",
   } as unknown as ApplicationContext<RouteId>;
   return {
     context,

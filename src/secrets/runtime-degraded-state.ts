@@ -40,6 +40,11 @@ export class SecretSurfaceUnavailableError extends Error {
 }
 
 let activeDegradedOwners: DegradedSecretOwner[] = [];
+const activeCredentialDegradedOwners = new Map<string, DegradedSecretOwner>();
+
+function ownerKey(ownerKind: DegradedSecretOwner["ownerKind"], ownerId: string): string {
+  return `${ownerKind}\0${ownerId}`;
+}
 
 function cloneOwner(owner: DegradedSecretOwner): DegradedSecretOwner {
   return {
@@ -52,11 +57,28 @@ function cloneOwner(owner: DegradedSecretOwner): DegradedSecretOwner {
 /** Publishes the degraded-owner snapshot at the same edge as runtime config activation. */
 export function setActiveDegradedSecretOwners(owners: readonly DegradedSecretOwner[]): void {
   activeDegradedOwners = owners.map(cloneOwner);
+  activeCredentialDegradedOwners.clear();
+}
+
+/** Publishes or clears one runtime-discovered channel credential owner. */
+export function setActiveCredentialDegradedOwner(owner: DegradedSecretOwner): void {
+  activeCredentialDegradedOwners.set(ownerKey(owner.ownerKind, owner.ownerId), cloneOwner(owner));
+}
+
+/** Clears one runtime-discovered channel credential owner before re-inspection. */
+export function clearActiveCredentialDegradedOwner(
+  ownerKind: DegradedSecretOwner["ownerKind"],
+  ownerId: string,
+): void {
+  activeCredentialDegradedOwners.delete(ownerKey(ownerKind, ownerId));
 }
 
 /** Returns the active degraded-owner snapshot without exposing mutable registry state. */
 export function listActiveDegradedSecretOwners(): DegradedSecretOwner[] {
-  return activeDegradedOwners.map(cloneOwner);
+  return [
+    ...activeDegradedOwners.map(cloneOwner),
+    ...Array.from(activeCredentialDegradedOwners.values(), cloneOwner),
+  ];
 }
 
 /** Returns one active degraded owner, if present. */
@@ -64,9 +86,10 @@ export function findActiveDegradedSecretOwner(
   ownerKind: DegradedSecretOwner["ownerKind"],
   ownerId: string,
 ): DegradedSecretOwner | undefined {
-  const owner = activeDegradedOwners.find(
-    (entry) => entry.ownerKind === ownerKind && entry.ownerId === ownerId,
-  );
+  const owner =
+    activeDegradedOwners.find(
+      (entry) => entry.ownerKind === ownerKind && entry.ownerId === ownerId,
+    ) ?? activeCredentialDegradedOwners.get(ownerKey(ownerKind, ownerId));
   return owner ? cloneOwner(owner) : undefined;
 }
 

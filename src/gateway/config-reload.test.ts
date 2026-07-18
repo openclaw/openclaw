@@ -3804,6 +3804,63 @@ describe("startGatewayConfigReloader watcher error recovery", () => {
     await reloader.stop();
   });
 
+  it("keeps hot-reload active when transient errors are separated by working watchers", async () => {
+    const originalVitest = process.env.VITEST;
+    const originalChokidarPolling = process.env.CHOKIDAR_USEPOLLING;
+    delete process.env.VITEST;
+    delete process.env.CHOKIDAR_USEPOLLING;
+    let reloader: { stop: () => Promise<void>; hotReloadStatus: () => string } | undefined;
+    try {
+      // One initial watcher plus one re-create per error/recovery round.
+      const watchers = Array.from({ length: 5 }, () => createWatcherMock());
+      const started = startReloaderWithWatchers(watchers);
+      const { watchSpy, log } = started;
+      reloader = started.reloader;
+      const watchOptions = (index: number) =>
+        watchSpy.mock.calls[index]?.[1] as { usePolling?: boolean } | undefined;
+
+      // The initial error consumes one attempt. Every replacement then proves
+      // itself before failing, so each new episode must restart at attempt one.
+      watchers[0]?.emit("error");
+      expect(log.warn).toHaveBeenLastCalledWith(
+        expect.stringContaining("re-creating watcher (attempt 1/3 in 500ms)"),
+      );
+      await vi.advanceTimersByTimeAsync(500);
+
+      for (let round = 1; round < 4; round += 1) {
+        watchers[round]?.emit("change");
+        await vi.advanceTimersByTimeAsync(0);
+        watchers[round]?.emit("error");
+        expect(log.warn).toHaveBeenLastCalledWith(
+          expect.stringContaining("re-creating watcher (attempt 1/3 in 500ms)"),
+        );
+        await vi.advanceTimersByTimeAsync(500);
+        expect(watchSpy).toHaveBeenCalledTimes(round + 2);
+      }
+
+      // Hot-reload survives in native mode: no polling degradation, no disable.
+      expect(reloader.hotReloadStatus()).toBe("active");
+      expect(log.warn).toHaveBeenCalledTimes(4);
+      expect(watchOptions(4)?.usePolling).toBe(false);
+      expect(log.warn).not.toHaveBeenCalledWith(
+        expect.stringContaining("degrading to polling mode"),
+      );
+      expect(log.error).not.toHaveBeenCalled();
+    } finally {
+      if (originalVitest === undefined) {
+        delete process.env.VITEST;
+      } else {
+        process.env.VITEST = originalVitest;
+      }
+      if (originalChokidarPolling === undefined) {
+        delete process.env.CHOKIDAR_USEPOLLING;
+      } else {
+        process.env.CHOKIDAR_USEPOLLING = originalChokidarPolling;
+      }
+      await reloader?.stop();
+    }
+  });
+
   it("degrades to polling then disables after both native and polling retries are exhausted", async () => {
     const originalVitest = process.env.VITEST;
     const originalChokidarPolling = process.env.CHOKIDAR_USEPOLLING;
