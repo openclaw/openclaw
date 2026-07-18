@@ -83,10 +83,11 @@ export async function createWhatsAppStatusReactionController(
   }
 
   const sender = getSenderIdentity(params.msg);
+  const participant = sender.jid ?? sender.lid;
   const reactionOptions = {
     verbose: params.verbose,
     fromMe: false,
-    ...(sender.jid ? { participant: sender.jid } : {}),
+    ...(participant ? { participant } : {}),
     ...(params.accountId ? { accountId: params.accountId } : {}),
     cfg: params.cfg,
   };

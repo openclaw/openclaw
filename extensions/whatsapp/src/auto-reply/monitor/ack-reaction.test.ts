@@ -169,6 +169,42 @@ describe("maybeSendAckReaction", () => {
     );
   });
 
+  it("falls back to sender.lid for group ack reactions", async () => {
+    const cfg = createConfig("ack", {
+      ackReaction: {
+        emoji: "👀",
+        direct: true,
+        group: "always",
+      },
+    });
+    const ackReaction = await runAckReaction({
+      cfg,
+      msg: createMessage({
+        chatType: "group",
+        wasMentioned: false,
+        sender: {
+          jid: null,
+          lid: "123@lid",
+        },
+      }),
+      conversationId: "group-1",
+    });
+
+    await expect(ackReaction?.ackReactionPromise).resolves.toBe(true);
+    expect(hoisted.sendReactionWhatsApp).toHaveBeenCalledWith(
+      "15551234567@s.whatsapp.net",
+      "msg-1",
+      "👀",
+      {
+        verbose: false,
+        fromMe: false,
+        participant: "123@lid",
+        accountId: "default",
+        cfg,
+      },
+    );
+  });
+
   it("returns a handle that removes the ack with an empty reaction", async () => {
     const cfg = createConfig("ack");
     const ackReaction = await runAckReaction({ cfg });

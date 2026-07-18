@@ -97,4 +97,65 @@ describe("createWhatsAppStatusReactionController", () => {
     });
     await controller?.clear();
   });
+
+  it("falls back to sender.lid for group status reactions", async () => {
+    const cfg = {
+      messages: {
+        statusReactions: {
+          enabled: true,
+          timing: {
+            debounceMs: 1_000_000,
+            stallSoftMs: 1_000_000,
+            stallHardMs: 1_000_000,
+            doneHoldMs: 0,
+            errorHoldMs: 0,
+          },
+        },
+      },
+      channels: {
+        whatsapp: {
+          reactionLevel: "ack",
+          ackReaction: {
+            emoji: "👀",
+            direct: true,
+            group: "always",
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const controller = await createWhatsAppStatusReactionController({
+      cfg,
+      msg: createMessage({
+        chatType: "group",
+        wasMentioned: false,
+        sender: {
+          jid: null,
+          lid: "123@lid",
+        },
+      }),
+      agentId: "agent",
+      sessionKey: "whatsapp:default:group-1",
+      conversationId: "group-1",
+      verbose: false,
+      accountId: "default",
+    });
+
+    void controller?.setQueued();
+    await vi.waitFor(() => {
+      expect(hoisted.sendReactionWhatsApp).toHaveBeenCalledWith(
+        "15551234567@s.whatsapp.net",
+        "msg-1",
+        "👀",
+        {
+          verbose: false,
+          fromMe: false,
+          participant: "123@lid",
+          accountId: "default",
+          cfg,
+        },
+      );
+    });
+    await controller?.clear();
+  });
 });
