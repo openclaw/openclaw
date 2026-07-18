@@ -163,6 +163,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
   const rawAttempt = await runEmbeddedAttemptWithBackend({
     sessionId: runtime.sessionId,
     sessionKey: runtime.sessionKey,
+    conversationRecall: params.conversationRecall,
     promptCacheKey: params.promptCacheKey,
     sandboxSessionKey: params.sandboxSessionKey,
     trigger: params.trigger,

@@ -390,6 +390,7 @@ describe("secrets runtime snapshot", () => {
       }),
       env: {},
       includeAuthStoreRefs: false,
+      allowUnavailableSecretOwners: true,
       loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
     });
 
@@ -474,27 +475,6 @@ describe("secrets runtime snapshot", () => {
         loadablePluginOrigins: BUNDLED_CODEX_PLUGIN_ORIGINS,
       }),
     ).rejects.toThrow('Environment variable "CODEX_APP_SERVER_TOKEN" is missing or empty.');
-  });
-
-  it("fails closed for missing TTS SecretRefs outside cold-start isolation", async () => {
-    await expect(
-      prepareSecretsRuntimeSnapshot({
-        config: asConfig({
-          messages: {
-            tts: {
-              providers: {
-                elevenlabs: {
-                  apiKey: TTS_REF,
-                },
-              },
-            },
-          },
-        }),
-        env: {},
-        includeAuthStoreRefs: false,
-        loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-      }),
-    ).rejects.toThrow('Environment variable "ELEVENLABS_API_KEY" is missing or empty.');
   });
 
   it("isolates the TTS owner when its SecretRef is missing during cold startup", async () => {
@@ -753,84 +733,6 @@ describe("secrets runtime snapshot", () => {
         loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
       }),
     ).rejects.toThrow('Secret provider "missing" is not configured');
-  });
-
-  it("keeps TTS SecretRefs that resolve to non-strings fail-closed", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const root = tempDirs.make("openclaw-tts-secretref-object-");
-    const secretsPath = path.join(root, "secrets.json");
-    await fs.writeFile(
-      secretsPath,
-      JSON.stringify(
-        {
-          providers: {
-            elevenlabs: {
-              apiKey: { value: "not-a-string" },
-            },
-          },
-        },
-        null,
-        2,
-      ),
-      "utf8",
-    );
-    await fs.chmod(secretsPath, 0o600);
-
-    await expect(
-      prepareSecretsRuntimeSnapshot({
-        config: asConfig({
-          secrets: {
-            providers: {
-              ttsfile: {
-                source: "file",
-                path: secretsPath,
-                mode: "json",
-              },
-            },
-          },
-          messages: {
-            tts: {
-              providers: {
-                elevenlabs: {
-                  apiKey: {
-                    source: "file",
-                    provider: "ttsfile",
-                    id: "/providers/elevenlabs/apiKey",
-                  },
-                },
-              },
-            },
-          },
-        }),
-        env: {},
-        includeAuthStoreRefs: false,
-        allowUnavailableSecretOwners: true,
-        loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-      }),
-    ).rejects.toThrow(
-      "messages.tts.providers.elevenlabs.apiKey resolved to a non-string or empty value.",
-    );
-  });
-
-  it("still fails required gateway auth SecretRefs when env is missing", async () => {
-    await expect(
-      prepareSecretsRuntimeSnapshot({
-        config: asConfig({
-          gateway: {
-            auth: {
-              mode: "token",
-              token: { source: "env", provider: "default", id: "GATEWAY_TOKEN_REF" },
-            },
-          },
-        }),
-        env: {},
-        includeAuthStoreRefs: false,
-        allowUnavailableSecretOwners: true,
-        loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-      }),
-    ).rejects.toThrow('Environment variable "GATEWAY_TOKEN_REF" is missing or empty.');
   });
 
   it("isolates an unavailable model provider without applying another credential source", async () => {

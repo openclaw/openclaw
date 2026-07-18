@@ -1,7 +1,7 @@
 // Control UI view renders config screen content.
+import "../../styles/lobster-pet.css";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import JSON5 from "json5";
-import { html, nothing, type TemplateResult } from "lit";
+import { html, nothing } from "lit";
 import type { QueueMode } from "../../../../src/auto-reply/reply/queue/types.js";
 import type { ConfigUiHints } from "../../api/types.ts";
 import {
@@ -25,12 +25,12 @@ import {
   schemaType,
   type JsonSchema,
 } from "../../components/config-form.shared.ts";
-import "../../components/tooltip.ts";
 import {
   analyzeConfigSchema,
   renderConfigForm,
   type ConfigSchemaAnalysis,
 } from "../../components/config-form.ts";
+import "../../components/tooltip.ts";
 import { icons } from "../../components/icons.ts";
 import { getLobsterdex, getLobsterdexEntries } from "../../components/lobster-dex.ts";
 import {
@@ -47,12 +47,17 @@ import {
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import type { ConfigAutoSaveStatus } from "../../lib/config/index.ts";
+import { isJson5Warm, parseJson5Text, warmJson5 } from "../../lib/json5-runtime.ts";
 import type { RealtimeTalkInputDevice } from "../chat/realtime-talk-input.ts";
 import { renderSettingsSelectRow } from "./settings-select-row.ts";
 import {
   APPEARANCE_SETTINGS_TARGET_IDS,
   COMMUNICATION_SETTINGS_TARGET_IDS,
 } from "./settings-targets.ts";
+
+// The config editor is where JSON5 text first appears; warm the parser with
+// the page instead of racing the first raw-draft keystroke.
+void warmJson5().catch(() => undefined);
 
 const TEXT_SCALE_LABELS: Record<TextScaleStop, string> = {
   90: "configView.textSizes.small",
@@ -746,8 +751,8 @@ function computeRawDiff(
     return viewState.rawDiffCache.diff;
   }
   try {
-    const originalValue = JSON5.parse(original) as unknown;
-    const currentValue = JSON5.parse(current) as unknown;
+    const originalValue = parseJson5Text(original);
+    const currentValue = parseJson5Text(current);
     if (
       !originalValue ||
       !currentValue ||
@@ -766,7 +771,12 @@ function computeRawDiff(
     viewState.rawDiffCache = { original, current, diff };
     return diff;
   } catch {
-    viewState.rawDiffCache = { original, current, diff: [] };
+    // While the lazy JSON5 parser is still loading, a parse failure may be
+    // transient; skip the cache so the next render retries instead of pinning
+    // an empty diff for this text pair.
+    if (isJson5Warm()) {
+      viewState.rawDiffCache = { original, current, diff: [] };
+    }
     return [];
   }
 }
@@ -836,28 +846,41 @@ type ThemeOption = {
   id: ThemeName;
   labelKey: string;
   descriptionKey: string;
-  icon: TemplateResult;
 };
 const BUILTIN_THEME_OPTIONS: ThemeOption[] = [
   {
     id: "claw",
     labelKey: "configView.themes.claw.label",
     descriptionKey: "configView.themes.claw.description",
-    icon: icons.zap,
   },
   {
     id: "knot",
     labelKey: "configView.themes.knot.label",
     descriptionKey: "configView.themes.knot.description",
-    icon: icons.link,
   },
   {
     id: "dash",
     labelKey: "configView.themes.dash.label",
     descriptionKey: "configView.themes.dash.description",
-    icon: icons.barChart,
   },
 ];
+
+/* Builtin cards preview their real palette (chip colors live in config.css,
+   mirrored from the base.css theme blocks). The custom card only has real
+   colors while active — its chips read the live CSS variables — so it falls
+   back to the spark icon otherwise. */
+function renderThemeCardVisual(id: ThemeName, activeTheme: ThemeName) {
+  if (id === "custom" && activeTheme !== "custom") {
+    return html`<span class="settings-theme-card__icon" aria-hidden="true">${icons.spark}</span>`;
+  }
+  return html`
+    <span class="settings-theme-card__palette" aria-hidden="true">
+      <span class="settings-theme-card__chip settings-theme-card__chip--accent"></span>
+      <span class="settings-theme-card__chip settings-theme-card__chip--accent-2"></span>
+      <span class="settings-theme-card__chip settings-theme-card__chip--bg"></span>
+    </span>
+  `;
+}
 
 function importedThemeName(props: Pick<ConfigProps, "hasCustomTheme" | "customThemeLabel">) {
   return props.hasCustomTheme && props.customThemeLabel
@@ -1110,7 +1133,9 @@ function renderChatPreferencesSection(props: ConfigProps) {
       <div class="settings-section__header">
         <h2 class="settings-section__heading">${t("configView.chatPrefs.title")}</h2>
       </div>
-      <p class="settings-section__desc">${t("configView.chatPrefs.hint")}</p>
+      <p class="settings-section__desc">
+        ${t("configView.chatPrefs.hint")} ${t("configView.syncedHint")}
+      </p>
       <div class="settings-group">
         ${renderSettingsSelectRow({
           title: t("chat.sendShortcut"),
@@ -1264,13 +1289,11 @@ function renderAppearanceSection(props: ConfigProps) {
     id: ThemeName;
     label: string;
     description: string;
-    icon: TemplateResult;
   }> = [
     ...BUILTIN_THEME_OPTIONS.map((option) => ({
       id: option.id,
       label: t(option.labelKey),
       description: t(option.descriptionKey),
-      icon: option.icon,
     })),
     {
       id: "custom",
@@ -1278,7 +1301,6 @@ function renderAppearanceSection(props: ConfigProps) {
       description: props.hasCustomTheme
         ? t("configView.appearance.importedFrom", { name: importedName })
         : t("configView.appearance.importHint"),
-      icon: icons.spark,
     },
   ];
   return html`
@@ -1287,14 +1309,17 @@ function renderAppearanceSection(props: ConfigProps) {
         <div class="settings-section__header">
           <h2 class="settings-section__heading">${t("configView.appearance.theme")}</h2>
         </div>
-        <p class="settings-section__desc">${t("configView.appearance.chooseTheme")}</p>
+        <p class="settings-section__desc">
+          ${t("configView.appearance.chooseTheme")} ${t("configView.syncedHint")}
+        </p>
         <div class="settings-group">
           <div class="settings-row settings-row--stacked">
             <div class="settings-theme-grid">
               ${themeOptions.map(
                 (opt) => html`
                   <button
-                    class="settings-theme-card ${opt.id === props.theme
+                    class="settings-theme-card settings-theme-card--${opt.id} ${opt.id ===
+                    props.theme
                       ? "settings-theme-card--active"
                       : ""}"
                     title=${opt.description}
@@ -1311,7 +1336,7 @@ function renderAppearanceSection(props: ConfigProps) {
                       }
                     }}
                   >
-                    <span class="settings-theme-card__icon" aria-hidden="true">${opt.icon}</span>
+                    ${renderThemeCardVisual(opt.id, props.theme)}
                     <span class="settings-theme-card__label">${opt.label}</span>
                     ${opt.id === props.theme
                       ? html`<span class="settings-theme-card__check" aria-hidden="true"
@@ -1784,6 +1809,13 @@ export function renderConfig(props: ConfigProps) {
     formMode === "raw" && hasRawChanges && viewState.rawDiffOpen
       ? computeRawDiff(viewState, props.originalRaw, props.raw)
       : [];
+  if (formMode === "raw" && hasRawChanges && viewState.rawDiffOpen && !isJson5Warm()) {
+    // First diff open can race the lazy JSON5 parser; re-render when it lands
+    // so the pending-changes list fills in instead of staying empty.
+    void warmJson5()
+      .then(() => requestUpdate())
+      .catch(() => undefined);
+  }
   // Includes the app updater: writes are suspended while it runs, so raw
   // Save/Discard must read busy instead of silently no-opping.
   const configBusy = props.loading || props.saving || props.applying || props.updating;

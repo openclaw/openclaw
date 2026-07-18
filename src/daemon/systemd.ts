@@ -33,6 +33,7 @@ import {
   isEnvironmentFileOnlySource,
   readManagedServiceEnvKeysFromEnvironment,
 } from "./service-managed-env.js";
+import { createGatewayLifecycleMutationReporter } from "./service-mutation.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import type {
   GatewayServiceCommandConfig,
@@ -1340,7 +1341,7 @@ function isRunningAsRoot(): boolean {
 async function runSystemdServiceAction(params: {
   stdout: NodeJS.WritableStream;
   env?: GatewayServiceEnv;
-  action: "stop" | "restart";
+  action: "start" | "stop" | "restart";
   label: string;
   onMutation?: () => void;
 }) {
@@ -1382,17 +1383,33 @@ async function runSystemdServiceAction(params: {
   params.stdout.write(`${formatLine(params.label, unitName)}\n`);
 }
 
+export async function startSystemdService({
+  stdout,
+  env,
+  onMutation,
+}: GatewayServiceControlArgs): Promise<void> {
+  const reportMutation = createGatewayLifecycleMutationReporter(onMutation);
+  await runSystemdServiceAction({
+    stdout,
+    env,
+    action: "start",
+    label: "Started systemd service",
+    onMutation: () => reportMutation("systemctl-start"),
+  });
+}
+
 export async function stopSystemdService({
   stdout,
   env,
   onMutation,
 }: GatewayServiceControlArgs): Promise<void> {
+  const reportMutation = createGatewayLifecycleMutationReporter(onMutation);
   await runSystemdServiceAction({
     stdout,
     env,
     action: "stop",
     label: "Stopped systemd service",
-    onMutation: () => onMutation?.({ mode: "systemctl-stop" }),
+    onMutation: () => reportMutation("systemctl-stop"),
   });
 }
 
@@ -1401,12 +1418,13 @@ export async function restartSystemdService({
   env,
   onMutation,
 }: GatewayServiceControlArgs): Promise<GatewayServiceRestartResult> {
+  const reportMutation = createGatewayLifecycleMutationReporter(onMutation);
   await runSystemdServiceAction({
     stdout,
     env,
     action: "restart",
     label: "Restarted systemd service",
-    onMutation: () => onMutation?.({ mode: "systemctl-restart" }),
+    onMutation: () => reportMutation("systemctl-restart"),
   });
   return { outcome: "completed" };
 }

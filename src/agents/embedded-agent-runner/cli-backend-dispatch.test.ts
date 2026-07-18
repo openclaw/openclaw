@@ -383,6 +383,32 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
     expect(onExecutionStarted).toHaveBeenCalledWith({ lifecycleGeneration: "gen-1" });
   });
 
+  it("forwards execution phases from the CLI backend", async () => {
+    const onExecutionPhase = vi.fn();
+    runCliAgent.mockImplementation(
+      async (cliParams: { onExecutionPhase?: RunEmbeddedAgentParams["onExecutionPhase"] }) => {
+        cliParams.onExecutionPhase?.({
+          phase: "model_call_started",
+          provider: "anthropic",
+          model: "claude-opus-4-8",
+          backend: "claude-cli",
+          firstModelCallStarted: true,
+        });
+        return cliRunResult();
+      },
+    );
+
+    await runEmbeddedAgentViaCliBackendIfEligible(baseRunParams({ onExecutionPhase }));
+
+    expect(onExecutionPhase).toHaveBeenCalledWith({
+      phase: "model_call_started",
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+      backend: "claude-cli",
+      firstModelCallStarted: true,
+    });
+  });
+
   it("bridges CLI tool result events to onAgentToolResult without the MCP prefix", async () => {
     const observed: Array<{ toolName: string; isError: boolean }> = [];
     const params = baseRunParams({
