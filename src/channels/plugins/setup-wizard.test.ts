@@ -227,6 +227,33 @@ describe("channel setup wizard account scoping", () => {
     expect(queued.confirm).not.toHaveBeenCalled();
   });
 
+  it("migrates stale root credentials when only an empty accounts map exists", async () => {
+    const queued = createQueuedWizardPrompter({
+      confirmValues: [false, false],
+      textValues: ["test-new-bot-id", "mock-secret"],
+    });
+
+    const result = await runSetupWizardConfigure({
+      configure: createConfigure(),
+      cfg: {
+        channels: {
+          demo: { botId: "test-stale-bot-id", secret: "fixture-secret", accounts: {} },
+        },
+      } as OpenClawConfig,
+      prompter: queued.prompter,
+      options: { secretInputMode: "plaintext" as const },
+    });
+
+    const channel = getChannelConfig(result.cfg);
+    expect(channel).not.toHaveProperty("botId");
+    expect(channel).not.toHaveProperty("secret");
+    expect(channel.accounts?.[result.accountId]).toEqual({
+      botId: "test-new-bot-id",
+      secret: "mock-secret",
+    });
+    expect(Object.keys(channel.accounts ?? {})).toEqual([result.accountId]);
+  });
+
   it("replaces credentials only in the selected existing account after rejecting keep", async () => {
     const main = { botId: "test-main-bot-id", secret: "test-secret" };
     const before = JSON.stringify(main);

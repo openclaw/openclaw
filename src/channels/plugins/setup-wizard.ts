@@ -51,8 +51,9 @@ function createWizardAccountScope(params: {
 }): { cfg: OpenClawConfig; restore: (cfg: OpenClawConfig) => OpenClawConfig } {
   const accountId = normalizeAccountId(params.accountId);
   const initialChannel = getChannelSection(params.cfg, params.channelKey);
-  const hasNamedAccounts = Object.keys(initialChannel.accounts ?? {}).length > 0;
-  if (accountId === DEFAULT_ACCOUNT_ID && !hasNamedAccounts) {
+  // An existing accounts map — even empty — makes legacy plugins write account-scoped
+  // while root credentials linger; only a truly absent map may skip promotion.
+  if (accountId === DEFAULT_ACCOUNT_ID && initialChannel.accounts === undefined) {
     return { cfg: params.cfg, restore: (cfg) => cfg };
   }
 
