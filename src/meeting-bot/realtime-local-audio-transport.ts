@@ -68,8 +68,16 @@ function attachStderrLineLogger(params: {
   const decoder = new StringDecoder("utf8");
   let pendingLine = "";
   let flushed = false;
+  let skipLeadingLf = false;
   const append = (text: string) => {
-    const lines = `${pendingLine}${text}`.split(/\r\n|[\r\n]/u);
+    if (!text) {
+      return;
+    }
+    const decoded = skipLeadingLf && text.startsWith("\n") ? text.slice(1) : text;
+    skipLeadingLf = false;
+    const combined = `${pendingLine}${decoded}`;
+    skipLeadingLf = combined.endsWith("\r");
+    const lines = combined.split(/\r\n|[\r\n]/u);
     pendingLine = truncateUtf8Suffix(lines.pop() ?? "", MAX_LOCAL_AUDIO_STDERR_PENDING_BYTES);
     for (const line of lines) {
       params.debug(`${params.prefix}: ${line.trim()}`);

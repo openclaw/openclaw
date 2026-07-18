@@ -136,6 +136,9 @@ describe("createLocalMeetingRealtimeAudioTransport", () => {
 
     outputProcess.stderr.write("progress\r");
     expect(debug).toHaveBeenCalledWith("[meeting] audio output: progress");
+    outputProcess.stderr.write("\nnext\r\n");
+    expect(debug).toHaveBeenNthCalledWith(2, "[meeting] audio output: next");
+    expect(debug).toHaveBeenCalledTimes(2);
 
     outputProcess.stderr.write("诊".repeat(3_000));
     outputProcess.stderr.end();
