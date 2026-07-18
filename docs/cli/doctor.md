@@ -12,6 +12,8 @@ Health checks and quick fixes for the gateway, channels, plugins, skills, model 
 
 When Gateway status reports degraded SecretRef owners, doctor prints a **Secret runtime degradation** warning with every cold or stale owner, affected config path, redacted reason, and the `openclaw secrets reload` retry command.
 
+When channel ingress events are dead-lettered, doctor names each affected channel account and points to [`openclaw channels dead-letters list`](/cli/channels#inbound-dead-letters) for inspection and recovery.
+
 Related:
 
 - Troubleshooting: [Troubleshooting](/gateway/troubleshooting)

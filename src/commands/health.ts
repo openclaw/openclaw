@@ -11,6 +11,7 @@ import {
   resolveChannelAccountConfigured,
   resolveChannelAccountEnabled,
 } from "../channels/account-summary.js";
+import { countFailedChannelIngressQueueEntries } from "../channels/message/ingress-queue.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
 import { buildChannelAccountSnapshotFromAccount } from "../channels/plugins/status.js";
@@ -253,10 +254,10 @@ export function formatContextEngineHealthLine(summary: HealthSummary): string | 
   return `Context engine: warning (${quarantined.length} quarantined; downgraded to legacy: ${engines})`;
 }
 
-/** Builds dead-lettered delivery queue health; shared with cached gateway responses. */
+/** Builds dead-lettered inbound and outbound queue health for cached gateway responses. */
 export function buildDeliveryQueueHealthSummary(): DeliveryQueueHealthSummary | undefined {
-  // Dead-lettered deliveries are retained in SQLite for diagnostics but had no
-  // health surface; a storage read failure must not take health down with it.
+  // Queue health reads are diagnostic; a storage failure must not take the
+  // gateway health endpoint down with it.
   try {
     const failed = countFailedDeliveryQueueEntries().map((queue) => {
       const entry: DeliveryQueueHealthSummary["failed"][number] = {
@@ -268,7 +269,24 @@ export function buildDeliveryQueueHealthSummary(): DeliveryQueueHealthSummary | 
       }
       return entry;
     });
-    return failed.length > 0 ? { failed } : undefined;
+    const ingressFailed = countFailedChannelIngressQueueEntries().map((queue) => {
+      const entry: NonNullable<DeliveryQueueHealthSummary["ingressFailed"]>[number] = {
+        channelId: queue.channelId,
+        accountId: queue.accountId,
+        count: queue.count,
+      };
+      if (queue.oldestFailedAt != null) {
+        entry.oldestFailedAt = queue.oldestFailedAt;
+      }
+      return entry;
+    });
+    if (failed.length === 0 && ingressFailed.length === 0) {
+      return undefined;
+    }
+    return {
+      failed,
+      ...(ingressFailed.length > 0 ? { ingressFailed } : {}),
+    };
   } catch (error) {
     debugHealth(undefined, "delivery queue health read failed", error);
     return undefined;
@@ -281,11 +299,17 @@ export function formatDeliveryQueueHealthLine(
   now = Date.now(),
 ): string | null {
   const failed = summary.deliveryQueues?.failed ?? [];
-  if (failed.length === 0) {
+  const ingressFailed = summary.deliveryQueues?.ingressFailed ?? [];
+  if (failed.length === 0 && ingressFailed.length === 0) {
     return null;
   }
-  const counts = failed.map((queue) => `${queue.queueName}: ${queue.count}`).join(", ");
-  const oldest = failed
+  const counts = [
+    ...failed.map((queue) => `${queue.queueName}: ${queue.count}`),
+    ...ingressFailed.map(
+      (queue) => `inbound ${queue.channelId}/${queue.accountId}: ${queue.count}`,
+    ),
+  ].join(", ");
+  const oldest = [...failed, ...ingressFailed]
     .map((queue) => queue.oldestFailedAt)
     .filter((value): value is number => typeof value === "number");
   const oldestNote =
