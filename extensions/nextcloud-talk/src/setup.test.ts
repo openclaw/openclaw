@@ -353,6 +353,25 @@ describe("nextcloud talk setup", () => {
 });
 
 describe("resolveNextcloudTalkAccount", () => {
+  it("ignores a blank bot secret file before credential precedence", () => {
+    const account = resolveNextcloudTalkAccount({
+      cfg: {
+        channels: {
+          "nextcloud-talk": {
+            baseUrl: "https://cloud.example.com",
+            botSecret: "inline-secret",
+            botSecretFile: "   ",
+          },
+        },
+      } as CoreConfig,
+    });
+
+    expect(account.secret).toBe("inline-secret");
+    expect(account.secretSource).toBe("config");
+    expect(account.tokenStatus).toBe("available");
+    expect(account.credentialDiagnostics).toBeUndefined();
+  });
+
   it("matches normalized configured account ids", () => {
     const account = resolveNextcloudTalkAccount({
       cfg: {

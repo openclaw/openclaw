@@ -500,8 +500,9 @@ describe("resolveGoogleChatAccount", () => {
   });
 
   it("ignores env JSON credentials when they decode to a non-object value", () => {
+    const missingFile = path.join(tempDirs.make("openclaw-googlechat-missing-"), "missing.json");
     vi.stubEnv("GOOGLE_CHAT_SERVICE_ACCOUNT", '["not","an","object"]');
-    vi.stubEnv("GOOGLE_CHAT_SERVICE_ACCOUNT_FILE", "/tmp/googlechat.json");
+    vi.stubEnv("GOOGLE_CHAT_SERVICE_ACCOUNT_FILE", missingFile);
 
     const resolved = resolveGoogleChatAccount({
       cfg: { channels: { googlechat: {} } },
@@ -510,7 +511,7 @@ describe("resolveGoogleChatAccount", () => {
 
     expect(resolved.credentialSource).toBe("env");
     expect(resolved.credentials).toBeUndefined();
-    expect(resolved.credentialsFile).toBe("/tmp/googlechat.json");
+    expect(resolved.credentialsFile).toBe(missingFile);
     expect(resolved.tokenStatus).toBe("configured_unavailable");
     expect(resolved.credentialDiagnostics).toEqual([
       {
@@ -519,7 +520,7 @@ describe("resolveGoogleChatAccount", () => {
         reason: "not-found",
       },
     ]);
-    expect(JSON.stringify(resolved.credentialDiagnostics)).not.toContain("/tmp/googlechat.json");
+    expect(JSON.stringify(resolved.credentialDiagnostics)).not.toContain(missingFile);
   });
 
   it("inherits shared defaults from accounts.default for named accounts", () => {

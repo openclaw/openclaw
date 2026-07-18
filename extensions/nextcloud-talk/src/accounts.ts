@@ -98,9 +98,10 @@ function resolveNextcloudTalkSecret(
     return { secret: envSecret, source: "env", status: "available" };
   }
 
-  if (merged.botSecretFile) {
+  const botSecretFile = normalizeOptionalString(merged.botSecretFile);
+  if (botSecretFile) {
     const result = tryReadSecretFileSync(
-      merged.botSecretFile,
+      botSecretFile,
       "Nextcloud Talk bot secret file",
       { rejectSymlink: true },
       { configPath: `channels.nextcloud-talk.accounts.${resolvedAccountId}.botSecretFile` },
