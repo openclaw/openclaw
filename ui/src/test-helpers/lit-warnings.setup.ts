@@ -124,13 +124,13 @@ if (typeof window !== "undefined" && !globalLocalStorageIsUsable()) {
       return backing.size;
     },
     clear: () => backing.clear(),
-    getItem: (key: string) => backing.get(String(key)) ?? null,
+    getItem: (key: string) => backing.get(key) ?? null,
     key: (index: number) => [...backing.keys()][index] ?? null,
     removeItem: (key: string) => {
-      backing.delete(String(key));
+      backing.delete(key);
     },
     setItem: (key: string, value: string) => {
-      backing.set(String(key), String(value));
+      backing.set(key, value);
     },
   };
   const install = (target: object) =>
