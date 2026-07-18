@@ -20,7 +20,7 @@ import {
 } from "./settings.ts";
 import type { ThemeMode, ThemeName } from "./theme.ts";
 
-export type ServerUiPrefs = {
+type ServerUiPrefs = {
   theme?: ThemeName;
   themeMode?: ThemeMode;
   textScale?: TextScaleStop;
@@ -33,7 +33,7 @@ export type ServerUiPrefs = {
 const THEMES: ReadonlySet<ThemeName> = new Set(["claw", "knot", "dash", "custom"]);
 const THEME_MODES: ReadonlySet<ThemeMode> = new Set(["light", "dark", "system"]);
 
-export function extractServerUiPrefs(configObject: unknown): ServerUiPrefs {
+function extractServerUiPrefs(configObject: unknown): ServerUiPrefs {
   const prefs = asRecord(asRecord(asRecord(configObject)?.ui)?.prefs);
   if (!prefs) {
     return {};
@@ -64,7 +64,7 @@ export function extractServerUiPrefs(configObject: unknown): ServerUiPrefs {
 }
 
 /** Local-settings patch that would bring the mirror in line with the server. */
-export function serverPrefsLocalPatch(
+function serverPrefsLocalPatch(
   prefs: ServerUiPrefs,
   settings: UiSettings,
 ): Partial<UiSettings> | null {

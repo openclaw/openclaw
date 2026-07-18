@@ -20,7 +20,7 @@ export const COMMUNICATION_SECTION_KEYS = [
 
 export const APPEARANCE_SECTION_KEYS = ["__appearance__", "ui", "wizard"] as const;
 
-export const NOTIFICATION_SECTION_KEYS = ["__notifications__"] as const;
+const NOTIFICATION_SECTION_KEYS = ["__notifications__"] as const;
 
 // Curated Privacy & Security home: the schema-backed security/approvals policy
 // sections render here, below the curated status rows (security.ts).

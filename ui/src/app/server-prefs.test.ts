@@ -5,7 +5,6 @@ import { createStorageMock } from "../test-helpers/storage.ts";
 import {
   applyServerUiPrefs,
   changedServerUiPrefs,
-  extractServerUiPrefs,
   pushServerUiPrefs,
   resetServerUiPrefsSync,
 } from "./server-prefs.ts";
@@ -24,10 +23,11 @@ function configWithPrefs(prefs: Record<string, unknown>) {
   return { ui: { prefs } };
 }
 
-describe("extractServerUiPrefs", () => {
-  it("keeps only valid, known pref values", () => {
+describe("server pref extraction", () => {
+  it("applies only valid, known pref values", () => {
+    const onApplied = vi.fn();
     expect(
-      extractServerUiPrefs(
+      applyServerUiPrefs(
         configWithPrefs({
           theme: "knot",
           themeMode: "dark",
@@ -37,8 +37,10 @@ describe("extractServerUiPrefs", () => {
           chatSendShortcut: "modifier-enter",
           bogus: true,
         }),
+        { onApplied },
       ),
-    ).toEqual({
+    ).toBe(true);
+    expect(onApplied).toHaveBeenCalledWith({
       theme: "knot",
       themeMode: "dark",
       textScale: 125,
@@ -46,11 +48,20 @@ describe("extractServerUiPrefs", () => {
       chatShowThinking: false,
       chatSendShortcut: "modifier-enter",
     });
+  });
+
+  it("ignores invalid values and configs without prefs", () => {
+    const onApplied = vi.fn();
     expect(
-      extractServerUiPrefs(configWithPrefs({ theme: "neon", textScale: 97, locale: "xx-YY" })),
-    ).toEqual({});
-    expect(extractServerUiPrefs({})).toEqual({});
-    expect(extractServerUiPrefs(null)).toEqual({});
+      applyServerUiPrefs(configWithPrefs({ theme: "neon", textScale: 97, locale: "xx-YY" }), {
+        onApplied,
+      }),
+    ).toBe(false);
+    resetServerUiPrefsSync();
+    expect(applyServerUiPrefs({}, { onApplied })).toBe(false);
+    resetServerUiPrefsSync();
+    expect(applyServerUiPrefs(null, { onApplied })).toBe(false);
+    expect(onApplied).not.toHaveBeenCalled();
   });
 });
 

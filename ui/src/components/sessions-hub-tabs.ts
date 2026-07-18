@@ -6,7 +6,7 @@ import { html } from "lit";
 import { t } from "../i18n/index.ts";
 import "./web-awesome-tabs.ts";
 
-export type SessionsHubTab = "sessions" | "worktrees";
+type SessionsHubTab = "sessions" | "worktrees";
 
 const HUB_TABS: readonly SessionsHubTab[] = ["sessions", "worktrees"];
 

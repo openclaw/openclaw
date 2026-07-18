@@ -17,7 +17,7 @@ import {
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import { PROFILE_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
 
-export type IdentitySectionProps = {
+type IdentitySectionProps = {
   userAvatar: string | null;
   onUserAvatarChange: (next: string | null) => void;
   assistantName: string | null;
