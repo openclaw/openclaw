@@ -14,6 +14,7 @@ import {
   finalizeCapturedOutput,
   flushPreservedOutputLine,
   MAX_PRESERVED_PENDING_LINE_BYTES,
+  observeCapturedOutputEncoding,
   resolveMaxOutputBytes,
   resolveOutputCapture,
   shouldTerminateOnOutputLimit,
@@ -229,6 +230,7 @@ export async function runCommandWithTimeout(
     captureMode: CommandOutputCaptureMode,
   ) => {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    observeCapturedOutputEncoding(capture, buffer);
     outputBytesByStream[stream] += buffer.byteLength;
     const streamLimitExceeded = outputBytesByStream[stream] > maxBytes;
     if (maxCombinedOutputBytes === undefined) {
@@ -447,15 +449,19 @@ export async function runCommandWithTimeout(
     }
   }
 
+  const stdoutBuffer = finalizeCapturedOutput(stdoutCapture, stdoutCaptureMode);
+  const stderrBuffer = finalizeCapturedOutput(stderrCapture, stderrCaptureMode);
   return {
     pid: child.pid,
     stdout: decodeWindowsOutputBuffer({
-      buffer: finalizeCapturedOutput(stdoutCapture, stdoutCaptureMode),
+      buffer: stdoutBuffer,
       windowsEncoding,
+      fullStreamUtf8Valid: stdoutCapture.utf8Valid,
     }),
     stderr: decodeWindowsOutputBuffer({
-      buffer: finalizeCapturedOutput(stderrCapture, stderrCaptureMode),
+      buffer: stderrBuffer,
       windowsEncoding,
+      fullStreamUtf8Valid: stderrCapture.utf8Valid,
     }),
     stdoutTruncatedBytes: stdoutCapture.truncatedBytes || undefined,
     stderrTruncatedBytes: stderrCapture.truncatedBytes || undefined,

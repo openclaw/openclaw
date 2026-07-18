@@ -168,6 +168,7 @@ export function decodeWindowsOutputBuffer(params: {
   buffer: Buffer;
   platform?: NodeJS.Platform;
   windowsEncoding?: string | null;
+  fullStreamUtf8Valid?: boolean;
 }): string {
   return decodeWindowsBufferWithFallback({
     ...params,
@@ -190,6 +191,7 @@ export function decodeWindowsTextFileBuffer(params: {
 function decodeWindowsBufferWithFallback(params: {
   buffer: Buffer;
   platform?: NodeJS.Platform;
+  fullStreamUtf8Valid?: boolean;
   resolveFallbackEncoding: () => string | null;
 }): string {
   const platform = params.platform ?? process.platform;
@@ -197,7 +199,9 @@ function decodeWindowsBufferWithFallback(params: {
     return params.buffer.toString("utf8");
   }
 
-  const utf8 = decodeStrictUtf8(params.buffer);
+  // A bounded capture can be valid UTF-8 even when discarded bytes proved the complete
+  // stream was not. Preserve the owner's full-stream decision when one is available.
+  const utf8 = params.fullStreamUtf8Valid === false ? null : decodeStrictUtf8(params.buffer);
   if (utf8 !== null) {
     return utf8;
   }

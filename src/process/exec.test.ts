@@ -2,9 +2,16 @@
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import process from "node:process";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { setVerbose } from "../global-state.js";
+import { decodeWindowsOutputBuffer } from "../infra/windows-encoding.js";
 import { attachChildProcessBridge } from "./child-process-bridge.js";
+import {
+  appendCapturedOutput,
+  createCapturedOutputBuffers,
+  finalizeCapturedOutput,
+  observeCapturedOutputEncoding,
+} from "./exec-output.js";
 import {
   resolveCommandEnv,
   resolveProcessExitCode,
@@ -683,5 +690,80 @@ describe("attachChildProcessBridge", () => {
     child.emit("exit");
     expect(process.listeners("SIGTERM")).toHaveLength(beforeSigterm.size);
     detach();
+  });
+});
+
+describe("finalizeCapturedOutput UTF-8 boundary trimming on win32", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("trims leading continuation bytes in tail mode for a valid UTF-8 stream", () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const capture = createCapturedOutputBuffers();
+    const fullOutput = Buffer.from("a😀z", "utf8");
+    observeCapturedOutputEncoding(capture, fullOutput);
+    appendCapturedOutput(capture, fullOutput, 3, "tail");
+
+    const result = finalizeCapturedOutput(capture, "tail");
+    expect(result.toString("utf8")).toBe("z");
+    expect(result.toString("utf8")).not.toContain("\uFFFD");
+  });
+
+  it("trims a trailing partial code point in head mode for a valid UTF-8 stream", () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const capture = createCapturedOutputBuffers();
+    const fullOutput = Buffer.from("😀", "utf8");
+    observeCapturedOutputEncoding(capture, fullOutput);
+    appendCapturedOutput(capture, fullOutput, 3, "head");
+
+    const result = finalizeCapturedOutput(capture, "head");
+    expect(result.toString("utf8")).toBe("");
+    expect(result.toString("utf8")).not.toContain("\uFFFD");
+  });
+
+  it("preserves a valid GBK lead byte at a tail truncation boundary", () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const gbk = Buffer.from([0xb2, 0xe2, 0xca, 0xd4, 0xa1, 0xab, 0xa3, 0xbb]);
+    const fullOutput = Buffer.concat([Buffer.from("x"), gbk]);
+    const capture = createCapturedOutputBuffers();
+    observeCapturedOutputEncoding(capture, fullOutput);
+    appendCapturedOutput(capture, fullOutput, gbk.byteLength, "tail");
+
+    expect(finalizeCapturedOutput(capture, "tail")).toEqual(gbk);
+  });
+
+  it("preserves a legacy full-stream verdict when the retained slice is valid UTF-8", () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const fullOutput = Buffer.from([0xc3, 0xa9, 0xff]);
+    const capture = createCapturedOutputBuffers();
+    observeCapturedOutputEncoding(capture, fullOutput);
+    appendCapturedOutput(capture, fullOutput, 2, "head");
+
+    const retained = finalizeCapturedOutput(capture, "head");
+    expect(capture.utf8Valid).toBe(false);
+    expect(
+      decodeWindowsOutputBuffer({
+        buffer: retained,
+        platform: "win32",
+        windowsEncoding: "windows-1252",
+        fullStreamUtf8Valid: capture.utf8Valid,
+      }),
+    ).toBe("Ã©");
+  });
+
+  it("keeps real truncated UTF-8 command output on a code-point boundary", async () => {
+    const result = await runCommandWithTimeout(
+      [process.execPath, "-e", "process.stdout.write('😀'.repeat(10))"],
+      {
+        maxOutputBytes: 18,
+        outputCapture: "head",
+        timeoutMs: 3_000,
+      },
+    );
+
+    expect(result.stdout).toBe("😀".repeat(4));
+    expect(result.stdout).not.toContain("\uFFFD");
+    expect(result.stdoutTruncatedBytes).toBe(24);
   });
 });

@@ -17,6 +17,8 @@ export type CapturedOutputBuffers = {
   chunks: Buffer[];
   bytes: number;
   truncatedBytes: number;
+  utf8Validator: TextDecoder | null;
+  utf8Valid: boolean;
   preservedLines: string[];
   decoder: StringDecoder;
   pendingLine: string;
@@ -30,10 +32,30 @@ export function createCapturedOutputBuffers(): CapturedOutputBuffers {
     chunks: [],
     bytes: 0,
     truncatedBytes: 0,
+    utf8Validator: process.platform === "win32" ? new TextDecoder("utf-8", { fatal: true }) : null,
+    utf8Valid: true,
     preservedLines: [],
     decoder: new StringDecoder("utf8"),
     pendingLine: "",
   };
+}
+
+/** Tracks the complete stream so Windows can preserve its UTF-8-first decoding contract. */
+export function observeCapturedOutputEncoding(
+  capture: CapturedOutputBuffers,
+  chunk: Buffer | string,
+): void {
+  const validator = capture.utf8Validator;
+  if (!validator || !capture.utf8Valid) {
+    return;
+  }
+  try {
+    validator.decode(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk), {
+      stream: true,
+    });
+  } catch {
+    capture.utf8Valid = false;
+  }
 }
 
 function normalizeMaxOutputBytes(value: number | undefined): number {
@@ -114,7 +136,7 @@ function trimTruncatedUtf8Boundary(
   mode: CommandOutputCaptureMode,
   truncatedBytes: number,
 ): Buffer {
-  if (truncatedBytes === 0 || buffer.length === 0 || process.platform === "win32") {
+  if (truncatedBytes === 0 || buffer.length === 0) {
     return buffer;
   }
   if (mode === "tail") {
@@ -137,12 +159,31 @@ function trimTruncatedUtf8Boundary(
   return buffer;
 }
 
+function finalizeCapturedUtf8Validation(capture: CapturedOutputBuffers): boolean {
+  const validator = capture.utf8Validator;
+  if (!validator || !capture.utf8Valid) {
+    return false;
+  }
+  try {
+    validator.decode();
+    return true;
+  } catch {
+    capture.utf8Valid = false;
+    return false;
+  }
+}
+
 export function finalizeCapturedOutput(
   capture: CapturedOutputBuffers,
   mode: CommandOutputCaptureMode,
 ): Buffer {
   const buffered = Buffer.concat(capture.chunks, capture.bytes);
-  const trimmed = trimTruncatedUtf8Boundary(buffered, mode, capture.truncatedBytes);
+  // Mirror decodeWindowsOutputBuffer's UTF-8-first contract using the complete stream.
+  // Truncated bytes alone cannot distinguish UTF-8 from the active Windows code page.
+  const trimUtf8Boundary = process.platform !== "win32" || finalizeCapturedUtf8Validation(capture);
+  const trimmed = trimUtf8Boundary
+    ? trimTruncatedUtf8Boundary(buffered, mode, capture.truncatedBytes)
+    : buffered;
   capture.truncatedBytes += buffered.byteLength - trimmed.byteLength;
   return trimmed;
 }
