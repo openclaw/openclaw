@@ -27,6 +27,7 @@ import {
   type MSTeamsAttachmentDownloadLogger,
   type MSTeamsAttachmentFetchPolicy,
   type MSTeamsAttachmentResolveFn,
+  MSTEAMS_MEDIA_READ_IDLE_TIMEOUT_MS,
   normalizeContentType,
   resolveMediaSsrfPolicy,
   resolveAttachmentFetchPolicy,
@@ -208,6 +209,7 @@ async function downloadGraphHostedContent(params: {
           maxBytes: params.maxBytes,
           fallbackContentType: item.contentType ?? undefined,
           subdir: "inbound",
+          readIdleTimeoutMs: MSTEAMS_MEDIA_READ_IDLE_TIMEOUT_MS,
         });
         out.push({
           path: saved.path,

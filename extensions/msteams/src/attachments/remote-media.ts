@@ -2,7 +2,11 @@
 import { saveResponseMedia, type SavedRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
 import type { SsrFPolicy } from "../../runtime-api.js";
 import { getMSTeamsRuntime } from "../runtime.js";
-import { inferPlaceholder } from "./shared.js";
+import {
+  inferPlaceholder,
+  MSTEAMS_MEDIA_READ_IDLE_TIMEOUT_MS,
+  MSTEAMS_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,
+} from "./shared.js";
 import type { MSTeamsInboundMedia } from "./types.js";
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -26,6 +30,7 @@ async function saveRemoteMediaDirect(params: {
       sourceUrl: params.url,
       filePathHint: params.filePathHint,
       maxBytes: params.maxBytes,
+      readIdleTimeoutMs: MSTEAMS_MEDIA_READ_IDLE_TIMEOUT_MS,
       fallbackContentType: params.contentTypeHint,
       originalFilename: params.originalFilename,
     });
@@ -69,6 +74,8 @@ export async function downloadAndStoreMSTeamsRemoteMedia(params: {
       filePathHint: params.filePathHint,
       maxBytes: params.maxBytes,
       ssrfPolicy: params.ssrfPolicy,
+      responseHeaderTimeoutMs: MSTEAMS_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,
+      readIdleTimeoutMs: MSTEAMS_MEDIA_READ_IDLE_TIMEOUT_MS,
       fallbackContentType: params.contentTypeHint,
       originalFilename,
     });

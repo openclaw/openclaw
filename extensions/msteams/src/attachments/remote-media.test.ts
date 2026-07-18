@@ -107,6 +107,13 @@ describe("downloadAndStoreMSTeamsRemoteMedia", () => {
       const calledUrl = requireFirstFetchUrl(fetchImpl);
       expect(calledUrl).toBe("https://graph.microsoft.com/v1.0/shares/abc/driveItem/content");
       expect(runtimeSaveRemoteMediaMock).not.toHaveBeenCalled();
+      expect(saveResponseMediaMock).toHaveBeenCalledWith(
+        expect.any(Response),
+        expect.objectContaining({
+          readIdleTimeoutMs: 30_000,
+          maxBytes: 1024,
+        }),
+      );
       expect(result.path).toBe("/tmp/saved.png");
     });
 
@@ -182,6 +189,13 @@ describe("downloadAndStoreMSTeamsRemoteMedia", () => {
       });
 
       expect(runtimeSaveRemoteMediaMock).toHaveBeenCalledTimes(1);
+      expect(runtimeSaveRemoteMediaMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          responseHeaderTimeoutMs: 120_000,
+          readIdleTimeoutMs: 30_000,
+          maxBytes: 1024,
+        }),
+      );
     });
 
     it("does not use the direct path when useDirectFetch is true but fetchImpl is missing", async () => {
