@@ -237,7 +237,7 @@ async function setupTelegramTrace(recorder: WireRecorder) {
     textLimit: TELEGRAM_TEXT_CHUNK_LIMIT,
     telegramCfg: {},
     telegramDeps: createTraceTelegramDeps(),
-    opts: { token: "trace-token" },
+    opts: { token: "test-token" },
   });
   // Swallow here only to avoid an unhandled rejection warning racing the idle
   // step; the idle handler awaits dispatchDone and surfaces real failures.
