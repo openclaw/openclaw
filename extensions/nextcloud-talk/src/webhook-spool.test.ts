@@ -8,10 +8,8 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSignedCreateMessageRequest } from "./monitor.test-fixtures.js";
-import {
-  createNextcloudTalkWebhookSpool,
-  migrateNextcloudTalkLegacyReplayState,
-} from "./webhook-spool.js";
+import { migrateNextcloudTalkLegacyReplayState } from "./webhook-spool-state.js";
+import { createNextcloudTalkWebhookSpool } from "./webhook-spool.js";
 
 type NextcloudTalkIngressQueue = NonNullable<
   Parameters<typeof createNextcloudTalkWebhookSpool>[0]["queue"]

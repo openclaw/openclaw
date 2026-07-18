@@ -31,7 +31,7 @@ describe("Nextcloud Talk monitor abort", () => {
           },
         },
       },
-      runtime: { error: vi.fn(), log: vi.fn() },
+      runtime: { error: vi.fn(), log: vi.fn(), exit: vi.fn() as never },
       abortSignal: abortController.signal,
       createSpool,
       createServer,

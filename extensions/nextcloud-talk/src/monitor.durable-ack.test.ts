@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createSignedCreateMessageRequest } from "./monitor.test-fixtures.js";
 import { startWebhookServer } from "./monitor.test-harness.js";
-import { NextcloudTalkWebhookPayloadError } from "./webhook-spool.js";
+import { NextcloudTalkWebhookPayloadError } from "./webhook-spool-state.js";
 
 describe("Nextcloud Talk durable webhook acknowledgement", () => {
   it("waits for durable admission before acknowledging", async () => {

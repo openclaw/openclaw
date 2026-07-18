@@ -10,9 +10,16 @@ import {
   type ChannelIngressQueue,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  inspectNostrIngressEvent,
+  isNostrIngressRecord,
+  migrateNostrLegacyRecentEventIds,
+  NOSTR_INGRESS_PAYLOAD_VERSION,
+  NostrIngressPermanentError,
+  type NostrIngressPayload,
+} from "./nostr-ingress-state.js";
 import { getNostrRuntime } from "./runtime.js";
 
-const NOSTR_INGRESS_PAYLOAD_VERSION = 1;
 const NOSTR_INGRESS_POLL_INTERVAL_MS = 500;
 const NOSTR_INGRESS_PRUNE_INTERVAL_MS = 60 * 60 * 1_000;
 const NOSTR_INGRESS_COMPLETED_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
@@ -20,12 +27,6 @@ const NOSTR_INGRESS_COMPLETED_MAX_ENTRIES = 100_000;
 const NOSTR_INGRESS_FAILED_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
 const NOSTR_INGRESS_FAILED_MAX_ENTRIES = 100_000;
 const NOSTR_INGRESS_APPEND_RETRY_MS = [0, 100, 300] as const;
-
-type NostrIngressPayload = {
-  version: 1;
-  receivedAt: number;
-  rawEvent: string;
-};
 
 type PreparedNostrAdmission = {
   event: Event;
@@ -43,16 +44,6 @@ type NostrIngressMonitor = {
   waitForIdle: () => Promise<void>;
 };
 
-export class NostrIngressPermanentError extends Error {
-  readonly reason: string;
-
-  constructor(reason: string, message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.name = "NostrIngressPermanentError";
-    this.reason = reason;
-  }
-}
-
 export class NostrIngressAdmissionRejectedError extends Error {
   readonly reason: "backpressure" | "oversized-event" | "rate-limited";
 
@@ -61,27 +52,6 @@ export class NostrIngressAdmissionRejectedError extends Error {
     this.name = "NostrIngressAdmissionRejectedError";
     this.reason = reason;
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function requiredString(value: unknown, field: string): string {
-  if (typeof value === "string" && value.trim()) {
-    return value;
-  }
-  throw new NostrIngressPermanentError("invalid-event", `Nostr event is missing ${field}.`);
-}
-
-export function inspectNostrIngressEvent(event: unknown): { eventId: string; laneKey: string } {
-  if (!isRecord(event)) {
-    throw new NostrIngressPermanentError("invalid-event", "Nostr event must be an object.");
-  }
-  return {
-    eventId: requiredString(event.id, "id"),
-    laneKey: `direct:${requiredString(event.pubkey, "pubkey")}`,
-  };
 }
 
 function parseClaimedEvent(
@@ -106,7 +76,11 @@ function parseClaimedEvent(
     );
   }
   const facts = inspectNostrIngressEvent(parsed);
-  if (facts.eventId !== claimedId || facts.laneKey !== claimedLaneKey || !isRecord(parsed)) {
+  if (
+    facts.eventId !== claimedId ||
+    facts.laneKey !== claimedLaneKey ||
+    !isNostrIngressRecord(parsed)
+  ) {
     throw new NostrIngressPermanentError(
       "invalid-event",
       `Nostr ingress row ${claimedId} changed event identity.`,
@@ -125,38 +99,6 @@ function parseClaimedEvent(
     );
   }
   return parsed as Event;
-}
-
-/** Convert the retired persisted LRU seed into durable completion tombstones. */
-export async function migrateNostrLegacyRecentEventIds(params: {
-  queue: ChannelIngressQueue<NostrIngressPayload>;
-  eventIds: readonly string[];
-  migratedAt?: number;
-}): Promise<number> {
-  const migratedAt = params.migratedAt ?? Date.now();
-  let migrated = 0;
-  for (const eventId of new Set(params.eventIds)) {
-    if (!eventId.trim()) {
-      continue;
-    }
-    const result = await params.queue.enqueue(
-      eventId,
-      { version: NOSTR_INGRESS_PAYLOAD_VERSION, receivedAt: migratedAt, rawEvent: "" },
-      { receivedAt: migratedAt, laneKey: `legacy:${eventId}` },
-    );
-    const ownsMarker =
-      result.kind === "accepted" ||
-      (result.kind === "pending" && result.record.payload.rawEvent === "");
-    if (ownsMarker) {
-      const completed = await params.queue.complete(eventId, { completedAt: migratedAt });
-      if (!completed) {
-        throw new Error(`Failed to migrate Nostr replay event ${eventId}.`);
-      }
-    }
-    // Existing ingress state already rejects the retired LRU's replay.
-    migrated += 1;
-  }
-  return migrated;
 }
 
 export function createNostrIngress(options: {

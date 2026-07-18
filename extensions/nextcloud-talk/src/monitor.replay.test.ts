@@ -7,7 +7,7 @@ import { createSignedCreateMessageRequest } from "./monitor.test-fixtures.js";
 import { startWebhookServer } from "./monitor.test-harness.js";
 import { generateNextcloudTalkSignature } from "./signature.js";
 import type { NextcloudTalkInboundMessage, NextcloudTalkWebhookServerOptions } from "./types.js";
-import { inspectNextcloudTalkWebhookEnvelope } from "./webhook-spool.js";
+import { inspectNextcloudTalkWebhookEnvelope } from "./webhook-spool-state.js";
 
 type TestWebhookServerOptions = Omit<NextcloudTalkWebhookServerOptions, "onWebhook"> & {
   onMessage: (rawBody: string) => void | Promise<void>;

@@ -9,7 +9,7 @@ import {
 } from "openclaw/plugin-sdk/webhook-ingress";
 import { extractNextcloudTalkHeaders, verifyNextcloudTalkSignature } from "./signature.js";
 import type { NextcloudTalkWebhookHeaders, NextcloudTalkWebhookServerOptions } from "./types.js";
-import { NextcloudTalkWebhookPayloadError } from "./webhook-spool.js";
+import { NextcloudTalkWebhookPayloadError } from "./webhook-spool-state.js";
 
 const DEFAULT_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const PREAUTH_WEBHOOK_MAX_BODY_BYTES = 64 * 1024;

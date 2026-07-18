@@ -3,7 +3,7 @@ import type { AddressInfo } from "node:net";
 import { afterEach } from "vitest";
 import { createNextcloudTalkWebhookServer as createRawNextcloudTalkWebhookServer } from "./monitor.js";
 import type { NextcloudTalkWebhookServerOptions } from "./types.js";
-import { inspectNextcloudTalkWebhookEnvelope } from "./webhook-spool.js";
+import { inspectNextcloudTalkWebhookEnvelope } from "./webhook-spool-state.js";
 
 type WebhookHarness = {
   webhookUrl: string;

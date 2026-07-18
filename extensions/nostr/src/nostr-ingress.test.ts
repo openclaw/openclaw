@@ -8,7 +8,8 @@ import {
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createNostrIngress, migrateNostrLegacyRecentEventIds } from "./nostr-ingress.js";
+import { migrateNostrLegacyRecentEventIds } from "./nostr-ingress-state.js";
+import { createNostrIngress } from "./nostr-ingress.js";
 
 type NostrIngressQueue = NonNullable<Parameters<typeof createNostrIngress>[0]["queue"]>;
 type NostrIngressPayload = Parameters<NostrIngressQueue["enqueue"]>[1];

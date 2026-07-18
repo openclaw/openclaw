@@ -2,6 +2,7 @@ import type { Event, SimplePool } from "nostr-tools";
 
 const DEFAULT_EOSE_CONFIRM_DEADLINE_MS = 10_000;
 const LIBRARY_EOSE_TIMEOUT_MARGIN_MS = 1_000;
+type BackfillStatus = "pending" | "confirmed" | "incomplete";
 
 /** Separates real relay EOSE frames from nostr-tools timeout/close synthesis. */
 export function createNostrRelaySubscriptionGroup(options: {
@@ -17,7 +18,9 @@ export function createNostrRelaySubscriptionGroup(options: {
   const relays = [...new Set(options.relays)];
   const subscriptions: Array<ReturnType<SimplePool["subscribeMany"]>> = [];
   const deadlineTimers = new Set<ReturnType<typeof setTimeout>>();
-  const backfillStatus = new Map(relays.map((relay) => [relay, "pending" as const]));
+  const backfillStatus = new Map<string, BackfillStatus>(
+    relays.map((relay): [string, BackfillStatus] => [relay, "pending"]),
+  );
   const confirmDeadlineMs = options.eoseConfirmDeadlineMs ?? DEFAULT_EOSE_CONFIRM_DEADLINE_MS;
 
   const settleBackfill = (relay: string, status: "confirmed" | "incomplete"): void => {
