@@ -49,7 +49,7 @@ struct SystemAgentSettings: View {
         onReplyReceived: @escaping () -> Void)
     {
         chat.onAgentHandoff = { agentDraft in
-            AppNavigationActions.openChat(draft: agentDraft?.text)
+            AppNavigationActions.openChat(draft: agentDraft?.composerValue)
         }
         chat.onReplyReceived = onReplyReceived
     }

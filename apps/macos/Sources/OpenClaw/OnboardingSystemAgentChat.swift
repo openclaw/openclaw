@@ -5,9 +5,9 @@ import SwiftUI
 enum SystemAgentDraft: String, Decodable {
     case hatch
 
-    var text: String {
+    var composerValue: String {
         switch self {
-        case .hatch: String(localized: "Wake up, my friend!")
+        case .hatch: "Wake up, my friend!"
         }
     }
 }

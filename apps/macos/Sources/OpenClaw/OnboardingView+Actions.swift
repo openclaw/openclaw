@@ -117,7 +117,7 @@ extension OnboardingView {
         // Land people in the real conversation, not on an empty desktop: the
         // agent chat is the product, and it is verified working by now.
         if state.connectionMode != .unconfigured {
-            AppNavigationActions.openChat(draft: agentDraft?.text)
+            AppNavigationActions.openChat(draft: agentDraft?.composerValue)
         }
     }
 

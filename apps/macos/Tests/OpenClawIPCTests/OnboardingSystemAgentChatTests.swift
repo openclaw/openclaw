@@ -505,7 +505,7 @@ struct OnboardingSystemAgentChatTests {
         await chat.startIfNeeded()
 
         #expect(receivedDraft == .hatch)
-        #expect(receivedDraft?.text == "Wake up, my friend!")
+        #expect(receivedDraft?.composerValue == "Wake up, my friend!")
     }
 
     @Test func `settings callback refreshes inference after assistant reply`() async throws {
