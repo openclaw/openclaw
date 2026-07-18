@@ -174,6 +174,12 @@ export async function activateCodexAttemptTurn(
           });
         }
       }
+      if (state.terminalReleaseAwaitingTurnCompletion) {
+        // The turn already delivered its terminal reply; a new user message
+        // must not wait out the completion deadline. Interrupt now so the
+        // rejected steer below falls back to a follow-up turn immediately.
+        lifecycle.interruptTurnForTerminalRelease("new_inbound_message");
+      }
       await activeSteeringQueue.queue(text, optionsLocal);
     },
     isStreaming: () => !state.completed && !runAbortController.signal.aborted,

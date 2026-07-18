@@ -271,13 +271,20 @@ export async function finalizeCodexAttempt(
     !state.terminalTurnNotificationQueued &&
     !state.timedOut &&
     clientClosedPromptErrorForFinal === undefined;
+  // A terminal-release deadline interrupt is an OpenClaw-initiated clean close
+  // of an already-delivered reply; the resulting "interrupted" status must not
+  // demote the turn to a failure.
+  const terminalReleaseInterruptClosed =
+    state.terminalReleaseAwaitingTurnCompletion?.interruptRequested === true &&
+    completedTurnStatus === "interrupted";
   const turnSucceeded =
     !finalAborted &&
     !effectiveTimedOut &&
     (finalPromptError === null || finalPromptError === undefined) &&
     (completedTurnStatus === "completed" ||
       recoveredTurnWatchTimeout ||
-      completedWithoutTerminalNotification);
+      completedWithoutTerminalNotification ||
+      terminalReleaseInterruptClosed);
   // buildResult retains the bridge's delivery records. Resolve omitted final
   // intent only after the authoritative turn outcome is known, before any
   // terminal observer consumes the result.

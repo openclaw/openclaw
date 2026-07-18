@@ -354,6 +354,58 @@ describe("Codex app-server attempt turn watches", () => {
     ]);
     expect(harness.abortController.signal.reason).toBe("turn_progress_idle_timeout");
   });
+
+  it("fires the terminal release deadline once, unmoved by activity", () => {
+    const harness = createController();
+    const onDeadline = vi.fn();
+
+    harness.controller.armTerminalReleaseDeadline({ deadlineMs: 10, onDeadline });
+    vi.advanceTimersByTime(9);
+    // The deadline is absolute: activity must not reschedule it.
+    harness.controller.touchActivity("notification:item/agentMessageDelta");
+    harness.controller.noteNotificationReceived("item/agentMessageDelta");
+    vi.advanceTimersByTime(1);
+    expect(onDeadline).toHaveBeenCalledOnce();
+
+    vi.advanceTimersByTime(100);
+    expect(onDeadline).toHaveBeenCalledOnce();
+  });
+
+  it("skips the terminal release deadline once the turn completed", () => {
+    const harness = createController({ isCompleted: () => true });
+    const onDeadline = vi.fn();
+
+    harness.controller.armTerminalReleaseDeadline({ deadlineMs: 10, onDeadline });
+    vi.advanceTimersByTime(10);
+
+    expect(onDeadline).not.toHaveBeenCalled();
+  });
+
+  it("skips the terminal release deadline after abort", () => {
+    const harness = createController();
+    const onDeadline = vi.fn();
+
+    harness.controller.armTerminalReleaseDeadline({ deadlineMs: 10, onDeadline });
+    harness.abortController.abort("user_abort");
+    vi.advanceTimersByTime(10);
+
+    expect(onDeadline).not.toHaveBeenCalled();
+  });
+
+  it("clears the terminal release deadline explicitly and via clearAllTimers", () => {
+    const harness = createController();
+    const onDeadline = vi.fn();
+
+    harness.controller.armTerminalReleaseDeadline({ deadlineMs: 10, onDeadline });
+    harness.controller.clearTerminalReleaseDeadline();
+    vi.advanceTimersByTime(20);
+    expect(onDeadline).not.toHaveBeenCalled();
+
+    harness.controller.armTerminalReleaseDeadline({ deadlineMs: 10, onDeadline });
+    harness.controller.clearAllTimers();
+    vi.advanceTimersByTime(20);
+    expect(onDeadline).not.toHaveBeenCalled();
+  });
 });
 
 describe("Codex completion blocker item tracking", () => {
