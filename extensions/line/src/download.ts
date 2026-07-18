@@ -3,6 +3,7 @@ import { Readable } from "node:stream";
 import { finished } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { setTimeout as delay } from "node:timers/promises";
+import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
 import { saveMediaStream } from "openclaw/plugin-sdk/media-store";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithRuntimeDispatcherOrMockedGlobal } from "openclaw/plugin-sdk/runtime-fetch";
@@ -44,15 +45,20 @@ async function fetchLineContentWhenReady(
       );
       if (response.status === 200) {
         if (!response.body) {
-          throw new Error(`LINE media response for message ${messageId} had no body`);
+          throw new MediaFetchError(
+            "fetch_failed",
+            `LINE media response for message ${messageId} had no body`,
+          );
         }
         return Readable.fromWeb(response.body as NodeReadableStream<Uint8Array>);
       }
 
       await response.body?.cancel();
       if (response.status !== 202) {
-        throw new Error(
+        throw new MediaFetchError(
+          "http_error",
           `LINE media download failed for message ${messageId} (HTTP ${response.status})`,
+          { status: response.status },
         );
       }
       if (attempt < CONTENT_READY_MAX_ATTEMPTS - 1) {
@@ -61,7 +67,8 @@ async function fetchLineContentWhenReady(
     }
   } catch (err) {
     if (controller.signal.aborted) {
-      throw new Error(
+      throw new MediaFetchError(
+        "fetch_failed",
         `LINE media for message ${messageId} did not become ready within ${CONTENT_READY_TIMEOUT_MS / 1000} seconds`,
         { cause: err },
       );
@@ -71,9 +78,33 @@ async function fetchLineContentWhenReady(
     clearTimeout(deadline);
   }
 
-  throw new Error(
+  throw new MediaFetchError(
+    "http_error",
     `LINE media for message ${messageId} was still preparing (HTTP 202) after ${CONTENT_READY_MAX_ATTEMPTS} attempts`,
+    { status: 202 },
   );
+}
+
+// Retryable = a transient LINE content failure that a later attempt can resolve
+// (still-preparing 202, readiness-deadline abort, 408/429/5xx, network). The drain
+// retries the event when the download rejects before adoption; permanent failures
+// (missing/expired content, size limit) fall through to degrade.
+export function isRetryableLineInboundMediaError(err: unknown): boolean {
+  if (!(err instanceof MediaFetchError)) {
+    return false;
+  }
+  if (err.code === "fetch_failed") {
+    return true;
+  }
+  if (err.code === "http_error") {
+    return (
+      err.status === 202 ||
+      err.status === 408 ||
+      err.status === 429 ||
+      (typeof err.status === "number" && err.status >= 500)
+    );
+  }
+  return false;
 }
 
 export async function downloadLineMedia(

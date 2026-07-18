@@ -1,4 +1,5 @@
 // Line tests cover download plugin behavior.
+import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const fetchMock = vi.hoisted(() => vi.fn());
@@ -41,6 +42,7 @@ vi.mock("openclaw/plugin-sdk/media-store", () => ({
 }));
 
 let downloadLineMedia: typeof import("./download.js").downloadLineMedia;
+let isRetryableLineInboundMediaError: typeof import("./download.js").isRetryableLineInboundMediaError;
 
 function saveMediaStreamCall(): unknown[] {
   const call = saveMediaStreamMock.mock.calls.at(0);
@@ -60,9 +62,17 @@ function detectMockContentType(buffer: Buffer, contentType?: string): string | u
   return contentType;
 }
 
+function expectMediaFetchError(err: unknown): MediaFetchError {
+  expect(err).toBeInstanceOf(MediaFetchError);
+  if (!(err instanceof MediaFetchError)) {
+    throw new Error("expected a MediaFetchError");
+  }
+  return err;
+}
+
 describe("downloadLineMedia", () => {
   beforeAll(async () => {
-    ({ downloadLineMedia } = await import("./download.js"));
+    ({ downloadLineMedia, isRetryableLineInboundMediaError } = await import("./download.js"));
   });
 
   afterAll(() => {
@@ -265,5 +275,71 @@ describe("downloadLineMedia", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(requestSignal?.aborted).toBe(true);
     expect(saveMediaStreamMock).not.toHaveBeenCalled();
+  });
+
+  it("raises a retryable MediaFetchError when content stays 202 until the attempt cap", async () => {
+    for (let i = 0; i < 6; i++) {
+      fetchMock.mockResolvedValueOnce(cancellableResponse(202).response);
+    }
+
+    const err = expectMediaFetchError(
+      await downloadLineMedia("mid-stuck", "token").catch((e: unknown) => e),
+    );
+
+    expect(err.code).toBe("http_error");
+    expect(err.status).toBe(202);
+    expect(isRetryableLineInboundMediaError(err)).toBe(true);
+  });
+
+  it("raises a retryable MediaFetchError when the readiness deadline aborts", async () => {
+    fetchMock.mockImplementation(
+      async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> =>
+        await new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(new Error("fetch aborted")), {
+            once: true,
+          });
+        }),
+    );
+
+    vi.useFakeTimers();
+    const pending = downloadLineMedia("mid-hung", "token").catch((e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(15_000);
+    const err = expectMediaFetchError(await pending);
+
+    expect(err.code).toBe("fetch_failed");
+    expect(isRetryableLineInboundMediaError(err)).toBe(true);
+  });
+
+  it("raises a non-retryable MediaFetchError for a permanent HTTP error", async () => {
+    fetchMock.mockResolvedValueOnce(cancellableResponse(404).response);
+
+    const err = expectMediaFetchError(
+      await downloadLineMedia("mid-missing", "token").catch((e: unknown) => e),
+    );
+
+    expect(err.code).toBe("http_error");
+    expect(err.status).toBe(404);
+    expect(isRetryableLineInboundMediaError(err)).toBe(false);
+  });
+
+  it("classifies media failures for durable retry", () => {
+    expect(
+      isRetryableLineInboundMediaError(new MediaFetchError("http_error", "x", { status: 202 })),
+    ).toBe(true);
+    expect(
+      isRetryableLineInboundMediaError(new MediaFetchError("http_error", "x", { status: 408 })),
+    ).toBe(true);
+    expect(
+      isRetryableLineInboundMediaError(new MediaFetchError("http_error", "x", { status: 429 })),
+    ).toBe(true);
+    expect(
+      isRetryableLineInboundMediaError(new MediaFetchError("http_error", "x", { status: 503 })),
+    ).toBe(true);
+    expect(isRetryableLineInboundMediaError(new MediaFetchError("fetch_failed", "x"))).toBe(true);
+    expect(
+      isRetryableLineInboundMediaError(new MediaFetchError("http_error", "x", { status: 404 })),
+    ).toBe(false);
+    expect(isRetryableLineInboundMediaError(new MediaFetchError("max_bytes", "x"))).toBe(false);
+    expect(isRetryableLineInboundMediaError(new Error("Media exceeds 0MB limit"))).toBe(false);
   });
 });
