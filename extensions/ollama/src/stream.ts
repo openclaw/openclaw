@@ -1187,22 +1187,20 @@ function createRawOllamaStreamFn(
           auditContext: "ollama-stream.chat",
         });
 
+        let reader: any;
         try {
           if (!response.ok) {
             const errorText = await readResponseTextLimited(
               response,
               OLLAMA_STREAM_ERROR_BODY_LIMIT_BYTES,
             ).catch(() => "unknown error");
-            throw new Error(`${response.status} ${errorText}`);
+            throw new Error(${"$"}{response.status} {errorText});
           }
           if (!response.body) {
             throw new Error("Ollama API returned empty response body");
           }
-        }
 
-        const reader = response.body.getReader();
-        try {
-
+          reader = response.body.getReader();
           let accumulatedRawContent = "";
           let accumulatedVisibleContent = "";
           let accumulatedThinking = "";
