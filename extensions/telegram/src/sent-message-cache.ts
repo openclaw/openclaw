@@ -105,7 +105,7 @@ function readLegacySentMessages(filePath: string): SentMessageStore {
         if (
           typeof timestamp === "number" &&
           Number.isFinite(timestamp) &&
-          now - timestamp <= TTL_MS
+          now - timestamp < TTL_MS
         ) {
           messages.set(messageId, timestamp);
         }
@@ -217,17 +217,25 @@ export function wasSentByBot(
 export function listTelegramLegacySentMessageCacheEntries(params: {
   cfg?: Pick<OpenClawConfig, "session">;
   persistedPath?: string;
-}): Array<{ key: string; value: PersistedSentMessage; ttlMs?: number }> {
+}): Array<{ key: string; value: PersistedSentMessage; ttlMs?: number; timestamp?: number }> {
   const scopeKey = resolveSentMessageScopeKey(params.cfg);
   const filePath = params.persistedPath ?? resolveSentMessageStorePath(params.cfg);
   const legacy = fs.existsSync(filePath)
     ? readLegacySentMessages(filePath)
     : createSentMessageStore();
   return [...legacy.entries()].flatMap(([chatId, messages]) =>
-    [...messages.entries()].map(([messageId, timestamp]) => ({
-      key: sentMessageEntryKey(scopeKey, chatId, messageId),
-      value: { scopeKey, chatId, messageId, timestamp },
-      ttlMs: Math.max(1, TTL_MS - Math.max(0, Date.now() - timestamp)),
-    })),
+    [...messages.entries()].flatMap(([messageId, timestamp]) => {
+      const ttlMs = TTL_MS - Math.max(0, Date.now() - timestamp);
+      return ttlMs > 0
+        ? [
+            {
+              key: sentMessageEntryKey(scopeKey, chatId, messageId),
+              value: { scopeKey, chatId, messageId, timestamp },
+              ttlMs,
+              timestamp,
+            },
+          ]
+        : [];
+    }),
   );
 }

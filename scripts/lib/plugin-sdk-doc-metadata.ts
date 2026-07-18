@@ -114,6 +114,9 @@ export const pluginSdkDocMetadata = {
   "tool-results": {
     category: "utilities",
   },
+  "widget-html": {
+    category: "utilities",
+  },
   "provider-selection-runtime": {
     category: "provider",
   },
@@ -142,6 +145,9 @@ export const pluginSdkDocMetadata = {
     category: "runtime",
   },
   "speech-core": {
+    category: "provider",
+  },
+  "speech-settings": {
     category: "provider",
   },
   "realtime-voice": {

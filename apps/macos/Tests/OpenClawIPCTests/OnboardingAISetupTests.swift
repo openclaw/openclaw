@@ -627,6 +627,8 @@ struct OnboardingAISetupTests {
             label: "OpenAI",
             hint: nil,
             groupLabel: "OpenAI",
+            icon: nil,
+            website: nil,
             kind: "oauth",
             featured: true
         )
@@ -699,6 +701,27 @@ struct OnboardingAISetupTests {
         #expect(legacy["modelRef"] == nil)
         #expect(capable["kind"]?.value as? String == "codex-cli")
         #expect(capable["modelRef"]?.value as? String == "openai/gpt-5.5")
+
+        let local = OnboardingAISetupModel.activationParams(
+            kind: "provider-auto:lmstudio",
+            modelRef: "lmstudio/qwen-local",
+            supportsExactModel: true
+        )
+        #expect(local["kind"]?.value as? String == "provider-auto:lmstudio")
+        #expect(local["modelRef"]?.value as? String == "lmstudio/qwen-local")
+    }
+
+    @Test func `unavailable detected integrations decode for informational display`() throws {
+        let candidates = try JSONDecoder().decode(
+            [OnboardingAISetupModel.UnavailableCandidate].self,
+            from: Data(
+                #"[{"id":"pi-cli","label":"Pi CLI","detail":"installed","reason":"Not a setup route."},{"id":"opencode-cli","label":"OpenCode CLI","detail":"installed","reason":"Not a setup route."}]"#.utf8
+            )
+        )
+
+        #expect(candidates.map(\.id) == ["pi-cli", "opencode-cli"])
+        #expect(candidates.map(\.label) == ["Pi CLI", "OpenCode CLI"])
+        #expect(candidates.allSatisfy { $0.detail == "installed" })
     }
 
     @Test func `activation decodes and retains copyable setup lines`() throws {

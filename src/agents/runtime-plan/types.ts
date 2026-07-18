@@ -113,12 +113,23 @@ type AgentRuntimeMessagePresentationAction =
       decision: "allow-once" | "allow-always" | "deny";
     }
   | {
+      type: "question";
+      questionId: string;
+      optionValue: string;
+    }
+  | {
       type: "url";
       url: string;
     }
   | {
       type: "web-app";
       url: string;
+      widgetId?: string;
+    }
+  | {
+      type: "web-app";
+      url?: string;
+      widgetId: string;
     };
 
 /** Portable action control exposed to agent runtime reply payloads. */
@@ -153,39 +164,16 @@ type AgentRuntimeMessagePresentationOption = {
   value?: string;
 };
 
-/**
- * @deprecated Use AgentRuntimeMessagePresentationButton.
- */
-type AgentRuntimeInteractiveReplyButton = AgentRuntimeMessagePresentationButton;
-
-/**
- * @deprecated Use AgentRuntimeMessagePresentationOption.
- */
-type AgentRuntimeInteractiveReplyOption = AgentRuntimeMessagePresentationOption;
-
-/**
- * @deprecated Use AgentRuntimeMessagePresentationBlock.
- */
-type AgentRuntimeInteractiveReplyBlock =
-  | {
-      type: "text";
-      text: string;
-    }
-  | {
-      type: "buttons";
-      buttons: AgentRuntimeInteractiveReplyButton[];
-    }
-  | {
-      type: "select";
-      placeholder?: string;
-      options: AgentRuntimeInteractiveReplyOption[];
-    };
-
-/**
- * @deprecated Use AgentRuntimeMessagePresentation.
- */
-type AgentRuntimeInteractiveReply = {
-  blocks: AgentRuntimeInteractiveReplyBlock[];
+type AgentRuntimeLegacyInteractiveReply = {
+  blocks: Array<
+    | { type: "text"; text: string }
+    | { type: "buttons"; buttons: AgentRuntimeMessagePresentationButton[] }
+    | {
+        type: "select";
+        placeholder?: string;
+        options: AgentRuntimeMessagePresentationOption[];
+      }
+  >;
 };
 
 /** Portable reply presentation severity/style hint. */
@@ -281,11 +269,12 @@ type AgentRuntimeReplyPayload = {
   trustedLocalMedia?: boolean;
   sensitiveMedia?: boolean;
   presentation?: AgentRuntimeMessagePresentation;
+  presentationTextMode?: "fallback";
   delivery?: AgentRuntimeReplyPayloadDelivery;
   /**
    * @deprecated Use presentation.
    */
-  interactive?: AgentRuntimeInteractiveReply;
+  interactive?: AgentRuntimeLegacyInteractiveReply;
   btw?: {
     question: string;
   };

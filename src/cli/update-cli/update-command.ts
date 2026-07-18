@@ -22,6 +22,10 @@ import { disableCurrentOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js"
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { createLowDiskSpaceWarning } from "../../infra/disk-space.js";
 import {
+  formatExternalSupervisorUpdateRequired,
+  isGatewayExternallySupervised,
+} from "../../infra/gateway-supervision.js";
+import {
   markPackagePostInstallDoctorAdvisory,
   runGlobalPackageUpdateSteps,
 } from "../../infra/package-update-steps.js";
@@ -33,6 +37,7 @@ import {
   normalizeUpdateChannel,
   type UpdateChannel,
 } from "../../infra/update-channels.js";
+import { fetchNpmPackageTargetStatus } from "../../infra/update-check-package-target.js";
 import {
   checkUpdateStatus,
   compareSemverStrings,
@@ -67,6 +72,14 @@ import {
 } from "../../infra/update-runner.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { defaultRuntime } from "../../runtime.js";
+import {
+  OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
+  preflightOpenClawDatabaseSchemas,
+  type IncompatibleOpenClawDatabase,
+  type IndeterminateOpenClawDatabase,
+  type OpenClawDatabaseSchemaPreflight,
+} from "../../state/openclaw-database-preflight.js";
+import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { VERSION } from "../../version.js";
 import { replaceCliName, resolveCliName } from "../cli-name.js";
 import { formatCliCommand } from "../command-format.js";
@@ -125,7 +138,7 @@ import {
   maybeStopManagedServiceBeforeMutableUpdate,
   resolveManagedServiceNodeRunnerOverride,
   resolveManagedServicePackageUpdateRoot,
-  resolvePackageRuntimePreflightError,
+  resolvePackageRuntimePreflight,
   resolvePostInstallDoctorEnv,
   resolvePostUpdateServiceStateReadEnv,
   resolveUpdatedGatewayRestartPort,
@@ -228,6 +241,41 @@ function printDryRunPreview(preview: UpdateDryRunPreview, jsonMode: boolean): vo
       defaultRuntime.log(`  - ${theme.muted(note)}`);
     }
   }
+}
+
+function formatSchemaRefusalLines(
+  schemas: {
+    incompatible: readonly IncompatibleOpenClawDatabase[];
+    indeterminate: readonly IndeterminateOpenClawDatabase[];
+  },
+  dryRun = false,
+): string[] {
+  const prefix = dryRun ? "Would refuse update" : "Update refused";
+  return [
+    ...schemas.incompatible.map((database) => {
+      const agent = database.agentId ? ` (agent ${database.agentId})` : "";
+      return `${prefix}: ${database.kind} database${agent} ${database.path} has schema ${database.foundVersion}; target supports ${database.supportedVersion}; writer build ${database.writerAppVersion ?? "unknown"}.`;
+    }),
+    ...schemas.indeterminate.map(
+      (database) =>
+        `${prefix}: could not inspect ${database.kind} database ${database.path}: ${database.reason}; retry once the gateway releases it.`,
+    ),
+    OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
+    "Installing manually via npm bypasses this guard; back up first and verify compatibility.",
+  ];
+}
+
+function checkTargetDatabaseSchemas(
+  supportedVersions: OpenClawSchemaVersions | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): OpenClawDatabaseSchemaPreflight {
+  return supportedVersions
+    ? preflightOpenClawDatabaseSchemas({ env, supportedVersions })
+    : { incompatible: [], indeterminate: [] };
+}
+
+function hasSchemaRefusal(schemas: OpenClawDatabaseSchemaPreflight): boolean {
+  return schemas.incompatible.length > 0 || schemas.indeterminate.length > 0;
 }
 
 async function runPackageInstallUpdate(params: {
@@ -406,7 +454,10 @@ async function runGitUpdate(params: {
   opts: UpdateCommandOptions;
   stop: () => void;
   devTargetRef?: string;
-  beforeGitMutation?: () => Promise<{
+  beforeGitMutation?: (target: {
+    schemaVersions?: OpenClawSchemaVersions;
+    metadataUnreadable?: string;
+  }) => Promise<{
     allowGatewayServiceRepair?: boolean;
     allowGatewayActivation?: boolean;
   } | void>;
@@ -542,6 +593,11 @@ async function updateCommandInternal(
   const timeoutMs = parseTimeoutMsOrExit(opts.timeout);
   const shouldRestart = opts.restart !== false;
   if (timeoutMs === null) {
+    return;
+  }
+  if (!postCoreUpdateResume && opts.dryRun !== true && isGatewayExternallySupervised()) {
+    defaultRuntime.error(formatExternalSupervisorUpdateRequired());
+    defaultRuntime.exit(1);
     return;
   }
   if (opts.dryRun !== true) {
@@ -731,11 +787,13 @@ async function updateCommandInternal(
   let packageInstallTarget: ResolvedGlobalInstallTarget | undefined;
   let installedPackageName = DEFAULT_PACKAGE_NAME;
   let packageAlreadyCurrent = false;
+  let packageTargetSchemaVersions: OpenClawSchemaVersions | undefined;
   let managedServiceRootRedirect: ManagedServiceRootRedirect | null = null;
   // Resolved independently of the root redirect so it covers the common case
   // where the package root is the same but the user's PATH-resolved node
   // differs from the node baked into the managed gateway service unit.
   let managedServiceNodeRunner: string | undefined;
+  let packageUpdateNodeRunner: string | undefined;
 
   if (updateInstallKind === "package") {
     managedServiceRootRedirect = await resolveManagedServicePackageUpdateRoot({ root });
@@ -781,6 +839,7 @@ async function updateCommandInternal(
         );
       }
     }
+    packageUpdateNodeRunner = managedServiceNodeRunner;
   }
 
   if (updateInstallKind !== "git") {
@@ -869,6 +928,46 @@ async function updateCommandInternal(
       tag,
       env: packageInstallEnv,
     });
+    if (targetVersion) {
+      const targetMetadata = await fetchNpmPackageTargetStatus({
+        target: targetVersion,
+        spec: resolveGlobalInstallSpec({
+          packageName: DEFAULT_PACKAGE_NAME,
+          tag: targetVersion,
+          env: packageInstallEnv,
+        }),
+        command: npmMetadataCommand,
+        timeoutMs,
+        cwd: packageInstallCwd,
+        env: packageInstallEnv,
+      });
+      if (targetMetadata.error || targetMetadata.version !== targetVersion) {
+        defaultRuntime.error(
+          `Update refused: could not inspect exact package target openclaw@${targetVersion}: ${targetMetadata.error ?? `registry returned version ${targetMetadata.version ?? "unknown"}`}.`,
+        );
+        defaultRuntime.exit(1);
+        return;
+      }
+      packageTargetSchemaVersions = targetMetadata.schemaVersions;
+      // Always install the exact inspected version: a dist-tag can move between
+      // this lookup and the install, and an uninspected version would bypass
+      // the schema and runtime decisions made here. Missing schema metadata
+      // only means the schema preflight cannot run (legacy target).
+      if (updateInstallKind === "package" && canResolveRegistryVersionForPackageTarget(tag)) {
+        packageInstallSpec = resolveGlobalInstallSpec({
+          packageName: DEFAULT_PACKAGE_NAME,
+          tag: targetVersion,
+          env: packageInstallEnv,
+        });
+      }
+    }
+  }
+
+  const packageSchemaPreflight = checkTargetDatabaseSchemas(packageTargetSchemaVersions);
+  if (!opts.dryRun && hasSchemaRefusal(packageSchemaPreflight)) {
+    defaultRuntime.error(formatSchemaRefusalLines(packageSchemaPreflight).join("\n"));
+    defaultRuntime.exit(1);
+    return;
   }
 
   if (opts.dryRun) {
@@ -922,6 +1021,16 @@ async function updateCommandInternal(
     }
     if (explicitTag && !canResolveRegistryVersionForPackageTarget(tag)) {
       notes.push("Non-registry package specs skip npm version lookup and downgrade previews.");
+    }
+    if (hasSchemaRefusal(packageSchemaPreflight)) {
+      notes.push(...formatSchemaRefusalLines(packageSchemaPreflight, true));
+    }
+    if (updateInstallKind === "git") {
+      // The git target revision is resolved inside the real update run, so its
+      // schema support cannot be previewed here without duplicating that flow.
+      notes.push(
+        "Database schema compatibility of the git target is verified during the real update; this preview does not check it.",
+      );
     }
 
     printDryRunPreview(
@@ -983,19 +1092,40 @@ async function updateCommandInternal(
   }
 
   if (updateInstallKind === "package") {
-    const runtimePreflightError = await resolvePackageRuntimePreflightError({
+    // Changing runners is safe only when this update owns and will rewrite the
+    // service; otherwise the unchanged unit could still restart on the stale Node.
+    const canRefreshManagedServiceNode =
+      shouldRestart &&
+      managedServiceNodeRunner !== undefined &&
+      (await gatewayServiceCommandUsesRoot({ root })) === true;
+    const runtimePreflight = await resolvePackageRuntimePreflight({
       tag,
       spec: packageInstallSpec ?? undefined,
       timeoutMs,
       nodeRunner: managedServiceNodeRunner,
+      fallbackNodeRunner: canRefreshManagedServiceNode ? resolveNodeRunner() : undefined,
       command: packageInstallTarget?.manager === "npm" ? packageInstallTarget.command : undefined,
       cwd: packageInstallCwd,
       env: packageInstallEnv,
     });
-    if (runtimePreflightError) {
-      defaultRuntime.error(runtimePreflightError);
+    if (!runtimePreflight.ok) {
+      defaultRuntime.error(runtimePreflight.error);
       defaultRuntime.exit(1);
       return;
+    }
+    const runtimeSelection = runtimePreflight.value;
+    packageUpdateNodeRunner = runtimeSelection.nodeRunner;
+    if (runtimeSelection.replacedNodeRunner && !opts.json) {
+      defaultRuntime.log(
+        theme.warn(
+          `Managed gateway service Node (${runtimeSelection.replacedNodeRunner}) cannot run openclaw@${runtimeSelection.targetVersion ?? tag}.`,
+        ),
+      );
+      defaultRuntime.log(
+        theme.muted(
+          `Using current Node (${packageUpdateNodeRunner}) and refreshing the managed service runtime after the update.`,
+        ),
+      );
     }
   }
 
@@ -1012,6 +1142,7 @@ async function updateCommandInternal(
   const preUpdatePluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
 
   let preManagedServiceStop: PreManagedServiceStop | undefined;
+  let schemaRefusalAfterStop = false;
   const gitMutationRoots =
     updateInstallKind === "git" ? (switchToGit ? [root, resolveGitInstallDir()] : [root]) : null;
   const stopManagedServiceBeforeMutableUpdate = async (
@@ -1087,67 +1218,122 @@ async function updateCommandInternal(
     }
   }
 
+  const postStopPackageSchemaPreflight =
+    updateInstallKind === "package"
+      ? checkTargetDatabaseSchemas(
+          packageTargetSchemaVersions,
+          preManagedServiceStop?.serviceEnv ?? process.env,
+        )
+      : { incompatible: [], indeterminate: [] };
+  if (hasSchemaRefusal(postStopPackageSchemaPreflight)) {
+    schemaRefusalAfterStop = true;
+    defaultRuntime.error(formatSchemaRefusalLines(postStopPackageSchemaPreflight).join("\n"));
+  }
+
   let result: UpdateRunResult;
   try {
     result =
-      updateInstallKind === "package"
-        ? await runPackageInstallUpdate({
+      updateInstallKind === "package" && hasSchemaRefusal(postStopPackageSchemaPreflight)
+        ? {
+            status: "error",
+            mode: packageInstallTarget?.manager ?? "unknown",
             root,
-            installKind,
-            tag,
-            installSpec: packageInstallSpec ?? undefined,
-            timeoutMs: updateStepTimeoutMs,
-            startedAt,
-            progress,
-            jsonMode: Boolean(opts.json),
-            allowGatewayServiceRepair: preManagedServiceStop?.serviceMatchesMutationRoot === true,
-            allowGatewayActivation:
-              shouldRestart &&
-              preManagedServiceStop?.stopped === true &&
-              preManagedServiceStop.serviceMatchesMutationRoot === true,
-            managedServiceEnv: preManagedServiceStop?.serviceEnv,
-            invocationCwd,
-            honorPackageRoot:
-              managedServiceRootRedirect !== null || managedServiceNodeRunner !== undefined,
-            nodeRunner: managedServiceNodeRunner,
-            installEnv: packageInstallEnv,
-            installTarget: packageInstallTarget,
-          })
-        : await runGitUpdate({
-            root,
-            switchToGit,
-            installKind,
-            timeoutMs,
-            startedAt,
-            progress,
-            channel,
-            tag,
-            showProgress,
-            opts,
-            stop,
-            devTargetRef,
-            beforeGitMutation:
-              updateInstallKind === "git"
-                ? async () => {
-                    await stopManagedServiceBeforeMutableUpdate(gitMutationRoots ?? [root]);
-                    return {
-                      // Only a positively owned service may be rewritten. Activation
-                      // additionally requires this update to have stopped it.
-                      allowGatewayServiceRepair:
-                        preManagedServiceStop?.serviceMatchesMutationRoot === true,
-                      allowGatewayActivation:
-                        shouldRestart &&
-                        preManagedServiceStop?.stopped === true &&
-                        preManagedServiceStop.serviceMatchesMutationRoot === true,
-                    };
-                  }
-                : undefined,
-            allowGatewayServiceRepair: false,
-            allowGatewayActivation: false,
-          });
+            reason: "database-schema-preflight",
+            steps: [],
+            durationMs: Date.now() - startedAt,
+          }
+        : updateInstallKind === "package"
+          ? await runPackageInstallUpdate({
+              root,
+              installKind,
+              tag,
+              installSpec: packageInstallSpec ?? undefined,
+              timeoutMs: updateStepTimeoutMs,
+              startedAt,
+              progress,
+              jsonMode: Boolean(opts.json),
+              allowGatewayServiceRepair: preManagedServiceStop?.serviceMatchesMutationRoot === true,
+              allowGatewayActivation:
+                shouldRestart &&
+                preManagedServiceStop?.stopped === true &&
+                preManagedServiceStop.serviceMatchesMutationRoot === true,
+              managedServiceEnv: preManagedServiceStop?.serviceEnv,
+              invocationCwd,
+              honorPackageRoot:
+                managedServiceRootRedirect !== null || managedServiceNodeRunner !== undefined,
+              nodeRunner: packageUpdateNodeRunner,
+              installEnv: packageInstallEnv,
+              installTarget: packageInstallTarget,
+            })
+          : await runGitUpdate({
+              root,
+              switchToGit,
+              installKind,
+              timeoutMs,
+              startedAt,
+              progress,
+              channel,
+              tag,
+              showProgress,
+              opts,
+              stop,
+              devTargetRef,
+              beforeGitMutation:
+                updateInstallKind === "git"
+                  ? async (target) => {
+                      if (target?.metadataUnreadable) {
+                        defaultRuntime.error(
+                          `Update refused: could not inspect the target's schema support (${target.metadataUnreadable}). Retry, or see ${OPENCLAW_DATABASE_SCHEMA_DOCS_URL}.`,
+                        );
+                        defaultRuntime.exit(1);
+                        throw new UpdateCommandAbort();
+                      }
+                      const preStopSchemas = checkTargetDatabaseSchemas(target?.schemaVersions);
+                      if (hasSchemaRefusal(preStopSchemas)) {
+                        defaultRuntime.error(formatSchemaRefusalLines(preStopSchemas).join("\n"));
+                        defaultRuntime.exit(1);
+                        throw new UpdateCommandAbort();
+                      }
+                      await stopManagedServiceBeforeMutableUpdate(gitMutationRoots ?? [root]);
+                      const postStopSchemas = checkTargetDatabaseSchemas(
+                        target?.schemaVersions,
+                        preManagedServiceStop?.serviceEnv ?? process.env,
+                      );
+                      if (hasSchemaRefusal(postStopSchemas)) {
+                        schemaRefusalAfterStop = true;
+                        defaultRuntime.error(formatSchemaRefusalLines(postStopSchemas).join("\n"));
+                        throw new UpdateCommandAbort();
+                      }
+                      return {
+                        // Only a positively owned service may be rewritten. Activation
+                        // additionally requires this update to have stopped it.
+                        allowGatewayServiceRepair:
+                          preManagedServiceStop?.serviceMatchesMutationRoot === true,
+                        allowGatewayActivation:
+                          shouldRestart &&
+                          preManagedServiceStop?.stopped === true &&
+                          preManagedServiceStop.serviceMatchesMutationRoot === true,
+                      };
+                    }
+                  : undefined,
+              allowGatewayServiceRepair: false,
+              allowGatewayActivation: false,
+            });
   } catch (err) {
     stop();
     if (err instanceof UpdateCommandAbort) {
+      if (schemaRefusalAfterStop) {
+        if (preManagedServiceStop?.stopped === true) {
+          await maybeResumeWindowsTaskAutoStartAfterPackageUpdate(preManagedServiceStop).catch(
+            () => undefined,
+          );
+          await maybeRestartServiceAfterFailedMutableUpdate({
+            preManagedServiceStop,
+            jsonMode: Boolean(opts.json),
+          });
+        }
+        defaultRuntime.exit(1);
+      }
       return;
     }
     try {
@@ -1278,7 +1464,7 @@ async function updateCommandInternal(
       opts,
       pluginInstallRecords: preUpdatePluginInstallRecords,
       updateStartedAtMs: startedAt,
-      nodeRunner: managedServiceNodeRunner,
+      nodeRunner: packageUpdateNodeRunner,
       preUpdateConfig: configSnapshot.valid
         ? {
             sourceConfig: configSnapshot.sourceConfig,
@@ -1438,7 +1624,11 @@ async function updateCommandInternal(
           processEnv: process.env,
           serviceEnv: gatewayServiceEnv,
         });
-        restartScriptPath = await prepareRestartScript(serviceState.env, gatewayPort);
+        restartScriptPath = await prepareRestartScript(
+          serviceState.env,
+          gatewayPort,
+          serviceOwnershipConfirmed ? serviceState.command?.programArguments : undefined,
+        );
         // An ambiguous wrapper may be stopped and restored, but only proven
         // ownership authorizes rewriting the service definition.
         refreshGatewayServiceEnvLocal = serviceOwnershipConfirmed;
@@ -1472,10 +1662,11 @@ async function updateCommandInternal(
     gatewayPort,
     restartScriptPath,
     invocationCwd,
-    nodeRunner: managedServiceNodeRunner,
+    nodeRunner: packageUpdateNodeRunner,
     skipLegacyServiceRestart,
     requireRunningServiceAfterRestart:
       resultWithPostUpdate.mode === "git" && preManagedServiceStop?.stopped === true,
+    timeoutMs: updateStepTimeoutMs,
   });
   if (!restartOk) {
     await markControlPlaneUpdateRestartSentinelFailureBestEffort({

@@ -504,7 +504,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     func applicationDidFinishLaunching(_: Notification) {
-        if self.isDuplicateInstance() {
+        let environment = ProcessInfo.processInfo.environment
+        let hasReplacementHandoff = ApplicationRelocator.hasReplacementHandoffMetadata(
+            environment: environment)
+        let isReplacementHandoff = ApplicationRelocator.acceptReplacementHandoff(
+            environment: environment)
+        if hasReplacementHandoff, !isReplacementHandoff {
+            NSApp.terminate(nil)
+            return
+        }
+        // Only a child whose signed parent and inherited readiness pipe authenticate
+        // may overlap the old process during replacement handoff.
+        if !isReplacementHandoff, self.isDuplicateInstance() {
             NSWorkspace.shared.open(Self.dashboardURL)
             NSApp.terminate(nil)
             return
@@ -555,6 +566,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ExecApprovalsGatewayPrompter.shared.start()
         MacNodeModeCoordinator.shared.start()
         VoiceWakeGlobalSettingsSync.shared.start()
+        QuickChatController.shared.start()
         Task { PresenceReporter.shared.start() }
         Task { await HealthStore.shared.refresh(onDemand: true) }
         Task { await PortGuardian.shared.sweep(mode: AppStateStore.shared.connectionMode) }
@@ -601,6 +613,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_: Notification) {
+        QuickChatController.shared.stop()
         PresenceReporter.shared.stop()
         NodePairingApprovalPrompter.shared.stop()
         DevicePairingApprovalPrompter.shared.stop()

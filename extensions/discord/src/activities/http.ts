@@ -1,9 +1,10 @@
+import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { logError } from "openclaw/plugin-sdk/logging-core";
 import { resolveRequestClientIp } from "openclaw/plugin-sdk/webhook-ingress";
 import { parseDiscordActivityCustomId } from "../component-custom-id.js";
 import { resolveActivityUserAuthorized } from "./allowlist.js";
 import {
-  defaultReadVendorAsset,
   DISCORD_TOKEN_URL,
   DISCORD_USER_URL,
   fetchDiscordJson,
@@ -34,9 +35,11 @@ const DISCORD_ACTIVITY_WIDGET_CSP =
 
 type DiscordActivityHttpDeps = {
   runtime: DiscordActivitiesRuntime;
+  vendorAssetPath: string;
   fetchGuard?: FetchGuard;
   now?: () => number;
-  readVendorAsset?: () => Promise<Buffer>;
+  readVendorAsset?: (assetPath: string) => Promise<Buffer>;
+  logError?: (message: string) => void;
 };
 
 type DiscordOauthUser = {
@@ -142,8 +145,18 @@ export function createDiscordActivityHttpHandler(deps: DiscordActivityHttpDeps):
 } {
   const fetchGuard = deps.fetchGuard ?? fetchWithSsrFGuard;
   const limiter = new TokenRateLimiter(deps.now ?? Date.now);
-  const readVendorAsset = deps.readVendorAsset ?? defaultReadVendorAsset;
+  const readVendorAsset = deps.readVendorAsset ?? ((assetPath: string) => fs.readFile(assetPath));
+  const reportError = deps.logError ?? logError;
   let vendorAsset: Promise<Buffer> | undefined;
+  let pendingLaunchFailureLogged = false;
+
+  function logPendingLaunchFailure(error: unknown): void {
+    if (pendingLaunchFailureLogged) {
+      return;
+    }
+    pendingLaunchFailureLogged = true;
+    reportError(`discord activity: failed to consume pending launch: ${String(error)}`);
+  }
 
   async function handleToken(req: IncomingMessage, res: ServerResponse): Promise<true> {
     const cfg = deps.runtime.currentConfig();
@@ -269,16 +282,51 @@ export function createDiscordActivityHttpHandler(deps: DiscordActivityHttpDeps):
     let resolved: {
       id: string;
       widget: NonNullable<Awaited<ReturnType<typeof deps.runtime.store.lookupWidget>>>;
-    } | null;
+    } | null = null;
+    // Prefer an explicit ID, then the click-time launch record, then the newest posted widget.
     const requestedWidgetId = widgetIdFromCustomId(customId);
     if (requestedWidgetId) {
       const widget = await deps.runtime.store.lookupWidget(requestedWidgetId);
+      // A parseable ID is an explicit widget selection. Missing or foreign widgets fail closed
+      // instead of silently opening unrelated pending or newest-widget state.
       if (widget?.accountId !== session.accountId || widget.channelId !== channelId) {
         return respondJson(res, 404, { error: "widget not found" });
       }
       resolved = { id: requestedWidgetId, widget };
+      // Awaited like every sibling store call on this path (sessions, widgets): the local
+      // KV either answers or the process is wedged; per-call budgets here would be asymmetric.
+      try {
+        await deps.runtime.store.retirePendingLaunch(
+          session.accountId,
+          channelId,
+          session.discordUserId,
+          requestedWidgetId,
+        );
+      } catch (error) {
+        logPendingLaunchFailure(error);
+      }
     } else {
-      resolved = await deps.runtime.store.singleWidgetForChannel(session.accountId, channelId);
+      try {
+        const pendingLaunch = await deps.runtime.store.consumePendingLaunch(
+          session.accountId,
+          channelId,
+          session.discordUserId,
+        );
+        if (pendingLaunch) {
+          const widget = await deps.runtime.store.lookupWidget(pendingLaunch.widgetId);
+          if (widget?.accountId === session.accountId && widget.channelId === channelId) {
+            resolved = { id: pendingLaunch.widgetId, widget };
+          }
+        }
+      } catch (error) {
+        logPendingLaunchFailure(error);
+      }
+      // Some Discord clients omit the launch custom ID. Prefer the most recently posted channel
+      // widget while keeping older widgets addressable through buttons that preserve custom IDs.
+      resolved ??= await deps.runtime.store.latestPostedWidgetForChannel(
+        session.accountId,
+        channelId,
+      );
     }
     if (!resolved) {
       return respondJson(res, 404, { error: "widget not found" });
@@ -335,10 +383,14 @@ export function createDiscordActivityHttpHandler(deps: DiscordActivityHttpDeps):
         return respond(res, 200, DISCORD_ACTIVITY_SHELL_JS, "text/javascript; charset=utf-8");
       }
       if (req.method === "GET" && relative === "/vendor/embedded-app-sdk.mjs") {
+        const pendingAsset = (vendorAsset ??= readVendorAsset(deps.vendorAssetPath));
         try {
-          vendorAsset ??= readVendorAsset();
-          return respond(res, 200, await vendorAsset, "text/javascript; charset=utf-8");
+          return respond(res, 200, await pendingAsset, "text/javascript; charset=utf-8");
         } catch {
+          // Clear only the failed read. A later request may already have installed a retry.
+          if (vendorAsset === pendingAsset) {
+            vendorAsset = undefined;
+          }
           return notFound(res);
         }
       }

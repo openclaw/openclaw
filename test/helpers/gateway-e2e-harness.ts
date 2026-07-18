@@ -4,12 +4,9 @@ import path from "node:path";
 import { GatewayClient } from "../../src/gateway/client.js";
 import { connectGatewayClient } from "../../src/gateway/test-helpers.e2e.js";
 import { loadOrCreateDeviceIdentity } from "../../src/infra/device-identity.js";
-import { extractFirstTextBlock } from "../../src/shared/chat-message-content.js";
 import { sleep } from "../../src/utils.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../src/utils/message-channel.js";
 import { createOpenClawTestInstance, type OpenClawTestInstance } from "./openclaw-test-instance.js";
-
-export { extractFirstTextBlock };
 
 export type GatewayInstance = OpenClawTestInstance;
 
@@ -19,7 +16,7 @@ const GATEWAY_NODE_STATUS_POLL_MS = 20;
 const POST_JSON_TIMEOUT_MS = 15_000;
 const POST_JSON_MAX_RESPONSE_BYTES = 1024 * 1024;
 
-export type PostJsonOptions = {
+type PostJsonOptions = {
   maxResponseBytes?: number;
   timeoutMs?: number;
 };
@@ -145,7 +142,7 @@ export async function connectNode(
   return { client, nodeId };
 }
 
-async function connectStatusClient(
+export async function connectGatewayStatusClient(
   inst: GatewayInstance,
   timeoutMs = GATEWAY_CONNECT_STATUS_TIMEOUT_MS,
 ): Promise<GatewayClient> {
@@ -205,7 +202,7 @@ export async function waitForNodeStatus(
     let client: GatewayClient | undefined;
     while (Date.now() < deadline) {
       try {
-        client = await connectStatusClient(
+        client = await connectGatewayStatusClient(
           inst,
           Math.min(2_000, GATEWAY_CONNECT_STATUS_TIMEOUT_MS, Math.max(1, deadline - Date.now())),
         );
