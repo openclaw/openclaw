@@ -128,11 +128,9 @@ function readRawDeltaInTransaction(
   const state = executeSqliteQueryTakeFirstSync(
     database,
     db
-      .selectFrom("session_transcript_generations as tg")
-      .leftJoin("transcript_events as te", "te.session_id", "tg.session_id")
-      .select(["tg.generation", (eb) => eb.fn.max<number | bigint>("te.seq").as("max_seq")])
-      .where("tg.session_id", "=", scope.sessionId)
-      .groupBy("tg.generation"),
+      .selectFrom("session_transcript_generations")
+      .select("generation")
+      .where("session_id", "=", scope.sessionId),
   );
   if (!state) {
     return { kind: "missing" };
@@ -156,10 +154,16 @@ function readRawDeltaInTransaction(
   if (cursor.generation !== state.generation) {
     return reset("generation_mismatch");
   }
-  const maxSeq =
-    state.max_seq === null || state.max_seq === undefined
-      ? -1
-      : normalizeSqliteNumber(state.max_seq);
+  const frontier = executeSqliteQueryTakeFirstSync(
+    database,
+    db
+      .selectFrom("transcript_events")
+      .select("seq")
+      .where("session_id", "=", scope.sessionId)
+      .orderBy("seq", "desc")
+      .limit(1),
+  );
+  const maxSeq = frontier ? normalizeSqliteNumber(frontier.seq) : -1;
   if (cursor.lastSeq > maxSeq) {
     return reset("invalid_cursor");
   }

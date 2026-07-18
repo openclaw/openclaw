@@ -209,6 +209,45 @@ describe("sqlite hot query plans", () => {
     );
     expect(latestMessagePlan).not.toContain("USE TEMP B-TREE FOR ORDER BY");
 
+    expectPlanIncludes({
+      db: database.db,
+      expected: "sqlite_autoindex_session_transcript_generations_1",
+      params: ["session-1"],
+      sql: `
+        SELECT generation
+          FROM session_transcript_generations
+         WHERE session_id = ?
+      `,
+    });
+    const rawDeltaPlan = explainQueryPlan(
+      database.db,
+      `
+        SELECT seq, LENGTH(CAST(event_json AS BLOB)) + 1 AS serialized_bytes
+          FROM transcript_events
+         WHERE session_id = ? AND seq > ?
+         ORDER BY seq ASC
+         LIMIT 1001
+      `,
+      ["session-1", 90_000],
+    );
+    expect(rawDeltaPlan).toContain("sqlite_autoindex_transcript_events_1");
+    expect(rawDeltaPlan).not.toContain("SCAN transcript_events");
+    expect(rawDeltaPlan).not.toContain("USE TEMP B-TREE FOR ORDER BY");
+    const rawFrontierPlan = explainQueryPlan(
+      database.db,
+      `
+        SELECT seq
+          FROM transcript_events
+         WHERE session_id = ?
+         ORDER BY seq DESC
+         LIMIT 1
+      `,
+      ["session-1"],
+    );
+    expect(rawFrontierPlan).toContain("sqlite_autoindex_transcript_events_1");
+    expect(rawFrontierPlan).not.toContain("SCAN transcript_events");
+    expect(rawFrontierPlan).not.toContain("USE TEMP B-TREE FOR ORDER BY");
+
     const historyPagePlan = explainQueryPlan(
       database.db,
       `

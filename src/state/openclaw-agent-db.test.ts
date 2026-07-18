@@ -1919,6 +1919,13 @@ describe("openclaw agent database", () => {
         )
         .get(),
     ).toEqual({ name: "session_transcript_active_events" });
+    expect(
+      database.db
+        .prepare(
+          "SELECT length(generation) AS generation_length FROM session_transcript_generations WHERE session_id = ?",
+        )
+        .get("session-1"),
+    ).toEqual({ generation_length: 32 });
     expect(readSqliteNumberPragma(database.db, "user_version")).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
   });
 

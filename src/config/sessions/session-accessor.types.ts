@@ -204,10 +204,39 @@ export type SessionTranscriptEventRow = {
   seq: number;
 };
 
-export type {
-  SessionTranscriptRawDeltaLimits,
-  SessionTranscriptRawDeltaResult,
-} from "./session-accessor.sqlite-contract.js";
+/** Count, byte, and continuation bounds for one raw transcript page. */
+export type SessionTranscriptRawDeltaLimits = {
+  /** Opaque cursor returned by a prior page or reset result. */
+  cursor?: string;
+  /** Maximum serialized JSONL bytes returned by this page. */
+  maxBytes?: number;
+  /** Maximum number of events returned by this page. */
+  maxEvents?: number;
+};
+
+/** Generation-aware outcome for one bounded raw transcript read. */
+export type SessionTranscriptRawDeltaResult =
+  | {
+      kind: "page";
+      /** Cursor positioned after the last returned event. */
+      cursor: string;
+      /** Ordered raw transcript events selected for this page. */
+      events: SessionTranscriptEventRow[];
+      /** True when another event remains after this page. */
+      hasMore: boolean;
+      /** First unread event size when it cannot fit under maxBytes. */
+      requiredBytes?: number;
+      /** Stored JSONL bytes represented by events. */
+      serializedBytes: number;
+    }
+  | {
+      kind: "reset";
+      /** Fresh bootstrap cursor for the current generation. */
+      cursor: string;
+      /** Stable discontinuity that invalidated the supplied cursor. */
+      reason: "generation_mismatch" | "invalid_cursor" | "scope_mismatch";
+    }
+  | { kind: "missing" };
 
 export type TranscriptMessageAppendOptions<TMessage> = {
   /** Runtime config used for message redaction and transcript header metadata. */
