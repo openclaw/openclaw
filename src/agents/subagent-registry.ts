@@ -29,6 +29,7 @@ import { SUBAGENT_KILL_TASK_ERROR } from "../tasks/detached-task-runtime-contrac
 import { finalizeTaskRunByRunId, findDetachedTaskRun } from "../tasks/detached-task-runtime.js";
 import { isProvisionalSubagentKillTask } from "../tasks/task-cancellation-state.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
+import type { AcceptedSessionSpawn } from "./accepted-session-spawn.js";
 import {
   ackLeasedAgentSteeringItemsFromSubagentRuns,
   leasePendingAgentSteeringItemsFromSubagentRuns,
@@ -785,6 +786,7 @@ const {
   completeSubagentRun,
   finalizeResumedAnnounceGiveUp,
   refreshFrozenResultFromSession,
+  resumeRequesterSettleWakeAfterYield,
   resumeRequesterSettleWake,
   startSubagentAnnounceCleanupFlow,
 } = subagentLifecycleController;
@@ -2047,6 +2049,14 @@ export function getLatestSubagentRunByChildSessionKey(
 
 export function initSubagentRegistry() {
   restoreSubagentRunsOnce();
+}
+
+/** Re-admits a delivered child batch after its requester explicitly yields. */
+export function resumeRequesterAfterYieldedSessionSpawns(params: {
+  requesterSessionKey: string;
+  acceptedSessionSpawns: readonly AcceptedSessionSpawn[];
+}): boolean {
+  return resumeRequesterSettleWakeAfterYield(params);
 }
 
 const SUBAGENT_REGISTRY_TEST_HANDLE = Symbol.for("openclaw.subagentRegistryTestApi");

@@ -3575,6 +3575,53 @@ describe("requester settle wake trigger", () => {
     expect(later.requesterSettleWake).toEqual({ status: "pending", attemptCount: 0 });
   });
 
+  it("preserves a yielded batch re-armed during an earlier successful wake", async () => {
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      expectsCompletionMessage: true,
+      delivery: { status: "delivered" },
+    });
+    const settleWake = vi.fn(
+      async (
+        params: Parameters<
+          LifecycleControllerParams["maybeWakeRequesterAfterAllChildrenSettled"]
+        >[0],
+      ) => {
+        const firstInvocation = settleWake.mock.calls.length === 1;
+        if (firstInvocation) {
+          controller.resumeRequesterSettleWakeAfterYield({
+            requesterSessionKey: entry.requesterSessionKey,
+            acceptedSessionSpawns: [{ runId: entry.runId, childSessionKey: entry.childSessionKey }],
+          });
+          params.transitionBatch([entry.runId], {
+            status: "dispatching",
+            attemptCount: 1,
+            batchRunIds: [entry.runId],
+          });
+        }
+        params.completeBatch(
+          [entry.runId],
+          firstInvocation ? undefined : entry.requesterSettleWake?.rearmGeneration,
+        );
+        return firstInvocation;
+      },
+    );
+    const controller = createLifecycleController({
+      entry,
+      maybeWakeRequesterAfterAllChildrenSettled: settleWake,
+    });
+
+    controller.completeCleanupBookkeeping({
+      runId: entry.runId,
+      entry,
+      cleanup: "keep",
+      completedAt: 5_000,
+    });
+
+    await waitForLifecycleState(() => expect(settleWake).toHaveBeenCalledTimes(2));
+    expect(entry.requesterSettleWake).toBeUndefined();
+  });
+
   it("preserves delete-mode child results for the settle wake after delivered cleanup clears them", async () => {
     const entry = createRunEntry({
       cleanup: "delete",

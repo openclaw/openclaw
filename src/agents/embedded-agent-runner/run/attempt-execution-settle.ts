@@ -1,6 +1,7 @@
 /** Runs prompt dispatch, stream settlement, cleanup, and result projection. */
 import type { AssistantMessage } from "../../../llm/types.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import { resumeRequesterAfterYieldedSessionSpawns } from "../../subagent-registry.js";
 import type { NormalizedUsage } from "../../usage.js";
 import { log } from "../logger.js";
 import type { PromptCacheBreak, PromptCacheChange } from "../prompt-cache-observability.js";
@@ -410,5 +411,11 @@ export async function runEmbeddedAttemptSettledPhase(
     trajectoryRecorder,
   });
   state.trajectoryEndRecorded = true;
+  if (result.yieldDetected === true && attempt.sessionKey && result.acceptedSessionSpawns?.length) {
+    resumeRequesterAfterYieldedSessionSpawns({
+      requesterSessionKey: attempt.sessionKey,
+      acceptedSessionSpawns: result.acceptedSessionSpawns,
+    });
+  }
   return result;
 }

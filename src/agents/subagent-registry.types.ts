@@ -103,8 +103,12 @@ export type RequesterSettleWakeState = {
   replayCount?: number;
   /** Persisted retry deadline; restore waits until this instant. */
   nextAttemptAt?: number;
-  /** Frozen wave membership once the first delivery attempt is admitted. */
+  /** Frozen wave membership after delivery admission or requester-yield re-admission. */
   batchRunIds?: string[];
+  /** Present only when an idle requester needs a new turn after yielding. */
+  afterRequesterYield?: true;
+  /** Monotonic process generation protecting a newer yield from stale completion. */
+  rearmGeneration?: number;
   lastError?: string | null;
   /** Cleanup wanted to retire this row; defer deletion until the outbox resolves. */
   retireAfterSettle?: boolean;
