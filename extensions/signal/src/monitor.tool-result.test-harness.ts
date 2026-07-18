@@ -46,6 +46,10 @@ const signalToolResultSessionStorePath = vi.hoisted(
 let signalToolResultStateDir: string | undefined;
 let signalToolResultIngressQueue: ReturnType<typeof createChannelIngressQueueForTests> | undefined;
 
+export function toSignalToolResultTestError(value: unknown, fallbackMessage: string): Error {
+  return value instanceof Error ? value : new Error(fallbackMessage, { cause: value });
+}
+
 export async function waitForSignalToolResultIngressIdle() {
   const queue = signalToolResultIngressQueue;
   if (!queue) {

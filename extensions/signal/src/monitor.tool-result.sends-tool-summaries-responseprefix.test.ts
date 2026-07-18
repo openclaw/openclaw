@@ -10,6 +10,7 @@ import {
   getSignalToolResultTestMocks,
   installSignalToolResultTestHooks,
   setSignalToolResultTestConfig,
+  toSignalToolResultTestError,
   waitForSignalToolResultIngressIdle,
 } from "./monitor.tool-result.test-harness.js";
 
@@ -49,7 +50,7 @@ async function receiveSignalPayloads(params: {
   opts?: Partial<MonitorSignalProviderOptions>;
 }) {
   const abortController = new AbortController();
-  let ingressIdleError: unknown;
+  let ingressIdleError: Error | undefined;
   streamMock.mockImplementation(async ({ onEvent }) => {
     for (const payload of params.payloads) {
       await onEvent({
@@ -60,7 +61,7 @@ async function receiveSignalPayloads(params: {
     try {
       await waitForSignalToolResultIngressIdle();
     } catch (error) {
-      ingressIdleError = error;
+      ingressIdleError = toSignalToolResultTestError(error, "Signal ingress did not become idle");
     } finally {
       abortController.abort();
     }
@@ -533,7 +534,7 @@ describe("monitorSignalProvider tool results", () => {
     });
     replyMock.mockResolvedValue({ text: "reply" });
     const abortController = new AbortController();
-    let ingressIdleError: unknown;
+    let ingressIdleError: Error | undefined;
     streamMock.mockImplementation(async ({ onEvent }) => {
       for (const [timestamp, message] of [
         [1700000000001, "first message"],
@@ -557,7 +558,10 @@ describe("monitorSignalProvider tool results", () => {
         });
         await waitForSignalToolResultIngressIdle();
       } catch (error) {
-        ingressIdleError = error;
+        ingressIdleError = toSignalToolResultTestError(
+          error,
+          "Batched Signal ingress did not become idle",
+        );
       } finally {
         abortController.abort();
       }

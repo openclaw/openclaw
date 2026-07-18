@@ -6,6 +6,7 @@ import {
   getSignalToolResultTestMocks,
   installSignalToolResultTestHooks,
   setSignalToolResultTestConfig,
+  toSignalToolResultTestError,
 } from "./monitor.tool-result.test-harness.js";
 
 installSignalToolResultTestHooks();
@@ -155,11 +156,11 @@ describe("monitorSignalProvider tool results", () => {
       baseUrl: "http://127.0.0.1:8080",
       abortSignal: abortController.signal,
     });
-    let waitError: unknown;
+    let waitError: Error | undefined;
     try {
       await vi.waitFor(() => expect(replyMock).toHaveBeenCalledTimes(1), { timeout: 5_000 });
     } catch (error) {
-      waitError = error;
+      waitError = toSignalToolResultTestError(error, "Signal reply was not dispatched");
     } finally {
       abortController.abort(new Error("monitor stopped"));
     }
