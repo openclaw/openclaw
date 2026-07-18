@@ -222,6 +222,8 @@ struct OpenClawTypographyTests {
         #expect(proComponents.contains("secondaryActionTitle.text"))
 
         #expect(chatTab.contains("Text(\"Export Transcript\")"))
+        #expect(chatTab.contains("Text(String(localized: \"Sessions…\"))"))
+        #expect(chatTab.contains("Text(String(localized: \"Show reasoning & tool activity\"))"))
         #expect(chatTab.contains(".font(OpenClawType.body)"))
         #expect(!chatTab.contains("Button(\"Export Transcript\")"))
 

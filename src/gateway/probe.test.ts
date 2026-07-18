@@ -162,8 +162,8 @@ vi.mock("../infra/device-identity.js", () => ({
     }
     return deviceIdentityState.value;
   },
-  loadDeviceIdentityIfPresent: (filePath: unknown) => {
-    deviceIdentityState.identityPaths.push(filePath);
+  loadDeviceIdentityIfPresent: (options: unknown) => {
+    deviceIdentityState.identityPaths.push(options);
     if (deviceIdentityState.throwOnLoad) {
       throw new Error("read-only identity dir");
     }
@@ -397,9 +397,7 @@ describe("probeGateway", () => {
 
     await runTokenProbe({ env });
 
-    expect(deviceIdentityState.identityPaths).toEqual([
-      "/tmp/openclaw-probe-service-state/identity/device.json",
-    ]);
+    expect(deviceIdentityState.identityPaths).toEqual([{ env }]);
     expect(deviceIdentityState.tokenParams).toEqual([
       {
         deviceId: "test-device-identity",

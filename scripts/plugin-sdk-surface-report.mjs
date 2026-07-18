@@ -215,7 +215,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: speech-settings keeps agent prompt imports off the synthesis/runtime graph.
       // +1: meeting-runtime barrel: browser meeting-bot core behind MeetingPlatformAdapter.
       // +1: question-gateway-runtime resolves ask_user choices for channel plugins.
-      331,
+      // +1: ingress-effect-once gives drained channels a narrow durable side-effect guard.
+      332,
       env,
     ),
     // ScopeTree adds six channel-policy exports, mirrored by compat, including three functions.
@@ -264,7 +265,16 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +23: core channel, envelope, direct-DM, feedback, legacy-payload, and memory contracts.
       // +81: meeting-runtime barrel: browser meeting-bot core behind MeetingPlatformAdapter.
       // +3: question-gateway-runtime resolver plus request/result types.
-      8152,
+      // +1: async memory prompt preparation registration.
+      // +1: canonical memory host event normalization for SQLite storage.
+      // +1: centralized remember-across-conversations effective-default resolver.
+      // +4: gateway-backed harness question runner, claim/cancel helpers, and caller type.
+      // Harvest: internal question runtime exports -2.
+      // +1: ingress-effect-once factory.
+      // +3: bounded raw transcript cursor request, result, and reader.
+      // +3: bounded visible transcript cursor request, result, and reader.
+      // +1: explicit AgentModelPolicyConfig shared with provider setup surfaces.
+      8165,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -299,7 +309,15 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +13: core channel, envelope, direct-DM, feedback, legacy-payload, and memory operations.
       // +32: meeting-runtime barrel: browser meeting-bot core behind MeetingPlatformAdapter.
       // +1: question-gateway-runtime resolver.
-      4534,
+      // +1: async memory prompt preparation registration.
+      // +1: canonical memory host event normalization for SQLite storage.
+      // +1: centralized remember-across-conversations effective-default resolver.
+      // +3: gateway-backed harness question runner and claim/cancel helpers.
+      // Harvest: internal question runtime callable -1.
+      // +1: ingress-effect-once factory.
+      // +1: bounded raw transcript cursor reader.
+      // +1: bounded visible transcript cursor reader.
+      4542,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -318,14 +336,16 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +24: narrowed drain seam compat mirrors in the channel-message
       // deprecation-window barrels (#108656).
       // Harvest: retired dual-field plan payload builder -1; lower-only drift -8.
-      3005,
+      // +1: AgentModelPolicyConfig mirrored by deprecated config-types.
+      3006,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_WILDCARD_REEXPORTS",
       // Used-union narrowing removes 103 wildcard re-exports.
-      // Harvest: freeze the compat config-schema barrel to explicit exports -1.
-      104,
+      // Harvest: freeze the compat config-schema barrel to explicit exports -1;
+      // retire the Memory Core facade's event-store wildcard -1.
+      103,
       env,
     ),
   };

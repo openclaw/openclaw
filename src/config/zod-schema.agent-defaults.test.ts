@@ -38,6 +38,23 @@ describe("agent defaults schema", () => {
     expect(agent.utilityModel).toBe("google/gemini-3.1-flash-lite-preview");
   });
 
+  it("accepts explicit model policy on defaults and agent entries", () => {
+    const defaults = AgentDefaultsSchema.parse({
+      modelPolicy: { allow: ["openai/*", "anthropic/claude-sonnet-4-6"] },
+    });
+    const agent = AgentEntrySchema.parse({
+      id: "ops",
+      modelPolicy: { allow: [] },
+    });
+
+    expect(defaults?.modelPolicy?.allow).toEqual(["openai/*", "anthropic/claude-sonnet-4-6"]);
+    expect(agent.modelPolicy?.allow).toEqual([]);
+    expectSchemaFailurePath(
+      AgentDefaultsSchema.safeParse({ modelPolicy: { allow: "openai/*" } }),
+      "modelPolicy.allow",
+    );
+  });
+
   it("accepts subagent archiveAfterMinutes=0 to disable archiving", () => {
     expectSchemaSuccess(
       AgentDefaultsSchema.safeParse({

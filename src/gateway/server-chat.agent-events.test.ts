@@ -72,6 +72,13 @@ import {
 import { loadGatewaySessionRow } from "./server-chat.load-gateway-session-row.runtime.js";
 import { loadSessionEntry } from "./session-utils.js";
 
+function waitForFast<T>(
+  callback: () => T | Promise<T>,
+  options: { timeout?: number; interval?: number } = {},
+) {
+  return vi.waitFor(callback, { interval: 1, ...options });
+}
+
 describe("agent event handler", () => {
   beforeEach(() => {
     resetAgentEventsForTest({ preserveListeners: true });
@@ -2260,7 +2267,7 @@ describe("agent event handler", () => {
       },
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(
         broadcastToConnIds.mock.calls.filter(([event]) => event === "sessions.changed"),
       ).toHaveLength(2);
@@ -2349,7 +2356,7 @@ describe("agent event handler", () => {
       },
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(
         broadcastToConnIds.mock.calls.filter(([event]) => event === "sessions.changed"),
       ).toHaveLength(2);
@@ -2515,7 +2522,7 @@ describe("agent event handler", () => {
       observedAt: 2_100,
       persistence: expect.any(Promise),
     });
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(markTrackedRunTerminalPersisted).toHaveBeenCalledWith({
         runId: "completed-during-marker-write",
         clientRunId: "completed-during-marker-write",
@@ -2588,7 +2595,7 @@ describe("agent event handler", () => {
       },
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(
         broadcastToConnIds.mock.calls.filter(([event]) => event === "sessions.changed"),
       ).toHaveLength(1);
@@ -2679,7 +2686,7 @@ describe("agent event handler", () => {
 
     currentRow = { ...currentRow, updatedAt: 2_101 };
     resolveRunA?.();
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(
         broadcastToConnIds.mock.calls.filter(([event]) => event === "sessions.changed"),
       ).toHaveLength(1);
@@ -2696,7 +2703,7 @@ describe("agent event handler", () => {
       abortedLastRun: false,
     };
     resolveRunB?.();
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(
         broadcastToConnIds.mock.calls.filter(([event]) => event === "sessions.changed"),
       ).toHaveLength(2);
@@ -2768,7 +2775,7 @@ describe("agent event handler", () => {
     };
     resolvePersistence?.();
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(
         broadcastToConnIds.mock.calls.filter(([event]) => event === "sessions.changed"),
       ).toHaveLength(1);
@@ -2813,7 +2820,7 @@ describe("agent event handler", () => {
       },
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(
         broadcastToConnIds.mock.calls.filter(([event]) => event === "sessions.changed"),
       ).toHaveLength(1);
@@ -3038,7 +3045,7 @@ describe("agent event handler", () => {
       clientRunId: "client-run",
       sessionKey: "session-finished",
     });
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(
         broadcastToConnIds.mock.calls.filter(([event]) => event === "sessions.changed"),
       ).toHaveLength(1);
@@ -3364,7 +3371,7 @@ describe("agent event handler", () => {
       },
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(
         broadcastToConnIds.mock.calls.filter(([event]) => event === "sessions.changed"),
       ).toHaveLength(1);
@@ -3432,7 +3439,7 @@ describe("agent event handler", () => {
       data: { phase: "end", endedAt: 1_700 },
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(
         broadcastToConnIds.mock.calls.filter(([event]) => event === "sessions.changed"),
       ).toHaveLength(1);
@@ -3628,7 +3635,7 @@ describe("agent event handler", () => {
       data: { phase: "start" },
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(logErrorMock).toHaveBeenCalledTimes(1);
     });
     expect(logErrorMock).toHaveBeenCalledWith(

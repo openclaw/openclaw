@@ -8,8 +8,9 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { generateIdentity } from "../protocol/index.js";
+import { runReefChannelLifecycle } from "./channel-lifecycle.js";
 import { reefPlugin } from "./channel.js";
 import { resolveReefConfig } from "./config-schema.js";
 import { resolveReefInboundDispatchContent } from "./inbound.js";
@@ -101,5 +102,98 @@ describe("Reef conversation directory", () => {
         runtime: defaultRuntime,
       }),
     ).resolves.toEqual([{ kind: "user", id: "molty", name: "@molty's agent", handle: "@molty" }]);
+  });
+});
+
+describe("Reef channel lifecycle", () => {
+  function hangingInbox() {
+    const seen: AbortSignal[] = [];
+    let settled = false;
+    const startInbox = (signal: AbortSignal) => {
+      seen.push(signal);
+      return new Promise<void>((resolve) => {
+        const done = () => {
+          settled = true;
+          resolve();
+        };
+        if (signal.aborted) {
+          done();
+          return;
+        }
+        signal.addEventListener("abort", done, { once: true });
+      });
+    };
+    return { startInbox, seen, isSettled: () => settled };
+  }
+
+  it("keeps running when a periodic reconcile fails", async () => {
+    const parent = new AbortController();
+    const inbox = hangingInbox();
+    const errors: unknown[] = [];
+    let reconciles = 0;
+    const lifecycle = runReefChannelLifecycle({
+      parentSignal: parent.signal,
+      startInbox: inbox.startInbox,
+      reconcile: async () => {
+        reconciles += 1;
+        throw new Error("rate_limited");
+      },
+      onReconcileError: (error) => errors.push(error),
+      reconcileIntervalMs: 5,
+    });
+    await vi.waitFor(() => {
+      expect(reconciles).toBeGreaterThanOrEqual(2);
+    });
+    expect(errors.length).toBeGreaterThanOrEqual(2);
+    expect(inbox.isSettled()).toBe(false);
+    parent.abort();
+    await lifecycle;
+    expect(inbox.isSettled()).toBe(true);
+  });
+
+  it("tears down the inbox loop before settling when a loop branch throws", async () => {
+    const parent = new AbortController();
+    const inbox = hangingInbox();
+    // Simulate a non-transport crash escaping the lifecycle (reconcile errors
+    // are contained, so throw from the error hook itself).
+    const lifecycle = runReefChannelLifecycle({
+      parentSignal: parent.signal,
+      startInbox: inbox.startInbox,
+      reconcile: async () => {
+        throw new Error("boom");
+      },
+      onReconcileError: () => {
+        throw new Error("fatal");
+      },
+      reconcileIntervalMs: 5,
+    });
+    await expect(lifecycle).rejects.toThrow("fatal");
+    // The rejection must not leave the inbox reconnect loop running: its
+    // signal is aborted and its promise has settled before the caller resumes.
+    expect(inbox.seen[0]?.aborted).toBe(true);
+    expect(inbox.isSettled()).toBe(true);
+  });
+});
+
+describe("Reef channel lifecycle abort inheritance", () => {
+  it("settles immediately when the parent signal is already aborted", async () => {
+    const parent = new AbortController();
+    parent.abort();
+    const seen: AbortSignal[] = [];
+    await runReefChannelLifecycle({
+      parentSignal: parent.signal,
+      startInbox: (signal) => {
+        seen.push(signal);
+        return signal.aborted
+          ? Promise.resolve()
+          : new Promise<void>((resolve) => {
+              signal.addEventListener("abort", () => resolve(), { once: true });
+            });
+      },
+      reconcile: async () => {},
+      onReconcileError: () => {},
+      reconcileIntervalMs: 5,
+    });
+    expect(seen[0]?.aborted).toBe(true);
   });
 });

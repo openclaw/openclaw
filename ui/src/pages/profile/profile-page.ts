@@ -1,3 +1,4 @@
+import "../../styles/config-quick.css";
 import { consume } from "@lit/context";
 import { html, nothing, svg } from "lit";
 import { state } from "lit/decorators.js";
@@ -9,6 +10,7 @@ import {
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
+import { loadLocalUserIdentity, saveLocalUserIdentity } from "../../app/settings.ts";
 import { icons } from "../../components/icons.ts";
 import {
   renderSettingsEmpty,
@@ -26,12 +28,13 @@ import {
 } from "../../lib/gateway-errors.ts";
 import { buildSessionUsageDateParams, requestSessionsUsage } from "../../lib/sessions/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
-import "../../styles/profile.css";
 import {
   decideUsageRefresh,
   USAGE_PAYLOAD_TTL_MS,
   type UsageRefreshReason,
 } from "../usage/refresh-policy.ts";
+import "../../styles/profile.css";
+import { renderIdentitySection } from "./identity-section.ts";
 import {
   buildHeatmap,
   buildInsights,
@@ -101,6 +104,7 @@ export class ProfilePage extends OpenClawLightDomElement {
   @state() private error: string | null = null;
   @state() private costSummary: CostUsageSummary | null = null;
   @state() private sessionsResult: SessionsUsageResult | null = null;
+  @state() private userAvatar: string | null = loadLocalUserIdentity().avatar;
 
   private client: GatewayBrowserClient | null = null;
   private connected = false;
@@ -288,6 +292,26 @@ export class ProfilePage extends OpenClawLightDomElement {
     }
     this.pendingAutomaticProfileRefresh = false;
     this.requestProfileRefresh("focus");
+  }
+
+  private setLocalUserAvatar(avatar: string | null) {
+    const identity = saveLocalUserIdentity({ ...loadLocalUserIdentity(), avatar });
+    this.userAvatar = identity.avatar;
+  }
+
+  private renderIdentity() {
+    const assistantIdentity = this.context.config.current.assistantIdentity;
+    return renderIdentitySection({
+      userAvatar: this.userAvatar,
+      onUserAvatarChange: (avatar) => this.setLocalUserAvatar(avatar),
+      assistantName: assistantIdentity.name,
+      assistantAvatar: assistantIdentity.avatar,
+      assistantAvatarUrl: assistantIdentity.avatar,
+      assistantAvatarSource: assistantIdentity.avatarSource,
+      assistantAvatarStatus: assistantIdentity.avatarStatus,
+      assistantAvatarReason: assistantIdentity.avatarReason,
+      basePath: this.context.basePath,
+    });
   }
 
   private featuredAgent() {
@@ -566,9 +590,9 @@ export class ProfilePage extends OpenClawLightDomElement {
         );
     return renderSettingsPage(
       hasActivity
-        ? html`${this.renderHero(insights)} ${this.renderStats(insights)} ${this.renderHeatmap()}
-          ${this.renderInsights(insights)}`
-        : html`${this.renderHero(insights)} ${emptyState}`,
+        ? html`${this.renderHero(insights)} ${this.renderStats(insights)} ${this.renderIdentity()}
+          ${this.renderHeatmap()} ${this.renderInsights(insights)}`
+        : html`${this.renderHero(insights)} ${this.renderIdentity()} ${emptyState}`,
     );
   }
 

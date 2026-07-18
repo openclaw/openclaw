@@ -775,11 +775,12 @@ describe("ensureAgentWorkspace", () => {
       .mockRejectedValueOnce(Object.assign(new Error("not a directory"), { code: "ENOTDIR" }));
 
     try {
-      await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+      const result = await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
       expect(rmSpy).toHaveBeenCalledWith(bootstrapPath, { force: true });
       await expect(fs.access(bootstrapPath)).resolves.toBeUndefined();
       const state = await readWorkspaceState(tempDir);
       expect(state.setupCompletedAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
+      expect(result.bootstrapPending).toBe(false);
       await expect(resolveWorkspaceBootstrapStatus(tempDir)).resolves.toBe("complete");
       await expect(isWorkspaceBootstrapPending(tempDir)).resolves.toBe(false);
     } finally {
@@ -1003,14 +1004,11 @@ describe("loadWorkspaceBootstrapFiles", () => {
       content: "# AGENTS.md\n\nkeep me\n",
     });
 
-    const originalReadFileSync = syncFs.readFileSync.bind(syncFs);
-    let readFileSyncCalls = 0;
+    const originalRead = syncFs.read.bind(syncFs);
+    let readCalls = 0;
     let threwTransient = false;
-    const readSpy = vi.spyOn(syncFs, "readFileSync").mockImplementation(((
-      target: unknown,
-      options: unknown,
-    ) => {
-      readFileSyncCalls += 1;
+    const readSpy = vi.spyOn(syncFs, "read").mockImplementation(((...args: unknown[]) => {
+      readCalls += 1;
       if (!threwTransient) {
         threwTransient = true;
         throw Object.assign(new Error("Unknown system error -11: read"), {
@@ -1018,15 +1016,15 @@ describe("loadWorkspaceBootstrapFiles", () => {
           errno: -11,
         });
       }
-      return originalReadFileSync(target as never, options as never);
-    }) as typeof syncFs.readFileSync);
+      return originalRead(...(args as Parameters<typeof syncFs.read>));
+    }) as unknown as typeof syncFs.read);
 
     try {
       const files = await loadWorkspaceBootstrapFiles(tempDir);
       expect(threwTransient).toBe(true);
       // The retry re-opens and reads again, so the failed first read is followed
       // by at least one more successful read.
-      expect(readFileSyncCalls).toBeGreaterThanOrEqual(2);
+      expect(readCalls).toBeGreaterThanOrEqual(2);
       const agents = files.find((file) => file.name === DEFAULT_AGENTS_FILENAME);
       expect(agents?.missing).toBe(false);
       expect(agents?.content).toContain("keep me");
@@ -1043,12 +1041,12 @@ describe("loadWorkspaceBootstrapFiles", () => {
       content: "# AGENTS.md\n",
     });
 
-    const readSpy = vi.spyOn(syncFs, "readFileSync").mockImplementation((() => {
+    const readSpy = vi.spyOn(syncFs, "read").mockImplementation((() => {
       throw Object.assign(new Error("Unknown system error -11: read"), {
         code: "EAGAIN",
         errno: -11,
       });
-    }) as typeof syncFs.readFileSync);
+    }) as unknown as typeof syncFs.read);
 
     try {
       // Unlike the template check, this reader returns an io failure (not a

@@ -501,6 +501,7 @@ export interface DiagnosticEvents {
   event_key: string;
   payload_json: string;
   scope: string;
+  sequence: Generated<number>;
 }
 
 export interface DiagnosticStabilityBundles {
@@ -899,6 +900,7 @@ export interface SessionWatchCursors {
   last_seen_sequence: Generated<number>;
   material_sequence: Generated<number>;
   notified_sequence: Generated<number>;
+  provenance: Generated<string>;
   target_session_key: string;
   updated_at: number;
   watcher_session_key: string;

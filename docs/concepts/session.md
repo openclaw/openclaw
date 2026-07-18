@@ -11,6 +11,10 @@ OpenClaw routes every inbound message to a **session** based on where it came
 from: DMs, group chats, cron jobs, etc. All session state is owned by the
 **gateway**; UI clients query the gateway for session data.
 
+For the personal-agent default — one rolling conversation shared by all your
+DM channels, with group activity and background work flowing into it — see
+[The main session](/concepts/main-session).
+
 ## How messages are routed
 
 | Source          | Behavior                  |
@@ -42,12 +46,12 @@ visible to Bob.
 
 `session.dmScope` options:
 
-| Value                      | Behavior                                  |
-| -------------------------- | ----------------------------------------- |
-| `main` (default)           | All DMs share one session                 |
-| `per-peer`                 | Isolate by sender, across channels        |
-| `per-channel-peer`         | Isolate by channel + sender (recommended) |
-| `per-account-channel-peer` | Isolate by account + channel + sender     |
+| Value                      | Behavior                                                 |
+| -------------------------- | -------------------------------------------------------- |
+| `main` (default)           | All DMs share the [main session](/concepts/main-session) |
+| `per-peer`                 | Isolate by sender, across channels                       |
+| `per-channel-peer`         | Isolate by channel + sender (recommended)                |
+| `per-account-channel-peer` | Isolate by account + channel + sender                    |
 
 <Tip>
 If the same person contacts you from multiple channels, use
@@ -63,6 +67,27 @@ linked channel without starting a new session. See
 troubleshooting.
 
 Verify your setup with `openclaw security audit`.
+
+## Remember across conversations
+
+Separate transcripts control each conversation's local history. For a personal
+or fully trusted agent, `memorySearch.rememberAcrossConversations: true`
+adds an optional retrieval step across that agent's other private
+conversations; it does not combine their transcripts.
+
+Private direct and persistent explicit UI conversations can supply relevant
+context to one another. Groups and channels stay separate in both directions:
+their transcripts are not private recall sources, and replies in those
+conversations do not receive private transcript context. The current
+conversation is also excluded because its history is already loaded.
+
+This setting does not change session keys, DM scope, routing, delivery, or
+`tools.sessions.visibility`. Shared workspace memory in `MEMORY.md` and
+`memory/*.md` also keeps its existing behavior. The current memory provider
+must support protected private transcript recall; context engines such as
+Lossless Claw remain independent and can run alongside it. See
+[Active Memory](/concepts/active-memory#remember-across-conversations) for setup
+and runtime details.
 
 ## Session lifecycle
 

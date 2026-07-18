@@ -1,6 +1,12 @@
 {
   "name": "openclaw",
   "version": "2026.7.2",
+  "openclaw": {
+    "schemaVersions": {
+      "state": 4,
+      "agent": 13
+    }
+  },
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
@@ -1162,6 +1168,10 @@
       "types": "./dist/plugin-sdk/persistent-dedupe.d.ts",
       "default": "./dist/plugin-sdk/persistent-dedupe.js"
     },
+    "./plugin-sdk/ingress-effect-once": {
+      "types": "./dist/plugin-sdk/ingress-effect-once.d.ts",
+      "default": "./dist/plugin-sdk/ingress-effect-once.js"
+    },
     "./plugin-sdk/keyed-async-queue": {
       "types": "./dist/plugin-sdk/keyed-async-queue.d.ts",
       "default": "./dist/plugin-sdk/keyed-async-queue.js"
@@ -1585,6 +1595,7 @@
     "check:opengrep-rule-metadata": "node security/opengrep/check-rule-metadata.mjs",
     "check:protocol-coverage": "node scripts/check-protocol-event-coverage.mjs",
     "check:runtime-sidecar-loaders": "node --import tsx scripts/check-runtime-sidecar-loaders.mjs",
+    "check:script-declarations": "node scripts/check-script-declarations.mjs",
     "check:static-import-sccs": "pnpm check:madge-import-cycles",
     "check:temp-path-guardrails": "node --import tsx scripts/check-temp-path-guardrails.ts",
     "check:test-types": "pnpm tsgo:test",

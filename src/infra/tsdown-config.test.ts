@@ -102,6 +102,8 @@ describe("tsdown config", () => {
       "cli/gateway-lifecycle.runtime",
       "agents/compaction-planning.worker",
       "agents/model-provider-auth.worker",
+      "state/openclaw-database-verify.worker",
+      "system-agent/setup-inference-detection.worker",
       "plugins/memory-state",
       "subagent-registry.runtime",
       "task-registry-control.runtime",

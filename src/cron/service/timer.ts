@@ -10,6 +10,7 @@ import {
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
   isRetryableHeartbeatBusySkipReason,
 } from "../../infra/heartbeat-wake.js";
+import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
 import {
   beginGatewayRootWorkAdmissionWhenOpen,
   GatewayDrainingError,
@@ -69,9 +70,11 @@ import {
 } from "./failure-alerts.js";
 import {
   DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
+  computeJobPreviousRunAtOrBeforeMs,
   computeJobPreviousRunAtMs,
   computeJobNextRunAtMs,
   errorBackoffMs,
+  hasActiveCronRun,
   hasScheduledNextRunAtMs,
   isJobEnabled,
   nextWakeAtMs,
@@ -196,6 +199,8 @@ type StartupCatchupExecution =
   | { ok: false; outcomes: TimedCronRunOutcome[]; error: unknown };
 
 type ExecuteJobCoreOptions = {
+  activeJobMarker?: CronActiveJobMarker;
+  owningCronLaneTaskMarker?: CommandLaneTaskMarker;
   onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
   onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
   onLaneWait?: (info?: { waiting?: boolean }) => void;
@@ -230,7 +235,11 @@ function cronRunAttributionFromExecution(execution?: CronAgentExecutionStarted):
 export async function executeJobCoreWithTimeout(
   state: CronServiceState,
   job: CronJob,
-  opts?: { runId?: string; activeJobMarker?: CronActiveJobMarker },
+  opts?: {
+    runId?: string;
+    activeJobMarker?: CronActiveJobMarker;
+    owningCronLaneTaskMarker?: CommandLaneTaskMarker;
+  },
 ): Promise<CronCoreRunOutcome> {
   const runAbortController = new AbortController();
   const operatorCancellationMarker = Symbol("cron-operator-cancelled");
@@ -275,6 +284,8 @@ export async function executeJobCoreWithTimeout(
         }
       };
       const corePromise = executeJobCore(state, job, runAbortController.signal, {
+        activeJobMarker: opts?.activeJobMarker,
+        owningCronLaneTaskMarker: opts?.owningCronLaneTaskMarker,
         onExecutionStarted: accumulateExecution,
         onExecutionPhase: accumulateExecution,
       });
@@ -328,6 +339,8 @@ export async function executeJobCoreWithTimeout(
       watchdog.noteLaneWait();
     };
     const corePromise = executeJobCore(state, job, runAbortController.signal, {
+      activeJobMarker: opts?.activeJobMarker,
+      owningCronLaneTaskMarker: opts?.owningCronLaneTaskMarker,
       onExecutionStarted: deferTimeoutUntilExecutionStart ? watchdog.noteRunnerStarted : undefined,
       onExecutionPhase: deferTimeoutUntilExecutionStart ? watchdog.notePhase : undefined,
       onLaneWait: deferTimeoutUntilExecutionStart ? noteLaneState : undefined,
@@ -1177,13 +1190,13 @@ function applyOutcomeToStoredJob(
       endedAt: result.endedAt,
       triggerEval: result.triggerEval,
     });
-    state.pendingCatchupDeferralJobIds.delete(job.id);
+    job.state.startupCatchupAtMs = undefined;
     return undefined;
   }
 
   const shouldDelete = applyJobResult(state, job, result);
   applyTriggerRunResult(job, result);
-  state.pendingCatchupDeferralJobIds.delete(job.id);
+  job.state.startupCatchupAtMs = undefined;
 
   emitJobFinished(state, job, result, result.startedAt);
 
@@ -1812,7 +1825,7 @@ function isRunnableJob(params: {
   if (params.skipJobIds?.has(job.id)) {
     return false;
   }
-  if (typeof job.state.queuedAtMs === "number" || typeof job.state.runningAtMs === "number") {
+  if (hasActiveCronRun(job)) {
     return false;
   }
   const lastRunStatus = resolveJobLastRunStatus(job);
@@ -1833,7 +1846,26 @@ function isRunnableJob(params: {
     return false;
   }
   if (hasScheduledNextRunAtMs(next) && nowMs >= next) {
-    return true;
+    const lastRunAtMs = job.state.lastRunAtMs;
+    // Startup loads persisted state before maintenance recompute. Suppress a
+    // completed stale slot, but still replay a newer slot due by restart time.
+    const alreadyCompletedDueCronSlot =
+      params.allowCronMissedRunByLastRun &&
+      job.schedule.kind === "cron" &&
+      (lastRunStatus === "ok" || lastRunStatus === "skipped") &&
+      typeof lastRunAtMs === "number" &&
+      Number.isFinite(lastRunAtMs) &&
+      lastRunAtMs >= next;
+    if (!alreadyCompletedDueCronSlot) {
+      return true;
+    }
+    let latestRunAtMs: number | undefined;
+    try {
+      latestRunAtMs = computeJobPreviousRunAtOrBeforeMs(job, nowMs);
+    } catch {
+      return false;
+    }
+    return typeof latestRunAtMs === "number" && latestRunAtMs > lastRunAtMs;
   }
   if (!params.allowCronMissedRunByLastRun || job.schedule.kind !== "cron") {
     return false;
@@ -2349,13 +2381,15 @@ async function applyStartupCatchupOutcomes(
             continue;
           }
           if (typeof deferred.delayMs === "number") {
-            job.state.nextRunAtMs = baseNow + deferred.delayMs + offset - staggerMs;
-            state.pendingCatchupDeferralJobIds.add(jobId);
+            const runAtMs = baseNow + deferred.delayMs + offset - staggerMs;
+            job.state.nextRunAtMs = runAtMs;
+            job.state.startupCatchupAtMs = runAtMs;
             offset += staggerMs;
             continue;
           }
-          job.state.nextRunAtMs = baseNow + offset;
-          state.pendingCatchupDeferralJobIds.add(jobId);
+          const runAtMs = baseNow + offset;
+          job.state.nextRunAtMs = runAtMs;
+          job.state.startupCatchupAtMs = runAtMs;
           offset += staggerMs;
         }
       }
@@ -2479,7 +2513,14 @@ async function executeJobCore(
     }
   }
   if (effectiveJob.sessionTarget === "main") {
-    const result = await executeMainSessionCronJob(state, effectiveJob, abortSignal, waitWithAbort);
+    const result = await executeMainSessionCronJob(
+      state,
+      effectiveJob,
+      abortSignal,
+      waitWithAbort,
+      options?.activeJobMarker,
+      options?.owningCronLaneTaskMarker,
+    );
     return triggerEval ? { ...result, triggerEval } : result;
   }
 
@@ -2498,6 +2539,8 @@ async function executeMainSessionCronJob(
   job: CronJob,
   abortSignal: AbortSignal | undefined,
   waitWithAbort: (ms: number) => Promise<void>,
+  activeJobMarker?: CronActiveJobMarker,
+  owningCronLaneTaskMarker?: CommandLaneTaskMarker,
 ): Promise<
   CronRunOutcome &
     CronRunTelemetry & {
@@ -2550,6 +2593,8 @@ async function executeMainSessionCronJob(
         reason,
         agentId: job.agentId,
         sessionKey: cronRunSessionKey,
+        owningCronJobMarker: activeJobMarker,
+        owningCronLaneTaskMarker,
         heartbeat: { target: "last" },
       });
       if (abortSignal?.aborted) {
@@ -2563,7 +2608,8 @@ async function executeMainSessionCronJob(
         break;
       }
       if (heartbeatResult.reason === HEARTBEAT_SKIP_CRON_IN_PROGRESS) {
-        // The active cron marker blocks direct wake-now until this job returns.
+        // Only another cron run or lane pressure reaches here. Requeue instead of
+        // waiting on markers that cannot clear until both runs finish.
         state.deps.requestHeartbeat({
           source: "cron",
           intent: "immediate",
