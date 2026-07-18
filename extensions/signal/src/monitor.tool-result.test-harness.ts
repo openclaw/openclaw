@@ -8,6 +8,7 @@ import {
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { MockFn } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, vi } from "vitest";
 import type { SignalDaemonHandle } from "./daemon.js";
 import { setSignalRuntime } from "./runtime.js";
@@ -40,9 +41,7 @@ const streamMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
 const signalCheckMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
 const signalRpcRequestMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
 const spawnSignalDaemonMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
-const signalToolResultSessionStorePath = vi.hoisted(
-  () => `/tmp/openclaw-signal-tool-result-sessions-${process.pid}.json`,
-);
+const signalToolResultSessionStore = vi.hoisted(() => ({ path: "" }));
 let signalToolResultStateDir: string | undefined;
 let signalToolResultIngressQueue: ReturnType<typeof createChannelIngressQueueForTests> | undefined;
 
@@ -149,7 +148,7 @@ vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
   );
   return {
     ...actual,
-    resolveStorePath: vi.fn(() => signalToolResultSessionStorePath),
+    resolveStorePath: vi.fn(() => signalToolResultSessionStore.path),
     updateLastRoute: (...args: unknown[]) => updateLastRouteMock(...args),
     readSessionUpdatedAt: vi.fn(() => undefined),
     recordSessionMetaFromInbound: vi.fn().mockResolvedValue(undefined),
@@ -175,7 +174,10 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
             }
             return {
               ...resolved,
-              replyResolver: (...replyArgs: unknown[]) => replyMock(...replyArgs),
+              replyResolver: async (...replyArgs: unknown[]) => {
+                await resolved.replyOptions?.turnAdoptionLifecycle?.onAdopted();
+                return await replyMock(...replyArgs);
+              },
             } as typeof resolved;
           },
         },
@@ -264,6 +266,7 @@ export function installSignalToolResultTestHooks() {
     );
     const stateDir = await fs.realpath(createdStateDir);
     signalToolResultStateDir = stateDir;
+    signalToolResultSessionStore.path = path.join(stateDir, "sessions.json");
     signalToolResultIngressQueue = undefined;
     setSignalRuntime({
       logging: {
@@ -294,7 +297,7 @@ export function installSignalToolResultTestHooks() {
     } as unknown as PluginRuntime);
     config = {
       messages: { responsePrefix: "PFX" },
-      session: { store: signalToolResultSessionStorePath },
+      session: { store: signalToolResultSessionStore.path },
       channels: {
         signal: { autoStart: false, dmPolicy: "open", allowFrom: ["*"] },
       },
@@ -318,10 +321,12 @@ export function installSignalToolResultTestHooks() {
   afterEach(async () => {
     clearSignalRuntimeForTest();
     signalToolResultIngressQueue = undefined;
+    closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
     if (signalToolResultStateDir) {
       await fs.rm(signalToolResultStateDir, { recursive: true, force: true });
       signalToolResultStateDir = undefined;
     }
+    signalToolResultSessionStore.path = "";
   });
 }

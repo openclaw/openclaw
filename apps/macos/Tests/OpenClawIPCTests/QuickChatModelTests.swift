@@ -222,6 +222,99 @@ struct QuickChatModelTests {
             mainKey: "daily") == QuickChatRoutingTarget(
             sessionKey: "agent:research:daily",
             agentID: nil))
+        #expect(QuickChatModel.routingTarget(
+            override: QuickChatSessionTargetOverride(key: "agent:main:telegram:direct:42", displayName: "Chat"),
+            base: QuickChatRoutingTarget(sessionKey: "agent:research:daily", agentID: nil)) ==
+            QuickChatRoutingTarget(sessionKey: "agent:main:telegram:direct:42", agentID: nil))
+        #expect(QuickChatModel.routingTarget(
+            override: QuickChatSessionTargetOverride(key: "global", displayName: "Global"),
+            base: QuickChatRoutingTarget(sessionKey: "global", agentID: "research")) ==
+            QuickChatRoutingTarget(sessionKey: "global", agentID: "research"))
+    }
+
+    @Test func `recent override wins over agent pin and clears back to the pin`() async {
+        let model = self.makeModel(agentsProvider: {
+            Self.agentsResult(defaultID: "main", agentIDs: ["main", "work"])
+        })
+        await self.prepare(model)
+        #expect(model.sessionKey == "agent:main:main")
+
+        model.selectAgent("work")
+        #expect(model.sessionKey == "agent:work:main")
+
+        let recent = QuickChatSessionTargetOverride(
+            key: "agent:main:telegram:direct:42",
+            displayName: "Release chat")
+        model.selectSessionOverride(recent)
+        #expect(model.targetSessionOverride == recent)
+        #expect(model.sessionKey == recent.key)
+        #expect(model.sendAgentID == nil)
+        #expect(model.messagePlaceholder == "Reply in Release chat")
+
+        model.selectSessionOverride(nil)
+        #expect(model.sessionKey == "agent:work:main")
+        #expect(model.messagePlaceholder == "Message work")
+    }
+
+    @Test func `recent override resets on hide`() async {
+        let model = self.makeModel()
+        await self.prepare(model)
+        model.selectSessionOverride(QuickChatSessionTargetOverride(key: "agent:main:other", displayName: "Other"))
+
+        model.endPresentation()
+
+        #expect(model.targetSessionOverride == nil)
+        #expect(model.sessionKey.isEmpty)
+    }
+
+    @Test func `agent switch clears recent override`() async {
+        let model = self.makeModel(agentsProvider: {
+            Self.agentsResult(defaultID: "main", agentIDs: ["main", "work"])
+        })
+        await self.prepare(model)
+        model.selectSessionOverride(QuickChatSessionTargetOverride(key: "agent:main:other", displayName: "Other"))
+
+        model.selectAgent("work")
+
+        #expect(model.targetSessionOverride == nil)
+        #expect(model.sessionKey == "agent:work:main")
+    }
+
+    @Test func `override send uses canonical session key verbatim`() async {
+        var sentRoute: QuickChatRoutingTarget?
+        let model = self.makeModel(sendHandler: { sessionKey, agentID, _, _, _ in
+            sentRoute = QuickChatRoutingTarget(sessionKey: sessionKey, agentID: agentID)
+            return "started"
+        })
+        await self.prepare(model)
+        let key = "agent:ops:discord:channel:release"
+        model.selectSessionOverride(QuickChatSessionTargetOverride(key: key, displayName: "Release"))
+        model.text = "hello"
+
+        #expect(await model.send())
+        #expect(sentRoute == QuickChatRoutingTarget(sessionKey: key, agentID: nil))
+    }
+
+    @Test func `global override preserves selected global agent`() async {
+        var sentRoute: QuickChatRoutingTarget?
+        let model = self.makeModel(
+            agentsProvider: {
+                Self.agentsResult(
+                    defaultID: "main",
+                    agentIDs: ["main", "work"],
+                    scope: "global")
+            },
+            sendHandler: { sessionKey, agentID, _, _, _ in
+                sentRoute = QuickChatRoutingTarget(sessionKey: sessionKey, agentID: agentID)
+                return "started"
+            })
+        await self.prepare(model)
+        model.selectAgent("work")
+        model.selectSessionOverride(QuickChatSessionTargetOverride(key: "global", displayName: "Global"))
+        model.text = "hello"
+
+        #expect(await model.send())
+        #expect(sentRoute == QuickChatRoutingTarget(sessionKey: "global", agentID: "work"))
     }
 
     @Test func `agent display parses avatar forms and monogram`() throws {
@@ -433,12 +526,13 @@ struct QuickChatModelTests {
     private static func agentsResult(
         defaultID: String,
         agentIDs: [String],
-        names: [String] = []) -> AgentsListResult
+        names: [String] = [],
+        scope: String = "per-agent") -> AgentsListResult
     {
         AgentsListResult(
             defaultid: defaultID,
             mainkey: "main",
-            scope: AnyCodable("per-agent"),
+            scope: AnyCodable(scope),
             agents: agentIDs.enumerated().map { index, id in
                 AgentSummary(
                     id: id,

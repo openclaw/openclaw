@@ -117,6 +117,10 @@ Appearance also has a Text size setting. It applies to chat text, composer text,
 
 Theme, theme mode, text size, language, and chat display preferences sync through the gateway config (`ui.prefs`), so they follow you across devices and agents can change them through the approval gate — connected clients apply changes live via the gateway's `config.changed` notice. Each browser keeps a local mirror for instant boot; clients that cannot write config (viewer scope, offline) keep changes device-local. See [Configuration reference](/gateway/configuration-reference#ui).
 
+## OpenClaw system care
+
+Open **OpenClaw** in the sidebar to talk to the system setup and repair agent. Outside onboarding, this page can show at most one dismissible event chip per visit. It stays silent for routine Gateway traffic and reacts only to health snapshots that report a disabled configuration reloader, a configured channel disconnect/degradation, a failed channel probe, or unavailable channel credentials. A newer event replaces the pending chip only when it is more severe; dismissing or using the chip silences event prompts for that visit. Clicking the chip sends its diagnosis question as a real `openclaw.chat` message, so the transcript records the request and OpenClaw performs the diagnosis. Onboarding never shows these event chips.
+
 ## Manage plugins
 
 Open **Plugins** in the sidebar, or use `/settings/plugins` relative to the
