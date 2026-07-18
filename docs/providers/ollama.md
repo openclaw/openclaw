@@ -63,6 +63,12 @@ OpenAI-SDK-style examples, but new config should use `baseUrl`.
         ```
 
         Select **Ollama**, then pick a mode: **Cloud + Local**, **Cloud only**, or **Local only**.
+
+        On a fresh guided setup, OpenClaw first checks the default or configured
+        Ollama host. If an installed model advertises tool support, the shared
+        CLI/macOS setup ladder offers it immediately and verifies it with a real
+        completion. This automatic check never pulls a model; if no suitable
+        installed model exists, onboarding continues to the normal Ollama picker.
       </Step>
       <Step title="Select a model">
         `Cloud only` prompts for `OLLAMA_API_KEY` and suggests hosted cloud defaults. `Cloud + Local` and `Local only` prompt for an Ollama base URL, discover available models, and auto-pull the selected local model if missing. An installed `:latest` tag such as `gemma4:latest` is shown once instead of duplicating `gemma4`. `Cloud + Local` also checks whether the host is signed in for cloud access.
@@ -752,12 +758,12 @@ Replace model IDs with exact names from `ollama list` or
 
     Use `compat.supportsTools: false` only when the model or server reliably
     fails on tool schemas — it trades agent capability for stability.
-    `localModelLean` removes the browser, cron, and message tools from the
-    direct agent surface (message stays if the run needs direct message
-    delivery semantics) and puts larger catalogs behind Tool Search, but does
-    not change Ollama's runtime context or thinking mode. Pair it with
-    `params.num_ctx` and `params.thinking: false` for small Qwen-style
-    thinking models that loop or spend their budget on hidden reasoning.
+    `localModelLean` removes heavyweight browser, cron, message, media-generation,
+    voice, and PDF tools from the direct agent surface unless explicitly required,
+    and puts larger catalogs behind Tool Search. It does not change Ollama's
+    runtime context or thinking mode. Pair it with `params.num_ctx` and
+    `params.thinking: false` for small Qwen-style thinking models that loop or
+    spend their budget on hidden reasoning.
 
   </Accordion>
 </AccordionGroup>

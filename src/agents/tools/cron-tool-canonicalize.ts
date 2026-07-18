@@ -38,6 +38,9 @@ const CRON_FLAT_SCHEDULE_KEYS = [
 ] as const;
 const CRON_RECOVERABLE_OBJECT_KEYS: ReadonlySet<string> = new Set([
   "name",
+  "declarationKey",
+  "displayName",
+  "owner",
   "schedule",
   "sessionTarget",
   "wakeMode",
@@ -239,8 +242,7 @@ function canonicalizeCronToolPayload(value: Record<string, unknown>): void {
       typeof payload.timeoutSeconds === "number" ||
       typeof payload.lightContext === "boolean" ||
       typeof payload.allowUnsafeExternalContent === "boolean" ||
-      (payload.fallbacks !== undefined && isStringArrayOrNull(payload.fallbacks)) ||
-      (payload.toolsAllow !== undefined && isStringArrayOrNull(payload.toolsAllow));
+      (payload.fallbacks !== undefined && isStringArrayOrNull(payload.fallbacks));
     if (hasAgentTurnSignal) {
       payload.kind = "agentTurn";
     } else if (isNonEmptyString(payload.text)) {

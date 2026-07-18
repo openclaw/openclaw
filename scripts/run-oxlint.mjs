@@ -39,23 +39,7 @@ const OXLINT_VALUE_FLAGS = new Set([
   "--tsconfig",
   "--warn",
 ]);
-
-function hasOxlintFormatArg(args) {
-  return args.some(
-    (arg) =>
-      arg === "--format" ||
-      arg.startsWith("--format=") ||
-      arg === "-f" ||
-      arg.startsWith("-f=") ||
-      (arg.startsWith("-f") && arg.length > 2),
-  );
-}
-
-function addOxlintFormatArg(args, value) {
-  const separatorIndex = args.indexOf("--");
-  const insertIndex = separatorIndex === -1 ? args.length : separatorIndex;
-  args.splice(insertIndex, 0, "--format", value);
-}
+const OPENCLAW_FOCUSED_CONFIG_FLAG = "--openclaw-focused-config";
 
 /**
  * Returns whether oxlint args need package-boundary declaration artifacts first.
@@ -223,15 +207,16 @@ async function prepareExtensionPackageBoundaryArtifacts(env) {
  * Applies wrapper policy and runs oxlint with the final argument list.
  */
 export async function main(argv = process.argv.slice(2), runtimeEnv = process.env) {
-  const { args: policyArgs, env } = applyLocalOxlintPolicy(
-    argv,
-    resolveLocalHeavyCheckEnv(runtimeEnv),
-  );
+  const focusedConfig = argv.includes(OPENCLAW_FOCUSED_CONFIG_FLAG);
+  const oxlintArgs = argv.filter((arg) => arg !== OPENCLAW_FOCUSED_CONFIG_FLAG);
+  const localEnv = resolveLocalHeavyCheckEnv(runtimeEnv);
+  // Focused configs are syntax-only guards; keep wrapper process handling
+  // without the broad type-aware policy or package artifact preparation.
+  const { args: policyArgs, env } = focusedConfig
+    ? { args: oxlintArgs, env: localEnv }
+    : applyLocalOxlintPolicy(oxlintArgs, localEnv);
   const sparseTargets = filterSparseMissingOxlintTargets(policyArgs);
   const finalArgs = sparseTargets.args;
-  if (env.GITHUB_ACTIONS === "true" && !hasOxlintFormatArg(finalArgs)) {
-    addOxlintFormatArg(finalArgs, "stylish");
-  }
   if (sparseTargets.skippedTargets.length > 0) {
     console.error(
       `[oxlint] sparse checkout is missing tracked target(s); skipping ${sparseTargets.skippedTargets.join(", ")}`,
@@ -249,7 +234,7 @@ export async function main(argv = process.argv.slice(2), runtimeEnv = process.en
   }
 
   const releaseLock =
-    env.OPENCLAW_OXLINT_SKIP_LOCK === "1"
+    env.OPENCLAW_OXLINT_SKIP_LOCK === "1" || focusedConfig
       ? () => {}
       : shouldAcquireLocalHeavyCheckLockForOxlint(finalArgs, {
             cwd: process.cwd(),
@@ -264,6 +249,7 @@ export async function main(argv = process.argv.slice(2), runtimeEnv = process.en
 
   try {
     if (
+      !focusedConfig &&
       env.OPENCLAW_OXLINT_SKIP_PREPARE !== "1" &&
       shouldPrepareExtensionPackageBoundaryArtifacts(finalArgs)
     ) {

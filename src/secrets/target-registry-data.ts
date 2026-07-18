@@ -1,6 +1,6 @@
+import { listBundledPluginMetadata } from "../plugins/bundled-plugin-metadata.js";
 /** Builds the static and plugin-derived registry of secret migration targets. */
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
-import { listBundledPluginMetadata } from "../plugins/bundled-plugin-metadata.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { loadChannelSecretContractApiForRecord } from "./channel-contract-api.js";
 import type { SecretTargetRegistryEntry } from "./target-registry-types.js";
@@ -526,7 +526,19 @@ export function getCoreSecretTargetRegistry(): SecretTargetRegistryEntry[] {
 
 /** Returns the process-cached registry including bundled plugin/channel metadata. */
 /** Returns core plus plugin/channel secret target registry entries for the current metadata view. */
-export function getSecretTargetRegistry(): SecretTargetRegistryEntry[] {
+export function getSecretTargetRegistry(params?: {
+  sourceTree?: boolean;
+}): SecretTargetRegistryEntry[] {
+  if (params?.sourceTree) {
+    // Docs generation needs the source plugin tree, never a process-cached or persisted snapshot.
+    return loadSecretTargetRegistryFromPluginMetadata({
+      env: {
+        ...process.env,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: process.env.OPENCLAW_BUNDLED_PLUGINS_DIR ?? "extensions",
+      },
+      preferPersisted: false,
+    });
+  }
   if (cachedSecretTargetRegistry) {
     return cachedSecretTargetRegistry;
   }
@@ -534,15 +546,4 @@ export function getSecretTargetRegistry(): SecretTargetRegistryEntry[] {
     env: process.env,
   });
   return cachedSecretTargetRegistry;
-}
-
-/** Returns an uncached source-tree registry for docs/snapshot generation. */
-export function getSourceSecretTargetRegistry(): SecretTargetRegistryEntry[] {
-  return loadSecretTargetRegistryFromPluginMetadata({
-    env: {
-      ...process.env,
-      OPENCLAW_BUNDLED_PLUGINS_DIR: process.env.OPENCLAW_BUNDLED_PLUGINS_DIR ?? "extensions",
-    },
-    preferPersisted: false,
-  });
 }

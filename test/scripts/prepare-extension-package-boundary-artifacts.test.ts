@@ -58,7 +58,7 @@ async function waitForFile(filePath: string, timeoutMs: number): Promise<string>
     } catch {
       // Not created yet.
     }
-    await delay(25);
+    await delay(5);
   }
   throw new Error(`Timed out waiting for ${filePath}`);
 }
@@ -81,7 +81,7 @@ async function waitForDead(pid: number, timeoutMs: number) {
     if (!isProcessAlive(pid)) {
       return;
     }
-    await delay(25);
+    await delay(5);
   }
   throw new Error(`Process ${pid} was still alive after ${timeoutMs}ms`);
 }
@@ -93,7 +93,7 @@ async function waitForProcessExit(
   const exit = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
     child.once("exit", (code, signal) => resolve({ code, signal }));
   });
-  const timeout = delay(timeoutMs).then(() => {
+  const timeout = delay(timeoutMs, undefined, { ref: false }).then(() => {
     throw new Error(`Process ${child.pid ?? "unknown"} did not exit after ${timeoutMs}ms`);
   });
   return Promise.race([exit, timeout]);
@@ -359,31 +359,44 @@ describe("prepare-extension-package-boundary-artifacts", () => {
     tempRoots.add(rootDir);
     const descendantPidPath = path.join(rootDir, "descendant.pid");
     let descendantPid = 0;
+    const nativeSetTimeout = globalThis.setTimeout;
+    let triggerStepTimeout: (() => void) | undefined;
+    const setTimeoutSpy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockImplementation((callback, timeout, ...args) => {
+        if (timeout === 2_000 && !triggerStepTimeout) {
+          triggerStepTimeout = () => callback(...args);
+          return nativeSetTimeout(() => undefined, 60_000);
+        }
+        return nativeSetTimeout(callback, timeout, ...args);
+      });
     const descendantScript = [
-      "const fs = require('node:fs');",
-      `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(process.pid));`,
       "process.on('SIGTERM', () => {});",
       "setInterval(() => {}, 1000);",
     ].join("\n");
     const parentScript = [
       "const { spawn } = require('node:child_process');",
-      `spawn(process.execPath, ["--eval", ${JSON.stringify(descendantScript)}], { stdio: "ignore" });`,
+      "const fs = require('node:fs');",
+      `const descendant = spawn(process.execPath, ["--eval", ${JSON.stringify(descendantScript)}], { stdio: "ignore" });`,
+      `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(descendant.pid));`,
       "setInterval(() => {}, 1000);",
     ].join("\n");
 
     try {
-      // The timeout clock starts at spawn, so it must leave room for two Node
-      // boots (parent + descendant) under parallel-suite load; otherwise the
-      // group is killed before the descendant ever writes its pid.
-      const command = runNodeStep("hung-group-prep", ["--eval", parentScript], 5_000);
+      // The parent records the descendant pid at spawn time, before it
+      // boots; fire the captured production timeout after that readiness proof.
+      const command = runNodeStep("hung-group-prep", ["--eval", parentScript], 2_000);
       const expectedFailure = expect(command).rejects.toThrow(
-        "hung-group-prep timed out after 5000ms",
+        "hung-group-prep timed out after 2000ms",
       );
       descendantPid = Number.parseInt(await waitForFile(descendantPidPath, 4_000), 10);
+      expect(triggerStepTimeout).toBeDefined();
+      triggerStepTimeout?.();
 
       await expectedFailure;
       await waitForDead(descendantPid, 2_000);
     } finally {
+      setTimeoutSpy.mockRestore();
       if (descendantPid && isProcessAlive(descendantPid)) {
         process.kill(descendantPid, "SIGKILL");
       }

@@ -9,6 +9,10 @@ import {
 import { resolveGatewayInstallEntrypoint } from "../daemon/gateway-entrypoint.js";
 import { type CommandOptions, runCommandWithTimeout } from "../process/exec.js";
 import {
+  parsePackageOpenClawSchemaVersions,
+  type OpenClawSchemaVersions,
+} from "../state/openclaw-schema-versions.js";
+import {
   resolveControlUiDistIndexHealth,
   resolveControlUiDistIndexPathForRoot,
 } from "./control-ui-assets.js";
@@ -139,7 +143,7 @@ export type UpdateStepInfo = {
   total: number;
 };
 
-export type UpdateStepCompletion = UpdateStepInfo & {
+type UpdateStepCompletion = UpdateStepInfo & {
   durationMs: number;
   exitCode: number | null;
   stderrTail?: string | null;
@@ -161,13 +165,21 @@ type UpdateRunnerOptions = {
   channel?: UpdateChannel;
   devTargetRef?: string;
   deferConfiguredPluginInstallRepair?: boolean;
-  beforeGitMutation?: () => Promise<void>;
+  allowGatewayServiceRepair?: boolean;
+  allowGatewayActivation?: boolean;
+  beforeGitMutation?: (target: {
+    schemaVersions?: OpenClawSchemaVersions;
+    metadataUnreadable?: string;
+  }) => Promise<{
+    allowGatewayServiceRepair?: boolean;
+    allowGatewayActivation?: boolean;
+  } | void>;
   timeoutMs?: number;
   runCommand?: CommandRunner;
   progress?: UpdateStepProgress;
 };
 
-export type UpdateInstallSurface =
+type UpdateInstallSurface =
   | {
       kind: "git";
       mode: "git";
@@ -193,6 +205,41 @@ export type UpdateInstallSurface =
       packageRoot?: undefined;
     };
 
+// Only a target we actually read may skip the schema guard as legacy; a failed
+// read must abort before mutation or the guard is silently bypassed.
+type GitTargetSchemaMetadata =
+  | { status: "ok"; schemaVersions?: OpenClawSchemaVersions }
+  | { status: "unreadable"; reason: string };
+
+async function readGitTargetSchemaVersions(params: {
+  runCommand: CommandRunner;
+  root: string;
+  revision: string;
+  timeoutMs: number;
+}): Promise<GitTargetSchemaMetadata> {
+  let result: Awaited<ReturnType<CommandRunner>>;
+  try {
+    result = await params.runCommand(
+      ["git", "-C", params.root, "show", `${params.revision}:package.json`],
+      { cwd: params.root, timeoutMs: params.timeoutMs },
+    );
+  } catch (error) {
+    return { status: "unreadable", reason: String(error) };
+  }
+  if (result.code !== 0) {
+    return {
+      status: "unreadable",
+      reason: `git show ${params.revision}:package.json exited ${result.code}`,
+    };
+  }
+  try {
+    const schemaVersions = parsePackageOpenClawSchemaVersions(JSON.parse(result.stdout) as unknown);
+    return { status: "ok", ...(schemaVersions ? { schemaVersions } : {}) };
+  } catch (error) {
+    return { status: "unreadable", reason: `target package.json unparseable: ${String(error)}` };
+  }
+}
+
 function mapManagerResolutionFailure(
   reason: UpdatePackageManagerFailureReason,
 ): NonNullable<UpdateRunResult["reason"]> {
@@ -208,6 +255,14 @@ const UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV =
   "OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR";
 const UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV =
   "OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE";
+const UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART_ENV =
+  "OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART";
+const UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR_ENV =
+  "OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR";
+const UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION_ENV =
+  "OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION";
+const UPDATE_DOCTOR_SERVICE_REPAIR_POLICY_ENV = "OPENCLAW_SERVICE_REPAIR_POLICY";
+const EXTERNAL_SERVICE_REPAIR_POLICY_MIN_VERSION = "2026.4.25-beta.1";
 const PREFLIGHT_TEMP_PREFIX =
   process.platform === "win32" ? "ocu-pf-" : "openclaw-update-preflight-";
 const PREFLIGHT_WORKTREE_DIRNAME = process.platform === "win32" ? "wt" : "worktree";
@@ -220,6 +275,24 @@ const DEV_PREFLIGHT_LINT_ENV: NodeJS.ProcessEnv = {
   OPENCLAW_OXLINT_SHARDS_SERIAL: "1",
 };
 const DEV_PREFLIGHT_LINT_OPT_IN_ENV = "OPENCLAW_UPDATE_PREFLIGHT_LINT";
+
+export function resolveUpdateDoctorExecutionPolicy(params: {
+  targetVersion: string | null;
+  allowGatewayServiceRepair: boolean;
+}): { fix: boolean; serviceRepairPolicy?: "external" } {
+  if (params.allowGatewayServiceRepair) {
+    return { fix: true };
+  }
+  const externalPolicySupport = compareSemverStrings(
+    params.targetVersion,
+    EXTERNAL_SERVICE_REPAIR_POLICY_MIN_VERSION,
+  );
+  if (externalPolicySupport !== null && externalPolicySupport >= 0) {
+    return { fix: true, serviceRepairPolicy: "external" };
+  }
+  // Older targets ignore both ownership markers and the external-service policy.
+  return { fix: false };
+}
 
 function normalizeDir(value?: string | null) {
   if (!value) {
@@ -249,17 +322,19 @@ function resolveNodeModulesBinPackageRoot(argv1: string): string | null {
 
 function buildStartDirs(opts: UpdateRunnerOptions): string[] {
   const dirs: string[] = [];
-  const cwd = normalizeDir(opts.cwd);
-  if (cwd) {
-    dirs.push(cwd);
-  }
   const argv1 = normalizeDir(opts.argv1);
   if (argv1) {
+    // Keep the lexical shim path ahead of a module-derived cwd. pnpm 11 module
+    // realpaths can point into a shared store that does not identify the owner.
     dirs.push(path.dirname(argv1));
     const packageRoot = resolveNodeModulesBinPackageRoot(argv1);
     if (packageRoot) {
       dirs.push(packageRoot);
     }
+  }
+  const cwd = normalizeDir(opts.cwd);
+  if (cwd) {
+    dirs.push(cwd);
   }
   let proc: string | null;
   try {
@@ -714,6 +789,9 @@ async function buildUpdateCommandRunner(
       const res = await runCommandWithTimeout(argv, {
         ...options,
         env: mergeCommandEnvironments(defaultCommandEnv, options.env),
+        // Update steps invoke package-manager trees; timeout must retire the
+        // whole tree or detached build workers can outlive the updater.
+        killProcessTree: true,
       });
       return res;
     },
@@ -779,6 +857,8 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
   const progress = opts.progress;
   const steps: UpdateStepResult[] = [];
   const candidates = buildStartDirs(opts);
+  let allowGatewayServiceRepair = opts.allowGatewayServiceRepair !== false;
+  let allowGatewayActivation = opts.allowGatewayActivation === true;
 
   let stepIndex = 0;
   let gitTotalSteps = 0;
@@ -858,11 +938,29 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     let gitMutationPrepared = false;
     let createdDevBranchDuringUpdate = false;
     let localDevBranchExists: boolean | null = null;
-    const prepareGitMutation = async () => {
+    const prepareGitMutation = async (targetRevision: string) => {
       if (gitMutationPrepared) {
         return;
       }
-      await opts.beforeGitMutation?.();
+      const targetMetadata = await readGitTargetSchemaVersions({
+        runCommand,
+        root: gitRoot,
+        revision: targetRevision,
+        timeoutMs,
+      });
+      const preparation = await opts.beforeGitMutation?.(
+        targetMetadata.status === "ok"
+          ? targetMetadata.schemaVersions
+            ? { schemaVersions: targetMetadata.schemaVersions }
+            : {}
+          : { metadataUnreadable: targetMetadata.reason },
+      );
+      if (typeof preparation?.allowGatewayServiceRepair === "boolean") {
+        allowGatewayServiceRepair = preparation.allowGatewayServiceRepair;
+      }
+      if (typeof preparation?.allowGatewayActivation === "boolean") {
+        allowGatewayActivation = preparation.allowGatewayActivation;
+      }
       gitMutationPrepared = true;
     };
     const buildGitErrorResult = (reason: string): UpdateRunResult => ({
@@ -1376,7 +1474,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       }
 
       if (devTargetRef) {
-        await prepareGitMutation();
+        await prepareGitMutation(selectedSha);
         const failure = await runRequiredGitStep(
           `git checkout ${selectedSha}`,
           ["git", "-C", gitRoot, "checkout", "--detach", selectedSha],
@@ -1386,7 +1484,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
           return failure;
         }
       } else {
-        await prepareGitMutation();
+        await prepareGitMutation(selectedSha);
         let checkedOutSelectedSha = false;
         if (needsCheckoutMain) {
           const hasLocalDevBranch = localDevBranchExists !== false;
@@ -1486,7 +1584,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         };
       }
 
-      await prepareGitMutation();
+      await prepareGitMutation(tag);
       const failure = await runRequiredGitStep(
         `git checkout ${tag}`,
         ["git", "-C", gitRoot, "checkout", "--detach", tag],
@@ -1573,10 +1671,19 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         return await buildGitErrorResultWithRollback("doctor-entry-missing");
       }
 
-      // Use --fix so that doctor auto-strips unknown config keys introduced by
-      // schema changes between versions, preventing a startup validation crash.
       const doctorNodePath = await resolveStableNodePath(process.execPath);
-      const doctorArgv = [doctorNodePath, doctorEntry, "doctor", "--non-interactive", "--fix"];
+      const doctorTargetVersion = await readPackageVersion(gitRoot);
+      const doctorPolicy = resolveUpdateDoctorExecutionPolicy({
+        targetVersion: doctorTargetVersion,
+        allowGatewayServiceRepair,
+      });
+      const doctorArgv = [
+        doctorNodePath,
+        doctorEntry,
+        "doctor",
+        "--non-interactive",
+        ...(doctorPolicy.fix ? ["--fix"] : []),
+      ];
       const doctorStep = await runStep(
         step("openclaw doctor", doctorArgv, gitRoot, {
           OPENCLAW_UPDATE_IN_PROGRESS: "1",
@@ -1584,6 +1691,12 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
             ? { [UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV]: "1" }
             : {}),
           [UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV]: "1",
+          [UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART_ENV]: "1",
+          [UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR_ENV]: allowGatewayServiceRepair ? "1" : "0",
+          [UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION_ENV]: allowGatewayActivation ? "1" : "0",
+          ...(doctorPolicy.serviceRepairPolicy
+            ? { [UPDATE_DOCTOR_SERVICE_REPAIR_POLICY_ENV]: doctorPolicy.serviceRepairPolicy }
+            : {}),
         }),
       );
       steps.push(doctorStep);
@@ -1751,15 +1864,33 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         }
         const doctorNodePath = await resolveStableNodePath(process.execPath);
         const candidateHostVersion = await readPackageVersion(verifiedPackageRoot);
+        const doctorPolicy = resolveUpdateDoctorExecutionPolicy({
+          targetVersion: candidateHostVersion,
+          allowGatewayServiceRepair,
+        });
         return await runStep({
           runCommand,
           name: "openclaw doctor",
-          argv: [doctorNodePath, doctorEntry, "doctor", "--non-interactive", "--fix"],
+          argv: [
+            doctorNodePath,
+            doctorEntry,
+            "doctor",
+            "--non-interactive",
+            ...(doctorPolicy.fix ? ["--fix"] : []),
+          ],
           cwd: verifiedPackageRoot,
           timeoutMs,
           env: {
             OPENCLAW_UPDATE_IN_PROGRESS: "1",
             [UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV]: "1",
+            [UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART_ENV]: "1",
+            [UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR_ENV]: allowGatewayServiceRepair
+              ? "1"
+              : "0",
+            [UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION_ENV]: allowGatewayActivation ? "1" : "0",
+            ...(doctorPolicy.serviceRepairPolicy
+              ? { [UPDATE_DOCTOR_SERVICE_REPAIR_POLICY_ENV]: doctorPolicy.serviceRepairPolicy }
+              : {}),
             ...(candidateHostVersion === null
               ? {}
               : { OPENCLAW_COMPATIBILITY_HOST_VERSION: candidateHostVersion }),
@@ -1794,3 +1925,4 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     durationMs: Date.now() - startedAt,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

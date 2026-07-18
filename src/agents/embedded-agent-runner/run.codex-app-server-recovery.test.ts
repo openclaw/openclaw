@@ -1,4 +1,6 @@
 // Coverage for replay-safe Codex app-server recovery retries.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeModelFallbackCfg } from "../test-helpers/model-fallback-config-fixture.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
@@ -9,6 +11,7 @@ import {
   mockedRunEmbeddedAttempt,
   overflowBaseRunParams,
   resetRunOverflowCompactionHarnessMocks,
+  warmRunOverflowCompactionHarness,
 } from "./run.overflow-compaction.harness.js";
 import { hasCodexAppServerRecoveryRetryBudget } from "./run/codex-app-server-recovery.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./run/types.js";
@@ -86,6 +89,7 @@ function asAttemptParams(value: unknown): EmbeddedRunAttemptParams {
 describe("runEmbeddedAgent Codex app-server recovery", () => {
   beforeAll(async () => {
     ({ runEmbeddedAgent } = await loadRunOverflowCompactionHarness());
+    await warmRunOverflowCompactionHarness(runEmbeddedAgent);
   });
 
   beforeEach(() => {
@@ -129,6 +133,8 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
     const freezeAbort = vi.fn();
     const replyOperation = {
       freezeAbort,
+      markDeferredMaintenanceWaitEnded: vi.fn(),
+      markWaitingForDeferredMaintenance: vi.fn(),
     } as unknown as NonNullable<Parameters<typeof runEmbeddedAgent>[0]["replyOperation"]>;
     mockedRunEmbeddedAttempt
       .mockImplementationOnce(async () => {
@@ -198,6 +204,8 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
     const abortByUser = vi.fn(() => true);
     const replyOperation = {
       abortByUser,
+      markDeferredMaintenanceWaitEnded: vi.fn(),
+      markWaitingForDeferredMaintenance: vi.fn(),
     } as unknown as NonNullable<Parameters<typeof runEmbeddedAgent>[0]["replyOperation"]>;
     mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams) => {
       asAttemptParams(attemptParams).onAttemptAbort?.();
@@ -228,6 +236,8 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
     const abortByUser = vi.fn(() => true);
     const replyOperation = {
       abortByUser,
+      markDeferredMaintenanceWaitEnded: vi.fn(),
+      markWaitingForDeferredMaintenance: vi.fn(),
     } as unknown as NonNullable<Parameters<typeof runEmbeddedAgent>[0]["replyOperation"]>;
     mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams) => {
       controller.abort(upstreamAbort);
@@ -265,7 +275,10 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
 
     expect(
       (
-        mockedRunEmbeddedAttempt.mock.calls[1][0] as {
+        expectDefined(
+          mockedRunEmbeddedAttempt.mock.calls[1],
+          "mockedRunEmbeddedAttempt.mock.calls[1] test invariant",
+        )[0] as {
           suppressNextUserMessagePersistence?: boolean;
         }
       ).suppressNextUserMessagePersistence,
@@ -296,7 +309,10 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
 
     expect(
       (
-        mockedRunEmbeddedAttempt.mock.calls[1][0] as {
+        expectDefined(
+          mockedRunEmbeddedAttempt.mock.calls[1],
+          "mockedRunEmbeddedAttempt.mock.calls[1] test invariant",
+        )[0] as {
           suppressNextUserMessagePersistence?: boolean;
         }
       ).suppressNextUserMessagePersistence,

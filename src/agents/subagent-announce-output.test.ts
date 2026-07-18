@@ -8,7 +8,7 @@ import {
   buildChildCompletionFindings,
   dedupeLatestChildCompletionRows,
   readSubagentOutput,
-} from "./subagent-announce-output.js";
+} from "./subagent-announce-output.test-support.js";
 
 type CallGateway = typeof import("../gateway/call.js").callGateway;
 type GetRuntimeConfig = typeof import("./subagent-announce.runtime.js").getRuntimeConfig;
@@ -327,6 +327,44 @@ describe("buildChildCompletionFindings", () => {
     expect(findings).not.toContain("(no output)");
   });
 
+  it("uses captured fallback output when a resumed completion returns NO_REPLY", () => {
+    const findings = buildChildCompletionFindings([
+      {
+        childSessionKey: "agent:main:subagent:child",
+        task: "child task",
+        createdAt: 1,
+        completion: {
+          resultText: "NO_REPLY",
+          fallbackResultText: "findings captured before the wake",
+        },
+        outcome: { status: "ok" },
+      },
+    ]);
+
+    expect(findings).toContain("findings captured before the wake");
+    expect(findings).not.toContain("NO_REPLY");
+  });
+
+  it.each(["ANNOUNCE_SKIP", "REPLY_SKIP", "HEARTBEAT_OK"])(
+    "does not override an intentional %s completion with fallback output",
+    (resultText) => {
+      const findings = buildChildCompletionFindings([
+        {
+          childSessionKey: "agent:main:subagent:silent",
+          task: "silent task",
+          createdAt: 1,
+          completion: {
+            resultText,
+            fallbackResultText: "stale findings",
+          },
+          outcome: { status: "ok" },
+        },
+      ]);
+
+      expect(findings).toBeUndefined();
+    },
+  );
+
   it("numbers findings contiguously after skipped silent completions", () => {
     const findings = buildChildCompletionFindings([
       {
@@ -372,6 +410,26 @@ describe("applySubagentWaitOutcome", () => {
     });
   });
 
+  it("treats abandoned ok wait snapshots as incomplete failures", () => {
+    const applied = applySubagentWaitOutcome({
+      wait: {
+        status: "ok",
+        startedAt: 100,
+        endedAt: 150,
+        livenessState: "abandoned",
+      },
+      outcome: undefined,
+    });
+
+    expect(applied.outcome).toEqual({
+      status: "error",
+      error: "Agent run ended before producing a complete result.",
+      startedAt: 100,
+      endedAt: 150,
+      elapsedMs: 50,
+    });
+  });
+
   it("keeps provider hard timeouts stronger than blocked wait metadata", () => {
     const applied = applySubagentWaitOutcome({
       wait: {
@@ -394,7 +452,7 @@ describe("applySubagentWaitOutcome", () => {
     });
   });
 
-  it("keeps rpc timeout wait snapshots as timeout outcomes", () => {
+  it("keeps explicit cancellation distinct from timeout outcomes", () => {
     const applied = applySubagentWaitOutcome({
       wait: {
         status: "timeout",
@@ -406,7 +464,8 @@ describe("applySubagentWaitOutcome", () => {
     });
 
     expect(applied.outcome).toEqual({
-      status: "timeout",
+      status: "error",
+      error: "subagent run terminated",
       startedAt: 100,
       endedAt: 150,
       elapsedMs: 50,

@@ -210,10 +210,10 @@ Cron does not classify final-output prose or approval-looking refusal phrases as
 
 ## Retention
 
-Retention and pruning are controlled in config:
+Retention behavior:
 
 - `cron.sessionRetention` (default `24h`, or `false` to disable) prunes completed isolated run sessions.
-- `cron.runLog.keepLines` (default `2000`) prunes retained SQLite run-history rows per job. `cron.runLog.maxBytes` (default `2000000`) remains accepted for compatibility with older file-backed run logs; SQLite pruning is row-count based.
+- Run history keeps the newest 2000 terminal rows per cron job. Lost rows retain the standard 24-hour lost-task cleanup window.
 
 ## Migrating older jobs
 
@@ -302,7 +302,7 @@ openclaw cron runs --id <job-id> --run-id <run-id>
 
 `openclaw cron get <job-id>` returns the stored job JSON directly. Use `cron show <job-id>` when you want the human-readable view with delivery-route preview.
 
-`cron list --json` and `cron show <job-id> --json` include a top-level `status` field on each job, computed from `enabled`, `state.runningAtMs`, and `state.lastRunStatus`. Values: `disabled`, `running`, `ok`, `error`, `skipped`, or `idle`. This mirrors the human-readable status column so external tooling can read job state without re-deriving it.
+`cron list --json` and `cron show <job-id> --json` include a top-level `status` field on each job, computed from `enabled`, `state.runningAtMs`, and `state.lastRunStatus`. Values: `disabled`, `running`, `ok`, `error`, `skipped`, or `idle`. JSON status stays canonical and undecorated so external tooling can read job state without re-deriving it; human output may decorate repeated `error` statuses with a failure count.
 
 `cron runs` entries include delivery diagnostics with the intended cron target, the resolved target, message-tool sends, fallback use, and delivered state.
 

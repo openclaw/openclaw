@@ -16,6 +16,7 @@ import type {
   ChannelHealthMonitorConfig,
   ChannelHeartbeatVisibilityConfig,
 } from "./types.channel-health.js";
+import type { ChannelImplicitMentionsConfig } from "./types.implicit-mentions.js";
 import type {
   DmConfig,
   MentionPatternsPolicyConfig,
@@ -64,6 +65,15 @@ export type SlackChannelConfig = {
   skills?: string[];
   /** Optional system prompt for this channel. */
   systemPrompt?: string;
+  /** Slack presence polling and agent wake mode for this channel. */
+  presenceEvents?: SlackPresenceEventsConfig;
+};
+
+type SlackPresenceEventsMode = "off" | "auto" | "on";
+
+type SlackPresenceEventsConfig = {
+  /** Presence wake mode. Default: off. */
+  mode?: SlackPresenceEventsMode;
 };
 
 export type SlackReactionNotificationMode = "off" | "own" | "all" | "allowlist";
@@ -128,14 +138,6 @@ export type SlackThreadConfig = {
   inheritParent?: boolean;
   /** Maximum number of thread messages to fetch as context when starting a new thread session (default: 20). Set to 0 to disable thread history fetching. */
   initialHistoryLimit?: number;
-  /**
-   * If true, require explicit @mention even inside threads where the bot has
-   * previously participated. By default (false), replying in a thread where
-   * the bot is a participant counts as an implicit mention and bypasses
-   * requireMention gating. Set to true to suppress implicit thread mentions
-   * so only explicit @bot mentions trigger replies in threads.
-   */
-  requireExplicitMention?: boolean;
 };
 
 export type SlackSocketModeConfig = {
@@ -159,8 +161,16 @@ export type SlackRelayConfig = {
 export type SlackAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
+  /** Slack author identity. Default: bot. */
+  identity?: "bot" | "user";
   /** Slack connection mode (socket|http|relay). Default: socket. */
   mode?: "socket" | "http" | "relay";
+  /**
+   * Treat this account as one Slack Enterprise Grid org-wide installation.
+   * The declaration is verified against auth.test during monitor startup.
+   * DMs must be disabled or use dmPolicy="open" with effective allowFrom containing "*".
+   */
+  enterpriseOrgInstall?: boolean;
   /** Slack SDK Socket Mode transport options. Ignored in HTTP mode. */
   socketMode?: SlackSocketModeConfig;
   /** Relay-delivered Slack event source. Used when mode is "relay". */
@@ -197,6 +207,8 @@ export type SlackAccountConfig = {
   dangerouslyAllowNameMatching?: boolean;
   /** Default mention requirement for channel messages (default: true). */
   requireMention?: boolean;
+  /** Implicit mention policy for replies, quotes, and participated threads. */
+  implicitMentions?: ChannelImplicitMentionsConfig;
   /**
    * Controls how channel messages are handled:
    * - "open": channels bypass allowlists; mention-gating applies
@@ -235,6 +247,8 @@ export type SlackAccountConfig = {
   replyToModeByChatType?: Partial<Record<"direct" | "group" | "channel", ReplyToMode>>;
   /** Thread session behavior. */
   thread?: SlackThreadConfig;
+  /** Poll Slack presence and wake the routed agent on away-to-active transitions. Default: off. */
+  presenceEvents?: SlackPresenceEventsConfig;
   actions?: SlackActionConfig;
   slashCommand?: SlackSlashCommandConfig;
   /**

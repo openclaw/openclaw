@@ -44,11 +44,12 @@ const OVERFLOW_PATTERNS = [
   /request_too_large/i, // Anthropic request byte-size overflow (HTTP 413)
   /input is too long for requested model/i, // Amazon Bedrock
   /exceeds the context window/i, // OpenAI (Completions & Responses API)
-  /exceeds (?:the )?(?:model'?s )?maximum context length of [\d,]+ tokens?/i, // OpenAI-compatible proxies (LiteLLM)
+  /exceeds (?:the )?(?:model'?s )?maximum context length(?: of [\d,]+ tokens?|\s*\([\d,]+\))/i, // OpenAI-compatible proxies (LiteLLM)
   /input token count.*exceeds the maximum/i, // Google (Gemini)
   /maximum prompt length is \d+/i, // xAI (Grok)
   /reduce the length of the messages/i, // Groq
   /maximum context length is \d+ tokens/i, // OpenRouter (all backends)
+  /exceeds (?:the )?maximum allowed input length of [\d,]+ tokens?/i, // OpenRouter/Poolside
   /input \(\d+ tokens\) is longer than the model'?s context length \(\d+ tokens\)/i, // Together AI
   /exceeds the limit of \d+/i, // GitHub Copilot
   /exceeds the available context size/i, // llama.cpp server
@@ -142,9 +143,11 @@ function resolveContextInputTokens(message: AssistantMessage): number | undefine
 export function isContextOverflow(message: AssistantMessage, contextWindow?: number): boolean {
   // Case 1: Check error message patterns
   if (message.stopReason === "error" && message.errorMessage) {
+    // Hoist so the regex closures keep the narrowing without assertions.
+    const errorMessage = message.errorMessage;
     // Skip messages matching known non-overflow patterns (e.g. throttling / rate-limit)
-    const isNonOverflow = NON_OVERFLOW_PATTERNS.some((p) => p.test(message.errorMessage!));
-    if (!isNonOverflow && OVERFLOW_PATTERNS.some((p) => p.test(message.errorMessage!))) {
+    const isNonOverflow = NON_OVERFLOW_PATTERNS.some((p) => p.test(errorMessage));
+    if (!isNonOverflow && OVERFLOW_PATTERNS.some((p) => p.test(errorMessage))) {
       return true;
     }
   }

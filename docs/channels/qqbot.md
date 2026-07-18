@@ -110,6 +110,28 @@ Notes:
 - Legacy `secretref:...` / `secretref-env:...` marker strings are rejected for
   `clientSecret`; use a structured SecretRef object instead.
 
+### Streaming
+
+```json5
+{
+  channels: {
+    qqbot: {
+      streaming: {
+        mode: "partial", // block streaming: "partial" (default) or "off"
+        nativeTransport: true, // use QQ's official C2C stream_messages API for DMs
+      },
+    },
+  },
+}
+```
+
+- `streaming.mode: "off"` disables block streaming for the account.
+- `streaming.nativeTransport: true` streams C2C (DM) replies through QQ's
+  official `stream_messages` API; group/channel targets are unaffected.
+- Legacy `streaming: true|false` scalars and the `streaming.c2cStreamApi` key
+  migrate to this shape via `openclaw doctor --fix`.
+- `/bot-streaming on|off` toggles the same config from a DM.
+
 ### Access policy
 
 - `allowFrom` / `groupAllowFrom` gate who can chat with the bot in C2C /
@@ -258,6 +280,11 @@ STT and TTS support two-level configuration with priority fallback:
 
 Set `enabled: false` on either to disable. Account-level TTS overrides use the
 same shape as `messages.tts` and deep-merge over channel/global TTS config.
+
+STT requests time out after 60 seconds by default. Plugin-specific STT uses the
+selected `models.providers.<id>.timeoutSeconds` override. Framework audio STT
+uses `tools.media.audio.models[0].timeoutSeconds`, then
+`tools.media.audio.timeoutSeconds`, then the selected provider override.
 
 Inbound QQ voice attachments are exposed to agents as audio media metadata
 while keeping raw voice files out of generic `MediaPaths`. `[[audio_as_voice]]`

@@ -94,7 +94,7 @@ function expectEnabledClaudeBundleCommands(
 }
 
 describe("loadEnabledClaudeBundleCommands", () => {
-  it("loads enabled Claude bundle markdown commands and skips disabled-model-invocation entries", async () => {
+  it("loads enabled Claude bundle markdown commands and honors invocation policy", async () => {
     const homeDir = await createTempDir("openclaw-bundle-commands-home-");
     const workspaceDir = await createTempDir("openclaw-bundle-commands-workspace-");
     await withEnvAsync(
@@ -129,8 +129,24 @@ describe("loadEnabledClaudeBundleCommands", () => {
               ],
             },
             {
-              relativePath: "commands/disabled.md",
-              contents: ["---", "disable-model-invocation: true", "---", "Do not load me."],
+              relativePath: "commands/model-hidden.md",
+              contents: ["---", "disable-model-invocation: on", "---", "Manual only."],
+            },
+            {
+              relativePath: "commands/user-enabled.md",
+              contents: ["---", "user-invocable: on", "---", "User enabled."],
+            },
+            {
+              relativePath: "commands/user-hidden.md",
+              contents: ["---", "user-invocable: off", "---", "User hidden."],
+            },
+            {
+              relativePath: "commands/user-hidden-false.md",
+              contents: ["---", "user-invocable: false", "---", "User hidden."],
+            },
+            {
+              relativePath: "commands/not-frontmatter.md",
+              contents: ["---not", "name: nope", "---not", "Treat this as Markdown."],
             },
           ],
         });
@@ -147,6 +163,28 @@ describe("loadEnabledClaudeBundleCommands", () => {
         expectEnabledClaudeBundleCommands(commands, [
           {
             pluginId: "compound-bundle",
+            rawName: "model-hidden",
+            description: "Manual only.",
+            promptTemplate: "Manual only.",
+            sourceFilePath: path.join(
+              resolveBundlePluginRoot(homeDir, "compound-bundle"),
+              "commands",
+              "model-hidden.md",
+            ),
+          },
+          {
+            pluginId: "compound-bundle",
+            rawName: "not-frontmatter",
+            description: "---not",
+            promptTemplate: "---not\nname: nope\n---not\nTreat this as Markdown.",
+            sourceFilePath: path.join(
+              resolveBundlePluginRoot(homeDir, "compound-bundle"),
+              "commands",
+              "not-frontmatter.md",
+            ),
+          },
+          {
+            pluginId: "compound-bundle",
             rawName: "office-hours",
             description: "Help with scoping and architecture",
             promptTemplate: "Give direct engineering advice.",
@@ -154,6 +192,17 @@ describe("loadEnabledClaudeBundleCommands", () => {
               resolveBundlePluginRoot(homeDir, "compound-bundle"),
               "commands",
               "office-hours.md",
+            ),
+          },
+          {
+            pluginId: "compound-bundle",
+            rawName: "user-enabled",
+            description: "User enabled.",
+            promptTemplate: "User enabled.",
+            sourceFilePath: path.join(
+              resolveBundlePluginRoot(homeDir, "compound-bundle"),
+              "commands",
+              "user-enabled.md",
             ),
           },
           {
@@ -170,7 +219,8 @@ describe("loadEnabledClaudeBundleCommands", () => {
           },
         ]);
         const rawNames = commands.map((entry) => entry.rawName);
-        expect(rawNames).not.toContain("disabled");
+        expect(rawNames).not.toContain("user-hidden");
+        expect(rawNames).not.toContain("user-hidden-false");
       },
     );
   });

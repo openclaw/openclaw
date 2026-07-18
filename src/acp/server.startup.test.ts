@@ -2,6 +2,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 type GatewayClientCallbacks = {
+  onEvent?: (evt: { event: string; payload?: unknown }) => void;
   onHelloOk?: () => void;
   onConnectError?: (err: Error) => void;
   onClose?: (code: number, reason: string) => void;
@@ -33,10 +34,17 @@ const mockState = vi.hoisted(() => ({
   gatewayAuth: [] as GatewayClientAuth[],
   gatewayOptions: [] as GatewayClientOptions[],
   agentSideConnectionCtor: vi.fn(),
+  agentHandleGatewayEvent: vi.fn(async (_evt: unknown) => {}),
   agentStart: vi.fn(),
+  agentShutdown: vi.fn(),
   routeLogsToStderr: vi.fn(),
   startProxy: vi.fn(async (_configForTest: unknown) => null as unknown),
   stopProxy: vi.fn(async (_handle: unknown) => {}),
+  closeOpenClawStateDatabase: vi.fn(),
+  gatewayStopDeferred: null as {
+    resolve: () => void;
+    promise: Promise<void>;
+  } | null,
   resolveGatewayClientBootstrap: vi.fn<ResolveGatewayClientBootstrap>(async (_params) => ({
     url: "ws://127.0.0.1:18789",
     urlSource: "local loopback",
@@ -63,12 +71,22 @@ class MockGatewayClient {
     this.callbacks.onClose?.(1000, "gateway stopped");
   }
 
+  async stopAndWait(): Promise<void> {
+    if (mockState.gatewayStopDeferred) {
+      await mockState.gatewayStopDeferred.promise;
+    }
+    this.stop();
+  }
+
   emitHello(): void {
     this.callbacks.onHelloOk?.();
   }
 
   emitConnectError(message: string): void {
     this.callbacks.onConnectError?.(new Error(message));
+  }
+  emitEvent(event: { event: string; payload?: unknown }): void {
+    this.callbacks.onEvent?.(event);
   }
 }
 
@@ -152,8 +170,20 @@ vi.mock("../infra/is-main.js", () => ({
   isMainModule: () => false,
 }));
 
-vi.mock("../logging/console.js", () => ({
-  routeLogsToStderr: () => mockState.routeLogsToStderr(),
+vi.mock("../logging/console.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logging/console.js")>();
+  return {
+    ...actual,
+    routeLogsToStderr: () => mockState.routeLogsToStderr(),
+  };
+});
+
+vi.mock("../state/openclaw-state-db.js", () => ({
+  closeOpenClawStateDatabase: () => mockState.closeOpenClawStateDatabase(),
+}));
+
+vi.mock("./event-ledger.js", () => ({
+  createSqliteAcpEventLedger: vi.fn(() => ({})),
 }));
 
 vi.mock("../infra/net/proxy/proxy-lifecycle.js", () => ({
@@ -167,11 +197,17 @@ vi.mock("./translator.js", () => ({
       mockState.agentStart();
     }
 
+    shutdown(): void {
+      mockState.agentShutdown();
+    }
+
     handleGatewayReconnect(): void {}
 
     handleGatewayDisconnect(): void {}
 
-    async handleGatewayEvent(): Promise<void> {}
+    async handleGatewayEvent(event: unknown): Promise<void> {
+      await mockState.agentHandleGatewayEvent(event);
+    }
   },
 }));
 
@@ -283,10 +319,14 @@ describe("serveAcpGateway startup", () => {
     mockState.gatewayAuth.length = 0;
     mockState.gatewayOptions.length = 0;
     mockState.agentSideConnectionCtor.mockReset();
+    mockState.agentHandleGatewayEvent.mockReset();
     mockState.agentStart.mockReset();
+    mockState.agentShutdown.mockReset();
     mockState.routeLogsToStderr.mockReset();
     mockState.startProxy.mockReset();
     mockState.stopProxy.mockReset();
+    mockState.closeOpenClawStateDatabase.mockReset();
+    mockState.gatewayStopDeferred = null;
     mockState.startProxy.mockResolvedValue(null);
     mockState.stopProxy.mockResolvedValue(undefined);
     mockState.resolveGatewayClientBootstrap.mockReset();
@@ -298,6 +338,14 @@ describe("serveAcpGateway startup", () => {
         password: undefined,
       },
     });
+  });
+
+  it("preserves console exports for a co-sharded subsystem logger", async () => {
+    const { createSubsystemLogger } = await import("../logging/subsystem.js");
+
+    expect(() =>
+      createSubsystemLogger("test/acp-startup").isEnabled("info", "console"),
+    ).not.toThrow();
   });
 
   it("waits for gateway hello before creating AgentSideConnection", async () => {
@@ -315,17 +363,58 @@ describe("serveAcpGateway startup", () => {
     }
   });
 
-  it("subscribes the Gateway client to run-scoped tool events", async () => {
+  it("advertises approval handling and subscribes to run-scoped tool events", async () => {
     const { signalHandlers, onceSpy } = captureProcessSignalHandlers();
 
     try {
       const servePromise = serveAcpGateway({});
       await emitHelloAndWaitForAgentSideConnection();
 
-      expect(mockState.gatewayOptions[0]?.caps).toEqual(["tool-events"]);
+      expect(mockState.gatewayOptions[0]?.caps).toEqual(["exec-approvals", "tool-events"]);
 
       await stopServeWithSigint(signalHandlers, servePromise);
     } finally {
+      onceSpy.mockRestore();
+    }
+  });
+
+  it.each([
+    {
+      name: "default logging",
+      opts: {},
+      expected: ["openclaw acp: gateway event chat failed\n"],
+    },
+    {
+      name: "verbose logging",
+      opts: { verbose: true },
+      expected: [
+        "openclaw acp: gateway event chat failed\n",
+        "openclaw acp: gateway event chat error: Error: handler boom\n",
+      ],
+    },
+  ])("contains rejected gateway event handling with $name", async ({ opts, expected }) => {
+    const { signalHandlers, onceSpy } = captureProcessSignalHandlers();
+    const writes: string[] = [];
+    const writeSpy = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation((chunk: string | Uint8Array): boolean => {
+        writes.push(String(chunk));
+        return true;
+      });
+    mockState.agentHandleGatewayEvent.mockRejectedValueOnce(new Error("handler boom"));
+
+    try {
+      const servePromise = serveAcpGateway(opts);
+      await emitHelloAndWaitForAgentSideConnection();
+
+      getMockGateway().emitEvent({ event: "chat" });
+      await vi.waitFor(() => {
+        expect(writes).toEqual(expected);
+      });
+
+      await stopServeWithSigint(signalHandlers, servePromise);
+    } finally {
+      writeSpy.mockRestore();
       onceSpy.mockRestore();
     }
   });
@@ -459,6 +548,81 @@ describe("serveAcpGateway startup", () => {
       await stopServeWithSigint(signalHandlers, servePromise);
       expect(mockState.stopProxy).not.toHaveBeenCalled();
     } finally {
+      onceSpy.mockRestore();
+    }
+  });
+
+  it("closes the shared state database on shutdown", async () => {
+    const { signalHandlers, onceSpy } = captureProcessSignalHandlers();
+    expect(mockState.closeOpenClawStateDatabase).not.toHaveBeenCalled();
+
+    try {
+      const servePromise = serveAcpGateway({});
+      await emitHelloAndWaitForAgentSideConnection();
+      await stopServeWithSigint(signalHandlers, servePromise);
+      expect(mockState.agentShutdown).toHaveBeenCalledOnce();
+      expect(mockState.closeOpenClawStateDatabase).toHaveBeenCalledOnce();
+    } finally {
+      onceSpy.mockRestore();
+    }
+  });
+
+  it("waits for Gateway transport teardown before closing the shared state database", async () => {
+    let resolveStop!: () => void;
+    const stopPromise = new Promise<void>((resolve) => {
+      resolveStop = resolve;
+    });
+    mockState.gatewayStopDeferred = { resolve: resolveStop, promise: stopPromise };
+    const { signalHandlers, onceSpy } = captureProcessSignalHandlers();
+
+    try {
+      const servePromise = serveAcpGateway({});
+      await emitHelloAndWaitForAgentSideConnection();
+      signalHandlers.get("SIGTERM")?.();
+      await vi.waitFor(() => {
+        expect(mockState.agentShutdown).toHaveBeenCalledOnce();
+      });
+      expect(mockState.closeOpenClawStateDatabase).not.toHaveBeenCalled();
+
+      resolveStop();
+      await servePromise;
+      expect(mockState.closeOpenClawStateDatabase).toHaveBeenCalledOnce();
+    } finally {
+      onceSpy.mockRestore();
+    }
+  });
+
+  it("closes a real node:sqlite DatabaseSync handle through serveAcpGateway shutdown", async () => {
+    // Use the real state-db module to open and verify a DatabaseSync handle —
+    // this proves the full serveAcpGateway → shutdown → close path, not just
+    // the closeOpenClawStateDatabase helper in isolation.
+    const actualStateDb = await vi.importActual<typeof import("../state/openclaw-state-db.js")>(
+      "../state/openclaw-state-db.js",
+    );
+
+    const realDb = actualStateDb.openOpenClawStateDatabase();
+    expect(realDb.db.isOpen).toBe(true);
+    expect(actualStateDb.isOpenClawStateDatabaseOpen()).toBe(true);
+
+    // Wire the test mock so serveAcpGateway's shutdown handler calls the
+    // real closeOpenClawStateDatabase, which closes the handle we opened above.
+    mockState.closeOpenClawStateDatabase.mockImplementation(() => {
+      actualStateDb.closeOpenClawStateDatabase();
+    });
+
+    const { signalHandlers, onceSpy } = captureProcessSignalHandlers();
+    try {
+      const servePromise = serveAcpGateway({});
+      await emitHelloAndWaitForAgentSideConnection();
+      await stopServeWithSigint(signalHandlers, servePromise);
+
+      // After serveAcpGateway shutdown completes, the real DatabaseSync
+      // handle must be closed — proving the ACP shutdown fix works
+      // end-to-end, not just in the helper function.
+      expect(realDb.db.isOpen).toBe(false);
+      expect(actualStateDb.isOpenClawStateDatabaseOpen()).toBe(false);
+    } finally {
+      actualStateDb.closeOpenClawStateDatabase();
       onceSpy.mockRestore();
     }
   });

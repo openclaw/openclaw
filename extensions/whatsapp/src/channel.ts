@@ -18,10 +18,7 @@ import {
 import { whatsappChannelOutbound, whatsappMessageAdapter } from "./channel-outbound.js";
 import { whatsappCommandPolicy } from "./command-policy.js";
 import { formatWhatsAppConfigAllowFromEntries } from "./config-accessors.js";
-import {
-  resolveWhatsAppGroupIntroHint,
-  resolveWhatsAppMentionStripRegexes,
-} from "./group-intro.js";
+import { resolveWhatsAppMentionStripRegexes } from "./group-intro.js";
 import {
   resolveWhatsAppGroupRequireMention,
   resolveWhatsAppGroupToolPolicy,
@@ -85,7 +82,6 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
         groups: {
           resolveRequireMention: resolveWhatsAppGroupRequireMention,
           resolveToolPolicy: resolveWhatsAppGroupToolPolicy,
-          resolveGroupIntroHint: resolveWhatsAppGroupIntroHint,
         },
         setupWizard: whatsappSetupWizardProxy,
         setup: whatsappSetupAdapter,
@@ -160,6 +156,8 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
           (await loadWhatsAppDirectoryConfig()).listWhatsAppDirectoryPeersFromConfig(params),
         listGroups: async (params) =>
           (await loadWhatsAppDirectoryConfig()).listWhatsAppDirectoryGroupsFromConfig(params),
+        listGroupsLive: async (params) =>
+          (await loadWhatsAppDirectoryConfig()).listWhatsAppDirectoryGroupsLive(params),
       },
       actions: {
         describeMessageTool: ({ cfg, accountId }) =>
@@ -288,6 +286,9 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
             lastRunActivityAt: snapshot.lastRunActivityAt ?? null,
             lastError: snapshot.lastError ?? null,
             healthState: snapshot.healthState ?? undefined,
+            ...(snapshot.terminalDisconnect
+              ? { terminalDisconnect: snapshot.terminalDisconnect }
+              : {}),
           };
         },
         resolveAccountSnapshot: async ({ account, runtime }) => {
@@ -315,6 +316,9 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
               busy: runtime?.busy ?? false,
               lastRunActivityAt: runtime?.lastRunActivityAt ?? null,
               healthState: runtime?.healthState ?? undefined,
+              ...(runtime?.terminalDisconnect
+                ? { terminalDisconnect: runtime.terminalDisconnect }
+                : {}),
               dmPolicy: account.dmPolicy,
               allowFrom: account.allowFrom,
             },

@@ -12,6 +12,7 @@ import {
 } from "openclaw/plugin-sdk/gateway-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { normalizeAgentId, parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { jsonResult as json } from "openclaw/plugin-sdk/tool-results";
 import { Type } from "typebox";
@@ -229,6 +230,7 @@ const GoogleMeetToolSchema = Type.Object({
       "join",
       "create",
       "status",
+      "transcript",
       "setup_status",
       "resolve_space",
       "preflight",
@@ -287,6 +289,12 @@ const GoogleMeetToolSchema = Type.Object({
   ),
   dtmfSequence: Type.Optional(Type.String({ description: "Explicit DTMF sequence for Twilio" })),
   sessionId: Type.Optional(Type.String({ description: "Meet session ID" })),
+  sinceIndex: Type.Optional(
+    Type.Integer({
+      description: "For transcript, resume from the previous response's nextIndex.",
+      minimum: 0,
+    }),
+  ),
   message: Type.Optional(Type.String({ description: "Realtime instructions to speak now" })),
   timeoutMs: optionalPositiveIntegerSchema({ description: "Probe timeout in milliseconds" }),
   meeting: Type.Optional(Type.String({ description: "Meet URL, meeting code, or spaces/{id}" })),
@@ -399,6 +407,7 @@ type GoogleMeetGatewayToolAction =
   | "join"
   | "create"
   | "status"
+  | "transcript"
   | "recover_current_tab"
   | "setup_status"
   | "leave"
@@ -472,8 +481,21 @@ async function callGoogleMeetGatewayFromTool(params: {
   config: GoogleMeetConfig;
   action: GoogleMeetGatewayToolAction;
   raw: Record<string, unknown>;
+  runtime?: OpenClawPluginApi["runtime"];
 }): Promise<unknown> {
   try {
+    if (params.runtime) {
+      return await params.runtime.gateway.request(
+        googleMeetGatewayMethodForToolAction(params.action),
+        params.raw,
+        {
+          timeoutMs: resolveGoogleMeetGatewayOperationTimeoutMs(params.config),
+          scopes: ["operator.admin"],
+        },
+      );
+    }
+    // Standalone agent workers connect as this bundled plugin, not as the
+    // model session; its Gateway methods remain the only exposed actions.
     return await googleMeetToolDeps.callGatewayFromCli(
       googleMeetGatewayMethodForToolAction(params.action),
       {
@@ -481,7 +503,7 @@ async function callGoogleMeetGatewayFromTool(params: {
         timeout: String(resolveGoogleMeetGatewayOperationTimeoutMs(params.config)),
       },
       params.raw,
-      { progress: false },
+      { progress: false, scopes: ["operator.admin"] },
     );
   } catch (err) {
     const details = readGatewayErrorDetails(err);
@@ -490,6 +512,18 @@ async function callGoogleMeetGatewayFromTool(params: {
     }
     throw err;
   }
+}
+
+function keepTrustedToolAgentId(
+  raw: Record<string, unknown>,
+  client: GatewayRequestHandlerOptions["client"],
+): Record<string, unknown> {
+  const { agentId: rawAgentId, ...rest } = raw;
+  if (client?.internal?.pluginRuntimeOwnerId !== "google-meet") {
+    return rest;
+  }
+  const agentId = normalizeOptionalString(rawAgentId);
+  return agentId ? { ...rest, agentId } : rest;
 }
 
 async function createMeetFromParams(params: {
@@ -724,18 +758,20 @@ export default definePluginEntry({
 
     api.registerGatewayMethod(
       "googlemeet.join",
-      async ({ params, respond }: GatewayRequestHandlerOptions) => {
+      async ({ params, client, respond }: GatewayRequestHandlerOptions) => {
         try {
+          const trustedParams = keepTrustedToolAgentId(asParamRecord(params), client);
           const rt = await ensureRuntime();
           const result = await rt.join({
-            url: resolveMeetingInput(config, params?.url),
-            transport: normalizeTransport(params?.transport),
-            mode: normalizeMode(params?.mode),
-            dialInNumber: normalizeOptionalString(params?.dialInNumber),
-            pin: normalizeOptionalString(params?.pin),
-            dtmfSequence: normalizeOptionalString(params?.dtmfSequence),
-            message: normalizeOptionalString(params?.message),
-            requesterSessionKey: normalizeOptionalString(params?.requesterSessionKey),
+            url: resolveMeetingInput(config, trustedParams.url),
+            transport: normalizeTransport(trustedParams.transport),
+            mode: normalizeMode(trustedParams.mode),
+            dialInNumber: normalizeOptionalString(trustedParams.dialInNumber),
+            pin: normalizeOptionalString(trustedParams.pin),
+            dtmfSequence: normalizeOptionalString(trustedParams.dtmfSequence),
+            message: normalizeOptionalString(trustedParams.message),
+            requesterSessionKey: normalizeOptionalString(trustedParams.requesterSessionKey),
+            agentId: normalizeOptionalString(trustedParams.agentId),
           });
           respond(true, result);
         } catch (err) {
@@ -746,9 +782,9 @@ export default definePluginEntry({
 
     api.registerGatewayMethod(
       "googlemeet.create",
-      async ({ params, respond }: GatewayRequestHandlerOptions) => {
+      async ({ params, client, respond }: GatewayRequestHandlerOptions) => {
         try {
-          const raw = asParamRecord(params);
+          const raw = keepTrustedToolAgentId(asParamRecord(params), client);
           respond(
             true,
             shouldJoinCreatedMeet(raw)
@@ -772,6 +808,38 @@ export default definePluginEntry({
         try {
           const rt = await ensureRuntime();
           respond(true, await rt.status(normalizeOptionalString(params?.sessionId)));
+        } catch (err) {
+          sendError(respond, err);
+        }
+      },
+    );
+
+    api.registerGatewayMethod(
+      "googlemeet.transcript",
+      async ({ params, respond }: GatewayRequestHandlerOptions) => {
+        try {
+          const sessionId = normalizeOptionalString(params?.sessionId);
+          if (!sessionId) {
+            sendError(respond, new Error("sessionId required"), ErrorCodes.INVALID_REQUEST);
+            return;
+          }
+          const sinceIndex = (params as { sinceIndex?: unknown } | undefined)?.sinceIndex;
+          if (
+            sinceIndex !== undefined &&
+            (typeof sinceIndex !== "number" || !Number.isSafeInteger(sinceIndex) || sinceIndex < 0)
+          ) {
+            sendError(
+              respond,
+              new Error("sinceIndex must be a non-negative safe integer"),
+              ErrorCodes.INVALID_REQUEST,
+            );
+            return;
+          }
+          const rt = await ensureRuntime();
+          respond(
+            true,
+            await rt.transcript(sessionId, sinceIndex === undefined ? {} : { sinceIndex }),
+          );
         } catch (err) {
           sendError(respond, err);
         }
@@ -976,18 +1044,20 @@ export default definePluginEntry({
 
     api.registerGatewayMethod(
       "googlemeet.testSpeech",
-      async ({ params, respond }: GatewayRequestHandlerOptions) => {
+      async ({ params, client, respond }: GatewayRequestHandlerOptions) => {
         try {
+          const trustedParams = keepTrustedToolAgentId(asParamRecord(params), client);
           const rt = await ensureRuntime();
           const result = await rt.testSpeech({
-            url: resolveMeetingInput(config, params?.url),
-            transport: normalizeTransport(params?.transport),
-            mode: normalizeMode(params?.mode),
-            dialInNumber: normalizeOptionalString(params?.dialInNumber),
-            pin: normalizeOptionalString(params?.pin),
-            dtmfSequence: normalizeOptionalString(params?.dtmfSequence),
-            message: normalizeOptionalString(params?.message),
-            requesterSessionKey: normalizeOptionalString(params?.requesterSessionKey),
+            url: resolveMeetingInput(config, trustedParams.url),
+            transport: normalizeTransport(trustedParams.transport),
+            mode: normalizeMode(trustedParams.mode),
+            dialInNumber: normalizeOptionalString(trustedParams.dialInNumber),
+            pin: normalizeOptionalString(trustedParams.pin),
+            dtmfSequence: normalizeOptionalString(trustedParams.dtmfSequence),
+            message: normalizeOptionalString(trustedParams.message),
+            requesterSessionKey: normalizeOptionalString(trustedParams.requesterSessionKey),
+            agentId: normalizeOptionalString(trustedParams.agentId),
           });
           respond(true, result);
         } catch (err) {
@@ -998,14 +1068,16 @@ export default definePluginEntry({
 
     api.registerGatewayMethod(
       "googlemeet.testListen",
-      async ({ params, respond }: GatewayRequestHandlerOptions) => {
+      async ({ params, client, respond }: GatewayRequestHandlerOptions) => {
         try {
+          const trustedParams = keepTrustedToolAgentId(asParamRecord(params), client);
           const rt = await ensureRuntime();
           const result = await rt.testListen({
-            url: resolveMeetingInput(config, params?.url),
-            transport: normalizeTransport(params?.transport),
-            mode: normalizeMode(params?.mode),
-            timeoutMs: readPositiveIntegerParam(asParamRecord(params), "timeoutMs"),
+            url: resolveMeetingInput(config, trustedParams.url),
+            transport: normalizeTransport(trustedParams.transport),
+            mode: normalizeMode(trustedParams.mode),
+            agentId: normalizeOptionalString(trustedParams.agentId),
+            timeoutMs: readPositiveIntegerParam(trustedParams, "timeoutMs"),
           });
           respond(true, result);
         } catch (err) {
@@ -1024,8 +1096,26 @@ export default definePluginEntry({
         async execute(_toolCallId, params) {
           const raw = asParamRecord(params);
           const requesterSessionKey = normalizeOptionalString(toolContext.sessionKey);
-          const rawWithRequester = requesterSessionKey ? { ...raw, requesterSessionKey } : raw;
+          // Agent ownership comes from trusted tool context, never model-supplied params.
+          // Some harnesses omit agentId but still provide its canonical session key.
+          const contextAgentId =
+            toolContext.agentId ?? parseAgentSessionKey(requesterSessionKey)?.agentId;
+          const agentId = contextAgentId ? normalizeAgentId(contextAgentId) : undefined;
           try {
+            // Main-agent sessions belong to the persistent Gateway runtime. Only
+            // non-default identities need trusted in-process routing metadata.
+            const needsTrustedAgentRouting = Boolean(agentId && agentId !== "main");
+            const useTrustedRuntime = needsTrustedAgentRouting
+              ? await api.runtime.gateway.isAvailable()
+              : false;
+            if (needsTrustedAgentRouting && !useTrustedRuntime) {
+              throw new Error("Per-agent Google Meet routing requires a Gateway-hosted agent run.");
+            }
+            const rawWithRequester = {
+              ...raw,
+              ...(requesterSessionKey ? { requesterSessionKey } : {}),
+              ...(useTrustedRuntime ? { agentId } : {}),
+            };
             assertGoogleMeetAgentToolActionSupported({ config, raw });
             switch (raw.action) {
               case "join": {
@@ -1034,6 +1124,7 @@ export default definePluginEntry({
                     config,
                     action: "join",
                     raw: rawWithRequester,
+                    runtime: useTrustedRuntime ? api.runtime : undefined,
                   }),
                 );
               }
@@ -1043,6 +1134,7 @@ export default definePluginEntry({
                     config,
                     action: "create",
                     raw: rawWithRequester,
+                    runtime: useTrustedRuntime ? api.runtime : undefined,
                   }),
                 );
               }
@@ -1052,16 +1144,27 @@ export default definePluginEntry({
                     config,
                     action: "test_speech",
                     raw: rawWithRequester,
+                    runtime: useTrustedRuntime ? api.runtime : undefined,
                   }),
                 );
               }
               case "test_listen": {
                 return json(
-                  await callGoogleMeetGatewayFromTool({ config, action: "test_listen", raw }),
+                  await callGoogleMeetGatewayFromTool({
+                    config,
+                    action: "test_listen",
+                    raw: rawWithRequester,
+                    runtime: useTrustedRuntime ? api.runtime : undefined,
+                  }),
                 );
               }
               case "status": {
                 return json(await callGoogleMeetGatewayFromTool({ config, action: "status", raw }));
+              }
+              case "transcript": {
+                return json(
+                  await callGoogleMeetGatewayFromTool({ config, action: "transcript", raw }),
+                );
               }
               case "recover_current_tab": {
                 return json(
@@ -1215,3 +1318,4 @@ export default definePluginEntry({
     );
   },
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

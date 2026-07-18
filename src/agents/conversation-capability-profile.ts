@@ -3,10 +3,14 @@
  * hot paths share. Keep this internal: it prepares existing config/state, not a
  * new public access-profile config surface.
  */
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { ChatType } from "../channels/chat-type.js";
 import { normalizeChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
 import type { SkillSnapshot } from "../skills/types.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
+import { normalizeMessageChannel } from "../utils/message-channel-core.js";
 import {
   resolveEffectiveToolPolicy,
   resolveGroupToolPolicy,
@@ -30,7 +34,7 @@ import {
 } from "./tool-policy.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
-export type ConversationCapabilityScope = "direct" | "shared" | "unknown";
+type ConversationCapabilityScope = "direct" | "shared" | "unknown";
 
 export type ConversationCapabilityProfileParams = {
   config?: OpenClawConfig;
@@ -76,6 +80,7 @@ export type ConversationCapabilityProfileParams = {
   skillsSnapshot?: SkillSnapshot;
   sandboxToolPolicy?: SandboxToolPolicy;
   runtimeToolAllowlist?: string[];
+  runtimePluginToolGrant?: RuntimePluginToolGrant;
 };
 
 export type ResolvedConversationCapabilityProfile = {
@@ -166,7 +171,10 @@ export type ResolvedConversationCapabilityProfile = {
     inheritedToolPolicy?: SandboxToolPolicy;
     inheritancePolicies: Array<ToolPolicyLike | undefined>;
     explicitToolAllowlist: string[];
+    /** Explicit config/runtime grants only; excludes built-in profile expansion. */
+    explicitToolOverrideAllowlist: string[];
     explicitToolDenylist: string[];
+    runtimePluginToolGrant?: RuntimePluginToolGrant;
   };
 };
 
@@ -204,15 +212,22 @@ export function resolveConversationCapabilityProfile(
     senderUsername: params.senderUsername,
     senderE164: params.senderE164,
   });
-  const senderPolicy = resolveSenderToolPolicy({
-    config: params.config,
-    agentId: effective.agentId,
-    messageProvider,
-    senderId: params.senderId,
-    senderName: params.senderName,
-    senderUsername: params.senderUsername,
-    senderE164: params.senderE164,
-  });
+  // Owner WebChat intentionally has no external sender identity. Its trusted
+  // owner state must not fall through to the wildcard policy for guests.
+  const isOwnerInternalSession =
+    params.senderIsOwner === true &&
+    normalizeMessageChannel(messageProvider ?? params.messageChannel) === INTERNAL_MESSAGE_CHANNEL;
+  const senderPolicy = isOwnerInternalSession
+    ? undefined
+    : resolveSenderToolPolicy({
+        config: params.config,
+        agentId: effective.agentId,
+        messageProvider,
+        senderId: params.senderId,
+        senderName: params.senderName,
+        senderUsername: params.senderUsername,
+        senderE164: params.senderE164,
+      });
   const profilePolicy = resolveToolProfilePolicy(effective.profile);
   const providerProfilePolicy = resolveToolProfilePolicy(effective.providerProfile);
   const subagentSessionKey = params.sandboxSessionKey ?? params.sessionKey;
@@ -236,9 +251,7 @@ export function resolveConversationCapabilityProfile(
       store: subagentStore,
     },
   );
-  const inheritancePolicies = [
-    profilePolicy,
-    providerProfilePolicy,
+  const configuredOverridePolicies = [
     effective.globalPolicy,
     effective.globalProviderPolicy,
     effective.agentPolicy,
@@ -247,8 +260,24 @@ export function resolveConversationCapabilityProfile(
     senderPolicy,
     params.sandboxToolPolicy,
     subagentPolicy,
+  ];
+  const runtimeToolPolicy = params.runtimeToolAllowlist
+    ? { allow: params.runtimeToolAllowlist }
+    : undefined;
+  const runtimeToolAlsoAllowlist = uniqueStrings(
+    (params.runtimePluginToolGrant?.toolNames ?? []).map((entry) => entry.trim()).filter(Boolean),
+  );
+  const mergeRuntimeToolAlsoAllowlist = (configured?: string[]) => {
+    const merged = uniqueStrings([...(configured ?? []), ...runtimeToolAlsoAllowlist]);
+    return merged.length > 0 ? merged : undefined;
+  };
+  const explicitOverridePolicies = [...configuredOverridePolicies, runtimeToolPolicy];
+  const inheritancePolicies = [
+    profilePolicy,
+    providerProfilePolicy,
+    ...configuredOverridePolicies,
     inheritedToolPolicy,
-    params.runtimeToolAllowlist ? { allow: params.runtimeToolAllowlist } : undefined,
+    runtimeToolPolicy,
   ];
 
   return {
@@ -332,8 +361,8 @@ export function resolveConversationCapabilityProfile(
       providerProfile: effective.providerProfile,
       profilePolicy,
       providerProfilePolicy,
-      profileAlsoAllow: effective.profileAlsoAllow,
-      providerProfileAlsoAllow: effective.providerProfileAlsoAllow,
+      profileAlsoAllow: mergeRuntimeToolAlsoAllowlist(effective.profileAlsoAllow),
+      providerProfileAlsoAllow: mergeRuntimeToolAlsoAllowlist(effective.providerProfileAlsoAllow),
       globalPolicy: effective.globalPolicy,
       globalProviderPolicy: effective.globalProviderPolicy,
       agentPolicy: effective.agentPolicy,
@@ -345,7 +374,9 @@ export function resolveConversationCapabilityProfile(
       inheritedToolPolicy,
       inheritancePolicies,
       explicitToolAllowlist: collectExplicitAllowlist(inheritancePolicies),
+      explicitToolOverrideAllowlist: collectExplicitAllowlist(explicitOverridePolicies),
       explicitToolDenylist: collectExplicitDenylist(inheritancePolicies),
+      runtimePluginToolGrant: params.runtimePluginToolGrant,
     },
   };
 }

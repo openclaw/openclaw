@@ -5,7 +5,6 @@ import { GatewayRelayRealtimeTalkTransport } from "./realtime-talk-gateway-relay
 import { GoogleLiveRealtimeTalkTransport } from "./realtime-talk-google-live.ts";
 import type {
   RealtimeTalkCallbacks,
-  RealtimeTalkEvent,
   RealtimeTalkGatewayRelaySessionResult,
   RealtimeTalkJsonPcmWebSocketSessionResult,
   RealtimeTalkSessionResult,
@@ -16,14 +15,9 @@ import type {
 } from "./realtime-talk-shared.ts";
 import { WebRtcSdpRealtimeTalkTransport } from "./realtime-talk-webrtc.ts";
 
-export type {
-  RealtimeTalkCallbacks,
-  RealtimeTalkEvent,
-  RealtimeTalkSessionResult,
-  RealtimeTalkStatus,
-};
+export type { RealtimeTalkStatus };
 
-export type RealtimeTalkLaunchOptions = {
+type RealtimeTalkLaunchOptions = {
   provider?: string;
   model?: string;
   voice?: string;
@@ -32,7 +26,41 @@ export type RealtimeTalkLaunchOptions = {
   silenceDurationMs?: number;
   prefixPaddingMs?: number;
   reasoningEffort?: string;
+  capabilities?: Array<"camera-frame">;
 };
+
+type RealtimeTalkLocalOptions = {
+  inputDeviceId?: string;
+  videoEnabled?: boolean;
+};
+
+type RealtimeTalkLaunchTransport = NonNullable<RealtimeTalkLaunchOptions["transport"]>;
+
+type RealtimeTalkConfigResult = {
+  config?: {
+    talk?: {
+      realtime?: {
+        transport?: unknown;
+      };
+    };
+  };
+};
+
+function normalizeLaunchTransport(value: unknown): RealtimeTalkLaunchTransport | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const transport = normalizeTalkTransport(value);
+  if (
+    transport === "webrtc" ||
+    transport === "provider-websocket" ||
+    transport === "gateway-relay" ||
+    transport === "managed-room"
+  ) {
+    return transport;
+  }
+  return undefined;
+}
 
 function createTransport(
   session: RealtimeTalkSessionResult,
@@ -80,6 +108,7 @@ export class RealtimeTalkSession {
     private readonly sessionKey: string,
     private readonly callbacks: RealtimeTalkCallbacks = {},
     private readonly options: RealtimeTalkLaunchOptions = {},
+    private readonly localOptions: RealtimeTalkLocalOptions = {},
   ) {}
 
   async start(): Promise<void> {
@@ -93,6 +122,8 @@ export class RealtimeTalkSession {
       client: this.client,
       sessionKey: this.sessionKey,
       callbacks: this.callbacks,
+      inputDeviceId: this.localOptions.inputDeviceId,
+      videoEnabled: this.localOptions.videoEnabled,
       consultThinkingLevel: session.consultThinkingLevel,
       consultFastMode: session.consultFastMode,
     });
@@ -109,7 +140,26 @@ export class RealtimeTalkSession {
         }),
       );
     } catch (error) {
-      if (this.options.transport && this.options.transport !== "gateway-relay") {
+      let transport = this.options.transport;
+      if (!transport) {
+        let result: RealtimeTalkConfigResult;
+        try {
+          result = await this.client.request<RealtimeTalkConfigResult>("talk.config", {});
+        } catch {
+          throw error;
+        }
+        if (!result.config || typeof result.config !== "object") {
+          throw error;
+        }
+        const configuredTransport = result.config?.talk?.realtime?.transport;
+        if (configuredTransport !== undefined) {
+          transport = normalizeLaunchTransport(configuredTransport);
+          if (!transport) {
+            throw error;
+          }
+        }
+      }
+      if (transport && transport !== "gateway-relay") {
         throw error;
       }
       try {
@@ -119,7 +169,7 @@ export class RealtimeTalkSession {
             sessionKey: this.sessionKey,
             ...this.options,
             mode: "realtime",
-            transport: this.options.transport ?? "gateway-relay",
+            transport: transport ?? "gateway-relay",
             brain: "agent-consult",
           }),
         );

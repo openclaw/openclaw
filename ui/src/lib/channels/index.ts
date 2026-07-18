@@ -19,7 +19,7 @@ type ChannelGateway = {
   subscribe: (listener: (snapshot: ChannelGatewaySnapshot) => void) => () => void;
 };
 
-export type ChannelsState = {
+type ChannelsState = {
   client: ChannelGatewayClient | null;
   connected: boolean;
   channelsLoading: boolean;
@@ -34,23 +34,21 @@ export type ChannelsState = {
   whatsappBusy: boolean;
 };
 
-export type LoadChannelsOptions = {
+type LoadChannelsOptions = {
   softTimeoutMs?: number;
 };
 
 export type ChannelCapability = {
   readonly state: ChannelsState;
   refresh: (probe?: boolean, options?: LoadChannelsOptions) => Promise<void>;
-  startWhatsApp: (force: boolean) => Promise<void>;
-  waitWhatsApp: () => Promise<void>;
+  startWhatsApp: (force: boolean, accountId?: string) => Promise<void>;
+  waitWhatsApp: (accountId?: string) => Promise<void>;
   logoutWhatsApp: () => Promise<void>;
   subscribe: (listener: (state: ChannelsState) => void) => () => void;
   dispose: () => void;
 };
 
-export function createInitialChannelsState(
-  snapshot: Partial<ChannelGatewaySnapshot> = {},
-): ChannelsState {
+function createInitialChannelsState(snapshot: Partial<ChannelGatewaySnapshot> = {}): ChannelsState {
   return {
     client: snapshot.client ?? null,
     connected: snapshot.connected ?? false,
@@ -81,7 +79,7 @@ function isCurrentChannelRefresh(
   return state.client === client && state.channelsRefreshSeq === refreshSeq;
 }
 
-export async function loadChannels(
+async function loadChannels(
   state: ChannelsState,
   probe: boolean,
   options: LoadChannelsOptions = {},
@@ -138,46 +136,110 @@ export async function loadChannels(
   await refresh;
 }
 
-export async function startWhatsAppLogin(state: ChannelsState, force: boolean) {
-  if (!state.client || !state.connected || state.whatsappBusy) {
-    return;
+type WhatsAppOperation = {
+  client: ChannelGatewayClient;
+  gatewayEpoch: number;
+  operationSeq: number;
+};
+
+type ChannelsLifecycle = {
+  gatewayEpoch: number;
+  whatsappOperationSeq: number;
+};
+
+const channelsLifecycles = new WeakMap<ChannelsState, ChannelsLifecycle>();
+
+function getChannelsLifecycle(state: ChannelsState): ChannelsLifecycle {
+  const existing = channelsLifecycles.get(state);
+  if (existing) {
+    return existing;
   }
+  const created = { gatewayEpoch: 0, whatsappOperationSeq: 0 };
+  channelsLifecycles.set(state, created);
+  return created;
+}
+
+function beginWhatsAppOperation(state: ChannelsState): WhatsAppOperation | null {
+  const client = state.client;
+  if (!client || !state.connected || state.whatsappBusy) {
+    return null;
+  }
+  const lifecycle = getChannelsLifecycle(state);
+  const operationSeq = lifecycle.whatsappOperationSeq + 1;
+  lifecycle.whatsappOperationSeq = operationSeq;
   state.whatsappBusy = true;
+  return { client, gatewayEpoch: lifecycle.gatewayEpoch, operationSeq };
+}
+
+function isCurrentWhatsAppOperation(state: ChannelsState, operation: WhatsAppOperation): boolean {
+  const lifecycle = getChannelsLifecycle(state);
+  return (
+    state.connected &&
+    state.client === operation.client &&
+    lifecycle.gatewayEpoch === operation.gatewayEpoch &&
+    lifecycle.whatsappOperationSeq === operation.operationSeq
+  );
+}
+
+async function startWhatsAppLogin(
+  state: ChannelsState,
+  force: boolean,
+  accountId?: string,
+): Promise<boolean> {
+  const operation = beginWhatsAppOperation(state);
+  if (!operation) {
+    return false;
+  }
   try {
-    const res = await state.client.request<{
+    const res = await operation.client.request<{
       message?: string;
       qrDataUrl?: string;
       connected?: boolean;
     }>("web.login.start", {
       force,
       timeoutMs: 30000,
+      ...(accountId ? { accountId } : {}),
     });
+    if (!isCurrentWhatsAppOperation(state, operation)) {
+      return false;
+    }
     state.whatsappLoginMessage = res.message ?? null;
     state.whatsappLoginQrDataUrl = res.qrDataUrl ?? null;
     state.whatsappLoginConnected = typeof res.connected === "boolean" ? res.connected : null;
   } catch (err) {
+    if (!isCurrentWhatsAppOperation(state, operation)) {
+      return false;
+    }
     state.whatsappLoginMessage = String(err);
     state.whatsappLoginQrDataUrl = null;
     state.whatsappLoginConnected = null;
   } finally {
-    state.whatsappBusy = false;
+    if (isCurrentWhatsAppOperation(state, operation)) {
+      state.whatsappBusy = false;
+    }
   }
+  return true;
 }
 
-export async function waitWhatsAppLogin(state: ChannelsState) {
-  if (!state.client || !state.connected || state.whatsappBusy) {
-    return;
+async function waitWhatsAppLogin(state: ChannelsState, accountId?: string): Promise<boolean> {
+  const operation = beginWhatsAppOperation(state);
+  if (!operation) {
+    return false;
   }
-  state.whatsappBusy = true;
+  const currentQrDataUrl = state.whatsappLoginQrDataUrl ?? undefined;
   try {
-    const res = await state.client.request<{
+    const res = await operation.client.request<{
       message?: string;
       connected?: boolean;
       qrDataUrl?: string;
     }>("web.login.wait", {
       timeoutMs: 120000,
-      currentQrDataUrl: state.whatsappLoginQrDataUrl ?? undefined,
+      currentQrDataUrl,
+      ...(accountId ? { accountId } : {}),
     });
+    if (!isCurrentWhatsAppOperation(state, operation)) {
+      return false;
+    }
     state.whatsappLoginMessage = res.message ?? null;
     state.whatsappLoginConnected = res.connected ?? null;
     if (res.qrDataUrl) {
@@ -186,28 +248,43 @@ export async function waitWhatsAppLogin(state: ChannelsState) {
       state.whatsappLoginQrDataUrl = null;
     }
   } catch (err) {
+    if (!isCurrentWhatsAppOperation(state, operation)) {
+      return false;
+    }
     state.whatsappLoginMessage = String(err);
     state.whatsappLoginConnected = null;
   } finally {
-    state.whatsappBusy = false;
+    if (isCurrentWhatsAppOperation(state, operation)) {
+      state.whatsappBusy = false;
+    }
   }
+  return true;
 }
 
-export async function logoutWhatsApp(state: ChannelsState) {
-  if (!state.client || !state.connected || state.whatsappBusy) {
-    return;
+async function logoutWhatsApp(state: ChannelsState): Promise<boolean> {
+  const operation = beginWhatsAppOperation(state);
+  if (!operation) {
+    return false;
   }
-  state.whatsappBusy = true;
   try {
-    await state.client.request("channels.logout", { channel: "whatsapp" });
+    await operation.client.request("channels.logout", { channel: "whatsapp" });
+    if (!isCurrentWhatsAppOperation(state, operation)) {
+      return false;
+    }
     state.whatsappLoginMessage = "Logged out.";
     state.whatsappLoginQrDataUrl = null;
     state.whatsappLoginConnected = null;
   } catch (err) {
+    if (!isCurrentWhatsAppOperation(state, operation)) {
+      return false;
+    }
     state.whatsappLoginMessage = String(err);
   } finally {
-    state.whatsappBusy = false;
+    if (isCurrentWhatsAppOperation(state, operation)) {
+      state.whatsappBusy = false;
+    }
   }
+  return true;
 }
 
 export function resolveChannelConfigValue(
@@ -273,20 +350,29 @@ export function createChannelCapability(gateway: ChannelGateway): ChannelCapabil
       listener(state);
     }
   };
-  const run = async <T>(task: () => Promise<T>): Promise<T> => {
+  const run = async (task: () => Promise<void>): Promise<void> => {
+    if (disposed) {
+      return;
+    }
     const result = task();
     publish();
     try {
-      return await result;
+      await result;
     } finally {
       publish();
     }
   };
   const stopGateway = gateway.subscribe((snapshot) => {
     const clientChanged = state.client !== snapshot.client;
+    const connectionChanged = state.connected !== snapshot.connected;
     state.client = snapshot.client;
     state.connected = snapshot.connected;
-    if (clientChanged || !snapshot.connected) {
+    if (clientChanged || connectionChanged) {
+      // Every transport epoch invalidates both channel loads and login work.
+      // A reconnect may reuse the same client object, so identity alone is insufficient.
+      const lifecycle = getChannelsLifecycle(state);
+      lifecycle.gatewayEpoch += 1;
+      lifecycle.whatsappOperationSeq += 1;
       state.channelsLoading = false;
       state.channelsLoadingProbe = null;
       state.whatsappBusy = false;
@@ -300,27 +386,37 @@ export function createChannelCapability(gateway: ChannelGateway): ChannelCapabil
       return state;
     },
     refresh: (probe, options) => run(() => loadChannels(state, probe ?? false, options)),
-    startWhatsApp: (force) =>
+    startWhatsApp: (force, accountId) =>
       run(async () => {
-        await startWhatsAppLogin(state, force);
-        await loadChannels(state, true);
+        if (await startWhatsAppLogin(state, force, accountId)) {
+          await loadChannels(state, true);
+        }
       }),
-    waitWhatsApp: () =>
+    waitWhatsApp: (accountId) =>
       run(async () => {
-        await waitWhatsAppLogin(state);
-        await loadChannels(state, true);
+        if (await waitWhatsAppLogin(state, accountId)) {
+          await loadChannels(state, true);
+        }
       }),
     logoutWhatsApp: () =>
       run(async () => {
-        await logoutWhatsApp(state);
-        await loadChannels(state, true);
+        if (await logoutWhatsApp(state)) {
+          await loadChannels(state, true);
+        }
       }),
     subscribe(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
     dispose() {
+      if (disposed) {
+        return;
+      }
       disposed = true;
+      const lifecycle = getChannelsLifecycle(state);
+      lifecycle.gatewayEpoch += 1;
+      lifecycle.whatsappOperationSeq += 1;
+      state.whatsappBusy = false;
       stopGateway();
       listeners.clear();
     },

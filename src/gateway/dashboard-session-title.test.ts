@@ -10,10 +10,7 @@ vi.mock("../auto-reply/reply/conversation-label-generator.js", () => ({
 vi.mock("../config/sessions/session-accessor.js", () => ({ updateSessionEntry }));
 
 import type { SessionEntry } from "../config/sessions/types.js";
-import {
-  maybeGenerateDashboardSessionTitle,
-  normalizeDashboardSessionTitle,
-} from "./dashboard-session-title.js";
+import { maybeGenerateDashboardSessionTitle } from "./dashboard-session-title.js";
 
 const baseEntry: SessionEntry = {
   sessionId: "session-1",
@@ -38,15 +35,6 @@ function mockSessionUpdate(current: SessionEntry): void {
     return patch ? { ...current, ...patch } : current;
   });
 }
-
-describe("normalizeDashboardSessionTitle", () => {
-  it("keeps the first content line and strips common wrappers", () => {
-    expect(normalizeDashboardSessionTitle('```text\n"Release Planning"\n```')).toBe(
-      "Release Planning",
-    );
-    expect(normalizeDashboardSessionTitle("Title:  Release   planning ")).toBe("Release planning");
-  });
-});
 
 describe("maybeGenerateDashboardSessionTitle", () => {
   beforeEach(() => {
@@ -80,6 +68,38 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     expect(await update?.({ ...baseEntry })).toEqual({
       displayName: "Release Planning",
     });
+  });
+
+  it("keeps utility title prompt input on a UTF-16 boundary", async () => {
+    await expect(
+      maybeGenerateDashboardSessionTitle({
+        ...titleParams(),
+        userMessage: `${"m".repeat(999)}🚀tail`,
+      }),
+    ).resolves.toBe(true);
+
+    expect(generateConversationLabel.mock.calls[0]?.[0]?.userMessage).toBe("m".repeat(999));
+  });
+
+  it.each([
+    ['```text\n"Release Planning"\n```', "Release Planning"],
+    ["Title:  Release   planning ", "Release planning"],
+  ])("normalizes generated title wrappers", async (generated, expected) => {
+    generateConversationLabel.mockResolvedValue(generated);
+
+    await expect(maybeGenerateDashboardSessionTitle(titleParams())).resolves.toBe(true);
+
+    const update = updateSessionEntry.mock.calls[0]?.[1];
+    expect(await update?.({ ...baseEntry })).toEqual({ displayName: expected });
+  });
+
+  it("keeps persisted titles on a UTF-16 boundary", async () => {
+    generateConversationLabel.mockResolvedValue(`${"a".repeat(59)}🚀tail`);
+
+    await expect(maybeGenerateDashboardSessionTitle(titleParams())).resolves.toBe(true);
+
+    const update = updateSessionEntry.mock.calls[0]?.[1];
+    expect(await update?.({ ...baseEntry })).toEqual({ displayName: "a".repeat(59) });
   });
 
   it.each([

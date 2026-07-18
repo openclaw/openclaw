@@ -15,7 +15,9 @@ import kotlinx.serialization.json.jsonPrimitive
  * chat/agent events through ChatController.handleGatewayEvent under
  * kotlinx-coroutines-test virtual time.
  */
-internal class ScriptedGateway(private val json: Json) {
+internal class ScriptedGateway(
+  private val json: Json,
+) {
   data class Call(
     val method: String,
     val paramsJson: String?,
@@ -31,7 +33,7 @@ internal class ScriptedGateway(private val json: Json) {
   init {
     // Benign defaults so bootstrap/health/commands side requests never fail a scenario.
     respondWith("health", "{}")
-    respondWith("commands.list", """{"commands":[]}""")
+    respondWith("chat.metadata", """{"commands":[],"models":[]}""")
     respondWith("sessions.list", """{"sessions":[]}""")
   }
 
@@ -54,7 +56,13 @@ internal class ScriptedGateway(private val json: Json) {
     respond("chat.send") { paramsJson ->
       val runId =
         paramsJson
-          ?.let { json.parseToJsonElement(it).jsonObject["idempotencyKey"]?.jsonPrimitive?.content }
+          ?.let { value ->
+            json
+              .parseToJsonElement(value)
+              .jsonObject["idempotencyKey"]
+              ?.jsonPrimitive
+              ?.content
+          }
       lastRunId = runId
       buildJsonObject {
         if (runId != null) put("runId", JsonPrimitive(runId))
@@ -73,7 +81,13 @@ internal class ScriptedGateway(private val json: Json) {
   }
 
   fun sessionKeyOf(paramsJson: String?): String? =
-    paramsJson?.let { json.parseToJsonElement(it).jsonObject["sessionKey"]?.jsonPrimitive?.content }
+    paramsJson?.let { value ->
+      json
+        .parseToJsonElement(value)
+        .jsonObject["sessionKey"]
+        ?.jsonPrimitive
+        ?.content
+    }
 
   fun callCount(method: String): Int = calls.count { it.method == method }
 }
@@ -89,9 +103,61 @@ internal data class ReplayHistoryMessage(
 internal fun historyResponse(
   sessionId: String,
   messages: List<ReplayHistoryMessage>,
+  inFlightRun: Pair<String, String>? = null,
+  inFlightPlan: ChatPlanSnapshot? = null,
+  hasActiveRun: Boolean? = inFlightRun?.let { true },
+  activeRunIds: List<String>? = inFlightRun?.let { listOf(it.first) },
 ): String =
   buildJsonObject {
     put("sessionId", JsonPrimitive(sessionId))
+    if (inFlightRun != null) {
+      put(
+        "inFlightRun",
+        buildJsonObject {
+          put("runId", JsonPrimitive(inFlightRun.first))
+          put("text", JsonPrimitive(inFlightRun.second))
+          if (inFlightPlan != null) {
+            put(
+              "plan",
+              buildJsonObject {
+                put(
+                  "steps",
+                  JsonArray(
+                    inFlightPlan.steps.map { step ->
+                      buildJsonObject {
+                        put("step", JsonPrimitive(step.step))
+                        put(
+                          "status",
+                          JsonPrimitive(
+                            when (step.status) {
+                              ChatPlanStepStatus.Pending -> "pending"
+                              ChatPlanStepStatus.InProgress -> "in_progress"
+                              ChatPlanStepStatus.Completed -> "completed"
+                            },
+                          ),
+                        )
+                      }
+                    },
+                  ),
+                )
+                inFlightPlan.explanation?.let { put("explanation", JsonPrimitive(it)) }
+              },
+            )
+          }
+        },
+      )
+    }
+    if (hasActiveRun != null || activeRunIds != null) {
+      put(
+        "sessionInfo",
+        buildJsonObject {
+          hasActiveRun?.let { put("hasActiveRun", JsonPrimitive(it)) }
+          activeRunIds?.let { ids ->
+            put("activeRunIds", JsonArray(ids.map(::JsonPrimitive)))
+          }
+        },
+      )
+    }
     put(
       "messages",
       JsonArray(
@@ -109,12 +175,12 @@ internal fun historyResponse(
     )
   }.toString()
 
-/** Protocol-valid gateway delta carrying both the incremental chunk and accumulated snapshot. */
+/** Gateway delta carrying the accumulated snapshot plus the v4 incremental chunk when present. */
 internal fun chatDeltaPayload(
   sessionKey: String,
   runId: String,
   seq: Int,
-  deltaText: String,
+  deltaText: String?,
   accumulatedText: String,
 ): String =
   buildJsonObject {
@@ -122,7 +188,7 @@ internal fun chatDeltaPayload(
     put("runId", JsonPrimitive(runId))
     put("seq", JsonPrimitive(seq))
     put("state", JsonPrimitive("delta"))
-    put("deltaText", JsonPrimitive(deltaText))
+    if (deltaText != null) put("deltaText", JsonPrimitive(deltaText))
     put(
       "message",
       buildJsonObject {
@@ -147,12 +213,32 @@ internal fun chatTerminalPayload(
   runId: String,
   seq: Int,
   state: String = "final",
+  assistantText: String? = null,
 ): String =
   buildJsonObject {
     put("sessionKey", JsonPrimitive(sessionKey))
     put("runId", JsonPrimitive(runId))
     put("seq", JsonPrimitive(seq))
     put("state", JsonPrimitive(state))
+    if (assistantText != null) {
+      put(
+        "message",
+        buildJsonObject {
+          put("role", JsonPrimitive("assistant"))
+          put(
+            "content",
+            JsonArray(
+              listOf(
+                buildJsonObject {
+                  put("type", JsonPrimitive("text"))
+                  put("text", JsonPrimitive(assistantText))
+                },
+              ),
+            ),
+          )
+        },
+      )
+    }
   }.toString()
 
 /**

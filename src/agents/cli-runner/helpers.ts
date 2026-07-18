@@ -27,6 +27,7 @@ import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js"
 import type { ImageContent } from "../../llm/types.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../plugins/command-registry-state.js";
+import type { BootstrapMode } from "../bootstrap-mode.js";
 import type { EmbeddedContextFile } from "../embedded-agent-helpers.js";
 import {
   detectAndLoadPromptImages,
@@ -54,7 +55,7 @@ const CLI_RUN_QUEUE = new KeyedAsyncQueue();
 const CLI_IMAGE_SWEEP_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
 const sweptCliImageRoots = new Set<string>();
 
-function isClaudeCliProvider(providerId: string): boolean {
+export function isClaudeCliProvider(providerId: string): boolean {
   return normalizeOptionalLowercaseString(providerId) === "claude-cli";
 }
 
@@ -145,6 +146,7 @@ export function buildCliAgentSystemPrompt(params: {
   sourcePath?: string;
   tools: AgentTool[];
   contextFiles?: EmbeddedContextFile[];
+  bootstrapMode?: BootstrapMode;
   skillsPrompt?: string;
   modelDisplay: string;
   agentId?: string;
@@ -203,6 +205,7 @@ export function buildCliAgentSystemPrompt(params: {
     userTime,
     userTimeFormat,
     contextFiles: params.contextFiles,
+    bootstrapMode: params.bootstrapMode,
   });
 }
 
@@ -360,7 +363,7 @@ function appendImagePathsToPrompt(prompt: string, paths: string[], prefix = ""):
 }
 
 /** Loads and sanitizes image references found in prompt text. */
-export async function loadPromptRefImages(params: {
+async function loadPromptRefImages(params: {
   prompt: string;
   workspaceDir: string;
   maxBytes?: number;
@@ -398,7 +401,7 @@ export async function loadPromptRefImages(params: {
 }
 
 /** Writes CLI image payloads to private paths and returns their file paths. */
-export async function writeCliImages(params: {
+async function writeCliImages(params: {
   backend: CliBackendConfig;
   workspaceDir: string;
   images: ImageContent[];
@@ -515,6 +518,7 @@ export function buildCliArgs(params: {
   imagePaths?: string[];
   promptArg?: string;
   useResume: boolean;
+  forkResume?: boolean;
   sendSystemPromptOnResume?: boolean;
 }): string[] {
   const args: string[] = [...params.baseArgs];
@@ -556,6 +560,12 @@ export function buildCliArgs(params: {
     } else if (params.backend.sessionArg) {
       args.push(params.backend.sessionArg, params.sessionId);
     }
+  }
+  if (params.useResume && params.forkResume) {
+    if (!params.backend.forkArg) {
+      throw new Error("CLI backend does not support forked session resume");
+    }
+    args.push(params.backend.forkArg);
   }
   if (params.promptArg !== undefined) {
     let replacedPromptPlaceholder = false;

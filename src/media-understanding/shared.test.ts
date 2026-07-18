@@ -637,6 +637,23 @@ describe("fetchWithTimeoutGuarded", () => {
     expect(call.timeoutMs).toBe(5000);
   });
 
+  it("truncates auditContext without leaving a lone surrogate at the max boundary", async () => {
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(null, { status: 200 }),
+      finalUrl: "https://example.com",
+      release: async () => {},
+    });
+
+    const prefix = "a".repeat(79);
+    await fetchWithTimeoutGuarded("https://example.com", {}, 5000, fetch, {
+      auditContext: `${prefix}${String.fromCodePoint(0x1f600)}tail`,
+    });
+
+    const call = getFirstGuardedFetchCall();
+    expect(call.auditContext).toBe(prefix);
+    expect(call.auditContext).not.toContain(String.fromCharCode(0xd83d));
+  });
+
   it("passes configured explicit proxy policy through the SSRF guard", async () => {
     fetchWithSsrFGuardMock.mockResolvedValue({
       response: new Response(null, { status: 200 }),
@@ -757,6 +774,39 @@ describe("fetchWithTimeoutGuarded", () => {
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce({
         response: new Response("busy", { status: 503, statusText: "Service Unavailable" }),
+        finalUrl: "https://api.example.com",
+        release: firstRelease,
+      })
+      .mockResolvedValueOnce({
+        response: new Response(null, { status: 200 }),
+        finalUrl: "https://api.example.com",
+        release: secondRelease,
+      });
+
+    const result = await postJsonRequest({
+      url: "https://api.example.com/v1/analyze",
+      headers: new Headers(),
+      body: { media: "base64" },
+      fetchFn: fetch,
+      retryStage: "read",
+      retry: { attempts: 2, baseDelayMs: 0, maxDelayMs: 0, sleep },
+    });
+
+    expect(result.response.status).toBe(200);
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
+    expect(firstRelease).toHaveBeenCalledOnce();
+    expect(secondRelease).not.toHaveBeenCalled();
+    expect(sleep).toHaveBeenCalledWith(0, undefined);
+  });
+
+  it("retries read JSON POST 429 rate limit responses", async () => {
+    fetchWithSsrFGuardMock.mockReset();
+    const firstRelease = vi.fn(async () => undefined);
+    const secondRelease = vi.fn(async () => undefined);
+    const sleep = vi.fn(async () => undefined);
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce({
+        response: new Response("rate limited", { status: 429, statusText: "Too Many Requests" }),
         finalUrl: "https://api.example.com",
         release: firstRelease,
       })

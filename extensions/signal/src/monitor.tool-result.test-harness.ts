@@ -1,7 +1,19 @@
 // Signal plugin module implements monitor.tool result harness behavior.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import type { PluginRuntime } from "openclaw/plugin-sdk/core";
+import {
+  closeOpenClawStateDatabaseForTest,
+  createChannelIngressQueueForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { MockFn } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { beforeEach, vi } from "vitest";
-import type { SignalDaemonExitEvent, SignalDaemonHandle } from "./daemon.js";
+import { afterEach, beforeEach, vi } from "vitest";
+import type { SignalDaemonHandle } from "./daemon.js";
+import { setSignalRuntime } from "./runtime.js";
+import { clearSignalRuntimeForTest } from "./runtime.test-support.js";
+
+type SignalDaemonExitEvent = Awaited<SignalDaemonHandle["exited"]>;
 
 type SignalToolResultTestMocks = {
   waitForTransportReadyMock: MockFn;
@@ -31,6 +43,7 @@ const spawnSignalDaemonMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
 const signalToolResultSessionStorePath = vi.hoisted(
   () => `/tmp/openclaw-signal-tool-result-sessions-${process.pid}.json`,
 );
+let signalToolResultStateDir: string | undefined;
 
 export function getSignalToolResultTestMocks(): SignalToolResultTestMocks {
   return {
@@ -86,7 +99,7 @@ export function createMockSignalDaemonHandle(
   const exited = overrides.exited ?? new Promise<SignalDaemonExitEvent>(() => {});
   const isExited = overrides.isExited ?? (() => false);
   return {
-    stop: stop as unknown as () => void,
+    stop: stop as unknown as () => Promise<void>,
     exited,
     isExited,
   };
@@ -127,22 +140,59 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
     dispatchInboundMessage: async (params: {
       ctx: unknown;
       cfg: unknown;
+      replyOptions?: {
+        turnAdoptionLifecycle?: { onAdopted?: () => void | Promise<void> };
+      };
       dispatcher: {
-        sendFinalReply: (payload: { text: string }) => boolean;
+        sendFinalReply: (payload: {
+          text?: string;
+          mediaUrl?: string;
+          mediaUrls?: string[];
+        }) => boolean;
         markComplete?: () => void;
         waitForIdle?: () => Promise<void>;
       };
     }) => {
+      type TestReplyPayload = {
+        text?: string;
+        mediaUrl?: string;
+        mediaUrls?: string[];
+        isCompactionNotice?: boolean;
+        isFallbackNotice?: boolean;
+        isStatusNotice?: boolean;
+        replyToId?: string;
+        replyToTag?: boolean;
+        replyToCurrent?: boolean;
+      };
       const resolved = (await replyMock(params.ctx, {}, params.cfg)) as
-        | { text?: string }
+        | {
+            replies?: TestReplyPayload[];
+          }
+        | TestReplyPayload
+        | TestReplyPayload[]
         | undefined;
-      const text = typeof resolved?.text === "string" ? resolved.text.trim() : "";
-      if (text) {
-        params.dispatcher.sendFinalReply({ text });
+      const resolvedPayloads = Array.isArray(resolved)
+        ? resolved
+        : Array.isArray((resolved as { replies?: unknown })?.replies)
+          ? (resolved as { replies: TestReplyPayload[] }).replies
+          : resolved
+            ? [resolved as TestReplyPayload]
+            : [];
+      let queuedFinal = false;
+      for (const resolvedPayload of resolvedPayloads) {
+        const text = typeof resolvedPayload.text === "string" ? resolvedPayload.text.trim() : "";
+        const hasMedia =
+          typeof resolvedPayload.mediaUrl === "string" ||
+          (Array.isArray(resolvedPayload.mediaUrls) && resolvedPayload.mediaUrls.length > 0);
+        if (text || hasMedia) {
+          queuedFinal = true;
+          params.dispatcher.sendFinalReply(resolvedPayload);
+        }
       }
       params.dispatcher.markComplete?.();
       await params.dispatcher.waitForIdle?.();
-      return { queuedFinal: Boolean(text) };
+      await params.replyOptions?.turnAdoptionLifecycle?.onAdopted?.();
+      return { queuedFinal };
     },
   };
 });
@@ -222,6 +272,36 @@ export function installSignalToolResultTestHooks() {
       import("openclaw/plugin-sdk/system-event-runtime"),
     ]);
     resetInboundDedupe();
+    const createdStateDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-signal-tool-result-state-"),
+    );
+    const stateDir = await fs.realpath(createdStateDir);
+    signalToolResultStateDir = stateDir;
+    setSignalRuntime({
+      logging: {
+        getChildLogger: () => ({
+          debug: vi.fn(),
+          error: vi.fn(),
+          info: vi.fn(),
+          warn: vi.fn(),
+        }),
+      },
+      state: {
+        resolveStateDir: () => stateDir,
+        openKeyedStore: () => {
+          throw new Error("keyed store is not configured in Signal monitor tests");
+        },
+        openChannelIngressQueue: (
+          options?: Omit<Parameters<typeof createChannelIngressQueueForTests>[0], "channelId">,
+        ) => {
+          return createChannelIngressQueueForTests({
+            ...options,
+            channelId: "signal",
+            stateDir: options?.stateDir ?? stateDir,
+          });
+        },
+      },
+    } as unknown as PluginRuntime);
     config = {
       messages: { responsePrefix: "PFX" },
       session: { store: signalToolResultSessionStorePath },
@@ -243,5 +323,14 @@ export function installSignalToolResultTestHooks() {
     enqueueSystemEventMock.mockReset();
 
     resetSystemEventsForTest();
+  });
+
+  afterEach(async () => {
+    clearSignalRuntimeForTest();
+    closeOpenClawStateDatabaseForTest();
+    if (signalToolResultStateDir) {
+      await fs.rm(signalToolResultStateDir, { recursive: true, force: true });
+      signalToolResultStateDir = undefined;
+    }
   });
 }

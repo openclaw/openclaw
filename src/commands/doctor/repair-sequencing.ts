@@ -28,14 +28,17 @@ import {
   applyDoctorConfigMutation,
   type DoctorConfigMutationState,
 } from "./shared/config-mutation-state.js";
+import { VERSION_BOUND_RUNTIME_PLUGIN_POLICY_IDS_BY_SURFACE } from "./shared/configured-runtime-plugin-installs.js";
 import { maybeRepairContextEngineHostCompatibility } from "./shared/context-engine-host-compat.js";
 import { scanEmptyAllowlistPolicyWarnings } from "./shared/empty-allowlist-scan.js";
 import { maybeRepairExecSafeBinProfiles } from "./shared/exec-safe-bins.js";
 import { maybeRepairInvalidPluginConfig } from "./shared/invalid-plugin-config.js";
+import type { BlockedLegacyOpenAICodexProviderPlan } from "./shared/legacy-config-migrations.runtime.models.js";
 import { maybeRepairLegacyToolsBySenderKeys } from "./shared/legacy-tools-by-sender.js";
 import { repairMissingConfiguredPluginInstalls } from "./shared/missing-configured-plugin-install.js";
 import { maybeRepairOpenPolicyAllowFrom } from "./shared/open-policy-allowfrom.js";
 import { cleanupLegacyPluginDependencyState } from "./shared/plugin-dependency-cleanup.js";
+import { maybeRepairStaleConfiguredAuthOrders } from "./shared/stale-auth-order.js";
 import { repairStaleOAuthProfileShadows } from "./shared/stale-oauth-profile-shadows.js";
 import { maybeRepairStalePluginConfig } from "./shared/stale-plugin-config.js";
 import { maybeRepairStaleSubagentAllowlists } from "./shared/stale-subagent-allowlist.js";
@@ -46,6 +49,7 @@ export async function runDoctorRepairSequence(params: {
   state: DoctorConfigMutationState;
   doctorFixCommand: string;
   env?: NodeJS.ProcessEnv;
+  blockedCodexProviderPlan?: BlockedLegacyOpenAICodexProviderPlan;
 }): Promise<{
   state: DoctorConfigMutationState;
   changeNotes: string[];
@@ -98,6 +102,7 @@ export async function runDoctorRepairSequence(params: {
     cfg: state.candidate,
     env,
     shouldRepair: true,
+    blockedProviderPlan: params.blockedCodexProviderPlan,
   });
   applyMutation({
     config: codexRouteRepair.cfg,
@@ -154,6 +159,9 @@ export async function runDoctorRepairSequence(params: {
     applyMutation(
       maybeRepairStalePluginConfig(state.candidate, env, {
         preservePluginIds: failedPluginIds,
+        // A host-version-bound runtime can be absent between core swap and package
+        // convergence. Preserve its allow, deny, and explicit enable/disable policy.
+        surfacePreservePluginIds: VERSION_BOUND_RUNTIME_PLUGIN_POLICY_IDS_BY_SURFACE,
       }),
     );
   }
@@ -233,6 +241,11 @@ export async function runDoctorRepairSequence(params: {
   if (authProfileSqliteMigration.warnings.length > 0) {
     warningNotes.push(sanitizeLines(authProfileSqliteMigration.warnings));
   }
+  const staleAuthOrderRepair = maybeRepairStaleConfiguredAuthOrders({
+    cfg: state.candidate,
+    env,
+  });
+  applyMutation(staleAuthOrderRepair);
   const authProfilesRepaired =
     legacyOAuthSidecarRepair.changes.length > 0 ||
     openAIAuthProviderRepair.changes.length > 0 ||

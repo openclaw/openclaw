@@ -3,8 +3,10 @@ import { describe, expect, it } from "vitest";
 import {
   compareEventCoverage,
   extractGatewayEventNames,
+  extractKotlinEnumStringConstants,
   extractKotlinHandledEvents,
   extractSwiftHandledEvents,
+  extractSwiftStaticStringConstants,
 } from "../../scripts/check-protocol-event-coverage.mjs";
 
 const GATEWAY_LIST_FIXTURE = `
@@ -51,6 +53,11 @@ describe("extractGatewayEventNames", () => {
 
 describe("extractSwiftHandledEvents", () => {
   it("collects switch case literals and comparisons, skipping nested and non-event code", () => {
+    const constants = extractSwiftStaticStringConstants(`
+      enum SomeBridge {
+        static let requestedKind = "exec.approval.requested"
+      }
+    `);
     const source = `
       static func mapEventFrame(_ evt: EventFrame) -> Event? {
         switch evt.event {
@@ -80,18 +87,67 @@ describe("extractSwiftHandledEvents", () => {
       }
       if evt.event == "connect.challenge" { return }
     `;
-    const handled = extractSwiftHandledEvents(source);
+    const handled = extractSwiftHandledEvents(source, constants);
     expect([...handled].toSorted()).toEqual([
       "chat",
       "connect.challenge",
+      "exec.approval.requested",
       "session.message",
       "tick",
     ]);
   });
+
+  it("extracts only type-scoped static string constants", () => {
+    const constants = extractSwiftStaticStringConstants(`
+      enum ApprovalBridge {
+        static let requestedKind = "exec.approval.requested"
+        private static let nested = makeValue {
+          "not.an.event"
+        }
+      }
+      let requestedKind = "wrong.global.value"
+    `);
+
+    expect([...constants]).toEqual([["ApprovalBridge.requestedKind", "exec.approval.requested"]]);
+  });
+
+  it("does not resolve qualified constants inside quoted case labels", () => {
+    const constants = extractSwiftStaticStringConstants(`
+      enum ApprovalBridge {
+        static let requestedKind = "exec.approval.requested"
+      }
+    `);
+    const handled = extractSwiftHandledEvents(
+      `
+        switch evt.event {
+        case "ApprovalBridge.requestedKind":
+          return .approval
+        default:
+          return nil
+        }
+      `,
+      constants,
+    );
+
+    expect(handled).toEqual(new Set(["ApprovalBridge.requestedKind"]));
+  });
 });
 
 describe("extractKotlinHandledEvents", () => {
-  it("collects when-block case literals and comparisons inside handler functions only", () => {
+  it("collects literals and generated enum constants inside handler functions only", () => {
+    const constants = extractKotlinEnumStringConstants(`
+      enum class GatewayEvent(
+        val rawValue: String,
+      ) {
+        ConnectChallenge("connect.challenge"),
+        Health("health"),
+        Other("other"),
+        Modified("modified"),
+        Commented("commented"),
+        BlockCommented("block-commented"),
+        NestedCommented("nested-commented"),
+      }
+    `);
     const source = `
       fun handleGatewayEvent(event: String, payloadJson: String?) {
         when (event) {
@@ -105,23 +161,67 @@ describe("extractKotlinHandledEvents", () => {
             }
           }
           "sessions.changed", "session.message" -> refresh()
+          GatewayEvent.Health.rawValue, GatewayEvent.Other.rawValue -> refreshHealth()
+          GatewayEvent.Modified.rawValue.uppercase() -> ignoreModifiedValue()
+          // GatewayEvent.Commented.rawValue -> ignoreComment()
+          /*
+          GatewayEvent.BlockCommented.rawValue -> ignoreBlockComment()
+          */
+          /* outer
+            /* inner */
+            GatewayEvent.NestedCommented.rawValue -> ignoreNestedComment()
+          */
+          "slash//event", "block/*event*/" -> refreshCommentMarkers()
         }
       }
       private fun handleEvent(
         frame: JsonObject,
       ) {
         val event = frame["event"].asStringOrNull() ?: return
-        if (event == "connect.challenge") { return }
+        val rawMarker = """/* raw string */ // raw string"""
+        val templateMarker = "\${if (rawMarker.isEmpty()) "/* text */" else "// text"}"
+        val slashMarker = '/'
+        if (event == GatewayEvent.ConnectChallenge.rawValue) { return }
+        if (event == GatewayEvent.Modified.rawValue.trim()) { ignoreModifiedValue() }
+        // if (event == GatewayEvent.Commented.rawValue) { ignoreComment() }
+        when {
+          event == "when-condition" -> refreshCondition()
+        }
+        val isAssignment = event == "assignment"
+        if (!isAssignment) { return }
         val other = keyEvent == "not.a.gateway.event"
       }
     `;
-    const handled = extractKotlinHandledEvents(source);
+    const handled = extractKotlinHandledEvents(source, constants);
     expect([...handled].toSorted()).toEqual([
+      "assignment",
+      "block/*event*/",
       "chat",
       "connect.challenge",
+      "health",
+      "other",
       "session.message",
       "sessions.changed",
+      "slash//event",
       "tick",
+      "when-condition",
+    ]);
+  });
+
+  it("extracts only enum-scoped constructor string values", () => {
+    const constants = extractKotlinEnumStringConstants(`
+      enum class GatewayEvent(
+        val rawValue: String,
+      ) {
+        Tick("tick"),
+        Chat("chat"),
+      }
+      val Tick = "wrong.global.value"
+    `);
+
+    expect([...constants]).toEqual([
+      ["GatewayEvent.Tick", "tick"],
+      ["GatewayEvent.Chat", "chat"],
     ]);
   });
 

@@ -46,6 +46,7 @@ extension RootTabs {
         case skillWorkshop
         case instances
         case sessions
+        case files
         case dreaming
         case usage
         case cron
@@ -60,28 +61,29 @@ extension RootTabs {
 
         var title: String {
             switch self {
-            case .chat: "Chat"
-            case .talk: "Talk"
-            case .overview: "Overview"
-            case .activity: "Activity"
-            case .agents: "Agents"
-            case .workboard: "Workboard"
-            case .skillWorkshop: "Skill Workshop"
-            case .instances: "Instances"
-            case .sessions: "Sessions"
-            case .dreaming: "Dreaming"
-            case .usage: "Usage"
-            case .cron: "Cron Jobs"
-            case .terminal: "Terminal"
-            case .docs: "Docs"
-            case .settings: "Settings"
-            case .gateway: "Settings / Gateway"
+            case .chat: String(localized: "Chat")
+            case .talk: String(localized: "Talk")
+            case .overview: String(localized: "Overview")
+            case .activity: String(localized: "Activity")
+            case .agents: String(localized: "Agents")
+            case .workboard: String(localized: "Workboard")
+            case .skillWorkshop: String(localized: "Skill Workshop")
+            case .instances: String(localized: "Instances")
+            case .sessions: String(localized: "Sessions")
+            case .files: String(localized: "Files")
+            case .dreaming: String(localized: "Dreaming")
+            case .usage: String(localized: "Usage")
+            case .cron: String(localized: "Automations")
+            case .terminal: String(localized: "Terminal")
+            case .docs: String(localized: "Docs")
+            case .settings: String(localized: "Settings")
+            case .gateway: String(localized: "Settings / Gateway")
             }
         }
 
         var sidebarTitle: String {
             switch self {
-            case .gateway: "Connection"
+            case .gateway: String(localized: "Connection")
             default: self.title
             }
         }
@@ -97,6 +99,7 @@ extension RootTabs {
             case .skillWorkshop: "hammer"
             case .instances: "dot.radiowaves.left.and.right"
             case .sessions: "doc.text"
+            case .files: "folder.fill"
             case .dreaming: "moon.stars"
             case .usage: "chart.bar.xaxis"
             case .cron: "timer"
@@ -117,7 +120,8 @@ extension RootTabs {
                 .agent
             case .settings, .gateway:
                 .settings
-            case .overview, .activity, .workboard, .skillWorkshop, .instances, .sessions, .dreaming,
+            case .overview, .activity, .workboard, .skillWorkshop, .instances, .sessions, .files,
+                 .dreaming,
                  .usage,
                  .cron, .terminal, .docs:
                 .control
@@ -129,6 +133,7 @@ extension RootTabs {
             case .gateway:
                 .gateway
             case .chat, .talk, .overview, .activity, .agents, .workboard, .skillWorkshop, .instances, .sessions,
+                 .files,
                  .dreaming,
                  .usage, .cron, .terminal, .settings, .docs:
                 nil
@@ -166,6 +171,13 @@ extension RootTabs {
         !isSidebarVisible
     }
 
+    static func visibleSettingsRoute(
+        navigationPath: [SettingsRoute],
+        baseRoute: SettingsRoute?) -> SettingsRoute?
+    {
+        navigationPath.last ?? baseRoute
+    }
+
     static func shouldShowSidebarRevealInDestinationHeader(
         isSidebarVisible: Bool,
         layoutMode: SidebarLayoutMode) -> Bool
@@ -199,7 +211,8 @@ extension RootTabs {
         switch destination {
         case .chat, .talk, .agents, .gateway, .settings:
             true
-        case .overview, .activity, .workboard, .skillWorkshop, .instances, .sessions, .dreaming,
+        case .overview, .activity, .workboard, .skillWorkshop, .instances, .sessions, .files,
+             .dreaming,
              .usage,
              .cron, .terminal, .docs:
             false
@@ -237,13 +250,15 @@ extension RootTabs {
         if gatewayConnected {
             return .none
         }
+        // Saved gateway state survives independently of the onboarding markers.
+        // Explicit resets bypass this route through evaluateOnboardingPresentation(force:).
+        if hasExistingGatewayConfig {
+            return .none
+        }
         if shouldPresentOnLaunch || !hasConnectedOnce || !onboardingComplete {
             return .onboarding
         }
-        if !hasExistingGatewayConfig {
-            return .settings
-        }
-        return .none
+        return .settings
     }
 
     static func shouldPresentQuickSetup(
@@ -283,6 +298,7 @@ extension RootTabs {
                 .skillWorkshop,
                 .instances,
                 .sessions,
+                .files,
                 .dreaming,
                 .usage,
                 .cron,

@@ -42,9 +42,12 @@ openclaw plugins install ./path/to/local/line-plugin
 https://gateway-host/line/webhook
 ```
 
-The Gateway answers LINE's webhook verification (GET) and acknowledges signed
-inbound events (POST) immediately after signature and payload validation; agent
-processing continues asynchronously.
+The Gateway answers LINE's webhook verification (GET). For signed inbound events
+(POST), it writes each event to the durable ingress queue before returning `200`;
+agent processing continues asynchronously. Failed delivery is retried from the
+queue, including after a Gateway restart, and poison events become failed queue
+records after bounded retries. If durable persistence fails, the request returns
+`500` instead of acknowledging an event that could be lost.
 If you need a custom path, set `channels.line.webhookPath` or
 `channels.line.accounts.<id>.webhookPath` and update the URL accordingly.
 
@@ -140,8 +143,9 @@ Allowlists and policies:
 - `channels.line.dmPolicy`: `pairing | allowlist | open | disabled` (default `pairing`)
 - `channels.line.allowFrom`: allowlisted LINE user IDs for DMs; `dmPolicy: "open"` requires `["*"]`
 - `channels.line.groupPolicy`: `allowlist | open | disabled` (default `allowlist`)
-- `channels.line.groupAllowFrom`: allowlisted LINE user IDs for groups
-- Per-group overrides: `channels.line.groups.<groupId>.allowFrom` (plus `enabled`, `requireMention`, `systemPrompt`, `skills`)
+- `channels.line.groupAllowFrom`: allowlisted LINE user IDs for groups; DM `allowFrom` entries do not admit group senders
+- Per-group overrides: `channels.line.groups.<groupId>.allowFrom` (plus `enabled`, `requireMention`, `systemPrompt`, `skills`). With
+  `groupPolicy: "allowlist"`, set `groupAllowFrom` or the per-group `allowFrom`; an empty group allowlist blocks group messages even when DMs are open.
 - Static sender access groups can be referenced from `allowFrom`, `groupAllowFrom`, and per-group `allowFrom` with `accessGroup:<name>`; see [Access groups](/channels/access-groups).
 - Runtime note: if `channels.line` is completely missing, runtime falls back to `groupPolicy="allowlist"` for group checks (even if `channels.defaults.groupPolicy` is set).
 
@@ -181,9 +185,7 @@ messages.
       },
       flexMessage: {
         altText: "Status card",
-        contents: {
-          /* Flex payload */
-        },
+        contents: {/* Flex payload */},
       },
       templateMessage: {
         type: "confirm",

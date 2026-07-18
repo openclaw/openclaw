@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Assistant error formatting helpers normalize assistant-visible error payloads.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 const ERROR_PAYLOAD_PREFIX_RE =
@@ -11,6 +12,11 @@ const HTTP_STATUS_CODE_PREFIX_RE = new RegExp(
   `^(?:http\\s*)?(\\d{3})(?:${HTTP_STATUS_DELIMITER_RE.source}([\\s\\S]+))?$`,
   "i",
 );
+// Built-in provider adapters format status as `OpenAI API error (500): ...` (also
+// Azure OpenAI / Mistral / Provider). Keep this anchored so mid-string numbers
+// like model ids or image dimensions never become fake HTTP statuses.
+const PROVIDER_WRAPPED_HTTP_STATUS_RE =
+  /^(?:[a-z][\w-]*(?:\s+[a-z][\w-]*){0,3}\s+)?api\s*error\s*\((\d{3})\)(?:\s*:\s*([\s\S]*))?$/i;
 const HTML_ERROR_PREFIX_RE = /^\s*(?:<!doctype\s+html\b|<html\b)/i;
 const HTML_CLOSE_RE = /<\/html>/i;
 const CLOUDFLARE_HTML_ERROR_CODES = new Set([521, 522, 523, 524, 525, 526, 530]);
@@ -94,8 +100,9 @@ export function parseApiErrorPayload(raw?: string): ErrorPayload | null {
   return null;
 }
 
-export function extractLeadingHttpStatus(raw: string): { code: number; rest: string } | null {
-  const match = raw.match(HTTP_STATUS_CODE_PREFIX_RE);
+function extractHttpStatusMatch(
+  match: RegExpMatchArray | null,
+): { code: number; rest: string } | null {
   if (!match) {
     return null;
   }
@@ -104,6 +111,16 @@ export function extractLeadingHttpStatus(raw: string): { code: number; rest: str
     return null;
   }
   return { code, rest: (match[2] ?? "").trim() };
+}
+
+export function extractLeadingHttpStatus(raw: string): { code: number; rest: string } | null {
+  return extractHttpStatusMatch(raw.match(HTTP_STATUS_CODE_PREFIX_RE));
+}
+
+export function extractProviderWrappedHttpStatus(
+  raw: string,
+): { code: number; rest: string } | null {
+  return extractHttpStatusMatch(raw.match(PROVIDER_WRAPPED_HTTP_STATUS_RE));
 }
 
 export function isCloudflareOrHtmlErrorPage(raw: string): boolean {
@@ -160,7 +177,7 @@ export function parseApiErrorInfo(raw?: string): ApiErrorInfo | null {
   const httpPrefixMatch = candidate.match(/^(\d{3})\s+(.+)$/s);
   if (httpPrefixMatch) {
     httpCode = httpPrefixMatch[1];
-    candidate = httpPrefixMatch[2].trim();
+    candidate = expectDefined(httpPrefixMatch[2], "http prefix match capture group 2").trim();
   }
 
   const payload = parseApiErrorPayload(candidate);
@@ -234,7 +251,7 @@ export function formatRawAssistantErrorForUi(raw?: string): string {
 
   const httpMatch = trimmed.match(HTTP_STATUS_PREFIX_RE);
   if (httpMatch) {
-    const rest = httpMatch[2].trim();
+    const rest = expectDefined(httpMatch[2], "http match capture group 2").trim();
     if (!rest.startsWith("{")) {
       return `HTTP ${httpMatch[1]}: ${rest}`;
     }

@@ -1,3 +1,4 @@
+import OpenClawChatUI
 import SwiftUI
 
 struct TalkProTab: View {
@@ -31,7 +32,7 @@ struct TalkProTab: View {
             gatewayConnected: self.gatewayConnected,
             isDemoMode: self.appModel.isAppleReviewDemoModeEnabled,
             isEnabled: self.appModel.talkMode.isEnabled || self.talkEnabled,
-            statusText: self.appModel.talkMode.statusText,
+            phase: self.appModel.talkMode.phase,
             isConfigLoaded: self.appModel.talkMode.gatewayTalkConfigLoaded,
             isListening: self.appModel.talkMode.isListening,
             isSpeaking: self.appModel.talkMode.isSpeaking,
@@ -116,7 +117,11 @@ struct TalkProTab: View {
     private var heroSection: some View {
         Section {
             VStack(spacing: 16) {
-                TalkSiriWaveView(mode: self.state.waveformMode(micLevel: self.appModel.talkMode.micLevel))
+                TalkWaveformView(
+                    phase: self.state.waveformPhase(
+                        micLevel: self.appModel.talkMode.micLevel,
+                        playbackLevel: self.appModel.talkMode.playbackLevel),
+                    palette: .openClawBrand)
                     .frame(height: 130)
                     .accessibilityHidden(true)
 
@@ -124,18 +129,22 @@ struct TalkProTab: View {
                     Text(self.state.title)
                         .font(OpenClawType.title3SemiBold)
                         .multilineTextAlignment(.center)
-                    Text(self.heroSubtitle)
+                    self.heroSubtitle
                         .font(OpenClawType.subhead)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                 }
 
                 Button(action: self.handlePrimaryAction) {
-                    Label(self.state.primaryButtonTitle, systemImage: self.state.primaryButtonIcon)
-                        .font(OpenClawType.subheadSemiBold)
-                        // Match the icon to the label; otherwise the symbol picks up the tint color.
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity)
+                    Label {
+                        Text(self.state.primaryButtonTitle)
+                    } icon: {
+                        Image(systemName: self.state.primaryButtonIcon)
+                    }
+                    .font(OpenClawType.subheadSemiBold)
+                    // Match the icon to the label; otherwise the symbol picks up the tint color.
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
@@ -150,22 +159,24 @@ struct TalkProTab: View {
 
     private var conversationSection: some View {
         Section("Conversation") {
-            LabeledContent("Agent", value: self.appModel.chatAgentName)
-            LabeledContent("Session", value: self.appModel.chatSessionKey)
-            LabeledContent("Runtime", value: self.appModel.talkMode.statusText)
+            SettingsDetailRow("Agent", value: .verbatim(self.appModel.chatAgentName))
+            SettingsDetailRow("Session", value: .verbatim(self.appModel.chatSessionKey))
+            SettingsDetailRow("Runtime", value: .localized(self.appModel.talkMode.statusText))
         }
     }
 
     private var voiceModeSection: some View {
         Section("Voice Mode") {
-            LabeledContent("Configured", value: self.appModel.talkMode.gatewayTalkVoiceModeTitle)
-            LabeledContent("Active", value: self.activeModeText)
-            LabeledContent("Transport", value: self.transportText)
+            SettingsDetailRow(
+                "Configured",
+                value: .localized(self.appModel.talkMode.gatewayTalkVoiceModeTitle))
+            SettingsDetailRow("Active", value: .verbatim(self.activeModeText))
+            SettingsDetailRow("Transport", value: .localized(self.transportText))
             if let issueText = self.talkIssueText {
-                LabeledContent("Last issue", value: issueText)
+                SettingsDetailRow("Last issue", value: .verbatim(issueText))
             }
-            LabeledContent("Permission", value: self.permissionText)
-            LabeledContent("Speech language", value: self.speechLocaleText)
+            SettingsDetailRow("Permission", value: .localized(self.permissionText))
+            SettingsDetailRow("Speech language", value: .verbatim(self.speechLocaleText))
         }
     }
 
@@ -208,18 +219,33 @@ struct TalkProTab: View {
         return self.appModel.talkMode.gatewayTalkCurrentFallbackIssue
     }
 
-    private var heroSubtitle: String {
-        if self.state
-            .prefersPermissionCopy { return "Gateway approval is required before this phone can capture voice." }
-        if self.appModel.isAppleReviewDemoModeEnabled { return "Voice is disabled in Apple Review demo mode." }
-        if !self.gatewayConnected { return "Connect to your gateway to start a voice conversation." }
-        if !self.appModel.talkMode.gatewayTalkConfigLoaded {
-            return "Open Voice settings after the gateway loads Talk configuration."
+    @ViewBuilder
+    private var heroSubtitle: some View {
+        if self.state.prefersPermissionCopy {
+            Text("Gateway approval is required before this phone can capture voice.")
+                .font(OpenClawType.subhead)
+        } else if self.appModel.isAppleReviewDemoModeEnabled {
+            Text("Voice is disabled in Apple Review demo mode.")
+                .font(OpenClawType.subhead)
+        } else if !self.gatewayConnected {
+            Text("Connect to your gateway to start a voice conversation.")
+                .font(OpenClawType.subhead)
+        } else if !self.appModel.talkMode.gatewayTalkConfigLoaded {
+            Text("Open Voice settings after the gateway loads Talk configuration.")
+                .font(OpenClawType.subhead)
+        } else {
+            let subtitle = (appModel.talkMode.gatewayTalkVoiceModeSubtitle ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if subtitle.isEmpty {
+                Text(verbatim: String(
+                    format: String(localized: "Routes voice to %@."),
+                    self.appModel.chatAgentName))
+                    .font(OpenClawType.subhead)
+            } else {
+                Text(verbatim: subtitle)
+                    .font(OpenClawType.subhead)
+            }
         }
-        let subtitle = (appModel.talkMode.gatewayTalkVoiceModeSubtitle ?? "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if !subtitle.isEmpty { return subtitle }
-        return "Routes voice to \(self.appModel.chatAgentName)."
     }
 
     private var transportText: String {
@@ -234,7 +260,7 @@ struct TalkProTab: View {
         let title = self.appModel.talkMode.gatewayTalkActiveModeTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         let subtitle = (appModel.talkMode.gatewayTalkActiveModeSubtitle ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        if title.isEmpty { return "Not active" }
+        if title.isEmpty { return String(localized: "Not active") }
         if subtitle.isEmpty { return title }
         return "\(title) • \(subtitle)"
     }
@@ -299,7 +325,7 @@ struct TalkProTab: View {
     private func startTalk() {
         guard !self.appModel.isAppleReviewDemoModeEnabled else { return }
         self.talkEnabled = true
-        self.appModel.talkMode.updateMainSessionKey(self.appModel.chatSessionKey)
+        self.appModel.synchronizeTalkSessionKey()
         self.appModel.setTalkEnabled(true)
     }
 
@@ -325,30 +351,34 @@ enum TalkProPrimaryAction: Equatable {
     case waiting
 }
 
-enum TalkProWaveformMode: Equatable {
-    case level(Double)
-    case inputSpeech
-    case speaking
-    case indeterminate
-    case still
+extension TalkWaveformPalette {
+    /// iOS app branding for the shared wave: adaptive accent front lobe plus
+    /// system grays so the idle wave tracks light/dark appearance.
+    static let openClawBrand = TalkWaveformPalette(
+        active: [
+            OpenClawBrand.accent,
+            Color(red: 0.95, green: 0.45, blue: 0.30),
+            Color(red: 0.45, green: 0.08, blue: 0.12),
+        ],
+        inactive: [
+            Color(uiColor: .systemGray2),
+            Color(uiColor: .systemGray3),
+            Color(uiColor: .systemGray4),
+        ])
 }
 
 struct TalkProState: Equatable {
     let gatewayConnected: Bool
     let isDemoMode: Bool
     let isEnabled: Bool
-    let statusText: String
+    let phase: TalkPhase
     let isConfigLoaded: Bool
     let isListening: Bool
     let isSpeaking: Bool
     let isUserSpeechDetected: Bool
     let permissionState: TalkGatewayPermissionState
 
-    private var normalizedStatus: String {
-        self.statusText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-    }
-
-    var title: String {
+    var title: LocalizedStringResource {
         if self.isDemoMode { return "Demo mode only" }
         if !self.gatewayConnected { return "Gateway offline" }
         switch self.permissionState {
@@ -368,8 +398,8 @@ struct TalkProState: Equatable {
         if !self.isConfigLoaded { return "Voice config unavailable" }
         if self.isSpeaking { return "Speaking" }
         if self.isListening { return "Listening" }
-        if self.normalizedStatus.contains("connecting") { return "Connecting" }
-        if self.normalizedStatus.contains("thinking") { return "Asking OpenClaw" }
+        if self.phase == .connecting { return "Connecting" }
+        if self.phase == .thinking { return "Asking OpenClaw" }
         if self.isEnabled { return "Ready to talk" }
         return "Talk is off"
     }
@@ -403,7 +433,7 @@ struct TalkProState: Equatable {
         }
     }
 
-    var primaryButtonTitle: String {
+    var primaryButtonTitle: LocalizedStringResource {
         switch self.primaryAction {
         case .start: "Start Talk"
         case .stop: "Stop Talk"
@@ -432,24 +462,23 @@ struct TalkProState: Equatable {
         }
     }
 
-    func waveformMode(micLevel: Double) -> TalkProWaveformMode {
-        if self.isDemoMode { return .still }
-        if !self.gatewayConnected { return .still }
+    func waveformPhase(micLevel: Double, playbackLevel: Double?) -> TalkWaveformPhase {
+        if self.isDemoMode { return .idle }
+        if !self.gatewayConnected { return .idle }
         switch self.permissionState {
         case .requestingUpgrade, .upgradeRequested:
-            return .indeterminate
+            return .thinking
         case .missingScope, .requestFailed, .apiKeyMissing, .loadFailed:
-            return .still
+            return .idle
         default:
             break
         }
-        if !self.isConfigLoaded { return .still }
-        if self.isSpeaking { return .speaking }
-        if self.isListening, self.isUserSpeechDetected { return .inputSpeech }
-        if self.isListening { return .level(micLevel) }
-        if self.normalizedStatus.contains("connecting") || self.normalizedStatus.contains("thinking") {
-            return .indeterminate
+        if !self.isConfigLoaded { return .idle }
+        if self.isSpeaking { return .speaking(level: playbackLevel) }
+        if self.isListening { return .listening(level: micLevel, speechActive: self.isUserSpeechDetected) }
+        if self.phase == .connecting || self.phase == .thinking {
+            return .thinking
         }
-        return self.isEnabled ? .indeterminate : .still
+        return self.isEnabled ? .thinking : .idle
     }
 }

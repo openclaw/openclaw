@@ -17,9 +17,9 @@ const DEFAULT_METHODS = ["health", "config.get"];
 const DEFAULT_ITERATIONS = 10;
 const SINGLE_VALUE_FLAGS = new Set(["--iterations", "--methods", "--output-dir", "--repo-root"]);
 /** Maximum time to wait for a spawned gateway to become reachable. */
-export const READY_TIMEOUT_MS = 120_000;
+const READY_TIMEOUT_MS = 120_000;
 /** Per-probe timeout used while polling gateway readiness endpoints. */
-export const READY_PROBE_TIMEOUT_MS = 1_000;
+const READY_PROBE_TIMEOUT_MS = 1_000;
 const READY_PROBE_RESPONSE_BODY_MAX_BYTES = 64 * 1024;
 const GATEWAY_FORCE_KILL_GRACE_MS = 250;
 const PARENT_TERMINATION_SIGNALS = ["SIGHUP", "SIGINT", "SIGTERM"];

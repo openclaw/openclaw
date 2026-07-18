@@ -45,6 +45,14 @@ openclaw hooks info session-memory
 
 ## Event types
 
+Hooks subscribe to a specific key from this table, or to a bare family name
+(`command`, `session`, `agent`, `gateway`, `message`) to receive every action
+in that family. OpenClaw core emits nothing else, so any other name is almost
+always a typo that leaves the hook silently dead (only a plugin emitting a
+custom event could fire it). The hook loader logs a warning for such names
+(for example `command:nwe`), and `openclaw hooks info <name>` flags them, so a
+hook that never runs is diagnosable.
+
 | Event                    | When it fires                                              |
 | ------------------------ | ---------------------------------------------------------- |
 | `command:new`            | `/new` command issued                                      |
@@ -230,7 +238,7 @@ openclaw hooks enable <hook-name>
 
 ### session-memory details
 
-Extracts the last user/assistant messages (default 15, configurable with `hooks.internal.entries.session-memory.messages`) and saves them to `<workspace>/memory/YYYY-MM-DD-HHMM.md` using the host local date. Memory capture runs in the background so `/new` and `/reset` acknowledgements are not delayed by transcript reads or optional slug generation. Set `hooks.internal.entries.session-memory.llmSlug: true` to generate descriptive filename slugs with the configured model (falls back to timestamp slugs when unavailable). Requires `workspace.dir` to be configured.
+Extracts the last user/assistant messages (default 15, configurable with `hooks.internal.entries.session-memory.messages`) and saves them to `<workspace>/memory/YYYY-MM-DD-HHMM.md` using the host local date. Memory capture runs in the background so `/new` and `/reset` acknowledgements are not delayed by transcript reads or optional slug generation. Set `hooks.internal.entries.session-memory.llmSlug: true` to generate descriptive filename slugs, and optionally set `hooks.internal.entries.session-memory.model` to a configured alias such as `sonnet`, a bare model ID on the agent's default provider, or a `provider/model` ref. Slug generation uses the agent's default model when `model` is omitted and falls back to timestamp slugs when unavailable. Requires `workspace.dir` to be configured.
 
 <a id="bootstrap-extra-files"></a>
 
