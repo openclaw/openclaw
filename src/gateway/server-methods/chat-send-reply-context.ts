@@ -15,7 +15,7 @@ import {
 // reply to a huge transcript entry cannot flood the prompt metadata.
 const REPLY_CONTEXT_BODY_MAX_CHARS = 2000;
 
-export type ChatSendReplyContextFields = Partial<
+type ChatSendReplyContextFields = Partial<
   Pick<MsgContext, "ReplyToId" | "ReplyToBody" | "ReplyToSender">
 >;
 

@@ -9,7 +9,7 @@ import {
 } from "./chat-send-reply-context.js";
 
 const readSessionMessageByIdAsyncMock = vi.fn();
-const resolveAssistantIdentityMock = vi.fn(() => ({
+const resolveAssistantIdentityMock = vi.fn((..._args: unknown[]) => ({
   agentId: "main",
   name: "Molty",
   avatar: "M",

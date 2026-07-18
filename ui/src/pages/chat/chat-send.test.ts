@@ -4867,7 +4867,7 @@ describe("handleSendChat", () => {
 
   it("sends replyToId instead of an inline quote when the reply target has a transcript id", async () => {
     const sent = createDeferred<unknown>();
-    const request = vi.fn((method: string) => {
+    const request = vi.fn((method: string, _params?: unknown) => {
       if (method === "chat.send") {
         return sent.promise;
       }
