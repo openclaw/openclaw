@@ -133,8 +133,9 @@ export function createEventHandlers(context: EventHandlerContext) {
     { errorMessage: string; timer: ReturnType<typeof setTimeout> }
   >();
   const toolValidationDiagnostics = new Map<string, string>();
-  // The gateway rejects stale lifecycle owners before projection, and WebSocket
-  // delivery preserves order. A lifecycle start is therefore the only valid reset.
+  // lifecycleGeneration is intentionally non-enumerable and never reaches the TUI.
+  // Gateway projection rejects stale owners, and WebSocket delivery preserves order.
+  // A lifecycle start is therefore the only valid sequence reset on this surface.
   const toolValidationDiagnosticSeqByRun = new Map<string, number>();
 
   const streamingWatchdogMs =

@@ -3138,6 +3138,31 @@ describe("agent event handler", () => {
     expect(updateRunToolErrorSummary).not.toHaveBeenCalled();
   });
 
+  it("does not project a delayed lifecycle start from a retired generation", () => {
+    const { broadcast, broadcastToConnIds, chatRunState, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-recovery",
+      resolveActiveLifecycleGenerationForRun: () => "post-restart",
+    });
+    chatRunState.registry.add("shared-run", {
+      sessionKey: "session-recovery",
+      clientRunId: "shared-run",
+    });
+
+    handler({
+      runId: "shared-run",
+      lifecycleGeneration: "pre-restart",
+      seq: 1,
+      stream: "lifecycle",
+      sessionKey: "session-recovery",
+      sessionId: "session-recovery",
+      ts: 2_000,
+      data: { phase: "start", startedAt: 2_000 },
+    });
+
+    expect(broadcast).not.toHaveBeenCalled();
+    expect(broadcastToConnIds).not.toHaveBeenCalled();
+  });
+
   it("cancels a deferred old-generation error before a same-id retry", () => {
     vi.useFakeTimers();
     let activeLifecycleGeneration = "pre-restart";

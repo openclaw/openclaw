@@ -9,6 +9,7 @@ import { loadSessionEntry } from "../session-utils.js";
 import { setGatewayDedupeEntry } from "./agent-job.js";
 import {
   buildAbortedChatSendPayload,
+  isPersistedChannelSessionKey,
   readPreRegisteredRun,
   resolveChatAbortRequester,
 } from "./chat-abort-authorization.js";
@@ -85,6 +86,7 @@ export async function runChatSendPreAdmission(params: {
       sessionKey: rawSessionKey,
       sessionKeyAliases: sessionKey === rawSessionKey ? undefined : [sessionKey],
       replyRunExplicitSessionKey: rawSessionKey,
+      allowHiddenSessionRuns: isPersistedChannelSessionKey(rawSessionKey, entry),
       agentId: stopAgentId,
       sessionId: entry?.sessionId,
       persistSessionKey: sessionKey,

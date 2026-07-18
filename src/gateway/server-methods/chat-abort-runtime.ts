@@ -179,6 +179,7 @@ export async function abortChatRunsForSessionKeyWithPartials(params: {
   sessionKey: string;
   sessionKeyAliases?: string[];
   replyRunExplicitSessionKey: string;
+  allowHiddenSessionRuns: boolean;
   agentId?: string;
   sessionId?: string;
   persistSessionKey?: string;
@@ -208,6 +209,7 @@ export async function abortChatRunsForSessionKeyWithPartials(params: {
     agentId: params.agentId,
     defaultAgentId: params.defaultAgentId,
     requester: params.requester,
+    allowHiddenSessionRuns: params.allowHiddenSessionRuns,
     preserveSideRuns: params.preserveSideRuns,
   });
   const {
@@ -221,6 +223,7 @@ export async function abortChatRunsForSessionKeyWithPartials(params: {
     defaultAgentId: params.defaultAgentId,
     requester: params.requester,
     keyPrefix: "agent:",
+    allowHiddenSessionRuns: params.allowHiddenSessionRuns,
     preserveSideRuns: params.preserveSideRuns,
   });
   const { matchedSessionRuns: matchedPendingChatRuns, authorizedRuns: authorizedPendingChatRuns } =
@@ -232,6 +235,7 @@ export async function abortChatRunsForSessionKeyWithPartials(params: {
       defaultAgentId: params.defaultAgentId,
       requester: params.requester,
       keyPrefix: PENDING_CHAT_SEND_DEDUPE_PREFIX,
+      allowHiddenSessionRuns: params.allowHiddenSessionRuns,
       preserveSideRuns: params.preserveSideRuns,
     });
   const abortedReplyRunKeys: string[] = [];
@@ -249,7 +253,7 @@ export async function abortChatRunsForSessionKeyWithPartials(params: {
       ) {
         continue;
       }
-      if (replyRunRegistry.abort(sessionKey)) {
+      if (operation.abortByUser()) {
         abortedReplyRunKeys.push(sessionKey);
       }
     }

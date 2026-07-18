@@ -1,6 +1,6 @@
 // Authorization and pending-run state transitions for chat cancellation.
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { classifySessionKeyShape, normalizeAgentId } from "../../routing/session-key.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import type { QueuedChatTurnEntry } from "../chat-queued-turns.js";
@@ -19,6 +19,37 @@ export type ChatAbortRequester = {
   deviceId?: string;
   isAdmin: boolean;
 };
+
+type PersistedChannelIdentity = {
+  channel?: string;
+  lastChannel?: string;
+  deliveryContext?: { channel?: string };
+  origin?: { provider?: string; surface?: string };
+  route?: { channel?: string };
+};
+
+export function isPersistedChannelSessionKey(
+  sessionKey: string,
+  entry: PersistedChannelIdentity | undefined,
+): boolean {
+  const scoped = parseAgentSessionKey(sessionKey)?.rest ?? sessionKey.trim();
+  const separator = scoped.indexOf(":");
+  if (separator <= 0) {
+    return false;
+  }
+  const scopeHead = scoped.slice(0, separator).trim().toLowerCase();
+  const persistedChannels = [
+    entry?.channel,
+    entry?.route?.channel,
+    entry?.deliveryContext?.channel,
+    entry?.origin?.provider,
+    entry?.origin?.surface,
+    entry?.lastChannel,
+  ];
+  return persistedChannels.some(
+    (channel) => normalizeOptionalText(channel)?.toLowerCase() === scopeHead,
+  );
+}
 
 type PreRegisteredAgentDedupePayload = {
   agentId?: unknown;
@@ -40,39 +71,6 @@ type PreRegisteredAgentRun = {
   sessionKey: string;
   payload: PreRegisteredAgentDedupePayload;
 };
-
-const CHANNEL_AGNOSTIC_SESSION_SCOPES = new Set([
-  "main",
-  "direct",
-  "dm",
-  "group",
-  "channel",
-  "cron",
-  "run",
-  "subagent",
-  "acp",
-  "thread",
-  "topic",
-]);
-
-function isExplicitChannelScopedSessionKey(sessionKey: string): boolean {
-  const parsed = parseAgentSessionKey(sessionKey);
-  // `agent:<id>` is a broad UI alias, not a channel identity. Keep malformed
-  // agent wrappers fail-closed so they cannot reveal hidden channel runs.
-  if (!parsed && classifySessionKeyShape(sessionKey) === "malformed_agent") {
-    return false;
-  }
-  const scoped = parsed?.rest ?? sessionKey;
-  const parts = scoped
-    .split(":", 3)
-    .map((part) => part.trim().toLowerCase())
-    .filter(Boolean);
-  const sessionScopeHead = parts[0];
-  if (!sessionScopeHead || CHANNEL_AGNOSTIC_SESSION_SCOPES.has(sessionScopeHead)) {
-    return false;
-  }
-  return parts.length > 1;
-}
 
 export function buildAbortedChatSendPayload(params: {
   runId: string;
@@ -326,6 +324,7 @@ export function resolveAuthorizedPreRegisteredRunsForSessionKeys(params: {
   defaultAgentId: string;
   requester: ChatAbortRequester;
   keyPrefix: string;
+  allowHiddenSessionRuns: boolean;
   preserveSideRuns?: boolean;
 }) {
   const sessionKeys = new Set(
@@ -333,9 +332,9 @@ export function resolveAuthorizedPreRegisteredRunsForSessionKeys(params: {
       (sessionKey): sessionKey is string => Boolean(sessionKey),
     ),
   );
-  // Hidden channel runs are addressable only through the exact full session
-  // named by the caller. Broad aliases in the candidate set cannot widen it.
-  const explicitHiddenSessionKey = isExplicitChannelScopedSessionKey(params.explicitSessionKey)
+  // The caller derives this permission from persisted channel metadata. Keys
+  // and aliases alone are not trusted evidence that a hidden run is a channel run.
+  const explicitHiddenSessionKey = params.allowHiddenSessionRuns
     ? params.explicitSessionKey
     : undefined;
   const authorizedByRunId = new Map<string, PreRegisteredAgentRun>();
@@ -361,7 +360,7 @@ export function resolveAuthorizedPreRegisteredRunsForSessionKeys(params: {
     ];
     if (
       run.payload.controlUiVisible === false &&
-      (!explicitHiddenSessionKey || !runSessionKeys.includes(explicitHiddenSessionKey))
+      (!explicitHiddenSessionKey || run.sessionKey !== explicitHiddenSessionKey)
     ) {
       continue;
     }
@@ -401,6 +400,7 @@ export function resolveAuthorizedRunsForSessionKeys(params: {
   agentId?: string;
   defaultAgentId: string;
   requester: ChatAbortRequester;
+  allowHiddenSessionRuns: boolean;
   preserveSideRuns?: boolean;
 }) {
   const sessionKeys = new Set(
@@ -414,8 +414,8 @@ export function resolveAuthorizedRunsForSessionKeys(params: {
     ),
   );
   const agentId = normalizeOptionalText(params.agentId)?.toLowerCase();
-  // Keep the same exact explicit-session boundary for registered and pre-registered runs.
-  const explicitHiddenSessionKey = isExplicitChannelScopedSessionKey(params.explicitSessionKey)
+  // Keep the same metadata-backed exact-session boundary for registered runs.
+  const explicitHiddenSessionKey = params.allowHiddenSessionRuns
     ? params.explicitSessionKey
     : undefined;
   const authorizedRuns: Array<{ runId: string; sessionKey: string }> = [];

@@ -21,7 +21,17 @@ import { chatHandlers } from "./chat.js";
 vi.mock("../session-utils.js", async () => {
   return {
     ...(await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js")),
-    loadSessionEntry: () => ({ entry: { sessionId: "main-session" } }),
+    loadSessionEntry: (sessionKey: string) => {
+      const channel = ["openclaw-weixin", "telegram"].find((candidate) =>
+        sessionKey.includes(`:${candidate}:`),
+      );
+      return {
+        entry: {
+          sessionId: "main-session",
+          ...(channel ? { channel } : {}),
+        },
+      };
+    },
   };
 });
 
@@ -228,6 +238,25 @@ describe("chat.abort authorization", () => {
     expect(context.chatAbortControllers.has("run-hidden-channel")).toBe(true);
   });
 
+  it("does not infer hidden-run authority from an unknown colon-delimited key", async () => {
+    const sessionKey = "agent:main:unknown-surface:foo";
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([
+        ["run-hidden-unknown", createActiveRun(sessionKey, { controlUiVisible: false })],
+      ]),
+    });
+
+    const respond = await invokeAbort({
+      context,
+      sessionKey,
+      connId: "conn-owner",
+      deviceId: "dev-owner",
+    });
+
+    expectAbortPayload(requireLastRespondCall(respond)[1], { aborted: false, runIds: [] });
+    expect(context.chatAbortControllers.has("run-hidden-unknown")).toBe(true);
+  });
+
   it("aborts hidden channel runs by explicit channel session key", async () => {
     const sessionKey = "agent:main:openclaw-weixin:direct:o9cq802hhmfc@im.wechat";
     const siblingSessionKey = "agent:main:telegram:direct:8661849123";
@@ -318,6 +347,7 @@ describe("chat.abort authorization", () => {
         sessionKey,
         sessionKeyAliases: [broadAlias],
         replyRunExplicitSessionKey: sessionKey,
+        allowHiddenSessionRuns: false,
         sessionId: "main-session",
         defaultAgentId: "main",
         abortOrigin: "rpc",
@@ -354,6 +384,7 @@ describe("chat.abort authorization", () => {
         sessionKey: requestedKey,
         sessionKeyAliases: [canonicalKey],
         replyRunExplicitSessionKey: requestedKey,
+        allowHiddenSessionRuns: false,
         sessionId: "main-session",
         defaultAgentId: "main",
         abortOrigin: "rpc",
@@ -388,6 +419,7 @@ describe("chat.abort authorization", () => {
         sessionKey: canonicalKey,
         sessionKeyAliases: [requestedKey],
         replyRunExplicitSessionKey: requestedKey,
+        allowHiddenSessionRuns: false,
         defaultAgentId: "main",
         abortOrigin: "rpc",
         requester: { isAdmin: true },
