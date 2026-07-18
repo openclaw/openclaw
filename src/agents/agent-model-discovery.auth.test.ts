@@ -151,6 +151,36 @@ describe("discoverAuthStorage", () => {
     expect(credentials.openai).toBeUndefined();
   });
 
+  // A same-provider valid credential after an expired one must still fill
+  // the per-provider slot: the map skips expired entries and keeps scanning.
+  it("skips an expired first credential for a provider and picks the next valid one", () => {
+    const credentials = resolveAgentCredentialMapFromStore({
+      version: 1,
+      profiles: {
+        "openai:expired": {
+          type: "oauth",
+          provider: "openai",
+          access: "expired-access",
+          refresh: "expired-refresh",
+          expires: Date.now() - 3600_000,
+        },
+        "openai:valid": {
+          type: "oauth",
+          provider: "openai",
+          access: "valid-access",
+          refresh: "valid-refresh",
+          expires: Date.now() + 3600_000,
+        },
+      },
+    });
+
+    const openai = credentials.openai as
+      | { type?: string; access?: string; refresh?: string }
+      | undefined;
+    expect(openai?.type).toBe("oauth");
+    expect(openai?.access).toBe("valid-access");
+  });
+
   it("keeps keyRef and tokenRef profiles visible only for read-only agent discovery", () => {
     const credentials = resolveAgentCredentialMapFromStore({
       version: 1,
