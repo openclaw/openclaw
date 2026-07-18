@@ -67,6 +67,38 @@ describe("qa suite", () => {
     expect(errors).toEqual([failure]);
   });
 
+  it("quiesces two-phase transports before gateway stop and releases them after", async () => {
+    const calls: string[] = [];
+    const failure = new Error("transport quiesce failed");
+    const step = (name: string, error?: Error) => async () => {
+      calls.push(name);
+      if (error) {
+        throw error;
+      }
+    };
+
+    const errors = await qaSuiteProgressTesting.runQaFlowSuiteCleanupPlan({
+      closeWebSessions: step("web sessions"),
+      quiesceTransport: step("transport quiesce", failure),
+      stopGateway: step("gateway"),
+      cleanupTransport: step("transport cleanup"),
+      disposeAgentHarnesses: step("agent harnesses"),
+      stopProvider: step("provider"),
+      finishLab: step("lab"),
+    });
+
+    expect(calls).toEqual([
+      "web sessions",
+      "transport quiesce",
+      "gateway",
+      "transport cleanup",
+      "agent harnesses",
+      "provider",
+      "lab",
+    ]);
+    expect(errors).toEqual([failure]);
+  });
+
   it("keeps the primary suite error as the cause of aggregated cleanup failures", () => {
     const runError = new Error("gateway infrastructure failed");
 

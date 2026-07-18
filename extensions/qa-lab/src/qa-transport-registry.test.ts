@@ -9,7 +9,7 @@ import {
 } from "./qa-transport-registry.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
 
-function createAdapterDefinition(cleanup?: () => Promise<void>) {
+function createAdapterDefinition(cleanup?: () => Promise<void>, quiesce?: () => Promise<void>) {
   const state = createQaBusState();
   return {
     id: "selected",
@@ -30,6 +30,7 @@ function createAdapterDefinition(cleanup?: () => Promise<void>) {
     }),
     async handleAction() {},
     createReportNotes: () => [],
+    ...(quiesce ? { quiesce } : {}),
     ...(cleanup ? { cleanup } : {}),
   };
 }
@@ -83,9 +84,10 @@ describe("qa transport registry", () => {
     expect(selectedCreate).toHaveBeenCalledOnce();
   });
 
-  it("returns cleanup owned by the selected adapter", async () => {
+  it("returns lifecycle hooks owned by the selected adapter", async () => {
     const cleanup = vi.fn(async () => undefined);
-    const definition = createAdapterDefinition(cleanup);
+    const quiesce = vi.fn(async () => undefined);
+    const definition = createAdapterDefinition(cleanup, quiesce);
     const factory: QaTransportAdapterFactory = {
       id: "cleanup",
       matches: () => true,
@@ -98,8 +100,10 @@ describe("qa transport registry", () => {
       [factory],
     );
 
+    await created.quiesce?.();
     await created.cleanup();
 
+    expect(quiesce).toHaveBeenCalledOnce();
     expect(cleanup).toHaveBeenCalledOnce();
   });
 

@@ -130,6 +130,9 @@ type QaRunnerTransportAdapterDefinition = {
     concurrency: number;
     isolatedWorkers?: boolean;
   }) => string[];
+  // Drain transport I/O while the gateway remains available. Final cleanup runs
+  // after gateway shutdown so credential-backed adapters release only after SUT quiescence.
+  quiesce?: () => Promise<void>;
   cleanup?: () => Promise<void>;
 };
 

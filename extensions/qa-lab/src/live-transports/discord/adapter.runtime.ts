@@ -4,6 +4,10 @@ import {
   acquireQaCredentialLease,
   startQaCredentialLeaseHeartbeat,
 } from "../shared/credential-lease.runtime.js";
+import {
+  createLiveTransportQuiesce,
+  runLiveTransportCleanupSteps,
+} from "../shared/live-transport-lifecycle.runtime.js";
 import { discordQaScenarioSupport } from "./discord-live.runtime.js";
 import { createDiscordQaScenarioEnvironment } from "./scenario-environment.js";
 
@@ -99,6 +103,14 @@ export async function createDiscordQaTransportAdapter(
       pollingError = error instanceof Error ? error : new Error(String(error));
     }
   });
+  const quiesce = createLiveTransportQuiesce({
+    stopPolling: () => {
+      stopped = true;
+    },
+    waitForPolling: async () => {
+      await polling.catch(() => undefined);
+    },
+  });
   const scenarioEnvironment = createDiscordQaScenarioEnvironment({
     accountId,
     driverIdentity,
@@ -156,15 +168,13 @@ export async function createDiscordQaTransportAdapter(
       throw new Error("Discord live QA adapter does not implement transport actions");
     },
     createReportNotes: () => ["Uses the Discord live adapter."],
+    quiesce,
     async cleanup() {
-      stopped = true;
-      await polling.catch(() => undefined);
-      // Lease release must still run when heartbeat shutdown reports an error.
-      try {
-        await heartbeat.stop();
-      } finally {
-        await lease.release();
-      }
+      await runLiveTransportCleanupSteps([
+        quiesce,
+        async () => await heartbeat.stop(),
+        async () => await lease.release(),
+      ]);
     },
   };
 }

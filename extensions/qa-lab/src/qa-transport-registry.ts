@@ -25,6 +25,7 @@ export type QaTransportAdapterFactoryResult<
   TAdapter extends QaTransportAdapter = QaTransportAdapter,
 > = {
   adapter: TAdapter;
+  quiesce?: () => Promise<void>;
   cleanup: () => Promise<void>;
 };
 
@@ -103,6 +104,13 @@ function createQaTransportAdapterFactoryRegistry(
       }
       return {
         adapter,
+        ...(adapter.quiesce
+          ? {
+              quiesce: async () => {
+                await adapter.quiesce?.();
+              },
+            }
+          : {}),
         cleanup: async () => {
           await adapter.cleanup?.();
         },

@@ -10,6 +10,10 @@ import {
   acquireQaCredentialLease,
   startQaCredentialLeaseHeartbeat,
 } from "../shared/credential-lease.runtime.js";
+import {
+  createLiveTransportQuiesce,
+  runLiveTransportCleanupSteps,
+} from "../shared/live-transport-lifecycle.runtime.js";
 import { createWhatsAppQaScenarioEnvironment } from "./scenario-environment.js";
 import {
   buildWhatsAppQaConfig,
@@ -133,6 +137,15 @@ export async function createWhatsAppQaTransportAdapter(
       pollingError = error instanceof Error ? error : new Error(String(error));
     }
   });
+  const quiesce = createLiveTransportQuiesce({
+    close: async () => await getDriver().close(),
+    stopPolling: () => {
+      stopped = true;
+    },
+    waitForPolling: async () => {
+      await polling.catch(() => undefined);
+    },
+  });
 
   return {
     id: "whatsapp",
@@ -220,23 +233,14 @@ export async function createWhatsAppQaTransportAdapter(
       throw new Error("WhatsApp live QA adapter does not implement transport actions");
     },
     createReportNotes: () => ["Uses the WhatsApp live adapter."],
+    quiesce,
     async cleanup() {
-      stopped = true;
-      await polling.catch(() => undefined);
-      // Credential and auth cleanup must run even when the live driver cannot close cleanly.
-      try {
-        await getDriver().close();
-      } finally {
-        try {
-          await heartbeat.stop();
-        } finally {
-          try {
-            await lease.release();
-          } finally {
-            await fs.rm(authRoot, { force: true, recursive: true });
-          }
-        }
-      }
+      await runLiveTransportCleanupSteps([
+        quiesce,
+        async () => await heartbeat.stop(),
+        async () => await lease.release(),
+        async () => await fs.rm(authRoot, { force: true, recursive: true }),
+      ]);
     },
   };
 }

@@ -5,6 +5,10 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { buildQaTarget } from "openclaw/plugin-sdk/qa-channel";
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
 import { readQaScenarioExecutionConfig } from "../../scenario-catalog.js";
+import {
+  createLiveTransportQuiesce,
+  runLiveTransportCleanupSteps,
+} from "../shared/live-transport-lifecycle.runtime.js";
 import { createMatrixQaScenarioEnvironment } from "./scenarios/scenario-environment.js";
 import { createMatrixQaClient, provisionMatrixQaRoom } from "./substrate/client.js";
 import { buildMatrixQaConfig } from "./substrate/config.js";
@@ -274,6 +278,14 @@ export async function createMatrixQaTransportAdapter(
       pollingError = error instanceof Error ? error : new Error(String(error));
     }
   });
+  const quiesce = createLiveTransportQuiesce({
+    stopPolling: () => {
+      stopped = true;
+    },
+    waitForPolling: async () => {
+      await polling.catch(() => undefined);
+    },
+  });
 
   return {
     id: "matrix",
@@ -413,10 +425,9 @@ export async function createMatrixQaTransportAdapter(
       );
     },
     createReportNotes: () => ["Uses the Matrix live adapter."],
+    quiesce,
     async cleanup() {
-      stopped = true;
-      await polling.catch(() => undefined);
-      await harness.stop();
+      await runLiveTransportCleanupSteps([quiesce, async () => await harness.stop()]);
     },
   };
 }

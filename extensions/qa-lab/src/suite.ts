@@ -320,18 +320,21 @@ async function runQaSuiteCleanupSteps(steps: ReadonlyArray<() => Promise<void>>)
 
 async function runQaFlowSuiteCleanupPlan(params: {
   closeWebSessions?: () => Promise<void>;
+  quiesceTransport?: () => Promise<void>;
   cleanupTransport: () => Promise<void>;
   stopGateway?: () => Promise<void>;
   disposeAgentHarnesses: () => Promise<void>;
   stopProvider?: () => Promise<void>;
   finishLab: () => Promise<void>;
 }) {
+  const usesTwoPhaseTransportCleanup = params.quiesceTransport !== undefined;
   return await runQaSuiteCleanupSteps([
     ...(params.closeWebSessions ? [params.closeWebSessions] : []),
-    // Drain transport HTTP work before stopping the gateway; otherwise a completed suite can
-    // emit an unhandled response-close rejection during delivery.
-    params.cleanupTransport,
+    // Drain transport work before gateway shutdown, but keep credential resources alive until
+    // the gateway proves SUT quiescence. Legacy one-phase adapters still clean up here.
+    params.quiesceTransport ?? params.cleanupTransport,
     ...(params.stopGateway ? [params.stopGateway] : []),
+    ...(usesTwoPhaseTransportCleanup ? [params.cleanupTransport] : []),
     params.disposeAgentHarnesses,
     ...(params.stopProvider ? [params.stopProvider] : []),
     params.finishLab,
@@ -2026,6 +2029,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
     const activeMock = mock;
     const cleanupErrors = await runQaFlowSuiteCleanupPlan({
       closeWebSessions: activeEnv ? () => closeQaWebSessions(activeEnv.webSessionIds) : undefined,
+      quiesceTransport: transportFactoryResult.quiesce,
       cleanupTransport: () => transportFactoryResult.cleanup(),
       stopGateway: activeGateway
         ? () =>

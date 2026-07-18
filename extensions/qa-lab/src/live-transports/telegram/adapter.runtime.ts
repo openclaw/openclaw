@@ -10,6 +10,10 @@ import {
   startQaCredentialLeaseHeartbeat,
 } from "../shared/credential-lease.runtime.js";
 import {
+  createLiveTransportQuiesce,
+  runLiveTransportCleanupSteps,
+} from "../shared/live-transport-lifecycle.runtime.js";
+import {
   buildTelegramQaConfig,
   callTelegramApi,
   flushTelegramUpdates,
@@ -45,14 +49,11 @@ export async function createTelegramQaTransportAdapter(
     throw error;
   }
   const heartbeat = startQaCredentialLeaseHeartbeat(credentialLease);
-  const releaseCredentialLease = async () => {
-    // Lease release must still run when heartbeat shutdown reports an error.
-    try {
-      await heartbeat.stop();
-    } finally {
-      await credentialLease.release();
-    }
-  };
+  const releaseCredentialLease = async () =>
+    await runLiveTransportCleanupSteps([
+      async () => await heartbeat.stop(),
+      async () => await credentialLease.release(),
+    ]);
   const runtimeEnv = credentialLease.payload;
   let driverIdentity: TelegramBotIdentity;
   let sutIdentity: TelegramBotIdentity;
@@ -149,6 +150,14 @@ export async function createTelegramQaTransportAdapter(
       pollingError = error instanceof Error ? error : new Error(String(error));
     }
   });
+  const quiesce = createLiveTransportQuiesce({
+    stopPolling: () => {
+      stopped = true;
+    },
+    waitForPolling: async () => {
+      await polling.catch(() => undefined);
+    },
+  });
   return {
     id: "telegram",
     label: "Telegram live",
@@ -224,27 +233,33 @@ export async function createTelegramQaTransportAdapter(
       throw new Error("Telegram live QA adapter does not implement transport actions");
     },
     createReportNotes: () => ["Runs through the Telegram live adapter and shared QA suite host."],
+    quiesce,
     async cleanup() {
-      stopped = true;
-      await polling.catch(() => undefined);
-      if (await shouldRetainQaGatewayCredentialLease()) {
-        const quarantineErrors: unknown[] = [];
-        try {
-          await credentialLease.heartbeat();
-        } catch (error) {
-          quarantineErrors.push(error);
-        }
-        try {
-          await heartbeat.stop();
-        } catch (error) {
-          quarantineErrors.push(error);
-        }
-        throw new Error(
-          "retained Telegram credential lease for two hours because isolated SUT quiescence was not proven",
-          quarantineErrors.length > 0 ? { cause: new AggregateError(quarantineErrors) } : undefined,
-        );
-      }
-      await releaseCredentialLease();
+      await runLiveTransportCleanupSteps([
+        quiesce,
+        async () => {
+          if (await shouldRetainQaGatewayCredentialLease()) {
+            const quarantineErrors: unknown[] = [];
+            try {
+              await credentialLease.heartbeat();
+            } catch (error) {
+              quarantineErrors.push(error);
+            }
+            try {
+              await heartbeat.stop();
+            } catch (error) {
+              quarantineErrors.push(error);
+            }
+            throw new Error(
+              "retained Telegram credential lease for two hours because isolated SUT quiescence was not proven",
+              quarantineErrors.length > 0
+                ? { cause: new AggregateError(quarantineErrors) }
+                : undefined,
+            );
+          }
+          await releaseCredentialLease();
+        },
+      ]);
     },
   };
 }

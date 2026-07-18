@@ -172,9 +172,14 @@ describe("Telegram QA transport adapter", () => {
     );
 
     await vi.waitFor(() => expect(pollResolvers).toHaveLength(3));
+    const quiesce = adapter.quiesce?.();
+    pollResolvers[2]?.([]);
+    await expect(quiesce).resolves.toBeUndefined();
+    expect(mocks.heartbeatStop).not.toHaveBeenCalled();
+    expect(mocks.leaseRelease).not.toHaveBeenCalled();
+
     mocks.heartbeatStop.mockRejectedValueOnce(new Error("heartbeat stop failed"));
     const cleanup = adapter.cleanup?.();
-    pollResolvers[2]?.([]);
     await expect(cleanup).rejects.toThrow("heartbeat stop failed");
     expect(mocks.heartbeatStop).toHaveBeenCalledOnce();
     expect(mocks.leaseRelease).toHaveBeenCalledOnce();

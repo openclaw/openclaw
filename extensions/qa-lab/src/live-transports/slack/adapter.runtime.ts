@@ -6,6 +6,10 @@ import {
   acquireQaCredentialLease,
   startQaCredentialLeaseHeartbeat,
 } from "../shared/credential-lease.runtime.js";
+import {
+  createLiveTransportQuiesce,
+  runLiveTransportCleanupSteps,
+} from "../shared/live-transport-lifecycle.runtime.js";
 import { createSlackQaScenarioEnvironment } from "./scenario-environment.js";
 import {
   buildSlackQaConfig,
@@ -160,6 +164,14 @@ export async function createSlackQaTransportAdapter(
       pollingError = error instanceof Error ? error : new Error(String(error));
     }
   });
+  const quiesce = createLiveTransportQuiesce({
+    stopPolling: () => {
+      stopped = true;
+    },
+    waitForPolling: async () => {
+      await polling.catch(() => undefined);
+    },
+  });
 
   return {
     id: "slack",
@@ -231,15 +243,13 @@ export async function createSlackQaTransportAdapter(
       throw new Error("Slack live QA adapter does not implement transport actions");
     },
     createReportNotes: () => ["Runs through the Slack live adapter and shared QA suite host."],
+    quiesce,
     async cleanup() {
-      stopped = true;
-      await polling.catch(() => undefined);
-      // Lease release must still run when heartbeat shutdown reports an error.
-      try {
-        await heartbeat.stop();
-      } finally {
-        await lease.release();
-      }
+      await runLiveTransportCleanupSteps([
+        quiesce,
+        async () => await heartbeat.stop(),
+        async () => await lease.release(),
+      ]);
     },
   };
 }
