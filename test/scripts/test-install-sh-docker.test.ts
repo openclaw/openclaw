@@ -1392,8 +1392,11 @@ describe("install-sh smoke runner", () => {
   it("aborts a stalled official-installer fetch inside the bound without running partial payload", () => {
     const runner = readFileSync(SMOKE_RUNNER_PATH, "utf8");
 
-    expect(runner).toContain("--connect-timeout 10 --max-time 120");
-    expect(runner).toContain("trap 'rm -f \"$installer\"' EXIT");
+    // The runner must fetch the official installer through a single bounded
+    // pipeline (curl timeout + outer kill-after), not pipe curl straight into
+    // bash with curl's default of no total timeout.
+    expect(runner).toContain("run_installer_pipeline");
+    expect(runner).toMatch(/curl -fsSL --connect-timeout \d+ --max-time \d+/);
 
     expectStalledInstallerFetchAborts({
       connectTimeout: 10,
