@@ -96,7 +96,7 @@ hello from source
     const originalEnqueue = KeyedAsyncQueue.prototype.enqueue;
     const enqueueSpy = vi
       .spyOn(KeyedAsyncQueue.prototype, "enqueue")
-      .mockImplementation(function (key, task, hooks) {
+      .mockImplementation(function (this: KeyedAsyncQueue, key, task, hooks) {
         ingestQueued.resolve();
         return originalEnqueue.call(this, key, task, hooks);
       });
