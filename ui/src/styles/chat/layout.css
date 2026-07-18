@@ -2290,6 +2290,130 @@ openclaw-chat-page {
   box-shadow: none;
 }
 
+.chat-talk-control {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
+.chat-talk-control > openclaw-tooltip {
+  display: inline-flex;
+}
+
+.chat-talk-control .chat-send-btn {
+  border-radius: var(--radius-full) 0 0 var(--radius-full);
+}
+
+.chat-talk-input-picker {
+  display: inline-flex;
+}
+
+.chat-talk-input-picker__trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  min-width: 20px;
+  height: 36px;
+  padding: 0;
+  border: 0;
+  border-left: 1px solid color-mix(in srgb, var(--accent) 24%, transparent);
+  border-radius: 0 var(--radius-full) var(--radius-full) 0;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+  transition: background var(--duration-fast) ease;
+}
+
+.chat-talk-control--active .chat-talk-input-picker__trigger {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.chat-talk-input-picker__trigger:hover,
+.chat-talk-input-picker[open] .chat-talk-input-picker__trigger {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+.chat-talk-input-picker__trigger:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.chat-talk-input-picker__trigger svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2px;
+}
+
+.chat-talk-input-picker[open] .chat-talk-input-picker__trigger svg {
+  transform: rotate(180deg);
+}
+
+.chat-talk-input-picker::part(menu) {
+  width: min(300px, calc(100vw - 24px));
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg-elevated) 96%, var(--card));
+  box-shadow: var(--shadow-md);
+}
+
+.chat-talk-input-picker__heading {
+  padding: 6px 9px 5px;
+  color: var(--text-strong);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.chat-talk-input-picker__item {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.chat-talk-input-picker__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-talk-input-picker__check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  color: var(--accent);
+}
+
+.chat-talk-input-picker__check svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2px;
+}
+
+.chat-talk-input-picker__note,
+.chat-talk-input-picker__warning,
+.chat-talk-input-picker__hint {
+  padding: 5px 9px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.chat-talk-input-picker__warning {
+  color: var(--warn);
+}
+
+.chat-talk-input-picker__hint {
+  margin-top: 3px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
+  padding-top: 8px;
+}
+
 .agent-chat__video-preview {
   position: relative;
   align-self: flex-end;

@@ -3890,6 +3890,7 @@ export const en: TranslationMap = {
       microphoneBusy: "Microphone inputs are busy or unavailable to the browser.",
       microphoneFallback: "Microphone {number}",
       microphoneInput: "Microphone input",
+      microphoneAppliesNextSession: "Changes apply when you start your next Talk session.",
       microphoneListUnsupported: "This browser cannot list microphone inputs.",
       noCameras: "No additional cameras found",
       noMicrophones: "No additional microphones found",
