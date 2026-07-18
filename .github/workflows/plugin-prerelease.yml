@@ -126,6 +126,11 @@ jobs:
             }).map((shard) => ({
               check_name: shard.checkName,
               extensions_csv: shard.extensionIds.join(","),
+              vitest_max_workers: shard.extensionIds.some((extensionId) =>
+                extensionId.startsWith("memory-"),
+              )
+                ? 4
+                : 1,
               runner: shard.extensionIds.some((extensionId) => extensionId.startsWith("memory-"))
                 ? "blacksmith-16vcpu-ubuntu-2404"
                 : [0, 1, 2, 3].includes(shard.index)
@@ -356,7 +361,7 @@ jobs:
         env:
           NODE_OPTIONS: --max-old-space-size=8192
           OPENCLAW_EXTENSION_BATCH_PARALLEL: 2
-          OPENCLAW_VITEST_MAX_WORKERS: 1
+          OPENCLAW_VITEST_MAX_WORKERS: ${{ matrix.vitest_max_workers }}
           OPENCLAW_EXTENSION_BATCH: ${{ matrix.extensions_csv }}
         run: pnpm test:extensions:batch "$OPENCLAW_EXTENSION_BATCH" -- --retry=1 --exclude extensions/codex/src/app-server/run-attempt.test.ts
 

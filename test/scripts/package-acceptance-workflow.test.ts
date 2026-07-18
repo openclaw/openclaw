@@ -1703,6 +1703,8 @@ describe("package artifact reuse", () => {
 
     expect(workflow).toContain('extensionId.startsWith("memory-")');
     expect(workflow).toContain('"blacksmith-16vcpu-ubuntu-2404"');
+    expect(workflow).toContain("vitest_max_workers:");
+    expect(workflow).toContain("OPENCLAW_VITEST_MAX_WORKERS: ${{ matrix.vitest_max_workers }}");
     expect(readFileSync("scripts/lib/extension-test-plan.mjs", "utf8")).toContain(
       '"test/vitest/vitest.extension-memory.config.ts": 1',
     );
