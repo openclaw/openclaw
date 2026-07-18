@@ -257,6 +257,22 @@ describe("Microsoft Teams meeting session flow", () => {
       openedByPlugin: false,
       targetId: "teams-tab-replaced",
     });
+
+    harness.setTargetId("teams-tab-replaced-again");
+    harness.gatewayRequest.mockClear();
+    await runtime.transcript(joined.session.id);
+
+    expect(joined.session.chrome?.browserTab).toEqual({
+      openedByPlugin: false,
+      targetId: "teams-tab-replaced-again",
+    });
+    const transcriptRead = harness.gatewayRequest.mock.calls.find(([, params]) => {
+      const fn = (params.body as { fn?: unknown } | undefined)?.fn;
+      return params.path === "/act" && typeof fn === "string" && fn.includes("expectedSessionId");
+    });
+    expect(transcriptRead?.[1]).toMatchObject({
+      body: { targetId: "teams-tab-replaced-again" },
+    });
   });
 
   it("recovers the tracked tab after Teams rewrites the in-call URL", async () => {

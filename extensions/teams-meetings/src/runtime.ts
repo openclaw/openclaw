@@ -447,13 +447,13 @@ export class TeamsMeetingsRuntime {
   }
 
   async #captureTranscript(session: TeamsMeetingsSession, options: { finalize?: boolean } = {}) {
+    // Recovery permits caption setup but atomically refuses a different live
+    // session owner, so stale sessions read their archived page buffer instead.
+    await this.#sessions.refreshCaptionHealth(session);
     const tab = session.chrome?.browserTab;
     if (!tab) {
       return undefined;
     }
-    // Recovery permits caption setup but atomically refuses a different live
-    // session owner, so stale sessions read their archived page buffer instead.
-    await this.#sessions.refreshCaptionHealth(session);
     return await readTeamsMeetingTranscript({
       runtime: this.params.runtime,
       config: this.params.config,
