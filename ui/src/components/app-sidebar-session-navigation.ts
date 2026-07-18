@@ -284,7 +284,12 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
     };
   }
 
-  /** Drop one session entry from the persisted zone order (raw list, no reconcile-pruning). */
+  /**
+   * Drop one session entry from the persisted zone order (raw list, no
+   * reconcile-pruning). Only sidebar-driven unpins call this; other surfaces
+   * (e.g. the Sessions page) rely on reconcileSidebarZone's known-unpinned
+   * pruning at the next canonical write, which keeps the slot hidden meanwhile.
+   */
   protected pruneSidebarSessionEntry(key: string) {
     const serialized = serializeSidebarEntry({ type: "session", key });
     if (!this.sidebarEntries.includes(serialized)) {
