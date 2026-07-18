@@ -64,11 +64,17 @@ describe("shared question panel", () => {
       onSkip?: () => void | Promise<void>;
     } = {},
   ) {
+    let collapsed = false;
     const redraw = () => {
       render(
         html`<openclaw-chat-question-panel
           .props=${createGatewayQuestionPanelProps(prompt, {
             nowMs: 2_000,
+            collapsed,
+            onCollapsedChange: (nextCollapsed) => {
+              collapsed = nextCollapsed;
+              redraw();
+            },
             onChange: redraw,
             onSubmit: callbacks.onSubmit ?? vi.fn(),
             onSkip: callbacks.onSkip ?? vi.fn(),
@@ -235,6 +241,7 @@ describe("shared question panel", () => {
 
     container.querySelector<HTMLButtonElement>(".chat-question-panel__collapsed-button")?.click();
     await panel.updateComplete;
+    expect(document.activeElement).toBe(container.querySelector(".chat-question-panel"));
     container.querySelector<HTMLButtonElement>(".chat-question-panel__skip")?.click();
     expect(onSkip).toHaveBeenCalledOnce();
   });
