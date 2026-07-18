@@ -102,8 +102,9 @@ function getSummaryCards(container: HTMLElement): Array<{
 }
 
 describe("renderUsageInsights", () => {
-  it("renders overview hints with declarative click, hover, and focus triggers", () => {
+  it("renders overview hints as focusable tooltip anchors", () => {
     const container = document.createElement("div");
+    document.body.append(container);
 
     render(
       renderUsageInsights(
@@ -139,10 +140,13 @@ describe("renderUsageInsights", () => {
     expect(
       tooltips.every(
         (tooltip) =>
-          tooltip.getAttribute("trigger") === "click hover focus" &&
+          tooltip.getAttribute("trigger") === "hover focus" &&
           buttons.some((button) => button.id === tooltip.getAttribute("for")),
       ),
     ).toBe(true);
+
+    buttons[0]?.click();
+    expect(document.activeElement).toBe(buttons[0]);
   });
 
   it("includes cache writes in cache-hit-rate denominator", () => {

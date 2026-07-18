@@ -591,6 +591,12 @@ function renderPeakErrorList(
   `;
 }
 
+function focusSummaryHint(event: MouseEvent) {
+  if (event.currentTarget instanceof HTMLElement) {
+    event.currentTarget.focus();
+  }
+}
+
 function renderSummaryStat(params: {
   hintId: string;
   title: string;
@@ -623,14 +629,22 @@ function renderSummaryStat(params: {
     <div class=${classes}>
       <div class="usage-summary-title">
         ${params.title}
-        <button id=${hintId} type="button" class="usage-summary-hint" aria-label=${params.hint}>
+        <button
+          id=${hintId}
+          type="button"
+          class="usage-summary-hint"
+          aria-label=${params.hint}
+          @click=${focusSummaryHint}
+        >
           ?
         </button>
+        <!-- Some browsers do not focus buttons on pointer activation; the
+             click handler normalizes that path without adding a second toggle. -->
         <wa-tooltip
           id=${tooltipId}
           class="usage-summary-tooltip"
           for=${hintId}
-          trigger="click hover focus"
+          trigger="hover focus"
         >
           ${params.hint}
         </wa-tooltip>

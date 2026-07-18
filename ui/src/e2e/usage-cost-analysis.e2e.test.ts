@@ -345,9 +345,9 @@ describeControlUiE2e("Control UI usage cost analysis mocked Gateway E2E", () => 
       await expect
         .poll(() => messagesTooltip.textContent())
         .toContain("Total user and assistant messages in range.");
-      await messagesHint.click();
+      await page.getByRole("button", { name: "Cost", exact: true }).click();
       await expect.poll(() => messagesTooltip.getAttribute("open")).toBeNull();
-      await messagesHint.press("Enter");
+      await messagesHint.focus();
       await expect.poll(() => messagesTooltip.getAttribute("open")).toBe("");
       await messagesHint.press("Escape");
       await expect.poll(() => messagesTooltip.getAttribute("open")).toBeNull();
