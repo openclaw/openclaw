@@ -324,7 +324,9 @@ describe("sandbox fs bridge anchored ops", () => {
         }),
       });
 
-      await expect(bridge.stat({ filePath: "note.txt" })).rejects.toThrow("Permission denied");
+      await expect(
+        bridge.stat({ filePath: "note.txt" }),
+      ).rejects.toThrow("Permission denied");
 
       const statCall = requireDockerCall(
         findCallByScriptFragment("st.st_mtime_ns"),
@@ -336,8 +338,9 @@ describe("sandbox fs bridge anchored ops", () => {
     });
   });
 
-  it("saturates unsafe stat size output", async () => {
+  it("saturates unsafe stat size and mtime output", async () => {
     await withTempDir("openclaw-fs-bridge-stat-parse-", async (stateDir) => {
+      const unsafeMtimeNs = "8640000000000000000000000000000000000000000";
       const workspaceDir = path.join(stateDir, "workspace");
       await fs.mkdir(workspaceDir, { recursive: true });
 
@@ -347,7 +350,7 @@ describe("sandbox fs bridge anchored ops", () => {
           return dockerExecResult(`${getDockerArg(args, 1)}\n`);
         }
         if (script.includes("st.st_mtime_ns")) {
-          return dockerExecResult("81a4|9007199254740992|8640000000001\n");
+          return dockerExecResult(`81a4|9007199254740992|${unsafeMtimeNs}\n`);
         }
         return dockerExecResult("");
       });
@@ -359,7 +362,9 @@ describe("sandbox fs bridge anchored ops", () => {
         }),
       });
 
-      await expect(bridge.stat({ filePath: "note.txt" })).resolves.toMatchObject({
+      await expect(
+        bridge.stat({ filePath: "note.txt" }),
+      ).resolves.toMatchObject({
         type: "file",
         size: Number.MAX_SAFE_INTEGER,
         mtimeMs: 0,

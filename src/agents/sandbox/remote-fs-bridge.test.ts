@@ -217,15 +217,16 @@ describe("remote sandbox fs bridge", () => {
     },
   );
 
-  it("parses locale-independent stat output and saturates unsafe sizes", async () => {
+  it("parses locale-independent stat output and saturates unsafe numeric fields", async () => {
     // Remote stat output is untrusted shell text; raw mode bits avoid localized
     // file-type names, and unsafe numeric fields clamp deterministically.
     await withTempDir("openclaw-remote-fs-bridge-stat-", async (stateDir) => {
+      const unsafeMtimeNs = "8640000000000000000000000000000000000000000";
       const workspaceDir = path.join(stateDir, "workspace");
       await fs.mkdir(workspaceDir, { recursive: true });
       const runtime = createStatRuntime(workspaceDir, {
         hardlinks: () => "81a4|1",
-        stat: () => "81a4|9007199254740992|8640000000001",
+        stat: () => `81a4|9007199254740992|${unsafeMtimeNs}`,
       });
       const bridge = createRemoteShellSandboxFsBridge({
         sandbox: createSandbox({
