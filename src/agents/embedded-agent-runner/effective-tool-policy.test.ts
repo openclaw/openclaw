@@ -312,11 +312,7 @@ describe("applyFinalEffectiveToolPolicy", () => {
   it("fix #109025: parent with E164 gets exact toolsBySender allow (no denies)", () => {
     // WhatsApp parent with E164 → exact allow override, no wildcard denies
     const filtered = applyFinalPolicy({
-      bundledTools: [
-        makeTool("exec"),
-        makeTool("fs_read"),
-        makeTool("message"),
-      ],
+      bundledTools: [makeTool("exec"), makeTool("fs_read"), makeTool("message")],
       config: {
         tools: {
           toolsBySender: {
@@ -341,11 +337,7 @@ describe("applyFinalEffectiveToolPolicy", () => {
   it("fix #109025: anonymous user without sender identity gets wildcard deny", () => {
     // No sender fields → wildcard deny applies, stripping fs/runtime tools
     const filtered = applyFinalPolicy({
-      bundledTools: [
-        makeTool("exec"),
-        makeTool("fs_read"),
-        makeTool("message"),
-      ],
+      bundledTools: [makeTool("exec"), makeTool("fs_read"), makeTool("message")],
       config: {
         tools: {
           toolsBySender: {
@@ -369,11 +361,7 @@ describe("applyFinalEffectiveToolPolicy", () => {
     // the sender-policy step. Subagent restrictions still apply but nothing
     // is configured here, so all tools pass.
     const filtered = applyFinalPolicy({
-      bundledTools: [
-        makeTool("exec"),
-        makeTool("fs_read"),
-        makeTool("message"),
-      ],
+      bundledTools: [makeTool("exec"), makeTool("fs_read"), makeTool("message")],
       config: {
         tools: {
           toolsBySender: {
