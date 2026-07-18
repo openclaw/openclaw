@@ -32,6 +32,7 @@ const HTML_RAW_TEXT_TAGS = new Set([
   "iframe",
   "noembed",
   "noframes",
+  "plaintext",
   "script",
   "style",
   "textarea",

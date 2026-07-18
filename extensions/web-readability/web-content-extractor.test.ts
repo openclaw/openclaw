@@ -108,6 +108,13 @@ describe("web readability extractor", () => {
     expect(requireReadabilityResult(result).text).toContain("Main content starts here");
   });
 
+  it("does not count pseudo tags after plaintext starts", async () => {
+    const pseudoTags = "<div>".repeat(3100);
+    const html = SAMPLE_HTML.replace("</article>", `</article><plaintext>${pseudoTags}`);
+    const result = await extractMarkdown(html);
+    expect(requireReadabilityResult(result).text).toContain("Main content starts here");
+  });
+
   it("does not count pseudo tags inside legacy raw-text content", async () => {
     const pseudoTags = "<div ".repeat(3100);
     for (const tagName of ["noembed", "noframes"]) {
