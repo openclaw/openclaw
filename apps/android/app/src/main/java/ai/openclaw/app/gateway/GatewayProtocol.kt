@@ -114,6 +114,11 @@ data class QuestionListResult(
 )
 
 @Serializable
+data class QuestionGetResult(
+  val question: QuestionRecord,
+)
+
+@Serializable
 data class GatewayEventFrameStateVersion(
   val presence: Long,
   val health: Long,

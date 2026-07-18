@@ -31,6 +31,14 @@ You can answer from any supported conversation surface:
 OpenClaw always enables a free-text **Other** answer. The agent must not add an
 `Other` option to the authored option list.
 
+## Platform behavior
+
+Answers work on every supported conversation surface. The web Control UI docks
+a stepper panel above the composer. iOS, macOS, and Android show inline cards;
+multiple questions stay stacked as an intentional touch-friendly idiom. Every
+platform keeps a persistent question-to-answer summary, and **Skip** is
+available everywhere.
+
 Prompts that cannot use native buttons, including multi-question and
 multi-select prompts, degrade to readable text on channels. The Control UI
 keeps the full structured stepper.

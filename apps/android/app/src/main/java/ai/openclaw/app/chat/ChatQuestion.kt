@@ -3,8 +3,6 @@ package ai.openclaw.app.chat
 import ai.openclaw.app.gateway.Question
 import ai.openclaw.app.gateway.QuestionRecord
 
-internal const val QUESTION_TERMINAL_RETENTION_MS = 15_000L
-
 enum class ChatQuestionStatus {
   Pending,
   Submitting,
@@ -33,8 +31,6 @@ data class ChatQuestionPrompt(
           else -> ChatQuestionStatus.Pending
         }
     }
-
-  fun shouldRetainAfterList(nowMs: Long): Boolean = terminalObservedAtMs?.let { nowMs - it < QUESTION_TERMINAL_RETENTION_MS } == true
 }
 
 data class ChatQuestionDraft(
