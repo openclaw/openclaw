@@ -8,29 +8,21 @@ import {
   type OfficialExternalPluginCatalogFeed,
 } from "./official-external-plugin-catalog.js";
 
-export const OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PAYLOAD_TYPE =
+const OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PAYLOAD_TYPE =
   "openclaw.official-external-plugin-catalog-feed.v1";
 const OFFICIAL_EXTERNAL_PLUGIN_CATALOG_MAX_SIGNATURES = 16;
 
-export type OfficialExternalPluginCatalogEnvelopeSignature = {
+type OfficialExternalPluginCatalogEnvelopeSignature = {
   keyId?: string;
   algorithm?: string;
   signature?: string;
 };
-
-export type OfficialExternalPluginCatalogSignedEnvelope = {
-  schemaVersion?: number;
-  payloadType?: string;
-  payload?: string;
-  signatures?: readonly OfficialExternalPluginCatalogEnvelopeSignature[];
-};
-
-export type OfficialExternalPluginCatalogTrustedSigningKey = {
+type OfficialExternalPluginCatalogTrustedSigningKey = {
   keyId: string;
   publicKey: string;
 };
 
-export type OfficialExternalPluginCatalogEnvelopeVerificationResult =
+type OfficialExternalPluginCatalogEnvelopeVerificationResult =
   | {
       ok: true;
       feed: OfficialExternalPluginCatalogFeed;
@@ -48,15 +40,9 @@ export type OfficialExternalPluginCatalogEnvelopeVerificationResult =
         | "missing-trust-key"
         | "invalid-signature";
       message: string;
+      authenticatedPayload?: unknown;
     };
-
-export function createOfficialExternalPluginCatalogEnvelopePayload(
-  feed: OfficialExternalPluginCatalogFeed,
-): string {
-  return Buffer.from(JSON.stringify(feed), "utf8").toString("base64url");
-}
-
-export function createOfficialExternalPluginCatalogEnvelopeSigningInput(params: {
+function createOfficialExternalPluginCatalogEnvelopeSigningInput(params: {
   payloadType: string;
   payloadBytes: Buffer;
 }): Buffer {
@@ -125,17 +111,18 @@ export function verifyOfficialExternalPluginCatalogSignedEnvelope(
     }
   }
   if (trustedSignaturePublicKeys.size >= threshold) {
-    const feed = decodeOfficialExternalPluginCatalogEnvelopePayload(payloadBytes);
-    if (!feed) {
+    const decoded = decodeOfficialExternalPluginCatalogEnvelopePayload(payloadBytes);
+    if (!decoded?.feed) {
       return {
         ok: false,
         error: "invalid-payload",
         message: "hosted catalog signed envelope payload is invalid",
+        ...(decoded ? { authenticatedPayload: decoded.raw } : {}),
       };
     }
     return {
       ok: true,
-      feed,
+      feed: decoded.feed,
       signedBy: trustedSignatureKeyIds[0] ?? "",
       ...(threshold > 1
         ? {
@@ -233,10 +220,13 @@ function decodeOfficialExternalPluginCatalogEnvelopePayloadBytes(payload: string
 
 function decodeOfficialExternalPluginCatalogEnvelopePayload(
   payloadBytes: Buffer,
-): OfficialExternalPluginCatalogFeed | null {
+): { raw: unknown; feed: OfficialExternalPluginCatalogFeed | null } | null {
   try {
     const raw = JSON.parse(payloadBytes.toString("utf8")) as unknown;
-    return isOfficialExternalPluginCatalogFeed(raw) ? raw : null;
+    return {
+      raw,
+      feed: isOfficialExternalPluginCatalogFeed(raw) ? raw : null,
+    };
   } catch {
     return null;
   }

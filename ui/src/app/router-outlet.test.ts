@@ -1,7 +1,6 @@
 import { createRouter, definePage, type Router } from "@openclaw/uirouter";
 import { html, type LitElement } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resetStaleChunkReloadStateForTest } from "./stale-chunk-reload.ts";
 import "./router-outlet.ts";
 
 type RouteId = "page";
@@ -39,19 +38,18 @@ function createOutlet(router: TestRouter, context: TestContext): RouterOutletEle
   return outlet;
 }
 
+afterEach(() => {
+  document.body.replaceChildren();
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+});
+
 async function settleOutlet(outlet: RouterOutletElement): Promise<void> {
   for (let attempt = 0; attempt < 5; attempt += 1) {
     await Promise.resolve();
     await outlet.updateComplete;
   }
 }
-
-afterEach(() => {
-  document.body.replaceChildren();
-  resetStaleChunkReloadStateForTest();
-  vi.unstubAllGlobals();
-  vi.useRealTimers();
-});
 
 describe("openclaw-router-outlet", () => {
   it("renders route data through the public custom-element boundary", async () => {
@@ -161,7 +159,7 @@ describe("openclaw-router-outlet", () => {
 
     const alert = outlet.querySelector('[role="alert"]');
     expect(alert?.textContent).toContain("Importing a module script failed.");
-    expect(alert?.textContent).toContain("Reload the page");
+    expect(alert?.textContent).toContain("Reload to get the latest panel");
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(loadCount).toBe(1);
     outlet.querySelector<HTMLButtonElement>("button")?.click();

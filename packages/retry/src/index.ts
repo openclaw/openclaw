@@ -1,21 +1,124 @@
-// Dependency-free retry scheduling shared across core and leaf workspace packages.
-
-// Keep a small margin below Node's signed 32-bit timeout ceiling.
 const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 
-/** Retry timing knobs shared by generic retry runners and channel retry policies. */
+export type BackoffPolicy = {
+  initialMs: number;
+  maxMs: number;
+  factor: number;
+  jitter: number;
+};
+
+export function computeBackoff(policy: BackoffPolicy, attempt: number): number {
+  const base = Math.min(policy.maxMs, policy.initialMs * policy.factor ** Math.max(attempt - 1, 0));
+  const jitter = base * policy.jitter * Math.random();
+  return Math.min(policy.maxMs, Math.round(base + jitter));
+}
+
+export function computeBackoffSchedule(scheduleMs: readonly number[], attempt: number): number {
+  const index = Math.min(attempt - 1, scheduleMs.length - 1);
+  return attempt <= 0 ? 0 : (scheduleMs[index] ?? 0);
+}
+
+export async function sleepWithAbort(
+  ms: number,
+  abortSignal?: AbortSignal,
+  options: { ref?: boolean } = {},
+): Promise<void> {
+  if (!Number.isFinite(ms) || ms <= 0) {
+    return;
+  }
+  const delayMs = Math.min(Math.max(Math.floor(ms), 1), MAX_TIMER_TIMEOUT_MS);
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const cleanup = () => abortSignal?.removeEventListener("abort", onAbort);
+    const onAbort = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (timer) {
+        clearTimeout(timer);
+      }
+      timer = null;
+      cleanup();
+      reject(new Error("aborted", { cause: abortSignal?.reason ?? new Error("aborted") }));
+    };
+    abortSignal?.addEventListener("abort", onAbort, { once: true });
+    if (abortSignal?.aborted) {
+      onAbort();
+      return;
+    }
+    timer = setTimeout(() => {
+      settled = true;
+      cleanup();
+      timer = null;
+      resolve();
+    }, delayMs);
+    // Retry loops can stay abortable without keeping an otherwise idle process alive.
+    if (options.ref === false) {
+      timer.unref?.();
+    }
+    if (abortSignal?.aborted) {
+      onAbort();
+    }
+  });
+}
+
+export class RetrySupervisor {
+  attempts = 0;
+  nextDelayOverrideMs: number | undefined;
+  private initialMs: number;
+  private pendingAbort: AbortController | undefined;
+
+  constructor(
+    private readonly policy: BackoffPolicy,
+    private readonly maxAttempts = Number.POSITIVE_INFINITY,
+  ) {
+    this.initialMs = policy.initialMs;
+  }
+
+  reset(initialMs = this.policy.initialMs): void {
+    this.cancel();
+    this.attempts = 0;
+    this.initialMs = initialMs;
+    this.nextDelayOverrideMs = undefined;
+  }
+
+  cancel(reason: unknown = new Error("retry cancelled")): void {
+    this.pendingAbort?.abort(reason);
+    this.pendingAbort = undefined;
+  }
+
+  next(abortSignal?: AbortSignal) {
+    const override = this.nextDelayOverrideMs;
+    this.nextDelayOverrideMs = undefined;
+    if (override === undefined && ++this.attempts > Math.ceil(this.maxAttempts)) {
+      return undefined;
+    }
+    const attempt = Math.max(this.attempts, 1);
+    const delayMs =
+      override ?? computeBackoff({ ...this.policy, initialMs: this.initialMs }, attempt);
+    this.cancel();
+    const pendingAbort = new AbortController();
+    this.pendingAbort = pendingAbort;
+    return {
+      attempt,
+      delayMs,
+      signal: abortSignal
+        ? AbortSignal.any([pendingAbort.signal, abortSignal])
+        : pendingAbort.signal,
+    };
+  }
+}
+
 export type RetryConfig = {
   attempts?: number;
   minDelayMs?: number;
   maxDelayMs?: number;
-  /**
-   * Delay spread strategy. A fraction (0-1) spreads proportionally around the
-   * backoff delay. `"full"` draws uniformly from [delay, 2*delay).
-   */
+  /** Fractional symmetric spread or full jitter. */
   jitter?: number | "full";
 };
 
-/** Metadata available while selecting the delay before the next retry. */
 type RetryDelayContext = {
   attempt: number;
   maxAttempts: number;
@@ -23,28 +126,21 @@ type RetryDelayContext = {
   label?: string;
 };
 
-/** Metadata emitted before a retry attempt sleeps and reruns the operation. */
 export type RetryInfo = RetryDelayContext & {
   delayMs: number;
 };
 
-/** Retry execution options, including predicates, delay hooks, and callbacks. */
 export type RetryOptions = RetryConfig & {
   label?: string;
   shouldRetry?: (err: unknown, attempt: number) => boolean;
   retryAfterMs?: (err: unknown) => number | undefined;
   retryAfterMaxDelayMs?: number;
-  /** Overrides exponential backoff while retaining timer clamping and jitter. */
   delayMs?: number | ((context: RetryDelayContext) => number);
-  /** Runs before sleeping; returned promises are awaited. */
   onRetry?: (info: RetryInfo) => unknown;
-  /** Random fraction source in [0, 1); injectable for deterministic tests. */
   random?: () => number;
-  /** Sleep implementation; useful for abortable waits and deterministic tests. */
   sleep?: (ms: number) => Promise<void>;
 };
 
-/** Runtime dependencies used to adapt the leaf scheduler to its host. */
 export type RetryRuntime = {
   sleep?: (ms: number) => Promise<void>;
   random?: () => number;
@@ -58,11 +154,10 @@ const DEFAULT_RETRY_CONFIG: Required<RetryConfig> = {
   jitter: 0,
 };
 
-function defaultSleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
+const defaultSleep = (ms: number) =>
+  new Promise<void>((resolve) => {
     setTimeout(resolve, ms);
   });
-}
 
 function asFiniteNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
@@ -73,21 +168,16 @@ function clampNumber(value: unknown, fallback: number, min?: number, max?: numbe
   if (next === undefined) {
     return fallback;
   }
-  const floor = min ?? Number.NEGATIVE_INFINITY;
-  const ceiling = max ?? Number.POSITIVE_INFINITY;
-  return Math.min(Math.max(next, floor), ceiling);
+  return Math.min(Math.max(next, min ?? Number.NEGATIVE_INFINITY), max ?? Number.POSITIVE_INFINITY);
 }
 
 function resolveAttemptCount(value: unknown, fallback: number): number {
-  const candidate = asFiniteNumber(value) ?? fallback;
-  return Math.max(1, Math.round(candidate));
+  return Math.max(1, Math.round(asFiniteNumber(value) ?? fallback));
 }
 
 function resolveRetryDelayMs(value: number): number {
-  if (value === Number.POSITIVE_INFINITY) {
-    return MAX_TIMER_TIMEOUT_MS;
-  }
-  const finite = asFiniteNumber(value) ?? 0;
+  const finite =
+    value === Number.POSITIVE_INFINITY ? MAX_TIMER_TIMEOUT_MS : (asFiniteNumber(value) ?? 0);
   return Math.min(Math.max(Math.round(finite), 0), MAX_TIMER_TIMEOUT_MS);
 }
 
@@ -99,21 +189,17 @@ function resolveJitterConfig(value: unknown, fallback: number | "full"): number 
   return fraction === undefined ? fallback : Math.min(Math.max(fraction, 0), 1);
 }
 
-/** Resolves retry overrides into clamped timer-safe settings. */
 export function resolveRetryConfig(
   defaults: Required<RetryConfig> = DEFAULT_RETRY_CONFIG,
   overrides?: RetryConfig,
 ): Required<RetryConfig> {
-  const attempts = resolveAttemptCount(
-    clampNumber(overrides?.attempts, defaults.attempts, 1),
-    defaults.attempts,
-  );
+  const attempts = resolveAttemptCount(overrides?.attempts, defaults.attempts);
   const minDelayMs = resolveRetryDelayMs(
-    Math.round(clampNumber(overrides?.minDelayMs, defaults.minDelayMs, 0)),
+    clampNumber(overrides?.minDelayMs, defaults.minDelayMs, 0),
   );
   const maxDelayMs = Math.max(
     minDelayMs,
-    resolveRetryDelayMs(Math.round(clampNumber(overrides?.maxDelayMs, defaults.maxDelayMs, 0))),
+    resolveRetryDelayMs(clampNumber(overrides?.maxDelayMs, defaults.maxDelayMs, 0)),
   );
   return {
     attempts,
@@ -150,7 +236,6 @@ function applyJitter(
   return Math.max(0, mode === "positive" ? Math.ceil(raw) : Math.round(raw));
 }
 
-/** Normalizes an arbitrary thrown value while preserving Error identity. */
 export function toRetryError(value: unknown, fallbackMessage = "Non-Error thrown"): Error {
   if (value instanceof Error) {
     return value;
@@ -165,15 +250,12 @@ export function toRetryError(value: unknown, fallbackMessage = "Non-Error thrown
   return error;
 }
 
-function defaultCreateFailure(attemptErrors: readonly unknown[]): Error {
-  return toRetryError(attemptErrors.at(-1) ?? new Error("Retry failed"));
-}
-
-/** Creates a retry runner bound to host-specific sleep, randomness, and diagnostics. */
 export function createRetryRunner(runtime: RetryRuntime = {}) {
   const runtimeSleep = runtime.sleep ?? defaultSleep;
   const runtimeRandom = runtime.random ?? Math.random;
-  const createFailure = runtime.createFailure ?? defaultCreateFailure;
+  const createFailure =
+    runtime.createFailure ??
+    ((errors: readonly unknown[]) => toRetryError(errors.at(-1) ?? new Error("Retry failed")));
 
   return async function retryAsync<T>(
     fn: () => Promise<T>,
@@ -207,9 +289,7 @@ export function createRetryRunner(runtime: RetryRuntime = {}) {
         ? maxDelayMs
         : Math.max(
             minDelayMs,
-            resolveRetryDelayMs(
-              Math.round(clampNumber(options.retryAfterMaxDelayMs, maxDelayMs, 0)),
-            ),
+            resolveRetryDelayMs(clampNumber(options.retryAfterMaxDelayMs, maxDelayMs, 0)),
           );
     const random = options.random ?? runtimeRandom;
     const sleep = options.sleep ?? runtimeSleep;
@@ -246,11 +326,9 @@ export function createRetryRunner(runtime: RetryRuntime = {}) {
 
         // Honorable Retry-After hints use positive jitter. Only an over-cap,
         // already-unsatisfiable hint may spread downward to avoid lockstep.
-        const canHonorRetryAfter =
-          hasRetryAfter && typeof retryAfterMs === "number" && retryAfterMs <= delayCap;
-        const overCapRetryAfter = hasRetryAfter && !canHonorRetryAfter;
+        const canHonorRetryAfter = hasRetryAfter && (retryAfterMs ?? 0) <= delayCap;
         const wantsPositiveDraw =
-          resolved.jitter === "full" ? !overCapRetryAfter : canHonorRetryAfter;
+          resolved.jitter === "full" ? !hasRetryAfter || canHonorRetryAfter : canHonorRetryAfter;
         delay = applyJitter(
           delay,
           resolved.jitter,
@@ -270,5 +348,4 @@ export function createRetryRunner(runtime: RetryRuntime = {}) {
   };
 }
 
-/** Default retry runner for dependency-leaf consumers. */
 export const retryAsync = createRetryRunner();

@@ -4,7 +4,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { writeChannelPairingStateSnapshot } from "../pairing/pairing-store-sqlite.js";
+import { writeChannelPairingStateSnapshot } from "../pairing/pairing-store-sqlite.test-helpers.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
 import {
@@ -1536,30 +1536,6 @@ describe("doctor config flow", () => {
     collectImplicitFallbackClobberWarningsMock.mockReturnValue([]);
     noteImplicitFallbackClobberWarningsMock.mockClear();
     runDoctorConfigPreflightOptionsMock.mockClear();
-  });
-
-  it("grants config preflight cross-state imports only with repair and direct capability", async () => {
-    await runDoctorConfigWithInput({
-      config: {},
-      repair: true,
-      run: ({ options, confirm }) =>
-        loadAndMaybeMigrateDoctorConfig({
-          options: { ...options, crossStateDirImports: true },
-          confirm: async () => confirm(),
-        }),
-    });
-    expect(runDoctorConfigPreflightOptionsMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({ crossStateDirImports: true }),
-    );
-
-    await runDoctorConfigWithInput({
-      config: {},
-      repair: true,
-      run: loadAndMaybeMigrateDoctorConfig,
-    });
-    expect(runDoctorConfigPreflightOptionsMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({ crossStateDirImports: false }),
-    );
   });
 
   it("preserves invalid config for doctor repairs", async () => {
@@ -3166,3 +3142,4 @@ describe("doctor config flow", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

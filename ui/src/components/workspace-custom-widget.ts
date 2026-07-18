@@ -62,12 +62,7 @@ export type CustomWidgetHostContext = {
 };
 
 /** Builds the served asset URL for a widget file under the plugin route. */
-export function widgetAssetUrl(
-  basePath: string,
-  frameToken: string,
-  name: string,
-  file: string,
-): string {
+function widgetAssetUrl(basePath: string, frameToken: string, name: string, file: string): string {
   const base = basePath.replace(/\/+$/, "");
   const encodedToken = encodeURIComponent(frameToken);
   const encodedName = encodeURIComponent(name);
@@ -179,7 +174,7 @@ export async function loadWidgetManifestView(
  * the trusted gateway client, theme tokens, and prompt dispatch. The returned
  * teardown removes the window listener and disposes the bridge.
  */
-export function attachWidgetBridge(params: {
+function attachWidgetBridge(params: {
   iframe: HTMLIFrameElement;
   widget: WorkspaceWidget;
   manifest: WidgetManifestView;
@@ -329,7 +324,7 @@ class CustomWidgetFrameDirective extends AsyncDirective {
       return iframe;
     } catch (error) {
       // A directive's render runs at Lit COMMIT time, outside the try/catch in
-      // `renderWidgetBody`. A throw here would escape the per-cell error boundary
+      // `renderWorkspaceWidgetBody`. A throw here would escape the per-cell error boundary
       // and take down the whole tab, so the boundary has to exist here too.
       this.detach = null;
       this.iframe = null;

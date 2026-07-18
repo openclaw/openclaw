@@ -1,9 +1,9 @@
 import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
+import { resolveSessionTranscriptResetArchiveCandidatesAsync } from "./session-transcript-files.fs.js";
 import { readSessionTranscriptIndex } from "./session-transcript-index.fs.js";
 import {
   findExistingTranscriptPath,
   indexedTranscriptEntryToMessages,
-  resolveSessionTranscriptResetArchiveCandidatesAsync,
   type ReadRecentSessionMessagesResult,
 } from "./session-utils.fs.js";
 
@@ -19,7 +19,7 @@ type ReadSessionMessagesAroundIdResult = ReadRecentSessionMessagesResult & {
   offset: number;
 };
 
-export function resolveSessionMessageAnchorBounds(
+function resolveSessionMessageAnchorBounds(
   records: readonly { id?: string }[],
   messageId: string,
   maxMessages: number,

@@ -18,6 +18,13 @@ import {
   resolveGatewayPortMock as resolveGatewayPort,
 } from "./gateway-connection.test-mocks.js";
 
+function waitForFast<T>(
+  callback: () => T | Promise<T>,
+  options: { timeout?: number; interval?: number } = {},
+) {
+  return vi.waitFor(callback, { interval: 1, ...options });
+}
+
 const deviceIdentityState = vi.hoisted(() => ({
   value: {
     deviceId: "test-device-identity",
@@ -151,15 +158,6 @@ function startStubGatewayClient() {
 }
 
 vi.mock("./client.js", () => ({
-  describeGatewayCloseCode: (code: number) => {
-    if (code === 1000) {
-      return "normal closure";
-    }
-    if (code === 1006) {
-      return "abnormal closure (no close frame)";
-    }
-    return undefined;
-  },
   isGatewayConnectAssemblyError: (value: unknown) => connectAssemblyErrorState.has(value),
   GatewayClient: class {
     constructor(opts: {
@@ -766,6 +764,7 @@ describe("callGateway url resolution", () => {
       "operator.read",
       "operator.write",
       "operator.approvals",
+      "operator.questions",
       "operator.pairing",
       "operator.talk.secrets",
     ]);
@@ -788,6 +787,7 @@ describe("callGateway url resolution", () => {
       "operator.read",
       "operator.write",
       "operator.approvals",
+      "operator.questions",
       "operator.pairing",
       "operator.talk.secrets",
     ]);
@@ -1095,7 +1095,7 @@ describe("callGateway url resolution", () => {
       clientName: GATEWAY_CLIENT_NAMES.CLI,
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(eventLoopReadyState.calls).toHaveLength(1);
     });
     expect(eventLoopReadyState.calls[0]?.maxWaitMs).toBe(10_000);
@@ -1739,7 +1739,7 @@ describe("callGateway error details", () => {
       errMessage = caught instanceof Error ? caught.message : String(caught);
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(eventLoopReadyState.calls).toHaveLength(1);
     });
     expect(eventLoopReadyState.calls[0]?.maxWaitMs).toBe(5);
@@ -1915,7 +1915,7 @@ describe("callGateway error details", () => {
       return result;
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(lastRequestOptions?.opts?.timeoutMs).toBeNull();
     });
     await vi.advanceTimersByTimeAsync(60_000);
@@ -2016,7 +2016,7 @@ describe("callGateway error details", () => {
       },
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(lastRequestOptions?.method).toBe("agent");
     });
     controller.abort();
@@ -2079,7 +2079,7 @@ describe("callGateway error details", () => {
       onSignalAbort,
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(startCalled).toBe(true);
     });
     controller.abort();
@@ -2162,7 +2162,7 @@ describe("callGateway error details", () => {
       callResolved = true;
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(stopStarted).toBe(true);
     });
     expect(callResolved).toBe(false);
@@ -2222,7 +2222,7 @@ describe("callGateway error details", () => {
 
     const promise = callGateway<{ ok: true }>({ method: "health", timeoutMs: 5 });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(stopStarted).toBe(true);
     });
 
@@ -2833,3 +2833,4 @@ describe("callGateway password resolution", () => {
     expect(lastClientOptions?.[testCase.authKey]).toBe(testCase.explicitValue);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

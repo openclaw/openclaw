@@ -7,6 +7,8 @@ import ai.openclaw.app.GatewayClawHubSkillSummary
 import ai.openclaw.app.GatewaySkillSummary
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.isClawHubSkillInstalled
+import ai.openclaw.app.isClawHubSkillOperationActive
 import ai.openclaw.app.ui.design.ClawDetailRow
 import ai.openclaw.app.ui.design.ClawIconButton
 import ai.openclaw.app.ui.design.ClawListPanel
@@ -184,6 +186,7 @@ internal fun SkillsSettingsScreen(
       SkillsTab.Browse ->
         ClawHubSkillSearchPanel(
           state = clawHubState,
+          installedSkills = skills,
           query = clawHubQuery,
           isConnected = isConnected,
           methodsAvailable = clawHubMethodsAvailable,
@@ -534,6 +537,7 @@ private fun SkillListRow(
 @Composable
 private fun ClawHubSkillSearchPanel(
   state: GatewayClawHubSkillSearchState,
+  installedSkills: List<GatewaySkillSummary>,
   query: String,
   isConnected: Boolean,
   methodsAvailable: Boolean,
@@ -593,22 +597,26 @@ private fun ClawHubSkillSearchPanel(
   }
   if (state.results.isNotEmpty()) {
     ClawListPanel(items = state.results) { skill ->
+      val installed =
+        skill.version?.let { version -> isClawHubSkillInstalled(installedSkills, skill.slug, version) }
+          ?: isClawHubSkillInstalled(installedSkills, skill.slug)
       ClawDetailRow(
         title = skill.displayName,
         subtitle = listOfNotNull(skill.summary, skill.version?.let { nativeString("Version \$it", it) }).joinToString(" · "),
         leading = { ClawTextBadge(text = skillBadge(skill.displayName)) },
         trailing = {
           val reviewing = state.reviewingSlug == skill.slug
-          val installing = skill.slug in state.installingSlugs
+          val installing = isClawHubSkillOperationActive(state.installingSlugs, skill.slug)
           ClawSecondaryButton(
             text =
               when {
+                installed -> nativeString("Installed")
                 installing -> nativeString("Installing")
                 reviewing -> nativeString("Loading")
                 else -> nativeString("Review")
               },
             onClick = { onReviewInstall(skill) },
-            enabled = isConnected && methodsAvailable && !reviewing && !installing,
+            enabled = isConnected && methodsAvailable && !installed && !reviewing && !installing,
           )
         },
       )

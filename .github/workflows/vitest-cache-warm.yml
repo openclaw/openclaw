@@ -1,0 +1,68 @@
+name: Vitest Cache Warm
+
+on:
+  repository_dispatch:
+    types: [vitest-cache-warm]
+  schedule:
+    - cron: "17 8 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vitest-cache-warm
+  cancel-in-progress: false
+
+jobs:
+  warm:
+    # Dependency snapshots are serialized before main CI fanout. This workflow
+    # writes only the transform and compile caches from scheduled/trusted runs.
+    if: github.repository == 'openclaw/openclaw'
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          node-compile-cache: "true"
+          node-compile-cache-scope: "test"
+          save-actions-cache: "true"
+          save-node-compile-cache: "true"
+          save-vitest-fs-cache: "true"
+          sticky-disk: "false"
+          use-actions-cache: "true"
+          vitest-fs-cache: "true"
+
+      - name: Select broad cache seed
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'EOF'
+          import { appendFileSync } from "node:fs";
+          import { createNodeTestShards } from "./scripts/lib/ci-node-test-plan.mjs";
+
+          // The unit-fast graph is striped across jobs; warm the union of its
+          // configs as whole suites so the seed covers every stripe's imports.
+          const shards = createNodeTestShards().filter((candidate) =>
+            candidate.shardName.startsWith("core-unit-fast"),
+          );
+          if (shards.length === 0) {
+            throw new Error("core-unit-fast cache seed shards are missing");
+          }
+          const configs = [...new Set(shards.flatMap((shard) => shard.configs))];
+          appendFileSync(
+            process.env.GITHUB_ENV,
+            [
+              `OPENCLAW_NODE_TEST_CONFIGS_JSON=${JSON.stringify(configs)}`,
+              "OPENCLAW_VITEST_SHARD_NAME=core-unit-fast",
+              "OPENCLAW_NODE_TEST_PLAN_CONCURRENCY=1",
+            ].join("\n") + "\n",
+          );
+          EOF
+
+      - name: Warm transform and compile caches
+        run: node scripts/ci-run-node-test-shard.mjs

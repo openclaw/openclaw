@@ -10,6 +10,7 @@ import {
   matchesMentionPatterns,
   resolveEnvelopeFormatOptions,
   resolveInboundMentionDecision,
+  resolveInboundSupplementalSenderAllowed,
   toInboundMediaFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
@@ -18,8 +19,9 @@ import {
   type ChannelIngressIdentityDescriptor,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
+  buildChannelGroupsScopeTree,
   resolveChannelGroupPolicy,
-  resolveChannelGroupRequireMention,
+  resolveScopeRequireMention,
 } from "openclaw/plugin-sdk/channel-policy";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-auth-native";
 import type { DmPolicy, GroupPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -737,18 +739,21 @@ export async function resolveIMessageInboundDecision(params: {
   const replyContextAllowFrom = Array.from(
     new Set([...groupAllowFromForAccess, ...effectiveGroupAllowFrom]),
   );
-  const replySenderAllowed =
-    !isGroup || replyContextAllowFrom.length === 0
-      ? true
-      : replyContext?.sender
+  const replySenderAllowed = resolveInboundSupplementalSenderAllowed({
+    isGroup,
+    groupPolicy: replyContextAllowFrom.length === 0 ? "open" : "allowlist",
+    allowFrom: replyContextAllowFrom,
+    isSenderAllowed: (allowFrom) =>
+      replyContext?.sender
         ? isAllowedIMessageReplyContextSender({
-            allowFrom: replyContextAllowFrom,
+            allowFrom: [...allowFrom],
             sender: replyContext.sender,
             chatId,
             chatGuid,
             chatIdentifier,
           })
-        : false;
+        : false,
+  });
   const visibleReply = filterChannelInboundQuoteContext(
     contextVisibilityMode,
     replyContext
@@ -777,11 +782,9 @@ export async function resolveIMessageInboundDecision(params: {
     : undefined;
 
   const mentioned = isGroup ? matchesMentionPatterns(messageText, mentionRegexes) : true;
-  const requireMention = resolveChannelGroupRequireMention({
-    cfg: params.cfg,
-    channel: "imessage",
-    accountId: params.accountId,
-    groupId,
+  const requireMention = resolveScopeRequireMention({
+    tree: buildChannelGroupsScopeTree(params.cfg, "imessage", params.accountId),
+    path: groupId ? [groupId] : [],
     requireMentionOverride: params.opts?.requireMention,
     overrideOrder: "before-config",
   });
@@ -1024,6 +1027,7 @@ export async function buildIMessageInboundContext(params: {
     },
     route: {
       agentId: decision.route.agentId,
+      dmScope: decision.route.dmScope,
       accountId: decision.route.accountId,
       routeSessionKey: decision.route.sessionKey,
     },
@@ -1107,11 +1111,9 @@ export function buildDirectIMessageReplyTarget(params: {
   return `imessage:${params.sender}`;
 }
 
-export function describeIMessageEchoDropLog(params: {
-  messageText: string;
-  messageId?: string;
-}): string {
+function describeIMessageEchoDropLog(params: { messageText: string; messageId?: string }): string {
   const preview = truncateUtf16Safe(params.messageText, 50);
   const messageIdPart = params.messageId ? ` id=${params.messageId}` : "";
   return `imessage: skipping echo message${messageIdPart}: "${preview}"`;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -57,6 +57,7 @@ export function createPluginApiFactory(
     registerHook,
     registerHttpRoute,
     registerHostedMediaResolver,
+    registerMcpServerConnectionResolver,
     registerProvider,
     registerWorkerProvider,
     registerModelCatalogProvider,
@@ -103,6 +104,7 @@ export function createPluginApiFactory(
     registerMemoryCapability,
     registerMemoryPromptSection,
     registerMemoryPromptSupplement,
+    registerMemoryPromptPreparation,
     registerMemoryCorpusSupplement,
     registerMemoryFlushPlan,
     registerMemoryRuntime,
@@ -180,6 +182,8 @@ export function createPluginApiFactory(
               registerHttpRoute: (routeParams) => registerHttpRoute(record, routeParams),
               registerHostedMediaResolver: (resolver) =>
                 registerHostedMediaResolver(record, resolver),
+              registerMcpServerConnectionResolver: (resolver) =>
+                registerMcpServerConnectionResolver(record, resolver),
               registerProvider: (provider) => registerProvider(record, provider),
               registerWorkerProvider: (provider) => registerWorkerProvider(record, provider),
               registerModelCatalogProvider: (provider) =>
@@ -358,6 +362,8 @@ export function createPluginApiFactory(
                 registerMemoryPromptSection(record, builder),
               registerMemoryPromptSupplement: (builder) =>
                 registerMemoryPromptSupplement(record, builder),
+              registerMemoryPromptPreparation: (prepare) =>
+                registerMemoryPromptPreparation(record, prepare),
               registerMemoryCorpusSupplement: (supplement) =>
                 registerMemoryCorpusSupplement(record, supplement),
               registerMemoryFlushPlan: (resolver) => registerMemoryFlushPlan(record, resolver),

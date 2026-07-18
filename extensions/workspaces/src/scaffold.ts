@@ -9,7 +9,7 @@ import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
 import { validateWidgetManifest } from "./manifest.js";
 
-export type WorkspaceScaffoldOptions = {
+type WorkspaceScaffoldOptions = {
   name: string;
   title?: string;
   stateDir?: string;
@@ -17,7 +17,7 @@ export type WorkspaceScaffoldOptions = {
   createdBy?: string;
 };
 
-export type WorkspaceScaffoldResult = {
+type WorkspaceScaffoldResult = {
   name: string;
   title: string;
   dir: string;
@@ -140,9 +140,8 @@ export async function scaffoldWorkspaceWidget(
     throw new Error("widget name is invalid");
   }
   const title = scaffoldTitle(name, options.title);
-  // Validate what we are about to write: `loadWidgetManifest` enforces the same
-  // schema at mount time, and a scaffold that cannot load is worse than a clear
-  // error at creation time.
+  // Validate what we are about to write: the approval snapshot enforces the same
+  // schema, and a scaffold that cannot be approved is worse than a clear error.
   validateWidgetManifest(widgetManifest(name, title), name);
   await fs.mkdir(widgetsRoot, { recursive: true, mode: 0o700 });
   try {

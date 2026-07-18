@@ -25,6 +25,7 @@ type Workflow = {
     {
       name?: string;
       needs?: string[] | string;
+      "runs-on"?: string;
       steps?: WorkflowStep[];
     }
   >;
@@ -97,6 +98,8 @@ describe("shared OpenClawKit Periphery workflow", () => {
     expect(workflow.jobs?.["scan-ios"]?.name).toBe("Scan shared kit from iOS");
     expect(workflow.jobs?.["scan-macos"]?.name).toBe("Scan shared kit from macOS");
     expect(workflow.jobs?.intersect?.needs).toEqual(["scope", "scan-ios", "scan-macos"]);
+    expect(workflow.jobs?.["scan-ios"]?.["runs-on"]).toContain("github.run_attempt > 1");
+    expect(workflow.jobs?.["scan-macos"]?.["runs-on"]).toContain("github.run_attempt > 1");
 
     const iosUpload = workflow.jobs?.["scan-ios"]?.steps?.find(
       (step) => step.name === "Upload iOS consumer report",
@@ -129,8 +132,8 @@ describe("shared OpenClawKit Periphery workflow", () => {
     const execute = compileFunction(`return (async () => {\n${script}\n})();`, [
       "context",
       "core",
-      "github",
-    ]) as (context: unknown, core: unknown, github: unknown) => Promise<void>;
+      "exec",
+    ]) as (context: unknown, core: unknown, exec: unknown) => Promise<void>;
 
     for (const filename of [
       "apps/ios/Sources/App.swift",
@@ -142,13 +145,20 @@ describe("shared OpenClawKit Periphery workflow", () => {
       await execute(
         {
           eventName: "pull_request",
-          payload: { pull_request: { draft: false, number: 1 } },
+          payload: { pull_request: { base: { sha: "base-sha" }, draft: false, number: 1 } },
           repo: {},
         },
         { setOutput: (name: string, value: string) => outputs.set(name, value) },
         {
-          paginate: async () => [{ filename }],
-          rest: { pulls: { listFiles() {} } },
+          async getExecOutput(command: string, args: string[]) {
+            expect(command).toBe("git");
+            expect(args.slice(0, 5)).toEqual(["diff", "--quiet", "base-sha", "HEAD", "--"]);
+            const pathspecs = args.slice(5);
+            const changed = pathspecs.some((pathspec) =>
+              pathspec.endsWith("/") ? filename.startsWith(pathspec) : filename === pathspec,
+            );
+            return { exitCode: changed ? 1 : 0 };
+          },
         },
       );
       expect(outputs.get("should-scan"), filename).toBe("true");

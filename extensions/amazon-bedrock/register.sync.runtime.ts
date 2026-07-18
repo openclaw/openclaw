@@ -2,6 +2,7 @@
  * Synchronous Amazon Bedrock provider registration. It wires Bedrock streaming,
  * model discovery, thinking policy, guardrails, and embedding integration.
  */
+import type { BedrockClient } from "@aws-sdk/client-bedrock";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { registerApiProvider, streamSimple } from "openclaw/plugin-sdk/llm";
@@ -11,7 +12,7 @@ import type {
   ProviderNormalizeResolvedModelContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
-  ANTHROPIC_BY_MODEL_REPLAY_HOOKS,
+  buildProviderReplayFamilyHooks,
   normalizeProviderId,
   resolveClaudeFable5ModelIdentity,
   resolveClaudeModelIdentity,
@@ -21,6 +22,7 @@ import {
 import { streamWithPayloadPatch } from "openclaw/plugin-sdk/provider-stream-shared";
 import { refreshAwsSharedConfigCacheForBedrock } from "./aws-credential-refresh.js";
 import { supportsBedrockPromptCaching } from "./bedrock-options.js";
+import { loadBedrockControlPlaneSdk, runBedrockControlPlaneRequest } from "./control-plane.js";
 import { mergeImplicitBedrockProvider, resolveBedrockConfigApiKey } from "./discovery-shared.js";
 import { bedrockMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
 import { streamBedrock, streamSimpleBedrock } from "./stream.runtime.js";
@@ -247,39 +249,31 @@ type BedrockAppProfileTraits = {
 
 const appProfileTraitsCache = new Map<string, BedrockAppProfileTraits>();
 
-type BedrockGetInferenceProfileResponse = {
-  models?: Array<{ modelArn?: string }>;
-};
-
-type BedrockControlPlane = {
-  getInferenceProfile: (input: {
-    inferenceProfileIdentifier: string;
-  }) => Promise<BedrockGetInferenceProfileResponse>;
-};
-
-async function createBedrockControlPlane(region: string | undefined): Promise<BedrockControlPlane> {
-  await refreshAwsSharedConfigCacheForBedrock();
-  const { BedrockClient, GetInferenceProfileCommand } = await import("@aws-sdk/client-bedrock");
-  const client = new BedrockClient(region ? { region } : {});
-  return {
-    getInferenceProfile: async (input) => await client.send(new GetInferenceProfileCommand(input)),
-  };
-}
-
 async function resolveAppProfileTraits(
   modelId: string,
   fallbackRegion: string | undefined,
+  signal: AbortSignal | undefined,
 ): Promise<BedrockAppProfileTraits> {
   const cached = appProfileTraitsCache.get(modelId);
   if (cached) {
     return cached;
   }
+  let client: BedrockClient | undefined;
   try {
+    signal?.throwIfAborted();
     const region = extractRegionFromArn(modelId) ?? fallbackRegion;
-    const controlPlane = await createBedrockControlPlane(region);
-    const resp = await controlPlane.getInferenceProfile({ inferenceProfileIdentifier: modelId });
+    const sdk = await loadBedrockControlPlaneSdk();
+    signal?.throwIfAborted();
+    const controlPlaneClient = sdk.createClient(region);
+    client = controlPlaneClient;
+    const command = sdk.createGetInferenceProfileCommand({ inferenceProfileIdentifier: modelId });
+    const resp = await runBedrockControlPlaneRequest({
+      operation: "Bedrock GetInferenceProfile",
+      signal,
+      send: (options) => controlPlaneClient.send(command, options),
+    });
     const models = resp.models ?? [];
-    const modelArns = models.map((m: { modelArn?: string }) => m.modelArn ?? "");
+    const modelArns = models.map((model) => model.modelArn ?? "");
     const traits = {
       cacheEligible:
         models.length > 0 && modelArns.every((modelArn) => resolvedModelSupportsCaching(modelArn)),
@@ -288,12 +282,16 @@ async function resolveAppProfileTraits(
     appProfileTraitsCache.set(modelId, traits);
     return traits;
   } catch {
+    // Caller cancellation is terminal; only provider/control-plane failures use heuristics.
+    signal?.throwIfAborted();
     // Transient failures (throttling, network, IAM) should not be cached —
     // return the heuristic fallback but allow retry on the next request.
     return {
       cacheEligible: isAnthropicBedrockModel(modelId),
       omitTemperature: isOpus47OrNewerBedrockModelRef(modelId),
     };
+  } finally {
+    client?.destroy();
   }
 }
 
@@ -379,7 +377,9 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
   ] as const;
   const deprecatedTemperatureValidationRe =
     /ValidationException[\s\S]*(?:invalid_request_error[\s\S]*)?temperature[\s\S]*deprecated|ValidationException[\s\S]*deprecated[\s\S]*temperature/i;
-  const anthropicByModelReplayHooks = ANTHROPIC_BY_MODEL_REPLAY_HOOKS;
+  const anthropicByModelReplayHooks = buildProviderReplayFamilyHooks({
+    family: "anthropic-by-model",
+  });
   const startupPluginConfig = (api.pluginConfig ?? {}) as AmazonBedrockPluginConfig;
 
   registerApiProvider(
@@ -461,7 +461,10 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
     return {
       ...options,
       onPayload: async (payload: unknown, payloadModel: unknown) => {
+        const signal = (options as { signal?: AbortSignal }).signal;
+        signal?.throwIfAborted();
         await refreshAwsSharedConfigCacheForBedrock();
+        signal?.throwIfAborted();
         return originalOnPayload?.(payload, payloadModel);
       },
     };
@@ -665,7 +668,7 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
                   if (shouldOmitTemperature) {
                     omitUnsupportedClaudePayloadTemperature(payloadRecord);
                   } else if (mayNeedTemperatureTrait) {
-                    const traits = await resolveAppProfileTraits(modelId, region);
+                    const traits = await resolveAppProfileTraits(modelId, region, merged.signal);
                     if (traits.omitTemperature) {
                       omitUnsupportedClaudePayloadTemperature(payloadRecord);
                     }
@@ -685,7 +688,7 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
           withAwsCredentialRefreshOnPayload({
             ...merged,
             onPayload: async (payload: unknown, payloadModel: unknown) => {
-              const traits = await resolveAppProfileTraits(modelId, region);
+              const traits = await resolveAppProfileTraits(modelId, region, merged.signal);
               if (payload && typeof payload === "object") {
                 const payloadRecord = payload as Record<string, unknown>;
                 if (traits.cacheEligible) {

@@ -3,7 +3,6 @@ import {
   normalizeSortedUniqueTrimmedStringList,
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
-import { GATEWAY_CLIENT_MODES } from "../../../../packages/gateway-protocol/src/client-info.js";
 import {
   buildPairingConnectCloseReason,
   buildPairingConnectErrorDetails,
@@ -22,17 +21,21 @@ import {
   requestDevicePairing,
 } from "../../../infra/device-pairing.js";
 import {
-  isPairingSetupBootstrapProfile,
+  isMobilePairingSetupBootstrapProfile,
   resolveBootstrapProfileScopesForRole,
   resolveBootstrapProfileScopesForRoles,
 } from "../../../shared/device-bootstrap-profile.js";
 import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
+import { isBrowserCopilotClient } from "../../../utils/message-channel.js";
 import { pruneSupersededSilentPairingsAfterApproval } from "../../device-pairing-prune.js";
 import { shouldAutoApproveNodePairingFromTrustedCidrs } from "../../node-pairing-auto-approve.js";
+import { normalizeChromeExtensionOrigin } from "../../origin-check.js";
 import { truncateCloseReason } from "../close-reason.js";
 import {
   isControlUiOperatorBootstrapProfile,
+  isMobileNodeBootstrapConnect,
   isSetupCodeMobileBootstrapClient,
+  pairedDeviceAllowsBootstrapProfile,
   resolvePairedAccessScopes,
 } from "./connect-device-metadata.js";
 import { issueGatewayConnectDeviceTokens } from "./connect-device-tokens.js";
@@ -49,8 +52,16 @@ export async function authorizeGatewayConnectDevice(
   context: GatewayConnectPhaseContext,
   state: AuthenticatedGatewayConnect,
 ): Promise<DeviceAuthorizedGatewayConnect | undefined> {
-  const { connId, buildRequestContext, close, send, setHandshakeState, setCloseCause, logGateway } =
-    context.handler;
+  const {
+    connId,
+    buildRequestContext,
+    close,
+    send,
+    setHandshakeState,
+    setCloseCause,
+    logGateway,
+    requestOrigin,
+  } = context.handler;
   const {
     frame,
     connectParams,
@@ -76,6 +87,11 @@ export async function authorizeGatewayConnectDevice(
     skipControlUiPairingForDevice,
   } = state;
   let hasServerApprovedDeviceTokenBaseline = false;
+  let pairedClientId: string | undefined;
+  let pairedBrowserOrigin: string | undefined;
+  const browserCopilotOrigin = isBrowserCopilotClient(connectParams.client)
+    ? normalizeChromeExtensionOrigin(requestOrigin)
+    : undefined;
   if (device && devicePublicKey) {
     const formatAuditList = (items: string[] | undefined): string => {
       const normalized = normalizeSortedUniqueTrimmedStringList(items);
@@ -96,6 +112,7 @@ export async function authorizeGatewayConnectDevice(
       deviceFamily: connectParams.client.deviceFamily,
       clientId: connectParams.client.id,
       clientMode: connectParams.client.mode,
+      ...(browserCopilotOrigin ? { browserOrigin: browserCopilotOrigin } : {}),
       role,
       scopes,
       remoteIp: reportedClientIp,
@@ -155,18 +172,25 @@ export async function authorizeGatewayConnectDevice(
         reportedClientIp,
         autoApproveCidrs: configSnapshot.gateway?.nodes?.pairing?.autoApproveCidrs,
       });
+      const isSetupCodeMobileNodeConnect = isMobileNodeBootstrapConnect({
+        role,
+        scopes,
+        isControlUi,
+        isBrowserOperatorUi,
+        isWebchat,
+        clientMode: connectParams.client.mode,
+      });
+      const allowBoundBootstrapProfileLookup =
+        (reason === "not-paired" &&
+          !existingPairedDevice &&
+          (isSetupCodeMobileNodeConnect || (isControlUi && role === "operator"))) ||
+        (reason === "scope-upgrade" &&
+          Boolean(existingPairedDevice) &&
+          isSetupCodeMobileNodeConnect);
       const boundBootstrapProfile =
         authMethod === "bootstrap-token" &&
         bootstrapTokenCandidate &&
-        reason === "not-paired" &&
-        !existingPairedDevice &&
-        ((role === "node" &&
-          scopes.length === 0 &&
-          !isControlUi &&
-          !isBrowserOperatorUi &&
-          !isWebchat &&
-          connectParams.client.mode === GATEWAY_CLIENT_MODES.NODE) ||
-          (isControlUi && role === "operator"))
+        allowBoundBootstrapProfileLookup
           ? await getBoundDeviceBootstrapProfile({
               token: bootstrapTokenCandidate,
               deviceId: device.id,
@@ -175,13 +199,8 @@ export async function authorizeGatewayConnectDevice(
           : null;
       const allowSetupCodeMobileBootstrapPairing =
         boundBootstrapProfile !== null &&
-        isPairingSetupBootstrapProfile(boundBootstrapProfile) &&
-        role === "node" &&
-        scopes.length === 0 &&
-        !isControlUi &&
-        !isBrowserOperatorUi &&
-        !isWebchat &&
-        connectParams.client.mode === GATEWAY_CLIENT_MODES.NODE &&
+        isMobilePairingSetupBootstrapProfile(boundBootstrapProfile) &&
+        isSetupCodeMobileNodeConnect &&
         isSetupCodeMobileBootstrapClient(connectParams.client);
       const setupCodeMobileBootstrapProfile = allowSetupCodeMobileBootstrapPairing
         ? boundBootstrapProfile
@@ -196,7 +215,8 @@ export async function authorizeGatewayConnectDevice(
       // This is the native QR/setup-code onboarding seam. Mobile clients
       // must prove their canonical client id and platform/family metadata
       // agree before the Gateway can skip owner approval and hand off the
-      // bounded operator token below. Admin/pairing still require an explicit owner flow.
+      // selected operator profile below. Full mobile setup includes admin;
+      // limited setup retains the previous bounded operator scope set.
       const bootstrapPairingRoles = setupCodeMobileBootstrapProfile
         ? uniqueStrings([role, ...setupCodeMobileBootstrapProfile.roles])
         : controlUiOperatorBootstrapProfile
@@ -206,11 +226,13 @@ export async function authorizeGatewayConnectDevice(
         ? resolveBootstrapProfileScopesForRoles(
             bootstrapPairingRoles ?? [],
             setupCodeMobileBootstrapProfile.scopes,
+            setupCodeMobileBootstrapProfile.purpose,
           )
         : controlUiOperatorBootstrapProfile
           ? resolveBootstrapProfileScopesForRole(
               "operator",
               controlUiOperatorBootstrapProfile.scopes,
+              controlUiOperatorBootstrapProfile.purpose,
             )
           : undefined;
       const bootstrapApprovalProfile =
@@ -226,7 +248,7 @@ export async function authorizeGatewayConnectDevice(
             }
           : {}),
         silent:
-          reason === "scope-upgrade"
+          reason === "scope-upgrade" && !allowSetupCodeMobileBootstrapPairing
             ? false
             : allowSilentLocalPairing ||
               allowSilentTrustedCidrsNodePairing ||
@@ -312,9 +334,14 @@ export async function authorizeGatewayConnectDevice(
             }
           }
         } else {
-          resolvedByConcurrentApproval = pairingStateAllowsRequestedAccess(
-            await getPairedDevice(device.id),
-          );
+          const pairedAfterConcurrentApproval = await getPairedDevice(device.id);
+          resolvedByConcurrentApproval = bootstrapApprovalProfile
+            ? pairedDeviceAllowsBootstrapProfile({
+                device: pairedAfterConcurrentApproval,
+                devicePublicKey,
+                profile: bootstrapApprovalProfile,
+              })
+            : pairingStateAllowsRequestedAccess(pairedAfterConcurrentApproval);
           let requestStillPending = false;
           if (!resolvedByConcurrentApproval) {
             recoveryRequestId = await resolveLivePendingRequestId();
@@ -419,6 +446,11 @@ export async function authorizeGatewayConnectDevice(
         if (!ok) {
           return undefined;
         }
+        const approvedDevice = await getPairedDevice(device.id);
+        pairedClientId =
+          approvedDevice?.publicKey === devicePublicKey ? approvedDevice.clientId : undefined;
+        pairedBrowserOrigin =
+          approvedDevice?.publicKey === devicePublicKey ? approvedDevice.browserOrigin : undefined;
         hasServerApprovedDeviceTokenBaseline = true;
       } else if (
         skipControlUiPairingForDevice ||
@@ -427,6 +459,8 @@ export async function authorizeGatewayConnectDevice(
         hasServerApprovedDeviceTokenBaseline = true;
       }
     } else {
+      pairedClientId = paired.clientId;
+      pairedBrowserOrigin = paired.browserOrigin;
       hasServerApprovedDeviceTokenBaseline = true;
       const existingDevice = await authorizeExistingGatewayDevice({
         context,
@@ -443,6 +477,26 @@ export async function authorizeGatewayConnectDevice(
       }
       handoffBootstrapProfile = existingDevice.handoffBootstrapProfile;
     }
+  }
+
+  const browserCopilotIdentityMismatch =
+    pairedClientId !== connectParams.client.id &&
+    (isBrowserCopilotClient(connectParams.client) ||
+      isBrowserCopilotClient({ id: pairedClientId }));
+  const browserCopilotOriginMismatch =
+    isBrowserCopilotClient(connectParams.client) &&
+    (!pairedBrowserOrigin || !browserCopilotOrigin || pairedBrowserOrigin !== browserCopilotOrigin);
+  if (browserCopilotIdentityMismatch || browserCopilotOriginMismatch) {
+    const message = "browser copilot requires a dedicated paired device identity";
+    setHandshakeState("failed");
+    send({
+      type: "res",
+      id: frame.id,
+      ok: false,
+      error: errorShape(ErrorCodes.NOT_PAIRED, message),
+    });
+    close(1008, truncateCloseReason(message));
+    return undefined;
   }
 
   const { deviceToken, bootstrapDeviceTokens } = await issueGatewayConnectDeviceTokens({

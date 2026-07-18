@@ -47,11 +47,9 @@ export type ServiceConfigIssue = {
   level?: "recommended" | "aggressive";
 };
 
-export type ServiceConfigAudit = {
-  ok: boolean;
-  issues: ServiceConfigIssue[];
-};
-
+export type ServiceConfigAudit =
+  | { ok: true; issues: ServiceConfigIssue[] }
+  | { ok: false; issues: ServiceConfigIssue[] };
 export const SERVICE_AUDIT_CODES = {
   gatewayCommandMissing: "gateway-command-missing",
   gatewayEntrypointMismatch: "gateway-entrypoint-mismatch",
@@ -299,15 +297,19 @@ function readGatewayServiceCommandPortState(
   if (!programArguments || programArguments.length === 0) {
     return { kind: "missing" };
   }
-  for (const [index, arg] of programArguments.entries()) {
+  let latest: GatewayServiceCommandPort = { kind: "missing" };
+  for (let index = 0; index < programArguments.length; index += 1) {
+    const arg = programArguments[index];
     if (arg === "--port") {
-      return parseGatewayPortArg(programArguments[index + 1]);
+      latest = parseGatewayPortArg(programArguments[index + 1]);
+      index += 1;
+      continue;
     }
-    if (arg.startsWith("--port=")) {
-      return parseGatewayPortArg(arg.slice("--port=".length));
+    if (arg?.startsWith("--port=")) {
+      latest = parseGatewayPortArg(arg.slice("--port=".length));
     }
   }
-  return { kind: "missing" };
+  return latest;
 }
 
 function auditGatewayServicePort(params: {
@@ -668,5 +670,5 @@ export async function auditGatewayServiceConfig(params: {
     await auditLaunchdPlist(params.env, issues);
   }
 
-  return { ok: issues.length === 0, issues };
+  return issues.length === 0 ? { ok: true, issues } : { ok: false, issues };
 }

@@ -46,6 +46,7 @@ const connectParams = {
     environmentId: "worker-1",
     credential,
     sessionId: null,
+    runId: null,
     ownerEpoch: 1,
     rpcSetVersion: WORKER_RPC_SET_VERSION,
     handshake,
@@ -190,6 +191,29 @@ describe("worker protocol schemas", () => {
         params: connectParams,
       }),
     ).toBe(true);
+    const missingRunId = structuredClone(connectParams);
+    Reflect.deleteProperty(missingRunId.admission, "runId");
+    expect(
+      validateWorkerConnectRequestFrame({
+        type: "req",
+        id: "connect-missing-run",
+        method: "connect",
+        params: missingRunId,
+      }),
+    ).toBe(false);
+    for (const admission of [
+      { ...connectParams.admission, sessionId: null, runId: "run-1" },
+      { ...connectParams.admission, sessionId: "session-1", runId: null },
+    ]) {
+      expect(
+        validateWorkerConnectRequestFrame({
+          type: "req",
+          id: "connect-mismatched-session-run",
+          method: "connect",
+          params: { ...connectParams, admission },
+        }),
+      ).toBe(false);
+    }
     expect(
       Value.Check(WorkerAdmissionResponseFrameSchema, {
         type: "res",
@@ -449,6 +473,7 @@ describe("worker protocol schemas", () => {
 
   it("keeps worker close reasons closed", () => {
     expect(Value.Check(WorkerProtocolCloseReasonSchema, "credential-replaced")).toBe(true);
+    expect(Value.Check(WorkerProtocolCloseReasonSchema, "placement-mismatch")).toBe(true);
     expect(Value.Check(WorkerProtocolCloseReasonSchema, "not-a-worker-reason")).toBe(false);
   });
 });

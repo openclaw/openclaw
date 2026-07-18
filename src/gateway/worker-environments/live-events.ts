@@ -5,12 +5,6 @@ import type {
   WorkerLiveEventResult,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
-  capLiveExecResult,
-  sanitizeToolArgs,
-  sanitizeToolResult,
-} from "../../agents/embedded-agent-subscribe.tools.js";
-import { normalizeToolName } from "../../agents/tool-policy.js";
-import {
   onSessionIdentityMutation,
   type SessionIdentityMutation,
 } from "../../config/sessions/session-accessor.js";
@@ -25,6 +19,14 @@ import {
   releaseAgentRunContext,
 } from "../../infra/agent-events.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import {
+  createWorkerLiveTrajectoryRecorder,
+  isDefinitiveWorkerTerminalEvent,
+  prepareWorkerLiveEventData,
+  recordWorkerLiveTrajectoryEvent,
+  type WorkerLiveTrajectoryRecorder,
+  type WorkerLiveTrajectoryTarget,
+} from "./live-event-projection.js";
 import { resolveWorkerSessionTarget } from "./session-target.js";
 
 const DEFAULT_WINDOW_SIZE = 128;
@@ -42,15 +44,12 @@ type OwnedLiveRun = {
   claimId: string;
   controlUiVisible: boolean;
   lifecycleGeneration: string;
+  trajectoryRecorder: WorkerLiveTrajectoryRecorder;
 };
 
-type LiveEventTarget = {
-  agentId?: string;
-  sessionId: string;
-  sessionKey: string;
-};
+type LiveEventTarget = WorkerLiveTrajectoryTarget;
 
-export type WorkerLiveSessionBinding = Readonly<{
+type WorkerLiveSessionBinding = Readonly<{
   environmentId: string;
   runEpoch: number;
   sessionId: string;
@@ -58,7 +57,7 @@ export type WorkerLiveSessionBinding = Readonly<{
 
 type BoundLiveSession = WorkerLiveSessionBinding & { target: LiveEventTarget };
 
-export type WorkerLiveCredentialRotation = Readonly<{
+type WorkerLiveCredentialRotation = Readonly<{
   credentialHash: string;
   environmentId: string;
   previousCredentialHash: string;
@@ -85,7 +84,7 @@ export type WorkerLiveEventApplicationResult =
 
 type WorkerLiveEventFailure = Extract<WorkerLiveEventApplicationResult, { ok: false }>;
 
-export type WorkerLiveEventReceiverOptions = {
+type WorkerLiveEventReceiverOptions = {
   getConfig: () => OpenClawConfig;
   maxActiveRuns?: number;
   maxPendingBytes?: number;
@@ -115,6 +114,7 @@ function resolveLiveEventTarget(
     ...(target.agentId ? { agentId: target.agentId } : {}),
     sessionId: target.sessionId,
     sessionKey: target.sessionKey,
+    storePath: target.storePath,
   };
 }
 
@@ -160,34 +160,6 @@ function matchesSessionIdentityMutation(
     (target) =>
       target.sessionId === binding.sessionId ||
       (prepared ? target.sessionKeys.includes(prepared.target.sessionKey) : false),
-  );
-}
-
-function prepareLiveEventData(event: WorkerLiveEventParams["event"]): Record<string, unknown> {
-  const payload = structuredClone(event.payload) as Record<string, unknown>;
-  if (event.kind !== "tool") {
-    return payload;
-  }
-  const toolName = normalizeToolName(event.payload.name);
-  payload.name = toolName;
-  if (event.payload.phase === "start") {
-    payload.args = sanitizeToolArgs(event.payload.args);
-  } else if (event.payload.phase === "update") {
-    const partialResult = sanitizeToolResult(event.payload.partialResult);
-    payload.partialResult = toolName === "exec" ? capLiveExecResult(partialResult) : partialResult;
-  } else {
-    const result = sanitizeToolResult(event.payload.result);
-    payload.result = toolName === "exec" ? capLiveExecResult(result) : result;
-  }
-  return payload;
-}
-
-function isDefinitiveTerminal(event: WorkerLiveEventParams["event"]): boolean {
-  return (
-    event.kind === "lifecycle" &&
-    (event.payload.phase === "end" ||
-      (event.payload.phase === "error" &&
-        (event.payload.aborted === true || event.payload.fallbackExhaustedFailure === true)))
   );
 }
 
@@ -503,7 +475,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       }
       const pendingRunId = pending.request.runId;
       if (countedRunIds.has(pendingRunId)) {
-        if (isDefinitiveTerminal(pending.request.event)) {
+        if (isDefinitiveWorkerTerminalEvent(pending.request.event)) {
           return true;
         }
         continue;
@@ -569,11 +541,22 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     }
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     const existingContext = getAgentRunContext(runId);
-    if (existingContext?.lifecycleGeneration === lifecycleGeneration) {
+    // A dispatch-owned turn context (e.g. a worker-routed turn) owns the run's
+    // Control UI visibility; adopt it so worker live events keep reaching the
+    // visible clients that started the turn. Identity still has to match, so a
+    // foreign run is rejected; only the visibility preference is inherited. With
+    // no pre-existing turn context we scope live events to this session.
+    const controlUiVisible = existingContext?.isControlUiVisible ?? false;
+    const adoptExistingUnowned = existingContext !== undefined;
+    if (
+      existingContext &&
+      (existingContext.sessionId !== window.sessionId ||
+        existingContext.sessionKey !== window.target.sessionKey ||
+        existingContext.agentId !== window.target.agentId ||
+        existingContext.lifecycleGeneration !== lifecycleGeneration)
+    ) {
       return invalidEvent();
     }
-    // Turn placement owns wider visibility; otherwise scope to this session.
-    const controlUiVisible = false;
     const claimId = claimAgentRunContext(
       runId,
       {
@@ -585,6 +568,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
         sessionKey: window.target.sessionKey,
       },
       {
+        adoptExistingUnowned,
         exclusive: true,
         onClearRequested: (clearedClaimId) => {
           if (window.activeRuns.get(runId)?.claimId === clearedClaimId) {
@@ -602,6 +586,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       claimId,
       controlUiVisible,
       lifecycleGeneration,
+      trajectoryRecorder: createWorkerLiveTrajectoryRecorder({ runId, target: window.target }),
     };
     window.activeRuns.set(runId, claimed);
     return claimed;
@@ -616,7 +601,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     if ("ok" in owned) {
       return owned;
     }
-    const definitiveTerminal = isDefinitiveTerminal(request.event);
+    const definitiveTerminal = isDefinitiveWorkerTerminalEvent(request.event);
     if (definitiveTerminal) {
       // Emission runs synchronous listeners that can clear this claim reentrantly.
       // Fence first so terminal delivery cannot reopen the run ID.
@@ -626,10 +611,11 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       {
         runId: request.runId,
         stream: request.event.kind,
-        data: prepareLiveEventData(request.event),
+        data: prepareWorkerLiveEventData(request.event),
       },
       owned.claimId,
     );
+    recordWorkerLiveTrajectoryEvent(owned.trajectoryRecorder, request.event);
     // Gateway handler owns cleanup so detach can revoke deferred terminal delivery.
     return undefined;
   };

@@ -1082,7 +1082,7 @@ function unsetPathForWriteAt(
   };
 }
 
-export function unsetPathForWrite(
+function unsetPathForWrite(
   root: OpenClawConfig,
   pathSegments: string[],
 ): { changed: boolean; next: OpenClawConfig } {
@@ -1272,3 +1272,4 @@ export function resolveWriteEnvSnapshotForPath(params: {
   }
   return undefined;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

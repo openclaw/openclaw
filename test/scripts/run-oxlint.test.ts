@@ -33,7 +33,7 @@ async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<voi
       return;
     }
     await new Promise((resolvePoll) => {
-      setTimeout(resolvePoll, 25);
+      setTimeout(resolvePoll, 5);
     });
   }
   throw new Error("condition was not met before timeout");
@@ -69,7 +69,9 @@ describe("run-oxlint", () => {
     const shardedLintRunner = readFileSync("scripts/run-oxlint-shards.mjs", "utf8");
 
     expect(packageJson.scripts.check).toBe("node scripts/check.mjs");
-    expect(packageJson.scripts.lint).toBe("node scripts/run-oxlint-shards.mjs");
+    expect(packageJson.scripts.lint).toBe(
+      "pnpm lint:ui:i18n && node scripts/run-oxlint-shards.mjs",
+    );
     expect(packageJson.scripts["lint:core"]).toBe(
       "node scripts/run-oxlint-shards.mjs --only=core --split-core",
     );
@@ -92,14 +94,6 @@ describe("run-oxlint", () => {
     expect(lockIndex).toBeGreaterThan(-1);
     expect(lockIndex).toBeGreaterThan(skipLockIndex);
     expect(childSkipIndex).toBeGreaterThan(lockIndex);
-  });
-
-  it("keeps a serial oxlint shard path available", () => {
-    const shardedLintRunner = readFileSync("scripts/run-oxlint-shards.mjs", "utf8");
-
-    expect(shardedLintRunner).toContain("OPENCLAW_OXLINT_SHARDS_SERIAL");
-    expect(shardedLintRunner).toContain('platform === "win32"');
-    expect(shardedLintRunner).toContain("runShardsSerial");
   });
 
   it("serializes broad oxlint shards on constrained local hosts", () => {
@@ -127,6 +121,25 @@ describe("run-oxlint", () => {
         env: { CI: "true", OPENCLAW_LOCAL_CHECK_MODE: "throttled" },
         platform: "linux",
         hostResources: constrainedHost,
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps oxlint shards parallel on dedicated CI runner classes", () => {
+    // Blacksmith's 16 vCPU class carries 32GB; the local-Mac 48GB threshold
+    // must not force CI serial (measured: serial shards cost 89s vs ~47s).
+    expect(
+      shouldRunOxlintShardsSerial({
+        env: { CI: "true" },
+        platform: "linux",
+        hostResources: { totalMemoryBytes: 32 * 1024 ** 3, logicalCpuCount: 16 },
+      }),
+    ).toBe(false);
+    expect(
+      shouldRunOxlintShardsSerial({
+        env: { CI: "true" },
+        platform: "linux",
+        hostResources: { totalMemoryBytes: 16 * 1024 ** 3, logicalCpuCount: 8 },
       }),
     ).toBe(true);
   });
@@ -516,9 +529,9 @@ describe("run-oxlint", () => {
             "  try { process.kill(pid, 0); return true; } catch { return false; }",
             "};",
             "const waitFor = async (predicate) => {",
-            "  for (let attempt = 0; attempt < 100; attempt += 1) {",
+            "  for (let attempt = 0; attempt < 500; attempt += 1) {",
             "    if (predicate()) return true;",
-            "    await sleep(25);",
+            "    await sleep(5);",
             "  }",
             "  return false;",
             "};",

@@ -16,6 +16,10 @@ import {
   resolveSourcePackageAliasesForVite,
   resolveTsconfigPathAliasesForVite,
 } from "../ui/vite.config.ts";
+import { buildBackgroundTasksMock } from "./control-ui-mock-background-tasks.ts";
+import { buildChannelsStatusMock, buildChannelWizardMocks } from "./control-ui-mock-channels.ts";
+import { buildPluginCatalogMock } from "./control-ui-mock-plugins.ts";
+import { buildSkillWorkshopMocks } from "./control-ui-mock-skill-workshop.js";
 
 type CliOptions = {
   allowedHosts: string[];
@@ -77,8 +81,9 @@ function sessionRow(
   key: string,
   label: string,
   updatedAt: number,
-  options: { model?: string; modelProvider?: string } = {},
+  options: { model?: string; modelProvider?: string } & Record<string, unknown> = {},
 ) {
+  const { model, modelProvider, ...extra } = options;
   return {
     contextTokens: 200_000,
     displayName: label,
@@ -86,11 +91,12 @@ function sessionRow(
     key,
     kind: "direct",
     label,
-    model: options.model ?? "gpt-5.6-luna",
-    modelProvider: options.modelProvider ?? "openai",
+    model: (model as string | undefined) ?? "gpt-5.6-luna",
+    modelProvider: (modelProvider as string | undefined) ?? "openai",
     status: "done",
     totalTokens: 0,
     updatedAt,
+    ...extra,
   };
 }
 
@@ -248,144 +254,6 @@ function buildSessionDiffMock() {
     ],
     additions: 6,
     deletions: 2,
-  };
-}
-
-function buildPluginCatalogMock() {
-  const entry = (params: {
-    id: string;
-    name: string;
-    description: string;
-    category: string;
-    installed: boolean;
-    enabled?: boolean;
-    featured?: boolean;
-  }) => ({
-    id: params.id,
-    name: params.name,
-    description: params.description,
-    version: "1.4.0",
-    installed: params.installed,
-    enabled: params.installed && (params.enabled ?? true),
-    state: params.installed ? ((params.enabled ?? true) ? "enabled" : "disabled") : "not-installed",
-    category: params.category,
-    featured: params.featured ?? false,
-    removable: params.installed,
-  });
-  return {
-    plugins: [
-      entry({
-        id: "telegram",
-        name: "Telegram",
-        description: "Chat with your agent from Telegram DMs and groups.",
-        category: "channel",
-        installed: true,
-      }),
-      entry({
-        id: "discord",
-        name: "Discord",
-        description: "Bridge agents into Discord servers and DMs.",
-        category: "channel",
-        installed: true,
-        enabled: false,
-      }),
-      entry({
-        id: "memory-wiki",
-        name: "Memory Wiki",
-        description: "Long-term wiki-style memory for people and projects.",
-        category: "memory",
-        installed: true,
-      }),
-      entry({
-        id: "browser",
-        name: "Browser",
-        description: "Drive a managed browser profile for research and automation.",
-        category: "tool",
-        installed: false,
-        featured: true,
-      }),
-      entry({
-        id: "canvas",
-        name: "Canvas",
-        description: "Generate and preview visual artifacts from sessions.",
-        category: "tool",
-        installed: false,
-      }),
-    ],
-    diagnostics: [],
-    mutationAllowed: true,
-  };
-}
-
-function buildSkillWorkshopMocks(baseTime: number) {
-  const hour = 60 * 60 * 1000;
-  const day = 24 * hour;
-  const proposals = [
-    {
-      id: "prop-release-tweets",
-      kind: "update",
-      status: "pending",
-      title: "Tighten release tweet drafting",
-      description: "Capture the changelog-to-tweet flow the agent keeps re-deriving.",
-      skillName: "release-tweets",
-      skillKey: "release-tweets",
-      createdAt: new Date(baseTime - 2 * hour).toISOString(),
-      updatedAt: new Date(baseTime - hour).toISOString(),
-      scanState: "clean",
-    },
-    {
-      id: "prop-crawler-etiquette",
-      kind: "create",
-      status: "pending",
-      title: "Add crawler etiquette skill",
-      description: "Rate limits and robots.txt handling learned during the docs sweep.",
-      skillName: "crawler-etiquette",
-      skillKey: "crawler-etiquette",
-      createdAt: new Date(baseTime - 3 * day).toISOString(),
-      updatedAt: new Date(baseTime - 2 * day).toISOString(),
-      scanState: "clean",
-    },
-    {
-      id: "prop-changelog-style",
-      kind: "update",
-      status: "applied",
-      title: "Changelog bullet style",
-      description: "One bullet per entry, no hard wraps.",
-      skillName: "changelog-style",
-      skillKey: "changelog-style",
-      createdAt: new Date(baseTime - 6 * day).toISOString(),
-      updatedAt: new Date(baseTime - 5 * day).toISOString(),
-      scanState: "clean",
-    },
-  ];
-  return {
-    list: {
-      schema: "openclaw.skill-workshop.proposals-manifest.v1",
-      updatedAt: new Date(baseTime - hour).toISOString(),
-      proposals,
-    },
-    inspect: {
-      cases: proposals.map((proposal) => ({
-        match: { proposalId: proposal.id },
-        response: {
-          record: {
-            ...proposal,
-            proposedVersion: "2",
-            target: { skillName: proposal.skillName, skillKey: proposal.skillKey },
-          },
-          content: [
-            `# ${proposal.title}`,
-            "",
-            proposal.description,
-            "",
-            "## Steps",
-            "1. Gather the source material.",
-            "2. Apply the documented workflow.",
-          ].join("\n"),
-          supportFiles: [],
-        },
-      })),
-    },
   };
 }
 
@@ -669,6 +537,116 @@ function buildProfileUsageMocks(baseTime: number) {
   };
 }
 
+/**
+ * Small but coherent config fixture so the schema-driven settings pages are
+ * demoable: `config.schema` covers a boolean, an enum, numbers, and strings
+ * across a few real section keys, and `config.get` returns a matching
+ * snapshot with the hash `config.set`/`config.apply` are guarded by.
+ */
+function buildConfigMocks() {
+  const config = {
+    logging: { level: "info", consoleTimestamps: true },
+    messages: { queueLimit: 5, responsePrefix: "" },
+    gateway: { port: 18789, bind: "127.0.0.1" },
+    agents: { defaults: { thinkingDefault: "medium" } },
+    models: { mode: "merge" },
+  };
+  const schema = {
+    type: "object",
+    title: "OpenClaw config",
+    properties: {
+      logging: {
+        type: "object",
+        title: "Logging",
+        properties: {
+          level: {
+            type: "string",
+            title: "Log level",
+            description: "Minimum severity written to the gateway log.",
+            enum: ["silent", "error", "warn", "info", "debug"],
+          },
+          consoleTimestamps: {
+            type: "boolean",
+            title: "Console timestamps",
+            description: "Prefix console log lines with a timestamp.",
+          },
+        },
+      },
+      messages: {
+        type: "object",
+        title: "Messages",
+        properties: {
+          queueLimit: {
+            type: "integer",
+            title: "Queue limit",
+            description: "Maximum queued inbound messages per session.",
+            minimum: 0,
+          },
+          responsePrefix: {
+            type: "string",
+            title: "Response prefix",
+            description: "Optional text prepended to outbound replies.",
+          },
+        },
+      },
+      gateway: {
+        type: "object",
+        title: "Gateway",
+        properties: {
+          port: { type: "integer", title: "Port", minimum: 1, maximum: 65535 },
+          bind: { type: "string", title: "Bind address" },
+        },
+      },
+      agents: {
+        type: "object",
+        title: "Agents",
+        properties: {
+          defaults: {
+            type: "object",
+            title: "Defaults",
+            properties: {
+              thinkingDefault: {
+                type: "string",
+                title: "Default thinking level",
+                enum: ["off", "low", "medium", "high"],
+              },
+            },
+          },
+        },
+      },
+      models: {
+        type: "object",
+        title: "Models",
+        properties: {
+          mode: {
+            type: "string",
+            title: "Catalog mode",
+            enum: ["merge", "replace"],
+          },
+        },
+      },
+    },
+  };
+  return {
+    get: {
+      path: "~/.openclaw/openclaw.json",
+      exists: true,
+      raw: `${JSON.stringify(config, null, 2)}\n`,
+      hash: "mock-config-hash",
+      appliedConfigHash: "mock-config-hash",
+      valid: true,
+      config,
+      issues: [],
+    },
+    schema: {
+      schema,
+      uiHints: {},
+      version: "mock-config-schema",
+      generatedAt: new Date(0).toISOString(),
+    },
+  };
+}
+
 function chatHistoryMessage(role: "assistant" | "user", text: string, timestamp: number) {
   return {
     content: [{ text, type: "text" }],
@@ -922,7 +900,7 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
         },
         files: sessionFiles,
         root: sessionWorkspaceRoot,
-        sessionKey: "agent:alpha",
+        sessionKey: "agent:main:main",
       },
     },
   ];
@@ -936,7 +914,7 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
         hash: mockFileHash(sessionFileContentByPath.get(file.path) ?? ""),
       },
       root: sessionWorkspaceRoot,
-      sessionKey: "agent:alpha",
+      sessionKey: "agent:main:main",
     },
   }));
   const sessionFileSetCases = sessionFiles.map((file) => ({
@@ -950,7 +928,7 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
         updatedAtMs: baseTime,
       },
       root: sessionWorkspaceRoot,
-      sessionKey: "agent:alpha",
+      sessionKey: "agent:main:main",
     },
   }));
   const lobsterSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360">
@@ -974,12 +952,64 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
     source: "session-transcript",
     download: { mode: "bytes" },
   };
+  // Five-zone sidebar fixture: main session (hidden behind the identity card,
+  // its child promoted to Threads), threads with a running tree, group rows,
+  // and a worktree row for the Coding zone.
+  const mainChildRow = sessionRow(
+    "agent:main:lisbon-trip",
+    "Lisbon trip planning",
+    baseTime - 120_000,
+    {
+      spawnedBy: "agent:main:main",
+      unread: true,
+    },
+  );
+  const taxChildRow = sessionRow(
+    "agent:main:subagent:tax-receipts",
+    "Reading receipts",
+    baseTime - 30_000,
+    {
+      spawnedBy: "agent:main:tax-research",
+      hasActiveRun: true,
+      status: "running",
+      startedAt: baseTime - 200_000,
+      runtimeMs: 200_000,
+    },
+  );
   const sessions = [
-    sessionRow("agent:alpha", "Alpha planning", baseTime - 1_000),
+    sessionRow("agent:main:main", "Molty", baseTime - 1_000, {
+      childSessions: ["agent:main:lisbon-trip"],
+    }),
+    sessionRow("agent:main:tax-research", "Tax filing research", baseTime - 60_000, {
+      hasActiveRun: true,
+      status: "running",
+      childSessions: ["agent:main:subagent:tax-receipts"],
+      pinned: true,
+    }),
+    mainChildRow,
+    sessionRow("agent:main:home-server", "Home server migration", baseTime - 240_000, {
+      pinned: true,
+    }),
+    sessionRow("agent:main:whatsapp:group:family", "Family", baseTime - 90_000, {
+      kind: "group",
+      channel: "whatsapp",
+      unread: true,
+    }),
+    sessionRow("agent:main:discord:channel:openclaw-dev", "#openclaw-dev", baseTime - 300_000, {
+      kind: "group",
+      channel: "discord",
+    }),
+    sessionRow("agent:main:sidebar-zones", "sidebar zones", baseTime - 150_000, {
+      worktree: {
+        id: "wt-sidebar-zones",
+        branch: "claude/sidebar-agent-zones",
+        repoRoot: "~/Projects/openclaw",
+      },
+    }),
     ...buildSessionRows({
-      baseTime: baseTime - 60_000,
-      count: TOTAL_MOCK_SESSIONS - 1,
-      keyPrefix: "history",
+      baseTime: baseTime - 400_000,
+      count: 3,
+      keyPrefix: "main:history",
       labelPrefix: "Long running session",
     }),
   ];
@@ -1002,17 +1032,30 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
   const profileUsage = buildProfileUsageMocks(Date.now());
   const modelProviders = buildModelProviderMocks(Date.now());
   const skillWorkshop = buildSkillWorkshopMocks(Date.now());
+  const channelWizard = buildChannelWizardMocks();
+  const configMocks = buildConfigMocks();
   return {
-    assistantAgentId: "openclaw-mock",
-    assistantName: "OpenClaw mock",
-    defaultAgentId: "openclaw-mock",
+    assistantAgentId: "main",
+    assistantName: "Molty",
+    defaultAgentId: "main",
     featureMethods: ["chat.metadata", "chat.startup", "sessions.diff", "sessions.files.set"],
     historyMessages: buildScrollableChatHistory(baseTime),
     methodResponses: {
+      ...buildBackgroundTasksMock(baseTime),
+      // config.set/config.apply are served statefully by the mock gateway
+      // (raw persists, hash advances) because config.get ships a raw fixture.
+      "config.get": configMocks.get,
+      "config.schema": configMocks.schema,
       "sessions.diff": buildSessionDiffMock(),
       "plugins.list": buildPluginCatalogMock(),
+      "channels.status": buildChannelsStatusMock(baseTime),
+      "wizard.start": channelWizard.start,
+      "wizard.next": channelWizard.next,
+      "wizard.cancel": { status: "cancelled" },
       "skills.proposals.list": skillWorkshop.list,
       "skills.proposals.inspect": skillWorkshop.inspect,
+      "skills.proposals.historyStatus": skillWorkshop.historyStatus,
+      "skills.proposals.historyScan": skillWorkshop.historyScan,
       "usage.cost": profileUsage.cost,
       "sessions.usage": profileUsage.sessions,
       "models.authStatus": modelProviders.authStatus,
@@ -1240,7 +1283,7 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
               },
               files: sessionFiles,
               root: sessionWorkspaceRoot,
-              sessionKey: "agent:alpha",
+              sessionKey: "agent:main:main",
             },
           },
           {
@@ -1269,7 +1312,7 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
               },
               files: sessionFiles,
               root: sessionWorkspaceRoot,
-              sessionKey: "agent:alpha",
+              sessionKey: "agent:main:main",
             },
           },
           ...sessionFileCases,
@@ -1297,6 +1340,15 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
       },
       "sessions.list": {
         cases: [
+          // Child fetches must precede the catch-all page case (subset match).
+          {
+            match: { spawnedBy: "agent:main:main" },
+            response: pagedSessionsListResponse([mainChildRow], 0),
+          },
+          {
+            match: { spawnedBy: "agent:main:tax-research" },
+            response: pagedSessionsListResponse([taxChildRow], 0),
+          },
           ...buildSearchSessionListCases(telegramSessions, searchPrefixes("telegram")),
           ...buildSearchSessionListCases(claudeSessions, [
             ...searchPrefixes("claude"),
@@ -1308,7 +1360,7 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
       },
     },
     models: modelProviders.models,
-    sessionKey: "agent:alpha",
+    sessionKey: "agent:main:main",
   };
 }
 

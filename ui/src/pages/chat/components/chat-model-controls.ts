@@ -1,7 +1,11 @@
 // Chat-owned model, reasoning, and speed picker.
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
-import type { ModelCatalogEntry, SessionsListResult } from "../../../api/types.ts";
+import type {
+  GatewaySessionRow,
+  ModelCatalogEntry,
+  SessionsListResult,
+} from "../../../api/types.ts";
 import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
 import {
@@ -23,6 +27,7 @@ import {
   resolveChatThinkingSelectState,
 } from "../../../lib/chat/thinking.ts";
 import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
+import { selectChatModelProvider } from "./chat-model-provider-menu.ts";
 
 export type ChatModelControlsProps = {
   activeRunId: string | null;
@@ -36,10 +41,14 @@ export type ChatModelControlsProps = {
   modelSelectionRuntimeId?: string;
   modelSwitching: boolean;
   modelsLoading?: boolean;
+  mode?: "combined" | "model";
+  showFastMode?: boolean;
   sending: boolean;
   sessionKey: string;
   sessionsResult: SessionsListResult | null;
   stream: string | null;
+  thinkingDefaults?: SessionsListResult["defaults"];
+  thinkingSession?: GatewaySessionRow;
   onFastModeSelect?: (value: ChatFastModeSelectValue, sessionKey: string) => unknown;
   onModelSelect?: (value: string, sessionKey: string) => unknown;
   onRequestUpdate?: () => void;
@@ -131,26 +140,6 @@ function resolveChatModelPickerLabel(
   return fallbackLabel;
 }
 
-function selectChatModelProvider(event: MouseEvent, provider: string): void {
-  event.preventDefault();
-  event.stopPropagation();
-  const menu = (event.currentTarget as HTMLElement).closest(
-    ".chat-controls__inline-select-menu--combined",
-  );
-  if (!(menu instanceof HTMLElement)) {
-    return;
-  }
-  menu.querySelectorAll<HTMLElement>("[data-chat-model-provider]").forEach((button) => {
-    button.setAttribute(
-      "aria-pressed",
-      button.dataset.chatModelProvider === provider ? "true" : "false",
-    );
-  });
-  menu.querySelectorAll<HTMLElement>("[data-chat-model-provider-group]").forEach((group) => {
-    group.hidden = group.dataset.chatModelProviderGroup !== provider;
-  });
-}
-
 export function renderChatModelControls(props: ChatModelControlsProps) {
   const {
     currentOverride,
@@ -167,6 +156,8 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
   });
   const thinking = resolveChatThinkingSelectState({
     catalog: props.modelCatalog,
+    defaults: props.thinkingDefaults,
+    session: props.thinkingSession,
     sessionKey: props.sessionKey,
     sessionsResult: props.sessionsResult,
   });
@@ -254,14 +245,17 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     !props.gatewayAvailable ||
     (thinking.options.length === 0 && thinking.currentOverride === "");
   return renderChatModelReasoningSelect({
+    defaultModelLabel: formatCombinedPickerModelLabel(pickerDefaultLabel),
     disabled,
     fastMode,
     modelSelectionLocked: props.modelSelectionLocked === true,
+    modelOnly: props.mode === "model",
     modelOptions,
     onRequestUpdate: props.onRequestUpdate,
     selectedModelValue: currentOverride,
     selectedThinkingValue: thinking.currentOverride,
     sessionKey: props.sessionKey,
+    showFastMode: props.showFastMode !== false,
     thinkingDefaultValue: thinking.defaultValue,
     thinkingDisabled,
     thinkingOptions: [{ value: "", label: thinking.defaultLabel }, ...thinking.options],
@@ -298,14 +292,77 @@ function formatCombinedPickerThinkingLabel(label: string): string {
   return label.replace(/^Inherited:\s*/u, "");
 }
 
+/**
+ * Provenance for the model choice, mirroring the reasoning row: an inherited
+ * default renders muted with no affordance, a session override names itself
+ * and offers an icon reset back to the Settings default.
+ */
+function renderModelProvenanceRow(params: {
+  defaultModelLabel: string;
+  disabled: boolean;
+  hasModelOverride: boolean;
+  onReset: () => void;
+}) {
+  return html`
+    <div class="chat-controls__model-provenance">
+      <span class="chat-controls__inline-select-section-label">
+        ${t("chat.selectors.modelSection")}
+      </span>
+      <span class="chat-controls__model-provenance-state">
+        <span
+          class="chat-controls__model-provenance-value ${params.hasModelOverride
+            ? ""
+            : "chat-controls__model-provenance-value--inherit"}"
+        >
+          ${params.hasModelOverride
+            ? t("chat.modelControls.sessionOverride")
+            : t("chat.modelControls.usingDefault")}
+        </span>
+        ${params.hasModelOverride
+          ? html`
+              <openclaw-tooltip
+                .content=${t("chat.modelControls.resetToDefault", {
+                  model: params.defaultModelLabel,
+                })}
+              >
+                <button
+                  class="chat-controls__model-reset"
+                  data-chat-model-reset="true"
+                  type="button"
+                  aria-label=${t("chat.modelControls.resetToDefault", {
+                    model: params.defaultModelLabel,
+                  })}
+                  ?disabled=${params.disabled}
+                  @click=${(event: MouseEvent) => {
+                    event.stopPropagation();
+                    if (params.disabled) {
+                      event.preventDefault();
+                      return;
+                    }
+                    params.onReset();
+                  }}
+                >
+                  ${icons.x}
+                </button>
+              </openclaw-tooltip>
+            `
+          : ""}
+      </span>
+    </div>
+  `;
+}
+
 function renderChatModelReasoningSelect(params: {
+  defaultModelLabel: string;
   fastMode: ChatFastModeSelectState;
   disabled: boolean;
   modelSelectionLocked: boolean;
+  modelOnly: boolean;
   modelOptions: ChatModelProviderOption[];
   selectedModelValue: string;
   selectedThinkingValue: string;
   sessionKey: string;
+  showFastMode: boolean;
   thinkingDefaultValue: string;
   thinkingDisabled: boolean;
   thinkingOptions: ChatModelSelectOption[];
@@ -317,13 +374,16 @@ function renderChatModelReasoningSelect(params: {
   onThinkingSelect: (value: string, sessionKey: string) => Promise<unknown>;
 }) {
   const {
+    defaultModelLabel,
     disabled,
     fastMode,
     modelSelectionLocked,
+    modelOnly,
     modelOptions,
     selectedModelValue,
     selectedThinkingValue,
     sessionKey,
+    showFastMode,
     thinkingDefaultValue,
     thinkingDisabled,
     thinkingOptions,
@@ -336,7 +396,7 @@ function renderChatModelReasoningSelect(params: {
   } = params;
   const triggerModel = formatCombinedPickerModelLabel(triggerModelLabel);
   const triggerThinking = formatCombinedPickerThinkingLabel(triggerThinkingLabel);
-  const triggerTitle = `${triggerModel} · ${triggerThinking}`;
+  const triggerTitle = modelOnly ? triggerModel : `${triggerModel} · ${triggerThinking}`;
   const triggerLabel = triggerTitle;
   const sliderStops = thinkingOptions.filter((option) => option.value !== "");
   const defaultStopIndex = sliderStops.findIndex((option) => option.value === thinkingDefaultValue);
@@ -427,7 +487,7 @@ function renderChatModelReasoningSelect(params: {
   const onlyStop = sliderStops.length === 1 ? sliderStops[0] : undefined;
   const effectiveThinkingValue = selectedThinkingValue || thinkingDefaultValue;
   const onlyStopSelected = onlyStop?.value === effectiveThinkingValue;
-  const showReasoningPanel = true;
+  const showReasoningPanel = !modelOnly && (showReasoning || showFastMode);
   const providerGroups = new Map<string, ChatModelProviderOption[]>();
   for (const option of modelOptions) {
     const existing = providerGroups.get(option.provider);
@@ -513,11 +573,13 @@ function renderChatModelReasoningSelect(params: {
           : ""}"
         data-chat-model-select="true"
         data-chat-model-locked=${modelSelectionLocked ? "true" : "false"}
-        data-chat-thinking-select="true"
+        data-chat-thinking-select=${modelOnly ? nothing : "true"}
         data-chat-select-value=${selectedModelValue}
         data-chat-thinking-value=${selectedThinkingValue}
         data-chat-thinking-disabled=${thinkingDisabled ? "true" : "false"}
-        aria-label=${`${t("chat.selectors.model")}, ${t("chat.selectors.thinkingLevel")}: ${triggerTitle}`}
+        aria-label=${modelOnly
+          ? `${t("chat.selectors.model")}: ${triggerTitle}`
+          : `${t("chat.selectors.model")}, ${t("chat.selectors.thinkingLevel")}: ${triggerTitle}`}
         aria-disabled=${disabled ? "true" : "false"}
         @click=${(event: MouseEvent) => {
           if (disabled) {
@@ -550,6 +612,12 @@ function renderChatModelReasoningSelect(params: {
               </div>
             `
           : html`
+              ${renderModelProvenanceRow({
+                defaultModelLabel,
+                disabled,
+                hasModelOverride: selectedModelValue !== "",
+                onReset: () => commitModel(""),
+              })}
               <div class="chat-controls__model-browser">
                 <div class="chat-controls__provider-list" aria-label=${t("sessionsView.provider")}>
                   <div class="chat-controls__inline-select-section-label">
@@ -721,37 +789,41 @@ function renderChatModelReasoningSelect(params: {
                           : ""}
                     `
                   : ""}
-                <div class="chat-controls__speed-row">
-                  <span class="chat-controls__inline-select-section-label"
-                    >${t("chat.modelControls.speed")}</span
-                  >
-                  <openclaw-tooltip .content=${speedTooltip}>
-                    <button
-                      class="chat-controls__speed-toggle ${fastMode.active
-                        ? "chat-controls__speed-toggle--active"
-                        : ""}"
-                      data-chat-speed-toggle=${fastMode.nextValue}
-                      type="button"
-                      role="switch"
-                      aria-checked=${fastMode.active ? "true" : "false"}
-                      aria-label=${`Fast responses: ${fastMode.label}`}
-                      ?disabled=${fastMode.disabled}
-                      @click=${(event: MouseEvent) => {
-                        event.stopPropagation();
-                        if (fastMode.disabled) {
-                          event.preventDefault();
-                          return;
-                        }
-                        commitFastMode(fastMode.nextValue);
-                      }}
-                    >
-                      <span class="chat-controls__speed-toggle-icon" aria-hidden="true">
-                        ${icons.zap}
-                      </span>
-                      <span>${fastMode.label}</span>
-                    </button>
-                  </openclaw-tooltip>
-                </div>
+                ${showFastMode
+                  ? html`
+                      <div class="chat-controls__speed-row">
+                        <span class="chat-controls__inline-select-section-label"
+                          >${t("chat.modelControls.speed")}</span
+                        >
+                        <openclaw-tooltip .content=${speedTooltip}>
+                          <button
+                            class="chat-controls__speed-toggle ${fastMode.active
+                              ? "chat-controls__speed-toggle--active"
+                              : ""}"
+                            data-chat-speed-toggle=${fastMode.nextValue}
+                            type="button"
+                            role="switch"
+                            aria-checked=${fastMode.active ? "true" : "false"}
+                            aria-label=${`Fast responses: ${fastMode.label}`}
+                            ?disabled=${fastMode.disabled}
+                            @click=${(event: MouseEvent) => {
+                              event.stopPropagation();
+                              if (fastMode.disabled) {
+                                event.preventDefault();
+                                return;
+                              }
+                              commitFastMode(fastMode.nextValue);
+                            }}
+                          >
+                            <span class="chat-controls__speed-toggle-icon" aria-hidden="true">
+                              ${icons.zap}
+                            </span>
+                            <span>${fastMode.label}</span>
+                          </button>
+                        </openclaw-tooltip>
+                      </div>
+                    `
+                  : nothing}
               </div>
             `
           : ""}
@@ -759,3 +831,4 @@ function renderChatModelReasoningSelect(params: {
     </details>
   `;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

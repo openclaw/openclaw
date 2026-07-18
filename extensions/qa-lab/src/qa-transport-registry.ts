@@ -25,7 +25,9 @@ export type QaTransportAdapterFactoryResult<
   TAdapter extends QaTransportAdapter = QaTransportAdapter,
 > = {
   adapter: TAdapter;
-  cleanup: () => Promise<void>;
+  cleanupBeforeGatewayStop: () => Promise<void>;
+  cleanupAfterGatewayStop: () => Promise<void>;
+  cleanupWithoutGateway: () => Promise<void>;
 };
 
 export type QaTransportAdapterFactory = NonNullable<QaRunnerCliRegistration["adapterFactory"]>;
@@ -67,7 +69,7 @@ function requireQaTransportFactory(
   return factory;
 }
 
-export function createQaTransportAdapterFactoryRegistry(
+function createQaTransportAdapterFactoryRegistry(
   factories: readonly QaTransportAdapterFactory[] = [],
 ): QaTransportAdapterFactoryRegistry {
   return {
@@ -101,10 +103,29 @@ export function createQaTransportAdapterFactoryRegistry(
           },
         );
       }
+      let cleanupBeforeGatewayStopComplete = false;
+      let cleanupAfterGatewayStopComplete = false;
+      const cleanupBeforeGatewayStop = async () => {
+        if (cleanupBeforeGatewayStopComplete) {
+          return;
+        }
+        await adapter.cleanup?.();
+        cleanupBeforeGatewayStopComplete = true;
+      };
+      const cleanupAfterGatewayStop = async () => {
+        if (cleanupAfterGatewayStopComplete) {
+          return;
+        }
+        await adapter.cleanupAfterGatewayStop?.();
+        cleanupAfterGatewayStopComplete = true;
+      };
       return {
         adapter,
-        cleanup: async () => {
-          await adapter.cleanup?.();
+        cleanupBeforeGatewayStop,
+        cleanupAfterGatewayStop,
+        cleanupWithoutGateway: async () => {
+          await cleanupBeforeGatewayStop();
+          await cleanupAfterGatewayStop();
         },
       };
     },

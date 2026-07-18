@@ -722,6 +722,7 @@ describe("codex command", () => {
     "permissions yolo",
     "compact",
     "review",
+    "goal pause",
   ])("blocks /codex %s in sandboxed sessions before native Codex execution", async (args) => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const codexControlRequest = vi.fn();
@@ -764,6 +765,7 @@ describe("codex command", () => {
     "permissions yolo",
     "compact",
     "review",
+    "goal pause",
   ])("blocks /codex %s when exec host=node is active", async (args) => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const codexControlRequest = vi.fn();
@@ -904,6 +906,28 @@ describe("codex command", () => {
         deps: createDeps(),
       }),
     ).resolves.toEqual({ text: "Codex permissions: full access." });
+    await expect(
+      handleCodexCommand(createSandboxedContext("goal", sessionFile), {
+        deps: createDeps({
+          codexControlRequest: vi.fn(
+            async (): Promise<JsonValue> => ({
+              goal: {
+                threadId: "thread-status",
+                objective: "Inspect status",
+                status: "active",
+                tokenBudget: null,
+                tokensUsed: 0,
+                timeUsedSeconds: 0,
+                createdAt: 1,
+                updatedAt: 1,
+              },
+            }),
+          ),
+        }),
+      }),
+    ).resolves.toEqual({
+      text: "Codex goal: Inspect status\n- Status: active\n- Tokens: 0",
+    });
   });
 
   it("lists Codex CLI sessions from a requested node", async () => {
@@ -4040,6 +4064,95 @@ describe("codex command", () => {
     );
   });
 
+  it("reads, updates, and clears goals through the bound native Codex thread", async () => {
+    await writeTestBinding(
+      { kind: "session", agentId: "main", sessionId: "session-1" },
+      { threadId: "thread-goal", cwd: "/repo" },
+    );
+    const goal = {
+      threadId: "thread-goal",
+      objective: "Ship native goals",
+      status: "active",
+      tokenBudget: null,
+      tokensUsed: 120,
+      timeUsedSeconds: 30,
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    const codexControlRequest = vi.fn(
+      async (_pluginConfig: unknown, method: string): Promise<JsonValue> => {
+        if (method === CODEX_CONTROL_METHODS.clearThreadGoal) {
+          return { cleared: true };
+        }
+        return { goal };
+      },
+    );
+    const deps = createDeps({ codexControlRequest });
+
+    await expect(handleCodexCommand(createContext("goal"), { deps })).resolves.toEqual({
+      text: "Codex goal: Ship native goals\n- Status: active\n- Tokens: 120",
+    });
+    await expect(
+      handleCodexCommand(createContext("goal set Ship native goals"), { deps }),
+    ).resolves.toEqual({
+      text: "Codex goal: Ship native goals\n- Status: active\n- Tokens: 120",
+    });
+    await expect(
+      handleCodexCommand(createContext("goal set Refine native goals"), { deps }),
+    ).resolves.toEqual({
+      text: "Codex goal: Ship native goals\n- Status: active\n- Tokens: 120",
+    });
+    await expect(handleCodexCommand(createContext("goal clear"), { deps })).resolves.toEqual({
+      text: "Cleared the Codex goal.",
+    });
+
+    expect(codexControlRequest).toHaveBeenNthCalledWith(
+      1,
+      undefined,
+      CODEX_CONTROL_METHODS.getThreadGoal,
+      { threadId: "thread-goal" },
+      expect.any(Object),
+    );
+    expect(codexControlRequest).toHaveBeenNthCalledWith(
+      2,
+      undefined,
+      CODEX_CONTROL_METHODS.setThreadGoal,
+      { threadId: "thread-goal", objective: "Ship native goals" },
+      expect.any(Object),
+    );
+    expect(codexControlRequest).toHaveBeenNthCalledWith(
+      3,
+      undefined,
+      CODEX_CONTROL_METHODS.setThreadGoal,
+      { threadId: "thread-goal", objective: "Refine native goals" },
+      expect.any(Object),
+    );
+    expect(codexControlRequest).toHaveBeenNthCalledWith(
+      4,
+      undefined,
+      CODEX_CONTROL_METHODS.clearThreadGoal,
+      { threadId: "thread-goal" },
+      expect.any(Object),
+    );
+  });
+
+  it("rejects inherited object names as goal actions", async () => {
+    await writeTestBinding(
+      { kind: "session", agentId: "main", sessionId: "session-1" },
+      { threadId: "thread-goal", cwd: "/repo" },
+    );
+    const codexControlRequest = vi.fn();
+
+    await expect(
+      handleCodexCommand(createContext("goal __proto__"), {
+        deps: createDeps({ codexControlRequest }),
+      }),
+    ).resolves.toEqual({
+      text: "Usage: /codex goal [status|set <objective>|pause|resume|block|complete|clear]",
+    });
+    expect(codexControlRequest).not.toHaveBeenCalled();
+  });
+
   it("formats every Codex skill as a code-styled bullet and tolerates malformed entries", async () => {
     const malformedSkillEntries: JsonValue[] = [
       null,
@@ -5128,3 +5241,4 @@ function computerUseReadyStatus(): CodexComputerUseStatus {
     message: "Computer Use is ready.",
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

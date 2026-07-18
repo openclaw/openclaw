@@ -25,7 +25,7 @@ export type MantisBeforeAfterOptions = {
   transport?: string;
 };
 
-export type MantisBeforeAfterResult = {
+type MantisBeforeAfterResult = {
   comparisonPath: string;
   manifestPath: string;
   outputDir: string;

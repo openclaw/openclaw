@@ -105,6 +105,10 @@ export type ChannelSetupInput = {
   secretFile?: string;
   botToken?: string;
   appToken?: string;
+  userToken?: string;
+  signingSecret?: string;
+  identity?: "bot" | "user";
+  mode?: "socket" | "http" | "relay";
   signalNumber?: string;
   cliPath?: string;
   dbPath?: string;
@@ -139,6 +143,10 @@ export type ChannelSetupInput = {
   groupChannels?: string[];
   dmAllowlist?: string[];
   autoDiscoverChannels?: boolean;
+  workspace?: string;
+  defaultTo?: string;
+  allowFrom?: string[];
+  agentActivity?: boolean;
 };
 
 export type ChannelStatusIssue = {
@@ -228,12 +236,14 @@ export type ChannelAccountSnapshot = {
   tokenSource?: string;
   botTokenSource?: string;
   appTokenSource?: string;
+  userTokenSource?: string;
   signingSecretSource?: string;
   tokenStatus?: string;
   botTokenStatus?: string;
   appTokenStatus?: string;
   signingSecretStatus?: string;
   userTokenStatus?: string;
+  identity?: string;
   credentialSource?: string;
   secretSource?: string;
   audienceType?: string;
@@ -503,6 +513,12 @@ export type ChannelMessagingAdapter = {
    * targets before plugin-specific normalization.
    */
   targetPrefixes?: readonly string[];
+  /** DM targets rebuilt from session keys require an explicit `user:` kind prefix. */
+  directTargetStyle?: "user-prefixed";
+  /** Equality rule for ids carried by prefixed outbound targets. */
+  targetIdComparison?: "case-sensitive" | "lowercase";
+  /** Bare numeric conversation/topic shorthand is valid for this channel. */
+  numericTopicShorthand?: true;
   normalizeTarget?: (raw: string) => string | undefined;
   defaultMarkdownTableMode?: MarkdownTableMode;
   normalizeExplicitSessionKey?: (params: {
@@ -672,7 +688,7 @@ export type ChannelAgentPromptAdapter = {
     cfg: OpenClawConfig;
     accountId?: string | null;
   }) => string[] | undefined;
-  inboundFormattingHints?: (params: { accountId?: string | null }) =>
+  inboundFormattingHints?: (params: { cfg: OpenClawConfig; accountId?: string | null }) =>
     | {
         text_markup: string;
         rules: string[];
@@ -696,7 +712,7 @@ export type ChannelDirectoryEntry = {
   raw?: unknown;
 };
 
-export type ChannelMessageActionName = ChannelMessageActionNameFromList;
+type ChannelMessageActionName = ChannelMessageActionNameFromList;
 
 /** Execution context passed to channel-owned actions on the shared `message` tool. */
 export type ChannelMessageActionContext = {

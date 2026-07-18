@@ -8,7 +8,6 @@ import {
   restoreEnvRefsFromMap,
   resolvePersistCandidateForWrite,
   resolveWriteEnvSnapshotForPath,
-  unsetPathForWrite,
 } from "./io.write-prepare.js";
 import type { OpenClawConfig } from "./types.js";
 
@@ -504,6 +503,46 @@ describe("config io write prepare", () => {
     expect(persisted.agents?.defaults?.models?.["openai/gpt-5.4"]).not.toHaveProperty("params");
   });
 
+  it("applies explicit unsets without mutating caller config", () => {
+    const input: OpenClawConfig = {
+      gateway: { mode: "local" },
+      commands: { ownerDisplay: "hash" },
+      tools: { alsoAllow: ["exec", "fetch", "read"] },
+    };
+
+    const next = applyUnsetPathsForWrite(input, [
+      ["commands", "ownerDisplay"],
+      ["tools", "alsoAllow", "1"],
+    ]);
+
+    expect(input).toEqual({
+      gateway: { mode: "local" },
+      commands: { ownerDisplay: "hash" },
+      tools: { alsoAllow: ["exec", "fetch", "read"] },
+    });
+    expect(next.commands ?? {}).not.toHaveProperty("ownerDisplay");
+    expect(next.tools?.alsoAllow).toEqual(["exec", "read"]);
+  });
+
+  it.each([
+    ["invalid array suffix", ["tools", "alsoAllow", "1abc"]],
+    ["signed array index", ["tools", "alsoAllow", "+0"]],
+    ["unsafe integer", ["tools", "alsoAllow", "9007199254740993"]],
+    ["maximum array key", ["tools", "alsoAllow", "4294967294"]],
+    ["missing key", ["commands", "missingKey"]],
+    ["prototype key", ["commands", "__proto__"]],
+    ["constructor key", ["commands", "constructor"]],
+    ["prototype constructor property", ["commands", "prototype"]],
+  ] as const)("treats %s unset paths as immutable no-ops", (_name, unsetPath) => {
+    const input: OpenClawConfig = {
+      gateway: { mode: "local" },
+      commands: { ownerDisplay: "hash" },
+      tools: { alsoAllow: ["exec", "fetch"] },
+    };
+
+    expect(applyUnsetPathsForWrite(input, [[...unsetPath]])).toBe(input);
+  });
+
   it("preserves untouched include-owned subtrees during unrelated writes", () => {
     const persisted = resolvePersistCandidateForWrite({
       runtimeConfig: {
@@ -820,105 +859,6 @@ describe("config io write prepare", () => {
 
     expect(message).toContain("openclaw config set channels.telegram.allowFrom '[\"*\"]'");
     expect(message).toContain('openclaw config set channels.telegram.dmPolicy "pairing"');
-  });
-
-  it("unsets explicit paths when runtime defaults would otherwise reappear", () => {
-    const next = unsetPathForWrite(
-      {
-        gateway: { auth: { mode: "none" } },
-        commands: { ownerDisplay: "hash" },
-      },
-      ["commands", "ownerDisplay"],
-    );
-
-    expect(next.changed).toBe(true);
-    expect(next.next.commands ?? {}).not.toHaveProperty("ownerDisplay");
-  });
-
-  it("does not mutate caller config when unsetting existing config objects", () => {
-    const input: OpenClawConfig = {
-      gateway: { mode: "local" },
-      commands: { ownerDisplay: "hash" },
-    } satisfies OpenClawConfig;
-
-    const next = unsetPathForWrite(input, ["commands", "ownerDisplay"]);
-
-    expect(input).toEqual({
-      gateway: { mode: "local" },
-      commands: { ownerDisplay: "hash" },
-    });
-    expect(next.next.commands ?? {}).not.toHaveProperty("ownerDisplay");
-  });
-
-  it("keeps caller arrays immutable when unsetting array entries", () => {
-    const input: OpenClawConfig = {
-      gateway: { mode: "local" },
-      tools: { alsoAllow: ["exec", "fetch", "read"] },
-    } satisfies OpenClawConfig;
-
-    const next = unsetPathForWrite(input, ["tools", "alsoAllow", "1"]);
-
-    expect(input.tools!.alsoAllow).toEqual(["exec", "fetch", "read"]);
-    expect((next.next.tools as { alsoAllow?: string[] } | undefined)?.alsoAllow).toEqual([
-      "exec",
-      "read",
-    ]);
-  });
-
-  it("treats invalid array-index unset paths as no-ops", () => {
-    const input: OpenClawConfig = {
-      gateway: { mode: "local" },
-      tools: { alsoAllow: ["exec", "fetch"] },
-    } satisfies OpenClawConfig;
-
-    for (const path of [
-      ["tools", "alsoAllow", "1abc"],
-      ["tools", "alsoAllow", "+0"],
-      ["tools", "alsoAllow", "9007199254740993"],
-      ["tools", "alsoAllow", "4294967294"],
-    ]) {
-      const next = unsetPathForWrite(input, path);
-      expect(next.changed).toBe(false);
-      expect(next.next).toBe(input);
-    }
-  });
-
-  it("treats missing unset paths as no-op without mutating caller config", () => {
-    const input: OpenClawConfig = {
-      gateway: { mode: "local" },
-      commands: { ownerDisplay: "hash" },
-    } satisfies OpenClawConfig;
-
-    const next = unsetPathForWrite(input, ["commands", "missingKey"]);
-
-    expect(next.changed).toBe(false);
-    expect(next.next).toBe(input);
-    expect(input).toEqual({
-      gateway: { mode: "local" },
-      commands: { ownerDisplay: "hash" },
-    });
-  });
-
-  it("ignores blocked prototype-key unset path segments", () => {
-    const input: OpenClawConfig = {
-      gateway: { mode: "local" },
-      commands: { ownerDisplay: "hash" },
-    } satisfies OpenClawConfig;
-
-    const blocked = [
-      ["commands", "__proto__"],
-      ["commands", "constructor"],
-      ["commands", "prototype"],
-    ].map((segments) => unsetPathForWrite(input, segments));
-
-    for (const result of blocked) {
-      expect(result.changed).toBe(false);
-      expect(result.next).toBe(input);
-    }
-    expect(input).toEqual({
-      gateway: { mode: "local" },
-      commands: { ownerDisplay: "hash" },
-    });
   });
 
   it("preserves env refs on unchanged paths while keeping changed paths resolved", () => {
@@ -1555,3 +1495,4 @@ describe("config io write prepare", () => {
     ).toThrow("Config write would flatten $include-owned config at agents.defaults");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

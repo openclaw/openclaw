@@ -90,30 +90,6 @@ describe("sqlite hot query plans", () => {
     });
     expectPlanUsesIndex({
       db: database.db,
-      indexName: "idx_cron_run_logs_store_ts",
-      params: ["/state/cron/jobs.json"],
-      sql: `
-        SELECT job_id, seq, ts
-          FROM cron_run_logs
-         WHERE store_key = ?
-         ORDER BY ts DESC, seq DESC
-         LIMIT 50
-      `,
-    });
-    expectPlanUsesIndex({
-      db: database.db,
-      indexName: "idx_cron_run_logs_job_status",
-      params: ["/state/cron/jobs.json", "job-1", "completed"],
-      sql: `
-        SELECT seq, ts, status
-          FROM cron_run_logs
-         WHERE store_key = ? AND job_id = ? AND status = ?
-         ORDER BY ts DESC, seq DESC
-         LIMIT 50
-      `,
-    });
-    expectPlanUsesIndex({
-      db: database.db,
       indexName: "idx_delivery_queue_pending",
       params: ["outbound", "pending"],
       sql: `
@@ -205,6 +181,16 @@ describe("sqlite hot query plans", () => {
          LIMIT 1
       `,
     });
+    expectPlanUsesIndex({
+      db: database.db,
+      indexName: "idx_agent_session_entries_status",
+      params: ["running"],
+      sql: `
+        SELECT session_key, entry_json
+          FROM session_entries
+         WHERE status = ?
+      `,
+    });
     const latestMessagePlan = explainQueryPlan(
       database.db,
       `
@@ -222,5 +208,38 @@ describe("sqlite hot query plans", () => {
       "USING COVERING INDEX idx_agent_transcript_event_sequence (session_id=? AND event_type=?)",
     );
     expect(latestMessagePlan).not.toContain("USE TEMP B-TREE FOR ORDER BY");
+
+    const historyPagePlan = explainQueryPlan(
+      database.db,
+      `
+        SELECT active.event_seq, event.event_json
+          FROM session_transcript_active_events AS active
+          JOIN transcript_events AS event
+            ON event.session_id = active.session_id AND event.seq = active.event_seq
+         WHERE active.session_id = ?
+           AND active.message_position IS NOT NULL
+           AND active.message_position >= ?
+           AND active.message_position < ?
+         ORDER BY active.message_position ASC
+      `,
+      ["session-1", 100, 125],
+    );
+    expect(historyPagePlan).toContain("idx_agent_transcript_active_messages");
+    expect(historyPagePlan).toContain("sqlite_autoindex_transcript_events_1");
+    expect(historyPagePlan).not.toContain("USE TEMP B-TREE FOR ORDER BY");
+
+    const historyAnchorPlan = explainQueryPlan(
+      database.db,
+      `
+        SELECT active.message_position
+          FROM transcript_event_identities AS identity
+          JOIN session_transcript_active_events AS active
+            ON active.session_id = identity.session_id AND active.event_seq = identity.seq
+         WHERE identity.session_id = ? AND identity.event_id = ?
+      `,
+      ["session-1", "message-1"],
+    );
+    expect(historyAnchorPlan).toContain("sqlite_autoindex_transcript_event_identities_1");
+    expect(historyAnchorPlan).toContain("idx_agent_transcript_active_event_seq");
   });
 });

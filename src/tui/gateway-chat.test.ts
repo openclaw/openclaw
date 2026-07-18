@@ -37,9 +37,15 @@ vi.mock("../infra/gateway-lock.js", () => ({
   readActiveGatewayLockPort: readActiveGatewayLockPortMock,
 }));
 
-const { GatewayChatClient, resolveBoundGatewayConnection, resolveGatewayConnection } =
-  await import("./gateway-chat.js");
+const { GatewayChatClient } = await import("./gateway-chat.js");
 const { GatewayClientRequestError } = await import("../gateway/client.js");
+
+const resolveBoundGatewayConnection = (
+  opts: Parameters<typeof GatewayChatClient.connectBound>[0],
+) => GatewayChatClient.connectBound(opts).connection;
+
+const resolveGatewayConnection = async (opts: Parameters<typeof GatewayChatClient.connect>[0]) =>
+  (await GatewayChatClient.connect(opts)).connection;
 
 async function fileExists(filePath: string): Promise<boolean> {
   try {
@@ -680,7 +686,7 @@ describe("GatewayChatClient", () => {
       expect(constructedOptions).toHaveLength(1);
       expect(constructedOptions[0]).toMatchObject({
         clientName: "openclaw-tui",
-        caps: ["task-suggestions", "tool-events"],
+        caps: ["plugin-approvals", "task-suggestions", "tool-events"],
         mode: "ui",
         preauthHandshakeTimeoutMs: 30_000,
         tlsFingerprint: "sha256:11:22:33:44",
