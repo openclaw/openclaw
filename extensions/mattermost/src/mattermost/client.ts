@@ -358,7 +358,10 @@ export async function fetchMattermostChannelPosts(
 
   return {
     messages: parsed.data.order.map((postId) => parsed.data.posts[postId] as MattermostPost),
-    hasMore: Boolean(parsed.data.next_post_id || parsed.data.prev_post_id),
+    // Mattermost returns the cursor for the opposite direction as well. For
+    // descending/default and `before` reads, `prev_post_id` points to older
+    // posts; for `after` reads, `next_post_id` points to newer posts.
+    hasMore: Boolean(after ? parsed.data.next_post_id : parsed.data.prev_post_id),
   };
 }
 

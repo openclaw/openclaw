@@ -477,7 +477,7 @@ describe("fetchMattermostChannelPosts", () => {
           "post-1": { id: "post-1", user_id: "user-1", message: "older" },
           "post-2": { id: "post-2", user_id: "user-2", message: "newer" },
         },
-        next_post_id: "post-0",
+        prev_post_id: "post-0",
       },
     });
 
@@ -494,6 +494,59 @@ describe("fetchMattermostChannelPosts", () => {
     const request = requireRequestCall(calls);
     expect(request.url).toContain("/channels/channel%2Funsafe/posts?");
     expect(request.url).toContain("per_page=10");
+  });
+
+  it.each([
+    {
+      label: "default history",
+      options: {},
+      response: { next_post_id: "newer-boundary", prev_post_id: "" },
+    },
+    {
+      label: "before history",
+      options: { before: "cursor" },
+      response: { next_post_id: "newer-boundary", prev_post_id: "" },
+    },
+    {
+      label: "after history",
+      options: { after: "cursor" },
+      response: { next_post_id: "", prev_post_id: "older-boundary" },
+    },
+  ])(
+    "ignores the opposite-direction cursor for exhausted $label",
+    async ({ options, response }) => {
+      const { client } = createTestClient({ body: { order: [], posts: {}, ...response } });
+
+      await expect(
+        fetchMattermostChannelPosts(client, "channel-1", options),
+      ).resolves.toMatchObject({
+        hasMore: false,
+      });
+    },
+  );
+
+  it.each([
+    {
+      label: "default history",
+      options: {},
+      response: { prev_post_id: "older-page" },
+    },
+    {
+      label: "before history",
+      options: { before: "cursor" },
+      response: { prev_post_id: "older-page" },
+    },
+    {
+      label: "after history",
+      options: { after: "cursor" },
+      response: { next_post_id: "newer-page" },
+    },
+  ])("reports the requested-direction cursor for $label", async ({ options, response }) => {
+    const { client } = createTestClient({ body: { order: [], posts: {}, ...response } });
+
+    await expect(fetchMattermostChannelPosts(client, "channel-1", options)).resolves.toMatchObject({
+      hasMore: true,
+    });
   });
 
   it("caps page size at the Mattermost maximum", async () => {
