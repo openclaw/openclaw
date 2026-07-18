@@ -178,13 +178,6 @@ public enum ApprovalTerminalReason: String, Codable, Sendable {
     case storageCorrupt = "storage-corrupt"
 }
 
-public enum QuestionStatus: String, Codable, Sendable {
-    case pending = "pending"
-    case answered = "answered"
-    case cancelled = "cancelled"
-    case expired = "expired"
-}
-
 public struct ConnectParams: Codable, Sendable {
     public let minprotocol: Int
     public let maxprotocol: Int
@@ -3370,7 +3363,6 @@ public struct SessionCatalogTranscriptItem: Codable, Sendable {
 public struct SessionsCatalogListParams: Codable, Sendable {
     public let catalogid: String?
     public let agentid: String?
-    public let progressid: String?
     public let search: String?
     public let limitperhost: Int?
     public let hostids: [String]?
@@ -3379,7 +3371,6 @@ public struct SessionsCatalogListParams: Codable, Sendable {
     public init(
         catalogid: String? = nil,
         agentid: String? = nil,
-        progressid: String? = nil,
         search: String? = nil,
         limitperhost: Int? = nil,
         hostids: [String]? = nil,
@@ -3387,7 +3378,6 @@ public struct SessionsCatalogListParams: Codable, Sendable {
     {
         self.catalogid = catalogid
         self.agentid = agentid
-        self.progressid = progressid
         self.search = search
         self.limitperhost = limitperhost
         self.hostids = hostids
@@ -3397,7 +3387,6 @@ public struct SessionsCatalogListParams: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case catalogid = "catalogId"
         case agentid = "agentId"
-        case progressid = "progressId"
         case search
         case limitperhost = "limitPerHost"
         case hostids = "hostIds"
@@ -6906,7 +6895,6 @@ public struct SystemAgentChatResult: Codable, Sendable {
     public let action: AnyCodable
     public let needsapproval: Bool?
     public let proposalid: String?
-    public let question: [String: AnyCodable]?
 
     public init(
         sessionid: String,
@@ -6914,8 +6902,7 @@ public struct SystemAgentChatResult: Codable, Sendable {
         sensitive: Bool? = nil,
         action: AnyCodable,
         needsapproval: Bool? = nil,
-        proposalid: String? = nil,
-        question: [String: AnyCodable]? = nil)
+        proposalid: String? = nil)
     {
         self.sessionid = sessionid
         self.reply = reply
@@ -6923,7 +6910,6 @@ public struct SystemAgentChatResult: Codable, Sendable {
         self.action = action
         self.needsapproval = needsapproval
         self.proposalid = proposalid
-        self.question = question
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -6933,7 +6919,6 @@ public struct SystemAgentChatResult: Codable, Sendable {
         case action
         case needsapproval = "needsApproval"
         case proposalid = "proposalId"
-        case question
     }
 }
 
@@ -12631,270 +12616,6 @@ public struct ExecApprovalResolveParams: Codable, Sendable {
     }
 }
 
-public struct QuestionOption: Codable, Sendable {
-    public let label: String
-    public let description: String?
-
-    public init(
-        label: String,
-        description: String? = nil)
-    {
-        self.label = label
-        self.description = description
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case label
-        case description
-    }
-}
-
-public struct Question: Codable, Sendable {
-    public let id: String
-    public let header: String
-    public let question: String
-    public let options: [QuestionOption]
-    public let multiselect: Bool?
-    public let isother: Bool?
-    public let issecret: Bool?
-
-    public init(
-        id: String,
-        header: String,
-        question: String,
-        options: [QuestionOption],
-        multiselect: Bool? = nil,
-        isother: Bool? = nil,
-        issecret: Bool? = nil)
-    {
-        self.id = id
-        self.header = header
-        self.question = question
-        self.options = options
-        self.multiselect = multiselect
-        self.isother = isother
-        self.issecret = issecret
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case id
-        case header
-        case question
-        case options
-        case multiselect = "multiSelect"
-        case isother = "isOther"
-        case issecret = "isSecret"
-    }
-}
-
-public struct QuestionRequestQuestion: Codable, Sendable {
-    public let id: String
-    public let header: String
-    public let question: String
-    public let options: [QuestionOption]
-    public let multiselect: Bool?
-    public let isother: Bool?
-    public let issecret: Bool?
-
-    public init(
-        id: String,
-        header: String,
-        question: String,
-        options: [QuestionOption],
-        multiselect: Bool? = nil,
-        isother: Bool? = nil,
-        issecret: Bool? = nil)
-    {
-        self.id = id
-        self.header = header
-        self.question = question
-        self.options = options
-        self.multiselect = multiselect
-        self.isother = isother
-        self.issecret = issecret
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case id
-        case header
-        case question
-        case options
-        case multiselect = "multiSelect"
-        case isother = "isOther"
-        case issecret = "isSecret"
-    }
-}
-
-public struct QuestionAnswers: Codable, Sendable {
-    public let answers: [String: AnyCodable]
-
-    public init(
-        answers: [String: AnyCodable])
-    {
-        self.answers = answers
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case answers
-    }
-}
-
-public struct QuestionRecord: Codable, Sendable {
-    public let id: String
-    public let questions: [Question]
-    public let agentid: String?
-    public let sessionkey: String?
-    public let createdatms: Int
-    public let expiresatms: Int
-    public let status: QuestionStatus
-    public let answers: QuestionAnswers?
-    public let resolvedby: String?
-
-    public init(
-        id: String,
-        questions: [Question],
-        agentid: String? = nil,
-        sessionkey: String? = nil,
-        createdatms: Int,
-        expiresatms: Int,
-        status: QuestionStatus,
-        answers: QuestionAnswers? = nil,
-        resolvedby: String? = nil)
-    {
-        self.id = id
-        self.questions = questions
-        self.agentid = agentid
-        self.sessionkey = sessionkey
-        self.createdatms = createdatms
-        self.expiresatms = expiresatms
-        self.status = status
-        self.answers = answers
-        self.resolvedby = resolvedby
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case id
-        case questions
-        case agentid = "agentId"
-        case sessionkey = "sessionKey"
-        case createdatms = "createdAtMs"
-        case expiresatms = "expiresAtMs"
-        case status
-        case answers
-        case resolvedby = "resolvedBy"
-    }
-}
-
-public struct QuestionRequestParams: Codable, Sendable {
-    public let id: String?
-    public let questions: [QuestionRequestQuestion]
-    public let agentid: String?
-    public let sessionkey: String?
-    public let timeoutms: Int?
-
-    public init(
-        id: String? = nil,
-        questions: [QuestionRequestQuestion],
-        agentid: String? = nil,
-        sessionkey: String? = nil,
-        timeoutms: Int? = nil)
-    {
-        self.id = id
-        self.questions = questions
-        self.agentid = agentid
-        self.sessionkey = sessionkey
-        self.timeoutms = timeoutms
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case id
-        case questions
-        case agentid = "agentId"
-        case sessionkey = "sessionKey"
-        case timeoutms = "timeoutMs"
-    }
-}
-
-public struct QuestionRequestResult: Codable, Sendable {
-    public let id: String
-    public let expiresatms: Int
-
-    public init(
-        id: String,
-        expiresatms: Int)
-    {
-        self.id = id
-        self.expiresatms = expiresatms
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case id
-        case expiresatms = "expiresAtMs"
-    }
-}
-
-public struct QuestionWaitAnswerParams: Codable, Sendable {
-    public let id: String
-    public let timeoutms: Int?
-
-    public init(
-        id: String,
-        timeoutms: Int? = nil)
-    {
-        self.id = id
-        self.timeoutms = timeoutms
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case id
-        case timeoutms = "timeoutMs"
-    }
-}
-
-public struct QuestionGetParams: Codable, Sendable {
-    public let id: String
-
-    public init(
-        id: String)
-    {
-        self.id = id
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case id
-    }
-}
-
-public struct QuestionGetResult: Codable, Sendable {
-    public let question: QuestionRecord
-
-    public init(
-        question: QuestionRecord)
-    {
-        self.question = question
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case question
-    }
-}
-
-public struct QuestionListParams: Codable, Sendable {}
-
-public struct QuestionListResult: Codable, Sendable {
-    public let questions: [QuestionRecord]
-
-    public init(
-        questions: [QuestionRecord])
-    {
-        self.questions = questions
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case questions
-    }
-}
-
 public struct PluginApprovalRequestParams: Codable, Sendable {
     public let pluginid: String?
     public let title: String
@@ -13017,7 +12738,6 @@ public struct PluginCatalogEntry: Codable, Sendable {
     public let enabled: Bool
     public let state: AnyCodable
     public let featured: Bool?
-    public let featuredat: Int?
     public let order: Double?
     public let hasicon: Bool?
     public let install: PluginCatalogInstallAction?
@@ -13037,7 +12757,6 @@ public struct PluginCatalogEntry: Codable, Sendable {
         enabled: Bool,
         state: AnyCodable,
         featured: Bool? = nil,
-        featuredat: Int? = nil,
         order: Double? = nil,
         hasicon: Bool? = nil,
         install: PluginCatalogInstallAction? = nil,
@@ -13056,7 +12775,6 @@ public struct PluginCatalogEntry: Codable, Sendable {
         self.enabled = enabled
         self.state = state
         self.featured = featured
-        self.featuredat = featuredat
         self.order = order
         self.hasicon = hasicon
         self.install = install
@@ -13077,7 +12795,6 @@ public struct PluginCatalogEntry: Codable, Sendable {
         case enabled
         case state
         case featured
-        case featuredat = "featuredAt"
         case order
         case hasicon = "hasIcon"
         case install
@@ -13754,7 +13471,6 @@ public struct DevicePairRequestedEvent: Codable, Sendable {
     public let devicefamily: String?
     public let clientid: String?
     public let clientmode: String?
-    public let browserorigin: String?
     public let role: String?
     public let roles: [String]?
     public let scopes: [String]?
@@ -13772,7 +13488,6 @@ public struct DevicePairRequestedEvent: Codable, Sendable {
         devicefamily: String? = nil,
         clientid: String? = nil,
         clientmode: String? = nil,
-        browserorigin: String? = nil,
         role: String? = nil,
         roles: [String]? = nil,
         scopes: [String]? = nil,
@@ -13789,7 +13504,6 @@ public struct DevicePairRequestedEvent: Codable, Sendable {
         self.devicefamily = devicefamily
         self.clientid = clientid
         self.clientmode = clientmode
-        self.browserorigin = browserorigin
         self.role = role
         self.roles = roles
         self.scopes = scopes
@@ -13808,7 +13522,6 @@ public struct DevicePairRequestedEvent: Codable, Sendable {
         case devicefamily = "deviceFamily"
         case clientid = "clientId"
         case clientmode = "clientMode"
-        case browserorigin = "browserOrigin"
         case role
         case roles
         case scopes
@@ -14001,7 +13714,6 @@ public struct ChatSendParams: Codable, Sendable {
     public let originatingaccountid: String?
     public let originatingthreadid: String?
     public let attachments: [AnyCodable]?
-    public let toolbindings: [String: AnyCodable]?
     public let timeoutms: Int?
     public let systeminputprovenance: [String: AnyCodable]?
     public let systemprovenancereceipt: String?
@@ -14024,7 +13736,6 @@ public struct ChatSendParams: Codable, Sendable {
         originatingaccountid: String? = nil,
         originatingthreadid: String? = nil,
         attachments: [AnyCodable]? = nil,
-        toolbindings: [String: AnyCodable]? = nil,
         timeoutms: Int? = nil,
         systeminputprovenance: [String: AnyCodable]? = nil,
         systemprovenancereceipt: String? = nil,
@@ -14046,7 +13757,6 @@ public struct ChatSendParams: Codable, Sendable {
         self.originatingaccountid = originatingaccountid
         self.originatingthreadid = originatingthreadid
         self.attachments = attachments
-        self.toolbindings = toolbindings
         self.timeoutms = timeoutms
         self.systeminputprovenance = systeminputprovenance
         self.systemprovenancereceipt = systemprovenancereceipt
@@ -14069,7 +13779,6 @@ public struct ChatSendParams: Codable, Sendable {
         originatingaccountid: String? = nil,
         originatingthreadid: String? = nil,
         attachments: [AnyCodable]? = nil,
-        toolbindings: [String: AnyCodable]? = nil,
         timeoutms: Int? = nil,
         systeminputprovenance: [String: AnyCodable]? = nil,
         systemprovenancereceipt: String? = nil,
@@ -14092,7 +13801,6 @@ public struct ChatSendParams: Codable, Sendable {
             originatingaccountid: originatingaccountid,
             originatingthreadid: originatingthreadid,
             attachments: attachments,
-            toolbindings: toolbindings,
             timeoutms: timeoutms,
             systeminputprovenance: systeminputprovenance,
             systemprovenancereceipt: systemprovenancereceipt,
@@ -14116,7 +13824,6 @@ public struct ChatSendParams: Codable, Sendable {
         case originatingaccountid = "originatingAccountId"
         case originatingthreadid = "originatingThreadId"
         case attachments
-        case toolbindings = "toolBindings"
         case timeoutms = "timeoutMs"
         case systeminputprovenance = "systemInputProvenance"
         case systemprovenancereceipt = "systemProvenanceReceipt"

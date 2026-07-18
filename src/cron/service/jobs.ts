@@ -181,32 +181,17 @@ function computeStaggeredCronPreviousRunAtMs(job: CronJob, nowMs: number) {
   return undefined;
 }
 
-function computeStaggeredCronPreviousRunAtOrBeforeMs(job: CronJob, nowMs: number) {
-  const previous = computeStaggeredCronPreviousRunAtMs(job, nowMs);
-  const probeMs = nowMs + 1_000;
-  if (!Number.isFinite(probeMs)) {
-    return previous;
-  }
-
-  // Croner previous-run queries are strict-before and second-granular. Keep
-  // the strict result, then probe past the current second to include a slot
-  // exactly at now without losing the prior slot between boundaries.
-  const boundary = computeStaggeredCronPreviousRunAtMs(job, probeMs);
-  if (
-    isFiniteTimestamp(boundary) &&
-    boundary <= nowMs &&
-    (!isFiniteTimestamp(previous) || boundary > previous)
-  ) {
-    return boundary;
-  }
-  return previous;
-}
-
 function isStaggeredCronRunAtMs(job: CronJob, runAtMs: number): boolean {
   if (job.schedule.kind !== "cron" || !isFiniteTimestamp(runAtMs)) {
     return false;
   }
-  const previous = computeStaggeredCronPreviousRunAtOrBeforeMs(job, runAtMs);
+  // Probe past the candidate second. Croner-style second-granular schedules
+  // normalize a 1ms probe back to the candidate's second, so
+  // `previousRuns(1, runAtMs + 1)` returns the slot before the candidate
+  // rather than the candidate itself and exact-second slots get misclassified
+  // as stale. A 1s probe lands past the candidate second, matching the cursor
+  // step used elsewhere in this file (cf. #81691).
+  const previous = computeStaggeredCronPreviousRunAtMs(job, runAtMs + 1_000);
   return previous === runAtMs;
 }
 
@@ -235,7 +220,6 @@ function shouldRepairFutureCronNextRunAtMs(params: {
     job.schedule.kind !== "cron" ||
     !hasScheduledNextRunAtMs(nextRun) ||
     nowMs >= nextRun ||
-    typeof job.state.queuedAtMs === "number" ||
     typeof job.state.runningAtMs === "number"
   ) {
     return false;
@@ -525,15 +509,6 @@ export function computeJobPreviousRunAtMs(job: CronJob, nowMs: number): number |
   return isFiniteTimestamp(previous) ? previous : undefined;
 }
 
-/** Computes the latest effective cron timestamp at or before the supplied time. */
-export function computeJobPreviousRunAtOrBeforeMs(job: CronJob, nowMs: number): number | undefined {
-  if (!isJobEnabled(job) || job.schedule.kind !== "cron") {
-    return undefined;
-  }
-  const previous = computeStaggeredCronPreviousRunAtOrBeforeMs(job, nowMs);
-  return isFiniteTimestamp(previous) ? previous : undefined;
-}
-
 /** Maximum consecutive schedule errors before auto-disabling a job. */
 const MAX_SCHEDULE_ERRORS = 3;
 
@@ -622,13 +597,6 @@ function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; 
       changed = true;
     }
     if (
-      job.state.queuedAtMs !== undefined &&
-      !isQueuedForceCronRun(state, job.id, job.state.queuedAtMs)
-    ) {
-      job.state.queuedAtMs = undefined;
-      changed = true;
-    }
-    if (
       job.state.runningAtMs !== undefined &&
       !isQueuedForceCronRun(state, job.id, job.state.runningAtMs)
     ) {
@@ -640,20 +608,6 @@ function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; 
 
   if (!hasScheduledNextRunAtMs(job.state.nextRunAtMs) && job.state.nextRunAtMs !== undefined) {
     job.state.nextRunAtMs = undefined;
-    changed = true;
-  }
-
-  const queuedAt = job.state.queuedAtMs;
-  if (
-    typeof queuedAt === "number" &&
-    nowMs - queuedAt > STUCK_RUN_MS &&
-    !isQueuedCronRun(state, job.id, queuedAt)
-  ) {
-    state.deps.log.warn(
-      { jobId: job.id, queuedAtMs: queuedAt },
-      "cron: clearing stuck queued marker",
-    );
-    job.state.queuedAtMs = undefined;
     changed = true;
   }
 
@@ -835,7 +789,6 @@ export function recomputeNextRunsForMaintenance(
       } else if (
         recomputeExpired &&
         now >= job.state.nextRunAtMs &&
-        typeof job.state.queuedAtMs !== "number" &&
         typeof job.state.runningAtMs !== "number"
       ) {
         // Only advance when the expired slot was already executed, or when
@@ -1360,7 +1313,7 @@ export function isJobDue(job: CronJob, nowMs: number, opts: { forced: boolean })
   if (!job.state) {
     job.state = {};
   }
-  if (typeof job.state.queuedAtMs === "number" || typeof job.state.runningAtMs === "number") {
+  if (typeof job.state.runningAtMs === "number") {
     return false;
   }
   if (opts.forced) {

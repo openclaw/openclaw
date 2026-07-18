@@ -4,8 +4,6 @@
 // lives here instead of being copied into each runtime.
 import {
   buildSearchCacheKey,
-  DEFAULT_SEARCH_COUNT,
-  readPositiveIntegerParam,
   resolveSiteName,
   wrapWebContent,
 } from "openclaw/plugin-sdk/provider-web-search";
@@ -42,17 +40,7 @@ export type ParallelSearchResponse = {
   usage?: unknown;
 };
 
-export function resolveParallelSearchCount(
-  args: Record<string, unknown>,
-  configuredCount: unknown,
-): number {
-  const requestedCount = readPositiveIntegerParam(args, "count", {
-    max: PARALLEL_MAX_SEARCH_COUNT,
-    message: `count must be an integer from 1 to ${PARALLEL_MAX_SEARCH_COUNT}.`,
-  });
-  const value =
-    requestedCount ??
-    (typeof configuredCount === "number" ? configuredCount : DEFAULT_SEARCH_COUNT);
+export function resolveParallelSearchCount(value: number): number {
   return Math.max(1, Math.min(PARALLEL_MAX_SEARCH_COUNT, Math.floor(value)));
 }
 

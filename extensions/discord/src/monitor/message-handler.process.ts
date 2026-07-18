@@ -12,7 +12,6 @@ import {
   hasFinalInboundReplyDispatch,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
-  bindIngressLifecycleToReplyOptions,
   createChannelMessageReplyPipeline,
   defineFinalizableLivePreviewAdapter,
   deliverWithFinalizableLivePreviewAdapter,
@@ -171,7 +170,6 @@ async function processDiscordMessageInner(
     threadBindings,
     route,
     abortSignal,
-    turnAdoptionLifecycle,
     preparedMedia: mediaList,
   } = ctx;
   if (isProcessAborted(abortSignal)) {
@@ -1053,7 +1051,6 @@ async function processDiscordMessageInner(
             limit: historyLimit,
           },
       replyOptions: {
-        ...(turnAdoptionLifecycle ? bindIngressLifecycleToReplyOptions(turnAdoptionLifecycle) : {}),
         abortSignal,
         skillFilter: channelConfig?.skills,
         sourceReplyDeliveryMode,

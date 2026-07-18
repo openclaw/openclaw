@@ -37,7 +37,6 @@ type AuthOption = NonNullable<SystemAgentSetupDetectResult["authOptions"]>[numbe
 export type ModelSetupRouteData = {
   state: ModelSetupPageState;
   client: GatewayBrowserClient | null;
-  firstRun: boolean;
 };
 
 function errorMessage(error: unknown): string {
@@ -512,13 +511,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       onManualConnect: () => this.connectManual(),
       onMoreSignInToggle: (open) => (this.moreSignInOpen = open),
       onIconError: (iconUrl) => this.invalidateIcon(iconUrl),
-      onOpenChat: () => {
-        if (this.routeData?.firstRun) {
-          this.context.navigate("custodian", { search: "?onboarding=1" });
-          return;
-        }
-        this.context.navigate("chat");
-      },
+      onOpenChat: () => this.context.navigate("chat"),
       onWizardValueChange: (value) => (this.wizardValue = value),
       onWizardAnswer: (value, includeValue) => void this.wizard.answer(value, includeValue),
       onWizardCancel: () => void this.wizard.cancel(),
@@ -533,6 +526,4 @@ export class ModelSetupPage extends OpenClawLightDomElement {
   }
 }
 
-if (!customElements.get("openclaw-model-setup-page")) {
-  customElements.define("openclaw-model-setup-page", ModelSetupPage);
-}
+customElements.define("openclaw-model-setup-page", ModelSetupPage);

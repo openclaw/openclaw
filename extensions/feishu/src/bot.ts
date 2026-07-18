@@ -19,6 +19,7 @@ import {
   createChannelHistoryWindow,
   type HistoryEntry,
 } from "openclaw/plugin-sdk/reply-history";
+import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   resolveDefaultGroupPolicy,
@@ -1555,7 +1556,7 @@ export async function handleFeishuMessage(params: {
         if (agentId === activeAgentId) {
           // Active agent: real Feishu dispatcher (responds on Feishu)
           const identity = resolveAgentOutboundIdentity(cfg, agentId);
-          const { dispatcherOptions, delivery, replyOptions, ensureNoVisibleReplyFallback } =
+          const { dispatcher, replyOptions, markDispatchIdle, ensureNoVisibleReplyFallback } =
             createFeishuReplyDispatcher({
               cfg,
               agentId,
@@ -1600,15 +1601,28 @@ export async function handleFeishuMessage(params: {
                 route: { agentId, sessionKey: agentSessionKey },
                 ctxPayload: agentCtx,
                 record: agentRecord,
-                dispatcherOptions,
-                delivery,
-                replyOptions,
+                onPreDispatchFailure: () =>
+                  core.channel.reply.settleReplyDispatcher({
+                    dispatcher,
+                    onSettled: () => markDispatchIdle(),
+                  }),
+                runDispatch: () =>
+                  dispatchInboundMessage({
+                    ctx: agentCtx,
+                    cfg,
+                    dispatcher,
+                    onSettled: () => markDispatchIdle(),
+                    replyOptions,
+                  }),
               }),
             },
           });
           if (
             turnResult.dispatched &&
-            shouldSendNoVisibleReplyFallback(turnResult.dispatchResult)
+            shouldSendNoVisibleReplyFallback({
+              ...turnResult.dispatchResult,
+              failedCounts: dispatcher.getFailedCounts?.() ?? { tool: 0, block: 0, final: 0 },
+            })
           ) {
             await ensureNoVisibleReplyFallback("broadcast-dispatch-complete-no-visible-reply");
           }
@@ -1617,6 +1631,16 @@ export async function handleFeishuMessage(params: {
           // Strip CommandAuthorized so slash commands (e.g. /reset) don't silently
           // mutate observer sessions — only the active agent should execute commands.
           delete (agentCtx as Record<string, unknown>).CommandAuthorized;
+          const noopDispatcher = {
+            sendToolResult: () => false,
+            sendBlockReply: () => false,
+            sendFinalReply: () => false,
+            waitForIdle: async () => {},
+            getQueuedCounts: () => ({ tool: 0, block: 0, final: 0 }),
+            getFailedCounts: () => ({ tool: 0, block: 0, final: 0 }),
+            markComplete: () => {},
+          };
+
           log(
             `feishu[${account.accountId}]: broadcast observer dispatch agent=${agentId} (session=${agentSessionKey})`,
           );
@@ -1640,10 +1664,12 @@ export async function handleFeishuMessage(params: {
                 route: { agentId, sessionKey: agentSessionKey },
                 ctxPayload: agentCtx,
                 record: agentRecord,
-                admission: { kind: "observeOnly", reason: "broadcast-observer" },
-                delivery: {
-                  deliver: async () => ({ visibleReplySent: false }),
-                },
+                runDispatch: () =>
+                  dispatchInboundMessage({
+                    ctx: agentCtx,
+                    cfg,
+                    dispatcher: noopDispatcher,
+                  }),
               }),
             },
           });
@@ -1704,7 +1730,7 @@ export async function handleFeishuMessage(params: {
         storePath,
         sessionKey: route.sessionKey,
       });
-      const { dispatcherOptions, delivery, replyOptions, ensureNoVisibleReplyFallback } =
+      const { dispatcher, replyOptions, markDispatchIdle, ensureNoVisibleReplyFallback } =
         createFeishuReplyDispatcher({
           cfg: effectiveCfg,
           agentId: route.agentId,
@@ -1763,9 +1789,19 @@ export async function handleFeishuMessage(params: {
               historyMap: chatHistories,
               limit: historyLimit,
             },
-            dispatcherOptions,
-            delivery,
-            replyOptions,
+            onPreDispatchFailure: () =>
+              core.channel.reply.settleReplyDispatcher({
+                dispatcher,
+                onSettled: () => markDispatchIdle(),
+              }),
+            runDispatch: () =>
+              dispatchInboundMessage({
+                ctx: ctxPayload,
+                cfg: effectiveCfg,
+                dispatcher,
+                onSettled: () => markDispatchIdle(),
+                replyOptions,
+              }),
           }),
         },
       });
@@ -1774,7 +1810,12 @@ export async function handleFeishuMessage(params: {
       }
       const { dispatchResult } = turnResult;
       const { queuedFinal, counts } = dispatchResult;
-      if (shouldSendNoVisibleReplyFallback(dispatchResult)) {
+      if (
+        shouldSendNoVisibleReplyFallback({
+          ...dispatchResult,
+          failedCounts: dispatcher.getFailedCounts?.() ?? { tool: 0, block: 0, final: 0 },
+        })
+      ) {
         await ensureNoVisibleReplyFallback("dispatch-complete-no-visible-reply");
       }
 

@@ -239,27 +239,20 @@ function createRuntimeCore(
     };
   };
   const recordInboundSession = vi.fn(async (_params: RecordInboundSessionInput) => {});
-  const dispatchPlanForTest = vi.fn(
+  const dispatchPreparedForTest = vi.fn(
     async (turn: {
-      cfg: OpenClawConfig;
-      channel: string;
       route: { agentId: string; sessionKey: string };
       ctxPayload: { SessionKey?: string };
-      dispatcherOptions?: Record<string, unknown>;
-      delivery: {
-        deliver: (
-          payload: ReplyPayload,
-          info: { kind: "tool" | "block" | "final" },
-        ) => Promise<unknown>;
-        onError?: unknown;
-      };
-      replyOptions?: Record<string, unknown>;
       record?: {
         groupResolution?: unknown;
         createIfMissing?: boolean;
         updateLastRoute?: RecordInboundSessionInput["updateLastRoute"];
         onRecordError?: (err: unknown) => void;
       };
+      runDispatch: () => Promise<{
+        queuedFinal: boolean;
+        counts: { tool: number; block: number; final: number };
+      }>;
     }) => {
       await recordInboundSession({
         storePath: "/tmp/openclaw-test-sessions.json",
@@ -270,18 +263,7 @@ function createRuntimeCore(
         updateLastRoute: turn.record?.updateLastRoute,
         onRecordError: turn.record?.onRecordError ?? (() => undefined),
       });
-      const prepared = mockState.createReplyDispatcherWithTyping({
-        ...turn.dispatcherOptions,
-        deliver: turn.delivery.deliver,
-        onError: turn.delivery.onError,
-      }) as { dispatcher: unknown; replyOptions?: Record<string, unknown> };
-      const dispatchResult = await mockState.dispatchInboundMessage({
-        ctx: turn.ctxPayload,
-        cfg: turn.cfg,
-        dispatcher: prepared.dispatcher,
-        replyOptions: { ...prepared.replyOptions, ...turn.replyOptions },
-        onSettled: turn.dispatcherOptions?.onSettled,
-      });
+      const dispatchResult = await turn.runDispatch();
       return {
         admission: { kind: "dispatch" as const },
         dispatched: true,
@@ -300,7 +282,7 @@ function createRuntimeCore(
           input: unknown,
           eventClass: { kind: "message"; canStartAgentTurn: true },
           preflight: Record<string, never>,
-        ) => Parameters<typeof dispatchPlanForTest>[0];
+        ) => Parameters<typeof dispatchPreparedForTest>[0];
       };
     }) => {
       const input = params.adapter.ingest(params.raw);
@@ -309,7 +291,7 @@ function createRuntimeCore(
         { kind: "message", canStartAgentTurn: true },
         {},
       );
-      return await dispatchPlanForTest(turn);
+      return await dispatchPreparedForTest(turn);
     },
   );
   return {

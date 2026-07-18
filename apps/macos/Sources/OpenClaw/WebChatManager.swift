@@ -17,89 +17,58 @@ enum WebChatPresentation {
     case panel(anchorProvider: () -> NSRect?)
 }
 
-struct WebChatRoute: Equatable, Sendable {
-    let sessionKey: String
-    let agentID: String?
-
-    init(sessionKey: String, agentID: String?) {
-        self.sessionKey = sessionKey
-        self.agentID = Self.normalizedAgentID(agentID)
-    }
-
-    func replacingSessionKey(_ sessionKey: String) -> Self {
-        Self(sessionKey: sessionKey, agentID: self.agentID)
-    }
-
-    static func normalizedAgentID(_ agentID: String?) -> String? {
-        let normalized = agentID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return normalized?.isEmpty == false ? normalized : nil
-    }
-}
-
 @MainActor
 final class WebChatManager {
     static let shared = WebChatManager()
 
     private var windowController: WebChatSwiftUIWindowController?
-    private var windowRoute: WebChatRoute?
+    private var windowSessionKey: String?
     private var panelController: WebChatSwiftUIWindowController?
-    private var panelRoute: WebChatRoute?
-    private var currentChatRoute: WebChatRoute?
+    private var panelSessionKey: String?
+    private var currentChatSessionKey: String?
     private var cachedPreferredSessionKey: String?
 
     var onPanelVisibilityChanged: ((Bool) -> Void)?
 
     var activeSessionKey: String? {
-        self.currentChatRoute?.sessionKey ?? self.panelRoute?.sessionKey ?? self.windowRoute?.sessionKey
+        self.currentChatSessionKey ?? self.panelSessionKey ?? self.windowSessionKey
     }
 
-    func show(sessionKey: String, agentID: String? = nil) {
-        let route = WebChatRoute(sessionKey: sessionKey, agentID: agentID)
+    func show(sessionKey: String) {
         self.closePanel()
         if let controller = self.windowController {
             // The window shell switches sessions in place (sidebar, /new);
-            // full route identity tracks those switches and the global owner.
-            if Self.shouldReuseController(currentRoute: self.windowRoute, requestedRoute: route) {
+            // windowSessionKey tracks those switches, so a window already on
+            // the requested session must not be torn down and re-bootstrapped.
+            if self.windowSessionKey == sessionKey {
                 controller.show()
                 return
             }
 
             controller.close()
             self.windowController = nil
-            self.windowRoute = nil
+            self.windowSessionKey = nil
         }
-        let controller = WebChatSwiftUIWindowController(
-            sessionKey: route.sessionKey,
-            agentID: route.agentID,
-            presentation: .window)
+        let controller = WebChatSwiftUIWindowController(sessionKey: sessionKey, presentation: .window)
         controller.onVisibilityChanged = { [weak self] visible in
             self?.onPanelVisibilityChanged?(visible)
         }
-        controller.onSessionKeyChanged = { [weak self, weak controller] key in
-            guard let self, let controller, self.windowController === controller else { return }
-            // Retaining the agent is safe: this surface has no in-window agent switcher,
-            // and the controller pins explicit agents against gateway-default changes.
-            let updatedRoute = (self.windowRoute ?? route).replacingSessionKey(key)
-            self.windowRoute = updatedRoute
-            self.currentChatRoute = updatedRoute
+        controller.onSessionKeyChanged = { [weak self] key in
+            self?.windowSessionKey = key
+            self?.currentChatSessionKey = key
         }
         self.windowController = controller
-        self.windowRoute = route
-        self.currentChatRoute = route
+        self.windowSessionKey = sessionKey
+        self.currentChatSessionKey = sessionKey
         controller.show()
     }
 
-    func togglePanel(
-        sessionKey: String,
-        agentID: String? = nil,
-        anchorProvider: @escaping () -> NSRect?)
-    {
-        let route = WebChatRoute(sessionKey: sessionKey, agentID: agentID)
+    func togglePanel(sessionKey: String, anchorProvider: @escaping () -> NSRect?) {
         if let controller = self.panelController {
-            if !Self.shouldReuseController(currentRoute: self.panelRoute, requestedRoute: route) {
+            if self.panelSessionKey != sessionKey {
                 controller.close()
                 self.panelController = nil
-                self.panelRoute = nil
+                self.panelSessionKey = nil
             } else {
                 if controller.isVisible {
                     controller.close()
@@ -111,8 +80,7 @@ final class WebChatManager {
         }
 
         let controller = WebChatSwiftUIWindowController(
-            sessionKey: route.sessionKey,
-            agentID: route.agentID,
+            sessionKey: sessionKey,
             presentation: .panel(anchorProvider: anchorProvider))
         controller.onClosed = { [weak self] in
             self?.panelHidden()
@@ -120,24 +88,20 @@ final class WebChatManager {
         controller.onVisibilityChanged = { [weak self] visible in
             self?.onPanelVisibilityChanged?(visible)
         }
-        controller.onSessionKeyChanged = { [weak self, weak controller] key in
-            guard let self, let controller, self.panelController === controller else { return }
-            let updatedRoute = (self.panelRoute ?? route).replacingSessionKey(key)
-            self.panelRoute = updatedRoute
-            self.currentChatRoute = updatedRoute
+        controller.onSessionKeyChanged = { [weak self] key in
+            self?.panelSessionKey = key
+            self?.currentChatSessionKey = key
         }
         self.panelController = controller
-        self.panelRoute = route
-        self.currentChatRoute = route
+        self.panelSessionKey = sessionKey
+        self.currentChatSessionKey = sessionKey
         controller.presentAnchored(anchorProvider: anchorProvider)
     }
 
     func recordActiveSessionKey(_ sessionKey: String) {
         let trimmed = sessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        let route = self.currentChatRoute ?? self.panelRoute ?? self.windowRoute
-        self.currentChatRoute = route?.replacingSessionKey(trimmed)
-            ?? WebChatRoute(sessionKey: trimmed, agentID: nil)
+        self.currentChatSessionKey = trimmed
     }
 
     func closePanel() {
@@ -154,11 +118,11 @@ final class WebChatManager {
     func resetTunnels() {
         self.windowController?.close()
         self.windowController = nil
-        self.windowRoute = nil
+        self.windowSessionKey = nil
         self.panelController?.close()
         self.panelController = nil
-        self.panelRoute = nil
-        self.currentChatRoute = nil
+        self.panelSessionKey = nil
+        self.currentChatSessionKey = nil
         self.cachedPreferredSessionKey = nil
     }
 
@@ -169,12 +133,5 @@ final class WebChatManager {
     private func panelHidden() {
         self.onPanelVisibilityChanged?(false)
         // Keep panel controller cached so reopening doesn't re-bootstrap.
-    }
-
-    static func shouldReuseController(
-        currentRoute: WebChatRoute?,
-        requestedRoute: WebChatRoute) -> Bool
-    {
-        currentRoute == requestedRoute
     }
 }

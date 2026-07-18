@@ -118,7 +118,6 @@ describe("OpenAI Realtime Video Talk", () => {
       .mockReturnValueOnce("data:image/jpeg;base64,camera-frame");
     const onVideoStream = vi.fn();
     const onTalkEvent = vi.fn();
-    const onStatus = vi.fn();
     const transport = new WebRtcSdpRealtimeTalkTransport(
       {
         provider: "openai",
@@ -128,7 +127,7 @@ describe("OpenAI Realtime Video Talk", () => {
       {
         client: {} as never,
         sessionKey: "main",
-        callbacks: { onStatus, onTalkEvent, onVideoStream },
+        callbacks: { onTalkEvent, onVideoStream },
         videoEnabled: true,
       },
     );
@@ -193,9 +192,7 @@ describe("OpenAI Realtime Video Talk", () => {
       expect(new TextEncoder().encode(String(payload)).length).toBeLessThanOrEqual(512);
     }
 
-    peer!.connectionState = "failed";
-    peer!.dispatchEvent(new Event("connectionstatechange"));
-    expect(onStatus).toHaveBeenLastCalledWith("error", "Realtime connection closed");
+    transport.stop();
     expect(onVideoStream).toHaveBeenLastCalledWith(null);
     expect(audioStop).toHaveBeenCalledOnce();
     expect(videoStop).toHaveBeenCalledOnce();

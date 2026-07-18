@@ -11,8 +11,7 @@ import {
   resolveInboundRouteEnvelopeBuilderWithRuntime,
 } from "./inbound-event/envelope.js";
 import { createChannelReplyPipeline } from "./message/reply-pipeline.js";
-import { dispatchChannelInboundTurn } from "./turn/kernel.js";
-import type { ChannelTurnPlan } from "./turn/types.js";
+import { dispatchChannelInboundTurn, runPreparedInboundReply } from "./turn/kernel.js";
 export {
   createPreCryptoDirectDmAuthorizer,
   resolveInboundDirectDmAccessWithRuntime,
@@ -119,16 +118,6 @@ export async function dispatchInboundDirectDm(params: DispatchInboundDirectDmPar
       timestamp: params.timestamp,
     }),
   );
-  await dispatchChannelInboundTurn(buildDirectDmTurnPlan(params, route, ctxPayload));
-
-  return { route, ctxPayload };
-}
-
-function buildDirectDmTurnPlan(
-  params: DispatchInboundDirectDmParams,
-  route: DirectDmRoute,
-  ctxPayload: FinalizedMsgContext,
-): ChannelTurnPlan {
   const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
     cfg: params.cfg,
     agentId: route.agentId,
@@ -136,7 +125,7 @@ function buildDirectDmTurnPlan(
     accountId: route.accountId ?? params.accountId,
   });
 
-  return {
+  await dispatchChannelInboundTurn({
     cfg: params.cfg,
     channel: params.channel,
     accountId: route.accountId ?? params.accountId,
@@ -151,7 +140,9 @@ function buildDirectDmTurnPlan(
     },
     replyPipeline,
     replyOptions: { onModelSelected },
-  };
+  });
+
+  return { route, ctxPayload };
 }
 
 export async function dispatchInboundDirectDmWithRuntime(
@@ -199,22 +190,36 @@ export async function dispatchInboundDirectDmWithRuntime(
     NativeDirectUserId: params.peer.id,
     ...params.extraContext,
   });
-  const plan = buildDirectDmTurnPlan(params, route, ctxPayload);
-  await params.runtime.channel.inbound.run({
+  const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
+    cfg: params.cfg,
+    agentId: route.agentId,
     channel: params.channel,
     accountId: route.accountId ?? params.accountId,
-    raw: ctxPayload,
-    adapter: {
-      ingest: () => ({
-        id: params.messageId,
-        timestamp: params.timestamp,
-        rawText: params.rawBody,
-        textForAgent: params.bodyForAgent,
-        textForCommands: params.commandBody,
-        raw: ctxPayload,
+  });
+  await runPreparedInboundReply({
+    channel: params.channel,
+    accountId: route.accountId ?? params.accountId,
+    routeSessionKey: route.sessionKey,
+    storePath,
+    ctxPayload,
+    recordInboundSession: params.runtime.channel.session.recordInboundSession,
+    record: { onRecordError: params.onRecordError },
+    runDispatch: () =>
+      params.runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
+        ctx: ctxPayload,
+        cfg: params.cfg,
+        dispatcherOptions: {
+          ...replyPipeline,
+          deliver: (payload: unknown) =>
+            params.deliver(
+              payload && typeof payload === "object"
+                ? normalizeOutboundReplyPayload(payload as Record<string, unknown>)
+                : {},
+            ),
+          onError: params.onDispatchError,
+        },
+        replyOptions: { onModelSelected },
       }),
-      resolveTurn: () => plan,
-    },
   });
   return { route, storePath, ctxPayload };
 }

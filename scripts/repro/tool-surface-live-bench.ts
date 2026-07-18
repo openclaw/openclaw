@@ -3,7 +3,6 @@
 // Tool Search (code/tools), and Code Mode, over a decoy-heavy catalog.
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
-import { isDeepStrictEqual } from "node:util";
 import { Type, type TSchema } from "typebox";
 import type { Model } from "../../packages/agent-core/src/llm.js";
 import type { AgentEvent, AgentTool } from "../../packages/agent-core/src/types.js";
@@ -119,9 +118,6 @@ function createOrchardService() {
   let calls = 0;
   let decoyCalls = 0;
   const checkedSensorPlots = new Set<string>();
-  // Tool results recorded per call so the harness can detect raw-first
-  // inspection execs (exec output deep-equal to one recorded tool result).
-  const resultLog: Array<{ tool: string; value: unknown }> = [];
   const note = () => {
     calls += 1;
   };
@@ -131,12 +127,6 @@ function createOrchardService() {
     },
     get decoyCalls() {
       return decoyCalls;
-    },
-    get resultLog(): ReadonlyArray<{ tool: string; value: unknown }> {
-      return resultLog;
-    },
-    noteResult(tool: string, value: unknown) {
-      resultLog.push({ tool, value: structuredClone(value) });
     },
     noteDecoy() {
       decoyCalls += 1;
@@ -193,7 +183,6 @@ function stringParam(params: Record<string, unknown>, key: string): string {
 }
 
 function makeTool(
-  service: OrchardService,
   pluginId: string,
   name: string,
   description: string,
@@ -207,13 +196,12 @@ function makeTool(
     description,
     parameters: Type.Object(properties),
     ...(outputSchema ? { outputSchema } : {}),
-    execute: async (_toolCallId: string, params: unknown) => {
-      const value = await execute(
-        (params && typeof params === "object" ? params : {}) as Record<string, unknown>,
-      );
-      service.noteResult(name, value);
-      return jsonResult(value);
-    },
+    execute: async (_toolCallId: string, params: unknown) =>
+      jsonResult(
+        await execute(
+          (params && typeof params === "object" ? params : {}) as Record<string, unknown>,
+        ),
+      ),
   } satisfies AnyAgentTool;
   setPluginToolMeta(tool, { pluginId, optional: true });
   return tool;
@@ -222,7 +210,6 @@ function makeTool(
 function createOrchardTools(service: OrchardService): AnyAgentTool[] {
   return [
     makeTool(
-      service,
       PLUGIN_ID,
       "orchard_list_plots",
       "List orchard plots with crop, hectares, irrigation mode, and yield score.",
@@ -231,7 +218,6 @@ function createOrchardTools(service: OrchardService): AnyAgentTool[] {
       Type.Array(PlotOutputSchema),
     ),
     makeTool(
-      service,
       PLUGIN_ID,
       "orchard_get_plot",
       "Get one orchard plot by id.",
@@ -240,7 +226,6 @@ function createOrchardTools(service: OrchardService): AnyAgentTool[] {
       Type.Union([PlotOutputSchema, Type.Null()]),
     ),
     makeTool(
-      service,
       PLUGIN_ID,
       "orchard_list_sensors",
       "List field sensors, optionally filtered by plot id.",
@@ -250,7 +235,6 @@ function createOrchardTools(service: OrchardService): AnyAgentTool[] {
       Type.Array(SensorOutputSchema),
     ),
     makeTool(
-      service,
       PLUGIN_ID,
       "orchard_list_shipments",
       "List harvest shipments, optionally filtered by buyer.",
@@ -260,7 +244,6 @@ function createOrchardTools(service: OrchardService): AnyAgentTool[] {
       Type.Array(ShipmentOutputSchema),
     ),
     makeTool(
-      service,
       PLUGIN_ID,
       "orchard_update_irrigation",
       "Set the irrigation mode for one plot after its sensors have been read.",
@@ -280,7 +263,7 @@ function createDecoyTools(service: OrchardService): AnyAgentTool[] {
     description: string,
     properties: Parameters<typeof Type.Object>[0] = {},
   ) =>
-    makeTool(service, DECOY_PLUGIN_ID, name, description, properties, () => {
+    makeTool(DECOY_PLUGIN_ID, name, description, properties, () => {
       service.noteDecoy();
       return { error: "decoy tool: not part of the orchard console" };
     });
@@ -520,46 +503,6 @@ function parseFirstJson(text: string): unknown {
   }
 }
 
-const CODE_EXEC_TOOL_NAMES = new Set(["exec", "tool_search_code"]);
-
-// An exec that returns one tool's raw result unchanged is a shape-inspection
-// turn: the model paid a full model round trip only to observe result fields.
-// Output-contract adoption is ranked by how many of these each tool causes.
-function countRawInspectionExecs(
-  messages: readonly unknown[],
-  resultLog: ReadonlyArray<{ tool: string; value: unknown }>,
-): { total: number; byTool: Record<string, number> } {
-  const byTool: Record<string, number> = {};
-  let total = 0;
-  for (const message of messages) {
-    const record = message as { role?: string; toolName?: string; content?: unknown };
-    if (record.role !== "toolResult" || !CODE_EXEC_TOOL_NAMES.has(record.toolName ?? "")) {
-      continue;
-    }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(textFromMessageContent(record.content)) as unknown;
-    } catch {
-      continue;
-    }
-    const envelope = parsed as { status?: unknown; value?: unknown };
-    // Scalars deep-equal too easily; only structured raw returns count.
-    const value = envelope.status === "completed" ? envelope.value : undefined;
-    if (typeof value !== "object" || value === null) {
-      continue;
-    }
-    const matched = new Set(
-      resultLog.filter((entry) => isDeepStrictEqual(entry.value, value)).map((entry) => entry.tool),
-    );
-    if (matched.size === 1) {
-      const tool = [...matched][0] as string;
-      byTool[tool] = (byTool[tool] ?? 0) + 1;
-      total += 1;
-    }
-  }
-  return { total, byTool };
-}
-
 type RunMetrics = {
   provider: ProviderId;
   model: string;
@@ -572,8 +515,6 @@ type RunMetrics = {
   toolCalls: number;
   serviceCalls: number;
   decoyCalls: number;
-  rawInspectionExecs: number;
-  rawInspectionByTool: Record<string, number>;
   toolsExposed: number;
   tokensIn: number;
   tokensOut: number;
@@ -642,7 +583,6 @@ async function runOne(params: {
     }
   }
   const latencyMs = Math.round(performance.now() - started);
-  const rawInspections = countRawInspectionExecs(agent.state.messages, service.resultLog);
   const assistants = agent.state.messages.filter((message) => message.role === "assistant");
   const usage = assistants.reduce(
     (sum, message) => {
@@ -714,8 +654,6 @@ async function runOne(params: {
     toolCalls: counts.toolCalls,
     serviceCalls: service.calls,
     decoyCalls: service.decoyCalls,
-    rawInspectionExecs: rawInspections.total,
-    rawInspectionByTool: rawInspections.byTool,
     toolsExposed: tools.length,
     tokensIn: usage.input,
     tokensOut: usage.output,
@@ -878,20 +816,13 @@ async function main(argv: readonly string[] = process.argv.slice(2)) {
         turns: entries.reduce((sum, entry) => sum + entry.turns, 0),
         toolCalls: entries.reduce((sum, entry) => sum + entry.toolCalls, 0),
         decoyCalls: entries.reduce((sum, entry) => sum + entry.decoyCalls, 0),
-        rawInspectionExecs: entries.reduce((sum, entry) => sum + entry.rawInspectionExecs, 0),
         tokensIn: entries.reduce((sum, entry) => sum + entry.tokensIn, 0),
         tokensOut: entries.reduce((sum, entry) => sum + entry.tokensOut, 0),
         cacheRead: entries.reduce((sum, entry) => sum + entry.cacheRead, 0),
       };
     }),
   );
-  const rawInspectionByTool: Record<string, number> = {};
-  for (const entry of results) {
-    for (const [tool, count] of Object.entries(entry.rawInspectionByTool)) {
-      rawInspectionByTool[tool] = (rawInspectionByTool[tool] ?? 0) + count;
-    }
-  }
-  console.log(JSON.stringify({ results, errors, aggregate, rawInspectionByTool }, null, 2));
+  console.log(JSON.stringify({ results, errors, aggregate }, null, 2));
   if (errors.length > 0 || results.some((entry) => !entry.ok)) {
     process.exitCode = 1;
   }

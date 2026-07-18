@@ -10,20 +10,30 @@ const {
   builtInboundContextCalls,
   mockCreateFeishuReplyDispatcher,
   mockCreateFeishuClient,
-  mockDispatchReply,
+  mockDispatchInboundMessage,
   mockRecordInboundSession,
   mockResolveAgentRoute,
   mockResolveStorePath,
 } = vi.hoisted(() => ({
   builtInboundContextCalls: [] as Array<Record<string, unknown>>,
   mockCreateFeishuReplyDispatcher: vi.fn((_params?: unknown) => ({
-    dispatcherOptions: {},
-    delivery: { deliver: vi.fn(async () => undefined) },
+    dispatcher: {
+      sendToolResult: vi.fn(),
+      sendBlockReply: vi.fn(),
+      sendFinalReply: vi.fn(),
+      waitForIdle: vi.fn(),
+      getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+      getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+      markComplete: vi.fn(),
+    },
     replyOptions: {},
+    markDispatchIdle: vi.fn(),
     ensureNoVisibleReplyFallback: vi.fn(),
   })),
   mockCreateFeishuClient: vi.fn(),
-  mockDispatchReply: vi.fn().mockResolvedValue({ queuedFinal: false, counts: { final: 1 } }),
+  mockDispatchInboundMessage: vi
+    .fn()
+    .mockResolvedValue({ queuedFinal: false, counts: { final: 1 } }),
   mockRecordInboundSession: vi.fn().mockResolvedValue(undefined),
   mockResolveAgentRoute: vi.fn(),
   mockResolveStorePath: vi.fn(() => "/tmp/feishu-session-store.json"),
@@ -46,6 +56,13 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
         },
       }),
   };
+});
+
+vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/reply-runtime")>(
+    "openclaw/plugin-sdk/reply-runtime",
+  );
+  return { ...actual, dispatchInboundMessage: mockDispatchInboundMessage };
 });
 
 vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
@@ -116,12 +133,15 @@ describe("broadcast dispatch", () => {
             canStartAgentTurn: true,
           };
           const turn = await params.adapter.resolveTurn(input, eventClass, {});
-          if (!("route" in turn) || !("delivery" in turn)) {
-            throw new Error("expected assembled Feishu channel turn plan");
+          if (!("runDispatch" in turn)) {
+            throw new Error("feishu broadcast test runtime only supports prepared turns");
           }
-          const routeSessionKey = turn.route.sessionKey;
-          await mockRecordInboundSession({
-            storePath: mockResolveStorePath(),
+          const routeSessionKey = "route" in turn ? turn.route.sessionKey : turn.routeSessionKey;
+          const storePath = "storePath" in turn ? turn.storePath : mockResolveStorePath();
+          const recordInboundSession =
+            "recordInboundSession" in turn ? turn.recordInboundSession : mockRecordInboundSession;
+          await recordInboundSession({
+            storePath,
             sessionKey: turn.ctxPayload.SessionKey ?? routeSessionKey,
             ctx: turn.ctxPayload,
             groupResolution: turn.record?.groupResolution,
@@ -130,15 +150,11 @@ describe("broadcast dispatch", () => {
             onRecordError: turn.record?.onRecordError ?? (() => undefined),
           });
           return {
-            admission: turn.admission ?? { kind: "dispatch" as const },
+            admission: { kind: "dispatch" as const },
             dispatched: true,
             ctxPayload: turn.ctxPayload,
             routeSessionKey,
-            dispatchResult: await mockDispatchReply({
-              ctx: turn.ctxPayload,
-              cfg: turn.cfg,
-              replyOptions: turn.replyOptions,
-            }),
+            dispatchResult: await turn.runDispatch(),
           };
         }),
       },
@@ -208,7 +224,7 @@ describe("broadcast dispatch", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mockDispatchReply.mockReset().mockResolvedValue({
+    mockDispatchInboundMessage.mockReset().mockResolvedValue({
       queuedFinal: false,
       counts: { final: 1 },
     });
@@ -224,9 +240,17 @@ describe("broadcast dispatch", () => {
       matchedBy: "default",
     });
     mockCreateFeishuReplyDispatcher.mockReturnValue({
-      dispatcherOptions: {},
-      delivery: { deliver: vi.fn(async () => undefined) },
+      dispatcher: {
+        sendToolResult: vi.fn(),
+        sendBlockReply: vi.fn(),
+        sendFinalReply: vi.fn(),
+        waitForIdle: vi.fn(),
+        getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+        getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+        markComplete: vi.fn(),
+      },
       replyOptions: {},
+      markDispatchIdle: vi.fn(),
       ensureNoVisibleReplyFallback: vi.fn(),
     });
     mockCreateFeishuClient.mockReturnValue({
@@ -262,7 +286,7 @@ describe("broadcast dispatch", () => {
       runtime: createRuntimeEnv(),
     });
 
-    expect(mockDispatchReply).toHaveBeenCalledTimes(2);
+    expect(mockDispatchInboundMessage).toHaveBeenCalledTimes(2);
     const sessionKeys = builtInboundContextCalls.map((call) => call.SessionKey);
     expect(sessionKeys).toContain("agent:susan:feishu:group:oc-broadcast-group");
     expect(sessionKeys).toContain("agent:main:feishu:group:oc-broadcast-group");
@@ -332,7 +356,7 @@ describe("broadcast dispatch", () => {
   });
 
   it("sends no-visible-reply fallback for active broadcast zero-final dispatch", async () => {
-    mockDispatchReply
+    mockDispatchInboundMessage
       .mockResolvedValueOnce({ queuedFinal: false, counts: { final: 1 } })
       .mockResolvedValueOnce({
         queuedFinal: false,
@@ -341,9 +365,17 @@ describe("broadcast dispatch", () => {
       });
     const ensureNoVisibleReplyFallback = vi.fn();
     mockCreateFeishuReplyDispatcher.mockReturnValueOnce({
-      dispatcherOptions: {},
-      delivery: { deliver: vi.fn(async () => undefined) },
+      dispatcher: {
+        sendToolResult: vi.fn(),
+        sendBlockReply: vi.fn(),
+        sendFinalReply: vi.fn(),
+        waitForIdle: vi.fn(),
+        getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+        getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+        markComplete: vi.fn(),
+      },
       replyOptions: {},
+      markDispatchIdle: vi.fn(),
       ensureNoVisibleReplyFallback,
     });
     const cfg = createBroadcastConfig();
@@ -366,18 +398,25 @@ describe("broadcast dispatch", () => {
   });
 
   it("sends no-visible-reply fallback for active broadcast failed final delivery", async () => {
-    mockDispatchReply
+    mockDispatchInboundMessage
       .mockResolvedValueOnce({ queuedFinal: false, counts: { final: 1 } })
       .mockResolvedValueOnce({
         queuedFinal: true,
         counts: { final: 1 },
-        failedCounts: { tool: 0, block: 0, final: 1 },
       });
     const ensureNoVisibleReplyFallback = vi.fn();
     mockCreateFeishuReplyDispatcher.mockReturnValueOnce({
-      dispatcherOptions: {},
-      delivery: { deliver: vi.fn(async () => undefined) },
+      dispatcher: {
+        sendToolResult: vi.fn(),
+        sendBlockReply: vi.fn(),
+        sendFinalReply: vi.fn(),
+        waitForIdle: vi.fn(),
+        getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+        getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 1 })),
+        markComplete: vi.fn(),
+      },
       replyOptions: {},
+      markDispatchIdle: vi.fn(),
       ensureNoVisibleReplyFallback,
     });
     const cfg = createBroadcastConfig();
@@ -400,7 +439,7 @@ describe("broadcast dispatch", () => {
   });
 
   it("skips no-visible-reply fallback for source-suppressed active broadcast dispatch", async () => {
-    mockDispatchReply
+    mockDispatchInboundMessage
       .mockResolvedValueOnce({ queuedFinal: false, counts: { final: 1 } })
       .mockResolvedValueOnce({
         queuedFinal: false,
@@ -410,9 +449,17 @@ describe("broadcast dispatch", () => {
       });
     const ensureNoVisibleReplyFallback = vi.fn();
     mockCreateFeishuReplyDispatcher.mockReturnValueOnce({
-      dispatcherOptions: {},
-      delivery: { deliver: vi.fn(async () => undefined) },
+      dispatcher: {
+        sendToolResult: vi.fn(),
+        sendBlockReply: vi.fn(),
+        sendFinalReply: vi.fn(),
+        waitForIdle: vi.fn(),
+        getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+        getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+        markComplete: vi.fn(),
+      },
       replyOptions: {},
+      markDispatchIdle: vi.fn(),
       ensureNoVisibleReplyFallback,
     });
     const cfg = createBroadcastConfig();
@@ -446,7 +493,7 @@ describe("broadcast dispatch", () => {
       runtime: createRuntimeEnv(),
     });
 
-    expect(mockDispatchReply).not.toHaveBeenCalled();
+    expect(mockDispatchInboundMessage).not.toHaveBeenCalled();
     expect(mockCreateFeishuReplyDispatcher).not.toHaveBeenCalled();
     expect(mockGetChatInfo).not.toHaveBeenCalled();
   });
@@ -464,7 +511,7 @@ describe("broadcast dispatch", () => {
       runtime: createRuntimeEnv(),
     });
 
-    expect(mockDispatchReply).not.toHaveBeenCalled();
+    expect(mockDispatchInboundMessage).not.toHaveBeenCalled();
     expect(mockCreateFeishuReplyDispatcher).not.toHaveBeenCalled();
     expect(mockGetChatInfo).not.toHaveBeenCalled();
   });
@@ -501,7 +548,7 @@ describe("broadcast dispatch", () => {
       runtime: createRuntimeEnv(),
     });
 
-    expect(mockDispatchReply).toHaveBeenCalledTimes(1);
+    expect(mockDispatchInboundMessage).toHaveBeenCalledTimes(1);
     expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledTimes(1);
     expect(builtInboundContextCalls).toHaveLength(1);
     expect(builtInboundContextCalls[0]?.SessionKey).toBe(
@@ -546,9 +593,9 @@ describe("broadcast dispatch", () => {
       runtime: createRuntimeEnv(),
       accountId: "account-A",
     });
-    expect(mockDispatchReply).toHaveBeenCalledTimes(2);
+    expect(mockDispatchInboundMessage).toHaveBeenCalledTimes(2);
 
-    mockDispatchReply.mockClear();
+    mockDispatchInboundMessage.mockClear();
     mockGetChatInfo.mockClear();
     builtInboundContextCalls.length = 0;
 
@@ -558,7 +605,7 @@ describe("broadcast dispatch", () => {
       runtime: createRuntimeEnv(),
       accountId: "account-B",
     });
-    expect(mockDispatchReply).not.toHaveBeenCalled();
+    expect(mockDispatchInboundMessage).not.toHaveBeenCalled();
     expect(mockGetChatInfo).not.toHaveBeenCalled();
   });
 
@@ -596,7 +643,7 @@ describe("broadcast dispatch", () => {
       runtime: createRuntimeEnv(),
     });
 
-    expect(mockDispatchReply).toHaveBeenCalledTimes(1);
+    expect(mockDispatchInboundMessage).toHaveBeenCalledTimes(1);
     const sessionKey =
       typeof builtInboundContextCalls[0]?.SessionKey === "string"
         ? builtInboundContextCalls[0].SessionKey

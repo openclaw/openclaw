@@ -2,6 +2,7 @@
 import { createChannelRunQueue } from "openclaw/plugin-sdk/channel-outbound";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
+import { DiscordRetryableInboundError } from "./inbound-dedupe.js";
 import { materializeDiscordInboundJob, type DiscordInboundJob } from "./inbound-job.js";
 import type { RuntimeEnv } from "./message-handler.preflight.types.js";
 import type { DiscordMonitorStatusSink } from "./status.js";
@@ -17,14 +18,14 @@ type DiscordMessageRunQueueParams = {
 
 type DiscordMessageRunQueue = {
   enqueue: (job: DiscordInboundJob) => void;
-  deactivate: () => Promise<void>;
+  deactivate: () => void;
 };
 
 export type DiscordMessageRunQueueTestingHooks = {
   processDiscordMessage?: ProcessDiscordMessage;
 };
 
-type SkippedQueuedMessageCleanup = () => Promise<void>;
+type SkippedQueuedMessageCleanup = () => void;
 
 const loadMessageProcessRuntime = createLazyRuntimeModule(
   () => import("./message-handler.process.js"),
@@ -35,31 +36,36 @@ async function processDiscordQueuedMessage(params: {
   lifecycleSignal?: AbortSignal;
   testing?: DiscordMessageRunQueueTestingHooks;
 }) {
+  const processDiscordMessageImpl =
+    params.testing?.processDiscordMessage ??
+    (await loadMessageProcessRuntime()).processDiscordMessage;
   const abortSignal =
     params.job.runtime.abortSignal && params.lifecycleSignal
       ? AbortSignal.any([params.job.runtime.abortSignal, params.lifecycleSignal])
       : (params.job.runtime.abortSignal ?? params.lifecycleSignal);
   try {
-    const processDiscordMessageImpl =
-      params.testing?.processDiscordMessage ??
-      (await loadMessageProcessRuntime()).processDiscordMessage;
     await processDiscordMessageImpl(materializeDiscordInboundJob(params.job, abortSignal));
-    if (abortSignal?.aborted) {
-      await params.job.ingressSettlement?.abandon(abortSignal.reason);
-    } else {
-      await params.job.ingressSettlement?.settle();
-    }
+    await Promise.all(params.job.replayClaims?.map((claim) => claim.commit()) ?? []);
   } catch (error) {
-    await params.job.ingressSettlement?.abandon(error);
+    if (error instanceof DiscordRetryableInboundError) {
+      for (const claim of params.job.replayClaims ?? []) {
+        claim.release({ error });
+      }
+    } else {
+      await Promise.all(params.job.replayClaims?.map((claim) => claim.commit()) ?? []);
+    }
     throw error;
   }
 }
 
-async function cleanupSkippedDiscordQueuedMessage(params: { job: DiscordInboundJob }) {
-  // A skipped job never reached reply-lane adoption; reopen its durable claim.
-  await params.job.ingressSettlement?.abandon(
-    new Error("discord queued run skipped before processing"),
-  );
+function cleanupSkippedDiscordQueuedMessage(params: { job: DiscordInboundJob }) {
+  // Typing feedback is created inside processing after admission, so skipped
+  // jobs only carry replay claims that need reopening for a later retry.
+  for (const claim of params.job.replayClaims ?? []) {
+    claim.release({
+      error: new DiscordRetryableInboundError("discord queued run skipped before processing"),
+    });
+  }
 }
 
 export function createDiscordMessageRunQueue(
@@ -74,11 +80,9 @@ export function createDiscordMessageRunQueue(
     },
   });
   let lifecycleActive = !params.abortSignal?.aborted;
-  const pendingTasks = new Set<Promise<void>>();
-  const onAbort = () => void cleanupSkippedQueuedMessages();
 
-  async function cleanupSkippedQueuedMessages() {
-    params.abortSignal?.removeEventListener("abort", onAbort);
+  const cleanupSkippedQueuedMessages = () => {
+    params.abortSignal?.removeEventListener("abort", cleanupSkippedQueuedMessages);
     // These callbacks represent jobs accepted into the queue but not started.
     // Running jobs remove their callback before processDiscordMessage owns cleanup.
     if (!lifecycleActive && skippedCleanup.size === 0) {
@@ -88,36 +92,23 @@ export function createDiscordMessageRunQueue(
     const cleanups = [...skippedCleanup];
     skippedCleanup.clear();
     for (const cleanup of cleanups) {
-      await cleanup();
+      cleanup();
     }
-  }
+  };
 
   if (params.abortSignal?.aborted) {
-    void cleanupSkippedQueuedMessages();
+    cleanupSkippedQueuedMessages();
   } else {
-    params.abortSignal?.addEventListener("abort", onAbort, { once: true });
+    params.abortSignal?.addEventListener("abort", cleanupSkippedQueuedMessages, { once: true });
   }
 
   return {
     enqueue(job) {
-      let resolvePending!: () => void;
-      const pending = new Promise<void>((resolve) => {
-        resolvePending = resolve;
-      });
-      pendingTasks.add(pending);
-      const settlePending = () => {
-        pendingTasks.delete(pending);
-        resolvePending();
-      };
-      const cleanupSkipped = async () => {
-        try {
-          await cleanupSkippedDiscordQueuedMessage({ job });
-        } finally {
-          settlePending();
-        }
+      const cleanupSkipped = () => {
+        cleanupSkippedDiscordQueuedMessage({ job });
       };
       if (!lifecycleActive) {
-        void cleanupSkipped();
+        cleanupSkipped();
         return;
       }
       skippedCleanup.add(cleanupSkipped);
@@ -125,21 +116,16 @@ export function createDiscordMessageRunQueue(
         // Once the task starts, normal process/commit handling owns cleanup.
         // Leaving it in skippedCleanup would double-release replay state.
         skippedCleanup.delete(cleanupSkipped);
-        try {
-          await processDiscordQueuedMessage({
-            job,
-            lifecycleSignal,
-            testing: params.testing,
-          });
-        } finally {
-          settlePending();
-        }
+        await processDiscordQueuedMessage({
+          job,
+          lifecycleSignal,
+          testing: params.testing,
+        });
       });
     },
-    async deactivate() {
+    deactivate() {
       runQueue.deactivate();
-      await cleanupSkippedQueuedMessages();
-      await Promise.allSettled(pendingTasks);
+      cleanupSkippedQueuedMessages();
     },
   };
 }

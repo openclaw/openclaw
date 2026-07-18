@@ -8,7 +8,6 @@ import {
   resetAgentEventsForTest,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { clearRuntimeAuthProfileStoreSnapshots } from "openclaw/plugin-sdk/agent-runtime";
 import { resetDiagnosticEventsForTest } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { clearInternalHooks, resetGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { clearMemoryPluginState } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
@@ -606,7 +605,6 @@ export function createRuntimeDynamicTool(name: string): RuntimeDynamicToolForTes
 export function setupRunAttemptTestHooks(): void {
   beforeEach(async () => {
     resetCodexTestBindingStore();
-    clearRuntimeAuthProfileStoreSnapshots();
     vi.useRealTimers();
     clearInternalHooks();
     clearMemoryPluginState();
@@ -622,7 +620,6 @@ export function setupRunAttemptTestHooks(): void {
     await drainActiveAppServerAttemptsForTest();
     await sandboxExecServerRegistry.closeAll();
     resetCodexAppServerClientFactoryForTest();
-    clearRuntimeAuthProfileStoreSnapshots();
     dynamicToolBuildState.openClawCodingToolsFactory = undefined;
     codexWorkspaceDirCache.clear();
     nativeHookRelayUnregisterQueue.clear();

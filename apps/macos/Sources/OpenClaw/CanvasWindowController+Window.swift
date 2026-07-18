@@ -45,10 +45,9 @@ extension CanvasWindowController {
     func presentAnchoredPanel(anchorProvider: @escaping () -> NSRect?) {
         guard case .panel = self.presentation, let window else { return }
         self.repositionPanel(using: anchorProvider)
-        // Agent-driven presents must not steal focus: order front without app
-        // activation or key status. becomesKeyOnlyIfNeeded gives the panel key
-        // when the user clicks into it; user entry points own app activation.
-        window.orderFrontRegardless()
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeFirstResponder(self.webView)
         VoiceWakeOverlayController.shared.bringToFrontIfVisible()
         self.onVisibilityChanged?(true)
     }

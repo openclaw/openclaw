@@ -712,7 +712,6 @@ async function handleChatHistoryRequest({
   const inFlightRun = resolveInFlightRunSnapshot({
     chatAbortControllers: context.chatAbortControllers,
     chatRunBuffers: context.chatRunBuffers,
-    chatRunPlanSnapshots: context.chatRunPlanSnapshots,
     requestedSessionKey: sessionKey,
     canonicalSessionKey: resolveSessionStoreKey({ cfg, sessionKey }),
     agentId: activeRunAgentId,
@@ -1711,9 +1710,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       state: "final" as const,
       message,
     };
-    context.broadcast("chat", chatPayload, {
-      sessionKeys: sessionKey === "global" && agentId ? [`agent:${agentId}:global`] : [sessionKey],
-    });
+    context.broadcast("chat", chatPayload);
     sendGlobalAwareNodeChatPayload({
       context,
       sessionKey,

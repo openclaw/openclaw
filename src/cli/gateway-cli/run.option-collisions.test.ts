@@ -11,7 +11,6 @@ import {
   setTestEnvValue,
   withEnvAsync,
 } from "../../test-utils/env.js";
-import { getFreePort } from "../../test-utils/ports.js";
 import { withTempSecretFiles } from "../../test-utils/secret-file-fixture.js";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 import { installGatewayRunRuntimeHooks } from "./runtime-hooks.js";
@@ -1500,22 +1499,15 @@ describe("gateway run option collisions", () => {
     expect(gatewayLogMessages.some((message) => message.includes("breaker recovered"))).toBe(true);
   });
 
-  it("skips failure bundles but exits nonzero for unconfirmed gateway lock conflicts", async () => {
-    const port = await getFreePort();
-    configState.snapshot = {
-      config: { gateway: { port } },
-      exists: false,
-      sourceConfig: {},
-      valid: true,
-    };
-    const err = Object.assign(new Error(`gateway already running on port ${port}`), {
+  it("does not write startup failure bundles for expected gateway lock conflicts", async () => {
+    const err = Object.assign(new Error("gateway already running on port 18789"), {
       name: "GatewayLockError",
     });
     startGatewayServer.mockRejectedValueOnce(err);
 
     await withEnvAsync(withoutSupervisorEnv, async () => {
       await expect(runGatewayCli(["gateway", "run", "--allow-unconfigured"])).rejects.toThrow(
-        "__exit__:1",
+        "__exit__:0",
       );
     });
 

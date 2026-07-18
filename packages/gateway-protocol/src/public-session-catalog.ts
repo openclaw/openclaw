@@ -12,7 +12,6 @@ export type {
   SessionsCatalogContinueResult,
   SessionsCatalogListParams,
   SessionsCatalogListResult,
-  SessionsCatalogHostEvent,
   SessionsCatalogReadParams,
   SessionsCatalogReadResult,
 } from "./schema/sessions-catalog.js";

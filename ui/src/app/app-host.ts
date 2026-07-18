@@ -81,7 +81,6 @@ import {
   type NativeHistoryState,
 } from "./native-web-chrome.ts";
 import { navigationSurfaceIsHidden, renderFloatingUpdateCard } from "./navigation-surface.ts";
-import { resolveOnboardingMode } from "./onboarding-mode.ts";
 import { hasOperatorAdminAccess } from "./operator-access.ts";
 import { controlUiPublicAssetPath } from "./public-assets.ts";
 import { selectRenderedRouteMatch } from "./router-outlet.ts";
@@ -128,6 +127,11 @@ function equalShellRouteState(previous: ShellRouteState, next: ShellRouteState):
     previous.committedLocation?.search === next.committedLocation?.search &&
     previous.committedLocation?.hash === next.committedLocation?.hash
   );
+}
+
+function resolveOnboardingMode(): boolean {
+  const raw = new URLSearchParams(globalThis.location?.search ?? "").get("onboarding");
+  return raw !== null && /^(?:1|true|yes|on)$/iu.test(raw.trim());
 }
 
 /**
@@ -196,7 +200,7 @@ class OpenClawApp extends OpenClawLightDomElement {
   @state() private loginShowGatewayToken = false;
   @state() private loginShowGatewayPassword = false;
   @state() private pendingGatewayUrl: string | null = null;
-  @state() private onboarding = resolveOnboardingMode(globalThis.location?.search ?? "");
+  @state() private onboarding = resolveOnboardingMode();
 
   private readonly terminalOnly = isTerminalOnlyView();
   // Fixed at page load: whether this browser held credentials (token,
@@ -472,11 +476,6 @@ class OpenClawShell extends OpenClawLightDomElement {
     return this.runtime?.context;
   }
 
-  private get onboardingMode(): boolean {
-    const routeSearch = this.routeState.location?.search;
-    return routeSearch === undefined ? this.onboarding : resolveOnboardingMode(routeSearch);
-  }
-
   constructor() {
     super();
     this.subscriptions
@@ -708,7 +707,7 @@ class OpenClawShell extends OpenClawLightDomElement {
     const context = this.context;
     // Desktop settings takeover has no app nav to collapse; the mobile drawer
     // hosts the settings sidebar and must keep toggling.
-    if (!context || this.onboardingMode || (this.isSettingsTakeover() && !isMobileNavLayout())) {
+    if (!context || this.onboarding || (this.isSettingsTakeover() && !isMobileNavLayout())) {
       return;
     }
     if (isMobileNavLayout()) {
@@ -794,7 +793,7 @@ class OpenClawShell extends OpenClawLightDomElement {
 
   private readonly handleNativeNewSession = () => {
     const context = this.context;
-    if (this.onboardingMode) {
+    if (this.onboarding) {
       return;
     }
     if (!context) {
@@ -1008,7 +1007,7 @@ class OpenClawShell extends OpenClawLightDomElement {
   private nativeNavCollapsed(): boolean {
     const mobileNavLayout = isMobileNavLayout();
     return (
-      this.onboardingMode ||
+      this.onboarding ||
       mobileNavLayout ||
       (this.isSettingsTakeover() && !mobileNavLayout) ||
       (!this.navDrawerOpen && (this.context?.navigation.snapshot.navCollapsed ?? false))
@@ -1202,13 +1201,12 @@ class OpenClawShell extends OpenClawLightDomElement {
       value: runtimeConfig.configForm ?? runtimeConfig.configSnapshot?.config ?? null,
       uiHints: runtimeConfig.configUiHints,
     });
-    const onboarding = this.onboardingMode;
-    const navDrawerOpen = this.navDrawerOpen && !onboarding;
+    const navDrawerOpen = this.navDrawerOpen && !this.onboarding;
     const mobileNavLayout = isMobileNavLayout();
     const mergedChatChrome = shouldMergeChatChrome({
       mobileNavLayout,
       routeId: activeRoute,
-      onboarding,
+      onboarding: this.onboarding,
     });
     // Drawer navigation always opens expanded; the desktop collapse preference
     // stays persisted for when the viewport returns to the desktop layout.
@@ -1224,8 +1222,7 @@ class OpenClawShell extends OpenClawLightDomElement {
     const uiSettings = loadSettings();
     // The new-session draft shares the chat layout: full-height pane that owns
     // its scrolling and pins the composer dock to the bottom.
-    const chatLikeRoute =
-      activeRoute === "chat" || activeRoute === "custodian" || activeRoute === "new-session";
+    const chatLikeRoute = activeRoute === "chat" || activeRoute === "new-session";
     // Optional tags stay mounted before definition. Lit replays their properties on upgrade,
     // and the upgraded panels catch the first toggle instead of dropping the event.
     return html`
@@ -1244,7 +1241,7 @@ class OpenClawShell extends OpenClawLightDomElement {
           ? "shell--nav-collapsed"
           : ""} ${mobileNavLayout ? "shell--mobile-nav" : ""} ${mergedChatChrome
           ? "shell--merged-chat-chrome"
-          : ""} ${navDrawerOpen ? "shell--nav-drawer-open" : ""} ${onboarding
+          : ""} ${navDrawerOpen ? "shell--nav-drawer-open" : ""} ${this.onboarding
           ? "shell--onboarding"
           : ""} ${settingsTakeover ? "shell--settings" : ""}"
         style=${`--shell-nav-expanded-width: ${navigationSnapshot.navWidth}px`}
@@ -1258,7 +1255,7 @@ class OpenClawShell extends OpenClawLightDomElement {
           aria-label=${t("nav.close")}
           @click=${() => this.closeNavDrawer({ restoreFocus: true })}
         ></button>
-        ${isNativeWebChromeHost() && !onboarding
+        ${isNativeWebChromeHost() && !this.onboarding
           ? html`
               <openclaw-macos-titlebar-controls
                 .navCollapsed=${this.nativeNavCollapsed()}
@@ -1275,11 +1272,11 @@ class OpenClawShell extends OpenClawLightDomElement {
           .basePath=${context.basePath}
           .searchDisabled=${false}
           .navDrawerOpen=${navDrawerOpen}
-          .onboarding=${onboarding}
+          .onboarding=${this.onboarding}
           .onOpenPalette=${this.openPalette}
           .onToggleDrawer=${(trigger: HTMLElement) => this.toggleNavigationSurface(trigger)}
         ></openclaw-app-topbar>
-        ${navCollapsed && !onboarding
+        ${navCollapsed && !this.onboarding
           ? html`
               <openclaw-tooltip .content=${`${t("nav.expand")} (⌘B)`}>
                 <button
@@ -1359,7 +1356,7 @@ class OpenClawShell extends OpenClawLightDomElement {
                   isRouteId(routeId) ? context.preload(routeId) : Promise.resolve()}
               ></openclaw-app-sidebar>`}
         </div>
-        ${!navCollapsed && !onboarding && !settingsTakeover
+        ${!navCollapsed && !this.onboarding && !settingsTakeover
           ? html`
               <resizable-divider
                 class="sidebar-resizer"
@@ -1396,7 +1393,7 @@ class OpenClawShell extends OpenClawLightDomElement {
           ></openclaw-update-banner>
           ${renderFloatingUpdateCard({
             navigationSurfaceHidden,
-            onboarding,
+            onboarding: this.onboarding,
             updateAvailable: overlaySnapshot.updateAvailable,
             updateRunning: overlaySnapshot.updateRunning,
             onUpdate: () => void context.overlays.runUpdate(),
@@ -1447,7 +1444,7 @@ class OpenClawShell extends OpenClawLightDomElement {
             this.navigate("nodes");
           },
         })}
-        ${onboarding && activeRoute !== "custodian"
+        ${this.onboarding
           ? html`<openclaw-onboarding-memory-import
               .active=${true}
               .context=${context}

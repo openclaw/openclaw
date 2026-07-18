@@ -281,8 +281,6 @@ type OpenClawCodingToolsOptions = {
   messageChannel?: string;
   /** Capabilities declared by the gateway client that originated this run. */
   clientCaps?: string[];
-  /** Out-of-band plugin bindings attached by the run initiator. */
-  toolBindings?: Readonly<Record<string, unknown>>;
   /** Normalized conversation kind when the caller already has channel metadata. */
   chatType?: ChatType;
   /** Specific ingress provider used only for transport tool availability. */
@@ -878,7 +876,6 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             requesterAgentIdOverride: agentId,
             allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
             clientCaps: options?.clientCaps,
-            toolBindings: options?.toolBindings,
             authProfileStore: options?.authProfileStore,
           },
           resolvedConfig: options?.config,
@@ -968,7 +965,6 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             sandboxed: Boolean(sandbox),
             config: options?.config,
             clientCaps: options?.clientCaps,
-            toolBindings: options?.toolBindings,
             pluginToolAllowlist,
             pluginToolDenylist,
             cronCreatorToolAllowlist: shouldCaptureCronCreatorToolAllowlist

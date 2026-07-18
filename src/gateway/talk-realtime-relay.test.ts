@@ -1679,7 +1679,6 @@ describe("talk realtime gateway relay", () => {
     expect(broadcast).not.toHaveBeenCalledWith(
       "chat",
       expect.objectContaining({ runId: "run-1", state: "aborted" }),
-      expect.anything(),
     );
   });
 
@@ -2136,7 +2135,6 @@ describe("talk realtime gateway relay", () => {
     expect(broadcast).not.toHaveBeenCalledWith(
       "chat",
       expect.objectContaining({ runId: "run-1", state: "aborted" }),
-      expect.anything(),
     );
   });
 
@@ -2358,7 +2356,6 @@ describe("talk realtime gateway relay", () => {
       expect(broadcast).not.toHaveBeenCalledWith(
         "chat",
         expect.objectContaining({ runId: "run-1", state: "aborted" }),
-        expect.anything(),
       );
 
       void submitTalkRealtimeRelayToolResult({

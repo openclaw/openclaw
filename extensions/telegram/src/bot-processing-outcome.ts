@@ -16,7 +16,7 @@ type TelegramSpooledReplayLifecycle = {
   onDeferred: () => void;
   /** Clears pre-adoption stall while durable adoption finalization is held. */
   onAdoptionFinalizing?: () => void;
-  onAbandoned: () => void | Promise<void>;
+  onAbandoned: () => void;
 };
 
 type TelegramSpooledReplayFrame = {

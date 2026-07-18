@@ -1116,11 +1116,9 @@ describe("truncateOversizedToolResultsInMessages", () => {
     await fs.writeFile(spillPath, "partial web output", { mode: 0o600 });
     const messages: AgentMessage[] = [
       makeToolResult(textWithFullOutputFooter("a".repeat(100), spillPath), "partial_spill_1", {
-        spill: {
-          path: spillPath,
-          chars: 2_000_000,
-          truncated: true,
-        },
+        fullOutputPath: spillPath,
+        spilledChars: 2_000_000,
+        spillTruncated: true,
       }),
       makeToolResult("b".repeat(100), "partial_spill_2"),
       makeToolResult("c".repeat(100), "partial_spill_3"),
@@ -1238,6 +1236,52 @@ describe("truncateOversizedToolResultsInMessages", () => {
     expect(
       texts.some((text) => text.startsWith("[tool result elided:") && !text.includes("rerun")),
     ).toBe(true);
+  });
+
+  it("shares the aggregate elision reserve across all results when budget is exhausted without spill markers", () => {
+    const messages: AgentMessage[] = [
+      makeToolResult("a".repeat(100), "exhausted_1"),
+      makeToolResult("b".repeat(100), "exhausted_2"),
+      makeToolResult("c".repeat(100), "exhausted_3"),
+    ];
+
+    const result = truncateOversizedToolResultsInMessages(messages, 128_000, 1_000, 1);
+    const texts = result.messages.map((message) => getFirstToolResultText(message));
+
+    // The aggregate elision reserve is a single shared pool, not per-result.
+    // Only the first eligible result gets 1 char (the "[" prefix);
+    // subsequent results get 0 — the shared pool is exhausted.
+    const nonEmptyCount = texts.filter((text) => text.length > 0).length;
+    expect(nonEmptyCount).toBe(1);
+    expect(texts.some((text) => text.startsWith("["))).toBe(true);
+    expect(result.truncatedCount).toBeGreaterThan(0);
+    expect(result.aggregateTruncatedCount).toBeGreaterThan(0);
+
+    // Global aggregate cap: total output is bounded by the shared reserve (1 char).
+    const totalOutputChars = result.messages.reduce(
+      (sum, message) => sum + getToolResultTextLength(message),
+      0,
+    );
+    expect(totalOutputChars).toBeLessThanOrEqual(1);
+  });
+
+  it("respects zero aggregate budget override (no elision reserve when capped at floor)", () => {
+    const messages: AgentMessage[] = [
+      makeToolResult("a".repeat(100), "zero_1"),
+      makeToolResult("b".repeat(100), "zero_2"),
+      makeToolResult("c".repeat(100), "zero_3"),
+    ];
+
+    // aggregateMaxCharsOverride=0 is floored to 1 by calculateRecoveryAggregateToolResultChars.
+    // The result must not exceed that floor (1 char from the shared elision reserve).
+    const result = truncateOversizedToolResultsInMessages(messages, 128_000, 1_000, 0);
+    const totalOutputChars = result.messages.reduce(
+      (sum, message) => sum + getToolResultTextLength(message),
+      0,
+    );
+
+    expect(totalOutputChars).toBeLessThanOrEqual(1);
+    expect(result.aggregateTruncatedCount).toBeGreaterThan(0);
   });
 
   it("keeps realistic spill pointers intact in near-zero aggregate elision budgets", async () => {

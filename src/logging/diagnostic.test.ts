@@ -15,7 +15,6 @@ import {
   markDiagnosticEmbeddedRunEnded,
   markDiagnosticEmbeddedRunStarted,
   resetDiagnosticRunActivityForTest,
-  startDiagnosticRunActivityTracking,
 } from "./diagnostic-run-activity.js";
 import {
   markDiagnosticModelStartedForTest,
@@ -2733,7 +2732,6 @@ describe("stuck session recovery activity reconciliation", () => {
     setDiagnosticsEnabledForProcess(true);
     resetDiagnosticSessionStateForTest();
     resetDiagnosticRunActivityForTest();
-    startDiagnosticRunActivityTracking();
     resetDiagnosticSessionRecoveryCoordinatorForTest();
   });
 

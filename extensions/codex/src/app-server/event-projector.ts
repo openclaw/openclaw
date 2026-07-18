@@ -13,7 +13,6 @@ import {
   type MessagingToolSourceReplyPayload,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { CodexAssistantProjection } from "./event-projector-assistant.js";
-import { CodexProjectionDiagnostics } from "./event-projector-diagnostics.js";
 import { CodexEventProjection } from "./event-projector-events.js";
 import {
   itemName,
@@ -29,7 +28,6 @@ import { CodexToolTranscriptProjection } from "./event-projector-tool-transcript
 import {
   normalizeCodexResponseTokenUsage,
   normalizeCodexThreadTokenUsage,
-  readCodexThreadTokenUsage,
 } from "./event-projector-usage.js";
 import {
   readCodexErrorNotificationMessage,
@@ -92,7 +90,6 @@ export class CodexAppServerEventProjector {
   private readonly activeCompactionItemIds = new Set<string>();
   private readonly terminalPresentationClearedItemIds = new Set<string>();
   private readonly nativeToolOutcomeOrdinals = new Map<string, number>();
-  private readonly diagnostics: CodexProjectionDiagnostics;
   private readonly generatedMediaProjection: CodexGeneratedMediaProjection;
   private readonly eventProjection: CodexEventProjection;
   private readonly nativeToolLifecycleProjector: CodexNativeToolLifecycleProjector;
@@ -113,7 +110,6 @@ export class CodexAppServerEventProjector {
     private readonly turnId: string,
     private readonly options: CodexAppServerEventProjectorOptions = {},
   ) {
-    this.diagnostics = new CodexProjectionDiagnostics(threadId, turnId);
     this.nativeToolLifecycleProjector = new CodexNativeToolLifecycleProjector(
       params,
       threadId,
@@ -267,7 +263,7 @@ export class CodexAppServerEventProjector {
         this.eventProjection.handleHook(notification.method, params);
         break;
       case "thread/tokenUsage/updated":
-        this.tokenUsage = readCodexThreadTokenUsage(params) ?? this.tokenUsage;
+        this.handleTokenUsage(params);
         break;
       case "turn/completed":
         await this.handleTurnCompleted(params);
@@ -286,21 +282,7 @@ export class CodexAppServerEventProjector {
         this.promptError = this.formatCodexErrorMessage(params) ?? "codex app-server error";
         this.promptErrorSource = "prompt";
         break;
-      case "thread/compacted":
-      case "turn/started":
-      case "turn/diff/updated":
-      case "item/reasoning/summaryPartAdded":
-      case "item/commandExecution/terminalInteraction":
-      case "item/fileChange/outputDelta":
-      case "item/fileChange/patchUpdated":
-      case "item/mcpToolCall/progress":
-      case "model/rerouted":
-      case "model/verification":
-      case "turn/moderationMetadata":
-      case "model/safetyBuffering/updated":
-        break;
       default:
-        this.diagnostics.warnUnknownEvent(notification, params);
         break;
     }
   }
@@ -533,7 +515,6 @@ export class CodexAppServerEventProjector {
 
   private async handleItemCompleted(params: JsonObject): Promise<void> {
     const item = readItem(params.item);
-    this.diagnostics.warnUnknownItemStatus(item);
     this.recordNativeToolOutcome(item);
     this.clearTerminalPresentationForNativeItem(item);
     const itemId = item?.id ?? readString(params, "itemId");
@@ -589,6 +570,18 @@ export class CodexAppServerEventProjector {
     });
   }
 
+  private handleTokenUsage(params: JsonObject): void {
+    const tokenUsage = isJsonObject(params.tokenUsage) ? params.tokenUsage : undefined;
+    const last = tokenUsage && isJsonObject(tokenUsage.last) ? tokenUsage.last : undefined;
+    if (!last) {
+      return;
+    }
+    const usage = normalizeCodexThreadTokenUsage(last);
+    if (usage) {
+      this.tokenUsage = usage;
+    }
+  }
+
   private handleRawResponseCompleted(params: JsonObject): void {
     const usage = isJsonObject(params.usage) ? params.usage : undefined;
     // Every provider completion replaces the prior response snapshot. A final
@@ -633,7 +626,6 @@ export class CodexAppServerEventProjector {
       }
     }
     for (const item of turnItems) {
-      this.diagnostics.warnUnknownItemStatus(item);
       this.assistantProjection.recordSnapshotItem(item);
       this.reasoningProjection.recordItem(item);
       this.generatedMediaProjection.recordNative(item);

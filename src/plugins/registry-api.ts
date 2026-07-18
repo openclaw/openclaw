@@ -104,7 +104,6 @@ export function createPluginApiFactory(
     registerMemoryCapability,
     registerMemoryPromptSection,
     registerMemoryPromptSupplement,
-    registerMemoryPromptPreparation,
     registerMemoryCorpusSupplement,
     registerMemoryFlushPlan,
     registerMemoryRuntime,
@@ -362,8 +361,6 @@ export function createPluginApiFactory(
                 registerMemoryPromptSection(record, builder),
               registerMemoryPromptSupplement: (builder) =>
                 registerMemoryPromptSupplement(record, builder),
-              registerMemoryPromptPreparation: (prepare) =>
-                registerMemoryPromptPreparation(record, prepare),
               registerMemoryCorpusSupplement: (supplement) =>
                 registerMemoryCorpusSupplement(record, supplement),
               registerMemoryFlushPlan: (resolver) => registerMemoryFlushPlan(record, resolver),

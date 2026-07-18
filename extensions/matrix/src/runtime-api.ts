@@ -74,6 +74,7 @@ export {
   type LookupFn,
   type SsrFPolicy,
 } from "openclaw/plugin-sdk/ssrf-runtime";
+export { dispatchReplyFromConfigWithSettledDispatcher } from "openclaw/plugin-sdk/channel-inbound";
 export {
   ensureConfiguredAcpBindingReady,
   resolveConfiguredAcpBindingRecord,

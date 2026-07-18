@@ -14,7 +14,7 @@ export function summarizeRunTimings(
   limit?: number,
 ): {
   byDuration: Array<{ name: string; durationSeconds: number }>;
-  byStartDelay: Array<{ name: string; startDelaySeconds: number }>;
+  byQueue: Array<{ name: string; queueSeconds: number }>;
   conclusion: unknown;
   status: unknown;
   wallSeconds: number | null;

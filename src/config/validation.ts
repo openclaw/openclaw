@@ -961,11 +961,6 @@ function isWorkspaceAvatarPath(value: string, workspaceDir: string): boolean {
   return isPathWithinRoot(workspaceRoot, resolved);
 }
 
-function createIdentityAvatarIssue(index: number, message: string): ConfigValidationIssue {
-  const pathSegments = ["agents", "list", index, "identity", "avatar"] as const;
-  return withConfigIssuePath({ path: formatConfigPath(pathSegments), message }, pathSegments);
-}
-
 function validateIdentityAvatar(config: OpenClawConfig): ConfigValidationIssue[] {
   const agents = config.agents?.list;
   if (!Array.isArray(agents) || agents.length === 0) {
@@ -988,22 +983,18 @@ function validateIdentityAvatar(config: OpenClawConfig): ConfigValidationIssue[]
       continue;
     }
     if (avatar.startsWith("~")) {
-      issues.push(
-        createIdentityAvatarIssue(
-          index,
-          "identity.avatar must be a workspace-relative path, http(s) URL, or data URI.",
-        ),
-      );
+      issues.push({
+        path: `agents.list.${index}.identity.avatar`,
+        message: "identity.avatar must be a workspace-relative path, http(s) URL, or data URI.",
+      });
       continue;
     }
     const hasScheme = hasAvatarUriScheme(avatar);
     if (hasScheme && !isWindowsAbsolutePath(avatar)) {
-      issues.push(
-        createIdentityAvatarIssue(
-          index,
-          "identity.avatar must be a workspace-relative path, http(s) URL, or data URI.",
-        ),
-      );
+      issues.push({
+        path: `agents.list.${index}.identity.avatar`,
+        message: "identity.avatar must be a workspace-relative path, http(s) URL, or data URI.",
+      });
       continue;
     }
     const workspaceDir = resolveAgentWorkspaceDir(
@@ -1011,9 +1002,10 @@ function validateIdentityAvatar(config: OpenClawConfig): ConfigValidationIssue[]
       entry.id ?? resolveDefaultAgentId(config),
     );
     if (!isWorkspaceAvatarPath(avatar, workspaceDir)) {
-      issues.push(
-        createIdentityAvatarIssue(index, "identity.avatar must stay within the agent workspace."),
-      );
+      issues.push({
+        path: `agents.list.${index}.identity.avatar`,
+        message: "identity.avatar must stay within the agent workspace.",
+      });
     }
   }
   return issues;

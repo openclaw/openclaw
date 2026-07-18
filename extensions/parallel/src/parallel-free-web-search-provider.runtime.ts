@@ -1,6 +1,8 @@
 import {
+  DEFAULT_SEARCH_COUNT,
   mergeScopedSearchConfig,
   readCachedSearchPayload,
+  readNumberParam,
   readStringArrayParam,
   readStringParam,
   resolveProviderWebSearchPluginConfig,
@@ -45,7 +47,10 @@ export async function executeParallelFreeWebSearchProviderTool(
   if (searchQueries.length === 0) {
     return invalidSearchQueriesPayload();
   }
-  const count = resolveParallelSearchCount(args, searchConfig?.maxResults);
+  const requestedCount =
+    readNumberParam(args, "count", { integer: true }) ??
+    (typeof searchConfig?.maxResults === "number" ? searchConfig.maxResults : undefined);
+  const count = resolveParallelSearchCount(requestedCount ?? DEFAULT_SEARCH_COUNT);
   const sessionId = normalizeParallelSessionId(
     readStringParam(args, "session_id"),
     PARALLEL_FREE_SESSION_ID_MAX_LENGTH,

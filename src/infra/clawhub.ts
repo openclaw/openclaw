@@ -10,7 +10,6 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { prerelease as parseSemverPrerelease, satisfies as satisfiesSemver } from "semver";
-import { hasValidIsoCalendarComponents } from "../shared/iso-time.js";
 import { retryClawHubRead } from "./clawhub-retry.js";
 import { sha256Base64, sha256Hex as digestSha256Hex } from "./crypto-digest.js";
 import { readResponseTextSnippet, readResponseWithLimit } from "./http-body.js";
@@ -1882,12 +1881,7 @@ export function parseClawHubPromotionsFeed(value: unknown): ClawHubPromotionsFee
   const expiresAt = requiredStringField(value, "expiresAt", context);
   const generatedAtMs = Date.parse(generatedAt);
   const expiresAtMs = Date.parse(expiresAt);
-  if (
-    !Number.isFinite(generatedAtMs) ||
-    !Number.isFinite(expiresAtMs) ||
-    !hasValidIsoCalendarComponents(generatedAt) ||
-    !hasValidIsoCalendarComponents(expiresAt)
-  ) {
+  if (!Number.isFinite(generatedAtMs) || !Number.isFinite(expiresAtMs)) {
     throw new Error(`Malformed ClawHub ${context}: timestamps must be ISO dates.`);
   }
   if (expiresAtMs <= generatedAtMs) {

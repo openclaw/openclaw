@@ -250,7 +250,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     path: `channels.slack.accounts.${account.accountId}.signingSecret`,
   });
   const botToken = resolveSlackBotToken(opts.botToken ?? account.botToken);
-  const userToken = account.userToken;
   const appToken = resolveSlackAppToken(opts.appToken ?? account.appToken);
   const relayConfig =
     slackMode === "relay"
@@ -259,40 +258,19 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
           accountId: account.accountId,
         })
       : undefined;
-  let token: string;
-  if (account.identity === "user") {
-    if (!userToken) {
-      throw new Error(
-        `Slack user token missing for account "${account.accountId}" (set channels.slack.accounts.${account.accountId}.userToken or SLACK_USER_TOKEN for default).`,
-      );
-    }
-    if (slackMode === "socket" && !appToken) {
-      throw new Error(
-        `Slack app token missing for user-identity socket mode account "${account.accountId}" (set channels.slack.accounts.${account.accountId}.appToken or SLACK_APP_TOKEN for default).`,
-      );
-    }
-    if (slackMode === "http" && !signingSecret) {
-      throw new Error(
-        `Slack signing secret missing for user-identity HTTP mode account "${account.accountId}" (set channels.slack.signingSecret or channels.slack.accounts.${account.accountId}.signingSecret).`,
-      );
-    }
-    token = userToken;
-  } else {
-    if (!botToken || (slackMode === "socket" && !appToken)) {
-      const missing =
-        slackMode === "http"
+  if (!botToken || (slackMode === "socket" && !appToken)) {
+    const missing =
+      slackMode === "http"
+        ? `Slack bot token missing for account "${account.accountId}" (set channels.slack.accounts.${account.accountId}.botToken or SLACK_BOT_TOKEN for default).`
+        : slackMode === "relay"
           ? `Slack bot token missing for account "${account.accountId}" (set channels.slack.accounts.${account.accountId}.botToken or SLACK_BOT_TOKEN for default).`
-          : slackMode === "relay"
-            ? `Slack bot token missing for account "${account.accountId}" (set channels.slack.accounts.${account.accountId}.botToken or SLACK_BOT_TOKEN for default).`
-            : `Slack bot + app tokens missing for account "${account.accountId}" (set channels.slack.accounts.${account.accountId}.botToken/appToken or SLACK_BOT_TOKEN/SLACK_APP_TOKEN for default).`;
-      throw new Error(missing);
-    }
-    if (slackMode === "http" && !signingSecret) {
-      throw new Error(
-        `Slack signing secret missing for account "${account.accountId}" (set channels.slack.signingSecret or channels.slack.accounts.${account.accountId}.signingSecret).`,
-      );
-    }
-    token = botToken;
+          : `Slack bot + app tokens missing for account "${account.accountId}" (set channels.slack.accounts.${account.accountId}.botToken/appToken or SLACK_BOT_TOKEN/SLACK_APP_TOKEN for default).`;
+    throw new Error(missing);
+  }
+  if (slackMode === "http" && !signingSecret) {
+    throw new Error(
+      `Slack signing secret missing for account "${account.accountId}" (set channels.slack.signingSecret or channels.slack.accounts.${account.accountId}.signingSecret).`,
+    );
   }
 
   const slackCfg = account.config;
@@ -351,7 +329,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const { app, receiver, socketModeLogger } = createSlackBoltApp({
     interop: await getSlackBoltInterop(),
     slackMode,
-    token,
+    botToken,
     appToken: slackMode === "socket" ? (appToken ?? undefined) : undefined,
     signingSecret: slackMode === "http" ? (signingSecret ?? undefined) : undefined,
     slackWebhookPath,
@@ -412,19 +390,17 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   let authIdentityWarning: string | undefined;
   let authTestIdentity: SlackAuthTestIdentity | undefined;
   try {
-    const auth = await createSlackStartupAuthClient(token, clientOptions).auth.test();
+    const auth = await createSlackStartupAuthClient(botToken, clientOptions).auth.test();
     const authUserId = normalizeOptionalString(auth.user_id) ?? "";
     botId = normalizeOptionalString((auth as { bot_id?: string }).bot_id) ?? "";
-    // User identity has no bot_id; its authenticated human id is both the mention target and
-    // the self-send dedupe source. Bot identity keeps the bot_id-gated fail-closed behavior.
-    botUserId = account.identity === "user" ? authUserId : botId ? authUserId : "";
+    // Slack documents bot_id only for bot-token identities. Never treat the user behind a
+    // user token as the bot mention target; required-mention channels must fail closed instead.
+    botUserId = botId ? authUserId : "";
     authTestIdentity = auth;
-    if (account.identity === "bot") {
-      authIdentityWarning = formatSlackBotTokenIdentityWarning({
-        auth,
-        accountId: account.accountId,
-      });
-    }
+    authIdentityWarning = formatSlackBotTokenIdentityWarning({
+      auth,
+      accountId: account.accountId,
+    });
     if (!authUserId && !enterpriseOrgInstall) {
       authTestError = "auth.test returned no user_id";
     }
@@ -441,14 +417,10 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const apiAppId =
     installationIdentity.kind === "degraded" ? "" : (installationIdentity.apiAppId ?? "");
   if (authTestError !== undefined) {
-    const identityFailureDetail =
-      account.identity === "user"
-        ? "explicit self-mention detection will be disabled until restart with a valid user token"
-        : "explicit bot-mention detection will be disabled until restart with a valid bot token";
     runtime.log?.(
       warn(
         `[${account.accountId}] slack auth.test failed at boot (${authTestError}); ` +
-          `${identityFailureDetail}; ` +
+          "explicit bot-mention detection will be disabled until restart with a valid bot token; " +
           "required-mention channels will fail closed without another trusted activation signal",
       ),
     );
@@ -465,16 +437,15 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   });
 
   if (apiAppId && expectedApiAppIdFromAppToken && apiAppId !== expectedApiAppIdFromAppToken) {
-    const identityTokenLabel = account.identity === "user" ? "user token" : "bot token";
     runtime.error?.(
-      `slack token mismatch: ${identityTokenLabel} app_id=${apiAppId} but app token looks like app_id=${expectedApiAppIdFromAppToken}`,
+      `slack token mismatch: bot token app_id=${apiAppId} but app token looks like app_id=${expectedApiAppIdFromAppToken}`,
     );
   }
 
   const ctx = createSlackMonitorContext({
     cfg,
     accountId: account.accountId,
-    botToken: token,
+    botToken,
     app,
     runtime,
     channelRuntime: opts.channelRuntime,

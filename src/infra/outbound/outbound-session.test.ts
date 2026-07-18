@@ -1,14 +1,10 @@
 // Covers outbound session-route resolution through plugin hooks and fallback
-// target parsing, plus best-effort session route persistence.
+// target parsing, plus best-effort session metadata persistence.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
-import {
-  bindOutboundSessionEntry,
-  ensureOutboundSessionEntry,
-  resolveOutboundSessionRoute,
-} from "./outbound-session.js";
+import { ensureOutboundSessionEntry, resolveOutboundSessionRoute } from "./outbound-session.js";
 import { setMinimalOutboundSessionPluginRegistryForTests } from "./outbound-session.test-helpers.js";
 
 type InboundMetadataParams = {
@@ -17,10 +13,7 @@ type InboundMetadataParams = {
 };
 
 const mocks = vi.hoisted(() => ({
-  updateSessionLastRoute: vi.fn(async (_params: InboundMetadataParams) => ({
-    sessionId: "session-1",
-    updatedAt: 1,
-  })),
+  recordInboundSessionMeta: vi.fn(async (_params: InboundMetadataParams) => ({ ok: true })),
   resolveStorePath: vi.fn(
     (_store: unknown, params?: { agentId?: string }) => `/stores/${params?.agentId ?? "main"}.json`,
   ),
@@ -42,13 +35,13 @@ function firstMockArg(
 }
 
 vi.mock("../../config/sessions/inbound.runtime.js", () => ({
+  recordInboundSessionMeta: mocks.recordInboundSessionMeta,
   resolveStorePath: mocks.resolveStorePath,
-  updateSessionLastRoute: mocks.updateSessionLastRoute,
 }));
 
 describe("resolveOutboundSessionRoute", () => {
   beforeEach(() => {
-    mocks.updateSessionLastRoute.mockClear();
+    mocks.recordInboundSessionMeta.mockClear();
     mocks.resolveStorePath.mockClear();
     setMinimalOutboundSessionPluginRegistryForTests();
   });
@@ -551,7 +544,7 @@ describe("resolveOutboundSessionRoute", () => {
 
 describe("ensureOutboundSessionEntry", () => {
   beforeEach(() => {
-    mocks.updateSessionLastRoute.mockClear();
+    mocks.recordInboundSessionMeta.mockClear();
     mocks.resolveStorePath.mockClear();
   });
 
@@ -576,8 +569,8 @@ describe("ensureOutboundSessionEntry", () => {
     expect(mocks.resolveStorePath).toHaveBeenCalledWith("/stores/{agentId}.json", {
       agentId: "main",
     });
-    expect(mocks.updateSessionLastRoute).toHaveBeenCalledOnce();
-    const metadata = firstMockArg(mocks.updateSessionLastRoute, "updateSessionLastRoute");
+    expect(mocks.recordInboundSessionMeta).toHaveBeenCalledOnce();
+    const metadata = firstMockArg(mocks.recordInboundSessionMeta, "recordInboundSessionMeta");
     expect(metadata.storePath).toBe("/stores/main.json");
     expect(metadata.sessionKey).toBe("agent:main:workspace:channel:c1");
     expect(metadata.ctx).toMatchObject({
@@ -600,49 +593,10 @@ describe("ensureOutboundSessionEntry", () => {
       },
     });
 
-    const metadata = firstMockArg(mocks.updateSessionLastRoute, "updateSessionLastRoute");
+    const metadata = firstMockArg(mocks.recordInboundSessionMeta, "recordInboundSessionMeta");
     expect(metadata.ctx).toMatchObject({
       NativeDirectUserId: "peer-agent",
       OriginatingTo: "reef:peer-agent",
     });
-    expect(metadata.createIfMissing).toBe(true);
-  });
-
-  it("keeps ordinary outbound sends best-effort when route persistence fails", async () => {
-    mocks.updateSessionLastRoute.mockRejectedValueOnce(new Error("storage unavailable"));
-
-    await expect(
-      ensureOutboundSessionEntry({
-        cfg: {} as OpenClawConfig,
-        channel: "reef",
-        route: {
-          sessionKey: "agent:main:main",
-          baseSessionKey: "agent:main:main",
-          peer: { kind: "direct", id: "peer-agent" },
-          chatType: "direct",
-          from: "reef:peer-agent",
-          to: "reef:peer-agent",
-        },
-      }),
-    ).resolves.toBeUndefined();
-  });
-
-  it("surfaces route persistence failures when a conversation requires binding", async () => {
-    mocks.updateSessionLastRoute.mockRejectedValueOnce(new Error("storage unavailable"));
-
-    await expect(
-      bindOutboundSessionEntry({
-        cfg: {} as OpenClawConfig,
-        channel: "reef",
-        route: {
-          sessionKey: "agent:main:main",
-          baseSessionKey: "agent:main:main",
-          peer: { kind: "direct", id: "peer-agent" },
-          chatType: "direct",
-          from: "reef:peer-agent",
-          to: "reef:peer-agent",
-        },
-      }),
-    ).rejects.toThrow("storage unavailable");
   });
 });

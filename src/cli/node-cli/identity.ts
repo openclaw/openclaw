@@ -3,7 +3,7 @@ import {
   loadDeviceIdentityIfPresent,
   publicKeyRawBase64UrlFromPem,
 } from "../../infra/device-identity.js";
-import { defaultRuntime, writeRuntimeJson } from "../../runtime.js";
+import { defaultRuntime } from "../../runtime.js";
 
 /**
  * Read-only by design: the SSH-verified pairing probe calls this remotely and
@@ -23,7 +23,7 @@ export function runNodeIdentityShow(opts: { json?: boolean }) {
     publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
   };
   if (opts.json) {
-    writeRuntimeJson(defaultRuntime, payload, 0);
+    defaultRuntime.log(JSON.stringify(payload));
     return;
   }
   defaultRuntime.log(`deviceId:  ${payload.deviceId}`);

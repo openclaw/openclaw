@@ -8,7 +8,6 @@ import {
   MSTEAMS_REQUEST_TIMEOUT_MS,
   resolveMSTeamsRequestTimeoutMs,
   type MSTeamsRequestDeadline,
-  withMSTeamsRequestDeadline,
 } from "./request-timeout.js";
 import { responseWithRelease } from "./response-with-release.js";
 import { createMSTeamsTokenProvider, loadMSTeamsSdkWithAuth } from "./sdk.js";
@@ -244,10 +243,7 @@ export async function resolveGraphToken(
 
   const { app } = await loadMSTeamsSdkWithAuth(creds, resolveMSTeamsSdkCloudOptions(msteamsCfg));
   const tokenProvider = createMSTeamsTokenProvider(app);
-  const graphTokenValue = await withMSTeamsRequestDeadline({
-    label: "MS Teams Graph token",
-    work: () => tokenProvider.getAccessToken("https://graph.microsoft.com"),
-  });
+  const graphTokenValue = await tokenProvider.getAccessToken("https://graph.microsoft.com");
   const accessToken = readAccessToken(graphTokenValue);
   if (!accessToken) {
     throw new Error("MS Teams graph token unavailable");

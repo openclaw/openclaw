@@ -449,12 +449,6 @@ export type OpenClawPluginApi = {
   registerMemoryPromptSupplement: (
     builder: import("./memory-state.js").MemoryPromptSectionBuilder,
   ) => void;
-  /** Register an async memory prompt preparation step (non-exclusive). */
-  registerMemoryPromptPreparation: (
-    prepare: (
-      params: import("./memory-state.js").MemoryPromptSectionParams,
-    ) => Promise<readonly string[]>,
-  ) => void;
   /** Register an additive memory-adjacent search/read corpus supplement (non-exclusive). */
   registerMemoryCorpusSupplement: (supplement: MemoryCorpusSupplement) => void;
   /**

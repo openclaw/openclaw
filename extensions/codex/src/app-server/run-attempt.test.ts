@@ -5,7 +5,6 @@ import {
   embeddedAgentLog,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { replaceRuntimeAuthProfileStoreSnapshots } from "openclaw/plugin-sdk/agent-runtime";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import {
   onInternalDiagnosticEvent,
@@ -598,22 +597,7 @@ describe("runCodexAppServerAttempt", () => {
     const config = {
       auth: { profiles: { [authProfileId]: { provider: "openai", mode: "api_key" as const } } },
     };
-    replaceRuntimeAuthProfileStoreSnapshots([
-      {
-        agentDir,
-        store: {
-          version: 1,
-          profiles: {
-            [authProfileId]: {
-              type: "api_key",
-              provider: "openai",
-              keyRef: { source: "env", provider: "default", id: "OPENAI_WORK_KEY" },
-              key: "work-key",
-            },
-          },
-        },
-      },
-    ]);
+    vi.stubEnv("OPENAI_WORK_KEY", "work-key");
     let clientOptions: CodexAppServerClientOptions | undefined;
     const harness = createStartedThreadHarness(async () => undefined, {
       onStart: (_profileId, _agentDir, options) => {

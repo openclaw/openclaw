@@ -6,7 +6,6 @@ mod gateway;
 mod installer;
 mod notify;
 mod pending_approvals;
-mod quickchat;
 mod tray;
 mod updater;
 
@@ -20,7 +19,6 @@ use std::thread;
 use std::time::Duration;
 use tauri::{AppHandle, Manager, State, Url, WebviewWindow};
 use tauri_plugin_deep_link::DeepLinkExt;
-use tauri_plugin_global_shortcut::{Code, Modifiers};
 
 const CONNECTED_WATCH_INTERVAL: Duration = Duration::from_secs(15);
 const RECONNECT_INTERVAL: Duration = Duration::from_secs(3);
@@ -177,18 +175,6 @@ impl DesktopState {
         *self.inner.tray.lock().expect("tray mutex poisoned") = Some(handles);
     }
 
-    pub(crate) fn set_quickchat_shortcut_checked(&self, checked: bool) {
-        if let Some(tray) = self
-            .inner
-            .tray
-            .lock()
-            .expect("tray mutex poisoned")
-            .as_ref()
-        {
-            tray.set_quickchat_shortcut_checked(checked);
-        }
-    }
-
     pub fn connect(&self, app: &AppHandle) -> Result<GatewaySnapshot, String> {
         let _operation = self
             .inner
@@ -291,7 +277,7 @@ impl DesktopState {
         self.inner.quitting.load(Ordering::SeqCst)
     }
 
-    pub(crate) fn resolve_cli(&self) -> Result<OpenClawCli, CliError> {
+    fn resolve_cli(&self) -> Result<OpenClawCli, CliError> {
         if let Some(cli) = self.inner.cli.lock().expect("CLI mutex poisoned").clone() {
             return Ok(cli);
         }
@@ -675,8 +661,6 @@ async fn gateway_action(
 
 fn main() {
     let global_shortcuts_supported = tray::global_shortcuts_supported();
-    let quickchat_state = quickchat::QuickChatState::new(global_shortcuts_supported);
-    let quickchat_shortcut_state = quickchat_state.clone();
     // Single-instance must run first so it can pass deep-link argv to the primary process.
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -692,15 +676,9 @@ fn main() {
     let builder = if global_shortcuts_supported {
         builder.plugin(
             tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(move |app, shortcut, event| {
+                .with_handler(|app, _shortcut, event| {
                     if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
-                        if quickchat_shortcut_state.matches_shortcut(shortcut) {
-                            quickchat::toggle_quickchat(app);
-                        } else if shortcut
-                            .matches(Modifiers::CONTROL | Modifiers::SHIFT, Code::KeyO)
-                        {
-                            tray::show_window(app);
-                        }
+                        tray::show_window(app);
                     }
                 })
                 .build(),
@@ -714,7 +692,7 @@ fn main() {
         .plugin(tauri_plugin_process::init())
         .plugin(
             tauri_plugin_window_state::Builder::default()
-                .with_denylist(&["canvas", quickchat::QUICKCHAT_LABEL])
+                .with_denylist(&["canvas"])
                 .build(),
         );
     #[cfg(target_os = "linux")]
@@ -739,7 +717,6 @@ fn main() {
         }
 
         app.manage(discovery::GatewayDiscovery::default());
-        app.manage(quickchat_state.clone());
         app.manage(updater::UpdaterState::default());
         #[cfg(target_os = "linux")]
         match canvas::CanvasBridge::start(app.handle().clone()) {
@@ -761,16 +738,6 @@ fn main() {
         discovery::discover_gateways,
         install_cli,
         gateway_action,
-        quickchat::quickchat_agents,
-        quickchat::quickchat_hide,
-        quickchat::quickchat_identity,
-        quickchat::quickchat_ready,
-        quickchat::quickchat_select_agent,
-        quickchat::quickchat_send,
-        quickchat::quickchat_set_expanded,
-        quickchat::quickchat_set_shortcut,
-        quickchat::quickchat_shortcut,
-        quickchat::quickchat_show_dashboard,
         updater::open_release_page,
         updater::relaunch,
         updater::updater_ready
@@ -784,16 +751,6 @@ fn main() {
         discovery::discover_gateways,
         install_cli,
         gateway_action,
-        quickchat::quickchat_agents,
-        quickchat::quickchat_hide,
-        quickchat::quickchat_identity,
-        quickchat::quickchat_ready,
-        quickchat::quickchat_select_agent,
-        quickchat::quickchat_send,
-        quickchat::quickchat_set_expanded,
-        quickchat::quickchat_set_shortcut,
-        quickchat::quickchat_shortcut,
-        quickchat::quickchat_show_dashboard,
         updater::open_release_page,
         updater::relaunch,
         updater::updater_ready
@@ -801,20 +758,6 @@ fn main() {
 
     let app = builder
         .on_window_event(|window, event| {
-            if window.label() == quickchat::QUICKCHAT_LABEL {
-                match event {
-                    tauri::WindowEvent::Focused(false) => {
-                        quickchat::request_hide(window.app_handle());
-                        return;
-                    }
-                    tauri::WindowEvent::CloseRequested { api, .. } => {
-                        api.prevent_close();
-                        quickchat::request_hide(window.app_handle());
-                        return;
-                    }
-                    _ => {}
-                }
-            }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 let state = window.app_handle().state::<DesktopState>();
                 if !state.is_quitting() {

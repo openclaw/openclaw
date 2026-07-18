@@ -149,19 +149,14 @@ export function prepareEmbeddedAttemptPromptContext(input: {
     }
   }
 
-  const hasNonEmptyTranscriptPrompt = Boolean(input.prompt.effectiveTranscriptPrompt?.trim());
-  // A non-empty transcript prompt is a persistence substitution. Keep the
-  // assembled model prompt authoritative even when no hook added context.
-  const shouldUseExplicitModelPrompt =
-    input.prompt.hasPromptBuildContext || hasNonEmptyTranscriptPrompt;
   const promptSubmission = resolveRuntimeContextPromptParts({
     effectivePrompt: input.prompt.promptForRuntimeContextSplit,
     transcriptPrompt: input.prompt.transcriptPromptForRuntimeSplit,
-    modelPrompt: shouldUseExplicitModelPrompt
+    modelPrompt: input.prompt.hasPromptBuildContext
       ? input.prompt.promptForModelBeforeRuntimeContextSplit
       : undefined,
     modelPromptBuildContext:
-      shouldUseExplicitModelPrompt && input.prompt.effectiveTranscriptPrompt !== undefined
+      input.prompt.hasPromptBuildContext && input.prompt.effectiveTranscriptPrompt !== undefined
         ? {
             promptBeforeHooks: input.prompt.promptBeforePromptBuildHooks,
             transcriptPromptBeforeTransforms: input.prompt.effectiveTranscriptPrompt,

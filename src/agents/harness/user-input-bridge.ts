@@ -10,7 +10,6 @@ export type AgentHarnessUserInputQuestion = {
   id: string;
   header: string;
   question: string;
-  multiSelect?: boolean;
   isOther?: boolean;
   isSecret?: boolean;
   options?: readonly AgentHarnessUserInputOption[] | null;

@@ -12,7 +12,6 @@ import {
   type OfficialExternalPluginCatalogEntry,
 } from "../plugins/official-external-plugin-catalog.js";
 import type { RuntimeEnv } from "../runtime.js";
-import type { OnboardingRecommendationMatch } from "../state/onboarding-recommendations.js";
 import { completeSetupInference } from "./setup-inference.js";
 
 const CLAWHUB_SEARCH_CONCURRENCY = 4;
@@ -53,7 +52,13 @@ type SetupAppCandidateGroup = {
   candidates: SetupAppCandidate[];
 };
 
-export type SetupAppRecommendationMatch = OnboardingRecommendationMatch;
+export type SetupAppRecommendationMatch = {
+  appLabel: string;
+  candidateId: string;
+  tier: "recommended" | "optional";
+  reason: string;
+  candidate: SetupAppCandidate;
+};
 
 export type SetupAppRecommendationsResult =
   | {

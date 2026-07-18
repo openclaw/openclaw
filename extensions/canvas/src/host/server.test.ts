@@ -417,18 +417,14 @@ describe("canvas host", () => {
 
     try {
       const call = watcherState.watchCalls.at(-1);
-      const watchRoot = call?.root;
-      expect(watchRoot).toBe(await fs.realpath(dir));
-      if (typeof watchRoot !== "string") {
-        throw new TypeError("expected a single Canvas watch root");
-      }
+      expect(call?.root).toBe(await fs.realpath(dir));
       const ignored = call?.options?.ignored;
       expect(ignored).toBeTypeOf("function");
       const shouldIgnore = ignored as (candidatePath: string) => boolean;
-      expect(shouldIgnore(watchRoot)).toBe(false);
-      expect(shouldIgnore(path.join(watchRoot, "index.html"))).toBe(false);
-      expect(shouldIgnore(path.join(watchRoot, ".draft.html"))).toBe(true);
-      expect(shouldIgnore(path.join(watchRoot, "node_modules", "asset.js"))).toBe(true);
+      expect(shouldIgnore(dir)).toBe(false);
+      expect(shouldIgnore(path.join(dir, "index.html"))).toBe(false);
+      expect(shouldIgnore(path.join(dir, ".draft.html"))).toBe(true);
+      expect(shouldIgnore(path.join(dir, "node_modules", "asset.js"))).toBe(true);
     } finally {
       await handler.close();
     }

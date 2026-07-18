@@ -17,3 +17,4 @@ export function collectTempCreationFindingsFromDiff(
       source: unknown;
     }
 )[];
+export function main(argv: unknown, io: unknown): Promise<1 | 0>;

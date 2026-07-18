@@ -1,9 +1,7 @@
 // Gateway run option resolution and local server startup command implementation.
 import fs from "node:fs";
-import { request as httpRequest } from "node:http";
-import { request as httpsRequest } from "node:https";
+import { request } from "node:http";
 import path from "node:path";
-import { TLSSocket } from "node:tls";
 import { expectDefined } from "@openclaw/normalization-core";
 import {
   normalizeOptionalLowercaseString,
@@ -50,7 +48,6 @@ import {
 import { GatewayLockError } from "../../infra/gateway-lock.js";
 import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import type { RespawnSupervisor } from "../../infra/supervisor-markers.js";
-import { normalizeFingerprint } from "../../infra/tls/fingerprint.js";
 import { setConsoleSubsystemFilter, setConsoleTimestampPrefix } from "../../logging/console.js";
 import { withDiagnosticPhase } from "../../logging/diagnostic-phase.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -74,7 +71,6 @@ const gatewayLog = createSubsystemLogger("gateway");
 const SUPERVISED_GATEWAY_LOCK_RETRY_MS = 5000;
 const SUPERVISED_GATEWAY_LOCK_RETRY_TIMEOUT_MS = 30_000;
 const SUPERVISED_GATEWAY_HEALTH_PROBE_TIMEOUT_MS = 1000;
-const GATEWAY_HEALTH_PROBE_MAX_RESPONSE_CHARS = 1024;
 const GATEWAY_SHELL_ENV_CONVERGENCE_MAX_READS = 4;
 
 type Awaitable<T> = T | Promise<T>;
@@ -451,15 +447,18 @@ function isGatewayAlreadyRunningLockError(err: unknown): boolean {
   );
 }
 
+function isHealthyGatewayLockError(err: unknown): boolean {
+  return isGatewayAlreadyRunningLockError(err);
+}
+
 function resolveGatewayLockErrorExitCode(
   err: unknown,
   supervisor: RespawnSupervisor | null,
-  healthyGatewayConfirmed: boolean,
 ): number {
   if (supervisor === "systemd" && isGatewayAlreadyRunningLockError(err)) {
     return EXIT_CONFIG_ERROR;
   }
-  return healthyGatewayConfirmed && isGatewayAlreadyRunningLockError(err) ? 0 : 1;
+  return isHealthyGatewayLockError(err) ? 0 : 1;
 }
 
 function resolveGatewayStartupFailureExitCode(err: unknown): number {
@@ -473,36 +472,13 @@ function normalizeGatewayHealthProbeHost(host: string): string {
   return host;
 }
 
-function isGatewayHealthzResponse(statusCode: number | undefined, body: string): boolean {
-  if (statusCode !== 200) {
-    return false;
-  }
-  try {
-    const payload = JSON.parse(body) as { ok?: unknown; status?: unknown };
-    return payload.ok === true && payload.status === "live";
-  } catch {
-    return false;
-  }
-}
-
 async function probeGatewayHealthz(params: {
   host: string;
   port: number;
   timeoutMs?: number;
-  tlsFingerprint?: string;
 }): Promise<boolean> {
   const timeoutMs = params.timeoutMs ?? SUPERVISED_GATEWAY_HEALTH_PROBE_TIMEOUT_MS;
   return await new Promise<boolean>((resolve) => {
-    let settled = false;
-    const finish = (healthy: boolean) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(deadline);
-      resolve(healthy);
-    };
-    const request = params.tlsFingerprint ? httpsRequest : httpRequest;
     const req = request(
       {
         hostname: normalizeGatewayHealthProbeHost(params.host),
@@ -510,50 +486,18 @@ async function probeGatewayHealthz(params: {
         path: "/healthz",
         method: "GET",
         timeout: timeoutMs,
-        // The probe sends no credentials. Pin the configured certificate below
-        // before accepting a self-signed gateway's liveness payload.
-        ...(params.tlsFingerprint ? { rejectUnauthorized: false } : {}),
       },
       (res) => {
-        if (params.tlsFingerprint) {
-          const peerFingerprint =
-            res.socket instanceof TLSSocket
-              ? normalizeFingerprint(res.socket.getPeerCertificate().fingerprint256 ?? "")
-              : "";
-          if (peerFingerprint !== normalizeFingerprint(params.tlsFingerprint)) {
-            res.resume();
-            finish(false);
-            return;
-          }
-        }
-        let body = "";
-        res.setEncoding("utf8");
-        res.on("data", (chunk: string) => {
-          if (body.length + chunk.length > GATEWAY_HEALTH_PROBE_MAX_RESPONSE_CHARS) {
-            res.destroy();
-            finish(false);
-            return;
-          }
-          body += chunk;
-        });
-        res.once("end", () => {
-          finish(isGatewayHealthzResponse(res.statusCode, body));
-        });
-        res.once("error", () => {
-          finish(false);
-        });
+        res.resume();
+        resolve(typeof res.statusCode === "number" && res.statusCode < 500);
       },
     );
-    const deadline = setTimeout(() => {
-      req.destroy();
-      finish(false);
-    }, timeoutMs);
     req.once("timeout", () => {
       req.destroy();
-      finish(false);
+      resolve(false);
     });
     req.once("error", () => {
-      finish(false);
+      resolve(false);
     });
     req.end();
   });
@@ -1137,29 +1081,7 @@ export async function runGatewayCommand(opts: GatewayRunOpts, hooks: GatewayRunR
       }
       const { maybeExplainGatewayServiceStop } = await import("./shared.js");
       await maybeExplainGatewayServiceStop();
-      // An occupied port is only a healthy duplicate when the listener proves
-      // the OpenClaw liveness contract. Arbitrary HTTP listeners must fail.
-      const gatewayTls =
-        isGatewayAlreadyRunningLockError(err) && cfg.gateway?.tls?.enabled === true
-          ? await import("../../infra/tls/gateway.js")
-              .then(({ loadGatewayTlsRuntime }) => loadGatewayTlsRuntime(cfg.gateway?.tls))
-              .catch(() => undefined)
-          : undefined;
-      const canProbeGateway =
-        cfg.gateway?.tls?.enabled !== true || Boolean(gatewayTls?.fingerprintSha256);
-      const healthyGatewayConfirmed =
-        isGatewayAlreadyRunningLockError(err) &&
-        canProbeGateway &&
-        (await probeGatewayHealthz({
-          host: healthHost,
-          port,
-          ...(gatewayTls?.fingerprintSha256
-            ? { tlsFingerprint: gatewayTls.fingerprintSha256 }
-            : {}),
-        }));
-      defaultRuntime.exit(
-        resolveGatewayLockErrorExitCode(err, supervisor, healthyGatewayConfirmed),
-      );
+      defaultRuntime.exit(resolveGatewayLockErrorExitCode(err, supervisor));
       return;
     }
     await maybeWriteGatewayStartupFailureBundle(err);
@@ -1171,9 +1093,7 @@ export async function runGatewayCommand(opts: GatewayRunOpts, hooks: GatewayRunR
 }
 
 const testing = {
-  isGatewayHealthzResponse,
   normalizeGatewayHealthProbeHost,
-  probeGatewayHealthz,
   resolveGatewayLockErrorExitCode,
   resolveGatewayStartupFailureExitCode,
   runGatewayLoopWithSupervisedLockRecovery,

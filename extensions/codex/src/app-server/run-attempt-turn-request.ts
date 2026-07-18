@@ -59,7 +59,6 @@ export async function prepareCodexAttemptTurnRequest(
         : params.modelId,
       api: usesSupervisionConnection ? runtimeParams.model.api : params.model.api,
       transport: appServer.start.transport,
-      observationUnit: "turn",
       ...hookContextWindowFields,
       trace: codexModelCallTrace,
     },

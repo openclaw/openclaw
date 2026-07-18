@@ -272,7 +272,6 @@ describe("fetchWithSsrFGuard hardening", () => {
     if (params.expectEnvProxy) {
       expect(envHttpProxyAgentCtor).toHaveBeenCalledTimes(1);
       expect(envHttpProxyAgentCtor).toHaveBeenCalledWith({
-        factory: expect.any(Function),
         connect: {
           autoSelectFamily: true,
           autoSelectFamilyAttemptTimeout: 300,
@@ -719,7 +718,6 @@ describe("fetchWithSsrFGuard hardening", () => {
     });
 
     expect(proxyAgentCtor).toHaveBeenCalledWith({
-      factory: expect.any(Function),
       uri: "http://proxy.example:7890",
       clientFactory: expect.any(Function),
       proxyTls: {

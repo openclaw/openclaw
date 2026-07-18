@@ -16,26 +16,18 @@ import type {
 } from "openclaw/plugin-sdk/setup-runtime";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { inspectSlackAccount, type InspectedSlackAccount } from "./account-inspect.js";
-import { resolveDefaultSlackAccountId, resolveSlackAccountAllowFrom } from "./accounts.js";
+import {
+  resolveDefaultSlackAccountId,
+  resolveSlackAccount,
+  resolveSlackAccountAllowFrom,
+  type ResolvedSlackAccount,
+} from "./accounts.js";
 import { resolveSlackChannelAllowlist } from "./resolve-channels.js";
 import { resolveSlackUserAllowlist } from "./resolve-users.js";
 import { createSlackSetupWizardBase } from "./setup-core.js";
 import { SLACK_CHANNEL as channel } from "./shared.js";
 
 const t = createSetupTranslator();
-
-type SlackSetupCredentialValues = { botToken?: string; userToken?: string };
-
-function resolveSlackSetupAuth(
-  account: InspectedSlackAccount,
-  credentialValues: SlackSetupCredentialValues,
-): string | undefined {
-  if (account.config.identity === "user") {
-    return credentialValues.userToken || account.userToken;
-  }
-  return credentialValues.botToken || account.botToken;
-}
 
 async function resolveSlackAllowFromEntries(params: {
   token?: string;
@@ -77,13 +69,13 @@ async function promptSlackAllowFrom(params: {
       normalizeId: (id) => id.toUpperCase(),
     });
 
-  return await promptLegacyChannelAllowFromForAccount<InspectedSlackAccount>({
+  return await promptLegacyChannelAllowFromForAccount<ResolvedSlackAccount>({
     cfg: params.cfg,
     channel,
     prompter: params.prompter,
     accountId: params.accountId,
     defaultAccountId: resolveDefaultSlackAccountId(params.cfg),
-    resolveAccount: adaptScopedAccountAccessor(inspectSlackAccount),
+    resolveAccount: adaptScopedAccountAccessor(resolveSlackAccount),
     resolveExisting: (account, cfg) =>
       resolveSlackAccountAllowFrom({ cfg, accountId: account.accountId }) ?? [],
     resolveToken: (account) => account.userToken ?? account.botToken ?? "",
@@ -117,16 +109,16 @@ async function promptSlackAllowFrom(params: {
 async function resolveSlackGroupAllowlist(params: {
   cfg: OpenClawConfig;
   accountId: string;
-  credentialValues: SlackSetupCredentialValues;
+  credentialValues: { botToken?: string };
   entries: string[];
   prompter: { note: (message: string, title?: string) => Promise<void> };
 }) {
   let keys = params.entries;
-  const accountWithTokens = inspectSlackAccount({
+  const accountWithTokens = resolveSlackAccount({
     cfg: params.cfg,
     accountId: params.accountId,
   });
-  const auth = resolveSlackSetupAuth(accountWithTokens, params.credentialValues) || "";
+  const activeBotToken = accountWithTokens.botToken || params.credentialValues.botToken || "";
   if (params.entries.length > 0) {
     try {
       const resolved = await resolveEntriesWithOptionalToken<{
@@ -134,7 +126,7 @@ async function resolveSlackGroupAllowlist(params: {
         resolved: boolean;
         id?: string;
       }>({
-        token: auth,
+        token: activeBotToken,
         entries: params.entries,
         buildWithoutToken: (input) => ({ input, resolved: false, id: undefined }),
         resolveEntries: async ({ token, entries }) =>
@@ -167,10 +159,11 @@ async function resolveSlackGroupAllowlist(params: {
 
 export const slackSetupWizard: ChannelSetupWizard = createSlackSetupWizardBase({
   promptAllowFrom: promptSlackAllowFrom,
-  resolveAllowFromEntries: async ({ cfg, accountId, credentialValues, entries }) => {
-    const auth = resolveSlackSetupAuth(inspectSlackAccount({ cfg, accountId }), credentialValues);
-    return await resolveSlackAllowFromEntries({ token: auth, entries });
-  },
+  resolveAllowFromEntries: async ({ credentialValues, entries }) =>
+    await resolveSlackAllowFromEntries({
+      token: credentialValues.botToken,
+      entries,
+    }),
   resolveGroupAllowlist: async ({ cfg, accountId, credentialValues, entries, prompter }) =>
     await resolveSlackGroupAllowlist({
       cfg,

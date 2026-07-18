@@ -8,10 +8,6 @@ import {
   prepareSkillHistoryScanReviewMessages,
 } from "./history-scan-transcript-content.js";
 
-export type SkillHistoryScanBatchSession = SkillHistoryScanPromptSession & {
-  updatedAtMs: number;
-};
-
 const HISTORY_SCAN_MAX_CANDIDATES = 60;
 const HISTORY_SCAN_MAX_SESSIONS = 20;
 const HISTORY_SCAN_MAX_TRANSCRIPT_CHARS = 80_000;
@@ -86,10 +82,10 @@ export async function collectSkillHistoryScanBatch(params: {
 }): Promise<{
   blockedByActive: boolean;
   considered: SkillHistoryScanCandidate[];
-  sessions: SkillHistoryScanBatchSession[];
+  sessions: SkillHistoryScanPromptSession[];
 }> {
   const considered: SkillHistoryScanCandidate[] = [];
-  const sessions: SkillHistoryScanBatchSession[] = [];
+  const sessions: SkillHistoryScanPromptSession[] = [];
   const maxTranscriptChars = params.maxTranscriptChars ?? HISTORY_SCAN_MAX_TRANSCRIPT_CHARS;
   let blockedByActive = false;
   let transcriptChars = 0;
@@ -117,13 +113,7 @@ export async function collectSkillHistoryScanBatch(params: {
     if (!session) {
       continue;
     }
-    const updatedAtMs = Date.parse(session.updatedAt);
-    // Pending cursors must identify every reviewed session for exact replay.
-    // Drop malformed sessions before they become canonical batch members.
-    if (!Number.isFinite(updatedAtMs)) {
-      continue;
-    }
-    sessions.push({ ...session, updatedAtMs });
+    sessions.push(session);
     transcriptChars += session.transcript.length + HISTORY_SCAN_SESSION_OVERHEAD_CHARS;
     if (sessions.length >= HISTORY_SCAN_MAX_SESSIONS) {
       break;

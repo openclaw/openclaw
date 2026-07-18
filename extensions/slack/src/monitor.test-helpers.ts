@@ -21,41 +21,8 @@ type SlackProviderMonitor = (params: {
 }) => Promise<unknown>;
 type SlackStartupAuthClientFactory = typeof import("./client.js").createSlackStartupAuthClient;
 
-const SLACK_INGRESS_LIFECYCLE_CONTEXT_KEY = "openclawIngressLifecycle";
-
-type SlackRunOnceOptions = {
-  botToken?: string;
-  appToken?: string;
-  awaitDispatch?: boolean;
-};
-
-function withSlackDispatchLifecycle(args: unknown): Record<string, unknown> {
-  if (!args || typeof args !== "object" || Array.isArray(args)) {
-    throw new Error("Slack event arguments must be an object");
-  }
-  const eventArgs = args as Record<string, unknown>;
-  const existingContext =
-    eventArgs.context && typeof eventArgs.context === "object" && !Array.isArray(eventArgs.context)
-      ? (eventArgs.context as Record<string, unknown>)
-      : {};
-  return {
-    ...eventArgs,
-    context: {
-      ...existingContext,
-      [SLACK_INGRESS_LIFECYCLE_CONTEXT_KEY]: {
-        admission: "exclusive",
-        abortSignal: new AbortController().signal,
-        onAdopted: vi.fn(),
-        onDeferred: vi.fn(),
-        onAbandoned: vi.fn(),
-      },
-    },
-  };
-}
-
 type SlackTestState = {
   config: Record<string, unknown>;
-  appConstructorArgs?: Record<string, unknown>;
   appStartMock: Mock<(...args: unknown[]) => Promise<unknown>>;
   appStopMock: Mock<(...args: unknown[]) => Promise<unknown>>;
   sendMock: Mock<(...args: unknown[]) => Promise<unknown>>;
@@ -74,32 +41,22 @@ type SlackTestState = {
   createSlackStartupAuthClientActual?: SlackStartupAuthClientFactory;
 };
 
-// globalThis-backed singleton: with isolate=false, a vi.resetModules() in any
-// sibling file recreates this module while the cached __slackClient on
-// globalThis keeps routing reactions to the OLD instance's mocks — tests then
-// assert on fresh mocks that never receive calls. One shared state object
-// keeps every module incarnation and the cached client converged.
-const slackTestState: SlackTestState = vi.hoisted(() => {
-  const globalState = globalThis as { __slackTestState?: SlackTestState };
-  globalState["__slackTestState"] ??= {
-    config: {} as Record<string, unknown>,
-    appConstructorArgs: undefined,
-    appStartMock: vi.fn(),
-    appStopMock: vi.fn(),
-    sendMock: vi.fn(),
-    replyMock: vi.fn(),
-    updateLastRouteMock: vi.fn(),
-    reactMock: vi.fn(),
-    reactionAddMock: vi.fn(),
-    reactionRemoveMock: vi.fn(),
-    readAllowFromStoreMock: vi.fn(),
-    upsertPairingRequestMock: vi.fn(),
-    resolveSlackUserAllowlistMock: vi.fn(),
-    socketModeLogger: undefined,
-    createSlackStartupAuthClientMock: vi.fn(),
-  } as SlackTestState;
-  return globalState["__slackTestState"];
-});
+const slackTestState: SlackTestState = vi.hoisted(() => ({
+  config: {} as Record<string, unknown>,
+  appStartMock: vi.fn(),
+  appStopMock: vi.fn(),
+  sendMock: vi.fn(),
+  replyMock: vi.fn(),
+  updateLastRouteMock: vi.fn(),
+  reactMock: vi.fn(),
+  reactionAddMock: vi.fn(),
+  reactionRemoveMock: vi.fn(),
+  readAllowFromStoreMock: vi.fn(),
+  upsertPairingRequestMock: vi.fn(),
+  resolveSlackUserAllowlistMock: vi.fn(),
+  socketModeLogger: undefined,
+  createSlackStartupAuthClientMock: vi.fn(),
+}));
 
 export const getSlackTestState = (): SlackTestState => slackTestState;
 
@@ -136,15 +93,6 @@ export const getSlackHandlers = () => ensureSlackTestRuntime().handlers;
 
 export const getSlackClient = () => ensureSlackTestRuntime().client;
 
-export function disposeSlackTestRuntime(): void {
-  const globalState = globalThis as {
-    __slackHandlers?: Map<string, SlackHandler>;
-    __slackClient?: SlackClient;
-  };
-  Reflect.deleteProperty(globalState, "__slackHandlers");
-  Reflect.deleteProperty(globalState, "__slackClient");
-}
-
 function ensureSlackTestRuntime(): {
   handlers: Map<string, SlackHandler>;
   client: SlackClient;
@@ -177,27 +125,20 @@ function ensureSlackTestRuntime(): {
         },
       },
       reactions: {
-        add: () => undefined,
-        remove: () => undefined,
+        add: (...args: unknown[]) => {
+          slackTestState.reactionAddMock(...args);
+          return slackTestState.reactMock(...args);
+        },
+        remove: (...args: unknown[]) => {
+          slackTestState.reactionRemoveMock(...args);
+          return slackTestState.reactMock(...args);
+        },
       },
     };
   }
-  const client = globalState["__slackClient"];
-  // The non-isolated Slack lane keeps this global client across file-level module resets.
-  // Rebind delegates so reaction assertions always target the current file's hoisted mocks.
-  client.reactions = {
-    add: (...args: unknown[]) => {
-      slackTestState.reactionAddMock(...args);
-      return slackTestState.reactMock(...args);
-    },
-    remove: (...args: unknown[]) => {
-      slackTestState.reactionRemoveMock(...args);
-      return slackTestState.reactMock(...args);
-    },
-  };
   return {
     handlers: globalState["__slackHandlers"],
-    client,
+    client: globalState["__slackClient"],
   };
 }
 
@@ -254,33 +195,24 @@ export async function stopSlackMonitor(params: {
   await flush();
   params.controller.abort();
   await params.run;
-  // A stopped provider's handlers must not satisfy the next start's
-  // waitForSlackEvent — see the reset-time clear above.
-  (globalThis as { __slackHandlers?: Map<string, SlackHandler> })["__slackHandlers"]?.clear();
 }
 
 async function runSlackEventOnce(
   monitorSlackProvider: SlackProviderMonitor,
   name: string,
   args: unknown,
-  opts?: SlackRunOnceOptions,
+  opts?: { botToken?: string; appToken?: string },
 ) {
   const { controller, run } = startSlackMonitor(monitorSlackProvider, opts);
   const handler = await getSlackHandlerOrThrow(name);
-  // Normal Bolt handlers return after queue admission. Terminal-state tests use the
-  // durable-ingress lifecycle so this helper can await the actual dispatch boundary.
-  const handlerArgs = opts?.awaitDispatch ? withSlackDispatchLifecycle(args) : args;
-  try {
-    await handler(handlerArgs);
-  } finally {
-    await stopSlackMonitor({ controller, run });
-  }
+  await handler(args);
+  await stopSlackMonitor({ controller, run });
 }
 
 export async function runSlackMessageOnce(
   monitorSlackProvider: SlackProviderMonitor,
   args: unknown,
-  opts?: SlackRunOnceOptions,
+  opts?: { botToken?: string; appToken?: string },
 ) {
   await runSlackEventOnce(monitorSlackProvider, "message", args, opts);
 }
@@ -307,11 +239,6 @@ export function resetSlackTestState(config: Record<string, unknown> = defaultSla
   // so a carried-over DB would dedupe unrelated test messages. realpath keeps
   // macOS /var vs /private/var symlinks out of resolver assertions.
   closeOpenClawStateDatabaseForTest();
-  // Clear worker-global Bolt handler registrations from previous test files:
-  // with isolate=false a stale "message" handler makes waitForSlackEvent
-  // return before THIS test's provider registers, dispatching through the old
-  // provider's closure config (reactions silently suppressed, replies fine).
-  (globalThis as { __slackHandlers?: Map<string, SlackHandler> })["__slackHandlers"]?.clear();
   if (lastSlackTestStateDir) {
     fs.rmSync(lastSlackTestStateDir, { recursive: true, force: true });
   }
@@ -320,7 +247,6 @@ export function resetSlackTestState(config: Record<string, unknown> = defaultSla
   );
   process.env.OPENCLAW_STATE_DIR = lastSlackTestStateDir;
   slackTestState.config = config;
-  slackTestState.appConstructorArgs = undefined;
   slackTestState.socketModeLogger = undefined;
   slackTestState.appStartMock.mockReset().mockResolvedValue(undefined);
   slackTestState.appStopMock.mockReset().mockResolvedValue(undefined);
@@ -436,8 +362,7 @@ vi.mock("@slack/bolt", () => {
     receiver: unknown;
     middlewares: SlackMiddleware[] = [];
 
-    constructor(args?: Record<string, unknown>) {
-      slackTestState.appConstructorArgs = args;
+    constructor(args?: { receiver?: unknown }) {
       this.receiver = args?.receiver;
     }
     use(middleware: SlackMiddleware) {

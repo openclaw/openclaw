@@ -1,7 +1,11 @@
 /** Finalizes cron task rows and active markers after timer outcome persistence. */
 import { clearCronJobActive, isCronActiveJobMarkerCurrent } from "../active-jobs.js";
 import type { CronActiveJobMarker } from "../active-jobs.js";
-import { clearQueuedCronRunReservationMarker, releaseQueuedCronRun } from "./run-admission.js";
+import {
+  isQueuedCronRunReservationMarkerCurrent,
+  releaseQueuedCronRun,
+  restoreQueuedCronRunReservationLastError,
+} from "./run-admission.js";
 import type { CronServiceState } from "./state.js";
 import { tryFinishCronTaskRunWithoutHistory } from "./task-runs.js";
 
@@ -72,14 +76,21 @@ export function clearUnstartedStartupCatchupReservationMarkers(
     }
     const job = state.store?.jobs.find((entry) => entry.id === candidate.jobId);
     if (
-      job &&
-      clearQueuedCronRunReservationMarker(
+      typeof job?.state.runningAtMs === "number" &&
+      isQueuedCronRunReservationMarkerCurrent(
+        state,
+        candidate.jobId,
+        candidate.reservationIdentity,
+        job.state.runningAtMs,
+      )
+    ) {
+      restoreQueuedCronRunReservationLastError(
         state,
         candidate.jobId,
         candidate.reservationIdentity,
         job.state,
-      )
-    ) {
+      );
+      delete job.state.runningAtMs;
       pendingReleases.push(candidate);
     } else {
       releaseQueuedCronRun(state, candidate.jobId, candidate.reservationIdentity);

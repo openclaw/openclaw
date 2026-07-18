@@ -10,7 +10,6 @@ import {
   removeAckReactionHandleAfterReply,
   shouldAckReaction,
 } from "../../channels/ack-reactions.js";
-import { createChannelReplyPipeline } from "../../channels/message/reply-pipeline.js";
 import { resolveSessionEntryResetFreshness } from "../../config/sessions/entry-freshness.js";
 import { createChannelRuntimeContextRegistry } from "../../plugins/runtime/channel-runtime-contexts.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
@@ -169,8 +168,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
     const storePath = params.storePath as string;
     const delivery = params.delivery as {
       deliver: (payload: unknown, info: unknown) => Promise<unknown>;
-      onDelivered?: (payload: unknown, info: unknown, result: unknown) => Promise<void> | void;
-      onError?: (err: unknown, info: unknown) => void;
+      onError?: (err: unknown, info: { kind: string }) => void;
     };
     const ctxSessionKey = ctxPayload.SessionKey;
     const sessionKey = typeof ctxSessionKey === "string" ? ctxSessionKey : routeSessionKey;
@@ -179,25 +177,12 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         ctx: unknown;
         cfg: unknown;
         dispatcherOptions: {
-          deliver: (payload: unknown, info: unknown) => Promise<unknown>;
-          onError?: (err: unknown, info: unknown) => void;
+          deliver: (payload: unknown, info: unknown) => Promise<void>;
+          onError?: (err: unknown, info: { kind: string }) => void;
         };
         replyOptions?: unknown;
         replyResolver?: unknown;
       }) => Promise<unknown>;
-    const pipeline = params.replyPipeline
-      ? createChannelReplyPipeline({
-          ...(params.replyPipeline as Omit<
-            Parameters<typeof createChannelReplyPipeline>[0],
-            "cfg" | "agentId" | "channel" | "accountId"
-          >),
-          cfg: params.cfg as Parameters<typeof createChannelReplyPipeline>[0]["cfg"],
-          agentId: params.agentId as string,
-          channel: params.channel as string,
-          accountId: params.accountId as string | undefined,
-        })
-      : undefined;
-    const { onModelSelected, ...dispatcherPipeline } = pipeline ?? {};
     await recordInboundSession({
       storePath,
       sessionKey,
@@ -213,19 +198,13 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       ctx: ctxPayload,
       cfg: params.cfg,
       dispatcherOptions: {
-        ...dispatcherPipeline,
         ...(params.dispatcherOptions as Record<string, unknown> | undefined),
         deliver: async (payload, info) => {
-          const result = await delivery.deliver(payload, info);
-          await delivery.onDelivered?.(payload, info, result);
-          return result;
+          await delivery.deliver(payload, info);
         },
         onError: delivery.onError,
       },
-      replyOptions: {
-        ...(onModelSelected ? { onModelSelected } : {}),
-        ...(params.replyOptions as Record<string, unknown> | undefined),
-      },
+      replyOptions: params.replyOptions,
       replyResolver: params.replyResolver,
     });
     return {
@@ -328,50 +307,48 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         };
       }
       const resolved = await params.adapter.resolveTurn(input, eventClass, preflight ?? {});
-      const admission =
-        resolved.admission ?? preflight.admission ?? ({ kind: "dispatch" } as const);
-      let dispatchResult;
-      if ("runDispatch" in resolved) {
-        const prepared =
-          "route" in resolved
-            ? (() => {
-                if (!mergedRuntime) {
-                  throw new Error("plugin runtime mock run used before initialization");
-                }
-                const { cfg, route, ...turn } = resolved;
-                return {
-                  ...turn,
-                  routeSessionKey: route.sessionKey,
-                  storePath: mergedRuntime.channel.session.resolveStorePath(cfg.session?.store, {
+      const assembled =
+        "route" in resolved
+          ? (() => {
+              if (!mergedRuntime) {
+                throw new Error("plugin runtime mock turn used before initialization");
+              }
+              const { cfg, route, ...turn } = resolved;
+              const routedTurn = {
+                ...turn,
+                routeSessionKey: route.sessionKey,
+                storePath: mergedRuntime.channel.session.resolveStorePath(cfg.session?.store, {
+                  agentId: route.agentId,
+                }),
+                recordInboundSession: mergedRuntime.channel.session.recordInboundSession,
+              };
+              return "runDispatch" in resolved
+                ? routedTurn
+                : {
+                    ...routedTurn,
+                    cfg,
                     agentId: route.agentId,
-                  }),
-                  recordInboundSession: mergedRuntime.channel.session.recordInboundSession,
-                };
-              })()
-            : resolved;
-        dispatchResult = await runPreparedChannelTurnMock({
-          ...prepared,
-          admission,
-        } as unknown as Parameters<PluginRuntime["channel"]["inbound"]["runPreparedReply"]>[0]);
-      } else {
-        const delivery =
-          admission.kind === "observeOnly"
-            ? { deliver: async () => ({ visibleReplySent: false }) }
-            : resolved.delivery;
-        if ("route" in resolved) {
-          dispatchResult = await dispatchChannelTurnPlanMock({
-            ...resolved,
-            admission,
-            delivery,
-          });
-        } else {
-          dispatchResult = await dispatchAssembledChannelTurnMock({
-            ...resolved,
-            admission,
-            delivery,
-          });
-        }
-      }
+                    dispatchReplyWithBufferedBlockDispatcher:
+                      mergedRuntime.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
+                  };
+            })()
+          : resolved;
+      const admission =
+        assembled.admission ?? preflight.admission ?? ({ kind: "dispatch" } as const);
+      const dispatchResult =
+        "runDispatch" in assembled
+          ? await runPreparedChannelTurnMock({
+              ...assembled,
+              admission,
+            } as unknown as Parameters<PluginRuntime["channel"]["inbound"]["runPreparedReply"]>[0])
+          : await dispatchAssembledChannelTurnMock({
+              ...assembled,
+              admission,
+              delivery:
+                admission.kind === "observeOnly"
+                  ? { deliver: async () => ({ visibleReplySent: false }) }
+                  : assembled.delivery,
+            });
       const result = {
         ...dispatchResult,
         admission,

@@ -23,12 +23,7 @@ import {
   resolveMcpLoopbackYieldContext,
   updateMcpLoopbackToolCallCapture,
 } from "../gateway/mcp-http.loopback-runtime.js";
-import {
-  onTrustedInternalDiagnosticEvent,
-  resetDiagnosticEventsForTest,
-  setDiagnosticsEnabledForProcess,
-  waitForDiagnosticEventsDrained,
-} from "../infra/diagnostic-events.js";
+import { resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { RunExit } from "../process/supervisor/types.js";
@@ -2013,21 +2008,6 @@ describe("runCliAgent reliability", () => {
   it.each(["timeout", "unknown", "context_overflow"] as const)(
     "retries a fresh CLI session after recoverable %s failover without a failed agent_end",
     async (reason) => {
-      const runId = `run-retry-${reason}`;
-      const modelCallEvents: Array<{ callId: string; type: string }> = [];
-      setDiagnosticsEnabledForProcess(true);
-      const stopDiagnostics = onTrustedInternalDiagnosticEvent((event) => {
-        if (
-          event.type !== "model.call.started" &&
-          event.type !== "model.call.completed" &&
-          event.type !== "model.call.error"
-        ) {
-          return;
-        }
-        if (event.runId === runId) {
-          modelCallEvents.push({ callId: event.callId, type: event.type });
-        }
-      });
       const hookRunner = {
         hasHooks: vi.fn((hookName: string) =>
           ["llm_input", "llm_output", "agent_end"].includes(hookName),
@@ -2103,7 +2083,7 @@ describe("runCliAgent reliability", () => {
       try {
         const context = buildPreparedContext({
           sessionKey: "agent:main:subagent:retry",
-          runId,
+          runId: `run-retry-${reason}`,
           cliSessionId: "stale-cli-session",
           provider: "claude-cli",
           model: "opus",
@@ -2145,18 +2125,7 @@ describe("runCliAgent reliability", () => {
         );
         expect(agentEndEvent.success).toBe(true);
         expect(agentEndEvent.error).toBeUndefined();
-        await waitForDiagnosticEventsDrained();
-        expect(modelCallEvents.map((event) => event.type)).toEqual([
-          "model.call.started",
-          "model.call.error",
-          "model.call.started",
-          "model.call.completed",
-        ]);
-        expect(modelCallEvents[0]?.callId).toBe(modelCallEvents[1]?.callId);
-        expect(modelCallEvents[2]?.callId).toBe(modelCallEvents[3]?.callId);
-        expect(modelCallEvents[0]?.callId).not.toBe(modelCallEvents[2]?.callId);
       } finally {
-        stopDiagnostics();
         fs.rmSync(dir, { recursive: true, force: true });
       }
     },

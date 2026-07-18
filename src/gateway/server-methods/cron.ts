@@ -23,7 +23,6 @@ import {
 import { resolveCronDeliveryPreviews } from "../../cron/delivery-preview.js";
 import { assertCronDeliveryInputNonBlankFields } from "../../cron/delivery-target-validation.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
-import { toPublicCronJob } from "../../cron/public-job.js";
 import { applyJobPatch } from "../../cron/service/jobs.js";
 import {
   isInvalidCronSessionTargetIdError,
@@ -87,9 +86,8 @@ class CronJobConfigRevisionConflictError extends Error {
 }
 
 function cronJobReadView(job: CronJob) {
-  const publicJob = toPublicCronJob(job);
   return {
-    ...publicJob,
+    ...job,
     configRevision: resolveCronJobConfigRevision(job),
     nextRunAtMs: job.state.nextRunAtMs,
     lastRunAtMs: job.state.lastRunAtMs,

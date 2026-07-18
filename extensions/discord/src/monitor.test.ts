@@ -124,7 +124,7 @@ describe("DiscordMessageListener", () => {
     await Promise.resolve();
   }
 
-  it("waits for the durable handler handoff", async () => {
+  it("returns immediately while handler continues in background", async () => {
     let handlerResolved = false;
     const deferred = createDeferred();
     const handler = vi.fn(async () => {
@@ -134,18 +134,19 @@ describe("DiscordMessageListener", () => {
     const listener = new DiscordMessageListener(handler);
 
     const handlePromise = listener.handle(
-      {} as unknown as Parameters<
-        import("./monitor/listeners.js").DiscordMessageListener["handle"]
-      >[0],
+      {} as unknown as import("./monitor/listeners.js").DiscordMessageEvent,
       {} as unknown as import("./internal/discord.js").Client,
     );
 
+    // handle() returns immediately while the background queue starts on the next tick.
+    await expect(handlePromise).resolves.toBeUndefined();
     await flushAsyncWork();
     expect(handler).toHaveBeenCalledOnce();
     expect(handlerResolved).toBe(false);
 
+    // Release and let background handler finish.
     deferred.resolve();
-    await expect(handlePromise).resolves.toBeUndefined();
+    await Promise.resolve();
     expect(handlerResolved).toBe(true);
   });
 
@@ -163,25 +164,26 @@ describe("DiscordMessageListener", () => {
     });
     const listener = new DiscordMessageListener(handler);
 
-    const firstHandle = listener.handle(
-      {} as unknown as Parameters<
-        import("./monitor/listeners.js").DiscordMessageListener["handle"]
-      >[0],
-      {} as unknown as import("./internal/discord.js").Client,
-    );
-    const secondHandle = listener.handle(
-      {} as unknown as Parameters<
-        import("./monitor/listeners.js").DiscordMessageListener["handle"]
-      >[0],
-      {} as unknown as import("./internal/discord.js").Client,
-    );
+    await expect(
+      listener.handle(
+        {} as unknown as import("./monitor/listeners.js").DiscordMessageEvent,
+        {} as unknown as import("./internal/discord.js").Client,
+      ),
+    ).resolves.toBeUndefined();
+    await expect(
+      listener.handle(
+        {} as unknown as import("./monitor/listeners.js").DiscordMessageEvent,
+        {} as unknown as import("./internal/discord.js").Client,
+      ),
+    ).resolves.toBeUndefined();
 
+    // Both handlers are dispatched concurrently (fire-and-forget).
     await flushAsyncWork();
     expect(handler).toHaveBeenCalledTimes(2);
 
     first.resolve();
     second.resolve();
-    await Promise.all([firstHandle, secondHandle]);
+    await Promise.resolve();
   });
 
   it("logs handler failures", async () => {
@@ -197,9 +199,7 @@ describe("DiscordMessageListener", () => {
     const listener = new DiscordMessageListener(handler, logger);
 
     await listener.handle(
-      {} as unknown as Parameters<
-        import("./monitor/listeners.js").DiscordMessageListener["handle"]
-      >[0],
+      {} as unknown as import("./monitor/listeners.js").DiscordMessageEvent,
       {} as unknown as import("./internal/discord.js").Client,
     );
     await flushAsyncWork();
@@ -218,13 +218,13 @@ describe("DiscordMessageListener", () => {
     const listener = new DiscordMessageListener(handler, logger);
 
     const handlePromise = listener.handle(
-      {} as unknown as Parameters<
-        import("./monitor/listeners.js").DiscordMessageListener["handle"]
-      >[0],
+      {} as unknown as import("./monitor/listeners.js").DiscordMessageEvent,
       {} as unknown as import("./internal/discord.js").Client,
     );
-    deferred.resolve();
     await expect(handlePromise).resolves.toBeUndefined();
+
+    deferred.resolve();
+    await flushAsyncWork();
     expect(handler).toHaveBeenCalledOnce();
     // The listener no longer wraps message handlers with slow-listener logging.
     expect(logger.warn).not.toHaveBeenCalled();

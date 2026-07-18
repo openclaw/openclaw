@@ -691,7 +691,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 168,
+      "line": 167,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Resolution outcome unknown. Actions stay disabled until the Gateway record is verified.",
       "surface": "android",
@@ -699,7 +699,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 170,
+      "line": 169,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "The Gateway still shows this approval as pending. Review it before trying again.",
       "surface": "android",
@@ -707,7 +707,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 172,
+      "line": 171,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Could not load approval details. Refresh and try again.",
       "surface": "android",
@@ -715,7 +715,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 174,
+      "line": 173,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Could not load approvals.",
       "surface": "android",
@@ -723,7 +723,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 176,
+      "line": 175,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Could not resolve approval. Refresh and try again.",
       "surface": "android",
@@ -731,7 +731,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 191,
+      "line": 190,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Proposal applied.",
       "surface": "android",
@@ -739,7 +739,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 191,
+      "line": 190,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "apply",
       "surface": "android",
@@ -747,7 +747,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 192,
+      "line": 191,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Proposal rejected.",
       "surface": "android",
@@ -755,7 +755,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 192,
+      "line": 191,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "reject",
       "surface": "android",
@@ -763,7 +763,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 193,
+      "line": 192,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Proposal quarantined.",
       "surface": "android",
@@ -771,7 +771,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 193,
+      "line": 192,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "quarantine",
       "surface": "android",
@@ -779,7 +779,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 200,
+      "line": 199,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "unknown",
       "surface": "android",
@@ -787,7 +787,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 201,
+      "line": 200,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Gateway returned status '$statusLabel' after ${action.verb}.",
       "surface": "android",
@@ -795,7 +795,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 209,
+      "line": 208,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Could not ${action.verb} Skill Workshop proposal.",
       "surface": "android",
@@ -803,7 +803,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 391,
+      "line": 390,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Connected (node offline)",
       "surface": "android",
@@ -811,7 +811,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 392,
+      "line": 391,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Connected (operator offline)",
       "surface": "android",
@@ -819,7 +819,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 394,
+      "line": 393,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Reconnecting…",
       "surface": "android",
@@ -827,7 +827,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 402,
+      "line": 401,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Connected (operator: $operator)",
       "surface": "android",
@@ -835,7 +835,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1943,
+      "line": 1918,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "This automation already has a queued run.",
       "surface": "android",
@@ -843,7 +843,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1973,
+      "line": 1948,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Automation run queued.",
       "surface": "android",
@@ -851,7 +851,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1973,
+      "line": 1948,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Automation started.",
       "surface": "android",
@@ -859,7 +859,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1986,
+      "line": 1961,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Gateway rejected the automation run.",
       "surface": "android",
@@ -867,7 +867,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2017,
+      "line": 1992,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Automation enabled.",
       "surface": "android",
@@ -875,7 +875,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2017,
+      "line": 1992,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Automation paused.",
       "surface": "android",
@@ -883,7 +883,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2039,
+      "line": 2014,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "This automation changed on the gateway. Review the latest version before saving again.",
       "surface": "android",
@@ -891,7 +891,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2045,
+      "line": 2020,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Automation updated.",
       "surface": "android",
@@ -899,7 +899,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2060,
+      "line": 2035,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Automation deleted.",
       "surface": "android",
@@ -907,7 +907,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2265,
+      "line": 2240,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Node offline. Reconnect and retry.",
       "surface": "android",
@@ -915,7 +915,7 @@
     },
     {
       "kind": "ui-named-argument-concatenated",
-      "line": 2276,
+      "line": 2251,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Restore canvas now for session=$sessionKey source=$source. If existing A2UI state exists, replay it immediately. If not, create and render a compact mobile-friendly dashboard in Canvas.",
       "surface": "android",
@@ -923,7 +923,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2297,
+      "line": 2272,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Failed to request restore. Tap to retry.",
       "surface": "android",
@@ -931,7 +931,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2308,
+      "line": 2283,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "No canvas update yet. Tap to retry.",
       "surface": "android",
@@ -939,7 +939,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3206,
+      "line": 3181,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Connect to a Gateway to save wake words",
       "surface": "android",
@@ -947,7 +947,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3234,
+      "line": 3209,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Wake words saved",
       "surface": "android",
@@ -955,7 +955,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3243,
+      "line": 3218,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Could not save wake words",
       "surface": "android",
@@ -963,7 +963,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3930,
+      "line": 3905,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Failed: no secure gateway endpoint was detected. Enable gateway TLS or Tailscale Serve, or use a trusted private LAN address with Unencrypted selected.",
       "surface": "android",
@@ -971,7 +971,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3934,
+      "line": 3909,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Failed: secure endpoint reached, but TLS fingerprint verification timed out. Check Tailscale Serve or gateway TLS and retry.",
       "surface": "android",
@@ -979,7 +979,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3938,
+      "line": 3913,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Failed: couldn't reach the secure gateway endpoint for this host.",
       "surface": "android",
@@ -987,7 +987,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 3982,
+      "line": 3957,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Connecting…",
       "surface": "android",
@@ -995,7 +995,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 4165,
+      "line": 4140,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Offline",
       "surface": "android",
@@ -1003,7 +1003,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 4899,
+      "line": 4874,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Could not load provider catalog.",
       "surface": "android",
@@ -1011,7 +1011,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 4930,
+      "line": 4905,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Update your Gateway to view provider model config.",
       "surface": "android",
@@ -1019,7 +1019,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 4932,
+      "line": 4907,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Could not load provider model config.",
       "surface": "android",
@@ -1027,7 +1027,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 4948,
+      "line": 4923,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Provider models loaded, but readiness is unavailable.",
       "surface": "android",
@@ -1035,7 +1035,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5035,
+      "line": 5010,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Could not load automations.",
       "surface": "android",
@@ -1043,7 +1043,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5121,
+      "line": 5096,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Connect the gateway to inspect automations.",
       "surface": "android",
@@ -1051,7 +1051,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5131,
+      "line": 5106,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Gateway returned an invalid automation.",
       "surface": "android",
@@ -1059,7 +1059,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5135,
+      "line": 5110,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Could not load automation.",
       "surface": "android",
@@ -1067,7 +1067,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5147,
+      "line": 5122,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Connect the gateway to inspect automation run history.",
       "surface": "android",
@@ -1075,7 +1075,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5178,
+      "line": 5153,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Could not load automation run history.",
       "surface": "android",
@@ -1083,7 +1083,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5195,
+      "line": 5170,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Cron changes require operator.admin access.",
       "surface": "android",
@@ -1091,7 +1091,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5204,
+      "line": 5179,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Connect the gateway to manage automations.",
       "surface": "android",
@@ -1099,7 +1099,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5216,
+      "line": 5191,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Another cron action is still finishing.",
       "surface": "android",
@@ -1107,7 +1107,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5263,
+      "line": 5238,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Cron action failed.",
       "surface": "android",
@@ -1115,7 +1115,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5390,
+      "line": 5365,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Could not load usage.",
       "surface": "android",
@@ -1123,7 +1123,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5425,
+      "line": 5400,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Could not load skills.",
       "surface": "android",
@@ -1131,7 +1131,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5438,
+      "line": 5413,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Connect the gateway to update skills.",
       "surface": "android",
@@ -1139,7 +1139,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5442,
+      "line": 5417,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "This gateway connection needs operator.admin to update skills.",
       "surface": "android",
@@ -1147,7 +1147,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 5457,
+      "line": 5432,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Could not disable skill.",
       "surface": "android",
@@ -1155,7 +1155,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 5457,
+      "line": 5432,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Could not enable skill.",
       "surface": "android",
@@ -1163,7 +1163,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5475,
+      "line": 5450,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Connect the gateway to search ClawHub skills.",
       "surface": "android",
@@ -1171,7 +1171,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5521,
+      "line": 5496,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Could not search ClawHub skills.",
       "surface": "android",
@@ -1179,7 +1179,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5534,
+      "line": 5509,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Connect the gateway to inspect ClawHub skills.",
       "surface": "android",
@@ -1187,7 +1187,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 5567,
+      "line": 5542,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "ClawHub did not return an installable version for ${skill.slug}.",
       "surface": "android",
@@ -1195,7 +1195,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5583,
+      "line": 5558,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Could not load ClawHub details for ${skill.slug}.",
       "surface": "android",
@@ -1203,7 +1203,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5599,
+      "line": 5574,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Connect the gateway to install ClawHub skills.",
       "surface": "android",
@@ -1211,7 +1211,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5615,
+      "line": 5590,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "This gateway connection needs operator.admin to install ClawHub skills.",
       "surface": "android",
@@ -1219,7 +1219,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 5705,
+      "line": 5680,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Installed $slug.",
       "surface": "android",
@@ -1227,7 +1227,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5712,
+      "line": 5687,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Could not install ${slug} from ClawHub.",
       "surface": "android",
@@ -1235,7 +1235,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5752,
+      "line": 5727,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Connect the gateway to load Skill Workshop proposals.",
       "surface": "android",
@@ -1243,7 +1243,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5792,
+      "line": 5767,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Could not load Skill Workshop proposals.",
       "surface": "android",
@@ -1251,7 +1251,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5812,
+      "line": 5787,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Connect the gateway to inspect Skill Workshop proposals.",
       "surface": "android",
@@ -1259,7 +1259,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5864,
+      "line": 5839,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Could not inspect Skill Workshop proposal.",
       "surface": "android",
@@ -1267,7 +1267,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5884,
+      "line": 5859,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Skill Workshop proposal actions require operator.admin scope.",
       "surface": "android",
@@ -1275,7 +1275,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5889,
+      "line": 5864,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Connect the gateway to update Skill Workshop proposals.",
       "surface": "android",
@@ -1283,7 +1283,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 6048,
+      "line": 6023,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Connected",
       "surface": "android",
@@ -1291,7 +1291,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 6074,
+      "line": 6049,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Could not load nodes and devices.",
       "surface": "android",
@@ -1299,7 +1299,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 6732,
+      "line": 6707,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Could not load channels.",
       "surface": "android",
@@ -1307,7 +1307,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 6762,
+      "line": 6737,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Could not load dreaming.",
       "surface": "android",
@@ -1315,7 +1315,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 6799,
+      "line": 6774,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Could not load gateway logs.",
       "surface": "android",
@@ -1323,7 +1323,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7256,
+      "line": 7231,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "One time",
       "surface": "android",
@@ -1331,7 +1331,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7265,
+      "line": 7240,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Cron",
       "surface": "android",
@@ -1339,7 +1339,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7266,
+      "line": 7241,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Scheduled",
       "surface": "android",
@@ -1347,7 +1347,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7274,
+      "line": 7249,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Every ${days}d",
       "surface": "android",
@@ -1355,7 +1355,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7275,
+      "line": 7250,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Every ${hours}h",
       "surface": "android",
@@ -1363,7 +1363,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7276,
+      "line": 7251,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Every ${minutes}m",
       "surface": "android",
@@ -1371,7 +1371,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7277,
+      "line": 7252,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Repeating",
       "surface": "android",
@@ -1379,7 +1379,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7293,
+      "line": 7268,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "No prompt",
       "surface": "android",
@@ -1387,7 +1387,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7310,
+      "line": 7285,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Gateway",
       "surface": "android",
@@ -1395,7 +1395,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7318,
+      "line": 7293,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Connected to $gatewayLabel",
       "surface": "android",
@@ -1403,7 +1403,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7319,
+      "line": 7294,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Your agents are ready",
       "surface": "android",
@@ -1411,7 +1411,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7321,
+      "line": 7296,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "This phone stays dormant until the gateway needs it, then wakes, syncs, and goes back to sleep.",
       "surface": "android",
@@ -1419,7 +1419,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7325,
+      "line": 7300,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Selected on this phone",
       "surface": "android",
@@ -1427,7 +1427,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7328,
+      "line": 7303,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "The overview refreshes on reconnect and when this screen opens.",
       "surface": "android",
@@ -1435,7 +1435,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7333,
+      "line": 7308,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Reconnecting",
       "surface": "android",
@@ -1443,7 +1443,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7334,
+      "line": 7309,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "OpenClaw is syncing back up",
       "surface": "android",
@@ -1451,7 +1451,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7336,
+      "line": 7311,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "The gateway session is coming back online. Agent shortcuts should settle automatically in a moment.",
       "surface": "android",
@@ -1459,7 +1459,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7340,
+      "line": 7315,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Gateway session in progress",
       "surface": "android",
@@ -1467,7 +1467,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7343,
+      "line": 7318,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "If the gateway is reachable, reconnect should complete without intervention.",
       "surface": "android",
@@ -1475,7 +1475,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7348,
+      "line": 7323,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Welcome to OpenClaw",
       "surface": "android",
@@ -1483,7 +1483,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7349,
+      "line": 7324,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Your phone stays quiet until it is needed",
       "surface": "android",
@@ -1491,7 +1491,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7351,
+      "line": 7326,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Pair this device to your gateway to wake it only for real work, keep a live agent overview handy, and avoid battery-draining background loops.",
       "surface": "android",
@@ -1499,7 +1499,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7355,
+      "line": 7330,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Connect to load your agents",
       "surface": "android",
@@ -1507,7 +1507,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7358,
+      "line": 7333,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "When connected, the gateway can wake the phone with a silent push instead of holding an always-on session.",
       "surface": "android",
@@ -1515,7 +1515,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7390,
+      "line": 7365,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Main",
       "surface": "android",
@@ -1523,7 +1523,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7405,
+      "line": 7380,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Active on this phone",
       "surface": "android",
@@ -1531,7 +1531,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7406,
+      "line": 7381,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Default agent",
       "surface": "android",
@@ -1539,7 +1539,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7407,
+      "line": 7382,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Ready",
       "surface": "android",
@@ -1547,7 +1547,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7966,
+      "line": 7941,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Dream",
       "surface": "android",
@@ -1723,7 +1723,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1017,
+      "line": 1016,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Wait for the current response to finish before starting a new chat.",
       "surface": "android",
@@ -1731,7 +1731,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1149,
+      "line": 1148,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Could not update model.",
       "surface": "android",
@@ -1739,7 +1739,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1214,
+      "line": 1213,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Could not update thinking level.",
       "surface": "android",
@@ -1747,7 +1747,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1707,
+      "line": 1706,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Chat failed before the run started; try again.",
       "surface": "android",
@@ -1755,7 +1755,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2743,
+      "line": 2738,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Could not stage an attachment for sending.",
       "surface": "android",
@@ -1763,7 +1763,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2776,
+      "line": 2771,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Offline queue is full ($OUTBOX_MAX_QUEUED messages); delete queued items first.",
       "surface": "android",
@@ -1771,7 +1771,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2782,
+      "line": 2777,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Attachments are too large to queue for one message; remove some and try again.",
       "surface": "android",
@@ -1779,7 +1779,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2788,
+      "line": 2783,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Offline attachment storage is full; delete queued items first.",
       "surface": "android",
@@ -1787,7 +1787,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2793,
+      "line": 2788,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Gateway health not OK; cannot send",
       "surface": "android",
@@ -1795,7 +1795,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2800,
+      "line": 2795,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Could not queue message for later delivery.",
       "surface": "android",
@@ -1803,7 +1803,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3517,
+      "line": 3512,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Chat failed",
       "surface": "android",
@@ -1811,7 +1811,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3655,
+      "line": 3650,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Event stream interrupted; try refreshing.",
       "surface": "android",
@@ -1819,7 +1819,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3792,
+      "line": 3762,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Timed out waiting for a reply; try again or refresh.",
       "surface": "android",
@@ -1827,7 +1827,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 4002,
+      "line": 3972,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Timed out confirming the sent message; refresh to check delivery.",
       "surface": "android",
@@ -16635,7 +16635,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 147,
+      "line": 137,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Unable to Export Transcript",
       "surface": "apple",
@@ -16643,7 +16643,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 151,
+      "line": 141,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "OK",
       "surface": "apple",
@@ -16651,7 +16651,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 155,
+      "line": 145,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "OpenClaw could not prepare the Markdown file.",
       "surface": "apple",
@@ -16659,7 +16659,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 177,
+      "line": 166,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "What would you like to work on?",
       "surface": "apple",
@@ -16667,7 +16667,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 190,
+      "line": 179,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "The session attaches once the gateway is ready.",
       "surface": "apple",
@@ -16675,7 +16675,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 318,
+      "line": 296,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Opens Settings / Gateway",
       "surface": "apple",
@@ -16683,7 +16683,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 343,
+      "line": 321,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "New Chat",
       "surface": "apple",
@@ -16691,23 +16691,15 @@
     },
     {
       "kind": "ui-call",
-      "line": 356,
+      "line": 334,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "New Chat in Worktree",
       "surface": "apple",
       "id": "native.apple.1876037e64a74110"
     },
     {
-      "kind": "ui-localized-call",
-      "line": 369,
-      "path": "apps/ios/Sources/Design/ChatProTab.swift",
-      "source": "Sessions…",
-      "surface": "apple",
-      "id": "native.apple.a1b0d289758e2213"
-    },
-    {
       "kind": "ui-call",
-      "line": 382,
+      "line": 349,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Background Tasks",
       "surface": "apple",
@@ -16715,23 +16707,15 @@
     },
     {
       "kind": "ui-call",
-      "line": 394,
+      "line": 361,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Export Transcript",
       "surface": "apple",
       "id": "native.apple.ced228bb4d20a726"
     },
     {
-      "kind": "ui-localized-call",
-      "line": 404,
-      "path": "apps/ios/Sources/Design/ChatProTab.swift",
-      "source": "Show reasoning & tool activity",
-      "surface": "apple",
-      "id": "native.apple.f26cef22f417abb4"
-    },
-    {
       "kind": "ui-modifier",
-      "line": 413,
+      "line": 371,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Chat actions",
       "surface": "apple",
@@ -16739,7 +16723,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 482,
+      "line": 440,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Connected",
       "surface": "apple",
@@ -16747,7 +16731,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 482,
+      "line": 440,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Unavailable",
       "surface": "apple",
@@ -16755,7 +16739,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 495,
+      "line": 453,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Message %@...",
       "surface": "apple",
@@ -16763,7 +16747,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 500,
+      "line": 458,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Message %@; sends when connected",
       "surface": "apple",
@@ -16771,7 +16755,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 503,
+      "line": 461,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Connect to a gateway",
       "surface": "apple",
@@ -16779,7 +16763,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 601,
+      "line": 559,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Check OpenClaw status",
       "surface": "apple",
@@ -16787,7 +16771,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 602,
+      "line": 560,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Summarize the current OpenClaw status and tell me what needs attention.",
       "surface": "apple",
@@ -16795,7 +16779,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 605,
+      "line": 563,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "What can I control here?",
       "surface": "apple",
@@ -16803,7 +16787,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 606,
+      "line": 564,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Show me which phone controls and device capabilities are available right now.",
       "surface": "apple",
@@ -16811,7 +16795,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 609,
+      "line": 567,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Help me start voice chat",
       "surface": "apple",
@@ -16819,7 +16803,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 610,
+      "line": 568,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Help me start a realtime voice session from this phone.",
       "surface": "apple",
@@ -20411,7 +20395,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 676,
+      "line": 675,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Voice & Talk",
       "surface": "apple",
@@ -20419,7 +20403,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 691,
+      "line": 690,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Health Check",
       "surface": "apple",
@@ -20427,7 +20411,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 692,
+      "line": 691,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Run app, permission, and gateway-adjacent checks without editing setup.",
       "surface": "apple",
@@ -20435,7 +20419,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 700,
+      "line": 699,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Run Diagnostics",
       "surface": "apple",
@@ -20443,7 +20427,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 710,
+      "line": 709,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Platform",
       "surface": "apple",
@@ -20451,7 +20435,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 713,
+      "line": 712,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "App",
       "surface": "apple",
@@ -20459,7 +20443,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 716,
+      "line": 715,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Model",
       "surface": "apple",
@@ -20467,7 +20451,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 728,
+      "line": 727,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Camera Access",
       "surface": "apple",
@@ -20475,7 +20459,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 734,
+      "line": 733,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Background Listening",
       "surface": "apple",
@@ -20483,7 +20467,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 760,
+      "line": 758,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Notifications",
       "surface": "apple",
@@ -20491,7 +20475,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 769,
+      "line": 767,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Turns OpenClaw notification delivery on or off",
       "surface": "apple",
@@ -20499,7 +20483,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 789,
+      "line": 787,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Reconnect",
       "surface": "apple",
@@ -20507,7 +20491,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 799,
+      "line": 797,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Diagnose",
       "surface": "apple",
@@ -20515,7 +20499,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 815,
+      "line": 813,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "License files are not available in this build.",
       "surface": "apple",
@@ -20523,7 +20507,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 832,
+      "line": 830,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "OpenClaw appreciates its partners in the open-source community.",
       "surface": "apple",
@@ -20531,7 +20515,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 872,
+      "line": 870,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "OpenClaw",
       "surface": "apple",
@@ -20539,7 +20523,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 874,
+      "line": 872,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Personal AI on your devices",
       "surface": "apple",
@@ -20547,7 +20531,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 891,
+      "line": 889,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "iOS",
       "surface": "apple",
@@ -20555,7 +20539,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 898,
+      "line": 896,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Website",
       "surface": "apple",
@@ -20563,7 +20547,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 903,
+      "line": 901,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Docs",
       "surface": "apple",
@@ -20571,7 +20555,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 908,
+      "line": 906,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "GitHub",
       "surface": "apple",
@@ -20579,7 +20563,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 913,
+      "line": 911,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Discord",
       "surface": "apple",
@@ -20587,7 +20571,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 918,
+      "line": 916,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "© 2026 OpenClaw Foundation — MIT License.",
       "surface": "apple",
@@ -20595,7 +20579,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 924,
+      "line": 922,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Title",
       "surface": "apple",
@@ -20603,7 +20587,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 964,
+      "line": 962,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Location",
       "surface": "apple",
@@ -20611,7 +20595,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 982,
+      "line": 980,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Location Sharing",
       "surface": "apple",
@@ -20619,7 +20603,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 995,
+      "line": 993,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Access Level",
       "surface": "apple",
@@ -20627,7 +20611,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 1017,
+      "line": 1015,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Chooses While Using the App or Always",
       "surface": "apple",
@@ -20635,7 +20619,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1037,
+      "line": 1035,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Default Agent",
       "surface": "apple",
@@ -20643,7 +20627,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1038,
+      "line": 1036,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Default",
       "surface": "apple",
@@ -20651,7 +20635,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1048,
+      "line": 1046,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Used for new Chat and Talk sessions.",
       "surface": "apple",
@@ -20659,7 +20643,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1058,
+      "line": 1056,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Scan QR",
       "surface": "apple",
@@ -20667,7 +20651,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1066,
+      "line": 1064,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Paste setup code",
       "surface": "apple",
@@ -20675,7 +20659,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1072,
+      "line": 1070,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Connect",
       "surface": "apple",
@@ -20683,7 +20667,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1081,
+      "line": 1079,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "No gateways found yet. Use manual setup if Bonjour is blocked.",
       "surface": "apple",
@@ -20691,7 +20675,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1090,
+      "line": 1088,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Add Gateway",
       "surface": "apple",
@@ -20699,7 +20683,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1105,
+      "line": 1103,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Pair a gateway to make it available here.",
       "surface": "apple",
@@ -20707,7 +20691,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1114,
+      "line": 1112,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Paired Gateways",
       "surface": "apple",
@@ -20715,7 +20699,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1117,
+      "line": 1115,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Switch gateways without pairing again.",
       "surface": "apple",
@@ -20723,7 +20707,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 1147,
+      "line": 1145,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Active Gateway",
       "surface": "apple",
@@ -20731,7 +20715,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1159,
+      "line": 1157,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Forget",
       "surface": "apple",
@@ -20739,7 +20723,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1171,
+      "line": 1169,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Forget Gateway",
       "surface": "apple",
@@ -20747,7 +20731,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1224,
+      "line": 1222,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Manual Gateway",
       "surface": "apple",
@@ -20755,7 +20739,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1225,
+      "line": 1223,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Use Manual Gateway",
       "surface": "apple",
@@ -20763,7 +20747,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1226,
+      "line": 1224,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Host",
       "surface": "apple",
@@ -20771,7 +20755,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1230,
+      "line": 1228,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Port",
       "surface": "apple",
@@ -20779,7 +20763,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1234,
+      "line": 1232,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Unencrypted",
       "surface": "apple",
@@ -20787,7 +20771,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1237,
+      "line": 1235,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Secure (TLS)",
       "surface": "apple",
@@ -20795,7 +20779,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1241,
+      "line": 1239,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Connection security",
       "surface": "apple",
@@ -20803,7 +20787,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1252,
+      "line": 1250,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Connect Manual",
       "surface": "apple",
@@ -20811,7 +20795,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1282,
+      "line": 1280,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Auto-connect on launch",
       "surface": "apple",
@@ -20819,7 +20803,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1283,
+      "line": 1281,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Gateway Auth Token",
       "surface": "apple",
@@ -20827,7 +20811,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1284,
+      "line": 1282,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Gateway Password",
       "surface": "apple",
@@ -20835,7 +20819,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1289,
+      "line": 1287,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Custom Headers",
       "surface": "apple",
@@ -20843,7 +20827,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1296,
+      "line": 1294,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Reset Onboarding",
       "surface": "apple",
@@ -20851,7 +20835,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1326,
+      "line": 1324,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Voice Wake",
       "surface": "apple",
@@ -20859,7 +20843,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1329,
+      "line": 1327,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Talk Mode",
       "surface": "apple",
@@ -20867,7 +20851,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1337,
+      "line": 1335,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Speech Language",
       "surface": "apple",
@@ -20875,7 +20859,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1344,
+      "line": 1342,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Speakerphone",
       "surface": "apple",
@@ -20883,7 +20867,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1348,
+      "line": 1346,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Wake Words",
       "surface": "apple",
@@ -20891,7 +20875,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1370,
+      "line": 1368,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Voice",
       "surface": "apple",
@@ -20899,7 +20883,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1371,
+      "line": 1369,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Provider",
       "surface": "apple",
@@ -20907,7 +20891,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1378,
+      "line": 1376,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Realtime Voice",
       "surface": "apple",
@@ -20915,7 +20899,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1379,
+      "line": 1377,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Gateway Default",
       "surface": "apple",
@@ -20923,7 +20907,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1386,
+      "line": 1384,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Voice Mode",
       "surface": "apple",
@@ -20931,7 +20915,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1389,
+      "line": 1387,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Active Voice",
       "surface": "apple",
@@ -20939,7 +20923,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1393,
+      "line": 1391,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Last Voice Issue",
       "surface": "apple",
@@ -20947,7 +20931,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1395,
+      "line": 1393,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Transport",
       "surface": "apple",
@@ -20955,7 +20939,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1398,
+      "line": 1396,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "API Key",
       "surface": "apple",
@@ -20963,7 +20947,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1405,
+      "line": 1403,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Show Talk Control",
       "surface": "apple",
@@ -20971,7 +20955,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1406,
+      "line": 1404,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Default Share Instruction",
       "surface": "apple",
@@ -20979,7 +20963,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1413,
+      "line": 1411,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Run Share Self-Test",
       "surface": "apple",
@@ -20987,15 +20971,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1432,
-      "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
-      "source": "Apple Health",
-      "surface": "apple",
-      "id": "native.apple.c2cab769e36ad25d"
-    },
-    {
-      "kind": "ui-call",
-      "line": 1440,
+      "line": 1428,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Discovery Debug Logs",
       "surface": "apple",
@@ -21003,7 +20979,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1443,
+      "line": 1431,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Debug Screen Status",
       "surface": "apple",
@@ -21011,7 +20987,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1447,
+      "line": 1435,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Discovery Logs",
       "surface": "apple",
@@ -21019,7 +20995,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1455,
+      "line": 1443,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Device",
       "surface": "apple",
@@ -21027,7 +21003,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1456,
+      "line": 1444,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Device Name",
       "surface": "apple",
@@ -21035,7 +21011,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1458,
+      "line": 1446,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Instance ID",
       "surface": "apple",
@@ -21043,7 +21019,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1482,
+      "line": 1470,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "On",
       "surface": "apple",
@@ -21051,7 +21027,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1483,
+      "line": 1471,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Off",
       "surface": "apple",
@@ -22898,54 +22874,6 @@
       "id": "native.apple.d180e6d9a4963c2b"
     },
     {
-      "kind": "ui-localized-call",
-      "line": 18,
-      "path": "apps/ios/Sources/Health/AppleHealthAccessSectionView.swift",
-      "source": "Apple Health Summaries",
-      "surface": "apple",
-      "id": "native.apple.e80408b30ca670f4"
-    },
-    {
-      "kind": "ui-localized-call",
-      "line": 46,
-      "path": "apps/ios/Sources/Health/AppleHealthAccessSectionView.swift",
-      "source": "Apple Health data is unavailable on this device.",
-      "surface": "apple",
-      "id": "native.apple.1d9253b4d79e1a6b"
-    },
-    {
-      "kind": "ui-localized-call-multiline",
-      "line": 50,
-      "path": "apps/ios/Sources/Health/AppleHealthAccessSectionView.swift",
-      "source": "Reads steps, sleep, resting heart rate, and workouts from Apple Health only when a summary is requested. Only the aggregate leaves this device through your Gateway to your configured AI provider; raw samples stay on this device and results may remain in chat history.",
-      "surface": "apple",
-      "id": "native.apple.f332b4fb6215a12a"
-    },
-    {
-      "kind": "ui-localized-call-multiline",
-      "line": 57,
-      "path": "apps/ios/Sources/Health/AppleHealthAccessSectionView.swift",
-      "source": "Creates read-only summaries from the Apple Health app for steps, sleep, resting heart rate, and workouts. Only requested summaries leave this device through your Gateway to your configured AI provider; raw samples stay on this device.",
-      "surface": "apple",
-      "id": "native.apple.279758eb7531d811"
-    },
-    {
-      "kind": "ui-localized-call",
-      "line": 67,
-      "path": "apps/ios/Sources/Health/AppleHealthAccessSectionView.swift",
-      "source": "Turn Off Summaries",
-      "surface": "apple",
-      "id": "native.apple.9e29919ede21527e"
-    },
-    {
-      "kind": "ui-localized-call",
-      "line": 68,
-      "path": "apps/ios/Sources/Health/AppleHealthAccessSectionView.swift",
-      "source": "Enable Apple Health Summaries",
-      "surface": "apple",
-      "id": "native.apple.c229e9c6fa7bac3b"
-    },
-    {
       "kind": "plist-string",
       "line": 56,
       "path": "apps/ios/Sources/Info.plist",
@@ -23021,17 +22949,17 @@
       "kind": "plist-string",
       "line": 74,
       "path": "apps/ios/Sources/Info.plist",
-      "source": "OpenClaw reads your steps, sleep, resting heart rate, and workouts from the Apple Health app to create summaries you request and send them through your Gateway to your configured AI provider.",
+      "source": "After you enable Health Summaries, OpenClaw reads steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider.",
       "surface": "apple",
-      "id": "native.apple.1d3a6099d7e11895"
+      "id": "native.apple.c86f7ba5b3762eb7"
     },
     {
       "kind": "plist-string",
       "line": 76,
       "path": "apps/ios/Sources/Info.plist",
-      "source": "OpenClaw does not write to the Apple Health app. It uses read-only data to create summaries you request and send them through your Gateway to your configured AI provider.",
+      "source": "OpenClaw does not write or change Health data. Health Summaries read steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider.",
       "surface": "apple",
-      "id": "native.apple.c90a204b3232c401"
+      "id": "native.apple.89de9bad79f17038"
     },
     {
       "kind": "plist-string",
@@ -24819,7 +24747,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 48,
+      "line": 57,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Privacy & Access",
       "surface": "apple",
@@ -24827,7 +24755,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 65,
+      "line": 74,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Search and add contacts from the assistant.",
       "surface": "apple",
@@ -24835,7 +24763,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 80,
+      "line": 89,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Read photos you select for the assistant.",
       "surface": "apple",
@@ -24843,7 +24771,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 81,
+      "line": 90,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Read recent photos for the assistant.",
       "surface": "apple",
@@ -24851,7 +24779,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 83,
+      "line": 92,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Limited",
       "surface": "apple",
@@ -24859,7 +24787,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 96,
+      "line": 105,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Calendar (Add Events)",
       "surface": "apple",
@@ -24867,7 +24795,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 97,
+      "line": 106,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Add events with least privilege.",
       "surface": "apple",
@@ -24875,7 +24803,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 111,
+      "line": 120,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "List and read calendar events.",
       "surface": "apple",
@@ -24883,7 +24811,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 126,
+      "line": 135,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "List, add, and complete reminders.",
       "surface": "apple",
@@ -24891,7 +24819,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 128,
+      "line": 137,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Add-Only",
       "surface": "apple",
@@ -24899,7 +24827,15 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 168,
+      "line": 152,
+      "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
+      "source": "Health Summaries",
+      "surface": "apple",
+      "id": "native.apple.33df187e4402065a"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 191,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Allow",
       "surface": "apple",
@@ -24907,11 +24843,51 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 170,
+      "line": 193,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Open Settings",
       "surface": "apple",
       "id": "native.apple.3cb9ed2ae352f95c"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 255,
+      "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
+      "source": "Health data is unavailable on this device.",
+      "surface": "apple",
+      "id": "native.apple.3f902cdb4d4e9176"
+    },
+    {
+      "kind": "ui-localized-call-multiline",
+      "line": 259,
+      "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
+      "source": "Shares only requested step, sleep, resting heart rate, and workout aggregates through your Gateway with your configured AI provider. Results may remain in chat history.",
+      "surface": "apple",
+      "id": "native.apple.33316ec020810816"
+    },
+    {
+      "kind": "ui-localized-call-multiline",
+      "line": 265,
+      "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
+      "source": "Off by default. Enabling lets requested aggregates leave this iPhone through your Gateway and configured AI provider.",
+      "surface": "apple",
+      "id": "native.apple.53fb25cb6e6aae6e"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 274,
+      "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
+      "source": "Disable",
+      "surface": "apple",
+      "id": "native.apple.6c2be9b001fb95b0"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 275,
+      "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
+      "source": "Enable & Share Summaries",
+      "surface": "apple",
+      "id": "native.apple.9eab20fbad55a0a9"
     },
     {
       "kind": "ui-call",
@@ -27339,7 +27315,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 769,
+      "line": 764,
       "path": "apps/macos/Sources/OpenClaw/AppState.swift",
       "source": "\\(user)@\\(host)",
       "surface": "apple",
@@ -27347,7 +27323,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 769,
+      "line": 764,
       "path": "apps/macos/Sources/OpenClaw/AppState.swift",
       "source": "\\(user)@\\(host):\\(port)",
       "surface": "apple",
@@ -27699,7 +27675,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 231,
+      "line": 233,
       "path": "apps/macos/Sources/OpenClaw/CanvasManager.swift",
       "source": "Degraded",
       "surface": "apple",
@@ -29971,7 +29947,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 76,
+      "line": 73,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "General",
       "surface": "apple",
@@ -29979,7 +29955,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 77,
+      "line": 74,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Everyday OpenClaw app behavior.",
       "surface": "apple",
@@ -29987,7 +29963,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 81,
+      "line": 78,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "App",
       "surface": "apple",
@@ -29995,7 +29971,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 83,
+      "line": 80,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Launch at login",
       "surface": "apple",
@@ -30003,7 +29979,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 85,
+      "line": 82,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Automatically start OpenClaw after you sign in.",
       "surface": "apple",
@@ -30011,7 +29987,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 86,
+      "line": 83,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Move OpenClaw to Applications before enabling launch at login.",
       "surface": "apple",
@@ -30019,7 +29995,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 91,
+      "line": 88,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Show Dock icon",
       "surface": "apple",
@@ -30027,7 +30003,7 @@
     },
     {
       "kind": "ui-named-argument-multiline",
-      "line": 92,
+      "line": 89,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Keep OpenClaw visible in the Dock. When off, windows still show the Dock icon while open.",
       "surface": "apple",
@@ -30035,7 +30011,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 98,
+      "line": 95,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Play menu bar icon animations",
       "surface": "apple",
@@ -30043,7 +30019,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 99,
+      "line": 96,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Enable idle blinks and wiggles on the status icon.",
       "surface": "apple",
@@ -30051,23 +30027,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 103,
-      "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
-      "source": "Quick Chat",
-      "surface": "apple",
-      "id": "native.apple.093df96ad9d52a40"
-    },
-    {
-      "kind": "ui-named-argument",
-      "line": 104,
-      "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
-      "source": "Show a floating composer for quick messages, summoned with a global shortcut.",
-      "surface": "apple",
-      "id": "native.apple.a66e340b4e1bd972"
-    },
-    {
-      "kind": "ui-named-argument",
-      "line": 108,
+      "line": 100,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Quick Chat shortcut",
       "surface": "apple",
@@ -30075,7 +30035,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 109,
+      "line": 101,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Global shortcut that opens a floating chat bar for the main session.",
       "surface": "apple",
@@ -30083,7 +30043,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 117,
+      "line": 108,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Capabilities",
       "surface": "apple",
@@ -30091,7 +30051,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 119,
+      "line": 110,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Allow Canvas",
       "surface": "apple",
@@ -30099,7 +30059,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 120,
+      "line": 111,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Allow the agent to show and control the Canvas panel.",
       "surface": "apple",
@@ -30107,7 +30067,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 124,
+      "line": 115,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Allow Camera",
       "surface": "apple",
@@ -30115,7 +30075,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 125,
+      "line": 116,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Allow the agent to capture a photo or short video via the built-in camera.",
       "surface": "apple",
@@ -30123,7 +30083,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 129,
+      "line": 120,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Allow Computer Control",
       "surface": "apple",
@@ -30131,7 +30091,7 @@
     },
     {
       "kind": "ui-named-argument-multiline",
-      "line": 130,
+      "line": 121,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Let an authorized agent move the pointer, click, and type on this Mac. Also requires Accessibility, Screen Recording, and gateway command authorization. High risk.",
       "surface": "apple",
@@ -30139,7 +30099,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 137,
+      "line": 128,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Enable Peekaboo Bridge",
       "surface": "apple",
@@ -30147,7 +30107,7 @@
     },
     {
       "kind": "ui-named-argument-multiline",
-      "line": 138,
+      "line": 129,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Allow signed tools (e.g. `peekaboo`) to drive UI automation via PeekabooBridge. Requires Computer Control; otherwise run Peekaboo's own Mac app.",
       "surface": "apple",
@@ -30155,7 +30115,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 147,
+      "line": 138,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Browser",
       "surface": "apple",
@@ -30163,7 +30123,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 149,
+      "line": 140,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Browser login",
       "surface": "apple",
@@ -30171,7 +30131,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 150,
+      "line": 141,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Copy cookies from a Chrome-family profile into an isolated managed profile.",
       "surface": "apple",
@@ -30179,7 +30139,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 153,
+      "line": 144,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Import…",
       "surface": "apple",
@@ -30187,7 +30147,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 175,
+      "line": 166,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Developer",
       "surface": "apple",
@@ -30195,7 +30155,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 177,
+      "line": 168,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Enable debug tools",
       "surface": "apple",
@@ -30203,7 +30163,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 178,
+      "line": 169,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Show the Debug page with development utilities.",
       "surface": "apple",
@@ -30211,7 +30171,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 185,
+      "line": 176,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "App session",
       "surface": "apple",
@@ -30219,7 +30179,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 187,
+      "line": 178,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Quit only when you want to stop the menu bar app completely.",
       "surface": "apple",
@@ -30227,7 +30187,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 192,
+      "line": 183,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Quit",
       "surface": "apple",
@@ -30235,7 +30195,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 212,
+      "line": 203,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "OpenClaw paused",
       "surface": "apple",
@@ -30243,7 +30203,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 222,
+      "line": 213,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "OpenClaw active",
       "surface": "apple",
@@ -30251,7 +30211,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 241,
+      "line": 232,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Processing messages through the local Gateway on this Mac.",
       "surface": "apple",
@@ -30259,7 +30219,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 243,
+      "line": 234,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Connected to a remote Gateway configuration.",
       "surface": "apple",
@@ -30267,7 +30227,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 245,
+      "line": 236,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Ready to run after you choose a Gateway connection.",
       "surface": "apple",
@@ -30275,7 +30235,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 252,
+      "line": 243,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Connection",
       "surface": "apple",
@@ -30283,7 +30243,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 253,
+      "line": 244,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Choose where the Gateway runs and how this Mac app reaches it.",
       "surface": "apple",
@@ -30291,7 +30251,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 318,
+      "line": 309,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "\\(Int(ping)) ms",
       "surface": "apple",
@@ -30299,7 +30259,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 352,
+      "line": 343,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Local Gateway",
       "surface": "apple",
@@ -30307,7 +30267,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 353,
+      "line": 344,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Remote Gateway direct",
       "surface": "apple",
@@ -30315,7 +30275,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 353,
+      "line": 344,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Remote Gateway via SSH",
       "surface": "apple",
@@ -30323,7 +30283,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 354,
+      "line": 345,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Gateway not configured",
       "surface": "apple",
@@ -30331,7 +30291,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 361,
+      "line": 352,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "OpenClaw starts and monitors the Gateway on this Mac.",
       "surface": "apple",
@@ -30339,7 +30299,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 370,
+      "line": 361,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Choose local or remote before the app can attach to a Gateway.",
       "surface": "apple",
@@ -30347,7 +30307,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 375,
+      "line": 366,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Gateway",
       "surface": "apple",
@@ -30355,7 +30315,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 377,
+      "line": 368,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "OpenClaw runs",
       "surface": "apple",
@@ -30363,7 +30323,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 378,
+      "line": 369,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Pick whether this app owns a local Gateway or attaches to another host.",
       "surface": "apple",
@@ -30371,7 +30331,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 381,
+      "line": 372,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Gateway location",
       "surface": "apple",
@@ -30379,7 +30339,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 382,
+      "line": 373,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Not configured",
       "surface": "apple",
@@ -30387,7 +30347,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 383,
+      "line": 374,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Local (this Mac)",
       "surface": "apple",
@@ -30395,7 +30355,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 384,
+      "line": 375,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Remote (another host)",
       "surface": "apple",
@@ -30403,7 +30363,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 393,
+      "line": 384,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Setup needed",
       "surface": "apple",
@@ -30411,7 +30371,7 @@
     },
     {
       "kind": "ui-named-argument-multiline",
-      "line": 394,
+      "line": 385,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Local is best for this Mac. Remote is best when the Gateway already runs on a Mac Studio or server.",
       "surface": "apple",
@@ -30419,7 +30379,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 425,
+      "line": 416,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Remote Access",
       "surface": "apple",
@@ -30427,7 +30387,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 436,
+      "line": 427,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Discovery & Status",
       "surface": "apple",
@@ -30435,7 +30395,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 452,
+      "line": 443,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Nearby gateways",
       "surface": "apple",
@@ -30443,7 +30403,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 475,
+      "line": 466,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Remote test",
       "surface": "apple",
@@ -30451,7 +30411,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 482,
+      "line": 473,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Control channel",
       "surface": "apple",
@@ -30459,7 +30419,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 509,
+      "line": 500,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Recommended setup",
       "surface": "apple",
@@ -30467,7 +30427,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 511,
+      "line": 502,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Use Tailscale plus an SSH tunnel for stable private access.",
       "surface": "apple",
@@ -30475,7 +30435,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 512,
+      "line": 503,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Use Tailscale Serve so the gateway has a valid HTTPS certificate.",
       "surface": "apple",
@@ -30483,7 +30443,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 521,
+      "line": 512,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Advanced",
       "surface": "apple",
@@ -30491,7 +30451,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 524,
+      "line": 515,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Identity file",
       "surface": "apple",
@@ -30499,7 +30459,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 526,
+      "line": 517,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "/Users/you/.ssh/id_ed25519",
       "surface": "apple",
@@ -30507,7 +30467,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 528,
+      "line": 519,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Project root",
       "surface": "apple",
@@ -30515,7 +30475,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 530,
+      "line": 521,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "/home/you/Projects/openclaw",
       "surface": "apple",
@@ -30523,7 +30483,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 532,
+      "line": 523,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "CLI path",
       "surface": "apple",
@@ -30531,7 +30491,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 534,
+      "line": 525,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "/Applications/OpenClaw.app/.../openclaw",
       "surface": "apple",
@@ -30539,7 +30499,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 539,
+      "line": 530,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "SSH command details",
       "surface": "apple",
@@ -30547,7 +30507,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 559,
+      "line": 550,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Transport",
       "surface": "apple",
@@ -30555,7 +30515,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 560,
+      "line": 551,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "SSH keeps the Gateway private; direct is best for HTTPS or Tailscale Serve.",
       "surface": "apple",
@@ -30563,7 +30523,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 563,
+      "line": 554,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "SSH tunnel",
       "surface": "apple",
@@ -30571,7 +30531,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 564,
+      "line": 555,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Direct (ws/wss)",
       "surface": "apple",
@@ -30579,7 +30539,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 577,
+      "line": 568,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "SSH target",
       "surface": "apple",
@@ -30587,7 +30547,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 577,
+      "line": 568,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "User and host for the remote Gateway machine.",
       "surface": "apple",
@@ -30595,7 +30555,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 594,
+      "line": 585,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Gateway URL",
       "surface": "apple",
@@ -30603,7 +30563,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 594,
+      "line": 585,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "The WebSocket URL exposed by the remote Gateway.",
       "surface": "apple",
@@ -30611,7 +30571,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 597,
+      "line": 588,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "wss://gateway.example.ts.net",
       "surface": "apple",
@@ -30619,7 +30579,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 603,
+      "line": 594,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Use wss:// for public hosts. ws:// is allowed for localhost, LAN, .local, and Tailnet hosts.",
       "surface": "apple",
@@ -30627,7 +30587,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 614,
+      "line": 605,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Gateway token",
       "surface": "apple",
@@ -30635,7 +30595,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 615,
+      "line": 606,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Used when the remote gateway requires token auth.",
       "surface": "apple",
@@ -30643,7 +30603,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 618,
+      "line": 609,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "remote gateway auth token (gateway.remote.token)",
       "surface": "apple",
@@ -30651,7 +30611,7 @@
     },
     {
       "kind": "ui-call-concatenated",
-      "line": 623,
+      "line": 614,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "The current gateway.remote.token value is not plain text. OpenClaw for macOS cannot use it directly; enter a plaintext token here to replace it.",
       "surface": "apple",
@@ -30659,7 +30619,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 642,
+      "line": 633,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Test remote",
       "surface": "apple",
@@ -30667,7 +30627,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 665,
+      "line": 656,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Testing…",
       "surface": "apple",
@@ -30675,7 +30635,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 703,
+      "line": 694,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Installed: \\(gatewayVersion) · Required: \\(required)",
       "surface": "apple",
@@ -30683,7 +30643,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 707,
+      "line": 698,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Gateway \\(gatewayVersion) detected",
       "surface": "apple",
@@ -30691,7 +30651,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 713,
+      "line": 704,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Node \\(node)",
       "surface": "apple",
@@ -30699,7 +30659,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 725,
+      "line": 716,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Last failure: \\(failure)",
       "surface": "apple",
@@ -30707,7 +30667,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 730,
+      "line": 721,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Recheck",
       "surface": "apple",
@@ -30715,7 +30675,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 733,
+      "line": 724,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Gateway auto-starts in local mode via launchd (\\(gatewayLaunchdLabel)).",
       "surface": "apple",
@@ -30723,7 +30683,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 788,
+      "line": 779,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Retry now",
       "surface": "apple",
@@ -30731,7 +30691,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 793,
+      "line": 784,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Open logs",
       "surface": "apple",
@@ -31179,7 +31139,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 145,
+      "line": 144,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Quick Chat",
       "surface": "apple",
@@ -31187,7 +31147,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 154,
+      "line": 152,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Close Canvas",
       "surface": "apple",
@@ -31195,7 +31155,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 154,
+      "line": 152,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Open Canvas",
       "surface": "apple",
@@ -31203,7 +31163,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 161,
+      "line": 159,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Stop Talk Mode",
       "surface": "apple",
@@ -31211,7 +31171,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 161,
+      "line": 159,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Talk Mode",
       "surface": "apple",
@@ -31219,7 +31179,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 166,
+      "line": 164,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Settings…",
       "surface": "apple",
@@ -31227,7 +31187,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 169,
+      "line": 167,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "About OpenClaw",
       "surface": "apple",
@@ -31235,7 +31195,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 171,
+      "line": 169,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Update ready, restart now?",
       "surface": "apple",
@@ -31243,7 +31203,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 173,
+      "line": 171,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Quit",
       "surface": "apple",
@@ -31251,7 +31211,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 206,
+      "line": 204,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "OpenClaw Not Configured",
       "surface": "apple",
@@ -31259,7 +31219,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 208,
+      "line": 206,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Remote OpenClaw Active",
       "surface": "apple",
@@ -31267,7 +31227,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 210,
+      "line": 208,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "OpenClaw Active",
       "surface": "apple",
@@ -31275,7 +31235,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 246,
+      "line": 244,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Debug",
       "surface": "apple",
@@ -31283,7 +31243,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 250,
+      "line": 248,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Open Config Folder",
       "surface": "apple",
@@ -31291,7 +31251,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 255,
+      "line": 253,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Run Health Check Now",
       "surface": "apple",
@@ -31299,7 +31259,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 260,
+      "line": 258,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Send Test Heartbeat",
       "surface": "apple",
@@ -31307,7 +31267,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 266,
+      "line": 264,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Show Pairing Panel (Demo)",
       "surface": "apple",
@@ -31315,7 +31275,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 273,
+      "line": 271,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Remote Tunnel",
       "surface": "apple",
@@ -31323,7 +31283,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 276,
+      "line": 274,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Reset Remote Tunnel",
       "surface": "apple",
@@ -31331,7 +31291,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 284,
+      "line": 282,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Verbose Logging (Main): On",
       "surface": "apple",
@@ -31339,7 +31299,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 285,
+      "line": 283,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Verbose Logging (Main): Off",
       "surface": "apple",
@@ -31347,7 +31307,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 289,
+      "line": 287,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Verbosity",
       "surface": "apple",
@@ -31355,7 +31315,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 297,
+      "line": 295,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "File Logging: On",
       "surface": "apple",
@@ -31363,7 +31323,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 298,
+      "line": 296,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "File Logging: Off",
       "surface": "apple",
@@ -31371,7 +31331,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 302,
+      "line": 300,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "App Logging",
       "surface": "apple",
@@ -31379,7 +31339,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 307,
+      "line": 305,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Open Session Store",
       "surface": "apple",
@@ -31387,7 +31347,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 313,
+      "line": 311,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Open Agent Events…",
       "surface": "apple",
@@ -31395,7 +31355,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 318,
+      "line": 316,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Open Log",
       "surface": "apple",
@@ -31403,7 +31363,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 323,
+      "line": 321,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Send Debug Voice Text",
       "surface": "apple",
@@ -31411,7 +31371,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 328,
+      "line": 326,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Send Test Notification",
       "surface": "apple",
@@ -31419,7 +31379,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 335,
+      "line": 333,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Restart Gateway",
       "surface": "apple",
@@ -31427,7 +31387,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 341,
+      "line": 339,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Restart Onboarding",
       "surface": "apple",
@@ -31435,7 +31395,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 346,
+      "line": 344,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Restart App",
       "surface": "apple",
@@ -31443,7 +31403,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 385,
+      "line": 383,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Main",
       "surface": "apple",
@@ -31451,7 +31411,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 385,
+      "line": 383,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Other",
       "surface": "apple",
@@ -31459,7 +31419,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 459,
+      "line": 457,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Show pairing requests",
       "surface": "apple",
@@ -31467,7 +31427,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 484,
+      "line": 482,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Refreshing microphones…",
       "surface": "apple",
@@ -31475,7 +31435,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 491,
+      "line": 489,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Microphone",
       "surface": "apple",
@@ -31483,7 +31443,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 516,
+      "line": 514,
       "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
       "source": "Disconnected (using System default)",
       "surface": "apple",
@@ -33795,23 +33755,23 @@
     },
     {
       "kind": "ui-call",
-      "line": 62,
+      "line": 60,
       "path": "apps/macos/Sources/OpenClaw/QuickChatView.swift",
       "source": "Message \\(self.model.agentDisplay.name)",
       "surface": "apple",
       "id": "native.apple.b3700cf60f4520dc"
     },
     {
-      "kind": "ui-modifier",
-      "line": 88,
+      "kind": "ui-call",
+      "line": 76,
       "path": "apps/macos/Sources/OpenClaw/QuickChatView.swift",
-      "source": "Send a window screenshot",
+      "source": "main session",
       "surface": "apple",
-      "id": "native.apple.edf12ff583307f43"
+      "id": "native.apple.c1fec5e4735d8995"
     },
     {
       "kind": "ui-modifier",
-      "line": 112,
+      "line": 104,
       "path": "apps/macos/Sources/OpenClaw/QuickChatView.swift",
       "source": "Send message",
       "surface": "apple",
@@ -33819,7 +33779,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 170,
+      "line": 133,
       "path": "apps/macos/Sources/OpenClaw/QuickChatView.swift",
       "source": "Needs additional permissions",
       "surface": "apple",
@@ -33827,7 +33787,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 177,
+      "line": 140,
       "path": "apps/macos/Sources/OpenClaw/QuickChatView.swift",
       "source": "Grant",
       "surface": "apple",
@@ -33835,7 +33795,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 183,
+      "line": 146,
       "path": "apps/macos/Sources/OpenClaw/QuickChatView.swift",
       "source": "Not now",
       "surface": "apple",

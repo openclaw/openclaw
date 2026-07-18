@@ -8,7 +8,6 @@ import {
   BLOCKED_TOOL_CALL_ABORT_FLOOR_MS,
   getDiagnosticSessionActivitySnapshot,
   resetDiagnosticRunActivityForTest,
-  startDiagnosticRunActivityTracking,
 } from "../../logging/diagnostic-run-activity.js";
 import type { getProcessSupervisor } from "../../process/supervisor/index.js";
 import {
@@ -32,7 +31,6 @@ type SupervisorSpawnFn = ProcessSupervisor["spawn"];
 beforeEach(() => {
   setDiagnosticsEnabledForProcess(true);
   resetDiagnosticRunActivityForTest();
-  startDiagnosticRunActivityTracking();
   resetClaudeLiveSessionsForTest();
   restoreCliRunnerPrepareTestDeps();
   setCliRunnerExecuteTestDeps({ writeCliSystemPromptFile });
@@ -165,7 +163,6 @@ function startLiveTurn(params: {
   timeoutMs?: number;
   noOutputTimeoutMs?: number;
   useResume?: boolean;
-  onPhase?: (phase: "send" | "resolve") => void;
 }) {
   const context = buildPreparedCliRunContext({
     runId: params.runId,
@@ -180,7 +177,6 @@ function startLiveTurn(params: {
     noOutputTimeoutMs: params.noOutputTimeoutMs ?? 5_000,
     getProcessSupervisor: getProcessSupervisorForTest,
     onAssistantDelta: () => {},
-    onPhase: params.onPhase,
     cleanup: async () => {},
   });
 }
@@ -193,11 +189,7 @@ describe("claude live session provisional results", () => {
     "defers the interim success result until $taskType ($label) tasks drain",
     async ({ taskType }) => {
       const driver = installLiveStdoutDriver();
-      const phases: Array<"send" | "resolve"> = [];
-      const resultPromise = startLiveTurn({
-        runId: `run-bg-interim-${taskType}`,
-        onPhase: (phase) => phases.push(phase),
-      });
+      const resultPromise = startLiveTurn({ runId: `run-bg-interim-${taskType}` });
       await driver.stdout.waitReady();
 
       // Tool spawn + authoritative outstanding-task list + immediate tool_result.
@@ -275,7 +267,6 @@ describe("claude live session provisional results", () => {
       );
       await Promise.resolve();
       expect(settled).toBe(false);
-      expect(phases).toEqual(["resolve", "send"]);
       expect(driver.cancel).not.toHaveBeenCalled();
       await waitForDiagnosticEventsDrained();
       expect(
@@ -317,7 +308,6 @@ describe("claude live session provisional results", () => {
       );
 
       const result = await resultPromise;
-      expect(phases).toEqual(["resolve", "send", "resolve"]);
       expect(result.output.text).toContain("Working on it in the background.");
       expect(result.output.text).toContain("Subagent finished: subagent final output");
       expect(driver.cancel).not.toHaveBeenCalled();
@@ -723,11 +713,7 @@ describe("claude live session provisional results", () => {
 
   it("fails the turn on an error result even when background tasks are outstanding", async () => {
     const driver = installLiveStdoutDriver();
-    const phases: Array<"send" | "resolve"> = [];
-    const resultPromise = startLiveTurn({
-      runId: "run-bg-error",
-      onPhase: (phase) => phases.push(phase),
-    });
+    const resultPromise = startLiveTurn({ runId: "run-bg-error" });
     await driver.stdout.waitReady();
 
     driver.stdout.emit(
@@ -752,7 +738,6 @@ describe("claude live session provisional results", () => {
       name: "FailoverError",
       rawError: expect.stringMatching(/agent crashed/i),
     });
-    expect(phases).toEqual(["resolve"]);
   });
 
   it("does not no-output-abort while a background task is outstanding within the blocked-tool floor", async () => {

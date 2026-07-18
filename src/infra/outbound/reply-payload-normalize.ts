@@ -12,7 +12,6 @@ export type OutboundReplyPayload = {
   mediaUrls?: string[];
   mediaUrl?: string;
   presentation?: InternalReplyPayload["presentation"];
-  presentationTextMode?: InternalReplyPayload["presentationTextMode"];
   /**
    * @deprecated Use presentation. Runtime support remains for legacy producers.
    */
@@ -42,7 +41,6 @@ export function normalizeOutboundReplyPayload(
   const presentation = readObjectValue(
     payload.presentation,
   ) as OutboundReplyPayload["presentation"];
-  const presentationTextMode = payload.presentationTextMode === "fallback" ? "fallback" : undefined;
   const interactive = readObjectValue(payload.interactive) as OutboundReplyPayload["interactive"];
   const channelData = readObjectValue(payload.channelData) as OutboundReplyPayload["channelData"];
   const sensitiveMedia = payload.sensitiveMedia === true ? true : undefined;
@@ -54,7 +52,6 @@ export function normalizeOutboundReplyPayload(
     mediaUrls,
     mediaUrl,
     presentation,
-    ...(presentationTextMode ? { presentationTextMode } : {}),
     interactive,
     channelData,
     sensitiveMedia,

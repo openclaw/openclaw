@@ -79,7 +79,7 @@ type ChannelIngressDispatchLifecycle = {
    * Deferred turn finished without ever owning the reply lane.
    * Drain releases the claim for retry.
    */
-  onAbandoned: () => void | Promise<void>;
+  onAbandoned: () => void;
 };
 
 type ChannelIngressDrainDispatchResult =
@@ -170,7 +170,7 @@ export function bindIngressLifecycleToReplyOptions(lifecycle: ChannelIngressDisp
     admission: "exclusive";
     onAdopted: () => void | Promise<void>;
     onDeferred: () => void;
-    onAbandoned: () => void | Promise<void>;
+    onAbandoned: () => void;
     abortSignal: AbortSignal;
   };
 } {
@@ -517,7 +517,7 @@ export function createChannelIngressDrain<
         // stall watchdog race and dead-letter an about-to-complete event.
         clearStallTimer(state);
       },
-      onAbandoned: async () => {
+      onAbandoned: () => {
         if (state.phase !== "deferred" && state.phase !== "dispatching") {
           return;
         }
@@ -525,7 +525,7 @@ export function createChannelIngressDrain<
           return;
         }
         clearStallTimer(state);
-        await state
+        void state
           .settleOnce(async () => {
             await releaseClaim(state.claim, "turn-abandoned");
           })

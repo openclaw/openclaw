@@ -38,13 +38,6 @@ import { installConnectedControlUiServerSuite } from "./test-with-server.js";
 installGatewayTestHooks({ scope: "suite" });
 const CHAT_RESPONSE_TIMEOUT_MS = 10_000;
 
-function waitForFast<T>(
-  callback: () => T | Promise<T>,
-  options: { timeout?: number; interval?: number } = {},
-) {
-  return vi.waitFor(callback, { interval: 1, ...options });
-}
-
 let ws: WebSocket;
 let port: number;
 
@@ -285,11 +278,11 @@ describe("gateway server chat", () => {
 
       expect(res.ok).toBe(true);
       expect(res.payload?.status).toBe("started");
-      await waitForFast(() => {
+      await vi.waitFor(() => {
         expect(subordinateAdmissionClosed).toBe(false);
       });
       await finalPromise;
-      await waitForFast(() => {
+      await vi.waitFor(() => {
         expect(getActiveGatewayRootWorkCount()).toBe(0);
       });
     });
@@ -671,7 +664,7 @@ describe("gateway server chat", () => {
       expect(agentAllowedRes.ok).toBe(true);
       expect(agentAllowedRes.payload?.status).toBe("accepted");
       expect(agentAllowedRes.payload?.runId).toBe("idem-2");
-      await waitForFast(() => expect(agentCommand).toHaveBeenCalled());
+      await vi.waitFor(() => expect(agentCommand).toHaveBeenCalled());
 
       testState.sessionStorePath = undefined;
       testState.sessionConfig = undefined;
@@ -865,19 +858,19 @@ describe("gateway server chat", () => {
             idempotencyKey: "idem-dispatch-error-1",
           });
           expect(res.ok).toBe(true);
-          await waitForFast(() => {
+          await vi.waitFor(() => {
             expect(dispatchStarted).toBe(true);
           });
           markGatewayRestartDraining();
           rejectDispatch.resolve();
           await errorPromise;
-          await waitForFast(() => {
+          await vi.waitFor(() => {
             expect(persistenceEntered).toBe(true);
           });
           expect(getActiveGatewayRootWorkCount()).toBe(1);
           releasePersistence.resolve();
           const changed = await sessionChangedPromise;
-          await waitForFast(() => {
+          await vi.waitFor(() => {
             expect(getActiveGatewayRootWorkCount()).toBe(0);
           });
           return changed;
@@ -1643,7 +1636,7 @@ describe("gateway server chat", () => {
       });
 
       expect(res.ok).toBe(true);
-      await waitForFast(() => {
+      await vi.waitFor(() => {
         expect(dispatchInboundMessageMock).toHaveBeenCalled();
       });
       const sideResult = await sideResultPromise;
@@ -1724,7 +1717,7 @@ describe("gateway server chat", () => {
       });
 
       expect(res.ok).toBe(true);
-      await waitForFast(() => {
+      await vi.waitFor(() => {
         expect(dispatchInboundMessageMock).toHaveBeenCalled();
       });
       const sideResult = await sideResultPromise;
@@ -1788,7 +1781,7 @@ describe("gateway server chat", () => {
           await finalPromise;
 
           let assistantMessage: Record<string, unknown> | undefined;
-          await waitForFast(
+          await vi.waitFor(
             async () => {
               const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
                 sessionKey: "main",

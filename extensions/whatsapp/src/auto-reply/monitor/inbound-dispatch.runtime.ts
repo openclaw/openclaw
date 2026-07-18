@@ -1,6 +1,7 @@
 // Whatsapp plugin module implements inbound dispatch behavior.
 export {
   createChannelMessageReplyPipeline,
+  dispatchReplyWithBufferedBlockDispatcher,
   getAgentScopedMediaLocalRoots,
   jidToE164,
   logVerbose,

@@ -279,7 +279,6 @@ export async function waitForGatewayHealthyRestart(params: {
   expectedVersion?: string | null;
   includeUnknownListenersAsStale?: boolean;
   requireRunningService?: boolean;
-  supervisorKeepsAlive?: boolean;
   isStartupMigrationActive?: typeof hasActiveStartupMigrationLease;
 }): Promise<GatewayRestartSnapshot> {
   const startedAtMs = performance.now();
@@ -329,12 +328,7 @@ export async function waitForGatewayHealthyRestart(params: {
     if (snapshot.staleGatewayPids.length > 0 && snapshot.runtime.status !== "running") {
       return withWaitContext(snapshot, "stale-pids", elapsedMs);
     }
-    // launchd KeepAlive can report a transient stopped state while its throttle window runs.
-    // Let the bounded standard deadline decide failure when the caller knows supervision persists.
-    if (
-      !params.supervisorKeepsAlive &&
-      shouldEarlyExitStoppedFree(snapshot, attempt, minAttemptForEarlyExit)
-    ) {
+    if (shouldEarlyExitStoppedFree(snapshot, attempt, minAttemptForEarlyExit)) {
       consecutiveStoppedFreeCount += 1;
       if (consecutiveStoppedFreeCount >= STOPPED_FREE_THRESHOLD) {
         return withWaitContext(snapshot, "stopped-free", elapsedMs);

@@ -19,7 +19,7 @@ import {
 } from "../../infra/agent-events.js";
 import { emitTrustedDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
-import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import {
   resolveEventSessionKeyForPolicy,
   resolveEventSessionRoutingPolicy,
@@ -121,7 +121,6 @@ import {
   formatCliBackendOutputDigest,
   LEGACY_CLAUDE_CLI_LOG_OUTPUT_ENV,
 } from "./log.js";
-import { createClaudeCliModelCallDiagnostics } from "./model-call-diagnostics.js";
 import { createCliOutputFailoverError } from "./output-error.js";
 import type { CliReusableSession, PreparedCliRunContext } from "./types.js";
 
@@ -386,15 +385,10 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
   };
 }
 
-type ExecutePreparedCliRunOptions = {
-  onPhase?: (phase: "send" | "resolve" | "cleanup") => void;
-};
-
 /** Executes a prepared CLI run context and returns normalized CLI output. */
 export async function executePreparedCliRun(
   context: PreparedCliRunContext,
   cliSessionIdToUse?: string,
-  options?: ExecutePreparedCliRunOptions,
 ): Promise<CliOutput> {
   const params = context.params;
   if (params.abortSignal?.aborted) {
@@ -548,21 +542,6 @@ export async function executePreparedCliRun(
 
   let completedOutput: CliOutput | undefined;
   let executionError: unknown;
-  let outerCleanupError: Error | undefined;
-  const useManagedClaudeLiveSession =
-    shouldUseClaudeLiveSession(context) && !params.onSuccessfulAuthBinding;
-  // Fresh-session retries invoke this function again. Keep one helper per
-  // observable CLI attempt so every started call retains its own terminal event.
-  const claudeModelCallDiagnostics = createClaudeCliModelCallDiagnostics({
-    context,
-    prompt,
-    systemPrompt: systemPromptArg ?? undefined,
-    transport: nodePlacement
-      ? "paired-node-cli"
-      : useManagedClaudeLiveSession
-        ? "stdio-live"
-        : "stdio",
-  });
   let forkResumeClaimed = false;
   let forkSuccessorObserved = false;
   let forkSuccessorPersistence: Promise<void> | undefined;
@@ -611,7 +590,6 @@ export async function executePreparedCliRun(
       if (params.lifecycleGeneration) {
         assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
       }
-      claudeModelCallDiagnostics?.emitStarted();
       if (params.forkCliSessionOnResume && useResume) {
         if (!params.persistCliSessionForkSuccessor) {
           throw new Error("CLI session fork successor persistence is unavailable");
@@ -877,6 +855,10 @@ export async function executePreparedCliRun(
         };
       };
       let finalizeParsedTools = () => {};
+      // Opaque owner proof must describe a child spawned for this turn. A
+      // warm stdio session could have been created from an older executable.
+      const useManagedClaudeLiveSession =
+        shouldUseClaudeLiveSession(context) && !params.onSuccessfulAuthBinding;
       try {
         cliBackendLog.info(
           buildCliExecLogLine({
@@ -1594,13 +1576,7 @@ export async function executePreparedCliRun(
             onSessionId: (sessionId) => {
               observeForkSuccessor(sessionId);
             },
-            onAssistantMessage: claudeModelCallDiagnostics?.observeAssistantMessage,
-            onUsage: claudeModelCallDiagnostics?.observeUsage,
-            onCliOutput: claudeModelCallDiagnostics?.observeCliOutput,
-            onRequestPayload: claudeModelCallDiagnostics?.observeRequestPayload,
-            onPhase: options?.onPhase,
           });
-          options?.onPhase?.("resolve");
           const rawText = liveResult.output.text;
           runOutput = {
             ...liveResult.output,
@@ -1629,8 +1605,6 @@ export async function executePreparedCliRun(
                 onSessionId: (sessionId) => {
                   observeForkSuccessor(sessionId);
                 },
-                onAssistantMessage: claudeModelCallDiagnostics?.observeAssistantMessage,
-                onUsage: claudeModelCallDiagnostics?.observeUsage,
               })
             : null;
           let stdoutTail = "";
@@ -1644,9 +1618,7 @@ export async function executePreparedCliRun(
           const stderrHash = crypto.createHash("sha256");
           let stderrParseExceeded = false;
           const consumeStdout = (chunk: string) => {
-            const chunkBytes = Buffer.byteLength(chunk);
-            claudeModelCallDiagnostics?.observeCliOutput(chunk, "stdout", chunkBytes);
-            stdoutBytes += chunkBytes;
+            stdoutBytes += Buffer.byteLength(chunk);
             stdoutHash.update(chunk);
             stdoutTail = appendCliOutputTail(stdoutTail, chunk);
             if (!stdoutParseExceeded) {
@@ -1657,7 +1629,6 @@ export async function executePreparedCliRun(
             streamingParser?.push(chunk);
           };
           const consumeStderr = (chunk: string) => {
-            claudeModelCallDiagnostics?.observeCliOutput(chunk, "stderr");
             stderrBytes += Buffer.byteLength(chunk);
             stderrHash.update(chunk);
             stderrTail = appendCliOutputTail(stderrTail, chunk);
@@ -1678,7 +1649,6 @@ export async function executePreparedCliRun(
           let nodeRunAbortSignal: AbortSignal | undefined;
           let nodeRunTruncated = false;
           let result: RunExit;
-          claudeModelCallDiagnostics?.observeRequestPayload(stdin ?? argsPrompt ?? "");
           if (nodePlacement) {
             const nodeRun = await executeNodeClaudeRun({
               context,
@@ -1748,14 +1718,13 @@ export async function executePreparedCliRun(
               params.abortSignal?.removeEventListener("abort", abortManagedRun);
             }
           }
+          streamingParser?.finish();
           if (
             (params.abortSignal?.aborted || nodeRunAbortSignal?.aborted) &&
             result.reason === "manual-cancel"
           ) {
             throw createCliAbortError();
           }
-          options?.onPhase?.("resolve");
-          streamingParser?.finish();
           const streamingParserErrorText =
             outputMode === "jsonl" ? (streamingParser?.getErrorText() ?? null) : null;
           if (streamingParserErrorText) {
@@ -1853,7 +1822,6 @@ export async function executePreparedCliRun(
           }
 
           if (result.exitCode !== 0 || result.reason !== "exit") {
-            options?.onPhase?.("send");
             if (result.reason === "no-output-timeout" || result.noOutputTimedOut) {
               const timeoutReason = `CLI produced no output for ${Math.round(noOutputTimeoutMs / 1000)}s and was terminated.`;
               cliBackendLog.warn(
@@ -2135,9 +2103,9 @@ export async function executePreparedCliRun(
       forkResumeClaimed = false;
       throw new Error("forked CLI session did not report a successor session id");
     }
+    return completedOutput;
   } catch (error) {
     executionError = error;
-    claudeModelCallDiagnostics?.emitError(error);
     let failure = error;
     try {
       await finishForkSuccessorPersistence();
@@ -2152,33 +2120,15 @@ export async function executePreparedCliRun(
     }
     throw failure;
   } finally {
-    try {
-      if (!fallbackClaudeSkillsPluginCleanupOwned) {
-        await cleanupOuterResource(fallbackClaudeSkillsPlugin?.cleanup);
-      }
-      if (systemPromptFile) {
-        await cleanupOuterResource(systemPromptFile.cleanup);
-      }
-      if (cleanupImages) {
-        await cleanupOuterResource(cleanupImages);
-      }
-    } catch (error) {
-      outerCleanupError = toErrorObject(error, "CLI outer resource cleanup failed");
+    if (!fallbackClaudeSkillsPluginCleanupOwned) {
+      await cleanupOuterResource(fallbackClaudeSkillsPlugin?.cleanup);
+    }
+    if (systemPromptFile) {
+      await cleanupOuterResource(systemPromptFile.cleanup);
+    }
+    if (cleanupImages) {
+      await cleanupOuterResource(cleanupImages);
     }
   }
-  if (outerCleanupError !== undefined) {
-    options?.onPhase?.("cleanup");
-    claudeModelCallDiagnostics?.emitError(outerCleanupError);
-    throw outerCleanupError;
-  }
-  if (!completedOutput) {
-    const error = new Error("CLI run completed without output");
-    claudeModelCallDiagnostics?.emitError(error);
-    throw error;
-  }
-  // Success stays provisional until fallible persistence and cleanup finish;
-  // otherwise a rejected turn would be exported as completed.
-  claudeModelCallDiagnostics?.emitCompleted(completedOutput);
-  return completedOutput;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

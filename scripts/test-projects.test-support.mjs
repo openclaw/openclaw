@@ -697,10 +697,6 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ["test/scripts/package-acceptance-workflow.test.ts", "test/scripts/ci-workflow-guards.test.ts"],
   ],
   [
-    ".github/actions/setup-node-env/dependency-fingerprint.mjs",
-    ["test/scripts/ci-workflow-guards.test.ts"],
-  ],
-  [
     ".github/actions/setup-node-env/sticky-importers.sh",
     ["test/scripts/ci-workflow-guards.test.ts"],
   ],
@@ -1852,26 +1848,11 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/e2e/lib/fixtures/mock-openai-config.mjs", ["test/scripts/mock-openai-config.test.ts"]],
   ["scripts/e2e/lib/fixtures/plugins.mjs", ["test/scripts/fixture-plugin-commands.test.ts"]],
   [
-    "scripts/e2e/lib/codex-app-server-fixture.mjs",
-    [
-      "test/scripts/codex-media-path-client.test.ts",
-      "test/e2e/qa-lab/runtime/codex-auth-product-proof.e2e.test.ts",
-    ],
-  ],
-  [
-    "scripts/e2e/lib/codex-media-path/jsonl-request-tail.mjs",
-    [
-      "test/scripts/codex-media-path-client.test.ts",
-      "test/e2e/qa-lab/runtime/codex-auth-product-proof.e2e.test.ts",
-    ],
-  ],
-  [
     "scripts/e2e/lib/incremental-line-reader.mjs",
     [
       "test/scripts/incremental-line-reader.test.ts",
       "test/scripts/config-reload-log-scanner.test.ts",
       "test/scripts/codex-media-path-client.test.ts",
-      "test/e2e/qa-lab/runtime/codex-auth-product-proof.e2e.test.ts",
     ],
   ],
   [
@@ -2016,10 +1997,6 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
       "extensions/openai/image-generation-provider.test.ts",
       "src/image-generation/openai-compatible-image-provider.test.ts",
     ],
-  ],
-  [
-    "test/e2e/qa-lab/runtime/codex-auth-app-server.fixture.mjs",
-    ["test/e2e/qa-lab/runtime/codex-auth-product-proof.e2e.test.ts"],
   ],
   [
     "scripts/e2e/lib/openai-chat-tools/client.mjs",

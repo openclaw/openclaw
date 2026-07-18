@@ -63,19 +63,7 @@ export async function resolveAgentRuntimeConfig(
         ).resolvedConfig;
       })()
     : loadedRaw;
-  const secretsRuntime = await import("../secrets/runtime.js");
-  if (secretsRuntime.getActiveSecretsRuntimeSnapshot()) {
-    setRuntimeConfigSnapshot(cfg, sourceConfig);
-  } else {
-    // Standalone local agent commands have no Gateway-owned snapshot. Materialize
-    // auth-profile refs too; resolving only config refs leaves selected credentials unusable.
-    const snapshot = await secretsRuntime.prepareSecretsRuntimeSnapshot({
-      config: sourceConfig,
-      assignmentConfig: cfg,
-      includeConfigRefs: false,
-    });
-    secretsRuntime.activateSecretsRuntimeSnapshot(snapshot);
-  }
+  setRuntimeConfigSnapshot(cfg, sourceConfig);
   return { loadedRaw, sourceConfig, cfg };
 }
 

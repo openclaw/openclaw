@@ -715,6 +715,4 @@ class UsagePage extends OpenClawLightDomElement {
   }
 }
 
-if (!customElements.get("openclaw-usage-page")) {
-  customElements.define("openclaw-usage-page", UsagePage);
-}
+customElements.define("openclaw-usage-page", UsagePage);

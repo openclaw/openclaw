@@ -36,10 +36,6 @@ import {
   sendGatewayCronFailureAlert,
 } from "./server-cron-notifications.js";
 
-function waitForFast(assertion: () => void | Promise<void>) {
-  return vi.waitFor(assertion, { interval: 1 });
-}
-
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object") {
     throw new Error(`expected ${label}`);
@@ -124,7 +120,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
           resolveCronAgent: () => ({ agentId: "main", cfg: {} }),
         });
 
-        await waitForFast(() => expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1));
+        await vi.waitFor(() => expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1));
         expect(getActiveGatewayRootWorkCount()).toBe(2);
       });
     } finally {
@@ -133,7 +129,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
 
     expect(getActiveGatewayRootWorkCount()).toBe(1);
     deferred.resolve();
-    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
   });
 
   it("keeps webhook delivery cold when its token owner is unavailable", async () => {
@@ -161,7 +157,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
       resolveCronAgent: () => ({ agentId: "main", cfg: {} }),
     });
 
-    await waitForFast(() =>
+    await vi.waitFor(() =>
       expect(logger.warn).toHaveBeenCalledWith(
         expect.objectContaining({
           jobId: job.id,
@@ -171,7 +167,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
       ),
     );
     expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
-    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
   });
 
   it("independently admits immediate failure alerts", async () => {
@@ -192,7 +188,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
       mode: "announce",
     });
 
-    await waitForFast(() => expect(mocks.sendCronAnnouncePayloadStrict).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(mocks.sendCronAnnouncePayloadStrict).toHaveBeenCalledOnce());
     expect(getActiveGatewayRootWorkCount()).toBe(1);
     deferred.resolve();
     await delivery;
@@ -220,7 +216,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
     expect(getActiveGatewayRootWorkCount()).toBe(0);
 
     expect(suspensionAdmission?.release()).toBe(true);
-    await waitForFast(() => expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1));
   });
 
   it("independently admits failure destination webhook delivery", async () => {
@@ -246,10 +242,10 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
       resolveCronAgent: () => ({ agentId: "main", cfg: {} }),
     });
 
-    await waitForFast(() => expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1));
     expect(getActiveGatewayRootWorkCount()).toBe(1);
     deferred.resolve();
-    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
   });
 
   it("independently admits failure destination announce delivery", async () => {
@@ -273,10 +269,10 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
       resolveCronAgent: () => ({ agentId: "main", cfg: {} }),
     });
 
-    await waitForFast(() => expect(mocks.sendFailureNotificationAnnounce).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(mocks.sendFailureNotificationAnnounce).toHaveBeenCalledTimes(1));
     expect(getActiveGatewayRootWorkCount()).toBe(1);
     deferred.resolve();
-    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
   });
 
   it("redacts invalid completion webhook targets in warnings", () => {
@@ -481,7 +477,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
       resolveCronAgent: () => ({ agentId: "main", cfg: {} }),
     });
 
-    await waitForFast(() => expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1));
     const body = webhookRequestBody();
     expect(body.summary).toContain("[redacted-url]");
     expect(body.summary).toContain("[redacted-code]");
@@ -563,7 +559,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
       resolveCronAgent: () => ({ agentId: "main", cfg: {} }),
     });
 
-    await waitForFast(() => expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1));
     const body = webhookRequestBody();
     expect(body).toMatchObject({
       action: "finished",

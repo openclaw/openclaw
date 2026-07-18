@@ -118,12 +118,8 @@ const require = createRequire(import.meta.url);
 
 let aliases: Record<string, string> | null = null;
 let createJitiLoaderFactory: typeof createJiti | undefined;
+let extensionSourceTransformLoader: ReturnType<typeof createJiti> | undefined;
 let nativeExtensionLoadCounter = 0;
-// One cwd slot bounds the process cache. The generation keeps an in-flight
-// load from repopulating it after an explicit reload or cwd change.
-let extensionCacheCwd: string | undefined;
-let extensionCacheGeneration = 0;
-const extensionFactoryCache = new Map<string, ExtensionFactory>();
 const EXTENSION_LOADER_ALIAS_IMPORT_PATTERN =
   /(?:@openclaw\/plugin-sdk|openclaw\/plugin-sdk|@sinclair\/typebox|typebox)(?:\/[A-Za-z0-9_-]+)?/u;
 const RELATIVE_EXTENSION_IMPORT_PATTERN =
@@ -205,39 +201,6 @@ function resolvePath(extPath: string, cwd: string): string {
 }
 
 type HandlerFn = (...args: unknown[]) => Promise<unknown>;
-
-type ExtensionCacheScope = {
-  cwd: string;
-  generation: number;
-};
-
-type ExtensionLoadContext = {
-  cacheScope?: ExtensionCacheScope;
-  sourceTransformLoader?: ReturnType<typeof createJiti>;
-};
-
-export function clearExtensionCache(): void {
-  extensionFactoryCache.clear();
-  extensionCacheCwd = undefined;
-  extensionCacheGeneration++;
-}
-
-function useExtensionCacheCwd(cwd: string): ExtensionCacheScope {
-  const resolvedCwd = path.resolve(expandPath(cwd));
-  if (extensionCacheCwd !== undefined && extensionCacheCwd !== resolvedCwd) {
-    clearExtensionCache();
-  }
-  extensionCacheCwd = resolvedCwd;
-  return { cwd: resolvedCwd, generation: extensionCacheGeneration };
-}
-
-function isCurrentCacheScope(scope: ExtensionCacheScope | undefined): scope is ExtensionCacheScope {
-  return (
-    scope !== undefined &&
-    extensionCacheCwd === scope.cwd &&
-    extensionCacheGeneration === scope.generation
-  );
-}
 
 /**
  * Create a runtime with throwing stubs for action methods.
@@ -519,50 +482,35 @@ async function loadNativeExtensionModule(
 
 async function loadExtensionSourceTransformModule(
   extensionPath: string,
-  context: ExtensionLoadContext,
 ): Promise<ExtensionFactory | undefined> {
-  if (!context.sourceTransformLoader) {
+  if (!extensionSourceTransformLoader) {
     installOpenClawInternalCorePackageNativeResolver({ moduleUrl: import.meta.url });
     const createJitiLoader = await loadCreateJitiLoaderFactory();
-    context.sourceTransformLoader = createJitiLoader(import.meta.url, {
+    extensionSourceTransformLoader = createJitiLoader(import.meta.url, {
       ...(isBunBinary
         ? {
             ...buildPluginLoaderJitiOptions({}),
             // Bun binaries need virtual modules because extension SDK files are
             // bundled into the executable rather than present on disk.
+            tryNative: false,
             virtualModules: VIRTUAL_MODULES,
           }
         : buildPluginLoaderJitiOptions(getExtensionLoaderAliases())),
-      // Extension entry modules must bypass the native ESM cache so an explicit
-      // reload observes edited source. Product modules stay native via nativeModules.
-      tryNative: false,
       moduleCache: false,
     });
   }
 
   return resolveExtensionFactory(
-    await context.sourceTransformLoader.import(extensionPath, { default: true }),
+    await extensionSourceTransformLoader.import(extensionPath, { default: true }),
   );
 }
 
-async function loadExtensionModule(
-  extensionPath: string,
-  context: ExtensionLoadContext,
-): Promise<ExtensionFactory | undefined> {
-  if (isCurrentCacheScope(context.cacheScope)) {
-    const cachedFactory = extensionFactoryCache.get(extensionPath);
-    if (cachedFactory) {
-      return cachedFactory;
-    }
+async function loadExtensionModule(extensionPath: string) {
+  if (shouldLoadExtensionWithNativeImport(extensionPath)) {
+    return loadNativeExtensionModule(extensionPath);
   }
 
-  const factory = shouldLoadExtensionWithNativeImport(extensionPath)
-    ? await loadNativeExtensionModule(extensionPath)
-    : await loadExtensionSourceTransformModule(extensionPath, context);
-  if (factory && isCurrentCacheScope(context.cacheScope)) {
-    extensionFactoryCache.set(extensionPath, factory);
-  }
-  return factory;
+  return loadExtensionSourceTransformModule(extensionPath);
 }
 
 /**
@@ -593,12 +541,11 @@ async function loadExtension(
   cwd: string,
   eventBus: EventBus,
   runtime: ExtensionRuntime,
-  context: ExtensionLoadContext,
 ): Promise<{ extension: Extension | null; error: string | null }> {
   const resolvedPath = resolvePath(extensionPath, cwd);
 
   try {
-    const factory = await loadExtensionModule(resolvedPath, context);
+    const factory = await loadExtensionModule(resolvedPath);
     if (!factory) {
       return {
         extension: null,
@@ -636,7 +583,7 @@ export async function loadExtensionFromFactory(
 /**
  * Load extensions from paths.
  */
-export async function loadExtensionsCached(
+export async function loadExtensions(
   paths: string[],
   cwd: string,
   eventBus?: EventBus,
@@ -645,18 +592,9 @@ export async function loadExtensionsCached(
   const errors: Array<{ path: string; error: string }> = [];
   const resolvedEventBus = eventBus ?? createEventBus();
   const runtime = createExtensionRuntime();
-  const cacheScope = useExtensionCacheCwd(cwd);
-  const resolvedCwd = cacheScope.cwd;
-  const context: ExtensionLoadContext = { cacheScope };
 
   for (const extPath of paths) {
-    const { extension, error } = await loadExtension(
-      extPath,
-      resolvedCwd,
-      resolvedEventBus,
-      runtime,
-      context,
-    );
+    const { extension, error } = await loadExtension(extPath, cwd, resolvedEventBus, runtime);
 
     if (error) {
       errors.push({ path: extPath, error });

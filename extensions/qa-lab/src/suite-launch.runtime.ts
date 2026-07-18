@@ -93,7 +93,6 @@ type QaUnifiedPartitionTask = {
 
 type QaFlowChannelGroup = {
   channel: string | undefined;
-  channelId: string | undefined;
   channelDriverSelection: QaSuiteRunParams["channelDriverSelection"];
   scenarios: QaSeedScenarioWithSource[];
 };
@@ -133,37 +132,10 @@ async function resolveQaFlowChannelGroups(
   runParams: QaSuiteRunParams | undefined,
   scenarios: readonly QaSeedScenarioWithSource[],
 ): Promise<QaFlowChannelGroup[]> {
-  if (runParams?.adapterFactories) {
-    const explicitChannel = runParams.channelId?.trim().toLowerCase();
-    if (explicitChannel) {
-      return [
-        {
-          channel: explicitChannel,
-          channelId: explicitChannel,
-          channelDriverSelection: runParams.channelDriverSelection,
-          scenarios: [...scenarios],
-        },
-      ];
-    }
-    const groups = new Map<string | undefined, QaSeedScenarioWithSource[]>();
-    for (const scenario of scenarios) {
-      const channel = normalizeQaSuiteScenarioChannel(scenario);
-      const group = groups.get(channel) ?? [];
-      group.push(scenario);
-      groups.set(channel, group);
-    }
-    return [...groups].map(([channel, groupedScenarios]) => ({
-      channel,
-      channelId: channel,
-      channelDriverSelection: runParams.channelDriverSelection,
-      scenarios: groupedScenarios,
-    }));
-  }
   if (runParams?.channelDriver !== "crabline") {
     return [
       {
-        channel: runParams?.channelId ?? runParams?.channelDriverSelection?.channel,
-        channelId: runParams?.channelId,
+        channel: runParams?.channelDriverSelection?.channel,
         channelDriverSelection: runParams?.channelDriverSelection,
         scenarios: [...scenarios],
       },
@@ -183,7 +155,6 @@ async function resolveQaFlowChannelGroups(
     return [
       {
         channel: singleChannel,
-        channelId: undefined,
         channelDriverSelection:
           runParams.channelDriverSelection ??
           resolveOpenClawCrablineChannelDriverSelection({ channel: singleChannel }),
@@ -195,7 +166,6 @@ async function resolveQaFlowChannelGroups(
   // launch one flow partition per channel and aggregate them at this owner.
   return channels.map((channel) => ({
     channel,
-    channelId: undefined,
     channelDriverSelection: resolveOpenClawCrablineChannelDriverSelection({ channel }),
     scenarios: scenarios.filter(
       (scenario) =>
@@ -226,14 +196,10 @@ async function resolveSuiteExecutionPlan(
     scenarios.push(scenario);
     testFileScenariosByKind.set(scenario.execution.kind, scenarios);
   }
-  const channelGroups = (await resolveQaFlowChannelGroups(params, flowScenarios)).filter(
-    (group) => group.scenarios.length > 0,
-  );
   const requiresFlowPartitions =
-    channelGroups.length > 1 ||
-    channelGroups.some(
-      (group) => group.channelId !== undefined && group.channelId !== params?.channelId,
-    ) ||
+    (await resolveQaFlowChannelGroups(params, flowScenarios)).filter(
+      (group) => group.scenarios.length > 0,
+    ).length > 1 ||
     (flowScenarios.length > 1 && flowScenarios.some(scenarioRequiresIsolatedQaSuiteWorker));
   if (testFileScenariosByKind.size === 0 && !requiresFlowPartitions) {
     return { kind: "flow" };
@@ -594,18 +560,12 @@ async function runUnifiedQaSuite(params: {
       const ordinaryIsolatedFlowScenarios = isolatedFlowScenarios.filter(
         (scenario) => !runtimeScenarioSet.has(scenario),
       );
-      const usesContributedChannelDriver = Boolean(
-        channelGroup.channelId && params.runParams?.adapterFactories,
-      );
-      const sharedFlowPartitions = partitionSharedFlowScenarios(
-        sharedFlowScenarios,
-        usesContributedChannelDriver ? 1 : concurrency,
-      );
+      const sharedFlowPartitions = partitionSharedFlowScenarios(sharedFlowScenarios, concurrency);
       // Channel-driver flow workers each launch a gateway plus transport harness.
       // Serializing their isolated workers keeps state-mutating smoke checks from
       // flaking under concurrent child gateways while preserving non-driver speed.
       const channelDriverFlowRequiresExclusiveWorkers = Boolean(
-        channelGroup.channelDriverSelection || usesContributedChannelDriver,
+        channelGroup.channelDriverSelection,
       );
       const isolatedFlowConcurrencyLimit = channelDriverFlowRequiresExclusiveWorkers
         ? 1
@@ -673,7 +633,6 @@ async function runUnifiedQaSuite(params: {
                   ? (partition.scenarios[0].execution.runtime ?? params.runParams?.forcedRuntime)
                   : params.runParams?.forcedRuntime,
               concurrency: partition.concurrency,
-              channelId: channelGroup.channelId,
               channelDriverSelection: channelGroup.channelDriverSelection,
               workerStartStaggerMs: isolatedPartition
                 ? (params.runParams?.workerStartStaggerMs ??

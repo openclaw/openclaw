@@ -955,12 +955,9 @@ const SlackRelaySchema = z
   })
   .strict();
 
-const SlackIdentitySchema = z.enum(["bot", "user"]);
-
 const SlackAccountSchema = z
   .object({
     name: z.string().optional(),
-    identity: SlackIdentitySchema.default("bot"),
     mode: z.enum(["socket", "http", "relay"]).optional(),
     enterpriseOrgInstall: z.boolean().optional(),
     socketMode: SlackSocketModeSchema.optional(),
@@ -1043,13 +1040,11 @@ const SlackAccountSchema = z
     ackReaction: z.string().optional(),
     typingReaction: z.string().optional(),
   })
-  .strict();
-
-// Account entries leave identity unset to inherit the top-level default. DM allowlist
-// validation stays at SlackConfigSchema so entries can also inherit top-level allowFrom.
-const SlackAccountEntrySchema = SlackAccountSchema.extend({
-  identity: SlackIdentitySchema.optional(),
-});
+  .strict()
+  .superRefine(() => {
+    // DM allowlist validation is enforced at SlackConfigSchema so account entries
+    // can inherit top-level allowFrom via runtime shallow merge.
+  });
 
 export const SlackConfigSchema = SlackAccountSchema.safeExtend({
   mode: z.enum(["socket", "http", "relay"]).optional().default("socket"),
@@ -1058,7 +1053,7 @@ export const SlackConfigSchema = SlackAccountSchema.safeExtend({
   groupPolicy: GroupPolicySchema.optional().default("allowlist"),
   mentionPatterns: MentionPatternsPolicySchema.optional(),
   contextVisibility: ContextVisibilityModeSchema.optional(),
-  accounts: z.record(z.string(), SlackAccountEntrySchema.optional()).optional(),
+  accounts: z.record(z.string(), SlackAccountSchema.optional()).optional(),
   defaultAccount: z.string().optional(),
 }).superRefine((value, ctx) => {
   const dmPolicy = value.dmPolicy ?? value.dm?.policy ?? "pairing";
@@ -1110,7 +1105,6 @@ export const SlackConfigSchema = SlackAccountSchema.safeExtend({
   };
 
   const baseMode = value.mode ?? "socket";
-  const accountIds = value.accounts ? Object.keys(value.accounts) : [];
   if (!value.accounts) {
     if (baseMode === "relay") {
       requireRelayConfig(value.relay, ["relay"]);
@@ -1118,8 +1112,7 @@ export const SlackConfigSchema = SlackAccountSchema.safeExtend({
     validateSlackSigningSecretRequirements(value, ctx);
     return;
   }
-  for (const accountId of accountIds) {
-    const account = value.accounts[accountId];
+  for (const [accountId, account] of Object.entries(value.accounts)) {
     if (!account) {
       continue;
     }

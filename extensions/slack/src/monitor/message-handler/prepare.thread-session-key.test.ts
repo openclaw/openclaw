@@ -48,7 +48,6 @@ function buildAccount(replyToMode: "all" | "first" | "off" | "batched"): Resolve
   return {
     accountId: "default",
     enabled: true,
-    identity: "bot",
     botTokenSource: "config",
     appTokenSource: "config",
     userTokenSource: "none",

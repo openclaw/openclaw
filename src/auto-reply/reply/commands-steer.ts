@@ -172,7 +172,6 @@ export const handleSteerCommand: CommandHandler = async (params, allowTextComman
 
   const queueOutcome = await queueEmbeddedAgentMessageWithOutcomeAsync(sessionId, message, {
     steeringMode: "all",
-    isInboundUserMessage: true,
     debounceMs: 0,
     ...(params.opts?.sourceReplyDeliveryMode
       ? { sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode }

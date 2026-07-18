@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import { state } from "lit/decorators.js";
-import type { NavigationRouteId } from "../app-navigation.ts";
+import { titleForRoute, type NavigationRouteId } from "../app-navigation.ts";
+import { pathForRoute } from "../app-route-paths.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
 import { t } from "../i18n/index.ts";
@@ -8,13 +9,14 @@ import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/displ
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import "./menu-surface.ts";
 import "./session-menu.ts";
-import "./sidebar-agent-card.ts";
+import "./sidebar-agent-chip.ts";
 import "./sidebar-attention.ts";
 import "./sidebar-build-chip.ts";
 import "./sidebar-update-card.ts";
 import "./theme-mode-toggle.ts";
 import "./tooltip.ts";
-import { areUiSessionKeysEquivalent, normalizeAgentId } from "../lib/sessions/session-key.ts";
+import { normalizeAgentId } from "../lib/sessions/session-key.ts";
+import { shouldHandleNavigationClick } from "./app-sidebar-nav-menus.ts";
 import { AppSidebarSessionListElement } from "./app-sidebar-session-list.ts";
 import { icons } from "./icons.ts";
 import {
@@ -82,6 +84,29 @@ class AppSidebar extends AppSidebarSessionListElement {
       : t("chat.runControls.newSessionDisconnected");
     return html`
       <div class="sidebar-brand">
+        <a
+          class="sidebar-brand__identity"
+          href=${pathForRoute("new-session", this.basePath)}
+          aria-label=${titleForRoute("new-session")}
+          @click=${(event: MouseEvent) => {
+            if (!shouldHandleNavigationClick(event)) {
+              return;
+            }
+            event.preventDefault();
+            this.onNavigate?.("new-session");
+          }}
+        >
+          <span class="sidebar-brand__logo-slot">
+            <img
+              class="sidebar-brand__logo ${this.logoVisit ? "sidebar-brand__logo--vacated" : ""}"
+              src=${controlUiPublicAssetPath("apple-touch-icon.png", this.basePath)}
+              alt=""
+              aria-hidden="true"
+            />
+            ${this.renderLogoStandIn()}
+          </span>
+          <span class="sidebar-brand__title">OpenClaw</span>
+        </a>
         <div class="sidebar-brand__actions">
           ${this.renderSearch()}
           <openclaw-tooltip .content=${newSessionTitle}>
@@ -111,89 +136,6 @@ class AppSidebar extends AppSidebarSessionListElement {
     `;
   }
 
-  /** Zone 1: the agent identity card is the main session's entry point. */
-  private renderAgentCard() {
-    const gatewayStatus = t("chat.gatewayStatus", {
-      status: this.connected ? t("common.online") : t("common.offline"),
-    });
-    const { activeId: cardAgentId, agent: cardAgent, agents: cardAgents } = this.activeChipAgent();
-    const menuUnread = cardAgents.some((entry) => {
-      const agentId = normalizeAgentId(entry.id);
-      return agentId !== cardAgentId && this.agentUnreadCount(agentId) > 0;
-    });
-    const cardName = cardAgent ? normalizeAgentLabel(cardAgent) : cardAgentId;
-    const cardAvatarText =
-      (cardAgent ? resolveAgentTextAvatar(cardAgent) : null) ??
-      (cardName || cardAgentId).slice(0, 1).toUpperCase();
-    const mainRow = this.mainSessionRow(cardAgentId);
-    const mainKey = this.selectedAgentMainSessionKey(cardAgentId);
-    const mainSessionActive =
-      this.activeRouteId === "chat" &&
-      areUiSessionKeysEquivalent(this.getRouteSessionKey(), mainKey);
-    return html`
-      <openclaw-sidebar-agent-card
-        .agentName=${cardName}
-        .avatarUrl=${cardAgent ? resolveAgentAvatarUrl(cardAgent) : null}
-        .avatarText=${cardAvatarText}
-        .connected=${this.connected}
-        .statusLabel=${gatewayStatus}
-        .subtitle=${this.agentChipSubtitle(cardAgentId)}
-        .activeSession=${mainSessionActive}
-        .running=${Boolean(mainRow?.hasActiveRun)}
-        .unread=${mainRow?.unread === true && !mainSessionActive}
-        .menuOpen=${this.agentMenuPosition !== null}
-        .menuUnread=${menuUnread}
-        .switcherAvailable=${cardAgents.length > 1}
-        .onOpenMain=${() => this.openMainSession(cardAgentId)}
-        .onToggleMenu=${(trigger: HTMLElement) => this.toggleAgentMenu(trigger)}
-      ></openclaw-sidebar-agent-card>
-    `;
-  }
-
-  /** Zone 5: product chrome recedes to one slim footer bar. */
-  private renderFooterBar() {
-    const gatewayStatus = t("chat.gatewayStatus", {
-      status: this.connected ? t("common.online") : t("common.offline"),
-    });
-    return html`
-      <div class="sidebar-footer-bar">
-        <span class="sidebar-brand__logo-slot sidebar-footer-bar__logo">
-          <img
-            class="sidebar-brand__logo ${this.logoVisit ? "sidebar-brand__logo--vacated" : ""}"
-            src=${controlUiPublicAssetPath("apple-touch-icon.png", this.basePath)}
-            alt=""
-            aria-hidden="true"
-          />
-          ${this.renderLogoStandIn()}
-        </span>
-        <openclaw-sidebar-build-chip
-          .basePath=${this.basePath}
-          .gatewayVersion=${this.gatewayVersion}
-          .onNavigate=${(routeId: "about") => this.onNavigate?.(routeId)}
-        ></openclaw-sidebar-build-chip>
-        <span
-          class="sidebar-footer-bar__status ${this.connected
-            ? "sidebar-connection-status--online"
-            : "sidebar-connection-status--offline"}"
-          role="img"
-          aria-live="polite"
-          aria-label=${gatewayStatus}
-          title=${gatewayStatus}
-        ></span>
-        <openclaw-tooltip .content=${t("nav.settings")}>
-          <button
-            type="button"
-            class="sidebar-footer-bar__settings"
-            aria-label=${t("nav.settings")}
-            @click=${() => this.onNavigate?.("config")}
-          >
-            ${icons.settings}
-          </button>
-        </openclaw-tooltip>
-      </div>
-    `;
-  }
-
   private renderSearch() {
     const tooltip = `${t("chat.openCommandPalette")} (${PALETTE_SHORTCUT})`;
     return html`
@@ -212,10 +154,22 @@ class AppSidebar extends AppSidebarSessionListElement {
   }
 
   override render() {
+    const gatewayStatus = t("chat.gatewayStatus", {
+      status: this.connected ? t("common.online") : t("common.offline"),
+    });
+    const { activeId: chipAgentId, agent: chipAgent, agents: chipAgents } = this.activeChipAgent();
+    const chipMenuUnread = chipAgents.some((entry) => {
+      const agentId = normalizeAgentId(entry.id);
+      return agentId !== chipAgentId && this.agentUnreadCount(agentId) > 0;
+    });
+    const chipName = chipAgent ? normalizeAgentLabel(chipAgent) : chipAgentId;
+    const chipAvatarText =
+      (chipAgent ? resolveAgentTextAvatar(chipAgent) : null) ??
+      (chipName || chipAgentId).slice(0, 1).toUpperCase();
     return html`
       <aside class="sidebar">
         <div class="sidebar-shell" @mousedown=${beginNativeWindowDragFromTopInset}>
-          ${this.renderBrand()} ${this.renderAgentCard()}
+          ${this.renderBrand()}
           <div
             class="sidebar-shell__body sidebar-shell__body--scroll-${this.sessionsScrollState}"
             @scroll=${(event: Event) =>
@@ -255,7 +209,19 @@ class AppSidebar extends AppSidebarSessionListElement {
                   <span class="sidebar-footer-branch__name">${this.devGitBranch}</span>
                 </div>`
               : nothing}
-            ${this.renderFooterBar()}
+            <openclaw-sidebar-agent-chip
+              .agentName=${chipName}
+              .avatarUrl=${chipAgent ? resolveAgentAvatarUrl(chipAgent) : null}
+              .avatarText=${chipAvatarText}
+              .connected=${this.connected}
+              .statusLabel=${gatewayStatus}
+              .subtitle=${this.agentChipSubtitle(chipAgentId)}
+              .menuOpen=${this.agentMenuPosition !== null}
+              .menuUnread=${chipMenuUnread}
+              .newSessionDisabled=${!this.connected}
+              .onNewSession=${() => this.onOpenNewSession?.(chipAgentId)}
+              .onToggleMenu=${(trigger: HTMLElement) => this.toggleAgentMenu(trigger)}
+            ></openclaw-sidebar-agent-chip>
           </div>
         </div>
         ${this.renderCustomizeMenu()} ${this.renderMoreMenu()} ${this.renderAgentMenu()}

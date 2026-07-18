@@ -164,9 +164,7 @@ function createCodexSessionCatalogControlFromRequests(params: {
             archived: false,
             limit: remaining,
             modelProviders: [],
-            // Match Codex's resume picker/latest-session ordering so a session
-            // created outside OpenClaw enters the first catalog page immediately.
-            sortKey: "updated_at",
+            sortKey: "recency_at",
             sortDirection: "desc",
             ...(cwd ? { cwd } : {}),
             ...(cursor ? { cursor } : {}),
@@ -392,7 +390,6 @@ async function listCodexSessionCatalog(params: {
   runtime: PluginRuntime;
   control: CodexSessionCatalogControl;
   query?: CodexSessionCatalogParams;
-  onHost?: (host: CodexSessionCatalogHost) => void;
 }): Promise<CodexSessionCatalogResult> {
   const query = readGatewayParams(params.query);
   const requestedHostIds = query.hostIds ? new Set(query.hostIds) : undefined;
@@ -408,11 +405,6 @@ async function listCodexSessionCatalog(params: {
           }),
         ]
       : [];
-  for (const host of localHosts) {
-    if (params.onHost) {
-      void host.then(params.onHost).catch(() => undefined);
-    }
-  }
   const wantsNodes =
     !requestedHostIds || query.hostIds?.some((hostId) => hostId.startsWith("node:"));
   if (!wantsNodes) {
@@ -428,17 +420,18 @@ async function listCodexSessionCatalog(params: {
       )
       .slice(0, MAX_HOST_COUNT - localHosts.length);
   } catch (error) {
-    const registryHost: CodexSessionCatalogHost = {
-      hostId: "node:registry",
-      label: "Paired nodes",
-      kind: "node",
-      connected: false,
-      sessions: [],
-      error: catalogError("NODE_LIST_FAILED", error),
-    };
-    params.onHost?.(registryHost);
     return {
-      hosts: [...(await Promise.all(localHosts)), registryHost],
+      hosts: [
+        ...(await Promise.all(localHosts)),
+        {
+          hostId: "node:registry",
+          label: "Paired nodes",
+          kind: "node",
+          connected: false,
+          sessions: [],
+          error: catalogError("NODE_LIST_FAILED", error),
+        },
+      ],
     };
   }
   const adoptedNodeSessions = listNodeAdoptedSessionEntries({
@@ -451,7 +444,6 @@ async function listCodexSessionCatalog(params: {
       node,
       query,
       adoptedSessions: adoptedNodeSessions,
-      ...(params.onHost ? { onHost: params.onHost } : {}),
     });
     return Object.assign(host, codexNodeTerminalCapability(node));
   });
@@ -1247,19 +1239,15 @@ function registerCodexSessionCatalog(params: {
     label: "Codex",
     list: async (query) => {
       const localTerminalAvailable = resolveLocalCodexTerminalExecutable() !== undefined;
-      const { onHost, ...gatewayQuery } = query;
-      const mapHost = (host: CodexSessionCatalogHost) =>
-        toGenericCatalogHost(host, localTerminalAvailable);
       return (
         await listCodexSessionCatalog({
           bindingStore: params.bindingStore,
           config: params.getRuntimeConfig(),
           runtime: params.api.runtime,
           control: params.control,
-          query: gatewayQuery,
-          ...(onHost ? { onHost: (host) => onHost(mapHost(host)) } : {}),
+          query,
         })
-      ).hosts.map(mapHost);
+      ).hosts.map((host) => toGenericCatalogHost(host, localTerminalAvailable));
     },
     read: async (request) => {
       const page = await readCodexSessionTranscript({

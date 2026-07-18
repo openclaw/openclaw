@@ -116,7 +116,6 @@ describe("createPinnedDispatcher", () => {
     expect(dispatcherOptions?.connect?.autoSelectFamilyAttemptTimeout).toBe(300);
     expect(dispatcherOptions?.allowH2).toBe(false);
     expect(agentCtor).toHaveBeenCalledWith({
-      factory: expect.any(Function),
       connect: {
         lookup,
         autoSelectFamily: true,
@@ -142,7 +141,6 @@ describe("createPinnedDispatcher", () => {
     createPinnedDispatcher(pinned);
 
     expect(agentCtor).toHaveBeenCalledWith({
-      factory: expect.any(Function),
       connect: {
         lookup,
         autoSelectFamily: false,
@@ -171,7 +169,6 @@ describe("createPinnedDispatcher", () => {
     });
 
     expect(agentCtor).toHaveBeenCalledWith({
-      factory: expect.any(Function),
       connect: {
         autoSelectFamily: true,
         autoSelectFamilyAttemptTimeout: 300,
@@ -198,7 +195,6 @@ describe("createPinnedDispatcher", () => {
     });
 
     expect(agentCtor).toHaveBeenCalledWith({
-      factory: expect.any(Function),
       connect: {
         autoSelectFamily: false,
         autoSelectFamilyAttemptTimeout: 50,
@@ -219,7 +215,6 @@ describe("createPinnedDispatcher", () => {
     createPinnedDispatcher(pinned, undefined, undefined, 123_456);
 
     expect(agentCtor).toHaveBeenCalledWith({
-      factory: expect.any(Function),
       connect: {
         lookup,
         autoSelectFamily: true,
@@ -370,7 +365,6 @@ describe("createPinnedDispatcher", () => {
     });
 
     expect(envHttpProxyAgentCtor).toHaveBeenCalledWith({
-      factory: expect.any(Function),
       connect: {
         autoSelectFamily: true,
         autoSelectFamilyAttemptTimeout: 300,
@@ -402,7 +396,6 @@ describe("createPinnedDispatcher", () => {
     });
 
     expect(proxyAgentCtor).toHaveBeenCalledWith({
-      factory: expect.any(Function),
       uri: "http://127.0.0.1:7890",
       clientFactory: expect.any(Function),
       proxyTls: {
@@ -439,7 +432,6 @@ describe("createPinnedDispatcher", () => {
     );
 
     expect(proxyAgentCtor).toHaveBeenCalledWith({
-      factory: expect.any(Function),
       uri: "http://127.0.0.1:7890",
       clientFactory: expect.any(Function),
       requestTls: {

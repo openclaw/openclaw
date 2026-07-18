@@ -5,19 +5,33 @@ import type { MSTeamsConversationStore } from "./conversation-store.js";
 import { type MSTeamsActivityHandler, registerMSTeamsHandlers } from "./monitor-handler.js";
 import {
   createActivityHandler,
-  getMSTeamsTestRuntimeState,
   installMSTeamsTestRuntime,
 } from "./monitor-handler.test-helpers.js";
 import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 
-const runtimeApiMockState = getMSTeamsTestRuntimeState();
+const runtimeApiMockState = vi.hoisted(() => ({
+  dispatchReplyFromConfigWithSettledDispatcher: vi.fn(async (params: { ctxPayload: unknown }) => ({
+    queuedFinal: false,
+    counts: {},
+    capturedCtxPayload: params.ctxPayload,
+  })),
+}));
+
+vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>();
+  return {
+    ...actual,
+    dispatchReplyFromConfigWithSettledDispatcher:
+      runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher,
+  };
+});
 
 vi.mock("./reply-dispatcher.js", () => ({
   createMSTeamsReplyDispatcher: () => ({
-    dispatcherOptions: {},
-    delivery: { deliver: vi.fn(async () => undefined) },
+    dispatcher: {},
     replyOptions: {},
+    markDispatchIdle: vi.fn(),
   }),
 }));
 
@@ -138,18 +152,18 @@ async function runMessageActivity(params: {
 }
 
 function lastDispatchedCtxPayload(): Record<string, unknown> {
-  const dispatched = runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mock.calls.at(
+  const dispatched = runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher.mock.calls.at(
     -1,
-  )?.[0] as { ctx?: Record<string, unknown> } | undefined;
-  if (!dispatched?.ctx) {
+  )?.[0] as { ctxPayload?: Record<string, unknown> } | undefined;
+  if (!dispatched?.ctxPayload) {
     throw new Error("expected dispatched context payload");
   }
-  return dispatched.ctx;
+  return dispatched.ctxPayload;
 }
 
 describe("msteams adaptive card action invoke", () => {
   beforeEach(() => {
-    runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mockClear();
+    runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher.mockClear();
   });
 
   it("forwards adaptive card submitted data to the agent as message text", async () => {
@@ -173,7 +187,9 @@ describe("msteams adaptive card action invoke", () => {
     await runAdaptiveCardInvoke(registered, payload);
 
     expect(run).not.toHaveBeenCalled();
-    expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+    expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).toHaveBeenCalledTimes(
+      1,
+    );
     const expectedBody = JSON.stringify(payload.action.data);
     const ctxPayload = lastDispatchedCtxPayload();
     expect(ctxPayload.RawBody).toBe(expectedBody);

@@ -25,7 +25,6 @@ import { pluginTabKey, pluginTabRefFromSearch, pluginTabSearch } from "./pages/p
 const ALL_ROUTES: RouteId[] = Array.from(
   new Set<RouteId>([
     "chat",
-    "custodian",
     ...SIDEBAR_NAV_ROUTES,
     "skills",
     "skill-workshop",
@@ -78,7 +77,6 @@ describe("navigationIconForRoute", () => {
       Object.fromEntries(ALL_ROUTES.map((routeId) => [routeId, navigationIconForRoute(routeId)])),
     ).toEqual({
       chat: "messageSquare",
-      custodian: "lobster",
       activity: "activity",
       approvals: "shieldCheck",
       workboard: "kanban",
@@ -132,7 +130,6 @@ describe("titleForRoute", () => {
       Object.fromEntries(ALL_ROUTES.map((routeId) => [routeId, titleForRoute(routeId)])),
     ).toEqual({
       chat: "Chat",
-      custodian: "OpenClaw",
       activity: "Activity",
       approvals: "Approvals",
       workboard: "Workboard",
@@ -172,7 +169,6 @@ describe("subtitleForRoute", () => {
       Object.fromEntries(ALL_ROUTES.map((routeId) => [routeId, subtitleForRoute(routeId)])),
     ).toEqual({
       chat: "Gateway chat for quick interventions.",
-      custodian: "System setup and care.",
       activity: "Browser-local tool activity summaries.",
       approvals: "Recent exec, plugin, and system-agent approvals.",
       workboard: "Agent work queue and session handoff.",
@@ -209,7 +205,6 @@ describe("subtitleForRoute", () => {
 describe("pathForRoute", () => {
   it("returns correct path without base", () => {
     expect(pathForRoute("chat")).toBe("/chat");
-    expect(pathForRoute("custodian")).toBe("/custodian");
     expect(pathForRoute("connection")).toBe("/settings/connection");
     expect(pathForRoute("debug")).toBe("/debug");
     expect(pathForRoute("logs")).toBe("/logs");
@@ -237,7 +232,6 @@ describe("route path normalization", () => {
 describe("routeIdFromPath", () => {
   it("returns tab for valid path", () => {
     expect(routeIdFromPath("/chat")).toBe("chat");
-    expect(routeIdFromPath("/custodian")).toBe("custodian");
     expect(routeIdFromPath("/new")).toBe("new-session");
     expect(routeIdFromPath("/overview")).toBeNull();
     expect(routeIdFromPath("/settings/connection")).toBe("connection");
@@ -312,7 +306,6 @@ describe("inferBasePathFromPathname", () => {
   it("handles direct routes, nested mounts, mount roots, and index.html", () => {
     expect(inferBasePathFromPathname("/")).toBe("");
     expect(inferBasePathFromPathname("/chat")).toBe("");
-    expect(inferBasePathFromPathname("/custodian")).toBe("");
     expect(inferBasePathFromPathname("/settings/connection")).toBe("");
     expect(inferBasePathFromPathname("/ui/chat")).toBe("/ui");
     expect(inferBasePathFromPathname("/apps/openclaw/sessions")).toBe("/apps/openclaw");
@@ -366,7 +359,6 @@ describe("SIDEBAR_NAV_ROUTES", () => {
     const settingsRoutes = SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.routes);
     expect(SIDEBAR_NAV_ROUTES).not.toContain("config");
     expect(settingsRoutes).toEqual([
-      "custodian",
       "profile",
       "config",
       "appearance",

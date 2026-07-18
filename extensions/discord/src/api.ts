@@ -9,7 +9,6 @@ import {
   retryAsync,
   type RetryConfig,
 } from "openclaw/plugin-sdk/retry-runtime";
-import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { isDiscordHtmlResponseBody, summarizeDiscordResponseBody } from "./error-body.js";
 import { parseDiscordRetryAfterBodySeconds } from "./retry-after.js";
 
@@ -237,8 +236,6 @@ export async function requestDiscord<T>(
       label: options?.label ?? path,
       shouldRetry: (err) => err instanceof DiscordApiError && err.status === 429,
       retryAfterMs: (err) => getDiscordApiRetryAfterMs(err, retryConfig),
-      // 429 backoffs can run for minutes; keep them abortable like the fetch itself.
-      sleep: (ms) => sleepWithAbort(ms, options?.signal),
     },
   );
 }

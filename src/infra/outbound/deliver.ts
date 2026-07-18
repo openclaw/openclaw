@@ -1148,37 +1148,21 @@ async function renderPresentationForDelivery(
     presentation,
     capabilities: handler.presentationCapabilities,
   });
-  const textIsFallback = payload.presentationTextMode === "fallback";
-  const adaptedPayload = {
-    ...payload,
-    ...(textIsFallback ? { text: undefined } : {}),
-    presentation: adaptedPresentation,
-  };
+  const adaptedPayload = { ...payload, presentation: adaptedPresentation };
   const rendered = handler.renderPresentation
     ? await handler.renderPresentation(adaptedPayload)
     : null;
   if (rendered) {
-    const {
-      presentation: _presentation,
-      presentationTextMode: _presentationTextMode,
-      ...withoutPresentation
-    } = rendered;
+    const { presentation: _presentation, ...withoutPresentation } = rendered;
     return withoutPresentation;
   }
-  const {
-    presentation: _presentation,
-    presentationTextMode: _presentationTextMode,
-    ...withoutPresentation
-  } = payload;
+  const { presentation: _presentation, ...withoutPresentation } = payload;
   return {
     ...withoutPresentation,
-    text: textIsFallback
-      ? (payload.text ??
-        renderMessagePresentationFallbackText({ presentation: adaptedPresentation }))
-      : renderMessagePresentationFallbackText({
-          text: payload.text,
-          presentation: adaptedPresentation,
-        }),
+    text: renderMessagePresentationFallbackText({
+      text: payload.text,
+      presentation: adaptedPresentation,
+    }),
   };
 }
 

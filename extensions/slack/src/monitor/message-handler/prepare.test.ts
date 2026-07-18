@@ -116,7 +116,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
   const defaultAccount: ResolvedSlackAccount = {
     accountId: "default",
     enabled: true,
-    identity: "bot",
     botTokenSource: "config",
     appTokenSource: "config",
     userTokenSource: "none",
@@ -657,7 +656,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
     return {
       accountId: "default",
       enabled: true,
-      identity: "bot",
       botTokenSource: "config",
       appTokenSource: "config",
       userTokenSource: "none",

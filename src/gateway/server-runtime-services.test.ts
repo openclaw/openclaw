@@ -8,13 +8,6 @@ import {
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 
-function waitForFast<T>(
-  callback: () => T | Promise<T>,
-  options: { timeout?: number; interval?: number } = {},
-) {
-  return vi.waitFor(callback, { interval: 1, ...options });
-}
-
 type StartSessionDeliveryRuntime =
   typeof import("../infra/session-delivery-queue-runtime.js").startSessionDeliveryRuntime;
 
@@ -251,7 +244,7 @@ describe("server-runtime-services", () => {
       logCron,
     });
 
-    await waitForFast(() => expect(order).toEqual(["start", "after-start", "hook"]));
+    await vi.waitFor(() => expect(order).toEqual(["start", "after-start", "hook"]));
     expect(cronReconciliation.arm).toHaveBeenCalledWith({
       reason: "startup",
       config,
@@ -281,7 +274,7 @@ describe("server-runtime-services", () => {
       logCron,
     });
 
-    await waitForFast(() =>
+    await vi.waitFor(() =>
       expect(logCron.error).toHaveBeenCalledWith("failed to start: Error: store unavailable"),
     );
     expect(onStartError).toHaveBeenCalledOnce();
@@ -304,7 +297,7 @@ describe("server-runtime-services", () => {
       logCron,
     });
 
-    await waitForFast(() =>
+    await vi.waitFor(() =>
       expect(logCron.error).toHaveBeenCalledWith("failed to start: Error: watcher unavailable"),
     );
     expect(cronReconciliation.complete).not.toHaveBeenCalled();
@@ -328,13 +321,13 @@ describe("server-runtime-services", () => {
       logCron: { error: vi.fn() },
     });
 
-    await waitForFast(() => expect(cronReconciliation.complete).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(cronReconciliation.complete).toHaveBeenCalledTimes(1));
     expect(getActiveGatewayRootWorkCount()).toBe(1);
     if (!releaseHook) {
       throw new Error("Expected cron reconciliation hook to be pending");
     }
     releaseHook();
-    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
   });
 
   it("does not start model pricing refresh after scheduled services stop before import settles", async () => {
@@ -400,7 +393,7 @@ describe("server-runtime-services", () => {
     await vi.dynamicImportSettled();
 
     expect(hoisted.schedulePendingSessionDeliveries).toHaveBeenCalledTimes(1);
-    await waitForFast(() =>
+    await vi.waitFor(() =>
       expect(log.error).toHaveBeenCalledWith(
         "Session delivery recovery failed: Error: database busy",
       ),
@@ -495,9 +488,9 @@ describe("server-runtime-services", () => {
     });
 
     await vi.advanceTimersByTimeAsync(25);
-    await waitForFast(() => expect(run).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(run).toHaveBeenCalledOnce());
     expect(activeRootCounts).toEqual([1]);
-    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
   });
 
   it("retries a scheduled idle task while request work is active", async () => {
@@ -524,7 +517,7 @@ describe("server-runtime-services", () => {
     await vi.advanceTimersByTimeAsync(49);
     expect(run).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
-    await waitForFast(() => expect(run).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(run).toHaveBeenCalledOnce());
   });
 
   it("cancels a scheduled idle task before its delay elapses", async () => {

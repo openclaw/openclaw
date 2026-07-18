@@ -151,7 +151,7 @@ describe("web tools defaults", () => {
         createTool: () => ({
           description: "custom runtime tool",
           parameters: {},
-          execute: async () => ({ query: "openclaw", results: [] }),
+          execute: async () => ({ ok: true }),
         }),
       },
     });
@@ -168,16 +168,10 @@ describe("web tools defaults", () => {
       },
     });
 
-    const result = await tool?.execute?.("call-runtime-provider", { query: "openclaw" });
+    const result = await tool?.execute?.("call-runtime-provider", {});
 
     expect(tool?.description).toContain("Search current web");
-    expect(result?.details).toMatchObject({
-      kind: "results",
-      provider: "custom",
-      query: "openclaw",
-      count: 0,
-      results: [],
-    });
+    expect((result?.details as { ok?: boolean } | undefined)?.ok).toBe(true);
   });
 
   it("keeps runtime provider discovery enabled when runtime web_search metadata is missing", async () => {
@@ -200,7 +194,7 @@ describe("web tools defaults", () => {
         createTool: () => ({
           description: "custom runtime tool",
           parameters: {},
-          execute: async () => ({ query: "openclaw", results: [] }),
+          execute: async () => ({ provider: "custom" }),
         }),
       },
     });
@@ -219,9 +213,7 @@ describe("web tools defaults", () => {
       sandboxed: true,
     });
 
-    const result = await tool?.execute?.("call-runtime-provider-without-metadata", {
-      query: "openclaw",
-    });
+    const result = await tool?.execute?.("call-runtime-provider-without-metadata", {});
 
     expect((result?.details as { provider?: string } | undefined)?.provider).toBe("custom");
     expect(runWebSearchCalls).toHaveLength(1);
@@ -251,7 +243,7 @@ describe("web tools defaults", () => {
           createTool: () => ({
             description: "stale runtime tool",
             parameters: {},
-            execute: async () => ({ query: "openclaw", results: [] }),
+            execute: async () => ({ provider: "stale" }),
           }),
         },
       },
@@ -273,7 +265,7 @@ describe("web tools defaults", () => {
           createTool: () => ({
             description: "fresh runtime tool",
             parameters: {},
-            execute: async () => ({ query: "openclaw", results: [] }),
+            execute: async () => ({ provider: "fresh" }),
           }),
         },
       },
@@ -311,7 +303,7 @@ describe("web tools defaults", () => {
       lateBindRuntimeConfig: true,
     });
 
-    const result = await tool?.execute?.("call-runtime-provider", { query: "openclaw" });
+    const result = await tool?.execute?.("call-runtime-provider", {});
 
     expect((result?.details as { provider?: string } | undefined)?.provider).toBe("fresh");
     expect(runWebSearchCalls).toHaveLength(1);

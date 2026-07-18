@@ -102,7 +102,8 @@ function writeSqliteTranscriptArchive(params: {
     }
     const tempPath = `${archivePath}.${randomUUID()}.tmp`;
     try {
-      writeDurableFileExclusive(tempPath, encoded.bytes);
+      fs.writeFileSync(tempPath, encoded.bytes, { flag: "wx", mode: 0o600 });
+      fsyncRegularFile(tempPath);
       fs.renameSync(tempPath, archivePath);
       fsyncDirectory(params.archiveDirectory);
       return archivePath;
@@ -117,12 +118,9 @@ function writeSqliteTranscriptArchive(params: {
   throw new Error(`Could not create SQLite transcript archive for ${params.sessionId}`);
 }
 
-// Windows rejects fsync on read-only handles, so keep the exclusive writable
-// descriptor open through both the write and durability boundary.
-function writeDurableFileExclusive(filePath: string, content: Buffer): void {
-  const fd = fs.openSync(filePath, "wx", 0o600);
+function fsyncRegularFile(filePath: string): void {
+  const fd = fs.openSync(filePath, "r");
   try {
-    fs.writeFileSync(fd, content);
     fs.fsyncSync(fd);
   } finally {
     fs.closeSync(fd);

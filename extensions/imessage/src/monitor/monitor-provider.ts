@@ -11,9 +11,9 @@ import {
   resolveEnvelopeFormatOptions,
   runChannelInboundEvent,
   shouldDebounceTextInbound,
-  type ChannelInboundTurnPlan,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
+  deliverInboundReplyWithMessageSendContext,
   createChannelMessageReplyPipeline,
   resolveChannelStreamingBlockEnabled,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -29,6 +29,9 @@ import { isInboundPathAllowed, kindFromMime } from "openclaw/plugin-sdk/media-ru
 import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { resolveTextChunkLimit, type GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
+import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
+import { createReplyDispatcherWithTyping } from "openclaw/plugin-sdk/reply-runtime";
+import { settleReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { getRuntimeConfig, type OpenClawConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, logVerbose, shouldLogVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
@@ -76,7 +79,6 @@ import {
 import { repairIMessageConversationAnchor } from "./conversation-repair.js";
 import { createIMessageEchoCachingSend, deliverReplies } from "./deliver.js";
 import { resolveIMessageDmHistoryContext, resolveIMessageDmHistoryLimit } from "./dm-history.js";
-import { createIMessageThrottledDropDiagnosticCache } from "./drop-diagnostic-cache.js";
 import { createSentMessageCache } from "./echo-cache.js";
 import {
   warnGroupAllowlistDropPerChatOnce,
@@ -521,7 +523,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   // replay aggressively without the old catchup cursor/retry bookkeeping.
   const inboundReplayGuard = createIMessageInboundReplayGuard();
   let staleBacklogSuppressed = 0;
-  const loggedThrottledDropDiagnostics = createIMessageThrottledDropDiagnosticCache();
+  const loggedThrottledDropDiagnostics = new Set<string>();
 
   // Downtime recovery. We pass the persisted recovery cursor (the last
   // dispatched rowid) to watch.subscribe as since_rowid so imsg replays the rows
@@ -1046,7 +1048,10 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         const shouldThrottleDiagnostic = shouldThrottleIMessageInboundDropDiagnostic(
           decision.reason,
         );
-        if (!shouldThrottleDiagnostic || !loggedThrottledDropDiagnostics.check(throttleKey)) {
+        if (!shouldThrottleDiagnostic || !loggedThrottledDropDiagnostics.has(throttleKey)) {
+          if (shouldThrottleDiagnostic) {
+            loggedThrottledDropDiagnostics.add(throttleKey);
+          }
           runtime.log?.(warn(diagnostic));
         }
       }
@@ -1353,26 +1358,39 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           : undefined,
     });
 
-    const dispatcherOptions = {
+    const {
+      dispatcher,
+      replyOptions: typingReplyOptions,
+      markDispatchIdle,
+    } = createReplyDispatcherWithTyping({
       ...replyPipeline,
       humanDelay: resolveHumanDelayConfig(cfg, decision.route.agentId),
-    };
-    const delivery: ChannelInboundTurnPlan["delivery"] = {
-      durable: ctxPayload.To
-        ? {
-            to: ctxPayload.To,
-            deps: {
-              imessage: createIMessageEchoCachingSend({
-                accountId: accountInfo.accountId,
-                sentMessageCache,
-              }),
-            },
-          }
-        : false,
-      deliver: async (payload: Parameters<typeof deliverReplies>[0]["replies"][number]) => {
+      deliver: async (payload, info) => {
         const target = ctxPayload.To;
         if (!target) {
           runtime.error?.(danger("imessage: missing delivery target"));
+          return;
+        }
+        const durable = await deliverInboundReplyWithMessageSendContext({
+          cfg,
+          channel: "imessage",
+          accountId: accountInfo.accountId,
+          agentId: decision.route.agentId,
+          ctxPayload,
+          payload,
+          info,
+          to: target,
+          deps: {
+            imessage: createIMessageEchoCachingSend({
+              accountId: accountInfo.accountId,
+              sentMessageCache,
+            }),
+          },
+        });
+        if (durable.status === "failed") {
+          throw durable.error;
+        }
+        if (durable.status === "handled_visible" || durable.status === "handled_no_send") {
           return;
         }
         await deliverReplies({
@@ -1389,7 +1407,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       onError: (err, info) => {
         runtime.error?.(danger(`imessage ${info.kind} reply failed: ${String(err)}`));
       },
-    };
+    });
     let directTypingController: IMessageTypingController | undefined;
     const directToolTypingOptions = shouldUseDirectToolTypingOptions
       ? ({
@@ -1403,6 +1421,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           allowProgressCallbacksWhenSourceDeliverySuppressed: true,
           onTypingController: (typing: IMessageTypingController) => {
             directTypingController = typing;
+            typingReplyOptions.onTypingController?.(typing);
           },
           ...(supportsTyping
             ? {
@@ -1475,19 +1494,35 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
             historyMap: groupHistories,
             limit: historyLimit,
           },
-          delivery,
-          dispatcherOptions: {
-            ...dispatcherOptions,
-            onSettled: () => stopEarlyDirectTyping?.(),
+          onPreDispatchFailure: () => {
+            stopEarlyDirectTyping?.();
+            void settleReplyDispatcher({
+              dispatcher,
+              onSettled: () => markDispatchIdle(),
+            });
           },
-          replyOptions: {
-            disableBlockStreaming:
-              typeof configuredBlockStreaming === "boolean" ? !configuredBlockStreaming : undefined,
-            onModelSelected,
-            ...directToolTypingOptions,
+          runDispatch: async () => {
+            try {
+              return await dispatchInboundMessage({
+                ctx: ctxPayload,
+                cfg,
+                dispatcher,
+                replyOptions: {
+                  ...typingReplyOptions,
+                  disableBlockStreaming:
+                    typeof configuredBlockStreaming === "boolean"
+                      ? !configuredBlockStreaming
+                      : undefined,
+                  onModelSelected,
+                  ...directToolTypingOptions,
+                },
+              });
+            } finally {
+              markDispatchIdle();
+              stopEarlyDirectTyping?.();
+            }
           },
         }),
-        onFinalize: () => stopEarlyDirectTyping?.(),
       },
     });
   }

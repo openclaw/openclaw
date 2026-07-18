@@ -390,7 +390,6 @@ CREATE TABLE IF NOT EXISTS device_pairing_pending (
   device_family TEXT,
   client_id TEXT,
   client_mode TEXT,
-  browser_origin TEXT,
   role TEXT,
   roles_json TEXT,
   scopes_json TEXT,
@@ -413,7 +412,6 @@ CREATE TABLE IF NOT EXISTS device_pairing_paired (
   device_family TEXT,
   client_id TEXT,
   client_mode TEXT,
-  browser_origin TEXT,
   role TEXT,
   roles_json TEXT,
   scopes_json TEXT,
@@ -491,15 +489,6 @@ CREATE TABLE IF NOT EXISTS macos_port_guardian_records (
 
 CREATE INDEX IF NOT EXISTS idx_macos_port_guardian_records_port
   ON macos_port_guardian_records(port, timestamp DESC);
-
-CREATE TABLE IF NOT EXISTS onboarding_recommendations (
-  config_key TEXT NOT NULL PRIMARY KEY,
-  inventory_hash TEXT NOT NULL,
-  matches_json TEXT NOT NULL,
-  offered_at_ms INTEGER NOT NULL,
-  accepted_at_ms INTEGER,
-  updated_at_ms INTEGER NOT NULL
-) STRICT;
 
 CREATE TABLE IF NOT EXISTS workspace_setup_state (
   workspace_key TEXT NOT NULL PRIMARY KEY,

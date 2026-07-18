@@ -104,14 +104,16 @@ export async function tombstoneMainRestartRecoveryWithNotice(params: {
   if (!tombstonedEntry) {
     return "skipped";
   }
-  await sendUnresumableSessionNotice({
-    deliveryContext,
-    entry: tombstonedEntry,
-    gatewayRuntime: params.gatewayRuntime,
-    reason: params.reason,
-    sessionKey: params.sessionKey,
-    text: TOMBSTONED_SESSION_NOTICE,
-  });
+  if (deliveryContext) {
+    await sendUnresumableSessionNotice({
+      deliveryContext,
+      entry: tombstonedEntry,
+      gatewayRuntime: params.gatewayRuntime,
+      reason: params.reason,
+      sessionKey: params.sessionKey,
+      text: TOMBSTONED_SESSION_NOTICE,
+    });
+  }
   return "tombstoned";
 }
 

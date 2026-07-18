@@ -792,36 +792,20 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
       defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
       buildChannelSummary: async ({ snapshot }) => {
         const { buildPassiveProbedChannelStatusSummary } = await loadExtensionSharedSdk();
-        return buildPassiveProbedChannelStatusSummary(
-          snapshot,
-          snapshot.identity === "user"
-            ? {
-                identity: "user",
-                userTokenSource: snapshot.userTokenSource ?? "none",
-                ...(snapshot.mode === "http"
-                  ? { signingSecretSource: snapshot.signingSecretSource ?? "none" }
-                  : { appTokenSource: snapshot.appTokenSource ?? "none" }),
-              }
-            : {
-                botTokenSource: snapshot.botTokenSource ?? "none",
-                appTokenSource: snapshot.appTokenSource ?? "none",
-              },
-        );
+        return buildPassiveProbedChannelStatusSummary(snapshot, {
+          botTokenSource: snapshot.botTokenSource ?? "none",
+          appTokenSource: snapshot.appTokenSource ?? "none",
+        });
       },
       probeAccount: async ({ account, timeoutMs }) => {
-        const token =
-          account.identity === "user" ? account.userToken?.trim() : account.botToken?.trim();
+        const token = account.botToken?.trim();
         if (!token) {
-          return {
-            ok: false,
-            error: account.identity === "user" ? "missing user token" : "missing token",
-          };
+          return { ok: false, error: "missing token" };
         }
         return await (
           await loadSlackProbeModule()
         ).probeSlack(token, timeoutMs, {
           accountId: account.accountId,
-          ...(account.identity === "user" ? { identity: "user" } : {}),
         });
       },
       formatCapabilitiesProbe: ({ probe }) => {
@@ -832,11 +816,6 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
         }
         if (slackProbe?.bot?.name) {
           lines.push({ text: `Bot: @${slackProbe.bot.name}` });
-        }
-        if (slackProbe?.user?.id || slackProbe?.user?.name) {
-          const name = slackProbe.user.name ? `@${slackProbe.user.name}` : "unknown";
-          const id = slackProbe.user.id ? ` (${slackProbe.user.id})` : "";
-          lines.push({ text: `User identity: ${name}${id}` });
         }
         if (slackProbe?.team?.name || slackProbe?.team?.id) {
           const id = slackProbe.team?.id ? ` (${slackProbe.team.id})` : "";
@@ -850,20 +829,12 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
         const botToken = account.botToken?.trim();
         const userToken = account.userToken?.trim();
         const { fetchSlackScopes } = await loadSlackScopesModule();
-        if (account.identity === "user") {
-          const userScopes: SlackScopesResultShape = userToken
-            ? await fetchSlackScopes(userToken, timeoutMs)
-            : { ok: false, error: "Slack user token missing." };
-          lines.push(formatSlackScopeDiagnostic({ tokenType: "user", result: userScopes }));
-          details.userScopes = userScopes;
-        } else {
-          const botScopes: SlackScopesResultShape = botToken
-            ? await fetchSlackScopes(botToken, timeoutMs)
-            : { ok: false, error: "Slack bot token missing." };
-          lines.push(formatSlackScopeDiagnostic({ tokenType: "bot", result: botScopes }));
-          details.botScopes = botScopes;
-        }
-        if (account.identity !== "user" && userToken) {
+        const botScopes: SlackScopesResultShape = botToken
+          ? await fetchSlackScopes(botToken, timeoutMs)
+          : { ok: false, error: "Slack bot token missing." };
+        lines.push(formatSlackScopeDiagnostic({ tokenType: "bot", result: botScopes }));
+        details.botScopes = botScopes;
+        if (userToken) {
           const userScopes = await fetchSlackScopes(userToken, timeoutMs);
           lines.push(formatSlackScopeDiagnostic({ tokenType: "user", result: userScopes }));
           details.userScopes = userScopes;
@@ -872,16 +843,15 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
       },
       resolveAccountSnapshot: ({ account }) => {
         const mode = account.config.mode ?? "socket";
-        const identity = account.config.identity ?? "bot";
         const credentialConfigured =
           mode === "http"
             ? resolveConfiguredFromRequiredCredentialStatuses(account, [
-                identity === "user" ? "userTokenStatus" : "botTokenStatus",
+                "botTokenStatus",
                 "signingSecretStatus",
               ])
             : mode === "socket"
               ? resolveConfiguredFromRequiredCredentialStatuses(account, [
-                  identity === "user" ? "userTokenStatus" : "botTokenStatus",
+                  "botTokenStatus",
                   "appTokenStatus",
                 ])
               : undefined;
@@ -893,9 +863,6 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
           configured,
           extra: {
             ...projectCredentialSnapshotFields(account),
-            ...(identity === "user"
-              ? { identity, mode, userTokenSource: account.userTokenSource }
-              : {}),
           },
         };
       },

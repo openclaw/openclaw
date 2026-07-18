@@ -150,7 +150,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
         return;
       }
       if (this.peer?.connectionState === "failed" || this.peer?.connectionState === "closed") {
-        this.failConnection("Realtime connection closed");
+        this.ctx.callbacks.onStatus?.("error", "Realtime connection closed");
       }
     });
 
@@ -310,15 +310,6 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
     this.responseActive = false;
     this.responseCreateInFlight = false;
     this.responseCreatePending = false;
-  }
-
-  private failConnection(detail: string): void {
-    if (this.closed) {
-      return;
-    }
-    this.ctx.callbacks.onStatus?.("error", detail);
-    // A terminal peer failure still owns live browser media until stop() releases it.
-    this.stop();
   }
 
   private send(event: unknown): void {

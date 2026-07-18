@@ -7,8 +7,6 @@ import { fileURLToPath } from "node:url";
 import type { Command } from "commander";
 import { ensureExtensionRelayToken } from "../browser/extension-relay/relay-auth.js";
 import { isLoopbackHost } from "../gateway/net.js";
-import { resolveGatewayPort } from "../sdk-config.js";
-import { resolveLocalPairingGatewayUrl } from "./browser-cli-extension-pairing.js";
 import type { BrowserParentOpts } from "./browser-cli-shared.js";
 import {
   danger,
@@ -84,24 +82,14 @@ function buildPairingString(gatewayUrl?: string): {
     // Remote: the extension connects straight to this gateway over wss:// — no
     // node host on the browser machine. The gateway route self-validates the
     // same host-local secret.
-    const relayUrl = new URL(buildRemoteGatewayRelayUrl(gateway));
-    relayUrl.searchParams.set("gateway", gateway);
     return {
-      pairing: `${relayUrl.toString()}#${token}`,
+      pairing: `${buildRemoteGatewayRelayUrl(gateway)}#${token}`,
       relayPort,
       remote: true,
     };
   }
-  const configuredRemote = cfg.gateway?.mode === "remote" ? cfg.gateway.remote?.url?.trim() : "";
-  const directGatewayUrl = resolveLocalPairingGatewayUrl({
-    configuredRemote,
-    gatewayPort: resolveGatewayPort(cfg),
-    tlsEnabled: cfg.gateway?.tls?.enabled === true,
-  });
-  const relayUrl = new URL(`ws://127.0.0.1:${relayPort}/extension`);
-  relayUrl.searchParams.set("gateway", directGatewayUrl);
   return {
-    pairing: `${relayUrl.toString()}#${token}`,
+    pairing: `ws://127.0.0.1:${relayPort}/extension#${token}`,
     relayPort,
     remote: false,
   };

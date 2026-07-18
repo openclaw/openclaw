@@ -138,14 +138,12 @@ struct MenuContent: View {
             } label: {
                 Label("Open Chat", systemImage: "bubble.left.and.bubble.right")
             }
-            if self.state.quickChatEnabled {
-                Button {
-                    QuickChatController.shared.toggle()
-                } label: {
-                    Label("Quick Chat", systemImage: "text.bubble")
-                }
-                .globalKeyboardShortcut(.toggleQuickChat)
+            Button {
+                QuickChatController.shared.toggle()
+            } label: {
+                Label("Quick Chat", systemImage: "text.bubble")
             }
+            .globalKeyboardShortcut(.toggleQuickChat)
             if self.state.canvasEnabled {
                 Button {
                     AppNavigationActions.toggleCanvas()

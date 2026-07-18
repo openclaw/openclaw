@@ -40,7 +40,10 @@ import {
   buildTtsSupplementMediaPayload,
   getReplyPayloadTtsSupplement,
 } from "openclaw/plugin-sdk/reply-payload";
-import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
+import {
+  dispatchInboundMessageWithBufferedDispatcher,
+  type GetReplyOptions,
+} from "openclaw/plugin-sdk/reply-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
@@ -231,6 +234,7 @@ type MatrixMonitorHandlerParams = {
   createChannelInboundEnvelopeBuilder?: typeof createChannelInboundEnvelopeBuilder;
   finalizeInboundContext?: (ctx: Record<string, unknown>) => unknown;
   resolveHumanDelayConfig?: typeof resolveHumanDelayConfig;
+  dispatchInboundMessageWithBufferedDispatcher?: typeof dispatchInboundMessageWithBufferedDispatcher;
 };
 
 function resolveMatrixMentionPrecheckText(params: {
@@ -480,6 +484,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       createChannelInboundEnvelopeBuilderImpl = createChannelInboundEnvelopeBuilder,
     finalizeInboundContext,
     resolveHumanDelayConfig: resolveHumanDelayConfigImpl = resolveHumanDelayConfig,
+    dispatchInboundMessageWithBufferedDispatcher:
+      dispatchInboundMessageWithBufferedDispatcherImpl = dispatchInboundMessageWithBufferedDispatcher,
   } = params;
   const contextVisibilityMode = resolveChannelContextVisibilityMode({
     cfg,
@@ -2379,11 +2385,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         onReplyStart: typingCallbacks.onReplyStart,
         onIdle: typingCallbacks.onIdle,
       };
-      const {
-        deliver: deliverReply,
-        onError: onReplyError,
-        ...turnDispatcherOptions
-      } = dispatcherOptions;
       const pinnedMainDmOwner = isDirectMessage
         ? await (async () => {
             const livePinnedCfg = core.config.current() as CoreConfig;
@@ -2467,7 +2468,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 });
               },
             },
-            afterRecord: async () => {
+            runDispatch: async () => {
               if (
                 sharedDmContextNotice &&
                 markTrackedRoomIfFirst(sharedDmContextNoticeRooms, roomId)
@@ -2483,50 +2484,53 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                   );
                 }
               }
-            },
-            delivery: {
-              deliver: deliverReply,
-              onError: (err, info) => onReplyError(err, info as Parameters<typeof onReplyError>[1]),
-            },
-            dispatcherOptions: {
-              ...turnDispatcherOptions,
-              onSettled: () => progressDraftGate.cancel(),
-            },
-            replyOptions: {
-              skillFilter: roomConfig?.skills,
-              // Preserve explicit block streaming with draft previews: drafts update the live
-              // block, while block deliveries finalize completed blocks as separate events.
-              disableBlockStreaming: !blockStreamingEnabled,
-              onPartialReply: draftStream
-                ? (payload) => {
-                    if (progressDraftStreaming) {
-                      return;
-                    }
-                    latestDraftFullText = payload.text ?? "";
-                    suppressPreviewToolProgressForAnswerText(latestDraftFullText);
-                    updateDraftFromLatestFullText();
-                  }
-                : undefined,
-              onBlockReplyQueued: draftStream
-                ? (payload, context) => {
-                    if (payload.isCompactionNotice === true) {
-                      return;
-                    }
-                    queueDraftBlockBoundary(payload, context);
-                  }
-                : undefined,
-              // Reset draft boundary bookkeeping on assistant message
-              // boundaries so post-tool blocks stream from a fresh
-              // cumulative payload (payload.text resets upstream).
-              onAssistantMessageStart: draftStream
-                ? () => {
-                    resetDraftBlockOffsets();
-                    resetPreviewToolProgress();
-                  }
-                : undefined,
-              onQueuedFollowupAdmitted: draftStream ? resetDraftDeliveryState : undefined,
-              ...buildPreviewToolProgressReplyOptions(),
-              onModelSelected,
+
+              return await dispatchInboundMessageWithBufferedDispatcherImpl({
+                ctx: ctxPayload,
+                cfg,
+                dispatcherOptions: {
+                  ...dispatcherOptions,
+                  onSettled: () => progressDraftGate.cancel(),
+                },
+                replyOptions: {
+                  skillFilter: roomConfig?.skills,
+                  // Keep block streaming enabled when explicitly requested, even
+                  // with draft previews on. The draft remains the live preview
+                  // for the current assistant block, while block deliveries
+                  // finalize completed blocks into their own preserved events.
+                  disableBlockStreaming: !blockStreamingEnabled,
+                  onPartialReply: draftStream
+                    ? (payload) => {
+                        if (progressDraftStreaming) {
+                          return;
+                        }
+                        latestDraftFullText = payload.text ?? "";
+                        suppressPreviewToolProgressForAnswerText(latestDraftFullText);
+                        updateDraftFromLatestFullText();
+                      }
+                    : undefined,
+                  onBlockReplyQueued: draftStream
+                    ? (payload, context) => {
+                        if (payload.isCompactionNotice === true) {
+                          return;
+                        }
+                        queueDraftBlockBoundary(payload, context);
+                      }
+                    : undefined,
+                  // Reset draft boundary bookkeeping on assistant message
+                  // boundaries so post-tool blocks stream from a fresh
+                  // cumulative payload (payload.text resets upstream).
+                  onAssistantMessageStart: draftStream
+                    ? () => {
+                        resetDraftBlockOffsets();
+                        resetPreviewToolProgress();
+                      }
+                    : undefined,
+                  onQueuedFollowupAdmitted: draftStream ? resetDraftDeliveryState : undefined,
+                  ...buildPreviewToolProgressReplyOptions(),
+                  onModelSelected,
+                },
+              });
             },
           }),
         },

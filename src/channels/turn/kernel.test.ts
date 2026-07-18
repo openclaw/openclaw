@@ -34,17 +34,6 @@ import type { PreparedChannelTurn } from "./types.js";
 const deliverOutboundPayloads = vi.hoisted(() => vi.fn());
 const resolveOutboundDurableFinalDeliverySupport = vi.hoisted(() => vi.fn());
 const sendDurableMessageBatch = vi.hoisted(() => vi.fn());
-const recordInboundSessionCore = vi.hoisted(() => vi.fn(async () => undefined));
-const dispatchReplyWithBufferedBlockDispatcherCore = vi.hoisted(() => vi.fn());
-
-vi.mock("../../auto-reply/reply/provider-dispatcher.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../auto-reply/reply/provider-dispatcher.js")>();
-  return {
-    ...actual,
-    dispatchReplyWithBufferedBlockDispatcher: dispatchReplyWithBufferedBlockDispatcherCore,
-  };
-});
 
 vi.mock("../../infra/outbound/deliver.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../infra/outbound/deliver.js")>();
@@ -61,11 +50,6 @@ vi.mock("../message/send.js", async (importOriginal) => {
     ...actual,
     sendDurableMessageBatch,
   };
-});
-
-vi.mock("../session.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../session.js")>();
-  return { ...actual, recordInboundSession: recordInboundSessionCore };
 });
 
 const cfg = {} as OpenClawConfig;
@@ -206,8 +190,6 @@ function loggedEvents(log: ReturnType<typeof vi.fn>): TurnLogEvent[] {
 describe("channel turn kernel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    recordInboundSessionCore.mockResolvedValue(undefined);
-    dispatchReplyWithBufferedBlockDispatcherCore.mockImplementation(createDispatch());
     resetDiagnosticEventsForTest();
     resetLogger();
     setLoggerOverride({ level: "info" });
@@ -1303,11 +1285,7 @@ describe("channel turn kernel", () => {
 
   it("drops repeated bot-pair turns in the core turn kernel before record and dispatch", async () => {
     const events: string[] = [];
-    dispatchReplyWithBufferedBlockDispatcherCore.mockImplementation(createDispatch(events));
     const onFinalize = vi.fn();
-    recordInboundSessionCore.mockImplementation(async () => {
-      events.push("record");
-    });
     let nowMs = 1_000;
     const runOne = async (id: string) =>
       await runChannelInboundEvent({
@@ -1317,11 +1295,12 @@ describe("channel turn kernel", () => {
         adapter: {
           ingest: () => ({ id, rawText: "hello" }),
           resolveTurn: () => ({
-            cfg,
             channel: "test",
             accountId: "acct",
-            route: { agentId: "main", sessionKey: "agent:main:test:peer" },
+            routeSessionKey: "agent:main:test:peer",
+            storePath: "/tmp/sessions.json",
             ctxPayload: createCtx(),
+            recordInboundSession: createRecordInboundSession(events),
             botLoopProtection: {
               scopeId: "acct",
               conversationId: "room",
@@ -1331,7 +1310,13 @@ describe("channel turn kernel", () => {
               defaultEnabled: true,
               nowMs: nowMs++,
             },
-            delivery: { deliver: async () => ({ visibleReplySent: true }) },
+            runDispatch: async () => {
+              events.push("custom-dispatch");
+              return {
+                queuedFinal: true,
+                counts: { tool: 0, block: 0, final: 1 },
+              };
+            },
           }),
           onFinalize,
         },
@@ -1347,7 +1332,7 @@ describe("channel turn kernel", () => {
       ctxPayload: createCtx(),
       routeSessionKey: "agent:main:test:peer",
     });
-    expect(events).toEqual(["record", "dispatch"]);
+    expect(events).toEqual(["record", "custom-dispatch"]);
     expect(onFinalize).toHaveBeenCalledTimes(2);
     const [, suppressed] = onFinalize.mock.calls;
     expect(suppressed?.[0]).toMatchObject({
@@ -1359,10 +1344,6 @@ describe("channel turn kernel", () => {
 
   it("runs observe-only preflights through resolve, record, dispatch, and finalize without visible delivery", async () => {
     const events: string[] = [];
-    dispatchReplyWithBufferedBlockDispatcherCore.mockImplementation(createDispatch(events));
-    recordInboundSessionCore.mockImplementation(async () => {
-      events.push("record");
-    });
     const deliver = vi.fn();
     const onFinalize = vi.fn();
     const result = await runChannelInboundEvent({
@@ -1374,8 +1355,12 @@ describe("channel turn kernel", () => {
         resolveTurn: () => ({
           cfg,
           channel: "test",
-          route: { agentId: "observer", sessionKey: "agent:observer:test:peer" },
+          agentId: "observer",
+          routeSessionKey: "agent:observer:test:peer",
+          storePath: "/tmp/sessions.json",
           ctxPayload: createCtx({ SessionKey: "agent:observer:test:peer" }),
+          recordInboundSession: createRecordInboundSession(events),
+          dispatchReplyWithBufferedBlockDispatcher: createDispatch(events),
           delivery: { deliver },
           record: {
             onRecordError: vi.fn(),
@@ -1392,15 +1377,6 @@ describe("channel turn kernel", () => {
     expect(result.dispatched).toBe(true);
     expect(events).toEqual(["record", "dispatch"]);
     expect(deliver).not.toHaveBeenCalled();
-    if (!result.dispatched) {
-      throw new Error("expected dispatch");
-    }
-    expect(hasVisibleChannelTurnDispatch(result.dispatchResult)).toBe(false);
-    expect(resolveChannelTurnDispatchCounts(result.dispatchResult)).toEqual({
-      tool: 0,
-      block: 0,
-      final: 0,
-    });
     expect(onFinalize).toHaveBeenCalledTimes(1);
     const [finalized] = requireFirstMockCall(onFinalize, "finalize");
     const finalizedResult = finalizeResult(finalized);
@@ -1496,9 +1472,6 @@ describe("channel turn kernel", () => {
     const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async () => {
       throw dispatchError;
     }) as unknown as DispatchReplyWithBufferedBlockDispatcher;
-    dispatchReplyWithBufferedBlockDispatcherCore.mockImplementation(
-      dispatchReplyWithBufferedBlockDispatcher,
-    );
 
     await expect(
       runChannelInboundEvent({
@@ -1509,8 +1482,12 @@ describe("channel turn kernel", () => {
           resolveTurn: () => ({
             cfg,
             channel: "test",
-            route: { agentId: "main", sessionKey: "agent:main:test:peer" },
+            agentId: "main",
+            routeSessionKey: "agent:main:test:peer",
+            storePath: "/tmp/sessions.json",
             ctxPayload: createCtx(),
+            recordInboundSession: createRecordInboundSession(),
+            dispatchReplyWithBufferedBlockDispatcher,
             delivery: { deliver: async () => ({ visibleReplySent: false }) },
             record: {
               onRecordError: vi.fn(),

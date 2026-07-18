@@ -355,7 +355,27 @@ export function transitionMainSessionRecovery(
         },
       };
     }
-    case "cancel_reservation":
+    case "cancel_reservation": {
+      const state = entry.mainRestartRecovery;
+      const reserved = state?.reservation;
+      if (
+        !state ||
+        entry.sessionId !== command.reservation.sessionId ||
+        state.cycleId !== command.reservation.cycleId ||
+        reserved?.runId !== command.reservation.runId ||
+        reserved.attempt !== command.reservation.attempt ||
+        reserved.lifecycleGeneration !== command.reservation.lifecycleGeneration
+      ) {
+        return { kind: "rejected", reason: "stale_reservation" };
+      }
+      entry.mainRestartRecovery = {
+        ...state,
+        revision: nextRevision(state),
+        chargedAttempts: Math.max(0, command.reservation.attempt - 1),
+        reservation: undefined,
+      };
+      return { kind: "applied" };
+    }
     case "abandon_reservation": {
       const state = entry.mainRestartRecovery;
       const reserved = state?.reservation;
@@ -372,10 +392,6 @@ export function transitionMainSessionRecovery(
       entry.mainRestartRecovery = {
         ...state,
         revision: nextRevision(state),
-        chargedAttempts:
-          command.kind === "cancel_reservation"
-            ? Math.max(0, command.reservation.attempt - 1)
-            : state.chargedAttempts,
         reservation: undefined,
       };
       return { kind: "applied" };

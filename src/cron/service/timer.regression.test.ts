@@ -2166,36 +2166,26 @@ describe("cron service timer regressions", () => {
     const timerRun = onTimer(state);
     await firstStarted.promise;
     await vi.waitFor(() => {
-      expect(state.store?.jobs.find((job) => job.id === second.id)?.state.queuedAtMs).toBe(dueAt);
+      expect(state.store?.jobs.find((job) => job.id === second.id)?.state.runningAtMs).toBe(dueAt);
     });
     now += 2 * 60 * 60 * 1000 + 1;
     recomputeNextRunsForMaintenance(state);
-    expect(state.store?.jobs.find((job) => job.id === second.id)?.state.queuedAtMs).toBe(dueAt);
+    expect(state.store?.jobs.find((job) => job.id === second.id)?.state.runningAtMs).toBe(dueAt);
 
     releaseFirst.resolve({ status: "ok", summary: "first" });
     await secondStarted.promise;
-    const secondStartedAt = now;
-    expect(state.store?.jobs.find((job) => job.id === second.id)?.state.runningAtMs).toBe(
-      secondStartedAt,
-    );
+    expect(state.store?.jobs.find((job) => job.id === second.id)?.state.runningAtMs).toBe(now);
     expect(
       (await loadCronStore(store.storePath))?.jobs.find((job) => job.id === second.id)?.state
         .runningAtMs,
-    ).toBe(secondStartedAt);
-    expect(state.queuedRunReservationsByJobId.has(second.id)).toBe(true);
-    now += 2 * 60 * 60 * 1000 + 1;
-    recomputeNextRunsForMaintenance(state);
-    expect(state.store?.jobs.find((job) => job.id === second.id)?.state.runningAtMs).toBe(
-      secondStartedAt,
-    );
+    ).toBe(now);
     now += 100;
     releaseSecond.resolve({ status: "ok", summary: "second" });
 
     await timerRun;
     const completedSecond = state.store?.jobs.find((job) => job.id === second.id);
-    expect(completedSecond?.state.lastRunAtMs).toBe(secondStartedAt);
-    expect(completedSecond?.state.lastDurationMs).toBe(2 * 60 * 60 * 1000 + 101);
-    expect(state.queuedRunReservationsByJobId.has(second.id)).toBe(false);
+    expect(completedSecond?.state.lastRunAtMs).toBe(dueAt + 2 * 60 * 60 * 1000 + 1);
+    expect(completedSecond?.state.lastDurationMs).toBe(100);
   });
 
   it("shares maxConcurrentRuns with startup catch-up", async () => {
@@ -2237,7 +2227,7 @@ describe("cron service timer regressions", () => {
     await activeStarted.promise;
     const catchupRun = runMissedJobs(state);
     await vi.waitFor(() => {
-      expect(state.store?.jobs.find((job) => job.id === catchupJob.id)?.state.queuedAtMs).toBe(
+      expect(state.store?.jobs.find((job) => job.id === catchupJob.id)?.state.runningAtMs).toBe(
         dueAt,
       );
     });
@@ -2287,7 +2277,7 @@ describe("cron service timer regressions", () => {
     await activeStarted.promise;
     const catchupRun = runMissedJobs(state);
     await vi.waitFor(() => {
-      expect(state.store?.jobs.find((job) => job.id === catchupJob.id)?.state.queuedAtMs).toBe(
+      expect(state.store?.jobs.find((job) => job.id === catchupJob.id)?.state.runningAtMs).toBe(
         dueAt,
       );
     });
@@ -2829,7 +2819,7 @@ describe("cron service timer regressions", () => {
     if (!replacementPersistedJob) {
       throw new Error("expected replacement-claimed startup job");
     }
-    replacementPersistedJob.state.queuedAtMs = replacementReservationMs;
+    replacementPersistedJob.state.runningAtMs = replacementReservationMs;
     await saveCronStore(store.storePath, replacementStore);
 
     releaseRun.resolve({ status: "ok", summary: "old service result" });
@@ -2845,7 +2835,7 @@ describe("cron service timer regressions", () => {
     expect(persistedJob?.state.lastStatus).toBeUndefined();
     expect(persistedUnstartedJob?.state.runningAtMs).toBeUndefined();
     expect(persistedUnstartedJob?.state.lastStatus).toBeUndefined();
-    expect(persistedReplacementClaimedJob?.state.queuedAtMs).toBe(replacementReservationMs);
+    expect(persistedReplacementClaimedJob?.state.runningAtMs).toBe(replacementReservationMs);
     expect(persistedReplacementClaimedJob?.state.lastStatus).toBeUndefined();
     expect(
       listTaskRecords().find((entry) => entry.runtime === "cron" && entry.sourceId === job.id)
@@ -2899,7 +2889,7 @@ describe("cron service timer regressions", () => {
     if (!replacementPersistedJob) {
       throw new Error("expected replacement-claimed timer job");
     }
-    replacementPersistedJob.state.queuedAtMs = replacementReservationMs;
+    replacementPersistedJob.state.runningAtMs = replacementReservationMs;
     await saveCronStore(store.storePath, replacementStore);
 
     releaseRun.resolve({ status: "ok", summary: "old service result" });
@@ -2907,7 +2897,7 @@ describe("cron service timer regressions", () => {
 
     const persisted = await loadCronStore(store.storePath);
     expect(
-      persisted.jobs.find((entry) => entry.id === replacementClaimedJob.id)?.state.queuedAtMs,
+      persisted.jobs.find((entry) => entry.id === replacementClaimedJob.id)?.state.runningAtMs,
     ).toBe(replacementReservationMs);
   });
 

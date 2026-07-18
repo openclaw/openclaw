@@ -32,7 +32,7 @@ export type ImageContent = {
 export type AgentCommandResultMetaOverrides = {
   transport?: "embedded";
   fallbackFrom?: "gateway";
-  fallbackReason?: "gateway_timeout" | "gateway_closed";
+  fallbackReason?: "gateway_timeout";
   fallbackSessionId?: string;
   fallbackSessionKey?: string;
 };

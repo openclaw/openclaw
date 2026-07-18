@@ -7,7 +7,7 @@ import type {
   TextContent,
   ThinkingBudgets,
   Transport,
-} from "@openclaw/llm-core";
+} from "../../llm-core/src/index.js";
 import { runAgentLoop, runAgentLoopContinue } from "./agent-loop.js";
 import { TranscriptNotContinuableError } from "./errors.js";
 import { resolveAgentReasoningOption } from "./reasoning.js";

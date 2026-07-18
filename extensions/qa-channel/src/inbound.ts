@@ -384,7 +384,6 @@ export async function handleQaInbound(params: {
       },
     },
     replyOptions: {
-      allowToolLifecycleWhenProgressHidden: true,
       onPartialReply: async (payload) => {
         await preview.update(payload.text ?? "");
       },

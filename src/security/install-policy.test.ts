@@ -254,12 +254,9 @@ describe("runInstallPolicy", () => {
           },
           request: baseRequest(sourceDir),
         });
-        await vi.waitFor(
-          () => {
-            expect(noOutputTimeouts.length).toBeGreaterThanOrEqual(2);
-          },
-          { timeout: 5_000 },
-        );
+        await vi.waitFor(() => {
+          expect(noOutputTimeouts.length).toBeGreaterThanOrEqual(2);
+        });
         childPid = await readPidFile(pidPath);
         noOutputTimeouts.at(-1)?.();
         const result = await resultPromise;

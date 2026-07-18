@@ -413,9 +413,7 @@ export async function summarizeInStages(params: {
 
   const partialSummaries: string[] = [];
   let consecutiveGenericFallbacks = 0;
-  // Caller-owned leading context lives in the oldest split. Only losing that
-  // split requires restoration; later fallback placeholders remain in the merge.
-  let oldestChunkDegraded = false;
+  let usedGenericFallback = false;
   for (const [index, chunk] of plan.chunks.entries()) {
     const result = await summarizeWithFallbackResult({
       ...params,
@@ -424,9 +422,7 @@ export async function summarizeInStages(params: {
     });
     consecutiveGenericFallbacks =
       result.kind === "generic-fallback" ? consecutiveGenericFallbacks + 1 : 0;
-    if (index === 0) {
-      oldestChunkDegraded = result.kind === "generic-fallback";
-    }
+    usedGenericFallback ||= result.kind === "generic-fallback";
 
     // Keep one placeholder to mark the missing split, but stop before repeated
     // placeholders trigger more split requests or a doomed merge request.
@@ -449,7 +445,7 @@ export async function summarizeInStages(params: {
       throw new Error("Compaction summary plan produced no summary");
     }
     return {
-      kind: oldestChunkDegraded ? "generic-fallback" : "summary",
+      kind: usedGenericFallback ? "generic-fallback" : "summary",
       text: summary,
     };
   }
@@ -490,7 +486,7 @@ export async function summarizeInStages(params: {
     messages: summaryMessages,
     customInstructions: mergeInstructions,
   });
-  return oldestChunkDegraded && mergedResult.kind === "summary"
+  return usedGenericFallback && mergedResult.kind === "summary"
     ? { kind: "generic-fallback", text: mergedResult.text }
     : mergedResult;
 }

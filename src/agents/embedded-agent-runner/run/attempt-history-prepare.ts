@@ -59,7 +59,6 @@ export async function prepareEmbeddedAttemptHistory(input: {
   isRawModelRun: boolean;
   orphanRepair?: OrphanRepairPlan;
   replayAllowedToolNames: Set<string>;
-  sandboxed: boolean;
   sessionAgentId: string;
   settingsManager: SettingsManager;
   systemPromptText: string;
@@ -226,7 +225,6 @@ export async function prepareEmbeddedAttemptHistory(input: {
         tokenBudget: messageBudget,
         availableTools: new Set(input.capabilityToolNames),
         citationsMode: attempt.config?.memory?.citations,
-        sandboxed: input.sandboxed,
         modelId: attempt.modelId,
         maxOutputTokens: reserveTokens,
         contextEngineHostSupport: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,

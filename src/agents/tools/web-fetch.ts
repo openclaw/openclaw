@@ -86,46 +86,6 @@ const WebFetchSchema = Type.Object({
   ),
 });
 
-const WebFetchOutputSchema = Type.Object(
-  {
-    url: Type.String(),
-    finalUrl: Type.String(),
-    status: Type.Integer({ minimum: 0 }),
-    contentType: Type.Optional(Type.String()),
-    title: Type.Optional(Type.String()),
-    extractMode: stringEnum(EXTRACT_MODES),
-    extractor: Type.String(),
-    externalContent: Type.Object(
-      {
-        untrusted: Type.Literal(true),
-        source: Type.Literal("web_fetch"),
-        wrapped: Type.Literal(true),
-        provider: Type.Optional(Type.String()),
-      },
-      { additionalProperties: false },
-    ),
-    truncated: Type.Boolean(),
-    length: Type.Integer({ minimum: 0 }),
-    rawLength: Type.Integer({ minimum: 0 }),
-    spill: Type.Optional(
-      Type.Object(
-        {
-          path: Type.String(),
-          chars: Type.Integer({ minimum: 0 }),
-          truncated: Type.Optional(Type.Literal(true)),
-        },
-        { additionalProperties: false },
-      ),
-    ),
-    fetchedAt: Type.String(),
-    tookMs: Type.Integer({ minimum: 0 }),
-    text: Type.String(),
-    warning: Type.Optional(Type.String()),
-    cached: Type.Optional(Type.Literal(true)),
-  },
-  { additionalProperties: false },
-);
-
 type WebFetchConfig = NonNullable<OpenClawConfig["tools"]>["web"] extends infer Web
   ? Web extends { fetch?: infer Fetch }
     ? Fetch
@@ -295,7 +255,7 @@ function formatWebFetchTerminalPresentation(result: unknown): { text: string } |
 
 function wrapWebFetchContent(value: string, maxChars: number): WebFetchWrappedContent {
   if (maxChars <= 0) {
-    return { text: "", truncated: true, rawLength: value.length, length: 0 };
+    return { text: "", truncated: true, rawLength: value.length, wrappedLength: 0 };
   }
   const includeWarning = maxChars >= WEB_FETCH_WRAPPER_WITH_WARNING_OVERHEAD;
   const wrapperOverhead = includeWarning
@@ -310,7 +270,7 @@ function wrapWebFetchContent(value: string, maxChars: number): WebFetchWrappedCo
       text: truncatedWrapper.text,
       truncated: true,
       rawLength: value.length,
-      length: truncatedWrapper.text.length,
+      wrappedLength: truncatedWrapper.text.length,
     };
   }
   const maxInner = Math.max(0, maxChars - wrapperOverhead);
@@ -332,7 +292,7 @@ function wrapWebFetchContent(value: string, maxChars: number): WebFetchWrappedCo
     text: wrappedText,
     truncated: truncated.truncated,
     rawLength: value.length,
-    length: wrappedText.length,
+    wrappedLength: wrappedText.length,
   };
 }
 
@@ -340,12 +300,10 @@ type WebFetchWrappedContent = {
   text: string;
   truncated: boolean;
   rawLength: number;
-  length: number;
-  spill?: {
-    path: string;
-    chars: number;
-    truncated?: true;
-  };
+  wrappedLength: number;
+  fullOutputPath?: string;
+  spilledChars?: number;
+  spillTruncated?: boolean;
 };
 
 async function spillWebFetchContent(
@@ -360,19 +318,19 @@ async function spillWebFetchContent(
   // maxChars/maxCharsCap bound the model-visible return text. Recoverable spill
   // uses this fixed file cap so vanished pages can still be read after truncation.
   const content = truncateUtf16Safe(value, WEB_FETCH_SPILL_MAX_CHARS);
-  const spillChars = content.length;
-  const spillPath = await writePrivateTempFile(
+  const spilledChars = content.length;
+  const fullOutputPath = await writePrivateTempFile(
     "openclaw-web-fetch",
     wrapWebContent(content, "web_fetch"),
   );
   const spillCapped = value.length > WEB_FETCH_SPILL_MAX_CHARS;
-  const isSpillTruncated = sourceTruncated || spillCapped;
+  const spillTruncated = sourceTruncated || spillCapped;
   const spillNote = sourceTruncated
     ? " Spilled available content from truncated response."
     : spillCapped
-      ? ` Spilled first ${spillChars} chars.`
+      ? ` Spilled first ${spilledChars} chars.`
       : "";
-  const fullOutputFooter = formatFullOutputFooter(spillPath);
+  const fullOutputFooter = formatFullOutputFooter(fullOutputPath);
   const footer = `\n\n[Showing truncated web_fetch content. ${fullOutputFooter}.${spillNote}]`;
   const compactFooter = `[${fullOutputFooter}]`;
   let visible = wrapped;
@@ -381,19 +339,17 @@ async function spillWebFetchContent(
     visible = wrapWebFetchContent(value, maxChars - footer.length);
     text = `${visible.text}${footer}`;
   } else if (compactFooter.length <= maxChars) {
-    visible = { ...wrapped, text: "", length: 0 };
+    visible = { ...wrapped, text: "", wrappedLength: 0 };
     text = compactFooter;
   }
   return {
     ...visible,
     truncated: true,
     text,
-    length: text.length,
-    spill: {
-      path: spillPath,
-      chars: spillChars,
-      ...(isSpillTruncated ? { truncated: true } : {}),
-    },
+    wrappedLength: text.length,
+    fullOutputPath,
+    spilledChars,
+    spillTruncated,
   };
 }
 
@@ -546,9 +502,12 @@ async function normalizeProviderWebFetchPayload(params: {
       provider: params.providerId,
     },
     truncated: wrapped.truncated,
-    length: wrapped.length,
+    length: wrapped.wrappedLength,
     rawLength: providerRawLength,
-    ...(wrapped.spill ? { spill: wrapped.spill } : {}),
+    wrappedLength: wrapped.wrappedLength,
+    ...(wrapped.fullOutputPath ? { fullOutputPath: wrapped.fullOutputPath } : {}),
+    ...(wrapped.spilledChars !== undefined ? { spilledChars: wrapped.spilledChars } : {}),
+    ...(wrapped.spillTruncated ? { spillTruncated: true } : {}),
     fetchedAt:
       typeof payload.fetchedAt === "string" && payload.fetchedAt
         ? payload.fetchedAt
@@ -796,7 +755,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       finalUrl, // Keep raw
       status: res.status,
       contentType: normalizedContentType, // Protocol metadata, don't wrap
-      ...(wrappedTitle ? { title: wrappedTitle } : {}),
+      title: wrappedTitle,
       extractMode: params.extractMode,
       extractor,
       externalContent: {
@@ -805,13 +764,16 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
         wrapped: true,
       },
       truncated: wrapped.truncated,
-      length: wrapped.length,
+      length: wrapped.wrappedLength,
       rawLength: wrapped.rawLength, // Actual content length, not wrapped
-      ...(wrapped.spill ? { spill: wrapped.spill } : {}),
+      wrappedLength: wrapped.wrappedLength,
+      ...(wrapped.fullOutputPath ? { fullOutputPath: wrapped.fullOutputPath } : {}),
+      ...(wrapped.spilledChars !== undefined ? { spilledChars: wrapped.spilledChars } : {}),
+      ...(wrapped.spillTruncated ? { spillTruncated: true } : {}),
       fetchedAt: new Date().toISOString(),
       tookMs: Date.now() - start,
       text: wrapped.text,
-      ...(wrappedWarning ? { warning: wrappedWarning } : {}),
+      warning: wrappedWarning,
     };
     writeCache(FETCH_CACHE, cacheKey, payload, params.cacheTtlMs);
     return payload;
@@ -838,7 +800,6 @@ export function createWebFetchTool(options?: {
     name: "web_fetch",
     description: "Fetch URL; extract readable markdown/text. Lightweight; no browser automation.",
     parameters: WebFetchSchema,
-    outputSchema: WebFetchOutputSchema,
     execute: async (_toolCallId, args, signal, onUpdate) => {
       const { config, preferRuntimeProviders, providerSelectionId, runtimeWebFetch } =
         resolveWebFetchToolRuntimeContext({

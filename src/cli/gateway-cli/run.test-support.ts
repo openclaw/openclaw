@@ -7,19 +7,8 @@ type GatewayRunTestLogger = {
 };
 
 type GatewayRunTestApi = {
-  isGatewayHealthzResponse(statusCode: number | undefined, body: string): boolean;
   normalizeGatewayHealthProbeHost(host: string): string;
-  probeGatewayHealthz(params: {
-    host: string;
-    port: number;
-    timeoutMs?: number;
-    tlsFingerprint?: string;
-  }): Promise<boolean>;
-  resolveGatewayLockErrorExitCode(
-    err: unknown,
-    supervisor: RespawnSupervisor | null,
-    healthyGatewayConfirmed: boolean,
-  ): number;
+  resolveGatewayLockErrorExitCode(err: unknown, supervisor: RespawnSupervisor | null): number;
   resolveGatewayStartupFailureExitCode(err: unknown): number;
   runGatewayLoopWithSupervisedLockRecovery(params: {
     startLoop: () => Promise<void>;
@@ -42,17 +31,11 @@ function getTestApi(): GatewayRunTestApi {
 }
 
 export const testing: GatewayRunTestApi = {
-  isGatewayHealthzResponse(statusCode, body) {
-    return getTestApi().isGatewayHealthzResponse(statusCode, body);
-  },
   normalizeGatewayHealthProbeHost(host) {
     return getTestApi().normalizeGatewayHealthProbeHost(host);
   },
-  async probeGatewayHealthz(params) {
-    return await getTestApi().probeGatewayHealthz(params);
-  },
-  resolveGatewayLockErrorExitCode(err, supervisor, healthyGatewayConfirmed) {
-    return getTestApi().resolveGatewayLockErrorExitCode(err, supervisor, healthyGatewayConfirmed);
+  resolveGatewayLockErrorExitCode(err, supervisor) {
+    return getTestApi().resolveGatewayLockErrorExitCode(err, supervisor);
   },
   resolveGatewayStartupFailureExitCode(err) {
     return getTestApi().resolveGatewayStartupFailureExitCode(err);

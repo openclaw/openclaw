@@ -36,7 +36,12 @@ import {
 } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
-import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import {
+  isAcpSessionKey,
+  isCronSessionKey,
+  isSubagentSessionKey,
+  resolveAgentIdFromSessionKey,
+} from "../routing/session-key.js";
 import {
   beginSessionWorkAdmission,
   cancelSessionWorkAdmissionHandoff,
@@ -107,7 +112,15 @@ function loadExpectedRestartRecoveryTarget(params: {
 }
 
 function shouldSkipMainRecovery(entry: SessionEntry, sessionKey: string): boolean {
-  return !isMainRestartRecoveryCandidate(entry, sessionKey);
+  if (typeof entry.spawnDepth === "number" && entry.spawnDepth > 0) {
+    return true;
+  }
+  if (entry.subagentRole != null) {
+    return true;
+  }
+  return (
+    isSubagentSessionKey(sessionKey) || isCronSessionKey(sessionKey) || isAcpSessionKey(sessionKey)
+  );
 }
 
 function normalizeStringSet(values: Iterable<string> | undefined): Set<string> {
@@ -1378,6 +1391,7 @@ async function writeUnresumableSessionNotice(params: {
 async function failUnresumableMainSession(params: {
   cfg?: OpenClawConfig;
   entry: SessionEntry;
+  expectedRecoverySourceRunId?: string;
   gatewayRuntime: GatewayRecoveryRuntime;
   observation: MainSessionRecoveryObservation;
   reason: string;
@@ -1669,6 +1683,9 @@ async function recoverStore(params: {
       const disposition = await failUnresumableMainSession({
         cfg: params.cfg,
         entry,
+        expectedRecoverySourceRunId: normalizeOptionalString(
+          entry.restartRecoveryDeliverySourceRunId,
+        ),
         gatewayRuntime: params.gatewayRuntime,
         observation: recoveryView.observation,
         reason: "message-tool-only recovery authority is unavailable",
@@ -1699,6 +1716,7 @@ async function recoverStore(params: {
       const disposition = await failUnresumableMainSession({
         cfg: params.cfg,
         entry,
+        expectedRecoverySourceRunId,
         gatewayRuntime: params.gatewayRuntime,
         observation: recoveryView.observation,
         reason: resumeBlockReason,
@@ -1830,6 +1848,7 @@ async function recoverStore(params: {
         const disposition = await failUnresumableMainSession({
           cfg: params.cfg,
           entry,
+          expectedRecoverySourceRunId,
           gatewayRuntime: params.gatewayRuntime,
           observation: recoveryView.observation,
           reason: completion.reason,
@@ -1844,6 +1863,7 @@ async function recoverStore(params: {
       const disposition = await failUnresumableMainSession({
         cfg: params.cfg,
         entry,
+        expectedRecoverySourceRunId,
         gatewayRuntime: params.gatewayRuntime,
         observation: recoveryView.observation,
         reason: resumePolicy.reason,

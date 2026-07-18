@@ -163,13 +163,6 @@ import type { HealthSummary } from "../commands/health.js";
 import type { NodeEventContext } from "./server-node-events-types.js";
 import { handleNodeEvent } from "./server-node-events.js";
 
-function waitForFast<T>(
-  callback: () => T | Promise<T>,
-  options: { timeout?: number; interval?: number } = {},
-) {
-  return vi.waitFor(callback, { interval: 1, ...options });
-}
-
 const enqueueSystemEventMock = runtimeMocks.enqueueSystemEvent;
 const requestHeartbeatMock = runtimeMocks.requestHeartbeat;
 const loadConfigMock = runtimeMocks.getRuntimeConfig;
@@ -1046,7 +1039,7 @@ describe("voice transcript events", () => {
     await Promise.resolve();
 
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
-    await waitForFast(() => expect(warn).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(warn).toHaveBeenCalledTimes(1));
     expect(String(mockCallArg(warn))).toContain("voice session-store update failed");
   });
 
@@ -1062,10 +1055,10 @@ describe("voice transcript events", () => {
       }),
     });
 
-    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(1));
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(1));
     expectSuspendBusyWithRootWork("voice-touch-busy");
     touch.resolve();
-    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
     expectSuspendReady("voice-touch-ready");
   });
 
@@ -1427,10 +1420,10 @@ describe("agent request events", () => {
       }),
     });
 
-    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(1));
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(1));
     expectSuspendBusyWithRootWork("agent-dispatch-busy");
     dispatch.resolve(undefined as never);
-    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
     expectSuspendReady("agent-dispatch-ready");
   });
 
@@ -1450,10 +1443,10 @@ describe("agent request events", () => {
       }),
     });
 
-    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(1));
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(1));
     expectSuspendBusyWithRootWork("receipt-delivery-busy");
     receipt.resolve({ status: "sent" });
-    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
     expectSuspendReady("receipt-delivery-ready");
   });
 

@@ -308,7 +308,7 @@ function shouldSkipOpenClawSlackSelfEvent(args: SlackSelfFilterArgs): boolean {
 export function createSlackBoltApp(params: {
   interop: SlackBoltResolvedExports;
   slackMode: "socket" | "http" | "relay";
-  token: string;
+  botToken: string;
   appToken?: string;
   signingSecret?: string;
   slackWebhookPath: string;
@@ -354,7 +354,7 @@ export function createSlackBoltApp(params: {
   }
   const appReceiver = receiver && params.wrapReceiver ? params.wrapReceiver(receiver) : receiver;
   const app = new params.interop.App({
-    token: params.token,
+    token: params.botToken,
     clientOptions: params.clientOptions,
     ignoreSelf: false,
     // Bolt eagerly starts an auth.test promise in the constructor when token

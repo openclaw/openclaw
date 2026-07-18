@@ -97,6 +97,4 @@ class AboutPage extends OpenClawLightDomElement {
   }
 }
 
-if (!customElements.get("openclaw-about-page")) {
-  customElements.define("openclaw-about-page", AboutPage);
-}
+customElements.define("openclaw-about-page", AboutPage);

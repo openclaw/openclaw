@@ -82,7 +82,6 @@ type BuildPluginApiParams = {
       | "registerMemoryCapability"
       | "registerMemoryPromptSection"
       | "registerMemoryPromptSupplement"
-      | "registerMemoryPromptPreparation"
       | "registerMemoryCorpusSupplement"
       | "registerMemoryFlushPlan"
       | "registerMemoryRuntime"
@@ -179,8 +178,6 @@ const noopRegisterDetachedTaskRuntime: OpenClawPluginApi["registerDetachedTaskRu
 const noopRegisterMemoryCapability: OpenClawPluginApi["registerMemoryCapability"] = () => {};
 const noopRegisterMemoryPromptSection: OpenClawPluginApi["registerMemoryPromptSection"] = () => {};
 const noopRegisterMemoryPromptSupplement: OpenClawPluginApi["registerMemoryPromptSupplement"] =
-  () => {};
-const noopRegisterMemoryPromptPreparation: OpenClawPluginApi["registerMemoryPromptPreparation"] =
   () => {};
 const noopRegisterMemoryCorpusSupplement: OpenClawPluginApi["registerMemoryCorpusSupplement"] =
   () => {};
@@ -296,8 +293,6 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
       handlers.registerMemoryPromptSection ?? noopRegisterMemoryPromptSection,
     registerMemoryPromptSupplement:
       handlers.registerMemoryPromptSupplement ?? noopRegisterMemoryPromptSupplement,
-    registerMemoryPromptPreparation:
-      handlers.registerMemoryPromptPreparation ?? noopRegisterMemoryPromptPreparation,
     registerMemoryCorpusSupplement:
       handlers.registerMemoryCorpusSupplement ?? noopRegisterMemoryCorpusSupplement,
     registerMemoryFlushPlan: handlers.registerMemoryFlushPlan ?? noopRegisterMemoryFlushPlan,

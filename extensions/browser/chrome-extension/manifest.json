@@ -9,7 +9,7 @@
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
-  "permissions": ["debugger", "tabs", "tabGroups", "storage", "alarms", "sidePanel"],
+  "permissions": ["debugger", "tabs", "tabGroups", "storage", "alarms"],
   "background": { "service_worker": "background.js", "type": "module" },
   "action": {
     "default_title": "OpenClaw",

@@ -40,7 +40,7 @@ import {
 } from "./inbound-context.js";
 import {
   buildWhatsAppInboundContext,
-  createWhatsAppReplyPlan,
+  dispatchWhatsAppBufferedReply,
   resolveWhatsAppDmRouteTarget,
   resolveWhatsAppResponsePrefix,
   updateWhatsAppMainLastRoute,
@@ -509,7 +509,6 @@ export async function processMessage(params: {
     updateLastRoute: updateLastRouteInBackground,
     warn: params.replyLogger.warn.bind(params.replyLogger),
   });
-  let finalizeReply: ReturnType<typeof createWhatsAppReplyPlan>["finalize"] | undefined;
 
   const turnResult = await runChannelInboundEvent({
     channel: "whatsapp",
@@ -543,59 +542,54 @@ export async function processMessage(params: {
           },
         };
       },
-      resolveTurn: () => {
-        const { finalize, ...replyPlan } = createWhatsAppReplyPlan({
-          cfg: params.cfg,
-          connectionId: params.connectionId,
-          context: ctxPayload,
-          deliverReply: deliverWebReply,
-          groupHistories: params.groupHistories,
-          groupHistoryKey: params.groupHistoryKey,
-          maxMediaBytes: params.maxMediaBytes,
-          maxMediaTextChunkLimit: params.maxMediaTextChunkLimit,
-          msg: params.msg,
-          onModelSelected,
-          rememberSentText: params.rememberSentText,
-          replyLogger: params.replyLogger,
-          replyPipeline: {
-            ...replyPipeline,
-            responsePrefix,
+      resolveTurn: () => ({
+        cfg: params.cfg,
+        channel: "whatsapp",
+        accountId: params.route.accountId,
+        route: { agentId: params.route.agentId, sessionKey: params.route.sessionKey },
+        ctxPayload,
+        record: {
+          onRecordError: (err) => {
+            params.replyLogger.warn(
+              {
+                error: formatError(err),
+                storePath,
+                sessionKey: params.route.sessionKey,
+              },
+              "failed updating session meta",
+            );
           },
-          replyResolver: params.replyResolver,
-          route: params.route,
-          shouldClearGroupHistory,
-          statusReactionController,
-        });
-        finalizeReply = finalize;
-        return {
-          cfg: params.cfg,
-          channel: "whatsapp",
-          accountId: params.route.accountId,
-          route: { agentId: params.route.agentId, sessionKey: params.route.sessionKey },
-          ctxPayload,
-          record: {
-            onRecordError: (err) => {
-              params.replyLogger.warn(
-                {
-                  error: formatError(err),
-                  storePath,
-                  sessionKey: params.route.sessionKey,
-                },
-                "failed updating session meta",
-              );
-            },
-            trackSessionMetaTask: (task) => {
-              trackBackgroundTask(params.backgroundTasks, task);
-            },
+          trackSessionMetaTask: (task) => {
+            trackBackgroundTask(params.backgroundTasks, task);
           },
-          ...replyPlan,
-        };
-      },
+        },
+        runDispatch: () =>
+          dispatchWhatsAppBufferedReply({
+            cfg: params.cfg,
+            connectionId: params.connectionId,
+            context: ctxPayload,
+            deliverReply: deliverWebReply,
+            groupHistories: params.groupHistories,
+            groupHistoryKey: params.groupHistoryKey,
+            maxMediaBytes: params.maxMediaBytes,
+            maxMediaTextChunkLimit: params.maxMediaTextChunkLimit,
+            msg: params.msg,
+            onModelSelected,
+            rememberSentText: params.rememberSentText,
+            replyLogger: params.replyLogger,
+            replyPipeline: {
+              ...replyPipeline,
+              responsePrefix,
+            },
+            replyResolver: params.replyResolver,
+            route: params.route,
+            shouldClearGroupHistory,
+            statusReactionController,
+          }),
+      }),
     },
   });
-  const didSendReply = turnResult.dispatched
-    ? (finalizeReply?.(turnResult.dispatchResult) ?? false)
-    : false;
+  const didSendReply = turnResult.dispatched ? turnResult.dispatchResult : false;
   removeAckReactionHandleAfterReply({
     removeAfterReply: Boolean(params.cfg.messages?.removeAckAfterReply && didSendReply),
     ackReaction,

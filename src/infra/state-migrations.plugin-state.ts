@@ -97,11 +97,7 @@ export async function migrateLegacyPluginStateSidecar(params: {
           const legacyExpired = isLegacyPluginStateRowExpired(row, now);
           if (existing) {
             if (!legacyPluginStateRowsMatch(existing, row)) {
-              const existingCreatedAt = normalizeLegacySqliteInteger(existing.created_at) ?? 0;
-              const rowCreatedAt = normalizeLegacySqliteInteger(row.created_at) ?? 0;
-              if (existingCreatedAt > rowCreatedAt) {
-                // Canonical row is strictly newer — migration already satisfied
-              } else if (legacyExpired) {
+              if (legacyExpired) {
                 skippedExpired += 1;
               } else {
                 conflictedKeys.push(`${row.plugin_id}/${row.namespace}/${row.entry_key}`);
@@ -146,7 +142,7 @@ export async function migrateLegacyPluginStateSidecar(params: {
       return {
         changes,
         warnings: [
-          `Left plugin-state sidecar in place because ${conflictedKeys.length} ${conflictedKeys.length === 1 ? "row differs" : "rows differ"} from shared state without a newer canonical timestamp. First key: ${conflictedKeys[0]}`,
+          `Left plugin-state sidecar in place because ${conflictedKeys.length} ${conflictedKeys.length === 1 ? "row" : "rows"} already existed in shared state: ${conflictedKeys[0]}`,
         ],
       };
     }

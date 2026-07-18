@@ -243,10 +243,11 @@ describeLive("xai live", () => {
       });
 
       const details = (result.details ?? {}) as {
-        kind?: "answer" | "error";
         provider?: string;
+        model?: string;
         content?: string;
-        citations?: Array<{ url: string; title?: string }>;
+        citations?: string[];
+        inlineCitations?: Array<unknown>;
         error?: string;
         message?: string;
       };
@@ -266,10 +267,14 @@ describeLive("xai live", () => {
       }
 
       expect(details.error, details.message).toBeUndefined();
-      expect(details.kind).toBe("answer");
       expect(details.provider).toBe("grok");
+      expect(details.model).toBe("grok-4.3");
       expect(details.content?.trim().length ?? 0).toBeGreaterThan(0);
-      expect(details.citations?.length ?? 0).toBeGreaterThan(0);
+
+      const citationCount =
+        (Array.isArray(details.citations) ? details.citations.length : 0) +
+        (Array.isArray(details.inlineCitations) ? details.inlineCitations.length : 0);
+      expect(citationCount).toBeGreaterThan(0);
     });
   }, 90_000);
 });

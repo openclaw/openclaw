@@ -13,11 +13,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitAgentEvent, getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { projectLiveAssistantBufferedText } from "./live-chat-projector.js";
-import {
-  createChatAbortMarker,
-  type ChatAbortMarker,
-  type ChatRunPlanSnapshot,
-} from "./server-chat-state.js";
+import { createChatAbortMarker, type ChatAbortMarker } from "./server-chat-state.js";
 
 const DEFAULT_CHAT_RUN_ABORT_GRACE_MS = 60_000;
 
@@ -264,12 +260,11 @@ function normalizeActiveAgentId(agentId: string | undefined): string | undefined
 export function resolveInFlightRunSnapshot(params: {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   chatRunBuffers: Map<string, string>;
-  chatRunPlanSnapshots?: Map<string, ChatRunPlanSnapshot>;
   requestedSessionKey: string;
   canonicalSessionKey: string;
   agentId?: string;
   defaultAgentId?: string;
-}): { runId: string; text: string; plan?: ChatRunPlanSnapshot } | undefined {
+}): { runId: string; text: string } | undefined {
   const matchesKey = (entry: ChatAbortControllerEntry, key: string): boolean => {
     if (entry.sessionKey !== key) {
       return false;
@@ -333,51 +328,26 @@ export function resolveInFlightRunSnapshot(params: {
   const projected = projectLiveAssistantBufferedText(bufferedText, {
     suppressLeadFragments: true,
   });
-  const plan = params.chatRunPlanSnapshots?.get(best.runId);
-  return {
-    runId: best.runId,
-    text: projected.suppress ? "" : projected.text,
-    ...(plan ? { plan } : {}),
-  };
+  return { runId: best.runId, text: projected.suppress ? "" : projected.text };
 }
 
 export function boundInFlightRunSnapshotForChatHistory(params: {
-  snapshot: { runId: string; text: string; plan?: ChatRunPlanSnapshot } | undefined;
+  snapshot: { runId: string; text: string } | undefined;
   messages: unknown[];
   maxBytes: number;
-}): { runId: string; text: string; plan?: ChatRunPlanSnapshot } | undefined {
-  if (!params.snapshot) {
-    return undefined;
+}): { runId: string; text: string } | undefined {
+  if (!params.snapshot?.text) {
+    return params.snapshot;
   }
   const messagesBytes = jsonUtf8Bytes(params.messages);
   const snapshotBytes = jsonUtf8Bytes(params.snapshot);
   if (messagesBytes + snapshotBytes <= params.maxBytes) {
     return params.snapshot;
   }
-  // Recovery priority is run adoption, then plan replay, then opportunistic text.
-  const withoutText = {
-    runId: params.snapshot.runId,
-    text: "",
-    ...(params.snapshot.plan ? { plan: params.snapshot.plan } : {}),
-  };
-  if (params.snapshot.plan && messagesBytes + jsonUtf8Bytes(withoutText) <= params.maxBytes) {
-    return withoutText;
-  }
-  // An oversized plan must not also cost the deliverable buffered text. Clients
-  // treat an ABSENT plan as legacy-gateway unknown and preserve retained state,
-  // so a budget-dropped plan is sent as an explicit empty snapshot (authoritative
-  // clear) — accepted tradeoff: the checklist blanks until the next live plan
-  // event instead of showing a possibly obsolete retained plan indefinitely.
-  const droppedPlan = params.snapshot.plan ? { plan: { steps: [] } } : {};
-  const withoutPlan = {
-    runId: params.snapshot.runId,
-    text: params.snapshot.text,
-    ...droppedPlan,
-  };
-  if (params.snapshot.text && messagesBytes + jsonUtf8Bytes(withoutPlan) <= params.maxBytes) {
-    return withoutPlan;
-  }
-  return { runId: params.snapshot.runId, text: "", ...droppedPlan };
+  // The run id is the recovery contract; buffered partial text is opportunistic.
+  // If it would break the history payload budget, keep adoption and wait for the
+  // next live delta/final instead of sending an oversized chat.history response.
+  return { runId: params.snapshot.runId, text: "" };
 }
 
 export type ChatAbortOps = {
@@ -392,11 +362,7 @@ export type ChatAbortOps = {
   ) => { sessionKey: string; agentId?: string; clientRunId: string } | undefined;
   agentRunSeq: Map<string, number>;
   getRuntimeConfig?: () => OpenClawConfig;
-  broadcast: (
-    event: string,
-    payload: unknown,
-    opts?: { dropIfSlow?: boolean; sessionKeys?: readonly string[] },
-  ) => void;
+  broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
 };
 
@@ -488,9 +454,12 @@ function broadcastChatAborted(
         }
       : undefined,
   };
-  const deliverySessionKeys = resolveChatAbortDeliverySessionKeys(ops, sessionKey, payloadAgentId);
-  ops.broadcast("chat", payload, { sessionKeys: deliverySessionKeys });
-  for (const deliverySessionKey of deliverySessionKeys) {
+  ops.broadcast("chat", payload);
+  for (const deliverySessionKey of resolveChatAbortDeliverySessionKeys(
+    ops,
+    sessionKey,
+    payloadAgentId,
+  )) {
     ops.nodeSendToSession(deliverySessionKey, "chat", payload);
   }
 }

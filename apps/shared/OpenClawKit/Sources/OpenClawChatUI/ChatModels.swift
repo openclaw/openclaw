@@ -406,35 +406,20 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
 public struct OpenClawChatInFlightRun: Codable, Sendable {
     public let runId: String
     public let text: String
-    public let plan: OpenClawChatPlanSnapshot?
 
     // periphery:ignore - package tests construct history fixtures; app consumers decode this payload.
-    public init(runId: String, text: String, plan: OpenClawChatPlanSnapshot? = nil) {
+    public init(runId: String, text: String) {
         self.runId = runId
         self.text = text
-        self.plan = plan
-    }
-}
-
-public struct OpenClawChatPlanSnapshot: Codable, Sendable {
-    public let steps: [OpenClawChatPlanStep]
-    public let explanation: String?
-
-    // periphery:ignore - package tests construct history fixtures; app consumers decode this payload.
-    public init(steps: [OpenClawChatPlanStep], explanation: String? = nil) {
-        self.steps = steps
-        self.explanation = explanation
     }
 }
 
 public struct OpenClawChatSessionInfo: Codable, Sendable {
     public let hasActiveRun: Bool?
-    public let activeRunIds: [String]?
 
     // periphery:ignore - package tests construct history fixtures; app consumers decode this payload.
-    public init(hasActiveRun: Bool?, activeRunIds: [String]? = nil) {
+    public init(hasActiveRun: Bool?) {
         self.hasActiveRun = hasActiveRun
-        self.activeRunIds = activeRunIds
     }
 }
 
@@ -556,8 +541,8 @@ public struct OpenClawAgentEventPayload: Codable, Sendable, Identifiable {
     public let data: [String: AnyCodable]
 }
 
-public struct OpenClawChatPlanStep: Codable, Hashable, Sendable {
-    public enum Status: String, Codable, Hashable, Sendable {
+public struct OpenClawChatPlanStep: Hashable, Sendable {
+    public enum Status: String, Hashable, Sendable {
         case pending
         case inProgress = "in_progress"
         case completed

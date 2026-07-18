@@ -522,29 +522,20 @@ export function parseFirecrawlScrapePayload(params: {
     source: "web_fetch",
     includeWarning: false,
   });
-  const status =
-    (typeof metadata?.statusCode === "number" && metadata.statusCode) ||
-    (typeof data.statusCode === "number" && data.statusCode) ||
-    undefined;
-  const title =
-    typeof metadata?.title === "string" && metadata.title
-      ? wrapExternalContent(metadata.title, { source: "web_fetch", includeWarning: false })
-      : undefined;
-  const warning =
-    typeof params.payload.warning === "string" && params.payload.warning
-      ? wrapExternalContent(params.payload.warning, {
-          source: "web_fetch",
-          includeWarning: false,
-        })
-      : undefined;
   return {
     url: params.url,
     finalUrl:
       (typeof metadata?.sourceURL === "string" && metadata.sourceURL) ||
       (typeof data.url === "string" && data.url) ||
       params.url,
-    ...(status !== undefined ? { status } : {}),
-    ...(title ? { title } : {}),
+    status:
+      (typeof metadata?.statusCode === "number" && metadata.statusCode) ||
+      (typeof data.statusCode === "number" && data.statusCode) ||
+      undefined,
+    title:
+      typeof metadata?.title === "string" && metadata.title
+        ? wrapExternalContent(metadata.title, { source: "web_fetch", includeWarning: false })
+        : undefined,
     extractor: "firecrawl",
     extractMode: params.extractMode,
     externalContent: {
@@ -554,9 +545,15 @@ export function parseFirecrawlScrapePayload(params: {
     },
     truncated: truncated.truncated,
     rawLength: rawText.length,
-    length: wrappedText.length,
+    wrappedLength: wrappedText.length,
     text: wrappedText,
-    ...(warning ? { warning } : {}),
+    warning:
+      typeof params.payload.warning === "string" && params.payload.warning
+        ? wrapExternalContent(params.payload.warning, {
+            source: "web_fetch",
+            includeWarning: false,
+          })
+        : undefined,
   };
 }
 

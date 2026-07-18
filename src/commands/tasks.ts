@@ -14,7 +14,7 @@ import {
 } from "../config/sessions.js";
 import { normalizeCronLaneSegment } from "../cron/service/task-runs.js";
 import { loadCronJobsStoreSync, resolveCronJobsStorePath } from "../cron/store.js";
-import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { getTaskById, updateTaskNotifyPolicyById } from "../tasks/runtime-internal.js";
 import { cancelDetachedTaskRunById } from "../tasks/task-executor.js";
 import { listTaskFlowAuditFindings } from "../tasks/task-flow-registry.audit.js";
@@ -360,12 +360,18 @@ export async function tasksListCommand(
   });
 
   if (opts.json) {
-    writeRuntimeJson(runtime, {
-      count: tasks.length,
-      runtime: runtimeFilter ?? null,
-      status: statusFilter ?? null,
-      tasks,
-    });
+    runtime.log(
+      JSON.stringify(
+        {
+          count: tasks.length,
+          runtime: runtimeFilter ?? null,
+          status: statusFilter ?? null,
+          tasks,
+        },
+        null,
+        2,
+      ),
+    );
     return;
   }
 
@@ -402,7 +408,7 @@ export async function tasksShowCommand(
   }
 
   if (opts.json) {
-    writeRuntimeJson(runtime, task);
+    runtime.log(JSON.stringify(task, null, 2));
     return;
   }
 
@@ -529,13 +535,16 @@ export async function tasksAuditCommand(
   const displayed = limit ? filteredFindings.slice(0, limit) : filteredFindings;
 
   if (opts.json) {
-    writeRuntimeJson(
-      runtime,
-      buildTaskSystemAuditJsonPayload(auditResult, {
-        severityFilter,
-        codeFilter,
-        limit: opts.limit,
-      }),
+    runtime.log(
+      JSON.stringify(
+        buildTaskSystemAuditJsonPayload(auditResult, {
+          severityFilter,
+          codeFilter,
+          limit: opts.limit,
+        }),
+        null,
+        2,
+      ),
     );
     return;
   }
@@ -597,24 +606,30 @@ export async function tasksMaintenanceCommand(
   );
 
   if (opts.json) {
-    writeRuntimeJson(runtime, {
-      mode: opts.apply ? "apply" : "preview",
-      maintenance: {
-        tasks: taskMaintenance,
-        taskFlows: flowMaintenance,
-        sessions: sessionMaintenance,
-      },
-      tasks: summary,
-      diagnostics,
-      auditBefore: {
-        ...auditBefore,
-        taskFlows: flowAuditBefore,
-      },
-      auditAfter: {
-        ...auditAfter,
-        taskFlows: flowAuditAfter,
-      },
-    });
+    runtime.log(
+      JSON.stringify(
+        {
+          mode: opts.apply ? "apply" : "preview",
+          maintenance: {
+            tasks: taskMaintenance,
+            taskFlows: flowMaintenance,
+            sessions: sessionMaintenance,
+          },
+          tasks: summary,
+          diagnostics,
+          auditBefore: {
+            ...auditBefore,
+            taskFlows: flowAuditBefore,
+          },
+          auditAfter: {
+            ...auditAfter,
+            taskFlows: flowAuditAfter,
+          },
+        },
+        null,
+        2,
+      ),
+    );
     return;
   }
 

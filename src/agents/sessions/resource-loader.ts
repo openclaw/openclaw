@@ -15,10 +15,9 @@ import { canonicalizePath, isLocalPath } from "../utils/paths.js";
 import type { ResourceDiagnostic } from "./diagnostics.js";
 import { createEventBus, type EventBus } from "./event-bus.js";
 import {
-  clearExtensionCache,
   createExtensionRuntime,
   loadExtensionFromFactory,
-  loadExtensionsCached,
+  loadExtensions,
 } from "./extensions/loader.js";
 import type {
   Extension,
@@ -226,7 +225,6 @@ export class DefaultResourceLoader implements ResourceLoader {
   private extensionThemeSourceInfos: Map<string, SourceInfo>;
   private lastPromptPaths: string[];
   private lastThemePaths: string[];
-  private loaded = false;
 
   constructor(options: DefaultResourceLoaderOptions) {
     this.cwd = options.cwd;
@@ -345,9 +343,6 @@ export class DefaultResourceLoader implements ResourceLoader {
   }
 
   async reload(): Promise<void> {
-    if (this.loaded) {
-      clearExtensionCache();
-    }
     await this.settingsManager.reload();
     const resolvedPaths = await this.packageManager.resolve();
     const cliExtensionPaths = await this.packageManager.resolveExtensionSources(
@@ -427,7 +422,7 @@ export class DefaultResourceLoader implements ResourceLoader {
       ? cliEnabledExtensions
       : this.mergePaths(cliEnabledExtensions, enabledExtensions);
 
-    const extensionsResult = await loadExtensionsCached(extensionPaths, this.cwd, this.eventBus);
+    const extensionsResult = await loadExtensions(extensionPaths, this.cwd, this.eventBus);
     const inlineExtensions = await this.loadExtensionFactories(extensionsResult.runtime);
     extensionsResult.extensions.push(...inlineExtensions.extensions);
     extensionsResult.errors.push(...inlineExtensions.errors);
@@ -527,7 +522,6 @@ export class DefaultResourceLoader implements ResourceLoader {
     this.appendSystemPrompt = this.appendSystemPromptTransform
       ? this.appendSystemPromptTransform(baseAppend)
       : baseAppend;
-    this.loaded = true;
   }
 
   private normalizeExtensionPaths(

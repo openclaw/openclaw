@@ -954,7 +954,6 @@ type ConnectReqOptions = {
   deviceIdentityPath?: string;
   skipConnectChallengeNonce?: boolean;
   prePairDevice?: boolean;
-  browserOrigin?: string;
   timeoutMs?: number;
 };
 
@@ -999,7 +998,6 @@ async function prePairTestDevice(params: {
   client: ConnectReqClient;
   role: string;
   scopes: string[];
-  browserOrigin?: string;
 }): Promise<void> {
   const paired = await getPairedDevice(params.device.id);
   if (
@@ -1019,7 +1017,6 @@ async function prePairTestDevice(params: {
     scopes: params.scopes,
     clientId: params.client.id,
     clientMode: params.client.mode,
-    browserOrigin: params.browserOrigin,
     platform: params.client.platform,
     deviceFamily: params.client.deviceFamily,
     silent: false,
@@ -1129,7 +1126,6 @@ export async function connectReq(
       client,
       role,
       scopes: requestedScopes,
-      browserOrigin: opts?.browserOrigin,
     });
   }
   const isResponseForId = (o: unknown): boolean => {

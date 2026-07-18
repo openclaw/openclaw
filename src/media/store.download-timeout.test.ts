@@ -111,23 +111,6 @@ function useInjectedRequest(
   });
 }
 
-// Tight budgets go only on the phase a test asserts times out. Phases expected
-// to make progress keep production-default budgets: a 40ms real-timer watchdog
-// on a progressing phase fires spuriously under CI worker contention.
-function usePinnedResolver(timeouts?: {
-  responseHeaderTimeoutMs?: number;
-  readIdleTimeoutMs?: number;
-}): void {
-  setMediaStoreDownloadDepsForTest({
-    resolvePinnedHostname: async (hostname) => ({
-      hostname,
-      addresses: ["127.0.0.1"],
-      lookup: createPinnedLookup({ hostname, addresses: ["127.0.0.1"] }),
-    }),
-    ...timeouts,
-  });
-}
-
 describe("media store download timeouts", () => {
   let testState: OpenClawTestState;
   let mediaRoot: string;
@@ -192,7 +175,15 @@ describe("media store download timeouts", () => {
   beforeEach(() => {
     mode = "ok";
     stalledSocketClosed = undefined;
-    usePinnedResolver();
+    setMediaStoreDownloadDepsForTest({
+      resolvePinnedHostname: async (hostname) => ({
+        hostname,
+        addresses: ["127.0.0.1"],
+        lookup: createPinnedLookup({ hostname, addresses: ["127.0.0.1"] }),
+      }),
+      responseHeaderTimeoutMs: HEADER_TIMEOUT_MS,
+      readIdleTimeoutMs: IDLE_TIMEOUT_MS,
+    });
   });
 
   afterEach(async () => {
@@ -216,7 +207,6 @@ describe("media store download timeouts", () => {
 
   it("times out when the server accepts a connection but never sends headers", async () => {
     mode = "hang-headers";
-    usePinnedResolver({ responseHeaderTimeoutMs: HEADER_TIMEOUT_MS });
     await expect(saveMediaSource(baseUrl)).rejects.toThrow(
       /timed out waiting for response headers after 40ms/i,
     );
@@ -233,6 +223,7 @@ describe("media store download timeouts", () => {
       }) as unknown as typeof http.request,
       resolvePinnedHostname: async () => await new Promise<never>(() => {}),
       responseHeaderTimeoutMs: HEADER_TIMEOUT_MS,
+      readIdleTimeoutMs: IDLE_TIMEOUT_MS,
     });
 
     await expect(saveMediaSource(baseUrl)).rejects.toThrow(
@@ -244,7 +235,6 @@ describe("media store download timeouts", () => {
 
   it("times out when the response body stalls after partial data", async () => {
     mode = "stall-body";
-    usePinnedResolver({ readIdleTimeoutMs: IDLE_TIMEOUT_MS });
     await expect(saveMediaSource(baseUrl)).rejects.toThrow(/stalled: no data received for 40ms/i);
     await expectSocketClosed(stalledSocketClosed);
     expect(await listMediaFiles(mediaRoot)).toEqual([]);

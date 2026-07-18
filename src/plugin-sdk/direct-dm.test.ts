@@ -15,36 +15,9 @@ const baseCfg = {
 } as unknown as OpenClawConfig;
 
 function createDirectDmRuntime() {
-  const recordInboundSessionMock = vi.fn(async (_params: unknown) => {});
+  const recordInboundSessionMock = vi.fn(async () => {});
   const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async ({ dispatcherOptions }) => {
     await dispatcherOptions.deliver({ text: "reply text" });
-  });
-  const runInbound = vi.fn(async ({ adapter, raw }) => {
-    const input = await adapter.ingest(raw);
-    const turn = await adapter.resolveTurn(input, {
-      kind: "message",
-      canStartAgentTurn: true,
-    });
-    await recordInboundSessionMock({
-      storePath: "/tmp/direct-dm-session-store",
-      sessionKey: turn.route.sessionKey,
-      ctx: turn.ctxPayload,
-      onRecordError: turn.record?.onRecordError ?? (() => undefined),
-    });
-    return {
-      admission: { kind: "dispatch" },
-      dispatched: true,
-      dispatchResult: await dispatchReplyWithBufferedBlockDispatcher({
-        ctx: turn.ctxPayload,
-        cfg: turn.cfg,
-        dispatcherOptions: {
-          ...turn.dispatcherOptions,
-          deliver: turn.delivery.deliver,
-          onError: turn.delivery.onError,
-        },
-        replyOptions: turn.replyOptions,
-      }),
-    };
   });
   return {
     recordInboundSession: recordInboundSessionMock,
@@ -69,7 +42,6 @@ function createDirectDmRuntime() {
           finalizeInboundContext: vi.fn((ctx) => ctx),
           dispatchReplyWithBufferedBlockDispatcher,
         },
-        inbound: { run: runInbound },
       },
     } as never,
   };

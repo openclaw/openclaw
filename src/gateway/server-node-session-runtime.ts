@@ -5,9 +5,9 @@ import {
   type NodeRegistryOptions,
   type SerializedEventPayload,
 } from "./node-registry.js";
-import type {
-  SessionEventSubscriberRegistry,
-  SessionMessageSubscriberRegistry,
+import {
+  createSessionEventSubscriberRegistry,
+  createSessionMessageSubscriberRegistry,
 } from "./server-chat-state.js";
 import { createNodeSubscriptionManager } from "./server-node-subscriptions.js";
 import { hasConnectedTalkNode } from "./server-talk-nodes.js";
@@ -20,8 +20,6 @@ export function createGatewayNodeSessionRuntime(params: {
   listRegisteredNodePluginToolCommands?: NodeRegistryOptions["listRegisteredNodePluginToolCommands"];
   nodePluginToolsEnabled?: boolean;
   nodeSkillsEnabled?: boolean;
-  sessionEventSubscribers: SessionEventSubscriberRegistry;
-  sessionMessageSubscribers: SessionMessageSubscriberRegistry;
 }) {
   const nodeRegistry = new NodeRegistry({
     listRegisteredNodePluginToolCommands: params.listRegisteredNodePluginToolCommands,
@@ -30,8 +28,8 @@ export function createGatewayNodeSessionRuntime(params: {
   });
   const nodePresenceTimers = new Map<string, ReturnType<typeof setInterval>>();
   const nodeSubscriptions = createNodeSubscriptionManager();
-  const sessionEventSubscribers = params.sessionEventSubscribers;
-  const sessionMessageSubscribers = params.sessionMessageSubscribers;
+  const sessionEventSubscribers = createSessionEventSubscriberRegistry();
+  const sessionMessageSubscribers = createSessionMessageSubscriberRegistry();
   const nodeSendEvent = (opts: {
     nodeId: string;
     event: string;

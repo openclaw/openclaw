@@ -15,7 +15,7 @@ import type {
   MessagingToolSourceReplyPayload,
 } from "./embedded-agent-messaging.types.js";
 
-export type CliUsage = {
+type CliUsage = {
   input?: number;
   output?: number;
   cacheRead?: number;
@@ -47,8 +47,6 @@ export type CliOutput = {
   rawText?: string;
   sessionId?: string;
   usage?: CliUsage;
-  /** Terminal cumulative turn usage for diagnostics; reply accounting keeps using `usage`. */
-  diagnosticUsage?: CliUsage;
   errorText?: string;
   terminalFailure?: CliTerminalFailure;
   diagnostics?: {
@@ -1212,15 +1210,12 @@ export function createCliJsonlStreamingParser(params: {
   onToolResult?: (delta: CliToolResultDelta) => void;
   onCommentaryText?: (text: string) => void;
   onSessionId?: (sessionId: string) => void;
-  onAssistantMessage?: (message: unknown) => void;
-  onUsage?: (usage: CliUsage, terminal: boolean) => void;
 }) {
   let lineBuffer = "";
   let assistantText = "";
   let pendingClaudeText = "";
   let sessionId: string | undefined;
   let usage: CliUsage | undefined;
-  let diagnosticUsage: CliUsage | undefined;
   let output: CliOutput | null = null;
   let parseErrorText = "";
   let rawChars = 0;
@@ -1272,17 +1267,6 @@ export function createCliJsonlStreamingParser(params: {
       params.onSessionId?.(parsedSessionId);
     }
     const nextUsage = readCliUsage(parsed);
-    const isClaudeTerminalResult =
-      isClaudeStreamJsonDialect({
-        backend: params.backend,
-        providerId: params.providerId,
-      }) && parsed.type === "result";
-    if (isClaudeTerminalResult && nextUsage && usage) {
-      diagnosticUsage = nextUsage;
-    }
-    if (nextUsage) {
-      params.onUsage?.(nextUsage, isClaudeTerminalResult);
-    }
     const shouldUseUsage =
       !isClaudeStreamJsonResult({
         backend: params.backend,
@@ -1291,9 +1275,6 @@ export function createCliJsonlStreamingParser(params: {
       }) || !usage;
     if (shouldUseUsage) {
       usage = nextUsage ?? usage;
-    }
-    if (parsed.type === "assistant" && isRecord(parsed.message)) {
-      params.onAssistantMessage?.(parsed.message);
     }
     const geminiErrorText = isGeminiStreamJsonDialect(params)
       ? readGeminiCliStreamJsonError(parsed)
@@ -1341,11 +1322,7 @@ export function createCliJsonlStreamingParser(params: {
       } else if (!nextText) {
         text = previousText;
       }
-      output = {
-        ...result,
-        text,
-        ...(diagnosticUsage ? { diagnosticUsage } : {}),
-      };
+      output = { ...result, text };
       return;
     }
 
@@ -1533,13 +1510,7 @@ export function createCliJsonlStreamingParser(params: {
     },
     getOutput() {
       if (parseErrorText) {
-        return {
-          text: "",
-          sessionId,
-          usage,
-          ...(diagnosticUsage ? { diagnosticUsage } : {}),
-          errorText: parseErrorText,
-        };
+        return { text: "", sessionId, usage, errorText: parseErrorText };
       }
       if (output) {
         return output;

@@ -177,7 +177,6 @@ internal val nativeStringResourceIds: Map<String, Int> =
     "Arguments" to R.string.native_7f816072c1c6a23b,
     "Ask OpenClaw anything" to R.string.native_8998824610d49175,
     "Ask OpenClaw to use Android capabilities." to R.string.native_e2d1ec2328a8146f,
-    "Ask User" to R.string.native_9309a242422af6f3,
     "Assistant speech muted" to R.string.native_a8bbbd7231a6c191,
     "Assistant working" to R.string.native_e02b4aac2b335f6f,
     "Attach" to R.string.native_d406ade2958cb5b6,

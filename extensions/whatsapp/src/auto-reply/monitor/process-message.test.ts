@@ -16,7 +16,7 @@ const {
   resolvePolicyMock: vi.fn(),
   buildContextMock: vi.fn(),
   isControlCommandMessageMock: vi.fn(() => false),
-  dispatchBufferedReplyMock: vi.fn(async (_params?: unknown) => ({
+  dispatchBufferedReplyMock: vi.fn(async () => ({
     queuedFinal: false,
     counts: { tool: 0, block: 0, final: 0 },
   })),
@@ -39,17 +39,7 @@ vi.mock("./inbound-dispatch.js", async (importOriginal) => {
   return {
     ...actual,
     buildWhatsAppInboundContext: buildContextMock,
-    createWhatsAppReplyPlan: (...args: unknown[]) => {
-      const params = args[0] as { replyResolver?: unknown };
-      void dispatchBufferedReplyMock(params);
-      return {
-        dispatcherOptions: {},
-        delivery: { deliver: async () => {} },
-        replyOptions: {},
-        replyResolver: params.replyResolver,
-        finalize: () => true,
-      };
-    },
+    dispatchWhatsAppBufferedReply: dispatchBufferedReplyMock,
     resolveWhatsAppDmRouteTarget: () => null,
     resolveWhatsAppResponsePrefix: () => undefined,
     updateWhatsAppMainLastRoute: () => {},
@@ -432,7 +422,6 @@ describe("processMessage group system prompt wiring", () => {
       Timestamp: 1710000000,
       Provider: "whatsapp",
       Surface: "whatsapp",
-      SuppressMessageReceivedHooks: true,
       OriginatingChannel: "whatsapp",
       OriginatingTo: GROUP_JID,
       GroupSubject: "Test Group",

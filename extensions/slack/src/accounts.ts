@@ -27,7 +27,6 @@ export type SlackTokenSource = "env" | "config" | "none";
 export type ResolvedSlackAccount = {
   accountId: string;
   enabled: boolean;
-  identity: "bot" | "user";
   name?: string;
   botToken?: string;
   appToken?: string;
@@ -47,11 +46,6 @@ export function resolveSlackOperationToken(
   account: ResolvedSlackAccount,
   operation: "read" | "write",
 ): string | undefined {
-  if (account.identity === "user") {
-    // User identity acts as the authorizing human through the xoxp user token;
-    // the companion Slack app carries events through the selected transport.
-    return normalizeOptionalString(account.userToken);
-  }
   const userToken = normalizeOptionalString(account.userToken);
   const botToken = normalizeOptionalString(account.botToken);
   if (operation === "read") {
@@ -63,28 +57,6 @@ export function resolveSlackOperationToken(
 const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("slack", {
   hasImplicitDefaultAccount: (cfg) => {
     const slack = cfg.channels?.slack;
-    if (slack?.identity === "user") {
-      const hasUserToken =
-        hasConfiguredAccountValue(slack.userToken) ||
-        hasConfiguredAccountValue(process.env.SLACK_USER_TOKEN);
-      if (!hasUserToken) {
-        return false;
-      }
-      if (slack.mode === "http") {
-        return hasConfiguredAccountValue(slack.signingSecret);
-      }
-      if (slack.mode === "relay") {
-        return (
-          hasConfiguredAccountValue(slack.relay?.url) &&
-          hasConfiguredAccountValue(slack.relay?.authToken) &&
-          hasConfiguredAccountValue(slack.relay?.gatewayId)
-        );
-      }
-      return (
-        hasConfiguredAccountValue(slack.appToken) ||
-        hasConfiguredAccountValue(process.env.SLACK_APP_TOKEN)
-      );
-    }
     const hasBotToken =
       hasConfiguredAccountValue(slack?.botToken) ||
       hasConfiguredAccountValue(process.env.SLACK_BOT_TOKEN);
@@ -249,7 +221,6 @@ export function resolveSlackAccount(params: {
   );
   const baseEnabled = params.cfg.channels?.slack?.enabled !== false;
   const merged = mergeSlackAccountConfig(params.cfg, accountId);
-  const identity = merged.identity ?? "bot";
   const accountEnabled = merged.enabled !== false;
   const enabled = baseEnabled && accountEnabled;
   const mode = merged.mode ?? "socket";
@@ -282,7 +253,6 @@ export function resolveSlackAccount(params: {
   return {
     accountId,
     enabled,
-    identity,
     name: normalizeOptionalString(merged.name),
     botToken,
     appToken,

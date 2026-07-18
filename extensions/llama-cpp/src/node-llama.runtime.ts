@@ -42,7 +42,5 @@ export function resolveNodeLlamaCppImportUrl(): string {
 }
 
 export async function importNodeLlamaCpp(): Promise<NodeLlamaCppModule> {
-  // Keep this runtime-resolved: bundling node-llama-cpp rewrites its import.meta.url,
-  // which makes its package-relative native assets resolve from the OpenClaw bundle.
-  return await import(resolveNodeLlamaCppImportUrl());
+  return await import("node-llama-cpp");
 }

@@ -48,3 +48,5 @@ export function resolveOpenClawNpmResumeRun(options: {
   runId: string;
   runGh?: (args: string[]) => string;
 }): OpenClawNpmResumeIdentity;
+
+export function main(argv?: string[]): void;

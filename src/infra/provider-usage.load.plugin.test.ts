@@ -220,10 +220,7 @@ describe("provider-usage.load plugin boundary", () => {
       ],
     });
 
-    expect(envAgentSpy).toHaveBeenCalledOnce();
-    expect(envAgentSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ httpsProxy: "http://proxy.test:8080" }),
-    );
+    expect(envAgentSpy).toHaveBeenCalledWith({ httpsProxy: "http://proxy.test:8080" });
     expect(undiciFetch).toHaveBeenCalledOnce();
     const [input] = undiciFetch.mock.calls[0] ?? [];
     expect(input).toBe("https://chatgpt.com/backend-api/wham/usage");

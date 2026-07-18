@@ -68,8 +68,6 @@ export const GATEWAY_EVENTS = [
   "voicewake.routing.changed",
   "exec.approval.requested",
   "exec.approval.resolved",
-  "question.requested",
-  "question.resolved",
   "plugin.approval.requested",
   "plugin.approval.resolved",
   "openclaw.approval.requested",

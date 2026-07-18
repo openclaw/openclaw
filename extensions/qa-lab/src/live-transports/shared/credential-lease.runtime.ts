@@ -408,7 +408,7 @@ function assertConvexOk(payload: unknown, actionLabel: string) {
   throw new Error(`Convex credential ${actionLabel} failed with an invalid response payload.`);
 }
 
-function isTransientBrokerTransportError(error: unknown) {
+function isTransientHeartbeatError(error: unknown) {
   if (error instanceof QaCredentialBrokerError) {
     return false;
   }
@@ -548,21 +548,18 @@ export async function acquireQaCredentialLease<TPayload>(
         },
       };
     } catch (error) {
-      const retryablePoolError =
-        error instanceof QaCredentialBrokerError && RETRYABLE_ACQUIRE_CODES.has(error.code);
-      const transientTransportError = isTransientBrokerTransportError(error);
-      if (retryablePoolError || transientTransportError) {
+      if (error instanceof QaCredentialBrokerError && RETRYABLE_ACQUIRE_CODES.has(error.code)) {
         const elapsed = timeImpl() - startedAt;
         if (elapsed >= config.acquireTimeoutMs) {
-          const message = retryablePoolError
-            ? `Convex credential pool exhausted for kind "${opts.kind}" after ${config.acquireTimeoutMs}ms.`
-            : `Convex credential broker remained unreachable for kind "${opts.kind}" after ${config.acquireTimeoutMs}ms.`;
-          throw new Error(message, { cause: error });
+          throw new Error(
+            `Convex credential pool exhausted for kind "${opts.kind}" after ${config.acquireTimeoutMs}ms.`,
+            { cause: error },
+          );
         }
         const delayMs = Math.min(
           computeAcquireBackoffMs({
             attempt,
-            retryAfterMs: retryablePoolError ? error.retryAfterMs : undefined,
+            retryAfterMs: error.retryAfterMs,
             randomImpl,
           }),
           Math.max(0, config.acquireTimeoutMs - elapsed),
@@ -634,7 +631,7 @@ export function startQaCredentialLeaseHeartbeat(
           await lease.heartbeat();
           retryAttempt = 0;
         } catch (error) {
-          if (isTransientBrokerTransportError(error) && retryAttempt < retryDelaysMs.length) {
+          if (isTransientHeartbeatError(error) && retryAttempt < retryDelaysMs.length) {
             const retryDelayMs = expectDefined(
               retryDelaysMs[retryAttempt],
               "QA credential heartbeat retry delay",

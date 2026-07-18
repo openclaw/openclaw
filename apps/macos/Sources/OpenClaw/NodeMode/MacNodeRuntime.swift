@@ -782,9 +782,9 @@ extension MacNodeRuntime {
         }
         let sessionKey = self.mainSessionKey
         _ = try await MainActor.run {
-            try CanvasManager.shared.prepare(
+            try CanvasManager.shared.show(
                 sessionKey: sessionKey,
-                target: a2uiUrl,
+                path: a2uiUrl,
                 trustedA2UIActions: true)
         }
         if await self.isA2UIReady(poll: true) {
@@ -792,9 +792,9 @@ extension MacNodeRuntime {
         }
         if let refreshedUrl = await self.canvasHostedSurfaceResolver.resolveA2UIURL(forceRefresh: true) {
             _ = try await MainActor.run {
-                try CanvasManager.shared.prepare(
+                try CanvasManager.shared.show(
                     sessionKey: sessionKey,
-                    target: refreshedUrl,
+                    path: refreshedUrl,
                     trustedA2UIActions: true)
             }
             if await self.isA2UIReady(poll: true) {

@@ -205,7 +205,6 @@ export function prepareEmbeddedAttemptToolBase(params: {
           ...buildEmbeddedAttemptToolRunContext({ ...attempt, trace: params.runTrace }),
           messageChannel: attempt.messageChannel,
           clientCaps: attempt.clientCaps,
-          toolBindings: attempt.toolBindings,
           chatType: attempt.chatType,
           exec: {
             ...attempt.execOverrides,

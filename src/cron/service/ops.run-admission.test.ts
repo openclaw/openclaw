@@ -125,54 +125,6 @@ describe("cron service run admission", () => {
     await Promise.all([manualRun, timerRun]);
   });
 
-  it("drains a burst of scheduled jobs without exceeding shared admission", async () => {
-    vi.useRealTimers();
-    const store = opsRegressionFixtures.makeStorePath();
-    const dueAt = Date.parse("2026-02-06T10:05:05.250Z");
-    const jobs = Array.from({ length: 40 }, (_, index) =>
-      createDueIsolatedJob({
-        id: `scheduled-admission-burst-${index}`,
-        nowMs: dueAt,
-        nextRunAtMs: dueAt,
-      }),
-    );
-    await saveCronStore(store.storePath, { version: 1, jobs });
-
-    let active = 0;
-    let peakActive = 0;
-    const completed = new Set<string>();
-    const state = createCronServiceState({
-      cronEnabled: true,
-      storePath: store.storePath,
-      cronConfig: { maxConcurrentRuns: 4 },
-      log: noopLogger,
-      nowMs: () => dueAt,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      runIsolatedAgentJob: vi.fn(async ({ job }: { job: { id: string } }) => {
-        active += 1;
-        peakActive = Math.max(peakActive, active);
-        await new Promise((resolve) => {
-          setTimeout(resolve, 2);
-        });
-        active -= 1;
-        completed.add(job.id);
-        return { status: "ok" as const, summary: job.id };
-      }),
-    });
-
-    await onTimer(state);
-
-    expect(completed).toEqual(new Set(jobs.map((job) => job.id)));
-    expect(peakActive).toBe(4);
-    const persisted = await loadCronStore(store.storePath);
-    expect(
-      persisted.jobs.every(
-        (job) => job.state.queuedAtMs === undefined && job.state.runningAtMs === undefined,
-      ),
-    ).toBe(true);
-  });
-
   it("finalizes an admitted scheduled sibling before surfacing an activation failure", async () => {
     const store = opsRegressionFixtures.makeStorePath();
     const dueAt = Date.parse("2026-02-06T10:05:05.500Z");
@@ -226,7 +178,7 @@ describe("cron service run admission", () => {
         await realSave(storePath, nextStore, opts);
         if (
           !reservationsPersisted &&
-          nextStore.jobs.every((job) => job.state.queuedAtMs === dueAt)
+          nextStore.jobs.every((job) => job.state.runningAtMs === dueAt)
         ) {
           reservationsPersisted = true;
           now = dueAt + 1;
@@ -301,7 +253,7 @@ describe("cron service run admission", () => {
     await activeStarted.promise;
     const waitingRun = run(state, waitingJob.id, "force");
     await vi.waitFor(() => {
-      expect(state.store?.jobs.find((job) => job.id === waitingJob.id)?.state.queuedAtMs).toBe(
+      expect(state.store?.jobs.find((job) => job.id === waitingJob.id)?.state.runningAtMs).toBe(
         dueAt,
       );
     });
@@ -438,7 +390,7 @@ describe("cron service run admission", () => {
       expect(state.queuedRunReservationsByJobId.get(waitingJob.id)?.identity).not.toBe(
         staleIdentity,
       );
-      expect(state.store?.jobs.find((job) => job.id === waitingJob.id)?.state.queuedAtMs).toBe(
+      expect(state.store?.jobs.find((job) => job.id === waitingJob.id)?.state.runningAtMs).toBe(
         dueAt,
       );
     });
@@ -519,22 +471,17 @@ describe("cron service run admission", () => {
     await activeStarted.promise;
     const waitingRun = run(state, waitingJob.id, "force");
     await vi.waitFor(() => {
-      expect(state.store?.jobs.find((job) => job.id === waitingJob.id)?.state.queuedAtMs).toBe(
+      expect(state.store?.jobs.find((job) => job.id === waitingJob.id)?.state.runningAtMs).toBe(
         dueAt,
       );
     });
     recomputeNextRunsForMaintenance(state);
-    expect(state.store?.jobs.find((job) => job.id === waitingJob.id)?.state.queuedAtMs).toBe(dueAt);
+    expect(state.store?.jobs.find((job) => job.id === waitingJob.id)?.state.runningAtMs).toBe(
+      dueAt,
+    );
 
     releaseActive.resolve({ status: "ok", summary: "active" });
     await waitingStarted.promise;
-    expect(state.store?.jobs.find((job) => job.id === waitingJob.id)?.state.runningAtMs).toBe(
-      dueAt,
-    );
-    recomputeNextRunsForMaintenance(state);
-    expect(state.store?.jobs.find((job) => job.id === waitingJob.id)?.state.runningAtMs).toBe(
-      dueAt,
-    );
     releaseWaiting.resolve({ status: "ok", summary: "waiting" });
     await Promise.all([activeRun, waitingRun]);
 
@@ -583,37 +530,29 @@ describe("cron service run admission", () => {
     await activeStarted.promise;
     const waitingRun = run(state, waitingJob.id, "force");
     await vi.waitFor(() => {
-      expect(state.store?.jobs.find((job) => job.id === waitingJob.id)?.state.queuedAtMs).toBe(
+      expect(state.store?.jobs.find((job) => job.id === waitingJob.id)?.state.runningAtMs).toBe(
         dueAt,
       );
     });
     now += 2 * 60 * 60 * 1000 + 1;
     recomputeNextRunsForMaintenance(state);
-    expect(state.store?.jobs.find((job) => job.id === waitingJob.id)?.state.queuedAtMs).toBe(dueAt);
+    expect(state.store?.jobs.find((job) => job.id === waitingJob.id)?.state.runningAtMs).toBe(
+      dueAt,
+    );
     releaseActive.resolve({ status: "ok", summary: "active" });
     await waitingStarted.promise;
-    const waitingStartedAt = now;
-    expect(state.store?.jobs.find((job) => job.id === waitingJob.id)?.state.runningAtMs).toBe(
-      waitingStartedAt,
-    );
+    expect(state.store?.jobs.find((job) => job.id === waitingJob.id)?.state.runningAtMs).toBe(now);
     expect(
       (await loadCronStore(store.storePath))?.jobs.find((job) => job.id === waitingJob.id)?.state
         .runningAtMs,
-    ).toBe(waitingStartedAt);
-    expect(state.queuedRunReservationsByJobId.has(waitingJob.id)).toBe(true);
-    now += 2 * 60 * 60 * 1000 + 1;
-    recomputeNextRunsForMaintenance(state);
-    expect(state.store?.jobs.find((job) => job.id === waitingJob.id)?.state.runningAtMs).toBe(
-      waitingStartedAt,
-    );
+    ).toBe(now);
     now += 100;
     releaseWaiting.resolve({ status: "ok", summary: "queued" });
 
     await Promise.all([activeRun, waitingRun]);
     const completedWaitingJob = state.store?.jobs.find((job) => job.id === waitingJob.id);
-    expect(completedWaitingJob?.state.lastRunAtMs).toBe(waitingStartedAt);
-    expect(completedWaitingJob?.state.lastDurationMs).toBe(2 * 60 * 60 * 1000 + 101);
-    expect(state.queuedRunReservationsByJobId.has(waitingJob.id)).toBe(false);
+    expect(completedWaitingJob?.state.lastRunAtMs).toBe(dueAt + 2 * 60 * 60 * 1000 + 1);
+    expect(completedWaitingJob?.state.lastDurationMs).toBe(100);
   });
 
   it("releases a manual reservation when activation reload fails", async () => {
@@ -687,7 +626,7 @@ describe("cron service run admission", () => {
       .spyOn(cronStoreModule, "saveCronJobsStore")
       .mockImplementation(async (storePath, nextStore, opts) => {
         await realSave(storePath, nextStore, opts);
-        if (nextStore.jobs.find((entry) => entry.id === job.id)?.state.queuedAtMs === dueAt) {
+        if (nextStore.jobs.find((entry) => entry.id === job.id)?.state.runningAtMs === dueAt) {
           stop(state);
         }
       });
@@ -805,7 +744,7 @@ describe("cron service run admission", () => {
     await activeStarted.promise;
     const waitingRun = run(state, waitingJob.id, "force");
     await vi.waitFor(() => {
-      expect(state.store?.jobs.find((job) => job.id === waitingJob.id)?.state.queuedAtMs).toBe(
+      expect(state.store?.jobs.find((job) => job.id === waitingJob.id)?.state.runningAtMs).toBe(
         dueAt,
       );
     });
@@ -858,7 +797,7 @@ describe("cron service run admission", () => {
     await activeStarted.promise;
     const timerRun = onTimer(state);
     await vi.waitFor(() => {
-      expect(state.store?.jobs.find((job) => job.id === scheduledJob.id)?.state.queuedAtMs).toBe(
+      expect(state.store?.jobs.find((job) => job.id === scheduledJob.id)?.state.runningAtMs).toBe(
         dueAt,
       );
     });

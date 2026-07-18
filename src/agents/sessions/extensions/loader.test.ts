@@ -4,20 +4,18 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
-import { clearExtensionCache, loadExtensionsCached } from "./loader.js";
+import { loadExtensions } from "./loader.js";
 
 const tempDirs: string[] = [];
 
 afterEach(async () => {
-  clearExtensionCache();
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { force: true, recursive: true })));
 });
 
-describe("loadExtensionsCached", () => {
-  let result: Awaited<ReturnType<typeof loadExtensionsCached>>;
+describe("loadExtensions", () => {
+  let result: Awaited<ReturnType<typeof loadExtensions>>;
 
   beforeAll(async () => {
-    clearExtensionCache();
     // Extensions import both public SDK helpers and runtime helper subpaths; the
     // loader must route those aliases without package-manager involvement.
     const dir = await mkdtemp(join(tmpdir(), "openclaw-extension-sdk-"));
@@ -45,7 +43,7 @@ export default async function(api) {
 `,
     );
 
-    result = await loadExtensionsCached([extensionPath], dir);
+    result = await loadExtensions([extensionPath], dir);
   });
 
   it("resolves plugin SDK subpaths in jiti-loaded extensions", () => {

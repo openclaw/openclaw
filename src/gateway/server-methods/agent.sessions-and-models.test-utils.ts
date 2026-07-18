@@ -19,7 +19,6 @@ import {
   setDetachedTaskLifecycleRuntime,
 } from "../../tasks/task-runtime.test-helpers.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
-import { dispatchAgentRunFromGateway } from "./agent-run-dispatch.js";
 import {
   applyGatewaySubagentRegistryTestDeps,
   getAgentTestMocks,
@@ -431,7 +430,7 @@ describe("gateway agent handler", () => {
     });
   });
 
-  it("preserves aborted async gateway agent runs as cancelled", async () => {
+  it("preserves aborted async gateway agent runs as timed out", async () => {
     await withTempDir({ prefix: "openclaw-gateway-agent-task-aborted-" }, async (root) => {
       useTestStateDir(root);
       resetTaskRegistryForTests();
@@ -455,7 +454,7 @@ describe("gateway agent handler", () => {
         expectRecordFields(findTaskByRunId("task-registry-agent-run-aborted"), {
           runtime: "cli",
           childSessionKey: "agent:main:main",
-          status: "cancelled",
+          status: "timed_out",
           terminalSummary: "aborted",
         });
         expectRecordFields(context.dedupe.get("agent:task-registry-agent-run-aborted")?.payload, {
@@ -467,7 +466,7 @@ describe("gateway agent handler", () => {
     });
   });
 
-  it("classifies RPC-aborted async gateway agent rejections as cancelled", async () => {
+  it("classifies aborted async gateway agent rejections as timed out", async () => {
     await withTempDir({ prefix: "openclaw-gateway-agent-task-abort-error-" }, async (root) => {
       useTestStateDir(root);
       resetTaskRegistryForTests();
@@ -494,7 +493,7 @@ describe("gateway agent handler", () => {
         expectRecordFields(findTaskByRunId("task-registry-agent-run-abort-error"), {
           runtime: "cli",
           childSessionKey: "agent:main:main",
-          status: "cancelled",
+          status: "timed_out",
           error: "AbortError: This operation was aborted",
         });
         expectRecordFields(
@@ -506,9 +505,6 @@ describe("gateway agent handler", () => {
             stopReason: "rpc",
           },
         );
-        expect(
-          context.dedupe.get("agent:task-registry-agent-run-abort-error")?.payload,
-        ).not.toHaveProperty("timeoutPhase");
       });
     });
   });
@@ -540,15 +536,11 @@ describe("gateway agent handler", () => {
       );
 
       await waitForAssertion(() => {
-        expectRecordFields(findTaskByRunId(runId), {
-          status: "cancelled",
-        });
         expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, {
           runId,
           status: "timeout",
           summary: "aborted",
           stopReason: "restart",
-          timeoutPhase: "gateway_draining",
         });
       });
     });
@@ -593,9 +585,6 @@ describe("gateway agent handler", () => {
             stopReason: "timeout",
           },
         );
-        expect(
-          context.dedupe.get("agent:task-registry-agent-run-timeout-error")?.payload,
-        ).not.toHaveProperty("timeoutPhase");
       });
     });
   });
@@ -689,42 +678,6 @@ describe("gateway agent handler", () => {
           false,
         );
       });
-    });
-  });
-
-  it("settles ordinary async gateway agent rejections as failed", async () => {
-    const providerError = new Error("provider request failed");
-    mocks.agentCommand.mockRejectedValueOnce(providerError);
-    const context = makeContext();
-    const onSettled = vi.fn(() => true);
-    const respond = vi.fn();
-
-    dispatchAgentRunFromGateway({
-      ingressOpts: {
-        message: "background cli task",
-        sessionKey: "agent:main:main",
-        allowModelOverride: false,
-      },
-      runId: "agent-run-provider-error-settlement",
-      dedupeKeys: ["agent:agent-run-provider-error-settlement"],
-      abortController: new AbortController(),
-      cleanupAbortController: vi.fn(),
-      respond,
-      context,
-      taskTrackingMode: "none",
-      onSettled,
-    });
-
-    await waitForAssertion(() => {
-      expect(onSettled).toHaveBeenCalledWith({
-        terminalOutcome: {
-          reason: "failed",
-          status: "error",
-          error: "Error: provider request failed",
-        },
-        onRecovered: expect.any(Function),
-      });
-      expect(respond).toHaveBeenCalled();
     });
   });
 

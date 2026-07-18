@@ -36,7 +36,7 @@ import {
   writeGatewayRestartIntentSync,
 } from "../../infra/restart-intent.js";
 import { resolveGatewayRestartDeferralTimeoutMs } from "../../infra/restart.js";
-import { defaultRuntime, writeRuntimeJson } from "../../runtime.js";
+import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
 import { parseDurationMs } from "../parse-duration.js";
 import { recoverInstalledLaunchAgent } from "./launchd-recovery.js";
@@ -293,7 +293,7 @@ async function requestSafeGatewayRestart(opts: DaemonLifecycleOptions): Promise<
     warnings: formatSafeRestartWarnings(result),
   };
   if (opts.json) {
-    writeRuntimeJson(defaultRuntime, payload);
+    defaultRuntime.log(JSON.stringify(payload, null, 2));
   } else {
     defaultRuntime.log(message);
     if (result.preflight.blockers.length > 0) {
@@ -684,7 +684,6 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         delayMs: POST_RESTART_HEALTH_DELAY_MS,
         env: managedRestartContext.env,
         includeUnknownListenersAsStale: process.platform === "win32",
-        supervisorKeepsAlive: process.platform === "darwin",
       });
 
       if (!health.healthy && health.staleGatewayPids.length > 0) {
@@ -709,7 +708,6 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
           delayMs: POST_RESTART_HEALTH_DELAY_MS,
           env: managedRestartContext.env,
           includeUnknownListenersAsStale: process.platform === "win32",
-          supervisorKeepsAlive: process.platform === "darwin",
         });
       }
 

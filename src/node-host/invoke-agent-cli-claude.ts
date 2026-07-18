@@ -165,10 +165,6 @@ export async function runClaudeCliNodeCommand(params: {
           terminalLineTouchesTruncation = false;
         }
       };
-      // Output pipes can fail independently; child close/error remains authoritative.
-      const ignoreOutputStreamError = () => {};
-      child.stdout.on("error", ignoreOutputStreamError);
-      child.stderr.on("error", ignoreOutputStreamError);
       child.stdout.on("data", (raw: Buffer) => {
         const retained = retain(raw);
         if (retained.length > 0) {

@@ -163,8 +163,6 @@ data class ChatSessionEntry(
   val thinkingDefault: String? = null,
   val contextTokens: Long? = null,
   val hasContextUsageMetadata: Boolean = totalTokens != null || totalTokensFresh != null || contextTokens != null,
-  val hasActiveRun: Boolean? = null,
-  val activeRunIds: List<String>? = null,
 )
 
 /** Local fallback for server-side `sessions.list` search over cached entries. */
@@ -198,12 +196,6 @@ data class ChatCommandEntry(
 data class ChatInFlightRun(
   val runId: String,
   val text: String,
-  val plan: ChatPlanSnapshot? = null,
-)
-
-data class ChatPlanSnapshot(
-  val steps: List<ChatPlanStep>,
-  val explanation: String? = null,
 )
 
 /**

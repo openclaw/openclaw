@@ -10,8 +10,6 @@ import {
   captureAgentRunLifecycleGeneration,
   withAgentRunLifecycleGeneration,
 } from "../infra/agent-events.js";
-import { hasInternalDiagnosticEventListeners } from "../infra/diagnostic-event-listener-presence.js";
-import { areDiagnosticsEnabledForProcess } from "../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -38,10 +36,6 @@ import {
 } from "./cli-runner/delivery-evidence.js";
 import { cliBackendLog, formatCliBackendOutputDigest } from "./cli-runner/log.js";
 import { hashCliReseedPrompt } from "./cli-runner/reseed-envelope.js";
-import {
-  runClaudeCliAgentTurnWithDiagnostics,
-  type ClaudeCliRunDiagnosticLifecycle,
-} from "./cli-runner/run-diagnostics.js";
 import {
   loadCliSessionContextEngineMessages,
   loadCliSessionHistoryMessages,
@@ -466,27 +460,15 @@ async function finalizeCliContextEngineTurn(params: {
 export function runCliAgent(paramsInput: RunCliAgentParams): Promise<EmbeddedAgentRunResult> {
   const lifecycleGeneration =
     paramsInput.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(paramsInput.runId);
-  const params = {
-    ...paramsInput,
-    lifecycleGeneration,
-  };
-  // Observability services register before turns and keep subscriptions process-stable.
-  // Snapshot listener presence here so disabled installs pay no synthetic trace cost.
   return withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
-    isClaudeCliProvider(params.provider) &&
-    areDiagnosticsEnabledForProcess() &&
-    hasInternalDiagnosticEventListeners()
-      ? runClaudeCliAgentTurnWithDiagnostics(params, (diagnosticLifecycle) =>
-          runCliAgentInternal(params, diagnosticLifecycle),
-        )
-      : runCliAgentInternal(params),
+    runCliAgentInternal({
+      ...paramsInput,
+      lifecycleGeneration,
+    }),
   );
 }
 
-async function runCliAgentInternal(
-  params: RunCliAgentParams,
-  diagnosticLifecycle?: ClaudeCliRunDiagnosticLifecycle,
-): Promise<EmbeddedAgentRunResult> {
+async function runCliAgentInternal(params: RunCliAgentParams): Promise<EmbeddedAgentRunResult> {
   assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration!);
   // The hook gate must fire before prepareCliRunContext — that call allocates
   // backend resources released only by runPreparedCliAgent's try…finally.
@@ -554,7 +536,7 @@ async function runCliAgentInternal(
   let result: EmbeddedAgentRunResult | undefined;
   let runError: unknown;
   try {
-    result = await runPreparedCliAgent(context, diagnosticLifecycle);
+    result = await runPreparedCliAgent(context);
   } catch (error) {
     runError = error;
   }
@@ -583,7 +565,6 @@ async function runCliAgentInternal(
     if (runError || result?.didSendViaMessagingTool === true) {
       log.warn(`cli run cleanup failed after completion: ${formatErrorMessage(cleanupError)}`);
     } else {
-      diagnosticLifecycle?.setPhase("cleanup");
       runError =
         cleanupError instanceof Error ? cleanupError : new Error(formatErrorMessage(cleanupError));
     }
@@ -597,7 +578,6 @@ async function runCliAgentInternal(
 /** Runs an already-prepared CLI agent context through hooks and execution. */
 export async function runPreparedCliAgent(
   context: PreparedCliRunContext,
-  diagnosticLifecycle?: ClaudeCliRunDiagnosticLifecycle,
 ): Promise<EmbeddedAgentRunResult> {
   const { executePreparedCliRun } = await import("./cli-runner/execute.runtime.js");
   const { params } = context;
@@ -928,14 +908,7 @@ export async function runPreparedCliAgent(
               timeoutMs,
             },
           };
-    diagnosticLifecycle?.setPhase("send");
-    const output = await executePreparedCliRun(
-      attemptContext,
-      cliSessionIdToUse,
-      diagnosticLifecycle ? { onPhase: diagnosticLifecycle.setPhase } : undefined,
-    );
-    // Test facades and non-instrumented executors may not signal the boundary.
-    diagnosticLifecycle?.setPhase("resolve");
+    const output = await executePreparedCliRun(attemptContext, cliSessionIdToUse);
     const sourceReplyMirror = resolveCliSourceReplyMirror(output);
     const assistantText = sourceReplyMirror.delivered
       ? (sourceReplyMirror.visibleText ?? "")
@@ -1436,7 +1409,6 @@ export async function runPreparedCliAgent(
           `CLI run also failed before backend cleanup: ${formatErrorMessage(runError)}`,
         );
       }
-      diagnosticLifecycle?.setPhase("cleanup");
       throw cleanupError;
     }
     cliBackendLog.warn(

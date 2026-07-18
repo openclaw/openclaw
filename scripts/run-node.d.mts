@@ -1,7 +1,6 @@
 export const runNodeWatchedPaths: string[];
 export function isBuildRelevantRunNodePath(repoPath: string): boolean;
 export function isRestartRelevantRunNodePath(repoPath: string): boolean;
-export function listRequiredRuntimePostBuildOutputs(deps: Record<string, unknown>): string[];
 export function resolveBuildRequirement(deps: {
   cwd: string;
   env: NodeJS.ProcessEnv;

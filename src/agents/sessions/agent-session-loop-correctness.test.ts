@@ -201,24 +201,6 @@ afterEach(() => {
 });
 
 describe("AgentSession loop correctness", () => {
-  it("emits agent_settled once after a normal run", async () => {
-    const lifecycleEvents: string[] = [];
-    const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>([
-      ["agent_end", [async () => lifecycleEvents.push("agent_end")]],
-      ["agent_settled", [async () => lifecycleEvents.push("agent_settled")]],
-    ]);
-    streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
-      createAssistantResultStream(
-        createAssistant(activeModel, [{ type: "text", text: "complete answer" }]),
-      ),
-    );
-    const { session } = await createTestSession({ resourceLoader: createResourceLoader(handlers) });
-
-    await session.prompt("new prompt");
-
-    expect(lifecycleEvents).toEqual(["agent_end", "agent_settled"]);
-  });
-
   it("manually compacts a completed turn smaller than the retained-token budget", async () => {
     const sessionManager = SessionManager.inMemory();
     appendHistory(
@@ -401,13 +383,11 @@ describe("AgentSession loop correctness", () => {
   it("drains a follow-up queued by an agent-end handler", async () => {
     const sessionRef: { current?: AgentSession } = {};
     let queued = false;
-    const lifecycleEvents: string[] = [];
     const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>([
       [
         "agent_end",
         [
           async () => {
-            lifecycleEvents.push("agent_end");
             if (!queued) {
               queued = true;
               await sessionRef.current?.followUp("queued after end");
@@ -416,7 +396,6 @@ describe("AgentSession loop correctness", () => {
           },
         ],
       ],
-      ["agent_settled", [async () => lifecycleEvents.push("agent_settled")]],
     ]);
     const requests: Context[] = [];
     streamMocks.streamSimple.mockImplementation((activeModel: Model, context: Context) => {
@@ -433,15 +412,10 @@ describe("AgentSession loop correctness", () => {
     expect(requests).toHaveLength(2);
     expect(JSON.stringify(requests[1]?.messages)).toContain("queued after end");
     expect(session.agent.hasQueuedMessages()).toBe(false);
-    expect(lifecycleEvents).toEqual(["agent_end", "agent_end", "agent_settled"]);
   });
 
   it("leaves queued messages dormant after a turn handoff", async () => {
     const sessionRef: { current?: AgentSession } = {};
-    const settled = vi.fn();
-    const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>([
-      ["agent_settled", [async () => settled()]],
-    ]);
     const yieldTool: ToolDefinition = {
       name: "yield_turn",
       label: "Yield turn",
@@ -472,17 +446,13 @@ describe("AgentSession loop correctness", () => {
         ),
       ),
     );
-    const { session } = await createTestSession({
-      customTools: [yieldTool],
-      resourceLoader: createResourceLoader(handlers),
-    });
+    const { session } = await createTestSession({ customTools: [yieldTool] });
     sessionRef.current = session;
 
     await session.prompt("yield now");
 
     expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
     expect(session.agent.hasQueuedMessages()).toBe(true);
-    expect(settled).not.toHaveBeenCalled();
     session.agent.clearAllQueues();
   });
 

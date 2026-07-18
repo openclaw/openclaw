@@ -24,31 +24,15 @@ export type SessionRowGroup = {
   rows: GatewaySessionRow[];
 };
 
-export type SidebarSessionSection<Row> = {
-  id: "pinned" | "ungrouped" | "groups" | "work" | `category:${string}`;
+type SidebarSessionSection<Row> = {
+  id: "pinned" | "ungrouped" | "work" | `channel:${string}` | `category:${string}`;
   category?: string;
-  /** Built-in smart group-conversation section (kind "group" rows). */
-  groups?: boolean;
-  /** Built-in smart coding section (worktree/exec-node/ACP sessions). */
+  /** Built-in smart channel section (Telegram, Slack, ...). */
+  channel?: string;
+  /** Built-in smart work section (worktree/exec-node sessions). */
   work?: boolean;
   rows: Row[];
 };
-
-/**
- * Sections that render a header (and therefore can collapse). Threads
- * ("ungrouped") only shows its header in category grouping; the flat mode
- * keeps it headerless. Shared by the renderer and keyboard-order walker so
- * collapse behavior cannot drift between them.
- */
-export function sidebarSectionHasHeader(
-  sectionId: string,
-  grouping: SidebarSessionsGrouping,
-): boolean {
-  if (sectionId === "ungrouped") {
-    return grouping === "category";
-  }
-  return true;
-}
 
 export function normalizeSessionsGroupBy(raw: unknown): SessionsGroupBy {
   return SESSION_GROUP_MODES.includes(raw as SessionsGroupBy) ? (raw as SessionsGroupBy) : "none";
@@ -132,23 +116,21 @@ export function normalizeSidebarSessionsGrouping(raw: unknown): SidebarSessionsG
 type SidebarGroupableRow = {
   pinned?: boolean;
   category?: string | null;
-  /** Session kind from the gateway row; "group" rows form the Groups zone. */
-  kind?: string;
-  /** Session bound to a managed worktree or exec node (Coding zone). */
+  /** Message channel this session belongs to (drives built-in channel sections). */
+  channel?: string | null;
+  /** Channel-shaped sessions only; dashboard chats never join channel sections. */
+  channelSession?: boolean;
+  /** Session bound to a managed worktree or exec node (drives the Work section). */
   workSession?: boolean;
-  /** ACP-backed harness session (Coding zone). */
-  acpSession?: boolean;
 };
 
 /**
- * Zone partition: pinned, named categories (persisted `knownGroups` order,
- * new ones alphabetical), threads ("ungrouped" — the agent's chat sessions),
- * group conversations, then coding (worktree/exec-node/ACP). An explicit user
- * category wins over the smart group/coding classification so manual curation
- * sticks. `grouping: "none"` only disables categories; the kind-based Groups
- * and Coding zones always split so chat threads stay readable. The coding
- * section is always emitted (even empty) because the renderer appends CLI
- * catalog sessions into it.
+ * Pinned first, built-in channel sections (alphabetical), the built-in Work
+ * section, named categories in the persisted `knownGroups` order, newly
+ * observed categories alphabetically, then plain chats. An explicit user
+ * category always wins over smart channel/work classification. `knownGroups`
+ * keeps stored-but-empty groups visible as move targets; `grouping: "none"`
+ * collapses everything into the flat list (pinned stays).
  */
 export function groupSidebarSessionRows<Row extends SidebarGroupableRow>(
   rows: readonly Row[],
@@ -156,9 +138,9 @@ export function groupSidebarSessionRows<Row extends SidebarGroupableRow>(
 ): SidebarSessionSection<Row>[] {
   const grouping = options.grouping ?? "category";
   const pinned: Row[] = [];
-  const threads: Row[] = [];
-  const groups: Row[] = [];
-  const coding: Row[] = [];
+  const ungrouped: Row[] = [];
+  const channels = new Map<string, Row[]>();
+  const work: Row[] = [];
   const categories = new Map<string, Row[]>();
   if (grouping === "category") {
     for (const name of options.knownGroups ?? []) {
@@ -173,7 +155,11 @@ export function groupSidebarSessionRows<Row extends SidebarGroupableRow>(
       pinned.push(row);
       continue;
     }
-    const category = grouping === "category" ? row.category?.trim() : undefined;
+    if (grouping !== "category") {
+      ungrouped.push(row);
+      continue;
+    }
+    const category = row.category?.trim();
     if (category) {
       const categoryRows = categories.get(category);
       if (categoryRows) {
@@ -183,20 +169,32 @@ export function groupSidebarSessionRows<Row extends SidebarGroupableRow>(
       }
       continue;
     }
-    if (row.kind === "group") {
-      groups.push(row);
+    const channel = row.channelSession === true ? (row.channel?.trim() ?? "") : "";
+    if (channel) {
+      const channelRows = channels.get(channel);
+      if (channelRows) {
+        channelRows.push(row);
+      } else {
+        channels.set(channel, [row]);
+      }
       continue;
     }
-    if (row.workSession === true || row.acpSession === true) {
-      coding.push(row);
+    if (row.workSession === true) {
+      work.push(row);
       continue;
     }
-    threads.push(row);
+    ungrouped.push(row);
   }
 
   const sections: SidebarSessionSection<Row>[] = [];
   if (pinned.length > 0) {
     sections.push({ id: "pinned", rows: pinned });
+  }
+  for (const channel of [...channels.keys()].toSorted((a, b) => a.localeCompare(b))) {
+    sections.push({ id: `channel:${channel}`, channel, rows: channels.get(channel) ?? [] });
+  }
+  if (work.length > 0) {
+    sections.push({ id: "work", work: true, rows: work });
   }
   const knownGroups = [
     ...new Set((options.knownGroups ?? []).map((name) => name.trim()).filter(Boolean)),
@@ -210,11 +208,7 @@ export function groupSidebarSessionRows<Row extends SidebarGroupableRow>(
   for (const category of orderedCategories) {
     sections.push({ id: `category:${category}`, category, rows: categories.get(category) ?? [] });
   }
-  sections.push({ id: "ungrouped", rows: threads });
-  if (groups.length > 0) {
-    sections.push({ id: "groups", groups: true, rows: groups });
-  }
-  sections.push({ id: "work", work: true, rows: coding });
+  sections.push({ id: "ungrouped", rows: ungrouped });
   return sections;
 }
 

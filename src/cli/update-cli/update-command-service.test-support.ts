@@ -51,10 +51,6 @@ type UpdateCommandServiceTestApi = {
     health: GatewayRestartSnapshot;
     launchAgentRecovery: PostUpdateLaunchAgentRecoveryResult | null;
   }>;
-  hasLoadedLaunchdKeepAliveSupervisor(params: {
-    service: GatewayService;
-    env?: NodeJS.ProcessEnv;
-  }): Promise<boolean>;
   shouldUseLegacyProcessRestartAfterUpdate(params: {
     updateMode: UpdateRunResult["mode"];
   }): boolean;
@@ -83,12 +79,6 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(
   params: Parameters<UpdateCommandServiceTestApi["recoverLaunchAgentAndRecheckGatewayHealth"]>[0],
 ) {
   return await getTestApi().recoverLaunchAgentAndRecheckGatewayHealth(params);
-}
-
-export async function hasLoadedLaunchdKeepAliveSupervisor(
-  params: Parameters<UpdateCommandServiceTestApi["hasLoadedLaunchdKeepAliveSupervisor"]>[0],
-): Promise<boolean> {
-  return await getTestApi().hasLoadedLaunchdKeepAliveSupervisor(params);
 }
 
 export function shouldUseLegacyProcessRestartAfterUpdate(

@@ -15,10 +15,7 @@ import {
   type EmbeddedRunAttemptResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
-import {
-  buildMemorySystemPromptAddition,
-  prepareMemorySystemPromptAddition,
-} from "openclaw/plugin-sdk/core";
+import { buildMemorySystemPromptAddition } from "openclaw/plugin-sdk/core";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
 import type { CodexDynamicToolFunctionSpec, CodexDynamicToolSpec, JsonValue } from "./protocol.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
@@ -173,7 +170,6 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
   sessionKey: string;
   sessionAgentId: string;
   memoryToolNames: readonly string[];
-  sandboxed?: boolean;
 }): Promise<CodexWorkspaceBootstrapContext> {
   try {
     const memoryToolsAvailable =
@@ -261,14 +257,13 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
         turnScopedDeveloperInstructionFiles,
       ),
       memoryCollaborationInstructions: shouldInjectCodexOpenClawPromptContext(params.params)
-        ? await renderCodexWorkspaceMemoryCollaborationInstructions({
+        ? renderCodexWorkspaceMemoryCollaborationInstructions({
             files: memoryReferenceFiles,
             toolNames: params.memoryToolNames,
             memoryToolRouted: memoryToolsAvailable,
             citationsMode: params.params.config?.memory?.citations,
             agentId: params.params.agentId ?? params.sessionAgentId,
             agentSessionKey: params.sessionKey,
-            sandboxed: params.sandboxed,
           })
         : undefined,
       heartbeatCollaborationInstructions:
@@ -862,22 +857,20 @@ function renderCodexWorkspaceMemoryReference(params: {
   return lines.join("\n").trim();
 }
 
-async function renderCodexWorkspaceMemoryCollaborationInstructions(params: {
+function renderCodexWorkspaceMemoryCollaborationInstructions(params: {
   files: EmbeddedContextFile[];
   toolNames: readonly string[];
   memoryToolRouted: boolean;
   citationsMode?: Parameters<typeof buildMemorySystemPromptAddition>[0]["citationsMode"];
   agentId?: string;
   agentSessionKey?: string;
-  sandboxed?: boolean;
-}): Promise<string | undefined> {
+}): string | undefined {
   const memoryRecallInstructions = params.memoryToolRouted
-    ? await renderCodexMemoryRecallInstructions({
+    ? renderCodexMemoryRecallInstructions({
         toolNames: params.toolNames,
         citationsMode: params.citationsMode,
         agentId: params.agentId,
         agentSessionKey: params.agentSessionKey,
-        sandboxed: params.sandboxed,
       })
     : undefined;
   const memoryReferenceInstructions = renderCodexWorkspaceMemoryReference({
@@ -888,20 +881,18 @@ async function renderCodexWorkspaceMemoryCollaborationInstructions(params: {
   return sections.length > 0 ? sections.join("\n\n") : undefined;
 }
 
-async function renderCodexMemoryRecallInstructions(params: {
+function renderCodexMemoryRecallInstructions(params: {
   toolNames: readonly string[];
   citationsMode?: Parameters<typeof buildMemorySystemPromptAddition>[0]["citationsMode"];
   agentId?: string;
   agentSessionKey?: string;
-  sandboxed?: boolean;
-}): Promise<string | undefined> {
+}): string | undefined {
   const availableTools = new Set(params.toolNames);
-  const memoryPrompt = await prepareMemorySystemPromptAddition({
+  const memoryPrompt = buildMemorySystemPromptAddition({
     availableTools,
     citationsMode: params.citationsMode,
     agentId: params.agentId,
     agentSessionKey: params.agentSessionKey,
-    sandboxed: params.sandboxed,
   });
   if (!memoryPrompt) {
     // Memory recall policy belongs to the active memory plugin.

@@ -90,8 +90,13 @@ function createTestRuntime(overrides?: {
   resolveAgentRoute?: () => ReturnType<typeof buildResolvedRoute>;
 }) {
   const recordInboundSession = vi.fn(async (_params: unknown) => {});
-  type CommentTurnPlan = Parameters<PluginRuntime["channel"]["inbound"]["dispatch"]>[0];
-  const dispatchPlanForTest = vi.fn(async (turn: CommentTurnPlan) => {
+  type PreparedCommentTurnPlan = {
+    route: { agentId: string; sessionKey: string };
+    ctxPayload: { SessionKey?: string };
+    record?: Record<string, unknown> & { onRecordError?: (error: unknown) => void };
+    runDispatch: () => Promise<unknown>;
+  };
+  const dispatchPreparedForTest = vi.fn(async (turn: PreparedCommentTurnPlan) => {
     const storePath = "/tmp/feishu-session-store.json";
     await recordInboundSession({
       storePath,
@@ -102,11 +107,7 @@ function createTestRuntime(overrides?: {
       updateLastRoute: turn.record?.updateLastRoute,
       onRecordError: turn.record?.onRecordError ?? (() => undefined),
     });
-    const dispatchResult = await dispatchInboundMessageMock({
-      ctx: turn.ctxPayload,
-      cfg: turn.cfg,
-      replyOptions: turn.replyOptions,
-    });
+    const dispatchResult = await turn.runDispatch();
     return {
       admission: { kind: "dispatch" as const },
       dispatched: true,
@@ -160,10 +161,10 @@ function createTestRuntime(overrides?: {
             canStartAgentTurn: true,
           };
           const turn = await params.adapter.resolveTurn(input, eventClass, {});
-          if (!("route" in turn) || !("delivery" in turn)) {
-            throw new Error("expected assembled Feishu comment turn plan");
+          if (!("runDispatch" in turn)) {
+            throw new Error("feishu comment test runtime only supports prepared turns");
           }
-          return await dispatchPlanForTest(turn);
+          return await dispatchPreparedForTest(turn as PreparedCommentTurnPlan);
         }) as unknown as PluginRuntime["channel"]["inbound"]["run"],
       },
       pairing: {
@@ -230,8 +231,13 @@ describe("handleFeishuCommentEvent", () => {
     setFeishuRuntime(runtime);
 
     createFeishuCommentReplyDispatcherMock.mockReturnValue({
-      dispatcherOptions: {},
-      delivery: { deliver: vi.fn(async () => undefined) },
+      dispatcher: {
+        markComplete: vi.fn(),
+        waitForIdle: vi.fn(async () => {}),
+      },
+      replyOptions: {},
+      markDispatchIdle: vi.fn(),
+      markRunComplete: vi.fn(),
       startTypingReaction: vi.fn(async () => {}),
       cleanupTypingReaction: vi.fn(async () => {}),
     });
@@ -534,10 +540,17 @@ describe("handleFeishuCommentEvent", () => {
     dispatchInboundMessageMock.mockRejectedValueOnce(new Error("dispatch failed"));
     const runtime = createTestRuntime();
     setFeishuRuntime(runtime);
+    const markRunComplete = vi.fn();
+    const markDispatchIdle = vi.fn();
     const cleanupTypingReaction = vi.fn(async () => {});
     createFeishuCommentReplyDispatcherMock.mockReturnValue({
-      dispatcherOptions: {},
-      delivery: { deliver: vi.fn(async () => undefined) },
+      dispatcher: {
+        markComplete: vi.fn(),
+        waitForIdle: vi.fn(async () => {}),
+      },
+      replyOptions: {},
+      markDispatchIdle,
+      markRunComplete,
       startTypingReaction: vi.fn(async () => {}),
       cleanupTypingReaction,
     });
@@ -555,6 +568,8 @@ describe("handleFeishuCommentEvent", () => {
       }),
     ).rejects.toThrow("dispatch failed");
 
+    expect(markRunComplete).toHaveBeenCalledTimes(1);
+    expect(markDispatchIdle).toHaveBeenCalledTimes(1);
     expect(cleanupTypingReaction).toHaveBeenCalledTimes(1);
   });
 
@@ -567,8 +582,13 @@ describe("handleFeishuCommentEvent", () => {
         }),
     );
     createFeishuCommentReplyDispatcherMock.mockReturnValue({
-      dispatcherOptions: {},
-      delivery: { deliver: vi.fn(async () => undefined) },
+      dispatcher: {
+        markComplete: vi.fn(),
+        waitForIdle: vi.fn(async () => {}),
+      },
+      replyOptions: {},
+      markDispatchIdle: vi.fn(),
+      markRunComplete: vi.fn(),
       startTypingReaction: vi.fn(async () => {}),
       cleanupTypingReaction,
     });
@@ -596,8 +616,13 @@ describe("handleFeishuCommentEvent", () => {
   it("does not start comment typing reaction before dispatch begins", async () => {
     const startTypingReaction = vi.fn(async () => {});
     createFeishuCommentReplyDispatcherMock.mockReturnValue({
-      dispatcherOptions: {},
-      delivery: { deliver: vi.fn(async () => undefined) },
+      dispatcher: {
+        markComplete: vi.fn(),
+        waitForIdle: vi.fn(async () => {}),
+      },
+      replyOptions: {},
+      markDispatchIdle: vi.fn(),
+      markRunComplete: vi.fn(),
       startTypingReaction,
       cleanupTypingReaction: vi.fn(async () => {}),
     });

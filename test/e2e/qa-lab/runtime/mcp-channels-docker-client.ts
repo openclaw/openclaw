@@ -230,7 +230,6 @@ async function main() {
       "expected one seeded attachment",
     );
 
-    const waitMessage = `wait event ${randomUUID()}`;
     const waited = (await Promise.all([
       callTool<{
         structuredContent?: { event?: Record<string, unknown> };
@@ -242,20 +241,19 @@ async function main() {
           timeout_ms: 10_000,
         },
       }),
-      gateway.request("chat.send", {
+      gateway.request("chat.inject", {
         sessionKey: "agent:main:main",
-        message: waitMessage,
-        idempotencyKey: randomUUID(),
+        message: "assistant live event",
       }),
     ]).then(([result]) => result)) as {
       structuredContent?: { event?: Record<string, unknown> };
     };
-    const waitEvent = waited.structuredContent?.event;
-    assert(waitEvent, "expected events_wait result");
-    assert(waitEvent.type === "message", "expected message event");
-    assert(waitEvent.role === "user", "expected user event role");
-    assert(waitEvent.text === waitMessage, "expected wait event text");
-    const waitCursor = typeof waitEvent.cursor === "number" ? waitEvent.cursor : 0;
+    const assistantEvent = waited.structuredContent?.event;
+    assert(assistantEvent, "expected events_wait result");
+    assert(assistantEvent.type === "message", "expected message event");
+    assert(assistantEvent.role === "assistant", "expected assistant event role");
+    assert(assistantEvent.text === "assistant live event", "expected assistant event text");
+    const assistantCursor = typeof assistantEvent.cursor === "number" ? assistantEvent.cursor : 0;
 
     const polled = await callTool<{
       structuredContent?: { events?: Array<Record<string, unknown>> };
@@ -264,8 +262,10 @@ async function main() {
       arguments: { session_key: "agent:main:main", after_cursor: 0, limit: 10 },
     });
     assert(
-      (polled.structuredContent?.events ?? []).some((entry) => entry.text === waitMessage),
-      "expected wait event in events_poll",
+      (polled.structuredContent?.events ?? []).some(
+        (entry) => entry.text === "assistant live event",
+      ),
+      "expected assistant event in events_poll",
     );
 
     const channelMessage = `hello from docker ${randomUUID()}`;
@@ -292,7 +292,7 @@ async function main() {
           structuredContent?: { events?: Array<Record<string, unknown>> };
         }>({
           name: "events_poll",
-          arguments: { session_key: "agent:main:main", after_cursor: waitCursor, limit: 50 },
+          arguments: { session_key: "agent:main:main", after_cursor: assistantCursor, limit: 50 },
         });
         return findEventByText(polledValue.structuredContent?.events, channelMessage);
       },
@@ -304,7 +304,7 @@ async function main() {
         structuredContent?: { events?: Array<Record<string, unknown>> };
       }>({
         name: "events_poll",
-        arguments: { session_key: "agent:main:main", after_cursor: waitCursor, limit: 50 },
+        arguments: { session_key: "agent:main:main", after_cursor: assistantCursor, limit: 50 },
       });
       finalPolledEvents = polledLocal.structuredContent?.events ?? [];
       const finalUserEvent = findEventByText(finalPolledEvents, channelMessage);

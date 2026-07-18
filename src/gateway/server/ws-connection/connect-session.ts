@@ -14,10 +14,7 @@ import { loadVoiceWakeRoutingConfig } from "../../../infra/voicewake-routing.js"
 import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
 import { loadNodeHostConfig } from "../../../node-host/config.js";
 import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../../skills/runtime/remote.js";
-import {
-  isBrowserCopilotClient,
-  isEphemeralGatewayClient,
-} from "../../../utils/message-channel.js";
+import { isEphemeralGatewayClient } from "../../../utils/message-channel.js";
 import { resolveRuntimeServiceVersion } from "../../../version.js";
 import { verifyAgentRuntimeIdentityToken } from "../../agent-runtime-identity-token.js";
 import { APPROVALS_SCOPE } from "../../method-scopes.js";
@@ -217,9 +214,6 @@ export async function attachAuthenticatedGatewayConnect(
     connId,
     connectionKind: "gateway",
     isDeviceTokenAuth: authMethod === "device-token",
-    pairedClientId: isBrowserCopilotClient(connectParams.client)
-      ? connectParams.client.id
-      : undefined,
     usesSharedGatewayAuth: sessionUsesSharedGatewayAuth,
     sharedGatewaySessionGeneration: sessionSharedGatewaySessionGeneration,
     presenceKey,

@@ -3316,12 +3316,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
     }).finally(() => {
       settled = true;
     });
-    try {
-      await harness.waitForMethod("turn/start");
-      await vi.waitFor(() => expect(turnStartProgressEvents).toHaveLength(2), { interval: 1 });
-    } finally {
-      stopDiagnostics();
-    }
+    await harness.waitForMethod("turn/start");
+    await vi.waitFor(() => expect(turnStartProgressEvents).toHaveLength(2), { interval: 1 });
+    stopDiagnostics();
 
     const blockedProjection = harness.notify({
       method: "item/reasoning/textDelta",

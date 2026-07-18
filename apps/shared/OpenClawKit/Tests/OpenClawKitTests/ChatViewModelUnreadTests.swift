@@ -541,7 +541,7 @@ struct ChatViewModelUnreadTests {
     }
 
     private func waitUntil(
-        timeout: Duration = .seconds(5),
+        timeout: Duration = .seconds(2),
         condition: @escaping @MainActor () async -> Bool) async throws
     {
         let clock = ContinuousClock()

@@ -8,6 +8,7 @@ import {
   resolveInboundSupplementalSenderAllowed,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
+  dispatchReplyFromConfigWithSettledDispatcher,
   hasFinalInboundReplyDispatch,
   resolveInboundReplyDispatchCounts,
 } from "openclaw/plugin-sdk/channel-inbound";
@@ -913,7 +914,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     logVerboseMessage(`msteams inbound: from=${ctxPayload.From} preview="${preview}"`);
 
     const sharePointSiteId = msteamsCfg?.sharePointSiteId;
-    const { dispatcherOptions, delivery, replyOptions } = createMSTeamsReplyDispatcher({
+    const { dispatcher, replyOptions, markDispatchIdle } = createMSTeamsReplyDispatcher({
       cfg,
       agentId: route.agentId,
       sessionKey: route.sessionKey,
@@ -942,16 +943,15 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       | { timezone?: string }
       | undefined;
     const senderTimezone = activityClientInfo?.timezone || conversationRef.timezone;
-    const turnConfig =
+    const configOverride =
       senderTimezone && !cfg.agents?.defaults?.userTimezone
         ? {
-            ...cfg,
             agents: {
-              ...cfg.agents,
               defaults: { ...cfg.agents?.defaults, userTimezone: senderTimezone },
             },
           }
-        : cfg;
+        : undefined;
+
     log.info("dispatching to agent", { sessionKey: route.sessionKey });
     try {
       const turnResult = await core.channel.inbound.run({
@@ -968,7 +968,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
             raw: activity,
           }),
           resolveTurn: () => ({
-            cfg: turnConfig,
+            cfg,
             channel: "msteams",
             accountId: route.accountId,
             route: { agentId: route.agentId, sessionKey: route.sessionKey },
@@ -986,9 +986,20 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
               historyMap: conversationHistories,
               limit: historyLimit,
             },
-            dispatcherOptions,
-            delivery,
-            replyOptions,
+            onPreDispatchFailure: () =>
+              core.channel.reply.settleReplyDispatcher({
+                dispatcher,
+                onSettled: () => markDispatchIdle(),
+              }),
+            runDispatch: () =>
+              dispatchReplyFromConfigWithSettledDispatcher({
+                cfg,
+                ctxPayload,
+                dispatcher,
+                onSettled: () => markDispatchIdle(),
+                replyOptions,
+                configOverride,
+              }),
           }),
         },
       });

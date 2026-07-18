@@ -1,4 +1,9 @@
 #!/usr/bin/env node
+export function githubReleaseBodySize(body: unknown): {
+  characters: number;
+  bytes: number;
+};
+export function fitsGithubReleaseBody(body: unknown): boolean;
 export function extractChangelogReleaseSections(changelog: string): {
   version: string;
   source: string;
@@ -7,6 +12,7 @@ export function extractChangelogSection(changelog: unknown, version: unknown): u
 export function releaseNotesVersionForTag(tag: unknown): unknown;
 export function formatShippedBaselineExclusions(baselines: ShippedBaselineExclusion[]): string;
 export function parseShippedBaselineExclusions(section: string): ShippedBaselineExclusion[];
+export function tagPinnedContributionRecordUrl(repository: unknown, tag: unknown): string;
 export function dedicatedSectionVersionForTag(tag: unknown): unknown;
 export function releaseNotesSectionForTag(
   changelog: unknown,

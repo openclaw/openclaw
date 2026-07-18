@@ -1,8 +1,6 @@
 // Slack tests cover config schema plugin behavior.
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { SlackConfigSchema } from "../config-api.js";
-import { listSlackAccountIds, resolveSlackAccount } from "./accounts.js";
 
 function expectSlackConfigValid(config: unknown) {
   const res = SlackConfigSchema.safeParse(config);
@@ -38,95 +36,6 @@ describe("slack config schema", () => {
     if (res.success) {
       expect(res.data.groupPolicy).toBe("allowlist");
     }
-  });
-
-  it('defaults identity to "bot"', () => {
-    const res = SlackConfigSchema.safeParse({ accounts: { work: {} } });
-
-    expect(res.success).toBe(true);
-    if (res.success) {
-      expect(res.data.identity).toBe("bot");
-      expect(res.data.accounts?.work?.identity).toBeUndefined();
-      expect(res.data.accounts?.work?.identity ?? res.data.identity).toBe("bot");
-    }
-  });
-
-  it('accepts identity="user" with a user token and socket companion app', () => {
-    expectSlackConfigValid({
-      identity: "user",
-      userToken: "test-user-token",
-      appToken: "test-app-token",
-    });
-  });
-
-  it('accepts identity="user" with a user token and HTTP companion app', () => {
-    expectSlackConfigValid({
-      identity: "user",
-      mode: "http",
-      userToken: "test-user-token",
-      signingSecret: "test-signing-secret",
-    });
-  });
-
-  it("allows account entries to inherit the top-level user identity", () => {
-    const cfg = {
-      channels: {
-        slack: {
-          identity: "user" as const,
-          userToken: "test-user-token",
-          appToken: "test-app-token",
-          accounts: { work: {} },
-        },
-      },
-    } satisfies OpenClawConfig;
-
-    expectSlackConfigValid(cfg.channels.slack);
-    expect(resolveSlackAccount({ cfg, accountId: "work" }).identity).toBe("user");
-  });
-
-  it("keeps user tokens and companion app tokens active for user identity", () => {
-    const cfg = {
-      channels: {
-        slack: {
-          identity: "user" as const,
-          userToken: "test-user-token",
-          appToken: "test-app-token",
-        },
-      },
-    } satisfies OpenClawConfig;
-
-    const account = resolveSlackAccount({ cfg });
-
-    expect(listSlackAccountIds(cfg)).toEqual(["default"]);
-    expect(account.userToken).toBe("test-user-token");
-    expect(account.userTokenSource).toBe("config");
-    expect(account.appToken).toBe("test-app-token");
-    expect(account.appTokenSource).toBe("config");
-  });
-
-  it("accepts inherited and relay companion-app transports for user identity", () => {
-    expectSlackConfigValid({
-      identity: "user",
-      userToken: "test-user-token",
-      appToken: "test-app-token",
-      accounts: {
-        work: {},
-      },
-    });
-    expectSlackConfigValid({
-      identity: "user",
-      mode: "relay",
-      userToken: "test-user-token",
-      relay: {
-        url: "test-relay-url",
-        authToken: "test-relay-auth-token",
-        gatewayId: "test-gateway-id",
-      },
-    });
-  });
-
-  it("defers user-identity user-token presence to runtime", () => {
-    expectSlackConfigValid({ identity: "user" });
   });
 
   it("keeps presence events off by default and accepts account/channel modes", () => {
@@ -220,9 +129,9 @@ describe("slack config schema", () => {
 
   it("accepts user token config fields", () => {
     expectSlackConfigValid({
-      botToken: "test-bot-token",
-      appToken: "test-app-token",
-      userToken: "test-user-token",
+      botToken: "xoxb-any",
+      appToken: "xapp-any",
+      userToken: "xoxp-any",
       userTokenReadOnly: false,
     });
   });
@@ -248,7 +157,7 @@ describe("slack config schema", () => {
   it("accepts relay mode with a SecretInput auth token", () => {
     expectSlackConfigValid({
       mode: "relay",
-      botToken: "test-bot-token",
+      botToken: "xoxb-any",
       relay: {
         url: "wss://router.example.com/gateway/ws",
         authToken: { source: "env", provider: "default", id: "SLACK_RELAY_AUTH_TOKEN" },
@@ -268,7 +177,7 @@ describe("slack config schema", () => {
         mode: "relay",
         relay: {
           url: "wss://router.example.com/gateway/ws",
-          authToken: "test-relay-auth-token",
+          authToken: "secret",
         },
       },
       "relay.gatewayId",
@@ -309,9 +218,9 @@ describe("slack config schema", () => {
     expectSlackConfigValid({
       accounts: {
         work: {
-          botToken: "test-bot-token",
-          appToken: "test-app-token",
-          userToken: "test-user-token",
+          botToken: "xoxb-any",
+          appToken: "xapp-any",
+          userToken: "xoxp-any",
           userTokenReadOnly: true,
         },
       },
@@ -321,9 +230,9 @@ describe("slack config schema", () => {
   it("rejects invalid userTokenReadOnly types", () => {
     expectSlackConfigIssue(
       {
-        botToken: "test-bot-token",
-        appToken: "test-app-token",
-        userToken: "test-user-token",
+        botToken: "xoxb-any",
+        appToken: "xapp-any",
+        userToken: "xoxp-any",
         userTokenReadOnly: "no",
       },
       "userTokenReadOnly",
@@ -333,8 +242,8 @@ describe("slack config schema", () => {
   it("rejects invalid userToken types", () => {
     expectSlackConfigIssue(
       {
-        botToken: "test-bot-token",
-        appToken: "test-app-token",
+        botToken: "xoxb-any",
+        appToken: "xapp-any",
         userToken: 123,
       },
       "userToken",
@@ -344,7 +253,7 @@ describe("slack config schema", () => {
   it("accepts HTTP mode when signing secret is configured", () => {
     expectSlackConfigValid({
       mode: "http",
-      signingSecret: "test-signing-secret",
+      signingSecret: "secret",
     });
   });
 
@@ -361,7 +270,7 @@ describe("slack config schema", () => {
 
   it("accepts account HTTP mode when base signing secret is set", () => {
     expectSlackConfigValid({
-      signingSecret: "test-signing-secret",
+      signingSecret: "secret",
       accounts: {
         ops: {
           mode: "http",

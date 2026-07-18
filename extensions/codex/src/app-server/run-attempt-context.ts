@@ -56,7 +56,6 @@ export async function prepareCodexAttemptContext(
     usesSupervisionConnection,
     resolvedWorkspace,
     initialInactiveThreadBootstrapBindingForcedFreshStart,
-    sandbox,
   } = connection;
   const { toolBridge } = attemptTools;
   const activeTranscriptTarget = {
@@ -140,7 +139,6 @@ export async function prepareCodexAttemptContext(
     sessionKey: contextSessionKey,
     sessionAgentId,
     memoryToolNames,
-    sandboxed: sandbox?.enabled === true,
   });
   const baseDeveloperInstructions = joinPresentSections(
     buildDeveloperInstructions(runtimeParams, { dynamicTools: toolBridge.availableSpecs }),

@@ -10,7 +10,7 @@ import {
 } from "../../scripts/ci-run-timings.mjs";
 
 describe("scripts/ci-run-timings.mjs", () => {
-  it("separates start delay from job duration without mislabeling dependency wait", () => {
+  it("separates queue time from job duration", () => {
     const summary = summarizeRunTimings(
       {
         conclusion: "success",
@@ -49,7 +49,7 @@ describe("scripts/ci-run-timings.mjs", () => {
       ["slow", 60],
       ["queued", 10],
     ]);
-    expect(summary.byStartDelay.map((job) => [job.name, job.startDelaySeconds])).toEqual([
+    expect(summary.byQueue.map((job) => [job.name, job.queueSeconds])).toEqual([
       ["queued", 50],
       ["slow", 20],
     ]);

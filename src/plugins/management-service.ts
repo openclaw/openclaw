@@ -78,7 +78,6 @@ type ManagedPluginCatalogEntry = {
   enabled: boolean;
   state: "enabled" | "disabled" | "not-installed" | "error";
   featured?: boolean;
-  featuredAt?: number;
   order?: number;
   hasIcon?: boolean;
   install?: { source: "clawhub"; packageName: string } | { source: "official"; pluginId: string };
@@ -320,10 +319,6 @@ function normalizeCatalogMetadata(
       };
 }
 
-function normalizeFeaturedAt(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
-}
-
 function resolveCatalogInstallAction(params: {
   config: OpenClawConfig;
   entry: OfficialExternalPluginCatalogEntry;
@@ -393,21 +388,6 @@ function compareCatalogEntries(
   const featured = Number(Boolean(right.featured)) - Number(Boolean(left.featured));
   if (featured !== 0) {
     return featured;
-  }
-  if (left.featured && right.featured) {
-    const leftFeaturedAt = left.featuredAt;
-    const rightFeaturedAt = right.featuredAt;
-    if (leftFeaturedAt !== undefined || rightFeaturedAt !== undefined) {
-      if (leftFeaturedAt === undefined) {
-        return 1;
-      }
-      if (rightFeaturedAt === undefined) {
-        return -1;
-      }
-      if (leftFeaturedAt !== rightFeaturedAt) {
-        return rightFeaturedAt - leftFeaturedAt;
-      }
-    }
   }
   const order = (left.order ?? Number.MAX_SAFE_INTEGER) - (right.order ?? Number.MAX_SAFE_INTEGER);
   return order !== 0 ? order : left.name.localeCompare(right.name);
@@ -659,10 +639,6 @@ export async function listManagedPlugins(params: {
       manifest?.description ?? manifest?.channelCatalogMeta?.blurb ?? manifest?.packageDescription;
     const hostedListingAuthoritative =
       hasHostedOfficialIdentity && officialCatalog.hostedFeaturedAuthoritative;
-    const featuredAt =
-      hostedListingAuthoritative && catalog?.featured === true
-        ? normalizeFeaturedAt(officialEntry?.featuredAt)
-        : undefined;
     const name =
       (hostedListingAuthoritative ? normalizeOptionalString(officialEntry?.title) : undefined) ??
       localName;
@@ -684,7 +660,6 @@ export async function listManagedPlugins(params: {
       enabled: record.enabled,
       state: error ? "error" : record.enabled ? "enabled" : "disabled",
       ...(catalog?.featured !== undefined ? { featured: catalog.featured } : {}),
-      ...(featuredAt !== undefined ? { featuredAt } : {}),
       ...(catalog?.order !== undefined ? { order: catalog.order } : {}),
       ...(resolvePluginIconUrlFromCatalogFacts({
         metadata,
@@ -729,8 +704,6 @@ export async function listManagedPlugins(params: {
     const install = resolveCatalogInstallAction({ config: params.config, entry, pluginId });
     const description = normalizeOptionalString(entry.description);
     const version = normalizeOptionalString(entry.version);
-    const featuredAt =
-      catalog.featured === true ? normalizeFeaturedAt(entry.featuredAt) : undefined;
     plugins.push({
       id: pluginId,
       name: resolveOfficialExternalPluginLabel(entry),
@@ -742,7 +715,6 @@ export async function listManagedPlugins(params: {
       enabled: false,
       state: "not-installed",
       ...(catalog.featured !== undefined ? { featured: catalog.featured } : {}),
-      ...(featuredAt !== undefined ? { featuredAt } : {}),
       ...(catalog.order !== undefined ? { order: catalog.order } : {}),
       ...(resolveCatalogEntryIcon(entry) ? { hasIcon: true } : {}),
       ...(install ? { install } : {}),

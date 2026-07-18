@@ -2172,7 +2172,6 @@ describe("message tool schema scoping", () => {
         ]),
       );
       expect(presentationSchemaJson).not.toContain('"const":"approval"');
-      expect(presentationSchemaJson).not.toContain('"const":"question"');
       expect(presentationSchemaJson).toContain('"chartType"');
       expect(presentationSchemaJson).toContain('"pie"');
       expect(presentationSchemaJson).toContain('"table"');

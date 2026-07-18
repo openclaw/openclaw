@@ -286,7 +286,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   }
   let lifecycleStarted = false;
   let gatewaySupervisor: ReturnType<typeof createDiscordGatewaySupervisor> | undefined;
-  let deactivateMessageHandler: (() => Promise<void>) | undefined;
+  let deactivateMessageHandler: (() => void) | undefined;
   let autoPresenceController: Awaited<
     ReturnType<typeof createDiscordMonitorClient>
   >["autoPresenceController"] = null;
@@ -426,7 +426,6 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       registerDiscordListener(client.listeners, new DiscordVoiceStateUpdateListener(voiceManager));
     }
     const messageHandler = discordProviderSessionRuntime.createDiscordMessageHandler({
-      client,
       cfg,
       discordConfig: discordCfg,
       accountId: account.accountId,
@@ -514,7 +513,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       gatewayRuntimeReadyTimeoutMs: account.config.gatewayRuntimeReadyTimeoutMs,
     });
   } finally {
-    await cleanupDiscordProviderStartup({
+    cleanupDiscordProviderStartup({
       deactivateMessageHandler,
       autoPresenceController,
       setStatus: opts.setStatus,

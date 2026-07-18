@@ -54,7 +54,6 @@ export const DevicePairRequestedEventSchema = closedObject({
   deviceFamily: Type.Optional(NonEmptyString),
   clientId: Type.Optional(NonEmptyString),
   clientMode: Type.Optional(NonEmptyString),
-  browserOrigin: Type.Optional(NonEmptyString),
   role: Type.Optional(NonEmptyString),
   roles: Type.Optional(Type.Array(NonEmptyString)),
   scopes: Type.Optional(Type.Array(NonEmptyString)),

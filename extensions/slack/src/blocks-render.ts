@@ -39,7 +39,6 @@ import {
   SLACK_SECTION_TEXT_MAX,
   SLACK_STATIC_SELECT_OPTIONS_MAX,
 } from "./presentation.js";
-import { encodeSlackQuestionAction } from "./question-actions.js";
 import {
   SLACK_APPROVAL_BUTTON_ACTION_ID,
   SLACK_APPROVAL_SELECT_ACTION_ID,
@@ -48,7 +47,6 @@ import {
   SLACK_REPLY_BUTTON_ACTION_ID,
   SLACK_REPLY_LINK_ACTION_ID,
   SLACK_REPLY_SELECT_ACTION_ID,
-  SLACK_QUESTION_BUTTON_ACTION_ID,
 } from "./reply-action-ids.js";
 import { truncateSlackText } from "./truncate.js";
 
@@ -91,10 +89,6 @@ function buildSlackCallbackSelectActionId(selectIndex: number): string {
   return `${SLACK_CALLBACK_SELECT_ACTION_ID}:${String(selectIndex)}`;
 }
 
-function buildSlackQuestionButtonActionId(buttonIndex: number, choiceIndex: number): string {
-  return `${SLACK_QUESTION_BUTTON_ACTION_ID}:${String(buttonIndex)}:${String(choiceIndex + 1)}`;
-}
-
 function resolveSlackButtonStyle(
   style: "primary" | "secondary" | "success" | "danger" | undefined,
 ) {
@@ -111,25 +105,16 @@ type SlackActionTarget =
   | { kind: "approval"; value: string }
   | { kind: "callback"; value: string }
   | { kind: "link"; url: string }
-  | { kind: "question"; value: string }
   | { kind: "reply"; value: string };
 
 function resolveSlackActionTarget(
   action: MessagePresentationAction | undefined,
-  optionIndex?: number,
 ): SlackActionTarget | undefined {
   if (!action) {
     return undefined;
   }
   if (action.type === "approval") {
     return { kind: "approval", value: encodeSlackApprovalAction(action) };
-  }
-  if (action.type === "question") {
-    const value =
-      optionIndex === undefined
-        ? undefined
-        : encodeSlackQuestionAction({ questionId: action.questionId, optionIndex });
-    return value ? { kind: "question", value } : undefined;
   }
   if (action.type === "url" || action.type === "web-app") {
     const url = normalizeOptionalString(action.url);
@@ -149,11 +134,10 @@ function resolveSlackActionTarget(
 
 function resolveSlackButtonTarget(
   button: MessagePresentationButtonsBlock["buttons"][number],
-  optionIndex?: number,
 ): SlackActionTarget | undefined {
   if (button.action !== undefined) {
     const action = resolveMessagePresentationButtonAction(button);
-    return action ? resolveSlackActionTarget(action, optionIndex) : undefined;
+    return action ? resolveSlackActionTarget(action) : undefined;
   }
 
   // Legacy buttons could carry both a URL and callback fallback. Preserve the
@@ -173,11 +157,11 @@ function resolveSlackButtonTarget(
 
 function resolveSlackOptionTarget(
   option: MessagePresentationSelectBlock["options"][number],
-): Exclude<SlackActionTarget, { kind: "link" } | { kind: "question" }> | undefined {
+): Exclude<SlackActionTarget, { kind: "link" }> | undefined {
   if (option.action !== undefined) {
     const action = resolveMessagePresentationOptionAction(option);
     const target = action ? resolveSlackActionTarget(action) : undefined;
-    return target?.kind === "link" || target?.kind === "question" ? undefined : target;
+    return target?.kind === "link" ? undefined : target;
   }
   const value = normalizeOptionalString(option.value);
   return value ? { kind: "reply", value } : undefined;
@@ -270,7 +254,7 @@ export function buildSlackInteractiveBlocks(
     if (block.type === "buttons") {
       const elements = block.buttons
         .flatMap((button, choiceIndex) => {
-          const target = resolveSlackButtonTarget(button, choiceIndex);
+          const target = resolveSlackButtonTarget(button);
           if (
             !target ||
             (target.kind === "link"
@@ -291,9 +275,7 @@ export function buildSlackInteractiveBlocks(
                     ? buildSlackApprovalButtonActionId(state.buttonIndex + 1, choiceIndex)
                     : target.kind === "callback"
                       ? buildSlackCallbackButtonActionId(state.buttonIndex + 1, choiceIndex)
-                      : target.kind === "question"
-                        ? buildSlackQuestionButtonActionId(state.buttonIndex + 1, choiceIndex)
-                        : buildSlackReplyButtonActionId(state.buttonIndex + 1, choiceIndex),
+                      : buildSlackReplyButtonActionId(state.buttonIndex + 1, choiceIndex),
               text: {
                 type: "plain_text" as const,
                 text: truncateSlackText(button.label, SLACK_ACTION_LABEL_MAX),
@@ -479,7 +461,7 @@ function buildSlackPresentationButtonBlock(
 ): SlackBlock | undefined {
   const elements = block.buttons
     .flatMap((button, choiceIndex) => {
-      const target = resolveSlackButtonTarget(button, choiceIndex);
+      const target = resolveSlackButtonTarget(button);
       if (
         !target ||
         (target.kind === "link"
@@ -500,9 +482,7 @@ function buildSlackPresentationButtonBlock(
                 ? buildSlackApprovalButtonActionId(buttonIndex, choiceIndex)
                 : target.kind === "callback"
                   ? buildSlackCallbackButtonActionId(buttonIndex, choiceIndex)
-                  : target.kind === "question"
-                    ? buildSlackQuestionButtonActionId(buttonIndex, choiceIndex)
-                    : buildSlackReplyButtonActionId(buttonIndex, choiceIndex),
+                  : buildSlackReplyButtonActionId(buttonIndex, choiceIndex),
           text: {
             type: "plain_text" as const,
             text: truncateSlackText(button.label, SLACK_ACTION_LABEL_MAX),
@@ -566,11 +546,11 @@ export function canRenderSlackPresentation(
     if (block.type === "buttons") {
       const allButtonsRenderable =
         block.buttons.length <= SLACK_ACTION_BLOCK_ELEMENTS_MAX &&
-        block.buttons.every((button, choiceIndex) => {
+        block.buttons.every((button) => {
           if (!isWithinSlackLimit(button.label, SLACK_ACTION_LABEL_MAX)) {
             return false;
           }
-          const target = resolveSlackButtonTarget(button, choiceIndex);
+          const target = resolveSlackButtonTarget(button);
           return target
             ? target.kind === "link"
               ? isWithinSlackLimit(target.url, SLACK_BUTTON_URL_MAX)

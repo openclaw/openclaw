@@ -3556,9 +3556,6 @@ struct GatewayNodeSessionTests {
             })
 
         let route = try #require(await gateway.currentRoute())
-        try await waitUntil("main session key captured", timeoutSeconds: 2) {
-            await capturedMainSessionKey.get() == "agent:main:main"
-        }
         #expect(await capturedMainSessionKey.get() == "agent:main:main")
         #expect(await gateway.waitForCurrentMainSessionKey(ifCurrentRoute: route) == "agent:main:main")
 

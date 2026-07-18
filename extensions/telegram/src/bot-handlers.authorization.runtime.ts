@@ -27,11 +27,7 @@ import {
   resolveTelegramEventIngressAuthorization,
 } from "./ingress.js";
 
-export type TelegramEventAuthorizationMode =
-  | "reaction"
-  | "callback-scope"
-  | "callback-allowlist"
-  | "callback-runtime-allowlist";
+export type TelegramEventAuthorizationMode = "reaction" | "callback-scope" | "callback-allowlist";
 
 export function createTelegramHandlerAuthorizationRuntime({
   accountId,
@@ -80,12 +76,6 @@ export function createTelegramHandlerAuthorizationRuntime({
       enforceGroupAllowlistAuthorization: false,
       deniedDmReason: "callback unauthorized by inlineButtonsScope allowlist",
       deniedGroupReason: "callback unauthorized by inlineButtonsScope allowlist",
-    },
-    "callback-runtime-allowlist": {
-      enforceDirectAuthorization: true,
-      enforceGroupAllowlistAuthorization: true,
-      deniedDmReason: "runtime callback unauthorized by allowlist",
-      deniedGroupReason: "runtime callback unauthorized by group allowlist",
     },
   };
 

@@ -13,33 +13,15 @@ private final class QuickChatPanel: NSPanel {
 }
 
 @MainActor
-private final class QuickChatAgentMenuTarget: NSObject {
-    let onSelect: (String) -> Void
-
-    init(onSelect: @escaping (String) -> Void) {
-        self.onSelect = onSelect
-    }
-
-    @objc func selectAgent(_ sender: NSMenuItem) {
-        guard let id = sender.representedObject as? String else { return }
-        self.onSelect(id)
-    }
-}
-
-@MainActor
 @Observable
 final class QuickChatController: NSObject, NSWindowDelegate {
     typealias GlobalMonitorInstaller = (NSEvent.EventTypeMask, @escaping (NSEvent) -> Void) -> Any?
     typealias LocalMonitorInstaller = (NSEvent.EventTypeMask, @escaping (NSEvent) -> NSEvent?) -> Any?
     typealias MonitorClearer = (inout Any?) -> Void
-    typealias HotkeyRegistrar = (@escaping () -> Void) -> Void
-    typealias HotkeyRemover = () -> Void
-    typealias ChatOpener = @MainActor (_ sessionKey: String?, _ agentID: String?) -> Void
 
     static let shared = QuickChatController()
 
     private(set) var isVisible = false
-    private(set) var isEnabled = true
 
     @ObservationIgnored let model: QuickChatModel
     @ObservationIgnored private let enableUI: Bool
@@ -47,10 +29,6 @@ final class QuickChatController: NSObject, NSWindowDelegate {
     @ObservationIgnored private let globalMonitorInstaller: GlobalMonitorInstaller
     @ObservationIgnored private let localMonitorInstaller: LocalMonitorInstaller
     @ObservationIgnored private let monitorClearer: MonitorClearer
-    @ObservationIgnored private let hotkeyRegistrar: HotkeyRegistrar
-    @ObservationIgnored private let hotkeyRemover: HotkeyRemover
-    @ObservationIgnored private let chatOpener: ChatOpener
-    @ObservationIgnored private let allowsHotkeyRegistrationInTests: Bool
     @ObservationIgnored private var panel: QuickChatPanel?
     @ObservationIgnored private var hostingView: NSHostingView<QuickChatView>?
     @ObservationIgnored private weak var textView: NSTextView?
@@ -62,8 +40,6 @@ final class QuickChatController: NSObject, NSWindowDelegate {
     @ObservationIgnored private var transitionID = UUID()
     @ObservationIgnored private var isStarted = false
     @ObservationIgnored private var hotkeyRegistered = false
-    @ObservationIgnored private var windowPicker: QuickChatWindowPicker?
-    @ObservationIgnored private var isAgentMenuActive = false
 
     init(
         enableUI: Bool = true,
@@ -77,17 +53,7 @@ final class QuickChatController: NSObject, NSWindowDelegate {
         },
         monitorClearer: @escaping MonitorClearer = { monitor in
             OverlayPanelFactory.clearGlobalEventMonitor(&monitor)
-        },
-        hotkeyRegistrar: @escaping HotkeyRegistrar = { handler in
-            KeyboardShortcuts.onKeyUp(for: .toggleQuickChat, action: handler)
-        },
-        hotkeyRemover: @escaping HotkeyRemover = {
-            KeyboardShortcuts.removeHandler(for: .toggleQuickChat)
-        },
-        chatOpener: @escaping ChatOpener = { sessionKey, agentID in
-            AppNavigationActions.openChat(sessionKey: sessionKey, agentID: agentID)
-        },
-        allowsHotkeyRegistrationInTests: Bool = false)
+        })
     {
         self.enableUI = enableUI
         self.model = model ?? QuickChatModel()
@@ -95,33 +61,14 @@ final class QuickChatController: NSObject, NSWindowDelegate {
         self.globalMonitorInstaller = globalMonitorInstaller
         self.localMonitorInstaller = localMonitorInstaller
         self.monitorClearer = monitorClearer
-        self.hotkeyRegistrar = hotkeyRegistrar
-        self.hotkeyRemover = hotkeyRemover
-        self.chatOpener = chatOpener
-        self.allowsHotkeyRegistrationInTests = allowsHotkeyRegistrationInTests
         super.init()
     }
 
     func start() {
         guard !self.isStarted else { return }
         self.isStarted = true
-        self.setEnabled(AppStateStore.shared.quickChatEnabled)
-    }
-
-    func setEnabled(_ enabled: Bool) {
-        self.isEnabled = enabled
-        if enabled {
-            self.registerHotkeyIfNeeded()
-            return
-        }
-        self.unregisterHotkeyIfNeeded()
-        self.dismiss(immediate: false)
-    }
-
-    private func registerHotkeyIfNeeded() {
-        guard self.isStarted, !self.hotkeyRegistered else { return }
-        guard !ProcessInfo.processInfo.isRunningTests || self.allowsHotkeyRegistrationInTests else { return }
-        self.hotkeyRegistrar { [weak self] in
+        guard !ProcessInfo.processInfo.isRunningTests else { return }
+        KeyboardShortcuts.onKeyUp(for: .toggleQuickChat) { [weak self] in
             Task { @MainActor in
                 self?.toggle()
             }
@@ -130,14 +77,11 @@ final class QuickChatController: NSObject, NSWindowDelegate {
         quickChatLogger.info("quick chat hotkey handler registered")
     }
 
-    private func unregisterHotkeyIfNeeded() {
-        guard self.hotkeyRegistered else { return }
-        self.hotkeyRemover()
-        self.hotkeyRegistered = false
-    }
-
     func stop() {
-        self.unregisterHotkeyIfNeeded()
+        if self.hotkeyRegistered {
+            KeyboardShortcuts.removeHandler(for: .toggleQuickChat)
+            self.hotkeyRegistered = false
+        }
         self.isStarted = false
         self.dismiss(immediate: true)
         self.model.cancelAllTasks()
@@ -148,7 +92,6 @@ final class QuickChatController: NSObject, NSWindowDelegate {
     }
 
     func toggle() {
-        guard self.isEnabled else { return }
         if self.isVisible {
             self.dismiss()
         } else {
@@ -157,7 +100,6 @@ final class QuickChatController: NSObject, NSWindowDelegate {
     }
 
     func present() {
-        guard self.isEnabled else { return }
         self.transitionID = UUID()
         let presentationID = self.model.beginPresentation()
         self.presentationTask?.cancel()
@@ -181,8 +123,8 @@ final class QuickChatController: NSObject, NSWindowDelegate {
             OverlayPanelFactory.applyFrame(window: panel, target: target, animate: true)
             panel.makeKeyAndOrderFront(nil)
         } else {
-            let start = QuickChatPlacement.scaledRect(target, factor: 0.96)
-            OverlayPanelFactory.animatePresent(window: panel, from: start, to: target, duration: 0.16)
+            let start = target.offsetBy(dx: 0, dy: -8)
+            OverlayPanelFactory.animatePresent(window: panel, from: start, to: target, duration: 0.18)
             panel.makeKeyAndOrderFront(nil)
         }
         self.focusEditor()
@@ -195,10 +137,7 @@ final class QuickChatController: NSObject, NSWindowDelegate {
     func windowDidResignKey(_: Notification) {
         guard self.isVisible else { return }
         // System permission dialogs steal key focus mid-grant; the bar must survive that flow.
-        guard !self.model.isGrantingPermissions,
-              self.windowPicker?.isInteractionActive != true,
-              !self.isAgentMenuActive
-        else { return }
+        guard !self.model.isGrantingPermissions else { return }
         self.dismiss()
     }
 
@@ -206,7 +145,6 @@ final class QuickChatController: NSObject, NSWindowDelegate {
         if self.isVisible {
             quickChatLogger.info("quick chat dismiss immediate=\(immediate)")
         }
-        self.windowPicker?.cancel()
         self.presentationTask?.cancel()
         self.presentationTask = nil
         self.model.endPresentation()
@@ -222,11 +160,11 @@ final class QuickChatController: NSObject, NSWindowDelegate {
             self.panel?.orderOut(nil)
             return
         }
-        let target = QuickChatPlacement.scaledRect(panel.frame, factor: 0.97)
         OverlayPanelFactory.animateDismissAndHide(
             window: panel,
-            to: target,
-            duration: 0.12)
+            offsetX: 0,
+            offsetY: -6,
+            duration: 0.14)
         { [weak self, weak panel] in
             guard let self, let panel else { return }
             if self.transitionID != dismissalID, self.isVisible {
@@ -268,13 +206,9 @@ final class QuickChatController: NSObject, NSWindowDelegate {
             model: self.model,
             onDismiss: { [weak self] in self?.dismiss() },
             onSendAccepted: { [weak self] openChat in
-                self?.handleSendAccepted(openChat: openChat)
-            },
-            onShowAgentPicker: { [weak self] in
-                self?.showAgentPicker()
-            },
-            onWindowScreenshot: { [weak self] in
-                self?.startWindowPicker()
+                guard let self else { return }
+                self.dismiss()
+                if openChat { AppNavigationActions.openChat() }
             },
             onContentHeightChange: { [weak self] height in
                 self?.updateContentHeight(height)
@@ -283,19 +217,6 @@ final class QuickChatController: NSObject, NSWindowDelegate {
                 self?.textView = textView
                 self?.focusEditor()
             })
-    }
-
-    private func handleSendAccepted(openChat: Bool) {
-        // Command-Return must open the immutable route that accepted the send,
-        // not live model routing state that may already have changed.
-        let route = self.model.lastAcceptedRoute
-        self.dismiss()
-        guard openChat else { return }
-        if let route, !route.sessionKey.isEmpty {
-            self.chatOpener(route.sessionKey, route.agentID)
-        } else {
-            self.chatOpener(nil, nil)
-        }
     }
 
     private func updateContentHeight(_ height: CGFloat) {
@@ -343,81 +264,9 @@ final class QuickChatController: NSObject, NSWindowDelegate {
     }
 
     private func dismissIfClickOutside(at point: NSPoint) {
-        guard self.isVisible,
-              !self.model.isGrantingPermissions,
-              self.windowPicker?.isInteractionActive != true,
-              !self.isAgentMenuActive,
-              let panel = self.panel
-        else { return }
+        guard self.isVisible, !self.model.isGrantingPermissions, let panel = self.panel else { return }
         if !panel.frame.contains(point) {
             self.dismiss()
-        }
-    }
-
-    private func showAgentPicker() {
-        guard self.model.agents.count > 1,
-              let panel,
-              let contentView = panel.contentView
-        else { return }
-
-        self.isAgentMenuActive = true
-        self.removeDismissMonitors()
-        defer {
-            self.isAgentMenuActive = false
-            if self.isVisible { self.installDismissMonitors() }
-            self.focusEditor()
-        }
-
-        let target = QuickChatAgentMenuTarget { [weak self] id in
-            self?.model.selectAgent(id)
-        }
-        let menu = NSMenu()
-        for agent in self.model.agents {
-            let title = agent.emoji.map { "\($0) \(agent.name)" } ?? agent.name
-            let item = NSMenuItem(
-                title: title,
-                action: #selector(QuickChatAgentMenuTarget.selectAgent(_:)),
-                keyEquivalent: "")
-            item.target = target
-            item.representedObject = agent.id
-            item.state = agent.id == self.model.selectedAgentID ? .on : .off
-            menu.addItem(item)
-        }
-        let windowPoint = panel.convertPoint(fromScreen: NSEvent.mouseLocation)
-        let contentPoint = contentView.convert(windowPoint, from: nil)
-        menu.popUp(positioning: nil, at: contentPoint, in: contentView)
-    }
-
-    private func startWindowPicker() {
-        guard self.isVisible, self.model.canCaptureWindow else { return }
-        if self.windowPicker == nil {
-            self.windowPicker = QuickChatWindowPicker(
-                model: self.model,
-                onInteractionChanged: { [weak self] active in
-                    self?.pickerInteractionChanged(active)
-                },
-                onSendAccepted: { [weak self] in
-                    self?.dismiss()
-                })
-        }
-        guard let windowPicker = self.windowPicker else { return }
-        Task { await windowPicker.begin() }
-    }
-
-    private func pickerInteractionChanged(_ active: Bool) {
-        if active {
-            self.removeDismissMonitors()
-        } else if self.isVisible {
-            self.installDismissMonitors()
-        }
-        guard let panel else { return }
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.12
-            panel.animator().alphaValue = active ? 0.35 : 1
-        } completionHandler: { [weak self] in
-            Task { @MainActor in
-                if active == false { self?.focusEditor() }
-            }
         }
     }
 
@@ -437,10 +286,6 @@ final class QuickChatController: NSObject, NSWindowDelegate {
 
     var hotkeyRegisteredForTesting: Bool {
         self.hotkeyRegistered
-    }
-
-    func handleSendAcceptedForTesting(openChat: Bool) {
-        self.handleSendAccepted(openChat: openChat)
     }
     #endif
 }

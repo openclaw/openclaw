@@ -23,10 +23,6 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const FILE_UPLOAD_TIMEOUT_MS = 120_000;
 const QQBOT_API_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 
-function isTimeoutError(err: unknown): boolean {
-  return err instanceof Error && err.name === "TimeoutError";
-}
-
 function resolveQqbotApiSsrfPolicy(url: string): SsrFPolicy {
   return {
     hostnameAllowlist: [new URL(url).hostname],
@@ -111,11 +107,14 @@ export class ApiClient {
       path.includes("/upload_part_finish");
     const timeout =
       options?.timeoutMs ?? (isFileUpload ? this.fileUploadTimeoutMs : this.defaultTimeoutMs);
-    const guardedTimeoutMs = timeout > 0 ? timeout : 1;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
 
     const fetchInit: RequestInit = {
       method,
       headers,
+      signal: controller.signal,
     };
 
     if (body) {
@@ -134,25 +133,29 @@ export class ApiClient {
       this.logger.debug(`[qqbot:api] >>> Body: ${JSON.stringify(logBody)}`);
     }
 
-    let guarded: Awaited<ReturnType<typeof fetchWithSsrFGuard>>;
+    let res: Response;
+    let release: (() => Promise<void>) | undefined;
     try {
-      guarded = await fetchWithSsrFGuard({
+      const guarded = await fetchWithSsrFGuard({
         url,
         init: fetchInit,
         auditContext: "qqbot-api",
         policy: resolveQqbotApiSsrfPolicy(url),
-        timeoutMs: guardedTimeoutMs,
       });
+      res = guarded.response;
+      release = guarded.release;
     } catch (err) {
-      if (isTimeoutError(err)) {
+      clearTimeout(timeoutId);
+      if (err instanceof Error && err.name === "AbortError") {
         this.logger?.error?.(`[qqbot:api] <<< Timeout after ${timeout}ms`);
         throw new ApiError(`Request timeout [${path}]: exceeded ${timeout}ms`, 0, path);
       }
       this.logger?.error?.(`[qqbot:api] <<< Network error: ${formatErrorMessage(err)}`);
       throw new ApiError(`Network error [${path}]: ${formatErrorMessage(err)}`, 0, path);
+    } finally {
+      clearTimeout(timeoutId);
     }
 
-    const res = guarded.response;
     try {
       // Log response status and trace ID.
       const traceId = res.headers.get("x-tps-trace-id") ?? "";
@@ -166,10 +169,6 @@ export class ApiClient {
             ? await readProviderTextResponse(res, "QQBot API response")
             : await readResponseTextLimited(res, limitBytes);
         } catch (err) {
-          if (isTimeoutError(err)) {
-            this.logger?.error?.(`[qqbot:api] <<< Timeout after ${timeout}ms`);
-            throw new ApiError(`Request timeout [${path}]: exceeded ${timeout}ms`, 0, path);
-          }
           throw new ApiError(
             `Failed to read response [${path}]: ${formatErrorMessage(err)}`,
             res.status,
@@ -239,7 +238,7 @@ export class ApiClient {
         throw new ApiError(`开放平台响应格式异常（${path}），请稍后重试`, res.status, path);
       }
     } finally {
-      await guarded.release();
+      await release?.();
     }
   }
 }

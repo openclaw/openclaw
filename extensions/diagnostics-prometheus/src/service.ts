@@ -323,7 +323,6 @@ function modelCallLabels(evt: {
   api?: string;
   errorCategory?: string;
   model?: string;
-  observationUnit?: "request" | "turn";
   provider?: string;
   transport?: string;
   type: string;
@@ -333,7 +332,6 @@ function modelCallLabels(evt: {
     error_category:
       evt.type === "model.call.error" ? lowCardinalityLabel(evt.errorCategory, "other") : "none",
     model: lowCardinalityLabel(evt.model),
-    observation_unit: evt.observationUnit === "turn" ? "turn" : "request",
     outcome: evt.type === "model.call.error" ? "error" : "completed",
     provider: lowCardinalityLabel(evt.provider),
     transport: lowCardinalityLabel(evt.transport),
@@ -586,13 +584,13 @@ function recordDiagnosticEvent(
     case "model.call.error":
       store.histogram(
         "openclaw_model_call_duration_seconds",
-        "Model request or synthetic agent-turn duration in seconds.",
+        "Provider model call duration in seconds.",
         modelCallLabels(evt),
         seconds(evt.durationMs),
       );
       store.counter(
         "openclaw_model_call_total",
-        "Model requests or synthetic agent turns completed by outcome.",
+        "Provider model calls completed by outcome.",
         modelCallLabels(evt),
       );
       return;

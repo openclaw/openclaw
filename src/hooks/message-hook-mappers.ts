@@ -323,11 +323,7 @@ function resolveInboundConversation(canonical: CanonicalInboundMessageHookContex
         threadParentId: canonical.threadParentId,
         isGroup: canonical.isGroup,
       })
-    : undefined;
-  if (pluginResolved === null) {
-    // A plugin-owned null is an explicit rejection, so generic parsing must not reclaim it.
-    return {};
-  }
+    : null;
   if (pluginResolved) {
     return {
       conversationId: normalizeOptionalString(pluginResolved.conversationId),

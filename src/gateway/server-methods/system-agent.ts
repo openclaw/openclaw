@@ -9,7 +9,6 @@ import {
   validateSystemAgentSetupAuthStartParams,
   validateSystemAgentSetupDetectParams,
   validateSystemAgentSetupVerifyParams,
-  type SystemAgentChatQuestion,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
   SYSTEM_AGENT_APPROVAL_DECISIONS,
@@ -481,12 +480,9 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             operatorApprovalOnly: params.delegation !== undefined,
           });
           let welcome: string;
-          let welcomeQuestion: SystemAgentChatQuestion | undefined;
           try {
             if (params.welcomeVariant === "onboarding") {
-              const onboardingWelcome = await buildOnboardingWelcome({ engine });
-              welcome = onboardingWelcome.text;
-              welcomeQuestion = onboardingWelcome.question;
+              welcome = await buildOnboardingWelcome({ engine });
             } else {
               welcome = formatSystemAgentStartupMessage(await engine.loadOverview());
               engine.noteAssistantMessage(welcome);
@@ -500,40 +496,16 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             return;
           }
           await evictOldestSession(sessions, context);
-          session = {
-            engine,
-            welcome,
-            ...(welcomeQuestion ? { welcomeQuestion } : {}),
-            lastUsedAt: Date.now(),
-            delegationKey,
-          };
+          session = { engine, welcome, lastUsedAt: Date.now(), delegationKey };
           sessions.set(sessionId, session);
           if (params.message === undefined || !params.message.trim()) {
-            respond(
-              true,
-              {
-                sessionId,
-                reply: session.welcome,
-                action: "none",
-                ...(session.welcomeQuestion ? { question: session.welcomeQuestion } : {}),
-              },
-              undefined,
-            );
+            respond(true, { sessionId, reply: session.welcome, action: "none" }, undefined);
             return;
           }
         }
         session.lastUsedAt = Date.now();
         if (params.message === undefined || !params.message.trim()) {
-          respond(
-            true,
-            {
-              sessionId,
-              reply: session.welcome,
-              action: "none",
-              ...(session.welcomeQuestion ? { question: session.welcomeQuestion } : {}),
-            },
-            undefined,
-          );
+          respond(true, { sessionId, reply: session.welcome, action: "none" }, undefined);
           return;
         }
         let reply: Awaited<ReturnType<SystemAgentChatEngine["handle"]>>;
@@ -591,7 +563,6 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
                 : "Nothing to change."),
             action,
             ...(reply.sensitive === true ? { sensitive: true } : {}),
-            ...(reply.question ? { question: reply.question } : {}),
             ...(proposalId ? { needsApproval: true, proposalId } : {}),
           },
           undefined,

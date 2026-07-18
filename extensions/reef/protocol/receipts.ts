@@ -61,7 +61,7 @@ export async function confirmDelivery(
   return appendAudit(audit, "confirm_delivery", {
     receipt,
     status: receipt.status,
-    ...(receipt.category ? { category: receipt.category } : {}),
+    category: receipt.category,
   });
 }
 

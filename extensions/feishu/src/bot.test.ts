@@ -22,6 +22,9 @@ type BoundConversation = ReturnType<
   ReturnType<typeof getSessionBindingService>["resolveByConversation"]
 >;
 type BindingReadiness = Awaited<ReturnType<typeof ensureConfiguredBindingRouteReady>>;
+type ReplyDispatcher = Parameters<
+  PluginRuntime["channel"]["reply"]["withReplyDispatcher"]
+>[0]["dispatcher"];
 type DeepPartial<T> = {
   [K in keyof T]?: T[K] extends (...args: never[]) => unknown
     ? T[K]
@@ -31,6 +34,18 @@ type DeepPartial<T> = {
         ? DeepPartial<T[K]>
         : T[K];
 };
+
+function createReplyDispatcher(): ReplyDispatcher {
+  return {
+    sendToolResult: vi.fn(),
+    sendBlockReply: vi.fn(),
+    sendFinalReply: vi.fn(),
+    waitForIdle: vi.fn(),
+    getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+    getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+    markComplete: vi.fn(),
+  };
+}
 
 function createConfiguredFeishuRoute(): NonNullable<ConfiguredBindingRoute> {
   return {
@@ -191,20 +206,13 @@ function createFeishuBotRuntime(overrides: DeepPartial<PluginRuntime> = {}): Plu
       inbound: {
         run: vi.fn(async (params) => {
           const input = await params.adapter.ingest(params.raw);
-          if (!input) {
-            return {
-              admission: { kind: "drop" as const, reason: "ingest-null" },
-              dispatched: false,
-            };
+          const turn = await params.adapter.resolveTurn(input, {
+            kind: "message",
+            canStartAgentTurn: true,
+          });
+          if (!("route" in turn) || !("runDispatch" in turn)) {
+            throw new Error("expected a prepared channel turn plan");
           }
-          const turn = await params.adapter.resolveTurn(
-            input,
-            {
-              kind: "message",
-              canStartAgentTurn: true,
-            },
-            {},
-          );
           await runtime.channel.session.recordInboundSession({
             storePath: runtime.channel.session.resolveStorePath(turn.cfg.session?.store, {
               agentId: turn.route.agentId,
@@ -217,18 +225,8 @@ function createFeishuBotRuntime(overrides: DeepPartial<PluginRuntime> = {}): Plu
             onRecordError: turn.record?.onRecordError ?? (() => undefined),
           });
           return {
-            admission: turn.admission ?? { kind: "dispatch" as const },
             dispatched: true,
-            ctxPayload: turn.ctxPayload,
-            routeSessionKey: turn.route.sessionKey,
-            dispatchResult:
-              turn.admission?.kind === "observeOnly"
-                ? { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } }
-                : await mockDispatchInboundMessage({
-                    ctx: turn.ctxPayload,
-                    cfg: turn.cfg,
-                    replyOptions: turn.replyOptions,
-                  }),
+            dispatchResult: await turn.runDispatch(),
           };
         }),
       },
@@ -312,9 +310,9 @@ const {
   mockResolveFeishuBotName,
 } = vi.hoisted(() => ({
   mockCreateFeishuReplyDispatcher: vi.fn(() => ({
-    dispatcherOptions: {},
-    delivery: { deliver: vi.fn(async () => undefined) },
+    dispatcher: createReplyDispatcher(),
     replyOptions: {},
+    markDispatchIdle: vi.fn(),
     ensureNoVisibleReplyFallback: vi.fn(),
   })),
   mockSendMessageFeishu: vi.fn().mockResolvedValue({ messageId: "pairing-msg", chatId: "oc-dm" }),
@@ -546,9 +544,9 @@ describe("handleFeishuMessage ACP routing", () => {
       .mockReset()
       .mockResolvedValue({ messageId: "reply-msg", chatId: "oc_dm" });
     mockCreateFeishuReplyDispatcher.mockReset().mockReturnValue({
-      dispatcherOptions: {},
-      delivery: { deliver: vi.fn(async () => undefined) },
+      dispatcher: createReplyDispatcher(),
       replyOptions: {},
+      markDispatchIdle: vi.fn(),
       ensureNoVisibleReplyFallback: vi.fn(),
     });
 
@@ -1227,9 +1225,9 @@ describe("handleFeishuMessage command authorization", () => {
     });
     const ensureNoVisibleReplyFallback = vi.fn();
     mockCreateFeishuReplyDispatcher.mockReturnValueOnce({
-      dispatcherOptions: {},
-      delivery: { deliver: vi.fn(async () => undefined) },
+      dispatcher: createReplyDispatcher(),
       replyOptions: {},
+      markDispatchIdle: vi.fn(),
       ensureNoVisibleReplyFallback,
     });
 
@@ -1264,13 +1262,14 @@ describe("handleFeishuMessage command authorization", () => {
     mockDispatchReplyFromConfig.mockResolvedValueOnce({
       queuedFinal: true,
       counts: { tool: 0, block: 0, final: 1 },
-      failedCounts: { tool: 0, block: 0, final: 1 },
     });
     const ensureNoVisibleReplyFallback = vi.fn();
+    const dispatcher = createReplyDispatcher();
+    vi.mocked(dispatcher.getFailedCounts).mockReturnValue({ tool: 0, block: 0, final: 1 });
     mockCreateFeishuReplyDispatcher.mockReturnValueOnce({
-      dispatcherOptions: {},
-      delivery: { deliver: vi.fn(async () => undefined) },
+      dispatcher,
       replyOptions: {},
+      markDispatchIdle: vi.fn(),
       ensureNoVisibleReplyFallback,
     });
 

@@ -156,7 +156,6 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
   const shutdown = new AbortController();
   // Match the predecessor worker's per-spool cap across repeated drain pumps.
   const activeDeliveries = new Set<Promise<void>>();
-  const deferredClaims = new Map<string, Promise<void>>();
   const drain = createChannelIngressDrain<LineWebhookSpoolPayload>({
     queue,
     abortSignal: shutdown.signal,
@@ -185,47 +184,8 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
     onLog: (message) => options.runtime.error?.(danger(`line: ${message}`)),
     dispatchClaimedEvent: async (claimed, lifecycle) => {
       const event = parseClaimedEvent(claimed.payload, claimed.id);
-      const boundLifecycle = bindIngressLifecycleToReplyOptions(lifecycle).turnAdoptionLifecycle;
-      let resolveDeferredClaim!: () => void;
-      const deferredClaim = new Promise<void>((resolve) => {
-        resolveDeferredClaim = resolve;
-      });
-      let deferredClaimSettled = false;
-      const settleDeferredClaim = () => {
-        if (deferredClaimSettled) {
-          return;
-        }
-        deferredClaimSettled = true;
-        // Delete only this dispatch's entry; a later retry may reuse the claim id.
-        if (deferredClaims.get(claimed.id) === deferredClaim) {
-          deferredClaims.delete(claimed.id);
-        }
-        resolveDeferredClaim();
-      };
       const delivery = options.deliver(event, claimed.payload.destination, {
-        turnAdoptionLifecycle: {
-          ...boundLifecycle,
-          onAdopted: async () => {
-            try {
-              await boundLifecycle.onAdopted();
-            } finally {
-              settleDeferredClaim();
-            }
-          },
-          onDeferred: () => {
-            if (!deferredClaimSettled) {
-              deferredClaims.set(claimed.id, deferredClaim);
-            }
-            boundLifecycle.onDeferred();
-          },
-          onAbandoned: async () => {
-            try {
-              await boundLifecycle.onAbandoned();
-            } finally {
-              settleDeferredClaim();
-            }
-          },
-        },
+        turnAdoptionLifecycle: bindIngressLifecycleToReplyOptions(lifecycle).turnAdoptionLifecycle,
       });
       activeDeliveries.add(delivery);
       try {
@@ -325,7 +285,6 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
       // Keep the claim owner live until every real delivery and core handler exits;
       // disposing earlier lets a replacement drain recover work still producing replies.
       await Promise.allSettled(activeDeliveries);
-      await Promise.allSettled(deferredClaims.values());
       await drain.waitForIdle();
       drain.dispose();
     },

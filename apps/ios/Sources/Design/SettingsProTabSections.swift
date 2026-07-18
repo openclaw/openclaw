@@ -664,7 +664,6 @@ extension SettingsProTab {
                 title: "Keep Awake",
                 isOn: self.$preventSleep)
 
-            self.appleHealthAccessCard
             self.privacyAccessCard
         }
     }
@@ -734,7 +733,6 @@ extension SettingsProTab {
                 title: "Background Listening",
                 isOn: self.$talkBackgroundEnabled)
 
-            self.appleHealthAccessCard
             self.privacyAccessCard
         }
     }
@@ -1422,16 +1420,6 @@ extension SettingsProTab {
     var privacyAccessCard: some View {
         Section {
             PrivacyAccessSectionView()
-        }
-    }
-
-    var appleHealthAccessCard: some View {
-        Section {
-            AppleHealthAccessSectionView()
-        } header: {
-            Text("Apple Health")
-                .font(OpenClawType.captionSemiBold)
-                .foregroundStyle(.secondary)
         }
     }
 

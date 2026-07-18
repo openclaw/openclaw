@@ -469,7 +469,6 @@ describe("normalizeOutboundReplyPayload", () => {
     expect(
       normalizeOutboundReplyPayload({
         presentation,
-        presentationTextMode: "fallback",
         interactive,
         channelData,
         trustedLocalMedia: true,
@@ -479,7 +478,6 @@ describe("normalizeOutboundReplyPayload", () => {
       mediaUrls: undefined,
       mediaUrl: undefined,
       presentation,
-      presentationTextMode: "fallback",
       interactive,
       channelData,
       sensitiveMedia: undefined,

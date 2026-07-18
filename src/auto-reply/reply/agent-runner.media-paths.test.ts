@@ -443,7 +443,6 @@ describe("runReplyAgent media path normalization", () => {
       "generate chart",
       {
         steeringMode: "all",
-        isInboundUserMessage: true,
         taskSuggestionDeliveryMode: "gateway",
       },
     );
@@ -479,7 +478,6 @@ describe("runReplyAgent media path normalization", () => {
       "compare these",
       {
         steeringMode: "all",
-        isInboundUserMessage: true,
         images,
         taskSuggestionDeliveryMode: undefined,
       },
@@ -546,11 +544,7 @@ describe("runReplyAgent media path normalization", () => {
     expect(queueEmbeddedAgentMessageWithOutcomeAsyncMock).toHaveBeenLastCalledWith(
       "session",
       "summarize the audio",
-      {
-        steeringMode: "all",
-        isInboundUserMessage: true,
-        taskSuggestionDeliveryMode: undefined,
-      },
+      { steeringMode: "all", taskSuggestionDeliveryMode: undefined },
     );
     expect(enqueueFollowupRunMock).not.toHaveBeenCalled();
   });
