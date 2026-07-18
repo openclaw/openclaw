@@ -2234,7 +2234,8 @@ class ChatController internal constructor(
         _questions.value
           .filter { prompt ->
             prompt.record.id !in listedIds &&
-              prompt.record.status == "pending"
+              prompt.record.status == "pending" &&
+              !prompt.recoveryUnavailable
           }.map { it.record }
       }
     val fallbackRecords = mutableListOf<QuestionRecord>()
@@ -2359,7 +2360,7 @@ class ChatController internal constructor(
   ): ChatQuestionPrompt {
     // Gateway terminal state is monotonic. A delayed requested/list replay must not
     // make an already resolved question actionable again.
-    if (prompt.record.status != "pending" && record.status == "pending") return prompt
+    if ((prompt.record.status != "pending" || prompt.recoveryUnavailable) && record.status == "pending") return prompt
     return prompt.copy(
       record = record.copy(answers = record.answers ?: prompt.record.answers),
       submitting = prompt.submitting && record.status == "pending",

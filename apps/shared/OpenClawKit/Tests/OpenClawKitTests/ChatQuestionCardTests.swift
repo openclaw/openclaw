@@ -171,6 +171,8 @@ private func questionRecord(
     unavailable.markRecoveryUnavailable()
     #expect(unavailable.status() == .unavailable)
     #expect(unavailable.terminalSummaryText(for: question) == "Unavailable")
+    #expect(!unavailable.apply(record: questionRecord()))
+    #expect(unavailable.status() == .unavailable)
 }
 
 @MainActor

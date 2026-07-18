@@ -1465,10 +1465,12 @@ struct ChatViewModelTests {
     }
 
     @Test @MainActor func `missing question tombstone has unknown terminal outcome`() async {
+        let getCalls = AsyncCounter()
         let transport = TestChatTransport(
             historyResponses: [],
             listQuestionsHook: { [] },
             getQuestionHook: { id in
+                _ = await getCalls.increment()
                 throw GatewayResponseError(
                     method: "question.get",
                     code: "INVALID_REQUEST",
@@ -1483,6 +1485,10 @@ struct ChatViewModelTests {
         #expect(viewModel.questionCards[0].status() == .unavailable)
         #expect(viewModel.questionCards[0].terminalSummaryText(
             for: viewModel.questionCards[0].record.questions[0]) == "Unavailable")
+
+        await viewModel.refreshQuestions()
+
+        #expect(await getCalls.current() == 1)
     }
 
     @Test @MainActor func `question refresh retries transport failure`() async throws {

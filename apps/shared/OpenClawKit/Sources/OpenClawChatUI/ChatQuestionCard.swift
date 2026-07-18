@@ -37,7 +37,7 @@ public final class OpenClawQuestionCardModel: Identifiable {
     public func apply(record: QuestionRecord) -> Bool {
         let nextRecord = self.preservingKnownAnswers(in: record)
         guard record.id == self.id,
-              !(self.record.status != .pending && record.status == .pending),
+              !((self.record.status != .pending || self.isRecoveryUnavailable) && record.status == .pending),
               !Self.recordsMatch(self.record, nextRecord)
         else { return false }
         self.record = nextRecord
@@ -562,7 +562,9 @@ extension OpenClawChatViewModel {
             else { return }
             let listedIDs = Set(records.map(\.id))
             let missingPending = self.questionCards.filter { model in
-                model.record.status == .pending && !listedIDs.contains(model.id)
+                model.record.status == .pending &&
+                    !model.isRecoveryUnavailable &&
+                    !listedIDs.contains(model.id)
             }
             let lookups = await self.fetchMissingQuestionLookups(missingPending)
             guard self.questionRefreshSnapshotIsCurrent(

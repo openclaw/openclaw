@@ -716,6 +716,7 @@ class ChatQuestionTest {
     runTest {
       val json = Json { ignoreUnknownKeys = true }
       val pending = record(expiresAtMs = Long.MAX_VALUE)
+      var getCalls = 0
       val controller =
         ChatController(
           scope = this,
@@ -724,19 +725,22 @@ class ChatQuestionTest {
             when (method) {
               "question.list" -> json.encodeToString(QuestionListResult(emptyList()))
               "question.get" ->
-                throw GatewayRequestRejected(
-                  GatewaySession.ErrorShape(
-                    code = "INVALID_REQUEST",
-                    message = "question not found",
-                    details =
-                      GatewayConnectErrorDetails(
-                        code = null,
-                        reason = "QUESTION_NOT_FOUND",
-                        canRetryWithDeviceToken = false,
-                        recommendedNextStep = null,
-                      ),
-                  ),
-                )
+                run {
+                  getCalls += 1
+                  throw GatewayRequestRejected(
+                    GatewaySession.ErrorShape(
+                      code = "INVALID_REQUEST",
+                      message = "question not found",
+                      details =
+                        GatewayConnectErrorDetails(
+                          code = null,
+                          reason = "QUESTION_NOT_FOUND",
+                          canRetryWithDeviceToken = false,
+                          recommendedNextStep = null,
+                        ),
+                    ),
+                  )
+                }
               else -> "{}"
             }
           },
@@ -745,6 +749,18 @@ class ChatQuestionTest {
       controller.handleGatewayEvent("question.requested", json.encodeToString(pending))
       advanceUntilIdle()
 
+      assertEquals(
+        ChatQuestionStatus.Unavailable,
+        controller.questions.value
+          .single()
+          .status(),
+      )
+
+      controller.handleGatewayEvent("question.requested", json.encodeToString(pending))
+      controller.handleGatewayEvent("health", null)
+      advanceUntilIdle()
+
+      assertEquals(1, getCalls)
       assertEquals(
         ChatQuestionStatus.Unavailable,
         controller.questions.value
