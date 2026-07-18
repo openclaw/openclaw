@@ -1051,7 +1051,7 @@ function configApplyHintForPaths(paths: string[], afterConfig: OpenClawConfig): 
   if (paths.some(isPluginEntryConfigPath)) {
     return RESTART_HINT;
   }
-  const plan = buildGatewayReloadPlan(paths);
+  const plan = buildGatewayReloadPlan(paths, { candidateConfig: afterConfig });
   if (plan.restartGateway) {
     return RESTART_HINT;
   }

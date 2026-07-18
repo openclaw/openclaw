@@ -123,6 +123,7 @@ export async function loadGatewayStartupConfigSnapshot(params: {
     throw createInvalidConfigError(
       configSnapshot.path,
       "Legacy config entries detected while running in Nix mode. Update your Nix config to the latest schema and restart.",
+      { recovery: "manual" },
     );
   }
   if (configSnapshot.exists) {
@@ -438,7 +439,9 @@ function assertValidGatewayStartupConfigSnapshot(
       : options.includeDoctorHint
         ? `\n${formatInvalidConfigRecoveryHint()}`
         : "";
-  throw createInvalidConfigError(snapshot.path, `${issues}${recoveryHint}`);
+  throw createInvalidConfigError(snapshot.path, `${issues}${recoveryHint}`, {
+    recovery: isPluginPackagingRuntimeOutputInvalidConfigSnapshot(snapshot) ? "manual" : "doctor",
+  });
 }
 
 /** Prepare the effective Gateway startup config after auth, overrides, and secrets activation. */
