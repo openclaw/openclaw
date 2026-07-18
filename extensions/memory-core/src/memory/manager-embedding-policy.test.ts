@@ -278,7 +278,7 @@ describe("memory embedding policy", () => {
     expect(isRateLimitMemoryEmbeddingError("429 rate limit exceeded")).toBe(true);
     expect(isRateLimitMemoryEmbeddingError("resource has been exhausted")).toBe(true);
     expect(isRateLimitMemoryEmbeddingError("too many requests, try again later")).toBe(true);
-    expect(isRateLimitMemoryEmbeddingError("rate_limit: token quota reached")).toBe(true);
+    expect(isRateLimitMemoryEmbeddingError("rate_limit: token quota reached")).toBe(false);
     expect(isRateLimitMemoryEmbeddingError("fetch failed | other side closed")).toBe(false);
     expect(isRateLimitMemoryEmbeddingError("502 Bad Gateway (cloudflare)")).toBe(false);
     expect(isRateLimitMemoryEmbeddingError("too many tokens per day")).toBe(false);

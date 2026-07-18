@@ -81,9 +81,6 @@ export function buildMemoryEmbeddingBatches<T extends MemoryEmbeddingChunk>(
   return batches;
 }
 
-const RATE_LIMIT_MEMORY_EMBEDDING_ERROR_RE =
-  /(rate[_ ]limit|too many requests|429|resource has been exhausted)/i;
-
 const RETRYABLE_MEMORY_EMBEDDING_SERVICE_ERROR_RE =
   /(rate[_ ]limit|too many requests|429|resource has been exhausted|5\d\d|cloudflare|tokens per day)/i;
 
@@ -115,7 +112,17 @@ export function isStructuredInputTooLargeMemoryEmbeddingError(message: string): 
 }
 
 export function isRateLimitMemoryEmbeddingError(message: string): boolean {
-  return RATE_LIMIT_MEMORY_EMBEDDING_ERROR_RE.test(message);
+  // Require both a rate-limit type indicator (status code / standard status
+  // text / error type) AND a human-readable keyword, so that pure quota or
+  // billing messages (whose reset window is hours, not seconds) fall through
+  // to the normal retry path.
+  const hasRateLimitIndicator = /(429|too\s+many\s+requests|resource\s+has\s+been\s+exhausted)/i.test(
+    message,
+  );
+  const hasRateLimitKeyword = /(rate\s*_?\s*limit|too\s+many\s+requests|resource\s+has\s+been\s+exhausted)/i.test(
+    message,
+  );
+  return hasRateLimitIndicator && hasRateLimitKeyword;
 }
 
 export function resolveMemoryEmbeddingRetryDelay(
@@ -129,16 +136,23 @@ export function resolveMemoryEmbeddingRetryDelay(
 export async function runMemoryEmbeddingRetryLoop<T>(params: {
   run: () => Promise<T>;
   isRetryable: (message: string) => boolean;
-  waitForRetry: (delayMs: number, maxDelayMs?: number) => Promise<void>;
+  waitForRetry: (delayMs: number, maxDelayMs?: number, err?: unknown) => Promise<void>;
   maxAttempts: number;
   baseDelayMs: number;
   /** Longer base delay for rate-limit (429) errors whose reset window is typically 60s. */
   rateLimitBaseDelayMs?: number;
+  /** Max attempts for rate-limit errors; defaults to maxAttempts. */
+  rateLimitMaxAttempts?: number;
   /** Caller-owned cancellation; an aborted caller stops the retry loop. */
   signal?: AbortSignal;
 }): Promise<T> {
-  const attempts = Math.max(1, params.maxAttempts);
-  for (const attempt of Array.from({ length: attempts }, (_, index) => index + 1)) {
+  const normalAttempts = Math.max(1, params.maxAttempts);
+  const rateLimitAttempts = Math.max(
+    normalAttempts,
+    params.rateLimitMaxAttempts ?? params.maxAttempts,
+  );
+  const maxLoopAttempts = Math.max(normalAttempts, rateLimitAttempts);
+  for (const attempt of Array.from({ length: maxLoopAttempts }, (_, index) => index + 1)) {
     try {
       return await params.run();
     } catch (err) {
@@ -149,16 +163,20 @@ export async function runMemoryEmbeddingRetryLoop<T>(params: {
         throw err;
       }
       const message = formatErrorMessage(err);
-      if (!params.isRetryable(message) || attempt >= params.maxAttempts) {
+      if (!params.isRetryable(message)) {
         throw err;
       }
       const isRateLimit =
         params.rateLimitBaseDelayMs != null && isRateLimitMemoryEmbeddingError(message);
+      const effectiveMaxAttempts = isRateLimit ? rateLimitAttempts : normalAttempts;
+      if (attempt >= effectiveMaxAttempts) {
+        throw err;
+      }
       const effectiveBaseDelayMs: number = isRateLimit
         ? params.rateLimitBaseDelayMs!
         : params.baseDelayMs;
       const delayMs = effectiveBaseDelayMs * 2 ** (attempt - 1);
-      await params.waitForRetry(delayMs);
+      await params.waitForRetry(delayMs, undefined, err);
     }
   }
   throw new Error("retry loop exhausted");
@@ -169,10 +187,11 @@ export async function runMemoryEmbeddingBatchRetryWithSplit<TInput, TOutput>(par
   run: (items: TInput[]) => Promise<TOutput[]>;
   isRetryable: (message: string) => boolean;
   isSplittable: (message: string) => boolean;
-  waitForRetry: (delayMs: number, maxDelayMs?: number) => Promise<void>;
+  waitForRetry: (delayMs: number, maxDelayMs?: number, err?: unknown) => Promise<void>;
   maxAttempts: number;
   baseDelayMs: number;
   rateLimitBaseDelayMs?: number;
+  rateLimitMaxAttempts?: number;
   onSplit?: (info: { itemCount: number; splitAt: number; message: string }) => void;
 }): Promise<TOutput[]> {
   try {
@@ -183,6 +202,7 @@ export async function runMemoryEmbeddingBatchRetryWithSplit<TInput, TOutput>(par
       maxAttempts: params.maxAttempts,
       baseDelayMs: params.baseDelayMs,
       rateLimitBaseDelayMs: params.rateLimitBaseDelayMs,
+      rateLimitMaxAttempts: params.rateLimitMaxAttempts,
     });
   } catch (err) {
     const message = formatErrorMessage(err);
