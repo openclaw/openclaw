@@ -1,6 +1,7 @@
 // Verifies memory-search config resolution across providers, sync, and batching.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveRememberAcrossConversations } from "../memory-host-sdk/host/config-utils.js";
 import {
   clearEmbeddingProviders,
   listRegisteredEmbeddingProviders,
@@ -12,6 +13,11 @@ import {
   clearMemoryEmbeddingProviders,
   registerMemoryEmbeddingProvider,
 } from "../plugins/memory-embedding-providers.js";
+import {
+  SecretSurfaceUnavailableError,
+  setActiveDegradedSecretOwners,
+} from "../secrets/runtime-degraded-state.js";
+import { runtimeMemorySecretOwnerId } from "../secrets/runtime-memory-secret-owner.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { resolveMemorySearchConfig, resolveMemorySearchSyncConfig } from "./memory-search.js";
@@ -87,6 +93,7 @@ describe("memory search config", () => {
   });
 
   afterEach(() => {
+    setActiveDegradedSecretOwners([]);
     clearMemoryEmbeddingProviders();
     restoreRegisteredEmbeddingProviders(registeredEmbeddingProvidersSnapshot);
   });
@@ -188,6 +195,27 @@ describe("memory search config", () => {
     expect(resolved).toBeNull();
   });
 
+  it("throws the typed unavailable error only for the degraded agent owner", () => {
+    const cfg = asConfig({
+      agents: {
+        list: [{ id: "cold" }, { id: "healthy" }],
+      },
+    });
+    setActiveDegradedSecretOwners([
+      {
+        ownerKind: "capability",
+        ownerId: runtimeMemorySecretOwnerId("cold"),
+        state: "unavailable",
+        paths: ["agents.defaults.memorySearch.remote.apiKey"],
+        refKeys: ["env:default:MISSING_MEMORY_KEY"],
+        reason: "secret reference was not found",
+      },
+    ]);
+
+    expect(() => resolveMemorySearchConfig(cfg, "cold")).toThrow(SecretSurfaceUnavailableError);
+    expect(resolveMemorySearchConfig(cfg, "healthy")?.enabled).toBe(true);
+  });
+
   it("returns null sync config when disabled", () => {
     const cfg = asConfig({
       agents: {
@@ -205,6 +233,131 @@ describe("memory search config", () => {
     });
     const resolved = resolveMemorySearchSyncConfig(cfg, "main");
     expect(resolved).toBeNull();
+  });
+
+  it.each([
+    { name: "unset with main scope", cfg: {}, expected: true },
+    {
+      name: "unset with per-channel-peer scope",
+      cfg: { session: { dmScope: "per-channel-peer" } },
+      expected: false,
+    },
+    {
+      name: "unset with main scope and a binding override",
+      cfg: {
+        session: { dmScope: "main" },
+        bindings: [
+          {
+            agentId: "main",
+            match: { channel: "telegram" },
+            session: { dmScope: "per-peer" },
+          },
+        ],
+      },
+      expected: false,
+    },
+    {
+      name: "explicit false with main scope",
+      cfg: {
+        session: { dmScope: "main" },
+        agents: { defaults: { memorySearch: { rememberAcrossConversations: false } } },
+      },
+      expected: false,
+    },
+    {
+      name: "explicit true with per-peer scope",
+      cfg: {
+        session: { dmScope: "per-peer" },
+        agents: { defaults: { memorySearch: { rememberAcrossConversations: true } } },
+      },
+      expected: true,
+    },
+  ])("resolves remember-across-conversations for $name", ({ cfg, expected }) => {
+    expect(resolveRememberAcrossConversations(asConfig(cfg as OpenClawConfig), "main")).toBe(
+      expected,
+    );
+  });
+
+  it("enables cross-conversation recall by default for a personal install", () => {
+    const resolved = resolveMemorySearchConfig(asConfig({}), "main");
+
+    expect(resolved?.rememberAcrossConversations).toBe(true);
+    expect(resolved?.experimental.sessionMemory).toBe(true);
+    expect(resolved?.sources).toEqual(["memory", "sessions"]);
+  });
+
+  it("keeps cross-conversation recall off by default for isolated DMs", () => {
+    const resolved = resolveMemorySearchConfig(
+      asConfig({ session: { dmScope: "per-channel-peer" } }),
+      "main",
+    );
+
+    expect(resolved?.rememberAcrossConversations).toBe(false);
+    expect(resolved?.experimental.sessionMemory).toBe(false);
+    expect(resolved?.sources).toEqual(["memory"]);
+  });
+
+  it("enables transcript indexing for an opted-in agent", () => {
+    const cfg = asConfig({
+      agents: {
+        list: [
+          {
+            id: "personal",
+            memorySearch: { rememberAcrossConversations: true },
+          },
+        ],
+      },
+    });
+
+    const resolved = resolveMemorySearchConfig(cfg, "personal");
+
+    expect(resolved?.rememberAcrossConversations).toBe(true);
+    expect(resolved?.experimental.sessionMemory).toBe(true);
+    expect(resolved?.sources).toEqual(["memory", "sessions"]);
+    expect(resolved?.searchSources).toEqual(["memory"]);
+  });
+
+  it("preserves explicitly configured transcript search for an opted-in agent", () => {
+    const cfg = asConfig({
+      agents: {
+        list: [
+          {
+            id: "personal",
+            memorySearch: {
+              rememberAcrossConversations: true,
+              sources: ["sessions"],
+            },
+          },
+        ],
+      },
+    });
+
+    const resolved = resolveMemorySearchConfig(cfg, "personal");
+
+    expect(resolved?.sources).toEqual(["sessions"]);
+    expect(resolved?.searchSources).toEqual(["sessions"]);
+  });
+
+  it("lets a per-agent false override a default true", () => {
+    const cfg = asConfig({
+      agents: {
+        defaults: {
+          memorySearch: { rememberAcrossConversations: true },
+        },
+        list: [
+          {
+            id: "shared",
+            memorySearch: { rememberAcrossConversations: false },
+          },
+        ],
+      },
+    });
+
+    const resolved = resolveMemorySearchConfig(cfg, "shared");
+
+    expect(resolved?.rememberAcrossConversations).toBe(false);
+    expect(resolved?.experimental.sessionMemory).toBe(false);
+    expect(resolved?.sources).toEqual(["memory"]);
   });
 
   it("defaults provider to openai when unspecified", () => {
@@ -789,6 +942,7 @@ describe("memory search config", () => {
             id: "main",
             default: true,
             memorySearch: {
+              rememberAcrossConversations: false,
               experimental: { sessionMemory: false },
             },
           },

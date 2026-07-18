@@ -84,10 +84,10 @@ every later turn remains on that connection with native auth and provider
 configuration. Disabled supervision or binding/connection drift fails closed
 rather than switching to the ordinary agent-home harness.
 
-The original CLI or VS Code source remains eligible for both catalogs. The
-canonical branch is a native Codex thread, but its source kind is `appServer`;
-native clients may filter that source kind, so its appearance in Codex Desktop
-is not guaranteed.
+The original CLI, VS Code, Atlas, or ChatGPT source remains eligible for both
+catalogs. The canonical branch is a native Codex thread, but its source kind is
+`appServer`; native clients may filter that source kind, so its appearance in
+Codex Desktop is not guaranteed.
 
 Active sources cannot start a new branch or be archived; an existing supervised
 Chat can still be opened. `notLoaded` means activity is unknown, not idle;
@@ -227,9 +227,14 @@ cwd creates a fresh approval.
 
 Codex MCP tool approval elicitations route through OpenClaw's plugin approval
 flow when Codex marks `_meta.codex_approval_kind` as `"mcp_tool_call"`. Codex
-`request_user_input` prompts are sent back to the originating chat, and the
-next queued follow-up message answers that native server request instead of
-being steered as extra context. Other MCP elicitation requests fail closed.
+`request_user_input` registers a provider-neutral gateway question for the
+originating session. The Control UI renders the gateway question card, and a
+single non-secret choice uses typed channel buttons when the channel supports
+them. Button taps, Control UI answers, and the next queued plain-text reply all
+resolve the same gateway record before OpenClaw returns the app-server answer.
+Codex auto-resolution and attempt aborts bound the wait and cancel the record.
+Secret questions stay entirely on the warned text-reply path. Other MCP
+elicitation requests fail closed.
 
 For the general plugin approval flow that carries these prompts, see
 [Plugin permission requests](/plugins/plugin-permission-requests).

@@ -114,15 +114,12 @@ openclaw-chat-page {
   user-select: text;
   scrollbar-gutter: stable both-edges;
   scrollbar-color: var(--muted-strong) transparent;
-  /* The tall top inset is a titlebar band: it keeps the floating rail
-     openers (.chat-floating-toggles, 28px at top 10px) clear of the first
-     message and gives the native macOS app an empty strip that starts a
-     window drag (see the thread mousedown handler in chat-thread.ts).
-     No horizontal padding: macOS overlay scrollbars render inside the
+  /* The pane header owns the titlebar and native drag surface. No horizontal
+     padding: macOS overlay scrollbars render inside the
      scroll container's padding, which floats the thumb away from the pane
      edge (visible next to the sidebar divider). The side inset lives on
      .chat-thread-inner instead so the scrollbar hugs the edge. */
-  padding: clamp(44px, 5vh, 52px) 0 6px;
+  padding: clamp(20px, 3vh, 28px) 0 6px;
   margin: 0 0 0 0;
   min-height: 0;
   /* Allow shrinking for flex scroll behavior */
@@ -136,14 +133,6 @@ openclaw-chat-page {
 
 :root .chat-thread::-webkit-scrollbar-thumb:hover {
   background: var(--text);
-}
-
-/* Split panes spend their top row on the pane header (which is both the
-   toggle host and the drag surface), so their threads keep a compact inset.
-   The single-pane view is also an openclaw-chat-pane but renders no header,
-   hence the :has() guard. */
-openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
-  padding-top: clamp(20px, 3vh, 28px);
 }
 
 .chat-thread-inner > :first-child {
@@ -1822,6 +1811,21 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   padding: var(--chat-box-inset);
 }
 
+.agent-chat__disabled-reason {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 8px var(--chat-box-inset) 0;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.4;
+}
+
+.agent-chat__disabled-reason .btn {
+  flex: 0 0 auto;
+}
+
 .agent-chat__composer-footer {
   display: flex;
   align-items: center;
@@ -2276,6 +2280,25 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
 .chat-send-btn--voice:hover:not(:disabled) {
   background: color-mix(in srgb, var(--accent) 18%, transparent);
   box-shadow: none;
+}
+
+.agent-chat__video-preview {
+  align-self: flex-end;
+  width: min(240px, 45vw);
+  margin: 4px 8px 0;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  border-radius: var(--radius-lg);
+  background: #000;
+  box-shadow: var(--shadow-md);
+}
+
+.agent-chat__video-preview video {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  transform: scaleX(-1);
 }
 
 /* Live voice input: the level meter itself is the control. Keeping it accent
@@ -3413,6 +3436,62 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   justify-content: space-between;
   gap: 8px;
   min-width: 0;
+}
+
+/* Model provenance sits above the provider browser, outside the reasoning
+   panel; mirrors the reasoning head's anatomy with its own class family so
+   test selectors and semantics stay distinct. */
+.chat-controls__model-provenance {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 10px 6px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+}
+
+.chat-controls__model-provenance-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding-right: 6px;
+}
+
+.chat-controls__model-provenance-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.chat-controls__model-provenance-value--inherit {
+  color: var(--muted);
+}
+
+.chat-controls__model-reset {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.chat-controls__model-reset:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--border) 45%, transparent);
+  color: var(--fg);
+}
+
+.chat-controls__model-reset svg {
+  width: 12px;
+  height: 12px;
 }
 
 .chat-controls__reasoning-state {

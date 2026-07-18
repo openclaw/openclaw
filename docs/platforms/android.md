@@ -22,6 +22,10 @@ The official Android app is available on [Google Play](https://play.google.com/s
 
 System control (launchd/systemd) lives on the Gateway host — see [Gateway](/gateway).
 
+## Wear OS companion
+
+The Wear OS companion uses the paired Android phone's authenticated Gateway connection; the watch never receives or stores Gateway credentials. It can select agents and sessions, read bounded transcripts, send text or dictated replies, abort an active run, start realtime Talk inside the selected session, and connect or disconnect the paired phone's Gateway. It also offers local reply notifications, dark or light appearance, and optional automatic speech for replies. Agent and Gateway controls are capability-negotiated for staggered phone/watch updates. Realtime Talk streams microphone and playback audio over a temporary Wear OS Data Layer channel and stops when the selected phone, Gateway connection, or audio channel is lost.
+
 ## Install outside Google Play
 
 Regular final and correction GitHub Releases include a universal `OpenClaw-Android.apk` and `OpenClaw-Android-SHA256SUMS.txt`. The APK is built from the release tag, signed with the OpenClaw Android release key, and carries GitHub Actions provenance.
@@ -355,6 +359,15 @@ before offering another decision.
 Gateways that predate the unified approval methods fall back to the shipped
 exec-specific methods. Pending review still works, but retained terminal state
 and the richer cross-surface result require an updated Gateway.
+
+## Answer agent questions
+
+Chat shows pending Gateway questions as native cards for operator connections
+with `operator.questions` (or `operator.admin`). Cards support single- and
+multi-select options, option descriptions, free-text **Other** answers, and an
+expiry countdown. Reconnects reload pending questions from the Gateway. A card
+locks when this device answers it, another surface answers it first, or the
+question expires or is cancelled.
 
 ## Assistant entrypoints
 

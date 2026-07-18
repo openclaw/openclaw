@@ -3,7 +3,9 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import {
   handleAgentEvent,
   handleSessionOperationEvent,
+  resetToolStream,
   type FallbackStatus,
+  type PlanStatus,
   type ToolStreamEntry,
 } from "./tool-stream.ts";
 
@@ -18,6 +20,8 @@ type MutableHost = ToolStreamHost & {
   compactionClearTimer?: number | null;
   fallbackStatus?: FallbackStatus | null;
   fallbackClearTimer?: number | null;
+  planStatus?: PlanStatus | null;
+  requestUpdate?: () => void;
 };
 const TOOL_STREAM_TEST_NOW = new Date("2026-05-09T00:00:00.000Z").getTime();
 
@@ -47,6 +51,7 @@ function createHost(overrides?: Partial<MutableHost>): MutableHost {
     compactionClearTimer: null,
     fallbackStatus: null,
     fallbackClearTimer: null,
+    planStatus: null,
     ...overrides,
   };
 }
@@ -100,6 +105,156 @@ function useToolStreamFakeTimers(): void {
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
   vi.setSystemTime(TOOL_STREAM_TEST_NOW);
 }
+
+describe("app-tool-stream plan snapshots", () => {
+  it("stores a normalized snapshot and drops malformed entries", () => {
+    const requestUpdate = vi.fn();
+    const host = createHost({ requestUpdate });
+
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "plan", {
+        phase: "update",
+        explanation: "  Shipping the focused change  ",
+        steps: [
+          { step: "Inspect the route", status: "completed" },
+          "  Wire the checklist  ",
+          { step: "Run focused tests", status: "in_progress" },
+          { step: "", status: "pending" },
+          { step: "Missing status" },
+          { step: "Unknown status", status: "blocked" },
+          null,
+          42,
+        ],
+      }),
+    );
+
+    expect(host.planStatus).toEqual({
+      runId: "run-1",
+      explanation: "Shipping the focused change",
+      steps: [
+        { step: "Inspect the route", status: "completed" },
+        { step: "Wire the checklist", status: "pending" },
+        { step: "Run focused tests", status: "in_progress" },
+      ],
+    });
+    expect(requestUpdate).toHaveBeenCalledOnce();
+  });
+
+  it("replaces the full snapshot and clears on an empty snapshot", () => {
+    const host = createHost();
+
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "plan", {
+        phase: "update",
+        steps: [
+          { step: "First", status: "completed" },
+          { step: "Second", status: "in_progress" },
+        ],
+      }),
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 2, "plan", {
+        phase: "update",
+        steps: [{ step: "Replacement", status: "pending" }],
+      }),
+    );
+
+    expect(host.planStatus).toEqual({
+      runId: "run-1",
+      steps: [{ step: "Replacement", status: "pending" }],
+    });
+
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 3, "plan", {
+        phase: "update",
+        explanation: "No actionable steps",
+        steps: [],
+      }),
+    );
+
+    expect(host.planStatus).toBeNull();
+  });
+
+  it("demotes duplicate in-progress steps to pending", () => {
+    const host = createHost();
+
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "plan", {
+        phase: "update",
+        steps: [
+          { step: "First active", status: "in_progress" },
+          { step: "Second active", status: "in_progress" },
+        ],
+      }),
+    );
+
+    expect(host.planStatus).toEqual({
+      runId: "run-1",
+      steps: [
+        { step: "First active", status: "in_progress" },
+        { step: "Second active", status: "pending" },
+      ],
+    });
+  });
+
+  it("ignores plan snapshots from another run while a run is active", () => {
+    const host = createHost({
+      chatRunId: "run-1",
+      planStatus: {
+        steps: [{ step: "Active step", status: "in_progress" }],
+      },
+    });
+
+    handleAgentEvent(
+      host,
+      agentEvent("run-2", 1, "plan", {
+        phase: "update",
+        steps: [{ step: "Spawned run step", status: "in_progress" }],
+      }),
+    );
+
+    expect(host.planStatus).toEqual({
+      steps: [{ step: "Active step", status: "in_progress" }],
+    });
+  });
+
+  it("filters plan snapshots for another session", () => {
+    const host = createHost();
+
+    handleAgentEvent(
+      host,
+      agentEvent(
+        "run-1",
+        1,
+        "plan",
+        {
+          phase: "update",
+          steps: [{ step: "Wrong session", status: "in_progress" }],
+        },
+        "agent:other:main",
+      ),
+    );
+
+    expect(host.planStatus).toBeNull();
+  });
+
+  it("clears plan state with the rest of a new run's transient stream", () => {
+    const host = createHost({
+      planStatus: {
+        steps: [{ step: "Stale step", status: "in_progress" }],
+      },
+    });
+
+    resetToolStream(host);
+
+    expect(host.planStatus).toBeNull();
+  });
+});
 
 describe("app-tool-stream fallback lifecycle handling", () => {
   beforeEach(() => {

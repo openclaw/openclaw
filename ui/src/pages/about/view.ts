@@ -1,3 +1,4 @@
+import "../../styles/lobster-pet.css";
 import { expectDefined } from "@openclaw/normalization-core";
 import { html, nothing, type TemplateResult } from "lit";
 import type { ControlUiBuildInfo } from "../../build-info.ts";
@@ -46,6 +47,11 @@ const ABOUT_LINKS: ReadonlyArray<{ href: string; icon: TemplateResult; label: ()
     href: "https://discord.gg/clawd",
     icon: brandIcons.discord,
     label: () => t("aboutPage.linkDiscord"),
+  },
+  {
+    href: "https://x.com/openclaw",
+    icon: brandIcons.x,
+    label: () => t("aboutPage.linkX"),
   },
   {
     href: "https://docs.openclaw.ai/releases",
