@@ -1706,7 +1706,13 @@ async function processResponsesStream(
       if (typeof response?.id === "string") {
         output.responseId = response.id;
       }
-      backfillCompletedResponseOutput(response);
+      if (type === "response.completed") {
+        // Reconstructing output from the terminal payload is a completed-response contract: it
+        // recovers the final answer when item events never arrived. An incomplete turn has no
+        // final answer, so replaying its partial output would persist text the streaming path
+        // never emitted. Usage/stop-reason recording below still applies to both.
+        backfillCompletedResponseOutput(response);
+      }
       recordResponsesTerminalOutcome({
         response,
         output,
