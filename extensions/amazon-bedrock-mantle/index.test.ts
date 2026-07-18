@@ -86,6 +86,32 @@ describe("amazon-bedrock-mantle provider plugin", () => {
     ).toBeUndefined();
   });
 
+  it("declares Responses rotating snapshot collapse during runtime normalization", async () => {
+    const provider = await registerSingleProviderPlugin(bedrockMantlePlugin);
+    const model = {
+      id: "openai.gpt-oss-120b",
+      name: "GPT OSS 120B",
+      api: "openai-responses",
+      provider: "amazon-bedrock-mantle",
+      baseUrl: "https://bedrock-mantle.us-east-1.api.aws/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128_000,
+      maxTokens: 8192,
+    };
+
+    const normalized = provider.normalizeResolvedModel?.({
+      provider: "amazon-bedrock-mantle",
+      modelId: model.id,
+      model,
+    } as never);
+
+    expect(normalized?.compat).toMatchObject({
+      collapseRotatingMessageSnapshots: true,
+    });
+  });
+
   it("restores missing or stale Sonnet 5 pricing during runtime normalization", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(Date.UTC(2026, 8, 1));

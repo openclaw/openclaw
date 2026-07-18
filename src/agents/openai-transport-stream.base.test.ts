@@ -413,7 +413,12 @@ describe("openai transport stream", () => {
   });
 
   it("collapses cumulative message snapshot items into one text block (#91959)", async () => {
-    const model = createAzureResponsesModel();
+    const model = {
+      ...createAzureResponsesModel(),
+      provider: "amazon-bedrock-mantle",
+      baseUrl: "https://bedrock-mantle.us-east-1.api.aws/v1",
+      compat: { collapseRotatingMessageSnapshots: true },
+    };
     const output = createResponsesAssistantOutput(model);
     const pushSpy = vi.fn();
     const textBlockSignatures: Array<[string, number, string | undefined]> = [];
@@ -434,17 +439,26 @@ describe("openai transport stream", () => {
           item: { type: "message", id: "msg_1", phase: "final_answer" },
         },
         { type: "response.output_text.delta", delta: snapshot1 },
-        { type: "response.output_item.done", item: messageItem("msg_1", snapshot1) },
+        {
+          type: "response.output_item.done",
+          item: messageItem("msg_1", snapshot1),
+        },
         {
           type: "response.output_item.added",
           item: { type: "message", id: "msg_2", phase: "final_answer" },
         },
-        { type: "response.output_item.done", item: messageItem("msg_2", snapshot2) },
+        {
+          type: "response.output_item.done",
+          item: messageItem("msg_2", snapshot2),
+        },
         {
           type: "response.output_item.added",
           item: { type: "message", id: "msg_3", phase: "final_answer" },
         },
-        { type: "response.output_item.done", item: messageItem("msg_3", snapshot3) },
+        {
+          type: "response.output_item.done",
+          item: messageItem("msg_3", snapshot3),
+        },
         {
           type: "response.completed",
           response: { id: "resp-snapshots", status: "completed" },
@@ -493,6 +507,68 @@ describe("openai transport stream", () => {
       ["text_end", 0, '{"v":1,"id":"msg_1","phase":"final_answer"}'],
       ["text_end", 0, '{"v":1,"id":"msg_2","phase":"final_answer"}'],
       ["text_end", 0, '{"v":1,"id":"msg_3","phase":"final_answer"}'],
+    ]);
+  });
+
+  it("keeps strict-prefix adjacent message items with different ids as distinct blocks", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+    const pushSpy = vi.fn();
+    const messageItem = (id: string, text: string) => ({
+      type: "message",
+      id,
+      phase: "final_answer",
+      content: [{ type: "output_text", text }],
+    });
+
+    await testing.processResponsesStream(
+      streamChunks([
+        {
+          type: "response.output_item.added",
+          output_index: 0,
+          item: { type: "message", id: "msg_1", phase: "final_answer" },
+        },
+        { type: "response.output_item.done", output_index: 0, item: messageItem("msg_1", "Hello") },
+        {
+          type: "response.output_item.added",
+          output_index: 1,
+          item: { type: "message", id: "msg_2", phase: "final_answer" },
+        },
+        {
+          type: "response.output_item.done",
+          output_index: 1,
+          item: messageItem("msg_2", "Hello world!"),
+        },
+        {
+          type: "response.completed",
+          response: { id: "resp-distinct-prefix", status: "completed" },
+        },
+      ]),
+      output,
+      { push: pushSpy },
+      model,
+    );
+
+    expect(output.content).toEqual([
+      {
+        type: "text",
+        text: "Hello",
+        textSignature: '{"v":1,"id":"msg_1","phase":"final_answer"}',
+      },
+      {
+        type: "text",
+        text: "Hello world!",
+        textSignature: '{"v":1,"id":"msg_2","phase":"final_answer"}',
+      },
+    ]);
+    const textEvents = pushSpy.mock.calls
+      .map(([event]) => event as { type: string; contentIndex?: number })
+      .filter((event) => event.type.startsWith("text_"));
+    expect(textEvents.map((event) => [event.type, event.contentIndex])).toEqual([
+      ["text_start", 0],
+      ["text_end", 0],
+      ["text_start", 1],
+      ["text_end", 1],
     ]);
   });
 
@@ -629,7 +705,12 @@ describe("openai transport stream", () => {
   });
 
   it("collapses cumulative message snapshots in completed-response backfill (#91959)", async () => {
-    const model = createAzureResponsesModel();
+    const model = {
+      ...createAzureResponsesModel(),
+      provider: "amazon-bedrock-mantle",
+      baseUrl: "https://bedrock-mantle.us-east-1.api.aws/v1",
+      compat: { collapseRotatingMessageSnapshots: true },
+    };
     const output = createResponsesAssistantOutput(model);
 
     await testing.processResponsesStream(

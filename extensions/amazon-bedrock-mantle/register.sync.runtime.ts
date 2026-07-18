@@ -28,17 +28,29 @@ function normalizeMantleResolvedModel(params: {
   modelId: string;
   model: ProviderRuntimeModel;
 }): ProviderRuntimeModel | undefined {
+  let nextModel = params.model;
+  let changed = false;
+  if (params.model.api === "openai-responses" || params.model.api === "azure-openai-responses") {
+    nextModel = {
+      ...nextModel,
+      compat: {
+        ...nextModel.compat,
+        collapseRotatingMessageSnapshots: true,
+      },
+    };
+    changed = params.model.compat?.collapseRotatingMessageSnapshots !== true;
+  }
   if (
-    resolveClaudeSonnet5ModelIdentity({ id: params.modelId, params: params.model.params }) ===
+    resolveClaudeSonnet5ModelIdentity({ id: params.modelId, params: params.model.params }) !==
     undefined
   ) {
-    return undefined;
+    const cost = resolveMantleSonnet5Cost();
+    if (!modelCostsEqual(params.model.cost, cost)) {
+      nextModel = { ...nextModel, cost };
+      changed = true;
+    }
   }
-  const cost = resolveMantleSonnet5Cost();
-  if (modelCostsEqual(params.model.cost, cost)) {
-    return undefined;
-  }
-  return { ...params.model, cost };
+  return changed ? nextModel : undefined;
 }
 
 /** Register the Amazon Bedrock Mantle provider with OpenClaw. */

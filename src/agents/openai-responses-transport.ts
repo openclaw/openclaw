@@ -3,8 +3,10 @@
  */
 import { randomUUID } from "node:crypto";
 import {
+  allowsResponsesCrossItemSnapshotCollapse,
   createResponsesToolCallTracker,
   isOpenAICompatibleAzureResponsesBaseUrl,
+  isResponsesMessageSnapshotLineage,
   isResponsesTextContentPartType,
   isResponsesTextDeltaEventType,
   normalizeOpenAIReasoningEffort,
@@ -1233,11 +1235,15 @@ async function processResponsesStream(
     contentIndex: number;
   };
   const streamingToolCalls = createResponsesToolCallTracker<StreamingToolCallState>();
+  const allowCrossItemSnapshot = allowsResponsesCrossItemSnapshotCollapse(model);
   let lastTextBlock: {
     block: Record<string, unknown>;
     index: number;
+    itemId: string | undefined;
+    outputIndex: number | undefined;
     phase: "commentary" | "final_answer" | undefined;
   } | null = null;
+  let currentMessageOutputIndex: number | undefined;
   // While a message item may still be a cumulative snapshot of lastTextBlock,
   // its public block is deferred so a collapsed item never leaves an
   // unbalanced text_start behind (#91959). null = no deferral in progress.
@@ -1250,6 +1256,12 @@ async function processResponsesStream(
   const readIdentityValue = (value: unknown): string | undefined => {
     const identity = typeof value === "string" ? value.trim() : "";
     return identity || undefined;
+  };
+  const readOutputIndex = (event: Record<string, unknown>): number | undefined => {
+    const outputIndex = event.output_index;
+    return typeof outputIndex === "number" && Number.isInteger(outputIndex) && outputIndex >= 0
+      ? outputIndex
+      : undefined;
   };
   // Opening fragments may carry the only function name. A conflicting
   // completion must never retarget an already-started call.
@@ -1296,19 +1308,28 @@ async function processResponsesStream(
     stream.push({ type: "text_delta", contentIndex: blockIndex(), delta: pendingMessageText });
     pendingMessageText = null;
   };
-  const appendCompletedResponseTextItem = (item: Record<string, unknown>) => {
+  const appendCompletedResponseTextItem = (
+    item: Record<string, unknown>,
+    outputIndex: number | undefined,
+  ) => {
     const text = readResponsesOutputMessageText(item);
     if (!text) {
       return;
     }
+    const itemId = readIdentityValue(item.id);
     const phase = (item.phase as "commentary" | "final_answer" | undefined) ?? undefined;
     const collapse = resolveResponsesMessageSnapshotCollapse({
       prior: lastTextBlock && {
         text: stringifyUnknown(lastTextBlock.block.text),
         phase: lastTextBlock.phase,
+        itemId: lastTextBlock.itemId,
+        outputIndex: lastTextBlock.outputIndex,
       },
       nextText: text,
       nextPhase: phase,
+      nextItemId: itemId,
+      nextOutputIndex: outputIndex,
+      allowCrossItemSnapshot,
     });
     if (collapse.kind === "extend" && lastTextBlock) {
       // Cumulative snapshot of the prior message item: replace, don't append;
@@ -1329,7 +1350,7 @@ async function processResponsesStream(
       textSignature: encodeTextSignatureV1(stringifyUnknown(item.id), phase),
     };
     output.content.push(block);
-    lastTextBlock = { block, index: blockIndex(), phase };
+    lastTextBlock = { block, index: blockIndex(), itemId, outputIndex, phase };
     stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
     stream.push({
       type: "text_end",
@@ -1371,7 +1392,7 @@ async function processResponsesStream(
         continue;
       }
       if (rawItem.type === "message") {
-        appendCompletedResponseTextItem(rawItem);
+        appendCompletedResponseTextItem(rawItem, undefined);
         continue;
       }
       // Any non-message item (reasoning, tool call) is a real boundary; a later
@@ -1422,6 +1443,7 @@ async function processResponsesStream(
         // other item is a real boundary (see resolveResponsesMessageSnapshotCollapse).
         lastTextBlock = null;
         pendingMessageText = null;
+        currentMessageOutputIndex = undefined;
       }
       if (item.type === "reasoning") {
         currentItem = item;
@@ -1430,11 +1452,22 @@ async function processResponsesStream(
         stream.push({ type: "thinking_start", contentIndex: blockIndex(), partial: output });
       } else if (item.type === "message") {
         currentItem = item;
-        if (lastTextBlock) {
+        const itemId = readIdentityValue(item.id);
+        const outputIndex = readOutputIndex(event);
+        const phase = (item.phase as "commentary" | "final_answer" | undefined) ?? undefined;
+        currentMessageOutputIndex = outputIndex;
+        if (
+          isResponsesMessageSnapshotLineage({
+            prior: lastTextBlock,
+            nextPhase: phase,
+            nextItemId: itemId,
+            nextOutputIndex: outputIndex,
+            allowCrossItemSnapshot,
+          })
+        ) {
           currentBlock = null;
           pendingMessageText = "";
         } else {
-          const phase = (item.phase as "commentary" | "final_answer" | undefined) ?? undefined;
           currentBlock = {
             type: "text",
             text: "",
@@ -1537,6 +1570,7 @@ async function processResponsesStream(
       if (item.type !== "message") {
         lastTextBlock = null;
         pendingMessageText = null;
+        currentMessageOutputIndex = undefined;
       }
       if (item.type === "reasoning" && currentBlock?.type === "thinking") {
         const summary = Array.isArray(item.summary)
@@ -1577,18 +1611,25 @@ async function processResponsesStream(
           })
           .join("");
         const phase = (item.phase as "commentary" | "final_answer" | undefined) ?? undefined;
+        const outputIndex = readOutputIndex(event) ?? currentMessageOutputIndex;
         const collapse =
           pendingMessageText !== null
             ? resolveResponsesMessageSnapshotCollapse({
                 prior: lastTextBlock && {
                   text: stringifyUnknown(lastTextBlock.block.text),
                   phase: lastTextBlock.phase,
+                  itemId: lastTextBlock.itemId,
+                  outputIndex: lastTextBlock.outputIndex,
                 },
                 nextText: finalText,
                 nextPhase: phase,
+                nextItemId: readIdentityValue(item.id),
+                nextOutputIndex: outputIndex,
+                allowCrossItemSnapshot,
               })
             : ({ kind: "keep" } as const);
         pendingMessageText = null;
+        currentMessageOutputIndex = undefined;
         if (collapse.kind === "extend" && lastTextBlock) {
           // Cumulative snapshot of the prior message item: replace its text
           // instead of appending another copy. The deferred block was never
@@ -1621,7 +1662,13 @@ async function processResponsesStream(
           }
           currentBlock.text = finalText;
           currentBlock.textSignature = encodeTextSignatureV1(stringifyUnknown(item.id), phase);
-          lastTextBlock = { block: currentBlock, index: blockIndex(), phase };
+          lastTextBlock = {
+            block: currentBlock,
+            index: blockIndex(),
+            itemId: readIdentityValue(item.id),
+            outputIndex,
+            phase,
+          };
           stream.push({
             type: "text_end",
             contentIndex: blockIndex(),

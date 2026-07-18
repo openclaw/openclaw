@@ -52,7 +52,9 @@ import {
   OPENAI_RESPONSES_OUTPUT_TEXT_CONTENT_PART_TYPE,
   type AzureResponsesTextContentPart,
   type AzureResponsesTextDeltaEvent,
+  allowsResponsesCrossItemSnapshotCollapse,
   isAzureResponsesTextDeltaEvent,
+  isResponsesMessageSnapshotLineage,
   isResponsesTextContentPartType,
   resolveResponsesMessageSnapshotCollapse,
 } from "./openai-responses-stream-compat.js";
@@ -702,6 +704,8 @@ export async function processResponsesStream<TApi extends Api>(
   type TextBlockReference = {
     block: TextContent;
     index: number;
+    itemId: string | undefined;
+    outputIndex: number | undefined;
     phase: TextSignatureV1["phase"] | undefined;
   };
   type ResponsesOutputSlot =
@@ -716,6 +720,7 @@ export async function processResponsesStream<TApi extends Api>(
         item: ResponsesStreamOutputMessage;
         block: TextContent | null;
         contentIndex: number | undefined;
+        outputIndex: number | undefined;
         pendingText: string | null;
         collapseCandidate: TextBlockReference | null;
       }
@@ -726,6 +731,7 @@ export async function processResponsesStream<TApi extends Api>(
   let unindexedOutputSlot: ResponsesOutputSlot | undefined;
   let terminalResponseEvent: "finalized" | "failed" | undefined;
   let lastTextBlock: TextBlockReference | null = null;
+  const allowCrossItemSnapshot = allowsResponsesCrossItemSnapshotCollapse(model);
   const blocks = output.content;
   const blockIndex = () => blocks.length - 1;
   const readOutputIndex = (event: object): number | undefined => {
@@ -831,21 +837,31 @@ export async function processResponsesStream<TApi extends Api>(
     }
     if (item.type === "message") {
       const messageItem = item as ResponsesStreamOutputMessage;
-      const collapseCandidate = lastTextBlock;
+      const itemId = readIdentityValue(messageItem.id);
+      const phase = messageItem.phase ?? undefined;
+      const outputIndex = readOutputIndex(event);
+      const collapseCandidate = isResponsesMessageSnapshotLineage({
+        prior: lastTextBlock,
+        nextPhase: phase,
+        nextItemId: itemId,
+        nextOutputIndex: outputIndex,
+        allowCrossItemSnapshot,
+      })
+        ? lastTextBlock
+        : null;
       const block: TextContent | null = collapseCandidate
         ? null
         : {
             type: "text",
             text: "",
-            ...(messageItem.phase
-              ? { textSignature: encodeTextSignatureV1(messageItem.id, messageItem.phase) }
-              : {}),
+            ...(phase ? { textSignature: encodeTextSignatureV1(messageItem.id, phase) } : {}),
           };
       const slot = {
         type: "text",
         item: messageItem,
         block,
         contentIndex: block ? blocks.length : undefined,
+        outputIndex,
         pendingText: collapseCandidate ? "" : null,
         collapseCandidate,
       } satisfies ResponsesOutputSlot;
@@ -886,12 +902,11 @@ export async function processResponsesStream<TApi extends Api>(
       return;
     }
     const text = slot.pendingText;
+    const phase = slot.item.phase ?? undefined;
     slot.block = {
       type: "text",
       text,
-      ...(slot.item.phase
-        ? { textSignature: encodeTextSignatureV1(slot.item.id, slot.item.phase) }
-        : {}),
+      ...(phase ? { textSignature: encodeTextSignatureV1(slot.item.id, phase) } : {}),
     };
     blocks.push(slot.block);
     slot.contentIndex = blockIndex();
@@ -1267,9 +1282,14 @@ export async function processResponsesStream<TApi extends Api>(
                 prior: outputSlot.collapseCandidate && {
                   text: outputSlot.collapseCandidate.block.text,
                   phase: outputSlot.collapseCandidate.phase,
+                  itemId: outputSlot.collapseCandidate.itemId,
+                  outputIndex: outputSlot.collapseCandidate.outputIndex,
                 },
                 nextText: finalText,
                 nextPhase: phase,
+                nextItemId: readIdentityValue(item.id),
+                nextOutputIndex: readOutputIndex(event) ?? outputSlot.outputIndex,
+                allowCrossItemSnapshot,
               })
             : ({ kind: "keep" } as const);
         outputSlot.pendingText = null;
@@ -1310,7 +1330,13 @@ export async function processResponsesStream<TApi extends Api>(
           if (contentIndex === undefined) {
             throw new Error("Responses stream finalized text without a content index");
           }
-          lastTextBlock = { block: outputSlot.block, index: contentIndex, phase };
+          lastTextBlock = {
+            block: outputSlot.block,
+            index: contentIndex,
+            itemId: readIdentityValue(item.id),
+            outputIndex: readOutputIndex(event) ?? outputSlot.outputIndex,
+            phase,
+          };
           stream.push({
             type: "text_end",
             contentIndex,

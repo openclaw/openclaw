@@ -77,6 +77,13 @@ const nativeOpenAIModel = {
   maxTokens: 8192,
 } satisfies Model<"openai-responses">;
 
+const bedrockMantleResponsesModel = {
+  ...nativeOpenAIModel,
+  provider: "amazon-bedrock-mantle",
+  baseUrl: "https://bedrock-mantle.us-east-1.api.aws/v1",
+  compat: { collapseRotatingMessageSnapshots: true },
+} satisfies Model<"openai-responses">;
+
 const proxyOpenAIModel = {
   ...nativeOpenAIModel,
   id: "custom-model",
@@ -1096,7 +1103,7 @@ describe("processResponsesStream", () => {
       ]),
       output,
       stream,
-      nativeOpenAIModel,
+      bedrockMantleResponsesModel,
     );
 
     expect(output.content).toMatchObject([
@@ -2607,7 +2614,7 @@ describe("processResponsesStream", () => {
     expect(output.usage.cost.total).toBeCloseTo(0.0007475);
   });
 
-  it("collapses cumulative message snapshot items into one text block (#91959)", async () => {
+  it("collapses cumulative same-message snapshot items into one text block (#91959)", async () => {
     const output = createAssistantOutput();
     const stream = new AssistantMessageEventStream();
     const events: Array<Record<string, unknown>> = [];
@@ -2640,24 +2647,36 @@ describe("processResponsesStream", () => {
           type: "response.output_item.added",
           item: { type: "message", id: "msg_1", phase: "final_answer" },
         },
-        { type: "response.content_part.added", part: { type: "output_text", text: "" } },
+        {
+          type: "response.content_part.added",
+          part: { type: "output_text", text: "" },
+        },
         { type: "response.output_text.delta", delta: snapshot1 },
-        { type: "response.output_item.done", item: messageItem("msg_1", snapshot1) },
+        {
+          type: "response.output_item.done",
+          item: messageItem("msg_1", snapshot1),
+        },
         {
           type: "response.output_item.added",
           item: { type: "message", id: "msg_2", phase: "final_answer" },
         },
-        { type: "response.output_item.done", item: messageItem("msg_2", snapshot2) },
+        {
+          type: "response.output_item.done",
+          item: messageItem("msg_2", snapshot2),
+        },
         {
           type: "response.output_item.added",
           item: { type: "message", id: "msg_3", phase: "final_answer" },
         },
-        { type: "response.output_item.done", item: messageItem("msg_3", snapshot3) },
+        {
+          type: "response.output_item.done",
+          item: messageItem("msg_3", snapshot3),
+        },
         { type: "response.completed", response: { id: "resp_1", status: "completed" } },
       ]),
       output,
       stream,
-      nativeOpenAIModel,
+      bedrockMantleResponsesModel,
     );
     stream.end();
     await collect;
@@ -2690,17 +2709,100 @@ describe("processResponsesStream", () => {
   });
 
   it.each([
+    ["strict prefix", "Hello", "Hello world."],
     ["identical", "Hello world.", "Hello world."],
     ["shrinking", "Step one. Step two.", "Step one."],
-  ])("keeps %s adjacent same-phase message items as distinct blocks", async (_label, a, b) => {
+  ])(
+    "keeps %s adjacent same-phase message items with different ids as distinct blocks",
+    async (_label, a, b) => {
+      const output = createAssistantOutput();
+      const stream = new AssistantMessageEventStream();
+      const events: Array<Record<string, unknown>> = [];
+      const collect = (async () => {
+        for await (const event of stream) {
+          events.push(event as unknown as Record<string, unknown>);
+        }
+      })();
+      await processResponsesStream(
+        responseEvents([
+          {
+            type: "response.output_item.added",
+            output_index: 0,
+            item: { type: "message", id: "msg_1", phase: "final_answer" },
+          },
+          {
+            type: "response.output_item.done",
+            output_index: 0,
+            item: {
+              type: "message",
+              id: "msg_1",
+              phase: "final_answer",
+              content: [{ type: "output_text", text: a }],
+            },
+          },
+          {
+            type: "response.output_item.added",
+            output_index: 1,
+            item: { type: "message", id: "msg_2", phase: "final_answer" },
+          },
+          {
+            type: "response.output_item.done",
+            output_index: 1,
+            item: {
+              type: "message",
+              id: "msg_2",
+              phase: "final_answer",
+              content: [{ type: "output_text", text: b }],
+            },
+          },
+          { type: "response.completed", response: { id: "resp_1", status: "completed" } },
+        ]),
+        output,
+        stream,
+        nativeOpenAIModel,
+      );
+      stream.end();
+      await collect;
+
+      // Different message IDs mark independently identified messages and must
+      // never be removed, even when the later text strictly extends the earlier.
+      expect(output.content).toEqual([
+        {
+          type: "text",
+          text: a,
+          textSignature: JSON.stringify({ v: 1, id: "msg_1", phase: "final_answer" }),
+        },
+        {
+          type: "text",
+          text: b,
+          textSignature: JSON.stringify({ v: 1, id: "msg_2", phase: "final_answer" }),
+        },
+      ]);
+      // The second item opens and closes its own block.
+      expect(events.map((event) => [event.type, event.contentIndex])).toEqual([
+        ["text_start", 0],
+        ["text_end", 0],
+        ["text_start", 1],
+        ["text_end", 1],
+      ]);
+    },
+  );
+
+  it("does not enable cross-item snapshot collapse from Bedrock provider identity alone", async () => {
     const output = createAssistantOutput();
     const stream = new AssistantMessageEventStream();
-    const events: Array<Record<string, unknown>> = [];
-    const collect = (async () => {
-      for await (const event of stream) {
-        events.push(event as unknown as Record<string, unknown>);
-      }
-    })();
+    const modelWithoutProviderCompat = {
+      ...nativeOpenAIModel,
+      provider: "amazon-bedrock-mantle",
+      baseUrl: "https://bedrock-mantle.us-east-1.api.aws/v1",
+    } satisfies Model<"openai-responses">;
+    const messageItem = (id: string, text: string) => ({
+      type: "message",
+      id,
+      phase: "final_answer",
+      content: [{ type: "output_text", text }],
+    });
+
     await processResponsesStream(
       responseEvents([
         {
@@ -2709,12 +2811,7 @@ describe("processResponsesStream", () => {
         },
         {
           type: "response.output_item.done",
-          item: {
-            type: "message",
-            id: "msg_1",
-            phase: "final_answer",
-            content: [{ type: "output_text", text: a }],
-          },
+          item: messageItem("msg_1", "Hello"),
         },
         {
           type: "response.output_item.added",
@@ -2722,42 +2819,27 @@ describe("processResponsesStream", () => {
         },
         {
           type: "response.output_item.done",
-          item: {
-            type: "message",
-            id: "msg_2",
-            phase: "final_answer",
-            content: [{ type: "output_text", text: b }],
-          },
+          item: messageItem("msg_2", "Hello world."),
         },
         { type: "response.completed", response: { id: "resp_1", status: "completed" } },
       ]),
       output,
       stream,
-      nativeOpenAIModel,
+      modelWithoutProviderCompat,
     );
     stream.end();
-    await collect;
 
-    // Only strict extensions collapse; equal or shrinking items are real,
-    // independently identified messages and must never be removed.
     expect(output.content).toEqual([
       {
         type: "text",
-        text: a,
+        text: "Hello",
         textSignature: JSON.stringify({ v: 1, id: "msg_1", phase: "final_answer" }),
       },
       {
         type: "text",
-        text: b,
+        text: "Hello world.",
         textSignature: JSON.stringify({ v: 1, id: "msg_2", phase: "final_answer" }),
       },
-    ]);
-    // The deferred second item still opens and closes its own block.
-    expect(events.map((event) => [event.type, event.contentIndex])).toEqual([
-      ["text_start", 0],
-      ["text_end", 0],
-      ["text_start", 1],
-      ["text_end", 1],
     ]);
   });
 
