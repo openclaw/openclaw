@@ -373,12 +373,17 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
-  it("continues live delivery when durable persistence rejects a message", async () => {
+  it("retries a transient persistence failure and still delivers through the drain", async () => {
     const onMessage = vi.fn(async () => undefined);
     const queue = createWhatsAppDurableInboundQueue(DEFAULT_ACCOUNT_ID);
+    // One transient rejection absorbs into the bounded retry; the message then
+    // flows durably. The retired live-dispatch fallback is gone: it bypassed
+    // drain dedupe and lane serialization once the replay guard was deleted.
     const durableInboundQueue = {
       ...queue,
-      enqueue: vi.fn().mockRejectedValueOnce(new Error("SQLITE_FULL")),
+      // First attempt rejects; the bounded retry's second attempt must reach
+      // the real queue so the message flows durably.
+      enqueue: vi.fn(queue.enqueue.bind(queue)).mockRejectedValueOnce(new Error("SQLITE_FULL")),
     };
 
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {

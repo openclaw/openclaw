@@ -1622,7 +1622,9 @@ export async function attachWebInboxToSocket(
       const durableId =
         remoteJid && id ? createWhatsAppDurableInboundMessageId({ remoteJid, id }) : undefined;
       let resolvePrepared: ((inbound: PreparedInbound | null | undefined) => void) | undefined;
-      if (durableId) {
+      // A redelivery must not clobber the first delivery's in-flight
+      // preparation: the drain consumes exactly one entry per durable id.
+      if (durableId && !preparedInboundByDurableId.has(durableId)) {
         preparedInboundByDurableId.set(
           durableId,
           new Promise((resolve) => {
@@ -1639,34 +1641,42 @@ export async function attachWebInboxToSocket(
           preparedInboundByDurableId.delete(durableId);
         }
       };
-      let result: Awaited<ReturnType<typeof enqueueWhatsAppDurableInbound>>;
-      try {
-        result = await enqueueWhatsAppDurableInbound({
-          queue: durableInboundQueue,
-          message: msg,
-          upsertType: upsert.type,
-          skipStaleAppend,
-          skipRecentOutboundEcho,
-          receivedAt,
-          receiveOrder,
-        });
-      } catch (error) {
+      let result: Awaited<ReturnType<typeof enqueueWhatsAppDurableInbound>> | undefined;
+      let appendError: unknown;
+      // Bounded retry for transient store blips. The retired live-dispatch
+      // fallback is gone deliberately: with the replay guard deleted it
+      // bypassed drain dedupe and lane serialization, trading a duplicate
+      // reply/session race for availability against an already-broken store.
+      for (const delayMs of [0, 100, 300]) {
+        if (delayMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+        }
+        try {
+          result = await enqueueWhatsAppDurableInbound({
+            queue: durableInboundQueue,
+            message: msg,
+            upsertType: upsert.type,
+            skipStaleAppend,
+            skipRecentOutboundEcho,
+            receivedAt,
+            receiveOrder,
+          });
+          appendError = undefined;
+          break;
+        } catch (error) {
+          appendError = error;
+        }
+      }
+      if (result === undefined) {
         finishPreparation(undefined);
-        const formattedError = formatError(error);
-        inboundLogger.warn(
+        const formattedError = formatError(appendError);
+        inboundLogger.error(
           { error: formattedError },
-          "failed persisting durable WhatsApp inbound; delivering live",
+          "failed persisting durable WhatsApp inbound after retries; message dropped",
         );
-        inboundConsoleLog.warn(
-          `Failed persisting durable WhatsApp inbound; delivering live: ${formattedError}`,
+        inboundConsoleLog.error(
+          `Failed persisting durable WhatsApp inbound after retries; message dropped: ${formattedError}`,
         );
-        await dispatchInboundMessage(msg, {
-          upsertType: upsert.type,
-          skipStaleAppend,
-          skipRecentOutboundEcho,
-          receivedAt,
-          receiveOrder,
-        });
         continue;
       }
       if (result.kind === "completed") {
@@ -1676,7 +1686,7 @@ export async function attachWebInboxToSocket(
           await maybeMarkNonSelfChatReadReceipt(inbound, buildReadReceiptTarget(inbound));
         }
       } else {
-        if (result.kind === "accepted" || result.kind === "pending") {
+        if (result.kind === "accepted") {
           try {
             finishPreparation(
               skipRecentOutboundEcho ? null : await normalizeInboundMessage(msg),
@@ -1687,6 +1697,8 @@ export async function attachWebInboxToSocket(
             throw error;
           }
         } else {
+          // "pending": the first delivery owns preparation; resolving without
+          // keepForDrain avoids orphaning a second map entry forever.
           finishPreparation(undefined);
         }
         void requestDurableInboundDrain().catch((error: unknown) => {
