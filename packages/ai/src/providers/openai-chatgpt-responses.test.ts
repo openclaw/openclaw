@@ -311,6 +311,46 @@ describe("streamOpenAICodexResponses transport", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("rejects oversized blob-like websocket messages before reading them", async () => {
+    const arrayBuffer = vi.fn(async () => new ArrayBuffer(0));
+    class OversizedBlobWebSocket extends EventTarget {
+      constructor() {
+        super();
+        queueMicrotask(() => this.dispatchEvent(new Event("open")));
+      }
+
+      send(): void {
+        queueMicrotask(() => {
+          this.dispatchEvent(
+            Object.assign(new Event("message"), {
+              data: {
+                arrayBuffer,
+                size: 16 * 1024 * 1024 + 1,
+              },
+            }),
+          );
+        });
+      }
+
+      close(): void {}
+    }
+    const fetchMock = vi.fn();
+    vi.stubGlobal("WebSocket", OversizedBlobWebSocket);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await streamOpenAICodexResponses(model, context, {
+      apiKey: createJwt({
+        "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
+      }),
+      transport: "websocket",
+    }).result();
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toContain("Codex WebSocket message exceeded size limit");
+    expect(arrayBuffer).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("rotates cached websockets before the backend connection age limit", async () => {
     vi.useFakeTimers();
     const startedAt = new Date("2026-07-03T00:00:00Z");
