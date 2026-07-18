@@ -636,6 +636,49 @@ class ChatQuestionTest {
 
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)
+  fun missingExpiredQuestionNotFoundRemainsExpired() =
+    runTest {
+      val json = Json { ignoreUnknownKeys = true }
+      val pending = record(expiresAtMs = 0)
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, _ ->
+            when (method) {
+              "question.list" -> json.encodeToString(QuestionListResult(emptyList()))
+              "question.get" ->
+                throw GatewayRequestRejected(
+                  GatewaySession.ErrorShape(
+                    code = "INVALID_REQUEST",
+                    message = "question not found",
+                    details =
+                      GatewayConnectErrorDetails(
+                        code = null,
+                        reason = "QUESTION_NOT_FOUND",
+                        canRetryWithDeviceToken = false,
+                        recommendedNextStep = null,
+                      ),
+                  ),
+                )
+              else -> "{}"
+            }
+          },
+        )
+
+      controller.handleGatewayEvent("question.requested", json.encodeToString(pending))
+      advanceUntilIdle()
+
+      assertEquals(
+        ChatQuestionStatus.Expired,
+        controller.questions.value
+          .single()
+          .status(),
+      )
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
   fun skipUsesCancelResolutionAndKeepsSkippedSummary() =
     runTest {
       val json = Json { ignoreUnknownKeys = true }

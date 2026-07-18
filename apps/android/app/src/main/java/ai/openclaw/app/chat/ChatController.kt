@@ -2261,7 +2261,8 @@ class ChatController internal constructor(
         throw err
       } catch (err: GatewayRequestRejected) {
         if (err.gatewayError.details?.reason == "QUESTION_NOT_FOUND") {
-          fallbackRecords += record.copy(status = "answered", answers = null)
+          val status = if (System.currentTimeMillis() >= record.expiresAtMs) "expired" else "answered"
+          fallbackRecords += record.copy(status = status, answers = null)
           successfulFallbackIds += record.id
         } else {
           unresolvedIds += record.id

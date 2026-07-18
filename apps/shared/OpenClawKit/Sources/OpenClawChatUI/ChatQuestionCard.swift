@@ -579,8 +579,12 @@ extension OpenClawChatViewModel {
                 case let .record(record):
                     changed = model.apply(record: record) || changed
                 case .notFound:
-                    model.markAnsweredElsewhere()
-                    changed = true
+                    if model.status() == .expired {
+                        changed = model.observeLocalExpiry(at: Date()) || changed
+                    } else {
+                        model.markAnsweredElsewhere()
+                        changed = true
+                    }
                 case .failed:
                     complete = false
                 }
