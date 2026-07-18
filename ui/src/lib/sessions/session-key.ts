@@ -189,13 +189,19 @@ export function resolveUiCanonicalMainSessionKey(
   host: Pick<UiSessionDefaultsHost, "agentsList" | "hello">,
 ): string {
   const defaults = readSessionDefaults(host);
-  return (
-    normalizeOptionalString(defaults?.mainSessionKey) ??
-    buildAgentMainSessionKey({
-      agentId: resolveUiDefaultAgentId(host),
-      mainKey: resolveUiConfiguredMainKey(host),
-    })
-  );
+  const advertised = normalizeOptionalString(defaults?.mainSessionKey);
+  if (advertised) {
+    return advertised;
+  }
+  // Global scope routes main to the "global" sentinel even when the gateway
+  // has not advertised a main session key yet (e.g. pre-hello snapshots).
+  if (normalizeOptionalLowercaseString(host.agentsList?.scope) === "global") {
+    return "global";
+  }
+  return buildAgentMainSessionKey({
+    agentId: resolveUiDefaultAgentId(host),
+    mainKey: resolveUiConfiguredMainKey(host),
+  });
 }
 
 function normalizeUiSessionEventKey(
