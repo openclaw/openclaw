@@ -155,6 +155,49 @@ describe("secrets runtime snapshot", () => {
     );
   });
 
+  it("does not send a stale provider credential to a changed endpoint", async () => {
+    const apiKeyRef = {
+      source: "env" as const,
+      provider: "default",
+      id: "PROVIDER_KEY",
+    };
+    const config = (baseUrl: string) =>
+      asConfig({
+        models: {
+          providers: {
+            first: { apiKey: apiKeyRef, baseUrl, models: [] },
+          },
+        },
+      });
+    const active = await prepareSecretsRuntimeSnapshot({
+      config: config("https://old.example.invalid/v1"),
+      env: { PROVIDER_KEY: "last-known-good" },
+      includeAuthStoreRefs: false,
+      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+    });
+    activateSecretsRuntimeSnapshotState({
+      snapshot: active,
+      refreshContext: null,
+      refreshHandler: null,
+    });
+
+    const candidate = await prepareSecretsRuntimeSnapshot({
+      config: config("https://new.example.invalid/v1"),
+      env: {},
+      includeAuthStoreRefs: false,
+      allowUnavailableSecretOwners: true,
+      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+    });
+
+    expect(candidate.config.models?.providers?.first).toMatchObject({
+      apiKey: apiKeyRef,
+      baseUrl: "https://new.example.invalid/v1",
+    });
+    expect(candidate.degradedOwners).toMatchObject([
+      { ownerKind: "provider", ownerId: "first", degradationState: "cold" },
+    ]);
+  });
+
   it("isolates only the skill whose API key cannot resolve", async () => {
     const missingRef = {
       source: "env",

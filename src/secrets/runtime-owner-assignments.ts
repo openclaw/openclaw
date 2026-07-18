@@ -19,6 +19,7 @@ import type {
   SecretOwnerRefState,
 } from "./runtime-degraded-state.js";
 import { associateSecretResolutionErrorOwners } from "./runtime-degraded-state.js";
+import { combineSecretOwnerContractDigests } from "./runtime-owner-contract.js";
 import {
   applyResolvedAssignments,
   getSecretAssignmentValidationFailures,
@@ -39,6 +40,7 @@ export function classifySecretOwnerDegradationState(params: {
   ownerId: string;
   refs: SecretRef[];
   config: OpenClawConfig;
+  contractDigest?: string;
 }): "cold" | "stale" {
   const active = getActiveSecretsRuntimeSnapshot();
   if (
@@ -60,6 +62,8 @@ export function classifySecretOwnerDegradationState(params: {
     hasSameSecretProviderDefinition(ref, [active.sourceConfig, params.config]),
   );
   return activeOwner &&
+    Boolean(params.contractDigest) &&
+    activeOwner.contractDigest === params.contractDigest &&
     isDeepStrictEqual(activeOwner.refKeys.toSorted(), refKeys) &&
     providerDefinitionsMatch
     ? "stale"
@@ -115,6 +119,11 @@ export function listSecretAssignmentOwners(
             ownerKind: owner.ownerKind,
             ownerId: owner.ownerId,
             refKeys: ownerAssignments.map((assignment) => secretRefKey(assignment.ref)).toSorted(),
+            contractDigest: combineSecretOwnerContractDigests(
+              ownerAssignments.flatMap((assignment) =>
+                assignment.ownerContractDigest ? [assignment.ownerContractDigest] : [],
+              ),
+            ),
             resolvedValues: ownerAssignments.flatMap((assignment) => {
               const refKey = secretRefKey(assignment.ref);
               return resolvedValues.has(refKey)
@@ -194,6 +203,11 @@ function associateAssignmentFailureOwners(params: {
           ownerId: degradedOwner.ownerId,
           refs: assignments.map((assignment) => assignment.ref),
           config: params.config,
+          contractDigest: combineSecretOwnerContractDigests(
+            assignments.flatMap((assignment) =>
+              assignment.ownerContractDigest ? [assignment.ownerContractDigest] : [],
+            ),
+          ),
         }),
         failureMatched,
         source: getSecretAssignmentSource(assignments[0]!),
@@ -271,6 +285,7 @@ function associateAssignmentFailureOwners(params: {
           ownerId: owner.ownerId,
           refs,
           config: params.config,
+          contractDigest: owner.contractDigest,
         }),
         failureMatched: true,
         source,
@@ -426,6 +441,11 @@ export async function resolveAndApplySecretAssignments(params: {
           ownerId: owner.ownerId,
           refs: assignments.map((assignment) => assignment.ref),
           config: params.options.config,
+          contractDigest: combineSecretOwnerContractDigests(
+            assignments.flatMap((assignment) =>
+              assignment.ownerContractDigest ? [assignment.ownerContractDigest] : [],
+            ),
+          ),
         });
         const activeOwner =
           degradationState === "stale"
@@ -448,6 +468,8 @@ export async function resolveAndApplySecretAssignments(params: {
             const value = activeValues.get(refKey);
             assignment.apply(structuredClone(value));
             resolvedValues.set(refKey, structuredClone(value));
+          } else if (assignment.applyUnavailable) {
+            assignment.applyUnavailable();
           } else {
             // Canonicalize shorthand refs so runtime consumers can distinguish an unavailable ref
             // from a successfully resolved literal that happens to look like `${ENV_VAR}`.

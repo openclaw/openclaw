@@ -21,6 +21,7 @@ export type RuntimeWebSecretOwner = {
   path: string;
   ref: SecretRef;
   refKey: string;
+  contractDigest: string;
   resolvedValue?: string;
   reason?: SecretDegradationReason;
   restoreResolvedValue?: (value: string) => void;

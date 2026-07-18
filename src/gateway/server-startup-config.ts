@@ -101,14 +101,17 @@ export type ActivateRuntimeSecrets = ((
 
 const runtimeSecretsStatePublishers = new WeakMap<
   ActivateRuntimeSecrets,
-  (snapshot: PreparedRuntimeSecretsSnapshot, options?: { sourceOnly?: boolean }) => void
+  (
+    snapshot: PreparedRuntimeSecretsSnapshot,
+    options?: { sourceOnly?: boolean; expectedRevision?: number },
+  ) => void
 >();
 
 /** Publishes a deferred degradation or recovery after the prepared snapshot wins its commit CAS. */
 export function publishRuntimeSecretsStateTransition(
   activateRuntimeSecrets: ActivateRuntimeSecrets,
   snapshot: PreparedRuntimeSecretsSnapshot,
-  options?: { sourceOnly?: boolean },
+  options?: { sourceOnly?: boolean; expectedRevision?: number },
 ): void {
   runtimeSecretsStatePublishers.get(activateRuntimeSecrets)?.(snapshot, options);
 }
@@ -525,10 +528,20 @@ export function createRuntimeSecretsActivator(params: {
   runtimeSecretsStatePublishers.set(activateRuntimeSecrets, (snapshot, options) => {
     const transition = deferredStateTransitions.get(snapshot);
     deferredStateTransitions.delete(snapshot);
-    if (
-      !transition ||
-      transition.activationRevision !== getActiveSecretsRuntimeSnapshotRevision()
-    ) {
+    if (!transition) {
+      const sourceOnlyContractRecovered =
+        options?.sourceOnly === true &&
+        options.expectedRevision === getActiveSecretsRuntimeSnapshotRevision() &&
+        activeDegradationGeneration !== null &&
+        activeDegradationSupportsSourceOnlyRecovery &&
+        activeDegradationConfig !== null &&
+        !hasSameSecretReloadContract(activeDegradationConfig, snapshot.sourceConfig);
+      if (sourceOnlyContractRecovered) {
+        publishRecovery(snapshot.config, activeDegradationGeneration);
+      }
+      return;
+    }
+    if (transition.activationRevision !== getActiveSecretsRuntimeSnapshotRevision()) {
       return;
     }
     if (transition.kind === "degraded") {

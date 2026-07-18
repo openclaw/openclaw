@@ -193,6 +193,9 @@ function cloneSecretOwnerRefState(owner: SecretOwnerRefState): SecretOwnerRefSta
     ownerId: owner.ownerId,
     refKeys: [...owner.refKeys],
   };
+  if (owner.contractDigest) {
+    cloned.contractDigest = owner.contractDigest;
+  }
   if (owner.resolvedValues) {
     cloned.resolvedValues = owner.resolvedValues.map((entry) => ({
       refKey: entry.refKey,

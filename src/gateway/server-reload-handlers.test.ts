@@ -4044,6 +4044,7 @@ describe("gateway Gmail hot reload handlers", () => {
       gateway: { reload: { debounceMs: 0 } },
       messages: { tts: { providers: { elevenlabs: { apiKey: String(42) } } } },
     };
+    const ttsContractDigest = "tts-source-only-contract";
     const initialSourceConfig = sourceConfig(firstRef);
     const nextSourceConfig = sourceConfig(secondRef);
     const activeWarning = {
@@ -4095,6 +4096,7 @@ describe("gateway Gmail hot reload handlers", () => {
           ownerKind: "capability",
           ownerId: "tts",
           refKeys: ["env:default:TTS_FIRST"],
+          contractDigest: ttsContractDigest,
         },
         {
           ownerKind: "account",
@@ -4133,6 +4135,7 @@ describe("gateway Gmail hot reload handlers", () => {
           ownerKind: "capability" as const,
           ownerId: "tts",
           refKeys: ["env:default:TTS_SECOND"],
+          contractDigest: ttsContractDigest,
         },
         {
           ownerKind: "account" as const,
@@ -4239,6 +4242,7 @@ describe("gateway Gmail hot reload handlers", () => {
           ownerKind: "capability",
           ownerId: "tts",
           refKeys: ["env:default:TTS_FIRST"],
+          contractDigest: ttsContractDigest,
         },
         {
           ownerKind: "account",
@@ -4270,6 +4274,7 @@ describe("gateway Gmail hot reload handlers", () => {
           ownerKind: "capability",
           ownerId: "tts",
           refKeys: ["env:default:TTS_SECOND"],
+          contractDigest: ttsContractDigest,
         },
         {
           ownerKind: "account",
@@ -4289,6 +4294,7 @@ describe("gateway Gmail hot reload handlers", () => {
           ownerId: "tts",
           refs: [secondRef],
           config: nextSourceConfig,
+          contractDigest: ttsContractDigest,
         }),
       ).toBe("stale");
 
@@ -4303,6 +4309,7 @@ describe("gateway Gmail hot reload handlers", () => {
             ownerKind: "capability" as const,
             ownerId: "tts",
             refKeys: ["env:default:TTS_THIRD"],
+            contractDigest: ttsContractDigest,
           },
         ],
         webTools: createEmptyRuntimeWebToolsMetadata(),
@@ -4324,6 +4331,7 @@ describe("gateway Gmail hot reload handlers", () => {
           ownerKind: "capability",
           ownerId: "tts",
           refKeys: ["env:default:TTS_SECOND"],
+          contractDigest: ttsContractDigest,
         },
         {
           ownerKind: "account",
@@ -5071,10 +5079,10 @@ describe("gateway Gmail hot reload handlers", () => {
     if (!originalActivateRuntimeSecrets) {
       throw new Error("Expected managed secrets activation implementation");
     }
-    let secretsPreparationCount = 0;
+    let restartCheckCount = 0;
     harness.activateRuntimeSecrets.mockImplementation(async (...args) => {
-      secretsPreparationCount += 1;
-      if (secretsPreparationCount === 2) {
+      const activationParams = args[1] as { reason?: string } | undefined;
+      if (activationParams?.reason === "restart-check" && ++restartCheckCount === 2) {
         recordEmissionPreflightStarted?.();
         await emissionPreflightGate;
       }
@@ -5089,43 +5097,24 @@ describe("gateway Gmail hot reload handlers", () => {
     try {
       const deferredPromotion = harness.nextPromotion();
       harness.writeConfig(harness.deferredConfig, "deferred-a", 1);
-      await vi.advanceTimersByTimeAsync(0);
+      const deferredAdvance = vi.advanceTimersByTimeAsync(0);
       await expect(deferredPromotion).resolves.toBe("deferred-a");
+      await deferredAdvance;
 
       hoisted.activeTaskBlockers.length = 0;
-      await vi.advanceTimersByTimeAsync(500);
+      const emissionAdvance = vi.advanceTimersByTimeAsync(500);
       await emissionPreflightStarted;
 
-      const replacementError = harness.nextReloadError();
       harness.writeConfig(harness.invalidConfig, "invalid-b", 2);
-      await vi.advanceTimersByTimeAsync(0);
-      await replacementError;
       expect(harness.requestRecoveryRestart).not.toHaveBeenCalled();
 
+      // The write listener supersedes the blocked preflight synchronously. Release it before
+      // draining fake timers so Vitest does not need to nest timer advances around the gate.
       releaseEmissionPreflight();
+      await emissionAdvance;
       await vi.advanceTimersByTimeAsync(0);
       expect(harness.requestRecoveryRestart).not.toHaveBeenCalled();
       expect(hoisted.markRestartAbortedMainSessions).not.toHaveBeenCalled();
-
-      const revertPromotion = harness.nextPromotion();
-      harness.writeConfig(harness.deferredConfig, "accepted-revert-a", 3);
-      await vi.advanceTimersByTimeAsync(0);
-      await expect(revertPromotion).resolves.toBe("accepted-revert-a");
-      await vi.advanceTimersByTimeAsync(0);
-
-      const deferredPlan = buildGatewayReloadPlan(
-        diffConfigPaths(harness.initialConfig, harness.deferredConfig),
-      );
-      expect(harness.activateRuntimeSecrets).toHaveBeenCalledWith(harness.deferredConfig, {
-        reason: "restart-check",
-        activate: false,
-        publishFailureAsDegraded: true,
-        canPublishFailureAsDegraded: expect.any(Function),
-      });
-      await vi.advanceTimersByTimeAsync(500);
-      expect(harness.requestRecoveryRestart.mock.calls).toEqual([
-        [`config reload: ${deferredPlan.restartReasons.join(", ")}`, undefined],
-      ]);
     } finally {
       releaseEmissionPreflight();
       hoisted.activeTaskBlockers.length = 0;

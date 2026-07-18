@@ -112,6 +112,7 @@ function collectUnavailableWebProviders(params: {
       ownerId: runtimeWebSecretOwnerId(params.kind, unavailable.providerId),
       refs: [unavailable.ref],
       config: params.sourceConfig,
+      contractDigest: unavailable.contractDigest,
     });
     if (degradationState === "stale") {
       const active = getActiveSecretsRuntimeSnapshot();
@@ -167,6 +168,7 @@ function toWebSecretOwnerRefState(
     ownerKind: "capability",
     ownerId: runtimeWebSecretOwnerId(kind, owner.providerId),
     refKeys: [owner.refKey],
+    contractDigest: owner.contractDigest,
     ...(owner.resolvedValue
       ? { resolvedValues: [{ refKey: owner.refKey, value: owner.resolvedValue }] }
       : {}),
@@ -191,6 +193,7 @@ function associateWebProviderResolutionError(params: {
         ownerId: owner.ownerId,
         refs: [unavailable.ref],
         config: params.config,
+        contractDigest: unavailable.contractDigest,
       }),
       failureMatched: true,
       source: "config" as const,
@@ -227,6 +230,7 @@ function associateWebProviderResolutionError(params: {
             ownerId: owner.ownerId,
             refs: matches.map((match) => match.ref),
             config: params.config,
+            contractDigest: owner.contractDigest,
           }),
           failureMatched: true,
           source: "config" as const,

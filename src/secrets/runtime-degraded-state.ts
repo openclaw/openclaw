@@ -35,6 +35,8 @@ export type DegradedSecretOwner = {
 
 /** SecretRef identities resolved for one owner in an active runtime snapshot. */
 export type SecretOwnerRefState = Pick<DegradedSecretOwner, "ownerKind" | "ownerId" | "refKeys"> & {
+  /** Identity of the full owner config that may use these values. */
+  contractDigest?: string;
   /** Last materialized values, kept process-local for unchanged-ref reload fallback. */
   resolvedValues?: Array<{ refKey: string; value: unknown }>;
 };

@@ -200,4 +200,59 @@ describe("secrets runtime snapshot auth refresh failure", () => {
       expect(profile).toMatchObject({ type: "api_key", key: "second-fixture" });
     });
   });
+
+  it("makes an auth-profile credential cold when its provider endpoint changes", async () => {
+    if (os.platform() === "win32") {
+      return;
+    }
+    await withTempHome("openclaw-secrets-runtime-auth-route-", async (home) => {
+      const { secretFile, agentDir } = await createOpenAIFileRuntimeFixture(home);
+      const profileId = "openai:default";
+      const loadAuthStore = () =>
+        loadAuthStoreWithProfiles({
+          [profileId]: {
+            type: "api_key",
+            provider: "openai",
+            keyRef: OPENAI_FILE_KEY_REF,
+          },
+        });
+      const config = (baseUrl: string) => {
+        const candidate = createOpenAIFileRuntimeConfig(secretFile);
+        const openai = candidate.models?.providers?.openai;
+        if (openai) {
+          openai.baseUrl = baseUrl;
+        }
+        return candidate;
+      };
+      const active = await prepareSecretsRuntimeSnapshot({
+        config: config("https://old.example.invalid/v1"),
+        agentDirs: [agentDir],
+        loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+        loadAuthStore,
+      });
+      activateSecretsRuntimeSnapshot(active);
+      await fs.unlink(secretFile);
+
+      const candidate = await prepareSecretsRuntimeSnapshot({
+        config: config("https://new.example.invalid/v1"),
+        agentDirs: [agentDir],
+        allowUnavailableSecretOwners: true,
+        loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+        loadAuthStore,
+      });
+
+      expect(candidate.degradedOwners).toContainEqual(
+        expect.objectContaining({
+          ownerKind: "account",
+          ownerId: resolveAuthProfileSecretOwnerId({ agentDir, profileId }),
+          degradationState: "cold",
+        }),
+      );
+      expect(candidate.authStores[0]?.store.profiles[profileId]).toMatchObject({
+        type: "api_key",
+        keyRef: OPENAI_FILE_KEY_REF,
+        key: undefined,
+      });
+    });
+  });
 });

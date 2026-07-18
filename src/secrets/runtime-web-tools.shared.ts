@@ -5,6 +5,7 @@ import { resolveSecretInputRef, type SecretRef } from "../config/types.secrets.j
 import { createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
 import { setPathExistingStrict } from "./path-utils.js";
 import type { SecretDegradationReason } from "./runtime-degraded-state.js";
+import { digestSecretOwnerContract } from "./runtime-owner-contract.js";
 import type { ResolverContext, SecretDefaults } from "./runtime-shared.js";
 import { pushInactiveSurfaceWarning, pushWarning } from "./runtime-shared.js";
 import {
@@ -396,6 +397,13 @@ export async function resolveRuntimeWebProviderSelection<
   }
 
   const unavailableProviders: RuntimeWebUnavailableProvider[] = [];
+  const resolveProviderContractDigest = (providerId: string) =>
+    digestSecretOwnerContract({
+      scopePath: params.scopePath,
+      configuredProvider: params.configuredProvider,
+      toolConfig: params.toolConfig,
+      provider: params.providers.find((entry) => entry.id === providerId),
+    });
   let selectedProvider: string | undefined;
   let selectedPath: string | undefined;
   let selectedResolution: SecretResolutionResult<TSource> | undefined;
@@ -409,6 +417,7 @@ export async function resolveRuntimeWebProviderSelection<
       ref?: SecretRef;
       refKey?: string;
       reason: SecretDegradationReason;
+      contractDigest: string;
       restoreResolvedValue: (value: string) => void;
     };
     const unresolvedWithoutFallback: UnresolvedProvider[] = [];
@@ -492,6 +501,7 @@ export async function resolveRuntimeWebProviderSelection<
           ref: selectedCandidateResolution.secretRef,
           refKey: selectedCandidateResolution.secretRefKey,
           reason: selectedCandidateResolution.unresolvedRefReason,
+          contractDigest: resolveProviderContractDigest(provider.id),
           restoreResolvedValue: (resolvedValue) =>
             params.setResolvedCredential({
               resolvedConfig: params.resolvedConfig,
@@ -608,6 +618,7 @@ export async function resolveRuntimeWebProviderSelection<
                 ref: entry.ref,
                 refKey: entry.refKey,
                 reason: entry.reason,
+                contractDigest: entry.contractDigest,
                 restoreResolvedValue: entry.restoreResolvedValue,
               },
             ]
@@ -637,6 +648,7 @@ export async function resolveRuntimeWebProviderSelection<
             ref,
             refKey,
             reason: unresolved.reason,
+            contractDigest: unresolved.contractDigest,
             restoreResolvedValue: unresolved.restoreResolvedValue,
           };
           if (params.allowUnavailableProviders) {
@@ -666,6 +678,7 @@ export async function resolveRuntimeWebProviderSelection<
                   ref: entry.ref,
                   refKey: entry.refKey,
                   reason: entry.reason,
+                  contractDigest: entry.contractDigest,
                   restoreResolvedValue: entry.restoreResolvedValue,
                 },
               ]
@@ -744,6 +757,7 @@ export async function resolveRuntimeWebProviderSelection<
           path: selectedPath,
           ref: selectedResolution.secretRef,
           refKey: selectedResolution.secretRefKey,
+          contractDigest: resolveProviderContractDigest(selectedProvider),
           ...(selectedResolution.value ? { resolvedValue: selectedResolution.value } : {}),
         }
       : undefined;
