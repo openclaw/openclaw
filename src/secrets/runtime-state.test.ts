@@ -16,6 +16,7 @@ import {
   saveAuthProfileStore,
 } from "../agents/auth-profiles/store.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+import { getRuntimeConfigSourceSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretRef } from "../config/types.secrets.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
@@ -72,6 +73,50 @@ describe("secrets runtime state", () => {
     expect(configSnapshot?.sourceConfig).not.toBe(fullSnapshot?.sourceConfig);
     expect(configSnapshot?.config).toEqual(snapshot.config);
     expect(configSnapshot?.sourceConfig).toEqual(snapshot.sourceConfig);
+  });
+
+  it("publishes distinct raw and overlay source snapshots without changing runtime auth", () => {
+    const secretRef = {
+      source: "env" as const,
+      provider: "default",
+      id: "OPENCLAW_DEBUG_AUTH_TOKEN",
+    };
+    const snapshot: PreparedSecretsRuntimeSnapshot = {
+      sourceConfig: { gateway: { auth: { mode: "token", token: secretRef } } },
+      config: { gateway: { auth: { mode: "token", token: "resolved-debug-token" } } },
+      authStores: [],
+      authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
+      warnings: [],
+      webTools: {
+        search: { providerSource: "none", diagnostics: [] },
+        fetch: { providerSource: "none", diagnostics: [] },
+        diagnostics: [],
+      },
+    };
+    activateSecretsRuntimeSnapshotState({
+      snapshot,
+      refreshContext: null,
+      refreshHandler: null,
+    });
+    const rawSourceConfig = { gateway: { port: 19_030 } } satisfies OpenClawConfig;
+    const secretsSourceConfig = {
+      ...rawSourceConfig,
+      gateway: { ...rawSourceConfig.gateway, auth: { mode: "token" as const, token: secretRef } },
+    } satisfies OpenClawConfig;
+
+    expect(
+      activateSecretsRuntimeSnapshotStateIfCurrent({
+        snapshot: { ...snapshot, sourceConfig: secretsSourceConfig },
+        expectedRevision: getActiveSecretsRuntimeSnapshotRevision(),
+        refreshContext: null,
+        refreshHandler: null,
+        runtimeSourceConfig: rawSourceConfig,
+      }),
+    ).toBe(true);
+
+    expect(getRuntimeConfigSourceSnapshot()).toEqual(rawSourceConfig);
+    expect(getActiveSecretsRuntimeSnapshot()?.sourceConfig).toEqual(secretsSourceConfig);
+    expect(getActiveSecretsRuntimeSnapshot()?.config).toEqual(snapshot.config);
   });
 
   it("preserves live auth bookkeeping when prepared credentials activate", () => {
