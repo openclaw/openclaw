@@ -1252,16 +1252,18 @@ function placeDeleteConfirmPopover(
 }
 
 function renderDeleteButton(onDelete: () => void, side: DeleteConfirmSide) {
+  // "Hide" is honest copy: this action only hides the bubble in this browser's
+  // localStorage; the message stays in the transcript and in agent context.
   return renderConfirmedActionButton({
     action: onDelete,
-    ariaLabel: t("chat.messages.deleteMessage"),
+    ariaLabel: t("chat.messages.hideMessage"),
     buttonClass: "chat-group-delete",
-    confirmLabel: t("common.delete"),
-    confirmText: "Delete this message?",
-    icon: icons.trash ?? icons.x,
+    confirmLabel: t("chat.messages.hide"),
+    confirmText: t("chat.messages.hideConfirm"),
+    icon: icons.eyeOff ?? icons.x,
     preferenceName: SKIP_DELETE_CONFIRM_PREFERENCE,
     side,
-    tooltip: t("common.delete"),
+    tooltip: t("chat.messages.hideTooltip"),
   });
 }
 

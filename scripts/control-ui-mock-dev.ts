@@ -23,6 +23,7 @@ import { buildSkillWorkshopMocks } from "./control-ui-mock-skill-workshop.js";
 
 type CliOptions = {
   allowedHosts: string[];
+  fixture?: "board";
   host: string;
   port: number;
 };
@@ -40,6 +41,30 @@ const TOTAL_TELEGRAM_SESSIONS = 180;
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const uiRoot = path.join(repoRoot, "ui");
+const boardFixturePath = "/__fixtures/board/";
+const boardFixtureHtml = `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OpenClaw Board Fixture</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+    <style>
+      body { margin: 0; min-width: 320px; min-height: 100vh; background: #0f1115; }
+      .board-fixture-shell { box-sizing: border-box; margin: 0 auto; max-width: 1440px; padding: 36px; }
+      .board-fixture-header { align-items: end; display: flex; justify-content: space-between; margin-bottom: 24px; }
+      .board-fixture-header span { color: #747e8d; font: 10px ui-monospace, monospace; letter-spacing: .15em; }
+      .board-fixture-header h1 { color: #e5e7eb; font-size: 24px; letter-spacing: -.03em; margin: 5px 0 0; }
+      .board-fixture-status { color: #8892a0; font: 11px ui-monospace, monospace; }
+      .board-fixture-status i { background: #4ec9a8; border-radius: 50%; display: inline-block; height: 7px; margin-right: 6px; width: 7px; }
+      @media (max-width: 700px) { .board-fixture-shell { padding: 18px; } }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/test-helpers/board-fixture.ts"></script>
+  </body>
+</html>`;
 
 function mockFileHash(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
@@ -63,6 +88,10 @@ function parseArgs(args: string[]): CliOptions {
       options.host = args[++i] ?? options.host;
     } else if (arg.startsWith("--host=")) {
       options.host = arg.slice("--host=".length) || options.host;
+    } else if (arg === "--fixture") {
+      options.fixture = parseFixture(args[++i]);
+    } else if (arg.startsWith("--fixture=")) {
+      options.fixture = parseFixture(arg.slice("--fixture=".length));
     } else if (arg === "--port") {
       options.port = parsePort(args[++i], options.port);
     } else if (arg.startsWith("--port=")) {
@@ -70,6 +99,16 @@ function parseArgs(args: string[]): CliOptions {
     }
   }
   return options;
+}
+
+function parseFixture(value: string | undefined): "board" | undefined {
+  if (!value) {
+    return undefined;
+  }
+  if (value !== "board") {
+    throw new Error(`Unknown Control UI mock fixture: ${value}`);
+  }
+  return value;
 }
 
 function parsePort(value: string | undefined, fallback: number): number {
@@ -1421,18 +1460,42 @@ function createMockGatewayPlugin(scenario: ControlUiMockGatewayScenario): Plugin
   };
 }
 
+function createBoardFixturePlugin(): Plugin {
+  return {
+    name: "openclaw-control-ui-board-fixture",
+    configureServer(server) {
+      server.middlewares.use(boardFixturePath, (_req, res, next) => {
+        void server
+          .transformIndexHtml(boardFixturePath, boardFixtureHtml)
+          .then((html) => {
+            res.statusCode = 200;
+            res.setHeader("content-type", "text/html; charset=utf-8");
+            res.end(html);
+          })
+          .catch((error: unknown) => {
+            next(error as Error);
+          });
+      });
+    },
+  };
+}
+
 function hostForUrl(boundAddress: string, requestedHost: string): string {
   const host = boundAddress === "0.0.0.0" || boundAddress === "::" ? requestedHost : boundAddress;
   const reachableHost = host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host;
   return reachableHost.includes(":") ? `[${reachableHost}]` : reachableHost;
 }
 
-function resolveServerUrl(server: ViteDevServer, requestedHost: string): string {
+function resolveServerUrl(
+  server: ViteDevServer,
+  requestedHost: string,
+  pathname = "/chat",
+): string {
   const address = server.httpServer?.address();
   if (!address || typeof address === "string") {
     throw new Error("Control UI mock server did not expose a TCP port");
   }
-  return `http://${hostForUrl(address.address, requestedHost)}:${address.port}/chat`;
+  return `http://${hostForUrl(address.address, requestedHost)}:${address.port}${pathname}`;
 }
 
 async function waitForShutdown(): Promise<void> {
@@ -1459,9 +1522,12 @@ const server = await createServer({
   },
   logLevel: "error",
   optimizeDeps: {
+    ...(options.fixture === "board"
+      ? { entries: [path.join(uiRoot, "src", "test-helpers", "board-fixture.ts")] }
+      : {}),
     include: ["lit/directives/repeat.js"],
   },
-  plugins: [createMockGatewayPlugin(scenario)],
+  plugins: [createMockGatewayPlugin(scenario), createBoardFixturePlugin()],
   publicDir: path.join(uiRoot, "public"),
   resolve: {
     alias: [
@@ -1481,5 +1547,8 @@ const server = await createServer({
 
 await server.listen();
 console.log(`[control-ui-mock] ${resolveServerUrl(server, options.host)}`);
+console.log(
+  `[control-ui-mock] board fixture: ${resolveServerUrl(server, options.host, boardFixturePath)}`,
+);
 await waitForShutdown();
 await server.close();

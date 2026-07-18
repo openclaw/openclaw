@@ -21229,6 +21229,101 @@
       "translated": "계속"
     },
     {
+      "id": "native.apple.0a4fcdf09c5e7b3f",
+      "source": "Capture Window…",
+      "translated": "윈도우 캡처…"
+    },
+    {
+      "id": "native.apple.d7ac1580e29304af",
+      "source": "Capture Area…",
+      "translated": "영역 캡처…"
+    },
+    {
+      "id": "native.apple.33adb82aa3c53c00",
+      "source": "focused app",
+      "translated": "포커스된 앱"
+    },
+    {
+      "id": "native.apple.5d20c8bd1235a43c",
+      "source": "No focused application is available.",
+      "translated": "포커스된 애플리케이션이 없습니다."
+    },
+    {
+      "id": "native.apple.3c1a2f1ac3b50de0",
+      "source": "Focused app",
+      "translated": "포커스된 앱"
+    },
+    {
+      "id": "native.apple.511248f39affffc4",
+      "source": "Focus another app before attaching its text.",
+      "translated": "텍스트를 첨부하기 전에 다른 앱에 포커스를 맞추세요."
+    },
+    {
+      "id": "native.apple.1c94e8c0010021d9",
+      "source": "Accessibility access is required to attach text from \\(appName).",
+      "translated": "\\(appName)의 텍스트를 첨부하려면 손쉬운 사용 권한이 필요합니다."
+    },
+    {
+      "id": "native.apple.a3e3d4b0ab6e94d9",
+      "source": "No focused window is available in \\(appName).",
+      "translated": "\\(appName)에 포커스된 윈도우가 없습니다."
+    },
+    {
+      "id": "native.apple.a2a454a96a011397",
+      "source": "Focused Window",
+      "translated": "포커스된 윈도우"
+    },
+    {
+      "id": "native.apple.67d183bf2f9e4c2c",
+      "source": "\\(appName) is not responding to Accessibility requests.",
+      "translated": "\\(appName)이(가) 손쉬운 사용 요청에 응답하지 않습니다."
+    },
+    {
+      "id": "native.apple.2f56bc484453a456",
+      "source": "No readable text was found in \\(appName).",
+      "translated": "\\(appName)에서 읽을 수 있는 텍스트를 찾지 못했습니다."
+    },
+    {
+      "id": "native.apple.507c2d9c7e94716f",
+      "source": "Allow OpenClaw to read text from \\(appName)",
+      "translated": "OpenClaw가 \\(appName)의 텍스트를 읽도록 허용"
+    },
+    {
+      "id": "native.apple.c5313d544a833af0",
+      "source": "Attaching focused-window text uses macOS Accessibility access.",
+      "translated": "포커스된 윈도우의 텍스트를 첨부하려면 macOS 손쉬운 사용 권한이 필요합니다."
+    },
+    {
+      "id": "native.apple.e68aeef0995a7d00",
+      "source": "Grant Access",
+      "translated": "접근 권한 부여"
+    },
+    {
+      "id": "native.apple.43dd985a6d9ec004",
+      "source": "Cancel",
+      "translated": "취소"
+    },
+    {
+      "id": "native.apple.a8880557335b5a25",
+      "source": "focused app",
+      "translated": "포커스된 앱"
+    },
+    {
+      "id": "native.apple.6af15237e49bd0bd",
+      "source": "Couldn't capture that image.",
+      "translated": "해당 이미지를 캡처할 수 없습니다."
+    },
+    {
+      "id": "native.apple.b31041aa0da3768c",
+      "source": "Screenshot: \\(label)",
+      "translated": "스크린샷: \\(label)"
+    },
+    {
+      "id": "native.apple.72e5bffb7ee89f19",
+      "source": "Context from \\(context.appName) — \\(context.windowTitle)",
+      "translated": "\\(context.appName)의 컨텍스트 — \\(context.windowTitle)"
+    },
+    {
       "id": "native.apple.b5524e37a230e571",
       "source": "New message to \\(agentName)",
       "translated": "\\(agentName)에게 보내는 새 메시지"
@@ -21249,9 +21344,14 @@
       "translated": "최근 대화 계속하기"
     },
     {
-      "id": "native.apple.edf12ff583307f43",
-      "source": "Send a window screenshot",
-      "translated": "창 스크린샷 보내기"
+      "id": "native.apple.c76e52d21bef75ba",
+      "source": "Attach text from \\(self.model.frontmostAppName)",
+      "translated": "\\(self.model.frontmostAppName)의 텍스트 첨부"
+    },
+    {
+      "id": "native.apple.aedd7e9870c3579a",
+      "source": "Capture a screenshot",
+      "translated": "스크린샷 캡처"
     },
     {
       "id": "native.apple.136cef9f750d3803",
@@ -21272,6 +21372,46 @@
       "id": "native.apple.a3332fa4db187973",
       "source": "Not now",
       "translated": "나중에"
+    },
+    {
+      "id": "native.apple.1962232c9bc52e12",
+      "source": "\\(context.appName) — \\(context.windowTitle) (\\(context.characterCount) chars)",
+      "translated": "\\(context.appName) — \\(context.windowTitle) (\\(context.characterCount)자)"
+    },
+    {
+      "id": "native.apple.66ec93e9eefd9bd7",
+      "source": "Remove attached text context",
+      "translated": "첨부된 텍스트 컨텍스트 제거"
+    },
+    {
+      "id": "native.apple.88d0123c86b06144",
+      "source": "Allow OpenClaw to capture windows",
+      "translated": "OpenClaw가 윈도우를 캡처하도록 허용"
+    },
+    {
+      "id": "native.apple.677c5733cd132aed",
+      "source": "Allow OpenClaw to capture a screen area",
+      "translated": "OpenClaw가 화면 영역을 캡처하도록 허용"
+    },
+    {
+      "id": "native.apple.529a6fc5aeba03b0",
+      "source": "Sending a screenshot uses macOS Screen Recording access.",
+      "translated": "스크린샷을 보내려면 macOS 화면 기록 접근 권한이 필요합니다."
+    },
+    {
+      "id": "native.apple.615245bf05ed3234",
+      "source": "Grant Access",
+      "translated": "접근 권한 부여"
+    },
+    {
+      "id": "native.apple.2a64131ba32d175d",
+      "source": "Cancel",
+      "translated": "취소"
+    },
+    {
+      "id": "native.apple.6521871fc0ddc987",
+      "source": "Selected area",
+      "translated": "선택한 영역"
     },
     {
       "id": "native.apple.1eeca02c45d3db5a",
@@ -22959,11 +23099,6 @@
       "translated": "에이전트 아바타"
     },
     {
-      "id": "native.apple.8509385953c19619",
-      "source": "\\(display.emoji) \\(display.title)",
-      "translated": "\\(display.emoji) \\(display.title)"
-    },
-    {
       "id": "native.apple.6426e369511b043c",
       "source": "Message usage",
       "translated": "메시지 사용량"
@@ -22972,16 +23107,6 @@
       "id": "native.apple.3c8c3679fd99c074",
       "source": "Voice note",
       "translated": "Voice note"
-    },
-    {
-      "id": "native.apple.aff6385b0a8dd0ac",
-      "source": "Show full output",
-      "translated": "전체 출력 표시"
-    },
-    {
-      "id": "native.apple.b9c78020ae8be34a",
-      "source": "Show less",
-      "translated": "간략히 보기"
     },
     {
       "id": "native.apple.e9914cfc93a514cb",
@@ -23007,11 +23132,6 @@
       "id": "native.apple.142c01bf6b97e380",
       "source": "Speaking, tap to stop",
       "translated": "말하는 중, 탭하여 중지"
-    },
-    {
-      "id": "native.apple.6b18ea1d85b5d3a2",
-      "source": "Running tools…",
-      "translated": "도구 실행 중…"
     },
     {
       "id": "native.apple.51ef5e41f9124819",
@@ -23692,6 +23812,31 @@
       "id": "native.apple.e7beeef6043ffd2a",
       "source": "System Default",
       "translated": "시스템 기본값"
+    },
+    {
+      "id": "native.apple.f390b84397c0d240",
+      "source": "Running",
+      "translated": "실행 중"
+    },
+    {
+      "id": "native.apple.e2e7faa7c9c5c61f",
+      "source": "Collapse tool result",
+      "translated": "도구 결과 접기"
+    },
+    {
+      "id": "native.apple.4e7850fe95fcd898",
+      "source": "Expand tool result",
+      "translated": "도구 결과 펼치기"
+    },
+    {
+      "id": "native.apple.d65ae0776d6b86ce",
+      "source": "Show less",
+      "translated": "간략히 보기"
+    },
+    {
+      "id": "native.apple.065f4da5ddaf14a1",
+      "source": "Show all %lld lines",
+      "translated": "%lld줄 모두 보기"
     },
     {
       "id": "native.apple.c4e808a2ec8d49f5",

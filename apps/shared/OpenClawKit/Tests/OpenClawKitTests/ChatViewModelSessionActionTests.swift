@@ -33,12 +33,45 @@ private actor SessionActionTransportState {
     }
 }
 
+/// Signals the exact suspension point before fork completion, then holds it so
+/// navigation can advance deterministically before the stale result resumes.
+private struct SessionActionForkGate: Sendable {
+    private let startedStream: AsyncStream<Void>
+    private let startedContinuation: AsyncStream<Void>.Continuation
+    private let releaseStream: AsyncStream<Void>
+    private let releaseContinuation: AsyncStream<Void>.Continuation
+
+    init() {
+        let started = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        self.startedStream = started.stream
+        self.startedContinuation = started.continuation
+        let release = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        self.releaseStream = release.stream
+        self.releaseContinuation = release.continuation
+    }
+
+    func suspendCompletion() async {
+        self.startedContinuation.yield()
+        var iterator = self.releaseStream.makeAsyncIterator()
+        _ = await iterator.next()
+    }
+
+    func waitUntilStarted() async -> Bool {
+        var iterator = self.startedStream.makeAsyncIterator()
+        return await iterator.next() != nil
+    }
+
+    func release() {
+        self.releaseContinuation.yield()
+    }
+}
+
 private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTransport {
     private let state = SessionActionTransportState()
-    private let forkDelay: Duration?
+    private let forkGate: SessionActionForkGate?
 
-    init(forkDelay: Duration? = nil) {
-        self.forkDelay = forkDelay
+    init(forkGate: SessionActionForkGate? = nil) {
+        self.forkGate = forkGate
     }
 
     func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload {
@@ -61,9 +94,7 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
 
     func forkSession(parentKey: String) async throws -> String {
         await self.state.recordFork(parentKey)
-        if let forkDelay {
-            try await Task.sleep(for: forkDelay)
-        }
+        await self.forkGate?.suspendCompletion()
         return "forked"
     }
 
@@ -336,29 +367,41 @@ struct ChatViewModelSessionActionTests {
             localized: "Remove attachments or wait for delivery to resolve before starting a new chat."))
     }
 
-    @Test func `fork completion does not override newer navigation`() async throws {
-        let transport = SessionActionTransport(forkDelay: .milliseconds(50))
+    @Test func `fork completion does not override newer navigation`() async {
+        let forkGate = SessionActionForkGate()
+        let transport = SessionActionTransport(forkGate: forkGate)
         let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
 
         let fork = Task { await viewModel.forkSession(key: "main") }
-        try await self.waitUntil { await transport.forkedParentKeys() == ["main"] }
+        guard await self.waitForForkStart(forkGate) else {
+            forkGate.release()
+            fork.cancel()
+            Issue.record("timed out waiting for fork start signal")
+            return
+        }
         viewModel.switchSession(to: "other")
+        forkGate.release()
         await fork.value
 
         #expect(viewModel.sessionKey == "other")
+        #expect(await transport.forkedParentKeys() == ["main"])
     }
 
-    private func waitUntil(
-        timeout: Duration = .seconds(2),
-        condition: @escaping @MainActor () async -> Bool) async throws
+    private func waitForForkStart(
+        _ gate: SessionActionForkGate,
+        timeout: Duration = .seconds(15)) async -> Bool
     {
-        let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: timeout)
-        while clock.now < deadline {
-            if await condition() { return }
-            try await Task.sleep(for: .milliseconds(10))
+        // The stream controls ordering; this deadline only bounds a broken fake or call path.
+        await withTaskGroup(of: Bool.self) { group in
+            group.addTask { await gate.waitUntilStarted() }
+            group.addTask {
+                try? await Task.sleep(for: timeout)
+                return false
+            }
+            let started = await group.next() ?? false
+            group.cancelAll()
+            return started
         }
-        Issue.record("timed out waiting for session action condition")
     }
 
     private func entry(key: String) -> OpenClawChatSessionEntry {

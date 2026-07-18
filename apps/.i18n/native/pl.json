@@ -21229,6 +21229,101 @@
       "translated": "Kontynuuj"
     },
     {
+      "id": "native.apple.0a4fcdf09c5e7b3f",
+      "source": "Capture Window…",
+      "translated": "Przechwyć okno…"
+    },
+    {
+      "id": "native.apple.d7ac1580e29304af",
+      "source": "Capture Area…",
+      "translated": "Przechwyć obszar…"
+    },
+    {
+      "id": "native.apple.33adb82aa3c53c00",
+      "source": "focused app",
+      "translated": "aktywna aplikacja"
+    },
+    {
+      "id": "native.apple.5d20c8bd1235a43c",
+      "source": "No focused application is available.",
+      "translated": "Brak aktywnej aplikacji."
+    },
+    {
+      "id": "native.apple.3c1a2f1ac3b50de0",
+      "source": "Focused app",
+      "translated": "Aktywna aplikacja"
+    },
+    {
+      "id": "native.apple.511248f39affffc4",
+      "source": "Focus another app before attaching its text.",
+      "translated": "Przełącz się na inną aplikację, zanim załączysz jej tekst."
+    },
+    {
+      "id": "native.apple.1c94e8c0010021d9",
+      "source": "Accessibility access is required to attach text from \\(appName).",
+      "translated": "Dostęp do funkcji Dostępność jest wymagany, aby załączyć tekst z aplikacji \\(appName)."
+    },
+    {
+      "id": "native.apple.a3e3d4b0ab6e94d9",
+      "source": "No focused window is available in \\(appName).",
+      "translated": "Brak aktywnego okna w aplikacji \\(appName)."
+    },
+    {
+      "id": "native.apple.a2a454a96a011397",
+      "source": "Focused Window",
+      "translated": "Aktywne okno"
+    },
+    {
+      "id": "native.apple.67d183bf2f9e4c2c",
+      "source": "\\(appName) is not responding to Accessibility requests.",
+      "translated": "Aplikacja \\(appName) nie odpowiada na żądania funkcji Dostępność."
+    },
+    {
+      "id": "native.apple.2f56bc484453a456",
+      "source": "No readable text was found in \\(appName).",
+      "translated": "Nie znaleziono tekstu możliwego do odczytania w aplikacji \\(appName)."
+    },
+    {
+      "id": "native.apple.507c2d9c7e94716f",
+      "source": "Allow OpenClaw to read text from \\(appName)",
+      "translated": "Zezwól OpenClaw na odczytywanie tekstu z aplikacji \\(appName)"
+    },
+    {
+      "id": "native.apple.c5313d544a833af0",
+      "source": "Attaching focused-window text uses macOS Accessibility access.",
+      "translated": "Załączanie tekstu z aktywnego okna wymaga dostępu do funkcji Dostępność w systemie macOS."
+    },
+    {
+      "id": "native.apple.e68aeef0995a7d00",
+      "source": "Grant Access",
+      "translated": "Udziel dostępu"
+    },
+    {
+      "id": "native.apple.43dd985a6d9ec004",
+      "source": "Cancel",
+      "translated": "Anuluj"
+    },
+    {
+      "id": "native.apple.a8880557335b5a25",
+      "source": "focused app",
+      "translated": "aktywna aplikacja"
+    },
+    {
+      "id": "native.apple.6af15237e49bd0bd",
+      "source": "Couldn't capture that image.",
+      "translated": "Nie udało się przechwycić tego obrazu."
+    },
+    {
+      "id": "native.apple.b31041aa0da3768c",
+      "source": "Screenshot: \\(label)",
+      "translated": "Zrzut ekranu: \\(label)"
+    },
+    {
+      "id": "native.apple.72e5bffb7ee89f19",
+      "source": "Context from \\(context.appName) — \\(context.windowTitle)",
+      "translated": "Kontekst z aplikacji \\(context.appName) — \\(context.windowTitle)"
+    },
+    {
       "id": "native.apple.b5524e37a230e571",
       "source": "New message to \\(agentName)",
       "translated": "Nowa wiadomość do \\(agentName)"
@@ -21249,9 +21344,14 @@
       "translated": "Kontynuuj ostatnią rozmowę"
     },
     {
-      "id": "native.apple.edf12ff583307f43",
-      "source": "Send a window screenshot",
-      "translated": "Wyślij zrzut ekranu okna"
+      "id": "native.apple.c76e52d21bef75ba",
+      "source": "Attach text from \\(self.model.frontmostAppName)",
+      "translated": "Załącz tekst z aplikacji \\(self.model.frontmostAppName)"
+    },
+    {
+      "id": "native.apple.aedd7e9870c3579a",
+      "source": "Capture a screenshot",
+      "translated": "Zrób zrzut ekranu"
     },
     {
       "id": "native.apple.136cef9f750d3803",
@@ -21272,6 +21372,46 @@
       "id": "native.apple.a3332fa4db187973",
       "source": "Not now",
       "translated": "Nie teraz"
+    },
+    {
+      "id": "native.apple.1962232c9bc52e12",
+      "source": "\\(context.appName) — \\(context.windowTitle) (\\(context.characterCount) chars)",
+      "translated": "\\(context.appName) — \\(context.windowTitle) (liczba znaków: \\(context.characterCount))"
+    },
+    {
+      "id": "native.apple.66ec93e9eefd9bd7",
+      "source": "Remove attached text context",
+      "translated": "Usuń dołączony kontekst tekstowy"
+    },
+    {
+      "id": "native.apple.88d0123c86b06144",
+      "source": "Allow OpenClaw to capture windows",
+      "translated": "Zezwól OpenClaw na przechwytywanie okien"
+    },
+    {
+      "id": "native.apple.677c5733cd132aed",
+      "source": "Allow OpenClaw to capture a screen area",
+      "translated": "Zezwól OpenClaw na przechwytywanie obszaru ekranu"
+    },
+    {
+      "id": "native.apple.529a6fc5aeba03b0",
+      "source": "Sending a screenshot uses macOS Screen Recording access.",
+      "translated": "Wysyłanie zrzutu ekranu wymaga dostępu do nagrywania ekranu w macOS."
+    },
+    {
+      "id": "native.apple.615245bf05ed3234",
+      "source": "Grant Access",
+      "translated": "Przyznaj dostęp"
+    },
+    {
+      "id": "native.apple.2a64131ba32d175d",
+      "source": "Cancel",
+      "translated": "Anuluj"
+    },
+    {
+      "id": "native.apple.6521871fc0ddc987",
+      "source": "Selected area",
+      "translated": "Wybrany obszar"
     },
     {
       "id": "native.apple.1eeca02c45d3db5a",
@@ -22959,11 +23099,6 @@
       "translated": "Awatar agenta"
     },
     {
-      "id": "native.apple.8509385953c19619",
-      "source": "\\(display.emoji) \\(display.title)",
-      "translated": "\\(display.emoji) \\(display.title)"
-    },
-    {
       "id": "native.apple.6426e369511b043c",
       "source": "Message usage",
       "translated": "Wykorzystanie wiadomości"
@@ -22972,16 +23107,6 @@
       "id": "native.apple.3c8c3679fd99c074",
       "source": "Voice note",
       "translated": "Voice note"
-    },
-    {
-      "id": "native.apple.aff6385b0a8dd0ac",
-      "source": "Show full output",
-      "translated": "Pokaż pełne dane wyjściowe"
-    },
-    {
-      "id": "native.apple.b9c78020ae8be34a",
-      "source": "Show less",
-      "translated": "Pokaż mniej"
     },
     {
       "id": "native.apple.e9914cfc93a514cb",
@@ -23007,11 +23132,6 @@
       "id": "native.apple.142c01bf6b97e380",
       "source": "Speaking, tap to stop",
       "translated": "Mówienie, stuknij, aby zatrzymać"
-    },
-    {
-      "id": "native.apple.6b18ea1d85b5d3a2",
-      "source": "Running tools…",
-      "translated": "Uruchamianie narzędzi…"
     },
     {
       "id": "native.apple.51ef5e41f9124819",
@@ -23692,6 +23812,31 @@
       "id": "native.apple.e7beeef6043ffd2a",
       "source": "System Default",
       "translated": "Domyślne ustawienie systemowe"
+    },
+    {
+      "id": "native.apple.f390b84397c0d240",
+      "source": "Running",
+      "translated": "Uruchomiono"
+    },
+    {
+      "id": "native.apple.e2e7faa7c9c5c61f",
+      "source": "Collapse tool result",
+      "translated": "Zwiń wynik narzędzia"
+    },
+    {
+      "id": "native.apple.4e7850fe95fcd898",
+      "source": "Expand tool result",
+      "translated": "Rozwiń wynik narzędzia"
+    },
+    {
+      "id": "native.apple.d65ae0776d6b86ce",
+      "source": "Show less",
+      "translated": "Pokaż mniej"
+    },
+    {
+      "id": "native.apple.065f4da5ddaf14a1",
+      "source": "Show all %lld lines",
+      "translated": "Pokaż wszystkie wiersze (%lld)"
     },
     {
       "id": "native.apple.c4e808a2ec8d49f5",

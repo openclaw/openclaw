@@ -423,9 +423,7 @@ public struct OpenClawChatView: View {
         }
 
         if self.displayOptions.contains(.toolActivity), !self.viewModel.pendingToolCalls.isEmpty {
-            ChatPendingToolsBubble(
-                toolCalls: self.viewModel.pendingToolCalls,
-                isClean: self.composerChrome == .clean)
+            ChatPendingToolsBubble(toolCalls: self.viewModel.pendingToolCalls)
                 .equatable()
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
