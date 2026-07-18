@@ -4110,6 +4110,25 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     },
   );
 
+  it("bounds QA profile selected-ref fetches", () => {
+    const validateSelectedRef = expectDefined(
+      readQaProfileEvidenceWorkflow().jobs.validate_selected_ref.steps.find(
+        (step: WorkflowStep) => step.name === "Validate selected ref",
+      ),
+      "QA profile selected-ref validation step",
+    );
+    const gitFetchLines = validateSelectedRef.run
+      .split("\n")
+      .filter((line: string) => line.includes("git fetch"));
+
+    expect(gitFetchLines).toHaveLength(2);
+    expect(
+      gitFetchLines.every((line: string) =>
+        line.trimStart().startsWith("timeout --signal=TERM --kill-after=10s 120s git fetch"),
+      ),
+    ).toBe(true);
+  });
+
   it("keeps maturity scorecard generated QA evidence handoff strict", () => {
     const maturityWorkflow = readMaturityScorecardWorkflow();
     const qaEvidenceWorkflow = readQaProfileEvidenceWorkflow();
