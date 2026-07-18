@@ -1,12 +1,11 @@
 // Ollama ensureOllamaModelPulled tests.
 import type { WizardPrompter } from "openclaw/plugin-sdk/setup";
-import { requestUrl, requestBodyText, jsonResponse } from "openclaw/plugin-sdk/test-env";
+import { requestUrl, jsonResponse } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ensureOllamaModelPulled } from "./setup.js";
 import {
   createDefaultOllamaConfig,
   createOllamaFetchMock,
-  mockCall,
   mockCallArg,
 } from "./setup.test-helpers.js";
 

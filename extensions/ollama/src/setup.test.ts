@@ -8,12 +8,7 @@ import {
   configureOllamaNonInteractive,
   promptAndConfigureOllama,
 } from "./setup.js";
-import {
-  createDefaultOllamaConfig,
-  createOllamaFetchMock,
-  mockCall,
-  mockCallArg,
-} from "./setup.test-helpers.js";
+import { createOllamaFetchMock, mockCallArg } from "./setup.test-helpers.js";
 
 const upsertAuthProfileWithLock = vi.hoisted(() => vi.fn(async () => {}));
 const fetchWithSsrFGuardMock = vi.hoisted(() =>
