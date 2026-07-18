@@ -453,17 +453,39 @@ describe("sendMessageIMessage receipts", () => {
     );
   });
 
-  it("keeps the outer send timeout beyond imsg bridge fallback and verification", async () => {
-    const client = createClient({ guid: "p:0/imsg-1" });
+  it("accepts one delayed imsg fallback response after the 150s bridge deadline", async () => {
+    vi.useFakeTimers();
+    const delayedFallbackMs = 158_000;
+    const client = {
+      request: vi.fn(
+        (_method: string, _params: Record<string, unknown>, opts?: { timeoutMs?: number }) =>
+          new Promise<Record<string, unknown>>((resolve, reject) => {
+            const timeout = setTimeout(
+              () => reject(new Error("imsg rpc timeout (send)")),
+              opts?.timeoutMs,
+            );
+            setTimeout(() => {
+              clearTimeout(timeout);
+              resolve({ guid: "p:0/imsg-delayed-fallback" });
+            }, delayedFallbackMs);
+          }),
+      ),
+      stop: vi.fn(async () => {}),
+    } as unknown as IMessageRpcClient;
 
-    await sendMessageIMessage("chat_id:42", "hello", {
+    const send = sendMessageIMessage("chat_id:42", "hello", {
       config: IMESSAGE_TEST_CFG,
       client,
     });
+    await vi.advanceTimersByTimeAsync(delayedFallbackMs);
 
-    expect(getClientMocks(client).request).toHaveBeenCalledWith("send", expect.any(Object), {
-      timeoutMs: 180_000,
-    });
+    await expect(send).resolves.toMatchObject({ messageId: "p:0/imsg-delayed-fallback" });
+    expect(getClientMocks(client).request).toHaveBeenCalledTimes(1);
+    expect(getClientMocks(client).request).toHaveBeenCalledWith(
+      "send",
+      expect.any(Object),
+      expect.objectContaining({ timeoutMs: 180_000 }),
+    );
   });
 
   it("sends explicit chat media-only payloads through send-attachment auto transport", async () => {
