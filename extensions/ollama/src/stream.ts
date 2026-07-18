@@ -1194,7 +1194,7 @@ function createRawOllamaStreamFn(
               response,
               OLLAMA_STREAM_ERROR_BODY_LIMIT_BYTES,
             ).catch(() => "unknown error");
-            throw new Error(${"$"}{response.status} {errorText});
+            throw new Error(`${response.status} ${errorText}`);
           }
           if (!response.body) {
             throw new Error("Ollama API returned empty response body");
