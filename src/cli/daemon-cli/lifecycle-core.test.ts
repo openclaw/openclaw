@@ -50,6 +50,22 @@ vi.mock("./lifecycle-audit.js", () => ({
   appendGatewayLifecycleAudit: (params: unknown) => appendGatewayLifecycleAudit(params),
   createGatewayLifecycleMutationAudit: (params: { action: string; source?: string }) =>
     createGatewayLifecycleMutationAudit(params),
+  createServiceLifecycleMutationAudit: (params: { serviceNoun: string; action: string }) =>
+    params.serviceNoun === "Gateway" ? createGatewayLifecycleMutationAudit(params) : undefined,
+  appendServiceLifecycleRepairAudit: (params: {
+    serviceNoun: string;
+    action: string;
+    pid?: number;
+  }) => {
+    if (params.serviceNoun === "Gateway") {
+      appendGatewayLifecycleAudit({
+        action: params.action,
+        source: "cli",
+        mode: "service-repair",
+        ...(params.pid === undefined ? {} : { pid: params.pid }),
+      });
+    }
+  },
 }));
 
 let runServiceRestart: typeof import("./lifecycle-core.js").runServiceRestart;

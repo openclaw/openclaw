@@ -39,3 +39,28 @@ export function createGatewayLifecycleMutationAudit(params: {
     });
   };
 }
+
+export function createServiceLifecycleMutationAudit(params: {
+  serviceNoun: string;
+  action: GatewayLifecycleAction;
+}): ((mutation: GatewayLifecycleMutation) => void) | undefined {
+  return params.serviceNoun === "Gateway"
+    ? createGatewayLifecycleMutationAudit({ action: params.action })
+    : undefined;
+}
+
+export function appendServiceLifecycleRepairAudit(params: {
+  serviceNoun: string;
+  action: "start" | "restart";
+  pid?: number;
+}): void {
+  if (params.serviceNoun !== "Gateway") {
+    return;
+  }
+  appendGatewayLifecycleAudit({
+    action: params.action,
+    source: "cli",
+    mode: "service-repair",
+    ...(params.pid === undefined ? {} : { pid: params.pid }),
+  });
+}

@@ -1,8 +1,9 @@
-// Systemd tests cover Linux service install, start, stop, and status behavior.
 import type { ExecFileOptionsWithStringEncoding } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+// Systemd tests cover Linux service install, start, stop, and status behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type ExecFileError = Error & {
@@ -2187,7 +2188,12 @@ describe("systemd service control", () => {
     expect(write).toHaveBeenCalledTimes(1);
     expect(requireFirstWrite(write)).toContain("Stopped systemd service");
     expect(onMutation).toHaveBeenCalledWith({ mode: "systemctl-stop" });
-    expect(onMutation.mock.invocationCallOrder[0]).toBeLessThan(write.mock.invocationCallOrder[0]);
+    expect(onMutation.mock.invocationCallOrder[0]).toBeLessThan(
+      expectDefined(
+        write.mock.invocationCallOrder[0],
+        "write.mock.invocationCallOrder[0] test invariant",
+      ),
+    );
   });
 
   it("audits a successful stop before a later output failure", async () => {

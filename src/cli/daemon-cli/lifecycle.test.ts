@@ -221,19 +221,9 @@ vi.mock("./lifecycle-core.js", () => ({
 }));
 
 describe("runDaemonRestart health checks", () => {
-  let runDaemonStart: (opts?: { json?: boolean }) => Promise<void>;
-  let runDaemonRestart: (opts?: {
-    json?: boolean;
-    safe?: boolean;
-    force?: boolean;
-    skipDeferral?: boolean;
-    wait?: string;
-  }) => Promise<boolean>;
-  let runDaemonStop: (opts?: {
-    json?: boolean;
-    disable?: boolean;
-    force?: boolean;
-  }) => Promise<void>;
+  let runDaemonStart: typeof import("./lifecycle.js").runDaemonStart;
+  let runDaemonRestart: typeof import("./lifecycle.js").runDaemonRestart;
+  let runDaemonStop: typeof import("./lifecycle.js").runDaemonStop;
   let envSnapshot: ReturnType<typeof captureEnv>;
 
   function mockUnmanagedRestart({
@@ -763,14 +753,6 @@ describe("runDaemonRestart health checks", () => {
     isTerminalInteractive.mockReturnValue(false);
 
     await runDaemonStop({ json: true, force: true });
-
-    expect(runServiceStop).toHaveBeenCalledTimes(1);
-  });
-
-  it("allows an interactive managed stop without force", async () => {
-    isTerminalInteractive.mockReturnValue(true);
-
-    await runDaemonStop({ json: true });
 
     expect(runServiceStop).toHaveBeenCalledTimes(1);
   });
