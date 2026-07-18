@@ -1332,31 +1332,26 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          pr_head="$(
+            gh api --method GET "repos/${GITHUB_REPOSITORY}/pulls/${PULL_REQUEST_NUMBER}" |
+              jq -r --arg repo "$GITHUB_REPOSITORY" --arg target "$TARGET_SHA" '
+                select(.state == "open" and .head.sha == $target and .base.repo.full_name == $repo)
+                | .head.sha
+              '
+          )"
+          if [[ "$pr_head" != "$TARGET_SHA" ]]; then
+            echo "release-gate pull request must be open and match the target head" >&2
+            exit 1
+          fi
+          # Freeze GitHub's canonical merge snapshot once it contains the exact head.
+          # Base freshness belongs to the landing gate; chasing moving main here can never converge.
           prepared=false
           for attempt in {1..6}; do
-            pr_info="$(
-              gh api --method GET "repos/${GITHUB_REPOSITORY}/pulls/${PULL_REQUEST_NUMBER}" |
-                jq -r --arg repo "$GITHUB_REPOSITORY" --arg target "$TARGET_SHA" '
-                  select(.state == "open" and .head.sha == $target and .base.repo.full_name == $repo)
-                  | [.base.sha, (if .mergeable == null then "unknown" else (.mergeable | tostring) end)]
-                  | @tsv
-                '
-            )"
-            if [[ -z "$pr_info" ]]; then
-              echo "release-gate pull request must be open and match the target head" >&2
-              exit 1
-            fi
-            IFS=$'\t' read -r base_sha mergeable <<<"$pr_info"
-            if [[ "$mergeable" == "false" ]]; then
-              echo "release-gate pull request is not mergeable" >&2
-              exit 1
-            fi
-            if [[ "$mergeable" == "true" ]] &&
-              timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=2 origin \
-                "+refs/pull/${PULL_REQUEST_NUMBER}/merge:refs/remotes/origin/ci-max-lines-merge"; then
+            if timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=2 origin \
+              "+refs/pull/${PULL_REQUEST_NUMBER}/merge:refs/remotes/origin/ci-max-lines-merge"; then
               merge_sha="$(git rev-parse refs/remotes/origin/ci-max-lines-merge)"
-              read -r merge_base merge_head extra_parent <<<"$(git show -s --format=%P "$merge_sha")"
-              if [[ "$merge_base" == "$base_sha" && "$merge_head" == "$TARGET_SHA" && -z "$extra_parent" ]]; then
+              read -r frozen_base_sha merge_head extra_parent <<<"$(git show -s --format=%P "$merge_sha")"
+              if [[ "$merge_head" == "$TARGET_SHA" && -z "$extra_parent" ]]; then
                 prepared=true
                 break
               fi
@@ -1366,11 +1361,11 @@ jobs:
             fi
           done
           if [[ "$prepared" != "true" ]]; then
-            echo "release-gate merge tree did not refresh to the current pull request base and head" >&2
+            echo "release-gate merge tree did not refresh to the target head" >&2
             exit 1
           fi
           git checkout --detach "$merge_sha"
-          echo "RATCHET_RELEASE_BASE_SHA=${base_sha}" >> "$GITHUB_ENV"
+          echo "RATCHET_RELEASE_BASE_SHA=${frozen_base_sha}" >> "$GITHUB_ENV"
           echo "RATCHET_RELEASE_MERGE_TREE=true" >> "$GITHUB_ENV"
 
       - name: Setup Node environment
