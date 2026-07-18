@@ -32,6 +32,60 @@ function createDripPullServer(dripTimers: Set<ReturnType<typeof setInterval>>): 
   return server;
 }
 
+function createStatusFinalizationPullServer(
+  dripTimers: Set<ReturnType<typeof setInterval>>,
+): http.Server {
+  const server = http.createServer((req, res) => {
+    if (req.url === "/api/tags") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ models: [] }));
+      return;
+    }
+    if (req.url === "/api/pull") {
+      res.writeHead(200, { "Content-Type": "application/x-ndjson" });
+      let completed = 0;
+      let step = 0;
+      const statusPhases = [
+        "verifying sha256 digest",
+        "writing manifest",
+        "pulling manifest",
+        "checking blob",
+        "cleanup",
+      ];
+      const timer = setInterval(() => {
+        if (step < 5) {
+          completed += 250;
+          res.write(`{"status":"downloading","total":1250,"completed":${completed}}\n`);
+        } else {
+          const phaseIdx = step - 5;
+          if (phaseIdx < statusPhases.length) {
+            res.write(`{"status":"${statusPhases[phaseIdx]}"}\n`);
+          } else {
+            // Spent >statusPhases.length status-only steps past the 100ms
+            // budget; healthy finalization survives because distinct status
+            // transitions reset the watchdog each step.
+            res.write('{"status":"success"}\n');
+            res.end();
+            clearInterval(timer);
+            dripTimers.delete(timer);
+          }
+        }
+        step++;
+      }, 30);
+      dripTimers.add(timer);
+      res.on("close", () => {
+        clearInterval(timer);
+        dripTimers.delete(timer);
+      });
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  server.on("clientError", (_err, socket) => socket.destroy());
+  return server;
+}
+
 function createAdvancingPullServer(dripTimers: Set<ReturnType<typeof setInterval>>): http.Server {
   const server = http.createServer((req, res) => {
     if (req.url === "/api/tags") {
@@ -182,6 +236,31 @@ describe("Ollama pull stream no-progress loopback", () => {
     expect(elapsedMs).toBeGreaterThanOrEqual(200);
     expect(elapsedMs).toBeLessThan(2_000);
     expect(stopMessages.some((message) => message.includes("no progress for"))).toBe(true);
+  });
+
+  it("allows status-only finalization past the shortened no-progress timeout", async () => {
+    server = createStatusFinalizationPullServer(dripTimers);
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected loopback server address");
+    }
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+    const { prompter, stopMessages } = createPullPrompter();
+
+    await ensureOllamaModelPulled({
+      config: createLoopbackConfig(baseUrl),
+      model: "ollama/gemma4",
+      prompter,
+      // Status-only finalization phases (~180ms total) survive past a 100ms budget
+      // because distinct status transitions reset the no-progress watchdog.
+      streamNoProgressTimeoutMs: 100,
+      streamIdleTimeoutMs: 10_000,
+    });
+    expect(stopMessages).toContain("Downloaded gemma4");
+    expect(stopMessages.some((message) => message.includes("no progress for"))).toBe(false);
   });
 
   it("allows advancing completed progress past the shortened no-progress timeout", async () => {

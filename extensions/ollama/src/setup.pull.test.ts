@@ -218,6 +218,95 @@ describe("ensureOllamaModelPulled", () => {
     }
   });
 
+  it("allows status-only finalization past the shortened no-progress timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const progress = { update: vi.fn(), stop: vi.fn() };
+      const prompter = {
+        progress: vi.fn(() => progress),
+      } as unknown as WizardPrompter;
+      const encoder = new TextEncoder();
+      let completed = 0;
+      let progressTimer: ReturnType<typeof setInterval> | undefined;
+      const fetchMock = vi.fn(async (input: string | URL | Request) => {
+        const url = requestUrl(input);
+        if (url.endsWith("/api/tags")) {
+          return jsonResponse({ models: [] });
+        }
+        if (url.endsWith("/api/pull")) {
+          return new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                let step = 0;
+                const statusPhases = [
+                  "verifying sha256 digest",
+                  "writing manifest",
+                  "pulling manifest",
+                  "checking blob",
+                  "cleanup",
+                ];
+                progressTimer = setInterval(() => {
+                  if (step < 5) {
+                    completed += 2000;
+                    controller.enqueue(
+                      encoder.encode(
+                        `{"status":"downloading","total":10000,"completed":${completed}}\n`,
+                      ),
+                    );
+                  } else {
+                    const phaseIdx = step - 5;
+                    if (phaseIdx < statusPhases.length) {
+                      controller.enqueue(
+                        encoder.encode(`{"status":"${statusPhases[phaseIdx]}"}\n`),
+                      );
+                    } else {
+                      // Spent >statusPhases.length status-only steps past the 500ms
+                      // budget; healthy finalization survives because distinct status
+                      // transitions reset the watchdog each step.
+                      controller.enqueue(encoder.encode('{"status":"success"}\n'));
+                      controller.close();
+                      if (progressTimer !== undefined) {
+                        clearInterval(progressTimer);
+                        progressTimer = undefined;
+                      }
+                    }
+                  }
+                  step++;
+                }, 160);
+              },
+              cancel() {
+                if (progressTimer !== undefined) {
+                  clearInterval(progressTimer);
+                  progressTimer = undefined;
+                }
+              },
+            }),
+            { status: 200 },
+          );
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      const pullPromise = ensureOllamaModelPulled({
+        config: createDefaultOllamaConfig("ollama/gemma4"),
+        model: "ollama/gemma4",
+        prompter,
+        streamNoProgressTimeoutMs: 500,
+        streamIdleTimeoutMs: 10_000,
+      });
+
+      await vi.waitFor(() => expect(mockCallArg(fetchMock, 1)).toContain("/api/pull"));
+      // Past several no-progress windows; status-only transitions keep the watchdog alive.
+      await vi.advanceTimersByTimeAsync(10_000);
+      await expect(pullPromise).resolves.toBeUndefined();
+      expect(progress.stop).toHaveBeenCalledWith("Downloaded gemma4");
+      expect(progress.stop).not.toHaveBeenCalledWith(expect.stringContaining("no progress for"));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("skips pull when model is already available", async () => {
     const prompter = {} as unknown as WizardPrompter;
 

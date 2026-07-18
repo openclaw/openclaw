@@ -303,6 +303,7 @@ async function pullOllamaModelCore(params: {
       let buffer = "";
       const layers = new Map<string, { total: number; completed: number }>();
       let lastCompletedSum = 0;
+      let lastStatus = "";
 
       const parseLine = (line: string): OllamaPullResult => {
         const trimmed = line.trim();
@@ -325,10 +326,11 @@ async function pullOllamaModelCore(params: {
               totalSum += layer.total;
               completedSum += layer.completed;
             }
-            // Only monotonically advancing aggregate completed resets the watchdog.
+            // Monotonically advancing aggregate completed resets the watchdog.
             // Duplicate status drips without byte progress cannot extend setup forever.
             if (completedSum > lastCompletedSum) {
               lastCompletedSum = completedSum;
+              lastStatus = chunk.status;
               armStreamNoProgressTimeout();
             }
             params.onStatus?.(
@@ -336,6 +338,14 @@ async function pullOllamaModelCore(params: {
               totalSum > 0 ? Math.round((completedSum / totalSum) * 100) : null,
             );
           } else {
+            // Published Ollama /api/pull protocol emits status-only post-download
+            // phases (e.g. "verifying sha256 digest", "writing manifest") after
+            // completed stops increasing. Reset the watchdog on distinct status
+            // transitions so healthy finalization work is not aborted.
+            if (chunk.status !== lastStatus) {
+              lastStatus = chunk.status;
+              armStreamNoProgressTimeout();
+            }
             params.onStatus?.(chunk.status, null);
           }
         } catch {
@@ -358,7 +368,8 @@ async function pullOllamaModelCore(params: {
         if (done) {
           break;
         }
-        // First body bytes start the no-progress clock; later completed advances reset it.
+        // First body bytes start the no-progress clock; advancing completed or
+        // distinct status transitions reset it so healthy finalization is not cut off.
         if (streamNoProgressTimeout === undefined) {
           armStreamNoProgressTimeout();
         }
