@@ -144,7 +144,7 @@ final class QuickChatController: NSObject, NSWindowDelegate {
             guard let self else { return }
             // A dispatched send supersedes any pending recents fetch: its menu popping
             // over the fresh reply would rebind away from the response just sent.
-            self.recentSessionsRequestID = UUID()
+            self.invalidateRecentsFetch()
             self.replyBinding.prepare(route: route)
         }
     }
@@ -163,6 +163,14 @@ final class QuickChatController: NSObject, NSWindowDelegate {
         }
         self.unregisterHotkeyIfNeeded()
         self.dismiss(immediate: false)
+    }
+
+    /// Invalidates any in-flight recents fetch: rotates the request ID so stale
+    /// completions no-op, and cancels/clears the task so the picker stays usable.
+    private func invalidateRecentsFetch() {
+        self.recentSessionsRequestID = UUID()
+        self.recentSessionsTask?.cancel()
+        self.recentSessionsTask = nil
     }
 
     private func registerHotkeyIfNeeded() {
@@ -209,6 +217,9 @@ final class QuickChatController: NSObject, NSWindowDelegate {
     func present() {
         guard self.isEnabled else { return }
         self.transitionID = UUID()
+        // A fresh presentation must never resurrect a reply prepared or shown by an
+        // earlier one (e.g. a capture send that raced the previous hide).
+        self.replyBinding.clear()
         let presentationID = self.model.beginPresentation()
         self.presentationTask?.cancel()
         self.presentationTask = Task { [weak self] in
@@ -453,7 +464,7 @@ final class QuickChatController: NSObject, NSWindowDelegate {
         let windowPoint = panel.convertPoint(fromScreen: NSEvent.mouseLocation)
         let contentPoint = contentView.convert(windowPoint, from: nil)
         // Competing interaction: invalidate any in-flight recents fetch before blocking.
-        self.recentSessionsRequestID = UUID()
+        self.invalidateRecentsFetch()
         menu.popUp(positioning: nil, at: contentPoint, in: contentView)
     }
 
@@ -541,7 +552,7 @@ final class QuickChatController: NSObject, NSWindowDelegate {
         }
         guard let windowPicker = self.windowPicker else { return }
         // Competing interaction: a recents menu must not pop over the picker overlays.
-        self.recentSessionsRequestID = UUID()
+        self.invalidateRecentsFetch()
         Task { await windowPicker.begin() }
     }
 
