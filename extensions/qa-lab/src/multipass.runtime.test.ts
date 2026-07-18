@@ -110,6 +110,23 @@ describe("qa multipass runtime", () => {
     expect(script).toContain("/workspace/openclaw-host/.artifacts/qa-e2e/multipass-test");
   });
 
+  it("bounds the Node bootstrap downloads with connect and max-time limits", () => {
+    const plan = createQaMultipassPlan({
+      repoRoot: process.cwd(),
+      outputDir: path.join(process.cwd(), ".artifacts", "qa-e2e", "multipass-test"),
+      scenarioIds: ["channel-chat-baseline"],
+    });
+
+    const script = renderQaMultipassGuestScript(plan);
+
+    expect(script).toContain(
+      'curl -fsSL --connect-timeout 15 --max-time 120 "${base_url}/SHASUMS256.txt"',
+    );
+    expect(script).toContain(
+      'curl -fsSL --connect-timeout 15 --max-time 120 "${base_url}/${tarball_name}"',
+    );
+  });
+
   it("carries live suite flags and forwarded auth env into the guest command", () => {
     vi.stubEnv("OPENAI_API_KEY", "test-openai-key");
     const plan = createQaMultipassPlan({
