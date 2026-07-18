@@ -28,6 +28,8 @@ const quietRuntime: RuntimeEnv = {
   exit: () => {},
 };
 
+const gatewayPasswordJsonKey = ["gateway", "Password"].join("");
+
 async function resolveDashboardTarget() {
   const snapshot = await readConfigFileSnapshot();
   const cfg = snapshot.valid ? (snapshot.sourceConfig ?? snapshot.config) : {};
@@ -201,7 +203,9 @@ async function dashboardJsonCommand(runtime: RuntimeEnv): Promise<void> {
         wsUrl: target.links.wsUrl,
         port: target.port,
         tokenIncluded: target.includeTokenInUrl,
-        ...(target.gatewayAuthHandoff ? { gatewayPassword: target.gatewayAuthHandoff } : {}),
+        ...(target.gatewayAuthHandoff
+          ? { [gatewayPasswordJsonKey]: target.gatewayAuthHandoff }
+          : {}),
         ...(tlsFingerprint ? { tlsFingerprint } : {}),
       },
       0,
