@@ -162,9 +162,8 @@ type ChatComposerState = {
   pendingClearedSubmittedDraft: PendingClearedSubmittedDraft | null;
   goalExpandedId: string | null;
   composerTextarea: HTMLTextAreaElement | null;
-  // Stable Lit ref: an inline arrow would change identity every render, making
-  // Lit re-invoke it (undefined + element) and forcing a layout re-measure of
-  // the textarea on every chat render instead of only on attach/detach.
+  // Stable Lit ref: an inline arrow would change identity per render and force
+  // a layout re-measure of the textarea on every chat render, not just attach.
   textareaRef: ((element?: Element) => void) | null;
 };
 

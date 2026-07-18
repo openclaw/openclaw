@@ -393,9 +393,8 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
     }
   }
 
-  // Reading scrollHeight/scrollTop synchronously inside updated() forces a
-  // layout flush on every render. Coalescing the read into one rAF per frame
-  // lets the browser batch it with the layout it computes for paint anyway.
+  // Reading scrollHeight/scrollTop inside updated() forces a layout flush per
+  // render; one rAF-coalesced read rides the layout computed for paint anyway.
   private scheduleSessionsScrollStateSync() {
     if (this.sessionsScrollStateFrame !== null) {
       return;

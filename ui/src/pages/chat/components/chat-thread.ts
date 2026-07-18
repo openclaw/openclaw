@@ -199,11 +199,9 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
   private readonly controllers = new Set<ReactiveController>();
   private readonly virtualizerController: VirtualizerController<HTMLDivElement, HTMLElement>;
   private scrollElement: HTMLDivElement | null = null;
-  // Stable Lit refs: inline arrows change identity every render, so Lit would
-  // re-invoke them (undefined + element) for every visible row on every render,
-  // sweeping the virtualizer's element cache and re-measuring rows each time.
-  // Lit tracks the last element per (host, callback), so each row needs its own
-  // stable callback; sharing one across rows would still churn every render.
+  // Stable Lit refs: inline arrows change identity per render, making Lit
+  // re-invoke them for every visible row and re-measure each row every render.
+  // Lit tracks the last element per callback, so each row needs its own.
   private readonly scrollElementRef = (element?: Element) => {
     this.scrollElement =
       element?.parentElement instanceof HTMLDivElement ? element.parentElement : null;
@@ -212,11 +210,10 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
   private measureRowRefFor(key: string): (element?: Element) => void {
     let callback = this.measureRowRefs.get(key);
     if (!callback) {
-      callback = (element?: Element) => {
+      callback = (element?: Element) =>
         this.virtualizerController
           .getVirtualizer()
           .measureElement(element instanceof HTMLElement ? element : null);
-      };
       this.measureRowRefs.set(key, callback);
     }
     return callback;
