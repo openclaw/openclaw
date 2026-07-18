@@ -38,6 +38,7 @@ export function createAvailableModelAuthMockModule() {
         `No API key resolved for provider "${provider}".`,
       );
     }),
+    applySecretRefHeaderSentinels: vi.fn((model: unknown) => model),
   };
 }
 

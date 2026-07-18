@@ -547,7 +547,7 @@ async function resolveCompressionModelPolicyWithHooks(params: {
   }
 }
 
-async function resolveCompressionModelPolicy(params: {
+export async function resolveCompressionModelPolicy(params: {
   cfg?: OpenClawConfig;
   provider: string;
   model: string;

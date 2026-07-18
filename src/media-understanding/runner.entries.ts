@@ -19,6 +19,7 @@ import {
   collectProviderApiKeysForExecution,
   executeWithApiKeyRotation,
 } from "../agents/api-key-rotation.js";
+import { resolveCompressionModelPolicy } from "../agents/tools/image-tool.js";
 import { CUSTOM_LOCAL_AUTH_MARKER } from "../agents/model-auth-markers.js";
 import {
   mergeModelProviderRequestOverrides,
@@ -28,7 +29,7 @@ import {
 import type { MsgContext } from "../auto-reply/templating.js";
 import { applyTemplate } from "../auto-reply/templating.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import type { ModelProviderConfig, OpenClawConfig } from "../config/types.js";
+import type { OpenClawConfig } from "../config/types.js";
 import type {
   MediaUnderstandingConfig,
   MediaUnderstandingModelConfig,
@@ -39,6 +40,8 @@ import { writeExternalFileWithinRoot } from "../infra/fs-safe.js";
 import { resolveProxyFetchFromEnv } from "../infra/net/proxy-fetch.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { runFfmpeg } from "../media/media-services.js";
+import type { ImageCompressionModelPolicy, ImageCompressionPolicy } from "../media/web-media.js";
+import { effectiveImageBytesCap, optimizeImageBufferForWebMedia } from "../media/web-media.js";
 import {
   getOfficialExternalPluginCatalogManifest,
   listOfficialExternalProviderCatalogEntries,
@@ -459,6 +462,53 @@ function resolveEntryRunOptions(params: {
   };
 }
 
+/**
+ * Resolves image compression policy using the shared model-aware resolver
+ * from image-tool, which merges configured model limits, bundled static
+ * catalog limits, and runtime-augmented limits into a single policy.
+ *
+ * Delegates to resolveCompressionModelPolicy so media-understanding paths
+ * follow the same resize ladder as the image tool.
+ */
+export async function resolveImageCompressionPolicyFromConfig(
+  cfg: OpenClawConfig,
+  opts?: {
+    provider?: string;
+    model?: string;
+    workspaceDir?: string;
+  },
+): Promise<ImageCompressionPolicy> {
+  const quality = cfg.agents?.defaults?.imageQuality;
+  const imageMaxDimensionPx = cfg.agents?.defaults?.imageMaxDimensionPx;
+  const models: ImageCompressionModelPolicy[] = [];
+
+  if (imageMaxDimensionPx) {
+    models.push({ preferredSidePx: imageMaxDimensionPx });
+  }
+
+  if (opts?.provider && opts?.model) {
+    const modelPolicy = await resolveCompressionModelPolicy({
+      cfg,
+      provider: opts.provider,
+      model: opts.model,
+      workspaceDir: opts.workspaceDir,
+    });
+    const hasModelPolicyFields =
+      modelPolicy.maxSidePx != null ||
+      modelPolicy.maxPixels != null ||
+      modelPolicy.preferredSidePx != null ||
+      modelPolicy.maxBytes != null;
+    if (hasModelPolicyFields) {
+      models.push(modelPolicy);
+    }
+  }
+
+  return {
+    ...(quality ? { quality } : {}),
+    ...(models.length > 0 ? { models } : {}),
+  };
+}
+
 function resolveMediaRequestOverrides(config: MediaUnderstandingConfig | undefined): {
   prompt?: string;
   language?: string;
@@ -822,23 +872,50 @@ export async function runProviderEntry(params: {
     if (!modelId) {
       throw new Error("Image understanding requires model id");
     }
+    // Read source with the base maxBytes so large images can still reach the
+    // compression step; the effective cap is enforced after optimization.
     const media = await params.cache.getBuffer({
       attachmentIndex: params.attachmentIndex,
       maxBytes,
       timeoutMs,
     });
+
+    // Resolve image compression policy using the shared model-aware resolver
+    // so media-understanding follows the same resize ladder as the image tool.
+    const imageCompression = await resolveImageCompressionPolicyFromConfig(cfg, {
+      provider: requestProviderId,
+      model: modelId,
+      workspaceDir: params.workspaceDir,
+    });
+
+    // Normalize HEIC/HEIF to JPEG before optimization so the optimizer
+    // receives a format it can resize. HEIC conversion must precede the
+    // web-media optimization boundary established by the merged HEIC fix.
     const normalizedMedia = await normalizeImageDescriptionInput({
       buffer: media.buffer,
       fileName: media.fileName,
       mime: media.mime,
       maxBytes,
     });
+
+    // Optimize the normalized image buffer, applying the configured
+    // compression policy. The effective cap (min of base and policy) is
+    // enforced here, after the source has had a chance to compress down.
+    const effectiveCap = effectiveImageBytesCap(maxBytes, imageCompression) ?? maxBytes;
+    const normalizedFileName = normalizedMedia.fileName ?? media.fileName;
+    const optimizedMedia = await optimizeImageBufferForWebMedia({
+      buffer: normalizedMedia.buffer,
+      contentType: normalizedMedia.mime,
+      fileName: normalizedFileName,
+      maxBytes: effectiveCap,
+      imageCompression,
+    });
     const requestOverrides = resolveMediaRequestOverrides(params.config);
     const provider = getMediaUnderstandingProvider(requestProviderId, params.providerRegistry);
     const imageInput = {
-      buffer: normalizedMedia.buffer,
-      fileName: media.fileName,
-      mime: normalizedMedia.mime,
+      buffer: optimizedMedia.buffer,
+      fileName: optimizedMedia.fileName ?? normalizedFileName,
+      mime: optimizedMedia.contentType,
       model: modelId,
       provider: requestProviderId,
       prompt: requestOverrides.prompt ?? prompt,

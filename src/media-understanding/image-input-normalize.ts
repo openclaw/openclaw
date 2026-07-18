@@ -21,9 +21,9 @@ export async function normalizeImageDescriptionInput(params: {
   fileName?: string;
   mime?: string;
   maxBytes?: number;
-}): Promise<{ buffer: Buffer; mime?: string }> {
+}): Promise<{ buffer: Buffer; mime?: string; fileName?: string }> {
   if (!isHeicInput(params)) {
-    return { buffer: params.buffer, mime: params.mime };
+    return { buffer: params.buffer, mime: params.mime, fileName: params.fileName };
   }
   const sourceMime = normalizeMimeType(params.mime) ?? "image/heic";
   // Reuse input-file extraction so HEIC conversion follows the same MIME and size guards.
@@ -41,8 +41,12 @@ export async function normalizeImageDescriptionInput(params: {
       timeoutMs: 0,
     },
   );
+  const normalizedFileName = params.fileName
+    ? params.fileName.replace(/\.[^.]+$/, ".jpg")
+    : params.fileName;
   return {
     buffer: Buffer.from(image.data, "base64"),
     mime: image.mimeType,
+    fileName: normalizedFileName,
   };
 }

@@ -41,6 +41,11 @@ vi.mock("../agents/model-auth.js", async () => {
   return createAvailableModelAuthMockModule();
 });
 
+vi.mock("../agents/provider-secret-egress.js", () => ({
+  unwrapSecretSentinelsForProviderEgress: (value: string) => value,
+  protectPreparedProviderRuntimeAuth: undefined,
+}));
+
 vi.mock("../plugins/capability-provider-runtime.js", async () => {
   const runtime =
     await vi.importActual<typeof import("../plugins/runtime.js")>("../plugins/runtime.js");
@@ -63,6 +68,25 @@ vi.mock("../agents/model-catalog.js", async () => {
     loadModelCatalog,
   };
 });
+
+vi.mock("../media/media-services.js", () => ({
+  convertHeicToJpeg: vi.fn(async () => Buffer.from("jpeg-normalized")),
+  createImageProcessor: vi.fn(() => ({
+    encode: vi.fn((buffer: Buffer, opts: { format?: string }) =>
+      Promise.resolve({
+        data: buffer,
+        bytes: buffer.length,
+        format: opts?.format === "png" ? "png" : "jpeg",
+        mimeType: opts?.format === "png" ? "image/png" : "image/jpeg",
+        chosen: { maxSide: 100, transparency: "flattened" },
+        width: 100,
+        height: 100,
+      }),
+    ),
+  })),
+  readImageMetadataFromHeader: vi.fn(() => null),
+  readImageProbeFromHeader: vi.fn(() => null),
+}));
 
 let buildProviderRegistry: typeof import("./runner.js").buildProviderRegistry;
 let applyMediaUnderstanding: typeof import("./apply.js").applyMediaUnderstanding;

@@ -16,6 +16,10 @@ import {
 } from "./runtime.js";
 
 const mocks = vi.hoisted(() => {
+  const PNG_1X1 = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=",
+    "base64",
+  );
   const cleanup = vi.fn(async () => {});
   const getBuffer = vi.fn(async () => ({
     buffer: Buffer.from("remote-image"),
@@ -33,22 +37,37 @@ const mocks = vi.hoisted(() => {
     readLocalFileSafely: vi.fn(async () => ({ buffer: Buffer.from("image") })),
     describeImageWithModel: vi.fn(async () => ({ text: "generic image ok", model: "vision" })),
     convertHeicToJpeg: vi.fn(async () => Buffer.from("jpeg-normalized")),
+    normalizeImageDescriptionInput: vi.fn(
+      async (params: { buffer: Buffer; mime?: string; fileName?: string }) => {
+        const HEIC_MIME_RE = /^image\/hei[cf]/i;
+        const isHeic =
+          HEIC_MIME_RE.test(params.mime ?? "") ||
+          /\.(heic|heif)$/i.test(params.fileName ?? "");
+        const jpgName = params.fileName?.replace(/\.[^.]+$/, ".jpg") ?? params.fileName;
+        return isHeic
+          ? { buffer: Buffer.from("jpeg-normalized"), mime: "image/jpeg", fileName: jpgName }
+          : { buffer: params.buffer, mime: params.mime, fileName: params.fileName };
+      },
+    ),
+    resolveImageCompressionPolicyFromConfig: vi.fn(async () => ({})),
     runCapability: vi.fn(),
     cleanup,
     getBuffer,
+    PNG_1X1,
   };
 });
-
-const PNG_1X1 = Buffer.from(
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=",
-  "base64",
-);
 
 vi.mock("./runner.js", () => ({
   buildProviderRegistry: mocks.buildProviderRegistry,
   createMediaAttachmentCache: mocks.createMediaAttachmentCache,
   normalizeMediaAttachments: mocks.normalizeMediaAttachments,
   runCapability: mocks.runCapability,
+}));
+
+vi.mock("./runner.entries.js", () => ({
+  resolveImageCompressionPolicyFromConfig: mocks.resolveImageCompressionPolicyFromConfig,
+  findDecisionReason: vi.fn(),
+  normalizeDecisionReason: vi.fn(),
 }));
 
 vi.mock("./provider-registry.js", () => ({
@@ -65,8 +84,31 @@ vi.mock("./image-runtime.js", () => ({
   describeImageWithModel: mocks.describeImageWithModel,
 }));
 
+vi.mock("./image-input-normalize.js", () => ({
+  normalizeImageDescriptionInput: mocks.normalizeImageDescriptionInput,
+}));
+
 vi.mock("../media/media-services.js", () => ({
   convertHeicToJpeg: mocks.convertHeicToJpeg,
+  createImageProcessor: vi.fn(() => ({
+    encode: vi.fn((buffer: Buffer, opts: { format?: string }) =>
+      Promise.resolve({
+        data: buffer,
+        bytes: buffer.length,
+        format: opts?.format === "png" ? "png" : "jpeg",
+        mimeType: opts?.format === "png" ? "image/png" : "image/jpeg",
+        chosen: { maxSide: 100, transparency: "flattened" },
+        width: 100,
+        height: 100,
+      }),
+    ),
+  })),
+  readImageMetadataFromHeader: vi.fn((buffer: Buffer) =>
+    buffer === mocks.PNG_1X1 ? { width: 1, height: 1 } : null,
+  ),
+  readImageProbeFromHeader: vi.fn((buffer: Buffer) =>
+    buffer === mocks.PNG_1X1 ? { format: "png" } : null,
+  ),
 }));
 
 function requireRunCapabilityRequest(): unknown {
@@ -528,7 +570,7 @@ describe("media-understanding runtime", () => {
   });
 
   it("prefers local image bytes over conflicting explicit MIME metadata", async () => {
-    mocks.readLocalFileSafely.mockResolvedValue({ buffer: PNG_1X1 });
+    mocks.readLocalFileSafely.mockResolvedValue({ buffer: mocks.PNG_1X1 });
 
     await describeImageFileWithModel({
       filePath: "/tmp/sample.jpg",
@@ -542,7 +584,7 @@ describe("media-understanding runtime", () => {
 
     expect(mocks.describeImageWithModel).toHaveBeenCalledWith(
       expect.objectContaining({
-        buffer: PNG_1X1,
+        buffer: mocks.PNG_1X1,
         fileName: "sample.jpg",
         mime: "image/png",
       }),
@@ -562,11 +604,16 @@ describe("media-understanding runtime", () => {
       agentDir: "/tmp/agent",
     });
 
-    expect(mocks.convertHeicToJpeg).toHaveBeenCalledWith(Buffer.from("heic-source"));
+    // HEIC normalization runs before optimization so the optimizer receives
+    // a format it can resize. The mock normalizer converts HEIC to JPEG.
+    expect(mocks.normalizeImageDescriptionInput).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mime: expect.stringMatching(/^image\/hei[cf]/i),
+      }),
+    );
     expect(mocks.describeImageWithModel).toHaveBeenCalledWith(
       expect.objectContaining({
-        buffer: Buffer.from("jpeg-normalized"),
-        fileName: "sample.bin",
+        fileName: "sample.jpg",
         mime: "image/jpeg",
       }),
     );
@@ -588,7 +635,7 @@ describe("media-understanding runtime", () => {
       expect.objectContaining({
         buffer: Buffer.from("remote-image"),
         fileName: "photo.png",
-        mime: "image/png",
+        mime: "image/jpeg",
       }),
     );
     expect(mocks.cleanup).toHaveBeenCalledTimes(1);
@@ -596,10 +643,10 @@ describe("media-understanding runtime", () => {
 
   it("prefers fetched image MIME over conflicting explicit metadata", async () => {
     mocks.getBuffer.mockResolvedValue({
-      buffer: PNG_1X1,
+      buffer: mocks.PNG_1X1,
       fileName: "photo.jpg",
       mime: "image/png",
-      size: PNG_1X1.length,
+      size: mocks.PNG_1X1.length,
     });
 
     await describeImageFileWithModel({
@@ -615,7 +662,7 @@ describe("media-understanding runtime", () => {
 
     expect(mocks.describeImageWithModel).toHaveBeenCalledWith(
       expect.objectContaining({
-        buffer: PNG_1X1,
+        buffer: mocks.PNG_1X1,
         fileName: "photo.jpg",
         mime: "image/png",
       }),
@@ -666,7 +713,7 @@ describe("media-understanding runtime", () => {
       expect.objectContaining({
         buffer: Buffer.from("remote-png"),
         fileName: "png",
-        mime: "image/png",
+        mime: "image/jpeg",
         provider: "zai",
         model: "glm-4.6v",
       }),

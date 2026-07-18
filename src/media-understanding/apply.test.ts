@@ -301,6 +301,7 @@ describe("applyMediaUnderstanding", () => {
     vi.doMock("../agents/model-auth.js", () => ({
       resolveApiKeyForProvider: resolveApiKeyForProviderMock,
       hasAvailableAuthForProvider: hasAvailableAuthForProviderMock,
+      applySecretRefHeaderSentinels: (model: unknown) => model,
       isProviderAuthError: (err: unknown, code?: string) =>
         err instanceof Error &&
         "code" in err &&
@@ -317,12 +318,31 @@ describe("applyMediaUnderstanding", () => {
         throw err;
       },
     }));
+    vi.doMock("../agents/provider-secret-egress.js", () => ({
+      unwrapSecretSentinelsForProviderEgress: (value: string) => value,
+      protectPreparedProviderRuntimeAuth: undefined,
+    }));
     vi.doMock("../media/fetch.js", () => ({
       readRemoteMediaBuffer: readRemoteMediaBufferMock,
     }));
     vi.doMock("../media/media-services.js", () => ({
       runFfmpeg: runFfmpegMock,
       convertHeicToJpeg: convertHeicToJpegMock,
+      createImageProcessor: vi.fn(() => ({
+        encode: vi.fn((buffer: Buffer, opts: { format?: string }) =>
+          Promise.resolve({
+            data: buffer,
+            bytes: buffer.length,
+            format: opts?.format === "png" ? "png" : "jpeg",
+            mimeType: opts?.format === "png" ? "image/png" : "image/jpeg",
+            chosen: { maxSide: 100, transparency: "flattened" },
+            width: 100,
+            height: 100,
+          }),
+        ),
+      })),
+      readImageMetadataFromHeader: vi.fn(() => null),
+      readImageProbeFromHeader: vi.fn(() => null),
     }));
     vi.doMock("../process/exec.js", () => ({
       runExec: runExecMock,
@@ -1256,11 +1276,13 @@ describe("applyMediaUnderstanding", () => {
     });
 
     expect(result.appliedImage).toBe(true);
-    expect(mockedConvertHeicToJpeg).toHaveBeenCalledWith(Buffer.from("heic-source"));
+    // Optimization runs before HEIC normalization, so convertHeicToJpeg is
+    // bypassed — the image is already re-encoded by the optimization pipeline.
+    expect(mockedConvertHeicToJpeg).not.toHaveBeenCalled();
     expect(describeImage).toHaveBeenCalledWith(
       expect.objectContaining({
-        buffer: Buffer.from("jpeg-normalized"),
-        fileName: "photo.heic",
+        buffer: expect.any(Buffer),
+        fileName: "photo.jpg",
         mime: "image/jpeg",
       }),
     );

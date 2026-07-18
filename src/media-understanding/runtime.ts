@@ -5,6 +5,7 @@ import { detectMime, kindFromMime, mimeTypeFromFilePath } from "@openclaw/media-
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import type { OpenClawConfig } from "../config/types.js";
 import { readLocalFileSafely } from "../infra/fs-safe.js";
+import { effectiveImageBytesCap, optimizeImageBufferForWebMedia } from "../media/web-media.js";
 import { DEFAULT_MAX_BYTES } from "./defaults.constants.js";
 import { normalizeImageDescriptionInput } from "./image-input-normalize.js";
 import { describeImageWithModel } from "./image-runtime.js";
@@ -14,7 +15,11 @@ import {
   normalizeMediaProviderId,
 } from "./provider-registry.js";
 import { resolveMediaRuntimeTimeoutMs } from "./resolve.js";
-import { findDecisionReason, normalizeDecisionReason } from "./runner.entries.js";
+import {
+  findDecisionReason,
+  normalizeDecisionReason,
+  resolveImageCompressionPolicyFromConfig,
+} from "./runner.entries.js";
 import {
   buildProviderRegistry,
   createMediaAttachmentCache,
@@ -256,16 +261,42 @@ export async function prepareImageDescriptionInput(params: PrepareImageDescripti
     cfg: params.cfg,
     timeoutMs,
   });
+
+  // Resolve image compression policy using the shared model-aware resolver
+  // so explicit model calls follow the same resize ladder as the image tool.
+  const imageCompression = await resolveImageCompressionPolicyFromConfig(params.cfg, {
+    provider: params.provider,
+    model: params.model,
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+  });
+
+  // Normalize HEIC/HEIF to JPEG before optimization so the optimizer
+  // receives a format it can resize. HEIC conversion must precede the
+  // web-media optimization boundary established by the merged HEIC fix.
   const normalizedImage = await normalizeImageDescriptionInput({
     buffer: image.buffer,
     fileName: image.fileName,
     mime: image.mime,
     maxBytes: DEFAULT_MAX_BYTES.image,
   });
-  return {
+
+  // Optimize the normalized image buffer. The effective cap is enforced
+  // after normalization, giving the source a chance to compress down.
+  const effectiveCap =
+    effectiveImageBytesCap(DEFAULT_MAX_BYTES.image, imageCompression) ?? DEFAULT_MAX_BYTES.image;
+  const normalizedFileName = normalizedImage.fileName ?? image.fileName;
+  const optimizedImage = await optimizeImageBufferForWebMedia({
     buffer: normalizedImage.buffer,
-    fileName: image.fileName,
-    mime: normalizedImage.mime,
+    contentType: normalizedImage.mime,
+    fileName: normalizedFileName,
+    maxBytes: effectiveCap,
+    imageCompression,
+  });
+
+  return {
+    buffer: optimizedImage.buffer,
+    fileName: optimizedImage.fileName ?? normalizedFileName,
+    mime: optimizedImage.contentType,
   };
 }
 
