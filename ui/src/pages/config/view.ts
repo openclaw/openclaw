@@ -865,7 +865,9 @@ const BUILTIN_THEME_OPTIONS: ThemeOption[] = [
    back to the spark icon otherwise. */
 function renderThemeCardVisual(id: ThemeName, activeTheme: ThemeName) {
   if (id === "custom" && activeTheme !== "custom") {
-    return html`<span class="settings-theme-card__icon" aria-hidden="true">${icons.spark}</span>`;
+    return html`<span class="settings-theme-card__icon" aria-hidden="true"
+      >${icons.download}</span
+    >`;
   }
   return html`
     <span class="settings-theme-card__palette" aria-hidden="true">
