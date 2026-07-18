@@ -40,6 +40,9 @@ export function teamsMeetingStatusCallSource(): string {
             // Teams mutes local/self-view and intentionally suppressed playback. Preserve
             // that product decision; only our own already-bridged source stays eligible.
             .filter((entry) => !entry.element.muted || bridgedElements.has(entry.element));
+          // The self-view often exists before Teams attaches remote playback. With the
+          // required output present, an all-filtered list is still a transient DOM state.
+          if (routeCandidates.length === 0) audioOutputRouteRetryable = true;
           if (canMutateSession) {
             for (const { element } of routeCandidates) {
               if (!originalMuteBySource.has(element)) {

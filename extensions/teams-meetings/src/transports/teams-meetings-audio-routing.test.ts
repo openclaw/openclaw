@@ -795,20 +795,27 @@ describe("Microsoft Teams meeting audio routing", () => {
         localRouteAttempts += 1;
       },
     };
-    const { result } = await runStatusScript({
+    const params = {
       allowMicrophone: true,
       devices: [
         { deviceId: "blackhole-input", kind: "audioinput", label: "BlackHole 2ch" },
         { deviceId: "blackhole-output", kind: "audiooutput", label: "BlackHole 2ch" },
       ],
       leave: control({ label: "Leave" }),
-      media: [remote, local],
       microphone: control({ label: "Turn microphone off", pressed: true }),
       microphoneDevice: control({ label: "BlackHole 2ch" }),
       priorMeeting: {
         identity: "teams-work:19:meeting_test@thread.v2",
       },
+    };
+    const pending = await runStatusScript({ ...params, media: [local] });
+    expect(pending.result).toMatchObject({
+      audioInputRouted: true,
+      audioOutputRouted: false,
+      audioOutputRouteRetryable: true,
     });
+
+    const { result } = await runStatusScript({ ...params, media: [remote, local] });
 
     expect(result.audioOutputRouted).toBe(true);
     expect(local.muted).toBe(true);
