@@ -327,6 +327,8 @@ export type SessionEntry = SessionRestartRecoveryState &
     runtimeMs?: number;
     /** Final persisted subagent run status, used after in-memory run archival. */
     status?: "running" | "done" | "failed" | "killed" | "timeout";
+    /** Compact user-facing reason for the latest failed or timed-out run. */
+    lastRunError?: string;
     /**
      * Session-level stop cutoff captured when /stop is received.
      * Messages at/before this boundary are skipped to avoid replaying

@@ -550,6 +550,32 @@ describe("gateway session utils", () => {
     }
   });
 
+  test("session rows and update events project the latest run failure reason", () => {
+    const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
+    const failed = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: {},
+      key: "agent:main:failed",
+      lightweightListRow: true,
+      skipTranscriptUsageFallback: true,
+      entry: {
+        sessionId: "session-failed",
+        updatedAt: 1,
+        status: "failed",
+        lastRunError: "Provider credits exhausted",
+      },
+    });
+
+    expect(failed.lastRunError).toBe("Provider credits exhausted");
+    expect(buildGatewaySessionEventFields({ sessionRow: failed }).lastRunError).toBe(
+      "Provider credits exhausted",
+    );
+
+    const cleared = { ...failed, status: "running" as const, lastRunError: undefined };
+    expect(buildGatewaySessionEventFields({ sessionRow: cleared }).lastRunError).toBeNull();
+  });
+
   test("session rows ignore malformed compaction checkpoints", () => {
     const row = buildGatewaySessionRow({
       cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),

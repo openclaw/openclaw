@@ -83,6 +83,7 @@ type TestChatPane = HTMLElement & {
     agentWorkspace: string | undefined,
     workspaceGit: boolean,
   ) => Promise<void>;
+  markSessionRead: (row: GatewaySessionRow | undefined) => void;
   renderPaneHeader: (
     workspace: ReturnType<typeof createSessionWorkspaceProps>,
     tasks: ReturnType<typeof createBackgroundTasksProps>,
@@ -572,6 +573,32 @@ describe("chat pane initialization", () => {
     expect(request).toHaveBeenCalledWith(
       "chat.startup",
       expect.objectContaining({ sessionKey: canonicalSessionKey }),
+    );
+  });
+});
+
+describe("chat pane read markers", () => {
+  it("marks an unread failure read even when its regular unread flag is false", () => {
+    const patch = vi.fn().mockResolvedValue(null);
+    const { pane } = createTestChatPane({
+      client: {} as GatewayBrowserClient,
+      sessions: { patch } as unknown as SessionCapability,
+    });
+
+    pane.markSessionRead({
+      key: "agent:main:current",
+      kind: "direct",
+      label: "Failed run",
+      updatedAt: 20,
+      endedAt: 20,
+      status: "failed",
+      unread: false,
+    });
+
+    expect(patch).toHaveBeenCalledWith(
+      "agent:main:current",
+      { unread: false },
+      { agentId: "main" },
     );
   });
 });

@@ -729,10 +729,15 @@ class ChatPane extends OpenClawLightDomElement {
 
   private markSessionRead(row: GatewaySessionRow | undefined) {
     const state = this.state;
+    if (!state?.connected || !row) {
+      return;
+    }
+    const failureAt = row.endedAt ?? row.updatedAt ?? 0;
+    const unreadFailure =
+      (row.status === "failed" || row.status === "timeout") &&
+      (row.lastReadAt == null || failureAt > row.lastReadAt);
     if (
-      !state?.connected ||
-      !row ||
-      !this.unreadPatchGuard.shouldPatch(state.sessionKey, row.unread)
+      !this.unreadPatchGuard.shouldPatch(state.sessionKey, row.unread === true || unreadFailure)
     ) {
       return;
     }

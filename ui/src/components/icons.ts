@@ -235,6 +235,21 @@ export const icons = {
       <path d="M12 17h.01" />
     </svg>
   `,
+  hand: html`
+    <svg viewBox="0 0 24 24">
+      <path d="M18 11V6a2 2 0 0 0-4 0v5" />
+      <path d="M14 10V4a2 2 0 0 0-4 0v6" />
+      <path d="M10 10.5V6a2 2 0 0 0-4 0v8" />
+      <path d="M6 14v-2a2 2 0 0 0-4 0v4c0 4.4 3.6 8 8 8h2c4.4 0 8-3.6 8-8v-5a2 2 0 0 0-4 0v2" />
+    </svg>
+  `,
+  key: html`
+    <svg viewBox="0 0 24 24">
+      <circle cx="7.5" cy="15.5" r="5.5" />
+      <path d="m21 2-9.6 9.6" />
+      <path d="m15.5 7.5 3 3L22 7l-3-3" />
+    </svg>
+  `,
   layoutComfortable: html`
     <svg viewBox="0 0 24 24">
       <rect width="16" height="5" x="4" y="4" rx="1.5" />

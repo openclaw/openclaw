@@ -23,6 +23,7 @@ import {
   sidebarSessionMetaId,
   storeSidebarCatalogGrouping,
   type SidebarRecentSession,
+  type SidebarSessionAttention,
 } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
 import { resolveSessionIcon } from "./session-icon-registry.ts";
@@ -30,6 +31,39 @@ import { renderSessionRowBadges } from "./session-row-badges.ts";
 import "./elapsed-time.ts";
 
 const SIDEBAR_VISIBLE_CHILD_SESSION_LIMIT = 4;
+
+function renderSessionAttentionIcon(attention: SidebarSessionAttention) {
+  if (attention.kind === "none") {
+    return nothing;
+  }
+  const icon =
+    attention.kind === "question"
+      ? icons.hand
+      : attention.kind === "approval"
+        ? icons.key
+        : icons.alertTriangle;
+  return html`<span
+    class="sidebar-session-attention__icon sidebar-session-attention__icon--${attention.kind}"
+    data-session-attention=${attention.kind}
+    aria-hidden="true"
+    >${icon}</span
+  >`;
+}
+
+function sessionAttentionSubtitle(attention: SidebarSessionAttention): string | undefined {
+  switch (attention.kind) {
+    case "question":
+      return t("sessionsView.waitingForAnswer");
+    case "approval":
+      return t("sessionsView.waitingForApproval");
+    case "error":
+      return t("sessionsView.runFailedReason", { reason: attention.reason });
+    case "none":
+      return undefined;
+    default:
+      return attention satisfies never;
+  }
+}
 
 /** Session-list presentation and catalog renderer wiring. */
 export abstract class AppSidebarSessionListElement extends AppSidebarMenusElement {
@@ -97,11 +131,13 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
     display?: CatalogBackingSessionDisplay,
   ) {
     const label = display?.label ?? session.label;
-    const subtitle = display
-      ? display.subtitle
-      : session.subtitle && session.workSession && session.subtitle !== session.label
-        ? session.subtitle
-        : undefined;
+    const subtitle =
+      sessionAttentionSubtitle(session.attention) ??
+      (display
+        ? display.subtitle
+        : session.subtitle && session.workSession && session.subtitle !== session.label
+          ? session.subtitle
+          : undefined);
     const meta = display?.meta ?? session.meta;
     const rowMeta = session.pinned ? "" : meta;
     const hasTrail = session.isChild && (session.runtimeMs != null || session.startedAt != null);
@@ -124,6 +160,11 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
       this.selectedSessionKeys.has(session.key) ? "sidebar-recent-session--selected" : "",
       session.pinned ? "session-row-host--pinned" : "",
       session.hasActiveRun ? "session-row-host--running" : "",
+      session.attention.kind === "error"
+        ? "sidebar-recent-session--attention-danger"
+        : session.attention.kind !== "none"
+          ? "sidebar-recent-session--attention-amber"
+          : "",
       this.draggingSessionKey === session.key ? "sidebar-recent-session--dragging" : "",
     ]
       .filter(Boolean)
@@ -167,11 +208,13 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
           aria-describedby=${metaId ?? nothing}
           @click=${(event: MouseEvent) => this.handleSessionRowClick(event, session)}
         >
-          ${session.pinned
-            ? html`<span class="sidebar-pinned-session__icon" aria-hidden="true"
-                >${resolveSessionIcon(session.icon)}</span
-              >`
-            : nothing}
+          ${session.attention.kind !== "none"
+            ? renderSessionAttentionIcon(session.attention)
+            : session.pinned
+              ? html`<span class="sidebar-pinned-session__icon" aria-hidden="true"
+                  >${resolveSessionIcon(session.icon)}</span
+                >`
+              : nothing}
           <span class="sidebar-recent-session__text">
             <span class="sidebar-recent-session__name hover-marquee">${label}</span>
             ${subtitle
@@ -297,7 +340,8 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
             child.containsActiveDescendant ||
             child.hasActiveRun ||
             child.status === "running" ||
-            child.runningChildCount > 0,
+            child.runningChildCount > 0 ||
+            child.attention.kind !== "none",
         );
     const hiddenChildCount = session.children.length - visibleChildren.length;
     return html`<div class="sidebar-session-tree" data-session-tree=${session.key}>
@@ -372,6 +416,8 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
     // Collapsed Coding still signals live runs so background work stays visible.
     const collapsedRunningDot =
       collapsed && section.work && section.rows.some((row) => row.hasActiveRun);
+    const collapsedAttentionDot =
+      collapsed && section.rows.some((row) => row.attention.kind !== "none");
     const acceptsSessions =
       isPinned ||
       (this.sessionsGrouping === "category" && (section.id === "ungrouped" || Boolean(group)));
@@ -454,6 +500,14 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
                         role="img"
                         aria-label=${t("sessionsView.activeRun")}
                         title=${t("sessionsView.activeRun")}
+                      ></span>`
+                    : nothing}
+                  ${collapsedAttentionDot
+                    ? html`<span
+                        class="sidebar-session-group-attention"
+                        role="img"
+                        aria-label=${t("sessionsView.attentionRequired")}
+                        title=${t("sessionsView.attentionRequired")}
                       ></span>`
                     : nothing}
                 </button>
