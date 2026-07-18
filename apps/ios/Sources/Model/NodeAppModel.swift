@@ -2976,6 +2976,8 @@ final class NodeAppModel {
         // Cancellation must also invalidate permission/preparation work before a
         // capture ID exists, or a dismissed dictation can start recording later.
         self.chatDictationCommandEpoch &+= 1
+        // The suspended starter owns the pending flag. Keep it set until that task
+        // unwinds so another start cannot overlap the cancelled preparation.
         guard let captureId = self.chatDictationCaptureId else { return }
         _ = self.talkMode.cancelPushToTalk(captureId: captureId)
         self.chatDictationCaptureId = nil

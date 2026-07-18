@@ -3136,6 +3136,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         #expect(!appModel.isChatDictationActive)
 
         appModel.cancelChatDictation()
+        #expect(appModel.isChatDictationPending)
         barrier.release()
 
         await #expect(throws: Error.self) {
