@@ -1460,7 +1460,10 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     tui.requestRender();
   };
   // Clipboard image paste support: stash a pending image attachment.
+  // Track the in-flight clipboard read so submit can await it (prevents race
+  // where a quick Enter after Ctrl+V sends the image with the wrong message).
   let pendingImageAttachments: ChatImageAttachment[] = [];
+  let inflightClipboardRead: Promise<void> | null = null;
 
   const submitHandler = createEditorSubmitHandler({
     editor,
@@ -1470,7 +1473,12 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     onSubmitError: notifySubmitError,
     admitMessage: admitChatMessage,
     onBlockedMessageSubmit: notifyBlockedChatSubmit,
-    consumeAttachments: () => {
+    consumeAttachments: async () => {
+      // Wait for any in-flight clipboard read to settle before consuming.
+      if (inflightClipboardRead) {
+        await inflightClipboardRead;
+        inflightClipboardRead = null;
+      }
       if (pendingImageAttachments.length === 0) return undefined;
       const att = pendingImageAttachments;
       pendingImageAttachments = [];
@@ -1551,7 +1559,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   };
 
   editor.onPasteImage = () => {
-    void (async () => {
+    const readPromise = (async () => {
       try {
         const img = await readClipboardImage();
         if (img) {
@@ -1564,6 +1572,13 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
         // Clipboard read failed silently — no image available.
       }
     })();
+    inflightClipboardRead = readPromise;
+    // Clean up the reference when done (only if still the same read).
+    void readPromise.then(() => {
+      if (inflightClipboardRead === readPromise) {
+        inflightClipboardRead = null;
+      }
+    });
   };
 
   tui.addInputListener((data) => {
