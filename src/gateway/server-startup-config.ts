@@ -7,6 +7,7 @@ import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.opencla
 import { measureDiagnosticsTimelineSpan } from "../infra/diagnostics-timeline.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { resolveAuthProfileSecretOwnerId } from "../secrets/runtime-auth-profile-owner.js";
 import {
   classifySecretResolutionErrorDegradations,
   isRetryableSecretDegradationReason,
@@ -585,9 +586,10 @@ export function createRuntimeSecretsActivator(params: {
         options.expectedRevision !== undefined &&
         hasActiveSecretsRuntimeSnapshotLineage(options.expectedRevision);
       const activeSnapshot = sourceOnlyOwnsLineage ? getActiveSecretsRuntimeSnapshot() : null;
+      const sourceOnlyDegradationGeneration = activeDegradationGeneration;
       const sourceOnlyContractRecovered =
         activeSnapshot !== null &&
-        activeDegradationGeneration !== null &&
+        sourceOnlyDegradationGeneration !== null &&
         activeDegradationSupportsSourceOnlyRecovery &&
         activeDegradationConfig !== null &&
         !hasSameSecretReloadContract(activeDegradationConfig, activeSnapshot.sourceConfig);
@@ -596,7 +598,7 @@ export function createRuntimeSecretsActivator(params: {
           const activeScope = resolvePreparedSecretsStateScope(activeSnapshot);
           publishDegradation(activeSnapshot, "reload", activeScope);
         } else {
-          publishRecovery(activeSnapshot.config, activeDegradationGeneration);
+          publishRecovery(activeSnapshot.config, sourceOnlyDegradationGeneration);
         }
       }
       return;
