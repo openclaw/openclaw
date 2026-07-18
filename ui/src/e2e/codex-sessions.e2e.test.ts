@@ -272,9 +272,8 @@ suite("Codex native session catalog", () => {
       expect(await section.getByText("Worktree fix session", { exact: true }).count()).toBe(1);
       const toggle = section.locator(".sidebar-session-group-toggle");
       expect(await toggle.getAttribute("title")).toBeNull();
-      await expect
-        .poll(() => section.locator(".sidebar-session-group-count").textContent())
-        .toBe("4");
+      // Counts only render while a section is collapsed.
+      expect(await section.locator(".sidebar-session-group-count").count()).toBe(0);
 
       const groupingToggle = section.locator('[data-session-catalog-grouping-toggle="codex"]');
       await groupingToggle.click();
