@@ -16,6 +16,7 @@ type NavigationItem = {
 // Skills and Skill Workshop are tabs inside the Plugins hub, not sidebar items.
 // Session management lives in Settings (SETTINGS_NAVIGATION_GROUPS below).
 export const SIDEBAR_NAV_ROUTES = [
+  "custodian",
   "workboard",
   "usage",
   "cron",
@@ -40,6 +41,7 @@ export type SidebarNavRoute = (typeof SIDEBAR_NAV_ROUTES)[number];
 // Keep the highest-value operational destinations visible on first use. Users
 // can still replace this set through the customize menu.
 export const DEFAULT_SIDEBAR_PINNED_ROUTES = [
+  "custodian",
   "usage",
   "cron",
   "plugins",
@@ -121,7 +123,7 @@ export function settingsSearchTextMatches(value: string, query: string): boolean
 
 // Grouping feeds the full-page settings sidebar (settings-sidebar.ts).
 export const SETTINGS_NAVIGATION_GROUPS = [
-  { labelKey: null, routes: ["profile", "config", "appearance"] },
+  { labelKey: null, routes: ["custodian", "profile", "config", "appearance"] },
   {
     labelKey: "nav.settingsGroupConnections",
     routes: ["connection", "channels", "communications"],
@@ -133,6 +135,7 @@ export const SETTINGS_NAVIGATION_GROUPS = [
       "ai-agents",
       "sessions",
       "memory-import",
+      "model-setup",
       "model-providers",
       "automation",
       "mcp",
@@ -140,7 +143,16 @@ export const SETTINGS_NAVIGATION_GROUPS = [
   },
   {
     labelKey: "nav.settingsGroupSystem",
-    routes: ["infrastructure", "nodes", "worktrees", "debug", "logs", "activity", "about"],
+    routes: [
+      "infrastructure",
+      "nodes",
+      "approvals",
+      "worktrees",
+      "debug",
+      "logs",
+      "activity",
+      "about",
+    ],
   },
 ] as const satisfies readonly SettingsNavigationGroup[];
 
@@ -148,9 +160,16 @@ const SETTINGS_NAVIGATION_ROUTES: readonly NavigationRouteId[] = SETTINGS_NAVIGA
   (group) => group.routes,
 );
 
+// Custodian is linked from Settings, but remains a workspace destination with
+// normal app chrome when opened from either Settings or the pinned sidebar.
+const SETTINGS_TAKEOVER_ROUTES = SETTINGS_NAVIGATION_ROUTES.filter(
+  (routeId) => routeId !== "custodian",
+);
+
 const NAVIGATION_ICONS: NavigationItem = {
   agents: "bot",
   activity: "activity",
+  approvals: "shieldCheck",
   workboard: "kanban",
   worktrees: "folder",
   channels: "link",
@@ -164,6 +183,7 @@ const NAVIGATION_ICONS: NavigationItem = {
   "skill-workshop": "wrench",
   nodes: "monitorSmartphone",
   chat: "messageSquare",
+  custodian: "lobster",
   config: "settings",
   profile: "lobster",
   communications: "send",
@@ -173,6 +193,7 @@ const NAVIGATION_ICONS: NavigationItem = {
   infrastructure: "globe",
   about: "fileText",
   "ai-agents": "brain",
+  "model-setup": "spark",
   "model-providers": "plug",
   "memory-import": "download",
   debug: "bug",
@@ -182,7 +203,7 @@ const NAVIGATION_ICONS: NavigationItem = {
 };
 
 export function isSettingsNavigationRoute(routeId: NavigationRouteId): boolean {
-  return (SETTINGS_NAVIGATION_ROUTES as readonly NavigationRouteId[]).includes(routeId);
+  return (SETTINGS_TAKEOVER_ROUTES as readonly NavigationRouteId[]).includes(routeId);
 }
 
 export function navigationIconForRoute(routeId: NavigationRouteId): IconName {
@@ -240,6 +261,7 @@ export function cancelRoutePreload(
 const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey: string }> = {
   agents: { titleKey: "tabs.agents", subtitleKey: "subtitles.agents" },
   activity: { titleKey: "tabs.activity", subtitleKey: "subtitles.activity" },
+  approvals: { titleKey: "tabs.approvals", subtitleKey: "subtitles.approvals" },
   workboard: { titleKey: "tabs.workboard", subtitleKey: "subtitles.workboard" },
   worktrees: { titleKey: "tabs.worktrees", subtitleKey: "subtitles.worktrees" },
   channels: { titleKey: "tabs.channels", subtitleKey: "subtitles.channels" },
@@ -256,6 +278,7 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
   },
   nodes: { titleKey: "tabs.nodes", subtitleKey: "subtitles.nodes" },
   chat: { titleKey: "tabs.chat", subtitleKey: "subtitles.chat" },
+  custodian: { titleKey: "tabs.custodian", subtitleKey: "subtitles.custodian" },
   config: { titleKey: "nav.settings", subtitleKey: "subtitles.config" },
   profile: { titleKey: "tabs.profile", subtitleKey: "subtitles.profile" },
   communications: {
@@ -268,6 +291,7 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
   infrastructure: { titleKey: "tabs.infrastructure", subtitleKey: "subtitles.infrastructure" },
   about: { titleKey: "tabs.about", subtitleKey: "subtitles.about" },
   "ai-agents": { titleKey: "tabs.aiAgents", subtitleKey: "subtitles.aiAgents" },
+  "model-setup": { titleKey: "tabs.modelSetup", subtitleKey: "subtitles.modelSetup" },
   "model-providers": {
     titleKey: "tabs.modelProviders",
     subtitleKey: "subtitles.modelProviders",
@@ -289,7 +313,13 @@ export function titleForRoute(routeId: NavigationRouteId): string {
  * sibling sections.
  */
 export function settingsNavigationLabelForRoute(routeId: NavigationRouteId): string {
-  return routeId === "config" ? t("nav.settingsGeneral") : titleForRoute(routeId);
+  if (routeId === "config") {
+    return t("nav.settingsGeneral");
+  }
+  if (routeId === "custodian") {
+    return t("nav.askOpenClaw");
+  }
+  return titleForRoute(routeId);
 }
 
 export function subtitleForRoute(routeId: NavigationRouteId): string {

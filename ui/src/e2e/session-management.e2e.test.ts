@@ -18,6 +18,13 @@ const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 const collapsedSessionSectionsStorageKey = "openclaw:sidebar:sessions:collapsed-sections";
+const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+const uiProofArtifactDir = path.join(
+  process.cwd(),
+  ".artifacts",
+  "control-ui-e2e",
+  "thread-management",
+);
 
 let browser: Browser;
 let server: ControlUiE2eServer;
@@ -34,6 +41,9 @@ function sessionRow(
     hasActiveRun?: boolean;
     status?: string;
     spawnedBy?: string;
+    startedAt?: number;
+    endedAt?: number;
+    childSessions?: string[];
     execNode?: string;
     worktree?: { branch?: string; repoRoot?: string };
   } = {},
@@ -101,7 +111,7 @@ async function waitForPatch(
       return match;
     }
     await new Promise((resolve) => {
-      setTimeout(resolve, 50);
+      setTimeout(resolve, 10);
     });
   }
   throw new Error(`No matching sessions.patch request found: ${JSON.stringify(requests)}`);
@@ -126,12 +136,11 @@ function actionPointerEvents(button: Locator): Promise<string> {
 }
 
 async function captureUiProof(page: Page, fileName: string) {
-  if (process.env.OPENCLAW_CAPTURE_UI_PROOF !== "1") {
+  if (!captureUiProofEnabled) {
     return;
   }
-  const artifactDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "thread-management");
-  await mkdir(artifactDir, { recursive: true });
-  await page.screenshot({ fullPage: true, path: path.join(artifactDir, fileName) });
+  await mkdir(uiProofArtifactDir, { recursive: true });
+  await page.screenshot({ fullPage: true, path: path.join(uiProofArtifactDir, fileName) });
 }
 
 describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
@@ -183,6 +192,84 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       await page.locator('[data-session-section="category:Recovered group"]').waitFor({
         state: "visible",
       });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("expands child sessions inline and opens a child chat", async () => {
+    const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
+    const parentKey = "agent:main:release-plan";
+    const childOneKey = "agent:main:research-sources";
+    const childTwoKey = "agent:main:verify-tests";
+    const context = await browser.newContext({
+      colorScheme: "dark",
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": {
+          cases: [
+            {
+              match: { spawnedBy: parentKey },
+              response: sessionsListResponse([
+                sessionRow(childOneKey, "Research sources", baseTime - 1_000, {
+                  hasActiveRun: true,
+                  spawnedBy: parentKey,
+                  startedAt: baseTime - 61_000,
+                  status: "running",
+                }),
+                sessionRow(childTwoKey, "Verify tests", baseTime - 2_000, {
+                  endedAt: baseTime - 2_000,
+                  spawnedBy: parentKey,
+                  startedAt: baseTime - 62_000,
+                  status: "done",
+                }),
+              ]),
+            },
+            {
+              response: sessionsListResponse([
+                sessionRow(parentKey, "Plan release", baseTime, {
+                  childSessions: [childOneKey, childTwoKey],
+                }),
+              ]),
+            },
+          ],
+        },
+      },
+      sessionKey: parentKey,
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat?session=${encodeURIComponent(parentKey)}`);
+      const parent = page.locator(`[data-session-key="${parentKey}"]`);
+      await parent.waitFor({ state: "visible", timeout: 10_000 });
+      await expect.poll(() => page.locator(".sidebar-recent-session--child").count()).toBe(0);
+      await captureUiProof(page, "child-sessions-collapsed.png");
+
+      await parent.getByRole("button", { name: "Show 2 child sessions for Plan release" }).click();
+      await page.getByText("Research sources", { exact: true }).waitFor({ state: "visible" });
+      await page.getByText("Verify tests", { exact: true }).waitFor({ state: "visible" });
+      await expect
+        .poll(async () =>
+          (await gateway.getRequests("sessions.list")).some(
+            (request) => requireRecord(request.params).spawnedBy === parentKey,
+          ),
+        )
+        .toBe(true);
+
+      const childRows = page.locator(".sidebar-recent-session--child");
+      await expect.poll(() => childRows.count()).toBe(2);
+      expect(await childRows.getByRole("button", { name: "Open session menu" }).count()).toBe(0);
+      await childRows.nth(0).getByRole("img", { name: "Active run" }).waitFor();
+      await childRows.nth(1).getByRole("img", { name: "Done" }).waitFor();
+      await captureUiProof(page, "child-sessions-expanded.png");
+
+      await childRows.nth(1).getByRole("link").click();
+      await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBe(childTwoKey);
     } finally {
       await context.close();
     }
@@ -1245,6 +1332,74 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
     }
   });
 
+  it("pins a session dropped into the Pinned group", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+      recordVideo: captureUiProofEnabled
+        ? { dir: uiProofArtifactDir, size: { height: 900, width: 1280 } }
+        : undefined,
+    });
+    const page = await context.newPage();
+    const proofVideo = page.video();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": sessionsListResponse([
+          sessionRow(
+            "agent:main:pinned",
+            "Already pinned",
+            Date.parse("2026-07-01T16:00:00.000Z"),
+            {
+              pinned: true,
+            },
+          ),
+          sessionRow("agent:main:candidate", "Pin me", Date.parse("2026-07-01T15:59:00.000Z"), {
+            category: "Research",
+          }),
+        ]),
+        "sessions.patch": {},
+      },
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.groups.list"],
+      sessionKey: "agent:main:candidate",
+      sessionGroups: ["Research"],
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+
+      const pinnedGroup = page.locator('[data-session-section="pinned"]');
+      const researchGroup = page.locator('[data-session-section="category:Research"]');
+      await expect
+        .poll(() => trimmedTextContents(pinnedGroup.locator(".sidebar-recent-session__name")))
+        .toEqual(["Already pinned"]);
+      await captureUiProof(page, "sidebar-session-before-pinned-drop.png");
+      await researchGroup
+        .locator('.sidebar-recent-session[data-session-key="agent:main:candidate"]')
+        .dragTo(pinnedGroup);
+
+      const pinPatch = await waitForPatch(
+        gateway,
+        (params) => params.key === "agent:main:candidate" && params.pinned === true,
+      );
+      expect(requireRecord(pinPatch.params)).toMatchObject({
+        key: "agent:main:candidate",
+        pinned: true,
+      });
+      expect(requireRecord(pinPatch.params)).not.toHaveProperty("category");
+      await expect
+        .poll(() => trimmedTextContents(pinnedGroup.locator(".sidebar-recent-session__name")))
+        .toEqual(["Already pinned", "Pin me"]);
+      await expect.poll(() => researchGroup.locator(".sidebar-recent-session").count()).toBe(0);
+      await captureUiProof(page, "sidebar-session-dropped-into-pinned.png");
+    } finally {
+      await context.close();
+      if (proofVideo) {
+        await proofVideo.saveAs(path.join(uiProofArtifactDir, "sidebar-session-pinned-drop.webm"));
+      }
+    }
+  });
+
   it("keeps raw ids out of work rows and survives rows growing subtitles in place", async () => {
     const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
     const nodeHash = "11c38726acc6fac280357576c87acc6fac280357";
@@ -1390,7 +1545,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       for (let pageIndex = 0; pageIndex < 3; pageIndex += 1) {
         await seeMore.click();
       }
-      await page.locator(".sidebar-recent-sessions").evaluate((element) => {
+      await page.locator(".sidebar-shell__body").evaluate((element) => {
         element.scrollTop = 0;
       });
       await expect
@@ -1422,9 +1577,9 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       expect(overlaps).toBe(0);
 
       // The squeeze regression compressed sections into the viewport with no
-      // overflow; a healthy list is taller than its container and scrolls.
+      // overflow; a healthy sidebar body is taller than its viewport and scrolls.
       const scroll = await page.evaluate(() => {
-        const list = document.querySelector(".sidebar-recent-sessions");
+        const list = document.querySelector(".sidebar-shell__body");
         if (!list) {
           return null;
         }

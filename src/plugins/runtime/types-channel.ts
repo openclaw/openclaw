@@ -24,13 +24,14 @@ import type {
   RecordSessionMetaFromInbound,
   UpdateLastRoute,
 } from "../../config/sessions/runtime-types.js";
+import type {
+  ReadChannelAllowFromStoreForAccount,
+  RemoveChannelAllowFromStoreEntryForAccount,
+  UpsertChannelPairingRequestForAccount,
+} from "../../pairing/pairing-store.types.js";
 
 type DispatchReplyWithBufferedBlockDispatcher =
   import("../../auto-reply/reply/provider-dispatcher.types.js").DispatchReplyWithBufferedBlockDispatcher;
-type ReadChannelAllowFromStoreForAccount =
-  import("../../pairing/pairing-store.types.js").ReadChannelAllowFromStoreForAccount;
-type UpsertChannelPairingRequestForAccount =
-  import("../../pairing/pairing-store.types.js").UpsertChannelPairingRequestForAccount;
 type RecordInboundSession = import("../../channels/session.types.js").RecordInboundSession;
 
 type RuntimeThreadBindingLifecycleRecord =
@@ -129,6 +130,7 @@ export type PluginRuntimeChannel = {
   pairing: {
     buildPairingReply: typeof import("../../pairing/pairing-messages.js").buildPairingReply;
     readAllowFromStore: ReadChannelAllowFromStoreForAccount;
+    removeAllowFromStoreEntry: RemoveChannelAllowFromStoreEntryForAccount;
     upsertPairingRequest: UpsertChannelPairingRequestForAccount;
   };
   media: {
@@ -187,6 +189,8 @@ export type PluginRuntimeChannel = {
     run: typeof import("../../channels/turn/kernel.js").runChannelInboundEvent;
     /** @deprecated Prefer `run` for raw inbound events or `dispatchReply` for assembled contexts. */
     runPreparedReply: typeof import("../../channels/turn/kernel.js").runPreparedInboundReply;
+    dispatch: typeof import("../../channels/turn/kernel.js").dispatchChannelInboundTurn;
+    /** Compatibility escape hatch; prefer `dispatch`, which keeps session wiring in core. */
     dispatchReply: typeof import("../../channels/turn/kernel.js").dispatchChannelInboundReply;
   };
   threadBindings: {

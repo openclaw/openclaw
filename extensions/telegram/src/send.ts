@@ -17,9 +17,9 @@ import { isDiagnosticFlagEnabled } from "openclaw/plugin-sdk/diagnostic-runtime"
 import { formatUncaughtError } from "openclaw/plugin-sdk/error-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
-import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
+import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
-import { createTelegramRetryRunner, type RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
+import { createChannelApiRetryRunner, type RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
 import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -33,6 +33,7 @@ import { splitTelegramCaption } from "./caption.js";
 import { asTelegramClientFetch, createTelegramClientFetch } from "./client-fetch.js";
 import { resolveTelegramTransport, type TelegramTransport } from "./fetch.js";
 import {
+  markdownToTelegramChunks,
   renderTelegramHtmlText,
   splitTelegramHtmlChunks,
   telegramHtmlToPlainTextFallback,
@@ -59,8 +60,9 @@ import {
 } from "./reply-parameters.js";
 import { TELEGRAM_OUTBOUND_RETRY_AFTER_CAP_MS } from "./retry-after.js";
 import {
-  buildTelegramRichMessagePlan,
+  buildTelegramRichMarkdownPlan,
   getTelegramRichRawApi,
+  isEmptyTelegramRichMessage,
   removeTelegramRichNativeQuoteParam,
   splitTelegramRichMessageTextChunks,
   TELEGRAM_RICH_TEXT_LIMIT,
@@ -73,7 +75,7 @@ import {
   buildTelegramPlainFallbackPlan,
   isTelegramHtmlParseError,
   splitTelegramPlainTextChunks,
-  warnTelegramRichHtmlDegradations,
+  warnTelegramRichBlocksDegradations,
 } from "./rich-plain-fallback.js";
 import {
   buildOutboundMediaLoadOptions,
@@ -718,7 +720,7 @@ function createTelegramRequestWithDiag(params: {
   strictShouldRetry?: boolean;
   useApiErrorLogging?: boolean;
 }): TelegramRequestWithDiag {
-  const request = createTelegramRetryRunner({
+  const request = createChannelApiRetryRunner({
     retry: params.retry,
     configRetry: params.account.config.retry,
     verbose: params.verbose,
@@ -907,7 +909,9 @@ async function sendMessageTelegramWithContext(
   });
 
   const textMode = opts.textMode ?? "markdown";
-  const useRichMessages = account.config.richMessages === true;
+  // Caller-authored HTML keeps legacy parse_mode HTML semantics (literal
+  // newlines, 4096 chunking) even on rich accounts; blocks are markdown-only.
+  const useRichMessages = account.config.richMessages === true && textMode !== "html";
   const tableMode =
     opts.tableMode ??
     resolveMarkdownTableMode({
@@ -1091,8 +1095,16 @@ async function sendMessageTelegramWithContext(
   };
 
   const buildChunkedTextPlan = (rawText: string, context: string): TelegramTextChunk[] => {
+    if (textMode === "markdown") {
+      // Chunk Markdown before rendering so HTML expansion cannot introduce a
+      // second mid-word split. Caller-authored HTML keeps its safe splitter below.
+      return markdownToTelegramChunks(rawText, 4000, { tableMode }).map((chunk) => ({
+        htmlText: chunk.html,
+        plainText: telegramHtmlToPlainTextFallback(chunk.html),
+      }));
+    }
     const htmlText = renderHtmlText(rawText);
-    const fallbackText = textMode === "html" ? telegramHtmlToPlainTextFallback(htmlText) : rawText;
+    const fallbackText = telegramHtmlToPlainTextFallback(htmlText);
     let htmlChunks: string[];
     try {
       htmlChunks = splitTelegramHtmlChunks(htmlText, 4000);
@@ -1142,8 +1154,6 @@ async function sendMessageTelegramWithContext(
     return splitTelegramRichMessageTextChunks({
       text: rawText,
       textLimit,
-      textMode,
-      chunkMode: resolveChunkMode(cfg, "telegram", account.accountId),
       tableMode,
       skipEntityDetection: account.config.linkPreview === false,
     });
@@ -1177,14 +1187,14 @@ async function sendMessageTelegramWithContext(
       );
       let result: TelegramMessageLike;
       let recordedParams: TelegramThreadScopedParams | TelegramRichMessageContextParams | undefined;
-      if (!chunk.text?.trim()) {
-        // plainText derives from text via telegramHtmlToPlainTextFallback, so
-        // an empty rich render has no sendable fallback.
-        sendLogger.warn("telegram richMessage chunk rendered empty HTML; skipping");
+      if (isEmptyTelegramRichMessage(chunk.richMessage)) {
+        // Gate on the rich payload only: valid rich content (media/divider HTML)
+        // can have an empty plain projection and must still send.
+        sendLogger.warn("telegram richMessage chunk rendered empty; skipping");
         continue;
       }
       try {
-        warnTelegramRichHtmlDegradations({
+        warnTelegramRichBlocksDegradations({
           context: "richMessage",
           reasons: chunk.degradationReasons,
           warn: (message) => sendLogger.warn(message),
@@ -1198,9 +1208,7 @@ async function sendMessageTelegramWithContext(
               () =>
                 richRawApi.sendRichMessage({
                   chat_id: chatId,
-                  rich_message: chunk.skipEntityDetection
-                    ? { html: chunk.text, skip_entity_detection: true }
-                    : { html: chunk.text },
+                  rich_message: chunk.richMessage,
                   ...effectiveParams,
                   ...(opts.silent === true ? { disable_notification: true } : {}),
                 }),
@@ -1211,7 +1219,7 @@ async function sendMessageTelegramWithContext(
         recordedParams = toTelegramRichMessageContextParams(richResult.acceptedParams);
       } catch (err) {
         const fallbackPlan = buildTelegramPlainFallbackPlan({
-          html: chunk.text,
+          plainText: chunk.plainText,
           err,
           context: "richMessage",
           warn: (message) => sendLogger.warn(message),
@@ -2226,7 +2234,8 @@ async function editMessageTelegramWithContext(
   ) => requestWithDiag(fn, label, shouldLog ? { shouldLog } : undefined);
 
   const textMode = opts.textMode ?? "markdown";
-  const useRichMessages = account.config.richMessages === true;
+  // Caller-authored HTML edits keep legacy parse_mode HTML semantics too.
+  const useRichMessages = account.config.richMessages === true && textMode !== "html";
   const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "telegram",
@@ -2237,7 +2246,7 @@ async function editMessageTelegramWithContext(
   const plainText = textMode === "html" ? telegramHtmlToPlainTextFallback(htmlText) : text;
   const richRawApi = useRichMessages ? getTelegramRichRawApi(api) : undefined;
   const richMessagePlan = useRichMessages
-    ? buildTelegramRichMessagePlan(text, textMode, {
+    ? buildTelegramRichMarkdownPlan(text, {
         skipEntityDetection: opts.linkPreview === false,
         tableMode,
       })
@@ -2285,7 +2294,7 @@ async function editMessageTelegramWithContext(
     if (richRawApi && richMessagePlan) {
       const richEditParams: Pick<TelegramEditRichMessageTextParams, "reply_markup"> =
         replyMarkup === undefined ? {} : { reply_markup: replyMarkup };
-      warnTelegramRichHtmlDegradations({
+      warnTelegramRichBlocksDegradations({
         context: "editMessage",
         reasons: richMessagePlan.degradationReasons,
         warn: (message) => sendLogger.warn(message),
@@ -2302,7 +2311,7 @@ async function editMessageTelegramWithContext(
         (err) => !isTelegramMessageNotModifiedError(err),
       ).catch((err: unknown) => {
         const fallbackPlan = buildTelegramPlainFallbackPlan({
-          html: richMessagePlan.richMessage.html,
+          plainText: richMessagePlan.plainText,
           err,
           context: "editMessage",
           warn: (message) => sendLogger.warn(message),

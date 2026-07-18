@@ -187,7 +187,6 @@ describe("Feishu bot-menu lifecycle", () => {
         SessionKey: "agent:bound-agent:feishu:direct:ou_user1",
         MessageSid: "bot-menu:quick-actions:1700000000001",
       }),
-      undefined,
     );
     expect(touchBindingMock).toHaveBeenCalledWith("binding-menu");
 

@@ -1104,11 +1104,6 @@
       "translated": "Не вдалося підготувати вкладення до надсилання."
     },
     {
-      "id": "native.android.0b29275eefad9863",
-      "source": "Could not queue message for later delivery.",
-      "translated": "Не вдалося додати повідомлення до черги для подальшого доставлення."
-    },
-    {
       "id": "native.android.c3899241029d152c",
       "source": "Offline queue is full ($OUTBOX_MAX_QUEUED messages); delete queued items first.",
       "translated": "Офлайн-черга заповнена ($OUTBOX_MAX_QUEUED повідомлень); спочатку видаліть елементи з черги."
@@ -1127,6 +1122,11 @@
       "id": "native.android.84af66e78ec02fa3",
       "source": "Gateway health not OK; cannot send",
       "translated": "Стан Gateway незадовільний; неможливо надіслати"
+    },
+    {
+      "id": "native.android.0b29275eefad9863",
+      "source": "Could not queue message for later delivery.",
+      "translated": "Не вдалося додати повідомлення до черги для подальшого доставлення."
     },
     {
       "id": "native.android.8c2ff49af3e78aee",
@@ -1187,11 +1187,6 @@
       "id": "native.android.a79d6ccab877c9ca",
       "source": "OpenClaw Active",
       "translated": "OpenClaw: активні"
-    },
-    {
-      "id": "native.android.f7a4f3bbcb0b2090",
-      "source": "${firstLine.take(157)}…",
-      "translated": "${firstLine.take(157)}…"
     },
     {
       "id": "native.android.356609f717b92350",
@@ -7034,9 +7029,94 @@
       "translated": "Не вдалося декодувати це зображення."
     },
     {
+      "id": "native.android.e2004e8205154dd2",
+      "source": "Couldn’t load background tasks",
+      "translated": "Не вдалося завантажити фонові завдання"
+    },
+    {
+      "id": "native.android.bfa286f1b0a3c526",
+      "source": "Couldn’t load task details",
+      "translated": "Не вдалося завантажити відомості про завдання"
+    },
+    {
+      "id": "native.android.6811e525782306c1",
+      "source": "Background tasks",
+      "translated": "Фонові завдання"
+    },
+    {
+      "id": "native.android.754676bf2d2a50e7",
+      "source": "Refresh background tasks",
+      "translated": "Оновити фонові завдання"
+    },
+    {
+      "id": "native.android.99e93f4520a61356",
+      "source": "No background tasks for this agent.",
+      "translated": "Для цього агента немає фонових завдань."
+    },
+    {
+      "id": "native.android.26f0aae060212535",
+      "source": "Finished",
+      "translated": "Завершено"
+    },
+    {
+      "id": "native.android.6f4ef7e03dd153f5",
+      "source": "Back to background tasks",
+      "translated": "Назад до фонових завдань"
+    },
+    {
+      "id": "native.android.193a6c8583fe0dfb",
+      "source": "${statusLabel} · ${task.runtime}",
+      "translated": "${statusLabel} · ${task.runtime}"
+    },
+    {
+      "id": "native.android.c00ea0e2c7802a9f",
+      "source": "Prompt",
+      "translated": "Запит"
+    },
+    {
+      "id": "native.android.4cdf83cd30fac87e",
+      "source": "Prompt unavailable",
+      "translated": "Запит недоступний"
+    },
+    {
+      "id": "native.android.a093c342398c1d62",
+      "source": "No output yet",
+      "translated": "Результатів ще немає"
+    },
+    {
+      "id": "native.android.3adeec85d4a8e797",
+      "source": "Output",
+      "translated": "Результат"
+    },
+    {
+      "id": "native.android.e378f4d3069dc5f4",
+      "source": "Queued",
+      "translated": "У черзі"
+    },
+    {
+      "id": "native.android.7e4ab752e691e19a",
+      "source": "Running",
+      "translated": "Виконується"
+    },
+    {
+      "id": "native.android.c3b1223090fc9f15",
+      "source": "Completed",
+      "translated": "Завершено"
+    },
+    {
+      "id": "native.android.7a5134f615d03ff9",
+      "source": "Failed",
+      "translated": "Не вдалося"
+    },
+    {
       "id": "native.android.6384b9802cfdacfe",
       "source": "$text ",
       "translated": "$text "
+    },
+    {
+      "id": "native.android.d1712183ebf86197",
+      "source": "Widget unavailable",
+      "translated": "Віджет недоступний"
     },
     {
       "id": "native.android.cd2033b0a82a72dd",
@@ -7299,9 +7379,9 @@
       "translated": "Не в мережі"
     },
     {
-      "id": "native.android.6b0f8ea129bca167",
-      "source": "More new chat options",
-      "translated": "Більше нових опцій чату"
+      "id": "native.android.6c2e520fd54edeb4",
+      "source": "Chat actions",
+      "translated": "Дії в чаті"
     },
     {
       "id": "native.android.0066c3883e9eff15",
@@ -7309,9 +7389,24 @@
       "translated": "Оновити чат"
     },
     {
+      "id": "native.android.b57a1b542cff8f55",
+      "source": "Background tasks",
+      "translated": "Фонові завдання"
+    },
+    {
       "id": "native.android.707eccff20a79f65",
       "source": "Chat",
       "translated": "Чат"
+    },
+    {
+      "id": "native.android.ec49cca2ed03f9f9",
+      "source": "Messages to recover",
+      "translated": "Messages to recover"
+    },
+    {
+      "id": "native.android.7983bb6667118aa1",
+      "source": "${item.count} message(s) need recovery. Re-enter anything you want to keep, then delete these rows.",
+      "translated": "${item.count} message(s) need recovery. Re-enter anything you want to keep, then delete these rows."
     },
     {
       "id": "native.android.882cc14a58e7e105",
@@ -7457,6 +7552,21 @@
       "id": "native.android.98a0d4d5bba788c4",
       "source": "OpenClaw is preparing a response.",
       "translated": "OpenClaw готує відповідь."
+    },
+    {
+      "id": "native.android.22d747642a3887cd",
+      "source": "$completedCount/${steps.size}",
+      "translated": "$completedCount/${steps.size}"
+    },
+    {
+      "id": "native.android.5d9378441e3bb86e",
+      "source": "Collapse plan checklist",
+      "translated": "Згорнути контрольний список плану"
+    },
+    {
+      "id": "native.android.cc46adc71637695d",
+      "source": "Expand plan checklist",
+      "translated": "Розгорнути контрольний список плану"
     },
     {
       "id": "native.android.f3806d79e43f568f",
@@ -10184,6 +10294,111 @@
       "translated": "OK"
     },
     {
+      "id": "native.apple.013dc12863bed23b",
+      "source": "Background task",
+      "translated": "Фонове завдання"
+    },
+    {
+      "id": "native.apple.d33ca570a77c6d6f",
+      "source": "Queued",
+      "translated": "У черзі"
+    },
+    {
+      "id": "native.apple.4e4498e6144974b7",
+      "source": "Completed",
+      "translated": "Завершено"
+    },
+    {
+      "id": "native.apple.8773684d27996e83",
+      "source": "Failed",
+      "translated": "Не виконано"
+    },
+    {
+      "id": "native.apple.92f69cf86443d64d",
+      "source": "Subagent",
+      "translated": "Субагент"
+    },
+    {
+      "id": "native.apple.924830db78883b2d",
+      "source": "Cron",
+      "translated": "Cron"
+    },
+    {
+      "id": "native.apple.d5433fcd3232cd16",
+      "source": "Task",
+      "translated": "Завдання"
+    },
+    {
+      "id": "native.apple.0b972513797e7385",
+      "source": "Loading background tasks…",
+      "translated": "Завантаження фонових завдань…"
+    },
+    {
+      "id": "native.apple.fb3147cbc796dd3a",
+      "source": "Tasks for this agent will appear here.",
+      "translated": "Тут з’являться завдання для цього агента."
+    },
+    {
+      "id": "native.apple.336cf64ef5611816",
+      "source": "No running tasks",
+      "translated": "Немає активних завдань"
+    },
+    {
+      "id": "native.apple.d5955a199881b73e",
+      "source": "Running",
+      "translated": "Виконується"
+    },
+    {
+      "id": "native.apple.a3c63b936f7f31a9",
+      "source": "No finished tasks",
+      "translated": "Немає завершених завдань"
+    },
+    {
+      "id": "native.apple.889ef61e5911c728",
+      "source": "Finished",
+      "translated": "Завершено"
+    },
+    {
+      "id": "native.apple.bb086e78b05fff33",
+      "source": "Background Tasks",
+      "translated": "Фонові завдання"
+    },
+    {
+      "id": "native.apple.b109300cc5265643",
+      "source": "Refresh",
+      "translated": "Оновити"
+    },
+    {
+      "id": "native.apple.51dd4026b0e770aa",
+      "source": "Prompt",
+      "translated": "Запит"
+    },
+    {
+      "id": "native.apple.e3268d00448fe1e3",
+      "source": "Loading…",
+      "translated": "Завантаження…"
+    },
+    {
+      "id": "native.apple.56b9f7324f04a28d",
+      "source": "Prompt unavailable.",
+      "translated": "Запит недоступний."
+    },
+    {
+      "id": "native.apple.f8ed60c4d4b277ed",
+      "source": "Output",
+      "translated": "Результат"
+    },
+    {
+      "id": "native.apple.f4545f1ff911f4e2",
+      "source": "No output yet.",
+      "translated": "Результату ще немає."
+    },
+    {
+      "id": "native.apple.e2c229b2828a7152",
+      "source": "Task Details",
+      "translated": "Відомості про завдання"
+    },
+    {
       "id": "native.apple.e5524d5756a62744",
       "source": "Unable to Export Transcript",
       "translated": "Не вдалося експортувати транскрипт"
@@ -10224,9 +10439,24 @@
       "translated": "Новий чат у Worktree"
     },
     {
+      "id": "native.apple.a1b0d289758e2213",
+      "source": "Sessions…",
+      "translated": "Сеанси…"
+    },
+    {
+      "id": "native.apple.17c13312e7532c89",
+      "source": "Background Tasks",
+      "translated": "Фонові завдання"
+    },
+    {
       "id": "native.apple.ced228bb4d20a726",
       "source": "Export Transcript",
       "translated": "Експортувати транскрипт"
+    },
+    {
+      "id": "native.apple.f26cef22f417abb4",
+      "source": "Show reasoning & tool activity",
+      "translated": "Показувати міркування та активність інструментів"
     },
     {
       "id": "native.apple.940e1f943750c94b",
@@ -12889,6 +13119,11 @@
       "translated": "Запустити самоперевірку поширення"
     },
     {
+      "id": "native.apple.c2cab769e36ad25d",
+      "source": "Apple Health",
+      "translated": "Apple Health"
+    },
+    {
       "id": "native.apple.dfbbe0f7c038894a",
       "source": "Discovery Debug Logs",
       "translated": "Журнали налагодження виявлення"
@@ -13694,6 +13929,21 @@
       "translated": "Перегляньте цей запит на виконання, перш ніж продовжити. Ваше рішення буде надіслано назад до gateway."
     },
     {
+      "id": "native.apple.d861d4796fad795b",
+      "source": "Plugin",
+      "translated": "Плагін"
+    },
+    {
+      "id": "native.apple.3e8bff33a33da259",
+      "source": "Tool",
+      "translated": "Інструмент"
+    },
+    {
+      "id": "native.apple.0122ae27422ef135",
+      "source": "Severity",
+      "translated": "Рівень серйозності"
+    },
+    {
       "id": "native.apple.1f2576ef69108e39",
       "source": "Host",
       "translated": "Хост"
@@ -14064,6 +14314,36 @@
       "translated": "Більше не показувати"
     },
     {
+      "id": "native.apple.e80408b30ca670f4",
+      "source": "Apple Health Summaries",
+      "translated": "Зведення Apple Health"
+    },
+    {
+      "id": "native.apple.1d9253b4d79e1a6b",
+      "source": "Apple Health data is unavailable on this device.",
+      "translated": "Дані Apple Health недоступні на цьому пристрої."
+    },
+    {
+      "id": "native.apple.f332b4fb6215a12a",
+      "source": "Reads steps, sleep, resting heart rate, and workouts from Apple Health only when a summary is requested. Only the aggregate leaves this device through your Gateway to your configured AI provider; raw samples stay on this device and results may remain in chat history.",
+      "translated": "Зчитує дані про кроки, сон, пульс у стані спокою та тренування з Apple Health лише за запитом на підсумок. Через ваш Gateway до налаштованого постачальника ШІ надсилаються лише агреговані дані; необроблені зразки залишаються на цьому пристрої, а результати можуть зберігатися в історії чату."
+    },
+    {
+      "id": "native.apple.279758eb7531d811",
+      "source": "Creates read-only summaries from the Apple Health app for steps, sleep, resting heart rate, and workouts. Only requested summaries leave this device through your Gateway to your configured AI provider; raw samples stay on this device.",
+      "translated": "Створює зведення лише для читання з програми Apple Health щодо кроків, сну, пульсу в стані спокою та тренувань. Лише запитані зведення залишають цей пристрій і передаються через ваш Gateway налаштованому постачальнику ШІ; необроблені зразки залишаються на цьому пристрої."
+    },
+    {
+      "id": "native.apple.9e29919ede21527e",
+      "source": "Turn Off Summaries",
+      "translated": "Вимкнути зведення"
+    },
+    {
+      "id": "native.apple.c229e9c6fa7bac3b",
+      "source": "Enable Apple Health Summaries",
+      "translated": "Увімкнути зведення Apple Health"
+    },
+    {
       "id": "native.apple.cf820096080f7031",
       "source": "OpenClaw uses your calendars to show events and scheduling context when you enable calendar access.",
       "translated": "OpenClaw використовує ваші календарі, щоб показувати події та контекст планування, коли ви надаєте доступ до календаря."
@@ -14109,14 +14389,14 @@
       "translated": "OpenClaw може використовувати дані про рух для підтримки взаємодій і автоматизацій з урахуванням пристрою."
     },
     {
-      "id": "native.apple.c86f7ba5b3762eb7",
-      "source": "After you enable Health Summaries, OpenClaw reads steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider.",
-      "translated": "Після ввімкнення підсумків здоров’я OpenClaw зчитує кроки, сон, пульс у стані спокою та тренування, щоб передавати запитані агреговані дані налаштованому постачальнику ШІ."
+      "id": "native.apple.1d3a6099d7e11895",
+      "source": "OpenClaw reads your steps, sleep, resting heart rate, and workouts from the Apple Health app to create summaries you request and send them through your Gateway to your configured AI provider.",
+      "translated": "OpenClaw зчитує дані про ваші кроки, сон, пульс у стані спокою та тренування з програми Apple Health, щоб створювати запитані вами зведення й надсилати їх через ваш Gateway налаштованому постачальнику ШІ."
     },
     {
-      "id": "native.apple.89de9bad79f17038",
-      "source": "OpenClaw does not write or change Health data. Health Summaries read steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider.",
-      "translated": "OpenClaw не записує і не змінює дані Health. Health Summaries зчитує кроки, сон, пульс у стані спокою та тренування, щоб надати запитані зведені дані вашому налаштованому AI-провайдеру."
+      "id": "native.apple.c90a204b3232c401",
+      "source": "OpenClaw does not write to the Apple Health app. It uses read-only data to create summaries you request and send them through your Gateway to your configured AI provider.",
+      "translated": "OpenClaw не записує дані до програми Apple Health. Він використовує дані лише для читання, щоб створювати запитані вами зведення й надсилати їх через ваш Gateway налаштованому постачальнику ШІ."
     },
     {
       "id": "native.apple.40ed4259ec869f1b",
@@ -15284,11 +15564,6 @@
       "translated": "Лише додавання"
     },
     {
-      "id": "native.apple.33df187e4402065a",
-      "source": "Health Summaries",
-      "translated": "Підсумки здоров’я"
-    },
-    {
       "id": "native.apple.0b10201d7e452dc4",
       "source": "Allow",
       "translated": "Дозволити"
@@ -15297,31 +15572,6 @@
       "id": "native.apple.3cb9ed2ae352f95c",
       "source": "Open Settings",
       "translated": "Відкрити налаштування"
-    },
-    {
-      "id": "native.apple.3f902cdb4d4e9176",
-      "source": "Health data is unavailable on this device.",
-      "translated": "Дані про здоров’я недоступні на цьому пристрої."
-    },
-    {
-      "id": "native.apple.33316ec020810816",
-      "source": "Shares only requested step, sleep, resting heart rate, and workout aggregates through your Gateway with your configured AI provider. Results may remain in chat history.",
-      "translated": "Передає налаштованому постачальнику ШІ через ваш Gateway лише запитані агреговані дані про кроки, сон, пульс у стані спокою та тренування. Результати можуть залишатися в історії чату."
-    },
-    {
-      "id": "native.apple.53fb25cb6e6aae6e",
-      "source": "Off by default. Enabling lets requested aggregates leave this iPhone through your Gateway and configured AI provider.",
-      "translated": "За замовчуванням вимкнено. Після ввімкнення запитані агреговані дані можуть залишати цей iPhone через ваш Gateway і налаштованого постачальника ШІ."
-    },
-    {
-      "id": "native.apple.6c2be9b001fb95b0",
-      "source": "Disable",
-      "translated": "Вимкнути"
-    },
-    {
-      "id": "native.apple.9eab20fbad55a0a9",
-      "source": "Enable & Share Summaries",
-      "translated": "Увімкнути підсумки й ділитися ними"
     },
     {
       "id": "native.apple.d9f9a74e25431256",
@@ -17024,6 +17274,36 @@
       "translated": "Gateway \\(found) не відповідає застосунку \\(required). Налаштування оновить його."
     },
     {
+      "id": "native.apple.86e7c86924ad0c70",
+      "source": "Repairing the OpenClaw Gateway update…",
+      "translated": "Відновлення оновлення OpenClaw Gateway…"
+    },
+    {
+      "id": "native.apple.b59713e1e3e7ee65",
+      "source": "Updating the OpenClaw Gateway to \\(targetVersion)…",
+      "translated": "Оновлення OpenClaw Gateway до версії \\(targetVersion)…"
+    },
+    {
+      "id": "native.apple.7772913c171b78ac",
+      "source": "Gateway update needs attention.",
+      "translated": "Оновлення Gateway потребує уваги."
+    },
+    {
+      "id": "native.apple.e831aa3b0ced39d4",
+      "source": "Gateway update failed.",
+      "translated": "Не вдалося оновити Gateway."
+    },
+    {
+      "id": "native.apple.681e41736dc87c67",
+      "source": "Gateway update finished, but verification failed.",
+      "translated": "Оновлення Gateway завершено, але перевірку не пройдено."
+    },
+    {
+      "id": "native.apple.66f44c526206f5de",
+      "source": "OpenClaw Gateway \\(installedVersion) is installed.",
+      "translated": "OpenClaw Gateway \\(installedVersion) встановлено."
+    },
+    {
       "id": "native.apple.6f14c557e2573526",
       "source": "Camera",
       "translated": "Камера"
@@ -18504,6 +18784,26 @@
       "translated": "Увімкнути кліпання та похитування іконки стану під час простою."
     },
     {
+      "id": "native.apple.093df96ad9d52a40",
+      "source": "Quick Chat",
+      "translated": "Швидкий чат"
+    },
+    {
+      "id": "native.apple.a66e340b4e1bd972",
+      "source": "Show a floating composer for quick messages, summoned with a global shortcut.",
+      "translated": "Показувати плаваюче поле введення для швидких повідомлень, яке викликається глобальним скороченням."
+    },
+    {
+      "id": "native.apple.d908ab245711bbd2",
+      "source": "Quick Chat shortcut",
+      "translated": "Швидка команда Quick Chat"
+    },
+    {
+      "id": "native.apple.6ae77665b5f4490f",
+      "source": "Global shortcut that opens a floating chat bar for the main session.",
+      "translated": "Глобальна швидка команда, що відкриває плаваючу панель чату для основного сеансу."
+    },
+    {
       "id": "native.apple.a66c725f98bfa823",
       "source": "Capabilities",
       "translated": "Можливості"
@@ -19189,6 +19489,11 @@
       "translated": "Відкрити чат"
     },
     {
+      "id": "native.apple.22334935d637c907",
+      "source": "Quick Chat",
+      "translated": "Quick Chat"
+    },
+    {
       "id": "native.apple.5e3cd7734f27f447",
       "source": "Close Canvas",
       "translated": "Закрити Canvas"
@@ -19524,9 +19829,9 @@
       "translated": "OpenClaw перевірить ще раз перед зміною будь-яких налаштувань висновування."
     },
     {
-      "id": "native.apple.c7a02803addf11fa",
-      "source": "Checking for Claude Code, Codex, Gemini, and saved API keys.",
-      "translated": "Перевірка наявності Claude Code, Codex, Gemini та збережених ключів API."
+      "id": "native.apple.a0a8f45082d0ba99",
+      "source": "Checking CLI logins, saved API keys, and local model servers on the Gateway.",
+      "translated": "Перевіряються входи через CLI, збережені ключі API та локальні сервери моделей на Gateway."
     },
     {
       "id": "native.apple.0fd3e5267cdf8250",
@@ -19534,9 +19839,9 @@
       "translated": "Не вдалося перевірити цей Gateway на наявність облікових записів ШІ"
     },
     {
-      "id": "native.apple.0af61b95d249c351",
-      "source": "Couldn’t check this Mac for AI accounts",
-      "translated": "Не вдалося перевірити цей Mac на наявність облікових записів ШІ"
+      "id": "native.apple.82ba8c9a69fbb84b",
+      "source": "Couldn’t check this Gateway for AI access",
+      "translated": "Не вдалося перевірити доступ до ШІ на цьому Gateway"
     },
     {
       "id": "native.apple.ab05bb1569f89077",
@@ -19579,14 +19884,34 @@
       "translated": "Скопіювати деталі налаштування"
     },
     {
-      "id": "native.apple.f5a157404f7a0eff",
-      "source": "No AI accounts found on this Mac",
-      "translated": "На цьому Mac не знайдено облікових записів ШІ"
+      "id": "native.apple.e0458fcb8c0536ea",
+      "source": "No usable AI access found on this Gateway",
+      "translated": "На цьому Gateway не знайдено придатного доступу до ШІ"
     },
     {
-      "id": "native.apple.76072d0308a553ca",
-      "source": "That’s fine — you can connect one with an API key or token. If you use Claude Code, Codex, or the Gemini CLI on this Mac, sign in there first and hit “Check again”.",
-      "translated": "Це нормально — ви можете підключити його за допомогою ключа API чи токена. Якщо ви використовуєте Claude Code, Codex або Gemini CLI на цьому Mac, спершу увійдіть там і натисніть «Перевірити ще раз»."
+      "id": "native.apple.1833f355381b12f3",
+      "source": "Connect a provider below with an API key or token, then check again.",
+      "translated": "Підключіть постачальника нижче за допомогою ключа API або токена, а потім перевірте ще раз."
+    },
+    {
+      "id": "native.apple.7345ff41fe96eaed",
+      "source": "Install one of these tools, then check again. You can also connect a provider below.",
+      "translated": "Установіть один із цих інструментів, а потім перевірте ще раз. Також нижче можна підключити постачальника."
+    },
+    {
+      "id": "native.apple.14b8c3e061779615",
+      "source": "Recommended installs",
+      "translated": "Рекомендовані для встановлення"
+    },
+    {
+      "id": "native.apple.e2749739df556643",
+      "source": "Detected, but not auto-tested",
+      "translated": "Виявлено, але не перевірено автоматично"
+    },
+    {
+      "id": "native.apple.5f604e17336ca8a7",
+      "source": "\\(candidate.label) — \\(candidate.detail)",
+      "translated": "\\(candidate.label) — \\(candidate.detail)"
     },
     {
       "id": "native.apple.5f28927fe23c11cb",
@@ -19604,11 +19929,6 @@
       "translated": "Перевірити ще раз"
     },
     {
-      "id": "native.apple.f179b0447a18bbf4",
-      "source": "Connect with an API key or token instead…",
-      "translated": "Підключитися за допомогою ключа API чи токена натомість…"
-    },
-    {
       "id": "native.apple.7fc409b6aaa6d3b9",
       "source": "Sign in with a provider",
       "translated": "Увійти через провайдера"
@@ -19622,6 +19942,11 @@
       "id": "native.apple.14b23c357d7a9eff",
       "source": "More sign-in options",
       "translated": "Більше варіантів входу"
+    },
+    {
+      "id": "native.apple.634c5b2f1e8ec40f",
+      "source": "API Keys",
+      "translated": "API Keys"
     },
     {
       "id": "native.apple.10971b41012d4f36",
@@ -19759,6 +20084,26 @@
       "translated": "Копіювати помилку"
     },
     {
+      "id": "native.apple.7dee24e5bf088dd5",
+      "source": "\\(incomplete) \\(Self.memoryNoun(incomplete)) could not be imported.",
+      "translated": "Не вдалося імпортувати \\(incomplete) \\(Self.memoryNoun(incomplete))."
+    },
+    {
+      "id": "native.apple.84189c39ea5803c6",
+      "source": "The Gateway returned an inconsistent provider plan. Try planning again.",
+      "translated": "Gateway повернув неузгоджений план постачальника. Спробуйте створити план ще раз."
+    },
+    {
+      "id": "native.apple.4c9e75d64cbc5cc2",
+      "source": "The Gateway did not return a usable import plan. Try planning again.",
+      "translated": "Gateway не повернув придатний план імпорту. Спробуйте створити план ще раз."
+    },
+    {
+      "id": "native.apple.2070bf43a67680ee",
+      "source": "The Gateway could not plan \\(plan.summary.errors) \\(Self.memoryNoun(plan.summary.errors)). Try again.",
+      "translated": "Gateway не зміг спланувати \\(plan.summary.errors) \\(Self.memoryNoun(plan.summary.errors)). Спробуйте ще раз."
+    },
+    {
       "id": "native.apple.1400567a01a8d7c0",
       "source": "<redacted secret>",
       "translated": "<прихований секрет>"
@@ -19802,6 +20147,106 @@
       "id": "native.apple.c8a2f8dc424fe447",
       "source": "Back",
       "translated": "Назад"
+    },
+    {
+      "id": "native.apple.7ca0977d5f73356d",
+      "source": "Bring your memories along",
+      "translated": "Перенесіть свої спогади"
+    },
+    {
+      "id": "native.apple.b57ee4f83cff23f3",
+      "source": "OpenClaw can bring useful context from AI tools you already use into your new assistant.",
+      "translated": "OpenClaw може перенести корисний контекст з інструментів ШІ, якими ви вже користуєтеся, до вашого нового асистента."
+    },
+    {
+      "id": "native.apple.46cab71d748860b8",
+      "source": "Looking for memories…",
+      "translated": "Пошук спогадів…"
+    },
+    {
+      "id": "native.apple.c9e5f1aebe85e201",
+      "source": "Checking supported AI tools on this Mac.",
+      "translated": "Перевірка підтримуваних інструментів ШІ на цьому Mac."
+    },
+    {
+      "id": "native.apple.77290f36f36f00e5",
+      "source": "No memories to import",
+      "translated": "Немає спогадів для імпорту"
+    },
+    {
+      "id": "native.apple.e5cca7b9f082ace9",
+      "source": "You can import memories later from the dashboard.",
+      "translated": "Ви зможете імпортувати спогади пізніше з панелі керування."
+    },
+    {
+      "id": "native.apple.963add2f12fd18cb",
+      "source": "Import memories",
+      "translated": "Імпортувати спогади"
+    },
+    {
+      "id": "native.apple.9db369e036a38a29",
+      "source": "Importing memories…",
+      "translated": "Імпортування спогадів…"
+    },
+    {
+      "id": "native.apple.71b8e38a5e7040ef",
+      "source": "Refresh plan",
+      "translated": "Оновити план"
+    },
+    {
+      "id": "native.apple.e87bec72cb9c9dbf",
+      "source": "Retry pending imports before refreshing the plan.",
+      "translated": "Повторіть імпорт елементів, що очікують, перш ніж оновлювати план."
+    },
+    {
+      "id": "native.apple.f678888102fded6e",
+      "source": "You can skip this and import later from the dashboard’s Memory import page.",
+      "translated": "Цей крок можна пропустити й імпортувати спогади пізніше на сторінці імпорту пам’яті в панелі керування."
+    },
+    {
+      "id": "native.apple.36108528c6acc448",
+      "source": "\\(provider.alreadyImportedCount) already imported",
+      "translated": "\\(provider.alreadyImportedCount) уже імпортовано"
+    },
+    {
+      "id": "native.apple.9b3444de8c9b2acc",
+      "source": "Imported \\(result.migrated) \\(self.memoryLabel(result.migrated)).",
+      "translated": "Імпортовано \\(result.migrated) \\(self.memoryLabel(result.migrated))."
+    },
+    {
+      "id": "native.apple.3252fea4dac8669a",
+      "source": "Couldn’t check for memories",
+      "translated": "Не вдалося перевірити наявність спогадів"
+    },
+    {
+      "id": "native.apple.d371deb696de9e6b",
+      "source": "Retry",
+      "translated": "Повторити"
+    },
+    {
+      "id": "native.apple.406ae454540725d0",
+      "source": "You can do this later from the dashboard’s Memory import page.",
+      "translated": "Це можна зробити пізніше на сторінці імпорту пам’яті в панелі керування."
+    },
+    {
+      "id": "native.apple.d1b5d99f67dae42e",
+      "source": "Your memories are ready",
+      "translated": "Ваші спогади готові"
+    },
+    {
+      "id": "native.apple.6dbe5b174271b62a",
+      "source": "Imported \\(imported) \\(self.memoryLabel(imported)) into OpenClaw.",
+      "translated": "Імпортовано \\(imported) \\(self.memoryLabel(imported)) в OpenClaw."
+    },
+    {
+      "id": "native.apple.d47b887f98e13e24",
+      "source": "\\(result.migrated) imported",
+      "translated": "Імпортовано: \\(result.migrated)"
+    },
+    {
+      "id": "native.apple.6ac3d513f0ec5da7",
+      "source": "You can manage imported memories anytime from the dashboard.",
+      "translated": "Ви можете будь-коли керувати імпортованими спогадами на панелі керування."
     },
     {
       "id": "native.apple.ea8beaeecef15e54",
@@ -20154,9 +20599,9 @@
       "translated": "Відкрити панель у рядку меню"
     },
     {
-      "id": "native.apple.f99e39e248dbc8ed",
-      "source": "Click the OpenClaw menu bar icon for quick chat and status.",
-      "translated": "Натисніть іконку OpenClaw у рядку меню для швидкого чату та стану."
+      "id": "native.apple.409bfb3a6e0f9f7c",
+      "source": "Click the OpenClaw menu bar icon for the compact chat panel and status.",
+      "translated": "Натисніть піктограму OpenClaw у рядку меню, щоб відкрити компактну панель чату та переглянути стан."
     },
     {
       "id": "native.apple.1b6cfcf3be8765c2",
@@ -20189,9 +20634,9 @@
       "translated": "Використовуйте панель + Canvas"
     },
     {
-      "id": "native.apple.774cf9fe7e3e289e",
-      "source": "Open the menu bar panel for quick chat; the agent can show previews and richer visuals in Canvas.",
-      "translated": "Open the menu bar panel for quick chat; the agent can show previews and richer visuals in Canvas."
+      "id": "native.apple.6022f5a79ed93235",
+      "source": "Open the compact chat panel; the agent can show previews and richer visuals in Canvas.",
+      "translated": "Відкрийте компактну панель чату; агент може показувати попередні перегляди та розширені візуальні матеріали в Canvas."
     },
     {
       "id": "native.apple.9b44b38b75a868d8",
@@ -20344,6 +20789,11 @@
       "translated": "Системний доступ"
     },
     {
+      "id": "native.apple.fee0f3732a447f35",
+      "source": "Location",
+      "translated": "Місцезнаходження"
+    },
+    {
       "id": "native.apple.89a4f5934df8268a",
       "source": "Setup",
       "translated": "Налаштування"
@@ -20459,46 +20909,6 @@
       "translated": "Запросити доступ"
     },
     {
-      "id": "native.apple.8d8386041799d2b0",
-      "source": "Automation (AppleScript)",
-      "translated": "Автоматизація (AppleScript)"
-    },
-    {
-      "id": "native.apple.bc935384479c2f48",
-      "source": "Notifications",
-      "translated": "Сповіщення"
-    },
-    {
-      "id": "native.apple.922a8b5e049ef146",
-      "source": "Accessibility",
-      "translated": "Доступність"
-    },
-    {
-      "id": "native.apple.c2f2fac8ab1ef9c0",
-      "source": "Screen Recording",
-      "translated": "Запис екрана"
-    },
-    {
-      "id": "native.apple.5ec94fe5a6864de7",
-      "source": "Microphone",
-      "translated": "Мікрофон"
-    },
-    {
-      "id": "native.apple.b27a5cb9cffe05f0",
-      "source": "Speech Recognition",
-      "translated": "Розпізнавання мовлення"
-    },
-    {
-      "id": "native.apple.3639c706ed77975c",
-      "source": "Camera",
-      "translated": "Камера"
-    },
-    {
-      "id": "native.apple.fee0f3732a447f35",
-      "source": "Location",
-      "translated": "Місцезнаходження"
-    },
-    {
       "id": "native.apple.4a4c10ca63e99590",
       "source": "Control other apps (e.g. Terminal) for automation actions",
       "translated": "Керування іншими застосунками (наприклад, Terminal) для дій автоматизації"
@@ -20537,6 +20947,211 @@
       "id": "native.apple.1f5015480ea0f783",
       "source": "Share location when requested by the agent",
       "translated": "Надсилати місцезнаходження на запит агента"
+    },
+    {
+      "id": "native.apple.65c21de72f06fd33",
+      "source": "OpenClaw updated",
+      "translated": "OpenClaw оновлено"
+    },
+    {
+      "id": "native.apple.6197fc2d1ebd6b2e",
+      "source": "Finishing your OpenClaw update",
+      "translated": "Завершення оновлення OpenClaw"
+    },
+    {
+      "id": "native.apple.226b698fbbfc3cc4",
+      "source": "Checking the Mac app and Gateway…",
+      "translated": "Перевірка застосунку для Mac і Gateway…"
+    },
+    {
+      "id": "native.apple.e9b1899627402a15",
+      "source": "Gateway recovery failed.",
+      "translated": "Не вдалося відновити Gateway."
+    },
+    {
+      "id": "native.apple.91debe404bb7affc",
+      "source": "The managed OpenClaw runtime could not be reinstalled.",
+      "translated": "Не вдалося повторно встановити кероване середовище виконання OpenClaw."
+    },
+    {
+      "id": "native.apple.1cc391ec928070c4",
+      "source": "Restarting and verifying the Gateway…",
+      "translated": "Перезапуск і перевірка Gateway…"
+    },
+    {
+      "id": "native.apple.37fe23aa33d9e76b",
+      "source": "Verifying the Mac node runtime…",
+      "translated": "Перевірка середовища виконання вузла Mac…"
+    },
+    {
+      "id": "native.apple.73e001baeae8e873",
+      "source": "Letting your agent know you’re back…",
+      "translated": "Сповіщаємо вашого агента про ваше повернення…"
+    },
+    {
+      "id": "native.apple.3b2db6e4144742dd",
+      "source": "Welcome back",
+      "translated": "З поверненням"
+    },
+    {
+      "id": "native.apple.69b54e24b90414dd",
+      "source": "OpenClaw \\(receipt.toVersion) and its Gateway are ready.",
+      "translated": "OpenClaw \\(receipt.toVersion) і його Gateway готові."
+    },
+    {
+      "id": "native.apple.f9d6fa6d7aaf23b6",
+      "source": "OpenClaw \\(receipt.toVersion) and its Mac node runtime are ready.",
+      "translated": "OpenClaw \\(receipt.toVersion) і його середовище виконання вузла Mac готові."
+    },
+    {
+      "id": "native.apple.a3fa88f5fd3c2732",
+      "source": "Your agent could not be notified yet. OpenClaw will retry after the next app launch.",
+      "translated": "Поки що не вдалося сповістити вашого агента. OpenClaw повторить спробу після наступного запуску застосунку."
+    },
+    {
+      "id": "native.apple.e9020028ddab1ba6",
+      "source": "OpenClaw could not notify your agent automatically. The app and Gateway update are complete.",
+      "translated": "OpenClaw не вдалося автоматично сповістити вашого агента. Оновлення застосунку та Gateway завершено."
+    },
+    {
+      "id": "native.apple.afc120cf0a96ea30",
+      "source": "OpenClaw could not notify your agent automatically. The app and Mac node update are complete.",
+      "translated": "OpenClaw не вдалося автоматично сповістити вашого агента. Оновлення застосунку та вузла Mac завершено."
+    },
+    {
+      "id": "native.apple.71ad85442725f45c",
+      "source": "OpenClaw could not confirm the agent notification. It will not retry, to avoid a duplicate welcome.",
+      "translated": "OpenClaw не вдалося підтвердити сповіщення агента. Повторної спроби не буде, щоб уникнути дублювання привітання."
+    },
+    {
+      "id": "native.apple.a3deea03e4870dd0",
+      "source": "The remote Gateway is older than this Mac app, so OpenClaw skipped the agent notification.",
+      "translated": "Віддалений Gateway старіший за цю програму для Mac, тому OpenClaw пропустив сповіщення агента."
+    },
+    {
+      "id": "native.apple.3636a8b503ff00d2",
+      "source": "The Gateway remains paused, so OpenClaw did not wake your agent.",
+      "translated": "Gateway залишається призупиненим, тому OpenClaw не активував вашого агента."
+    },
+    {
+      "id": "native.apple.0f533623878f3d67",
+      "source": "Gateway verification failed.",
+      "translated": "Не вдалося перевірити Gateway."
+    },
+    {
+      "id": "native.apple.3ab92d342b4fa00b",
+      "source": "The managed runtime does not match the updated Mac app.",
+      "translated": "Кероване середовище виконання не відповідає оновленій програмі для Mac."
+    },
+    {
+      "id": "native.apple.2cfad583503a9a41",
+      "source": "The Mac node did not restart.",
+      "translated": "Вузол Mac не перезапустився."
+    },
+    {
+      "id": "native.apple.5b9061db451b644a",
+      "source": "The Mac node did not become ready.",
+      "translated": "Вузол Mac не перейшов у стан готовності."
+    },
+    {
+      "id": "native.apple.54e76dabec1eb1c1",
+      "source": "The node service restarted but did not remain running.",
+      "translated": "Служба вузла перезапустилася, але не продовжила роботу."
+    },
+    {
+      "id": "native.apple.51fe0a453f99f5ad",
+      "source": "The Gateway did not start.",
+      "translated": "Gateway не запустився."
+    },
+    {
+      "id": "native.apple.9e9e4278e553c144",
+      "source": "The update is installed, but Gateway health did not become ready.",
+      "translated": "Оновлення встановлено, але перевірка стану Gateway не показала готовності."
+    },
+    {
+      "id": "native.apple.91a105faed454e5a",
+      "source": "The Gateway could not reconnect.",
+      "translated": "Gateway не вдалося повторно підключитися."
+    },
+    {
+      "id": "native.apple.9ac2dfa295929a92",
+      "source": "OpenClaw installed the update but could not verify the Gateway connection.",
+      "translated": "OpenClaw установив оновлення, але не зміг перевірити підключення до Gateway."
+    },
+    {
+      "id": "native.apple.3abafcfb64b362fb",
+      "source": "The Gateway could not be checked.",
+      "translated": "Не вдалося перевірити Gateway."
+    },
+    {
+      "id": "native.apple.00e3d2037782506c",
+      "source": "OpenClaw could not read the Gateway service ownership record. Retry after checking the Gateway LaunchAgent.",
+      "translated": "OpenClaw не вдалося прочитати запис про власника служби Gateway. Повторіть спробу після перевірки Gateway LaunchAgent."
+    },
+    {
+      "id": "native.apple.c4b8806a570dad31",
+      "source": "The Mac node could not be checked.",
+      "translated": "Не вдалося перевірити вузол Mac."
+    },
+    {
+      "id": "native.apple.0483bf19d612560b",
+      "source": "OpenClaw could not read the node service ownership record. Retry after checking the node LaunchAgent.",
+      "translated": "OpenClaw не вдалося прочитати запис про власника служби вузла. Повторіть спробу після перевірки LaunchAgent вузла."
+    },
+    {
+      "id": "native.apple.d0f712a2ed470a3e",
+      "source": "Gateway update needs help",
+      "translated": "Для оновлення Gateway потрібна допомога"
+    },
+    {
+      "id": "native.apple.e2ffc7753f75e1b8",
+      "source": "Update guide",
+      "translated": "Посібник з оновлення"
+    },
+    {
+      "id": "native.apple.3a6aaa0aa0be82e7",
+      "source": "Ask Discord",
+      "translated": "Запитати в Discord"
+    },
+    {
+      "id": "native.apple.11b9ee23142b1060",
+      "source": "Retry",
+      "translated": "Повторити"
+    },
+    {
+      "id": "native.apple.144b21229f65f2a4",
+      "source": "Continue",
+      "translated": "Продовжити"
+    },
+    {
+      "id": "native.apple.b3700cf60f4520dc",
+      "source": "Message \\(self.model.agentDisplay.name)",
+      "translated": "Повідомлення для \\(self.model.agentDisplay.name)"
+    },
+    {
+      "id": "native.apple.edf12ff583307f43",
+      "source": "Send a window screenshot",
+      "translated": "Надіслати знімок вікна"
+    },
+    {
+      "id": "native.apple.136cef9f750d3803",
+      "source": "Send message",
+      "translated": "Надіслати повідомлення"
+    },
+    {
+      "id": "native.apple.024725d220e79697",
+      "source": "Needs additional permissions",
+      "translated": "Потрібні додаткові дозволи"
+    },
+    {
+      "id": "native.apple.84027c0f438c7aaa",
+      "source": "Grant",
+      "translated": "Надати"
+    },
+    {
+      "id": "native.apple.a3332fa4db187973",
+      "source": "Not now",
+      "translated": "Не зараз"
     },
     {
       "id": "native.apple.1eeca02c45d3db5a",
@@ -21819,6 +22434,71 @@
       "translated": "Голосову активацію виявлено!"
     },
     {
+      "id": "native.apple.282d11786f2f4c4b",
+      "source": "Talk mode off",
+      "translated": "Режим розмови вимкнено"
+    },
+    {
+      "id": "native.apple.133d737c2b59e66d",
+      "source": "Talk mode paused",
+      "translated": "Режим розмови призупинено"
+    },
+    {
+      "id": "native.apple.c11a8fc78a7b2cf8",
+      "source": "Talk mode ready",
+      "translated": "Режим розмови готовий"
+    },
+    {
+      "id": "native.apple.62a4d588f4259d54",
+      "source": "Listening",
+      "translated": "Слухаю"
+    },
+    {
+      "id": "native.apple.d602e6304c3ef523",
+      "source": "Thinking",
+      "translated": "Обмірковую"
+    },
+    {
+      "id": "native.apple.2328556b7443e453",
+      "source": "Speaking",
+      "translated": "Говорю"
+    },
+    {
+      "id": "native.apple.b42b8777035baf64",
+      "source": "What would you like to work on?",
+      "translated": "Над чим ви хотіли б попрацювати?"
+    },
+    {
+      "id": "native.apple.448dfe21a7f3a883",
+      "source": "Check OpenClaw status",
+      "translated": "Перевірити стан OpenClaw"
+    },
+    {
+      "id": "native.apple.00f4977e0123ce7a",
+      "source": "Summarize the current OpenClaw status and tell me what needs attention.",
+      "translated": "Підсумуй поточний стан OpenClaw і скажи, що потребує уваги."
+    },
+    {
+      "id": "native.apple.9c1a9be47ac92727",
+      "source": "What can you do?",
+      "translated": "Що ти вмієш?"
+    },
+    {
+      "id": "native.apple.5101b6cab56c0faf",
+      "source": "Show me what you can help with on this Mac right now.",
+      "translated": "Покажи, із чим ти можеш допомогти на цьому Mac просто зараз."
+    },
+    {
+      "id": "native.apple.070fa91f6622e6cf",
+      "source": "Catch me up",
+      "translated": "Введи мене в курс справ"
+    },
+    {
+      "id": "native.apple.234ec45f4231edc4",
+      "source": "Summarize what happened in my sessions since yesterday.",
+      "translated": "Підсумуй, що відбулося в моїх сеансах від учора."
+    },
+    {
       "id": "native.apple.c5d8bca2d78e1b9b",
       "source": " (local filtered)",
       "translated": " (локально відфільтровано)"
@@ -22064,6 +22744,11 @@
       "translated": "Використано токенів: %@"
     },
     {
+      "id": "native.apple.2c865ac4a69645d3",
+      "source": "Widget unavailable",
+      "translated": "Віджет недоступний"
+    },
+    {
       "id": "native.apple.769b7dcea4708c40",
       "source": "Image",
       "translated": "Image"
@@ -22134,6 +22819,156 @@
       "translated": "Виконання інструментів…"
     },
     {
+      "id": "native.apple.3b932a47b4223a43",
+      "source": "Collapse plan",
+      "translated": "Згорнути план"
+    },
+    {
+      "id": "native.apple.b6b3b9af4c618060",
+      "source": "Expand plan",
+      "translated": "Розгорнути план"
+    },
+    {
+      "id": "native.apple.7cd6fb01b9f5d14a",
+      "source": "User",
+      "translated": "Користувач"
+    },
+    {
+      "id": "native.apple.8ec708a3605a2cc3",
+      "source": "Search sessions",
+      "translated": "Пошук сеансів"
+    },
+    {
+      "id": "native.apple.23b069b4e7f97039",
+      "source": "No Sessions",
+      "translated": "Немає сеансів"
+    },
+    {
+      "id": "native.apple.2d4ee298bdd1c05d",
+      "source": "No Results",
+      "translated": "Немає результатів"
+    },
+    {
+      "id": "native.apple.0058923f2ce8a3ec",
+      "source": "New Session",
+      "translated": "Новий сеанс"
+    },
+    {
+      "id": "native.apple.66ba42960eb4135b",
+      "source": "New session",
+      "translated": "Новий сеанс"
+    },
+    {
+      "id": "native.apple.36753ef2f1ed4264",
+      "source": "Rename Session",
+      "translated": "Перейменувати сеанс"
+    },
+    {
+      "id": "native.apple.c9de0a1510ef475f",
+      "source": "Session name",
+      "translated": "Назва сеансу"
+    },
+    {
+      "id": "native.apple.6ec5a13c0e6c20d9",
+      "source": "Rename",
+      "translated": "Перейменувати"
+    },
+    {
+      "id": "native.apple.4c76665d89af4bec",
+      "source": "Cancel",
+      "translated": "Скасувати"
+    },
+    {
+      "id": "native.apple.afb4e6c99c63a28d",
+      "source": "Delete Session",
+      "translated": "Видалити сеанс"
+    },
+    {
+      "id": "native.apple.3d4ef32e42f136a4",
+      "source": "The session and its transcript are removed from the gateway.",
+      "translated": "Сеанс і його розшифровку буде видалено з Gateway."
+    },
+    {
+      "id": "native.apple.90bcad5f067b4be1",
+      "source": "Delete “%@”?",
+      "translated": "Видалити «%@»?"
+    },
+    {
+      "id": "native.apple.9a7dca238fba628d",
+      "source": "Session running",
+      "translated": "Сеанс виконується"
+    },
+    {
+      "id": "native.apple.fcfbfe5e97a95e9c",
+      "source": "Session failed",
+      "translated": "Помилка сеансу"
+    },
+    {
+      "id": "native.apple.ac85292b16a7465f",
+      "source": "Unread",
+      "translated": "Непрочитане"
+    },
+    {
+      "id": "native.apple.a174cb1027a9b881",
+      "source": "Rename…",
+      "translated": "Перейменувати…"
+    },
+    {
+      "id": "native.apple.134d6bf84d58fb38",
+      "source": "Pin",
+      "translated": "Закріпити"
+    },
+    {
+      "id": "native.apple.e7815cc4ba359513",
+      "source": "Unpin",
+      "translated": "Відкріпити"
+    },
+    {
+      "id": "native.apple.83f9f2db7eef6a19",
+      "source": "Fork",
+      "translated": "Відгалузити"
+    },
+    {
+      "id": "native.apple.235614194dc19df2",
+      "source": "Mark Read",
+      "translated": "Позначити як прочитане"
+    },
+    {
+      "id": "native.apple.bc71f0d20b7f72a0",
+      "source": "Mark Unread",
+      "translated": "Позначити непрочитаним"
+    },
+    {
+      "id": "native.apple.c9e118f6aae18d97",
+      "source": "Archive",
+      "translated": "Архівувати"
+    },
+    {
+      "id": "native.apple.10365a351a1b58b3",
+      "source": "Restore",
+      "translated": "Відновити"
+    },
+    {
+      "id": "native.apple.660f63319b89bd8e",
+      "source": "Copy Session Key",
+      "translated": "Копіювати ключ сесії"
+    },
+    {
+      "id": "native.apple.4aeb7c14c26dabac",
+      "source": "Delete Session…",
+      "translated": "Видалити сесію…"
+    },
+    {
+      "id": "native.apple.6a3425ea2811ff88",
+      "source": "Gateway connected",
+      "translated": "Gateway підключено"
+    },
+    {
+      "id": "native.apple.e3958d1053259f1d",
+      "source": "Connecting…",
+      "translated": "Підключення…"
+    },
+    {
       "id": "native.apple.63320b6d5138c0db",
       "source": "Pinned",
       "translated": "Закріплено"
@@ -22189,6 +23024,16 @@
       "translated": "Сеансів не знайдено"
     },
     {
+      "id": "native.apple.f0e9d8f69c1d9190",
+      "source": "Restore",
+      "translated": "Відновити"
+    },
+    {
+      "id": "native.apple.666ba6eb696e649f",
+      "source": "Archive",
+      "translated": "Архівувати"
+    },
+    {
       "id": "native.apple.05cb1fecc5844b69",
       "source": "Pinned",
       "translated": "Закріплено"
@@ -22209,14 +23054,34 @@
       "translated": "Відкріпити"
     },
     {
-      "id": "native.apple.666ba6eb696e649f",
-      "source": "Archive",
-      "translated": "Архівувати"
+      "id": "native.apple.6de479e9d780869a",
+      "source": "Fork",
+      "translated": "Створити відгалуження"
     },
     {
-      "id": "native.apple.34b910911a05110e",
-      "source": "Unarchive",
-      "translated": "Розархівувати"
+      "id": "native.apple.1398a2f69867f22d",
+      "source": "Mark Read",
+      "translated": "Позначити прочитаним"
+    },
+    {
+      "id": "native.apple.4f259c4409cfcc75",
+      "source": "Mark Unread",
+      "translated": "Позначити непрочитаним"
+    },
+    {
+      "id": "native.apple.946b677d8dbf0f37",
+      "source": "Hide talk transcript",
+      "translated": "Приховати текстову версію розмови"
+    },
+    {
+      "id": "native.apple.cb1d1c999a859927",
+      "source": "Show talk transcript",
+      "translated": "Показати текстову версію розмови"
+    },
+    {
+      "id": "native.apple.e7beeef6043ffd2a",
+      "source": "System Default",
+      "translated": "Системне значення за замовчуванням"
     },
     {
       "id": "native.apple.c4e808a2ec8d49f5",
@@ -22267,6 +23132,21 @@
       "id": "native.apple.fe9f30f12f1dcfaf",
       "source": "Copy Message",
       "translated": "Копіювати повідомлення"
+    },
+    {
+      "id": "native.apple.b37ec7bd7dc1579a",
+      "source": "Reply",
+      "translated": "Відповісти"
+    },
+    {
+      "id": "native.apple.8d80a6bb3d6e99b0",
+      "source": "You",
+      "translated": "Ви"
+    },
+    {
+      "id": "native.apple.3b44a67aa284886f",
+      "source": "Assistant",
+      "translated": "Асистент"
     },
     {
       "id": "native.apple.f84b674ad395b694",
@@ -22369,9 +23249,34 @@
       "translated": "Це скине розмову для %@. Ключ сеансу залишиться незмінним."
     },
     {
+      "id": "native.apple.a92e96bed98bd553",
+      "source": "Rename Session",
+      "translated": "Перейменувати сесію"
+    },
+    {
+      "id": "native.apple.848e2388f3466f40",
+      "source": "Session name",
+      "translated": "Назва сесії"
+    },
+    {
+      "id": "native.apple.8d636ca6b4764418",
+      "source": "Rename",
+      "translated": "Перейменувати"
+    },
+    {
+      "id": "native.apple.32b4a79f1b889aa6",
+      "source": "Cancel",
+      "translated": "Скасувати"
+    },
+    {
       "id": "native.apple.2ee7858b00a47c42",
       "source": "Export Transcript",
       "translated": "Експортувати стенограму"
+    },
+    {
+      "id": "native.apple.4af0f566d39d7041",
+      "source": "Sessions",
+      "translated": "Сеанси"
     },
     {
       "id": "native.apple.b1f10b5e9113881d",
@@ -22404,14 +23309,74 @@
       "translated": "Модель"
     },
     {
+      "id": "native.apple.eb58552e43c8dde2",
+      "source": "New Session",
+      "translated": "Нова сесія"
+    },
+    {
       "id": "native.apple.5361129a24118af6",
       "source": "Refresh",
       "translated": "Оновити"
     },
     {
+      "id": "native.apple.2bcff4a8fa503739",
+      "source": "Sessions…",
+      "translated": "Сеанси…"
+    },
+    {
+      "id": "native.apple.c36e008b051adb38",
+      "source": "Rename Session…",
+      "translated": "Перейменувати сесію…"
+    },
+    {
+      "id": "native.apple.ea0ef95a159bffe0",
+      "source": "Fork Session",
+      "translated": "Створити відгалуження сесії"
+    },
+    {
+      "id": "native.apple.8768f9ed198edc54",
+      "source": "Unpin",
+      "translated": "Відкріпити"
+    },
+    {
+      "id": "native.apple.a8a2f4b248663f97",
+      "source": "Pin",
+      "translated": "Закріпити"
+    },
+    {
+      "id": "native.apple.e53f1d7e094dc542",
+      "source": "Mark Read",
+      "translated": "Позначити прочитаним"
+    },
+    {
+      "id": "native.apple.99579b05ec001672",
+      "source": "Mark Unread",
+      "translated": "Позначити непрочитаним"
+    },
+    {
+      "id": "native.apple.b39c58e213137cc8",
+      "source": "Restore",
+      "translated": "Відновити"
+    },
+    {
+      "id": "native.apple.6f5686f621b44307",
+      "source": "Archive",
+      "translated": "Архівувати"
+    },
+    {
+      "id": "native.apple.27ddbe5e4643b60f",
+      "source": "Copy Session Key",
+      "translated": "Копіювати ключ сеансу"
+    },
+    {
       "id": "native.apple.9b2ad72143b931bf",
       "source": "Export Transcript…",
       "translated": "Експортувати стенограму…"
+    },
+    {
+      "id": "native.apple.3294ababd29c4457",
+      "source": "Show reasoning & tool activity",
+      "translated": "Показувати міркування та дії інструментів"
     },
     {
       "id": "native.apple.4b24d792545e5086",
@@ -22437,76 +23402,6 @@
       "id": "native.apple.f0a4720df5f5f403",
       "source": "Compact Session",
       "translated": "Стиснути сесію"
-    },
-    {
-      "id": "native.apple.0b9fc81ff2031799",
-      "source": "Search sessions",
-      "translated": "Пошук сесій"
-    },
-    {
-      "id": "native.apple.f10d5ccfd0530fec",
-      "source": "No Results",
-      "translated": "Немає результатів"
-    },
-    {
-      "id": "native.apple.42b0ee4c8b3326b6",
-      "source": "No Sessions",
-      "translated": "Немає сесій"
-    },
-    {
-      "id": "native.apple.eb58552e43c8dde2",
-      "source": "New Session",
-      "translated": "Нова сесія"
-    },
-    {
-      "id": "native.apple.247771e4350c006f",
-      "source": "New session",
-      "translated": "Новий сеанс"
-    },
-    {
-      "id": "native.apple.d9a72d07e8d95d35",
-      "source": "Delete Session",
-      "translated": "Видалити сеанс"
-    },
-    {
-      "id": "native.apple.499537ec30a28ae0",
-      "source": "The session and its transcript are removed from the gateway.",
-      "translated": "Сеанс і його транскрипт видаляються з gateway."
-    },
-    {
-      "id": "native.apple.1bd1b747fd161df5",
-      "source": "Unread",
-      "translated": "Непрочитані"
-    },
-    {
-      "id": "native.apple.a8a2f4b248663f97",
-      "source": "Pin",
-      "translated": "Закріпити"
-    },
-    {
-      "id": "native.apple.8768f9ed198edc54",
-      "source": "Unpin",
-      "translated": "Відкріпити"
-    },
-    {
-      "id": "native.apple.27ddbe5e4643b60f",
-      "source": "Copy Session Key",
-      "translated": "Копіювати ключ сеансу"
-    },
-    {
-      "id": "native.apple.a994d072ab35cb35",
-      "source": "Delete Session…",
-      "translated": "Видалити сеанс…"
-    },
-    {
-      "id": "native.apple.22d5ce71e22a7f73",
-      "source": "Connecting…",
-      "translated": "Підключення…"
-    },
-    {
-      "id": "native.apple.8d0606ab1a2c0f44",
-      "source": "Gateway connected",
-      "translated": "Gateway підключено"
     },
     {
       "id": "native.apple.f74d150ce05205dd",

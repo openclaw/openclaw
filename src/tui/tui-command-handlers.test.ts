@@ -1688,9 +1688,8 @@ describe("tui command handlers", () => {
   it("preserves provider prefix for nested model ids in /model confirmation", async () => {
     // Some providers route to nested model ids that themselves contain a slash
     // (e.g. resolved.model: "moonshotai/kimi-k2.5" with modelProvider: "nvidia").
-    // The confirmation must still show the full nvidia/moonshotai/kimi-k2.5 ref
-    // to match the footer/status bar, not strip the provider just because the
-    // model id already contains a slash.
+    // The confirmation must still show the full nvidia/moonshotai/kimi-k2.5 ref,
+    // not strip the provider just because the model id already contains a slash.
     const patchSession = vi.fn().mockResolvedValue({
       ok: true,
       path: "/sessions/patch",
@@ -1826,6 +1825,19 @@ describe("tui command handlers", () => {
     await handleCommand("/queue:followup");
 
     expectSendChatFields(sendChat, { message: "/queue:followup" });
+  });
+
+  it("routes /queue directives through the local backend", async () => {
+    const { handleCommand, sendChat, addSystem } = createHarness({
+      opts: { local: true },
+      activeChatRunId: "run-active",
+      activityStatus: "streaming",
+    });
+
+    await handleCommand("/queue followup");
+
+    expectSendChatFields(sendChat, { message: "/queue followup" });
+    expect(addSystem).not.toHaveBeenCalledWith("/queue is unavailable in local mode");
   });
 
   it("blocks /queue while optimistic user message is pending", async () => {

@@ -37,21 +37,30 @@ const { createSessionStoreDir, createSelectedGlobalSessionStore, openClient } =
   setupGatewaySessionsTestHarness();
 const execFileAsync = promisify(execFile);
 
+function waitForFast<T>(
+  callback: () => T | Promise<T>,
+  options: { timeout?: number; interval?: number } = {},
+) {
+  return vi.waitFor(callback, { interval: 1, ...options });
+}
+
 async function initializeGitWorkspace(root: string): Promise<string> {
   const workspace = path.join(root, "workspace");
   await fs.mkdir(workspace, { recursive: true });
   await execFileAsync("git", ["-C", workspace, "init", "-b", "main"]);
-  await execFileAsync("git", ["-C", workspace, "config", "user.name", "OpenClaw Test"]);
-  await execFileAsync("git", [
-    "-C",
-    workspace,
-    "config",
-    "user.email",
-    "openclaw-test@example.invalid",
-  ]);
   await fs.writeFile(path.join(workspace, "README.md"), "base\n");
   await execFileAsync("git", ["-C", workspace, "add", "README.md"]);
-  await execFileAsync("git", ["-C", workspace, "commit", "-m", "initial"]);
+  await execFileAsync("git", [
+    "-c",
+    "user.name=OpenClaw Test",
+    "-c",
+    "user.email=openclaw-test@example.invalid",
+    "-C",
+    workspace,
+    "commit",
+    "-m",
+    "initial",
+  ]);
   return await fs.realpath(workspace);
 }
 
@@ -125,7 +134,7 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
       idempotencyKey: "session-worktree-cwd",
     });
     expect(run.ok, JSON.stringify(run)).toBe(true);
-    await vi.waitFor(() => expect(agentCommand).toHaveBeenCalled());
+    await waitForFast(() => expect(agentCommand).toHaveBeenCalled());
     expect(agentCommand.mock.calls.at(-1)?.[0]).toMatchObject({
       cwd: worktree?.path,
       workspaceDir: worktree?.path,
@@ -154,7 +163,17 @@ test("sessions.create honors worktree name/base ref and persists worktree info",
   await execFileAsync("git", ["-C", workspace, "checkout", "-b", "base-branch"]);
   await fs.writeFile(path.join(workspace, "base.txt"), "base\n");
   await execFileAsync("git", ["-C", workspace, "add", "base.txt"]);
-  await execFileAsync("git", ["-C", workspace, "commit", "-m", "base branch commit"]);
+  await execFileAsync("git", [
+    "-c",
+    "user.name=OpenClaw Test",
+    "-c",
+    "user.email=openclaw-test@example.invalid",
+    "-C",
+    workspace,
+    "commit",
+    "-m",
+    "base branch commit",
+  ]);
   const { stdout: baseCommitRaw } = await execFileAsync("git", [
     "-C",
     workspace,
@@ -612,7 +631,7 @@ test("sessions.create rejects worktrees for non-git agent workspaces", async () 
   }
 });
 
-test("sessions.create stores dashboard session model and parent linkage, and creates a transcript", async () => {
+test("sessions.create stores dashboard model, thinking, and parent linkage, and creates a transcript", async () => {
   const { storePath } = await createSessionStoreDir();
   agentDiscoveryMock.enabled = true;
   agentDiscoveryMock.models = [{ id: "gpt-test-a", name: "A", provider: "openai" }];
@@ -628,6 +647,7 @@ test("sessions.create stores dashboard session model and parent linkage, and cre
       label?: string;
       providerOverride?: string;
       modelOverride?: string;
+      thinkingLevel?: string;
       parentSessionKey?: string;
       sessionFile?: string;
     };
@@ -635,6 +655,7 @@ test("sessions.create stores dashboard session model and parent linkage, and cre
     agentId: "ops",
     label: "Dashboard Chat",
     model: "openai/gpt-test-a",
+    thinkingLevel: "high",
     parentSessionKey: "main",
   });
 
@@ -643,6 +664,7 @@ test("sessions.create stores dashboard session model and parent linkage, and cre
   expect(created.payload?.entry?.label).toBe("Dashboard Chat");
   expect(created.payload?.entry?.providerOverride).toBe("openai");
   expect(created.payload?.entry?.modelOverride).toBe("gpt-test-a");
+  expect(created.payload?.entry?.thinkingLevel).toBe("high");
   expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:main");
   const sessionFile = requireNonEmptyString(
     created.payload?.entry?.sessionFile,
@@ -658,6 +680,7 @@ test("sessions.create stores dashboard session model and parent linkage, and cre
   expect(storedEntry?.label).toBe("Dashboard Chat");
   expect(storedEntry?.providerOverride).toBe("openai");
   expect(storedEntry?.modelOverride).toBe("gpt-test-a");
+  expect(storedEntry?.thinkingLevel).toBe("high");
   expect(storedEntry?.parentSessionKey).toBe("agent:main:main");
   expect(sessionFile).toBe(storedEntry?.sessionFile);
 

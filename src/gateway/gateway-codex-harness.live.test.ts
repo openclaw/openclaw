@@ -60,6 +60,9 @@ const CODEX_HARNESS_GUARDIAN_PROBE = isTruthyEnvValue(
 const CODEX_HARNESS_CODE_MODE_ONLY = isTruthyEnvValue(
   process.env.OPENCLAW_LIVE_CODEX_HARNESS_CODE_MODE_ONLY,
 );
+const CODEX_HARNESS_DISABLE_LOOP_RELAY = isTruthyEnvValue(
+  process.env.OPENCLAW_LIVE_CODEX_HARNESS_DISABLE_LOOP_RELAY,
+);
 const CODEX_HARNESS_SUBAGENT_ONLY =
   CODEX_HARNESS_SUBAGENT_PROBE &&
   !CODEX_HARNESS_CHAT_IMAGE_PROBE &&
@@ -248,6 +251,37 @@ async function assertCodexHarnessSessionSelection(params: {
   expect(row?.thinkingLevel).toBe(CODEX_HARNESS_THINKING);
 }
 
+async function readCodexHarnessSessionUsageFreshness(params: {
+  client: GatewayClient;
+  sessionKey: string;
+}): Promise<boolean> {
+  const result: {
+    sessions?: Array<{
+      key?: string;
+      inputTokens?: number;
+      outputTokens?: number;
+      cacheRead?: number;
+      cacheWrite?: number;
+      totalTokens?: number;
+      totalTokensFresh?: boolean;
+    }>;
+  } = await params.client.request("sessions.list", {
+    includeGlobal: true,
+    limit: 200,
+  });
+  const row = result.sessions?.find((entry) => entry.key === params.sessionKey);
+  expect(row, `expected sessions.list row for ${params.sessionKey}`).toBeDefined();
+  const fresh = row?.totalTokensFresh === true;
+  if (fresh) {
+    expect(row?.totalTokens).toBeTypeOf("number");
+    expect(row?.totalTokens).toBeGreaterThan(0);
+  } else {
+    expect(row?.totalTokensFresh).toBe(false);
+  }
+  logCodexLiveStep("session-usage", row);
+  return fresh;
+}
+
 async function assertCodexHarnessTranscriptModelIdentity(params: {
   client: GatewayClient;
   modelKey: string;
@@ -272,6 +306,7 @@ async function assertCodexHarnessTranscriptModelIdentity(params: {
 async function writeLiveGatewayConfig(params: {
   codexAppServerMode?: "guardian" | "yolo";
   codeModeOnly?: boolean;
+  loopDetectionPreToolUseRelay?: boolean;
   configPath: string;
   modelKey: string;
   port: number;
@@ -294,6 +329,9 @@ async function writeLiveGatewayConfig(params: {
             appServer: {
               mode: params.codexAppServerMode ?? "yolo",
               ...(params.codeModeOnly === true ? { codeModeOnly: true } : {}),
+              ...(params.loopDetectionPreToolUseRelay === false
+                ? { loopDetectionPreToolUseRelay: false }
+                : {}),
             },
           },
         },
@@ -512,7 +550,7 @@ async function waitForChatAgentRunOk(client: GatewayClient, runId: string): Prom
     },
   );
   if (result?.status !== "ok") {
-    throw new Error(`agent.wait failed for ${runId}: status=${String(result?.status)}`);
+    throw new Error(`agent.wait failed for ${runId}: ${JSON.stringify(result)}`);
   }
 }
 
@@ -981,7 +1019,7 @@ async function verifyCodexSubagentProbe(params: {
   });
   try {
     const { testing: subagentSpawnTesting, spawnSubagentDirect } =
-      await import("../agents/subagent-spawn.js");
+      await import("../agents/subagent-spawn.test-support.js");
     const noOpContextEngine: ContextEngine = {
       info: { id: "codex-harness-subagent-smoke", name: "Codex harness subagent smoke" },
       ingest: async () => ({ ingested: false }),
@@ -1055,7 +1093,8 @@ async function verifyCodexSubagentProbe(params: {
       events,
     });
   } finally {
-    const { testing: subagentSpawnTesting } = await import("../agents/subagent-spawn.js");
+    const { testing: subagentSpawnTesting } =
+      await import("../agents/subagent-spawn.test-support.js");
     subagentSpawnTesting.setDepsForTest();
     unsubscribe();
   }
@@ -1170,6 +1209,7 @@ describeLive("gateway live (Codex harness)", () => {
         workspace,
         codexAppServerMode: CODEX_HARNESS_GUARDIAN_PROBE ? "guardian" : "yolo",
         codeModeOnly: CODEX_HARNESS_CODE_MODE_ONLY,
+        ...(CODEX_HARNESS_DISABLE_LOOP_RELAY ? { loopDetectionPreToolUseRelay: false } : {}),
       });
       const deviceIdentity = await ensurePairedTestGatewayClientIdentity({
         displayName: "vitest-codex-harness-live",
@@ -1296,6 +1336,27 @@ describeLive("gateway live (Codex harness)", () => {
                 modelKey,
                 sessionKey,
               });
+              const sessionUsageFresh = await readCodexHarnessSessionUsageFreshness({
+                client: activeClient,
+                sessionKey,
+              });
+              const openClawStatusText = await requestCodexCommandText({
+                client: activeClient,
+                events: gatewayEvents,
+                sessionKey,
+                command: "/status",
+                expectedText: "Context:",
+                isExpectedText: (text) =>
+                  text.split("\n").some((line) => {
+                    if (!line.includes("Context:")) {
+                      return false;
+                    }
+                    const reportsUnknown = line.includes("Context: ?/");
+                    return sessionUsageFresh ? !reportsUnknown : reportsUnknown;
+                  }),
+                predicateOnly: true,
+              });
+              logCodexLiveStep("openclaw-status-command", { statusText: openClawStatusText });
 
               if (CODEX_HARNESS_CODE_MODE_ONLY) {
                 logCodexLiveStep("code-mode-only-tool-probe:start", { sessionKey });

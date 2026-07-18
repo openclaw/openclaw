@@ -7,12 +7,15 @@ export type SessionCreateOutcome = {
 };
 
 export type SessionCreateParams = {
+  key?: string;
   agentId?: string;
+  catalogId?: string;
   currentSessionKey?: string;
   parentSessionKey?: string;
   fork?: boolean;
   label?: string;
   model?: string;
+  thinkingLevel?: string;
   worktree?: boolean;
   /** Base ref for the managed worktree branch; requires worktree. */
   worktreeBaseRef?: string;

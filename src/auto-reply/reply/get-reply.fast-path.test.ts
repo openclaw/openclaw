@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { testing as cliBackendsTesting } from "../../agents/cli-backends.js";
+import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -340,6 +340,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
         pendingFinalDeliveryCreatedAt: 1,
         pendingFinalDeliveryAttemptCount: 4,
         pendingFinalDeliveryLastError: null,
+        pendingFinalDeliveryIntentId: "stale-heartbeat-intent",
       },
     });
     const cfg = withFastReplyConfig({
@@ -361,6 +362,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(stored.pendingFinalDelivery).toBeUndefined();
     expect(stored.pendingFinalDeliveryText).toBeUndefined();
     expect(stored.pendingFinalDeliveryAttemptCount).toBeUndefined();
+    expect(stored.pendingFinalDeliveryIntentId).toBeUndefined();
   });
 
   it("keeps non-ack heartbeat pending delivery without direct replay", async () => {
