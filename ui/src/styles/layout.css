@@ -933,7 +933,7 @@ html.openclaw-native-web-chrome .shell:not(.shell--mobile-nav) .sidebar-brand .s
 
 .sidebar-shell__footer {
   flex-shrink: 0;
-  padding: 12px 0 0;
+  padding: 4px 0 0;
   border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
 }
 
@@ -2743,13 +2743,13 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   margin-left: auto;
 }
 
-/* Zone 5: product chrome in one slim footer bar. */
+/* Zone 5: product chrome in one slim footer bar. The shell footer's top
+   border is the only divider (and the pet's ledge); no second line here. */
 .sidebar-footer-bar {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px 8px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  padding: 6px 12px;
 }
 
 .sidebar-footer-bar__logo {
@@ -2792,8 +2792,8 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: 28px;
+  height: 28px;
   flex: none;
   border: none;
   border-radius: var(--radius-md);
@@ -2812,8 +2812,8 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
 }
 
 .sidebar-footer-bar__settings svg {
-  width: 15px;
-  height: 15px;
+  width: 17px;
+  height: 17px;
   stroke: currentColor;
   fill: none;
   stroke-width: 1.5px;
