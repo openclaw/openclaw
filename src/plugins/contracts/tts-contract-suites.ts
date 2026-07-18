@@ -1,5 +1,6 @@
 // TTS contract suites provide reusable text-to-speech plugin contract assertions.
-import http from "node:http";
+import http, { type Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createEmptyPluginRegistry,
@@ -7,6 +8,10 @@ import {
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { ResolvedTtsConfig, SpeechProviderPlugin } from "openclaw/plugin-sdk/speech-core";
+import {
+  fetchWithSsrFGuard,
+  ssrfPolicyFromHttpBaseUrlAllowedHostname,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 import { withEnv, withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AssistantMessage, Model } from "../../llm/types.js";
@@ -168,6 +173,42 @@ function createAudioBuffer(length = 2): Buffer {
   return Buffer.from(new Uint8Array(length).fill(1));
 }
 
+async function listenLocal(server: Server): Promise<number> {
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  return (server.address() as AddressInfo).port;
+}
+
+async function closeServer(server: Server): Promise<void> {
+  server.closeAllConnections();
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
+async function withHangingSpeechServer(
+  run: (baseUrl: string, getRequestCount: () => number) => Promise<void>,
+): Promise<void> {
+  let requestCount = 0;
+  const server = http.createServer((_req, _res) => {
+    requestCount += 1;
+  });
+  const port = await listenLocal(server);
+  try {
+    await run(`http://127.0.0.1:${port}/v1`, () => requestCount);
+  } finally {
+    await closeServer(server);
+  }
+}
+
 async function withMockedSpeechFetch(
   run: (fetchMock: ReturnType<typeof vi.fn>) => Promise<void>,
   audioLength: number,
@@ -187,6 +228,25 @@ async function withMockedSpeechFetch(
 
 function resolveBaseUrl(rawValue: unknown, fallback: string): string {
   return typeof rawValue === "string" && rawValue.trim() ? rawValue.replace(/\/+$/u, "") : fallback;
+}
+
+async function requestTestOpenAISpeech(params: {
+  baseUrl: string;
+  body: Record<string, unknown>;
+  timeoutMs: number;
+}): Promise<void> {
+  const requestUrl = `${params.baseUrl}/audio/speech`;
+  const { release } = await fetchWithSsrFGuard({
+    url: requestUrl,
+    init: {
+      method: "POST",
+      body: JSON.stringify(params.body),
+    },
+    timeoutMs: params.timeoutMs,
+    policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(params.baseUrl),
+    auditContext: "tts-contract-openai",
+  });
+  await release();
 }
 
 function resolveTestProviderConfig(
@@ -267,22 +327,17 @@ function buildTestOpenAISpeechProvider(): SpeechProviderPlugin {
     isConfigured: ({ providerConfig }) =>
       typeof (providerConfig as Record<string, unknown> | undefined)?.apiKey === "string" ||
       typeof process.env.OPENAI_API_KEY === "string",
-    synthesize: async ({ text, providerConfig, providerOverrides }) => {
+    synthesize: async ({ text, providerConfig, providerOverrides, timeoutMs }) => {
       const config = providerConfig as Record<string, unknown> | undefined;
-      const res = await fetch(
-        `${resolveBaseUrl(config?.baseUrl, "https://api.openai.com/v1")}/audio/speech`,
-        {
-          method: "POST",
-          body: JSON.stringify({
-            input: text,
-            model: providerOverrides?.model ?? config?.model ?? "gpt-4o-mini-tts",
-            voice: providerOverrides?.voice ?? config?.voice ?? "alloy",
-          }),
+      await requestTestOpenAISpeech({
+        baseUrl: resolveBaseUrl(config?.baseUrl, "https://api.openai.com/v1"),
+        body: {
+          input: text,
+          model: providerOverrides?.model ?? config?.model ?? "gpt-4o-mini-tts",
+          voice: providerOverrides?.voice ?? config?.voice ?? "alloy",
         },
-      );
-      // The contract only asserts the request, but an unread audio body pins the
-      // connection-pool socket — release it instead of leaking fds across calls.
-      await res.body?.cancel().catch(() => {});
+        timeoutMs,
+      });
       return {
         audioBuffer: createAudioBuffer(1),
         outputFormat: "mp3",
@@ -290,7 +345,7 @@ function buildTestOpenAISpeechProvider(): SpeechProviderPlugin {
         voiceCompatible: true,
       };
     },
-    synthesizeTelephony: async ({ text, providerConfig }) => {
+    synthesizeTelephony: async ({ text, providerConfig, timeoutMs }) => {
       const config = providerConfig as Record<string, unknown> | undefined;
       const configuredModel = typeof config?.model === "string" ? config.model : undefined;
       const model = configuredModel ?? "tts-1";
@@ -298,19 +353,16 @@ function buildTestOpenAISpeechProvider(): SpeechProviderPlugin {
         typeof config?.instructions === "string" ? config.instructions : undefined;
       const instructions =
         model === "gpt-4o-mini-tts" ? configuredInstructions || undefined : undefined;
-      const res = await fetch(
-        `${resolveBaseUrl(config?.baseUrl, "https://api.openai.com/v1")}/audio/speech`,
-        {
-          method: "POST",
-          body: JSON.stringify({
-            input: text,
-            model,
-            voice: config?.voice ?? "alloy",
-            instructions,
-          }),
+      await requestTestOpenAISpeech({
+        baseUrl: resolveBaseUrl(config?.baseUrl, "https://api.openai.com/v1"),
+        body: {
+          input: text,
+          model,
+          voice: config?.voice ?? "alloy",
+          instructions,
         },
-      );
-      await res.body?.cancel().catch(() => {});
+        timeoutMs,
+      });
       return {
         audioBuffer: createAudioBuffer(2),
         outputFormat: "mp3",
@@ -1260,6 +1312,79 @@ export function describeTtsProviderRuntimeContract() {
         },
       );
     });
+
+    it.each([
+      {
+        name: "ordinary synthesis",
+        run: async (cfg: OpenClawConfig, timeoutMs: number) =>
+          await ttsRuntime.textToSpeech({
+            text: "Hello from the timeout contract.",
+            cfg,
+            disableFallback: true,
+            timeoutMs,
+          }),
+      },
+      {
+        name: "telephony synthesis",
+        run: async (cfg: OpenClawConfig, timeoutMs: number) =>
+          await ttsRuntime.textToSpeechTelephony({
+            text: "Hello from the telephony timeout contract.",
+            cfg,
+            timeoutMs,
+          }),
+      },
+    ] as const)(
+      "aborts stalled OpenAI $name within the caller timeout",
+      { timeout: 2_000 },
+      async (testCase) => {
+        await withHangingSpeechServer(async (baseUrl, getRequestCount) => {
+          const registry = createEmptyPluginRegistry();
+          registry.speechProviders = [
+            { pluginId: "openai", provider: buildTestOpenAISpeechProvider(), source: "test" },
+          ];
+          setActivePluginRegistry(registry);
+          const cfg = asLegacyTtsConfig({
+            messages: {
+              tts: {
+                provider: "openai",
+                providers: {
+                  openai: {
+                    apiKey: "test-key",
+                    baseUrl,
+                    model: "gpt-4o-mini-tts",
+                    voice: "alloy",
+                  },
+                },
+              },
+            },
+          });
+          const timeoutMs = 100;
+          const startedAt = Date.now();
+          let watchdog: ReturnType<typeof setTimeout> | undefined;
+
+          try {
+            const result = await Promise.race([
+              testCase.run(cfg, timeoutMs),
+              new Promise<never>((_, reject) => {
+                watchdog = setTimeout(
+                  () => reject(new Error(`${testCase.name} did not time out`)),
+                  1_000,
+                );
+              }),
+            ]);
+
+            expect(result.success).toBe(false);
+            expect(result.error).toMatch(/aborted|timeout|timed out/i);
+            expect(Date.now() - startedAt).toBeLessThan(1_000);
+            expect(getRequestCount()).toBe(1);
+          } finally {
+            if (watchdog) {
+              clearTimeout(watchdog);
+            }
+          }
+        });
+      },
+    );
   });
 }
 
