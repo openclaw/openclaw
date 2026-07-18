@@ -10,6 +10,7 @@ import type { CronConfig } from "../../config/types.cron.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { isCronJobActive } from "../active-jobs.js";
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
+import { parseCronPacingBounds } from "../pacing.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import {
   coerceFiniteScheduleNumber,
@@ -248,7 +249,6 @@ function shouldRepairFutureCronNextRunAtMs(params: {
   if (isPendingErrorBackoffSlot({ state, job, nextRunAtMs: nextRun, nowMs })) {
     return false;
   }
-
   let naturalNext: number | undefined;
   try {
     naturalNext = computeStaggeredCronNextRunAtMs(job, nowMs);
@@ -613,6 +613,7 @@ function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; 
         ...job.schedule,
         anchorMs: normalizedAnchorMs,
       };
+      job.state.pacedNextRunAtMs = undefined;
       changed = true;
     }
   }
@@ -620,6 +621,10 @@ function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; 
   if (!isJobEnabled(job)) {
     if (job.state.startupCatchupAtMs !== undefined) {
       job.state.startupCatchupAtMs = undefined;
+      changed = true;
+    }
+    if (job.state.pacedNextRunAtMs !== undefined) {
+      job.state.pacedNextRunAtMs = undefined;
       changed = true;
     }
     if (job.state.nextRunAtMs !== undefined) {
@@ -804,6 +809,7 @@ export function recomputeNextRunsForMaintenance(
       let changed = false;
 
       const startupCatchupAtMs = job.state.startupCatchupAtMs;
+      const pacedNextRunAtMs = job.state.pacedNextRunAtMs;
       const nextRunAtMs = job.state.nextRunAtMs;
       // The persisted marker owns only its exact future slot. Schedule edits,
       // malformed state, or arrival at the slot release normal repair policy.
@@ -816,6 +822,15 @@ export function recomputeNextRunsForMaintenance(
         job.state.startupCatchupAtMs = undefined;
         changed = true;
       }
+      const hasPendingPacedNextRun =
+        isFiniteTimestamp(pacedNextRunAtMs) &&
+        hasScheduledNextRunAtMs(nextRunAtMs) &&
+        pacedNextRunAtMs === nextRunAtMs &&
+        now < pacedNextRunAtMs;
+      if (pacedNextRunAtMs !== undefined && !hasPendingPacedNextRun) {
+        job.state.pacedNextRunAtMs = undefined;
+        changed = true;
+      }
 
       if (!hasScheduledNextRunAtMs(job.state.nextRunAtMs)) {
         if (recomputeJob(job, now)) {
@@ -824,6 +839,7 @@ export function recomputeNextRunsForMaintenance(
       } else if (
         repairFutureCronNextRunAtMs &&
         !hasPendingStartupCatchup &&
+        !hasPendingPacedNextRun &&
         shouldRepairFutureCronNextRunAtMs({ state, job, nowMs: now })
       ) {
         if (recomputeJob(job, now)) {
@@ -952,6 +968,7 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
     createdAtMs: now,
     updatedAtMs: now,
     schedule,
+    ...(input.pacing !== undefined ? { pacing: structuredClone(input.pacing) } : {}),
     sessionTarget: input.sessionTarget,
     wakeMode: input.wakeMode,
     payload: input.payload,
@@ -963,6 +980,9 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
     },
   };
   assertSupportedJobSpec(job);
+  if (job.pacing !== undefined) {
+    parseCronPacingBounds(job.pacing);
+  }
   assertTriggerSupport(job, {
     cronConfig: state.deps.cronConfig,
     requireEnabled: job.trigger !== undefined,
@@ -1054,6 +1074,13 @@ export function applyJobPatch(
       job.trigger = structuredClone(patch.trigger);
     }
   }
+  if ("pacing" in patch) {
+    if (patch.pacing === null || patch.pacing === undefined) {
+      delete job.pacing;
+    } else {
+      job.pacing = structuredClone(patch.pacing);
+    }
+  }
   if (patch.sessionTarget) {
     job.sessionTarget = patch.sessionTarget;
   }
@@ -1098,6 +1125,9 @@ export function applyJobPatch(
     job.sessionKey = normalizeOptionalString((patch as { sessionKey?: unknown }).sessionKey);
   }
   assertSupportedJobSpec(job);
+  if (job.pacing !== undefined) {
+    parseCronPacingBounds(job.pacing);
+  }
   assertTriggerSupport(job, {
     cronConfig: opts?.cronConfig,
     requireEnabled: patch.trigger !== null && patch.trigger !== undefined,
@@ -1164,6 +1194,11 @@ export function applyDeclarativeJobSpec(
   } else {
     job.schedule = structuredClone(input.schedule);
   }
+  if (input.pacing !== undefined) {
+    job.pacing = structuredClone(input.pacing);
+  } else {
+    delete job.pacing;
+  }
   job.payload = structuredClone(input.payload);
   if (input.trigger) {
     job.trigger = structuredClone(input.trigger);
@@ -1185,6 +1220,9 @@ export function applyDeclarativeJobSpec(
   });
 
   assertSupportedJobSpec(job);
+  if (job.pacing !== undefined) {
+    parseCronPacingBounds(job.pacing);
+  }
   assertMainSessionAgentId(job, opts.defaultAgentId);
   assertDeliverySupport(job);
   assertFailureDestinationSupport(job);
