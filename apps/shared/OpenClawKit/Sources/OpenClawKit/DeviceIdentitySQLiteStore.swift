@@ -4,7 +4,7 @@ import SQLite3
 
 enum DeviceIdentitySQLiteStore {
     // Keep aligned with OPENCLAW_STATE_SCHEMA_VERSION. Swift never upgrades this database.
-    private static let maximumSupportedSchemaVersion: Int64 = 3
+    private static let maximumSupportedSchemaVersion: Int64 = 4
     private static let busyTimeoutMilliseconds: Int32 = 5000
     private static let maximumLegacyIdentityBytes = 64 * 1024
     private static let maximumLegacyAuthBytes = 4 * 1024 * 1024

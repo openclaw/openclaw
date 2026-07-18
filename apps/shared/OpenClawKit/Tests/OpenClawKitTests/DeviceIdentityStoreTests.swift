@@ -718,6 +718,7 @@ struct DeviceIdentityStoreTests {
         #expect(try String(contentsOf: destinationAuthURL, encoding: .utf8) == destinationAuth)
     }
 
+    // swiftlint:disable line_length
     @Test
     func `migration rejects stale destination auth for the same device`() throws {
         let tempDir = FileManager.default.temporaryDirectory
@@ -786,6 +787,7 @@ struct DeviceIdentityStoreTests {
         #expect(!FileManager.default.fileExists(atPath: source.identityURL.path))
         #expect(try String(contentsOf: destinationAuthURL, encoding: .utf8) == destinationAuth)
     }
+    // swiftlint:enable line_length
 
     @Test
     func `preserves WAL journal mode`() throws {
@@ -845,8 +847,10 @@ struct DeviceIdentityStoreTests {
                 profile: .primary)
         }
     }
+}
 
-    private static func base64UrlDecode(_ value: String) -> Data? {
+extension DeviceIdentityStoreTests {
+    fileprivate static func base64UrlDecode(_ value: String) -> Data? {
         let normalized = value
             .replacingOccurrences(of: "-", with: "+")
             .replacingOccurrences(of: "_", with: "/")
@@ -854,30 +858,30 @@ struct DeviceIdentityStoreTests {
         return Data(base64Encoded: padded)
     }
 
-    private static let fixtureDeviceID = "56475aa75463474c0285df5dbf2bcab73da651358839e9b77481b2eab107708c"
-    private static let fixturePublicKeyRaw = "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg="
-    private static let fixturePublicKeyData = Data(base64Encoded: Self.fixturePublicKeyRaw)!
-    private static let fixturePrivateKeyData = Data((0 ..< 32).map { UInt8($0) })
-    private static let fixturePrivateKeyRaw = Self.fixturePrivateKeyData.base64EncodedString()
-    private static let fixturePublicKeyPEM = Self.fixturePEM(
+    fileprivate static let fixtureDeviceID = "56475aa75463474c0285df5dbf2bcab73da651358839e9b77481b2eab107708c"
+    fileprivate static let fixturePublicKeyRaw = "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg="
+    fileprivate static let fixturePublicKeyData = Data(base64Encoded: Self.fixturePublicKeyRaw)!
+    fileprivate static let fixturePrivateKeyData = Data((0..<32).map { UInt8($0) })
+    fileprivate static let fixturePrivateKeyRaw = Self.fixturePrivateKeyData.base64EncodedString()
+    fileprivate static let fixturePublicKeyPEM = Self.fixturePEM(
         label: "PUBLIC KEY",
         der: Data([
             0x30, 0x2A, 0x30, 0x05, 0x06, 0x03, 0x2B, 0x65,
             0x70, 0x03, 0x21, 0x00,
         ]) + Self.fixturePublicKeyData)
-    private static let fixturePrivateKeyPEM = Self.fixturePEM(
+    fileprivate static let fixturePrivateKeyPEM = Self.fixturePEM(
         label: "PRIVATE KEY",
         der: Data([
             0x30, 0x2E, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06,
             0x03, 0x2B, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20,
         ]) + Self.fixturePrivateKeyData)
 
-    private static func fixturePEM(label: String, der: Data) -> String {
+    fileprivate static func fixturePEM(label: String, der: Data) -> String {
         let fence = String(repeating: "-", count: 5)
         return "\(fence)BEGIN \(label)\(fence)\n\(der.base64EncodedString())\n\(fence)END \(label)\(fence)\n"
     }
 
-    private static func nodePEMIdentityJSON(
+    fileprivate static func nodePEMIdentityJSON(
         deviceId: String = Self.fixtureDeviceID,
         privateKeyPem: String = Self.fixturePrivateKeyPEM) throws -> String
     {
@@ -889,10 +893,13 @@ struct DeviceIdentityStoreTests {
             "createdAtMs": Int64(1_800_000_000_000),
         ]
         let data = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
-        return String(decoding: data, as: UTF8.self) + "\n"
+        guard let json = String(bytes: data, encoding: .utf8) else {
+            throw DeviceIdentityStoreError("Could not encode fixture identity JSON")
+        }
+        return json + "\n"
     }
 
-    private static func writeLegacyIdentity(
+    fileprivate static func writeLegacyIdentity(
         stateDirURL: URL,
         profile: GatewayDeviceIdentityProfile,
         contents: String) throws -> DeviceIdentityPaths.LegacyIdentitySource
@@ -907,7 +914,7 @@ struct DeviceIdentityStoreTests {
         return source
     }
 
-    private static func seedCanonicalSchema(_ databaseURL: URL, nodeOwned: Bool = false) throws {
+    fileprivate static func seedCanonicalSchema(_ databaseURL: URL, nodeOwned: Bool = false) throws {
         try FileManager.default.createDirectory(
             at: databaseURL.deletingLastPathComponent(),
             withIntermediateDirectories: true)
@@ -924,8 +931,8 @@ struct DeviceIdentityStoreTests {
             ) STRICT;
             INSERT INTO schema_meta (
               meta_key, role, schema_version, agent_id, app_version, created_at, updated_at
-            ) VALUES ('primary', 'global', 3, NULL, NULL, 1800000000000, 1800000000000);
-            PRAGMA user_version = 3;
+            ) VALUES ('primary', 'global', 4, NULL, NULL, 1800000000000, 1800000000000);
+            PRAGMA user_version = 4;
             """
             : ""
         try self.execute(databaseURL, """
@@ -943,7 +950,7 @@ struct DeviceIdentityStoreTests {
         """)
     }
 
-    private static func execute(_ databaseURL: URL, _ sql: String) throws {
+    fileprivate static func execute(_ databaseURL: URL, _ sql: String) throws {
         var database: OpaquePointer?
         guard sqlite3_open(databaseURL.path, &database) == SQLITE_OK, let database else {
             throw DeviceIdentityStoreError("Could not open test database")
@@ -954,17 +961,17 @@ struct DeviceIdentityStoreTests {
         }
     }
 
-    private static func scalarInt(_ databaseURL: URL, _ sql: String) throws -> Int64 {
+    fileprivate static func scalarInt(_ databaseURL: URL, _ sql: String) throws -> Int64 {
         try self.scalar(databaseURL, sql) { sqlite3_column_int64($0, 0) }
     }
 
-    private static func scalarText(_ databaseURL: URL, _ sql: String) throws -> String? {
+    fileprivate static func scalarText(_ databaseURL: URL, _ sql: String) throws -> String? {
         try self.scalar(databaseURL, sql) { statement in
             sqlite3_column_text(statement, 0).map { String(cString: $0) }
         }
     }
 
-    private static func scalar<T>(
+    fileprivate static func scalar<T>(
         _ databaseURL: URL,
         _ sql: String,
         transform: (OpaquePointer) -> T) throws -> T
@@ -985,7 +992,7 @@ struct DeviceIdentityStoreTests {
         return transform(statement)
     }
 
-    private static func sql(_ value: String) -> String {
+    fileprivate static func sql(_ value: String) -> String {
         value.replacingOccurrences(of: "'", with: "''")
     }
 }

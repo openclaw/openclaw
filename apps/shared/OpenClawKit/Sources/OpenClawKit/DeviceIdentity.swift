@@ -1,7 +1,7 @@
 import CryptoKit
 import Foundation
 #if canImport(Security)
-    import Security
+import Security
 #endif
 
 public enum GatewayDeviceIdentityProfile: String, Sendable {
@@ -57,13 +57,12 @@ enum DeviceIdentityPaths {
         DeviceIdentityPaths.hasAppGroupEntitlement(OpenClawAppGroup.identifier)
 
     static func stateDirURL() -> URL {
-        stateDirURL(
-            overrideURL: stateDirOverrideURL(),
-            legacyStateDirURL: legacyStateDirURL(),
-            appGroupStateDirURL: appGroupStateDirURL(),
-            appGroupStateDirAvailable: appGroupStateDirAvailable,
-            temporaryDirectory: FileManager.default.temporaryDirectory
-        )
+        self.stateDirURL(
+            overrideURL: self.stateDirOverrideURL(),
+            legacyStateDirURL: self.legacyStateDirURL(),
+            appGroupStateDirURL: self.appGroupStateDirURL(),
+            appGroupStateDirAvailable: self.appGroupStateDirAvailable,
+            temporaryDirectory: FileManager.default.temporaryDirectory)
     }
 
     static func stateDirURL(
@@ -71,8 +70,8 @@ enum DeviceIdentityPaths {
         legacyStateDirURL: URL?,
         appGroupStateDirURL: URL?,
         appGroupStateDirAvailable: Bool = true,
-        temporaryDirectory: URL
-    ) -> URL {
+        temporaryDirectory: URL) -> URL
+    {
         if let overrideURL {
             return overrideURL
         }
@@ -88,10 +87,10 @@ enum DeviceIdentityPaths {
     private static func stateDirOverrideURL() -> URL? {
         // Test-scoped stores must win over the process environment. Parallel Swift tests
         // otherwise race whenever another suite temporarily swaps OPENCLAW_STATE_DIR.
-        if let scopedStateDirURL = scopedStateDirURL {
+        if let scopedStateDirURL {
             return scopedStateDirURL
         }
-        for key in stateDirEnv {
+        for key in self.stateDirEnv {
             if let raw = getenv(key) {
                 let value = String(cString: raw).trimmingCharacters(in: .whitespacesAndNewlines)
                 if !value.isEmpty {
@@ -115,29 +114,28 @@ enum DeviceIdentityPaths {
         // Unentitled builds (the shipped mac app) must not depend on that container. iOS requires
         // the entitlement for containerURL to resolve at all, so the gate is macOS-only.
         #if os(macOS) && canImport(Security)
-            guard
-                let task = SecTaskCreateFromSelf(nil),
-                let value = SecTaskCopyValueForEntitlement(
-                    task,
-                    "com.apple.security.application-groups" as CFString,
-                    nil
-                )
-            else {
-                return false
-            }
-            guard let groups = value as? [String] else {
-                return false
-            }
-            return groups.contains(identifier)
+        guard
+            let task = SecTaskCreateFromSelf(nil),
+            let value = SecTaskCopyValueForEntitlement(
+                task,
+                "com.apple.security.application-groups" as CFString,
+                nil)
+        else {
+            return false
+        }
+        guard let groups = value as? [String] else {
+            return false
+        }
+        return groups.contains(identifier)
         #else
-            return true
+        return true
         #endif
     }
 
     static func appGroupStateDirURL() -> URL? {
         guard
             let containerURL = FileManager.default
-            .containerURL(forSecurityApplicationGroupIdentifier: OpenClawAppGroup.identifier)
+                .containerURL(forSecurityApplicationGroupIdentifier: OpenClawAppGroup.identifier)
         else {
             return nil
         }
@@ -151,18 +149,18 @@ enum DeviceIdentityPaths {
     }
 
     static func legacyIdentitySources(
-        profile: GatewayDeviceIdentityProfile
-    ) -> [LegacyIdentitySource] {
+        profile: GatewayDeviceIdentityProfile) -> [LegacyIdentitySource]
+    {
         // Node doctor cannot traverse sandboxed Apple App Group/Application Support containers.
         // Native startup therefore owns this one-time import before runtime becomes SQLite-only.
-        let selectedStateDirURL = stateDirURL()
-        let roots: [URL] = if stateDirOverrideURL() != nil {
+        let selectedStateDirURL = self.stateDirURL()
+        let roots: [URL] = if self.stateDirOverrideURL() != nil {
             // Explicit and task-local stores must never import the machine's real identity.
             [selectedStateDirURL]
         } else {
             // Unentitled macOS builds intentionally probe the former App Group once: shipped
             // installs must carry their identity and auth together instead of rotating/re-pairing.
-            [selectedStateDirURL, appGroupStateDirURL(), legacyStateDirURL()]
+            [selectedStateDirURL, self.appGroupStateDirURL(), self.legacyStateDirURL()]
                 .compactMap(\.self)
         }
 
@@ -174,15 +172,14 @@ enum DeviceIdentityPaths {
             return LegacyIdentitySource(
                 stateDirURL: standardizedRoot,
                 identityURL: identityDirURL.appendingPathComponent(profile.identityFileName, isDirectory: false),
-                authURL: identityDirURL.appendingPathComponent(profile.authFileName, isDirectory: false)
-            )
+                authURL: identityDirURL.appendingPathComponent(profile.authFileName, isDirectory: false))
         }
     }
 
     static func legacyIdentitySources(
         stateDirURLs: [URL],
-        profile: GatewayDeviceIdentityProfile
-    ) -> [LegacyIdentitySource] {
+        profile: GatewayDeviceIdentityProfile) -> [LegacyIdentitySource]
+    {
         var seen = Set<String>()
         return stateDirURLs.compactMap { root in
             let standardizedRoot = root.standardizedFileURL
@@ -191,8 +188,7 @@ enum DeviceIdentityPaths {
             return LegacyIdentitySource(
                 stateDirURL: standardizedRoot,
                 identityURL: identityDirURL.appendingPathComponent(profile.identityFileName, isDirectory: false),
-                authURL: identityDirURL.appendingPathComponent(profile.authFileName, isDirectory: false)
-            )
+                authURL: identityDirURL.appendingPathComponent(profile.authFileName, isDirectory: false))
         }
     }
 }
@@ -201,7 +197,7 @@ public struct DeviceIdentityStoreError: Error, LocalizedError, Sendable {
     public let message: String
 
     public var errorDescription: String? {
-        message
+        self.message
     }
 
     init(_ message: String) {
@@ -226,31 +222,29 @@ public enum DeviceIdentityStore {
     ])
 
     public static func loadOrCreate() -> DeviceIdentity {
-        loadOrCreate(profile: .primary)
+        self.loadOrCreate(profile: .primary)
     }
 
     #if compiler(>=6.4)
-        static func withStateDirectory<T>(
-            _ url: URL,
-            operation: nonisolated(nonsending) () async throws -> T
-        ) async rethrows -> T {
-            try await DeviceIdentityPaths.$scopedStateDirURL.withValue(
-                url,
-                operation: operation
-            )
-        }
+    static func withStateDirectory<T>(
+        _ url: URL,
+        operation: nonisolated(nonsending) () async throws -> T) async rethrows -> T
+    {
+        try await DeviceIdentityPaths.$scopedStateDirURL.withValue(
+            url,
+            operation: operation)
+    }
     #else
-        static func withStateDirectory<T>(
-            _ url: URL,
-            operation: () async throws -> T,
-            isolation: isolated (any Actor)? = #isolation
-        ) async rethrows -> T {
-            try await DeviceIdentityPaths.$scopedStateDirURL.withValue(
-                url,
-                operation: operation,
-                isolation: isolation
-            )
-        }
+    static func withStateDirectory<T>(
+        _ url: URL,
+        operation: () async throws -> T,
+        isolation: isolated (any Actor)? = #isolation) async rethrows -> T
+    {
+        try await DeviceIdentityPaths.$scopedStateDirURL.withValue(
+            url,
+            operation: operation,
+            isolation: isolation)
+    }
     #endif
 
     public static func loadOrCreate(profile: GatewayDeviceIdentityProfile) -> DeviceIdentity {
@@ -262,43 +256,40 @@ public enum DeviceIdentityStore {
 
     /// Loads or creates an identity, returning nil unless its key material was durably persisted.
     public static func loadOrCreatePersisted(
-        profile: GatewayDeviceIdentityProfile = .primary
-    ) -> DeviceIdentity? {
+        profile: GatewayDeviceIdentityProfile = .primary) -> DeviceIdentity?
+    {
         let stateDirURL = DeviceIdentityPaths.stateDirURL()
         return try? DeviceIdentitySQLiteStore.loadOrCreate(
-            databaseURL: databaseURL(stateDirURL: stateDirURL),
+            databaseURL: self.databaseURL(stateDirURL: stateDirURL),
             destinationStateDirURL: stateDirURL,
             profile: profile,
-            legacySources: DeviceIdentityPaths.legacyIdentitySources(profile: profile)
-        )
+            legacySources: DeviceIdentityPaths.legacyIdentitySources(profile: profile))
     }
 
     static func loadOrCreate(
         databaseURL: URL,
         destinationStateDirURL: URL,
         profile: GatewayDeviceIdentityProfile,
-        legacySources: [DeviceIdentityPaths.LegacyIdentitySource] = []
-    ) throws -> DeviceIdentity {
+        legacySources: [DeviceIdentityPaths.LegacyIdentitySource] = []) throws -> DeviceIdentity
+    {
         try DeviceIdentitySQLiteStore.loadOrCreate(
             databaseURL: databaseURL,
             destinationStateDirURL: destinationStateDirURL,
             profile: profile,
-            legacySources: legacySources
-        )
+            legacySources: legacySources)
     }
 
     static func loadOrCreatePersisted(
         databaseURL: URL,
         destinationStateDirURL: URL,
         profile: GatewayDeviceIdentityProfile,
-        legacySources: [DeviceIdentityPaths.LegacyIdentitySource] = []
-    ) -> DeviceIdentity? {
-        try? loadOrCreate(
+        legacySources: [DeviceIdentityPaths.LegacyIdentitySource] = []) -> DeviceIdentity?
+    {
+        try? self.loadOrCreate(
             databaseURL: databaseURL,
             destinationStateDirURL: destinationStateDirURL,
             profile: profile,
-            legacySources: legacySources
-        )
+            legacySources: legacySources)
     }
 
     public static func signPayload(_ payload: String, identity: DeviceIdentity) -> String? {
@@ -306,7 +297,7 @@ public enum DeviceIdentityStore {
         do {
             let privateKey = try Curve25519.Signing.PrivateKey(rawRepresentation: privateKeyData)
             let signature = try privateKey.signature(for: Data(payload.utf8))
-            return base64UrlEncode(signature)
+            return self.base64UrlEncode(signature)
         } catch {
             return nil
         }
@@ -322,13 +313,11 @@ public enum DeviceIdentityStore {
             deviceId: deviceId,
             publicKey: publicKeyData.base64EncodedString(),
             privateKey: privateKeyData.base64EncodedString(),
-            createdAtMs: Int64(Date().timeIntervalSince1970 * 1000)
-        )
+            createdAtMs: Int64(Date().timeIntervalSince1970 * 1000))
         return DeviceIdentityMaterial(
             identity: identity,
-            publicKeyPEM: pem(label: "PUBLIC KEY", der: ed25519SPKIPrefix + publicKeyData),
-            privateKeyPEM: pem(label: "PRIVATE KEY", der: ed25519PKCS8PrivatePrefix + privateKeyData)
-        )
+            publicKeyPEM: self.pem(label: "PUBLIC KEY", der: self.ed25519SPKIPrefix + publicKeyData),
+            privateKeyPEM: self.pem(label: "PRIVATE KEY", der: self.ed25519PKCS8PrivatePrefix + privateKeyData))
     }
 
     private static func base64UrlEncode(_ data: Data) -> String {
@@ -341,7 +330,7 @@ public enum DeviceIdentityStore {
 
     public static func publicKeyBase64Url(_ identity: DeviceIdentity) -> String? {
         guard let data = Data(base64Encoded: identity.publicKey) else { return nil }
-        return base64UrlEncode(data)
+        return self.base64UrlEncode(data)
     }
 
     static func material(fromLegacyData data: Data) throws -> DeviceIdentityMaterial {
@@ -362,9 +351,8 @@ public enum DeviceIdentityStore {
             }
             return DeviceIdentityMaterial(
                 identity: normalized,
-                publicKeyPEM: pem(label: "PUBLIC KEY", der: ed25519SPKIPrefix + publicKeyData),
-                privateKeyPEM: pem(label: "PRIVATE KEY", der: ed25519PKCS8PrivatePrefix + privateKeyData)
-            )
+                publicKeyPEM: self.pem(label: "PUBLIC KEY", der: self.ed25519SPKIPrefix + publicKeyData),
+                privateKeyPEM: self.pem(label: "PRIVATE KEY", der: self.ed25519PKCS8PrivatePrefix + privateKeyData))
         }
         if keys == ["version", "deviceId", "publicKeyPem", "privateKeyPem", "createdAtMs"],
            let decoded = try? decoder.decode(PemDeviceIdentity.self, from: data)
@@ -376,11 +364,10 @@ public enum DeviceIdentityStore {
             else {
                 throw DeviceIdentityStoreError("Legacy PEM device identity has invalid key material")
             }
-            return material(
+            return self.material(
                 publicKeyData: publicKeyData,
                 privateKeyData: privateKeyData,
-                createdAtMs: decoded.createdAtMs
-            )
+                createdAtMs: decoded.createdAtMs)
         }
         throw DeviceIdentityStoreError("Legacy device identity has an unsupported shape")
     }
@@ -389,8 +376,8 @@ public enum DeviceIdentityStore {
         deviceId: String,
         publicKeyPEM: String,
         privateKeyPEM: String,
-        createdAtMs: Int64
-    ) throws -> DeviceIdentityMaterial {
+        createdAtMs: Int64) throws -> DeviceIdentityMaterial
+    {
         guard createdAtMs >= 0,
               let publicKeyData = rawPublicKey(fromPEM: publicKeyPEM),
               let privateKeyData = rawPrivateKey(fromPEM: privateKeyPEM),
@@ -398,11 +385,10 @@ public enum DeviceIdentityStore {
         else {
             throw DeviceIdentityStoreError("SQLite device identity has invalid key material")
         }
-        let canonical = material(
+        let canonical = self.material(
             publicKeyData: publicKeyData,
             privateKeyData: privateKeyData,
-            createdAtMs: createdAtMs
-        )
+            createdAtMs: createdAtMs)
         guard canonical.identity.deviceId == deviceId else {
             throw DeviceIdentityStoreError("SQLite device identity deviceId does not match its public key")
         }
@@ -472,19 +458,17 @@ public enum DeviceIdentityStore {
     static func material(
         publicKeyData: Data,
         privateKeyData: Data,
-        createdAtMs: Int64
-    ) -> DeviceIdentityMaterial {
+        createdAtMs: Int64) -> DeviceIdentityMaterial
+    {
         let identity = DeviceIdentity(
             deviceId: deviceId(publicKeyData: publicKeyData),
             publicKey: publicKeyData.base64EncodedString(),
             privateKey: privateKeyData.base64EncodedString(),
-            createdAtMs: createdAtMs
-        )
+            createdAtMs: createdAtMs)
         return DeviceIdentityMaterial(
             identity: identity,
-            publicKeyPEM: pem(label: "PUBLIC KEY", der: ed25519SPKIPrefix + publicKeyData),
-            privateKeyPEM: pem(label: "PRIVATE KEY", der: ed25519PKCS8PrivatePrefix + privateKeyData)
-        )
+            publicKeyPEM: self.pem(label: "PUBLIC KEY", der: self.ed25519SPKIPrefix + publicKeyData),
+            privateKeyPEM: self.pem(label: "PRIVATE KEY", der: self.ed25519PKCS8PrivatePrefix + privateKeyData))
     }
 
     private static func pem(label: String, der: Data) -> String {
@@ -493,7 +477,7 @@ public enum DeviceIdentityStore {
         let lines = stride(from: 0, to: base64.count, by: 64).map { offset -> String in
             let start = base64.index(base64.startIndex, offsetBy: offset)
             let end = base64.index(start, offsetBy: min(64, base64.distance(from: start, to: base64.endIndex)))
-            return String(base64[start ..< end])
+            return String(base64[start..<end])
         }
         return "\(fence)BEGIN \(label)\(fence)\n\(lines.joined(separator: "\n"))\n\(fence)END \(label)\(fence)\n"
     }

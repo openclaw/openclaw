@@ -4,7 +4,10 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  OPENCLAW_STATE_SCHEMA_VERSION,
+} from "../state/openclaw-state-db.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import {
   deriveDeviceIdFromPublicKey,
@@ -199,12 +202,14 @@ describe("device identity SQLite store", () => {
       });
       closeOpenClawStateDatabaseForTest();
       const verified = new sqlite.DatabaseSync(options.path!, { readOnly: true });
-      expect(verified.prepare("PRAGMA user_version").get()).toEqual({ user_version: 3 });
+      expect(verified.prepare("PRAGMA user_version").get()).toEqual({
+        user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+      });
       expect(
         verified
           .prepare("SELECT role, schema_version FROM schema_meta WHERE meta_key = 'primary'")
           .get(),
-      ).toEqual({ role: "global", schema_version: 3 });
+      ).toEqual({ role: "global", schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
       verified.close();
     });
   });
