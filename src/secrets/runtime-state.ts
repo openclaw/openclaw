@@ -23,12 +23,7 @@ import {
   type RuntimeConfigSnapshotRefreshHandler,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  coerceSecretRef,
-  isSecretRef,
-  type SecretDefaults,
-  type SecretRef,
-} from "../config/types.secrets.js";
+import { coerceSecretRef, isSecretRef, type SecretRef } from "../config/types.secrets.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { isRecord } from "../utils.js";
@@ -60,6 +55,8 @@ type LocatedSecretRef = {
   path: Array<string | number>;
   ref: SecretRef;
 };
+
+type SecretDefaults = Parameters<typeof coerceSecretRef>[1];
 
 function listLocatedSecretRefs(
   value: unknown,
