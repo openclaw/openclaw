@@ -548,6 +548,7 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
   const migrated = await runLegacyStateMigrations({
     detected: legacyState,
     config: ctx.cfg,
+    doctorOnlyStateMigrations: true,
     recoverCorruptTargetStore: ctx.options.repair === true || ctx.options.yes === true,
   });
   if (migrated.changes.length > 0) {

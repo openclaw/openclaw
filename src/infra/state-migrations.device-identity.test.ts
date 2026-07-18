@@ -185,10 +185,12 @@ describe("legacy device identity Doctor migration", () => {
     return await migrateLegacyDeviceIdentity({
       detected: detectLegacyDeviceIdentity({
         stateDir,
+        env,
         doctorOnlyStateMigrations: true,
       }),
       stateDir,
       env,
+      doctorOnlyStateMigrations: true,
       ...overrides,
     });
   }
@@ -201,6 +203,7 @@ describe("legacy device identity Doctor migration", () => {
       sourcePath,
       claimPath: `${sourcePath}.doctor-importing`,
       hasLegacy: false,
+      hasInvalidCanonical: false,
     });
 
     expect(
@@ -231,6 +234,7 @@ describe("legacy device identity Doctor migration", () => {
       detected: detectLegacyDeviceIdentity({ stateDir, doctorOnlyStateMigrations: true }),
       env,
       stateDir,
+      doctorOnlyStateMigrations: true,
     });
 
     expect(repaired.changes).toContain("Migrated primary device identity to SQLite.");
@@ -343,6 +347,149 @@ describe("legacy device identity Doctor migration", () => {
     expect(JSON.parse(receipt(env)?.report_json ?? "null")).toMatchObject({
       repairedSqliteRecordCount: 1,
     });
+  });
+
+  it("replaces an invalid canonical row without legacy JSON only under Doctor authority", async () => {
+    const { env, stateDir } = useStateDir();
+    seedInvalidCanonical(env);
+
+    expect(detectLegacyDeviceIdentity({ stateDir, env }).hasInvalidCanonical).toBe(false);
+    const detected = detectLegacyDeviceIdentity({
+      stateDir,
+      env,
+      doctorOnlyStateMigrations: true,
+    });
+    expect(detected).toMatchObject({ hasLegacy: false, hasInvalidCanonical: true });
+
+    const skipped = await migrateLegacyDeviceIdentity({ detected, env, stateDir });
+    expect(skipped).toEqual({ changes: [], warnings: [] });
+    expect(identityRow(env)?.device_id).toBe("0".repeat(64));
+
+    const result = await migrateLegacyDeviceIdentity({
+      detected,
+      env,
+      stateDir,
+      doctorOnlyStateMigrations: true,
+    });
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual(["Replaced invalid primary device identity in SQLite."]);
+    expect(result.notices).toEqual([
+      "The repaired device has a new identity and must be approved again.",
+    ]);
+    expect(identityRow(env)).toMatchObject({
+      identity_key: "primary",
+      device_id: expect.stringMatching(/^[a-f0-9]{64}$/),
+    });
+    expect(
+      detectLegacyDeviceIdentity({
+        stateDir,
+        env,
+        doctorOnlyStateMigrations: true,
+      }).hasInvalidCanonical,
+    ).toBe(false);
+  });
+
+  it("prefers legacy key material that appears after invalid-row detection", async () => {
+    const { env, stateDir } = useStateDir();
+    seedInvalidCanonical(env);
+    const detected = detectLegacyDeviceIdentity({
+      stateDir,
+      env,
+      doctorOnlyStateMigrations: true,
+    });
+    expect(detected).toMatchObject({ hasLegacy: false, hasInvalidCanonical: true });
+    const sourcePath = await writeLegacy({ stateDir, value: nodeIdentity() });
+
+    const result = await migrateLegacyDeviceIdentity({
+      detected,
+      env,
+      stateDir,
+      doctorOnlyStateMigrations: true,
+    });
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual(["Migrated primary device identity to SQLite."]);
+    expect(identityRow(env)?.device_id).toBe(SWIFT_RAW_DEVICE_ID);
+    expect(fs.existsSync(sourcePath)).toBe(false);
+  });
+
+  it("reports a generated identity when the invalid row disappears before repair", async () => {
+    const { env, stateDir } = useStateDir();
+    seedInvalidCanonical(env);
+    const detected = detectLegacyDeviceIdentity({
+      stateDir,
+      env,
+      doctorOnlyStateMigrations: true,
+    });
+    const db = database(env);
+    executeSqliteQuerySync(
+      db,
+      getNodeSqliteKysely<MigrationDatabase>(db)
+        .deleteFrom("device_identities")
+        .where("identity_key", "=", "primary"),
+    );
+
+    const result = await migrateLegacyDeviceIdentity({
+      detected,
+      env,
+      stateDir,
+      doctorOnlyStateMigrations: true,
+    });
+
+    expect(result.changes).toEqual(["Replaced invalid primary device identity in SQLite."]);
+    expect(result.notices).toEqual([
+      "The repaired device has a new identity and must be approved again.",
+    ]);
+    expect(identityRow(env)?.device_id).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it("requires mutation-time Doctor authority after canonical state becomes invalid", async () => {
+    const { env, stateDir } = useStateDir();
+    seedCanonical(env, normalizedSwift());
+    const sourcePath = await writeLegacy({ stateDir, value: nodeIdentity() });
+    const detected = detectLegacyDeviceIdentity({
+      stateDir,
+      env,
+      doctorOnlyStateMigrations: true,
+    });
+    expect(detected).toMatchObject({ hasLegacy: true, hasInvalidCanonical: false });
+    const db = database(env);
+    executeSqliteQuerySync(
+      db,
+      getNodeSqliteKysely<MigrationDatabase>(db)
+        .updateTable("device_identities")
+        .set({ device_id: "0".repeat(64) })
+        .where("identity_key", "=", "primary"),
+    );
+
+    const result = await migrateLegacyDeviceIdentity({ detected, env, stateDir });
+
+    expect(result).toEqual({ changes: [], warnings: [] });
+    expect(identityRow(env)?.device_id).toBe("0".repeat(64));
+    expect(fs.existsSync(sourcePath)).toBe(true);
+  });
+
+  it("does not generate an identity from a stale legacy-only detection", async () => {
+    const { env, stateDir } = useStateDir();
+    const sourcePath = await writeLegacy({ stateDir, value: nodeIdentity() });
+    const detected = detectLegacyDeviceIdentity({
+      stateDir,
+      env,
+      doctorOnlyStateMigrations: true,
+    });
+    expect(detected).toMatchObject({ hasLegacy: true, hasInvalidCanonical: false });
+    await fsp.unlink(sourcePath);
+
+    const result = await migrateLegacyDeviceIdentity({
+      detected,
+      env,
+      stateDir,
+      doctorOnlyStateMigrations: true,
+    });
+
+    expect(result).toEqual({ changes: [], warnings: [] });
+    expect(identityRow(env)).toBeUndefined();
   });
 
   it("repairs an invalid canonical update timestamp before retiring JSON", async () => {

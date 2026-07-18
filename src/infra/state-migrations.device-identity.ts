@@ -9,6 +9,10 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import {
+  DeviceIdentityStorageError,
+  generateStoredDeviceIdentity,
+  readStoredDeviceIdentityReadOnly,
+  repairInvalidStoredDeviceIdentity,
   validateStoredDeviceIdentity,
   type DeviceIdentity,
   type StoredDeviceIdentity,
@@ -171,17 +175,51 @@ function pathMayExist(filePath: string): boolean {
 /** Detect the exact retired primary identity paths only during explicit Doctor repair. */
 export function detectLegacyDeviceIdentity(params: {
   stateDir: string;
+  env?: NodeJS.ProcessEnv;
   doctorOnlyStateMigrations?: boolean;
 }): LegacyDeviceIdentityDetection {
   const sourcePath = path.join(params.stateDir, LEGACY_IDENTITY_RELATIVE_PATH);
   const claimPath = `${sourcePath}${DOCTOR_CLAIM_SUFFIX}`;
+  const doctorAuthorized = params.doctorOnlyStateMigrations === true;
+  let hasInvalidCanonical = false;
+  if (doctorAuthorized) {
+    try {
+      readStoredDeviceIdentityReadOnly({
+        env: { ...(params.env ?? process.env), OPENCLAW_STATE_DIR: params.stateDir },
+        identityKey: IDENTITY_KEY,
+      });
+    } catch (error) {
+      hasInvalidCanonical = error instanceof DeviceIdentityStorageError;
+    }
+  }
   return {
     sourcePath,
     claimPath,
-    hasLegacy:
-      params.doctorOnlyStateMigrations === true &&
-      (pathMayExist(sourcePath) || pathMayExist(claimPath)),
+    hasLegacy: doctorAuthorized && (pathMayExist(sourcePath) || pathMayExist(claimPath)),
+    hasInvalidCanonical,
   };
+}
+
+function repairInvalidCanonicalIdentity(env: NodeJS.ProcessEnv): MigrationMessages {
+  try {
+    const result = repairInvalidStoredDeviceIdentity(generateStoredDeviceIdentity(), {
+      env,
+      identityKey: IDENTITY_KEY,
+    });
+    if (!result.repaired) {
+      return { changes: [], warnings: [] };
+    }
+    return {
+      changes: ["Replaced invalid primary device identity in SQLite."],
+      warnings: [],
+      notices: ["The repaired device has a new identity and must be approved again."],
+    };
+  } catch (error) {
+    return {
+      changes: [],
+      warnings: [`Failed repairing invalid SQLite device identity: ${formatErrorMessage(error)}`],
+    };
+  }
 }
 
 function relativeLegacyPath(stateDir: string, filePath: string): string {
@@ -684,11 +722,15 @@ export async function migrateLegacyDeviceIdentity(params: {
   detected: LegacyDeviceIdentityDetection;
   stateDir: string;
   env?: NodeJS.ProcessEnv;
+  doctorOnlyStateMigrations?: boolean;
   beforeClaim?: (sourcePath: string) => void;
   beforeCleanup?: () => void;
   removeSource?: (sourcePath: string) => Promise<void> | void;
 }): Promise<MigrationMessages> {
-  if (!params.detected.hasLegacy) {
+  if (!params.detected.hasLegacy && !params.detected.hasInvalidCanonical) {
+    return { changes: [], warnings: [] };
+  }
+  if (params.doctorOnlyStateMigrations !== true) {
     return { changes: [], warnings: [] };
   }
   const env = { ...(params.env ?? process.env), OPENCLAW_STATE_DIR: params.stateDir };
@@ -724,12 +766,18 @@ export async function migrateLegacyDeviceIdentity(params: {
   let releaseError: unknown;
   try {
     try {
-      const stateRoot = await root(params.stateDir, {
-        hardlinks: "reject",
-        maxBytes: MAX_LEGACY_IDENTITY_BYTES,
-        symlinks: "reject",
-      });
-      result = await migrateWithExclusiveStateOwnership({ ...params, env, stateRoot });
+      const hasLegacyNow =
+        pathMayExist(params.detected.sourcePath) || pathMayExist(params.detected.claimPath);
+      if (hasLegacyNow) {
+        const stateRoot = await root(params.stateDir, {
+          hardlinks: "reject",
+          maxBytes: MAX_LEGACY_IDENTITY_BYTES,
+          symlinks: "reject",
+        });
+        result = await migrateWithExclusiveStateOwnership({ ...params, env, stateRoot });
+      } else if (params.detected.hasInvalidCanonical) {
+        result = repairInvalidCanonicalIdentity(env);
+      }
     } catch (error) {
       result.warnings.push(`Failed reading legacy device identity state: ${String(error)}`);
     }

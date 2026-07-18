@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import {
+  generateStoredDeviceIdentity,
   insertStoredDeviceIdentityIfAbsent,
   PRIMARY_DEVICE_IDENTITY_KEY,
   readStoredDeviceIdentity,
@@ -40,18 +41,6 @@ export class DeviceIdentityMigrationRequiredError extends Error {
 function fingerprintPublicKey(publicKeyPem: string): string {
   const raw = deriveEd25519PublicKeyRaw(publicKeyPem);
   return crypto.createHash("sha256").update(raw).digest("hex");
-}
-
-function generateStoredIdentity(): StoredDeviceIdentity {
-  const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
-  const publicKeyPem = publicKey.export({ type: "spki", format: "pem" });
-  const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" });
-  return {
-    deviceId: fingerprintPublicKey(publicKeyPem),
-    publicKeyPem,
-    privateKeyPem,
-    createdAtMs: Date.now(),
-  };
 }
 
 function toDeviceIdentity(stored: StoredDeviceIdentity): DeviceIdentity {
@@ -110,7 +99,7 @@ export function loadOrCreateDeviceIdentity(
 
   // Generate outside the write transaction. The transaction rereads the row
   // before inserting so concurrent runtimes converge on one authoritative key.
-  const candidate = generateStoredIdentity();
+  const candidate = generateStoredDeviceIdentity();
   return toDeviceIdentity(insertStoredDeviceIdentityIfAbsent(candidate, options));
 }
 

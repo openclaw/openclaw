@@ -76,6 +76,19 @@ function fingerprintPublicKey(publicKeyPem: string): string {
   return crypto.createHash("sha256").update(raw).digest("hex");
 }
 
+/** Generate canonical Ed25519 material before entering a synchronous write transaction. */
+export function generateStoredDeviceIdentity(now = Date.now()): StoredDeviceIdentity {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
+  const publicKeyPem = publicKey.export({ type: "spki", format: "pem" });
+  const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" });
+  return {
+    deviceId: fingerprintPublicKey(publicKeyPem),
+    publicKeyPem,
+    privateKeyPem,
+    createdAtMs: now,
+  };
+}
+
 function keyPairMatches(publicKeyPem: string, privateKeyPem: string): boolean {
   try {
     deriveCanonicalEd25519PublicKeyRaw(publicKeyPem);
@@ -267,5 +280,59 @@ export function insertStoredDeviceIdentityIfAbsent(
     },
     { env: options.env, path: resolved.databasePath },
     { operationLabel: "device-identity.create" },
+  );
+}
+
+/** Replace only an invalid authoritative row; preserve a valid concurrent winner. */
+export function repairInvalidStoredDeviceIdentity(
+  candidate: StoredDeviceIdentity,
+  options: DeviceIdentityStoreOptions = {},
+): { identity: StoredDeviceIdentity; repaired: boolean } {
+  const resolved = resolveDeviceIdentityStore(options);
+  validateStoredDeviceIdentity(candidate, resolved.identityKey);
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      let repaired = false;
+      try {
+        const existing = readStoredIdentityFromDatabase({ db }, resolved.identityKey);
+        if (existing) {
+          validateStoredDeviceIdentity(existing, resolved.identityKey);
+          return { identity: existing, repaired };
+        }
+      } catch (error) {
+        if (!(error instanceof DeviceIdentityStorageError)) {
+          throw error;
+        }
+        executeSqliteQuerySync(
+          db,
+          getNodeSqliteKysely<DeviceIdentityDatabase>(db)
+            .deleteFrom("device_identities")
+            .where("identity_key", "=", resolved.identityKey),
+        );
+        repaired = true;
+      }
+
+      // An absent row after an invalid-row detection still means identity continuity was lost.
+      // Report the generated winner so Doctor always surfaces the required re-approval.
+      repaired = true;
+
+      executeSqliteQuerySync(
+        db,
+        getNodeSqliteKysely<DeviceIdentityDatabase>(db)
+          .insertInto("device_identities")
+          .values(storedIdentityToRow(resolved.identityKey, candidate))
+          .onConflict((conflict) => conflict.column("identity_key").doNothing()),
+      );
+      const authoritative = readStoredIdentityFromDatabase({ db }, resolved.identityKey);
+      if (!authoritative) {
+        throw new DeviceIdentityStorageError(
+          `SQLite device identity "${resolved.identityKey}" was not durable after repair.`,
+        );
+      }
+      validateStoredDeviceIdentity(authoritative, resolved.identityKey);
+      return { identity: authoritative, repaired };
+    },
+    { env: options.env, path: resolved.databasePath },
+    { operationLabel: "device-identity.doctor-repair" },
   );
 }

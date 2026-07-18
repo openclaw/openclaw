@@ -512,6 +512,40 @@ struct DeviceIdentityStoreTests {
     }
 
     @Test
+    func `same key migration preserves the authoritative SQLite timestamp`() throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let databaseURL = tempDir.appendingPathComponent("openclaw.sqlite", isDirectory: false)
+        try Self.seedCanonicalSchema(databaseURL, nodeOwned: true)
+        try Self.execute(databaseURL, """
+        INSERT INTO device_identities (
+          identity_key, device_id, public_key_pem, private_key_pem, created_at_ms, updated_at_ms
+        ) VALUES (
+          'primary', '\(Self.fixtureDeviceID)', '\(Self.sql(Self.fixturePublicKeyPEM))',
+          '\(Self.sql(Self.fixturePrivateKeyPEM))', 1700000000000, 1700000000123
+        )
+        """)
+        let source = try Self.writeLegacyIdentity(
+            stateDirURL: tempDir.appendingPathComponent("legacy", isDirectory: true),
+            profile: .primary,
+            contents: Self.nodePEMIdentityJSON())
+
+        let identity = try DeviceIdentityStore.loadOrCreate(
+            databaseURL: databaseURL,
+            destinationStateDirURL: tempDir,
+            profile: .primary,
+            legacySources: [source])
+
+        #expect(identity.deviceId == Self.fixtureDeviceID)
+        #expect(identity.createdAtMs == 1_700_000_000_000)
+        #expect(try Self.scalarInt(
+            databaseURL,
+            "SELECT updated_at_ms FROM device_identities WHERE identity_key = 'primary'") == 1_700_000_000_123)
+        #expect(!FileManager.default.fileExists(atPath: source.identityURL.path))
+    }
+
+    @Test
     func `strict legacy validation preserves invalid source and creates no row`() throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

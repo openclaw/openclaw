@@ -448,6 +448,7 @@ export async function detectLegacyStateMigrations(params: {
   });
   const deviceIdentity = detectLegacyDeviceIdentity({
     stateDir,
+    env,
     doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
   });
   const mcpOauth = detectLegacyMcpOAuthStores({
@@ -640,6 +641,9 @@ export async function detectLegacyStateMigrations(params: {
   }
   if (deviceIdentity.hasLegacy) {
     preview.push("- Primary device identity: legacy JSON → shared SQLite state");
+  }
+  if (deviceIdentity.hasInvalidCanonical && !deviceIdentity.hasLegacy) {
+    preview.push("- Primary device identity: invalid SQLite row → new device identity");
   }
   if (mcpOauth.hasLegacy) {
     preview.push("- MCP OAuth credentials: legacy JSON → shared SQLite state");
@@ -946,6 +950,7 @@ export async function runLegacyStateMigrations(params: {
   env?: NodeJS.ProcessEnv;
   now?: () => number;
   recoverCorruptTargetStore?: boolean;
+  doctorOnlyStateMigrations?: boolean;
 }): Promise<MigrationMessages> {
   const now = params.now ?? (() => Date.now());
   const detected = params.detected;
@@ -1019,6 +1024,7 @@ export async function runLegacyStateMigrations(params: {
     detected: detected.deviceIdentity,
     env,
     stateDir: detected.stateDir,
+    doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
   });
   const mcpOauth = await migrateLegacyMcpOAuthStores({
     detected: detected.mcpOauth,
@@ -1285,6 +1291,7 @@ export async function autoMigrateLegacyState(params: {
     detected: detected.deviceIdentity,
     env,
     stateDir: detected.stateDir,
+    doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
   });
   const hasCustomAgentDir = env.OPENCLAW_AGENT_DIR?.trim() || env.PI_CODING_AGENT_DIR?.trim();
   if (hasCustomAgentDir) {

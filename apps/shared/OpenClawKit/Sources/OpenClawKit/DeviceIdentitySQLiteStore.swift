@@ -89,7 +89,9 @@ enum DeviceIdentitySQLiteStore {
         let existing = try self.readIdentity(database, key: profile.rawValue)
         let selected: DeviceIdentityMaterial
         if let existing {
-            if let migrated = claims.first?.material, migrated != existing {
+            if let migrated = claims.first?.material,
+               !self.hasSameKeyMaterial(migrated, existing)
+            {
                 throw DeviceIdentityStoreError(
                     "Legacy device identity conflicts with SQLite identity key \(profile.rawValue); source preserved")
             }
@@ -418,9 +420,18 @@ enum DeviceIdentitySQLiteStore {
 
     private static func requireConsistentClaims(_ claims: [LegacyClaim]) throws {
         guard let first = claims.first else { return }
-        guard claims.dropFirst().allSatisfy({ $0.material == first.material }) else {
+        guard claims.dropFirst().allSatisfy({ self.hasSameKeyMaterial($0.material, first.material) }) else {
             throw DeviceIdentityStoreError("Legacy device identity sources conflict; all sources preserved")
         }
+    }
+
+    private static func hasSameKeyMaterial(
+        _ lhs: DeviceIdentityMaterial,
+        _ rhs: DeviceIdentityMaterial) -> Bool
+    {
+        lhs.identity.deviceId == rhs.identity.deviceId
+            && lhs.identity.publicKey == rhs.identity.publicKey
+            && lhs.identity.privateKey == rhs.identity.privateKey
     }
 
     private static func relocateLegacyAuthIfNeeded(

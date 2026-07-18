@@ -3,4 +3,5 @@ export type LegacyDeviceIdentityDetection = {
   sourcePath: string;
   claimPath: string;
   hasLegacy: boolean;
+  hasInvalidCanonical: boolean;
 };
