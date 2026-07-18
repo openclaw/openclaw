@@ -6,10 +6,7 @@
 import * as http from "node:http";
 import * as https from "node:https";
 import { safeParseJsonWithSchema, safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
-import {
-  parseStrictNonNegativeInteger,
-  resolveTimerTimeoutMs,
-} from "openclaw/plugin-sdk/number-runtime";
+import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { readByteStreamWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -159,7 +156,6 @@ async function fetchChatUsers(
   incomingUrl: string,
   allowInsecureSsl = false,
   log?: { warn: (...args: unknown[]) => void },
-  timeoutMs?: number,
 ): Promise<ChatUser[]> {
   const now = Date.now();
   const listUrl = incomingUrl.replace(/method=\w+/, "method=user_list");
@@ -167,8 +163,6 @@ async function fetchChatUsers(
   if (cached && now - cached.cachedAt < CACHE_TTL_MS) {
     return cached.users;
   }
-  const deadlineMs = resolveTimerTimeoutMs(timeoutMs, USER_LIST_REQUEST_TIMEOUT_MS);
-
   return new Promise((resolve) => {
     let settled = false;
     let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
@@ -242,6 +236,9 @@ async function fetchChatUsers(
         })();
       })
       .on("error", (err) => {
+        if (settled) {
+          return;
+        }
         log?.warn(`fetchChatUsers: HTTP error — ${err instanceof Error ? err.message : err}`);
         finish(cached?.users ?? []);
       });
@@ -252,7 +249,7 @@ async function fetchChatUsers(
       log?.warn("fetchChatUsers: request timed out, using cached data");
       req.destroy?.();
       finish(cached?.users ?? []);
-    }, deadlineMs);
+    }, USER_LIST_REQUEST_TIMEOUT_MS);
     deadlineTimer.unref?.();
   });
 }
@@ -299,15 +296,8 @@ export async function resolveLegacyWebhookNameToChatUserId(params: {
   mutableWebhookUsername: string;
   allowInsecureSsl?: boolean;
   log?: { warn: (...args: unknown[]) => void };
-  /** Override for tests; production uses USER_LIST_REQUEST_TIMEOUT_MS. */
-  timeoutMs?: number;
 }): Promise<number | undefined> {
-  const users = await fetchChatUsers(
-    params.incomingUrl,
-    params.allowInsecureSsl,
-    params.log,
-    params.timeoutMs,
-  );
+  const users = await fetchChatUsers(params.incomingUrl, params.allowInsecureSsl, params.log);
   const lower = normalizeLowercaseStringOrEmpty(params.mutableWebhookUsername);
 
   // Match by nickname first (webhook "username" field = Chat "nickname")
