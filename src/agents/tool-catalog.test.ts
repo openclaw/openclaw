@@ -27,7 +27,7 @@ describe("tool-catalog", () => {
       listCoreToolSections(config).flatMap((section) => section.tools.map((tool) => tool.id));
 
     expect(ids()).not.toContain("agents_wait");
-    expect(ids({ config: { tools: { swarm: true } }, agentId: "main" })).toContain("agents_wait");
+    expect(ids({ swarmEnabled: true })).toContain("agents_wait");
   });
 
   it("includes code_execution, web_search, x_search, web_fetch, and update_plan in the coding profile policy", () => {

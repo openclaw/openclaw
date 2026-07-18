@@ -12,6 +12,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
+import { resolveSwarmConfig } from "../../agents/swarm-config.js";
 import {
   listCoreToolSections,
   PROFILE_OPTIONS,
@@ -53,7 +54,8 @@ type ToolCatalogGroup = {
 function buildCoreGroups(params: { cfg: OpenClawConfig; agentId: string }): ToolCatalogGroup[] {
   // Core catalog rows come from static tool sections so profile chips remain
   // stable even before any runtime agent session exists.
-  return listCoreToolSections({ config: params.cfg, agentId: params.agentId }).map((section) => ({
+  const swarmEnabled = resolveSwarmConfig(params.cfg, params.agentId).enabled;
+  return listCoreToolSections({ swarmEnabled }).map((section) => ({
     id: section.id,
     label: section.label,
     source: "core",
