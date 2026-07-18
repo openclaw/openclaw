@@ -6,28 +6,40 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
+import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import { extensionForMime } from "@openclaw/media-core/mime";
-import { validateBase64SizeLimit } from "@openclaw/media-core/base64-size-limit";
 import type { CliBackendConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { privateFileStore } from "../../infra/private-file-store.js";
 import { tempWorkspace } from "../../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import type { ImageContent } from "../../llm/types.js";
-import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { resolveGeneratedMediaMaxBytes } from "../../media/configured-max-bytes.js";
-import type { SandboxFsBridge } from "../../sandbox/fs-bridge.js";
+import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import {
   detectAndLoadPromptImages,
   detectImageReferences,
   loadImageFromRef,
 } from "../embedded-agent-runner/run/images.js";
+import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";
 import { sanitizeImageBlocks } from "../tool-images.js";
 import { cliBackendLog } from "./log.js";
 
 const CLI_IMAGE_SWEEP_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
 const sweptCliImageRoots = new Set<string>();
+
+/**
+ * Validates base64 decoded size against a byte budget without decoding.
+ * Returns an Error instead of throwing so the caller decides the strategy.
+ */
+function validateBase64SizeLimit(base64: string, maxBytes: number): Error | undefined {
+  const estimated = estimateBase64DecodedBytes(base64);
+  if (estimated > maxBytes) {
+    return new Error(`Base64 payload exceeds size limit: ${estimated} bytes > ${maxBytes} bytes`);
+  }
+  return undefined;
+}
 
 function resolveCliImagePath(image: ImageContent): string {
   const ext = extensionForMime(image.mimeType) ?? ".bin";
