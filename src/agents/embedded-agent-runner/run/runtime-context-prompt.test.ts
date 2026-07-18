@@ -611,7 +611,7 @@ describe("runtime context prompt submission", () => {
       role: "custom",
       customType: "openclaw.runtime-context",
       content: [
-        "OpenClaw runtime context for the immediately preceding user message.",
+        "OpenClaw runtime context that accompanies the user message below. The user's own message text is delivered separately and IS included in this turn; this block only adds runtime context on top of it.",
         "This context is runtime-generated, not user-authored. Keep internal details private.",
         "",
         "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
@@ -621,6 +621,14 @@ describe("runtime context prompt submission", () => {
       display: false,
       details: { source: "openclaw-runtime-context" },
     });
+  });
+
+  it("runtime context header clarifies the user message IS included (#110672)", () => {
+    const message = buildRuntimeContextCustomMessage("secret runtime context");
+    const header = message?.content.split("\n")[0] ?? "";
+    expect(header).toContain("accompanies the user message");
+    expect(header).toContain("IS included in this turn");
+    expect(header).not.toContain("immediately preceding user message");
   });
 
   it("labels runtime-only events as system context", () => {
