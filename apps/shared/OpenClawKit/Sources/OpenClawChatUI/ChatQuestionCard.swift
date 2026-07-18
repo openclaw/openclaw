@@ -285,8 +285,7 @@ public final class OpenClawQuestionCardModel: Identifiable {
     }
 }
 
-// periphery:ignore - Public SwiftUI component for package consumers; native apps embed it through the shared list.
-public struct OpenClawQuestionCard: View {
+struct OpenClawQuestionCard: View {
     @Bindable private var model: OpenClawQuestionCardModel
     private let onSubmit: @MainActor @Sendable (OpenClawQuestionCardModel) async -> Void
     private let onSkip: (@MainActor @Sendable (OpenClawQuestionCardModel) async -> Void)?
@@ -294,8 +293,7 @@ public struct OpenClawQuestionCard: View {
     @FocusState private var focusedQuestionID: String?
     #endif
 
-    // periphery:ignore - Public construction is part of the exported SwiftUI component API.
-    public init(
+    init(
         model: OpenClawQuestionCardModel,
         onSubmit: @escaping @MainActor @Sendable (OpenClawQuestionCardModel) async -> Void)
     {
@@ -304,7 +302,7 @@ public struct OpenClawQuestionCard: View {
         self.onSkip = nil
     }
 
-    public init(
+    init(
         model: OpenClawQuestionCardModel,
         onSubmit: @escaping @MainActor @Sendable (OpenClawQuestionCardModel) async -> Void,
         onSkip: @escaping @MainActor @Sendable (OpenClawQuestionCardModel) async -> Void)
@@ -314,8 +312,7 @@ public struct OpenClawQuestionCard: View {
         self.onSkip = onSkip
     }
 
-    // periphery:ignore - SwiftUI View witness must stay public for the exported component.
-    public var body: some View {
+    var body: some View {
         let status = self.model.status()
         if status == .pending || status == .submitting {
             self.pendingCard

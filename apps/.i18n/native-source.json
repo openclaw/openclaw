@@ -36763,7 +36763,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 345,
+      "line": 342,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
       "source": "\\(question.header):",
       "surface": "apple",
@@ -36771,7 +36771,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 358,
+      "line": 355,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
       "source": "Question summary",
       "surface": "apple",
@@ -36779,7 +36779,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 372,
+      "line": 369,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
       "source": "Other answer",
       "surface": "apple",
@@ -36787,7 +36787,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 426,
+      "line": 423,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
       "source": "Not selected",
       "surface": "apple",
@@ -36795,7 +36795,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 426,
+      "line": 423,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
       "source": "Selected",
       "surface": "apple",
@@ -36803,7 +36803,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 443,
+      "line": 440,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
       "source": "Skipping…",
       "surface": "apple",
@@ -36811,7 +36811,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 446,
+      "line": 443,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
       "source": "Skip",
       "surface": "apple",
@@ -36819,7 +36819,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 457,
+      "line": 454,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
       "source": "Submitting…",
       "surface": "apple",
@@ -36827,7 +36827,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 460,
+      "line": 457,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
       "source": "Submit",
       "surface": "apple",
