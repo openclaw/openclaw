@@ -175,6 +175,7 @@ export function createRuntimeSecretsActivator(params: {
   let activeDegradationSupportsSourceOnlyRecovery = false;
   let activeDegradationScope: SecretsStateScope | null = null;
   const deferredStateTransitions = new WeakMap<object, DeferredSecretsStateTransition>();
+  let pendingDeferredLineageRevision: number | null = null;
   let secretsActivationTail: Promise<void> = Promise.resolve();
   const loadSecretsRuntime = createLazyPromise(() => import("../secrets/runtime.js"), {
     cacheRejections: true,
@@ -304,25 +305,29 @@ export function createRuntimeSecretsActivator(params: {
     const activationScope = options?.stateScope ?? "full";
     if (activationParams.activate && (statePrepared.degradedOwners?.length ?? 0) > 0) {
       if (activationParams.deferStatePublication === true) {
+        const activationRevision = getActiveSecretsRuntimeSnapshotRevision();
         deferredStateTransitions.set(prepared, {
           kind: "degraded",
-          activationRevision: getActiveSecretsRuntimeSnapshotRevision(),
+          activationRevision,
           reason: activationParams.reason,
           activationScope,
         });
+        pendingDeferredLineageRevision = activationRevision;
       } else {
         publishDegradation(statePrepared, activationParams.reason, stateScope, activationScope);
       }
     } else if (activationParams.activate && secretsDegraded) {
       if (activationParams.deferStatePublication === true) {
         if (activeDegradationGeneration !== null) {
+          const activationRevision = getActiveSecretsRuntimeSnapshotRevision();
           deferredStateTransitions.set(prepared, {
             kind: "recovered",
-            activationRevision: getActiveSecretsRuntimeSnapshotRevision(),
+            activationRevision,
             degradationGeneration: activeDegradationGeneration,
             reason: activationParams.reason,
             activationScope,
           });
+          pendingDeferredLineageRevision = activationRevision;
         }
       } else {
         publishRecovery(prepared.config, undefined, stateScope);
@@ -552,6 +557,12 @@ export function createRuntimeSecretsActivator(params: {
       hasCurrentAuthStoreCredentialsRevision(snapshot),
     assertValid: (snapshot) => assertRuntimeGatewayAuthNotKnownWeak(snapshot.config),
     publish: async (snapshot) => {
+      if (
+        pendingDeferredLineageRevision !== null &&
+        hasActiveSecretsRuntimeSnapshotLineage(pendingDeferredLineageRevision)
+      ) {
+        return;
+      }
       await finishPreparedSnapshot(snapshot, providerAuthActivationParams, {
         alreadyActivated: true,
         stateScope: "provider-auth",
@@ -565,16 +576,28 @@ export function createRuntimeSecretsActivator(params: {
   runtimeSecretsStatePublishers.set(activateRuntimeSecrets, (snapshot, options) => {
     const transition = deferredStateTransitions.get(snapshot);
     deferredStateTransitions.delete(snapshot);
+    if (transition && pendingDeferredLineageRevision === transition.activationRevision) {
+      pendingDeferredLineageRevision = null;
+    }
     if (!transition) {
-      const sourceOnlyContractRecovered =
+      const sourceOnlyOwnsLineage =
         options?.sourceOnly === true &&
-        options.expectedRevision === getActiveSecretsRuntimeSnapshotRevision() &&
+        options.expectedRevision !== undefined &&
+        hasActiveSecretsRuntimeSnapshotLineage(options.expectedRevision);
+      const activeSnapshot = sourceOnlyOwnsLineage ? getActiveSecretsRuntimeSnapshot() : null;
+      const sourceOnlyContractRecovered =
+        activeSnapshot !== null &&
         activeDegradationGeneration !== null &&
         activeDegradationSupportsSourceOnlyRecovery &&
         activeDegradationConfig !== null &&
-        !hasSameSecretReloadContract(activeDegradationConfig, snapshot.sourceConfig);
+        !hasSameSecretReloadContract(activeDegradationConfig, activeSnapshot.sourceConfig);
       if (sourceOnlyContractRecovered) {
-        publishRecovery(snapshot.config, activeDegradationGeneration);
+        if ((activeSnapshot.degradedOwners?.length ?? 0) > 0) {
+          const activeScope = resolvePreparedSecretsStateScope(activeSnapshot);
+          publishDegradation(activeSnapshot, "reload", activeScope);
+        } else {
+          publishRecovery(activeSnapshot.config, activeDegradationGeneration);
+        }
       }
       return;
     }
@@ -592,12 +615,8 @@ export function createRuntimeSecretsActivator(params: {
     });
     if ((activeSnapshot.degradedOwners?.length ?? 0) > 0) {
       const activeScope = resolvePreparedSecretsStateScope(activeSnapshot);
-      publishDegradation(
-        activeSnapshot,
-        transition.reason,
-        activeScope,
-        transition.activationScope,
-      );
+      const { reason, activationScope } = transition;
+      publishDegradation(activeSnapshot, reason, activeScope, activationScope);
       return;
     }
     if (

@@ -33,6 +33,7 @@ import {
   getActiveSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshotRevision,
   hasSameSecretReloadContract,
+  restoreSecretsRuntimeSourceSnapshotIfLineageCurrent,
   restoreSecretsRuntimeSnapshotStateIfCurrent,
   setSecretsRuntimeSourceSnapshotIfCurrent,
   type PreparedSecretsRuntimeSnapshot,
@@ -187,6 +188,70 @@ describe("secrets runtime state", () => {
     ).toBe(false);
     expect(getRuntimeConfigSourceSnapshot()).toEqual(concurrentConfig);
     expect(getActiveSecretsRuntimeSnapshot()?.sourceConfig).toEqual(initialConfig);
+  });
+
+  it("restores source-only ownership through a scoped descendant", () => {
+    const initialSource = { logging: { level: "info" as const } };
+    const nextSource = { logging: { level: "debug" as const } };
+    const runtimeConfig = {
+      models: { providers: { openai: { apiKey: "initial", models: [] } } },
+    } satisfies OpenClawConfig;
+    activateSecretsRuntimeSnapshotState({
+      snapshot: {
+        sourceConfig: initialSource,
+        config: runtimeConfig,
+        authStores: [],
+        authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
+        warnings: [],
+        webTools: {
+          search: { providerSource: "none", diagnostics: [] },
+          fetch: { providerSource: "none", diagnostics: [] },
+          diagnostics: [],
+        },
+      },
+      refreshContext: null,
+      refreshHandler: null,
+      runtimeSourceConfig: initialSource,
+    });
+    const runtimeMetadata = getRuntimeConfigSnapshotMetadata();
+    if (!runtimeMetadata) {
+      throw new Error("expected runtime config metadata");
+    }
+    expect(
+      setSecretsRuntimeSourceSnapshotIfCurrent({
+        expectedSecretsRevision: getActiveSecretsRuntimeSnapshotRevision(),
+        expectedRuntimeConfigRevision: runtimeMetadata.revision,
+        runtimeSourceConfig: nextSource,
+        secretsSourceConfig: nextSource,
+      }),
+    ).toBe(true);
+    const committedRevision = getActiveSecretsRuntimeSnapshotRevision();
+    const active = getActiveSecretsRuntimeSnapshot()!;
+    const descendant = structuredClone(active);
+    descendant.config.models!.providers!.openai!.apiKey = "refreshed";
+    expect(
+      activateSecretsRuntimeSnapshotStateIfCurrent({
+        snapshot: descendant,
+        expectedRevision: committedRevision,
+        refreshContext: null,
+        refreshHandler: null,
+        runtimeSourceConfig: nextSource,
+        preserveActivationLineage: true,
+      }),
+    ).toBe(true);
+
+    expect(
+      restoreSecretsRuntimeSourceSnapshotIfLineageCurrent({
+        expectedLineageRevision: committedRevision,
+        runtimeSourceConfig: initialSource,
+        secretsSourceConfig: initialSource,
+      }),
+    ).toBe(true);
+    expect(getRuntimeConfigSourceSnapshot()).toEqual(initialSource);
+    expect(getActiveSecretsRuntimeSnapshot()?.sourceConfig).toEqual(initialSource);
+    expect(getActiveSecretsRuntimeSnapshot()?.config.models?.providers?.openai?.apiKey).toBe(
+      "refreshed",
+    );
   });
 
   it("preserves live auth bookkeeping when prepared credentials activate", () => {

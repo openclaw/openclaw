@@ -18,6 +18,8 @@ import type {
 } from "../agents/auth-profiles/types.js";
 import {
   clearRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshotMetadata,
   setRuntimeConfigSourceSnapshotIfCurrent,
   setRuntimeConfigSnapshot,
   setRuntimeConfigSnapshotRefreshHandler,
@@ -1054,8 +1056,6 @@ export function setSecretsRuntimeSourceSnapshotIfCurrent(params: {
   }
   const nextRuntimeSourceConfig = structuredClone(params.runtimeSourceConfig);
   const nextSecretsSourceConfig = structuredClone(params.secretsSourceConfig);
-  const currentAuthStores = structuredClone(listRuntimeAuthProfileStoreSnapshots());
-  const nextAuthMutations = captureAuthStoreMutationLineage(currentAuthStores, currentAuthStores);
   if (
     !setRuntimeConfigSourceSnapshotIfCurrent({
       expectedRevision: params.expectedRuntimeConfigRevision,
@@ -1064,13 +1064,50 @@ export function setSecretsRuntimeSourceSnapshotIfCurrent(params: {
   ) {
     return false;
   }
+  advanceSecretsRuntimeSourceSnapshot(nextSecretsSourceConfig);
+  return true;
+}
+
+function advanceSecretsRuntimeSourceSnapshot(sourceConfig: OpenClawConfig): void {
   if (activeSnapshot) {
-    activeSnapshot.sourceConfig = nextSecretsSourceConfig;
+    activeSnapshot.sourceConfig = sourceConfig;
     activeSnapshotRevision += 1;
     activeSnapshotLineageStartRevision = activeSnapshotRevision;
-    activeSnapshotLineageAuthStores = currentAuthStores;
-    activeSnapshotLineageAuthMutations = nextAuthMutations;
+    activeSnapshotLineageAuthStores = structuredClone(listRuntimeAuthProfileStoreSnapshots());
+    activeSnapshotLineageAuthMutations = captureAuthStoreMutationLineage(
+      activeSnapshotLineageAuthStores,
+      activeSnapshotLineageAuthStores,
+    );
   }
+}
+
+/** Reverts source ownership while retaining scoped descendants of the committed source write. */
+export function restoreSecretsRuntimeSourceSnapshotIfLineageCurrent(params: {
+  expectedLineageRevision: number;
+  runtimeSourceConfig: OpenClawConfig;
+  secretsSourceConfig: OpenClawConfig;
+}): boolean {
+  if (!activeSnapshot || activeSnapshotLineageStartRevision !== params.expectedLineageRevision) {
+    return false;
+  }
+  const runtimeConfig = getRuntimeConfigSnapshot();
+  const runtimeMetadata = getRuntimeConfigSnapshotMetadata();
+  if (
+    !runtimeConfig ||
+    !runtimeMetadata ||
+    !isDeepStrictEqual(runtimeConfig, activeSnapshot.config)
+  ) {
+    return false;
+  }
+  if (
+    !setRuntimeConfigSourceSnapshotIfCurrent({
+      expectedRevision: runtimeMetadata.revision,
+      sourceConfig: structuredClone(params.runtimeSourceConfig),
+    })
+  ) {
+    return false;
+  }
+  advanceSecretsRuntimeSourceSnapshot(structuredClone(params.secretsSourceConfig));
   return true;
 }
 

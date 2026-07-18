@@ -45,6 +45,7 @@ import {
   getActiveSecretsRuntimeSnapshotRevision,
   hasActiveSecretsRuntimeSnapshotLineage,
   hasSameSecretReloadContract,
+  restoreSecretsRuntimeSourceSnapshotIfLineageCurrent,
   setSecretsRuntimeSourceSnapshotIfCurrent,
   type PreparedSecretsRuntimeSnapshot,
 } from "../secrets/runtime-state.js";
@@ -2069,13 +2070,10 @@ export function startManagedGatewayConfigReloader(
             continue;
           }
           const committedSecretsRevision = getActiveSecretsRuntimeSnapshotRevision();
-          const committedRuntimeMetadata = getRuntimeConfigSnapshotMetadata();
           const rollbackPublishedSource = async () => {
             if (
-              !committedRuntimeMetadata ||
-              !setSecretsRuntimeSourceSnapshotIfCurrent({
-                expectedSecretsRevision: committedSecretsRevision,
-                expectedRuntimeConfigRevision: committedRuntimeMetadata.revision,
+              !restoreSecretsRuntimeSourceSnapshotIfLineageCurrent({
+                expectedLineageRevision: committedSecretsRevision,
                 runtimeSourceConfig: previousRuntimeSourceConfig,
                 secretsSourceConfig: previousSecretsSnapshot.sourceConfig,
               })
