@@ -203,7 +203,9 @@ struct ChatProTab: View {
                 emptyAssistantIntro: String(localized: "What would you like to work on?"),
                 emptyAssistantPrompts: Self.emptyAssistantPrompts,
                 talkControl: viewModel.isAttachmentOwnerPinned ? nil : self.talkControl,
-                dictationControl: viewModel.isAttachmentOwnerPinned ? nil : self.dictationControl,
+                dictationControl: Self.shouldExposeDictationControl(
+                    isAttachmentOwnerPinned: viewModel.isAttachmentOwnerPinned,
+                    isDictationActive: self.appModel.isChatDictationActive) ? self.dictationControl : nil,
                 voiceNoteControl: self.voiceNoteControl,
                 speech: self.speech)
                 // iMessage-style grey bubbles for agent replies in the clean chrome.
@@ -667,6 +669,14 @@ struct ChatProTab: View {
             return .disconnected
         }
         return current
+    }
+
+    /// Attachment pinning blocks new capture, but active dictation must keep its stop control.
+    nonisolated static func shouldExposeDictationControl(
+        isAttachmentOwnerPinned: Bool,
+        isDictationActive: Bool) -> Bool
+    {
+        !isAttachmentOwnerPinned || isDictationActive
     }
 
     private var gatewayAccessibilityLabel: String {
