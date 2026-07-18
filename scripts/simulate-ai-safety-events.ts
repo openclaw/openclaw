@@ -9,12 +9,12 @@
 
 import { createAiSafetyRecorders } from "../extensions/diagnostics-otel/src/service-recorders-ai-safety.js";
 import {
-  AI_SAFETY_EVENT_SCHEMA_VERSION,
   emitTrustedAISafetyEvent,
   onAISafetyDiagnosticEvent,
 } from "../src/infra/diagnostic-ai-safety-events.js";
 import { emitPluginSafetyEvent } from "../src/plugins/safety-event-emission.js";
 
+const AI_SAFETY_EVENT_SCHEMA_VERSION = "ai.diagnostics.v1";
 const SESSION = "sim-session-abc12345";
 const AGENT = "sim-agent-007";
 
