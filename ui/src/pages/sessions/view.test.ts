@@ -70,6 +70,8 @@ function buildProps(result: SessionsListResult): SessionsProps {
     onPageChange: () => undefined,
     onPageSizeChange: () => undefined,
     onRefresh: () => undefined,
+    onArchivedViewChange: () => undefined,
+    onDeleteAllArchived: () => undefined,
     onPatch: () => undefined,
     onToggleSelect: () => undefined,
     onSelectPage: () => undefined,
@@ -212,33 +214,29 @@ describe("sessions view", () => {
     expect(onTranscriptSearch).not.toHaveBeenCalled();
   });
 
-  it("renders an explicit archived-session toggle", async () => {
+  it("renders an Active and Archived segment", async () => {
     const container = document.createElement("div");
-    const onFiltersChange = vi.fn();
+    const onArchivedViewChange = vi.fn();
     render(
       renderSessions({
         ...buildProps(buildMultiResult([])),
-        onFiltersChange,
+        onArchivedViewChange,
       }),
       container,
     );
     await Promise.resolve();
 
-    const archivedToggle = container.querySelector(
-      ".session-archive-toggle input",
-    ) as HTMLInputElement | null;
-    expect(archivedToggle?.checked).toBe(false);
+    const buttons = container.querySelectorAll<HTMLButtonElement>(".sessions-view-segment button");
+    expect([...buttons].map((button) => button.textContent?.trim())).toEqual([
+      "Active",
+      "Archived",
+    ]);
+    expect(buttons[0]?.getAttribute("aria-pressed")).toBe("true");
+    expect(buttons[1]?.getAttribute("aria-pressed")).toBe("false");
 
-    archivedToggle!.checked = true;
-    archivedToggle!.dispatchEvent(new Event("change", { bubbles: true }));
+    buttons[1]?.click();
 
-    expect(onFiltersChange).toHaveBeenCalledWith({
-      activeMinutes: "",
-      limit: "120",
-      includeGlobal: false,
-      includeUnknown: false,
-      showArchived: true,
-    });
+    expect(onArchivedViewChange).toHaveBeenCalledWith(true);
   });
 
   it("groups sessions by channel with section headers and no pagination", async () => {
@@ -441,7 +439,6 @@ describe("sessions view", () => {
       "Max sessions to load.",
       "Include global sessions.",
       "Include unknown sessions.",
-      "Show only archived sessions.",
     ]);
   });
 
@@ -469,7 +466,7 @@ describe("sessions view", () => {
     const toggleGroup = container.querySelector(".session-filter-toggle-group");
     expect(toggleGroup?.getAttribute("role")).toBe("group");
     expect(toggleGroup?.getAttribute("aria-label")).toBe("Session source filters");
-    expect(toggleGroup?.querySelectorAll(".session-filter-check")).toHaveLength(3);
+    expect(toggleGroup?.querySelectorAll(".session-filter-check")).toHaveLength(2);
     expect(
       Array.from(toggleGroup?.querySelectorAll(".session-filter-check") ?? []).map((toggle) => [
         toggle.querySelector("input")?.getAttribute("name"),
@@ -481,7 +478,6 @@ describe("sessions view", () => {
         ["session-filter-check", "session-filter-toggle", "session-filter-check--active"],
       ],
       ["includeUnknown", ["session-filter-check", "session-filter-toggle"]],
-      ["showArchived", ["session-filter-check", "session-filter-toggle", "session-archive-toggle"]],
     ]);
     expect(toggleGroup?.querySelector(".session-filter-check__box")).toBeNull();
   });

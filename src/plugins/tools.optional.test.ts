@@ -75,6 +75,7 @@ function createContext() {
 
 function createResolveToolsParams(params?: {
   context?: ReturnType<typeof createContext> & Record<string, unknown>;
+  clientCaps?: string[];
   toolAllowlist?: readonly string[];
   toolDenylist?: readonly string[];
   existingToolNames?: Set<string>;
@@ -89,6 +90,7 @@ function createResolveToolsParams(params?: {
   );
   return {
     context: (params?.context ?? createContext()) as never,
+    ...(params?.clientCaps ? { clientCaps: params.clientCaps } : {}),
     ...(toolAllowlist.length > 0 ? { toolAllowlist } : {}),
     ...(params?.toolDenylist ? { toolDenylist: [...params.toolDenylist] } : {}),
     ...(params?.existingToolNames ? { existingToolNames: params.existingToolNames } : {}),
@@ -1998,6 +2000,79 @@ describe("resolvePluginTools optional tools", () => {
     expect(registry.diagnostics).toHaveLength(0);
   });
 
+  it("filters client-cap tools before resolving contextual duplicate names", () => {
+    const registry = setRegistry([
+      {
+        pluginId: "canvas",
+        optional: false,
+        source: "/tmp/canvas.js",
+        names: ["show_widget"],
+        factory: (context) =>
+          (context as { messageChannel?: string }).messageChannel === "discord"
+            ? null
+            : {
+                ...makeTool("show_widget"),
+                description: "canvas implementation",
+                requiredClientCaps: ["inline-widgets"],
+              },
+      },
+      {
+        pluginId: "discord",
+        optional: false,
+        source: "/tmp/discord.js",
+        names: ["show_widget"],
+        factory: (context) =>
+          (context as { messageChannel?: string }).messageChannel === "discord"
+            ? { ...makeTool("show_widget"), description: "discord implementation" }
+            : null,
+      },
+    ]);
+
+    const discordTools = resolvePluginTools(
+      createResolveToolsParams({
+        context: { ...createContext(), messageChannel: "discord" },
+        clientCaps: ["inline-widgets"],
+      }),
+    );
+    expect(discordTools.map((tool) => [tool.name, tool.description])).toEqual([
+      ["show_widget", "discord implementation"],
+    ]);
+
+    const webTools = resolvePluginTools(
+      createResolveToolsParams({
+        context: { ...createContext(), messageChannel: "webchat" },
+        clientCaps: ["inline-widgets"],
+      }),
+    );
+    expect(webTools.map((tool) => [tool.name, tool.description])).toEqual([
+      ["show_widget", "canvas implementation"],
+    ]);
+    expect(registry.diagnostics).toHaveLength(0);
+  });
+
+  it("isolates tools with malformed required client capabilities", () => {
+    const registry = setRegistry([
+      {
+        pluginId: "multi",
+        optional: false,
+        source: "/tmp/multi.js",
+        names: ["broken_tool", "other_tool"],
+        factory: () => [
+          { ...makeTool("broken_tool"), requiredClientCaps: "inline-widgets" },
+          makeTool("other_tool"),
+        ],
+      },
+    ]);
+
+    const tools = resolvePluginTools(createResolveToolsParams({ clientCaps: ["inline-widgets"] }));
+
+    expectResolvedToolNames(tools, ["other_tool"]);
+    expectSingleDiagnosticMessage(
+      registry.diagnostics,
+      "broken_tool requiredClientCaps must be an array of strings",
+    );
+  });
+
   it.each([
     {
       name: "skips conflicting tool names but keeps other tools",
@@ -2212,10 +2287,12 @@ describe("resolvePluginTools optional tools", () => {
   });
 
   it("caches plugin tool descriptors and uses the runtime only on execution", async () => {
+    const outputSchema = { type: "object", properties: { ok: { type: "boolean" } } };
     const factory = vi.fn((rawCtx: unknown) => {
       const ctx = rawCtx as { sessionId?: string };
       return {
         ...makeTool("cached_tool"),
+        outputSchema,
         async execute() {
           return { content: [{ type: "text", text: ctx.sessionId ?? "missing" }] };
         },
@@ -2246,6 +2323,8 @@ describe("resolvePluginTools optional tools", () => {
     expectResolvedToolNames(second, ["cached_tool"]);
     expect(factory).toHaveBeenCalledTimes(1);
     expect(second[0]).not.toBe(first[0]);
+    expect(first[0]?.outputSchema).toBe(outputSchema);
+    expect(second[0]?.outputSchema).toBe(outputSchema);
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
 
     await expect(second[0]?.execute("call", {}, undefined)).resolves.toEqual({

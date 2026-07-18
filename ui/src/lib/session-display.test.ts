@@ -1,6 +1,6 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import {
-  channelDisplayLabel,
   resolveChannelSessionInfo,
   resolveSessionDisplayName,
   resolveSessionWorkSubtitle,
@@ -77,6 +77,34 @@ describe("resolveSessionDisplayName", () => {
       "node-fleet-…8b2e",
     );
   });
+
+  it("can omit only the subagent prefix while preserving its untitled fallback", () => {
+    const key = "agent:main:subagent:worker";
+    expect(resolveSessionDisplayName(key, { label: "Research sources" })).toBe(
+      "Subagent: Research sources",
+    );
+    expect(
+      resolveSessionDisplayName(
+        key,
+        { label: "Subagent: Research sources" },
+        {
+          includeSubagentPrefix: false,
+        },
+      ),
+    ).toBe("Research sources");
+    expect(resolveSessionDisplayName(key, undefined, { includeSubagentPrefix: false })).toBe(
+      "Subagent:",
+    );
+    expect(
+      resolveSessionDisplayName(
+        "agent:main:cron:daily",
+        { label: "Daily" },
+        {
+          includeSubagentPrefix: false,
+        },
+      ),
+    ).toBe("Cron: Daily");
+  });
 });
 
 describe("resolveSessionWorkSubtitle", () => {
@@ -130,13 +158,5 @@ describe("resolveChannelSessionInfo", () => {
     expect(resolveChannelSessionInfo("agent:main:dashboard:uuid")).toEqual({
       channelSession: false,
     });
-  });
-});
-
-describe("channelDisplayLabel", () => {
-  it("uses friendly names for known channels and capitalizes the rest", () => {
-    expect(channelDisplayLabel("imessage")).toBe("iMessage");
-    expect(channelDisplayLabel("telegram")).toBe("Telegram");
-    expect(channelDisplayLabel("mattermost")).toBe("Mattermost");
   });
 });

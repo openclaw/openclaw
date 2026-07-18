@@ -29,6 +29,8 @@ export type EmbeddedAgentQueueHandle = {
   isAbortable?: () => boolean;
   isCompacting: () => boolean;
   supportsTranscriptCommitWait?: boolean;
+  /** True only when queueMessage preserves images supplied in its options. */
+  supportsQueueMessageImages?: boolean;
   cancel?: (reason?: "user_abort" | "restart" | "superseded") => void;
   abort: (reason?: "restart") => void;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
@@ -45,7 +47,7 @@ export type ActiveEmbeddedRunSnapshot = {
 
 export type EmbeddedRunWaiter = {
   resolve: (ended: boolean) => void;
-  timer: NodeJS.Timeout;
+  timer?: NodeJS.Timeout;
 };
 
 export type AbandonedEmbeddedRun = {
