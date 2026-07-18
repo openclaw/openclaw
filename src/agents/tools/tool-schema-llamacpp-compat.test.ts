@@ -2,8 +2,10 @@ import { normalizeToolParameterSchema } from "@openclaw/ai/internal/openai";
 // Guards model-facing tool schemas against constructs that llama.cpp's
 // JSON-schema -> GBNF grammar converter rejects (issue #108580). Canonical tool
 // schemas keep server-side validation guidance; llama.cpp projection strips the
-// incompatible keywords at the provider boundary.
+// incompatible keywords through provider-owned normalizeToolSchemas hooks or the
+// explicit toolSchemaProfile: "llamacpp" compatibility opt-in.
 import { describe, expect, it } from "vitest";
+import { normalizeLlamacppGbnfToolSchemas } from "../../plugin-sdk/provider-tools.js";
 import type { AnyAgentTool } from "./common.js";
 import { createCronTool } from "./cron-tool.js";
 import { createSessionsHistoryTool } from "./sessions-history-tool.js";
@@ -155,11 +157,24 @@ describe("model-facing tool schemas stay llama.cpp GBNF-compatible", () => {
     expect(searchSchema.properties?.query).toMatchObject({ maxLength: 4_096 });
   });
 
-  it("llama.cpp-projected tool schemas carry no GBNF-breaking pattern or maxLength", () => {
+  it("llama.cpp provider-hook projection carries no GBNF-breaking pattern or maxLength", () => {
+    const projectedTools = normalizeLlamacppGbnfToolSchemas({
+      provider: "ollama",
+      modelId: "llama3.2",
+      tools,
+    } as never);
+    const violations: string[] = [];
+    for (const tool of projectedTools) {
+      collectGbnfViolations(tool.parameters, tool.name, violations);
+    }
+    expect(violations).toEqual([]);
+  });
+
+  it("explicit llamacpp profile projection carries no GBNF-breaking pattern or maxLength", () => {
     const violations: string[] = [];
     for (const tool of tools) {
       const projected = normalizeToolParameterSchema(tool.parameters, {
-        modelProvider: "ollama",
+        modelCompat: { toolSchemaProfile: "llamacpp" },
       });
       collectGbnfViolations(projected, tool.name, violations);
     }

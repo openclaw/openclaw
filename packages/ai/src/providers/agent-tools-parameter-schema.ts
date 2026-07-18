@@ -13,7 +13,7 @@ import type { TSchema } from "typebox";
 import { cleanSchemaForGemini } from "./clean-for-gemini.js";
 import {
   cleanSchemaForLlamacppGbnf,
-  isLlamacppGbnfToolSchemaProvider,
+  LLAMACPP_TOOL_SCHEMA_PROFILE,
 } from "./clean-for-llamacpp-gbnf.js";
 import { stripUnsupportedSchemaKeywords } from "./schema-keyword-strip.js";
 
@@ -835,18 +835,16 @@ function normalizeToolParameterSchemaUncached(
   const isAnthropicProvider = normalizedProvider.includes("anthropic");
   const unsupportedToolSchemaKeywords = resolveUnsupportedToolSchemaKeywords(options?.modelCompat);
   const omitEmptyArrayItems = shouldOmitEmptyArrayItems(options?.modelCompat);
-
-  const isLlamacppGbnfProvider = isLlamacppGbnfToolSchemaProvider({
-    modelProvider: normalizedProvider,
-    toolSchemaProfile: normalizedToolSchemaProfile,
-  });
+  // Opt-in only: bundled llama.cpp-backed providers clean via normalizeToolSchemas
+  // hooks. Custom OpenAI-compatible llama.cpp endpoints set toolSchemaProfile.
+  const isLlamacppGbnfProfile = normalizedToolSchemaProfile === LLAMACPP_TOOL_SCHEMA_PROFILE;
 
   function applyProviderCleaning(s: unknown): TSchema {
     const normalizedSchema = normalizeArraySchemasMissingItems(s);
     let arrayItemsCompatibleSchema = omitEmptyArrayItems
       ? stripEmptyArrayItemsFromArraySchemas(normalizedSchema)
       : normalizedSchema;
-    if (isLlamacppGbnfProvider) {
+    if (isLlamacppGbnfProfile) {
       arrayItemsCompatibleSchema = cleanSchemaForLlamacppGbnf(arrayItemsCompatibleSchema);
     }
     if (isGeminiProvider && !isAnthropicProvider) {

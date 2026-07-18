@@ -29,6 +29,7 @@ import {
   buildProviderReplayFamilyHooks,
   selectPreferredLocalModelId,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
 import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
 import {
   buildOllamaModelDefinition,
@@ -677,6 +678,7 @@ export default definePluginEntry({
         });
       },
       ...buildProviderReplayFamilyHooks({ family: "openai-compatible" }),
+      ...buildProviderToolCompatFamilyHooks("llamacpp-gbnf"),
       buildReplayPolicy: (ctx) =>
         ctx.modelApi === "ollama"
           ? buildNativeOllamaReplayPolicy()
@@ -853,6 +855,7 @@ export default definePluginEntry({
         });
       },
       ...buildProviderReplayFamilyHooks({ family: "openai-compatible" }),
+      ...buildProviderToolCompatFamilyHooks("llamacpp-gbnf"),
       buildReplayPolicy: (ctx) =>
         ctx.modelApi === "ollama"
           ? buildNativeOllamaReplayPolicy()

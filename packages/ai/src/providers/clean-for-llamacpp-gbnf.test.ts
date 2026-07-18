@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   cleanSchemaForLlamacppGbnf,
-  isLlamacppGbnfToolSchemaProvider,
+  findLlamacppGbnfSchemaViolations,
 } from "./clean-for-llamacpp-gbnf.js";
 
 describe("cleanSchemaForLlamacppGbnf", () => {
@@ -79,21 +79,22 @@ describe("cleanSchemaForLlamacppGbnf", () => {
   });
 });
 
-describe("isLlamacppGbnfToolSchemaProvider", () => {
-  it("matches the explicit llamacpp profile", () => {
+describe("findLlamacppGbnfSchemaViolations", () => {
+  it("reports pattern and oversized maxLength paths", () => {
     expect(
-      isLlamacppGbnfToolSchemaProvider({ toolSchemaProfile: "llamacpp", modelProvider: "openai" }),
-    ).toBe(true);
-  });
-
-  it("matches known llama.cpp-backed provider ids", () => {
-    for (const provider of ["ollama", "lmstudio", "llama-cpp", "llamacpp", "my-llama.cpp-host"]) {
-      expect(isLlamacppGbnfToolSchemaProvider({ modelProvider: provider })).toBe(true);
-    }
-  });
-
-  it("does not match unrelated providers", () => {
-    expect(isLlamacppGbnfToolSchemaProvider({ modelProvider: "openai" })).toBe(false);
-    expect(isLlamacppGbnfToolSchemaProvider({ modelProvider: "anthropic" })).toBe(false);
+      findLlamacppGbnfSchemaViolations(
+        {
+          type: "object",
+          properties: {
+            key: { type: "string", pattern: "\\S", maxLength: 200 },
+            script: { type: "string", maxLength: 65_536 },
+          },
+        },
+        "demo.parameters",
+      ),
+    ).toEqual([
+      "demo.parameters.properties.key.pattern",
+      "demo.parameters.properties.script.maxLength",
+    ]);
   });
 });

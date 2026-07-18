@@ -5,9 +5,11 @@ import {
   inspectDeepSeekToolSchemas,
   findOpenAIStrictSchemaViolations,
   inspectGeminiToolSchemas,
+  inspectLlamacppGbnfToolSchemas,
   inspectOpenAIToolSchemas,
   normalizeDeepSeekToolSchemas,
   normalizeGeminiToolSchemas,
+  normalizeLlamacppGbnfToolSchemas,
   normalizeOpenAIToolSchemas,
 } from "./provider-tools.js";
 
@@ -43,6 +45,11 @@ describe("buildProviderToolCompatFamilyHooks", () => {
         inspectToolSchemas: inspectGeminiToolSchemas,
       },
       {
+        family: "llamacpp-gbnf" as const,
+        normalizeToolSchemas: normalizeLlamacppGbnfToolSchemas,
+        inspectToolSchemas: inspectLlamacppGbnfToolSchemas,
+      },
+      {
         family: "openai" as const,
         normalizeToolSchemas: normalizeOpenAIToolSchemas,
         inspectToolSchemas: inspectOpenAIToolSchemas,
@@ -55,6 +62,67 @@ describe("buildProviderToolCompatFamilyHooks", () => {
       expect(hooks.normalizeToolSchemas).toBe(testCase.normalizeToolSchemas);
       expect(hooks.inspectToolSchemas).toBe(testCase.inspectToolSchemas);
     }
+  });
+
+  it("strips llama.cpp GBNF-hostile pattern and oversized maxLength", () => {
+    const hooks = buildProviderToolCompatFamilyHooks("llamacpp-gbnf");
+    const tools = [
+      {
+        name: "cron",
+        description: "",
+        parameters: {
+          type: "object",
+          properties: {
+            declarationKey: {
+              type: "string",
+              maxLength: 200,
+              pattern: "\\S",
+            },
+            script: {
+              type: "string",
+              minLength: 1,
+              maxLength: 65_536,
+            },
+          },
+        },
+      },
+    ] as never;
+
+    const normalized = hooks.normalizeToolSchemas({
+      provider: "ollama",
+      modelId: "llama3.2",
+      tools,
+    } as never);
+
+    expect(normalized[0]?.parameters).toEqual({
+      type: "object",
+      properties: {
+        declarationKey: {
+          type: "string",
+          maxLength: 200,
+        },
+        script: {
+          type: "string",
+          minLength: 1,
+        },
+      },
+    });
+
+    const diagnostics = hooks.inspectToolSchemas({
+      provider: "ollama",
+      modelId: "llama3.2",
+      tools,
+    } as never);
+    expect(diagnostics).toEqual([
+      {
+        toolName: "cron",
+        toolIndex: 0,
+        violations: [
+          "cron.parameters.properties.declarationKey.pattern",
+          "cron.parameters.properties.script.maxLength",
+        ],
+      },
+    ]);
   });
 
   it("normalizes canonical OpenAI Codex Responses tool schemas", () => {

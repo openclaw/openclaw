@@ -68,9 +68,59 @@ describe("llama.cpp provider plugin", () => {
         id: "llama-cpp",
         label: "Local model (llama.cpp)",
         createStreamFn: expect.any(Function),
+        normalizeToolSchemas: expect.any(Function),
+        inspectToolSchemas: expect.any(Function),
         auth: [expect.objectContaining({ id: "local" })],
       }),
     );
+  });
+
+  it("projects tool schemas through the llama.cpp GBNF compat family", () => {
+    const registerProvider = vi.fn();
+
+    llamaCppPlugin.register(
+      createTestPluginApi({
+        id: "llama-cpp",
+        name: "llama.cpp Provider",
+        source: "test",
+        config: {},
+        pluginConfig: {},
+        runtime: {} as never,
+        registerProvider,
+      }),
+    );
+
+    const provider = registerProvider.mock.calls[0]?.[0] as {
+      normalizeToolSchemas?: (ctx: {
+        provider: string;
+        tools: Array<{ name: string; description: string; parameters: unknown }>;
+      }) => Array<{ parameters?: unknown }>;
+    };
+    const [tool] =
+      provider.normalizeToolSchemas?.({
+        provider: "llama-cpp",
+        tools: [
+          {
+            name: "cron",
+            description: "Manage cron jobs",
+            parameters: {
+              type: "object",
+              properties: {
+                declarationKey: { type: "string", pattern: "\\S", maxLength: 200 },
+                script: { type: "string", maxLength: 65_536 },
+              },
+            },
+          },
+        ],
+      }) ?? [];
+
+    expect(tool?.parameters).toEqual({
+      type: "object",
+      properties: {
+        declarationKey: { type: "string", maxLength: 200 },
+        script: { type: "string" },
+      },
+    });
   });
 
   it("registers the local embedding provider through the generic SDK contract", () => {

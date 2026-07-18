@@ -31,7 +31,13 @@ describe("normalizeToolParameterSchema llama.cpp GBNF projection", () => {
     ).toEqual(canonicalCronTriggerScript);
   });
 
-  it("strips grammar-hostile constraints for llamacpp profile projection", () => {
+  it("does not guess llama.cpp cleaning from provider ids", () => {
+    expect(
+      normalizeToolParameterSchema(canonicalCronTriggerScript, { modelProvider: "ollama" }),
+    ).toEqual(canonicalCronTriggerScript);
+  });
+
+  it("strips grammar-hostile constraints for explicit llamacpp profile", () => {
     expect(
       normalizeToolParameterSchema(canonicalCronTriggerScript, {
         modelCompat: { toolSchemaProfile: "llamacpp" },
@@ -57,25 +63,5 @@ describe("normalizeToolParameterSchema llama.cpp GBNF projection", () => {
         },
       },
     });
-  });
-
-  it("strips grammar-hostile constraints for ollama provider ids", () => {
-    const normalized = normalizeToolParameterSchema(canonicalCronTriggerScript, {
-      modelProvider: "ollama",
-    }) as {
-      properties?: {
-        job?: {
-          properties?: {
-            declarationKey?: Record<string, unknown>;
-            trigger?: { properties?: { script?: Record<string, unknown> } };
-          };
-        };
-      };
-    };
-
-    expect(normalized.properties?.job?.properties?.declarationKey).not.toHaveProperty("pattern");
-    expect(normalized.properties?.job?.properties?.trigger?.properties?.script).not.toHaveProperty(
-      "maxLength",
-    );
   });
 });

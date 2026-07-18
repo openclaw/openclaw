@@ -3,11 +3,10 @@
  * constructs that other providers accept. Strip them at the provider boundary so
  * canonical tool definitions keep their validation guidance intact.
  */
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { TSchema } from "typebox";
 
-/** Model compat profile id for llama.cpp GBNF tool-schema cleaning. */
-const LLAMACPP_TOOL_SCHEMA_PROFILE = "llamacpp";
+/** Model compat profile id for opt-in llama.cpp GBNF tool-schema cleaning. */
+export const LLAMACPP_TOOL_SCHEMA_PROFILE = "llamacpp";
 
 // llama.cpp compiles bounded maxLength into repeated grammar rules and caps the
 // repetition count near 2000; larger values fail GBNF compilation (#108580).
@@ -89,32 +88,49 @@ function cleanLlamacppGbnfNode(node: unknown): unknown {
   return cleaned;
 }
 
-/** Whether tool schemas should be projected for llama.cpp GBNF compatibility. */
-export function isLlamacppGbnfToolSchemaProvider(params: {
-  modelProvider?: string;
-  toolSchemaProfile?: string;
-}): boolean {
-  const profile = normalizeLowercaseStringOrEmpty(params.toolSchemaProfile);
-  if (profile === LLAMACPP_TOOL_SCHEMA_PROFILE) {
-    return true;
+function collectLlamacppGbnfViolations(node: unknown, path: string, out: string[]): void {
+  if (!node || typeof node !== "object") {
+    return;
   }
-  const provider = normalizeLowercaseStringOrEmpty(params.modelProvider);
-  if (!provider) {
-    return false;
+  if (Array.isArray(node)) {
+    node.forEach((entry, index) => collectLlamacppGbnfViolations(entry, `${path}[${index}]`, out));
+    return;
   }
-  return (
-    provider === "ollama" ||
-    provider.startsWith("ollama-") ||
-    provider === "lmstudio" ||
-    provider.startsWith("lmstudio-") ||
-    provider === "llamacpp" ||
-    provider === "llama-cpp" ||
-    provider.startsWith("llama-cpp-") ||
-    provider.includes("llama.cpp")
-  );
+
+  const record = node as Record<string, unknown>;
+  if (typeof record.pattern === "string") {
+    out.push(`${path}.pattern`);
+  }
+  if (
+    typeof record.maxLength === "number" &&
+    record.maxLength > LLAMACPP_GBNF_MAX_REPETITION_THRESHOLD
+  ) {
+    out.push(`${path}.maxLength`);
+  }
+
+  for (const [key, value] of Object.entries(record)) {
+    if (SCHEMA_MAP_KEYS.has(key)) {
+      if (value && typeof value === "object" && !Array.isArray(value)) {
+        for (const [childKey, childValue] of Object.entries(value as Record<string, unknown>)) {
+          collectLlamacppGbnfViolations(childValue, `${path}.${key}.${childKey}`, out);
+        }
+      }
+      continue;
+    }
+    if (SCHEMA_CHILD_KEYS.has(key)) {
+      collectLlamacppGbnfViolations(value, `${path}.${key}`, out);
+    }
+  }
 }
 
 /** Remove llama.cpp GBNF-incompatible pattern and oversized maxLength constraints. */
 export function cleanSchemaForLlamacppGbnf(schema: unknown): TSchema {
   return cleanLlamacppGbnfNode(schema) as TSchema;
+}
+
+/** Report nested schema paths that llama.cpp GBNF conversion rejects. */
+export function findLlamacppGbnfSchemaViolations(schema: unknown, path: string): string[] {
+  const violations: string[] = [];
+  collectLlamacppGbnfViolations(schema, path, violations);
+  return violations;
 }
