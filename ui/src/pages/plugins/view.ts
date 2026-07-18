@@ -7,6 +7,7 @@ import { html, nothing, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
 import { repeat } from "lit/directives/repeat.js";
 import { icons } from "../../components/icons.ts";
+import { renderMcpServerForm, type McpServerForm } from "../../components/mcp-server-form.ts";
 import "../../components/modal-dialog.ts";
 import "../../components/openclaw-mascot.ts";
 import {
@@ -17,6 +18,7 @@ import {
   renderSettingsStatus,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import type { McpServerSummary } from "../../lib/config/mcp-servers.ts";
 import { EXTERNAL_LINK_TARGET, buildExternalLinkRel } from "../../lib/external-link.ts";
 import "../../styles/plugins.css";
 import {
@@ -46,19 +48,6 @@ export type PluginRowMessage = {
   kind: "success" | "error";
   text: string;
   acknowledge?: { packageName: string; version?: string };
-};
-
-export type McpServerSummary = {
-  name: string;
-  enabled: boolean;
-  transport: "stdio" | "http" | "invalid";
-  target: string;
-  auth: string | null;
-};
-
-export type McpServerForm = {
-  name: string;
-  target: string;
 };
 
 type PluginsViewProps = {
@@ -669,12 +658,20 @@ function renderMcpSection(props: PluginsViewProps) {
           @click=${() => props.onMcpFormToggle(!props.mcpFormOpen)}
         >
           <span aria-hidden="true">${icons.plus}</span>
-          ${t("pluginsPage.mcpAdd")}
+          ${t("mcpServers.add")}
         </button>
       `,
     },
     html`
-      ${props.mcpFormOpen ? renderMcpForm(props) : nothing}
+      ${props.mcpFormOpen
+        ? renderMcpServerForm({
+            busy: props.mcpBusy,
+            disabled: !props.canMutate,
+            blockedReason: props.mutationBlockedReason,
+            onSubmit: props.onMcpAdd,
+            onCancel: () => props.onMcpFormToggle(false),
+          })
+        : nothing}
       ${props.mcpMessage
         ? html`<div
             class="plugins-row-message plugins-row-message--${props.mcpMessage
@@ -695,7 +692,9 @@ function renderMcpRow(server: McpServerSummary, props: PluginsViewProps): Templa
       ${renderArtTile(server.name, server.name)}
       <div class="settings-row__text">
         <h3 class="settings-row__title">${server.name}</h3>
-        <span class="settings-row__desc plugins-meta__mono">${server.target}</span>
+        <span class="settings-row__desc plugins-meta__mono">
+          ${server.target || t("mcpServers.missingTransport")}
+        </span>
         ${renderMetaLine([
           t("pluginsPage.mcp"),
           server.transport,
@@ -712,54 +711,6 @@ function renderMcpRow(server: McpServerSummary, props: PluginsViewProps): Templa
         )}
       </div>
     </article>
-  `;
-}
-
-function renderMcpForm(props: PluginsViewProps) {
-  const submit = (event: Event) => {
-    event.preventDefault();
-    const form = event.currentTarget as HTMLFormElement;
-    const data = new FormData(form);
-    const name = data.get("mcp-name");
-    const target = data.get("mcp-target");
-    props.onMcpAdd({
-      name: typeof name === "string" ? name.trim() : "",
-      target: typeof target === "string" ? target.trim() : "",
-    });
-  };
-  return html`
-    <form class="plugins-mcp-form" @submit=${submit}>
-      <label>
-        <span>${t("pluginsPage.mcpNameLabel")}</span>
-        <input
-          name="mcp-name"
-          class="settings-input"
-          type="text"
-          required
-          placeholder="context7"
-          autocomplete="off"
-        />
-      </label>
-      <label class="plugins-mcp-form__target">
-        <span>${t("pluginsPage.mcpTargetLabel")}</span>
-        <input
-          name="mcp-target"
-          class="settings-input"
-          type="text"
-          required
-          placeholder="https://mcp.example.com/mcp  ·  npx some-mcp-server"
-          autocomplete="off"
-        />
-      </label>
-      <div class="plugins-mcp-form__actions">
-        <button type="submit" class="btn btn--sm" ?disabled=${props.mcpBusy}>
-          ${props.mcpBusy ? t("pluginsPage.mcpAdding") : t("pluginsPage.mcpAdd")}
-        </button>
-        <button type="button" class="btn btn--sm" @click=${() => props.onMcpFormToggle(false)}>
-          ${t("pluginsPage.cancel")}
-        </button>
-      </div>
-    </form>
   `;
 }
 
@@ -878,7 +829,7 @@ function renderConnectorRow(
                   ?disabled=${!props.canMutate || busy}
                   @click=${() => props.onAddConnector(connector)}
                 >
-                  ${busy ? t("pluginsPage.mcpAdding") : t("pluginsPage.connectorAdd")}
+                  ${busy ? t("mcpServers.adding") : t("pluginsPage.connectorAdd")}
                 </button>
               `
           : html`

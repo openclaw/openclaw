@@ -825,7 +825,6 @@ export class ConfigPage extends OpenClawLightDomElement {
           activeSection: "mcp",
           activeSubsection: null,
           showModeToggle: false,
-          includeSections: ["mcp"],
           navRootLabel: "MCP",
         }),
       });
