@@ -36627,7 +36627,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 172,
+      "line": 168,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatModelPickerStore.swift",
       "source": "Other",
       "surface": "apple",
@@ -37291,7 +37291,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1144,
+      "line": 1140,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel.swift",
       "source": "Remove attachments or wait for delivery to resolve before switching chats.",
       "surface": "apple",
@@ -37299,7 +37299,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1202,
+      "line": 1198,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel.swift",
       "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
       "surface": "apple",
