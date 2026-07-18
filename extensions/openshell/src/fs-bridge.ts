@@ -1,3 +1,4 @@
+import { statSync } from "node:fs";
 // Openshell plugin module implements fs bridge behavior.
 import fsPromises from "node:fs/promises";
 import path from "node:path";
@@ -28,6 +29,8 @@ export function createOpenShellFsBridge(params: {
 }): SandboxFsBridge {
   return new OpenShellFsBridge(params.sandbox, params.backend);
 }
+
+const MAX_SANDBOX_READ_BYTES = 100 * 1024 * 1024;
 
 class OpenShellFsBridge implements SandboxFsBridge {
   private readonly resolveRenameTargets = createWritableRenameTargetResolver(
@@ -69,6 +72,15 @@ class OpenShellFsBridge implements SandboxFsBridge {
         hardlinks: "reject",
       });
       try {
+        const stat = await opened.handle.stat();
+        if (!stat.isFile()) {
+          throw new Error(`not a regular file: ${target.containerPath}`);
+        }
+        if (stat.size > MAX_SANDBOX_READ_BYTES) {
+          throw new Error(
+            `file too large: ${target.containerPath} is ${stat.size} bytes (max ${MAX_SANDBOX_READ_BYTES})`,
+          );
+        }
         return (await opened.handle.readFile()) as Buffer;
       } finally {
         await opened.handle.close();
