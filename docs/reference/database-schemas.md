@@ -66,6 +66,28 @@ Version 3 was an unshipped development step folded into version 4.
 The Gateway preflight reads schema headers only. The background verifier owns the slower full scan for databases that do not need migration.
 Quarantine decisions live in a dedicated `openclaw-quarantine.sqlite` store, so they survive damage to the databases being quarantined. The global `database_verifications` table remains verification history.
 
+## Troubleshooting
+
+### Why you cannot go back after updating to 2026.7.2
+
+Every release through `v2026.7.1` used agent schema 1 and state schema 1. The 2026.7.2 release train (starting with `v2026.7.2-beta.1`) migrates your databases forward on first start. That migration is one-way: the data is rewritten into the newer schema, and installing an older OpenClaw afterwards does not undo it. The older build refuses to start with a `newer schema version` error that names the build that owns the database.
+
+Downgrading the binary never downgrades the data. If you must run a release older than 2026.7.2 after updating, you have three options:
+
+1. Restore a backup taken before the update. [Create and verify backups](/cli/backup) before major updates.
+2. Run the older build against a separate state directory (`OPENCLAW_STATE_DIR`). It starts fresh; your migrated data stays untouched for when you return to the newer build.
+3. Follow the manual downgrade procedure below. It is unsupported and risks data loss without a verified backup.
+
+Since 2026.7.2, `openclaw update` refuses to install a release that cannot open your current databases, so the updater will not put you in this situation. Installing an older version manually through npm bypasses that guard; the databases still refuse the old binary, but only after it is installed.
+
+### The Gateway refuses to start with a newer schema version error
+
+A newer OpenClaw build wrote your databases, and the running build is older. The error and the Gateway startup log name the build that owns the database (`app_version`). Install that version or newer, or use one of the options above. Do not edit the database to silence the error.
+
+### A database is quarantined after integrity verification failed
+
+The background verifier proved the file is corrupt, and every open now fails fast instead of rescanning. Restore the database from a backup or repair it, then run `openclaw doctor --fix` to clear the quarantine record. Doctor reports an explicit error if the quarantine record itself cannot be cleared; rerun it until it reports clean.
+
 ## Downgrades are unsupported
 
 Manual schema downgrades are for agents and operators who accept the risk. [Create and verify a backup](/cli/backup) before editing any database. Stop the Gateway and every process that can open the database.
