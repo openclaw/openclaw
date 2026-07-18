@@ -311,9 +311,10 @@ describe("push APNs send semantics", () => {
     expect(getApnsResponseBodyCaptureText(splitCapture)).toBe("before 🚀 after");
 
     const cappedCapture = createApnsResponseBodyCapture();
-    appendApnsResponseBodyCapture(cappedCapture, Buffer.from("abc🚀"), 5);
-    expect(getApnsResponseBodyCaptureText(cappedCapture)).toBe("abc");
-    expect(cappedCapture).toMatchObject({ bytes: 7, truncated: true });
+    const cappedPrefix = "a".repeat(8191);
+    appendApnsResponseBodyCapture(cappedCapture, Buffer.from(`${cappedPrefix}🚀`));
+    expect(getApnsResponseBodyCaptureText(cappedCapture)).toBe(cappedPrefix);
+    expect(cappedCapture).toMatchObject({ bytes: 8195, truncated: true });
   });
 
   it("sends alert pushes with alert headers and payload", async () => {
