@@ -202,8 +202,14 @@ struct ChatProTab: View {
                 messagePlaceholder: self.messagePlaceholder,
                 emptyAssistantIntro: String(localized: "What would you like to work on?"),
                 emptyAssistantPrompts: Self.emptyAssistantPrompts,
-                talkControl: viewModel.isAttachmentOwnerPinned ? nil : self.talkControl,
-                dictationControl: viewModel.isAttachmentOwnerPinned ? nil : self.dictationControl,
+                talkControl: Self.shouldExposeCaptureControl(
+                    isAttachmentOwnerPinned: viewModel.isAttachmentOwnerPinned,
+                    isCaptureInFlight: self.appModel.talkMode.isEnabled) ? self.talkControl : nil,
+                dictationControl: Self.shouldExposeCaptureControl(
+                    isAttachmentOwnerPinned: viewModel.isAttachmentOwnerPinned,
+                    isCaptureInFlight: self.appModel.isChatDictationPending || self.appModel.isChatDictationActive)
+                    ? self.dictationControl
+                    : nil,
                 voiceNoteControl: self.voiceNoteControl,
                 speech: self.speech)
                 // iMessage-style grey bubbles for agent replies in the clean chrome.
@@ -667,6 +673,14 @@ struct ChatProTab: View {
             return .disconnected
         }
         return current
+    }
+
+    /// Attachment pinning blocks new capture, but starting or active capture must keep its stop control.
+    nonisolated static func shouldExposeCaptureControl(
+        isAttachmentOwnerPinned: Bool,
+        isCaptureInFlight: Bool) -> Bool
+    {
+        !isAttachmentOwnerPinned || isCaptureInFlight
     }
 
     private var gatewayAccessibilityLabel: String {
