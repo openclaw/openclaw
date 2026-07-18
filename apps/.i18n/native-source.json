@@ -1755,7 +1755,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3152,
+      "line": 3173,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Could not stage an attachment for sending.",
       "surface": "android",
@@ -1763,7 +1763,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3185,
+      "line": 3206,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Offline queue is full ($OUTBOX_MAX_QUEUED messages); delete queued items first.",
       "surface": "android",
@@ -1771,7 +1771,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3191,
+      "line": 3212,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Attachments are too large to queue for one message; remove some and try again.",
       "surface": "android",
@@ -1779,7 +1779,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3197,
+      "line": 3218,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Offline attachment storage is full; delete queued items first.",
       "surface": "android",
@@ -1787,7 +1787,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3202,
+      "line": 3223,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Gateway health not OK; cannot send",
       "surface": "android",
@@ -1795,7 +1795,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3209,
+      "line": 3230,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Could not queue message for later delivery.",
       "surface": "android",
@@ -1803,7 +1803,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3926,
+      "line": 3947,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Chat failed",
       "surface": "android",
@@ -1811,7 +1811,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 4064,
+      "line": 4085,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Event stream interrupted; try refreshing.",
       "surface": "android",
@@ -1819,7 +1819,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 4201,
+      "line": 4222,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Timed out waiting for a reply; try again or refresh.",
       "surface": "android",
@@ -1827,7 +1827,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 4411,
+      "line": 4432,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Timed out confirming the sent message; refresh to check delivery.",
       "surface": "android",
@@ -1843,7 +1843,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1530,
+      "line": 1563,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewaySession.kt",
       "source": "Connecting…",
       "surface": "android",
@@ -1851,7 +1851,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1530,
+      "line": 1563,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewaySession.kt",
       "source": "Reconnecting…",
       "surface": "android",
@@ -23395,7 +23395,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 4088,
+      "line": 4087,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Approval needed",
       "surface": "apple",
@@ -23403,7 +23403,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 4089,
+      "line": 4088,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Action required",
       "surface": "apple",
@@ -23411,7 +23411,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 4804,
+      "line": 4803,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Connecting...",
       "surface": "apple",
@@ -23419,7 +23419,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 4805,
+      "line": 4804,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Reconnecting...",
       "surface": "apple",
@@ -23427,7 +23427,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 5157,
+      "line": 5156,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Connected",
       "surface": "apple",
@@ -23435,7 +23435,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 5157,
+      "line": 5156,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Offline",
       "surface": "apple",
@@ -23443,7 +23443,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 6327,
+      "line": 6326,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "No chat messages yet",
       "surface": "apple",
@@ -23451,7 +23451,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 6526,
+      "line": 6525,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Connecting…",
       "surface": "apple",
@@ -23459,7 +23459,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 6526,
+      "line": 6525,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Reconnecting…",
       "surface": "apple",
@@ -23467,7 +23467,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 8935,
+      "line": 8934,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Approval",
       "surface": "apple",
@@ -23475,7 +23475,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 8935,
+      "line": 8934,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "This approval was already",
       "surface": "apple",
@@ -23483,7 +23483,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 8941,
+      "line": 8940,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "This approval was already set to Always Allow.",
       "surface": "apple",
@@ -23491,7 +23491,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 8942,
+      "line": 8941,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Approval set to Always Allow.",
       "surface": "apple",
@@ -23499,7 +23499,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 10280,
+      "line": 10278,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "\\(urlText.prefix(500))…",
       "surface": "apple",
@@ -25635,7 +25635,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 4700,
+      "line": 4693,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Realtime unavailable",
       "surface": "apple",
@@ -25643,7 +25643,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 4722,
+      "line": 4715,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Listening (PTT)",
       "surface": "apple",

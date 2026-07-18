@@ -24,7 +24,7 @@ export const NODE_EXEC_APPROVALS_COMMANDS = [
 ] as const;
 
 // Direct node.invoke and pairing approval share this admin-only subset.
-export const NODE_ADMIN_ONLY_INVOKE_COMMANDS = [
+const NODE_ADMIN_ONLY_INVOKE_COMMANDS = [
   NODE_BROWSER_PROXY_COMMAND,
   NODE_FS_LIST_DIR_COMMAND,
   NODE_TERMINAL_UPLOAD_COMMAND,
@@ -36,13 +36,6 @@ const NODE_ADMIN_ONLY_INVOKE_COMMAND_SET = new Set<string>(NODE_ADMIN_ONLY_INVOK
 export function isAdminOnlyNodeInvokeCommand(command: unknown): boolean {
   return typeof command === "string" && NODE_ADMIN_ONLY_INVOKE_COMMAND_SET.has(command);
 }
-
-// Pairing also protects commands whose execution uses a separate gated path.
-export const NODE_ADMIN_PAIR_APPROVAL_COMMANDS = [
-  ...NODE_SYSTEM_RUN_COMMANDS,
-  ...NODE_ADMIN_ONLY_INVOKE_COMMANDS,
-  ...NODE_EXEC_APPROVALS_COMMANDS,
-] as const;
 
 export const NODE_MCP_TOOL_CALL_TIMEOUT_MS = 120_000;
 export const NODE_MCP_TOOL_CALL_GATEWAY_TIMEOUT_MS = NODE_MCP_TOOL_CALL_TIMEOUT_MS + 5_000;
