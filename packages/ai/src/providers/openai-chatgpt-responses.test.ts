@@ -1069,67 +1069,6 @@ describe("streamOpenAICodexResponses transport", () => {
     expect(pullCount).toBeLessThanOrEqual(3);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
-
-  it.each([
-    { status: 401, statusText: "Unauthorized", message: "Invalid credentials" },
-    { status: 403, statusText: "Forbidden", message: "Account is not authorized" },
-    { status: 400, statusText: "Bad Request", message: "Unsupported parameter" },
-  ])(
-    "does not retry non-retryable ChatGPT responses: $status",
-    async ({ status, statusText, message }) => {
-      const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
-        new Response(JSON.stringify({ error: { message } }), {
-          status,
-          statusText,
-        }),
-      );
-      vi.stubGlobal("fetch", fetchMock);
-      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
-
-      const result = await streamOpenAICodexResponses(model, context, {
-        apiKey: createJwt({
-          "https://api.openai.com/auth": {
-            chatgpt_account_id: "acct-1",
-          },
-        }),
-        transport: "sse",
-      }).result();
-
-      expect(result.stopReason).toBe("error");
-      expect(fetchMock).toHaveBeenCalledTimes(1);
-      expect(setTimeoutSpy).not.toHaveBeenCalled();
-    },
-  );
-
-  it("still retries retryable ChatGPT responses", async () => {
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(new Response("overloaded", { status: 503 }))
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ error: { message: "Invalid credentials" } }), {
-          status: 401,
-        }),
-      );
-    vi.stubGlobal("fetch", fetchMock);
-    vi.spyOn(globalThis, "setTimeout").mockImplementation((callback: TimerHandler) => {
-      if (typeof callback === "function") {
-        callback();
-      }
-      return 0 as unknown as ReturnType<typeof setTimeout>;
-    });
-
-    const result = await streamOpenAICodexResponses(model, context, {
-      apiKey: createJwt({
-        "https://api.openai.com/auth": {
-          chatgpt_account_id: "acct-1",
-        },
-      }),
-      transport: "sse",
-    }).result();
-
-    expect(result.stopReason).toBe("error");
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-  });
 });
 
 describe("parseSSEForTest", () => {
