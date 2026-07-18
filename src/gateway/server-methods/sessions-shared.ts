@@ -1,6 +1,5 @@
 // Shared session-handler target resolution and mutation guards.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import {
   ErrorCodes,
   errorShape,
@@ -275,39 +274,6 @@ export function emitSessionOperation(
     connIds,
     { dropIfSlow: true },
   );
-}
-
-export function rejectWebchatSessionMutation(params: {
-  action:
-    | "patch"
-    | "delete"
-    | "compact"
-    | "branch"
-    | "restore"
-    | "rewind"
-    | "fork"
-    | "switch"
-    | "dispatch"
-    | "reclaim";
-  client: GatewayClient | null;
-  isWebchatConnect: (params: GatewayClient["connect"] | null | undefined) => boolean;
-  respond: RespondFn;
-}): boolean {
-  if (!params.client?.connect || !params.isWebchatConnect(params.client.connect)) {
-    return false;
-  }
-  if (params.client.connect.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI) {
-    return false;
-  }
-  params.respond(
-    false,
-    undefined,
-    errorShape(
-      ErrorCodes.INVALID_REQUEST,
-      `webchat clients cannot ${params.action} sessions; use chat.send for session-scoped updates`,
-    ),
-  );
-  return true;
 }
 
 export function isWorkerDispatchInputError(error: unknown): boolean {
