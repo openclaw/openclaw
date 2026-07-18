@@ -74,8 +74,14 @@ function isBotMentionedFromTargets(
         return true;
       }
     }
-    // If the message explicitly mentions someone else, do not fall back to regex matches.
-    return false;
+    // The message natively @-mentions only other members. That must not veto
+    // the operator's configured text mentionPatterns — `marlow, look at
+    // @SomeoneElse's message` still explicitly addresses the bot (#109488).
+    // Only the loose self-number digit fallback stays suppressed here: an
+    // @-tag of another member injects that member's number into the body, so
+    // substring digit matching is unreliable in this shape.
+    const bodyWithMentions = clean(msg.payload.body);
+    return mentionCfg.mentionRegexes.some((re) => re.test(bodyWithMentions));
   } else if (hasMentions && isSelfChat) {
     // Self-chat mode: ignore WhatsApp @mention JIDs, otherwise @mentioning the owner in self-chat triggers the bot.
   }
