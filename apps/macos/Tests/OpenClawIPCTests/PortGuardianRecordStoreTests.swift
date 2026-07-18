@@ -490,7 +490,7 @@ struct PortGuardianRecordStoreTests {
         }
 
         let newerURL = fixture.root.appendingPathComponent("newer.sqlite")
-        try Self.execute(newerURL, "PRAGMA user_version = 4")
+        try Self.execute(newerURL, "PRAGMA user_version = 5")
         #expect(throws: PortGuardianStoreError.self) {
             try PortGuardianRecordStore(databaseURL: newerURL)
         }
