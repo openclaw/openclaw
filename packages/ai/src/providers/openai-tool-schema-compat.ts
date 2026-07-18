@@ -216,13 +216,22 @@ export function findOpenAIStrictSchemaViolations(
     }
   }
 
-  if (properties) {
-    for (const [key, value] of Object.entries(properties)) {
-      violations.push(...findOpenAIStrictSchemaViolations(value, `${path}.properties.${key}`));
+  // Schema maps contain user-chosen names. Walk their values as schemas, but
+  // never interpret map keys such as `$defs.anyOf` as schema keywords.
+  for (const key of OPENAI_STRICT_COMPAT_SCHEMA_MAP_KEYS) {
+    const schemaMap = record[key];
+    if (!schemaMap || typeof schemaMap !== "object" || Array.isArray(schemaMap)) {
+      continue;
+    }
+    for (const [entryKey, value] of Object.entries(schemaMap as Record<string, unknown>)) {
+      violations.push(...findOpenAIStrictSchemaViolations(value, `${path}.${key}.${entryKey}`));
     }
   }
-  for (const [key, value] of Object.entries(record)) {
-    if (key !== "properties" && value && typeof value === "object") {
+  // Only recurse through JSON Schema applicators. Annotation payloads such as
+  // examples/default may contain arbitrary objects that are not schemas.
+  for (const key of OPENAI_STRICT_COMPAT_SCHEMA_NESTED_KEYS) {
+    const value = record[key];
+    if (value && typeof value === "object") {
       violations.push(...findOpenAIStrictSchemaViolations(value, `${path}.${key}`));
     }
   }

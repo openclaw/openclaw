@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { projectOpenAITools } from "./openai-tool-projection.js";
 import {
   clearOpenAIToolSchemaCacheForTest,
+  findOpenAIStrictSchemaViolations,
   findOpenAIStrictToolProjectionDiagnostics,
   isStrictOpenAIJsonSchemaCompatible,
   normalizeOpenAIStrictToolParameters,
@@ -61,6 +62,23 @@ describe("OpenAI strict tool schema normalization", () => {
         true,
       ),
     ).toBe(false);
+  });
+
+  it("walks named schema maps without treating definition names as keywords", () => {
+    const schema = {
+      type: "object",
+      properties: {},
+      required: [],
+      additionalProperties: false,
+      $defs: {
+        anyOf: { type: "string" },
+      },
+      examples: [{ anyOf: [{ type: "string" }] }],
+    };
+
+    expect(
+      findOpenAIStrictSchemaViolations(schema, "parameters", { requireObjectRoot: true }),
+    ).toEqual([]);
   });
 
   it("normalizes truly empty MCP tool schema {} for strict mode", () => {
