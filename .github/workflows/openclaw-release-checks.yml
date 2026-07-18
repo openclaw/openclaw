@@ -223,13 +223,13 @@ jobs:
           set -euo pipefail
           SELECTED_SHA="$(git rev-parse HEAD)"
           git_fetch_with_checkout_auth() {
-            if git config --get-all http.https://github.com/.extraheader >/dev/null; then
-              timeout --signal=TERM --kill-after=10s 120s git fetch "$@"
-              return
+            local -a git_args=(git)
+            if ! git config --get-all http.https://github.com/.extraheader >/dev/null; then
+              local auth_header
+              auth_header="$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 | tr -d '\n')"
+              git_args+=(-c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}")
             fi
-            local auth_header
-            auth_header="$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 | tr -d '\n')"
-            git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" fetch "$@"
+            timeout --signal=TERM --kill-after=10s 120s "${git_args[@]}" fetch "$@"
           }
           git_fetch_with_checkout_auth --no-tags origin '+refs/heads/*:refs/remotes/origin/*'
           git_fetch_with_checkout_auth --tags origin '+refs/tags/*:refs/tags/*'
@@ -284,13 +284,13 @@ jobs:
           fi
           alpha_branch="${WORKFLOW_REF#refs/heads/}"
           git_fetch_with_checkout_auth() {
-            if git config --get-all http.https://github.com/.extraheader >/dev/null; then
-              timeout --signal=TERM --kill-after=10s 120s git fetch "$@"
-              return
+            local -a git_args=(git)
+            if ! git config --get-all http.https://github.com/.extraheader >/dev/null; then
+              local auth_header
+              auth_header="$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 | tr -d '\n')"
+              git_args+=(-c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}")
             fi
-            local auth_header
-            auth_header="$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 | tr -d '\n')"
-            git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" fetch "$@"
+            timeout --signal=TERM --kill-after=10s 120s "${git_args[@]}" fetch "$@"
           }
           git_fetch_with_checkout_auth --no-tags origin "+refs/heads/${alpha_branch}:refs/remotes/origin/${alpha_branch}"
           if ! git merge-base --is-ancestor "${SELECTED_SHA}" "refs/remotes/origin/${alpha_branch}"; then

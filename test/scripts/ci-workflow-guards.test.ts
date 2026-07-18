@@ -2630,6 +2630,26 @@ describe("ci workflow guards", () => {
     }
   });
 
+  it("bounds release ref validation fetches across checkout auth modes", () => {
+    const resolveTargetSteps = readReleaseChecksWorkflow().jobs.resolve_target.steps;
+
+    for (const stepName of [
+      "Validate selected ref belongs to this repository",
+      "Validate Tideclaw alpha target matches workflow branch",
+    ]) {
+      const step = resolveTargetSteps.find((candidate: WorkflowStep) => candidate.name === stepName);
+
+      expect(step?.run, stepName).toContain("local -a git_args=(git)");
+      expect(step?.run, stepName).toContain(
+        'git_args+=(-c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}")',
+      );
+      expect(step?.run, stepName).toContain(
+        'timeout --signal=TERM --kill-after=10s 120s "${git_args[@]}" fetch "$@"',
+      );
+      expect(step?.run, stepName).not.toContain('git -c "http.https://github.com/.extraheader');
+    }
+  });
+
   it("bounds shared base commit fetches", () => {
     const action = readFileSync(".github/actions/ensure-base-commit/action.yml", "utf8");
     const exactFetch = action.indexOf('fetch_base_ref --no-tags --depth=1 origin "$BASE_SHA"');
