@@ -19,6 +19,10 @@ import {
   withSpeakerSelectionCompat,
   withSpeakerSelectionFallbackCompat,
 } from "../../../packages/speech-core/speaker.js";
+import {
+  CODE_HEAVY_SPOKEN_FALLBACK,
+  isCodeHeavySpeechText,
+} from "../../../packages/speech-core/src/speech-text.js";
 import { getVoiceProviderConfig } from "../../../packages/speech-core/voice-models.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { redactConfigObject } from "../../config/redact-snapshot.js";
@@ -807,8 +811,9 @@ export const talkHandlers: GatewayRequestHandlers = {
         runtimeConfig,
         typedParams,
       );
+      const speechText = isCodeHeavySpeechText(text) ? CODE_HEAVY_SPOKEN_FALLBACK : text;
       const result = await synthesizeSpeech({
-        text,
+        text: speechText,
         cfg: setup.cfg,
         overrides,
         disableFallback: true,
