@@ -2604,9 +2604,29 @@
       "translated": "ไม่สามารถเปิดกล้องได้ โปรดเลือกรูปภาพคิวอาร์จากแกลเลอรีหรือป้อนรหัสตั้งค่าด้วยตนเอง"
     },
     {
+      "id": "native.android.7a18be21a62739bf",
+      "source": "The gateway certificate could not be read automatically. Paste the SHA-256 fingerprint obtained on the gateway host.",
+      "translated": "ไม่สามารถอ่านใบรับรองของ Gateway โดยอัตโนมัติได้ ให้วางลายนิ้วมือ SHA-256 ที่ได้รับจากโฮสต์ Gateway"
+    },
+    {
+      "id": "native.android.aa489429ad39aa39",
+      "source": "This gateway now presents a certificate trusted by this device.",
+      "translated": "ขณะนี้ Gateway นี้แสดงใบรับรองที่อุปกรณ์นี้เชื่อถือ"
+    },
+    {
+      "id": "native.android.b3db82f1162808ad",
+      "source": "SHA-256 fingerprint",
+      "translated": "ลายนิ้วมือ SHA-256"
+    },
+    {
       "id": "native.android.9ac2d4498b17d478",
       "source": "Trust",
       "translated": "เชื่อถือ"
+    },
+    {
+      "id": "native.android.09245320d3878458",
+      "source": "Use system trust",
+      "translated": "ใช้ความเชื่อถือของระบบ"
     },
     {
       "id": "native.android.e26ee07a1d1911be",
@@ -5437,6 +5457,26 @@
       "id": "native.android.30d8b822fa68d6c4",
       "source": "Close Canvas",
       "translated": "ปิด Canvas"
+    },
+    {
+      "id": "native.android.846fe5afd08b8089",
+      "source": "The gateway certificate could not be read automatically. Paste the SHA-256 fingerprint obtained on the gateway host.",
+      "translated": "ไม่สามารถอ่านใบรับรองของ Gateway โดยอัตโนมัติได้ ให้วางลายนิ้วมือ SHA-256 ที่ได้รับจากโฮสต์ Gateway"
+    },
+    {
+      "id": "native.android.b263dca13f55dad9",
+      "source": "This gateway now presents a certificate trusted by this device.",
+      "translated": "ขณะนี้ Gateway นี้แสดงใบรับรองที่อุปกรณ์นี้เชื่อถือ"
+    },
+    {
+      "id": "native.android.dca0f8814b658170",
+      "source": "SHA-256 fingerprint",
+      "translated": "ลายนิ้วมือ SHA-256"
+    },
+    {
+      "id": "native.android.bb5d50fcdd5ebafe",
+      "source": "Use system trust",
+      "translated": "ใช้ความเชื่อถือของระบบ"
     },
     {
       "id": "native.android.3d83e0755437a5f9",

@@ -45,12 +45,15 @@ import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.GatewayTlsProbeFailure
 import ai.openclaw.app.gateway.GatewayTlsProbeResult
+import ai.openclaw.app.gateway.GatewayTlsTrustDecision
 import ai.openclaw.app.gateway.GatewayUpdateAvailableSummary
 import ai.openclaw.app.gateway.NetworkMonitor
 import ai.openclaw.app.gateway.NodeEventSendOutcome
+import ai.openclaw.app.gateway.decideGatewayTlsTrust
 import ai.openclaw.app.gateway.formatGatewayAuthority
+import ai.openclaw.app.gateway.isGatewayTlsSystemTrustCandidate
 import ai.openclaw.app.gateway.normalizeGatewayApprovalRequestId
-import ai.openclaw.app.gateway.normalizeGatewayTlsFingerprint
+import ai.openclaw.app.gateway.normalizeGatewayTlsFingerprintInput
 import ai.openclaw.app.gateway.parseChatSendAck
 import ai.openclaw.app.gateway.probeGatewayTlsFingerprint
 import ai.openclaw.app.i18n.NativeText
@@ -798,9 +801,11 @@ class NodeRuntime private constructor(
    */
   data class GatewayTrustPrompt(
     val endpoint: GatewayEndpoint,
-    val fingerprintSha256: String,
+    val fingerprintSha256: String?,
     val auth: GatewayConnectAuth,
     val previousFingerprintSha256: String? = null,
+    val probeFailure: GatewayTlsProbeFailure? = null,
+    val systemTrustAvailable: Boolean = false,
   )
 
   data class VoiceE2eSliceResult(
@@ -3844,43 +3849,47 @@ class NodeRuntime private constructor(
     _pendingGatewayTrust.value = null
     val tls = connectionManager.resolveTlsParams(endpoint)
     if (tls?.required == true) {
-      val expectedFingerprint =
-        tls.expectedFingerprint
-          ?.let(::normalizeGatewayTlsFingerprint)
-          ?.takeIf { it.isNotBlank() }
+      val storedFingerprint = tls.expectedFingerprint
       setStandaloneGatewayStatus("Verify gateway TLS fingerprint…")
       scope.launch {
         val tlsProbe = tlsFingerprintProbe(endpoint.host, endpoint.port)
         if (!isCurrentConnectAttempt(connectAttemptId)) return@launch
-        val fp =
-          tlsProbe.fingerprintSha256 ?: run {
-            if (expectedFingerprint == null) {
-              connectingEndpointStableId = null
-              setStandaloneGatewayStatus(gatewayTlsProbeFailureMessage(tlsProbe.failure))
-            } else {
-              connectAfterTlsCheck(endpoint = endpoint, auth = auth, connectAttemptId = connectAttemptId)
-            }
-            return@launch
+        when (
+          val decision =
+            decideGatewayTlsTrust(
+              storedFingerprint = storedFingerprint,
+              systemTrustCandidate = isGatewayTlsSystemTrustCandidate(endpoint.host),
+              probeResult = tlsProbe,
+            )
+        ) {
+          GatewayTlsTrustDecision.SystemTrusted -> {
+            // Automatic platform trust only applies where no user-accepted pin exists.
+            // Replacing a pin always requires explicit confirmation in the trust prompt.
+            registerGateway(endpoint, setActive = true)
+            connectAfterTlsCheck(endpoint = endpoint, auth = auth, connectAttemptId = connectAttemptId)
           }
-        val observedFingerprint =
-          normalizeGatewayTlsFingerprint(fp)
-            .takeIf { it.isNotBlank() }
-            ?: fp
-        val previousFingerprint = expectedFingerprint?.takeUnless { it == observedFingerprint }
-        if (expectedFingerprint == null || previousFingerprint != null) {
-          publishGatewayTrustPromptIfCurrent(
-            connectAttemptId = connectAttemptId,
-            prompt =
-              GatewayTrustPrompt(
-                endpoint = endpoint,
-                fingerprintSha256 = observedFingerprint,
-                auth = auth,
-                previousFingerprintSha256 = previousFingerprint,
-              ),
-          )
-          return@launch
+          is GatewayTlsTrustDecision.PinnedTrust ->
+            connectAfterTlsCheck(endpoint = endpoint, auth = auth, connectAttemptId = connectAttemptId)
+          is GatewayTlsTrustDecision.PromptRequired -> {
+            decision.probeFailure?.let { setStandaloneGatewayStatus(gatewayTlsProbeFailureMessage(it)) }
+            publishGatewayTrustPromptIfCurrent(
+              connectAttemptId = connectAttemptId,
+              prompt =
+                GatewayTrustPrompt(
+                  endpoint = endpoint,
+                  fingerprintSha256 = decision.fingerprintSha256,
+                  auth = auth,
+                  previousFingerprintSha256 = decision.previousFingerprintSha256,
+                  probeFailure = decision.probeFailure,
+                  systemTrustAvailable = decision.systemTrustAvailable,
+                ),
+            )
+          }
+          is GatewayTlsTrustDecision.Failed -> {
+            connectingEndpointStableId = null
+            setStandaloneGatewayStatus(gatewayTlsProbeFailureMessage(decision.reason))
+          }
         }
-        connectAfterTlsCheck(endpoint = endpoint, auth = auth, connectAttemptId = connectAttemptId)
       }
       return
     }
@@ -4004,13 +4013,30 @@ class NodeRuntime private constructor(
         )
       }
 
-  fun acceptGatewayTrustPrompt() {
+  fun acceptGatewayTrustPrompt(manualFingerprint: String? = null) {
     val prompt = _pendingGatewayTrust.value ?: return
+    val acceptedFingerprint =
+      normalizeGatewayTlsFingerprintInput(
+        prompt.fingerprintSha256 ?: manualFingerprint ?: return,
+      ) ?: return
     gatewayLifecycleIntentSeq.incrementAndGet()
     launchGatewayLifecycle {
       if (_pendingGatewayTrust.value != prompt) return@launchGatewayLifecycle
       _pendingGatewayTrust.value = null
-      prefs.saveGatewayTlsFingerprint(prompt.endpoint.stableId, prompt.fingerprintSha256)
+      prefs.saveGatewayTlsFingerprint(prompt.endpoint.stableId, acceptedFingerprint)
+      registerGateway(prompt.endpoint, setActive = true)
+      beginConnect(endpoint = prompt.endpoint, auth = prompt.auth)
+    }
+  }
+
+  fun useSystemGatewayTrustPrompt() {
+    val prompt = _pendingGatewayTrust.value ?: return
+    if (!prompt.systemTrustAvailable) return
+    gatewayLifecycleIntentSeq.incrementAndGet()
+    launchGatewayLifecycle {
+      if (_pendingGatewayTrust.value != prompt) return@launchGatewayLifecycle
+      _pendingGatewayTrust.value = null
+      prefs.clearGatewayTlsFingerprint(prompt.endpoint.stableId)
       registerGateway(prompt.endpoint, setActive = true)
       beginConnect(endpoint = prompt.endpoint, auth = prompt.auth)
     }
@@ -4025,7 +4051,7 @@ class NodeRuntime private constructor(
     }
   }
 
-  private fun gatewayTlsProbeFailureMessage(failure: GatewayTlsProbeFailure?): String =
+  private fun gatewayTlsProbeFailureMessage(failure: GatewayTlsProbeFailure): String =
     when (failure) {
       GatewayTlsProbeFailure.TLS_UNAVAILABLE ->
         nativeText(
@@ -4035,7 +4061,7 @@ class NodeRuntime private constructor(
         nativeText(
           "Failed: secure endpoint reached, but TLS fingerprint verification timed out. Check Tailscale Serve or gateway TLS and retry.",
         ).source
-      GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE, null ->
+      GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE ->
         nativeText("Failed: couldn't reach the secure gateway endpoint for this host.").source
     }
 

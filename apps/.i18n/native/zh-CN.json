@@ -2604,9 +2604,29 @@
       "translated": "无法启动相机。请从图库中选择二维码图片，或手动输入设置代码。"
     },
     {
+      "id": "native.android.7a18be21a62739bf",
+      "source": "The gateway certificate could not be read automatically. Paste the SHA-256 fingerprint obtained on the gateway host.",
+      "translated": "无法自动读取 Gateway 证书。请粘贴在 Gateway 主机上获取的 SHA-256 指纹。"
+    },
+    {
+      "id": "native.android.aa489429ad39aa39",
+      "source": "This gateway now presents a certificate trusted by this device.",
+      "translated": "此 Gateway 现在提供的证书已受此设备信任。"
+    },
+    {
+      "id": "native.android.b3db82f1162808ad",
+      "source": "SHA-256 fingerprint",
+      "translated": "SHA-256 指纹"
+    },
+    {
       "id": "native.android.9ac2d4498b17d478",
       "source": "Trust",
       "translated": "信任"
+    },
+    {
+      "id": "native.android.09245320d3878458",
+      "source": "Use system trust",
+      "translated": "使用系统信任"
     },
     {
       "id": "native.android.e26ee07a1d1911be",
@@ -5437,6 +5457,26 @@
       "id": "native.android.30d8b822fa68d6c4",
       "source": "Close Canvas",
       "translated": "关闭 Canvas"
+    },
+    {
+      "id": "native.android.846fe5afd08b8089",
+      "source": "The gateway certificate could not be read automatically. Paste the SHA-256 fingerprint obtained on the gateway host.",
+      "translated": "无法自动读取 Gateway 证书。请粘贴在 Gateway 主机上获取的 SHA-256 指纹。"
+    },
+    {
+      "id": "native.android.b263dca13f55dad9",
+      "source": "This gateway now presents a certificate trusted by this device.",
+      "translated": "此 Gateway 现在提供的证书已受此设备信任。"
+    },
+    {
+      "id": "native.android.dca0f8814b658170",
+      "source": "SHA-256 fingerprint",
+      "translated": "SHA-256 指纹"
+    },
+    {
+      "id": "native.android.bb5d50fcdd5ebafe",
+      "source": "Use system trust",
+      "translated": "使用系统信任"
     },
     {
       "id": "native.android.3d83e0755437a5f9",
