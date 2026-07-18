@@ -1143,11 +1143,15 @@ printf 'status=%s\\n' "$status"
     );
   });
 
-  it("bounds the CLI installer pipeline and propagates curl failures", () => {
+  it("bounds both non-root installer pipelines and propagates curl failures", () => {
     const wrapper = readFileSync(SCRIPT_PATH, "utf8");
+    const nonrootRunner = readFileSync(NONROOT_RUNNER_PATH, "utf8");
 
     expect(wrapper).toContain(
       'set -o pipefail; curl -fsSL --connect-timeout 30 --max-time 300 \\"$CLI_INSTALL_URL\\" | bash -s -- --set-npm-prefix --no-onboard',
+    );
+    expect(nonrootRunner).toContain(
+      'curl -fsSL --connect-timeout 30 --max-time 300 "$INSTALL_URL" | bash',
     );
   });
 
