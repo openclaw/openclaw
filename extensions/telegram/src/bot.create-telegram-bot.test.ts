@@ -776,8 +776,6 @@ describe("createTelegramBot", () => {
         },
       },
     });
-    createTelegramBot({ token: "tok", testTimings: TELEGRAM_TEST_TIMINGS });
-    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
       async () =>
         new Response(new Uint8Array([0xff, 0xd8, 0xff, 0x00]), {
@@ -785,6 +783,12 @@ describe("createTelegramBot", () => {
           headers: { "content-type": "image/jpeg" },
         }),
     );
+    createTelegramBot({
+      token: "tok",
+      testTimings: TELEGRAM_TEST_TIMINGS,
+      proxyFetch: fetchSpy,
+    });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
     const messageBase = {
       chat: { id: -9_876_543_215, type: "group", title: "Bot mixed album" },
       from: { id: 8_765_432_105, is_bot: true, username: "peer_bot" },
@@ -852,8 +856,6 @@ describe("createTelegramBot", () => {
         },
       },
     });
-    createTelegramBot({ token: "tok", testTimings: TELEGRAM_TEST_TIMINGS });
-    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
       async () =>
         new Response(new Uint8Array([0xff, 0xd8, 0xff, 0x00]), {
@@ -861,6 +863,12 @@ describe("createTelegramBot", () => {
           headers: { "content-type": "image/jpeg" },
         }),
     );
+    createTelegramBot({
+      token: "tok",
+      testTimings: TELEGRAM_TEST_TIMINGS,
+      proxyFetch: fetchSpy,
+    });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
     const messageBase = {
       chat: { id: -9_876_543_216, type: "group", title: "Bot photo album" },
       from: { id: 8_765_432_106, is_bot: true, username: "peer_bot" },
