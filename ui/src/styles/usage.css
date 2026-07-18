@@ -466,7 +466,7 @@
 .usage-pin-btn.active,
 .chart-toggle .toggle-btn.active {
   border-color: var(--accent);
-  background: var(--accent);
+  background: var(--primary);
   color: var(--primary-foreground);
   font-weight: 600;
   box-shadow: 0 1px 3px color-mix(in srgb, var(--accent) 20%, transparent);
