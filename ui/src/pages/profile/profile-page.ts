@@ -1,3 +1,4 @@
+import "../../styles/config-quick.css";
 import { consume } from "@lit/context";
 import { html, nothing, svg } from "lit";
 import { state } from "lit/decorators.js";

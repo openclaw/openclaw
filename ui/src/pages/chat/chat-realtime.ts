@@ -1,5 +1,5 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { loadSettings, type UiSettings } from "../../app/settings.ts";
+import { loadSettings, patchSettings, type UiSettings } from "../../app/settings.ts";
 import {
   createRealtimeTalkConversationState,
   updateRealtimeTalkConversation,
@@ -72,6 +72,49 @@ export function dismissRealtimeTalkError(state: ChatRealtimeState) {
 }
 
 export function attachChatRealtimeActions(state: ChatRealtimeState) {
+  const talkStatusIsError = () => state.realtimeTalkStatus === "error";
+  const persistCameraPreference = (enabled: boolean) => {
+    state.settings = patchSettings({ talkCameraAutoEnable: enabled });
+  };
+  const setRealtimeTalkCameraEnabled = async (
+    enabled: boolean,
+    options: { disableAutoEnableOnFailure?: boolean } = {},
+  ) => {
+    const session = state.realtimeTalkSession;
+    if (
+      !session ||
+      !state.realtimeTalkVideoCapable ||
+      state.realtimeTalkVideoPending ||
+      talkStatusIsError()
+    ) {
+      return;
+    }
+    state.realtimeTalkVideoPending = true;
+    state.realtimeTalkCameraError = false;
+    state.realtimeTalkDetail = null;
+    state.requestUpdate();
+    if (!enabled) {
+      persistCameraPreference(false);
+    }
+    try {
+      await session.setVideoEnabled(enabled);
+    } catch (error) {
+      if (state.realtimeTalkSession !== session || talkStatusIsError()) {
+        return;
+      }
+      if (options.disableAutoEnableOnFailure) {
+        persistCameraPreference(false);
+      }
+      state.realtimeTalkVideoStream = null;
+      state.realtimeTalkDetail = error instanceof Error ? error.message : String(error);
+      state.realtimeTalkCameraError = true;
+    } finally {
+      if (state.realtimeTalkSession === session) {
+        state.realtimeTalkVideoPending = false;
+        state.requestUpdate();
+      }
+    }
+  };
   state.resetRealtimeTalkConversation = () => {
     resetChatRealtimeConversation(state);
   };
@@ -97,9 +140,12 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
       state.requestUpdate();
       return;
     }
-    // Re-read persisted settings so a microphone picked on the Settings page
-    // applies to the next talk session without a reload.
-    const inputDeviceId = loadSettings().realtimeTalkInputDeviceId?.trim() || undefined;
+    // Re-read persisted settings so device choices made elsewhere apply to the
+    // next talk session without a reload.
+    const talkSettings = loadSettings();
+    const inputDeviceId = talkSettings.realtimeTalkInputDeviceId?.trim() || undefined;
+    const autoEnableCamera = talkSettings.talkCameraAutoEnable === true;
+    let autoEnableCameraAttempted = false;
     state.realtimeTalkActive = true;
     state.realtimeTalkStatus = "connecting";
     state.realtimeTalkDetail = null;
@@ -124,6 +170,18 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
             state.realtimeTalkInputLevel.set(0);
           }
           state.requestUpdate();
+          // Remembered camera intent waits for "listening": capability is reported
+          // before transport start, and acquiring the camera while microphone
+          // startup can still fail would prompt for a call that never happens.
+          if (
+            status === "listening" &&
+            state.realtimeTalkVideoCapable &&
+            autoEnableCamera &&
+            !autoEnableCameraAttempted
+          ) {
+            autoEnableCameraAttempted = true;
+            void setRealtimeTalkCameraEnabled(true, { disableAutoEnableOnFailure: true });
+          }
         },
         onVideoCapability: (capable) => {
           if (state.realtimeTalkSession !== session) {
@@ -159,6 +217,7 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
           }
           state.realtimeTalkVideoStream = stream;
           if (stream) {
+            persistCameraPreference(true);
             state.realtimeTalkDetail = null;
             state.realtimeTalkCameraError = false;
           }
@@ -188,38 +247,8 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
       state.requestUpdate();
     }
   };
-  // Reads through a call so TS does not keep the early-guard narrowing across the
-  // await below; the status can legitimately become "error" while acquiring the camera.
-  const talkStatusIsError = () => state.realtimeTalkStatus === "error";
   state.toggleRealtimeTalkCamera = async () => {
-    const session = state.realtimeTalkSession;
-    if (
-      !session ||
-      !state.realtimeTalkVideoCapable ||
-      state.realtimeTalkVideoPending ||
-      talkStatusIsError()
-    ) {
-      return;
-    }
     const enabled = state.realtimeTalkVideoStream === null;
-    state.realtimeTalkVideoPending = true;
-    state.realtimeTalkCameraError = false;
-    state.realtimeTalkDetail = null;
-    state.requestUpdate();
-    try {
-      await session.setVideoEnabled(enabled);
-    } catch (error) {
-      if (state.realtimeTalkSession !== session || talkStatusIsError()) {
-        return;
-      }
-      state.realtimeTalkVideoStream = null;
-      state.realtimeTalkDetail = error instanceof Error ? error.message : String(error);
-      state.realtimeTalkCameraError = true;
-    } finally {
-      if (state.realtimeTalkSession === session) {
-        state.realtimeTalkVideoPending = false;
-        state.requestUpdate();
-      }
-    }
+    await setRealtimeTalkCameraEnabled(enabled);
   };
 }

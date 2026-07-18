@@ -4,6 +4,7 @@ import type {
   SourceReplyDeliveryMode,
   TaskSuggestionDeliveryMode,
 } from "../auto-reply/get-reply-options.types.js";
+import { createShowWidgetTool } from "../canvas/widget-tool.js";
 import type { ChatType } from "../channels/chat-type.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { ConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
@@ -287,6 +288,8 @@ export function createOpenClawTools(
   const taskSuggestionSessionKey = normalizeOptionalString(
     options?.runSessionKey ?? options?.agentSessionKey,
   );
+  const requesterSessionKey = options?.agentSessionKey;
+  const requesterTurnRunId = options?.runId;
   const imageToolAgentDir = options?.agentDir;
   const imageTool = resolveImageToolFactoryAvailable({
     config: availabilityConfig ?? resolvedConfig,
@@ -522,6 +525,16 @@ export function createOpenClawTools(
         })
       : []),
     ...(messageTool && includeMessageTool ? [messageTool] : []),
+    // Discord sessions get the Discord plugin's own show_widget (Activities
+    // delivery); registering the core tool there would collide on the name.
+    ...(options?.agentChannel === "discord"
+      ? []
+      : [
+          createShowWidgetTool({
+            sessionId: options?.sessionId,
+            agentId: sessionAgentId,
+          }),
+        ]),
     ...collectPresentOpenClawTools([heartbeatTool]),
     createTtsTool({
       agentChannel: options?.agentChannel,
@@ -636,6 +649,7 @@ export function createOpenClawTools(
       ? [
           createSessionsSpawnTool({
             agentSessionKey: options?.agentSessionKey,
+            requesterTurnRunId: options?.runId,
             completionOwnerKey: options?.runSessionKey,
             agentChannel: options?.agentChannel,
             agentAccountId: options?.agentAccountId,
@@ -660,6 +674,13 @@ export function createOpenClawTools(
       : []),
     createSessionsYieldTool({
       sessionId: options?.sessionId,
+      onBeforeYield:
+        requesterSessionKey && requesterTurnRunId
+          ? async () => {
+              const { markRequesterTurnYielded } = await import("./subagent-registry.js");
+              markRequesterTurnYielded({ requesterSessionKey, requesterTurnRunId });
+            }
+          : undefined,
       onYield: options?.onYield,
     }),
     createSubagentsTool({

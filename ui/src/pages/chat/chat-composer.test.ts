@@ -6,7 +6,15 @@ import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { renderChatComposer, resetChatComposerState } from "./components/chat-composer.ts";
 
-vi.mock("../../components/icons.ts", () => ({ icons: {} }));
+vi.mock("../../components/icons.ts", async () => {
+  const { html: litHtml } = await import("lit");
+  return {
+    icons: {
+      camera: litHtml`<svg data-icon="camera"></svg>`,
+      cameraOff: litHtml`<svg data-icon="camera-off"></svg>`,
+    },
+  };
+});
 
 type ComposerProps = Parameters<typeof renderChatComposer>[0];
 
@@ -81,6 +89,21 @@ afterEach(async () => {
 });
 
 describe("renderChatComposer controls", () => {
+  it("renders and invokes an action beside the disabled reason", () => {
+    const onDisabledAction = vi.fn();
+    const { container } = renderComposer({
+      canSend: false,
+      disabledReason: "This session is archived.",
+      disabledActionLabel: "Restore",
+      onDisabledAction,
+    });
+
+    const reason = container.querySelector(".agent-chat__disabled-reason");
+    expect(reason?.textContent).toContain("This session is archived.");
+    reason?.querySelector<HTMLButtonElement>("button")?.click();
+    expect(onDisabledAction).toHaveBeenCalledOnce();
+  });
+
   it("switches the primary action between voice, send, queue, and stop", () => {
     const onToggleRealtimeTalk = vi.fn();
     let view = renderComposer({ onToggleRealtimeTalk });
@@ -146,6 +169,21 @@ describe("renderChatComposer controls", () => {
       realtimeTalkVideoCapable: true,
     });
     expect(button(failed.container, t("chat.composer.turnCameraOn")).disabled).toBe(true);
+  });
+
+  it("renders the camera-off glyph while the talk camera is enabled", () => {
+    const { container } = renderComposer({
+      onToggleRealtimeTalk: vi.fn(),
+      onToggleRealtimeCamera: vi.fn(),
+      realtimeTalkActive: true,
+      realtimeTalkStatus: "listening",
+      realtimeTalkVideoCapable: true,
+      realtimeTalkVideoStream: {} as MediaStream,
+    });
+
+    const cameraToggle = button(container, t("chat.composer.turnCameraOff"));
+    expect(cameraToggle.querySelector('[data-icon="camera-off"]')).not.toBeNull();
+    expect(cameraToggle.querySelector('[data-icon="camera"]')).toBeNull();
   });
 
   it("sends attachment-only drafts instead of starting voice", () => {

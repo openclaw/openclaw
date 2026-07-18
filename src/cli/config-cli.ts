@@ -1,5 +1,6 @@
 // Config CLI command implementation for get/set/unset/patch/validate and secret refs.
 import fs from "node:fs";
+import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -1478,25 +1479,20 @@ function configPatchModeError(message: string): Error {
 }
 
 async function readStdinText(): Promise<string> {
-  const chunks: string[] = [];
-  let bytes = 0;
   if (process.stdin.isTTY) {
     throw configPatchModeError(
       "--stdin refuses to read from an interactive terminal; pipe input or use --file <path>.",
     );
   }
   process.stdin.setEncoding("utf8");
-  for await (const chunk of process.stdin) {
-    const text = String(chunk);
-    bytes += Buffer.byteLength(text, "utf8");
-    if (bytes > CONFIG_PATCH_STDIN_MAX_BYTES) {
-      throw configPatchModeError(
-        `--stdin input exceeds ${CONFIG_PATCH_STDIN_MAX_BYTES} bytes; use --file <path> for larger patches.`,
-      );
-    }
-    chunks.push(text);
-  }
-  return chunks.join("");
+  const bytes = await readByteStreamWithLimit(process.stdin, {
+    maxBytes: CONFIG_PATCH_STDIN_MAX_BYTES,
+    onOverflow: ({ maxBytes }) =>
+      configPatchModeError(
+        `--stdin input exceeds ${maxBytes} bytes; use --file <path> for larger patches.`,
+      ),
+  });
+  return bytes.toString("utf8");
 }
 
 async function readConfigPatchInput(opts: ConfigPatchOptions): Promise<unknown> {
