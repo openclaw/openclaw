@@ -107,12 +107,69 @@ describe("registerTelegramNativeCommands /login", () => {
     });
 
     await handler(createPrivateCommandContext({ match: "codex", userId: 200 }));
+    await vi.waitFor(() =>
+      expect(sendMessage.mock.calls.map((call) => String(call[1]))).toContain(
+        "Codex login complete. Try your request again now.",
+      ),
+    );
 
     const texts = sendMessage.mock.calls.map((call) => String(call[1]));
     expect(texts[0]).toContain("URL: https://auth.openai.com/codex/device");
     expect(texts[0]).toContain("Code: ABCD-EFGH");
     expect(texts[0]).toContain("Never share it.");
     expect(texts.at(-1)).toContain("Codex login complete. Try your request again now.");
+  });
+
+  it("returns after sending the device code while login continues", async () => {
+    const deferred = createDeferred<void>();
+    let loginCompleted = false;
+    const loginFlow = vi.fn(
+      async (params: {
+        prompter: { note: (message: string, title?: string) => Promise<void> };
+      }) => {
+        await params.prompter.note(
+          "URL: https://auth.openai.com/codex/device\nCode: PENDING-CODE",
+          "OpenAI Codex device code",
+        );
+        await deferred.promise;
+        loginCompleted = true;
+        return {
+          providerId: "openai",
+          methodId: "device-code",
+          profiles: [{ profileId: "openai:codex", provider: "openai", mode: "oauth" }],
+        };
+      },
+    );
+    const { handler, sendMessage } = registerLoginCommand({
+      cfg: {
+        commands: {
+          native: true,
+          ownerAllowFrom: ["200"],
+        },
+        agents: { list: [{ id: "main", default: true }] },
+      } as OpenClawConfig,
+      loginFlow,
+    });
+
+    await expect(
+      handler(createPrivateCommandContext({ match: "codex", userId: 200 })),
+    ).resolves.toBeUndefined();
+
+    expect(loginCompleted).toBe(false);
+    expect(sendMessage.mock.calls.map((call) => String(call[1]))).toContainEqual(
+      expect.stringContaining("Code: PENDING-CODE"),
+    );
+    expect(sendMessage.mock.calls.map((call) => String(call[1]))).not.toContain(
+      "Codex login complete. Try your request again now.",
+    );
+
+    deferred.resolve();
+    await vi.waitFor(() => expect(loginCompleted).toBe(true));
+    await vi.waitFor(() =>
+      expect(sendMessage.mock.calls.map((call) => String(call[1]))).toContain(
+        "Codex login complete. Try your request again now.",
+      ),
+    );
   });
 
   it("rejects group /login codex without sending the device code publicly", async () => {
