@@ -1,5 +1,6 @@
 // Microsoft Teams monitor tests inject a durable-ingress boundary without ambient state.
 import { vi } from "vitest";
+import type { Mock } from "vitest";
 
 type IngressDispatch = (
   activity: unknown,
@@ -9,7 +10,7 @@ type IngressDispatch = (
 
 const ingressMockState = vi.hoisted(() => ({
   instances: [] as Array<{
-    accept: ReturnType<typeof vi.fn>;
+    accept: Mock<(activity: unknown, context?: unknown) => Promise<void>>;
     start: ReturnType<typeof vi.fn>;
     stop: ReturnType<typeof vi.fn>;
     options: { dispatch: IngressDispatch };
