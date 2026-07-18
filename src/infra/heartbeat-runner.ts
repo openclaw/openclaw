@@ -100,7 +100,9 @@ import { getActivePluginChannelRegistry } from "../plugins/runtime.js";
 import {
   getCommandLaneSnapshots,
   getQueueSize,
+  isCommandLaneTaskMarkerCurrent,
   type CommandLaneSnapshot,
+  type CommandLaneTaskMarker,
 } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import {
@@ -201,15 +203,7 @@ const loadHeartbeatRunnerRuntime = createLazyRuntimeModule(
   () => import("./heartbeat-runner.runtime.js"),
 );
 
-const HEARTBEAT_ALWAYS_BUSY_LANES = [CommandLane.Cron, CommandLane.CronNested] as const;
 const DEFAULT_HEARTBEAT_TIMEOUT_SECONDS = 10 * 60;
-
-function hasQueuedWorkInLanes(
-  lanes: readonly string[],
-  getSize: (lane?: string) => number,
-): boolean {
-  return lanes.some((lane) => getSize(lane) > 0);
-}
 
 function hasQueuedWorkInLaneSnapshots(
   snapshots: readonly CommandLaneSnapshot[],
@@ -1304,6 +1298,7 @@ export async function runHeartbeatOnce(opts: {
   runScope?: HeartbeatRunScope;
   /** Exact cron run marker whose own activity must not block this wake. */
   owningCronJobMarker?: CronActiveJobMarker;
+  owningCronLaneTaskMarker?: CommandLaneTaskMarker;
   deps?: HeartbeatDeps;
 }): Promise<HeartbeatRunResult> {
   const cfg = opts.cfg ?? getRuntimeConfig();
@@ -1344,8 +1339,8 @@ export async function runHeartbeatOnce(opts: {
     return { status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT };
   }
 
-  // An exact current owner may ignore itself and queued cron work that cannot advance
-  // until this run finishes. Unrelated active runs remain visible through their markers.
+  // Ignore only the exact Cron lane task that owns this wake. Other queued or active
+  // Cron work and all CronNested work remain busy signals.
   const owningCronJobMarker = opts.owningCronJobMarker;
   const ownsActiveCronRun = owningCronJobMarker
     ? isCronActiveJobMarkerCurrent(owningCronJobMarker)
@@ -1354,8 +1349,14 @@ export async function runHeartbeatOnce(opts: {
     ownsActiveCronRun && owningCronJobMarker
       ? hasActiveCronJobsExceptMarker(owningCronJobMarker)
       : hasActiveCronJobs();
+  const owningCronLaneTaskMarker = opts.owningCronLaneTaskMarker;
+  const ownsCronLaneTask =
+    ownsActiveCronRun &&
+    owningCronLaneTaskMarker?.lane === CommandLane.Cron &&
+    isCommandLaneTaskMarkerCurrent(owningCronLaneTaskMarker);
+  const cronLaneDepth = getSize(CommandLane.Cron);
   const cronLaneBusy =
-    !ownsActiveCronRun && hasQueuedWorkInLanes(HEARTBEAT_ALWAYS_BUSY_LANES, getSize);
+    cronLaneDepth > (ownsCronLaneTask ? 1 : 0) || getSize(CommandLane.CronNested) > 0;
   if (cronBusy || cronLaneBusy) {
     emitHeartbeatEvent({
       status: "skipped",

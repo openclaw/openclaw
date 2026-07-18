@@ -1107,6 +1107,11 @@ describe("buildGatewayCronService", () => {
                 agentId?: string;
                 sessionKey?: string | null;
                 reason?: string;
+                owningCronLaneTaskMarker?: {
+                  lane: string;
+                  taskId: number;
+                  generation: number;
+                };
                 heartbeat?: { target?: string };
               }) => Promise<unknown>;
             };
@@ -1114,9 +1119,11 @@ describe("buildGatewayCronService", () => {
         }
       ).state?.deps;
 
+      const owningCronLaneTaskMarker = { lane: "cron", taskId: 7, generation: 3 };
       await cronDeps?.runHeartbeatOnce?.({
         reason: "cron:test",
         sessionKey: "telegram:group:123:topic:456",
+        owningCronLaneTaskMarker,
         heartbeat: { target: "last" },
       });
 
@@ -1125,6 +1132,7 @@ describe("buildGatewayCronService", () => {
         "heartbeat run options",
       );
       expect(call.sessionKey).toBe("agent:main:telegram:group:123:topic:456");
+      expect(call.owningCronLaneTaskMarker).toEqual(owningCronLaneTaskMarker);
       expect(call.heartbeat).toEqual({
         every: "1h",
         prompt: "Default heartbeat prompt",

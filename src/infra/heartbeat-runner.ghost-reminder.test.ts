@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
 import { clearCronJobActive, markCronJobActive, resetCronActiveJobs } from "../cron/active-jobs.js";
+import { enqueueCommandInLane, type CommandLaneTaskMarker } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import {
@@ -192,7 +193,9 @@ describe("Ghost reminder bug (issue #13317)", () => {
     activeCronJobId?: string;
     owningCronJobId?: string;
     replaceOwningCronMarker?: boolean;
+    owningCronLaneTaskMarker?: CommandLaneTaskMarker;
     cronLaneDepth?: number;
+    cronNestedLaneDepth?: number;
   }): Promise<{
     result: Awaited<ReturnType<typeof runHeartbeatOnce>>;
     sendTelegram: ReturnType<typeof vi.fn>;
@@ -235,14 +238,21 @@ describe("Ghost reminder bug (issue #13317)", () => {
             intent: params.intent,
             ...(params.source ? { sessionKey } : {}),
             ...(owningCronJobMarker ? { owningCronJobMarker } : {}),
+            ...(params.owningCronLaneTaskMarker
+              ? { owningCronLaneTaskMarker: params.owningCronLaneTaskMarker }
+              : {}),
             deps: {
               getReplyFromConfig: getReplySpy,
               telegram: sendTelegram,
-              ...(params.cronLaneDepth === undefined
+              ...(params.cronLaneDepth === undefined && params.cronNestedLaneDepth === undefined
                 ? {}
                 : {
                     getQueueSize: (lane?: string) =>
-                      lane === CommandLane.Cron ? (params.cronLaneDepth ?? 0) : 0,
+                      lane === CommandLane.Cron
+                        ? (params.cronLaneDepth ?? 0)
+                        : lane === CommandLane.CronNested
+                          ? (params.cronNestedLaneDepth ?? 0)
+                          : 0,
                   }),
             },
           });
@@ -343,7 +353,6 @@ describe("Ghost reminder bug (issue #13317)", () => {
       intent: "immediate",
       activeCronJobId: "nightly-report",
       owningCronJobId: "nightly-report",
-      cronLaneDepth: 3,
       enqueue: (key) => {
         enqueueSystemEvent("Reminder: Send the nightly report", {
           sessionKey: key,
@@ -355,6 +364,122 @@ describe("Ghost reminder bug (issue #13317)", () => {
     expect(result.status).toBe("ran");
     expectCronEventPrompt(calledCtx, "Reminder: Send the nightly report");
     expect(peekSystemEvents(sessionKey)).toEqual([]);
+  });
+
+  it("still blocks an owning cron wake while the nested cron lane is busy", async () => {
+    const { result, replyCallCount } = await runHeartbeatCase({
+      tmpPrefix: "openclaw-cron-owner-nested-lane-",
+      replyText: "must not run",
+      reason: "cron:nightly-report",
+      source: "cron",
+      intent: "immediate",
+      owningCronJobId: "nightly-report",
+      cronNestedLaneDepth: 1,
+      enqueue: (key) => {
+        enqueueSystemEvent("Reminder: Send the nightly report", {
+          sessionKey: key,
+          contextKey: "cron:nightly-report",
+        });
+      },
+    });
+
+    expect(result).toEqual({ status: "skipped", reason: HEARTBEAT_SKIP_CRON_IN_PROGRESS });
+    expect(replyCallCount).toBe(0);
+  });
+
+  it("still blocks an owning cron wake while unrelated cron lane work is queued", async () => {
+    const { result, replyCallCount } = await runHeartbeatCase({
+      tmpPrefix: "openclaw-cron-owner-unrelated-lane-",
+      replyText: "must not run",
+      reason: "cron:nightly-report",
+      source: "cron",
+      intent: "immediate",
+      owningCronJobId: "nightly-report",
+      cronLaneDepth: 1,
+      enqueue: (key) => {
+        enqueueSystemEvent("Reminder: Send the nightly report", {
+          sessionKey: key,
+          contextKey: "cron:nightly-report",
+        });
+      },
+    });
+
+    expect(result).toEqual({ status: "skipped", reason: HEARTBEAT_SKIP_CRON_IN_PROGRESS });
+    expect(replyCallCount).toBe(0);
+  });
+
+  it("ignores only the exact command lane task that owns the cron wake", async () => {
+    await enqueueCommandInLane(CommandLane.Cron, async (owningCronLaneTaskMarker) => {
+      const ownTaskOnly = await runHeartbeatCase({
+        tmpPrefix: "openclaw-cron-owner-exact-lane-",
+        replyText: "Handled the reminder",
+        reason: "cron:nightly-report",
+        source: "cron",
+        intent: "immediate",
+        owningCronJobId: "nightly-report",
+        owningCronLaneTaskMarker,
+        cronLaneDepth: 1,
+        enqueue: (key) => {
+          enqueueSystemEvent("Reminder: Send the nightly report", {
+            sessionKey: key,
+            contextKey: "cron:nightly-report",
+          });
+        },
+      });
+      expect(ownTaskOnly.result.status).toBe("ran");
+
+      const unrelatedTaskQueued = await runHeartbeatCase({
+        tmpPrefix: "openclaw-cron-owner-second-lane-",
+        replyText: "must not run",
+        reason: "cron:nightly-report",
+        source: "cron",
+        intent: "immediate",
+        owningCronJobId: "nightly-report",
+        owningCronLaneTaskMarker,
+        cronLaneDepth: 2,
+        enqueue: (key) => {
+          enqueueSystemEvent("Reminder: Send the nightly report", {
+            sessionKey: key,
+            contextKey: "cron:nightly-report",
+          });
+        },
+      });
+      expect(unrelatedTaskQueued.result).toEqual({
+        status: "skipped",
+        reason: HEARTBEAT_SKIP_CRON_IN_PROGRESS,
+      });
+      expect(unrelatedTaskQueued.replyCallCount).toBe(0);
+    });
+  });
+
+  it("does not let a stale command lane task marker bypass cron pressure", async () => {
+    let staleMarker: CommandLaneTaskMarker | undefined;
+    await enqueueCommandInLane(CommandLane.Cron, async (marker) => {
+      staleMarker = marker;
+    });
+    if (!staleMarker) {
+      throw new Error("expected command lane marker");
+    }
+
+    const { result, replyCallCount } = await runHeartbeatCase({
+      tmpPrefix: "openclaw-cron-owner-stale-lane-",
+      replyText: "must not run",
+      reason: "cron:nightly-report",
+      source: "cron",
+      intent: "immediate",
+      owningCronJobId: "nightly-report",
+      owningCronLaneTaskMarker: staleMarker,
+      cronLaneDepth: 1,
+      enqueue: (key) => {
+        enqueueSystemEvent("Reminder: Send the nightly report", {
+          sessionKey: key,
+          contextKey: "cron:nightly-report",
+        });
+      },
+    });
+
+    expect(result).toEqual({ status: "skipped", reason: HEARTBEAT_SKIP_CRON_IN_PROGRESS });
+    expect(replyCallCount).toBe(0);
   });
 
   it("does not let a stale owner marker bypass its replacement", async () => {
