@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
-import {
-  isMeetingBrowserTransientNavigationError,
-  openMeetingWithBrowser,
-  recoverMeetingBrowserTab,
-} from "./browser-controller.js";
+import { openMeetingWithBrowser, recoverMeetingBrowserTab } from "./browser-controller.js";
+import { isMeetingBrowserTransientNavigationError } from "./browser-navigation-errors.js";
 
 describe("meeting browser navigation errors", () => {
   it.each([
