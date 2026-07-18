@@ -143,6 +143,36 @@ describe("createIngressEffectOnce", () => {
     ).resolves.toEqual({ kind: "executed", value: "second" });
   });
 
+  it("keeps normalized-prefix collisions isolated", async () => {
+    const slashQueue = createIngressEffectOnce({
+      ...EFFECT_ONCE_PARAMS,
+      namespacePrefix: "test/queue",
+    });
+    const dashQueue = createIngressEffectOnce({
+      ...EFFECT_ONCE_PARAMS,
+      namespacePrefix: "test-queue",
+    });
+    const slashRun = vi.fn(async () => "slash");
+    const dashRun = vi.fn(async () => "dash");
+
+    await expect(
+      slashQueue.runOnce({
+        eventId: "event-local-collision",
+        effect: "config-write",
+        run: slashRun,
+      }),
+    ).resolves.toEqual({ kind: "executed", value: "slash" });
+    await expect(
+      dashQueue.runOnce({
+        eventId: "event-local-collision",
+        effect: "config-write",
+        run: dashRun,
+      }),
+    ).resolves.toEqual({ kind: "executed", value: "dash" });
+    expect(slashRun).toHaveBeenCalledOnce();
+    expect(dashRun).toHaveBeenCalledOnce();
+  });
+
   it("persists completed effects across fresh factory instances", async () => {
     const first = createIngressEffectOnce(EFFECT_ONCE_PARAMS);
     await expect(

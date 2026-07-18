@@ -1,5 +1,7 @@
 import { createClaimableDedupe } from "./persistent-dedupe.js";
 
+const INGRESS_EFFECT_ONCE_NAMESPACE_PREFIX = "ingress-effect-once";
+
 class IngressEffectRunFailedError extends Error {
   constructor() {
     super("ingress effect failed before its durable commit");
@@ -35,7 +37,7 @@ export function createIngressEffectOnce(params: {
 } {
   const dedupe = createClaimableDedupe({
     pluginId: params.pluginId,
-    namespacePrefix: params.namespacePrefix,
+    namespacePrefix: INGRESS_EFFECT_ONCE_NAMESPACE_PREFIX,
     ttlMs: params.ttlMs,
     stateMaxEntries: params.stateMaxEntries,
     memoryMaxSize: params.memoryMaxSize ?? params.stateMaxEntries,
@@ -52,9 +54,11 @@ export function createIngressEffectOnce(params: {
       run: () => Promise<T>;
     }): Promise<{ kind: "executed"; value: T } | { kind: "replayed" }> => {
       const key = JSON.stringify([effectParams.effect, effectParams.eventId]);
+      const namespace = params.namespacePrefix;
 
       while (true) {
-        const claim = await dedupe.claim(key);
+        // The persistent-dedupe namespace path hashes this raw queue/account scope.
+        const claim = await dedupe.claim(key, { namespace });
         if (claim.kind === "duplicate") {
           return { kind: "replayed" };
         }
@@ -75,15 +79,16 @@ export function createIngressEffectOnce(params: {
         try {
           value = await effectParams.run();
         } catch (error) {
-          dedupe.release(key, { error: new IngressEffectRunFailedError() });
+          dedupe.release(key, { namespace, error: new IngressEffectRunFailedError() });
           throw error;
         }
         try {
-          await dedupe.commit(key);
+          await dedupe.commit(key, { namespace });
         } catch (error) {
           try {
             // forget clears the failed commit's memory marker before its durable delete attempt.
             await dedupe.forget(key, {
+              namespace,
               onDiskError: (cleanupError) => {
                 throw cleanupError;
               },
