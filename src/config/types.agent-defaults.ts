@@ -519,6 +519,8 @@ export type AgentCompactionMidTurnPrecheckConfig = {
 };
 
 export type AgentCompactionConfig = {
+  /** Whether auto-compaction is enabled. When false, the runtime skips compaction entirely. Default: true. */
+  enabled?: boolean;
   /** Compaction summarization mode. */
   mode?: AgentCompactionMode;
   /** Embedded OpenClaw reserve target before floor and context-window caps. */
