@@ -138,6 +138,12 @@ export function isChatStopCommand(text: string) {
   return CHAT_STOP_COMMANDS.has(normalizeLowercaseStringOrEmpty(text.trim()));
 }
 
+export function shouldAbortChatInput(text: string, hasAbortableRun: boolean): boolean {
+  // Natural words remain conversational input while idle; only the explicit
+  // slash command may target an idle or remotely tracked session.
+  return isChatStopCommand(text) && (text.trim().startsWith("/") || hasAbortableRun);
+}
+
 type ChatAbortOptions = { preserveDraft?: boolean };
 
 function resolveAbortTarget(host: ChatAbortHost): ChatAbortTarget {

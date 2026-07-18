@@ -100,8 +100,8 @@ import {
   handleAbortChat,
   hasAbortableSessionRun,
   isChatBusy,
-  isChatStopCommand,
   reconcileChatRunLifecycle,
+  shouldAbortChatInput,
 } from "./run-lifecycle.ts";
 import { scheduleChatScroll, resetChatScroll } from "./scroll.ts";
 import { resetToolStream } from "./tool-stream.ts";
@@ -2165,9 +2165,7 @@ export async function handleSendChat(
   if (shouldInterpretChatCommands) {
     // Natural words such as "wait" and "exit" are stop aliases only while a
     // run exists. Keep the explicit /stop command available at any time.
-    const shouldAbort =
-      isChatStopCommand(message) &&
-      (message.trim().startsWith("/") || hasAbortableSessionRun(host));
+    const shouldAbort = shouldAbortChatInput(message, hasAbortableSessionRun(host));
     if (shouldAbort) {
       if (messageOverride == null) {
         recordNonTranscriptInputHistory(host, message);

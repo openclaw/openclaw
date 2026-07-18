@@ -3049,6 +3049,55 @@ describe("chat slash menu accessibility", () => {
     expect(onSend).toHaveBeenCalledWith("/stop");
   });
 
+  it("respects the configured modifier shortcut for exact stop commands", () => {
+    const onSend = vi.fn();
+    const container = renderChatView({ onSend, sendShortcut: "modifier-enter" });
+
+    inputDraft(container, "/stop");
+    const plainEnter = keydownComposer(container, "Enter");
+
+    expect(plainEnter.defaultPrevented).toBe(false);
+    expect(onSend).not.toHaveBeenCalled();
+
+    keydownComposer(container, "Enter", { ctrlKey: true });
+    expect(onSend).toHaveBeenCalledWith("/stop");
+  });
+
+  it("uses the normal draft send path for idle natural stop aliases", () => {
+    let draft = "";
+    const onSend = vi.fn();
+    const attachment: ChatAttachment = {
+      id: "idle-stop-alias-attachment",
+      fileName: "context.txt",
+      mimeType: "text/plain",
+      sizeBytes: 7,
+    };
+    const container = renderChatView({
+      attachments: [attachment],
+      getDraft: () => draft,
+      onDraftChange: (next) => {
+        draft = next;
+      },
+      onSend,
+    });
+
+    inputDraft(container, "wait");
+    keydownComposer(container, "Enter");
+
+    expect(onSend).toHaveBeenCalledOnce();
+    expect(onSend.mock.calls[0]).toEqual([]);
+  });
+
+  it("uses the explicit stop path for natural aliases during an active run", () => {
+    const onSend = vi.fn();
+    const container = renderChatView({ canAbort: true, onSend });
+
+    inputDraft(container, "wait");
+    keydownComposer(container, "Enter");
+
+    expect(onSend).toHaveBeenCalledWith("wait");
+  });
+
   it("commits local draft input on blur", () => {
     const onDraftChange = vi.fn();
     const container = renderChatView({ onDraftChange });

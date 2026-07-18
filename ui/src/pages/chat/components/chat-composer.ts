@@ -48,7 +48,7 @@ import type { RealtimeTalkLevelSignal } from "../realtime-talk-level.ts";
 import type { RealtimeTalkStatus } from "../realtime-talk.ts";
 import {
   CHAT_RUN_STATUS_TOAST_DURATION_MS,
-  isChatStopCommand,
+  shouldAbortChatInput,
   type ChatRunUiStatus,
 } from "../run-lifecycle.ts";
 import type { CompactionStatus, FallbackStatus, PlanStatus } from "../tool-stream.ts";
@@ -2080,7 +2080,17 @@ export function renderChatComposer(props: ChatComposerProps) {
     }
 
     const target = event.target as HTMLTextAreaElement;
-    if (event.key === "Enter" && !event.shiftKey && isChatStopCommand(target.value)) {
+    const sendShortcutMatches = sendShortcut === "enter" || event.metaKey || event.ctrlKey;
+    if (
+      event.key === "Enter" &&
+      !event.shiftKey &&
+      shouldAbortChatInput(target.value, showAbortableUi)
+    ) {
+      // Stop commands bypass slash-menu selection only when this keypress is
+      // also the configured send shortcut; otherwise Enter remains text input.
+      if (!sendShortcutMatches) {
+        return;
+      }
       if (!canCompose) {
         return;
       }
@@ -2209,7 +2219,6 @@ export function renderChatComposer(props: ChatComposerProps) {
       }
     }
 
-    const sendShortcutMatches = sendShortcut === "enter" || event.metaKey || event.ctrlKey;
     if (event.key === "Enter" && !event.shiftKey && sendShortcutMatches) {
       if (!canSubmitDraft((event.target as HTMLTextAreaElement).value)) {
         return;
