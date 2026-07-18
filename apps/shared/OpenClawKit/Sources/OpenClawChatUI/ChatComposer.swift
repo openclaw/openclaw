@@ -697,6 +697,9 @@ struct OpenClawChatComposer: View {
             HStack(alignment: .center, spacing: 8) {
                 if let talkControl {
                     self.talkButton(talkControl)
+                    if self.showsCameraFlip(talkControl) {
+                        self.cameraFlipButton(talkControl, compact: false)
+                    }
                 }
                 if self.showsConnectionPill {
                     self.connectionPill
@@ -763,6 +766,10 @@ struct OpenClawChatComposer: View {
                             self.startDictation(dictationControl)
                         }
                     })
+            }
+
+            if let talkControl, self.showsCameraFlip(talkControl) {
+                self.cameraFlipButton(talkControl, compact: true)
             }
 
             self.cleanTrailingControl
@@ -886,6 +893,40 @@ struct OpenClawChatComposer: View {
         .accessibilityIdentifier("chat-realtime-control")
         .help(self.talkHelpText(talkControl))
         .chatTalkInputDeviceMenu(talkControl)
+    }
+
+    private func showsCameraFlip(_ talkControl: OpenClawChatTalkControl) -> Bool {
+        talkControl.isEnabled && talkControl.cameraFacing != nil && talkControl.flipCamera != nil
+    }
+
+    private func cameraFlipButton(_ talkControl: OpenClawChatTalkControl, compact: Bool) -> some View {
+        let size = compact ? self.cleanControlHeight : 32
+        let label = switch talkControl.cameraFacing {
+        case .front:
+            String(localized: "Switch to back camera")
+        case .back:
+            String(localized: "Switch to front camera")
+        case nil:
+            String(localized: "Flip camera")
+        }
+
+        return Button {
+            talkControl.flipCamera?()
+        } label: {
+            Image(systemName: "arrow.triangle.2.circlepath.camera")
+                .font(OpenClawChatTypography.body(size: 14, weight: .semibold, relativeTo: .subheadline))
+                .foregroundStyle(.primary)
+                .frame(width: size, height: size)
+                .background {
+                    Circle()
+                        .fill(OpenClawChatTheme.accent.opacity(0.12))
+                }
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+        .accessibilityIdentifier("chat-camera-flip")
+        .help(label)
     }
 
     private func talkButtonFill(_ talkControl: OpenClawChatTalkControl) -> AnyShapeStyle {
