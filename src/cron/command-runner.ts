@@ -13,7 +13,16 @@ function secondsToMs(value: number | undefined): number | undefined {
   if (typeof value !== "number") {
     return undefined;
   }
-  if (value <= 0) {
+  if (value < 0) {
+    // Negative timeoutSeconds/noOutputTimeoutSeconds is misconfiguration.
+    // Fall back to undefined so the caller uses DEFAULT_COMMAND_TIMEOUT_MS
+    // instead of arming a ~24.8-day deadline (EFFECTIVELY_UNBOUNDED_TIMEOUT_MS)
+    // that hangs doctor/cron under abnormal config.
+    // Note: 0 is intentionally preserved as "no timeout" (unbounded) per the
+    // existing contract documented in docs/automation/cron-jobs.md.
+    return undefined;
+  }
+  if (value === 0) {
     return EFFECTIVELY_UNBOUNDED_TIMEOUT_MS;
   }
   return finiteSecondsToTimerSafeMilliseconds(value) ?? undefined;
