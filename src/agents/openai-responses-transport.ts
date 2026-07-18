@@ -1364,7 +1364,7 @@ async function processResponsesStream(
   };
   const backfillTerminalResponseOutput = (
     response: Record<string, unknown> | undefined,
-    options: { includeToolCalls: boolean },
+    backfillOptions: { includeToolCalls: boolean },
   ) => {
     if (output.content.length > 0 || !Array.isArray(response?.output)) {
       return;
@@ -1380,7 +1380,7 @@ async function processResponsesStream(
       // Any non-message item (reasoning, tool call) is a real boundary; a later
       // message must not collapse across it, mirroring the streaming path.
       lastTextBlock = null;
-      if (options.includeToolCalls && rawItem.type === "function_call") {
+      if (backfillOptions.includeToolCalls && rawItem.type === "function_call") {
         appendCompletedResponseToolCallItem(rawItem);
       }
     }
