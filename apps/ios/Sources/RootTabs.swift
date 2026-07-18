@@ -1442,6 +1442,7 @@ private struct RootTabsHomeCanvasAgentCard: Codable {
     var caption: String
     var isActive: Bool
 }
+
 private struct RootCameraFlashOverlay: View {
     var nonce: Int
 
