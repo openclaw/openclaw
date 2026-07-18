@@ -58,7 +58,7 @@ describe("ReefTransportClient network failures", () => {
       throw cause;
     });
 
-    const error = await client.listFriends().catch((cause) => cause);
+    const error = await client.listFriends().catch((failure: unknown) => failure);
     expect(error).toMatchObject({
       name: "ReefRelayUnavailableError",
       message: "fetch failed",
