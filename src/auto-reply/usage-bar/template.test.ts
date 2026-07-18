@@ -13,6 +13,21 @@ vi.mock("../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({ warn: warnSpy }),
 }));
 
+const capturedWatchers = vi.hoisted(() => [] as Array<ReturnType<typeof import("node:fs").watch>>);
+
+vi.mock("node:fs", async (importOriginal) => {
+  const orig = await importOriginal<typeof import("node:fs")>();
+  const origWatch = orig.watch;
+  return {
+    ...orig,
+    watch: ((path: unknown, opts: unknown, cb: unknown) => {
+      const w = origWatch(path as never, opts as never, cb as never);
+      capturedWatchers.push(w);
+      return w;
+    }) as typeof orig.watch,
+  };
+});
+
 const tplA = { segments: [{ text: "A" }] };
 const tplB = { output: { default: [{ text: "B" }] } };
 
@@ -21,6 +36,7 @@ const cleanups: Array<() => void> = [];
 afterEach(() => {
   clearUsageBarTemplateCacheForTest();
   warnSpy.mockClear();
+  capturedWatchers.splice(0);
   for (const fn of cleanups.splice(0)) {
     fn();
   }
@@ -185,6 +201,36 @@ describe("loadUsageBarTemplate", () => {
       expect(loadUsageBarTemplate(paths[0])).toMatchObject({
         segments: [{ text: "v2-0" }],
       });
+    });
+
+    it("recovers after watcher error by clearing the dead watcher reference", async () => {
+      const path = tmpFile("t.json", JSON.stringify(tplA));
+
+      // Load valid template → creates a watcher in the cache.
+      expect(loadUsageBarTemplate(path)).toMatchObject(tplA);
+      expect(capturedWatchers.length).toBe(1);
+
+      // Write invalid JSON to trigger the change handler, which sets
+      // entry.template = undefined.
+      writeFileSync(path, "{ not json");
+      // Wait for the watcher to deliver the change event.
+      await new Promise((r) => setTimeout(r, 200));
+
+      // The template is now invalid — served as DEFAULT.
+      expect(loadUsageBarTemplate(path)).toBe(DEFAULT_USAGE_BAR_TEMPLATE);
+
+      // Simulate a transient watcher error.
+      // Without the fix: entry.watcher stays truthy → permanent DEFAULT.
+      // With the fix: entry.watcher is cleared → recovery on next access.
+      capturedWatchers[0]?.emit("error", new Error("simulated watcher error"));
+
+      // Write valid content to disk.
+      writeFileSync(path, JSON.stringify(tplB));
+
+      // With the fix, entry.watcher is undefined → cacheTemplateFile re-reads.
+      // Without the fix, entry.watcher is a closed FSWatcher (truthy) →
+      // returns undefined → DEFAULT.
+      expect(loadUsageBarTemplate(path)).toMatchObject(tplB);
     });
 
     it("does not evict when retrying the same key after a prior miss", () => {

@@ -156,6 +156,7 @@ function cacheTemplateFile(path: string): UsageBarTemplate | undefined {
       });
       watcher.on("error", () => {
         watcher.close();
+        entry.watcher = undefined;
       });
       entry.watcher = watcher;
     } catch {
