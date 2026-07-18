@@ -283,31 +283,18 @@ export const OpenClawSchemaShape = {
       prefs: z
         .strictObject({
           theme: z
-            .union([
-              z.literal("claw"),
-              z.literal("knot"),
-              z.literal("dash"),
-              z.literal("custom"),
-            ])
+            .union([z.literal("claw"), z.literal("knot"), z.literal("dash"), z.literal("custom")])
             .optional(),
           themeMode: z
             .union([z.literal("light"), z.literal("dark"), z.literal("system")])
             .optional(),
           textScale: z
-            .union([
-              z.literal(90),
-              z.literal(100),
-              z.literal(110),
-              z.literal(125),
-              z.literal(140),
-            ])
+            .union([z.literal(90), z.literal(100), z.literal(110), z.literal(125), z.literal(140)])
             .optional(),
           locale: z.string().max(20).optional(),
           chatShowThinking: z.boolean().optional(),
           chatShowToolCalls: z.boolean().optional(),
-          chatSendShortcut: z
-            .union([z.literal("enter"), z.literal("modifier-enter")])
-            .optional(),
+          chatSendShortcut: z.union([z.literal("enter"), z.literal("modifier-enter")]).optional(),
         })
         .optional(),
     })

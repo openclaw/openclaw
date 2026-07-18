@@ -99,10 +99,13 @@ describeControlUiE2e("Control UI Settings controls mocked Gateway E2E", () => {
           animations: "disabled",
           path: path.join(uiProofArtifactDir, "01-settings-view.png"),
         });
-        await overview.locator(".settings-section").first().screenshot({
-          animations: "disabled",
-          path: path.join(uiProofArtifactDir, "02-security-controls.png"),
-        });
+        await overview
+          .locator(".settings-section")
+          .first()
+          .screenshot({
+            animations: "disabled",
+            path: path.join(uiProofArtifactDir, "02-security-controls.png"),
+          });
       }
 
       await browserSwitch.click();

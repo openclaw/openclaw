@@ -26,7 +26,13 @@ export const NOTIFICATION_SECTION_KEYS = ["__notifications__"] as const;
 // sections render here, below the curated status rows (security.ts).
 export const SECURITY_SECTION_KEYS = ["security", "approvals"] as const;
 
-export const AUTOMATION_SECTION_KEYS = ["commands", "hooks", "bindings", "cron", "plugins"] as const;
+export const AUTOMATION_SECTION_KEYS = [
+  "commands",
+  "hooks",
+  "bindings",
+  "cron",
+  "plugins",
+] as const;
 
 export const INFRASTRUCTURE_SECTION_KEYS = [
   "gateway",

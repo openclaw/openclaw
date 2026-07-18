@@ -65,9 +65,7 @@ describe("findSettingsSearchBlocks", () => {
       value: null,
       uiHints: {},
     });
-    expect(security).toEqual([
-      expect.objectContaining({ routeId: "security", label: "Security" }),
-    ]);
+    expect(security).toEqual([expect.objectContaining({ routeId: "security", label: "Security" })]);
 
     const notifications = findSettingsSearchBlocks({
       query: "push notifications",

@@ -107,10 +107,7 @@ export function serverPrefsLocalPatch(
 }
 
 /** Synced-key delta between two local settings snapshots, for the push path. */
-export function changedServerUiPrefs(
-  previous: UiSettings,
-  next: UiSettings,
-): ServerUiPrefs | null {
+export function changedServerUiPrefs(previous: UiSettings, next: UiSettings): ServerUiPrefs | null {
   const prefs: ServerUiPrefs = {};
   if (next.theme !== previous.theme) {
     prefs.theme = next.theme;

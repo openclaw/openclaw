@@ -322,9 +322,8 @@ export async function executeSystemAgentOperation(
           const runPluginUninstall =
             ctx.deps?.runPluginUninstall ??
             (async (pluginId: string, pluginRuntime: RuntimeEnv) => {
-              const { runPluginUninstallCommand } = await import(
-                "../cli/plugins-uninstall-command.js"
-              );
+              const { runPluginUninstallCommand } =
+                await import("../cli/plugins-uninstall-command.js");
               await runPluginUninstallCommand(pluginId, {}, pluginRuntime);
             });
           await ctx.commit(async () => {

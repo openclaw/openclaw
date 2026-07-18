@@ -6,6 +6,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import { renderSessionsHubTabs } from "../../components/sessions-hub-tabs.ts";
 import {
   renderSettingsEmpty,
   renderSettingsPage,
@@ -13,7 +14,6 @@ import {
   renderSettingsSection,
   renderSettingsStatus,
 } from "../../components/settings-ui.ts";
-import { renderSessionsHubTabs } from "../../components/sessions-hub-tabs.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveEditableSnapshotConfig } from "../../lib/config/index.ts";

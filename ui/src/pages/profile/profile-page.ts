@@ -9,6 +9,7 @@ import {
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
+import { loadLocalUserIdentity, saveLocalUserIdentity } from "../../app/settings.ts";
 import { icons } from "../../components/icons.ts";
 import {
   renderSettingsEmpty,
@@ -27,16 +28,12 @@ import {
 import { buildSessionUsageDateParams, requestSessionsUsage } from "../../lib/sessions/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import {
-  loadLocalUserIdentity,
-  saveLocalUserIdentity,
-} from "../../app/settings.ts";
-import { renderIdentitySection } from "./identity-section.ts";
-import "../../styles/profile.css";
-import {
   decideUsageRefresh,
   USAGE_PAYLOAD_TTL_MS,
   type UsageRefreshReason,
 } from "../usage/refresh-policy.ts";
+import "../../styles/profile.css";
+import { renderIdentitySection } from "./identity-section.ts";
 import {
   buildHeatmap,
   buildInsights,
