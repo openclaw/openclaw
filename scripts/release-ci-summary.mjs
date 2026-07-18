@@ -22,6 +22,10 @@ const MANIFEST_ARTIFACT_ENTRY = "full-release-validation-manifest.json";
 const MAX_MANIFEST_ARTIFACT_ZIP_BYTES = 256 * 1024;
 const MAX_MANIFEST_JSON_BYTES = 128 * 1024;
 const MAX_MANIFEST_ENTRY_LIST_BYTES = 8 * 1024;
+// Release evidence lookups run during full release validation, so keep enough
+// headroom for GitHub latency while preventing one stalled read from consuming
+// the workflow budget.
+const GH_COMMAND_TIMEOUT_MS = 60_000;
 
 const CHILD_DISPATCHES = [
   {
@@ -89,13 +93,20 @@ const RERUN_GROUP_CHILD_KEYS = new Map([
   ["performance", ["productPerformance"]],
 ]);
 
-function gh(args) {
-  return execFileSync(resolvePlainGhBin(), args, {
+export function runReleaseCiGh(args, params = {}) {
+  const execFileSyncImpl = params.execFileSyncImpl ?? execFileSync;
+  return execFileSyncImpl(resolvePlainGhBin(), args, {
     encoding: "utf8",
     env: plainGhEnv(),
+    killSignal: "SIGKILL",
     maxBuffer: 64 * 1024 * 1024,
     stdio: ["ignore", "pipe", "pipe"],
+    timeout: GH_COMMAND_TIMEOUT_MS,
   });
+}
+
+function gh(args) {
+  return runReleaseCiGh(args);
 }
 
 function jsonGh(args) {
@@ -119,7 +130,9 @@ function downloadArtifactZip(artifactId, destination, repository = DEFAULT_REPO)
   try {
     execFileSync(resolvePlainGhBin(), artifactDownloadArgs(artifactId, repository), {
       env: plainGhEnv(),
+      killSignal: "SIGKILL",
       stdio: ["ignore", output, "pipe"],
+      timeout: GH_COMMAND_TIMEOUT_MS,
     });
   } finally {
     closeSync(output);
