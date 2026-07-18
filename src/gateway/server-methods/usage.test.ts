@@ -266,6 +266,14 @@ describe("gateway usage helpers", () => {
     expect(testApi.parseDays("nope")).toBeUndefined();
   });
 
+  it("parseDays rejects absurd day counts that would overflow Date arithmetic", () => {
+    expect(testApi.parseDays(1e300)).toBeUndefined();
+    expect(testApi.parseDays("1e300")).toBeUndefined();
+    expect(testApi.parseDays(Number.MAX_SAFE_INTEGER)).toBeUndefined();
+    // 100 years is still accepted (36600 days).
+    expect(testApi.parseDays(366 * 100)).toBe(36600);
+  });
+
   it("resolveDateRange uses explicit start/end as UTC when mode is missing (backward compatible)", () => {
     const result = testApi.resolveDateRange({
       startDate: "2026-02-01",
