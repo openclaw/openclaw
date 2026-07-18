@@ -181,6 +181,7 @@ function runPackageAcceptanceSummary(params: {
   advisory?: boolean;
   dockerArtifactResult?: string;
   dockerRegistryResult?: string;
+  telegramAdvisory?: boolean;
   telegramEnabled: boolean;
   telegramResult: string;
 }) {
@@ -199,6 +200,7 @@ function runPackageAcceptanceSummary(params: {
       PACKAGE_TELEGRAM_RESULT: params.telegramResult,
       PATH: process.env.PATH,
       RESOLVE_RESULT: "success",
+      TELEGRAM_ADVISORY: String(params.telegramAdvisory ?? false),
       TELEGRAM_ENABLED: String(params.telegramEnabled),
     },
   });
@@ -620,7 +622,7 @@ describe("package acceptance workflow", () => {
       cwd: existingDir,
     });
     const sourceArchive = readFileSync(sourceZip);
-    writeFileSync(corruptZip, sourceArchive.subarray(0, sourceArchive.length - 10));
+    writeFileSync(corruptZip, sourceArchive.subarray(0, -10));
 
     const compare = (left: string, right: string) =>
       spawnSync("python3", ["scripts/compare-release-evidence-zip.py", left, right], {
@@ -1261,7 +1263,10 @@ describe("package acceptance workflow", () => {
 
     expect(performanceStep.env?.RELEASE_PROFILE).toBe("${{ inputs.release_profile }}");
     expectTextToIncludeAll(performanceStep.run, [
+      "fail_on_regression=true",
       'if [[ "$RELEASE_PROFILE" == "beta" ]]',
+      "fail_on_regression=false",
+      '-f fail_on_regression="$fail_on_regression"',
       "Release impact: advisory",
       "advisory for beta",
     ]);
@@ -2385,7 +2390,7 @@ describe("package artifact reuse", () => {
     });
     expect(dockerAcceptanceJob.with).toMatchObject({
       allow_frozen_target_scenario_omissions:
-        "${{ inputs.allow_frozen_target_scenario_omissions }}",
+        "${{ inputs.allow_frozen_target_scenario_omissions || false }}",
     });
     expect(workflow).toContain(
       "live_repo_e2e_release_checks:\n    name: Run repo/live E2E validation\n    needs: [resolve_target]",
@@ -2423,6 +2428,9 @@ describe("package artifact reuse", () => {
       "published_upgrade_survivor_scenarios: ${{ needs.resolve_target.outputs.run_release_soak == 'true' && 'reported-issues' || '' }}",
     );
     expect(workflow).toContain("telegram_mode: mock-openai");
+    expect(packageAcceptanceJob.with).toMatchObject({
+      telegram_advisory: "${{ needs.resolve_target.outputs.release_profile == 'beta' }}",
+    });
     expect(workflow).not.toContain("telegram_scenarios:");
     expect(workflow).toContain("ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}");
     expect(workflow).toContain("ANTHROPIC_API_TOKEN: ${{ secrets.ANTHROPIC_API_TOKEN }}");
@@ -2920,6 +2928,27 @@ describe("package artifact reuse", () => {
     );
   });
 
+  it("allows beta callers to make only Telegram package acceptance advisory", () => {
+    const telegramResult = runPackageAcceptanceSummary({
+      telegramAdvisory: true,
+      telegramEnabled: true,
+      telegramResult: "failure",
+    });
+    const dockerResult = runPackageAcceptanceSummary({
+      dockerArtifactResult: "failure",
+      telegramAdvisory: true,
+      telegramEnabled: true,
+      telegramResult: "success",
+    });
+
+    expect(telegramResult.status).toBe(0);
+    expect(telegramResult.stdout).toContain(
+      "::warning::package_telegram ended with failure; package acceptance is advisory for this caller.",
+    );
+    expect(dockerResult.status).toBe(1);
+    expect(dockerResult.stdout).toContain("::error::docker_acceptance ended with failure");
+  });
+
   it("gives release build steps enough Node heap", () => {
     for (const workflowPath of [LIVE_E2E_WORKFLOW, RELEASE_CHECKS_WORKFLOW]) {
       const jobs = readWorkflow(workflowPath).jobs ?? {};
@@ -2984,8 +3013,10 @@ describe("package artifact reuse", () => {
       "Verify release checks accepted Tideclaw alpha advisory lanes",
       "release_checks_advisory_only",
       "release_check_blocking_job",
+      'if [[ "$RELEASE_PROFILE" == "beta" && "$1" == "Run package acceptance / Telegram package acceptance / "* ]]; then',
       'or (.name | startswith("Run QA Lab runtime parity tier ("))',
       'or .name == "Run QA Lab live Discord lane"',
+      'or (.name | startswith("Run package acceptance / Telegram package acceptance / ")))',
       "is a package-safety Tideclaw alpha release-check lane",
       '"Run package acceptance" | \\',
       '"Run package acceptance / "*)',
@@ -3168,7 +3199,7 @@ describe("package artifact reuse", () => {
 
   it("uses bounded Convex lease waits instead of GitHub concurrency for CI Telegram consumers", () => {
     const telegramJobs = [
-      [NPM_TELEGRAM_WORKFLOW, "run_package_telegram_e2e", "Run package Telegram E2E", "1800000"],
+      [NPM_TELEGRAM_WORKFLOW, "run_package_telegram_e2e", "Run package Telegram E2E", "600000"],
       [RELEASE_TELEGRAM_QA_WORKFLOW, "run_telegram", "Run Telegram live lane", "600000"],
       [QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_telegram", "Run Telegram live lane", "1800000"],
       [

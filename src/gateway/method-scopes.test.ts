@@ -191,6 +191,7 @@ describe("method scope resolution", () => {
       "operator.read",
       "operator.write",
       "operator.approvals",
+      "operator.questions",
       "operator.pairing",
       "operator.talk.secrets",
     ]);
@@ -389,6 +390,7 @@ describe("method scope resolution", () => {
       "operator.read",
       "operator.write",
       "operator.approvals",
+      "operator.questions",
       "operator.pairing",
       "operator.talk.secrets",
     ]);
@@ -507,6 +509,22 @@ describe("operator scope authorization", () => {
       missingScope: "operator.approvals",
     });
     expect(authorizeOperatorScopesForMethod(method, ["operator.approvals"])).toEqual({
+      allowed: true,
+    });
+  });
+
+  it.each([
+    "question.request",
+    "question.waitAnswer",
+    "question.resolve",
+    "question.get",
+    "question.list",
+  ])("requires questions scope for %s", (method) => {
+    expect(authorizeOperatorScopesForMethod(method, ["operator.write"])).toEqual({
+      allowed: false,
+      missingScope: "operator.questions",
+    });
+    expect(authorizeOperatorScopesForMethod(method, ["operator.questions"])).toEqual({
       allowed: true,
     });
   });
@@ -641,5 +659,6 @@ describe("CLI default operator scopes", () => {
   it("includes operator.talk.secrets for node-role device pairing approvals", async () => {
     const { CLI_DEFAULT_OPERATOR_SCOPES } = await import("./method-scopes.js");
     expect(CLI_DEFAULT_OPERATOR_SCOPES).toContain("operator.talk.secrets");
+    expect(CLI_DEFAULT_OPERATOR_SCOPES).toContain("operator.questions");
   });
 });

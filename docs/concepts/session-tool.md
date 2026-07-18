@@ -69,6 +69,8 @@ A **session** is local model context. A **conversation** is an exact external ad
 
 Use the shared `message` tool when you already have an explicit raw channel target or need a channel-specific action. Conversation references are scoped to the active agent and should be obtained through `conversations_list`, not constructed from session keys.
 
+In Code Mode, the conversation tools reuse their exact Gateway output contracts. A single `exec` cell can list addresses, select a returned `conversationRef`, and call `conversations_send` or `conversations_turn`; normal tool policy and approvals still apply to the nested calls.
+
 ## Sending cross-session messages
 
 `sessions_send` runs another session on the same Gateway and optionally waits for the response. Its `sessionKey`, `label`, or `agentId` selects local model context, not an external destination. The resulting reply can still be announced through the established requester or target delivery context; that existing behavior is unchanged. For exact external delivery, use a conversation tool or `message` with an explicit channel and target.

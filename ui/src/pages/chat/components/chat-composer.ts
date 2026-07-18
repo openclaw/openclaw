@@ -54,12 +54,12 @@ import {
   renderChatAttachmentMenu,
 } from "./chat-attachments.ts";
 import { renderChatPlanChecklist } from "./chat-plan-checklist.ts";
+import { createCodexQuestionCardProps } from "./chat-question-card.ts";
 import {
   renderChatVoiceError,
   renderMicrophoneActivity,
   voiceStatusLabel,
 } from "./chat-voice-activity.ts";
-import "./chat-question-card.ts";
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
 const FALLBACK_TOAST_DURATION_MS = 8000;
@@ -2233,16 +2233,15 @@ export function renderChatComposer(props: ChatComposerProps) {
         <div class="agent-chat__composer-status-stack">
           ${props.questionStatus
             ? html`<openclaw-chat-question
-                .props=${{
-                  status: props.questionStatus,
-                  disabled: !props.connected,
-                  onSubmit: (answers: Record<string, string>, onRejected: () => void) =>
+                .props=${createCodexQuestionCardProps(props.questionStatus, {
+                  disabled: !props.connected || !props.onQuestionSubmit,
+                  onSubmit: (answers, onRejected) =>
                     props.onQuestionSubmit?.(
                       props.questionStatus!.actionToken,
                       answers,
                       onRejected,
                     ),
-                }}
+                })}
               ></openclaw-chat-question>`
             : nothing}
           ${renderChatPlanChecklist(props.planStatus, {

@@ -34,7 +34,7 @@ function isSideAppendEntry(entry: SessionTreeEntry): boolean {
 
 function generateEntryId(byId: { has(id: string): boolean }): string {
   for (let i = 0; i < 100; i++) {
-    const id = uuidv7().slice(0, 8);
+    const id = uuidv7().slice(-8);
     if (!byId.has(id)) {
       return id;
     }

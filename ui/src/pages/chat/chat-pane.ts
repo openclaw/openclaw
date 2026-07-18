@@ -31,6 +31,16 @@ import {
 } from "../../app/context.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import {
+  createQuestionPromptState,
+  disposeQuestionPromptState,
+  handleQuestionPromptEvent,
+  listQuestionPrompts,
+  refreshPendingQuestionsWithRetry,
+  setQuestionPromptClient,
+  submitQuestionPrompt,
+  type QuestionPrompt,
+} from "../../app/question-prompt.ts";
+import {
   BROWSER_ANNOTATION_EVENT,
   type BrowserAnnotationDraft,
 } from "../../components/browser/browser-annotation.ts";
@@ -300,6 +310,11 @@ class ChatPane extends OpenClawLightDomElement {
 
   private readonly chatState = new ChatStateController<ChatPageHost>(this);
   private readonly transcript = new ChatTranscriptController(this);
+  private readonly questionPromptState = createQuestionPromptState(() => {
+    this.questionPrompts = listQuestionPrompts(this.questionPromptState);
+    this.requestUpdate();
+  });
+  private questionPrompts: QuestionPrompt[] = [];
   private state: ChatPageHost | undefined;
   /* Infinity until the first ResizeObserver tick so an unmeasured pane keeps
    * the wide side-by-side layout instead of flashing the stacked one. */
@@ -1610,6 +1625,9 @@ class ChatPane extends OpenClawLightDomElement {
     chatState.addCleanup(
       this.context.gateway.subscribeEvents((event) => {
         const state = this.state;
+        if (state) {
+          handleQuestionPromptEvent(this.questionPromptState, event);
+        }
         if (state && !parseCatalogSessionKey(state.sessionKey)) {
           if (event.event === "task.suggestion" && event.payload) {
             this.handleTaskSuggestionEvent(event.payload as TaskSuggestionEvent);
@@ -1686,6 +1704,7 @@ class ChatPane extends OpenClawLightDomElement {
     resetChatViewState(this.paneId);
     this.state = undefined;
     this.connectedClient = null;
+    disposeQuestionPromptState(this.questionPromptState);
     super.disconnectedCallback();
   }
 
@@ -1836,6 +1855,7 @@ class ChatPane extends OpenClawLightDomElement {
         markQueuedChatSendsWaitingForReconnect(state);
       }
       this.connectedClient = null;
+      setQuestionPromptClient(this.questionPromptState, null);
       state.realtimeTalkSession?.stop();
       state.realtimeTalkSession = null;
       state.realtimeTalkActive = false;
@@ -1876,6 +1896,8 @@ class ChatPane extends OpenClawLightDomElement {
         }
       };
       this.connectedClient = startupClient;
+      setQuestionPromptClient(this.questionPromptState, startupClient);
+      refreshPendingQuestionsWithRetry(this.questionPromptState, startupClient, clientIsCurrent);
       this.headerWorktreePaths.clear();
       this.headerBranches.clear();
       this.headerPlatform = null;
@@ -2279,6 +2301,13 @@ class ChatPane extends OpenClawLightDomElement {
       fallbackStatus: state.fallbackStatus,
       planStatus: state.planStatus,
       questionStatus: state.questionStatus,
+      gatewayQuestionPrompts: catalogKey ? [] : this.questionPrompts,
+      onGatewayQuestionChange: () => {
+        this.questionPrompts = [...this.questionPrompts];
+        this.requestUpdate();
+      },
+      onGatewayQuestionSubmit: (id, answers) =>
+        submitQuestionPrompt(this.questionPromptState, id, answers),
       messages: catalogKey ? this.catalogMessages : state.chatMessages,
       historyPagination:
         catalogKey || state.chatHistoryPagination?.hasMore || this.loadingOlder

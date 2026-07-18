@@ -19,7 +19,11 @@ concurrency:
 
 jobs:
   warm:
-    if: github.repository == 'openclaw/openclaw' && (github.event_name != 'workflow_run' || (github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main'))
+    # Cancelled main runs count as refresh triggers: under merge traffic every
+    # push cancels the prior run, so success-only gating starves the snapshot
+    # for hours (observed 15:34->18:45 stale window) while this job checks out
+    # main tip anyway. Failed runs still skip so a broken main cannot publish.
+    if: github.repository == 'openclaw/openclaw' && (github.event_name != 'workflow_run' || (github.event.workflow_run.event == 'push' && (github.event.workflow_run.conclusion == 'success' || github.event.workflow_run.conclusion == 'cancelled') && github.event.workflow_run.head_branch == 'main'))
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 30
     steps:

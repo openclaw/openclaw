@@ -1,0 +1,10 @@
+[[permission]]
+identifier = "allow-quickchat"
+description = "Enables Quick Chat identity, send, hide, and dashboard commands."
+commands.allow = [
+  "quickchat_hide",
+  "quickchat_identity",
+  "quickchat_ready",
+  "quickchat_send",
+  "quickchat_show_dashboard",
+]

@@ -300,6 +300,11 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Update Plan",
       detailKeys: ["explanation", "plan.0.step"],
     },
+    ask_user: {
+      emoji: "❓",
+      title: "Ask User",
+      detailKeys: ["questions.0.question"],
+    },
     spawn_task: {
       emoji: "✨",
       title: "Suggest Task",

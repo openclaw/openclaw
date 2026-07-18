@@ -128,6 +128,7 @@ export type FollowupRun = {
     runtimePolicySessionKey?: string;
     messageProvider?: string;
     clientCaps?: string[];
+    toolBindings?: Readonly<Record<string, unknown>>;
     chatType?: ChatType;
     agentAccountId?: string;
     groupId?: string;
