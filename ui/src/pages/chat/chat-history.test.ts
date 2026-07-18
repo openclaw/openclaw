@@ -1,7 +1,17 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { loadChatHistory, type ChatHistoryResult, type ChatState } from "./chat-history.ts";
+import {
+  loadChatHistory,
+  rewindChatHistory,
+  type ChatHistoryResult,
+  type ChatState,
+} from "./chat-history.ts";
+import {
+  cacheChatSessionSnapshot,
+  readChatMessagesFromCache,
+  type ChatMessageCache,
+} from "./session-message-cache.ts";
 import { handleAgentEvent, type PlanStatus, type ToolStreamEntry } from "./tool-stream.ts";
 
 type TestState = ChatState &
@@ -68,6 +78,95 @@ function activeHistory(
     },
   } satisfies ChatHistoryResult;
 }
+
+describe("rewindChatHistory", () => {
+  it("clears the cached snapshot, refetches, and returns the composer text", async () => {
+    const state = createState({
+      messages: [{ role: "assistant", content: "kept prefix" }],
+    }) as TestState & {
+      chatMessagesBySession: ChatMessageCache;
+      handleChatDraftChange: ReturnType<typeof vi.fn>;
+      sessions: { rewind: ReturnType<typeof vi.fn> };
+    };
+    state.sessionKey = "agent:main:rewind";
+    state.chatMessages = [{ role: "assistant", content: "stale tail" }];
+    state.chatMessagesBySession = new Map();
+    state.handleChatDraftChange = vi.fn((next: string) => {
+      state.chatMessage = next;
+    });
+    state.sessions = {
+      rewind: vi.fn().mockResolvedValue({ editorText: "edit this" }),
+      setModelOverride: vi.fn(),
+    };
+    cacheChatSessionSnapshot(
+      state.chatMessagesBySession,
+      state,
+      { sessionKey: state.sessionKey },
+      {
+        messages: state.chatMessages,
+        pagination: { hasMore: false, completeSnapshot: true },
+        sessionId: "old-session",
+      },
+    );
+
+    const result = await rewindChatHistory(state as never, "user-entry");
+
+    expect(state.sessions.rewind).toHaveBeenCalledWith(
+      state.sessionKey,
+      "user-entry",
+      expect.any(Object),
+    );
+    expect(result).toEqual({ editorText: "edit this" });
+    expect(state.chatMessage).toBe("edit this");
+    expect(state.chatMessages).toEqual([{ role: "assistant", content: "kept prefix" }]);
+    expect(
+      readChatMessagesFromCache(state.chatMessagesBySession, state, {
+        sessionKey: state.sessionKey,
+      }),
+    ).toEqual([{ role: "assistant", content: "kept prefix" }]);
+  });
+
+  it("invalidates the source cache without overwriting a newly selected draft", async () => {
+    const sourceSessionKey = "agent:main:rewind-source";
+    const state = createState({
+      messages: [{ role: "assistant", content: "source prefix" }],
+    }) as TestState & {
+      chatMessagesBySession: ChatMessageCache;
+      handleChatDraftChange: ReturnType<typeof vi.fn>;
+      sessions: { rewind: ReturnType<typeof vi.fn> };
+    };
+    state.sessionKey = sourceSessionKey;
+    state.chatMessagesBySession = new Map();
+    state.handleChatDraftChange = vi.fn();
+    state.sessions = {
+      rewind: vi.fn().mockImplementation(async () => {
+        state.sessionKey = "agent:main:new-selection";
+        return { editorText: "source draft" };
+      }),
+      setModelOverride: vi.fn(),
+    };
+    cacheChatSessionSnapshot(
+      state.chatMessagesBySession,
+      state,
+      { sessionKey: sourceSessionKey },
+      {
+        messages: [{ role: "assistant", content: "stale source tail" }],
+        pagination: { hasMore: false, completeSnapshot: true },
+        sessionId: "old-source-session",
+      },
+    );
+
+    const result = await rewindChatHistory(state as never, "user-entry");
+
+    expect(
+      readChatMessagesFromCache(state.chatMessagesBySession, state, {
+        sessionKey: sourceSessionKey,
+      }),
+    ).toEqual([]);
+    expect(result).toBeNull();
+    expect(state.handleChatDraftChange).not.toHaveBeenCalled();
+  });
+});
 
 describe("chat history plan replay", () => {
   const retainedPlan = {

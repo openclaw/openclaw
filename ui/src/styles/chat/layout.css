@@ -1022,6 +1022,15 @@ openclaw-chat-page {
   outline: none;
 }
 
+.chat-reply-context-menu button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.chat-reply-context-menu button:disabled:hover {
+  background: none;
+}
+
 .chat-reply-context-menu button svg {
   width: 16px;
   height: 16px;

@@ -157,6 +157,11 @@
   pointer-events: auto;
 }
 
+.chat-group:hover .chat-group-footer button:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
 .chat-group-footer button:hover,
 .chat-message-actions-row button:hover {
   opacity: 1 !important;

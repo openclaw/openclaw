@@ -93,6 +93,47 @@ function sessionChangedEvent(key: string): GatewayEventFrame {
 }
 
 describe("createSessionCapability", () => {
+  it("returns a committed rewind result after the connection is replaced", async () => {
+    const committed = deferred<{ editorText?: string }>();
+    const request = vi.fn((method: string) => {
+      if (method === "sessions.rewind") {
+        return committed.promise;
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const harness = createGatewayHarness(client);
+    const sessions = createSessionCapability(harness.gateway);
+
+    const pending = sessions.rewind("agent:main:main", "user-entry");
+    harness.publish(false);
+    committed.resolve({ editorText: "edit me" });
+
+    await expect(pending).resolves.toEqual({ editorText: "edit me" });
+    sessions.dispose();
+  });
+
+  it("returns a committed fork result when the replacement refresh fails", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.fork") {
+        return { sessionKey: "agent:main:dashboard:forked", editorText: "edit me" };
+      }
+      if (method === "sessions.list") {
+        throw new Error("refresh failed");
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway } = createGatewayHarness(client);
+    const sessions = createSessionCapability(gateway);
+
+    await expect(sessions.forkAtMessage("agent:main:main", "user-entry")).resolves.toEqual({
+      sessionKey: "agent:main:dashboard:forked",
+      editorText: "edit me",
+    });
+    sessions.dispose();
+  });
+
   it("allows an advertised group catalog load to be retried after failure", async () => {
     let groupsCalls = 0;
     const request = vi.fn(async (method: string) => {
