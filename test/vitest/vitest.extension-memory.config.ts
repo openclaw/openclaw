@@ -18,6 +18,7 @@ export function createExtensionMemoryVitestConfig(
     {
       dir: "extensions",
       env,
+      includeOpenClawRuntimeSetup: false,
       isolate: true,
       name: "extension-memory",
       passWithNoTests: true,
