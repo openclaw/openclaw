@@ -998,11 +998,11 @@ extension RootTabs {
                 eyebrow: "\(gatewayLabel) online",
                 title: "Command center",
                 subtitle:
-                "Use Chat for code work, Talk for realtime voice, and gateway tools for approved device actions.",
+                "Use Chat for code work or realtime voice, plus gateway tools for approved device actions.",
                 gatewayLabel: gatewayLabel,
                 activeAgentName: self.appModel.activeAgentName,
                 activeAgentBadge: agents.first(where: { $0.isActive })?.badge ?? "OC",
-                activeAgentCaption: "Routes chat and talk",
+                activeAgentCaption: "Routes chat and voice",
                 agentCount: agents.count,
                 agents: Array(agents.prefix(6)),
                 footer: "OpenClaw only runs phone-side capabilities while the app is connected and permitted.")
