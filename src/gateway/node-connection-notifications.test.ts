@@ -162,7 +162,9 @@ describe("node connection notification routing", () => {
     };
     const desk = node("desk", { lastActiveAtMs: 100 });
     let connected = [oldSource, desk];
-    const invoke = vi.fn(async () => ({ ok: true }));
+    const invoke = vi.fn(async (_params: { nodeId: string; params: { body: string } }) => ({
+      ok: true,
+    }));
     const registryValue = registry({ listConnected: () => connected, invoke });
 
     schedule(registryValue, oldSource);
