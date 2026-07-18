@@ -247,7 +247,9 @@ export interface WebSocketLike {
     listener: (event: { error?: unknown; message?: string }) => void,
   ): void;
   close(): void;
-  terminate?(): void;
+  // Reconnect must be able to force a stalled generation toward its real close
+  // event without allowing the replacement to overlap it.
+  terminate(): void;
 }
 
 interface ReefInboxConnectionOptions {
@@ -472,9 +474,6 @@ export class ReefInboxConnection {
         // Do not let a stale generation observe a later channel abort while
         // its asynchronous WebSocket close handshake is still in flight.
         closeTimer = setTimeout(() => {
-          if (!socket.terminate) {
-            return;
-          }
           try {
             socket.terminate();
           } catch {

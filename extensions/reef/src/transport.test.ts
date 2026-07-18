@@ -1017,46 +1017,6 @@ describe("ReefInboxConnection reconnect lifecycle", () => {
     abort.abort();
     await running;
   });
-
-  it("waits for a real close when a stalled generation cannot be terminated", async () => {
-    vi.useFakeTimers();
-    const stalledSocket = new ControlledSocket(false);
-    const closeOnlySocket = {
-      addEventListener: stalledSocket.addEventListener.bind(stalledSocket),
-      close: () => stalledSocket.close(),
-    } as unknown as WebSocketLike;
-    const sockets: WebSocketLike[] = [
-      closeOnlySocket,
-      new ControlledSocket() as unknown as WebSocketLike,
-    ];
-    let socketIndex = 0;
-    const abort = new AbortController();
-    const client = new ReefTransportClient(
-      "https://relay.example",
-      "alice",
-      keys,
-      async () => Response.json({ entries: [], cursor: 0 }),
-      () => ts,
-    );
-    const inbox = new ReefInboxConnection(
-      client,
-      async () => {},
-      () => sockets[socketIndex++]!,
-    );
-
-    const running = inbox.start(abort.signal);
-    stalledSocket.emit("message", { data: "{" });
-
-    await vi.advanceTimersByTimeAsync(5_250);
-    expect(socketIndex).toBe(1);
-
-    stalledSocket.emit("close");
-    await vi.advanceTimersByTimeAsync(250);
-    expect(socketIndex).toBe(2);
-
-    abort.abort();
-    await running;
-  });
 });
 
 describe("ReefInboxConnection response frame bounds", () => {
