@@ -19,7 +19,7 @@ import type { SidebarContent } from "./chat-sidebar.ts";
 export { WIDGET_PROMPT_EVENT };
 export type { WidgetPromptEventDetail };
 
-export type WidgetCardOptions = {
+type WidgetCardOptions = {
   onOpenSidebar?: (content: SidebarContent) => void;
   rawText?: string | null;
   canvasPluginSurfaceUrl?: string | null;
@@ -278,7 +278,7 @@ function renderWidgetContent(
   return nothing;
 }
 
-export function renderWidgetCard(
+function renderWidgetCard(
   preview: ToolPreview | undefined,
   surface: "chat_tool" | "chat_message" | "sidebar",
   options?: WidgetCardOptions,

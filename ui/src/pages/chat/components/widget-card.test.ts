@@ -2,13 +2,13 @@
 
 import { render } from "lit";
 import { describe, expect, it } from "vitest";
-import { renderWidgetCard } from "./widget-card.ts";
+import { renderToolPreview } from "./widget-card.ts";
 
 describe("widget-card", () => {
   it("dispatches canvas HTML and MCP App content and ignores unknown kinds", () => {
     const canvas = document.createElement("div");
     render(
-      renderWidgetCard(
+      renderToolPreview(
         {
           kind: "canvas",
           surface: "assistant_message",
@@ -25,7 +25,7 @@ describe("widget-card", () => {
 
     const app = document.createElement("div");
     render(
-      renderWidgetCard(
+      renderToolPreview(
         {
           kind: "canvas",
           surface: "assistant_message",
@@ -43,7 +43,7 @@ describe("widget-card", () => {
     expect(app.querySelector("iframe")).toBeNull();
 
     const unknown = document.createElement("div");
-    render(renderWidgetCard({ kind: "unknown" } as never, "chat_message"), unknown);
+    render(renderToolPreview({ kind: "unknown" } as never, "chat_message"), unknown);
     expect(unknown.childElementCount).toBe(0);
   });
 });
