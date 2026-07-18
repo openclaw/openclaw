@@ -101,10 +101,18 @@ export class GatewayConnection {
       }
       this.ctx.abortSignal.addEventListener("abort", stop, { once: true });
     });
+    // Observe shutdown immediately: abort can reject while the initial connection is still pending.
+    const stoppedResult = stopped.then(
+      () => ({ ok: true as const }),
+      (error: unknown) => ({ ok: false as const, error }),
+    );
     if (!this.isAborted) {
       await this.connect();
     }
-    await stopped;
+    const result = await stoppedResult;
+    if (!result.ok) {
+      throw result.error;
+    }
   }
 
   private restoreSession(): void {

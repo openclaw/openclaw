@@ -314,6 +314,53 @@ describe("GatewayConnection disconnect status", () => {
     expect(flushRefIndex).toHaveBeenCalledTimes(1);
   });
 
+  it("observes shutdown rejection while the initial connection is pending", async () => {
+    vi.useRealTimers();
+    const cleanupError = new Error("ingress stop failed");
+    const ws = new FakeWebSocket();
+    let resolveSocket!: (socket: FakeWebSocket) => void;
+    createQQWSClientMock.mockReturnValue(
+      new Promise<FakeWebSocket>((resolve) => {
+        resolveSocket = resolve;
+      }),
+    );
+    const controller = new AbortController();
+    const connection = new GatewayConnection({
+      account: makeAccount(),
+      abortSignal: controller.signal,
+      cfg: {},
+      runtime: {} as GatewayPluginRuntime,
+      adapters: {} as EngineAdapters,
+      handleMessage: async () => {},
+      createIngressMonitor: () => ({
+        receive: vi.fn(async () => {}),
+        stop: vi.fn(async () => {
+          throw cleanupError;
+        }),
+        waitForIdle: vi.fn(async () => {}),
+      }),
+    });
+    const unhandledRejections: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandledRejections.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandledRejection);
+
+    try {
+      const started = connection.start();
+      await vi.waitFor(() => expect(createQQWSClientMock).toHaveBeenCalledTimes(1));
+
+      controller.abort();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(unhandledRejections).toStrictEqual([]);
+      resolveSocket(ws);
+      await expect(started).rejects.toBe(cleanupError);
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection);
+    }
+  });
+
   it("terminates the socket when durable admission fails closed", async () => {
     const admissionError = new QQBotIngressAdmissionError("sqlite unavailable");
     const receive = vi.fn(async () => {

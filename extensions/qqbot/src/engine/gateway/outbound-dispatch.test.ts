@@ -942,6 +942,55 @@ describe("dispatchOutbound", () => {
     }
   });
 
+  it("keeps durable settlement with a dispatch that outlives the response watchdog", async () => {
+    vi.useFakeTimers();
+    try {
+      const lifecycle = {
+        abortSignal: new AbortController().signal,
+        onAdopted: vi.fn(async () => {}),
+        onDeferred: vi.fn(),
+        onAdoptionFinalizing: vi.fn(),
+        onAbandoned: vi.fn(async () => {}),
+      };
+      const inbound = makeInbound();
+      inbound.event.turnAdoptionLifecycle = lifecycle;
+      const runtime = makeRuntime({
+        onDeliver: async (deliver) => {
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 301_000);
+          });
+          await deliver({ text: "late durable answer" }, { kind: "block" });
+        },
+      });
+      let settled = false;
+      const dispatchPromise = dispatchOutbound(inbound, {
+        runtime,
+        cfg: {},
+        account,
+      }).finally(() => {
+        settled = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(300_000);
+
+      expect(settled).toBe(false);
+      expect(lifecycle.onAbandoned).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await dispatchPromise;
+
+      expect(sendTextMock).toHaveBeenCalledWith(
+        expect.anything(),
+        "late durable answer",
+        expect.anything(),
+        expect.anything(),
+      );
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
   it("marks voice-only inbound as audio without adding voice paths to MediaPaths", async () => {
     let finalized: Record<string, unknown> | undefined;
     const runtime = makeRuntime({ onFinalize: (ctx) => (finalized = ctx) });

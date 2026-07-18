@@ -283,10 +283,11 @@ export async function dispatchOutbound(
   // a longer configured ceiling (e.g. slow local ollama models) is not
   // silently undercut by a plugin-local 5-minute cap.
   const responseTimeoutMs = resolveResponseTimeoutMs(cfg);
+  const responseTimeoutError = new Error("Response timeout");
   const timeoutPromise = new Promise<void>((_, reject) => {
     timeoutId = setTimeout(() => {
       if (!hasResponse) {
-        reject(new Error("Response timeout"));
+        reject(responseTimeoutError);
       }
     }, responseTimeoutMs);
   });
@@ -707,7 +708,11 @@ export async function dispatchOutbound(
       clearTimeout(timeoutId);
       timeoutId = null;
     }
-    if (event.turnAdoptionLifecycle) {
+    if (error === responseTimeoutError && event.turnAdoptionLifecycle) {
+      // The watchdog cannot cancel a live agent turn. Keep durable settlement with that turn;
+      // releasing here would let a retry overlap its later replies and adoption callback.
+      await dispatchPromise;
+    } else if (event.turnAdoptionLifecycle) {
       throw error;
     }
   } finally {
