@@ -478,5 +478,26 @@ describe("dispatchAgentHook trust handling", () => {
       await waitForFast(() => expect(logHooksInfoMock).toHaveBeenCalledTimes(2));
       expect(started).toEqual([0, 1]);
     });
+
+    it("settles a failed same-session hook so the chain advances to the next", async () => {
+      const started: number[] = [];
+      let failed = false;
+
+      runCronIsolatedAgentTurnMock.mockImplementation(async () => {
+        const idx = started.length;
+        started.push(idx);
+        if (!failed) {
+          failed = true;
+          throw new Error("handler exploded");
+        }
+        return { status: "ok" as const, summary: "done", delivered: false };
+      });
+
+      dispatchAgentHook(buildAgentPayload("First"));
+      dispatchAgentHook(buildAgentPayload("Second"));
+
+      // Chain survives the first hook's failure and advances to the second.
+      await waitForFast(() => expect(started.length).toBe(2));
+    });
   });
 });
