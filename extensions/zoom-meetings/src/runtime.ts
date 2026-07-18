@@ -230,6 +230,7 @@ export class ZoomMeetingsRuntime {
               !replacePendingJoin && health?.meetingEnded !== true && health?.bridgeClosed !== true,
           };
         }
+        return undefined;
       },
       ensureRealtimeBridge: async (session) => await this.#ensureRealtimeBridge(session),
       captureTranscript: async (session, options) =>
