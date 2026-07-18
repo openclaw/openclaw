@@ -2097,7 +2097,7 @@ export function renderChatComposer(props: ChatComposerProps) {
       event.preventDefault();
       closeSlashMenuIfNeeded(state, requestUpdate);
       commitComposerDraft(props, target.value);
-      props.onSend(target.value);
+      props.onSend();
       syncComposerDraftAfterSend(target);
       return;
     }

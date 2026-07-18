@@ -3046,7 +3046,8 @@ describe("chat slash menu accessibility", () => {
     keydownComposer(container, "Enter");
 
     expect(onDraftChange).toHaveBeenCalledWith("/stop");
-    expect(onSend).toHaveBeenCalledWith("/stop");
+    expect(onSend).toHaveBeenCalledOnce();
+    expect(onSend.mock.calls[0]).toEqual([]);
   });
 
   it("respects the configured modifier shortcut for exact stop commands", () => {
@@ -3060,7 +3061,8 @@ describe("chat slash menu accessibility", () => {
     expect(onSend).not.toHaveBeenCalled();
 
     keydownComposer(container, "Enter", { ctrlKey: true });
-    expect(onSend).toHaveBeenCalledWith("/stop");
+    expect(onSend).toHaveBeenCalledOnce();
+    expect(onSend.mock.calls[0]).toEqual([]);
   });
 
   it("uses the normal draft send path for idle natural stop aliases", () => {
@@ -3095,7 +3097,8 @@ describe("chat slash menu accessibility", () => {
     inputDraft(container, "wait");
     keydownComposer(container, "Enter");
 
-    expect(onSend).toHaveBeenCalledWith("wait");
+    expect(onSend).toHaveBeenCalledOnce();
+    expect(onSend.mock.calls[0]).toEqual([]);
   });
 
   it("commits local draft input on blur", () => {

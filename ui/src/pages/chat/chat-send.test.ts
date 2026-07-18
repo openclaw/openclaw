@@ -7691,6 +7691,8 @@ describe("handleAbortChat", () => {
         sessionKey: "agent:main",
       });
       expect(host.chatMessage).toBe("");
+      expect(navigateChatInputHistory(host, "up")).toBe(true);
+      expect(host.chatMessage).toBe(message);
     },
   );
 
