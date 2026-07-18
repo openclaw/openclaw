@@ -417,6 +417,7 @@ async function inspectRecoverableTab<
             captureCaptions: params.adapter.browser.captions.enabled(params.mode),
             guestName: params.config.guestName,
             readOnly: params.readOnly,
+            waitForInCallMs: params.config.waitForInCallMs,
           }),
         },
         timeoutMs: Math.min(params.timeoutMs, 10_000, remainingMs),
