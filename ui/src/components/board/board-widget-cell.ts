@@ -31,7 +31,7 @@ export type BoardWidgetCellCallbacks = {
   focusChanged: (name: string) => void;
 };
 
-export class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
+class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
   @property({ attribute: false }) widget?: BoardWidget;
   @property({ attribute: false }) rect?: BoardGridRect;
   @property({ attribute: false }) tabs: readonly BoardTab[] = [];
