@@ -768,6 +768,29 @@ export function recomputeNextRuns(state: CronServiceState): boolean {
 }
 
 /**
+ * Rebuilds the in-memory catch-up deferral marker set from persisted job state
+ * after a store (re)load. Without this, a restart between the deferral write
+ * and the deferred slot firing starts with an empty marker set, and the first
+ * maintenance pass repairs the staggered slot to the next natural run,
+ * silently dropping the catch-up execution (#102236).
+ */
+export function rehydratePendingCatchupDeferrals(state: CronServiceState): void {
+  for (const job of state.store?.jobs ?? []) {
+    const deferredUntil = job.state?.catchupDeferredUntilMs;
+    if (typeof deferredUntil !== "number") {
+      continue;
+    }
+    // The persisted marker is only meaningful while the deferred slot is still
+    // the scheduled run; any other nextRunAtMs means the job was edited or ran.
+    if (isJobEnabled(job) && job.state.nextRunAtMs === deferredUntil) {
+      state.pendingCatchupDeferralJobIds.add(job.id);
+    } else {
+      delete job.state.catchupDeferredUntilMs;
+    }
+  }
+}
+
+/**
  * Maintenance-only version of recomputeNextRuns that handles disabled jobs
  * and stuck markers, but does NOT recompute nextRunAtMs for enabled jobs
  * with existing values. Used during timer ticks when no due jobs were found
@@ -816,6 +839,7 @@ export function recomputeNextRunsForMaintenance(
         const nextRun = job.state.nextRunAtMs;
         if (hasScheduledNextRunAtMs(nextRun) && now >= nextRun) {
           deferralIds.delete(job.id);
+          delete job.state.catchupDeferredUntilMs;
           changed = true;
         }
       }

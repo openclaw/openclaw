@@ -315,6 +315,10 @@ export type CronJobState = {
   nextRunAtMs?: number;
   /** Durable pre-admission reservation. Cleared on restart without recording a run. */
   queuedAtMs?: number;
+  /** Startup overflow catch-up slot this job was deferred to. Persisted so the
+   * deferral marker survives a restart before the slot fires; otherwise the
+   * next start()'s maintenance pass advances the slot and drops the run. */
+  catchupDeferredUntilMs?: number;
   runningAtMs?: number;
   lastRunAtMs?: number;
   /** Preferred execution outcome field. */

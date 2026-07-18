@@ -1179,12 +1179,14 @@ function applyOutcomeToStoredJob(
       triggerEval: result.triggerEval,
     });
     state.pendingCatchupDeferralJobIds.delete(job.id);
+    delete job.state.catchupDeferredUntilMs;
     return undefined;
   }
 
   const shouldDelete = applyJobResult(state, job, result);
   applyTriggerRunResult(job, result);
   state.pendingCatchupDeferralJobIds.delete(job.id);
+  delete job.state.catchupDeferredUntilMs;
 
   emitJobFinished(state, job, result, result.startedAt);
 
@@ -2370,11 +2372,15 @@ async function applyStartupCatchupOutcomes(
           }
           if (typeof deferred.delayMs === "number") {
             job.state.nextRunAtMs = baseNow + deferred.delayMs + offset - staggerMs;
+            // Persist the deferred slot so a restart before it fires can
+            // rebuild the in-memory marker instead of repairing the slot away.
+            job.state.catchupDeferredUntilMs = job.state.nextRunAtMs;
             state.pendingCatchupDeferralJobIds.add(jobId);
             offset += staggerMs;
             continue;
           }
           job.state.nextRunAtMs = baseNow + offset;
+          job.state.catchupDeferredUntilMs = job.state.nextRunAtMs;
           state.pendingCatchupDeferralJobIds.add(jobId);
           offset += staggerMs;
         }

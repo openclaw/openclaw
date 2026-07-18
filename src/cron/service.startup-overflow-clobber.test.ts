@@ -93,6 +93,66 @@ describe("CronService startup catch-up repair scoping", () => {
     await store.cleanup();
   });
 
+  it("keeps the overflow catch-up deferral across a restart before the deferred slot fires", async () => {
+    const store = await makeStorePath();
+    const startNow = Date.parse("2025-12-13T17:00:00.000Z");
+    let now = startNow;
+    const tomorrowNaturalSlot = Date.parse("2025-12-14T09:00:00.000Z");
+
+    await saveCronStore(store.storePath, {
+      version: 1,
+      jobs: [
+        createHourlyCronJob("hourly-0", Date.parse("2025-12-13T03:00:00.000Z")),
+        createHourlyCronJob("hourly-1", Date.parse("2025-12-13T04:00:00.000Z")),
+        createHourlyCronJob("hourly-2", Date.parse("2025-12-13T05:00:00.000Z")),
+        createHourlyCronJob("hourly-3", Date.parse("2025-12-13T06:00:00.000Z")),
+        createHourlyCronJob("hourly-4", Date.parse("2025-12-13T07:00:00.000Z")),
+        createDailyCronJob("daily-overflow", Date.parse("2025-12-13T09:00:00.000Z")),
+      ],
+    });
+
+    const makeState = () =>
+      createCronServiceState({
+        cronEnabled: true,
+        storePath: store.storePath,
+        log: noopLogger,
+        nowMs: () => now,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+      });
+
+    const firstProcess = makeState();
+    await start(firstProcess);
+    expect(
+      firstProcess.store?.jobs.find((job) => job.id === "daily-overflow")?.state.nextRunAtMs,
+    ).toBe(startNow + 5_000);
+    firstProcess.stopped = true;
+
+    // Restart before the deferred slot fires: a fresh process starts with an
+    // empty in-memory marker set and must rebuild it from the persisted store.
+    now = startNow + 3_000;
+    const secondProcess = makeState();
+    await start(secondProcess);
+
+    const deferred = secondProcess.store?.jobs.find((job) => job.id === "daily-overflow");
+    expect(secondProcess.pendingCatchupDeferralJobIds.has("daily-overflow")).toBe(true);
+    expect(deferred?.state.nextRunAtMs).toBe(startNow + 5_000);
+    expect(deferred?.state.nextRunAtMs).not.toBe(tomorrowNaturalSlot);
+
+    now = startNow + 5_005;
+    await onTimer(secondProcess);
+
+    const completed = secondProcess.store?.jobs.find((job) => job.id === "daily-overflow");
+    expect(completed?.state.lastRunStatus).toBe("ok");
+    expect(completed?.state.nextRunAtMs).toBe(tomorrowNaturalSlot);
+    expect(completed?.state.catchupDeferredUntilMs).toBeUndefined();
+    expect(secondProcess.pendingCatchupDeferralJobIds.has("daily-overflow")).toBe(false);
+
+    secondProcess.stopped = true;
+    await store.cleanup();
+  });
+
   it("still repairs a stale future cron slot on start() when no jobs were deferred", async () => {
     const store = await makeStorePath();
     const startNow = Date.parse("2025-12-13T17:00:00.000Z");

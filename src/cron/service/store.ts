@@ -11,7 +11,7 @@ import {
   type QuarantinedCronConfigJob,
 } from "../store.js";
 import type { CronJob, CronStoreFile } from "../types.js";
-import { recomputeNextRuns } from "./jobs.js";
+import { recomputeNextRuns, rehydratePendingCatchupDeferrals } from "./jobs.js";
 import { emit, type CronServiceState } from "./state.js";
 
 type PersistOptions = {
@@ -228,6 +228,9 @@ export async function ensureLoaded(
   };
   state.durableNextRunAtMsByJobId = durableNextRunAtMsByJobId;
   state.storeLoadedAtMs = state.deps.nowMs();
+  // A fresh process starts with an empty marker set; rebuild it from persisted
+  // job state before any maintenance pass can repair deferred catch-up slots.
+  rehydratePendingCatchupDeferrals(state);
 
   if (quarantinedConfigJobs.length > 0) {
     state.pendingQuarantineConfigJobs = quarantinedConfigJobs;
