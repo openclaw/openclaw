@@ -564,6 +564,13 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
             codingTrailing: html`${this.renderSessionCatalogs(navigationState)}`,
             codingTrailingPresent: this.sessionCatalogs.length > 0,
           })}
+          <button
+            type="button"
+            class="sidebar-view-archived"
+            @click=${() => this.onNavigate?.("sessions", { search: "?showArchived=1" })}
+          >
+            ${icons.archive} ${t("sessionsView.viewArchived")}
+          </button>
         </div>
       </section>
     `;

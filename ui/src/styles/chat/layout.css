@@ -1811,6 +1811,21 @@ openclaw-chat-page {
   padding: var(--chat-box-inset);
 }
 
+.agent-chat__disabled-reason {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 8px var(--chat-box-inset) 0;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.4;
+}
+
+.agent-chat__disabled-reason .btn {
+  flex: 0 0 auto;
+}
+
 .agent-chat__composer-footer {
   display: flex;
   align-items: center;

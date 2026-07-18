@@ -1650,6 +1650,30 @@ html.openclaw-native-macos
   color: var(--text);
 }
 
+.sidebar-view-archived {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: -2px 10px 2px;
+  padding: 5px 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  text-align: left;
+}
+
+.sidebar-view-archived:hover,
+.sidebar-view-archived:focus-visible {
+  color: var(--text);
+}
+
+.sidebar-view-archived svg {
+  width: 12px;
+  height: 12px;
+  stroke: currentColor;
+}
+
 .sidebar-recent-session--dragging {
   opacity: 0.45;
 }

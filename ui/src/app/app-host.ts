@@ -48,6 +48,7 @@ import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../lib/plugin-activation.ts";
 import { searchForSession } from "../lib/sessions/index.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
+import "../lib/toast.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { findSettingsSearchBlocks } from "../pages/config/settings-search.ts";
@@ -1516,6 +1517,7 @@ class OpenClawShell extends OpenClawLightDomElement {
               .context=${context}
             ></openclaw-onboarding-memory-import>`
           : nothing}
+        <openclaw-toast-host></openclaw-toast-host>
       </div>
     `;
   }
