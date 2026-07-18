@@ -3377,7 +3377,7 @@ describe("startGatewayConfigReloader", () => {
     await harness.reloader.stop();
   });
 
-  it("preserves a pending restart intent while coalescing a newer write", async () => {
+  const expectPendingRestartSurvivesCoalescing = async (emitWatcherEcho: boolean) => {
     let releasePluginRead = () => {};
     let recordPluginReadStarted: (() => void) | undefined;
     const pluginReadStarted = new Promise<void>((resolve) => {
@@ -3405,6 +3405,9 @@ describe("startGatewayConfigReloader", () => {
       ...makeZeroDebounceHookWrite("pending-b"),
       afterWrite: { mode: "restart", reason: "pending B requires restart" },
     });
+    if (emitWatcherEcho) {
+      harness.watcher.emit("change");
+    }
     const latestConfig = {
       gateway: { reload: { debounceMs: 0 } },
       hooks: { enabled: false },
@@ -3424,6 +3427,14 @@ describe("startGatewayConfigReloader", () => {
     expect(harness.onHotReload).not.toHaveBeenCalled();
 
     await harness.reloader.stop();
+  };
+
+  it("preserves a pending restart intent while coalescing a newer write", async () => {
+    await expectPendingRestartSurvivesCoalescing(false);
+  });
+
+  it("preserves a pending restart intent across a watcher echo", async () => {
+    await expectPendingRestartSurvivesCoalescing(true);
   });
 
   it("preserves in-process intent through a transient missing-file retry", async () => {
