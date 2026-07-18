@@ -128,10 +128,11 @@ describe("Synology Chat user_list loopback", () => {
     const timeoutMs = 250;
     const nativeSetTimeout = globalThis.setTimeout;
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    timeoutSpy.mockImplementationOnce(
-      ((callback: (...args: unknown[]) => void, _delay?: number, ...args: unknown[]) =>
-        nativeSetTimeout(callback, timeoutMs, ...args)) as typeof setTimeout,
-    );
+    timeoutSpy.mockImplementationOnce(((
+      callback: (...args: unknown[]) => void,
+      _delay?: number,
+      ...args: unknown[]
+    ) => nativeSetTimeout(callback, timeoutMs, ...args)) as typeof setTimeout);
     const startedAt = performance.now();
     await expect(
       resolveLegacyWebhookNameToChatUserId({
