@@ -22,6 +22,7 @@ type TestNostrBusState = {
 };
 
 const mockState = vi.hoisted(() => ({
+  pool: null as { onRelayConnectionSuccess?: (relay: string) => void } | null,
   handlers: [] as Array<{
     onevent: (event: Record<string, unknown>) => void | Promise<void>;
     oneose?: () => void;
@@ -49,6 +50,12 @@ const mockState = vi.hoisted(() => ({
 
 vi.mock("nostr-tools", () => {
   class MockSimplePool {
+    onRelayConnectionSuccess?: (relay: string) => void;
+
+    constructor() {
+      mockState.pool = this;
+    }
+
     subscribeMany(
       relays: string[],
       filters: unknown,
@@ -153,6 +160,7 @@ describe("startNostrBus inbound guards", () => {
       },
     } as unknown as PluginRuntime);
     mockState.handlers = [];
+    mockState.pool = null;
     ingressTasks = [];
     mockState.subscribeMany.mockClear();
     mockState.publish.mockReset();
@@ -195,6 +203,23 @@ describe("startNostrBus inbound guards", () => {
         since: 0,
       });
     }
+
+    await bus.close();
+  });
+
+  it("reports successful relay connections through onConnect", async () => {
+    const onConnect = vi.fn();
+    const bus = await startTestNostrBus({
+      privateKey: TEST_HEX_PRIVATE_KEY,
+      relays: ["wss://relay.example"],
+      onMessage: vi.fn(async () => {}),
+      onConnect,
+      onMetric: () => {},
+    });
+
+    expect(mockState.pool?.onRelayConnectionSuccess).toBeTypeOf("function");
+    mockState.pool?.onRelayConnectionSuccess?.("wss://relay.example/");
+    expect(onConnect).toHaveBeenCalledWith("wss://relay.example/");
 
     await bus.close();
   });
