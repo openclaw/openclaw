@@ -22,12 +22,12 @@ const PROVIDER_JSON_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 const PROVIDER_TEXT_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 
 /** Shared timeout and byte-limit options for provider response consumption. */
-export type ProviderResponseReadOptions = ReadResponseTextPrefixOptions & {
+type ProviderResponseReadOptions = ReadResponseTextPrefixOptions & {
   maxBytes?: number;
 };
 
 /** Options for bounded provider error-body normalization. */
-export type ProviderHttpErrorOptions = {
+type ProviderHttpErrorOptions = {
   statusPrefix?: string;
   bodyTimeoutMs?: ReadResponseTextPrefixOptions["timeoutMs"];
   onBodyTimeout?: NonNullable<ReadResponseTextPrefixOptions["onTimeout"]>;
