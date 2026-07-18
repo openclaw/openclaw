@@ -4,6 +4,7 @@ import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
+  createProviderHttpError,
   createProviderOperationDeadline,
   fetchWithTimeout,
   readProviderJsonResponse,
@@ -271,10 +272,16 @@ export async function downloadVydraAsset(params: {
       16 * 1024,
       resolveVydraDownloadBodyTimeout({ kind: params.kind, timeoutMs, deadlineMs }),
     );
-    const detail = prefix.text.replace(/\s+/g, " ").trim();
-    throw new Error(
-      `Vydra ${params.kind} download failed (HTTP ${response.status})` +
-        (detail ? `: ${detail.length > 220 ? `${detail.slice(0, 219)}…` : detail}` : ""),
+    // Re-run the bounded body through the shared formatter so provider error metadata and
+    // sensitive-text redaction remain identical to the previous assertOkOrThrowHttpError path.
+    throw await createProviderHttpError(
+      new Response(prefix.text || null, {
+        headers: response.headers,
+        status: response.status,
+        statusText: response.statusText,
+      }),
+      `Vydra ${params.kind} download failed`,
+      { statusPrefix: "HTTP " },
     );
   }
   const mimeType =

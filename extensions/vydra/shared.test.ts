@@ -103,6 +103,45 @@ describe("downloadVydraAsset", () => {
     expect(elapsedMs).toBeLessThan(timeoutMs + 1_500);
   });
 
+  it("preserves normalized and redacted provider errors after the bounded read", async () => {
+    const result = await downloadVydraAsset({
+      url: "https://cdn.vydra.example/generated/test.png",
+      kind: "image",
+      timeoutMs: 250,
+      fetchFn: async () =>
+        new Response(
+          JSON.stringify({ message: "Authorization: Bearer test-token", code: "asset_failed" }),
+          {
+            status: 502,
+            headers: { "x-request-id": "req-vydra-test" },
+          },
+        ),
+      maxBytes: 1024 * 1024,
+    }).catch((error: unknown) => error);
+
+    expect(result).toMatchObject({
+      name: "ProviderHttpError",
+      status: 502,
+      statusCode: 502,
+      errorCode: "asset_failed",
+      requestId: "req-vydra-test",
+    });
+    expect(result).toBeInstanceOf(Error);
+    expect(result instanceof Error ? result.message : "").not.toContain("test-token");
+  });
+
+  it("normalizes null-body HTTP errors after the bounded read", async () => {
+    const result = await downloadVydraAsset({
+      url: "https://cdn.vydra.example/generated/test.png",
+      kind: "image",
+      timeoutMs: 250,
+      fetchFn: async () => new Response(null, { status: 304 }),
+      maxBytes: 1024 * 1024,
+    }).catch((error: unknown) => error);
+
+    expect(result).toMatchObject({ name: "ProviderHttpError", status: 304, statusCode: 304 });
+  });
+
   it("does not bound a dripping body when only chunk idle timeout is used", async () => {
     // Negative control: chunkTimeoutMs resets on every drip, so idle alone never fires.
     server = http.createServer((_req, res) => {
