@@ -217,6 +217,8 @@ export function createGatewayHooksRequestHandler(params: {
           // Agent hooks run after the HTTP response path has returned, so failure
           // handling must record a system event instead of throwing to the caller.
           const cfg = getRuntimeConfig();
+          // Keep an omitted agent omitted for event routing so global session scope
+          // stays global; runner identity is frozen separately via accepted agentId.
           hookEventSessionKey = resolveHookEventSessionKey({
             cfg,
             agentId: value.agentId,
@@ -228,6 +230,8 @@ export function createGatewayHooksRequestHandler(params: {
             job,
             message: value.message,
             sessionKey,
+            // Isolated runs derive their lifecycle key from random jobId (or an
+            // already-stable cron: key), so accepted agentId closes reload drift.
             agentId,
             lane: "cron",
           });
