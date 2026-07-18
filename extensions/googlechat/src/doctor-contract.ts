@@ -23,6 +23,10 @@ function hasLegacyGoogleChatStreamMode(value: unknown): boolean {
   return asObjectRecord(value)?.streamMode !== undefined;
 }
 
+function hasRetiredReactions(value: unknown): boolean {
+  return Object.hasOwn(asObjectRecord(asObjectRecord(value)?.actions) ?? {}, "reactions");
+}
+
 function hasLegacyGoogleChatGroupAllowAlias(value: unknown): boolean {
   const groups = asObjectRecord(asObjectRecord(value)?.groups);
   if (!groups) {
@@ -84,6 +88,18 @@ function normalizeGoogleChatEntry(params: {
     changed = true;
   }
 
+  if (hasRetiredReactions(updated)) {
+    const actions = { ...(asObjectRecord(updated.actions) ?? {}) };
+    delete actions.reactions;
+    updated = { ...updated };
+    if (Object.keys(actions).length > 0) updated.actions = actions;
+    else delete updated.actions;
+    params.changes.push(
+      `Removed ${params.pathPrefix}.actions.reactions (Google Chat does not support reactions).`,
+    );
+    changed = true;
+  }
+
   const groups = asObjectRecord(updated.groups);
   if (groups) {
     const normalized = normalizeGoogleChatGroups({
@@ -101,6 +117,18 @@ function normalizeGoogleChatEntry(params: {
 }
 
 export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
+  {
+    path: ["channels", "googlechat"],
+    message:
+      'channels.googlechat.actions.reactions is retired and ignored. Run "openclaw doctor --fix".',
+    match: hasRetiredReactions,
+  },
+  {
+    path: ["channels", "googlechat", "accounts"],
+    message:
+      'channels.googlechat.accounts.<id>.actions.reactions is retired and ignored. Run "openclaw doctor --fix".',
+    match: (value) => hasLegacyAccountAliases(value, hasRetiredReactions),
+  },
   {
     path: ["channels", "googlechat"],
     message: "channels.googlechat.streamMode is legacy and no longer used; it is removed on load.",

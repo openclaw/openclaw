@@ -84,12 +84,6 @@ const GoogleChatAccountSchema = z
     streaming: ChannelDeliveryStreamingConfigSchema.optional(),
     mediaMaxMb: z.number().positive().optional(),
     replyToMode: ReplyToModeSchema.optional(),
-    actions: z
-      .object({
-        reactions: z.boolean().optional(),
-      })
-      .strict()
-      .optional(),
     dm: GoogleChatDmSchema.optional(),
     healthMonitor: ChannelHealthMonitorSchema,
     typingIndicator: z.enum(["none", "message", "reaction"]).optional(),

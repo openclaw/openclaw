@@ -163,8 +163,6 @@ export type DiscordVoiceRealtimeConfig = {
   speakerVoice?: string;
   /** Provider realtime output voice id. */
   speakerVoiceId?: string;
-  /** @deprecated Use speakerVoice. */
-  voice?: string;
   /** System instructions passed to the realtime provider. */
   instructions?: string;
   /** Tool policy for bidi realtime consult calls. */
@@ -287,14 +285,6 @@ export type DiscordThreadBindingsConfig = {
    * Default: "fork".
    */
   defaultSpawnContext?: "isolated" | "fork";
-  /**
-   * @deprecated Use spawnSessions instead.
-   */
-  spawnSubagentSessions?: boolean;
-  /**
-   * @deprecated Use spawnSessions instead.
-   */
-  spawnAcpSessions?: boolean;
 };
 
 export type DiscordSlashCommandConfig = {

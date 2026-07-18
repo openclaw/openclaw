@@ -21,7 +21,6 @@ import {
   AccessGroupsSchema,
   CommitmentsSchema,
   HttpUrlSchema,
-  LegacyCanvasHostSchema,
   LoggingLevelSchema,
   MarketplacesSchema,
   McpConfigSchema,
@@ -307,15 +306,6 @@ export const OpenClawSchemaShape = {
         .optional(),
     })
     .optional(),
-  tui: z
-    .strictObject({
-      footer: z
-        .strictObject({
-          showRemoteHost: z.boolean().optional(),
-        })
-        .optional(),
-    })
-    .optional(),
   secrets: SecretsConfigSchema,
   marketplaces: MarketplacesSchema,
   auth: z
@@ -436,7 +426,6 @@ export const OpenClawSchemaShape = {
             .optional(),
         })
         .optional(),
-      webhook: HttpUrlSchema.optional(),
       webhookToken: SecretInputSchema.optional().register(sensitive),
       sessionRetention: z.union([z.string(), z.literal(false)]).optional(),
       failureAlert: z
@@ -629,7 +618,6 @@ export const OpenClawSchemaShape = {
       bundledDiscovery: z.enum(["compat", "allowlist"]).optional(),
     })
     .optional(),
-  canvasHost: LegacyCanvasHostSchema,
   surfaces: z
     .record(
       z.string(),

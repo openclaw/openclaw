@@ -36,16 +36,7 @@ export type TelegramActionConfig = {
   editForumTopic?: boolean;
 };
 
-export type TelegramThreadBindingsConfig = SessionThreadBindingsConfig & {
-  /**
-   * @deprecated Use spawnSessions instead.
-   */
-  spawnSubagentSessions?: boolean;
-  /**
-   * @deprecated Use spawnSessions instead.
-   */
-  spawnAcpSessions?: boolean;
-};
+export type TelegramThreadBindingsConfig = SessionThreadBindingsConfig;
 
 export type TelegramNetworkConfig = {
   /** Override Node's autoSelectFamily behavior (true = enable, false = disable). */
@@ -129,11 +120,6 @@ export type TelegramAccountConfig = {
   tokenFile?: string;
   /** Control reply threading when reply tags are present (off|first|all|batched). */
   replyToMode?: ReplyToMode;
-  /**
-   * @deprecated Telegram DM topic session detection is automatic from bot
-   * getMe.has_topics_enabled. This legacy config is removed by doctor --fix.
-   */
-  dm?: TelegramDmConfig;
   groups?: Record<string, TelegramGroupConfig>;
   /** Per-DM configuration for Telegram DM topics (key is chat ID). */
   direct?: Record<string, TelegramDirectConfig>;
@@ -246,21 +232,6 @@ export type TelegramAccountConfig = {
   autoTopicLabel?: AutoTopicLabelConfig;
 };
 
-/**
- * @deprecated Telegram DM topic session detection is automatic from bot
- * getMe.has_topics_enabled. This legacy type remains for plugin SDK
- * compatibility only.
- */
-export type TelegramDmThreadReplies = "off" | "inbound" | "always";
-
-/**
- * @deprecated Legacy config removed by doctor --fix.
- */
-export type TelegramDmConfig = {
-  /** @deprecated Use bot getMe.has_topics_enabled; doctor removes this key. */
-  threadReplies?: TelegramDmThreadReplies;
-};
-
 export type TelegramTopicConfig = {
   requireMention?: boolean;
   /** Emit internal message hooks for mention-skipped topic messages. */
@@ -324,8 +295,6 @@ export type AutoTopicLabelConfig =
 export type TelegramDirectConfig = {
   /** Per-DM override for DM message policy (open|disabled|allowlist). */
   dmPolicy?: DmPolicy;
-  /** @deprecated Use bot getMe.has_topics_enabled; doctor removes this key. */
-  threadReplies?: TelegramDmThreadReplies;
   /** Optional tool policy overrides for this DM. */
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;

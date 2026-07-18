@@ -30,7 +30,6 @@ describe("googlechatPlugin config adapter", () => {
       channels: {
         googlechat: {
           serviceAccount: { client_email: "bot@example.com" },
-          actions: { reactions: true },
         },
       },
     } as OpenClawConfig;

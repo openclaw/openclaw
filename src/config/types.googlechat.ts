@@ -32,11 +32,6 @@ export type GoogleChatGroupConfig = {
   systemPrompt?: string;
 };
 
-export type GoogleChatActionConfig = {
-  /** @deprecated Accepted for config compatibility; service-account auth cannot use reaction APIs. */
-  reactions?: boolean;
-};
-
 export type GoogleChatAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
@@ -102,7 +97,6 @@ export type GoogleChatAccountConfig = {
   /** Control reply threading when reply tags are present (off|first|all|batched). */
   replyToMode?: ReplyToMode;
   /** Per-action tool gating (default: true for all). */
-  actions?: GoogleChatActionConfig;
   dm?: GoogleChatDmConfig;
   /** Channel health monitor overrides for this channel/account. */
   healthMonitor?: ChannelHealthMonitorConfig;

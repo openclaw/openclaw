@@ -368,7 +368,7 @@ Those saved definitions are for runtimes that OpenClaw launches or configures la
     - `add` builds a definition from flags and probes before saving unless `--no-probe` is set or OAuth authorization is needed first
     - runtime adapters decide which transport shapes they actually support at execution time
     - `enabled: false` keeps a server saved but excludes it from embedded runtime discovery
-    - `timeout` and `connectTimeout` set per-server request and connection timeouts in seconds
+    - `requestTimeoutMs` and `connectionTimeoutMs` set per-server request and connection timeouts in milliseconds
     - `supportsParallelToolCalls: true` marks servers that adapters can call concurrently
     - HTTP servers can use static headers, OAuth login, TLS verification control, and mTLS certificate/key paths
     - embedded OpenClaw exposes configured MCP tools in normal `coding` and `messaging` tool profiles; `minimal` still hides them, and `tools.deny: ["bundle-mcp"]` disables them explicitly
@@ -620,8 +620,8 @@ Example config shape:
       "docs": {
         "url": "https://mcp.example.com",
         "transport": "streamable-http",
-        "timeout": 20,
-        "connectTimeout": 5,
+        "requestTimeoutMs": 20000,
+        "connectionTimeoutMs": 5000,
         "supportsParallelToolCalls": true,
         "auth": "oauth",
         "oauth": {
@@ -663,17 +663,16 @@ If your MCP server genuinely needs one of the blocked variables, set it on the g
 
 Connects to a remote MCP server over HTTP Server-Sent Events.
 
-| Field                          | Description                                                      |
-| ------------------------------ | ---------------------------------------------------------------- |
-| `url`                          | HTTP or HTTPS URL of the remote server (required)                |
-| `headers`                      | Optional key-value map of HTTP headers (for example auth tokens) |
-| `connectionTimeoutMs`          | Per-server connection timeout in ms (optional)                   |
-| `connectTimeout`               | Per-server connection timeout in seconds (optional)              |
-| `timeout` / `requestTimeoutMs` | Per-server MCP request timeout in seconds or ms                  |
-| `auth: "oauth"`                | Use MCP OAuth credentials saved by `openclaw mcp login`          |
-| `sslVerify`                    | Set false only for explicitly trusted private HTTPS endpoints    |
-| `clientCert` / `clientKey`     | mTLS client certificate and key paths                            |
-| `supportsParallelToolCalls`    | Hint that concurrent calls are safe for this server              |
+| Field                       | Description                                                      |
+| --------------------------- | ---------------------------------------------------------------- |
+| `url`                       | HTTP or HTTPS URL of the remote server (required)                |
+| `headers`                   | Optional key-value map of HTTP headers (for example auth tokens) |
+| `connectionTimeoutMs`       | Per-server connection timeout in ms (optional)                   |
+| `requestTimeoutMs`          | Per-server MCP request timeout in milliseconds                   |
+| `auth: "oauth"`             | Use MCP OAuth credentials saved by `openclaw mcp login`          |
+| `sslVerify`                 | Set false only for explicitly trusted private HTTPS endpoints    |
+| `clientCert` / `clientKey`  | mTLS client certificate and key paths                            |
+| `supportsParallelToolCalls` | Hint that concurrent calls are safe for this server              |
 
 Example:
 
@@ -684,7 +683,7 @@ Example:
       "remote-tools": {
         "url": "https://mcp.example.com",
         "auth": "oauth",
-        "timeout": 20,
+        "requestTimeoutMs": 20000,
         "headers": {
           "Authorization": "Bearer <token>"
         }
@@ -768,18 +767,17 @@ If the provider rotates tokens or the authorization state gets stuck, run `openc
 
 `streamable-http` is an additional transport option alongside `sse` and `stdio`. It uses HTTP streaming for bidirectional communication with remote MCP servers.
 
-| Field                          | Description                                                                            |
-| ------------------------------ | -------------------------------------------------------------------------------------- |
-| `url`                          | HTTP or HTTPS URL of the remote server (required)                                      |
-| `transport`                    | Set to `"streamable-http"` to select this transport; when omitted, OpenClaw uses `sse` |
-| `headers`                      | Optional key-value map of HTTP headers (for example auth tokens)                       |
-| `connectionTimeoutMs`          | Per-server connection timeout in ms (optional)                                         |
-| `connectTimeout`               | Per-server connection timeout in seconds (optional)                                    |
-| `timeout` / `requestTimeoutMs` | Per-server MCP request timeout in seconds or ms                                        |
-| `auth: "oauth"`                | Use MCP OAuth credentials saved by `openclaw mcp login`                                |
-| `sslVerify`                    | Set false only for explicitly trusted private HTTPS endpoints                          |
-| `clientCert` / `clientKey`     | mTLS client certificate and key paths                                                  |
-| `supportsParallelToolCalls`    | Hint that concurrent calls are safe for this server                                    |
+| Field                       | Description                                                                            |
+| --------------------------- | -------------------------------------------------------------------------------------- |
+| `url`                       | HTTP or HTTPS URL of the remote server (required)                                      |
+| `transport`                 | Set to `"streamable-http"` to select this transport; when omitted, OpenClaw uses `sse` |
+| `headers`                   | Optional key-value map of HTTP headers (for example auth tokens)                       |
+| `connectionTimeoutMs`       | Per-server connection timeout in ms (optional)                                         |
+| `requestTimeoutMs`          | Per-server MCP request timeout in milliseconds                                         |
+| `auth: "oauth"`             | Use MCP OAuth credentials saved by `openclaw mcp login`                                |
+| `sslVerify`                 | Set false only for explicitly trusted private HTTPS endpoints                          |
+| `clientCert` / `clientKey`  | mTLS client certificate and key paths                                                  |
+| `supportsParallelToolCalls` | Hint that concurrent calls are safe for this server                                    |
 
 OpenClaw config uses `transport: "streamable-http"` as the canonical spelling. CLI-native MCP `type: "http"` values are accepted when saved through `openclaw mcp set` and repaired by `openclaw doctor --fix` in existing config, but `transport` is what embedded OpenClaw consumes directly.
 
@@ -792,8 +790,8 @@ Example:
       "streaming-tools": {
         "url": "https://mcp.example.com/stream",
         "transport": "streamable-http",
-        "connectTimeout": 10,
-        "timeout": 30,
+        "connectionTimeoutMs": 10000,
+        "requestTimeoutMs": 30000,
         "headers": {
           "Authorization": "Bearer <token>"
         }

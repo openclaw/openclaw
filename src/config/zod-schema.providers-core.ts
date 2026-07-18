@@ -346,8 +346,6 @@ const TelegramAccountSchemaBase = z
         maxAgeHours: z.number().nonnegative().optional(),
         spawnSessions: z.boolean().optional(),
         defaultSpawnContext: z.enum(["isolated", "fork"]).optional(),
-        spawnSubagentSessions: z.boolean().optional(),
-        spawnAcpSessions: z.boolean().optional(),
       })
       .strict()
       .optional(),
@@ -557,7 +555,6 @@ const DiscordVoiceRealtimeSchema = z
     model: z.string().min(1).optional(),
     speakerVoice: z.string().min(1).optional(),
     speakerVoiceId: z.string().min(1).optional(),
-    voice: z.string().min(1).optional(),
     instructions: z.string().min(1).optional(),
     toolPolicy: DiscordVoiceRealtimeToolPolicySchema.optional(),
     consultPolicy: DiscordVoiceRealtimeConsultPolicySchema.optional(),
@@ -717,8 +714,6 @@ const DiscordAccountSchema = z
         maxAgeHours: z.number().nonnegative().optional(),
         spawnSessions: z.boolean().optional(),
         defaultSpawnContext: z.enum(["isolated", "fork"]).optional(),
-        spawnSubagentSessions: z.boolean().optional(),
-        spawnAcpSessions: z.boolean().optional(),
       })
       .strict()
       .optional(),
@@ -889,7 +884,6 @@ const SlackDmSchema = z
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     groupEnabled: z.boolean().optional(),
     groupChannels: z.array(z.union([z.string(), z.number()])).optional(),
-    replyToMode: ReplyToModeSchema.optional(),
   })
   .strict();
 

@@ -4,6 +4,23 @@ import { resolveGoogleChatAccount } from "./accounts.js";
 import { legacyConfigRules, normalizeCompatibilityConfig } from "./doctor-contract.js";
 
 describe("googlechat doctor contract", () => {
+  it("removes retired reaction flags", () => {
+    const result = normalizeCompatibilityConfig({
+      cfg: {
+        channels: {
+          googlechat: {
+            actions: { reactions: true },
+            accounts: { work: { actions: { reactions: false } } },
+          },
+        },
+      } as never,
+    });
+    expect(result.config.channels?.googlechat).toEqual({ accounts: { work: {} } });
+    expect(result.changes).toEqual([
+      "Removed channels.googlechat.actions.reactions (Google Chat does not support reactions).",
+      "Removed channels.googlechat.accounts.work.actions.reactions (Google Chat does not support reactions).",
+    ]);
+  });
   it("removes legacy streamMode keys", () => {
     const result = normalizeCompatibilityConfig({
       cfg: {

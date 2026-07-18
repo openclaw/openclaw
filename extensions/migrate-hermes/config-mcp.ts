@@ -173,7 +173,10 @@ export function mapMcpServer(
   } else if (!transport && readString(next.url)) {
     next.transport = "streamable-http";
   }
-  next.connectTimeout = value.connectTimeout ?? value.connect_timeout;
+  const connectionTimeoutSeconds = value.connectTimeout ?? value.connect_timeout;
+  if (typeof connectionTimeoutSeconds === "number") {
+    next.connectionTimeoutMs = connectionTimeoutSeconds * 1_000;
+  }
   next.supportsParallelToolCalls = readBoolean(
     value.supportsParallelToolCalls ?? value.supports_parallel_tool_calls,
   );

@@ -57,18 +57,6 @@ const WhatsAppPluginHooksSchema = z
   .strict()
   .optional();
 
-function stripDeprecatedWhatsAppNoopKeys(value: unknown): unknown {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return value;
-  }
-  if (!Object.hasOwn(value, "exposeErrorText")) {
-    return value;
-  }
-  const next = { ...(value as Record<string, unknown>) };
-  delete next.exposeErrorText;
-  return next;
-}
-
 function buildWhatsAppCommonShape(params: { useDefaults: boolean }) {
   return {
     enabled: z.boolean().optional(),
@@ -162,10 +150,7 @@ const WhatsAppAccountObjectSchema = z
   })
   .strict();
 
-const WhatsAppAccountSchema = z.preprocess(
-  stripDeprecatedWhatsAppNoopKeys,
-  WhatsAppAccountObjectSchema,
-);
+const WhatsAppAccountSchema = WhatsAppAccountObjectSchema;
 
 const WhatsAppConfigObjectSchema = z
   .object({
@@ -234,7 +219,4 @@ const WhatsAppConfigObjectSchema = z
     }
   });
 
-export const WhatsAppConfigSchema = z.preprocess(
-  stripDeprecatedWhatsAppNoopKeys,
-  WhatsAppConfigObjectSchema,
-);
+export const WhatsAppConfigSchema = WhatsAppConfigObjectSchema;

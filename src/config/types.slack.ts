@@ -36,8 +36,6 @@ export type SlackDmConfig = {
   groupEnabled?: boolean;
   /** Optional allowlist for group DM channels (ids or slugs). */
   groupChannels?: Array<string | number>;
-  /** @deprecated Prefer channels.slack.replyToModeByChatType.direct. */
-  replyToMode?: ReplyToMode;
 };
 
 export type SlackChannelConfig = {

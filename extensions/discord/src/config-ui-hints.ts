@@ -195,10 +195,6 @@ export const discordChannelConfigUiHints = {
     label: "Discord Realtime Speaker Voice ID",
     help: "Provider realtime output voice id.",
   },
-  "voice.realtime.voice": {
-    label: "Discord Realtime Voice",
-    help: "Deprecated provider realtime output voice. Use voice.realtime.speakerVoice.",
-  },
   "voice.realtime.toolPolicy": {
     label: "Discord Realtime Tool Policy",
     help: "Tool policy for the OpenClaw agent consult tool in realtime voice modes: safe-read-only, owner, or none. Default is owner for agent-proxy and safe-read-only for bidi.",

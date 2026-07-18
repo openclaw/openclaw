@@ -182,11 +182,6 @@ describe("config help copy quality", () => {
   });
 
   it("documents cron deprecation, migration, and retention formats", () => {
-    const legacy = expectDefined(
-      FIELD_HELP["cron.webhook"],
-      'FIELD_HELP["cron.webhook"] test invariant',
-    );
-    expect(/deprecated|legacy/i.test(legacy)).toBe(true);
     expect(legacy.includes('delivery.mode="webhook"')).toBe(true);
     expect(legacy.includes("delivery.to")).toBe(true);
 
@@ -260,11 +255,6 @@ describe("config help copy quality", () => {
     expect(pruneAfter.includes("30d")).toBe(true);
     expect(pruneAfter.includes("12h")).toBe(true);
 
-    const deprecated = expectDefined(
-      FIELD_HELP["session.maintenance.pruneDays"],
-      'FIELD_HELP["session.maintenance.pruneDays"] test invariant',
-    );
-    expect(/deprecated/i.test(deprecated)).toBe(true);
     expect(deprecated.includes("session.maintenance.pruneAfter")).toBe(true);
 
     const resetRetention = expectDefined(

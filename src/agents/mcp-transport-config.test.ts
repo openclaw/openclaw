@@ -32,11 +32,11 @@ describe("resolveMcpTransportConfig", () => {
     });
   });
 
-  it("resolves operator timeout aliases and parallel capability", () => {
+  it("resolves canonical timeouts and parallel capability", () => {
     const resolved = resolveMcpTransportConfig("probe", {
       command: "node",
-      timeout: 7,
-      connectTimeout: 2,
+      requestTimeoutMs: 7_000,
+      connectionTimeoutMs: 2_000,
       supportsParallelToolCalls: true,
     });
 
