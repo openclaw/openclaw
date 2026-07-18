@@ -178,7 +178,7 @@ openclaw wiki get syntheses/alpha-summary.md --from 1 --lines 80
 
 Apply narrow mutations without freeform page surgery:
 
-- `apply synthesis <title>`: create or refresh a synthesis page with a managed summary body
+- `apply synthesis <title>`: create or refresh a synthesis page with a managed summary body. `--body-file` accepts regular files up to 1 MiB and rejects larger or non-regular files before writing the page.
 - `apply metadata <lookup>`: update metadata on an existing page
 
 Both accept `--source-id`, `--contradiction`, `--question` (each repeatable), `--confidence <n>` (0-1), and `--status <status>`. `apply metadata` also accepts `--clear-confidence` to remove a stored confidence value. This is the supported way to evolve wiki pages so managed generated blocks stay intact.

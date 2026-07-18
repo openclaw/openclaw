@@ -1,4 +1,5 @@
 // Memory Wiki plugin module implements cli behavior.
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import type { Command } from "commander";
 import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
@@ -59,6 +60,9 @@ const GATEWAY_RESPONSE_MAX_ARRAY_ITEMS = 10_000;
 const GATEWAY_RESPONSE_MAX_STRING_CHARS = 10_000;
 const GATEWAY_RESPONSE_MAX_CODE_CHARS = 256;
 const WIKI_APPLY_BODY_FILE_MAX_BYTES = 1_048_576;
+// Open non-blocking so FIFO swaps do not stall before descriptor validation.
+const WIKI_APPLY_BODY_FILE_OPEN_FLAGS =
+  fsConstants.O_RDONLY | (fsConstants.O_NONBLOCK ?? 0);
 const ANSI_ESCAPE_SEQUENCE_PATTERN = new RegExp(
   String.raw`(?:\x1B\[[0-?]*[ -/]*[@-~]|\x1B[@-Z\\-_]|\x9B[0-?]*[ -/]*[@-~])`,
   "g",
@@ -388,16 +392,16 @@ function createOversizedWikiApplyBodyFileError(size?: number): Error {
 }
 
 async function readWikiApplyBodyFile(bodyFile: string): Promise<string> {
-  const stat = await fs.stat(bodyFile);
-  if (!stat.isFile()) {
-    throw new Error("wiki apply synthesis --body-file must point to a regular file.");
-  }
-  if (stat.size > WIKI_APPLY_BODY_FILE_MAX_BYTES) {
-    throw createOversizedWikiApplyBodyFileError(stat.size);
-  }
-
-  const handle = await fs.open(bodyFile, "r");
+  const handle = await fs.open(bodyFile, WIKI_APPLY_BODY_FILE_OPEN_FLAGS);
   try {
+    const stat = await handle.stat();
+    if (!stat.isFile()) {
+      throw new Error("wiki apply synthesis --body-file must point to a regular file.");
+    }
+    if (stat.size > WIKI_APPLY_BODY_FILE_MAX_BYTES) {
+      throw createOversizedWikiApplyBodyFileError(stat.size);
+    }
+
     const chunks: Buffer[] = [];
     let totalBytes = 0;
     let position = 0;

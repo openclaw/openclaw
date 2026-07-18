@@ -1,5 +1,6 @@
 // Memory Wiki tests cover cli plugin behavior.
 import fs from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -259,10 +260,16 @@ describe("memory-wiki cli", () => {
     expect(index).not.toContain("Oversized Body");
   });
 
-  it("rejects non-regular apply synthesis --body-file before opening the path", async () => {
+  it("rejects non-regular apply synthesis --body-file after opening the path", async () => {
     const { config } = await createCliVault();
-    const statSpy = vi.spyOn(fs, "stat").mockResolvedValue({ isFile: () => false } as never);
-    const openSpy = vi.spyOn(fs, "open").mockRejectedValue(new Error("should not open"));
+    const handleStatMock = vi.fn().mockResolvedValue({ isFile: () => false } as never);
+    const handleReadMock = vi.fn();
+    const handleCloseMock = vi.fn().mockResolvedValue(undefined);
+    const openSpy = vi.spyOn(fs, "open").mockResolvedValue({
+      stat: handleStatMock,
+      read: handleReadMock,
+      close: handleCloseMock,
+    } as never);
     const program = new Command();
     program.name("test");
     program.exitOverride();
@@ -288,8 +295,13 @@ describe("memory-wiki cli", () => {
       ),
     ).rejects.toThrow("wiki apply synthesis --body-file must point to a regular file.");
 
-    expect(openSpy).not.toHaveBeenCalled();
-    statSpy.mockRestore();
+    expect(openSpy).toHaveBeenCalledWith(
+      "ignored.pipe",
+      fsConstants.O_RDONLY | (fsConstants.O_NONBLOCK ?? 0),
+    );
+    expect(handleStatMock).toHaveBeenCalledTimes(1);
+    expect(handleReadMock).not.toHaveBeenCalled();
+    expect(handleCloseMock).toHaveBeenCalledTimes(1);
     openSpy.mockRestore();
   });
 
