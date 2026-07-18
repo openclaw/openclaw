@@ -37,6 +37,8 @@ import {
   createLegacyAuditBackupSnapshots,
   hasLegacyAuditBackupSources,
   isLegacyAuditMigrationBackupPath,
+  rewriteLegacyAuditBackupCheckpoints,
+  type LegacyAuditBackupSnapshot,
 } from "./state-migrations.audit-backup.js";
 import { withLegacyAuditMigrationLease } from "./state-migrations.audit-coordination.js";
 
@@ -624,6 +626,7 @@ async function createStateSqliteBackupPlan(params: {
   stateDir: string;
   tempDir: string;
   preservedStatePaths?: readonly string[];
+  legacyAuditSnapshots: readonly LegacyAuditBackupSnapshot[];
 }): Promise<StateSqliteBackupPlan> {
   // Complete discovery before writing snapshots. chooseBackupTempRoot keeps
   // tempDir outside stateDir, and this ordering prevents future overlap from
@@ -682,7 +685,10 @@ async function createStateSqliteBackupPlan(params: {
         // Agent coordination is transient, while unrelated plugin databases
         // remain owner-defined. Queue and TTL-blob policy is global-only.
         transform: isGlobalStateDatabase
-          ? sanitizeOpenClawGlobalStateSnapshot
+          ? (database) => {
+              sanitizeOpenClawGlobalStateSnapshot(database);
+              rewriteLegacyAuditBackupCheckpoints(database, params.legacyAuditSnapshots);
+            }
           : canonicalAgentSource
             ? sanitizeOpenClawStateLeaseRows
             : undefined,
@@ -783,22 +789,24 @@ export async function createBackupArchive(
     const hasLegacyAuditSources = stateAsset
       ? await hasLegacyAuditBackupSources(stateAsset.sourcePath)
       : false;
-    const createSnapshotPlans = async () => ({
-      legacyAuditSnapshots:
+    const createSnapshotPlans = async () => {
+      const legacyAuditSnapshots =
         stateAsset && hasLegacyAuditSources
           ? await createLegacyAuditBackupSnapshots({
               stateDir: stateAsset.sourcePath,
               tempDir,
             })
-          : [],
-      stateSqliteBackup: stateAsset
+          : [];
+      const stateSqliteBackup = stateAsset
         ? await createStateSqliteBackupPlan({
             stateDir: stateAsset.sourcePath,
             tempDir,
             preservedStatePaths,
+            legacyAuditSnapshots,
           })
-        : { snapshots: [], discoveredSourcePaths: new Set<string>() },
-    });
+        : { snapshots: [], discoveredSourcePaths: new Set<string>() };
+      return { legacyAuditSnapshots, stateSqliteBackup };
+    };
     const snapshotPlans =
       stateAsset && hasLegacyAuditSources
         ? await withLegacyAuditMigrationLease(stateAsset.sourcePath, createSnapshotPlans)

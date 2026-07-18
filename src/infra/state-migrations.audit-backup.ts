@@ -1,10 +1,21 @@
 // Builds secret-sanitized backup replacements for legacy audit append archives.
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import { root as createFsSafeRoot } from "./fs-safe.js";
-import { detectLegacyAuditLogs } from "./state-migrations.audit-checkpoints.js";
-import { prepareLegacyAuditRecords } from "./state-migrations.audit-records.js";
 import {
+  detectLegacyAuditLogs,
+  legacyAuditRawCheckpointKey,
+  legacyAuditSourceGenerationKey,
+  type LegacyAuditRawCheckpoint,
+} from "./state-migrations.audit-checkpoints.js";
+import {
+  prepareLegacyAuditRecords,
+  serializePreparedAuditRecords,
+} from "./state-migrations.audit-records.js";
+import {
+  findPreviousLegacyAuditRawCheckpoint,
   readLegacyAuditRecoverySourceForBackup,
   readLegacyAuditSourcePrefixSnapshotForBackup,
 } from "./state-migrations.audit-recovery.js";
@@ -68,11 +79,52 @@ export function isLegacyAuditMigrationBackupPath(sourcePath: string, stateDir: s
   return false;
 }
 
-type LegacyAuditBackupSnapshot = {
+type LegacyAuditBackupCheckpoint = {
+  key: string;
+  value: LegacyAuditRawCheckpoint;
+};
+
+export type LegacyAuditBackupSnapshot = {
   sourcePath: string;
   archiveSourcePath: string;
   skippedSourcePaths: Set<string>;
+  checkpoint?: LegacyAuditBackupCheckpoint;
 };
+
+/** Replaces live raw checkpoints with metadata for the transformed backup files. */
+export function rewriteLegacyAuditBackupCheckpoints(
+  database: DatabaseSync,
+  snapshots: readonly LegacyAuditBackupSnapshot[],
+): void {
+  const hasDiagnosticEvents = database // sqlite-allow-raw -- Offline snapshot maintenance boundary.
+    .prepare("SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = ?")
+    .get("diagnostic_events") as { ok?: unknown } | undefined;
+  if (hasDiagnosticEvents?.ok !== 1) {
+    return;
+  }
+  const scope = "migration.legacy-audit-raw";
+  database.prepare("DELETE FROM diagnostic_events WHERE scope = ?").run(scope); // sqlite-allow-raw -- Offline snapshot maintenance boundary.
+  const insert = database // sqlite-allow-raw -- Offline snapshot maintenance boundary.
+    .prepare(
+      `INSERT INTO diagnostic_events (
+        scope, event_key, payload_json, created_at, sequence
+      ) VALUES (?, ?, ?, ?, ?)`,
+    );
+  let sequence = 1;
+  for (const snapshot of snapshots) {
+    if (!snapshot.checkpoint) {
+      continue;
+    }
+    insert.run(
+      scope,
+      snapshot.checkpoint.key,
+      JSON.stringify(snapshot.checkpoint.value),
+      0,
+      sequence,
+    );
+    sequence += 1;
+  }
+}
 
 async function createLegacyAuditBackupSnapshotsOnce(params: {
   stateDir: string;
@@ -99,7 +151,17 @@ async function createLegacyAuditBackupSnapshotsOnce(params: {
       source.storage === "raw-archive"
         ? await readLegacyAuditRecoverySourceForBackup(root, sourceRelativePath)
         : await readLegacyAuditSourcePrefixSnapshotForBackup(root, sourceRelativePath);
-    const prepared = prepareLegacyAuditRecords(source, snapshot.raw, `backup-${index}`);
+    const sourceGeneration = legacyAuditSourceGenerationKey(sourceRelativePath);
+    const previousCheckpoint =
+      source.storage === "raw-archive"
+        ? findPreviousLegacyAuditRawCheckpoint(params.stateDir, sourceRelativePath)
+        : undefined;
+    const prepared = prepareLegacyAuditRecords(
+      source,
+      snapshot.raw,
+      sourceGeneration,
+      previousCheckpoint?.recordOrdinalBase ?? 0,
+    );
     if (!prepared.ok) {
       throw new Error(
         `Legacy ${source.label} append archive cannot be sanitized for backup: ${prepared.warnings.join("; ")}`,
@@ -107,9 +169,33 @@ async function createLegacyAuditBackupSnapshotsOnce(params: {
     }
     const sourcePath = path.join(params.tempDir, `legacy-audit-raw-${index}.jsonl`);
     await fs.writeFile(sourcePath, prepared.sanitizedJsonl, { mode: 0o600 });
+    let checkpoint: LegacyAuditBackupCheckpoint | undefined;
+    if (previousCheckpoint) {
+      if (previousCheckpoint.recordCount > prepared.records.length) {
+        throw new Error(
+          `Legacy ${source.label} append archive is shorter than its durable checkpoint`,
+        );
+      }
+      // Backup rewrites raw bytes to sanitized JSONL. Preserve the source ordinal
+      // and rebase the checkpoint hash onto the equivalent transformed prefix.
+      const transformedPrefix = Buffer.from(
+        serializePreparedAuditRecords(prepared.records.slice(0, previousCheckpoint.recordCount)),
+        "utf8",
+      );
+      const value: LegacyAuditRawCheckpoint = {
+        ...previousCheckpoint,
+        dev: 0,
+        ino: 0,
+        mtimeMs: 0,
+        size: transformedPrefix.length,
+        contentHash: createHash("sha256").update(transformedPrefix).digest("hex"),
+      };
+      checkpoint = { key: legacyAuditRawCheckpointKey(value), value };
+    }
     snapshots.push({
       sourcePath,
       archiveSourcePath: source.sourcePath,
+      ...(checkpoint ? { checkpoint } : {}),
       skippedSourcePaths: new Set([
         path.resolve(source.sourcePath),
         path.resolve(`${source.sourcePath}.doctor-scrub-progress`),

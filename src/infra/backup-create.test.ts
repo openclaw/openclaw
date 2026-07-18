@@ -8,6 +8,7 @@ import * as tar from "tar";
 import { describe, expect, it, vi } from "vitest";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { backupVerifyCommand } from "../commands/backup-verify.js";
+import { CONFIG_AUDIT_MAX_ENTRIES, CONFIG_AUDIT_SCOPE } from "../config/io.audit.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
@@ -29,6 +30,7 @@ import { writeTarArchiveWithRetry } from "./backup-tar-retry.js";
 import { isVolatileBackupPath } from "./backup-volatile-filter.js";
 import { createBackupVolatileStatCache } from "./backup-volatile-stat-cache.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
+import { createSqliteAuditRecordStore } from "./sqlite-audit-record-store.js";
 import { detectLegacyAuditLogs, migrateLegacyAuditLogs } from "./state-migrations.audit-logs.js";
 
 function makeResult(overrides: Partial<BackupCreateResult> = {}): BackupCreateResult {
@@ -241,7 +243,7 @@ describe("sanitizeOpenClawGlobalStateSnapshot", () => {
     }
   });
 
-  it("drops legacy raw-archive checkpoints from restorable snapshots", () => {
+  it("leaves diagnostic state to its backup-specific sanitizer", () => {
     const sqlite = requireNodeSqlite();
     const database = new sqlite.DatabaseSync(":memory:");
     try {
@@ -254,6 +256,7 @@ describe("sanitizeOpenClawGlobalStateSnapshot", () => {
       sanitizeOpenClawGlobalStateSnapshot(database);
 
       expect(database.prepare("SELECT scope FROM diagnostic_events").all()).toEqual([
+        { scope: "migration.legacy-audit-raw" },
         { scope: "system-agent.audit" },
       ]);
     } finally {
@@ -798,6 +801,75 @@ describe("createBackupArchive", () => {
         } finally {
           closeOpenClawStateDatabase();
         }
+      },
+    );
+  });
+
+  it("preserves audit ordinals for identical later appends across backup restore", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-audit-ordinal-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const outputDir = state.path("backups");
+        const extractDir = state.path("extract");
+        const sourcePath = state.statePath("logs/config-audit.jsonl");
+        const rawRelativePath = "logs/config-audit.jsonl.migrated.raw";
+        const record = {
+          ts: "2026-07-01T00:00:00.000Z",
+          source: "config-io",
+          event: "config.write",
+          argv: ["openclaw", "config", "set", "safe", "same"],
+          execArgv: [],
+        };
+        await fs.mkdir(outputDir, { recursive: true });
+        await fs.mkdir(extractDir, { recursive: true });
+        await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+        await fs.writeFile(sourcePath, `${JSON.stringify(record)}\n`);
+        await migrateLegacyAuditLogs({
+          detected: detectLegacyAuditLogs({
+            stateDir: state.stateDir,
+            doctorOnlyStateMigrations: true,
+          }),
+          stateDir: state.stateDir,
+        });
+        await fs.appendFile(state.statePath(rawRelativePath), `${JSON.stringify(record)}\n`);
+
+        const result = await createBackupArchive({
+          output: outputDir,
+          includeWorkspace: false,
+          nowMs: Date.UTC(2026, 4, 9, 8, 25, 0),
+        });
+        const entries = await listArchiveEntries(result.archivePath);
+        const databaseEntry = expectDefined(
+          entries.find((entry) => entry.endsWith("/state/state/openclaw.sqlite")),
+          "global state database entry",
+        );
+        await tar.x({ file: result.archivePath, gzip: true, cwd: extractDir });
+        closeOpenClawStateDatabase();
+
+        const restoredDatabasePath = path.join(extractDir, databaseEntry);
+        const restoredStateDir = path.dirname(path.dirname(restoredDatabasePath));
+        const restoredDetection = detectLegacyAuditLogs({
+          stateDir: restoredStateDir,
+          doctorOnlyStateMigrations: true,
+        });
+        expect(restoredDetection.hasLegacy).toBe(true);
+        await migrateLegacyAuditLogs({
+          detected: restoredDetection,
+          stateDir: restoredStateDir,
+        });
+        const restoredEntries = createSqliteAuditRecordStore({
+          scope: CONFIG_AUDIT_SCOPE,
+          maxEntries: CONFIG_AUDIT_MAX_ENTRIES,
+          env: { ...process.env, OPENCLAW_STATE_DIR: restoredStateDir },
+        }).entries();
+        expect(restoredEntries).toHaveLength(2);
+        expect(new Set(restoredEntries.map((entry) => entry.key)).size).toBe(2);
+        expect(restoredEntries.map((entry) => entry.value)).toEqual([record, record]);
+        closeOpenClawStateDatabase();
       },
     );
   });
