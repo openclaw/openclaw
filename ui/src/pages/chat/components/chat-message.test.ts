@@ -3293,5 +3293,24 @@ describe("resolveManagedOutgoingImageBlobUrl fetch bounding", () => {
     authServer.close();
     vi.useFakeTimers();
   });
+
+  it("aborts when headers received but body stalls", async () => {
+    const headersOnlyServer = createServer((req, res) => {
+      res.writeHead(200, { "content-type": "image/png" });
+    });
+    await new Promise<void>((resolve) => headersOnlyServer.listen(0, resolve));
+    const address = headersOnlyServer.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+    const headersOnlyServerUrl = `http://127.0.0.1:${port}`;
+    installRelativeFetchBridge(headersOnlyServerUrl);
+
+    const fetchUrl = `${headersOnlyServerUrl}/image/blob/abc123`;
+    const call = resolveManagedOutgoingImageBlobUrl(fetchUrl, {
+      authToken: "test-token",
+    });
+    await vi.advanceTimersByTimeAsync(30_000);
+    await expect(call).resolves.toBeNull();
+    headersOnlyServer.close();
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

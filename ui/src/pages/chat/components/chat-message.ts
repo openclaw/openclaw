@@ -1552,32 +1552,31 @@ export async function resolveManagedOutgoingImageBlobUrl(
       }
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), MANAGED_IMAGE_BLOB_URL_FETCH_TIMEOUT_MS);
-      let res: Response;
       try {
-        res = await fetch(fetchUrl, {
+        const res = await fetch(fetchUrl, {
           method: "GET",
           headers,
           credentials: "same-origin",
           signal: controller.signal,
         });
+        if (!res.ok) {
+          managedImageBlobUrlMissCache.set(cacheKey, Date.now());
+          return null;
+        }
+        const blob = await res.blob();
+        if (!blob.type.startsWith("image/")) {
+          managedImageBlobUrlMissCache.set(cacheKey, Date.now());
+          return null;
+        }
+        const blobUrl = URL.createObjectURL(blob);
+        managedImageBlobUrlResolvedCache.set(cacheKey, blobUrl);
+        managedImageBlobUrlMissCache.delete(cacheKey);
+        return blobUrl;
       } catch {
         return null;
       } finally {
         clearTimeout(timeout);
       }
-      if (!res.ok) {
-        managedImageBlobUrlMissCache.set(cacheKey, Date.now());
-        return null;
-      }
-      const blob = await res.blob();
-      if (!blob.type.startsWith("image/")) {
-        managedImageBlobUrlMissCache.set(cacheKey, Date.now());
-        return null;
-      }
-      const blobUrl = URL.createObjectURL(blob);
-      managedImageBlobUrlResolvedCache.set(cacheKey, blobUrl);
-      managedImageBlobUrlMissCache.delete(cacheKey);
-      return blobUrl;
     })().finally(() => {
       managedImageBlobUrlCache.delete(cacheKey);
     });
