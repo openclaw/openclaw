@@ -1359,6 +1359,19 @@ describe("gateway startup config secret preflight", () => {
       provider: "default",
       id: "OPENAI_API_KEY_NEXT",
     };
+    associateSecretResolutionErrorOwners(missingSecretError, [
+      {
+        ownerKind: "provider",
+        ownerId: "openai",
+        state: "unavailable",
+        paths: ["models.providers.openai.apiKey"],
+        refKeys: ["env:default:OPENAI_API_KEY_NEXT"],
+        reason: "secret reference was not found",
+        degradationState: "cold",
+        failureMatched: true,
+        source: "config",
+      },
+    ]);
     shouldResolve = false;
     await expect(
       activateRuntimeSecrets(changedSourceConfig, {
@@ -1384,6 +1397,52 @@ describe("gateway startup config secret preflight", () => {
     expect(emitStateEvent.mock.calls.map((call) => call[0]).slice(-2)).toEqual([
       "SECRETS_RELOADER_DEGRADED",
       "SECRETS_RELOADER_RECOVERED",
+    ]);
+
+    const unrelatedChangedSourceConfig = structuredClone(sourceConfig);
+    unrelatedChangedSourceConfig.messages = {
+      tts: {
+        providers: {
+          elevenlabs: {
+            apiKey: { source: "env", provider: "default", id: "UNRELATED_TTS_KEY" },
+          },
+        },
+      },
+    };
+    associateSecretResolutionErrorOwners(missingSecretError, [
+      {
+        ownerKind: "provider",
+        ownerId: "openai",
+        state: "unavailable",
+        paths: ["models.providers.openai.apiKey"],
+        refKeys: ["env:default:OPENAI_API_KEY"],
+        reason: "secret reference was not found",
+        degradationState: "stale",
+        failureMatched: true,
+        source: "config",
+      },
+    ]);
+    await expect(
+      activateRuntimeSecrets(unrelatedChangedSourceConfig, {
+        reason: "reload",
+        activate: false,
+        publishFailureAsDegraded: true,
+      }),
+    ).rejects.toThrow(missingSecretError.message);
+    const unrelatedRevertedSnapshot = getActiveSecretsRuntimeSnapshot()!;
+    await expect(
+      activateRuntimeSecrets.activatePreparedSnapshotIfCurrent?.(
+        unrelatedRevertedSnapshot,
+        getActiveSecretsRuntimeSnapshotRevision(),
+        { reason: "reload", activate: true, publishRecovery: false },
+      ),
+    ).resolves.toMatchObject({ sourceConfig });
+    publishRuntimeSecretsRecovery(activateRuntimeSecrets, unrelatedRevertedSnapshot, {
+      sourceOnly: true,
+    });
+    expect(emitStateEvent.mock.calls.map((call) => call[0]).slice(-2)).toEqual([
+      "SECRETS_RELOADER_RECOVERED",
+      "SECRETS_RELOADER_DEGRADED",
     ]);
 
     await expect(

@@ -357,7 +357,10 @@ export function createRuntimeSecretsActivator(params: {
           (owner) => owner.failureMatched,
         );
         const currentFailureSupportsSourceOnlyRecovery =
-          failedOwners.length > 0 && failedOwners.every((owner) => owner.source === "config");
+          failedOwners.length > 0 &&
+          failedOwners.every(
+            (owner) => owner.source === "config" && owner.degradationState === "cold",
+          );
         activeDegradationSupportsSourceOnlyRecovery = secretsDegraded
           ? activeDegradationSupportsSourceOnlyRecovery && currentFailureSupportsSourceOnlyRecovery
           : currentFailureSupportsSourceOnlyRecovery;
