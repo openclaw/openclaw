@@ -7,6 +7,7 @@ import {
   normalizeExecApprovals,
   resetExecApprovalsSyncLockStateForTest,
   saveExecApprovals,
+  updateExecApprovals,
 } from "./exec-approvals.js";
 
 const tempDirs: string[] = [];
@@ -78,6 +79,73 @@ describe("exec approvals sync lock", () => {
       nonceSeen = typeof parsed.nonce === "string" && parsed.nonce.length > 0;
     }
     expect(nonceSeen).toBe(true);
+    expect(fs.existsSync(lockPath)).toBe(false);
+    expect(fs.existsSync(statePath)).toBe(true);
+  });
+});
+
+describe("exec approvals async lock", () => {
+  // The gateway's real exec-approval traffic goes through updateExecApprovals,
+  // not saveExecApprovals. It must use the same nonce-based lock as the sync
+  // path instead of the external fs-safe sidecar lock, whose release compares
+  // an fd-based fstat against a path-based lstat and can silently skip the
+  // unlink on VirtioFS bind mounts (openclaw/openclaw#106777).
+  it("removes lock sidecar after an async update completes", async () => {
+    const { statePath, lockPath } = setupStateDir();
+    const file = normalizeExecApprovals({
+      version: 1,
+      entries: [],
+      host: "gateway",
+      security: "deny",
+    });
+    await updateExecApprovals({ update: () => file });
+    expect(fs.existsSync(lockPath)).toBe(false);
+    expect(fs.existsSync(statePath)).toBe(true);
+  });
+
+  it("uses nonce-based ownership for async updates too", async () => {
+    const { statePath, lockPath } = setupStateDir();
+    const origClose = fs.closeSync;
+    let lockContent: string | null = null;
+    const closeSpy = vi.spyOn(fs, "closeSync").mockImplementation((...args: unknown[]) => {
+      const fd = args[0] as number;
+      if (fs.existsSync(lockPath)) {
+        try {
+          lockContent = fs.readFileSync(lockPath, "utf8");
+        } catch {}
+      }
+      const result = origClose(fd);
+      return result;
+    });
+    const file = normalizeExecApprovals({
+      version: 1,
+      entries: [],
+      host: "gateway",
+      security: "deny",
+    });
+    await updateExecApprovals({ update: () => file });
+    closeSpy.mockRestore();
+    let nonceSeen = false;
+    if (lockContent) {
+      const parsed = JSON.parse(lockContent);
+      nonceSeen = typeof parsed.nonce === "string" && parsed.nonce.length > 0;
+    }
+    expect(nonceSeen).toBe(true);
+    expect(fs.existsSync(lockPath)).toBe(false);
+    expect(fs.existsSync(statePath)).toBe(true);
+  });
+
+  it("allows a sync lock and an async lock on the same path to interleave without deadlocking", async () => {
+    const { statePath, lockPath } = setupStateDir();
+    const file = normalizeExecApprovals({
+      version: 1,
+      entries: [],
+      host: "gateway",
+      security: "deny",
+    });
+    saveExecApprovals(file);
+    await updateExecApprovals({ update: () => file });
+    saveExecApprovals(file);
     expect(fs.existsSync(lockPath)).toBe(false);
     expect(fs.existsSync(statePath)).toBe(true);
   });

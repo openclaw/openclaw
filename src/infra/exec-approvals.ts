@@ -34,7 +34,6 @@ import {
   extractBindableShellWrapperInlineCommand,
   isShellWrapperInvocation,
 } from "./exec-wrapper-resolution.js";
-import { withFileLock } from "./file-lock.js";
 import { assertNoSymlinkParentsSync } from "./fs-safe-advanced.js";
 import { expandHomePrefix, resolveHomeRelativePath, resolveRequiredHomeDir } from "./home-dir.js";
 import { requestJsonlSocket } from "./jsonl-socket.js";
@@ -321,18 +320,16 @@ const DEFAULT_AUTO_ALLOW_SKILLS = false;
 const DEFAULT_EXEC_APPROVALS_STATE_DIR = "~/.openclaw";
 const EXEC_APPROVALS_FILE = "exec-approvals.json";
 const EXEC_APPROVALS_SOCKET = "exec-approvals.sock";
-const EXEC_APPROVALS_LOCK_OPTIONS = {
-  retries: {
-    retries: 10,
-    factor: 2,
-    minTimeout: 25,
-    maxTimeout: 500,
-    randomize: true,
-  },
-  stale: 30_000,
-  // Approval policy is an authorization boundary. A pathname recheck followed
-  // by stale-lock unlink cannot prove that a fresh owner was not substituted.
-  staleRecovery: "fail-closed",
+// Approval policy is an authorization boundary: the lock never auto-reclaims
+// a contended sidecar on age alone (see classifyExecApprovalsLockContention),
+// only on a proven-dead or PID-reused owner. This mirrors the previous
+// `staleRecovery: "fail-closed"` policy from the shared fs-safe lock.
+const EXEC_APPROVALS_ASYNC_LOCK_RETRY = {
+  retries: 10,
+  factor: 2,
+  minTimeout: 25,
+  maxTimeout: 500,
+  randomize: true,
 } as const;
 const EXEC_APPROVALS_LOCK_QUEUE = resolveGlobalMap<string, Promise<unknown>>(
   Symbol.for("openclaw.execApprovalsLockQueue"),
@@ -1089,6 +1086,12 @@ export async function loadExecApprovalsAsync(): Promise<ExecApprovalsFile> {
   }
 }
 
+// Nonce-based, on-disk sidecar lock. Both the sync entry point (used by CLI
+// tooling) and the async entry point (used by the gateway's real exec-approval
+// traffic) share this implementation and the held-lock map below, instead of
+// the external @openclaw/fs-safe sidecar lock: that package's release compares
+// an fd-based fstat against a path-based lstat, which can diverge on VirtioFS
+// bind mounts and silently skip the unlink (openclaw/openclaw#106777).
 type ExecApprovalsSyncLock = {
   descriptor: number;
   lockPath: string;
@@ -1096,14 +1099,14 @@ type ExecApprovalsSyncLock = {
   raw: string;
 };
 
-const HELD_EXEC_APPROVALS_SYNC_LOCKS = resolveGlobalMap<
+const HELD_EXEC_APPROVALS_LOCKS = resolveGlobalMap<
   string,
   { lock: ExecApprovalsSyncLock; depth: number }
->(Symbol.for("openclaw.heldExecApprovalsSyncLocks"));
+>(Symbol.for("openclaw.heldExecApprovalsLocks"));
 
 export function resetExecApprovalsSyncLockStateForTest(): void {
-  for (const key of HELD_EXEC_APPROVALS_SYNC_LOCKS.keys()) {
-    HELD_EXEC_APPROVALS_SYNC_LOCKS.delete(key);
+  for (const key of HELD_EXEC_APPROVALS_LOCKS.keys()) {
+    HELD_EXEC_APPROVALS_LOCKS.delete(key);
   }
 }
 
@@ -1137,6 +1140,42 @@ function readExecApprovalsLockState(lockPath: string): {
   }
 }
 
+type ExecApprovalsLockContentionOutcome = "retry" | "stale" | "timeout";
+
+// Shared EEXIST decision for both entry points: never reclaim on age alone
+// (see EXEC_APPROVALS_ASYNC_LOCK_RETRY), only on a proven-dead or PID-reused
+// owner, otherwise keep retrying until the caller's retry budget is spent.
+function classifyExecApprovalsLockContention(
+  lockPath: string,
+  attempt: number,
+  maxRetries: number,
+): ExecApprovalsLockContentionOutcome {
+  const state = readExecApprovalsLockState(lockPath);
+  if (state.definitelyStale) {
+    return "stale";
+  }
+  if (state.ownerPid !== null && state.ownerPid !== process.pid && attempt < maxRetries) {
+    return "retry";
+  }
+  return "timeout";
+}
+
+function throwExecApprovalsLockContentionError(
+  outcome: "stale" | "timeout",
+  lockPath: string,
+): never {
+  if (outcome === "stale") {
+    throw Object.assign(new Error(`Exec approvals lock has a stale owner: ${lockPath}`), {
+      code: "file_lock_stale",
+      lockPath,
+    });
+  }
+  throw Object.assign(new Error(`Exec approvals are locked: ${lockPath}`), {
+    code: "file_lock_timeout",
+    lockPath,
+  });
+}
+
 function sleepExecApprovalsSyncLockRetry(): void {
   try {
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, EXEC_APPROVALS_SYNC_LOCK_RETRY_MS);
@@ -1148,11 +1187,33 @@ function sleepExecApprovalsSyncLockRetry(): void {
   }
 }
 
+function sleepExecApprovalsAsyncLockRetry(attempt: number): Promise<void> {
+  const { minTimeout, maxTimeout, factor, randomize } = EXEC_APPROVALS_ASYNC_LOCK_RETRY;
+  const base = Math.min(maxTimeout, Math.max(minTimeout, minTimeout * factor ** attempt));
+  const delayMs = Math.min(maxTimeout, Math.round(base * (randomize ? 1 + Math.random() : 1)));
+  return new Promise((resolve) => {
+    setTimeout(resolve, delayMs);
+  });
+}
+
+function buildExecApprovalsLockPayload(): { raw: string; nonce: string } {
+  const payload: Record<string, unknown> = {
+    pid: process.pid,
+    createdAt: new Date().toISOString(),
+    nonce: crypto.randomUUID(),
+  };
+  const starttime = getExecApprovalsProcessStartTime();
+  if (starttime !== null) {
+    payload.starttime = starttime;
+  }
+  return { raw: `${JSON.stringify(payload, null, 2)}\n`, nonce: payload.nonce as string };
+}
+
 function removeOwnedExecApprovalsLock(
   lock: ExecApprovalsSyncLock,
   options: { requirePayloadMatch: boolean },
 ): void {
-  const held = HELD_EXEC_APPROVALS_SYNC_LOCKS.get(lock.lockPath);
+  const held = HELD_EXEC_APPROVALS_LOCKS.get(lock.lockPath);
   if (held && held.depth > 1) {
     held.depth -= 1;
     return;
@@ -1169,27 +1230,18 @@ function removeOwnedExecApprovalsLock(
   } catch {
     // Best-effort release; a changed path belongs to another lock owner.
   }
-  HELD_EXEC_APPROVALS_SYNC_LOCKS.delete(lock.lockPath);
+  HELD_EXEC_APPROVALS_LOCKS.delete(lock.lockPath);
 }
 
 function acquireExecApprovalsLockSync(filePath: string): ExecApprovalsSyncLock {
   const normalizedTarget = resolveCanonicalExecApprovalsTarget(filePath);
   const lockPath = `${normalizedTarget}.lock`;
-  const held = HELD_EXEC_APPROVALS_SYNC_LOCKS.get(lockPath);
+  const held = HELD_EXEC_APPROVALS_LOCKS.get(lockPath);
   if (held) {
     held.depth += 1;
     return held.lock;
   }
-  const payload: Record<string, unknown> = {
-    pid: process.pid,
-    createdAt: new Date().toISOString(),
-    nonce: crypto.randomUUID(),
-  };
-  const starttime = getExecApprovalsProcessStartTime();
-  if (starttime !== null) {
-    payload.starttime = starttime;
-  }
-  const raw = `${JSON.stringify(payload, null, 2)}\n`;
+  const { raw, nonce } = buildExecApprovalsLockPayload();
   for (let attempt = 0; attempt <= EXEC_APPROVALS_SYNC_LOCK_RETRIES; attempt += 1) {
     let descriptor: number;
     try {
@@ -1198,36 +1250,63 @@ function acquireExecApprovalsLockSync(filePath: string): ExecApprovalsSyncLock {
       if ((err as NodeJS.ErrnoException).code !== "EEXIST") {
         throw err;
       }
-      const state = readExecApprovalsLockState(lockPath);
-      if (state.definitelyStale) {
-        throw Object.assign(new Error(`Exec approvals lock has a stale owner: ${lockPath}`), {
-          code: "file_lock_stale",
-          lockPath,
-        });
-      }
-      if (
-        state.ownerPid !== null &&
-        state.ownerPid !== process.pid &&
-        attempt < EXEC_APPROVALS_SYNC_LOCK_RETRIES
-      ) {
+      const outcome = classifyExecApprovalsLockContention(
+        lockPath,
+        attempt,
+        EXEC_APPROVALS_SYNC_LOCK_RETRIES,
+      );
+      if (outcome === "retry") {
         sleepExecApprovalsSyncLockRetry();
         continue;
       }
-      throw Object.assign(new Error(`Exec approvals are locked: ${lockPath}`), {
-        code: "file_lock_timeout",
-        lockPath,
-      });
+      throwExecApprovalsLockContentionError(outcome, lockPath);
     }
-    const nonce = payload.nonce as string;
-    const lock: ExecApprovalsSyncLock = {
-      descriptor,
-      lockPath,
-      nonce,
-      raw,
-    };
+    const lock: ExecApprovalsSyncLock = { descriptor, lockPath, nonce, raw };
     try {
       fs.writeFileSync(descriptor, raw, "utf8");
-      HELD_EXEC_APPROVALS_SYNC_LOCKS.set(lockPath, { lock, depth: 1 });
+      HELD_EXEC_APPROVALS_LOCKS.set(lockPath, { lock, depth: 1 });
+      return lock;
+    } catch (err) {
+      fs.closeSync(descriptor);
+      removeOwnedExecApprovalsLock(lock, { requirePayloadMatch: false });
+      throw err;
+    }
+  }
+  throw new Error(`Failed to acquire exec approvals lock: ${lockPath}`);
+}
+
+// Async twin of acquireExecApprovalsLockSync: identical payload/nonce/release
+// semantics, but retries wait via setTimeout instead of Atomics.wait so a
+// contended lock never blocks the gateway's event loop for other requests.
+async function acquireExecApprovalsLockAsync(filePath: string): Promise<ExecApprovalsSyncLock> {
+  const normalizedTarget = resolveCanonicalExecApprovalsTarget(filePath);
+  const lockPath = `${normalizedTarget}.lock`;
+  const held = HELD_EXEC_APPROVALS_LOCKS.get(lockPath);
+  if (held) {
+    held.depth += 1;
+    return held.lock;
+  }
+  const { raw, nonce } = buildExecApprovalsLockPayload();
+  const maxRetries = EXEC_APPROVALS_ASYNC_LOCK_RETRY.retries;
+  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    let descriptor: number;
+    try {
+      descriptor = fs.openSync(lockPath, "wx", 0o600);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") {
+        throw err;
+      }
+      const outcome = classifyExecApprovalsLockContention(lockPath, attempt, maxRetries);
+      if (outcome === "retry") {
+        await sleepExecApprovalsAsyncLockRetry(attempt);
+        continue;
+      }
+      throwExecApprovalsLockContentionError(outcome, lockPath);
+    }
+    const lock: ExecApprovalsSyncLock = { descriptor, lockPath, nonce, raw };
+    try {
+      fs.writeFileSync(descriptor, raw, "utf8");
+      HELD_EXEC_APPROVALS_LOCKS.set(lockPath, { lock, depth: 1 });
       return lock;
     } catch (err) {
       fs.closeSync(descriptor);
@@ -1240,10 +1319,24 @@ function acquireExecApprovalsLockSync(filePath: string): ExecApprovalsSyncLock {
 
 function withExecApprovalsLockSync<T>(fn: () => T): T {
   const lock = acquireExecApprovalsLockSync(resolveExecApprovalsPath());
-  const held = HELD_EXEC_APPROVALS_SYNC_LOCKS.get(lock.lockPath);
+  const held = HELD_EXEC_APPROVALS_LOCKS.get(lock.lockPath);
   const isOutermost = held?.depth === 1;
   try {
     return fn();
+  } finally {
+    if (isOutermost) {
+      fs.closeSync(lock.descriptor);
+    }
+    removeOwnedExecApprovalsLock(lock, { requirePayloadMatch: true });
+  }
+}
+
+async function withExecApprovalsLockAsyncNonce<T>(fn: () => Promise<T>): Promise<T> {
+  const lock = await acquireExecApprovalsLockAsync(resolveExecApprovalsPath());
+  const held = HELD_EXEC_APPROVALS_LOCKS.get(lock.lockPath);
+  const isOutermost = held?.depth === 1;
+  try {
+    return await fn();
   } finally {
     if (isOutermost) {
       fs.closeSync(lock.descriptor);
@@ -1360,9 +1453,7 @@ async function withExecApprovalsLock<T>(fn: () => Promise<T>): Promise<T> {
   // symlinked state component from redirecting the sidecar and secures the
   // directory even when the guarded update becomes a no-op or loses its CAS.
   const filePath = resolveCanonicalExecApprovalsTarget(resolveExecApprovalsPath());
-  return await enqueueExecApprovalsLock(filePath, async () =>
-    withFileLock(filePath, EXEC_APPROVALS_LOCK_OPTIONS, fn),
-  );
+  return await enqueueExecApprovalsLock(filePath, () => withExecApprovalsLockAsyncNonce(fn));
 }
 
 async function withExecApprovalsReadLock<T>(filePath: string, fn: () => Promise<T>): Promise<T> {
