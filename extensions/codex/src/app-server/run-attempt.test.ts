@@ -6110,7 +6110,10 @@ describe("runCodexAppServerAttempt", () => {
         pluginConfig: { supervision: { enabled: true } },
         clientFactory,
       }),
-    ).rejects.toThrow("Codex session generation is no longer current");
+    ).rejects.toMatchObject({
+      name: "AgentHarnessSessionSupersededError",
+      message: "Codex session generation is no longer current: session-current",
+    });
     expect(clientFactory).not.toHaveBeenCalled();
 
     registerCodexTestSessionIdentity(sessionFile, "session-previous", sessionKey);
