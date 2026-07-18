@@ -8,7 +8,6 @@ export {
   isValidDiagnosticTraceFlags,
   isValidDiagnosticTraceId,
   onDiagnosticEvent,
-  onAISafetyDiagnosticEvent,
   parseDiagnosticTraceparent,
   type AISafetyEventMetadata,
   type DiagnosticAISafetyEventPayload,

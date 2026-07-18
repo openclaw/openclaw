@@ -3,14 +3,18 @@ import type { Duplex } from "node:stream";
 import type { Command } from "commander";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
+  AISafetyEventMetadata,
+  DiagnosticAISafetyEventPayload,
+} from "../infra/diagnostic-ai-safety-events.js";
+import type {
   DiagnosticEventPrivateData,
   DiagnosticEventInput,
   DiagnosticEventMetadata,
   DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
-import type { AISafetyEventEmitResult, AISafetyEventInput } from "./safety-event-emission.js";
 import type { SecurityAuditFinding } from "../security/audit.types.js";
 import type { PluginLogger } from "./logger-types.js";
+import type { AISafetyEventEmitResult, AISafetyEventInput } from "./safety-event-emission.js";
 
 type ChannelPlugin = import("../channels/plugins/types.plugin.js").ChannelPlugin;
 
@@ -262,6 +266,9 @@ export type OpenClawPluginServiceContext = {
         metadata: DiagnosticEventMetadata,
         privateData: DiagnosticEventPrivateData,
       ) => void,
+    ) => () => void;
+    onAISafetyEvent: (
+      listener: (event: DiagnosticAISafetyEventPayload, metadata: AISafetyEventMetadata) => void,
     ) => () => void;
   };
   /**

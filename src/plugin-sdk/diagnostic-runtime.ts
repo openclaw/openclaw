@@ -37,7 +37,6 @@ export type {
   DiagnosticToolPolicyDecisionEvent,
   DiagnosticUserFeedbackReceivedEvent,
 } from "../infra/diagnostic-ai-safety-events.js";
-export { onAISafetyDiagnosticEvent } from "../infra/diagnostic-ai-safety-events.js";
 export {
   createChildDiagnosticTraceContext,
   createDiagnosticTraceContext,

@@ -167,7 +167,7 @@ describe("startPluginServices", () => {
                   ctx.safetyDiagnostics?.emit({
                     type: "ai_safety.external_content.consumed",
                     sessionId: "session-test",
-                    sourceType: "plugin",
+                    sourceType: "api",
                     trusted: false,
                   }),
                 ).toEqual({ ok: true });

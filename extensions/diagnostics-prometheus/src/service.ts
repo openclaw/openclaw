@@ -9,11 +9,7 @@ import type {
   OpenClawPluginHttpRouteHandler,
   OpenClawPluginService,
 } from "../api.js";
-import {
-  isInternalDiagnosticEventMetadata,
-  onAISafetyDiagnosticEvent,
-  redactSensitiveText,
-} from "../api.js";
+import { isInternalDiagnosticEventMetadata, redactSensitiveText } from "../api.js";
 
 type LabelSet = Record<string, string>;
 
@@ -1055,7 +1051,8 @@ export function createDiagnosticsPrometheusExporter() {
     id: "diagnostics-prometheus",
     start(ctx) {
       const subscribe = ctx.internalDiagnostics?.onEvent;
-      if (!subscribe) {
+      const subscribeAISafety = ctx.internalDiagnostics?.onAISafetyEvent;
+      if (!subscribe || !subscribeAISafety) {
         ctx.logger.error("diagnostics-prometheus: internal diagnostics capability unavailable");
         return;
       }
@@ -1068,7 +1065,7 @@ export function createDiagnosticsPrometheusExporter() {
           );
         }
       });
-      unsubscribeAISafety = onAISafetyDiagnosticEvent((event, metadata) => {
+      unsubscribeAISafety = subscribeAISafety((event, metadata) => {
         try {
           recordAISafetyEvent(store, event, metadata);
         } catch (err) {

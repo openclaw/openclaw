@@ -39,6 +39,9 @@ function createMetricsHarness() {
           listener = undefined;
         };
       },
+      onAISafetyEvent() {
+        return () => {};
+      },
     },
   });
   return {
@@ -748,6 +751,7 @@ describe("diagnostics-prometheus service", () => {
           listeners.push(listener);
           return unsubscribe;
         },
+        onAISafetyEvent: () => unsubscribe,
       },
     });
 
@@ -801,7 +805,7 @@ describe("diagnostics-prometheus service", () => {
 
     exporter.service.stop?.();
 
-    expect(unsubscribe).toHaveBeenCalledOnce();
+    expect(unsubscribe).toHaveBeenCalledTimes(2);
     expect(exporter.render()).toBe("");
   });
 });

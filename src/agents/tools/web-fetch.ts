@@ -934,14 +934,16 @@ export function createWebFetchTool(options?: {
           resolveProviderFallback,
         });
         // Fix #3 (external-content): emit at real web_fetch boundary.
-        emitTrustedAISafetyEvent({
-          type: "ai_safety.external_content.consumed",
-          ...(options?.sessionId ? { sessionId: options.sessionId } : {}),
-          ...(options?.agentId ? { agentId: options.agentId } : {}),
-          ...(options?.channel ? { channel: options.channel } : {}),
-          sourceType: "web_fetch",
-          trusted: false,
-        });
+        if (options?.sessionId) {
+          emitTrustedAISafetyEvent({
+            type: "ai_safety.external_content.consumed",
+            sessionId: options.sessionId,
+            ...(options.agentId ? { agentId: options.agentId } : {}),
+            ...(options.channel ? { channel: options.channel } : {}),
+            sourceType: "web_fetch",
+            trusted: false,
+          });
+        }
         return jsonResult(result);
       } finally {
         clearProgressTimer();

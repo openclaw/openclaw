@@ -2,6 +2,7 @@
 import { STATE_DIR } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayPluginEventBroadcastFn } from "../gateway/server-broadcast-types.js";
+import { onAISafetyDiagnosticEvent } from "../infra/diagnostic-ai-safety-events.js";
 import {
   emitTrustedDiagnosticEventWithPrivateData,
   onTrustedInternalDiagnosticEvent,
@@ -59,6 +60,7 @@ function createServiceContext(params: {
           internalDiagnostics: {
             emit: emitTrustedDiagnosticEventWithPrivateData,
             onEvent: onTrustedInternalDiagnosticEvent,
+            onAISafetyEvent: onAISafetyDiagnosticEvent,
           },
         }
       : {}),

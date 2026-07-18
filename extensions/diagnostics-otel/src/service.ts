@@ -14,7 +14,6 @@ import {
 import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
 import { registerUnhandledRejectionHandler } from "openclaw/plugin-sdk/runtime-env";
 import type { OpenClawPluginService } from "../api.js";
-import { onAISafetyDiagnosticEvent } from "../api.js";
 import {
   DEFAULT_SERVICE_NAME,
   OTEL_EXPORTER_OTLP_ENDPOINT_ENV,
@@ -296,7 +295,8 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         ...createAiSafetyRecorders(recorderRuntime),
       };
       const subscribe = ctx.internalDiagnostics?.onEvent;
-      if (!subscribe) {
+      const subscribeAISafety = ctx.internalDiagnostics?.onAISafetyEvent;
+      if (!subscribe || !subscribeAISafety) {
         ctx.logger.error("diagnostics-otel: internal diagnostics capability unavailable");
         return;
       }
@@ -310,7 +310,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         }),
       );
 
-      unsubscribeAISafety = onAISafetyDiagnosticEvent((event, metadata) => {
+      unsubscribeAISafety = subscribeAISafety((event, metadata) => {
         const { type } = event;
         if (type === "ai_safety.prompt_injection.signal")
           recorders.recordPromptInjectionSignal(event, metadata);
