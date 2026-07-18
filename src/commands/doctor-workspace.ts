@@ -44,8 +44,15 @@ export async function shouldSuggestMemorySystem(workspaceDir: string): Promise<b
 
   const agentsPath = path.join(workspaceDir, DEFAULT_AGENTS_FILENAME);
   try {
-    const content = await readRegularFile({ filePath: agentsPath, maxBytes: WORKSPACE_DOCTOR_MAX_BYTES });
-    if (new RegExp(`\\b${CANONICAL_ROOT_MEMORY_FILENAME.replace(".", "\\.")}\\b`).test(content)) {
+    const { buffer: content } = await readRegularFile({
+      filePath: agentsPath,
+      maxBytes: WORKSPACE_DOCTOR_MAX_BYTES,
+    });
+    if (
+      new RegExp(`\\b${CANONICAL_ROOT_MEMORY_FILENAME.replace(".", "\\.")}\\b`).test(
+        content.toString("utf8"),
+      )
+    ) {
       return false;
     }
   } catch {
@@ -210,10 +217,12 @@ export async function migrateLegacyRootMemoryFile(
     workspaceDir: detection.workspaceDir,
     legacyPath: detection.legacyPath,
   });
-  const [canonicalText, legacyText] = await Promise.all([
+  const [canonicalResult, legacyResult] = await Promise.all([
     readRegularFile({ filePath: detection.canonicalPath, maxBytes: WORKSPACE_DOCTOR_MAX_BYTES }),
     readRegularFile({ filePath: archivedLegacyPath, maxBytes: WORKSPACE_DOCTOR_MAX_BYTES }),
   ]);
+  const canonicalText = canonicalResult.buffer.toString("utf8");
+  const legacyText = legacyResult.buffer.toString("utf8");
   if (canonicalText !== legacyText) {
     const merged = `${canonicalText.trimEnd()}\n${buildMergedLegacyRootMemorySection({
       legacyText,
