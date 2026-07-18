@@ -105,12 +105,28 @@ function decodeCursor(value: unknown): number {
       throw new Error("non-canonical base64url");
     }
     const parsed = JSON.parse(bytes.toString("utf8")) as unknown;
-    if (!isRecord(parsed) || !Number.isInteger(parsed.offset) || Number(parsed.offset) < 0) {
+    if (!isRecord(parsed) || !Number.isSafeInteger(parsed.offset) || Number(parsed.offset) < 0) {
       throw new Error("invalid offset");
     }
-    return Number(parsed.offset);
+    const offset = Number(parsed.offset);
+    if (encodeCursor(offset) !== cursor) {
+      throw new Error("non-canonical cursor payload");
+    }
+    return offset;
   } catch (error) {
     throw new Error("cursor is invalid", { cause: error });
+  }
+}
+
+export function isExactOpenCodeSessionCursor(value: unknown): value is string {
+  if (typeof value !== "string") {
+    return false;
+  }
+  try {
+    decodeCursor(value);
+    return true;
+  } catch {
+    return false;
   }
 }
 

@@ -46,17 +46,21 @@ export function decodeListSessionsCursor(value: string | null | undefined): List
   }
   if (
     typeof record.offset !== "number" ||
-    !Number.isInteger(record.offset) ||
+    !Number.isSafeInteger(record.offset) ||
     record.offset < 0 ||
     record.offset > ACP_LIST_SESSIONS_MAX_CURSOR_OFFSET
   ) {
     throw new Error("Invalid ACP session list cursor offset.");
   }
   const cwd = normalizeOptionalString(record.cwd);
-  return {
+  const cursor = {
     offset: record.offset,
     ...(cwd ? { cwd } : {}),
   };
+  if (encodeListSessionsCursor(cursor) !== value) {
+    throw new Error("Invalid ACP session list cursor.");
+  }
+  return cursor;
 }
 
 /** Throws when an ACP method receives a relative cwd filter/path. */
