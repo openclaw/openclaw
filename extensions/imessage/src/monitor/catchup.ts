@@ -11,7 +11,7 @@ import { getIMessageRuntime } from "../runtime.js";
 //
 // This module keeps catchup on the same inbound evaluation and dispatch path
 // as live `imsg watch` notifications. The replay loop is pluggable via the
-// `dispatch` callback so `evaluateIMessageInbound` + `dispatchInboundMessage`
+// `dispatch` callback so `evaluateIMessageInbound` + `runChannelInboundEvent`
 // runs unchanged on replayed rows.
 //
 // See https://github.com/openclaw/openclaw/issues/78649 for design discussion.
@@ -358,7 +358,7 @@ export async function advanceIMessageCatchupCursor(
  * The fetch and dispatch functions are injected so this loop is unit-testable
  * without standing up an `imsg` daemon. The wiring in `monitor-provider.ts`
  * passes the live `client.request("messages.history", ...)` adapter as
- * `fetch` and the `evaluateIMessageInbound` + `dispatchInboundMessage`
+ * `fetch` and the `evaluateIMessageInbound` + `runChannelInboundEvent`
  * pipeline as `dispatch`.
  */
 export async function performIMessageCatchup(

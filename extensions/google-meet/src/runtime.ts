@@ -483,26 +483,46 @@ export class GoogleMeetRuntime {
   ): Promise<MeetingSessionRuntimeHandles<GoogleMeetChromeHealth> | undefined> {
     if (
       !isGoogleMeetTalkBackMode(session.mode) ||
-      session.transport !== "chrome" ||
+      !isBrowserTransport(session.transport) ||
       session.state !== "active" ||
       !session.chrome ||
       session.chrome.audioBridge ||
       session.chrome.health?.inCall !== true ||
-      session.chrome.health.micMuted === true ||
+      session.chrome.health.micMuted !== false ||
       session.chrome.health.manualActionRequired === true
     ) {
       return undefined;
     }
     const config = withSessionAgentConfig(this.params.config, session.agentId);
-    const result = await launchChromeMeet({
-      runtime: this.params.runtime,
-      config: { ...config, chrome: { ...config.chrome, launch: false } },
-      fullConfig: this.params.fullConfig,
-      meetingSessionId: session.id,
-      mode: session.mode,
-      url: session.url,
-      logger: this.params.logger,
-    });
+    // This session already owns its browser tab. Bridge recovery must not
+    // launch or navigate another tab, even when tab reuse is disabled.
+    const recoveryConfig = {
+      ...config,
+      chrome: { ...config.chrome, launch: false },
+      ...(session.chrome.nodeId
+        ? { chromeNode: { ...config.chromeNode, node: session.chrome.nodeId } }
+        : {}),
+    };
+    const result: ChromeLaunchResult =
+      session.transport === "chrome-node"
+        ? await launchChromeMeetOnNode({
+            runtime: this.params.runtime,
+            config: recoveryConfig,
+            fullConfig: this.params.fullConfig,
+            meetingSessionId: session.id,
+            mode: session.mode,
+            url: session.url,
+            logger: this.params.logger,
+          })
+        : await launchChromeMeet({
+            runtime: this.params.runtime,
+            config: recoveryConfig,
+            fullConfig: this.params.fullConfig,
+            meetingSessionId: session.id,
+            mode: session.mode,
+            url: session.url,
+            logger: this.params.logger,
+          });
     session.updatedAt = nowIso();
     return this.#attachChromeAudioBridge(session, result.audioBridge);
   }
@@ -519,6 +539,8 @@ export class GoogleMeetRuntime {
               config: this.params.config,
               mode: session.mode,
               readOnly: options.readOnly,
+              trackedMeetingUrl: session.url,
+              trackedTargetId: session.chrome?.browserTab?.targetId,
               url: session.url,
             })
           : await recoverCurrentMeetTab({
@@ -526,10 +548,22 @@ export class GoogleMeetRuntime {
               config: this.params.config,
               mode: session.mode,
               readOnly: options.readOnly,
+              trackedMeetingUrl: session.url,
+              trackedTargetId: session.chrome?.browserTab?.targetId,
               url: session.url,
             });
-      if (result.found && result.browser && session.chrome) {
-        session.chrome.health = { ...session.chrome.health, ...result.browser };
+      if (result.found && session.chrome) {
+        if (result.targetId) {
+          const currentTab = session.chrome.browserTab;
+          session.chrome.browserTab = {
+            targetId: result.targetId,
+            openedByPlugin:
+              result.targetId === currentTab?.targetId ? currentTab.openedByPlugin : false,
+          };
+        }
+        if (result.browser) {
+          session.chrome.health = { ...session.chrome.health, ...result.browser };
+        }
         session.updatedAt = nowIso();
       }
     } catch (error) {

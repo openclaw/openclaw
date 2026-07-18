@@ -145,6 +145,44 @@ describe("checkGatewayHealth", () => {
     );
   });
 
+  it("lists every plugin configured unavailable by Gateway startup", async () => {
+    callGateway
+      .mockResolvedValueOnce({
+        degradedPlugins: [
+          {
+            pluginId: "discord",
+            state: "configured-unavailable",
+            diagnostic: {
+              kind: "plugin-verification",
+              reason: "unreadable-package-json",
+              detail: "permission denied",
+            },
+          },
+          {
+            pluginId: "matrix",
+            state: "configured-unavailable",
+            diagnostic: {
+              kind: "plugin-verification",
+              reason: "missing-main-entry",
+              detail: "dist/index.js is missing",
+            },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({});
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    await checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 });
+
+    expect(note).toHaveBeenCalledWith(
+      [
+        "- discord (unreadable-package-json): permission denied",
+        "- matrix (missing-main-entry): dist/index.js is missing",
+      ].join("\n"),
+      "Plugins configured unavailable",
+    );
+  });
+
   it("does not run follow-up channel probes when liveness fails", async () => {
     callGateway.mockRejectedValueOnce(new Error("gateway timeout after 3000ms"));
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };

@@ -24,7 +24,7 @@ import {
 } from "./deliver-types.js";
 import { attachOutboundDeliveryCommitHook } from "./delivery-commit-hooks.js";
 import { pruneOrphanedDeliveryQueueMedia } from "./delivery-queue-media-spool.js";
-import { loadPendingDeliveries } from "./delivery-queue-storage.js";
+import { loadPendingDeliveries, reserveDeliveryAttempt } from "./delivery-queue-storage.js";
 import {
   ackDelivery,
   enqueueDelivery,
@@ -498,6 +498,67 @@ describe("delivery-queue recovery", () => {
     });
   });
 
+  it("honors a producer-specific retry budget", async () => {
+    const id = await enqueueDelivery(
+      {
+        channel: "demo-channel-a",
+        to: "+1",
+        payloads: [{ text: "a" }],
+        maxRetries: 45,
+      },
+      tmpDir(),
+    );
+    setQueuedEntryState(tmpDir(), id, {
+      retryCount: MAX_RETRIES,
+      lastAttemptAt: Date.now() - 10_000_000,
+    });
+    const deliver = vi.fn().mockResolvedValue([]);
+
+    const { result } = await runRecovery({ deliver });
+
+    expect(deliver).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({ recovered: 1, skippedMaxRetries: 0 });
+    expect(readOutboundQueueStatus(tmpDir(), id)).toBeUndefined();
+  });
+
+  it("dead-letters an atomically exhausted attempt budget before replay", async () => {
+    const id = await enqueueDelivery(
+      {
+        channel: "demo-channel-a",
+        to: "+1",
+        payloads: [{ text: "a" }],
+        maxRetries: 1,
+      },
+      tmpDir(),
+    );
+    await reserveDeliveryAttempt(id, 1, tmpDir());
+    const deliver = vi.fn();
+
+    const { result } = await runRecovery({ deliver });
+
+    expect(deliver).not.toHaveBeenCalled();
+    expect(result.skippedMaxRetries).toBe(1);
+    expect(readOutboundQueueStatus(tmpDir(), id)).toBe("failed");
+  });
+
+  it("ignores an invalid producer retry budget", async () => {
+    await enqueueDelivery(
+      {
+        channel: "demo-channel-a",
+        to: "+1",
+        payloads: [{ text: "a" }],
+        maxRetries: 0.5,
+      },
+      tmpDir(),
+    );
+    const deliver = vi.fn().mockResolvedValue([]);
+
+    const { result } = await runRecovery({ deliver });
+
+    expect(deliver).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({ recovered: 1, skippedMaxRetries: 0 });
+  });
+
   it("dead-letters max-retry entries even when conversation owner state is missing", async () => {
     const storePath = path.join(tmpDir(), "missing-owner-sessions.json");
     const id = await enqueueDelivery(
@@ -537,6 +598,7 @@ describe("delivery-queue recovery", () => {
     );
     setQueuedEntryState(tmpDir(), id, {
       retryCount: MAX_RETRIES,
+      lastAttemptAt: Date.now() - 10_000_000,
       platformSendStartedAt: Date.now(),
       recoveryState: "send_attempt_started",
     });
@@ -544,7 +606,7 @@ describe("delivery-queue recovery", () => {
     const { result } = await runRecovery({ deliver: vi.fn() });
     unsubscribe();
 
-    expect(result.skippedMaxRetries).toBe(1);
+    expect(result).toMatchObject({ failed: 1, skippedMaxRetries: 0 });
     expect(auditEvents).toHaveLength(1);
     expect(auditEvents[0]).toMatchObject({
       sourceId: `message:outbound:queue:${id}:payload:0`,
@@ -571,6 +633,7 @@ describe("delivery-queue recovery", () => {
     const entries = await loadPendingDeliveries(tmpDir());
     expect(entries).toHaveLength(1);
     expect(entries[0]?.retryCount).toBe(1);
+    expect(entries[0]?.attemptCount).toBe(1);
     expect(entries[0]?.lastError).toBe("network down");
     expect(auditEvents).toEqual([]);
   });
@@ -1008,9 +1071,11 @@ describe("delivery-queue recovery", () => {
         replyToId: "root-message",
         threadId: "thread-1",
         silent: true,
+        maxRetries: 1,
       },
       tmpDir(),
     );
+    await reserveDeliveryAttempt(id, 1, tmpDir());
     await markDeliveryPlatformSendAttemptStarted(id, tmpDir(), {
       replyToId: "hooked-root-message",
     });
@@ -1170,6 +1235,45 @@ describe("delivery-queue recovery", () => {
     expect(entries[0]?.retryCount).toBe(1);
     expect(entries[0]?.recoveryState).toBe("unknown_after_send");
     expect(entries[0]?.lastError).toContain("provider lookup timed out");
+  });
+
+  it("dead-letters an exhausted unknown send after retryable reconciliation fails", async () => {
+    const id = await enqueueDelivery(
+      {
+        channel: "demo-channel-a",
+        to: "+1",
+        payloads: [{ text: "unknown final attempt" }],
+        maxRetries: 1,
+      },
+      tmpDir(),
+    );
+    await reserveDeliveryAttempt(id, 1, tmpDir());
+    setQueuedEntryState(tmpDir(), id, {
+      retryCount: 0,
+      lastAttemptAt: Date.now() - 10_000_000,
+      platformSendStartedAt: Date.now(),
+      recoveryState: "unknown_after_send",
+    });
+    const reconcileUnknownSend = vi.fn().mockResolvedValue({
+      status: "unresolved",
+      error: "provider lookup timed out",
+      retryable: true,
+    });
+    resolveOutboundChannelMessageAdapterMock.mockReturnValue({
+      durableFinal: {
+        capabilities: { reconcileUnknownSend: true },
+        reconcileUnknownSend,
+      },
+    });
+    const deliver = vi.fn().mockResolvedValue([]);
+
+    const { result } = await runRecovery({ deliver });
+
+    expect(reconcileUnknownSend).toHaveBeenCalledOnce();
+    expect(deliver).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ failed: 1, skippedMaxRetries: 0 });
+    expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
+    expect(readOutboundQueueStatus(tmpDir(), id)).toBe("failed");
   });
 
   it("does not reconcile unknown-after-send entries unless the adapter declares the capability", async () => {

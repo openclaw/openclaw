@@ -128,6 +128,84 @@ describe("check-database-first-legacy-stores", () => {
     expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 5 }]);
   });
 
+  it("keeps legacy restart sentinel filesystem access in its sole migration owner", () => {
+    const runtimeViolations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { readFile } from "node:fs/promises";
+        import path from "node:path";
+        const legacyFilename = "restart-sentinel.json";
+      `,
+      "src/infra/restart-sentinel.ts",
+    );
+    const migrationViolations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { readFile } from "node:fs/promises";
+        import path from "node:path";
+        const legacyFilename = "restart-sentinel.json";
+      `,
+      "src/infra/state-migrations.restart-sentinel.ts",
+    );
+
+    expect(runtimeViolations).toEqual([
+      { kind: "legacy restart sentinel filesystem import", line: 2 },
+      { kind: "legacy restart sentinel filesystem import", line: 3 },
+      { kind: "legacy restart sentinel reference", line: 4 },
+    ]);
+    expect(migrationViolations).toEqual([]);
+  });
+
+  it("flags legacy restart sentinel references outside the migration owner", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        const legacyPath = path.join(stateDir, "restart-sentinel.json");
+        await readFile(legacyPath, "utf8");
+      `,
+      "src/commands/doctor/state-migrations.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy restart sentinel reference", line: 2 }]);
+  });
+
+  it("allows the CLI preflight to detect exact legacy restart sentinel inputs", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        [
+          path.join(stateDir, "restart-sentinel.json"),
+          path.join(stateDir, "restart-sentinel.json.doctor-importing"),
+        ].some(fileOrDirExists);
+      `,
+      "src/cli/program/config-guard.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("flags direct legacy restart sentinel reads from the CLI preflight", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        await readFile(path.join(stateDir, "restart-sentinel.json"), "utf8");
+        await readFile(path.join(stateDir, "restart-sentinel.json.doctor-importing"), "utf8");
+      `,
+      "src/cli/program/config-guard.ts",
+    );
+
+    expect(violations).toEqual([
+      { kind: "legacy restart sentinel reference", line: 2 },
+      { kind: "legacy restart sentinel reference", line: 3 },
+    ]);
+  });
+
+  it("flags nested restart sentinel paths disguised as CLI preflight detection", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        [path.join(stateDir, "archive/restart-sentinel.json")].some(fileOrDirExists);
+      `,
+      "src/cli/program/config-guard.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy restart sentinel reference", line: 2 }]);
+  });
+
   it("flags retired Diffs viewer sidecar writes", () => {
     const violations = collectDatabaseFirstLegacyStoreViolations(
       `
@@ -1819,6 +1897,7 @@ describe("check-database-first-legacy-stores", () => {
     );
 
     expect(violations).toEqual([
+      { kind: "legacy restart sentinel reference", line: 5 },
       { kind: "legacy store filesystem write", line: 5 },
       { kind: "legacy store filesystem write", line: 6 },
       { kind: "legacy store filesystem write", line: 7 },
@@ -8583,23 +8662,7 @@ describe("check-database-first-legacy-stores", () => {
     expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 668 }]);
   });
 
-  it("allows current legacy-debt writes after harmless line movement", () => {
-    const content = [
-      `import { fsRoot } from "@openclaw/fs-safe/root";`,
-      `const relativePath = ".openclaw-wiki/cache/claims.jsonl";`,
-      `const root = await fsRoot(rootDir);`,
-      ...Array.from({ length: 8 }, () => ""),
-      `await root.write(relativePath, content);`,
-    ].join("\n");
-    const violations = collectDatabaseFirstLegacyStoreViolations(
-      content,
-      "extensions/memory-wiki/src/compile.ts",
-    );
-
-    expect(violations).toEqual([]);
-  });
-
-  it("flags duplicate copies of current legacy-debt writes", () => {
+  it("flags duplicate copies when one current legacy-debt write is allowed", () => {
     const relativePath = "extensions/memory-wiki/src/compile.ts";
     const allowedWrite = `fs.writeFileSync("sessions.json", "{}\\n")`;
     const currentLegacyWriteAllowances = new Map([
@@ -8612,18 +8675,6 @@ describe("check-database-first-legacy-stores", () => {
     );
 
     expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 3 }]);
-  });
-
-  it("flags stale current legacy-debt allowlist entries during full scans", () => {
-    const violations = collectDatabaseFirstLegacyStoreViolations(
-      `
-        export const CLAIMS_DIGEST_PATH = ".openclaw-wiki/cache/claims.jsonl";
-      `,
-      "extensions/memory-wiki/src/compile.ts",
-      { enforceCurrentLegacyAllowlist: true },
-    );
-
-    expect(violations).toEqual([{ kind: "stale current legacy write allowlist", line: 1 }]);
   });
 
   it("allows doctor and migration owners to import or archive legacy files", () => {

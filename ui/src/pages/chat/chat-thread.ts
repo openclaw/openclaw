@@ -5,6 +5,7 @@ import {
   isToolResultContentType,
   resolveToolUseId,
 } from "../../../../src/chat/tool-content.js";
+import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import type {
   ChatItem,
   MessageGroup,
@@ -34,6 +35,7 @@ import {
   extractToolPreview,
   isToolCardError,
 } from "../../lib/chat/tool-cards.ts";
+import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import {
   buildCompactionDividerItem,
@@ -64,6 +66,7 @@ type BuildChatItemsProps = {
   /** True while the current session has an abortable live run. */
   runActive?: boolean;
   planStatus?: PlanStatus | null;
+  questionPrompts?: readonly QuestionPrompt[];
   /** True while chat history is loading (initial load or background reload). */
   loading?: boolean;
   searchOpen?: boolean;
@@ -82,7 +85,10 @@ type StreamRunRenderItem = {
   kind: "stream-run";
   key: string;
   parts: Array<
-    Extract<ChatItem, { kind: "stream" } | { kind: "reading-indicator" } | { kind: "plan" }>
+    Extract<
+      ChatItem,
+      { kind: "stream" } | { kind: "reading-indicator" } | { kind: "question" } | { kind: "plan" }
+    >
   >;
 };
 
@@ -1100,6 +1106,8 @@ function chatItemTimestamp(item: ChatItem): number | null {
       return item.timestamp;
     case "stream":
       return item.startedAt;
+    case "question":
+      return item.startedAt;
     case "reading-indicator":
     case "plan":
       return null;
@@ -1479,6 +1487,20 @@ function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGro
   if (props.runActive === true && props.planStatus && props.planStatus.steps.length > 0) {
     items.push({ kind: "plan", key: `plan:${props.sessionKey}:active` });
   }
+  for (const prompt of props.questionPrompts ?? []) {
+    // In-thread questions need an explicit owner. Routing an unscoped prompt to the active pane
+    // could expose it to the wrong session; ask_user supplies the originating session key.
+    if (!prompt.sessionKey || !areUiSessionKeysEquivalent(prompt.sessionKey, props.sessionKey)) {
+      continue;
+    }
+    items.push({
+      kind: "question",
+      key: `question:${prompt.id}`,
+      questionId: prompt.id,
+      startedAt: prompt.createdAtMs,
+      pending: prompt.status === "pending",
+    });
+  }
 
   return annotateToolTurnOutcome(
     groupMessages(
@@ -1542,6 +1564,13 @@ function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
       );
     case "reading-indicator":
       return previous.kind === "reading-indicator" && previous.startedAt === next.startedAt;
+    case "question":
+      return (
+        previous.kind === "question" &&
+        previous.questionId === next.questionId &&
+        previous.startedAt === next.startedAt &&
+        previous.pending === next.pending
+      );
     case "plan":
       return previous.kind === "plan";
   }
@@ -1645,6 +1674,7 @@ function sameChatItemsStructuralInput(
     previous.showToolCalls === next.showToolCalls &&
     previous.runWorking === next.runWorking &&
     previous.runActive === next.runActive &&
+    previous.questionPrompts === next.questionPrompts &&
     Boolean(previous.planStatus?.steps.length) === Boolean(next.planStatus?.steps.length) &&
     previous.loading === next.loading &&
     previous.searchOpen === next.searchOpen &&
@@ -1746,7 +1776,7 @@ export function coalesceStreamRuns(
 ): Array<RenderChatItem | StreamRunRenderItem> {
   const result: Array<RenderChatItem | StreamRunRenderItem> = [];
   let run: StreamRunRenderItem["parts"] = [];
-  // Contiguous in-flight stream, plan, and reading-indicator items render under one
+  // Contiguous in-flight stream, question, plan, and reading-indicator items render under one
   // assistant avatar; messages, groups, and dividers intentionally break the run.
   const flush = () => {
     const [first] = run;
@@ -1756,7 +1786,12 @@ export function coalesceStreamRuns(
     }
   };
   for (const item of items) {
-    if (item.kind === "stream" || item.kind === "reading-indicator" || item.kind === "plan") {
+    if (
+      item.kind === "stream" ||
+      item.kind === "reading-indicator" ||
+      (item.kind === "question" && item.pending) ||
+      item.kind === "plan"
+    ) {
       run.push(item);
       continue;
     }

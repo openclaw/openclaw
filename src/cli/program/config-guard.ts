@@ -124,6 +124,8 @@ function hasLegacyStateMigrationInputs(): boolean {
       path.join(stateDir, "agent"),
       path.join(stateDir, "agents"),
       path.join(stateDir, "plugins", "installs.json"),
+      path.join(stateDir, "restart-sentinel.json"),
+      path.join(stateDir, "restart-sentinel.json.doctor-importing"),
       path.join(stateDir, "sessions"),
       path.join(stateDir, "state", "openclaw.sqlite"),
     ].some(fileOrDirExists) ||

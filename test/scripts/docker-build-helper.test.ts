@@ -3695,6 +3695,14 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
     );
   });
 
+  it("keeps private bundled plugins discoverable in the functional Docker E2E image", () => {
+    const dockerfile = readFileSync("scripts/e2e/Dockerfile", "utf8");
+
+    expect(dockerfile).toContain(
+      "OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION=1 node /app/scripts/postinstall-bundled-plugins.mjs",
+    );
+  });
+
   it("keeps onboarding Docker E2E resource-guarded", () => {
     const runner = readFileSync(ONBOARD_DOCKER_E2E_PATH, "utf8");
 
@@ -4198,6 +4206,9 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
     expect(helper).toContain("--allow-unreleased-changelog");
     expect(helper).toContain(
       '-v "$ROOT_DIR/scripts/windows-cmd-helpers.mjs:/app/scripts/windows-cmd-helpers.mjs:ro"',
+    );
+    expect(helper).toContain(
+      '-v "$ROOT_DIR/packages/normalization-core/src:/app/packages/normalization-core/src:ro"',
     );
     expect(helper).toContain('-v "$ROOT_DIR/test/e2e/qa-lab:/app/test/e2e/qa-lab:ro"');
     expect(helper).toContain('-v "$ROOT_DIR/test/helpers:/app/test/helpers:ro"');

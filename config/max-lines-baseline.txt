@@ -278,7 +278,6 @@ extensions/slack/src/approval-native.test.ts
 extensions/slack/src/channel.test.ts
 extensions/slack/src/channel.ts
 extensions/slack/src/message-action-dispatch.test.ts
-extensions/slack/src/monitor/context.ts
 extensions/slack/src/monitor/events/interactions.block-actions.ts
 extensions/slack/src/monitor/events/interactions.test.ts
 extensions/slack/src/monitor/media.test.ts
@@ -349,7 +348,6 @@ extensions/zalouser/src/monitor.ts
 extensions/zalouser/src/zalo-js.ts
 packages/agent-core/src/agent-loop.test.ts
 packages/agent-core/src/agent-loop.ts
-packages/agent-core/src/harness/agent-harness.ts
 packages/agent-core/src/harness/compaction/compaction.ts
 packages/ai/src/providers/agent-tools-parameter-schema.ts
 packages/ai/src/providers/anthropic.test.ts
@@ -641,7 +639,6 @@ src/channels/plugins/setup-wizard-helpers.ts
 src/channels/plugins/types.adapters.ts
 src/channels/streaming.ts
 src/channels/turn/kernel.test.ts
-src/channels/turn/kernel.ts
 src/cli/capability-cli.test.ts
 src/cli/command-secret-gateway.test.ts
 src/cli/command-secret-gateway.ts
@@ -744,8 +741,6 @@ src/config/plugin-auto-enable.core.test.ts
 src/config/plugin-auto-enable.shared.ts
 src/config/redact-snapshot.test.ts
 src/config/redact-snapshot.ts
-src/config/schema.help.quality.test.ts
-src/config/schema.help.ts
 src/config/schema.labels.ts
 src/config/schema.test.ts
 src/config/schema.ts
@@ -761,7 +756,6 @@ src/config/validation.ts
 src/config/zod-schema.agent-runtime.ts
 src/config/zod-schema.core.ts
 src/config/zod-schema.providers-core.ts
-src/config/zod-schema.ts
 src/context-engine/context-engine.test.ts
 src/context-engine/registry.ts
 src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts

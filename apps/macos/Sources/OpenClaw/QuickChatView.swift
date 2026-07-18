@@ -7,6 +7,8 @@ struct QuickChatView: View {
     @Bindable var model: QuickChatModel
     let onDismiss: () -> Void
     let onSendAccepted: (Bool) -> Void
+    let onShowAgentPicker: () -> Void
+    let onWindowScreenshot: () -> Void
     let onContentHeightChange: (CGFloat) -> Void
     let onTextViewReady: (NSTextView) -> Void
 
@@ -53,7 +55,7 @@ struct QuickChatView: View {
 
     private var inputRow: some View {
         HStack(spacing: 10) {
-            self.agentAvatar
+            self.agentChip
 
             ZStack(alignment: .leading) {
                 if self.model.text.isEmpty {
@@ -73,12 +75,18 @@ struct QuickChatView: View {
             }
             .frame(maxWidth: .infinity)
 
-            Text("main session")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 7)
-                .padding(.vertical, 3)
-                .background(.quaternary, in: Capsule())
+            if self.model.sendState != .sending {
+                Button(action: self.onWindowScreenshot) {
+                    Image(systemName: "camera.viewfinder")
+                        .font(.system(size: 16.5, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 22, height: 22)
+                }
+                .buttonStyle(.plain)
+                .disabled(!self.model.canCaptureWindow)
+                .help("Send a window screenshot")
+                .accessibilityLabel("Send a window screenshot")
+            }
 
             Button {
                 self.submit(openChat: false)
@@ -106,21 +114,50 @@ struct QuickChatView: View {
         .padding(14)
     }
 
+    @ViewBuilder
+    private var agentChip: some View {
+        if self.model.agents.count > 1 {
+            Button(action: self.onShowAgentPicker) {
+                self.agentAvatar
+            }
+            .buttonStyle(.plain)
+            .disabled(self.model.sendState == .sending)
+            .help(self.model.agentDisplay.name)
+        } else {
+            self.agentAvatar
+                .help(self.model.agentDisplay.name)
+        }
+    }
+
     private var agentAvatar: some View {
         ZStack {
             Circle()
-                .fill(Color.primary.opacity(0.07))
-            if let emoji = self.model.agentDisplay.emoji {
+                .fill(self.agentTint.opacity(0.18))
+            if case let .image(data) = self.model.agentDisplay.avatar,
+               let image = NSImage(data: data)
+            {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    .clipShape(Circle())
+            } else if let emoji = self.model.agentDisplay.emoji {
                 Text(emoji)
                     .font(.system(size: 16))
             } else {
-                Image(systemName: self.model.agentDisplay.avatarSymbolFallback)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.secondary)
+                Text(self.model.agentDisplay.monogram)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(self.agentTint)
             }
         }
         .frame(width: 28, height: 28)
         .accessibilityLabel(self.model.agentDisplay.name)
+    }
+
+    private var agentTint: Color {
+        Color(
+            hue: self.model.agentDisplay.tintHue,
+            saturation: 0.62,
+            brightness: 0.72)
     }
 
     private var permissionStrip: some View {

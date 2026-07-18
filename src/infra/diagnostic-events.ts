@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { TalkBrain, TalkEventType, TalkMode, TalkTransport } from "../talk/talk-events.js";
+import { setInternalDiagnosticEventListenerCounts } from "./diagnostic-event-listener-presence.js";
 import {
   formatDiagnosticTraceparent,
   getActiveDiagnosticTraceContext,
@@ -599,6 +600,8 @@ type DiagnosticModelCallBaseEvent = DiagnosticBaseEvent & {
   model: string;
   api?: string;
   transport?: string;
+  /** Defaults to request for emitters created before turn-level CLI diagnostics. */
+  observationUnit?: "request" | "turn";
   contextTokenBudget?: number;
   contextWindowSource?: "model" | "modelsConfig" | "agentContextTokens" | "default";
   contextWindowReferenceTokens?: number;
@@ -1385,8 +1388,10 @@ export function emitFailoverEvent(event: Omit<DiagnosticFailoverEvent, "seq" | "
 export function onInternalDiagnosticEvent(listener: DiagnosticEventListener): () => void {
   const state = getDiagnosticEventsState();
   state.listeners.add(listener);
+  setInternalDiagnosticEventListenerCounts(state.listeners.size, state.trustedListeners.size);
   return () => {
     state.listeners.delete(listener);
+    setInternalDiagnosticEventListenerCounts(state.listeners.size, state.trustedListeners.size);
   };
 }
 
@@ -1396,8 +1401,10 @@ export function onTrustedInternalDiagnosticEvent(
 ): () => void {
   const state = getDiagnosticEventsState();
   state.trustedListeners.add(listener);
+  setInternalDiagnosticEventListenerCounts(state.listeners.size, state.trustedListeners.size);
   return () => {
     state.trustedListeners.delete(listener);
+    setInternalDiagnosticEventListenerCounts(state.listeners.size, state.trustedListeners.size);
   };
 }
 
@@ -1464,6 +1471,7 @@ export function resetDiagnosticEventsForTest(): void {
   state.seq = 0;
   state.listeners.clear();
   state.trustedListeners.clear();
+  setInternalDiagnosticEventListenerCounts(0, 0);
   state.toolExecutionListeners.clear();
   state.toolExecutionSeq = 0;
   state.dispatchDepth = 0;

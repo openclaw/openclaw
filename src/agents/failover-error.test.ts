@@ -375,6 +375,20 @@ describe("failover-error", () => {
     ).toBe("model_not_found");
   });
 
+  it("does not classify OpenRouter image-input no-endpoints 404s as model_not_found", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        status: 404,
+        message: "No endpoints found that support image input",
+      }),
+    ).toBe("format");
+    expect(
+      resolveFailoverReasonFromError(
+        new Error("HTTP 404: No endpoints found that support image input"),
+      ),
+    ).toBe("format");
+  });
+
   it("classifies JSON-wrapped OpenRouter stealth-model 404s as model_not_found", () => {
     expect(
       resolveFailoverReasonFromError({

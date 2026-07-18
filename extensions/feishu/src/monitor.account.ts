@@ -22,6 +22,7 @@ import { fetchBotIdentityForMonitor } from "./monitor.startup.js";
 import { botNames, botOpenIds } from "./monitor.state.js";
 import { FeishuRetryableSyntheticEventError } from "./monitor.synthetic-error.js";
 import { monitorWebhook, monitorWebSocket } from "./monitor.transport.js";
+import { createFeishuVcMeetingInvitedHandler } from "./monitor.vc-meeting-invited-handler.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu } from "./send.js";
 import { getFeishuSequentialKey } from "./sequential-key.js";
@@ -167,6 +168,7 @@ type RegisterEventHandlersContext = {
   runtime?: RuntimeEnv;
   chatHistories: Map<string, HistoryEntry[]>;
   fireAndForget?: boolean;
+  vcAutoJoin: boolean;
   /** Owning account signal; retrying handlers must propagate it. */
   abortSignal?: AbortSignal;
   /**
@@ -346,6 +348,14 @@ function registerEventHandlers(
       fireAndForget,
       abortSignal,
     }),
+    "vc.bot.meeting_invited_v1": createFeishuVcMeetingInvitedHandler({
+      cfg,
+      accountId,
+      runtime,
+      fireAndForget,
+      channelRuntime,
+      autoJoin: context.vcAutoJoin,
+    }),
     "im.message.reaction.created_v1": async (data) => {
       await runFeishuHandler({
         errorMessage: `feishu[${accountId}]: error handling reaction event`,
@@ -510,6 +520,7 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
       runtime,
       chatHistories,
       fireAndForget: params.fireAndForget ?? true,
+      vcAutoJoin: account.config.vcAutoJoin === true,
       abortSignal,
       ...(params.statusSink ? { statusSink: params.statusSink } : {}),
     });
