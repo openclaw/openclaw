@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  collectDatabaseFirstNativeLegacyStoreViolations,
   collectDatabaseFirstLegacyStoreSourceFiles,
   collectDatabaseFirstLegacyStoreViolations,
 } from "../../scripts/check-database-first-legacy-stores.mjs";
@@ -8732,6 +8733,20 @@ describe("check-database-first-legacy-stores", () => {
     );
 
     expect(violations).toEqual([]);
+  });
+
+  it("keeps legacy PortGuardian filenames inside the native migration owner", () => {
+    const runtimeViolations = collectDatabaseFirstNativeLegacyStoreViolations(
+      'let path = root.appendingPathComponent("port-guard.json")\n',
+      "apps/macos/Sources/OpenClaw/PortGuardian.swift",
+    );
+    const migrationViolations = collectDatabaseFirstNativeLegacyStoreViolations(
+      'let path = root.appendingPathComponent("port-guard.json")\n',
+      "apps/macos/Sources/OpenClaw/PortGuardianRecordStore.swift",
+    );
+
+    expect(runtimeViolations).toEqual([{ kind: "legacy PortGuardian file reference", line: 1 }]);
+    expect(migrationViolations).toEqual([]);
   });
 
   it("allows the workspace Doctor migration owner to claim legacy sidecars", () => {
