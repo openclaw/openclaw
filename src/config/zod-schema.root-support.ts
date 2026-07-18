@@ -364,6 +364,8 @@ const McpServerSchema = z
       .optional(),
   })
   .superRefine((data, ctx) => {
+    // This schema is .catchall(z.unknown()) (open-world server options), so
+    // unknown keys survive into this refine; retired aliases are rejected here.
     for (const key of ["connectTimeout", "connect_timeout", "timeout"] as const) {
       if (Object.hasOwn(data, key)) {
         ctx.addIssue({
