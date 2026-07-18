@@ -12,6 +12,7 @@ import {
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSnakeCaseParamKey } from "../../param-key.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
@@ -217,6 +218,7 @@ function resolveAcpUnavailableMessage(opts?: { sandboxed?: boolean; config?: Ope
 export function createSessionsSpawnTool(
   opts?: {
     agentSessionKey?: string;
+    requesterTurnRunId?: string;
     /** Separate key used only for completion routing (registerSubagentRun requesterSessionKey). */
     completionOwnerKey?: string;
     agentChannel?: GatewayMessageChannel;
@@ -226,6 +228,7 @@ export function createSessionsSpawnTool(
     currentMessagingTarget?: string;
     currentChannelId?: string;
     currentThreadTs?: string;
+    currentMessageId?: string | number;
     sandboxed?: boolean;
     config?: OpenClawConfig;
     /** Explicit agent ID override for cron/hook sessions where session key parsing may not work. */
@@ -418,16 +421,26 @@ export function createSessionsSpawnTool(
             to: opts?.agentTo,
             threadId: opts?.agentThreadId,
           });
+          const progressOrigin = {
+            channel: requesterOrigin?.channel,
+            accountId: requesterOrigin?.accountId,
+            to: opts?.currentMessagingTarget ?? opts?.currentChannelId ?? requesterOrigin?.to,
+            threadId: requesterOrigin?.threadId,
+            channelId: opts?.currentChannelId,
+            messageId: opts?.currentMessageId,
+          };
           const shouldExpectCompletionMessage = result.inlineDelivery
             ? false
             : expectsCompletionMessage;
           try {
             registerSubagentRun({
               runId: childRunId,
+              requesterTurnRunId: opts?.requesterTurnRunId,
               childSessionKey,
               controllerSessionKey: ownership.controllerSessionKey,
               requesterSessionKey: ownership.completionRequesterSessionKey,
               requesterOrigin,
+              progressOrigin,
               requesterDisplayKey: ownership.completionRequesterDisplayKey,
               task,
               taskName,
@@ -438,6 +451,26 @@ export function createSessionsSpawnTool(
               expectsCompletionMessage: shouldExpectCompletionMessage,
               spawnMode: trackedSpawnMode,
             });
+            try {
+              const hookRunner = getGlobalHookRunner();
+              if (hookRunner?.hasHooks("subagent_progress")) {
+                await hookRunner.runSubagentProgress(
+                  {
+                    phase: "started",
+                    runId: childRunId,
+                    childSessionKey,
+                    requester: progressOrigin,
+                  },
+                  {
+                    runId: childRunId,
+                    childSessionKey,
+                    requesterSessionKey: ownership.completionRequesterSessionKey,
+                  },
+                );
+              }
+            } catch {
+              // ACP already started; presentation hooks are best-effort only.
+            }
           } catch (err) {
             // Best-effort only: the ACP turn was already started above, so deleting the
             // child session record here does not guarantee the in-flight run was aborted.
@@ -478,11 +511,15 @@ export function createSessionsSpawnTool(
         },
         {
           agentSessionKey: opts?.agentSessionKey,
+          requesterTurnRunId: opts?.requesterTurnRunId,
           completionOwnerKey: opts?.completionOwnerKey,
           agentChannel: opts?.agentChannel,
           agentAccountId: opts?.agentAccountId,
           agentTo: opts?.agentTo,
           agentThreadId: opts?.agentThreadId,
+          currentMessagingTarget: opts?.currentMessagingTarget ?? opts?.currentChannelId,
+          currentChannelId: opts?.currentChannelId,
+          currentMessageId: opts?.currentMessageId,
           agentGroupId: opts?.agentGroupId,
           agentGroupChannel: opts?.agentGroupChannel,
           agentGroupSpace: opts?.agentGroupSpace,

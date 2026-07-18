@@ -13,7 +13,12 @@ import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import { formatConnectError } from "./connect-error.ts";
 import { resetChatInputHistoryNavigation, type ChatInputHistoryState } from "./input-history.ts";
 // Control UI chat module implements run lifecycle behavior.
-import { resetToolStream, type CompactionStatus, type FallbackStatus } from "./tool-stream.ts";
+import {
+  resetToolStream,
+  type CompactionStatus,
+  type FallbackStatus,
+  type PlanStatus,
+} from "./tool-stream.ts";
 
 export const CHAT_RUN_STATUS_TOAST_DURATION_MS = 5_000;
 
@@ -50,6 +55,7 @@ type RunLifecycleHost = Omit<
   compactionClearTimer?: TimerHandle | number | null;
   fallbackStatus?: FallbackStatus | null;
   fallbackClearTimer?: TimerHandle | number | null;
+  planStatus?: PlanStatus | null;
   chatRunStatus?: ChatRunUiStatus | null;
   chatRunStatusClearTimer?: TimerHandle | number | null;
   sessionsResult?: SessionsListResult | null;
@@ -212,7 +218,7 @@ function scheduleRunStatusClear(host: RunLifecycleHost, status: ChatRunUiStatus)
   }, CHAT_RUN_STATUS_TOAST_DURATION_MS);
 }
 
-function clearRunIndicators(host: RunLifecycleHost) {
+function clearRunIndicators(host: RunLifecycleHost, runId?: string | null) {
   clearTimer(host.compactionClearTimer);
   host.compactionClearTimer = null;
   if (host.compactionStatus) {
@@ -222,6 +228,12 @@ function clearRunIndicators(host: RunLifecycleHost) {
   host.fallbackClearTimer = null;
   if (host.fallbackStatus) {
     host.fallbackStatus = null;
+  }
+  // Plan checklists are run-owned (unlike the transient compaction/fallback
+  // toasts): a terminal reconcile for another run must not clear them.
+  const planOwner = host.planStatus?.runId;
+  if (host.planStatus && (!runId || !planOwner || planOwner === runId)) {
+    host.planStatus = null;
   }
 }
 
@@ -300,7 +312,7 @@ export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: Recon
   const sessionKey = toSessionKey(options.sessionKey) ?? host.sessionKey;
 
   if (options.clearIndicators ?? true) {
-    clearRunIndicators(host);
+    clearRunIndicators(host, runId);
   }
   if (options.clearChatStream) {
     host.chatStream = null;

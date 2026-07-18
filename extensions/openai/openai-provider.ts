@@ -81,7 +81,10 @@ function classifyOpenAiFailoverCode(code: string | undefined) {
   }
 }
 const OPENAI_MODELS_ENDPOINT = "https://api.openai.com/v1/models";
-const OPENAI_CODEX_MODELS_ENDPOINT = `${OPENAI_CODEX_RESPONSES_BASE_URL}/models?client_version=1.0.0`;
+// Keep synchronized with extensions/codex's exact @openai/codex dependency;
+// the provider contract test fails when that managed-runtime pin changes.
+const OPENAI_CODEX_CLIENT_VERSION = "0.144.6";
+const OPENAI_CODEX_MODELS_ENDPOINT = `${OPENAI_CODEX_RESPONSES_BASE_URL}/models?client_version=${OPENAI_CODEX_CLIENT_VERSION}`;
 const OPENAI_MODELS_CACHE_TTL_MS = 60_000;
 const OPENAI_CODEX_MODELS_CACHE_TTL_MS = 60_000;
 const OPENAI_GPT_56_DIRECT_CONTEXT_TOKENS = 1_050_000;
@@ -440,6 +443,12 @@ function buildOpenAICodexStaticProviderConfig(): ModelProviderConfig {
     api: "openai-chatgpt-responses",
     auth: "oauth",
     models: OPENAI_MANIFEST_PROVIDER.models.flatMap((model) => {
+      const modelId = normalizeLowercaseStringOrEmpty(model.id);
+      // Static OAuth rows are offline hints, not entitlement claims. Keep only
+      // the proven GPT-5.6 subscription route; live discovery may add others.
+      if (modelId.startsWith("gpt-5.6") && modelId !== OPENAI_GPT_56_SOL_MODEL_ID) {
+        return [];
+      }
       const normalized = normalizeOpenAICodexCatalogModel(model);
       return normalized ? [normalized] : [];
     }),

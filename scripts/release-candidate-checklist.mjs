@@ -7,6 +7,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   writeFileSync,
@@ -54,6 +55,7 @@ const WINDOWS_NODE_REQUIRED_ASSETS = [
 const SHA256_DIGEST_PATTERN = /^sha256:[a-f0-9]{64}$/u;
 const RELEASE_CANDIDATE_STATE_VERSION = 1;
 const RELEASE_CANDIDATE_STATE_FILE = "release-candidate-state.json";
+const TRUSTED_TOOLING_SHA_ENV = "OPENCLAW_RELEASE_CANDIDATE_TRUSTED_TOOLING_SHA";
 const RELEASE_CANDIDATE_STATE_KEYS = [
   "repo",
   "tag",
@@ -521,7 +523,7 @@ function runFromTrustedTooling(argv, { targetRoot, workflowRef }) {
       [join(toolingRoot, "scripts/release-candidate-checklist.mjs"), ...argv],
       {
         cwd: targetRoot,
-        env: process.env,
+        env: { ...process.env, [TRUSTED_TOOLING_SHA_ENV]: trustedToolingSha },
         stdio: "inherit",
       },
     );
@@ -544,6 +546,21 @@ function runFromTrustedTooling(argv, { targetRoot, workflowRef }) {
       }
     }
     rmSync(tempRoot, { force: true, recursive: true });
+  }
+}
+
+export function isDirectReleaseCandidateExecution(
+  directPath,
+  modulePath,
+  resolveRealPath = realpathSync,
+) {
+  if (!directPath) {
+    return false;
+  }
+  try {
+    return resolveRealPath(directPath) === resolveRealPath(modulePath);
+  } catch {
+    return false;
   }
 }
 
@@ -599,6 +616,31 @@ function gitIsAncestor(ancestor, target) {
       result.stderr?.trim() || result.signal || result.status
     }`,
   );
+}
+
+export function validateTrustedToolingPin({
+  toolingSha,
+  pinnedToolingSha,
+  latestTrustedToolingSha,
+  isAncestor = gitIsAncestor,
+}) {
+  if (!/^[a-f0-9]{40}$/u.test(pinnedToolingSha)) {
+    throw new Error("release candidate trusted tooling pin is missing or invalid");
+  }
+  if (toolingSha !== pinnedToolingSha) {
+    throw new Error(
+      `release candidate tooling HEAD ${toolingSha} does not match pinned tooling ${pinnedToolingSha}`,
+    );
+  }
+  if (
+    pinnedToolingSha !== latestTrustedToolingSha &&
+    !isAncestor(pinnedToolingSha, latestTrustedToolingSha)
+  ) {
+    throw new Error(
+      `pinned release candidate tooling ${pinnedToolingSha} is not reachable from trusted workflow tip ${latestTrustedToolingSha}`,
+    );
+  }
+  return pinnedToolingSha;
 }
 
 export function validateNpmPreflightRunSource({
@@ -1199,7 +1241,7 @@ export function validateFullManifest(manifest, params) {
       `full validation must record runReleaseSoak=true for ${params.releaseProfile} release candidates`,
     );
   }
-  if (manifest.controls?.performanceBlocking !== true) {
+  if (params.releaseProfile !== "beta" && manifest.controls?.performanceBlocking !== true) {
     throw new Error("full validation manifest must record blocking product performance evidence");
   }
 }
@@ -1336,7 +1378,14 @@ async function main() {
   options.outputDir ||= join(".artifacts", "release-candidate", options.tag);
   const targetSha = gitRevParse(`${options.tag}^{}`, targetRoot);
   const toolingSha = gitRevParse("HEAD", TOOLING_ROOT);
-  const trustedToolingSha = fetchTrustedWorkflowSha(options.workflowRef, TOOLING_ROOT);
+  const latestTrustedToolingSha = fetchTrustedWorkflowSha(options.workflowRef, TOOLING_ROOT);
+  // The outer process pins a clean main commit before creating this tooling checkout.
+  // A newer main tip must not invalidate that immutable, still-trusted ancestor mid-run.
+  const trustedToolingSha = validateTrustedToolingPin({
+    toolingSha,
+    pinnedToolingSha: process.env[TRUSTED_TOOLING_SHA_ENV] ?? latestTrustedToolingSha,
+    latestTrustedToolingSha,
+  });
   validateCandidateCheckout({
     targetSha,
     targetHeadSha: gitRevParse("HEAD", targetRoot),
@@ -1612,7 +1661,7 @@ async function main() {
   console.log(publishCommand);
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (isDirectReleaseCandidateExecution(process.argv[1], fileURLToPath(import.meta.url))) {
   await main().catch(
     /** @param {unknown} error */ (error) => {
       console.error(error instanceof Error ? error.message : String(error));

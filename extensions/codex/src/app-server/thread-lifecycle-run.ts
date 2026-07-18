@@ -17,6 +17,7 @@ import { isCodexAppServerProfilerEnabled } from "./profiler-flag.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import {
   assertCodexBindingMayBeReplaced,
+  createCodexSessionGenerationSupersededError,
   hashCodexAppServerBindingFingerprint,
   normalizeCodexAppServerBindingModelProvider,
   reclaimCurrentCodexSessionGeneration,
@@ -194,9 +195,7 @@ export async function startOrResumeThread(
         }),
       );
       if (!reclaimed) {
-        throw new Error(
-          `Codex session generation is no longer current: ${bindingIdentity.sessionId}`,
-        );
+        throw createCodexSessionGenerationSupersededError(bindingIdentity.sessionId);
       }
     }
     if (binding?.pendingSupervisionBranch) {
@@ -350,8 +349,12 @@ export async function startOrResumeThread(
     const startModelProvider = startModelSelection.modelProvider;
     // Capability read failures use managed search for this turn but must not
     // create a binding that later looks like a confirmed provider-policy change.
+    const transientDelegationRestriction = params.params.delegationCapability === "report_only";
     let preserveExistingBinding =
-      !ringZeroActive && params.nativeProviderWebSearchSupport === "unknown" && !binding?.threadId;
+      transientDelegationRestriction ||
+      (!ringZeroActive &&
+        params.nativeProviderWebSearchSupport === "unknown" &&
+        !binding?.threadId);
     let rotatedContextEngineBinding = false;
     let prebuiltPluginThreadConfig: CodexPluginThreadConfig | undefined;
     const webSearchBindingChanged =
@@ -437,6 +440,16 @@ export async function startOrResumeThread(
         },
       );
       preserveExistingBinding = true;
+      binding = undefined;
+    }
+    if (binding?.threadId && transientDelegationRestriction) {
+      assertCodexBindingMayBeReplaced(binding, "starting a delegation-restricted turn");
+      // Loaded Codex threads ignore resume config overrides. Keep the normal
+      // binding intact and start a transient thread with collaboration disabled.
+      embeddedAgentLog.debug(
+        "codex app-server delegation restricted for turn; starting transient thread",
+        { threadId: binding.threadId },
+      );
       binding = undefined;
     }
     if (binding?.threadId && (binding.contextEngine || contextEngineBinding)) {

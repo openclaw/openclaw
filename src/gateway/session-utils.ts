@@ -64,6 +64,7 @@ import {
   resolveEffectiveAgentRuntime,
 } from "../agents/thinking-runtime.js";
 import { insideGitCheckout } from "../agents/worktrees/git.js";
+import { resolveQueueSettings } from "../auto-reply/reply/queue/settings.js";
 import {
   listThinkingLevelOptions,
   normalizeThinkLevel,
@@ -100,6 +101,7 @@ import { isAcpSessionKey, isCronRunSessionKey } from "../sessions/session-key-ut
 import { resolveNonNegativeNumber } from "../shared/number-coercion.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { normalizeSessionDeliveryFields } from "../utils/delivery-context.shared.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import type { ModelCostConfig } from "../utils/usage-format.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
 import { listGatewayAgentIds } from "./agent-list.js";
@@ -2207,6 +2209,7 @@ export function buildGatewaySessionRow(params: {
     archivedAt: entry?.archivedAt,
     pinned: entry?.pinnedAt !== undefined,
     pinnedAt: entry?.pinnedAt,
+    icon: entry?.icon,
     unread: deriveSessionUnread(entry),
     lastReadAt: entry?.lastReadAt,
     lastInteractionAt: entry?.lastInteractionAt,
@@ -2248,6 +2251,12 @@ export function buildGatewaySessionRow(params: {
       cfg.messages?.responseUsage,
       channel,
     ),
+    queueMode: entry?.queueMode,
+    effectiveQueueMode: resolveQueueSettings({
+      cfg,
+      channel: INTERNAL_MESSAGE_CHANNEL,
+      sessionEntry: entry,
+    }).mode,
     modelProvider: rowModelProvider,
     model: rowModel,
     modelSelectionLocked: entry?.modelSelectionLocked,

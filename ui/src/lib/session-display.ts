@@ -15,12 +15,6 @@ const CHANNEL_LABELS: Record<string, string> = {
 
 const KNOWN_CHANNEL_KEYS = Object.keys(CHANNEL_LABELS);
 
-/** Human channel label for group headers and name fallbacks. */
-export function channelDisplayLabel(channel: string): string {
-  const normalized = normalizeLowercaseStringOrEmpty(channel);
-  return CHANNEL_LABELS[normalized] ?? capitalize(normalized || channel);
-}
-
 /** Raw peer ids stay out of the sidebar; keep a short recognizable tail only. */
 function shortenPeerId(identifier: string): string {
   const trimmed = identifier.trim();
@@ -95,7 +89,12 @@ type SessionKeyInfo = {
 type SessionDisplayRow = {
   label?: string;
   displayName?: string;
+  derivedTitle?: string;
 } & SessionWorktreeDisplayRow;
+
+type SessionDisplayOptions = {
+  includeSubagentPrefix?: boolean;
+};
 
 function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
@@ -110,7 +109,7 @@ function parseSessionKey(key: string): SessionKeyInfo {
 
   // Main session.
   if (key === "main" || key === "agent:main:main") {
-    return { prefix: "", fallbackName: "Main Session" };
+    return { prefix: "", fallbackName: "Main Thread" };
   }
 
   // Subagent.
@@ -151,14 +150,14 @@ function parseSessionKey(key: string): SessionKeyInfo {
   // pre-agent-scoped builds still surface in session lists; label, don't leak keys.
   for (const ch of KNOWN_CHANNEL_KEYS) {
     if (key === ch || key.startsWith(`${ch}:`)) {
-      return { prefix: "", fallbackName: `${CHANNEL_LABELS[ch]} Session` };
+      return { prefix: "", fallbackName: `${CHANNEL_LABELS[ch]} Thread` };
     }
   }
 
   // Dashboard sessions get generated titles asynchronously; the opaque uuid key
   // must not flash in the sidebar while that title is pending.
   if (/^agent:[^:]+:dashboard:/.test(key)) {
-    return { prefix: "", fallbackName: "New session" };
+    return { prefix: "", fallbackName: "New thread" };
   }
 
   // Remaining agent keys are named subsessions (CLI --session-id and friends):
@@ -174,9 +173,14 @@ function parseSessionKey(key: string): SessionKeyInfo {
   return { prefix: "", fallbackName: key };
 }
 
-export function resolveSessionDisplayName(key: string, row?: SessionDisplayRow): string {
+export function resolveSessionDisplayName(
+  key: string,
+  row?: SessionDisplayRow,
+  options: SessionDisplayOptions = {},
+): string {
   const label = normalizeOptionalString(row?.label) ?? "";
   const displayName = normalizeOptionalString(row?.displayName) ?? "";
+  const derivedTitle = normalizeOptionalString(row?.derivedTitle) ?? "";
   const { prefix, fallbackName } = parseSessionKey(key);
 
   const applyTypedPrefix = (name: string): string => {
@@ -184,6 +188,9 @@ export function resolveSessionDisplayName(key: string, row?: SessionDisplayRow):
       return name;
     }
     const prefixPattern = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}\\s*`, "i");
+    if (prefix === "Subagent:" && options.includeSubagentPrefix === false) {
+      return name.replace(prefixPattern, "").trim() || fallbackName;
+    }
     return prefixPattern.test(name) ? name : `${prefix} ${name}`;
   };
 
@@ -197,6 +204,9 @@ export function resolveSessionDisplayName(key: string, row?: SessionDisplayRow):
   const workSubtitle = row ? resolveSessionWorkSubtitle(row) : undefined;
   if (workSubtitle && row?.worktree) {
     return applyTypedPrefix(workSubtitle);
+  }
+  if (derivedTitle && derivedTitle !== key) {
+    return applyTypedPrefix(derivedTitle);
   }
   return fallbackName;
 }

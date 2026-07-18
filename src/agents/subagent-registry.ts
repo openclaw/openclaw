@@ -29,6 +29,7 @@ import { SUBAGENT_KILL_TASK_ERROR } from "../tasks/detached-task-runtime-contrac
 import { finalizeTaskRunByRunId, findDetachedTaskRun } from "../tasks/detached-task-runtime.js";
 import { isProvisionalSubagentKillTask } from "../tasks/task-cancellation-state.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
+import type { AcceptedSessionSpawn } from "./accepted-session-spawn.js";
 import {
   ackLeasedAgentSteeringItemsFromSubagentRuns,
   leasePendingAgentSteeringItemsFromSubagentRuns,
@@ -57,6 +58,7 @@ import {
 } from "./subagent-lifecycle-events.js";
 import {
   emitSubagentEndedHookOnce,
+  emitSubagentProgressEndedHook,
   resolveLifecycleOutcomeFromRunOutcome,
 } from "./subagent-registry-completion.js";
 import {
@@ -78,6 +80,7 @@ import {
   listRunsForControllerFromRuns,
   listDescendantRunsForRequesterFromRuns,
 } from "./subagent-registry-queries.js";
+import { markRequesterTurnYieldedInRuns } from "./subagent-registry-requester-yield.js";
 import {
   createSubagentRunManager,
   markSubagentRunPausedAfterYield,
@@ -114,6 +117,10 @@ type SubagentAnnounceModule = Pick<
   typeof import("./subagent-announce.js"),
   "captureSubagentCompletionReply" | "runSubagentAnnounceFlow"
 >;
+type RequesterSettleWakeModule = Pick<
+  typeof import("./subagent-announce.requester-settle-wake.js"),
+  "maybeWakeRequesterAfterAllChildrenSettled"
+>;
 type BrowserCleanupModule = Pick<
   typeof import("../browser-lifecycle-cleanup.js"),
   "cleanupBrowserSessionsForLifecycleEnd"
@@ -132,6 +139,7 @@ type SubagentRegistryDeps = {
   resolveAgentTimeoutMs: typeof resolveAgentTimeoutMs;
   restoreSubagentRunsFromDisk: typeof restoreSubagentRunsFromDisk;
   runSubagentAnnounceFlow: SubagentAnnounceModule["runSubagentAnnounceFlow"];
+  maybeWakeRequesterAfterAllChildrenSettled: RequesterSettleWakeModule["maybeWakeRequesterAfterAllChildrenSettled"];
   ensureContextEnginesInitialized?: () => void;
   ensureRuntimePluginsLoaded?: (
     params: Parameters<typeof ensureRuntimePluginsLoadedFn>[0],
@@ -175,6 +183,10 @@ const defaultSubagentRegistryDeps: SubagentRegistryDeps = {
   restoreSubagentRunsFromDisk,
   runSubagentAnnounceFlow: async (params) =>
     (await loadSubagentAnnounceModule()).runSubagentAnnounceFlow(params),
+  maybeWakeRequesterAfterAllChildrenSettled: async (params) =>
+    (
+      await import("./subagent-announce.requester-settle-wake.js")
+    ).maybeWakeRequesterAfterAllChildrenSettled(params),
 };
 
 let subagentRegistryDeps: SubagentRegistryDeps = defaultSubagentRegistryDeps;
@@ -754,6 +766,7 @@ const subagentLifecycleController = createSubagentRegistryLifecycleController({
   resolveSubagentTask: findSubagentTaskForRun,
   shouldEmitEndedHookForRun,
   emitSubagentEndedHookForRun,
+  emitSubagentProgressEndedForRun: emitSubagentProgressEndedHook,
   notifyContextEngineSubagentEnded,
   retireSupersededRun: retireSupersededSubagentRun,
   resumeSubagentRun,
@@ -763,6 +776,8 @@ const subagentLifecycleController = createSubagentRegistryLifecycleController({
   cleanupBrowserSessionsForLifecycleEnd: (args) =>
     subagentRegistryDeps.cleanupBrowserSessionsForLifecycleEnd(args),
   runSubagentAnnounceFlow: (params) => subagentRegistryDeps.runSubagentAnnounceFlow(params),
+  maybeWakeRequesterAfterAllChildrenSettled: (args) =>
+    subagentRegistryDeps.maybeWakeRequesterAfterAllChildrenSettled(args),
   warn: (message, meta) => log.warn(message, meta),
 });
 
@@ -772,6 +787,8 @@ const {
   completeSubagentRun,
   finalizeResumedAnnounceGiveUp,
   refreshFrozenResultFromSession,
+  resumeRequesterSettleWake,
+  settleRequesterTurnAfterSessionSpawns,
   startSubagentAnnounceCleanupFlow,
 } = subagentLifecycleController;
 
@@ -842,6 +859,19 @@ function resumeSubagentRun(runId: string) {
     // Startup orphan recovery replays this durable exact-run winner before it
     // reads session/config state. Do not prune or resume it through announce.
     resumedRuns.add(runId);
+    return;
+  }
+  const yieldedWakeWaitingForDelivery =
+    entry.requesterSettleWake?.requesterYieldBatch === true &&
+    (entry.delivery?.status === "pending" ||
+      entry.delivery?.status === "in_progress" ||
+      entry.delivery?.status === "failed");
+  if (
+    entry.requesterSettleWake &&
+    typeof entry.endedAt === "number" &&
+    !yieldedWakeWaitingForDelivery
+  ) {
+    resumeRequesterSettleWake(runId, entry);
     return;
   }
   if (entry.cleanupCompletedAt) {
@@ -941,6 +971,34 @@ function restoreSubagentRunsOnce() {
       })
     ) {
       persistSubagentRuns();
+    }
+    const requesterTurns = new Map<string, Map<string, SubagentRunRecord[]>>();
+    for (const entry of subagentRuns.values()) {
+      const requesterTurnRunId = entry.requesterTurnRunId?.trim();
+      if (!requesterTurnRunId) {
+        continue;
+      }
+      let turns = requesterTurns.get(entry.requesterSessionKey);
+      if (!turns) {
+        turns = new Map();
+        requesterTurns.set(entry.requesterSessionKey, turns);
+      }
+      const entries = turns.get(requesterTurnRunId) ?? [];
+      entries.push(entry);
+      turns.set(requesterTurnRunId, entries);
+    }
+    for (const [requesterSessionKey, turns] of requesterTurns) {
+      for (const [requesterTurnRunId, entries] of turns) {
+        settleRequesterTurnAfterSessionSpawns({
+          requesterSessionKey,
+          requesterTurnRunId,
+          requesterYielded: entries.every((entry) => entry.requesterTurnYielded === true),
+          acceptedSessionSpawns: entries.map((entry) => ({
+            runId: entry.runId,
+            childSessionKey: entry.childSessionKey,
+          })),
+        });
+      }
     }
     if (subagentRuns.size === 0) {
       return;
@@ -1085,6 +1143,8 @@ async function discardSuspendedPendingFinalDelivery(
     entry,
     cleanup: entry.cleanup,
     completedAt: now,
+    // The requester settle wake already ran when this delivery was suspended.
+    skipRequesterSettleWake: true,
   });
   if (
     entry.expectsCompletionMessage === true &&
@@ -1153,6 +1213,10 @@ async function sweepSubagentRuns() {
       });
     }
     for (const [runId, entry] of subagentRuns.entries()) {
+      if (entry.requesterSettleWake) {
+        resumeRequesterSettleWake(runId, entry);
+        continue;
+      }
       if (isSuspendedPendingFinalDelivery(entry)) {
         const suspendedAgeMs = now - (entry.delivery?.suspendedAt ?? now);
         const expired = suspendedAgeMs >= resolveSuspendedDeliveryExpiryMs(entry);
@@ -2023,6 +2087,29 @@ export function getLatestSubagentRunByChildSessionKey(
 
 export function initSubagentRegistry() {
   restoreSubagentRunsOnce();
+}
+
+/** Re-admits a delivered child batch after its requester explicitly yields. */
+export function settleRequesterAfterSessionSpawns(params: {
+  requesterSessionKey: string;
+  requesterTurnRunId: string;
+  requesterYielded: boolean;
+  acceptedSessionSpawns: readonly AcceptedSessionSpawn[];
+}): boolean {
+  return settleRequesterTurnAfterSessionSpawns(params);
+}
+
+/** Records sessions_yield before the active requester run is aborted. */
+export function markRequesterTurnYielded(params: {
+  requesterSessionKey: string;
+  requesterTurnRunId: string;
+}): number {
+  restoreSubagentRunsOnce();
+  return markRequesterTurnYieldedInRuns({
+    ...params,
+    runs: subagentRuns,
+    persistOrThrow: persistSubagentRunsOrThrow,
+  });
 }
 
 const SUBAGENT_REGISTRY_TEST_HANDLE = Symbol.for("openclaw.subagentRegistryTestApi");

@@ -2,6 +2,7 @@
 import { recordChannelBotPairLoopAndCheckSuppression } from "openclaw/plugin-sdk/channel-inbound";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
+import type { GoogleChatIngressLifecycle } from "./monitor-ingress.js";
 import type { GoogleChatCoreRuntime, GoogleChatRuntimeEnv } from "./monitor-types.js";
 import "./monitor.js";
 import type { GoogleChatEvent } from "./types.js";
@@ -17,9 +18,26 @@ const accessMocks = vi.hoisted(() => ({
 
 const routingMocks = vi.hoisted(() => ({
   processEvent: undefined as
-    | ((event: GoogleChatEvent, target: Record<string, unknown>) => Promise<void>)
+    | ((
+        event: GoogleChatEvent,
+        target: Record<string, unknown>,
+        turnAdoptionLifecycle?: GoogleChatIngressLifecycle,
+      ) => Promise<void>)
     | undefined,
 }));
+
+const inboundMocks = vi.hoisted(() => ({
+  buildEnvelope: vi.fn(({ body }: { body: string }) => body),
+  resolveChannelInboundRouteEnvelope: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>();
+  return {
+    ...actual,
+    resolveChannelInboundRouteEnvelope: inboundMocks.resolveChannelInboundRouteEnvelope,
+  };
+});
 
 vi.mock("./api.js", () => ({
   downloadGoogleChatMedia: apiMocks.downloadGoogleChatMedia,
@@ -33,7 +51,13 @@ vi.mock("./monitor-access.js", () => ({
 vi.mock("./monitor-routing.js", () => ({
   registerGoogleChatWebhookTarget: vi.fn(),
   setGoogleChatWebhookEventProcessor: vi.fn(
-    (processEvent: (event: GoogleChatEvent, target: Record<string, unknown>) => Promise<void>) => {
+    (
+      processEvent: (
+        event: GoogleChatEvent,
+        target: Record<string, unknown>,
+        turnAdoptionLifecycle?: GoogleChatIngressLifecycle,
+      ) => Promise<void>,
+    ) => {
       routingMocks.processEvent = processEvent;
     },
   ),
@@ -43,34 +67,29 @@ beforeEach(() => {
   apiMocks.downloadGoogleChatMedia.mockReset();
   apiMocks.sendGoogleChatMessage.mockReset();
   accessMocks.applyGoogleChatInboundAccessPolicy.mockReset();
+  inboundMocks.buildEnvelope.mockReset().mockImplementation(({ body }: { body: string }) => body);
+  inboundMocks.resolveChannelInboundRouteEnvelope
+    .mockReset()
+    .mockImplementation(({ accountId }: { accountId: string }) => ({
+      route: {
+        agentId: "agent-1",
+        accountId,
+        sessionKey: "session-1",
+      },
+      buildEnvelope: inboundMocks.buildEnvelope,
+    }));
 });
 
 function createInboundClassificationHarness() {
-  const resolveAgentRoute = vi.fn(() => ({
-    agentId: "agent-1",
-    accountId: "work",
-    sessionKey: "session-1",
-  }));
   const buildContext = vi.fn((payload: unknown) => payload);
   const runTurn = vi.fn();
   const core = {
     logging: { shouldLogVerbose: () => false },
     channel: {
-      routing: { resolveAgentRoute },
-      session: {
-        resolveStorePath: () => "/tmp/openclaw-googlechat-test",
-        readSessionUpdatedAt: () => undefined,
-        recordInboundSession: vi.fn(),
-      },
-      reply: {
-        resolveEnvelopeFormatOptions: () => ({}),
-        formatAgentEnvelope: ({ body }: { body: string }) => body,
-        dispatchReplyWithBufferedBlockDispatcher: vi.fn(),
-      },
       inbound: { buildContext, run: runTurn },
     },
   } as unknown as GoogleChatCoreRuntime;
-  return { buildContext, core, resolveAgentRoute, runTurn };
+  return { buildContext, core, runTurn };
 }
 
 async function processGoogleChatTestEvent(params: {
@@ -80,18 +99,23 @@ async function processGoogleChatTestEvent(params: {
   runtime: GoogleChatRuntimeEnv;
   core: GoogleChatCoreRuntime;
   mediaMaxMb: number;
+  turnAdoptionLifecycle?: GoogleChatIngressLifecycle;
 }): Promise<void> {
   if (!routingMocks.processEvent) {
     throw new Error("Expected Google Chat webhook event processor registration");
   }
-  await routingMocks.processEvent(params.event, {
-    account: params.account,
-    config: params.config,
-    runtime: params.runtime,
-    core: params.core,
-    mediaMaxMb: params.mediaMaxMb,
-    path: "/googlechat",
-  });
+  await routingMocks.processEvent(
+    params.event,
+    {
+      account: params.account,
+      config: params.config,
+      runtime: params.runtime,
+      core: params.core,
+      mediaMaxMb: params.mediaMaxMb,
+      path: "/googlechat",
+    },
+    params.turnAdoptionLifecycle,
+  );
 }
 
 describe("googlechat monitor bot loop protection", () => {
@@ -177,7 +201,7 @@ describe("googlechat monitor inbound space classification", () => {
   ] as const;
 
   it.each(cases)("$name uses the expected access and route branch", async ({ space, peerKind }) => {
-    const { buildContext, core, resolveAgentRoute, runTurn } = createInboundClassificationHarness();
+    const { buildContext, core, runTurn } = createInboundClassificationHarness();
     const account = {
       accountId: "work",
       config: {},
@@ -214,7 +238,7 @@ describe("googlechat monitor inbound space classification", () => {
     expect(accessMocks.applyGoogleChatInboundAccessPolicy).toHaveBeenCalledWith(
       expect.objectContaining({ isGroup }),
     );
-    expect(resolveAgentRoute).toHaveBeenCalledWith({
+    expect(inboundMocks.resolveChannelInboundRouteEnvelope).toHaveBeenCalledWith({
       cfg: {},
       channel: "googlechat",
       accountId: "work",
@@ -227,6 +251,48 @@ describe("googlechat monitor inbound space classification", () => {
       }),
     );
     expect(runTurn).toHaveBeenCalledOnce();
+  });
+
+  it("passes durable ingress adoption ownership into the inbound turn", async () => {
+    const { core, runTurn } = createInboundClassificationHarness();
+    const turnAdoptionLifecycle = {
+      admission: "exclusive",
+      onAdopted: vi.fn(async () => {}),
+      onDeferred: vi.fn(),
+      onAbandoned: vi.fn(async () => {}),
+      abortSignal: new AbortController().signal,
+    } satisfies GoogleChatIngressLifecycle;
+    accessMocks.applyGoogleChatInboundAccessPolicy.mockResolvedValue({
+      ok: true,
+      commandAuthorized: undefined,
+      effectiveWasMentioned: undefined,
+      groupBotLoopProtection: undefined,
+      groupSystemPrompt: undefined,
+    });
+
+    await processGoogleChatTestEvent({
+      event: {
+        type: "MESSAGE",
+        space: { name: "spaces/DURABLE", type: "DM" },
+        message: {
+          name: "spaces/DURABLE/messages/1",
+          text: "hello",
+          sender: { name: "users/alice", type: "HUMAN" },
+        },
+      },
+      account: {
+        accountId: "work",
+        config: { typingIndicator: "none" },
+        credentialSource: "inline",
+      } as ResolvedGoogleChatAccount,
+      config: {},
+      runtime: { error: vi.fn(), log: vi.fn() },
+      core,
+      mediaMaxMb: 10,
+      turnAdoptionLifecycle,
+    });
+
+    expect(runTurn).toHaveBeenCalledWith(expect.objectContaining({ turnAdoptionLifecycle }));
   });
 
   it.each([
@@ -509,7 +575,6 @@ describe("googlechat monitor direct messages", () => {
   it("drops invalid event timestamps from inbound runtime payloads", async () => {
     const runTurn = vi.fn();
     const buildContext = vi.fn((payload: unknown) => payload);
-    const formatAgentEnvelope = vi.fn(({ body }: { body: string }) => body);
     const core = {
       logging: { shouldLogVerbose: () => false },
       channel: {
@@ -527,7 +592,7 @@ describe("googlechat monitor direct messages", () => {
         },
         reply: {
           resolveEnvelopeFormatOptions: () => ({}),
-          formatAgentEnvelope,
+          formatAgentEnvelope: ({ body }: { body: string }) => body,
           dispatchReplyWithBufferedBlockDispatcher: vi.fn(),
         },
         inbound: { buildContext, run: runTurn },
@@ -569,7 +634,7 @@ describe("googlechat monitor direct messages", () => {
       mediaMaxMb: 10,
     });
 
-    expect(formatAgentEnvelope).toHaveBeenCalledWith(
+    expect(inboundMocks.buildEnvelope).toHaveBeenCalledWith(
       expect.objectContaining({ timestamp: undefined }),
     );
     expect(buildContext).toHaveBeenCalledWith(expect.objectContaining({ timestamp: undefined }));

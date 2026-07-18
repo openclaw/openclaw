@@ -1,8 +1,12 @@
 // Control UI module implements main behavior.
 import "./styles.css";
 import "./app/app-host.ts";
+import "./components/board/board-view.ts";
 import { inferControlUiPublicAssetPath } from "./app/public-assets.ts";
-import { installStaleChunkReloadListener } from "./app/stale-chunk-reload.ts";
+import {
+  installMissingStylesheetRecovery,
+  installStaleChunkReloadListener,
+} from "./app/stale-chunk-reload.ts";
 import { CONTROL_UI_BUILD_INFO } from "./build-info.ts";
 
 type ViteImportMeta = ImportMeta & {
@@ -16,6 +20,7 @@ const currentControlUiBuildId = CONTROL_UI_BUILD_INFO.buildId;
 
 syncDocumentPublicAssetLinks();
 installStaleChunkReloadListener();
+installMissingStylesheetRecovery();
 
 if (isProd && "serviceWorker" in navigator) {
   const swUrl = new URL(inferControlUiPublicAssetPath("sw.js"), window.location.origin);

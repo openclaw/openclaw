@@ -27,7 +27,10 @@ import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js"
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
-import { resolveTranscriptSessionKeyBySessionId } from "../../config/sessions/session-accessor.js";
+import {
+  isSessionTranscriptProjectionUnavailableError,
+  resolveTranscriptSessionKeyBySessionId,
+} from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   clearAgentRunContext,
@@ -120,6 +123,10 @@ import {
   respondChatSessionRoutingChanged,
   runChatSendPreAdmission,
 } from "./chat-send-pre-admission.js";
+import {
+  applyChatSendReplyContextFields,
+  resolveChatSendReplyContext,
+} from "./chat-send-reply-context.js";
 import { createChatSendReplyDispatch } from "./chat-send-reply-dispatch.js";
 import { normalizeChatSendRequest } from "./chat-send-request.js";
 import { prepareChatSendSession } from "./chat-send-session.js";
@@ -567,19 +574,36 @@ async function handleChatHistoryRequest({
   const max = Math.min(1000, requested);
   const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
   const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(cfg, maxChars);
-  const historyPage = await readChatHistoryPage({
-    entry: historyEntry,
-    provider: resolvedSessionModel.provider,
-    sessionId,
-    storePath,
-    sessionAgentId,
-    canonicalKey,
-    max,
-    maxHistoryBytes,
-    effectiveMaxChars,
-    offset,
-    messageId,
-  });
+  let historyPage: Awaited<ReturnType<typeof readChatHistoryPage>>;
+  try {
+    historyPage = await readChatHistoryPage({
+      entry: historyEntry,
+      provider: resolvedSessionModel.provider,
+      sessionId,
+      storePath,
+      sessionAgentId,
+      canonicalKey,
+      max,
+      maxHistoryBytes,
+      effectiveMaxChars,
+      offset,
+      messageId,
+    });
+  } catch (error) {
+    if (!isSessionTranscriptProjectionUnavailableError(error)) {
+      throw error;
+    }
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.UNAVAILABLE, "session history is rebuilding; retry shortly", {
+        details: { method },
+        retryable: true,
+        retryAfterMs: 250,
+      }),
+    );
+    return;
+  }
   const normalized = enrichChatHistoryCompactionMarkers(historyPage.messages, historyEntry);
   const perMessageHardCap = Math.min(CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES, maxHistoryBytes);
   const replaced = replaceOversizedChatHistoryMessages({
@@ -692,6 +716,7 @@ async function handleChatHistoryRequest({
   const inFlightRun = resolveInFlightRunSnapshot({
     chatAbortControllers: context.chatAbortControllers,
     chatRunBuffers: context.chatRunBuffers,
+    chatRunPlanSnapshots: context.chatRunPlanSnapshots,
     requestedSessionKey: sessionKey,
     canonicalSessionKey: resolveSessionStoreKey({ cfg, sessionKey }),
     agentId: activeRunAgentId,
@@ -1178,6 +1203,22 @@ export const chatHandlers: GatewayRequestHandlers = {
         logGateway: context.logGateway,
         userTurn,
       });
+      // Resolve the reply target from session history in parallel with the
+      // remaining dispatch prep so replies do not delay the first model call.
+      // Skipped entirely for non-reply sends so their dispatch path keeps its
+      // existing await ordering.
+      const replyContextFieldsPromise = p.replyToId
+        ? resolveChatSendReplyContext({
+            replyToId: p.replyToId,
+            cfg,
+            agentId,
+            sessionKey,
+            sessionEntry: entry,
+            storePath,
+            userSenderLabel: clientInfo?.displayName,
+            warn: (message) => context.logGateway.warn(message),
+          })
+        : undefined;
 
       let agentRunStarted = false;
       const { deliveredReplies, dispatcher, hasAppendedWebchatAgentMedia, onModelSelected } =
@@ -1241,6 +1282,9 @@ export const chatHandlers: GatewayRequestHandlers = {
             "gateway.chat_send.dispatch_inbound",
             async () => {
               applyChatSendManagedMediaFields(ctx, await pluginBoundMediaFieldsPromise);
+              if (replyContextFieldsPromise) {
+                applyChatSendReplyContextFields(ctx, await replyContextFieldsPromise);
+              }
               const dispatchResult = await dispatchInboundMessage({
                 ctx,
                 cfg,
@@ -1283,9 +1327,12 @@ export const chatHandlers: GatewayRequestHandlers = {
                   abortSignal: activeRunAbort.controller.signal,
                   // Keep a Gateway-owned cancel identity after this chat.send
                   // terminalizes while the prompt waits in followup/collect queue.
-                  queuedFollowupLifecycle: {
+                  turnAdoptionLifecycle: {
+                    // Gateway cancel identity only — share collect key via ownerKey.
+                    admission: "cancel-only",
                     ownerKey: queuedFollowupOwnerKey,
-                    onEnqueued: () => {
+                    onAdopted: async () => {},
+                    onDeferred: () => {
                       queuedFollowupEnqueued = registerQueuedChatTurn({
                         chatQueuedTurns: ensureChatQueuedTurns(context),
                         runId: clientRunId,
@@ -1305,7 +1352,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                         activeRunAbort.controller,
                       );
                     },
-                    onComplete: () => {
+                    onSettled: () => {
                       completeQueuedChatTurn(
                         ensureChatQueuedTurns(context),
                         clientRunId,
@@ -1687,7 +1734,9 @@ export const chatHandlers: GatewayRequestHandlers = {
       state: "final" as const,
       message,
     };
-    context.broadcast("chat", chatPayload);
+    context.broadcast("chat", chatPayload, {
+      sessionKeys: sessionKey === "global" && agentId ? [`agent:${agentId}:global`] : [sessionKey],
+    });
     sendGlobalAwareNodeChatPayload({
       context,
       sessionKey,

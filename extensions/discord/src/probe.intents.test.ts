@@ -31,19 +31,27 @@ function oversizedDiscordProbeJsonResponse(onCancel: () => void): Response {
   return response;
 }
 
-function abortableTricklingDiscordProbeJsonResponse(
+function trackedTricklingDiscordProbeJsonResponse(
   signal: AbortSignal | null | undefined,
-  onAbort: () => void,
+  onTerminate: () => void,
 ): Response {
   let interval: ReturnType<typeof setInterval> | undefined;
+  let terminated = false;
+  const terminate = () => {
+    if (terminated) {
+      return;
+    }
+    terminated = true;
+    if (interval) {
+      clearInterval(interval);
+    }
+    onTerminate();
+  };
   return new Response(
     new ReadableStream<Uint8Array>({
       start(controller) {
         const abort = () => {
-          if (interval) {
-            clearInterval(interval);
-          }
-          onAbort();
+          terminate();
           controller.error(signal?.reason ?? new Error("request aborted"));
         };
         if (signal?.aborted) {
@@ -55,24 +63,30 @@ function abortableTricklingDiscordProbeJsonResponse(
         signal?.addEventListener("abort", abort, { once: true });
       },
       cancel() {
-        if (interval) {
-          clearInterval(interval);
-        }
+        terminate();
       },
     }),
     { headers: { "content-type": "application/json" }, status: 200 },
   );
 }
 
-function abortableStalledDiscordJsonResponse(
+function trackedStalledDiscordJsonResponse(
   signal: AbortSignal | null | undefined,
-  onAbort: () => void,
+  onTerminate: () => void,
 ): Response {
+  let terminated = false;
+  const terminate = () => {
+    if (terminated) {
+      return;
+    }
+    terminated = true;
+    onTerminate();
+  };
   return new Response(
     new ReadableStream<Uint8Array>({
       start(controller) {
         const abort = () => {
-          onAbort();
+          terminate();
           controller.error(signal?.reason ?? new Error("request aborted"));
         };
         if (signal?.aborted) {
@@ -80,6 +94,9 @@ function abortableStalledDiscordJsonResponse(
           return;
         }
         signal?.addEventListener("abort", abort, { once: true });
+      },
+      cancel() {
+        terminate();
       },
     }),
     { headers: { "content-type": "application/json" }, status: 200 },
@@ -199,10 +216,10 @@ describe("resolveDiscordPrivilegedIntentsFromFlags", () => {
   it("times out and cancels stalled getMe probe JSON response bodies", async () => {
     vi.useFakeTimers();
     try {
-      let abortCount = 0;
+      let terminationCount = 0;
       const fetcher = withFetchPreconnect(async (_input, init) =>
-        abortableStalledDiscordJsonResponse(init?.signal, () => {
-          abortCount += 1;
+        trackedStalledDiscordJsonResponse(init?.signal, () => {
+          terminationCount += 1;
         }),
       );
 
@@ -215,7 +232,7 @@ describe("resolveDiscordPrivilegedIntentsFromFlags", () => {
       await vi.advanceTimersByTimeAsync(0);
       await vi.advanceTimersByTimeAsync(50);
       await assertion;
-      expect(abortCount).toBe(1);
+      expect(terminationCount).toBe(1);
     } finally {
       vi.useRealTimers();
     }
@@ -224,13 +241,13 @@ describe("resolveDiscordPrivilegedIntentsFromFlags", () => {
   it("uses one total deadline across getMe headers and a trickling JSON body", async () => {
     vi.useFakeTimers();
     try {
-      let abortCount = 0;
+      let terminationCount = 0;
       const fetcher = withFetchPreconnect(async (_input, init) => {
         await new Promise<void>((resolve) => {
           setTimeout(resolve, 30);
         });
-        return abortableTricklingDiscordProbeJsonResponse(init?.signal, () => {
-          abortCount += 1;
+        return trackedTricklingDiscordProbeJsonResponse(init?.signal, () => {
+          terminationCount += 1;
         });
       });
 
@@ -242,7 +259,7 @@ describe("resolveDiscordPrivilegedIntentsFromFlags", () => {
 
       await vi.advanceTimersByTimeAsync(50);
       await assertion;
-      expect(abortCount).toBe(1);
+      expect(terminationCount).toBe(1);
     } finally {
       vi.useRealTimers();
     }
@@ -251,15 +268,15 @@ describe("resolveDiscordPrivilegedIntentsFromFlags", () => {
   it("bounds stalled application-summary response bodies during probes", async () => {
     vi.useFakeTimers();
     try {
-      let abortCount = 0;
+      let terminationCount = 0;
       const fetcher = withFetchPreconnect(async (input, init) => {
         const url =
           typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
         if (url.endsWith("/users/@me")) {
           return jsonResponse({ id: "bot-1", username: "openclaw" });
         }
-        return abortableStalledDiscordJsonResponse(init?.signal, () => {
-          abortCount += 1;
+        return trackedStalledDiscordJsonResponse(init?.signal, () => {
+          terminationCount += 1;
         });
       });
 
@@ -280,7 +297,7 @@ describe("resolveDiscordPrivilegedIntentsFromFlags", () => {
         ok: true,
         bot: { id: "bot-1", username: "openclaw" },
       });
-      expect(abortCount).toBe(1);
+      expect(terminationCount).toBe(1);
     } finally {
       vi.useRealTimers();
     }
@@ -289,10 +306,10 @@ describe("resolveDiscordPrivilegedIntentsFromFlags", () => {
   it("bounds stalled application-id response bodies", async () => {
     vi.useFakeTimers();
     try {
-      let abortCount = 0;
+      let terminationCount = 0;
       const fetcher = withFetchPreconnect(async (_input, init) =>
-        abortableStalledDiscordJsonResponse(init?.signal, () => {
-          abortCount += 1;
+        trackedStalledDiscordJsonResponse(init?.signal, () => {
+          terminationCount += 1;
         }),
       );
 
@@ -301,7 +318,7 @@ describe("resolveDiscordPrivilegedIntentsFromFlags", () => {
       await vi.advanceTimersByTimeAsync(50);
 
       await expect(lookup).resolves.toBeUndefined();
-      expect(abortCount).toBe(1);
+      expect(terminationCount).toBe(1);
     } finally {
       vi.useRealTimers();
     }

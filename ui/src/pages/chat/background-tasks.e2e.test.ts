@@ -15,7 +15,7 @@ const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/chat-background-tasks");
-const baseTime = Date.parse("2026-07-05T18:00:00.000Z");
+const baseTime = Date.now();
 
 const runningSubagent = {
   id: "task-subagent",
@@ -52,13 +52,27 @@ const finishedCli = {
   taskId: "task-cli",
   kind: "cli",
   runtime: "cli",
-  status: "completed",
+  status: "failed",
   title: "Generate media index",
   agentId: "main",
   sessionKey: "agent:main:cli:media",
   createdAt: baseTime - 30_000,
   updatedAt: baseTime - 20_000,
-  terminalSummary: "Index generated",
+  error: "Index generation failed",
+};
+
+const runningExec = {
+  id: "task-exec",
+  taskId: "task-exec",
+  kind: "exec",
+  runtime: "cli",
+  status: "running",
+  title: "CLI command",
+  agentId: "main",
+  createdAt: baseTime - 2_000,
+  updatedAt: baseTime,
+  startedAt: baseTime - 2_000,
+  progressSummary: "Command running",
 };
 
 let server: ControlUiE2eServer;
@@ -118,6 +132,12 @@ describeControlUiE2e("Control UI chat background-tasks rail mocked Gateway E2E",
             ],
           },
           "tasks.list": { tasks: [runningSubagent, queuedCron, finishedCli] },
+          "tasks.get": {
+            task: {
+              ...runningSubagent,
+              prompt: "Trace model routing across provider and session boundaries.",
+            },
+          },
           "tasks.cancel": {
             found: true,
             cancelled: true,
@@ -153,6 +173,19 @@ describeControlUiE2e("Control UI chat background-tasks rail mocked Gateway E2E",
       }
       await page.screenshot({ path: path.join(artifactDir, "01-rail-open.png"), fullPage: true });
 
+      await rail
+        .locator('[data-task-id="task-subagent"]')
+        .getByRole("button", { name: "Show details for Map model routing code" })
+        .click();
+      await rail.getByText("Trace model routing across provider and session boundaries.").waitFor();
+      expect(await rail.textContent()).toContain("Reading provider catalogs");
+      const detailRequest = await gateway.waitForRequest("tasks.get");
+      expect(detailRequest.params).toEqual({ taskId: "task-subagent" });
+      await page.screenshot({
+        path: path.join(artifactDir, "02-task-detail.png"),
+        fullPage: true,
+      });
+
       await gateway.emitGatewayEvent("task", {
         action: "upserted",
         task: {
@@ -170,7 +203,7 @@ describeControlUiE2e("Control UI chat background-tasks rail mocked Gateway E2E",
         .waitFor({ state: "detached" });
       expect(await rail.textContent()).toContain("Routing map complete");
       await page.screenshot({
-        path: path.join(artifactDir, "02-pushed-completion.png"),
+        path: path.join(artifactDir, "03-pushed-completion.png"),
         fullPage: true,
       });
 
@@ -200,7 +233,52 @@ describeControlUiE2e("Control UI chat background-tasks rail mocked Gateway E2E",
         )
         .toBe(true);
       await page.screenshot({
-        path: path.join(artifactDir, "03-transcript-open.png"),
+        path: path.join(artifactDir, "04-transcript-open.png"),
+        fullPage: true,
+      });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("shows one detached exec after the agent turn ends", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { width: 1440, height: 900 },
+    });
+    const page = await context.newPage();
+    try {
+      await installMockGateway(page, {
+        historyMessages: [
+          {
+            content: [{ type: "text", text: "I started the CLI command in the background." }],
+            role: "assistant",
+            timestamp: Date.now(),
+          },
+        ],
+        methodResponses: {
+          "tasks.list": { tasks: [runningExec] },
+        },
+      });
+
+      const response = await page.goto(`${server.baseUrl}chat`);
+      expect(response?.status()).toBe(200);
+      await page
+        .getByText("I started the CLI command in the background.")
+        .waitFor({ timeout: 10_000 });
+      expect(await page.locator(".chat-tasks-toggle__badge").textContent()).toBe("1");
+      expect(await page.locator(".chat-tasks-status__link").textContent()).toContain(
+        "1 running task",
+      );
+
+      await page.getByRole("button", { name: "Show background tasks" }).click();
+      const row = page.locator('[data-task-id="task-exec"]');
+      await row.waitFor({ state: "visible" });
+      expect(await row.textContent()).toContain("CLI command");
+      expect(await row.textContent()).toContain("Command running");
+      await page.screenshot({
+        path: path.join(artifactDir, "05-one-background-exec.png"),
         fullPage: true,
       });
     } finally {

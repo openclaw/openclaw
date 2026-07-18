@@ -144,6 +144,29 @@ describe("push-apns.relay", () => {
       });
     });
 
+    it("uses the configured timeout when the env override is blank", () => {
+      const resolved = resolveApnsRelayConfigFromEnv(
+        {
+          OPENCLAW_APNS_RELAY_BASE_URL: "https://relay.example.com",
+          OPENCLAW_APNS_RELAY_TIMEOUT_MS: "   ",
+        } as NodeJS.ProcessEnv,
+        {
+          push: {
+            apns: {
+              relay: {
+                timeoutMs: 2500,
+              },
+            },
+          },
+        },
+      );
+
+      expectRelayConfig(resolved, {
+        baseUrl: "https://relay.example.com",
+        timeoutMs: 2500,
+      });
+    });
+
     it("allows loopback http URLs for alternate truthy env values", () => {
       const resolved = resolveApnsRelayConfigFromEnv({
         OPENCLAW_APNS_RELAY_BASE_URL: "http://[::1]:8787",
@@ -267,11 +290,9 @@ describe("push-apns.relay", () => {
     });
 
     it("does not follow relay redirects", async () => {
-      const fetchMock = vi.fn().mockResolvedValue({
-        ok: false,
-        status: 302,
-        json: vi.fn().mockRejectedValue(new Error("no body")),
-      });
+      const response = new Response("redirected", { status: 302 });
+      const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
+      const fetchMock = vi.fn().mockResolvedValue(response);
       vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
       const result = await sendApnsRelayPush(createRelayPushParams());
@@ -283,6 +304,7 @@ describe("push-apns.relay", () => {
       expect(result.status).toBe(302);
       expect(result.reason).toBe("RelayRedirectNotAllowed");
       expect(result.environment).toBeUndefined();
+      expect(cancel).toHaveBeenCalledOnce();
     });
 
     it("falls back to fetch status when the relay body is not JSON", async () => {

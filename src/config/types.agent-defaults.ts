@@ -46,6 +46,11 @@ export type AgentModelEntryConfig = {
   streaming?: boolean;
 };
 
+export type AgentModelPolicyConfig = {
+  /** Model refs allowed for session/run overrides. Empty or omitted allows any model. */
+  allow?: string[];
+};
+
 export type AgentModelListConfig = {
   /** Primary provider/model ref. */
   primary?: string;
@@ -258,6 +263,8 @@ export type AgentDefaultsConfig = {
   pdfMaxPages?: number;
   /** Model catalog with optional aliases (full provider/model keys). */
   models?: Record<string, AgentModelEntryConfig>;
+  /** Explicit model override policy. Empty or omitted allow permits any model. */
+  modelPolicy?: AgentModelPolicyConfig;
   /** Agent working directory (preferred). Used as the default cwd for agent runs. */
   workspace?: string;
   /** Optional default allowlist of skills for agents that do not set agents.list[].skills. */

@@ -28,6 +28,7 @@ import {
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
+  normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { refreshAwsSharedConfigCacheForBedrock } from "./aws-credential-refresh.js";
 import {
@@ -74,9 +75,7 @@ const KNOWN_CONTEXT_WINDOWS: Record<string, number> = {
   "anthropic.claude-opus-4-8": 1_000_000,
   "anthropic.claude-opus-4-7": 1_000_000,
   "anthropic.claude-opus-4-6-v1": 1_000_000,
-  "anthropic.claude-opus-4-6-v1:0": 1_000_000,
   "anthropic.claude-sonnet-4-6": 1_000_000,
-  "anthropic.claude-sonnet-4-6-v1:0": 1_000_000,
   "anthropic.claude-sonnet-4-5-20250929-v1:0": 200_000,
   "anthropic.claude-sonnet-4-20250514-v1:0": 200_000,
   "anthropic.claude-opus-4-5-20251101-v1:0": 200_000,
@@ -677,7 +676,11 @@ export async function resolveImplicitBedrockProvider(params: {
     return null;
   }
 
-  const region = discoveryConfig?.region ?? env.AWS_REGION ?? env.AWS_DEFAULT_REGION ?? "us-east-1";
+  const region =
+    discoveryConfig?.region ??
+    normalizeOptionalString(env.AWS_REGION) ??
+    normalizeOptionalString(env.AWS_DEFAULT_REGION) ??
+    "us-east-1";
   const models = await discoverBedrockModels({
     region,
     config: discoveryConfig,
