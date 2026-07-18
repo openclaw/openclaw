@@ -64,17 +64,8 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
       // dispatcher. Assembled turns now dispatch through core's own provider
       // dispatcher, which an extension test cannot intercept; convert each
       // resolved turn to a prepared one that drives the harness dispatcher,
-      // or reply waits never settle and turn tests hang to timeout.
+      // while leaving the outer runner as the sole lifecycle owner.
       const harness = await import("./bot.create-telegram-bot.test-harness.js");
-      const { createPluginRuntimeMock } = await import("openclaw/plugin-sdk/plugin-test-runtime");
-      const dispatchRuntime = createPluginRuntimeMock({
-        channel: {
-          reply: {
-            dispatchReplyWithBufferedBlockDispatcher:
-              harness.dispatchReplyWithBufferedBlockDispatcher,
-          },
-        },
-      });
       const resolveTurn = params.adapter.resolveTurn;
       return await actual.runChannelInboundEvent({
         ...params,
@@ -89,13 +80,19 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
               resolved;
             return {
               ...plan,
-              runDispatch: async () => {
-                const result = await dispatchRuntime.channel.inbound.dispatch(plan);
-                if (!result.dispatched) {
-                  throw new Error("Telegram harness turn did not dispatch");
-                }
-                return result.dispatchResult;
-              },
+              runDispatch: async () =>
+                await harness.dispatchReplyWithBufferedBlockDispatcher({
+                  ctx: plan.ctxPayload,
+                  cfg: plan.cfg,
+                  dispatcherOptions: {
+                    ...plan.dispatcherOptions,
+                    deliver: plan.delivery.deliver,
+                    onError: plan.delivery.onError,
+                  },
+                  toolsAllow: plan.toolsAllow,
+                  replyOptions: plan.replyOptions,
+                  replyResolver: plan.replyResolver,
+                }),
             } as typeof resolved;
           },
         },
