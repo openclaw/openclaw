@@ -834,17 +834,15 @@ describe("restoreEnvVarRefs", () => {
     });
   });
 
-  it("treats prototype-named keys as new caller keys, not matches in parsed", () => {
-    // When a config key collides with an Object.prototype property name,
-    // Object.hasOwn ensures we only match own properties of `parsed`,
-    // not inherited ones.
-    const incoming = { toString: "my-override", apiKey: "sk-ant-api03-real-key" };
-    // parsed has own "apiKey" but NOT a "toString" own property:
-    const parsed: Record<string, unknown> = { apiKey: "${ANTHROPIC_API_KEY}" };
+  it("does not restore env refs from inherited parsed properties", () => {
+    // isPlainObject accepts custom prototypes, but only own properties represent authored config.
+    const parsed = Object.create({
+      toString: "${TEST_VALUE}",
+    }) as Record<string, unknown>;
+    const testEnv = { TEST_VALUE: "resolved-value" } as unknown as NodeJS.ProcessEnv;
 
-    const result = restoreEnvVarRefs(incoming, parsed, env);
-    // "toString" is a new key not in parsed → keep as-is.
-    // "apiKey" matches parsed own property → should restore the env var ref.
-    expect(result).toEqual({ toString: "my-override", apiKey: "${ANTHROPIC_API_KEY}" });
+    expect(restoreEnvVarRefs({ toString: "resolved-value" }, parsed, testEnv)).toEqual({
+      toString: "resolved-value",
+    });
   });
 });
