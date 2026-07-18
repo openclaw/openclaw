@@ -65,12 +65,16 @@ async function executeReloadHandoff(launchctlStub: string): Promise<{
       waitForPid: 1,
     });
     const [, args] = requireSpawnCall();
+    const script = args[1];
+    if (!script) {
+      throw new Error("expected generated restart script");
+    }
 
     let exitCode = 0;
     try {
       await execFileAsync(
         "/bin/sh",
-        ["-c", args[1], "handoff-test", "gui/501/test.label", "gui/501", "/tmp/test.plist", "1"],
+        ["-c", script, "handoff-test", "gui/501/test.label", "gui/501", "/tmp/test.plist", "1"],
         {
           env: {
             ...process.env,
