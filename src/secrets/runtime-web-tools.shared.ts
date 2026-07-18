@@ -11,6 +11,7 @@ import {
   RuntimeWebProviderUnavailableError,
   type RuntimeWebProviderSelectionResult,
   type RuntimeWebUnavailableProvider,
+  type RuntimeWebWarningCode,
   type SecretResolutionResult,
 } from "./runtime-web-tools-selection.types.js";
 import type { RuntimeWebDiagnostic } from "./runtime-web-tools.types.js";
@@ -20,6 +21,7 @@ export {
   type RuntimeWebProviderSelectionResult,
   type RuntimeWebSecretOwner,
   type RuntimeWebUnavailableProvider,
+  type RuntimeWebWarningCode,
   type SecretResolutionResult,
 } from "./runtime-web-tools-selection.types.js";
 import { expectDefined } from "@openclaw/normalization-core";

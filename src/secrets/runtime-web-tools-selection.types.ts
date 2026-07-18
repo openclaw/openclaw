@@ -4,7 +4,7 @@ import type { SecretDegradationReason } from "./runtime-degraded-state.js";
 import type { SecretResolverWarningCode } from "./runtime-shared.js";
 import type { RuntimeWebDiagnosticCode } from "./runtime-web-tools.types.js";
 
-type RuntimeWebWarningCode = Extract<RuntimeWebDiagnosticCode, SecretResolverWarningCode>;
+export type RuntimeWebWarningCode = Extract<RuntimeWebDiagnosticCode, SecretResolverWarningCode>;
 
 export type SecretResolutionResult<TSource extends string> = {
   value?: string;
