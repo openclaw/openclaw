@@ -6,10 +6,15 @@
  * Demonstrates:
  * 1. WhatsApp E164 sender → exact toolsBySender allow:["*"] (no denies)
  * 2. Anonymous user (no sender) → wildcard deny:["exec","process","fs_read","fs_write"]
- * 3. Subagent session (spawned) → senderPolicy is undefined (skipped)
+ * 3. Subagent session with stored inheritedSenderPolicy → uses stored policy
+ *    instead of re-resolving, preserving the parent's authorization ceiling.
  */
 
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
 
 const CONFIG: Record<string, unknown> = {
@@ -49,18 +54,40 @@ describe("fix #109025: sender-scoped tool policy for subagents", () => {
     expect(profile.policy.senderPolicy!.deny).toContain("fs_read");
   });
 
-  it("spawned subagent skips sender policy (isSubagentEnvelopeSession detected)", () => {
+  it("spawned subagent with stored inheritedSenderPolicy gets that policy", async () => {
+    // Subagent session with stored inheritedSenderPolicy → uses stored policy
+    // instead of re-resolving (which would match wildcard "*" with no sender fields).
+    const agentId = `proof-subagent-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const sessionKey = `agent:${agentId}:subagent:child`;
+    const storePath = path.join(
+      os.tmpdir(),
+      `openclaw-proof-109025-${agentId}`,
+      "agents",
+      agentId,
+      "sessions",
+      "sessions.json",
+    );
+    await replaceSessionEntry({ storePath, sessionKey }, {
+      sessionId: "child-session",
+      updatedAt: Date.now(),
+      spawnDepth: 1,
+      subagentRole: "orchestrator",
+      subagentControlScope: "children",
+      inheritedSenderPolicy: { allow: ["*"] },
+    } as SessionEntry);
+
     const profile = resolveConversationCapabilityProfile({
-      config: CONFIG,
-      sessionKey: "subagent:child::main",
-      sandboxSessionKey: "subagent:child::main",
+      config: { ...CONFIG, session: { store: storePath } },
+      sessionKey,
+      sandboxSessionKey: sessionKey,
       chatType: "direct",
       messageProvider: "whatsapp",
-      senderE164: "+1234567890",
+      // No sender fields — realistic subagent scenario
       senderIsOwner: false,
       spawnedBy: "main",
     });
-    // Subagent detected via isSubagentEnvelopeSession → sender policy skipped
-    expect(profile.policy.senderPolicy).toBeUndefined();
+    // Subagent gets stored inheritedSenderPolicy instead of wildcard
+    expect(profile.policy.senderPolicy).toBeDefined();
+    expect(profile.policy.senderPolicy!.allow).toContain("*");
   });
 });

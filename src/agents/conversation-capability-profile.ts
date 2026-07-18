@@ -227,18 +227,28 @@ export function resolveConversationCapabilityProfile(
   // owner state must not fall through to the wildcard policy for guests.
   // Spawned subagents inherit the parent's already-resolved sender policy so
   // the authorization ceiling (both allow and deny) is preserved. When no
-  // stored policy exists (pre-existing sessions), undefined is safe — the
-  // parent already resolved the correct policy during spawn.
+  // stored policy exists (pre-upgrade legacy sessions), fall back to the
+  // normal sender policy resolution to preserve the wildcard deny behavior
+  // that applied before the upgrade.
   const isOwnerInternalSession =
     params.senderIsOwner === true &&
     normalizeMessageChannel(messageProvider ?? params.messageChannel) === INTERNAL_MESSAGE_CHANNEL;
   const senderPolicy = isOwnerInternalSession
     ? undefined
     : isSubagentSession
-      ? resolveStoredSenderPolicy(subagentSessionKey, {
+      ? (resolveStoredSenderPolicy(subagentSessionKey, {
           cfg: params.config,
           store: subagentStore,
-        })
+        }) ??
+        resolveSenderToolPolicy({
+          config: params.config,
+          agentId: effective.agentId,
+          messageProvider,
+          senderId: params.senderId,
+          senderName: params.senderName,
+          senderUsername: params.senderUsername,
+          senderE164: params.senderE164,
+        }))
       : resolveSenderToolPolicy({
           config: params.config,
           agentId: effective.agentId,

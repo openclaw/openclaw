@@ -496,4 +496,44 @@ describe("applyFinalEffectiveToolPolicy", () => {
     expect(filtered.map((t) => t.name)).not.toContain("exec");
     expect(filtered.map((t) => t.name)).not.toContain("fs_read");
   });
+
+  it("fix #109025: legacy subagent without stored policy gets wildcard deny (upgrade compat)", async () => {
+    // Pre-upgrade subagent session has NO inheritedSenderPolicy in its store
+    // entry. Must fall back to normal sender policy resolution so the
+    // wildcard deny continues to apply, preserving upgrade compatibility.
+    const agentId = `legacy-subagent-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const sessionKey = `agent:${agentId}:subagent:legacy`;
+    const storePath = createSessionStorePath("openclaw-legacy-subagent", agentId);
+    await writeSessionEntries(storePath, {
+      [sessionKey]: {
+        sessionId: "legacy-session",
+        updatedAt: Date.now(),
+        spawnDepth: 1,
+        subagentRole: "orchestrator",
+        subagentControlScope: "children",
+        // NO inheritedSenderPolicy — pre-upgrade session
+      },
+    });
+
+    const filtered = applyFinalPolicy({
+      bundledTools: [makeTool("exec"), makeTool("fs_read"), makeTool("message")],
+      config: {
+        session: { store: storePath },
+        tools: {
+          toolsBySender: {
+            "e164:+1234567890": { allow: ["*"] },
+            "*": { deny: ["exec", "process", "fs_read", "fs_write"] },
+          },
+        },
+      },
+      sessionKey,
+      sandboxSessionKey: sessionKey,
+      spawnedBy: "parent",
+      messageProvider: "whatsapp",
+      warn: () => {},
+    });
+
+    // Legacy subagent gets wildcard deny — same behavior as before upgrade
+    expect(filtered.map((t) => t.name)).toEqual(["message"]);
+  });
 });
