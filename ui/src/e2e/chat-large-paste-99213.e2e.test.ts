@@ -179,7 +179,7 @@ describeControlUiE2e("Control UI #99213 large screenshot paste proof", () => {
     await server?.close();
   });
 
-  it("pastes and sends a roughly 2 MB PNG through the chat composer", async () => {
+  it("sends a roughly 2 MB PNG without overlapping transcript rows", async () => {
     await rm(artifactDir, { force: true, recursive: true });
     await mkdir(artifactDir, { recursive: true });
     const pngBytes = createLargePngBytes(1_901_669);
