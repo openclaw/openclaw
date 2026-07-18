@@ -862,7 +862,7 @@ function resumeSubagentRun(runId: string) {
     return;
   }
   const yieldedWakeWaitingForDelivery =
-    entry.requesterSettleWake?.afterRequesterYield === true &&
+    entry.requesterSettleWake?.requesterYieldBatch === true &&
     (entry.delivery?.status === "pending" ||
       entry.delivery?.status === "in_progress" ||
       entry.delivery?.status === "failed");

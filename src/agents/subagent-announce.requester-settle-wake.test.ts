@@ -375,6 +375,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
           status: "dispatching",
           attemptCount: 1,
           batchRunIds: ["run-b"],
+          requesterYieldBatch: true,
         },
       }),
     ]);
@@ -393,6 +394,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
         status: "pending",
         attemptCount: 0,
         batchRunIds: ["run-b"],
+        requesterYieldBatch: true,
         afterRequesterYield: true,
         rearmGeneration: 1,
       },

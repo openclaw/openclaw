@@ -105,6 +105,8 @@ export type RequesterSettleWakeState = {
   nextAttemptAt?: number;
   /** Frozen wave membership after delivery admission or requester-yield re-admission. */
   batchRunIds?: string[];
+  /** Batch frozen while its spawning requester turn was yielding. */
+  requesterYieldBatch?: true;
   /** Present only when an idle requester needs a new turn after yielding. */
   afterRequesterYield?: true;
   /** Monotonic process generation protecting a newer yield from stale completion. */

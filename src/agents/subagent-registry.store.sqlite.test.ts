@@ -96,6 +96,7 @@ describe("subagent registry sqlite store", () => {
           replayCount: 1,
           nextAttemptAt: 30_000,
           batchRunIds: ["run-one", "run-two"],
+          requesterYieldBatch: true,
           afterRequesterYield: true,
           rearmGeneration: 3,
           lastError: "provider timeout",

@@ -123,7 +123,12 @@ function readSharedBatchState(batch: readonly SubagentRunRecord[]): RequesterSet
     ...(source?.replayCount !== undefined ? { replayCount: source.replayCount } : {}),
     ...(source?.nextAttemptAt !== undefined ? { nextAttemptAt: source.nextAttemptAt } : {}),
     ...(source?.batchRunIds ? { batchRunIds: [...source.batchRunIds] } : {}),
-    ...(source?.afterRequesterYield === true ? { afterRequesterYield: true } : {}),
+    ...(states.some((state) => state.requesterYieldBatch === true)
+      ? { requesterYieldBatch: true }
+      : {}),
+    ...(states.some((state) => state.afterRequesterYield === true)
+      ? { afterRequesterYield: true }
+      : {}),
     ...(source?.rearmGeneration !== undefined ? { rearmGeneration: source.rearmGeneration } : {}),
     ...(source?.lastError !== undefined ? { lastError: source.lastError } : {}),
   };
@@ -143,6 +148,7 @@ function deferRequesterSettleWakeBatch(params: {
       Date.now() + REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS[0],
     ),
     batchRunIds: [...params.batchRunIds],
+    ...(params.state.requesterYieldBatch === true ? { requesterYieldBatch: true } : {}),
     ...(params.state.afterRequesterYield === true ? { afterRequesterYield: true } : {}),
     ...(params.state.rearmGeneration !== undefined
       ? { rearmGeneration: params.state.rearmGeneration }
@@ -345,6 +351,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
         status: "dispatching",
         attemptCount: state.attemptCount + 1,
         batchRunIds,
+        ...(state.requesterYieldBatch === true ? { requesterYieldBatch: true } : {}),
         ...(state.afterRequesterYield === true ? { afterRequesterYield: true } : {}),
         ...(state.rearmGeneration !== undefined ? { rearmGeneration: state.rearmGeneration } : {}),
       };
@@ -396,6 +403,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
         replayCount,
         nextAttemptAt,
         batchRunIds,
+        ...(state.requesterYieldBatch === true ? { requesterYieldBatch: true } : {}),
         ...(state.afterRequesterYield === true ? { afterRequesterYield: true } : {}),
         ...(state.rearmGeneration !== undefined ? { rearmGeneration: state.rearmGeneration } : {}),
         lastError,
@@ -440,6 +448,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
       attemptCount,
       nextAttemptAt,
       batchRunIds,
+      ...(state.requesterYieldBatch === true ? { requesterYieldBatch: true } : {}),
       ...(state.afterRequesterYield === true ? { afterRequesterYield: true } : {}),
       ...(state.rearmGeneration !== undefined ? { rearmGeneration: state.rearmGeneration } : {}),
       lastError,

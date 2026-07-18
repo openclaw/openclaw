@@ -95,7 +95,10 @@ export function settleRequesterTurnAfterSessionSpawns(params: {
         status: "pending",
         attemptCount: 0,
         batchRunIds,
-        afterRequesterYield: true,
+        requesterYieldBatch: true,
+        ...(typeof entry.endedAt === "number" && entry.delivery?.status === "delivered"
+          ? { afterRequesterYield: true }
+          : {}),
         rearmGeneration,
         ...(existing?.retireAfterSettle === true || entry.retireAfterRequesterTurn === true
           ? { retireAfterSettle: true }

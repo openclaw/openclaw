@@ -71,6 +71,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     expect(first.requesterSettleWake?.batchRunIds).toEqual(["run-a", "run-b"]);
     expect(second.requesterSettleWake?.batchRunIds).toEqual(["run-a", "run-b"]);
     expect(first.requesterSettleWake).toMatchObject({
+      requesterYieldBatch: true,
       afterRequesterYield: true,
       rearmGeneration: 1,
     });
@@ -97,8 +98,9 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     ).toBe(true);
     expect(entry.requesterSettleWake).toMatchObject({
       batchRunIds: [entry.runId],
-      afterRequesterYield: true,
+      requesterYieldBatch: true,
     });
+    expect(entry.requesterSettleWake?.afterRequesterYield).toBeUndefined();
     expect(schedule).not.toHaveBeenCalled();
   });
 
