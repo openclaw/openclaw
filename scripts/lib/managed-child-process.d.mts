@@ -1,3 +1,5 @@
+export const MANAGED_COMMAND_TIMEOUT_CODE: "OPENCLAW_MANAGED_COMMAND_TIMEOUT";
+
 /**
  * Return conventional shell exit code for a signal.
  *
@@ -35,6 +37,7 @@ export function terminateManagedChild(
  *   platform?: NodeJS.Platform;
  *   comSpec?: string;
  *   onReady?: (child: import("node:child_process").ChildProcess) => void;
+ *   timeoutMs?: number;
  * }} options
  * @returns {Promise<number>}
  */
@@ -49,6 +52,7 @@ export function runManagedCommand({
   windowsVerbatimArguments,
   comSpec,
   onReady,
+  timeoutMs,
 }: {
   bin: string;
   args?: string[];
@@ -60,6 +64,7 @@ export function runManagedCommand({
   platform?: NodeJS.Platform;
   comSpec?: string;
   onReady?: (child: import("node:child_process").ChildProcess) => void;
+  timeoutMs?: number;
 }): Promise<number>;
 /**
  * @param {{

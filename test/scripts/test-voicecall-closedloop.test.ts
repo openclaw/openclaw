@@ -1,4 +1,6 @@
 import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const MANAGED_COMMAND_TIMEOUT_CODE = "OPENCLAW_MANAGED_COMMAND_TIMEOUT";
@@ -7,6 +9,7 @@ const expectedTestFiles = [
   "extensions/voice-call/src/media-stream.test.ts",
   "extensions/voice-call/index.test.ts",
 ];
+const scriptUrl = pathToFileURL(path.resolve("scripts/test-voicecall-closedloop.mjs")).href;
 const { execFileSyncMock, runManagedCommandMock } = vi.hoisted(() => ({
   execFileSyncMock: vi.fn(),
   runManagedCommandMock: vi.fn(),
@@ -43,7 +46,7 @@ describe("test-voicecall-closedloop", () => {
   });
 
   it("runs the current three-file slice through the managed total deadline", async () => {
-    await import("../../scripts/test-voicecall-closedloop.mjs");
+    await import(scriptUrl);
 
     expect(execFileSyncMock).not.toHaveBeenCalled();
     expect(runManagedCommandMock).toHaveBeenCalledOnce();
@@ -73,7 +76,7 @@ describe("test-voicecall-closedloop", () => {
       }),
     );
 
-    const error = await import("../../scripts/test-voicecall-closedloop.mjs").then(
+    const error = await import(scriptUrl).then(
       () => undefined,
       (cause: unknown) => cause,
     );
