@@ -177,7 +177,6 @@ export async function startSshPortForward(opts: {
 
   const stop = async () => {
     if (child.killed || !child.kill("SIGTERM")) {
-      stderrStream?.destroy();
       return;
     }
     await new Promise<void>((resolve) => {
@@ -185,16 +184,15 @@ export async function startSshPortForward(opts: {
         try {
           child.kill("SIGKILL");
         } finally {
-          stderrStream?.destroy();
           resolve();
         }
       }, 1500);
-      child.once("exit", () => {
+      child.once("close", () => {
         clearTimeout(t);
-        stderrStream?.destroy();
         resolve();
       });
     });
+    stderrStream?.destroy();
   };
 
   try {
