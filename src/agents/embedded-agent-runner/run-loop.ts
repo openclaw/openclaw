@@ -12,10 +12,7 @@ import {
   retireSessionMcpRuntimeForSessionKey,
 } from "../agent-bundle-mcp-tools.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
-import type {
-  CriticalToolLoopSignal,
-  ToolOutcomeObservation,
-} from "../agent-tools.before-tool-call.js";
+import type { ToolOutcomeObservation } from "../agent-tools.before-tool-call.js";
 import type { FailoverReason } from "../embedded-agent-helpers.js";
 import { isStrictAgenticExecutionContractActive } from "../execution-contract.js";
 import type { McpAppChannelView } from "../mcp-ui-resource.js";
@@ -33,7 +30,7 @@ import { prepareAndDispatchEmbeddedRunAttempt } from "./run/attempt-dispatch-pre
 import { normalizeEmbeddedRunAttempt } from "./run/attempt-normalization.js";
 import { recoverEmbeddedRunAttempt } from "./run/attempt-recovery.js";
 import { forgetPromptBuildDrainCacheForRun } from "./run/attempt.prompt-helpers.js";
-import { buildEmbeddedRunBlockedResult } from "./run/blocked-run-result.js";
+import { buildCriticalToolLoopBlockedResult } from "./run/blocked-run-result.js";
 import { hasCodexAppServerRecoveryRetryBudget } from "./run/codex-app-server-recovery.js";
 import { createEmbeddedRunCompactionRuntime } from "./run/compaction-runtime.js";
 import { createEmbeddedRunContextRecoveryState } from "./run/context-recovery-state.js";
@@ -49,13 +46,13 @@ import {
 import { handleRetryLimitExhaustion } from "./run/retry-limit.js";
 import { prepareEmbeddedRunRuntime } from "./run/runtime-preparation.js";
 import { createEmbeddedRunSessionPromptState } from "./run/session-prompt-state.js";
+import {
+  createEmbeddedRunTerminalAbortOwner,
+  CriticalToolLoopError,
+} from "./run/terminal-abort.js";
 import { prepareEmbeddedRunTerminal } from "./run/terminal-preparation.js";
 import { resolveEmbeddedRunTerminal } from "./run/terminal-resolution.js";
 import { createEmbeddedRunTerminalRetryState } from "./run/terminal-retry-state.js";
-import {
-  CriticalToolLoopError,
-  type EmbeddedRunTerminalAbort,
-} from "./run/terminal-abort.js";
 import { resolveEmbeddedRunTerminalTimeout } from "./run/terminal-timeout.js";
 import type { EmbeddedAgentRunResult, TraceAttempt } from "./types.js";
 import { createUsageAccumulator } from "./usage-accumulator.js";
@@ -202,8 +199,10 @@ export async function runPreparedEmbeddedLoop(
   const postCompactionGuard = createPostCompactionLoopGuard({
     enabled: resolvedLoopDetectionConfig?.enabled !== false,
   });
-  let terminalAbortController: AbortController | undefined;
-  let terminalAbort: EmbeddedRunTerminalAbort | undefined;
+  const terminalAbortOwner = createEmbeddedRunTerminalAbortOwner({
+    parentAbortSignal: params.abortSignal,
+    laneTaskAbortController,
+  });
   const attemptTerminalToolPresentation = {
     ordinal: -1,
     value: undefined as string | undefined,
@@ -212,24 +211,6 @@ export async function runPreparedEmbeddedLoop(
   const allocateToolOutcomeOrdinal = (): number => nextToolOutcomeOrdinal++;
   const readAttemptTerminalToolPresentation = (): string | undefined =>
     attemptTerminalToolPresentation.value;
-  // Terminal detectors can race with sibling tool completions. The first
-  // detector owns teardown so later outcomes cannot clear or replace it.
-  const requestTerminalAbort = (candidate: EmbeddedRunTerminalAbort): void => {
-    // Parent and attempt-owned cancellation keep their canonical terminal
-    // paths; a detector that observes either abort late must not replace it.
-    if (params.abortSignal?.aborted || laneTaskAbortController.signal.aborted || terminalAbort) {
-      return;
-    }
-    terminalAbort = candidate;
-    laneTaskAbortController.abort(candidate.error);
-    terminalAbortController?.abort(candidate.error);
-  };
-  const observeCriticalToolLoop = (signal: CriticalToolLoopSignal): void => {
-    requestTerminalAbort({
-      kind: "critical_tool_loop",
-      error: new CriticalToolLoopError(signal),
-    });
-  };
   const observeToolOutcome = (observation: ToolOutcomeObservation): void => {
     const observationOrdinal =
       observation.toolCallOrdinal ?? attemptTerminalToolPresentation.ordinal + 1;
@@ -242,10 +223,9 @@ export async function runPreparedEmbeddedLoop(
     }
     const verdict = postCompactionGuard.observe(observation);
     if (verdict.shouldAbort) {
-      requestTerminalAbort({
-        kind: "post_compaction_loop",
-        error: PostCompactionLoopPersistedError.fromVerdict(verdict),
-      });
+      terminalAbortOwner.requestPostCompactionAbort(
+        PostCompactionLoopPersistedError.fromVerdict(verdict),
+      );
     }
   };
   let lastRetryFailoverReason: FailoverReason | null = null;
@@ -358,17 +338,11 @@ export async function runPreparedEmbeddedLoop(
           bootstrapPromptWarningSignaturesSeen,
           resolveRuntimeFallbackReason,
           observeToolOutcome,
-          onCriticalToolLoop: observeCriticalToolLoop,
+          onCriticalToolLoop: terminalAbortOwner.onCriticalToolLoop,
           allocateToolOutcomeOrdinal,
-          getTerminalAbort: () => terminalAbort,
-          setTerminalAbortController: (controller) => {
-            terminalAbortController = controller;
-          },
-          clearTerminalAbortController: (controller) => {
-            if (terminalAbortController === controller) {
-              terminalAbortController = undefined;
-            }
-          },
+          getTerminalAbort: terminalAbortOwner.getTerminalAbort,
+          setTerminalAbortController: terminalAbortOwner.setTerminalAbortController,
+          clearTerminalAbortController: terminalAbortOwner.clearTerminalAbortController,
         });
       } catch (error) {
         if (!(error instanceof CriticalToolLoopError)) {
@@ -377,10 +351,8 @@ export async function runPreparedEmbeddedLoop(
         await sessionPromptState.waitForCurrentUserMessagePersistence();
         sessionPromptState.suppressNextUserMessagePersistence =
           sessionPromptState.activePrompt.persisted;
-        return buildEmbeddedRunBlockedResult({
-          text: error.message,
-          errorKind: "hook_block",
-          errorMessage: error.message,
+        return buildCriticalToolLoopBlockedResult({
+          error,
           durationMs: Date.now() - started,
           agentMeta: buildErrorAgentMeta({
             sessionId: sessionPromptState.sessionId,
@@ -392,7 +364,6 @@ export async function runPreparedEmbeddedLoop(
             lastRunPromptUsage,
             lastTurnTotal,
           }),
-          replayInvalid: true,
         });
       }
       startupStagesEmitted = dispatch.startupStagesEmitted;
@@ -424,10 +395,8 @@ export async function runPreparedEmbeddedLoop(
           livenessState: "blocked",
         });
         const error = normalizedAttempt.terminalAbort.error;
-        return buildEmbeddedRunBlockedResult({
-          text: error.message,
-          errorKind: "hook_block",
-          errorMessage: error.message,
+        return buildCriticalToolLoopBlockedResult({
+          error,
           durationMs: Date.now() - started,
           agentMeta: buildErrorAgentMeta({
             sessionId: sessionPromptState.sessionId,
@@ -440,7 +409,6 @@ export async function runPreparedEmbeddedLoop(
             lastTurnTotal,
           }),
           attempt: normalizedAttempt.attempt,
-          replayInvalid: true,
           finalPromptText: normalizedAttempt.attempt.finalPromptText,
         });
       }

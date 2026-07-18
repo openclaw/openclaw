@@ -35,6 +35,7 @@ import {
   getBeforeToolCallPolicyDiagnosticState,
   runBeforeToolCallHook,
   type CriticalToolLoopObserver,
+  type HookContext,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
@@ -106,13 +107,13 @@ afterEach(() => {
 
 describe("before_tool_call loop detection behavior", () => {
   let hookRunner: TestHookRunner;
-  const enabledLoopDetectionContext = {
+  const enabledLoopDetectionContext: HookContext = {
     agentId: "main",
     sessionKey: "main",
     loopDetection: { enabled: true },
   };
 
-  const disabledLoopDetectionContext = {
+  const disabledLoopDetectionContext: HookContext = {
     agentId: "main",
     sessionKey: "main",
     loopDetection: { enabled: false },
@@ -129,7 +130,7 @@ describe("before_tool_call loop detection behavior", () => {
   function createWrappedTool(
     name: string,
     execute: ReturnType<typeof vi.fn>,
-    loopDetectionContext = enabledLoopDetectionContext,
+    loopDetectionContext: HookContext = enabledLoopDetectionContext,
   ) {
     return wrapToolWithBeforeToolCallHook(
       { name, execute } as unknown as AnyAgentTool,

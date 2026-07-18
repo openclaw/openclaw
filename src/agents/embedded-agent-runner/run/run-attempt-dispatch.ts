@@ -15,10 +15,7 @@ import {
 } from "./lane-runtime.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import { resolveSkillWorkshopAttemptParams } from "./skill-workshop-attempt-params.js";
-import type {
-  CriticalToolLoopTerminalAbort,
-  EmbeddedRunTerminalAbort,
-} from "./terminal-abort.js";
+import type { CriticalToolLoopTerminalAbort, EmbeddedRunTerminalAbort } from "./terminal-abort.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptTrajectoryRecorder } from "./types.js";
 
 type InternalRunParams = RunEmbeddedAgentParams & {
