@@ -413,6 +413,7 @@ describe("Microsoft Teams meeting platform adapter", () => {
       currentUrl: "https://teams.microsoft.com/v2/",
       leave: currentLeave,
       leaveInitiated: true,
+      postCall: control({ label: "Rejoin" }),
       priorMeeting: {
         identity: "teams-work:19:meeting_test@thread.v2",
         inCallControl: staleLeave,
@@ -479,6 +480,7 @@ describe("Microsoft Teams meeting platform adapter", () => {
 
   it("accepts post-call proof after an initiated leave replaces the document", () => {
     const pending = runLeaveScript({
+      currentUrl: "https://teams.microsoft.com/v2/",
       leaveInitiated: true,
       omitMeetingState: true,
     });

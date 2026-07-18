@@ -294,12 +294,20 @@ export function teamsMeetingLeaveScript(params: {
   const meetingIdentityMatches = Boolean(
     currentUrlMatches || preservedCallMatches || pendingLeaveMatches || rerenderPendingMatches
   );
-  if (postCall && (meetingIdentityMatches || leaveInitiated)) {
+  // Teams can replace the document between our Leave click and its post-call marker.
+  // Retain request ownership only while no identity or live-call control contradicts it.
+  const initiatedLeaveTransitionMatches = Boolean(
+    leaveInitiated &&
+    !currentIdentity &&
+    !leave &&
+    (!state?.identity || state.identity === expectedIdentity)
+  );
+  if (postCall && (meetingIdentityMatches || initiatedLeaveTransitionMatches)) {
     retireOwnedAudioBridges();
     if (sessionMatched) delete window.__openclawTeamsMeeting;
     return JSON.stringify({ departed: true, sessionMatched: true, urlMatched: true });
   }
-  if (!meetingIdentityMatches) {
+  if (!meetingIdentityMatches && !initiatedLeaveTransitionMatches) {
     return JSON.stringify({ departed: false, urlMatched: false });
   }
   if (!sessionMatched) {
