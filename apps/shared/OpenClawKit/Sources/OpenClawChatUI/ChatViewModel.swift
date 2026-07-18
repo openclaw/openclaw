@@ -1232,6 +1232,14 @@ extension OpenClawChatViewModel {
             next = createdKey.isEmpty ? requested : createdKey
         } catch {
             if Self.isUnsupportedCreateSessionError(error) {
+                // Reset only mimics a plain new chat; agent/worktree selections were
+                // not honored, so advanced requests surface the error instead of
+                // silently resetting the current session.
+                guard requestedAgentID == nil, !worktree else {
+                    chatUILogger.error("sessions.create unsupported; advanced options not honored")
+                    self.errorText = error.localizedDescription
+                    return false
+                }
                 chatUILogger.info("sessions.create unsupported; falling back to sessions.reset")
                 await self.performReset()
                 return true

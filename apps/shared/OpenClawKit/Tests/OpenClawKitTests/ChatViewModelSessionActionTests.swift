@@ -269,6 +269,20 @@ struct ChatViewModelSessionActionTests {
         #expect(await transport.createdAgentIDs() == ["worker"])
     }
 
+    @Test func `unsupported create with advanced options fails without resetting`() async throws {
+        // SessionActionTransport relies on the protocol's default createSession,
+        // which throws the canonical unsupported error; the worktree request must
+        // surface it instead of taking the plain-new reset fallback.
+        let transport = SessionActionTransport()
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+
+        let created = await viewModel.startNewSession(worktree: true)
+
+        #expect(created == false)
+        #expect(viewModel.sessionKey == "main")
+        #expect(viewModel.errorText != nil)
+    }
+
     @Test func `ambiguous agent ownership omits the parent session`() async throws {
         let transport = SessionActionTransport()
         let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)

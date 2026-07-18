@@ -248,7 +248,9 @@ struct ChatSessionInspectorSheet: View {
                         .font(OpenClawChatTypography.body)
                 }
             }
-            .task {
+            // Keyed to the catalog revision so group create/rename/delete while
+            // the inspector is open refreshes the picker instead of going stale.
+            .task(id: self.viewModel.sessionGroupsRevision) {
                 do {
                     self.groups = try await self.viewModel.fetchSessionGroups()
                 } catch {
