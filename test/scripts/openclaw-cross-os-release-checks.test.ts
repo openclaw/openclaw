@@ -2302,12 +2302,16 @@ function appendBoundedCommandOutputFixed(
   const chunkBuffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
   // SAFETY: skip leading continuation bytes so the suffix starts at a character boundary.
   function safeTail(buffer: Buffer, limit: number): Buffer {
-    if (buffer.byteLength <= limit) return buffer;
+    if (buffer.byteLength <= limit) {
+      return buffer;
+    }
     const raw = buffer.subarray(buffer.byteLength - limit);
     let start = 0;
     while (start < raw.length) {
       const byte = raw.at(start);
-      if (byte === undefined || (byte & 0xc0) !== 0x80) break;
+      if (byte === undefined || (byte & 0xc0) !== 0x80) {
+        break;
+      }
       start += 1;
     }
     return start > 0 ? raw.subarray(start) : raw;
@@ -2317,7 +2321,9 @@ function appendBoundedCommandOutputFixed(
   }
   const currentBuffer = Buffer.from(current);
   const nextBytes = currentBuffer.byteLength + chunkBuffer.byteLength;
-  if (nextBytes <= maxBytes) return `${current}${chunkBuffer.toString("utf8")}`;
+  if (nextBytes <= maxBytes) {
+    return `${current}${chunkBuffer.toString("utf8")}`;
+  }
   const currentTailBytes = maxBytes - chunkBuffer.byteLength;
   let currentTail = currentBuffer.subarray(
     Math.max(0, currentBuffer.byteLength - currentTailBytes),
@@ -2325,7 +2331,9 @@ function appendBoundedCommandOutputFixed(
   let skip = 0;
   while (skip < currentTail.length) {
     const byte = currentTail.at(skip);
-    if (byte === undefined || (byte & 0xc0) !== 0x80) break;
+    if (byte === undefined || (byte & 0xc0) !== 0x80) {
+      break;
+    }
     skip += 1;
   }
   if (skip > 0) currentTail = currentTail.subarray(skip);
