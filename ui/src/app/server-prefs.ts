@@ -213,7 +213,7 @@ export function applyServerUiPrefs(
   // Apply per field: only keys whose *server* value changed since last seen.
   // Reapplying unchanged fields would revert unpushable local edits on other
   // keys whenever any one server field moves.
-  let lastSeen: ServerUiPrefs = {};
+  let lastSeen: ServerUiPrefs;
   try {
     lastSeen = lastSeenRaw ? (JSON.parse(lastSeenRaw) as ServerUiPrefs) : {};
   } catch {
@@ -253,7 +253,12 @@ let queuedPrefs: ServerUiPrefs | null = null;
 let pushDraining = false;
 
 async function drainPrefsQueue(client: GatewayBrowserClient): Promise<void> {
-  while (queuedPrefs && queuedClient === client) {
+  while (queuedPrefs) {
+    // The awaits below can outlive a gateway switch; a superseded drain stops
+    // instead of writing one gateway's prefs to another.
+    if (queuedClient !== client) {
+      return;
+    }
     const prefs = queuedPrefs;
     queuedPrefs = null;
     for (let attempt = 0; attempt < 2; attempt += 1) {
