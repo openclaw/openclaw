@@ -133,9 +133,9 @@ describe("workspace path resolution", () => {
 
         await expect(fs.readdir(workspaceDir)).resolves.toEqual(["Source"]);
         await expect(fs.readdir(path.join(workspaceDir, "Source"))).resolves.toEqual(["İstanbul"]);
-        await expect(
-          fs.readdir(path.join(workspaceDir, "Source", "İstanbul")),
-        ).resolves.toEqual(["Widget.ts"]);
+        await expect(fs.readdir(path.join(workspaceDir, "Source", "İstanbul"))).resolves.toEqual([
+          "Widget.ts",
+        ]);
       });
     },
   );
