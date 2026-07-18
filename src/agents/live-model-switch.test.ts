@@ -492,6 +492,94 @@ describe("live model switch", () => {
     });
   });
 
+  describe("consolidateLiveModelSwitchAfterRun", () => {
+    const consolidateParams = {
+      cfg: { session: { store: "/tmp/custom-store.json" } },
+      sessionKey: "main",
+      agentId: "reply",
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-6",
+    };
+
+    it("clears the pending flag when the run executed the persisted selection", async () => {
+      // CLI harness runs never pass the embedded attempt-recovery clear; the
+      // post-run consolidation is what stops /status reporting a stale switch.
+      const sessionEntry = {
+        liveModelSwitchPending: true,
+        providerOverride: "claude-cli",
+        modelOverride: "claude-opus-4-6",
+      };
+      state.loadSessionStoreMock.mockReturnValue({ main: sessionEntry });
+
+      const { consolidateLiveModelSwitchAfterRun } = await loadModule();
+
+      await consolidateLiveModelSwitchAfterRun({
+        ...consolidateParams,
+        providerUsed: "claude-cli",
+        modelUsed: "claude-opus-4-6",
+      });
+
+      expect(sessionEntry).not.toHaveProperty("liveModelSwitchPending");
+    });
+
+    it("keeps the pending flag when the run executed a different model", async () => {
+      const sessionEntry = {
+        liveModelSwitchPending: true,
+        providerOverride: "openai",
+        modelOverride: "gpt-5.5",
+      };
+      state.loadSessionStoreMock.mockReturnValue({ main: sessionEntry });
+
+      const { consolidateLiveModelSwitchAfterRun } = await loadModule();
+
+      await consolidateLiveModelSwitchAfterRun({
+        ...consolidateParams,
+        providerUsed: "anthropic",
+        modelUsed: "claude-opus-4-6",
+      });
+
+      expect(sessionEntry.liveModelSwitchPending).toBe(true);
+      expect(state.updateSessionStoreMock).not.toHaveBeenCalled();
+    });
+
+    it("clears via the openai runtime promotion when providers differ only by alias", async () => {
+      const sessionEntry = {
+        liveModelSwitchPending: true,
+        providerOverride: "openai",
+        modelOverride: "gpt-5.5",
+      };
+      state.loadSessionStoreMock.mockReturnValue({ main: sessionEntry });
+
+      const { consolidateLiveModelSwitchAfterRun } = await loadModule();
+
+      await consolidateLiveModelSwitchAfterRun({
+        ...consolidateParams,
+        providerUsed: "OpenAI",
+        modelUsed: "gpt-5.5",
+      });
+
+      expect(sessionEntry).not.toHaveProperty("liveModelSwitchPending");
+    });
+
+    it("is a no-op when the flag is not set", async () => {
+      const sessionEntry = {
+        providerOverride: "openai",
+        modelOverride: "gpt-5.5",
+      };
+      state.loadSessionStoreMock.mockReturnValue({ main: sessionEntry });
+
+      const { consolidateLiveModelSwitchAfterRun } = await loadModule();
+
+      await consolidateLiveModelSwitchAfterRun({
+        ...consolidateParams,
+        providerUsed: "openai",
+        modelUsed: "gpt-5.5",
+      });
+
+      expect(state.updateSessionStoreMock).not.toHaveBeenCalled();
+    });
+  });
+
   describe("clearLiveModelSwitchPending", () => {
     it("calls updateSessionStore to clear the flag", async () => {
       const { clearLiveModelSwitchPending } = await loadModule();

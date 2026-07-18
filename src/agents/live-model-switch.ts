@@ -208,6 +208,66 @@ export function shouldSwitchToLiveModel(params: {
 }
 
 /**
+ * Post-run consolidation: once a completed run has actually executed the
+ * persisted selection, the pending live-switch flag is spent. CLI harness runs
+ * never pass through the embedded attempt-recovery clear, so without this the
+ * flag survives forever and `/status` keeps reporting a switch that already
+ * happened. Unlike `shouldSwitchToLiveModel`, runtime/auth-profile drift is
+ * ignored here: the selected model demonstrably ran, so keeping the flag would
+ * only re-arm mid-run restarts that have nothing left to apply.
+ */
+export async function consolidateLiveModelSwitchAfterRun(params: {
+  cfg?: OpenClawConfig | undefined;
+  sessionKey?: string;
+  agentId?: string;
+  defaultProvider: string;
+  defaultModel: string;
+  providerUsed?: string;
+  modelUsed?: string;
+}): Promise<void> {
+  const sessionKey = normalizeOptionalString(params.sessionKey);
+  const cfg = params.cfg;
+  const providerUsed = normalizeOptionalString(params.providerUsed);
+  const modelUsed = normalizeOptionalString(params.modelUsed);
+  if (!cfg || !sessionKey || !providerUsed || !modelUsed) {
+    return;
+  }
+  const storePath = resolveStorePath(cfg.session?.store, {
+    agentId: params.agentId?.trim(),
+  });
+  const entry = loadSessionEntry({
+    storePath,
+    sessionKey,
+    hydrateSkillPromptRefs: false,
+    clone: false,
+    readConsistency: "latest",
+  });
+  if (!entry?.liveModelSwitchPending) {
+    return;
+  }
+  const persisted = resolveLiveSessionModelSelection({
+    cfg,
+    sessionKey,
+    agentId: params.agentId,
+    defaultProvider: params.defaultProvider,
+    defaultModel: params.defaultModel,
+  });
+  if (!persisted) {
+    return;
+  }
+  const selectionApplied =
+    (providerUsed === persisted.provider && modelUsed === persisted.model) ||
+    isAlreadyAppliedOpenAICodexRuntimePromotion(
+      { provider: providerUsed, model: modelUsed },
+      persisted,
+    );
+  if (!selectionApplied) {
+    return;
+  }
+  await clearLiveModelSwitchPending({ cfg, sessionKey, agentId: params.agentId });
+}
+
+/**
  * Clear the `liveModelSwitchPending` flag from the session entry on disk so
  * subsequent retry iterations do not re-trigger the switch.
  */
