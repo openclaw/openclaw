@@ -571,7 +571,7 @@ async function startLocalModeTui(
   });
 
   const cleanup = createIdempotentCleanup(async () => {
-    run.dispose();
+    await run.dispose();
     await mockModel.stop();
     await rm(tempDir, { recursive: true, force: true });
   });
@@ -776,7 +776,7 @@ async function startGatewayModeTui(
   });
   const cleanup = createIdempotentCleanup(async () => {
     shared.mockModel.releaseFirstResponse(scenario.modelId);
-    run.dispose();
+    await run.dispose();
     for (const key of sessionKeys) {
       await shared.controlClient.abortChat({ sessionKey: key });
     }
