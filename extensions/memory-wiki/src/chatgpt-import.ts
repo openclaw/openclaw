@@ -210,7 +210,7 @@ function isoFromUnix(raw: unknown): string | undefined {
   const numeric =
     typeof raw === "number"
       ? raw
-      : /^(?:0|[1-9]\d*)(?:\.\d+)?(?![\s\S])/.test(raw)
+      : /^[+-]?(?:0|[1-9]\d*)(?:\.\d+)?(?![\s\S])/.test(raw)
         ? Number(raw)
         : undefined;
   if (numeric === undefined || !Number.isFinite(numeric)) {

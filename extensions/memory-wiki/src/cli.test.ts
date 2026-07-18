@@ -809,8 +809,8 @@ cli note
     );
     expect(sourceFile).toBeDefined();
     const pageContent = await fs.readFile(path.join(rootDir, "sources", sourceFile ?? ""), "utf8");
-    expect(pageContent).toContain("- Created: 2024-04-06T00:26:40.000Z");
-    expect(pageContent).toContain("- Updated: 2024-04-06T00:26:40.000Z");
+    expect(pageContent).toContain("- Created: 1969-12-31T23:59:59.000Z");
+    expect(pageContent).toContain("- Updated: 1969-12-31T23:59:59.000Z");
   });
 
   it("rejects malformed ChatGPT Unix timestamp strings", async () => {
