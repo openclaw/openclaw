@@ -76,6 +76,14 @@ function finiteNumber(value: unknown): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+function dateValidEpochSeconds(value: unknown): number | undefined {
+  const seconds = finiteNumber(value);
+  if (seconds === undefined || !Number.isFinite(new Date(seconds * 1000).getTime())) {
+    return undefined;
+  }
+  return seconds;
+}
+
 function nonNegativeInteger(value: unknown): number {
   const parsed = finiteNumber(value);
   return parsed === undefined ? 0 : Math.max(0, Math.trunc(parsed));
@@ -243,7 +251,7 @@ function aggregateHistory(params: {
 
   for (const rawBucket of params.costs) {
     const bucket = objectRecord(rawBucket);
-    const startTime = finiteNumber(bucket?.start_time);
+    const startTime = dateValidEpochSeconds(bucket?.start_time);
     if (startTime === undefined || !Array.isArray(bucket?.results)) {
       continue;
     }
@@ -259,7 +267,7 @@ function aggregateHistory(params: {
 
   for (const rawBucket of params.completions) {
     const bucket = objectRecord(rawBucket);
-    const startTime = finiteNumber(bucket?.start_time);
+    const startTime = dateValidEpochSeconds(bucket?.start_time);
     if (startTime === undefined || !Array.isArray(bucket?.results)) {
       continue;
     }
