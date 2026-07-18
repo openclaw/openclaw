@@ -279,6 +279,21 @@ describe("downloadLineMedia", () => {
     expect(saveMediaStreamMock).not.toHaveBeenCalled();
   });
 
+  it("preserves a permanent HTTP error when response cancellation fails", async () => {
+    const response = cancellableResponse(404);
+    response.cancel.mockRejectedValueOnce(new Error("cancel failed"));
+    fetchMock.mockResolvedValueOnce(response.response);
+
+    const err = expectMediaFetchError(
+      await downloadLineMedia("mid-missing", "token").catch((e: unknown) => e),
+    );
+
+    expect(err.code).toBe("http_error");
+    expect(err.status).toBe(404);
+    expect(isRetryableLineInboundMediaError(err)).toBe(false);
+    expect(saveMediaStreamMock).not.toHaveBeenCalled();
+  });
+
   it("aborts a hung content request at the total readiness deadline", async () => {
     let requestSignal: AbortSignal | undefined;
     fetchMock.mockImplementation(

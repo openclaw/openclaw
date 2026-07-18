@@ -98,7 +98,7 @@ async function fetchLineContentWhenReady(
         return response;
       }
 
-      await response.body?.cancel();
+      await response.body?.cancel().catch(() => undefined);
       if (response.status !== 202) {
         throw new MediaFetchError(
           "http_error",
