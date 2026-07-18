@@ -7434,6 +7434,21 @@
       "translated": "Caduca en ${seconds}s"
     },
     {
+      "id": "native.android.7c65a0e8c6e2a9d2",
+      "source": "Realtime Talk",
+      "translated": "Conversación en tiempo real"
+    },
+    {
+      "id": "native.android.56e73fe98ab486ce",
+      "source": "Back",
+      "translated": "Atrás"
+    },
+    {
+      "id": "native.android.b827945b6ee6c1e8",
+      "source": "Open Settings",
+      "translated": "Abrir Ajustes"
+    },
+    {
       "id": "native.android.118e8d239b18895e",
       "source": "Model",
       "translated": "Modelo"

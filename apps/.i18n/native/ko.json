@@ -7434,6 +7434,21 @@
       "translated": "${seconds}초 후 만료"
     },
     {
+      "id": "native.android.7c65a0e8c6e2a9d2",
+      "source": "Realtime Talk",
+      "translated": "실시간 대화"
+    },
+    {
+      "id": "native.android.56e73fe98ab486ce",
+      "source": "Back",
+      "translated": "뒤로"
+    },
+    {
+      "id": "native.android.b827945b6ee6c1e8",
+      "source": "Open Settings",
+      "translated": "설정 열기"
+    },
+    {
       "id": "native.android.118e8d239b18895e",
       "source": "Model",
       "translated": "모델"

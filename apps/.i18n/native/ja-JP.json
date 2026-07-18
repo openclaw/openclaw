@@ -7434,6 +7434,21 @@
       "translated": "期限切れまで${seconds}s"
     },
     {
+      "id": "native.android.7c65a0e8c6e2a9d2",
+      "source": "Realtime Talk",
+      "translated": "リアルタイムトーク"
+    },
+    {
+      "id": "native.android.56e73fe98ab486ce",
+      "source": "Back",
+      "translated": "戻る"
+    },
+    {
+      "id": "native.android.b827945b6ee6c1e8",
+      "source": "Open Settings",
+      "translated": "設定を開く"
+    },
+    {
       "id": "native.android.118e8d239b18895e",
       "source": "Model",
       "translated": "モデル"
