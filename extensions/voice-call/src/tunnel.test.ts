@@ -195,6 +195,29 @@ describe("voice-call tunnels", () => {
     }
   });
 
+  it("unrefs the ngrok startup timeout", async () => {
+    const unrefSpy = vi.fn();
+    const setTimeoutOriginal = globalThis.setTimeout.bind(globalThis);
+    const setTimeoutSpy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockImplementation((handler: TimerHandler, timeout?: number) => {
+        const timer = Reflect.apply(setTimeoutOriginal, globalThis, [handler, timeout]);
+        Object.defineProperty(timer, "unref", { value: unrefSpy, configurable: true });
+        return timer;
+      });
+    try {
+      const proc = nextProcess();
+      const result = startNgrokTunnel({ port: 3334, path: "/voice/webhook" });
+      emitNgrokUrl(proc, "https://unref.ngrok.io");
+
+      await result;
+
+      expect(unrefSpy).toHaveBeenCalledOnce();
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
   it("force-kills ngrok before rejecting a startup timeout", async () => {
     vi.useFakeTimers();
     try {

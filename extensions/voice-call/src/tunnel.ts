@@ -129,8 +129,10 @@ async function startNgrokTunnel(config: {
       stdio: ["ignore", "pipe", "pipe"],
     });
 
-    let resolved = false;
-    let closed = false;
+    // Startup settlement and OS process closure are separate: the deadline can
+    // win before the child has been reaped.
+    let startupSettled = false;
+    let childClosed = false;
     let publicUrl: string | null = null;
     let outputBuffer = "";
     // Keep only enough UTF-16-safe suffix to recognize an error marker split
@@ -138,19 +140,21 @@ async function startNgrokTunnel(config: {
     let stderrTail = "";
 
     const timeout = setTimeout(() => {
-      if (!resolved) {
-        resolved = true;
-        void terminateNgrokProcess(proc, () => closed).then(() => {
+      if (!startupSettled) {
+        startupSettled = true;
+        void terminateNgrokProcess(proc, () => childClosed).then(() => {
           reject(new Error("ngrok startup timed out (30s)"));
         });
       }
     }, 30000);
+    // Do not keep the host process alive solely waiting on ngrok startup.
+    timeout.unref();
 
     const rejectIfPending = (message: string, kill = false) => {
-      if (!resolved) {
-        resolved = true;
+      if (!startupSettled) {
+        startupSettled = true;
         clearTimeout(timeout);
-        if (kill && !closed) {
+        if (kill && !childClosed) {
           proc.kill("SIGKILL");
         }
         reject(new Error(message));
@@ -172,8 +176,8 @@ async function startNgrokTunnel(config: {
         }
 
         // Check for ready state
-        if (publicUrl && !resolved) {
-          resolved = true;
+        if (publicUrl && !startupSettled) {
+          startupSettled = true;
           clearTimeout(timeout);
 
           // Add path to the public URL
@@ -185,7 +189,7 @@ async function startNgrokTunnel(config: {
             publicUrl: fullUrl,
             provider: "ngrok",
             stop: async () => {
-              await terminateNgrokProcess(proc, () => closed);
+              await terminateNgrokProcess(proc, () => childClosed);
             },
           });
         }
@@ -234,9 +238,9 @@ async function startNgrokTunnel(config: {
     });
 
     proc.on("close", (code) => {
-      closed = true;
-      if (!resolved) {
-        resolved = true;
+      childClosed = true;
+      if (!startupSettled) {
+        startupSettled = true;
         clearTimeout(timeout);
         reject(new Error(`ngrok exited unexpectedly with code ${code}`));
       }
