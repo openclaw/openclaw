@@ -97,4 +97,22 @@ describe("streamOpenAICodexResponses retry classification", () => {
     expect(result.stopReason).toBe("error");
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
+
+  it("does not retry a bodyless 304 response", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response(null, { status: 304, statusText: "Not Modified" }));
+    vi.stubGlobal("fetch", fetchMock);
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+    const result = await streamOpenAICodexResponses(model, context, {
+      apiKey,
+      transport: "sse",
+    }).result();
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toBe("Not Modified");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(setTimeoutSpy).not.toHaveBeenCalled();
+  });
 });
