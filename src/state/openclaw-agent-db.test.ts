@@ -577,13 +577,13 @@ describe("openclaw agent database", () => {
     closeOpenClawAgentDatabasesForTest();
 
     const { DatabaseSync } = requireNodeSqlite();
-    const existingV11 = new DatabaseSync(databasePath);
-    existingV11.exec(`
+    const existingV12 = new DatabaseSync(databasePath);
+    existingV12.exec(`
       DROP TABLE heartbeat_outcomes;
       PRAGMA user_version = 12;
       UPDATE schema_meta SET schema_version = 12 WHERE meta_key = 'primary';
     `);
-    existingV11.close();
+    existingV12.close();
 
     const reopened = openOpenClawAgentDatabase({ agentId: "worker-1", env });
     expect(
@@ -637,9 +637,7 @@ describe("openclaw agent database", () => {
         .prepare("SELECT strict FROM pragma_table_list WHERE name = ?")
         .get("session_transcript_generations"),
     ).toEqual({ strict: 1 });
-    expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(
-      OPENCLAW_AGENT_SCHEMA_VERSION,
-    );
+    expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
     expect(
       migrated.db
         .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
