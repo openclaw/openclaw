@@ -415,8 +415,9 @@ export function readSessionTranscriptVisibleMessageDelta(
               .leftJoin("session_transcript_active_events as parent_active", (join) =>
                 join
                   .onRef("parent_active.session_id", "=", "active.session_id")
-                  /* kysely-allow-raw: active positions are contiguous path ordinals. */
-                  .on(sql<boolean>`parent_active.active_position = active.active_position - 1`),
+                  .on((eb) =>
+                    eb("parent_active.active_position", "=", eb("active.active_position", "-", 1)),
+                  ),
               )
               .leftJoin("transcript_event_identities as parent_identity", (join) =>
                 join
