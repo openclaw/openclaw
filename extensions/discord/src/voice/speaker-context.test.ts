@@ -55,4 +55,25 @@ describe("DiscordVoiceSpeakerContextResolver", () => {
 
     expect(fetchMember).toHaveBeenCalledTimes(2);
   });
+
+  it("evicts the oldest speaker context after the cache reaches its production bound", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+    const fetchMember = vi.fn(async (_guildId: string, userId: string) => ({
+      nickname: userId,
+      roles: [],
+      user: { id: userId, username: userId, globalName: userId },
+    }));
+    const resolver = new DiscordVoiceSpeakerContextResolver({
+      client: createClient(fetchMember),
+    });
+
+    for (let index = 0; index <= 5_000; index += 1) {
+      await resolver.resolveContext("g1", `u${index}`);
+    }
+    await resolver.resolveContext("g1", "u0");
+    await resolver.resolveContext("g1", "u5000");
+
+    expect(fetchMember).toHaveBeenCalledTimes(5_002);
+  });
 });

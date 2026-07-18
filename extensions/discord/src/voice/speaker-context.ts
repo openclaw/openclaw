@@ -8,6 +8,7 @@ import { resolveDiscordOwnerAccess } from "../monitor/allow-list.js";
 import { formatDiscordUserTag } from "../monitor/format.js";
 
 const SPEAKER_CONTEXT_CACHE_TTL_MS = 60_000;
+const SPEAKER_CONTEXT_CACHE_MAX_ENTRIES = 5_000;
 
 type VoiceSpeakerIdentity = {
   id: string;
@@ -136,6 +137,15 @@ export class DiscordVoiceSpeakerContextResolver {
         ...context,
         expiresAt,
       });
+      // Expiry is checked on lookup, so one-time speakers would otherwise remain
+      // for the full voice-manager lifetime even after their entries expire.
+      while (this.cache.size > SPEAKER_CONTEXT_CACHE_MAX_ENTRIES) {
+        const oldestKey = this.cache.keys().next().value;
+        if (oldestKey === undefined) {
+          break;
+        }
+        this.cache.delete(oldestKey);
+      }
     }
   }
 }
