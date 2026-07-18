@@ -697,6 +697,34 @@ describe("custodian page", () => {
     expect(page.querySelector(".custodian__nudge")).toBeNull();
   });
 
+  it("does not report a recovered channel with a retained error", async () => {
+    const request = vi.fn().mockResolvedValue({
+      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+      reply: "Everything is healthy.",
+      action: "none",
+    });
+    const { context, emitGatewayEvent } = createContext(request);
+    const { page } = await mountPage(context, { onboarding: false });
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+
+    emitGatewayEvent({
+      event: "health",
+      payload: {
+        channels: {
+          telegram: {
+            configured: true,
+            enabled: true,
+            running: true,
+            healthState: "healthy",
+            lastError: "connection closed during the previous run",
+          },
+        },
+      },
+    });
+    await page.updateComplete;
+    expect(page.querySelector(".custodian__nudge")).toBeNull();
+  });
+
   it("reports a channel that fails before its first start", async () => {
     const request = vi.fn().mockResolvedValue({
       sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",

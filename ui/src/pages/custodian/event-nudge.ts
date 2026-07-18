@@ -88,7 +88,12 @@ function classifyChannelAccount(
       return null;
     }
   }
-  if (typeof account.lastError === "string" && account.lastError.trim()) {
+  if (
+    account.connected !== true &&
+    healthState !== "healthy" &&
+    typeof account.lastError === "string" &&
+    account.lastError.trim()
+  ) {
     return {
       severity: 3,
       kind: "channel-degraded",
