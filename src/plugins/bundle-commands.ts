@@ -113,9 +113,7 @@ function loadBundleCommandsFromRoot(params: {
         "utf-8",
       );
     } catch (error) {
-      log.warn(
-        `skipping unreadable bundle command file ${filePath}: ${formatErrorMessage(error)}`,
-      );
+      log.warn(`skipping unreadable bundle command file ${filePath}: ${formatErrorMessage(error)}`);
       continue;
     }
     const frontmatter = parseFrontmatterBlock(raw);
