@@ -59,14 +59,17 @@ import {
 import type { DB as OpenClawAgentKyselyDatabase } from "./openclaw-agent-db.generated.js";
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.generated.js";
+import {
+  clearOpenClawDatabaseQuarantine,
+  readOpenClawDatabaseQuarantine,
+} from "./openclaw-quarantine-store.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
-  clearOpenClawDatabaseVerification,
+  clearOpenClawDatabaseVerificationHistory,
   createOpenClawDatabaseVerificationError,
   detectOpenClawStateDatabaseSchemaMigrations,
   OPENCLAW_STATE_SCHEMA_VERSION,
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-  readOpenClawDatabaseVerification,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
@@ -183,7 +186,8 @@ export function clearOpenClawAgentDatabaseOpenFailure(
   options: OpenClawStateDatabaseOptions = {},
 ): boolean {
   const resolvedPath = path.resolve(pathname);
-  const cleared = clearOpenClawDatabaseVerification(resolvedPath, options);
+  const cleared = clearOpenClawDatabaseQuarantine(resolvedPath, { env: options.env });
+  clearOpenClawDatabaseVerificationHistory(resolvedPath, options);
   terminalOpenFailures.delete(resolvedPath);
   return cleared;
 }
@@ -1082,19 +1086,17 @@ export function openOpenClawAgentDatabase(
   }
   let persistedFailure: Error | undefined;
   try {
-    const verification = readOpenClawDatabaseVerification(pathname, { env: databaseOptions.env });
-    if (verification?.result === "error") {
+    const quarantine = readOpenClawDatabaseQuarantine(pathname, { env: databaseOptions.env });
+    if (quarantine) {
       persistedFailure = createOpenClawDatabaseVerificationError(
         "agent",
         pathname,
-        verification.error,
+        quarantine.reason,
       );
     }
   } catch {
-    // Accepted tradeoff: a locked/unavailable state DB must not block agent
-    // opens, or every transient state hiccup takes all agents down. The
-    // in-process latch still covers this process; a missed cross-process
-    // quarantine is re-detected by the next daily verifier pass.
+    // A broken quarantine store must not brick every agent open.
+    // The process latch and daily verifier still cover known damage.
   }
   if (persistedFailure) {
     recordOpenClawAgentDatabaseOpenFailure(pathname, persistedFailure);

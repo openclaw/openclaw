@@ -56,14 +56,15 @@ Version 3 was an unshipped development step folded into version 4.
 
 ## Integrity checks
 
-| When                                        | Check                                                                                              |
-| ------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| Every open                                  | Validate the `schema_meta` table and primary metadata row                                          |
-| Before a pending migration                  | Run a full integrity, foreign-key, role, schema, and index scan                                    |
-| Gateway background verifier                 | Run the full scan about once daily and record results in the global `database_verifications` table |
-| Doctor, backup verification, and compaction | Run the full scan before accepting or rewriting the database                                       |
+| When                                        | Check                                                           |
+| ------------------------------------------- | --------------------------------------------------------------- |
+| Every open                                  | Validate the `schema_meta` table and primary metadata row       |
+| Before a pending migration                  | Run a full integrity, foreign-key, role, schema, and index scan |
+| Gateway background verifier                 | Run the full scan about once daily and record results           |
+| Doctor, backup verification, and compaction | Run the full scan before accepting or rewriting the database    |
 
 The Gateway preflight reads schema headers only. The background verifier owns the slower full scan for databases that do not need migration.
+Quarantine decisions live in a dedicated `openclaw-quarantine.sqlite` store, so they survive damage to the databases being quarantined. The global `database_verifications` table remains verification history.
 
 ## Downgrades are unsupported
 

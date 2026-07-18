@@ -320,14 +320,26 @@ Docker notes:
 - Default thinking: `low`
 - Model override: `OPENCLAW_LIVE_CODEX_HARNESS_MODEL=openai/<model>`
 - Thinking override: `OPENCLAW_LIVE_CODEX_HARNESS_THINKING=<level>`
+- Non-default model effort assertion:
+  `OPENCLAW_LIVE_CODEX_HARNESS_EXPECTED_EFFORT=<level>`
 - Matrix override: `OPENCLAW_LIVE_CODEX_HARNESS_TARGETS=<model>=<thinking>,...`
 - Auth mode: `OPENCLAW_LIVE_CODEX_HARNESS_AUTH=codex-auth` (default) uses the
   copied Codex login; `api-key` uses `OPENAI_API_KEY` through Codex app-server.
 - Optional image probe: `OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE=1`
 - Optional MCP/tool probe: `OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE=1`
 - Optional Guardian probe: `OPENCLAW_LIVE_CODEX_HARNESS_GUARDIAN_PROBE=1`
+- Optional resume stress: `OPENCLAW_LIVE_CODEX_HARNESS_RESUME_STRESS=1` adds
+  four history turns, then closes and restarts the Gateway and Codex app-server
+  three times while requiring the same native thread id and conversation
+  history. Override the bounded counts with
+  `OPENCLAW_LIVE_CODEX_HARNESS_RESUME_STRESS_HISTORY_TURNS` (1-20) and
+  `OPENCLAW_LIVE_CODEX_HARNESS_RESUME_STRESS_RESTARTS` (1-10).
 - Optional loop-relay opt-out probe:
   `OPENCLAW_LIVE_CODEX_HARNESS_DISABLE_LOOP_RELAY=1`
+- The requested thinking preference may map to the nearest effort advertised
+  by Codex for that model. For example, Luna maps `minimal` to `low`.
+- Known Codex catalog models derive that exact native effort automatically.
+  Unknown model overrides must state the expected mapped effort.
 - The smoke forces provider/model `agentRuntime.id: "codex"` so a broken Codex
   harness cannot pass by silently falling back to OpenClaw.
 - Auth: Codex app-server auth from the local Codex subscription login, or
@@ -349,6 +361,13 @@ Docker recipe:
 
 ```bash
 pnpm test:docker:live-codex-harness
+```
+
+Restart and history stress:
+
+```bash
+OPENCLAW_LIVE_CODEX_HARNESS_RESUME_STRESS=1 \
+  pnpm test:docker:live-codex-harness
 ```
 
 GPT-5.6 native Codex matrix:

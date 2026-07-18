@@ -51,7 +51,7 @@ import { hasErrnoCode } from "../infra/errors.js";
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { ExitError, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import {
   isPluginIntegrationSecretProviderConfig,
@@ -2472,6 +2472,11 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
     const redacted = redactConfigObject(snapshot.config);
     const res = getAtPath(redacted, parsedPath);
     if (!res.found) {
+      if (opts.json) {
+        writeRuntimeJson(runtime, { error: `Config path not found: ${opts.path}` });
+        runtime.exit(1);
+        return;
+      }
       runtime.error(
         danger(
           `Config path not found: ${opts.path}. Run ${formatCliCommand("openclaw config validate")} to inspect config shape.`,
@@ -2494,6 +2499,9 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
     }
     writeRuntimeJson(runtime, res.value ?? null);
   } catch (err) {
+    if (err instanceof ExitError) {
+      throw err;
+    }
     runtime.error(danger(String(err)));
     runtime.exit(1);
   }

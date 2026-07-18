@@ -228,3 +228,22 @@ export function acknowledgeOnboardingRecommendations(
     { operationLabel: "onboarding.recommendations.acknowledge" },
   );
 }
+
+export function clearOnboardingRecommendations(
+  databaseOptions: OpenClawStateDatabaseOptions = {},
+): boolean {
+  return runOpenClawStateWriteTransaction(
+    (database) => {
+      const db = getNodeSqliteKysely<OnboardingRecommendationsDatabase>(database.db);
+      const result = executeSqliteQuerySync(
+        database.db,
+        db
+          .deleteFrom("onboarding_recommendations")
+          .where("config_key", "=", ONBOARDING_RECOMMENDATIONS_KEY),
+      );
+      return (result.numAffectedRows ?? 0n) > 0n;
+    },
+    databaseOptions,
+    { operationLabel: "onboarding.recommendations.clear" },
+  );
+}

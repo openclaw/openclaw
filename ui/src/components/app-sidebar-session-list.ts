@@ -128,6 +128,24 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
         @mouseenter=${(event: MouseEvent) => startHoverMarquee(event.currentTarget as HTMLElement)}
         @mouseleave=${(event: MouseEvent) => stopHoverMarquee(event.currentTarget as HTMLElement)}
       >
+        <a
+          href=${session.href}
+          class="sidebar-recent-session__link"
+          draggable="false"
+          title=${title}
+          aria-current=${session.visuallyActive ? "page" : nothing}
+          aria-describedby=${metaId ?? nothing}
+          @click=${(event: MouseEvent) => this.handleSessionRowClick(event, session)}
+        >
+          <span class="sidebar-recent-session__text">
+            <span class="sidebar-recent-session__name hover-marquee">${label}</span>
+            ${subtitle
+              ? html`<span class="sidebar-recent-session__subtitle">${subtitle}</span>`
+              : nothing}
+          </span>
+          ${this.renderSessionState(session)}
+          ${session.isChild ? nothing : renderSessionRowBadges(session)}
+        </a>
         ${session.childSessionKeys.length > 0
           ? html`<button
               class="sidebar-child-session-toggle ${session.runningChildCount > 0
@@ -151,29 +169,13 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
                   ? icons.chevronDown
                   : icons.chevronRight}</span
               >
-              <span class="sidebar-child-session-toggle__count"
-                >${session.childSessionKeys.length}</span
-              >
+              ${this.isSessionChildrenExpanded(session)
+                ? nothing
+                : html`<span class="sidebar-child-session-toggle__count"
+                    >${session.childSessionKeys.length}</span
+                  >`}
             </button>`
           : nothing}
-        <a
-          href=${session.href}
-          class="sidebar-recent-session__link"
-          draggable="false"
-          title=${title}
-          aria-current=${session.visuallyActive ? "page" : nothing}
-          aria-describedby=${metaId ?? nothing}
-          @click=${(event: MouseEvent) => this.handleSessionRowClick(event, session)}
-        >
-          <span class="sidebar-recent-session__text">
-            <span class="sidebar-recent-session__name hover-marquee">${label}</span>
-            ${subtitle
-              ? html`<span class="sidebar-recent-session__subtitle">${subtitle}</span>`
-              : nothing}
-          </span>
-          ${this.renderSessionState(session)}
-          ${session.isChild ? nothing : renderSessionRowBadges(session)}
-        </a>
         <span class="sidebar-recent-session__aside session-row-aside">
           <span class="session-row-trail" id=${metaId ?? nothing}
             >${session.isChild && session.runtimeMs != null
