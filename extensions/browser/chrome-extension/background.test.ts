@@ -76,6 +76,7 @@ async function loadBackground() {
     },
     runtime: {
       getManifest: vi.fn(() => ({ version: "1.0.0" })),
+      onConnect: { addListener },
       onMessage: { addListener },
       onStartup: { addListener },
       onInstalled: { addListener },
@@ -89,6 +90,10 @@ async function loadBackground() {
         })),
         set: vi.fn(async () => undefined),
         remove: vi.fn(async () => undefined),
+      },
+      session: {
+        get: vi.fn(async () => ({})),
+        set: vi.fn(async () => undefined),
       },
     },
     tabGroups: {
