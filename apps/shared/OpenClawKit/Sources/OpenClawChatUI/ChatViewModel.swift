@@ -3,7 +3,8 @@ import Observation
 import OpenClawKit
 import OSLog
 
-private let chatUILogger = Logger(subsystem: "ai.openclaw", category: "OpenClawChatUI")
+// Module-internal: ChatViewModel extension files share this logger.
+let chatUILogger = Logger(subsystem: "ai.openclaw", category: "OpenClawChatUI")
 
 @MainActor
 @Observable
@@ -81,6 +82,10 @@ public final class OpenClawChatViewModel {
     public var attachments: [OpenClawPendingAttachment] = []
     /// Setter is module-internal for the health/outbox extension only.
     public internal(set) var healthOK: Bool = false
+    /// Bumped after every successful group-catalog mutation so views keyed on it
+    /// refetch; catalog-only changes (e.g. creating an empty group) alter no
+    /// session rows and would otherwise stay stale until reconnect.
+    public internal(set) var sessionGroupsRevision = 0
 
     /// True when this view model owns a gateway-scoped durable text outbox.
     public var supportsOfflineTextOutbox: Bool {
@@ -754,7 +759,8 @@ public final class OpenClawChatViewModel {
         self.blocksAttachmentOwnerChange
     }
 
-    private var blocksAttachmentOwnerChange: Bool {
+    /// Module-internal: the session-actions extension guards sessions.create with it.
+    var blocksAttachmentOwnerChange: Bool {
         self.attachmentOwnerIsActive() ||
             self.isSendingAttachmentDraft ||
             self.attachmentStagingCount > 0 ||
@@ -1176,38 +1182,10 @@ extension OpenClawChatViewModel {
         self.applySessionSwitch(to: sessionKey, intent: .externalSync)
     }
 
-    func performStartNewSession(worktree: Bool) async {
-        guard !self.blocksAttachmentOwnerChange else {
-            self.errorText = String(
-                localized: "Remove attachments or wait for delivery to resolve before starting a new chat.")
-            return
-        }
-        let requested = self.generatedNewSessionKey()
-        let parentSessionKey = self.sessionKey
-        let next: String
-        do {
-            let created = try await transport.createSession(
-                key: requested,
-                label: nil,
-                parentSessionKey: parentSessionKey,
-                worktree: worktree ? true : nil)
-            let createdKey = created.key.trimmingCharacters(in: .whitespacesAndNewlines)
-            next = createdKey.isEmpty ? requested : createdKey
-        } catch {
-            if Self.isUnsupportedCreateSessionError(error) {
-                chatUILogger.info("sessions.create unsupported; falling back to sessions.reset")
-                await self.performReset()
-                return
-            }
-            chatUILogger.error("sessions.create failed \(error.localizedDescription, privacy: .public)")
-            self.errorText = error.localizedDescription
-            return
-        }
-        guard !self.blocksAttachmentOwnerChange else {
-            self.errorText = String(
-                localized: "Remove attachments or wait for delivery to resolve before starting a new chat.")
-            return
-        }
+    /// Adopts a freshly created session key: full composer-preserving switch plus
+    /// session-owned state reset. Module-internal so the session-actions extension
+    /// does not need access to the private switch members.
+    func adoptCreatedSession(_ next: String) {
         self.prepareComposerForSessionSwitch(to: next)
         self.advanceSessionGeneration()
         self.sessionKey = next
@@ -1235,12 +1213,6 @@ extension OpenClawChatViewModel {
         self.updateActiveSessionRunWithoutChatSnapshot(false)
         resetSlashCommandCatalog()
         clearPendingRuns(reason: nil)
-    }
-
-    private static func isUnsupportedCreateSessionError(_ error: Error) -> Bool {
-        let nsError = error as NSError
-        return nsError.domain == "OpenClawChatTransport"
-            && nsError.localizedDescription == "sessions.create not supported by this transport"
     }
 
     func performReset() async {
@@ -1572,9 +1544,11 @@ extension OpenClawChatViewModel {
         return normalized
     }
 
-    private func generatedNewSessionKey() -> String {
+    /// Module-internal: the session-actions extension derives new-session keys.
+    func generatedNewSessionKey(agentID explicitAgentID: String? = nil) -> String {
         let baseKey = "ios-\(UUID().uuidString.lowercased())"
-        guard let agentID = OpenClawChatSessionKey.agentID(from: sessionKey) ??
+        guard let agentID = explicitAgentID ??
+            OpenClawChatSessionKey.agentID(from: sessionKey) ??
             activeAgentId ??
             OpenClawChatSessionKey.agentID(from: resolvedMainSessionKey) ??
             sessions.lazy.compactMap({ OpenClawChatSessionKey.agentID(from: $0.key) }).first

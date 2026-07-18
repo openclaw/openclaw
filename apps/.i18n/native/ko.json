@@ -23014,6 +23014,286 @@
       "translated": "사용자"
     },
     {
+      "id": "native.apple.b1cdcb906a43d5d6",
+      "source": "This session cannot be archived while it is active or running.",
+      "translated": "이 세션은 활성 상태이거나 실행 중인 동안 보관할 수 없습니다."
+    },
+    {
+      "id": "native.apple.5817e3f3dab1ee19",
+      "source": "The main session cannot be deleted.",
+      "translated": "기본 세션은 삭제할 수 없습니다."
+    },
+    {
+      "id": "native.apple.a6b8df3f18171c91",
+      "source": "Remove attachments or wait for delivery before archiving or deleting this session.",
+      "translated": "이 세션을 보관하거나 삭제하기 전에 첨부 파일을 제거하거나 전송이 완료될 때까지 기다리세요."
+    },
+    {
+      "id": "native.apple.476b3862e0449857",
+      "source": "Running",
+      "translated": "실행 중"
+    },
+    {
+      "id": "native.apple.83b41e41f428cffb",
+      "source": "Identity",
+      "translated": "ID"
+    },
+    {
+      "id": "native.apple.ba6710da42846eed",
+      "source": "Name",
+      "translated": "이름"
+    },
+    {
+      "id": "native.apple.bdb1928f7e63c4c6",
+      "source": "Key",
+      "translated": "키"
+    },
+    {
+      "id": "native.apple.7259d51423f8def0",
+      "source": "Copy session key",
+      "translated": "세션 키 복사"
+    },
+    {
+      "id": "native.apple.1494b638984ddca3",
+      "source": "Kind",
+      "translated": "종류"
+    },
+    {
+      "id": "native.apple.49cd6c21bdd0d8da",
+      "source": "Organization",
+      "translated": "조직"
+    },
+    {
+      "id": "native.apple.83e2ae5c4c7dbb94",
+      "source": "Group",
+      "translated": "그룹"
+    },
+    {
+      "id": "native.apple.1ba465bfa16ed23b",
+      "source": "None",
+      "translated": "없음"
+    },
+    {
+      "id": "native.apple.2c7c9e5dc8ad574e",
+      "source": "Pinned",
+      "translated": "고정됨"
+    },
+    {
+      "id": "native.apple.b0d3e265af9f562a",
+      "source": "Archived",
+      "translated": "보관됨"
+    },
+    {
+      "id": "native.apple.de94ca2cf7d4d766",
+      "source": "Run",
+      "translated": "실행"
+    },
+    {
+      "id": "native.apple.f7a51dca3268b26c",
+      "source": "Status",
+      "translated": "상태"
+    },
+    {
+      "id": "native.apple.12678de5fa43321d",
+      "source": "Model",
+      "translated": "모델"
+    },
+    {
+      "id": "native.apple.8ec6bd6001df285d",
+      "source": "Provider",
+      "translated": "제공업체"
+    },
+    {
+      "id": "native.apple.f43534cf1ee73605",
+      "source": "Runtime",
+      "translated": "런타임"
+    },
+    {
+      "id": "native.apple.f0775e602bbe75ed",
+      "source": "Run duration",
+      "translated": "실행 시간"
+    },
+    {
+      "id": "native.apple.ecde91d89eab026b",
+      "source": "Worktree",
+      "translated": "Worktree"
+    },
+    {
+      "id": "native.apple.1ef1698bb3ff7166",
+      "source": "ID",
+      "translated": "ID"
+    },
+    {
+      "id": "native.apple.69bc49f9663fa205",
+      "source": "Branch",
+      "translated": "브랜치"
+    },
+    {
+      "id": "native.apple.aa430e81e52e2354",
+      "source": "Repository root",
+      "translated": "저장소 루트"
+    },
+    {
+      "id": "native.apple.6e851b012a982d38",
+      "source": "Activity",
+      "translated": "활동"
+    },
+    {
+      "id": "native.apple.bf87c6fd92c9315a",
+      "source": "Updated",
+      "translated": "업데이트됨"
+    },
+    {
+      "id": "native.apple.dcb1734cba578b79",
+      "source": "Last activity",
+      "translated": "최근 활동"
+    },
+    {
+      "id": "native.apple.58ca290e3f032865",
+      "source": "Last interaction",
+      "translated": "최근 상호작용"
+    },
+    {
+      "id": "native.apple.7020bd521499f3b8",
+      "source": "Run started",
+      "translated": "실행 시작"
+    },
+    {
+      "id": "native.apple.abb2b24d6378b605",
+      "source": "Run ended",
+      "translated": "실행 종료"
+    },
+    {
+      "id": "native.apple.cd7c3095a22f80a9",
+      "source": "Session Info",
+      "translated": "세션 정보"
+    },
+    {
+      "id": "native.apple.e308b012d84b3b3e",
+      "source": "Groups",
+      "translated": "그룹"
+    },
+    {
+      "id": "native.apple.6438f66cfcaefaf7",
+      "source": "Rename…",
+      "translated": "이름 변경…"
+    },
+    {
+      "id": "native.apple.58b0f1df4985b0d1",
+      "source": "Delete…",
+      "translated": "삭제…"
+    },
+    {
+      "id": "native.apple.bc70cc0f0b882179",
+      "source": "No groups",
+      "translated": "그룹 없음"
+    },
+    {
+      "id": "native.apple.cb3e1fa7783a35d2",
+      "source": "Create Group",
+      "translated": "그룹 생성"
+    },
+    {
+      "id": "native.apple.4ac72aeb70f107d8",
+      "source": "Add Group",
+      "translated": "그룹 추가"
+    },
+    {
+      "id": "native.apple.23d628606fe0734f",
+      "source": "Session Groups",
+      "translated": "세션 그룹"
+    },
+    {
+      "id": "native.apple.7777b2d2ec43ed59",
+      "source": "Done",
+      "translated": "완료"
+    },
+    {
+      "id": "native.apple.0b0149661cacfe36",
+      "source": "Rename Group",
+      "translated": "그룹 이름 변경"
+    },
+    {
+      "id": "native.apple.8cbd863aa4d0524f",
+      "source": "Group name",
+      "translated": "그룹 이름"
+    },
+    {
+      "id": "native.apple.6021088d5ed9c301",
+      "source": "Rename",
+      "translated": "이름 변경"
+    },
+    {
+      "id": "native.apple.e697417338a47751",
+      "source": "Cancel",
+      "translated": "취소"
+    },
+    {
+      "id": "native.apple.cc89328a14af7a23",
+      "source": "Delete “%@”?",
+      "translated": "“%@”을(를) 삭제하시겠습니까?"
+    },
+    {
+      "id": "native.apple.4c09741db2e6c624",
+      "source": "Delete group?",
+      "translated": "그룹을 삭제하시겠습니까?"
+    },
+    {
+      "id": "native.apple.ddb1bbbd3c1a9c5e",
+      "source": "Delete Group",
+      "translated": "그룹 삭제"
+    },
+    {
+      "id": "native.apple.b049c8a4d2805e08",
+      "source": "Sessions in this group become ungrouped.",
+      "translated": "이 그룹의 세션은 그룹에서 해제됩니다."
+    },
+    {
+      "id": "native.apple.5aa6082d78027c5f",
+      "source": "Gateway changed. Close and reopen Groups to continue.",
+      "translated": "Gateway가 변경되었습니다. 계속하려면 그룹을 닫았다가 다시 여세요."
+    },
+    {
+      "id": "native.apple.bb4b44183929c881",
+      "source": "No agents are available on this gateway.",
+      "translated": "이 Gateway에서 사용할 수 있는 에이전트가 없습니다."
+    },
+    {
+      "id": "native.apple.6c89f35d53506406",
+      "source": "New Session Options",
+      "translated": "새 세션 옵션"
+    },
+    {
+      "id": "native.apple.5b0cde807ccb4241",
+      "source": "Agent",
+      "translated": "에이전트"
+    },
+    {
+      "id": "native.apple.124a640f9620d9cd",
+      "source": "Create in a worktree",
+      "translated": "워크트리에 생성"
+    },
+    {
+      "id": "native.apple.632ce245d5575fea",
+      "source": "Base ref (optional)",
+      "translated": "기준 참조(선택 사항)"
+    },
+    {
+      "id": "native.apple.fd81909fc9719a59",
+      "source": "Retry",
+      "translated": "다시 시도"
+    },
+    {
+      "id": "native.apple.a085278be62286b2",
+      "source": "Create",
+      "translated": "생성"
+    },
+    {
+      "id": "native.apple.795ba37f6782cf28",
+      "source": "The session could not be created.",
+      "translated": "세션을 생성할 수 없습니다."
+    },
+    {
       "id": "native.apple.8ec708a3605a2cc3",
       "source": "Search sessions",
       "translated": "세션 검색"
@@ -23037,6 +23317,11 @@
       "id": "native.apple.66ba42960eb4135b",
       "source": "New session",
       "translated": "새 세션"
+    },
+    {
+      "id": "native.apple.2ef0e34db02ad255",
+      "source": "New session options",
+      "translated": "새 세션 옵션"
     },
     {
       "id": "native.apple.36753ef2f1ed4264",
@@ -23087,6 +23372,11 @@
       "id": "native.apple.ac85292b16a7465f",
       "source": "Unread",
       "translated": "읽지 않음"
+    },
+    {
+      "id": "native.apple.f57a4b9c14d31867",
+      "source": "Get Info…",
+      "translated": "정보 가져오기…"
     },
     {
       "id": "native.apple.a174cb1027a9b881",
@@ -23149,6 +23439,11 @@
       "translated": "연결 중…"
     },
     {
+      "id": "native.apple.79f708b3bc1d3a6c",
+      "source": "Retry session groups",
+      "translated": "세션 그룹 다시 시도"
+    },
+    {
       "id": "native.apple.63320b6d5138c0db",
       "source": "Pinned",
       "translated": "고정됨"
@@ -23194,6 +23489,41 @@
       "translated": "취소"
     },
     {
+      "id": "native.apple.751e0f6b81cd374a",
+      "source": "Delete selected sessions?",
+      "translated": "선택한 세션을 삭제하시겠습니까?"
+    },
+    {
+      "id": "native.apple.aa679276581b0058",
+      "source": "Delete Sessions",
+      "translated": "세션 삭제"
+    },
+    {
+      "id": "native.apple.f837129cbee23297",
+      "source": "Each selected session and its transcript will be removed from the gateway.",
+      "translated": "선택한 각 세션과 해당 기록이 Gateway에서 삭제됩니다."
+    },
+    {
+      "id": "native.apple.bf09df5e38a7a950",
+      "source": "Groups",
+      "translated": "그룹"
+    },
+    {
+      "id": "native.apple.64013cfee5e25305",
+      "source": "Manage session groups",
+      "translated": "세션 그룹 관리"
+    },
+    {
+      "id": "native.apple.185f4688f98e244e",
+      "source": "Done",
+      "translated": "완료"
+    },
+    {
+      "id": "native.apple.58133fc5791847e6",
+      "source": "Select",
+      "translated": "선택"
+    },
+    {
       "id": "native.apple.b67eaecec1b423ac",
       "source": "No archived sessions",
       "translated": "보관된 세션 없음"
@@ -23209,29 +23539,14 @@
       "translated": "복원"
     },
     {
-      "id": "native.apple.666ba6eb696e649f",
-      "source": "Archive",
-      "translated": "보관"
-    },
-    {
-      "id": "native.apple.05cb1fecc5844b69",
-      "source": "Pinned",
-      "translated": "고정됨"
+      "id": "native.apple.158cfa096c57bcb9",
+      "source": "Get Info…",
+      "translated": "정보 가져오기…"
     },
     {
       "id": "native.apple.080fce25e4a9bb61",
       "source": "Rename",
       "translated": "이름 바꾸기"
-    },
-    {
-      "id": "native.apple.d148288258094aa6",
-      "source": "Pin",
-      "translated": "고정"
-    },
-    {
-      "id": "native.apple.3c62aaf44e6ab4d4",
-      "source": "Unpin",
-      "translated": "고정 해제"
     },
     {
       "id": "native.apple.6de479e9d780869a",
@@ -23247,6 +23562,31 @@
       "id": "native.apple.4f259c4409cfcc75",
       "source": "Mark Unread",
       "translated": "읽지 않음으로 표시"
+    },
+    {
+      "id": "native.apple.05cb1fecc5844b69",
+      "source": "Pinned",
+      "translated": "고정됨"
+    },
+    {
+      "id": "native.apple.d148288258094aa6",
+      "source": "Pin",
+      "translated": "고정"
+    },
+    {
+      "id": "native.apple.3c62aaf44e6ab4d4",
+      "source": "Unpin",
+      "translated": "고정 해제"
+    },
+    {
+      "id": "native.apple.666ba6eb696e649f",
+      "source": "Archive",
+      "translated": "보관"
+    },
+    {
+      "id": "native.apple.b09b91392835fe58",
+      "source": "Delete",
+      "translated": "삭제"
     },
     {
       "id": "native.apple.946b677d8dbf0f37",
@@ -23404,14 +23744,24 @@
       "translated": "경로 변경 후 대기열에 추가됨"
     },
     {
-      "id": "native.apple.710c7bd117a7cc12",
-      "source": "Remove attachments or wait for delivery to resolve before switching chats.",
-      "translated": "채팅을 전환하기 전에 첨부 파일을 제거하거나 전송이 완료될 때까지 기다리세요."
+      "id": "native.apple.787047d0da6b8b9f",
+      "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
+      "translated": "새 채팅을 시작하기 전에 첨부 파일을 제거하거나 전송이 완료될 때까지 기다리세요."
+    },
+    {
+      "id": "native.apple.980f552bb0f96c0f",
+      "source": "Gateway changed before the session operation started.",
+      "translated": "세션 작업이 시작되기 전에 Gateway가 변경되었습니다."
     },
     {
       "id": "native.apple.d93e6fe16ec1b0e5",
       "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
       "translated": "새 채팅을 시작하기 전에 첨부 파일을 제거하거나 전송이 완료될 때까지 기다리세요."
+    },
+    {
+      "id": "native.apple.710c7bd117a7cc12",
+      "source": "Remove attachments or wait for delivery to resolve before switching chats.",
+      "translated": "채팅을 전환하기 전에 첨부 파일을 제거하거나 전송이 완료될 때까지 기다리세요."
     },
     {
       "id": "native.apple.87ba543b42696b92",
@@ -23532,6 +23882,11 @@
       "id": "native.apple.eb58552e43c8dde2",
       "source": "New Session",
       "translated": "새 세션"
+    },
+    {
+      "id": "native.apple.a7119fbf9d25df5e",
+      "source": "New Session Options…",
+      "translated": "새 세션 옵션…"
     },
     {
       "id": "native.apple.5361129a24118af6",

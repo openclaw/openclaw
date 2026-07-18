@@ -36,6 +36,7 @@ import { syncCustomThemeStyleTag } from "./custom-theme.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
 import { createNativeChatDrafts } from "./native-bridge.ts";
 import { startNativeLinkRouting } from "./native-link-routing.ts";
+import { createNativeNotificationsCapability } from "./native-notifications.ts";
 import { createApplicationOverlays } from "./overlays.ts";
 import {
   loadSettings,
@@ -319,6 +320,7 @@ export function bootstrapApplication(): ApplicationRuntime {
   const theme = createApplicationTheme(settings);
   const nativeChatDrafts = createNativeChatDrafts();
   const nativeLinkRouting = startNativeLinkRouting();
+  const nativeNotifications = createNativeNotificationsCapability();
   const webPush = createWebPushCapability(gateway);
   const skillWorkshopRevision = createSkillWorkshopRevisionHandoff();
   applyStartupPresentation(settings);
@@ -390,6 +392,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     navigation,
     theme,
     nativeChatDrafts,
+    nativeNotifications,
     webPush,
     skillWorkshopRevision,
     navigate: (routeId, options) => {
@@ -447,6 +450,7 @@ export function bootstrapApplication(): ApplicationRuntime {
       theme.dispose();
       nativeChatDrafts.dispose();
       nativeLinkRouting.dispose();
+      nativeNotifications?.dispose();
       webPush.dispose();
       skillWorkshopRevision.clear();
     },

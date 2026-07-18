@@ -1211,9 +1211,12 @@ export const en: TranslationMap = {
     syncedHint: "Synced across your devices through the gateway.",
     notifications: {
       title: "Push notifications",
+      nativeTitle: "Notifications",
       hint: "Receive browser push notifications from your gateway.",
+      nativeHint: "Notifications are shown natively by the OpenClaw app on this Mac.",
       unavailableHint: "Not available in this browser.",
       unavailable: "Unavailable",
+      checking: "Checking...",
       granted: "Granted",
       denied: "Denied",
       notRequested: "Not requested",
@@ -1231,8 +1234,11 @@ export const en: TranslationMap = {
       sendTest: "Send test",
       subscribing: "Subscribing...",
       enable: "Enable notifications",
+      openSystemSettings: "Open System Settings",
       blockedHint:
         "Notifications are blocked. Update your browser site permissions to allow notifications.",
+      nativeBlockedHint:
+        "Notifications are disabled for OpenClaw in macOS. Allow them in System Settings > Notifications.",
     },
     appearance: {
       theme: "Theme",

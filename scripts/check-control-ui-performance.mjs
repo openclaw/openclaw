@@ -156,7 +156,11 @@ function formatViolation(violation) {
     violation.unit === "bytes"
       ? formatControlUiPerformanceBytes(violation.limit)
       : String(violation.limit);
-  return `${violation.metric}: ${actual} exceeds ${limit}`;
+  const exactBytes =
+    violation.unit === "bytes" && actual === limit
+      ? ` (${violation.actual} B vs ${violation.limit} B)`
+      : "";
+  return `${violation.metric}: ${actual} exceeds ${limit}${exactBytes}`;
 }
 
 export function formatControlUiPerformanceReport(
