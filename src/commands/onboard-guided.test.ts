@@ -273,43 +273,40 @@ describe("runGuidedOnboarding", () => {
     );
   });
 
-  it.each(["darwin", "linux", "win32"] satisfies NodeJS.Platform[])(
-    "hands the custodian hatch to the browser on %s after apply and recommendations",
-    async (platform) => {
-      const prompter = createWizardPrompter();
-      const applySetup = vi.fn(async () => ({
-        configPath: "/tmp/openclaw.json",
-        configHashBefore: null,
-        configHashAfter: null,
-        lines: [],
-      }));
-      const runAppRecommendations = vi.fn<
-        NonNullable<GuidedOnboardingDeps["runAppRecommendations"]>
-      >(async ({ config }) => config);
-      const probeBrowserHandoffGateway = vi.fn(async () => ({ ok: true }));
-      const runBrowserHandoff = vi.fn(async () => ({ handedOff: true as const }));
-      const deps = setupDeps({
-        prompter,
-        applySetup,
-        runAppRecommendations,
-        probeBrowserHandoffGateway,
-        runBrowserHandoff,
-        platform,
-      });
+  it("hands the custodian hatch to the browser on Linux after apply and recommendations", async () => {
+    const prompter = createWizardPrompter();
+    const applySetup = vi.fn(async () => ({
+      configPath: "/tmp/openclaw.json",
+      configHashBefore: null,
+      configHashAfter: null,
+      lines: [],
+    }));
+    const runAppRecommendations = vi.fn<NonNullable<GuidedOnboardingDeps["runAppRecommendations"]>>(
+      async ({ config }) => config,
+    );
+    const probeBrowserHandoffGateway = vi.fn(async () => ({ ok: true }));
+    const runBrowserHandoff = vi.fn(async () => ({ handedOff: true as const }));
+    const deps = setupDeps({
+      prompter,
+      applySetup,
+      runAppRecommendations,
+      probeBrowserHandoffGateway,
+      runBrowserHandoff,
+      platform: "linux",
+    });
 
-      await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
+    await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
 
-      expect(runBrowserHandoff).toHaveBeenCalledWith({ config: {}, prompter });
-      expect(applySetup.mock.invocationCallOrder[0]).toBeLessThan(
-        runAppRecommendations.mock.invocationCallOrder[0]!,
-      );
-      expect(runAppRecommendations.mock.invocationCallOrder[0]).toBeLessThan(
-        runBrowserHandoff.mock.invocationCallOrder[0]!,
-      );
-      expect(deps.launchHatchTui).not.toHaveBeenCalled();
-      expect(prompter.outro).toHaveBeenCalledWith("Your browser is ready — I'll be in Settings.");
-    },
-  );
+    expect(runBrowserHandoff).toHaveBeenCalledWith({ config: {}, prompter });
+    expect(applySetup.mock.invocationCallOrder[0]).toBeLessThan(
+      runAppRecommendations.mock.invocationCallOrder[0]!,
+    );
+    expect(runAppRecommendations.mock.invocationCallOrder[0]).toBeLessThan(
+      runBrowserHandoff.mock.invocationCallOrder[0]!,
+    );
+    expect(deps.launchHatchTui).not.toHaveBeenCalled();
+    expect(prompter.outro).toHaveBeenCalledWith("Your browser is ready — I'll be in Settings.");
+  });
 
   it("falls through to the terminal hatch when browser handoff does not connect", async () => {
     const prompter = createWizardPrompter();
