@@ -3,17 +3,14 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { ErrorCode, type CallToolResult, type Tool } from "@modelcontextprotocol/sdk/types.js";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
-import {
-  clampPositiveTimerTimeoutMs,
-  finiteSecondsToTimerSafeMilliseconds,
-  MAX_TIMER_TIMEOUT_SECONDS,
-} from "@openclaw/normalization-core/number-coercion";
+import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/src/schema/nodes.js";
 import { matchesMcpToolFilterPattern } from "../agents/agent-bundle-mcp-filter.js";
 import { createMcpJsonSchemaValidator } from "../agents/mcp-json-schema-validator.js";
 import { sanitizeMcpMetadataText } from "../agents/mcp-metadata.js";
+import { resolveMcpRequestTimeoutMs } from "../agents/mcp-transport-config.js";
 import { resolveMcpTransport } from "../agents/mcp-transport.js";
 import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
 import type { McpServerConfig } from "../config/types.mcp.js";
@@ -281,19 +278,6 @@ function resolveCallTimeoutMs(value: number | undefined): number {
   return clampPositiveTimerTimeoutMs(value) ?? NODE_MCP_TOOL_CALL_TIMEOUT_MS;
 }
 
-function resolveServerToolCallTimeoutMs(config: McpServerConfig): number {
-  const requestTimeoutMs = clampPositiveTimerTimeoutMs(config.requestTimeoutMs);
-  if (requestTimeoutMs) {
-    return requestTimeoutMs;
-  }
-  if (typeof config.timeout === "number" && Number.isFinite(config.timeout) && config.timeout > 0) {
-    return (
-      finiteSecondsToTimerSafeMilliseconds(Math.min(config.timeout, MAX_TIMER_TIMEOUT_SECONDS)) ?? 1
-    );
-  }
-  return NODE_MCP_TOOL_CALL_TIMEOUT_MS;
-}
-
 function isMcpTimeoutError(error: unknown): boolean {
   return Boolean(
     error &&
@@ -341,7 +325,7 @@ export async function startNodeHostMcpManager(
           client,
           connected: false,
           tools: new Set<string>(),
-          toolCallTimeoutMs: resolveServerToolCallTimeoutMs(config),
+          toolCallTimeoutMs: resolveMcpRequestTimeoutMs(config, NODE_MCP_TOOL_CALL_TIMEOUT_MS),
           detachStderr: resolved.detachStderr,
         };
         // MCP Client exposes callback properties rather than an EventTarget surface.
