@@ -12,7 +12,7 @@ import type {
   PluginDoctorStateMigrationContext,
 } from "openclaw/plugin-sdk/runtime-doctor";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { stateMigrations } from "./doctor-contract-api.js";
+import { LEGACY_TOGGLE_STATE_MAX_BYTES, stateMigrations } from "./doctor-contract-api.js";
 
 function createDoctorContext(env: NodeJS.ProcessEnv): PluginDoctorStateMigrationContext {
   return {
@@ -135,5 +135,89 @@ describe("active-memory doctor state migration", () => {
         },
       },
     ]);
+  });
+
+  it("imports the maximum supported legacy session opt-outs under the file cap", async () => {
+    const sourcePath = path.join(stateDir, "plugins", "active-memory", "session-toggles.json");
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    const sessions = Object.fromEntries(
+      Array.from({ length: 10_000 }, (_, index) => [
+        `telegram:dm:${String(index).padStart(5, "0")}`,
+        { disabled: true, updatedAt: index },
+      ]),
+    );
+    const payload = JSON.stringify({ sessions });
+    expect(Buffer.byteLength(payload, "utf8")).toBeLessThan(LEGACY_TOGGLE_STATE_MAX_BYTES);
+    await fs.writeFile(sourcePath, payload);
+
+    const migration = expectDefined(stateMigrations[0], "active-memory state migration");
+    await expect(
+      migration.detectLegacyState({
+        config: {},
+        env,
+        stateDir,
+        oauthDir: path.join(stateDir, "oauth"),
+        context: createDoctorContext(env),
+      }),
+    ).resolves.toMatchObject({
+      preview: [expect.stringContaining("10000 entries")],
+    });
+
+    const result = await migration.migrateLegacyState({
+      config: {},
+      env,
+      stateDir,
+      oauthDir: path.join(stateDir, "oauth"),
+      context: createDoctorContext(env),
+    });
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual([
+      expect.stringContaining("Migrated 10000 Active Memory session toggle entries"),
+      expect.stringContaining("Archived Active Memory session toggles legacy source"),
+    ]);
+    await expect(fs.access(sourcePath)).rejects.toThrow();
+
+    const entries = await createDoctorContext(env)
+      .openPluginStateKeyedStore({
+        namespace: "session-toggles",
+        maxEntries: 10_000,
+      })
+      .entries();
+    expect(entries).toHaveLength(10_000);
+  });
+
+  it("warns and keeps oversized legacy session toggles for a later migration", async () => {
+    const sourcePath = path.join(stateDir, "plugins", "active-memory", "session-toggles.json");
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(sourcePath, Buffer.alloc(LEGACY_TOGGLE_STATE_MAX_BYTES + 1));
+
+    const migration = expectDefined(stateMigrations[0], "active-memory state migration");
+    await expect(
+      migration.detectLegacyState({
+        config: {},
+        env,
+        stateDir,
+        oauthDir: path.join(stateDir, "oauth"),
+        context: createDoctorContext(env),
+      }),
+    ).resolves.toMatchObject({
+      preview: [expect.stringContaining(`exceeds ${LEGACY_TOGGLE_STATE_MAX_BYTES} bytes`)],
+    });
+
+    const result = await migration.migrateLegacyState({
+      config: {},
+      env,
+      stateDir,
+      oauthDir: path.join(stateDir, "oauth"),
+      context: createDoctorContext(env),
+    });
+
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([
+      expect.stringContaining(`exceeds ${LEGACY_TOGGLE_STATE_MAX_BYTES} bytes`),
+    ]);
+    await expect(fs.access(sourcePath)).resolves.toBeUndefined();
+    await expect(fs.access(`${sourcePath}.migrated`)).rejects.toThrow();
   });
 });
