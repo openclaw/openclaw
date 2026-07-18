@@ -1,5 +1,4 @@
 // Config CLI command implementation for get/set/unset/patch/validate and secret refs.
-import fs from "node:fs";
 import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
@@ -85,6 +84,7 @@ import {
   hasProviderBuilderOptions,
   hasRefBuilderOptions,
   parseBatchSource,
+  readConfigMutationFileSync,
   type ConfigSetBatchEntry,
   type ConfigSetOptions,
 } from "./config-set-input.js";
@@ -1507,7 +1507,7 @@ async function readConfigPatchInput(opts: ConfigPatchOptions): Promise<unknown> 
     raw = await readStdinText();
   } else {
     try {
-      raw = fs.readFileSync(file as string, "utf8");
+      raw = readConfigMutationFileSync(file as string);
     } catch (err) {
       if (hasErrnoCode(err, "ENOENT")) {
         throw new Error(`--file not found: ${file}`, { cause: err });
