@@ -518,6 +518,43 @@ describe("exec approvals CLI", () => {
     });
   });
 
+  it("preserves whitespace-bearing ids verbatim and keeps them distinct", async () => {
+    const now = Date.now();
+    callGatewayFromCli.mockImplementation(async (method: string) => {
+      if (method === "exec.approval.list") {
+        return [
+          {
+            id: " victim ",
+            request: { command: "echo padded" },
+            createdAtMs: now - 2_000,
+            expiresAtMs: now + 60_000,
+          },
+          {
+            id: "victim",
+            request: { command: "echo exact" },
+            createdAtMs: now - 1_000,
+            expiresAtMs: now + 60_000,
+          },
+        ];
+      }
+      return [];
+    });
+
+    await runApprovalsCommand(["approvals", "pending", "--json"]);
+
+    const ids = (writtenJson() as { approvals: { id: string }[] }).approvals.map(
+      (entry) => entry.id,
+    );
+    expect(ids).toContain(" victim ");
+    expect(ids).toContain("victim");
+    // Display forms stay distinct: raw for the safe id, exact id64 token for
+    // the padded one.
+    expect(approvalDisplayId("victim")).toBe("victim");
+    expect(approvalDisplayId(" victim ")).toBe(
+      `id64_${Buffer.from(" victim ").toString("base64url")}`,
+    );
+  });
+
   it("resolves an approval and prints the settled decision and resolver", async () => {
     const approvalId = "approval-\u202E1";
     const displayId = approvalDisplayId(approvalId);

@@ -441,7 +441,11 @@ function readPendingApprovalEntry(
   if (!isRecord(value) || !isRecord(value.request)) {
     return null;
   }
-  const id = normalizeOptionalString(value.id);
+  // Approval ids are opaque and stored verbatim by the gateway — never trim
+  // them, or two ids differing only in whitespace collapse into one display
+  // form and resolving could target the wrong request. Whitespace-bearing ids
+  // fail the terminal-safe charset and render as exact-round-trip id64 tokens.
+  const id = typeof value.id === "string" && value.id.length > 0 ? value.id : null;
   const createdAtMs = value.createdAtMs;
   const expiresAtMs = value.expiresAtMs;
   if (
@@ -583,6 +587,9 @@ async function resolvePendingApproval(
   decisionInput: string,
   opts: ExecApprovalsCliOpts,
 ): Promise<void> {
+  // Trimming pasted input is safe: whitespace-bearing ids are never displayed
+  // raw (they render as id64 tokens, which contain no whitespace), so a trim
+  // here cannot retarget one pending approval onto another.
   const rawId = requireTrimmedNonEmpty(idInput, "Approval id required.");
   const decision = requireTrimmedNonEmpty(decisionInput, "Decision required.");
   if (!isApprovalDecision(decision)) {
