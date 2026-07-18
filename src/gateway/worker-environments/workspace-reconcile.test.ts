@@ -418,14 +418,18 @@ describe("worker workspace reconciliation", () => {
     expect(journal).toBeDefined();
     expect(journal!.baseEntries.map((entry) => entry.path)).toContain(":literal.ts");
     expect(await fs.readFile(path.join(local, ":literal.ts"), "utf8")).toBe("remote literal");
+    const withLegacyDerivedPath = (entry: WorkerWorkspaceManifestEntry) => {
+      if (entry.path !== "file.txt") {
+        return entry;
+      }
+      const legacyEntry = structuredClone(entry);
+      legacyEntry.path = "__pycache__/file.pyc";
+      return legacyEntry;
+    };
     const legacyJournal = {
       ...journal!,
-      baseEntries: journal!.baseEntries.map((entry) =>
-        entry.path === "file.txt" ? { ...entry, path: "__pycache__/file.pyc" } : entry,
-      ),
-      appliedEntries: journal!.appliedEntries.map((entry) =>
-        entry.path === "file.txt" ? { ...entry, path: "__pycache__/file.pyc" } : entry,
-      ),
+      baseEntries: journal!.baseEntries.map(withLegacyDerivedPath),
+      appliedEntries: journal!.appliedEntries.map(withLegacyDerivedPath),
     } satisfies WorkerWorkspaceReconciliationJournal;
     await fs.mkdir(path.join(local, "__pycache__"));
     await fs.writeFile(path.join(local, "__pycache__/file.pyc"), "local cache");
