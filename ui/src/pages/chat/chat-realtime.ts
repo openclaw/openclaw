@@ -188,13 +188,16 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
       state.requestUpdate();
     }
   };
+  // Reads through a call so TS does not keep the early-guard narrowing across the
+  // await below; the status can legitimately become "error" while acquiring the camera.
+  const talkStatusIsError = () => state.realtimeTalkStatus === "error";
   state.toggleRealtimeTalkCamera = async () => {
     const session = state.realtimeTalkSession;
     if (
       !session ||
       !state.realtimeTalkVideoCapable ||
       state.realtimeTalkVideoPending ||
-      state.realtimeTalkStatus === "error"
+      talkStatusIsError()
     ) {
       return;
     }
@@ -206,7 +209,7 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
     try {
       await session.setVideoEnabled(enabled);
     } catch (error) {
-      if (state.realtimeTalkSession !== session || state.realtimeTalkStatus === "error") {
+      if (state.realtimeTalkSession !== session || talkStatusIsError()) {
         return;
       }
       state.realtimeTalkVideoStream = null;
