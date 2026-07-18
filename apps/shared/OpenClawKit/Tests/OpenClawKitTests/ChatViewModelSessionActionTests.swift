@@ -221,6 +221,20 @@ struct ChatViewModelSessionActionTests {
         #expect(viewModel.sessionGroupsRevision == 1)
     }
 
+    @Test func `remote group mutations bump the catalog revision`() async {
+        let transport = SessionActionTransport()
+        let viewModel = await MainActor.run {
+            OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        }
+
+        await MainActor.run {
+            viewModel.handleTransportEvent(.sessionsChanged(.init(sessionKey: nil, reason: "groups")))
+            viewModel.handleTransportEvent(.sessionsChanged(.init(sessionKey: nil, reason: "unrelated")))
+        }
+
+        #expect(await MainActor.run { viewModel.sessionGroupsRevision } == 1)
+    }
+
     @Test func `batch delete rejects current session while attachment owner is pinned`() async {
         let transport = SessionActionTransport()
         let viewModel = OpenClawChatViewModel(sessionKey: "worker", transport: transport)
