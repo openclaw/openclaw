@@ -245,6 +245,7 @@ type DispatchGatewayMethodInProcessOptions = {
   onAccepted?: (payload: unknown) => void;
   pluginRuntimeOwnerId?: string;
   runtimePluginToolGrant?: RuntimePluginToolGrant;
+  delegatedToolPolicyHandoff?: boolean;
   requireScopedClient?: boolean;
   syntheticScopes?: string[];
   timeoutMs?: number;
@@ -285,15 +286,22 @@ export async function dispatchGatewayMethodInProcessRaw(
     ...(options?.runtimePluginToolGrant
       ? { runtimePluginToolGrant: options.runtimePluginToolGrant }
       : {}),
+    delegatedToolPolicyHandoff: options?.delegatedToolPolicyHandoff === true,
     scopes: options?.syntheticScopes,
   });
   const scopedClient = mergePluginRuntimeClientInternal(
     scope?.client,
-    pluginRuntimeOwnerId || options?.agentRunTracking || options?.runtimePluginToolGrant
+    pluginRuntimeOwnerId ||
+      options?.agentRunTracking ||
+      options?.runtimePluginToolGrant ||
+      options?.delegatedToolPolicyHandoff ||
+      scope?.client?.internal?.delegatedToolPolicyHandoff
       ? {
           ...(options?.agentRunTracking ? { agentRunTracking: options.agentRunTracking } : {}),
           ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),
           runtimePluginToolGrant: options?.runtimePluginToolGrant,
+          delegatedToolPolicyHandoff:
+            options?.delegatedToolPolicyHandoff === true ? (true as const) : undefined,
         }
       : undefined,
   );

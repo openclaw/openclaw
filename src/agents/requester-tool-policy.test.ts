@@ -1,0 +1,319 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveRequesterToolPolicies } from "./requester-tool-policy.js";
+import { resolveWebSearchToolPolicy } from "./web-search-tool-policy.js";
+
+describe("resolveRequesterToolPolicies", () => {
+  let tempDir: string;
+  let storePath: string;
+
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-requester-policy-"));
+    storePath = path.join(tempDir, "sessions.json");
+  });
+
+  afterEach(() => {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  async function writeSession(sessionKey: string, patch: Partial<SessionEntry>) {
+    await replaceSessionEntry({ storePath, sessionKey }, {
+      sessionId: `${sessionKey}-session`,
+      updatedAt: Date.now(),
+      ...patch,
+    } as SessionEntry);
+  }
+
+  function config(overrides: OpenClawConfig = {}): OpenClawConfig {
+    return {
+      ...overrides,
+      session: { ...overrides.session, store: storePath },
+      tools: {
+        ...overrides.tools,
+        toolsBySender: {
+          "*": { deny: ["group:runtime", "group:fs"] },
+          "id:alice": {},
+          ...overrides.tools?.toolsBySender,
+        },
+      },
+    };
+  }
+
+  it("resolves exact sender policy for an external requester", () => {
+    const result = resolveRequesterToolPolicies({
+      config: config(),
+      agentId: "main",
+      sessionKey: "agent:main:discord:direct:alice",
+      messageProvider: "discord",
+      senderId: "alice",
+    });
+
+    expect(result.delegated).toBe(false);
+    expect(result.senderPolicy).toBeUndefined();
+  });
+
+  it("uses a persisted child projection without re-resolving sender policy", async () => {
+    const childSessionKey = "agent:main:subagent:child";
+    await writeSession(childSessionKey, {
+      spawnedBy: "agent:main:discord:direct:alice",
+      spawnDepth: 1,
+      subagentRole: "orchestrator",
+      subagentControlScope: "children",
+      inheritedToolDeny: ["message"],
+    });
+
+    const result = resolveRequesterToolPolicies({
+      config: config(),
+      agentId: "main",
+      sessionKey: childSessionKey,
+    });
+
+    expect(result.delegated).toBe(true);
+    expect(result.senderPolicy).toBeUndefined();
+    expect(result.groupPolicy).toBeUndefined();
+    expect(result.inheritedToolPolicy).toEqual({ deny: ["message"] });
+    expect(result.subagentPolicy).toBeDefined();
+  });
+
+  it("keeps delegated web search aligned with the inherited projection", async () => {
+    const childSessionKey = "agent:main:subagent:web-search";
+    await writeSession(childSessionKey, {
+      spawnedBy: "agent:main:discord:direct:alice",
+      spawnDepth: 1,
+      subagentRole: "orchestrator",
+      subagentControlScope: "children",
+    });
+    const cfg = config({
+      tools: {
+        toolsBySender: {
+          "*": { deny: ["web_search"] },
+          "id:alice": {},
+        },
+      },
+    });
+
+    expect(
+      resolveWebSearchToolPolicy({
+        config: cfg,
+        agentId: "main",
+        sessionKey: childSessionKey,
+      }),
+    ).toEqual({ allowed: true, persistentAllowed: true });
+    expect(
+      resolveWebSearchToolPolicy({
+        config: cfg,
+        agentId: "main",
+        sessionKey: "agent:main:subagent:forged",
+      }),
+    ).toEqual({ allowed: false, persistentAllowed: false });
+  });
+
+  it("does not re-resolve group sender policy for a verified child", async () => {
+    const parentSessionKey = "agent:main:telegram:group:dev";
+    const childSessionKey = "agent:main:subagent:group-child";
+    await writeSession(childSessionKey, {
+      spawnedBy: parentSessionKey,
+      spawnDepth: 1,
+      subagentRole: "orchestrator",
+      subagentControlScope: "children",
+    });
+    const cfg = config({
+      channels: {
+        telegram: {
+          groups: {
+            dev: {
+              toolsBySender: {
+                "*": { deny: ["read"] },
+                "id:alice": {},
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const child = resolveRequesterToolPolicies({
+      config: cfg,
+      agentId: "main",
+      sessionKey: childSessionKey,
+      spawnedBy: parentSessionKey,
+      messageProvider: "telegram",
+      groupId: "dev",
+    });
+    const forged = resolveRequesterToolPolicies({
+      config: cfg,
+      agentId: "main",
+      sessionKey: "agent:main:subagent:forged",
+      spawnedBy: parentSessionKey,
+      messageProvider: "telegram",
+      groupId: "dev",
+    });
+
+    expect(child.delegated).toBe(true);
+    expect(child.groupPolicy).toBeUndefined();
+    expect(forged.delegated).toBe(false);
+    expect(forged.groupPolicy).toEqual({ deny: ["read"] });
+  });
+
+  it("does not trust a subagent-shaped key without a persisted envelope", () => {
+    const result = resolveRequesterToolPolicies({
+      config: config(),
+      agentId: "main",
+      sessionKey: "agent:main:subagent:forged",
+    });
+
+    expect(result.delegated).toBe(false);
+    expect(result.senderPolicy).toEqual({ deny: ["group:runtime", "group:fs"] });
+    expect(result.subagentPolicy).toBeDefined();
+  });
+
+  it("applies a new external sender policy to an existing child session", async () => {
+    const childSessionKey = "agent:main:subagent:external-turn";
+    await writeSession(childSessionKey, {
+      spawnedBy: "agent:main:discord:direct:alice",
+      spawnDepth: 1,
+      subagentRole: "orchestrator",
+      subagentControlScope: "children",
+      inheritedToolDeny: ["message"],
+    });
+
+    const result = resolveRequesterToolPolicies({
+      config: config(),
+      agentId: "main",
+      sessionKey: childSessionKey,
+      messageProvider: "discord",
+      senderId: "bob",
+      inputProvenance: { kind: "external_user" },
+    });
+
+    expect(result.delegated).toBe(false);
+    expect(result.senderPolicy).toEqual({ deny: ["group:runtime", "group:fs"] });
+    expect(result.inheritedToolPolicy).toEqual({ deny: ["message"] });
+  });
+
+  it("treats an empty projection as valid only for verified lineage", async () => {
+    const childSessionKey = "agent:main:subagent:unrestricted";
+    await writeSession(childSessionKey, {
+      spawnedBy: "agent:main:discord:direct:alice",
+      spawnDepth: 1,
+      subagentRole: "orchestrator",
+      subagentControlScope: "children",
+    });
+
+    const result = resolveRequesterToolPolicies({
+      config: config(),
+      agentId: "main",
+      sessionKey: childSessionKey,
+    });
+
+    expect(result.delegated).toBe(true);
+    expect(result.inheritedToolPolicy).toBeUndefined();
+    expect(result.senderPolicy).toBeUndefined();
+  });
+
+  it("restores a verified completion handoff from the direct child projection", async () => {
+    const requesterSessionKey = "agent:main:discord:direct:alice";
+    const childSessionKey = "agent:main:subagent:child";
+    await writeSession(childSessionKey, {
+      spawnedBy: requesterSessionKey,
+      spawnDepth: 1,
+      subagentRole: "orchestrator",
+      subagentControlScope: "children",
+      inheritedToolAllow: ["read", "message"],
+      inheritedToolDeny: ["exec"],
+    });
+
+    const result = resolveRequesterToolPolicies({
+      config: config(),
+      agentId: "main",
+      sessionKey: requesterSessionKey,
+      trustedInternalHandoff: true,
+      inputProvenance: {
+        kind: "inter_session",
+        sourceSessionKey: childSessionKey,
+        sourceTool: "subagent_announce",
+      },
+    });
+
+    expect(result.delegated).toBe(true);
+    expect(result.senderPolicy).toBeUndefined();
+    expect(result.inheritedToolPolicy).toEqual({
+      allow: ["read", "message"],
+      deny: ["exec"],
+    });
+  });
+
+  it("walks nested lineage to the projection captured from the target requester", async () => {
+    const requesterSessionKey = "agent:main:discord:direct:alice";
+    const parentChildSessionKey = "agent:main:subagent:parent-child";
+    const leafSessionKey = "agent:main:subagent:leaf";
+    await writeSession(parentChildSessionKey, {
+      spawnedBy: requesterSessionKey,
+      spawnDepth: 1,
+      subagentRole: "orchestrator",
+      subagentControlScope: "children",
+      inheritedToolDeny: ["exec"],
+    });
+    await writeSession(leafSessionKey, {
+      spawnedBy: parentChildSessionKey,
+      spawnDepth: 2,
+      subagentRole: "leaf",
+      subagentControlScope: "none",
+      inheritedToolDeny: ["exec", "read"],
+    });
+
+    const result = resolveRequesterToolPolicies({
+      config: config(),
+      agentId: "main",
+      sessionKey: requesterSessionKey,
+      trustedInternalHandoff: true,
+      inputProvenance: {
+        kind: "inter_session",
+        sourceSessionKey: leafSessionKey,
+        sourceTool: "subagent_announce",
+      },
+    });
+
+    expect(result.delegated).toBe(true);
+    expect(result.inheritedToolPolicy).toEqual({ deny: ["exec"] });
+  });
+
+  it("fails closed for untrusted or mismatched completion handoffs", async () => {
+    const childSessionKey = "agent:main:subagent:child";
+    await writeSession(childSessionKey, {
+      spawnedBy: "agent:main:discord:direct:alice",
+      spawnDepth: 1,
+      subagentRole: "orchestrator",
+      subagentControlScope: "children",
+    });
+    const provenance = {
+      kind: "inter_session" as const,
+      sourceSessionKey: childSessionKey,
+      sourceTool: "subagent_announce",
+    };
+
+    const untrusted = resolveRequesterToolPolicies({
+      config: config(),
+      agentId: "main",
+      sessionKey: "agent:main:discord:direct:alice",
+      inputProvenance: provenance,
+    });
+    const mismatched = resolveRequesterToolPolicies({
+      config: config(),
+      agentId: "main",
+      sessionKey: "agent:main:discord:direct:bob",
+      trustedInternalHandoff: true,
+      inputProvenance: provenance,
+    });
+
+    expect(untrusted.delegated).toBe(false);
+    expect(untrusted.senderPolicy).toEqual({ deny: ["group:runtime", "group:fs"] });
+    expect(mismatched.delegated).toBe(false);
+    expect(mismatched.senderPolicy).toEqual({ deny: ["group:runtime", "group:fs"] });
+  });
+});

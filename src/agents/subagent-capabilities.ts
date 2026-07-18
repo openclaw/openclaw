@@ -61,6 +61,13 @@ export type SessionCapabilityStore = Record<
   }
 >;
 
+export type PersistedSubagentToolPolicyEnvelope = {
+  sessionKey: string;
+  spawnedBy: string;
+  inheritedToolAllow: string[];
+  inheritedToolDeny: string[];
+};
+
 function normalizeSubagentRole(value: unknown): SubagentSessionRole | undefined {
   const trimmed = normalizeOptionalLowercaseString(value);
   return SUBAGENT_SESSION_ROLES.find((entry) => entry === trimmed);
@@ -284,6 +291,51 @@ export function isSubagentEnvelopeSession(
     store,
     entry: opts?.entry,
   });
+}
+
+/**
+ * Resolve a persisted child envelope that is strong enough to carry authority.
+ * Session-key shape alone is useful for fail-closed subagent restrictions, but
+ * never sufficient to bypass requester-scoped policy re-resolution.
+ */
+export function resolvePersistedSubagentToolPolicyEnvelope(
+  sessionKey: string | undefined | null,
+  opts?: {
+    cfg?: OpenClawConfig;
+    store?: SessionCapabilityStore;
+  },
+): PersistedSubagentToolPolicyEnvelope | undefined {
+  const normalizedSessionKey = normalizeOptionalString(sessionKey);
+  if (!normalizedSessionKey || !shouldInspectStoredSubagentEnvelope(normalizedSessionKey)) {
+    return undefined;
+  }
+  const store = resolveSubagentCapabilityStore(normalizedSessionKey, opts);
+  const entry = resolveSessionCapabilityEntry({
+    sessionKey: normalizedSessionKey,
+    cfg: opts?.cfg,
+    store,
+  });
+  const spawnedBy = normalizeOptionalString(entry?.spawnedBy);
+  const hasSpawnDepth =
+    typeof entry?.spawnDepth === "number" &&
+    Number.isInteger(entry.spawnDepth) &&
+    entry.spawnDepth >= 1;
+  const role = normalizeSubagentRole(entry?.subagentRole);
+  const controlScope = normalizeSubagentControlScope(entry?.subagentControlScope);
+  if (
+    !entry ||
+    !spawnedBy ||
+    !isSubagentEnvelopeSession(normalizedSessionKey, { ...opts, store, entry }) ||
+    (!hasSpawnDepth && role === undefined && controlScope === undefined)
+  ) {
+    return undefined;
+  }
+  return {
+    sessionKey: normalizedSessionKey,
+    spawnedBy,
+    inheritedToolAllow: normalizeInheritedToolAllowlist(entry.inheritedToolAllow),
+    inheritedToolDeny: normalizeInheritedToolDenylist(entry.inheritedToolDeny),
+  };
 }
 
 /**
