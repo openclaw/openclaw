@@ -219,6 +219,7 @@ async function resolveVaultTokenFromJwt(baseUrl, method) {
     }),
   });
   if (!response.ok) {
+    response.body?.cancel().catch(() => undefined);
     throw new Error(`Vault ${method} login failed (${response.status}).`);
   }
   return readVaultLoginToken(payload, method);
@@ -260,6 +261,7 @@ async function readVaultSecret(baseUrl, vaultToken, id) {
     headers,
   });
   if (!response.ok) {
+    response.body?.cancel().catch(() => undefined);
     throw new Error(`Vault read failed for "${id}" (${response.status}).`);
   }
   return readStringField(payload, parsedId);
