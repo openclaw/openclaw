@@ -11,10 +11,11 @@ extension OpenClawChatViewModel {
         Task { await self.fetchSessions(limit: limit, sessionSnapshot: context) }
     }
 
+    @discardableResult
     public func startNewSession(
         agentID: String? = nil,
         worktree: Bool = false,
-        worktreeBaseRef: String? = nil) async
+        worktreeBaseRef: String? = nil) async -> Bool
     {
         await self.performStartNewSession(
             agentID: agentID,
@@ -22,11 +23,12 @@ extension OpenClawChatViewModel {
             worktreeBaseRef: worktreeBaseRef)
     }
 
+    @discardableResult
     func startNewSession(
         agentID: String,
         worktree: Bool,
         worktreeBaseRef: String?,
-        using routeLease: OpenClawChatNewSessionRouteLease) async
+        using routeLease: OpenClawChatNewSessionRouteLease) async -> Bool
     {
         await self.performStartNewSession(
             agentID: agentID,
@@ -74,9 +76,11 @@ extension OpenClawChatViewModel {
     {
         let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { return try await self.fetchSessionGroups(using: routeLease) }
-        // Read-modify-write matches web's sessions.groups.put contract; the gateway
-        // offers no atomic add/CAS, so a concurrent edit between fetch and put can be
-        // lost. Accepted tradeoff until the gateway grows a revisioned groups API.
+        // Read-modify-write matches web group creation (app-sidebar-session-groups,
+        // custom-groups); the gateway has no atomic add/CAS. A concurrent edit can
+        // lose catalog names/order only — session categories are untouched by
+        // sessions.groups.put, so memberships survive. Accepted tradeoff until the
+        // gateway grows a revisioned groups API.
         let current = try await self.fetchSessionGroups(using: routeLease)
         let response = try await routeLease.putGroups(names: current.map(\.name) + [name])
         self.sessionGroupsRevision += 1

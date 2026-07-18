@@ -23244,6 +23244,11 @@
       "translated": "Gateway został zmieniony. Zamknij i ponownie otwórz Grupy, aby kontynuować."
     },
     {
+      "id": "native.apple.bb4b44183929c881",
+      "source": "No agents are available on this gateway.",
+      "translated": "Na tym gatewayu nie są dostępni żadni agenci."
+    },
+    {
       "id": "native.apple.6c89f35d53506406",
       "source": "New Session Options",
       "translated": "Opcje nowej sesji"
@@ -23264,9 +23269,19 @@
       "translated": "Referencja bazowa (opcjonalnie)"
     },
     {
+      "id": "native.apple.fd81909fc9719a59",
+      "source": "Retry",
+      "translated": "Spróbuj ponownie"
+    },
+    {
       "id": "native.apple.a085278be62286b2",
       "source": "Create",
       "translated": "Utwórz"
+    },
+    {
+      "id": "native.apple.795ba37f6782cf28",
+      "source": "The session could not be created.",
+      "translated": "Nie udało się utworzyć sesji."
     },
     {
       "id": "native.apple.8ec708a3605a2cc3",

@@ -23244,6 +23244,11 @@
       "translated": "Gateway बदल गया है। जारी रखने के लिए Groups को बंद करके फिर से खोलें।"
     },
     {
+      "id": "native.apple.bb4b44183929c881",
+      "source": "No agents are available on this gateway.",
+      "translated": "इस Gateway पर कोई एजेंट उपलब्ध नहीं है।"
+    },
+    {
       "id": "native.apple.6c89f35d53506406",
       "source": "New Session Options",
       "translated": "नए सत्र के विकल्प"
@@ -23264,9 +23269,19 @@
       "translated": "बेस रेफ़रेंस (वैकल्पिक)"
     },
     {
+      "id": "native.apple.fd81909fc9719a59",
+      "source": "Retry",
+      "translated": "पुनः प्रयास करें"
+    },
+    {
       "id": "native.apple.a085278be62286b2",
       "source": "Create",
       "translated": "बनाएँ"
+    },
+    {
+      "id": "native.apple.795ba37f6782cf28",
+      "source": "The session could not be created.",
+      "translated": "सत्र बनाया नहीं जा सका।"
     },
     {
       "id": "native.apple.8ec708a3605a2cc3",

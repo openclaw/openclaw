@@ -23244,6 +23244,11 @@
       "translated": "Gateway가 변경되었습니다. 계속하려면 그룹을 닫았다가 다시 여세요."
     },
     {
+      "id": "native.apple.bb4b44183929c881",
+      "source": "No agents are available on this gateway.",
+      "translated": "이 Gateway에서 사용할 수 있는 에이전트가 없습니다."
+    },
+    {
       "id": "native.apple.6c89f35d53506406",
       "source": "New Session Options",
       "translated": "새 세션 옵션"
@@ -23264,9 +23269,19 @@
       "translated": "기준 참조(선택 사항)"
     },
     {
+      "id": "native.apple.fd81909fc9719a59",
+      "source": "Retry",
+      "translated": "다시 시도"
+    },
+    {
       "id": "native.apple.a085278be62286b2",
       "source": "Create",
       "translated": "생성"
+    },
+    {
+      "id": "native.apple.795ba37f6782cf28",
+      "source": "The session could not be created.",
+      "translated": "세션을 생성할 수 없습니다."
     },
     {
       "id": "native.apple.8ec708a3605a2cc3",

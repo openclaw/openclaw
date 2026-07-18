@@ -23244,6 +23244,11 @@
       "translated": "Gateway มีการเปลี่ยนแปลง ปิดแล้วเปิดกลุ่มอีกครั้งเพื่อดำเนินการต่อ"
     },
     {
+      "id": "native.apple.bb4b44183929c881",
+      "source": "No agents are available on this gateway.",
+      "translated": "ไม่มีเอเจนต์ที่พร้อมใช้งานบน Gateway นี้"
+    },
+    {
       "id": "native.apple.6c89f35d53506406",
       "source": "New Session Options",
       "translated": "ตัวเลือกเซสชันใหม่"
@@ -23264,9 +23269,19 @@
       "translated": "Base ref (ไม่บังคับ)"
     },
     {
+      "id": "native.apple.fd81909fc9719a59",
+      "source": "Retry",
+      "translated": "ลองอีกครั้ง"
+    },
+    {
       "id": "native.apple.a085278be62286b2",
       "source": "Create",
       "translated": "สร้าง"
+    },
+    {
+      "id": "native.apple.795ba37f6782cf28",
+      "source": "The session could not be created.",
+      "translated": "ไม่สามารถสร้างเซสชันได้"
     },
     {
       "id": "native.apple.8ec708a3605a2cc3",

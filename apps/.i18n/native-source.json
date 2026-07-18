@@ -36843,7 +36843,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 419,
+      "line": 421,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
       "source": "Rename Group",
       "surface": "apple",
@@ -36851,7 +36851,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 424,
+      "line": 426,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
       "source": "Group name",
       "surface": "apple",
@@ -36859,7 +36859,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 426,
+      "line": 428,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
       "source": "Rename",
       "surface": "apple",
@@ -36867,7 +36867,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 433,
+      "line": 435,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
       "source": "Cancel",
       "surface": "apple",
@@ -36875,7 +36875,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 436,
+      "line": 438,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
       "source": "Delete “%@”?",
       "surface": "apple",
@@ -36883,7 +36883,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 437,
+      "line": 439,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
       "source": "Delete group?",
       "surface": "apple",
@@ -36891,7 +36891,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 442,
+      "line": 444,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
       "source": "Delete Group",
       "surface": "apple",
@@ -36899,7 +36899,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 449,
+      "line": 451,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
       "source": "Sessions in this group become ungrouped.",
       "surface": "apple",
@@ -36907,15 +36907,23 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 511,
+      "line": 513,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
       "source": "Gateway changed. Close and reopen Groups to continue.",
       "surface": "apple",
       "id": "native.apple.5aa6082d78027c5f"
     },
     {
+      "kind": "ui-localized-call",
+      "line": 550,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "No agents are available on this gateway.",
+      "surface": "apple",
+      "id": "native.apple.bb4b44183929c881"
+    },
+    {
       "kind": "ui-call",
-      "line": 542,
+      "line": 563,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
       "source": "New Session Options",
       "surface": "apple",
@@ -36923,7 +36931,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 544,
+      "line": 565,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
       "source": "Agent",
       "surface": "apple",
@@ -36931,7 +36939,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 552,
+      "line": 573,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
       "source": "Create in a worktree",
       "surface": "apple",
@@ -36939,7 +36947,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 556,
+      "line": 577,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
       "source": "Base ref (optional)",
       "surface": "apple",
@@ -36947,11 +36955,27 @@
     },
     {
       "kind": "ui-call",
-      "line": 561,
+      "line": 587,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "Retry",
+      "surface": "apple",
+      "id": "native.apple.fd81909fc9719a59"
+    },
+    {
+      "kind": "ui-call",
+      "line": 593,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
       "source": "Create",
       "surface": "apple",
       "id": "native.apple.a085278be62286b2"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 611,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "The session could not be created.",
+      "surface": "apple",
+      "id": "native.apple.795ba37f6782cf28"
     },
     {
       "kind": "ui-localized-call",
@@ -37675,7 +37699,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 146,
+      "line": 150,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+SessionActions.swift",
       "source": "Gateway changed before the session operation started.",
       "surface": "apple",
@@ -37691,7 +37715,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1119,
+      "line": 1122,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel.swift",
       "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
       "surface": "apple",

@@ -23244,6 +23244,11 @@
       "translated": "Gateway berubah. Tutup dan buka kembali Grup untuk melanjutkan."
     },
     {
+      "id": "native.apple.bb4b44183929c881",
+      "source": "No agents are available on this gateway.",
+      "translated": "Tidak ada agen yang tersedia di gateway ini."
+    },
+    {
       "id": "native.apple.6c89f35d53506406",
       "source": "New Session Options",
       "translated": "Opsi Sesi Baru"
@@ -23264,9 +23269,19 @@
       "translated": "Ref dasar (opsional)"
     },
     {
+      "id": "native.apple.fd81909fc9719a59",
+      "source": "Retry",
+      "translated": "Coba lagi"
+    },
+    {
       "id": "native.apple.a085278be62286b2",
       "source": "Create",
       "translated": "Buat"
+    },
+    {
+      "id": "native.apple.795ba37f6782cf28",
+      "source": "The session could not be created.",
+      "translated": "Sesi tidak dapat dibuat."
     },
     {
       "id": "native.apple.8ec708a3605a2cc3",

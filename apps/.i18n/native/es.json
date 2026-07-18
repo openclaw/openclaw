@@ -23244,6 +23244,11 @@
       "translated": "El Gateway ha cambiado. Cierra y vuelve a abrir Grupos para continuar."
     },
     {
+      "id": "native.apple.bb4b44183929c881",
+      "source": "No agents are available on this gateway.",
+      "translated": "No hay agentes disponibles en este Gateway."
+    },
+    {
       "id": "native.apple.6c89f35d53506406",
       "source": "New Session Options",
       "translated": "Opciones de nueva sesión"
@@ -23264,9 +23269,19 @@
       "translated": "Referencia base (opcional)"
     },
     {
+      "id": "native.apple.fd81909fc9719a59",
+      "source": "Retry",
+      "translated": "Reintentar"
+    },
+    {
       "id": "native.apple.a085278be62286b2",
       "source": "Create",
       "translated": "Crear"
+    },
+    {
+      "id": "native.apple.795ba37f6782cf28",
+      "source": "The session could not be created.",
+      "translated": "No se pudo crear la sesión."
     },
     {
       "id": "native.apple.8ec708a3605a2cc3",

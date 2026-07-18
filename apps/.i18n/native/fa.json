@@ -23244,6 +23244,11 @@
       "translated": "Gateway تغییر کرد. برای ادامه، Groups را ببندید و دوباره باز کنید."
     },
     {
+      "id": "native.apple.bb4b44183929c881",
+      "source": "No agents are available on this gateway.",
+      "translated": "هیچ عاملی در این Gateway در دسترس نیست."
+    },
+    {
       "id": "native.apple.6c89f35d53506406",
       "source": "New Session Options",
       "translated": "گزینه‌های نشست جدید"
@@ -23264,9 +23269,19 @@
       "translated": "ارجاع پایه (اختیاری)"
     },
     {
+      "id": "native.apple.fd81909fc9719a59",
+      "source": "Retry",
+      "translated": "تلاش مجدد"
+    },
+    {
       "id": "native.apple.a085278be62286b2",
       "source": "Create",
       "translated": "ایجاد"
+    },
+    {
+      "id": "native.apple.795ba37f6782cf28",
+      "source": "The session could not be created.",
+      "translated": "جلسه ایجاد نشد."
     },
     {
       "id": "native.apple.8ec708a3605a2cc3",

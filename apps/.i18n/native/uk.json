@@ -23244,6 +23244,11 @@
       "translated": "Gateway змінено. Закрийте й знову відкрийте розділ «Групи», щоб продовжити."
     },
     {
+      "id": "native.apple.bb4b44183929c881",
+      "source": "No agents are available on this gateway.",
+      "translated": "На цьому шлюзі немає доступних агентів."
+    },
+    {
       "id": "native.apple.6c89f35d53506406",
       "source": "New Session Options",
       "translated": "Параметри нового сеансу"
@@ -23264,9 +23269,19 @@
       "translated": "Базове посилання (необов’язково)"
     },
     {
+      "id": "native.apple.fd81909fc9719a59",
+      "source": "Retry",
+      "translated": "Повторити"
+    },
+    {
       "id": "native.apple.a085278be62286b2",
       "source": "Create",
       "translated": "Створити"
+    },
+    {
+      "id": "native.apple.795ba37f6782cf28",
+      "source": "The session could not be created.",
+      "translated": "Не вдалося створити сеанс."
     },
     {
       "id": "native.apple.8ec708a3605a2cc3",

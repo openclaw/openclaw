@@ -23244,6 +23244,11 @@
       "translated": "Gateway har ändrats. Stäng och öppna Grupper igen för att fortsätta."
     },
     {
+      "id": "native.apple.bb4b44183929c881",
+      "source": "No agents are available on this gateway.",
+      "translated": "Inga agenter är tillgängliga på denna gateway."
+    },
+    {
       "id": "native.apple.6c89f35d53506406",
       "source": "New Session Options",
       "translated": "Alternativ för ny session"
@@ -23264,9 +23269,19 @@
       "translated": "Basreferens (valfritt)"
     },
     {
+      "id": "native.apple.fd81909fc9719a59",
+      "source": "Retry",
+      "translated": "Försök igen"
+    },
+    {
       "id": "native.apple.a085278be62286b2",
       "source": "Create",
       "translated": "Skapa"
+    },
+    {
+      "id": "native.apple.795ba37f6782cf28",
+      "source": "The session could not be created.",
+      "translated": "Sessionen kunde inte skapas."
     },
     {
       "id": "native.apple.8ec708a3605a2cc3",

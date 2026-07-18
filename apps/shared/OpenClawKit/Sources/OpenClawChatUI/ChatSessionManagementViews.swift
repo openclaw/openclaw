@@ -414,7 +414,9 @@ struct ChatSessionGroupsSheet: View {
                         .font(OpenClawChatTypography.body)
                 }
             }
-            .task { await self.loadGroups() }
+            // Keyed to the catalog revision so remote group mutations (reason
+            // "groups" events) refresh an open manager instead of going stale.
+            .task(id: self.viewModel.sessionGroupsRevision) { await self.loadGroups() }
             .alert(
                 "Rename Group",
                 isPresented: Binding(
@@ -532,9 +534,28 @@ struct ChatNewSessionOptionsPopover: View {
     @State private var isLoading = true
     @State private var isCreating = false
     @State private var routeLease: OpenClawChatNewSessionRouteLease?
+    @State private var errorText: String?
 
     private var selectedAgent: OpenClawChatAgentChoice? {
         self.agents.first { $0.id == self.selectedAgentID }
+    }
+
+    private func loadOptions() async {
+        self.isLoading = true
+        self.errorText = nil
+        defer { self.isLoading = false }
+        do {
+            let routeLease = try await self.viewModel.newSessionRouteLease()
+            guard let response = try await routeLease.listAgents() else {
+                self.errorText = String(localized: "No agents are available on this gateway.")
+                return
+            }
+            self.routeLease = routeLease
+            self.agents = response.agents
+            self.selectedAgentID = response.defaultId
+        } catch {
+            self.errorText = error.localizedDescription
+        }
     }
 
     var body: some View {
@@ -556,20 +577,39 @@ struct ChatNewSessionOptionsPopover: View {
                 TextField("Base ref (optional)", text: self.$baseRef)
                     .font(OpenClawChatTypography.body)
             }
+            if let errorText {
+                Text(errorText)
+                    .font(OpenClawChatTypography.caption)
+                    .foregroundStyle(OpenClawChatTheme.danger)
+            }
             HStack {
+                if self.errorText != nil, self.routeLease == nil {
+                    Button("Retry") {
+                        Task { await self.loadOptions() }
+                    }
+                    .font(OpenClawChatTypography.body)
+                }
                 Spacer()
                 Button("Create") {
                     guard !self.isCreating, let routeLease = self.routeLease else { return }
                     self.isCreating = true
+                    self.errorText = nil
                     let baseRef = self.baseRef.trimmingCharacters(in: .whitespacesAndNewlines)
                     Task {
                         defer { self.isCreating = false }
-                        await self.viewModel.startNewSession(
+                        let created = await self.viewModel.startNewSession(
                             agentID: self.selectedAgentID,
                             worktree: self.usesWorktree,
                             worktreeBaseRef: baseRef.isEmpty ? nil : baseRef,
                             using: routeLease)
-                        self.onComplete()
+                        // Keep inputs on failure; dismissing would discard the
+                        // selected agent/worktree while no session exists.
+                        if created {
+                            self.onComplete()
+                        } else {
+                            self.errorText = self.viewModel.errorText
+                                ?? String(localized: "The session could not be created.")
+                        }
                     }
                 }
                 .font(OpenClawChatTypography.body)
@@ -580,15 +620,7 @@ struct ChatNewSessionOptionsPopover: View {
         }
         .padding(16)
         .frame(width: 320)
-        .task {
-            defer { self.isLoading = false }
-            guard let routeLease = try? await self.viewModel.newSessionRouteLease(),
-                  let response = try? await routeLease.listAgents()
-            else { return }
-            self.routeLease = routeLease
-            self.agents = response.agents
-            self.selectedAgentID = response.defaultId
-        }
+        .task { await self.loadOptions() }
         .onChange(of: self.selectedAgentID) {
             if self.selectedAgent?.workspaceGit == false {
                 self.usesWorktree = false

@@ -23244,6 +23244,11 @@
       "translated": "Gateway 已變更。請關閉並重新開啟「群組」以繼續。"
     },
     {
+      "id": "native.apple.bb4b44183929c881",
+      "source": "No agents are available on this gateway.",
+      "translated": "此 Gateway 上沒有可用的代理程式。"
+    },
+    {
       "id": "native.apple.6c89f35d53506406",
       "source": "New Session Options",
       "translated": "新工作階段選項"
@@ -23264,9 +23269,19 @@
       "translated": "基礎參照（選填）"
     },
     {
+      "id": "native.apple.fd81909fc9719a59",
+      "source": "Retry",
+      "translated": "重試"
+    },
+    {
       "id": "native.apple.a085278be62286b2",
       "source": "Create",
       "translated": "建立"
+    },
+    {
+      "id": "native.apple.795ba37f6782cf28",
+      "source": "The session could not be created.",
+      "translated": "無法建立工作階段。"
     },
     {
       "id": "native.apple.8ec708a3605a2cc3",

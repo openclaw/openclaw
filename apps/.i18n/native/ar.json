@@ -23244,6 +23244,11 @@
       "translated": "تغيّر Gateway. أغلق المجموعات وأعد فتحها للمتابعة."
     },
     {
+      "id": "native.apple.bb4b44183929c881",
+      "source": "No agents are available on this gateway.",
+      "translated": "لا توجد وكلاء متاحة على هذا Gateway."
+    },
+    {
       "id": "native.apple.6c89f35d53506406",
       "source": "New Session Options",
       "translated": "خيارات الجلسة الجديدة"
@@ -23264,9 +23269,19 @@
       "translated": "المرجع الأساسي (اختياري)"
     },
     {
+      "id": "native.apple.fd81909fc9719a59",
+      "source": "Retry",
+      "translated": "إعادة المحاولة"
+    },
+    {
       "id": "native.apple.a085278be62286b2",
       "source": "Create",
       "translated": "إنشاء"
+    },
+    {
+      "id": "native.apple.795ba37f6782cf28",
+      "source": "The session could not be created.",
+      "translated": "تعذّر إنشاء الجلسة."
     },
     {
       "id": "native.apple.8ec708a3605a2cc3",

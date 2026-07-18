@@ -23244,6 +23244,11 @@
       "translated": "Gateway 已更改。请关闭并重新打开“群组”以继续。"
     },
     {
+      "id": "native.apple.bb4b44183929c881",
+      "source": "No agents are available on this gateway.",
+      "translated": "此 Gateway 上没有可用的代理。"
+    },
+    {
       "id": "native.apple.6c89f35d53506406",
       "source": "New Session Options",
       "translated": "新建会话选项"
@@ -23264,9 +23269,19 @@
       "translated": "基础引用（可选）"
     },
     {
+      "id": "native.apple.fd81909fc9719a59",
+      "source": "Retry",
+      "translated": "重试"
+    },
+    {
       "id": "native.apple.a085278be62286b2",
       "source": "Create",
       "translated": "创建"
+    },
+    {
+      "id": "native.apple.795ba37f6782cf28",
+      "source": "The session could not be created.",
+      "translated": "无法创建会话。"
     },
     {
       "id": "native.apple.8ec708a3605a2cc3",
