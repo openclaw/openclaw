@@ -532,6 +532,33 @@ export async function readSessionMessageByIdAsync(
   );
 }
 
+// Page full SQLite visits so sessions.files.list / artifact scans stay O(page)
+// in memory. Callers still see every active message; we just never materialise
+// the entire transcript array at once.
+const SQLITE_VISIT_PAGE_SIZE = 100;
+
+function visitSqliteMessagesPaged(
+  target: ResolvedTranscriptReadTarget,
+  visit: (message: unknown, seq: number) => void,
+): number {
+  const scope = toTranscriptReadScope(target);
+  const totalMessages = readSessionTranscriptMessageEventCount(scope);
+  let count = 0;
+  for (let start = 0; start < totalMessages; start += SQLITE_VISIT_PAGE_SIZE) {
+    const endExclusive = Math.min(totalMessages, start + SQLITE_VISIT_PAGE_SIZE);
+    // Page API is tail-relative: offset = total - endExclusive yields [start, endExclusive).
+    const page = readSessionTranscriptMessageEventPage(scope, {
+      maxMessages: endExclusive - start,
+      offset: totalMessages - endExclusive,
+    });
+    for (const record of extractMessageRecordsFromEventEntries(page.events)) {
+      visit(record.message, record.seq);
+      count += 1;
+    }
+  }
+  return count;
+}
+
 /** Visits display messages asynchronously through the reader seam. */
 export async function visitSessionMessagesAsync(
   scope: SessionTranscriptReadScope,
@@ -540,12 +567,7 @@ export async function visitSessionMessagesAsync(
 ): Promise<number> {
   const target = resolveTranscriptReadTarget(scope);
   if (isSqliteReadTarget(target)) {
-    let count = 0;
-    for (const record of await readSqliteMessageRecords(target)) {
-      visit(record.message, record.seq);
-      count += 1;
-    }
-    return count;
+    return visitSqliteMessagesPaged(target, visit);
   }
   return await visitSessionMessagesAsyncFile(
     target.sessionId,
