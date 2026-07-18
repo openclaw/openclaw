@@ -2923,7 +2923,7 @@ jobs:
             if [[ "$attempt" -eq 3 ]]; then
               break
             fi
-            echo "swift build failed (attempt $attempt/3). Retrying."
+            echo "swift build failed (attempt $attempt/3). Retrying…"
             # SwiftPM can invalidate a restored binary artifact while planning.
             # Reset so the next attempt downloads a complete dependency graph.
             swift package --package-path apps/macos reset
@@ -2963,7 +2963,7 @@ jobs:
             if swift test --package-path apps/macos --parallel --enable-code-coverage; then
               exit 0
             fi
-            echo "swift test failed (attempt $attempt/3). Retrying."
+            echo "swift test failed (attempt $attempt/3). Retrying…"
             sleep $((attempt * 20))
           done
           exit 1
