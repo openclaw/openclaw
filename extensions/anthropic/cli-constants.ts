@@ -23,6 +23,7 @@ export const CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS = [
   `${CLAUDE_CLI_BACKEND_ID}/claude-opus-4-7`,
   `${CLAUDE_CLI_BACKEND_ID}/claude-sonnet-4-6`,
   `${CLAUDE_CLI_BACKEND_ID}/claude-opus-4-6`,
+  `${CLAUDE_CLI_BACKEND_ID}/claude-haiku-4-5`,
 ] as const;
 
 /** User-facing Claude CLI model aliases normalized before execution. */
@@ -40,6 +41,8 @@ export const CLAUDE_CLI_MODEL_ALIASES: Record<string, string> = {
   "sonnet-4.6": "claude-sonnet-4-6",
   "claude-sonnet-4-6": "claude-sonnet-4-6",
   haiku: "haiku",
+  "haiku-4.5": "claude-haiku-4-5",
+  "claude-haiku-4-5": "claude-haiku-4-5",
 };
 
 /** JSONL fields that may contain Claude CLI session ids. */
