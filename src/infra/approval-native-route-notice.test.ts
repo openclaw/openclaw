@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import {
   describeApprovalDeliveryDestination,
+  resolveApprovalDeliveryFailedNoticeText,
   resolveApprovalRoutedElsewhereNoticeText,
 } from "./approval-native-route-notice.js";
 
@@ -48,5 +49,36 @@ describe("resolveApprovalRoutedElsewhereNoticeText", () => {
 
   it("suppresses the notice when there are no destinations", () => {
     expect(resolveApprovalRoutedElsewhereNoticeText([])).toBeNull();
+  });
+});
+
+describe("resolveApprovalDeliveryFailedNoticeText", () => {
+  it("truncates long exec approval ids to 8 chars", () => {
+    const notice = resolveApprovalDeliveryFailedNoticeText({
+      approvalId: "exec-1234567890",
+      approvalKind: "exec",
+    });
+    expect(notice).toContain("/approve exec-123 allow-once|allow-always|deny");
+  });
+
+  it("keeps short plugin approval ids intact", () => {
+    const notice = resolveApprovalDeliveryFailedNoticeText({
+      approvalId: "deploy",
+      approvalKind: "plugin",
+    });
+    expect(notice).toContain("/approve deploy allow-once|allow-always|deny");
+  });
+
+  it("does not split UTF-16 surrogate pairs when truncating exec ids", () => {
+    const id = "exec-12😀34567890";
+    const notice = resolveApprovalDeliveryFailedNoticeText({
+      approvalId: id,
+      approvalKind: "exec",
+    });
+    expect(() => encodeURIComponent(notice)).not.toThrow();
+    expect(notice).not.toMatch(
+      /[\uD800-\uDFFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/,
+    );
+    expect(notice).toContain("use the full id in /approve");
   });
 });
