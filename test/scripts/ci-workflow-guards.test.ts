@@ -2732,6 +2732,9 @@ describe("ci workflow guards", () => {
     const cleanupSource = readFileSync(".github/workflows/sticky-disk-cleanup.yml", "utf8");
     const cleanup = parse(cleanupSource);
     const job = cleanup.jobs.delete;
+    const checkoutStep = job.steps.find(
+      (step: WorkflowStep) => step.name === "Checkout protected manifest",
+    );
     const validateStep = job.steps.find(
       (step: WorkflowStep) => step.name === "Validate exact retired key",
     );
@@ -2766,6 +2769,7 @@ describe("ci workflow guards", () => {
     });
     expect(job.if).toContain("github.ref == 'refs/heads/main'");
     expect(job.if).toContain("inputs.confirm");
+    expect(checkoutStep.with.ref).toBe("refs/heads/main");
     expect(job["runs-on"]).toContain("inputs.architecture == 'arm64'");
     expect(validateStep.env.RETIRED_ARCHITECTURE).toBe("${{ inputs.architecture }}");
     expect(validateStep.env.RETIRED_KEY).toBe("${{ inputs.retired_key }}");
