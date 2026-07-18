@@ -615,17 +615,19 @@ public struct OpenClawChatView: View {
             self.hasNewerContentBelow = false
             self.moveScrollPosition(to: self.scrollerBottomID)
         } label: {
-            Label("Jump to latest", systemImage: "arrow.down")
-                .font(OpenClawChatTypography.body(size: 16, weight: .semibold, relativeTo: .callout))
-                .padding(.horizontal, 13)
-                .padding(.vertical, 8)
+            Image(systemName: "arrow.down")
+                .font(.system(size: 15, weight: .semibold))
+                .frame(width: 36, height: 36)
+                .background(
+                    Circle()
+                        .fill(OpenClawChatTheme.subtleCard)
+                        .shadow(color: .black.opacity(0.16), radius: 8, y: 3))
+                // Padding keeps a ~44pt tap target around the compact visual circle.
+                .padding(4)
+                .contentShape(Circle())
         }
         .buttonStyle(.plain)
         .foregroundStyle(OpenClawChatTheme.assistantText)
-        .background(
-            Capsule()
-                .fill(OpenClawChatTheme.subtleCard)
-                .shadow(color: .black.opacity(0.16), radius: 10, y: 4))
         .accessibilityLabel("Jump to latest reply")
     }
 
