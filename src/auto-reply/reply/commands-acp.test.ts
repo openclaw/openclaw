@@ -1942,6 +1942,30 @@ describe("/acp command", () => {
     expect(result?.reply?.text).not.toContain("agent:claude:acp:foreign");
   });
 
+  it("returns an empty listing to non-owner senders with no matching session", async () => {
+    hoisted.listAcpSessionEntriesMock.mockResolvedValue([
+      createAcpSessionEntry({ sessionKey: "agent:claude:acp:foreign" }),
+    ]);
+    const params = createDiscordParams("/acp sessions");
+    params.command.senderIsOwner = false;
+
+    const result = await handleAcpCommand(params, true);
+
+    expect(result?.reply?.text).toContain("(none)");
+    expect(result?.reply?.text).not.toContain("agent:claude:acp:foreign");
+  });
+
+  it("warns when no session key resolves for /acp sessions", async () => {
+    hoisted.listAcpSessionEntriesMock.mockResolvedValue([createAcpSessionEntry()]);
+    const params = createDiscordParams("/acp sessions");
+    params.command.senderIsOwner = false;
+    params.sessionKey = "";
+
+    const result = await handleAcpCommand(params, true);
+
+    expect(result?.reply?.text).toContain("Missing session key");
+  });
+
   it("shows ACP status for the thread-bound ACP session", async () => {
     mockBoundThreadSession({
       identity: {
