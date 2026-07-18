@@ -21,7 +21,7 @@ import "../components/resizable-divider.ts";
 import "../components/sidebar-update-card.ts";
 import "../components/tooltip.ts";
 import "../components/update-banner.ts";
-import { isSettingsNavigationRoute, type SidebarNavRoute } from "../app-navigation.ts";
+import { isSettingsNavigationRoute } from "../app-navigation.ts";
 import { APP_ROUTE_IDS, isRouteId, type RouteId } from "../app-routes.ts";
 import {
   COMMAND_PALETTE_OPEN_EVENT,
@@ -48,6 +48,7 @@ import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../lib/plugin-activation.ts";
 import { searchForSession } from "../lib/sessions/index.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
+import "../lib/toast.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { findSettingsSearchBlocks } from "../pages/config/settings-search.ts";
@@ -1393,7 +1394,7 @@ class OpenClawShell extends OpenClawLightDomElement {
                 .catalogOpenTarget=${normalizeCatalogOpenTarget(uiSettings.catalogOpenTarget)}
                 .canPairDevice=${gatewaySnapshot.connected &&
                 hasOperatorAdminAccess(gatewaySnapshot.hello?.auth ?? null)}
-                .sidebarPinnedRoutes=${navigationSnapshot.sidebarPinnedRoutes}
+                .sidebarEntries=${navigationSnapshot.sidebarEntries}
                 .pinnedAgentIds=${navigationSnapshot.pinnedAgentIds}
                 .themeMode=${context.theme.mode}
                 .lobsterPetVisits=${uiSettings.lobsterPetVisits !== false}
@@ -1413,8 +1414,8 @@ class OpenClawShell extends OpenClawLightDomElement {
                   this.navigate("new-session", { search });
                 }}
                 .draftSessionAgentId=${this.draftSessionAgentId()}
-                .onUpdatePinnedRoutes=${(routes: SidebarNavRoute[]) =>
-                  context.navigation.update({ sidebarPinnedRoutes: routes })}
+                .onUpdateSidebarEntries=${(entries: string[]) =>
+                  context.navigation.update({ sidebarEntries: entries })}
                 .onPairMobile=${() => void context.overlays.openDevicePairSetup()}
                 .onNavigate=${(routeId: string, options?: ApplicationNavigationOptions) =>
                   this.navigate(routeId, options)}
@@ -1520,6 +1521,7 @@ class OpenClawShell extends OpenClawLightDomElement {
               .context=${context}
             ></openclaw-onboarding-memory-import>`
           : nothing}
+        <openclaw-toast-host></openclaw-toast-host>
       </div>
     `;
   }
