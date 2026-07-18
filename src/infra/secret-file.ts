@@ -41,6 +41,7 @@ type CredentialResult<T> =
   | { status: "available"; value: T }
   | { status: "configured_unavailable"; diagnostic: CredentialUnavailableDiagnostic }
   | { status: "missing" };
+type ConfiguredCredentialResult<T> = Exclude<CredentialResult<T>, { status: "missing" }>;
 
 type CredentialFileReadOptions = FsSafeSecretFileReadOptions & {
   credentialDiagnostic: {
@@ -61,6 +62,12 @@ export function tryReadSecretFileSync(
   options?: FsSafeSecretFileReadOptions,
 ): string | undefined;
 /** Reads an explicitly configured credential file without exposing its filesystem path. */
+export function tryReadSecretFileSync(
+  filePath: string,
+  label: string,
+  options: FsSafeSecretFileReadOptions | undefined,
+  diagnostic: { configPath: string },
+): ConfiguredCredentialResult<string>;
 export function tryReadSecretFileSync(
   filePath: string | undefined,
   label: string,

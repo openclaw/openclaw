@@ -1328,9 +1328,9 @@ describe("server-channels auto restart", () => {
     let broken = true;
     const startAccount = vi.fn(
       async ({ abortSignal }: ChannelGatewayContext<TestAccount>) =>
-        await new Promise<void>((resolve) =>
-          abortSignal.addEventListener("abort", () => resolve(), { once: true }),
-        ),
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        }),
     );
     installTestRegistry(
       createTestPlugin({
