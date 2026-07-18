@@ -1180,6 +1180,11 @@ export async function processGatewayAllowlist(
         | { status: "spawn-failed" };
       try {
         admitted = await runWithGatewayIndependentRootWorkAdmission(async () => {
+          // Admission can queue: recheck abort before writing authorization so
+          // an abort that wins while waiting cannot persist an allow-always.
+          if (params.signal?.aborted) {
+            return { status: "run-aborted" as const };
+          }
           try {
             await commitExecutionAuthorization({
               source: approvalDecision.authorizationSource,
