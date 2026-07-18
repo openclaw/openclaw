@@ -149,11 +149,15 @@ async function fetchVault(baseUrl, url, init) {
   const abortController = new AbortController();
   const timeout = setTimeout(() => abortController.abort(), VAULT_FETCH_TIMEOUT_MS);
   try {
-    return await fetch(url, {
+    const response = await fetch(url, {
       ...init,
       redirect: "manual",
       signal: abortController.signal,
     });
+    return {
+      response,
+      payload: response.ok ? await response.json() : undefined,
+    };
   } finally {
     clearTimeout(timeout);
   }
@@ -206,7 +210,7 @@ async function resolveVaultTokenFromJwt(baseUrl, method) {
     "Content-Type": "application/json",
   };
   addVaultNamespaceHeader(headers);
-  const response = await fetchVault(baseUrl, `${baseUrl}/v1/auth/${mount}/login`, {
+  const { response, payload } = await fetchVault(baseUrl, `${baseUrl}/v1/auth/${mount}/login`, {
     method: "POST",
     headers,
     body: JSON.stringify({
@@ -217,7 +221,7 @@ async function resolveVaultTokenFromJwt(baseUrl, method) {
   if (!response.ok) {
     throw new Error(`Vault ${method} login failed (${response.status}).`);
   }
-  return readVaultLoginToken(await response.json(), method);
+  return readVaultLoginToken(payload, method);
 }
 
 async function resolveVaultClientToken(baseUrl) {
@@ -252,11 +256,13 @@ async function readVaultSecret(baseUrl, vaultToken, id) {
     "X-Vault-Token": vaultToken,
   };
   addVaultNamespaceHeader(headers);
-  const response = await fetchVault(baseUrl, buildVaultUrl(baseUrl, parsedId), { headers });
+  const { response, payload } = await fetchVault(baseUrl, buildVaultUrl(baseUrl, parsedId), {
+    headers,
+  });
   if (!response.ok) {
     throw new Error(`Vault read failed for "${id}" (${response.status}).`);
   }
-  return readStringField(await response.json(), parsedId);
+  return readStringField(payload, parsedId);
 }
 
 async function resolveFromVault(ids) {

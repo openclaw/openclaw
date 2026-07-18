@@ -196,13 +196,18 @@ function initialTranscriptScrollMargin(host: ReactiveControllerHost): number {
 class ChatSessionVirtualizerHost implements ReactiveControllerHost {
   private readonly controllers = new Set<ReactiveController>();
   private readonly virtualizerController: VirtualizerController<HTMLDivElement, HTMLElement>;
-  private scrollElement: HTMLDivElement | null = null;
+  private threadInnerElement: HTMLDivElement | null = null;
+  // Lit calls refs before newly rendered nodes are connected. Resolve the
+  // scroll parent lazily or a stable ref can permanently capture null.
+  private get scrollElement(): HTMLDivElement | null {
+    const parent = this.threadInnerElement?.parentElement;
+    return parent instanceof HTMLDivElement ? parent : null;
+  }
   // Stable Lit refs: inline arrows change identity per render, making Lit
   // re-invoke them for every visible row and re-measure each row every render.
   // Lit tracks the last element per callback, so each row needs its own.
   private readonly scrollElementRef = (element?: Element) => {
-    this.scrollElement =
-      element?.parentElement instanceof HTMLDivElement ? element.parentElement : null;
+    this.threadInnerElement = element instanceof HTMLDivElement ? element : null;
   };
   private readonly measureRowRefs = new Map<string, (element?: Element) => void>();
   private measureRowRefFor(key: string): (element?: Element) => void {
@@ -294,7 +299,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
     for (const controller of this.controllers) {
       controller.hostDisconnected?.();
     }
-    this.scrollElement = null;
+    this.threadInnerElement = null;
   }
 
   render(

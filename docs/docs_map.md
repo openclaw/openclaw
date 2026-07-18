@@ -334,7 +334,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Troubleshooting
   - H3: The Activity says “Gateway offline”
   - H3: Discord opens a blank page or reports blocked:csp
-  - H3: “Not authorized”
   - H3: “Widget unavailable”
   - H3: “You cannot launch Activities in this channel”
 
@@ -7386,6 +7385,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Message adapter
   - H3: Inbound ingress (experimental)
   - H3: Durable ingress and replay dedupe
+  - H4: Account-scoped restart contract
   - H3: Typing indicators
   - H3: Media source params
   - H3: Native payload shaping
@@ -9013,6 +9013,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Where this runs
   - H2: Global rule: image sanitization
   - H2: Global rule: malformed tool calls
+  - H2: Global rule: tool result pairing
   - H2: Global rule: incomplete reasoning-only turns
   - H2: Global rule: inter-session input provenance
   - H2: Provider matrix (current behavior)
@@ -9344,10 +9345,10 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Phase 1 — app recommendations (PR #109668)
   - H3: Phase 2 — CLI custodian spine (PR #109841)
   - H3: Phase 3 — browser-first handoff (PR #110054, merged)
-  - H3: Phase 4 — web custodian surface (planned)
-  - H3: Phase 5 — hatch and bootstrap (planned)
-  - H3: Phase 6 — custodian presence (planned)
-  - H3: Phase 7 — resilience (follow-up)
+  - H3: Phase 4 — web custodian surface (merged: #110141, #110242)
+  - H3: Phase 5 — hatch and bootstrap (merged: #110173, #110331)
+  - H3: Phase 6 — custodian presence (PR1 merged: #110269; commentary/summon are PR2)
+  - H3: Phase 7 — resilience (needs an owner decision before building)
   - H2: Testing and landing playbook (hard-won; read before phases 4-6)
   - H2: Decision log
   - H2: Known gaps and follow-ups
@@ -10518,6 +10519,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Language support
   - H2: Appearance themes
   - H2: Manage plugins
+  - H2: Apps and extensions
   - H2: Sidebar navigation
   - H2: New session page
   - H2: What it can do (today)

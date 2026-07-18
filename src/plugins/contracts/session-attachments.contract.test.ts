@@ -16,7 +16,16 @@ import { sendPluginSessionAttachment } from "../host-hook-attachments.js";
 import { clearPluginLoaderCache } from "../loader.test-fixtures.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import { createPluginRegistry } from "../registry.js";
-import { setActivePluginRegistry } from "../runtime.js";
+import {
+  pinActivePluginChannelRegistry,
+  pinActivePluginHttpRouteRegistry,
+  pinActivePluginSessionExtensionRegistry,
+  releasePinnedPluginChannelRegistry,
+  releasePinnedPluginHttpRouteRegistry,
+  releasePinnedPluginSessionExtensionRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../runtime.js";
 import type { PluginRuntime } from "../runtime/types.js";
 import { createPluginRecord } from "../status.test-helpers.js";
 import type { OpenClawPluginApi } from "../types.js";
@@ -136,7 +145,10 @@ describe("plugin session attachments", () => {
   afterEach(() => {
     workflowMocks.getChannelPlugin.mockReset();
     workflowMocks.sendMessage.mockReset();
-    setActivePluginRegistry(createEmptyPluginRegistry());
+    releasePinnedPluginChannelRegistry();
+    releasePinnedPluginHttpRouteRegistry();
+    releasePinnedPluginSessionExtensionRegistry();
+    resetPluginRuntimeStateForTest();
     clearPluginLoaderCache();
     delete (globalThis as { proofAttachmentApi?: OpenClawPluginApi }).proofAttachmentApi;
     delete (globalThis as { proofAttachmentLog?: unknown[] }).proofAttachmentLog;
@@ -461,7 +473,7 @@ describe("plugin session attachments", () => {
     });
   });
 
-  it("wires sendSessionAttachment through the plugin API with stale-registry protection", async () => {
+  it("keeps pinned attachment APIs live until their registry retires", async () => {
     await withSessionStore(async ({ storePath, filePath }) => {
       await writeSessionEntry(storePath);
       mockSuccessfulAttachmentDelivery();
@@ -488,7 +500,19 @@ describe("plugin session attachments", () => {
       });
       expectTelegramAttachmentResult(firstResult, 1);
 
+      pinActivePluginChannelRegistry(registry.registry);
+      pinActivePluginHttpRouteRegistry(registry.registry);
+      pinActivePluginSessionExtensionRegistry(registry.registry);
       setActivePluginRegistry(createEmptyPluginRegistry());
+      const pinnedResult = await capturedApi?.sendSessionAttachment({
+        sessionKey: MAIN_SESSION_KEY,
+        files: [{ path: filePath }],
+      });
+      expectTelegramAttachmentResult(pinnedResult, 1);
+
+      releasePinnedPluginChannelRegistry(registry.registry);
+      releasePinnedPluginHttpRouteRegistry(registry.registry);
+      releasePinnedPluginSessionExtensionRegistry(registry.registry);
       await expect(
         capturedApi?.sendSessionAttachment({
           sessionKey: MAIN_SESSION_KEY,
