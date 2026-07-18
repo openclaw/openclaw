@@ -361,8 +361,15 @@ export function createGatewayAuxHandlers(params: {
                     expectedGeneration: nextSharedGatewaySessionGeneration,
                   });
                 }
-                if (plan.restartChannels.size > 0) {
-                  const restartChannels = [...plan.restartChannels];
+                // Account-scoped changes restart their whole channel here:
+                // secrets.reload has no per-account restart path, and a missed
+                // restart would leave rotated credentials unapplied.
+                const channelsToRestart = new Set<ChannelKind>([
+                  ...plan.restartChannels,
+                  ...(plan.restartChannelAccounts?.keys() ?? []),
+                ]);
+                if (channelsToRestart.size > 0) {
+                  const restartChannels = [...channelsToRestart];
                   if (
                     isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
                     isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS)

@@ -107,6 +107,7 @@ export const PluginCatalogEntrySchema = closedObject({
     Type.Literal("error"),
   ]),
   featured: Type.Optional(Type.Boolean()),
+  featuredAt: Type.Optional(Type.Integer({ minimum: 0 })),
   order: Type.Optional(Type.Number()),
   /** True when the gateway can resolve a manifest or catalog icon for this plugin identity. */
   hasIcon: Type.Optional(Type.Boolean()),

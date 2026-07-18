@@ -5053,6 +5053,7 @@ public struct SessionsCreateParams: Codable, Sendable {
     public let parentsessionkey: String?
     public let fork: Bool?
     public let emitcommandhooks: Bool?
+    public let succeedsparent: Bool?
     public let task: String?
     public let message: String?
     public let attachments: [AnyCodable]?
@@ -5072,6 +5073,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         parentsessionkey: String? = nil,
         fork: Bool? = nil,
         emitcommandhooks: Bool? = nil,
+        succeedsparent: Bool? = nil,
         task: String? = nil,
         message: String? = nil,
         attachments: [AnyCodable]? = nil,
@@ -5090,6 +5092,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         self.parentsessionkey = parentsessionkey
         self.fork = fork
         self.emitcommandhooks = emitcommandhooks
+        self.succeedsparent = succeedsparent
         self.task = task
         self.message = message
         self.attachments = attachments
@@ -5110,6 +5113,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         case parentsessionkey = "parentSessionKey"
         case fork
         case emitcommandhooks = "emitCommandHooks"
+        case succeedsparent = "succeedsParent"
         case task
         case message
         case attachments
@@ -6904,6 +6908,7 @@ public struct SystemAgentChatResult: Codable, Sendable {
     public let reply: String
     public let sensitive: Bool?
     public let action: AnyCodable
+    public let agentdraft: String?
     public let needsapproval: Bool?
     public let proposalid: String?
     public let question: [String: AnyCodable]?
@@ -6913,6 +6918,7 @@ public struct SystemAgentChatResult: Codable, Sendable {
         reply: String,
         sensitive: Bool? = nil,
         action: AnyCodable,
+        agentdraft: String? = nil,
         needsapproval: Bool? = nil,
         proposalid: String? = nil,
         question: [String: AnyCodable]? = nil)
@@ -6921,6 +6927,7 @@ public struct SystemAgentChatResult: Codable, Sendable {
         self.reply = reply
         self.sensitive = sensitive
         self.action = action
+        self.agentdraft = agentdraft
         self.needsapproval = needsapproval
         self.proposalid = proposalid
         self.question = question
@@ -6931,6 +6938,7 @@ public struct SystemAgentChatResult: Codable, Sendable {
         case reply
         case sensitive
         case action
+        case agentdraft = "agentDraft"
         case needsapproval = "needsApproval"
         case proposalid = "proposalId"
         case question
@@ -13017,6 +13025,7 @@ public struct PluginCatalogEntry: Codable, Sendable {
     public let enabled: Bool
     public let state: AnyCodable
     public let featured: Bool?
+    public let featuredat: Int?
     public let order: Double?
     public let hasicon: Bool?
     public let install: PluginCatalogInstallAction?
@@ -13036,6 +13045,7 @@ public struct PluginCatalogEntry: Codable, Sendable {
         enabled: Bool,
         state: AnyCodable,
         featured: Bool? = nil,
+        featuredat: Int? = nil,
         order: Double? = nil,
         hasicon: Bool? = nil,
         install: PluginCatalogInstallAction? = nil,
@@ -13054,6 +13064,7 @@ public struct PluginCatalogEntry: Codable, Sendable {
         self.enabled = enabled
         self.state = state
         self.featured = featured
+        self.featuredat = featuredat
         self.order = order
         self.hasicon = hasicon
         self.install = install
@@ -13074,6 +13085,7 @@ public struct PluginCatalogEntry: Codable, Sendable {
         case enabled
         case state
         case featured
+        case featuredat = "featuredAt"
         case order
         case hasicon = "hasIcon"
         case install

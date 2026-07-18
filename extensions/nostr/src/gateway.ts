@@ -323,10 +323,10 @@ export const nostrOutboundAdapter: NostrOutboundAdapter = {
     });
     const message = core.channel.text.convertMarkdownTables(text ?? "", tableMode);
     const normalizedTo = normalizePubkey(to);
-    await bus.sendDm(normalizedTo, message);
+    const eventId = await bus.sendDm(normalizedTo, message);
     return attachChannelToResult("nostr", {
       to: normalizedTo,
-      messageId: `nostr-${Date.now()}`,
+      messageId: eventId,
     });
   },
 };

@@ -447,6 +447,17 @@ async function closeBrowserPage(page: Page): Promise<void> {
   await page.close().catch(() => {});
 }
 
+async function waitForLayoutSettled(page: Page): Promise<void> {
+  // Raw DOM mutations skip Playwright's actionability wait. Allow style invalidation
+  // to land, then observe one stable frame before measuring viewport bounds.
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      }),
+  );
+}
+
 async function getRect(page: Page, selector: string) {
   const rect = await page.locator(selector).evaluate((node) => {
     const bounds = (node as HTMLElement).getBoundingClientRect();
@@ -621,7 +632,10 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             },
           ],
         });
-        await page.goto(`${realChatServer.baseUrl}chat`);
+        await page.goto(`${realChatServer.baseUrl}chat`, {
+          waitUntil: "domcontentloaded",
+          timeout: APP_FIRST_RENDER_TIMEOUT_MS,
+        });
         await page
           .getByText("Context hover regression fixture.")
           .waitFor({ timeout: APP_FIRST_RENDER_TIMEOUT_MS });
@@ -700,7 +714,10 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           },
         ],
       });
-      await page.goto(`${realChatServer.baseUrl}chat`);
+      await page.goto(`${realChatServer.baseUrl}chat`, {
+        waitUntil: "domcontentloaded",
+        timeout: APP_FIRST_RENDER_TIMEOUT_MS,
+      });
 
       const image = page.locator("img.chat-message-image");
       const video = page.locator("video");
@@ -1837,6 +1854,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         await page.locator(".chat-view-menu").evaluate((node) => {
           node.setAttribute("open", "");
         });
+        await waitForLayoutSettled(page);
 
         const settingsMenu = await getRect(page, ".chat-view-menu[open]");
         expect(settingsMenu.left).toBeGreaterThanOrEqual(0);
@@ -1861,6 +1879,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         await page.locator(".chat-view-menu").evaluate((node) => {
           node.setAttribute("open", "");
         });
+        await waitForLayoutSettled(page);
 
         const settingsMenu = await getRect(page, ".chat-view-menu[open]");
         expect(settingsMenu.left).toBeGreaterThanOrEqual(0);
@@ -1895,7 +1914,10 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           },
         ],
       });
-      await page.goto(`${realChatServer.baseUrl}chat`);
+      await page.goto(`${realChatServer.baseUrl}chat`, {
+        waitUntil: "domcontentloaded",
+        timeout: APP_FIRST_RENDER_TIMEOUT_MS,
+      });
       await page
         .getByText("Short landscape slash command keyboard regression fixture.")
         .waitFor({ timeout: APP_FIRST_RENDER_TIMEOUT_MS });

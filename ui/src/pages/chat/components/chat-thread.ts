@@ -134,8 +134,6 @@ type ChatThreadProps = {
   onOpenSessionCheckpoints?: () => void | Promise<void>;
   onAssistantAttachmentLoaded?: () => void;
   onRequestUpdate?: () => void;
-  onQuestionChange?: () => void;
-  onQuestionSubmit?: (id: string, answers: Record<string, string[]>) => void | Promise<void>;
   onChatScroll?: (event: Event) => void;
   onHistoryIntent?: (event: Event) => void;
   onDraftChange: (next: string) => void;
@@ -198,7 +196,31 @@ function initialTranscriptScrollMargin(host: ReactiveControllerHost): number {
 class ChatSessionVirtualizerHost implements ReactiveControllerHost {
   private readonly controllers = new Set<ReactiveController>();
   private readonly virtualizerController: VirtualizerController<HTMLDivElement, HTMLElement>;
-  private scrollElement: HTMLDivElement | null = null;
+  private threadInnerElement: HTMLDivElement | null = null;
+  // Lit calls refs before newly rendered nodes are connected. Resolve the
+  // scroll parent lazily or a stable ref can permanently capture null.
+  private get scrollElement(): HTMLDivElement | null {
+    const parent = this.threadInnerElement?.parentElement;
+    return parent instanceof HTMLDivElement ? parent : null;
+  }
+  // Stable Lit refs: inline arrows change identity per render, making Lit
+  // re-invoke them for every visible row and re-measure each row every render.
+  // Lit tracks the last element per callback, so each row needs its own.
+  private readonly scrollElementRef = (element?: Element) => {
+    this.threadInnerElement = element instanceof HTMLDivElement ? element : null;
+  };
+  private readonly measureRowRefs = new Map<string, (element?: Element) => void>();
+  private measureRowRefFor(key: string): (element?: Element) => void {
+    let callback = this.measureRowRefs.get(key);
+    if (!callback) {
+      callback = (element?: Element) =>
+        this.virtualizerController
+          .getVirtualizer()
+          .measureElement(element instanceof HTMLElement ? element : null);
+      this.measureRowRefs.set(key, callback);
+    }
+    return callback;
+  }
   private rowKeys: readonly string[] = [];
   private rowIndexesByKey = new Map<string, number>();
   private focusedRowKey: string | null = null;
@@ -277,7 +299,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
     for (const controller of this.controllers) {
       controller.hostDisconnected?.();
     }
-    this.scrollElement = null;
+    this.threadInnerElement = null;
   }
 
   render(
@@ -292,13 +314,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
     const virtualizer = this.virtualizerController.getVirtualizer();
     const virtualRows = virtualizer.getVirtualItems();
     return html`
-      <div
-        class="chat-thread-inner chat-thread-inner--virtual"
-        ${ref((element) => {
-          this.scrollElement =
-            element?.parentElement instanceof HTMLDivElement ? element.parentElement : null;
-        })}
-      >
+      <div class="chat-thread-inner chat-thread-inner--virtual" ${ref(this.scrollElementRef)}>
         <div
           class="chat-virtual-sizer"
           style=${styleMap({ height: `${virtualizer.getTotalSize()}px` })}
@@ -324,9 +340,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
                   })}
                   data-index=${String(virtualRow.index)}
                   data-virtual-row-key=${row.key}
-                  ${ref((element) =>
-                    virtualizer.measureElement(element instanceof HTMLElement ? element : null),
-                  )}
+                  ${ref(this.measureRowRefFor(row.key))}
                 >
                   ${renderRow(row)}
                 </div>
@@ -388,6 +402,11 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
     }
     this.rowKeys = Object.freeze(nextKeys);
     this.rowIndexesByKey = new Map(this.rowKeys.map((key, index) => [key, index]));
+    for (const key of this.measureRowRefs.keys()) {
+      if (!this.rowIndexesByKey.has(key)) {
+        this.measureRowRefs.delete(key);
+      }
+    }
     const keys = this.rowKeys;
     const virtualizer = this.virtualizerController.getVirtualizer();
     virtualizer.setOptions({
@@ -1062,8 +1081,6 @@ function renderChatThreadContents(
     if (item.kind === "stream-run") {
       return renderStreamGroup(item.parts, {
         questionPrompts,
-        onQuestionChange: props.onQuestionChange,
-        onQuestionSubmit: props.onQuestionSubmit,
         planStatus: props.planStatus,
         planActive: Boolean(props.runActive),
         onOpenSidebar: props.onOpenSidebar,
@@ -1091,8 +1108,6 @@ function renderChatThreadContents(
     if (item.kind === "question") {
       return renderStreamGroup([item], {
         questionPrompts,
-        onQuestionChange: props.onQuestionChange,
-        onQuestionSubmit: props.onQuestionSubmit,
       });
     }
     return nothing;
