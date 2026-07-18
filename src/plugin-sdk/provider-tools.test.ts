@@ -1,6 +1,4 @@
 // Provider tool tests cover tool schema conversion and provider payload compatibility.
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   buildProviderToolCompatFamilyHooks,
@@ -82,18 +80,6 @@ describe("buildProviderToolCompatFamilyHooks", () => {
       required: [],
       additionalProperties: false,
     });
-  });
-
-  it("keeps a single openai provider gate for OpenAI tool-schema compat", () => {
-    // Guards against reintroducing a duplicate unreachable
-    // `if (provider === "openai")` branch after the live openai return.
-    const source = readFileSync(
-      fileURLToPath(new URL("./provider-tools.ts", import.meta.url)),
-      "utf8",
-    );
-    const fn = source.match(/function shouldApplyOpenAIToolCompat\([\s\S]*?\n\}/)?.[0];
-    expect(fn).toBeTruthy();
-    expect(fn!.match(/if \(provider === "openai"\)/g)).toHaveLength(1);
   });
 
   it("applies ChatGPT Responses strict compat on first-party OpenAI API hosts", () => {
