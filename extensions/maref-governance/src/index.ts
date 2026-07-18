@@ -26,21 +26,6 @@ interface MAREFConfig {
   sidecarUrl?: string;
   mode?: MAREFMode;
   failClosed?: boolean;
-  sensitivePaths?: string[];
-}
-
-// ── 敏感文件检测 ─────────────────────────────────────────────────────
-
-const DEFAULT_SENSITIVE_PATTERNS = [
-  /\.pem$/i, /\.key$/i, /\.p12$/i, /\.jks$/i,
-  /\.env/, /\.env\..+/,
-  /id_rsa/, /id_ed25519/, /credentials/i,
-  /\/etc\/(passwd|shadow|sudoers)/,
-];
-
-function isSensitivePath(filePath: string, extraPatterns: RegExp[] = []): boolean {
-  const patterns = [...DEFAULT_SENSITIVE_PATTERNS, ...extraPatterns];
-  return patterns.some((p) => p.test(filePath));
 }
 
 // ── 工具 ─────────────────────────────────────────────────────────────
@@ -78,9 +63,6 @@ export default definePluginEntry({
     const mode: MAREFMode = config.mode ?? "enforcing";
     const failClosed = config.failClosed ?? true;
     const sidecarUrl = config.sidecarUrl ?? "http://localhost:8000";
-    const sensitivePaths = (config.sensitivePaths ?? []).map(
-      (p: string) => new RegExp(p, "i"),
-    );
 
     const client = new MAREFClient(sidecarUrl);
 
@@ -91,6 +73,16 @@ export default definePluginEntry({
       decision: GateDecision,
       operation: string,
     ): PluginHookBeforeToolCallResult {
+      if (!decision || !decision.verdict) {
+        // 无有效决策时 enforcing 模式默认阻断
+        if (mode === "enforcing" && failClosed) {
+          return {
+            block: true,
+            blockReason: `[MAREF] No valid decision for ${operation}`,
+          };
+        }
+        return {};
+      }
       switch (mode) {
         case "logging":
           return {}; // 放行
@@ -138,6 +130,7 @@ export default definePluginEntry({
       decision: GateDecision,
       extra: Record<string, unknown>,
     ): void {
+      if (!decision) return;
       client.reportAction({
         action: `openclaw:${hook}`,
         result: {
@@ -157,15 +150,15 @@ export default definePluginEntry({
     // 拦截文件写入和执行类工具调用，在允许执行前向 MAREF sidecar 发起治理检查。
 
     api.registerHook("before_tool_call", async (event, ctx) => {
-      // logging 模式快速放行（执行类不检查）
-      if (mode === "logging" && ["exec", "write"].includes(event.toolName)) {
+      // logging 模式：完全跳过所有 sidecar 检查
+      if (mode === "logging") {
         return {};
       }
 
       const filePath = extractFilePath(event.params);
       const command = extractCommand(event.params);
 
-      // 如果不是文件操作或命令执行，放行
+      // 不是文件操作或命令执行，放行
       if (!filePath && !command) {
         return {};
       }

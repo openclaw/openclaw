@@ -25,12 +25,6 @@
         "type": "boolean",
         "description": "Block operations when sidecar is unreachable (enforcing mode only)",
         "default": true
-      },
-      "sensitivePaths": {
-        "type": "array",
-        "items": { "type": "string" },
-        "description": "Additional sensitive file patterns for read protection",
-        "default": []
       }
     }
   }

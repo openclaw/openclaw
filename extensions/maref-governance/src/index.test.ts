@@ -234,10 +234,10 @@ describe("maref-governance plugin", () => {
       expect(mockClientInstance!.checkBeforeExecute).not.toHaveBeenCalled();
     });
 
-    it("passes through exec tool calls without checking sidecar", async () => {
+    it("passes through any tool call (including exec) without checking sidecar", async () => {
       const handler = getBeforeToolCallHandler();
       const result = await handler(
-        { toolName: "exec", params: { command: "rm -rf /" } },
+        { toolName: "Bash", params: { command: "rm -rf /" } },
         { agentId: "test-agent", sessionId: "sess-1" },
       );
       expect(result).toEqual({});
@@ -394,18 +394,7 @@ describe("maref-governance plugin", () => {
   });
 
   describe("non-file/non-command tool calls pass through", () => {
-    it("allows tools with no file_path or command params (e.g. think)", async () => {
-      registerPlugin({ mode: "enforcing" });
-      const handler = getBeforeToolCallHandler();
-      const result = await handler(
-        { toolName: "think", params: { thought: "hmm" } },
-        { agentId: "test-agent", sessionId: "sess-1" },
-      );
-      expect(result).toEqual({});
-      expect(mockClientInstance!.checkBeforeWrite).not.toHaveBeenCalled();
-    });
-
-    it("allows tools with unrelated params", async () => {
+    it("allows tools with neither file_path nor command params", async () => {
       registerPlugin({ mode: "enforcing" });
       const handler = getBeforeToolCallHandler();
       const result = await handler(
