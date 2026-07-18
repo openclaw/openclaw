@@ -25,12 +25,36 @@ vi.mock("openclaw/plugin-sdk/provider-http", async (importActual) => {
     // REAL byte-bounded JSON reader under test — not stubbed.
     readProviderJsonResponse: actual.readProviderJsonResponse,
     postJsonRequest: postJsonRequestMock,
-    fetchProviderOperationResponse: async (params: {
+    pollProviderOperationJson: async (params: {
       url: string;
-      init?: RequestInit;
-      timeoutMs?: unknown;
-      fetchFn: typeof fetch;
-    }) => fetchWithTimeoutMock(params.url, params.init ?? {}, resolveTimeoutMs(params.timeoutMs)),
+      headers: Headers;
+      defaultTimeoutMs: number;
+      maxAttempts: number;
+      requestFailedMessage: string;
+      timeoutMessage: string;
+      isComplete: (payload: unknown) => boolean;
+      getFailureMessage?: (payload: unknown) => string | undefined;
+    }) => {
+      for (let attempt = 0; attempt < params.maxAttempts; attempt += 1) {
+        const response = await fetchWithTimeoutMock(
+          params.url,
+          { method: "GET", headers: params.headers },
+          params.defaultTimeoutMs,
+        );
+        const payload = await actual.readProviderJsonResponse(
+          response,
+          params.requestFailedMessage,
+        );
+        if (params.isComplete(payload)) {
+          return payload;
+        }
+        const failureMessage = params.getFailureMessage?.(payload);
+        if (failureMessage) {
+          throw new Error(failureMessage);
+        }
+      }
+      throw new Error(params.timeoutMessage);
+    },
     fetchProviderDownloadResponse: async (params: {
       url: string;
       init?: RequestInit;
@@ -62,7 +86,6 @@ vi.mock("openclaw/plugin-sdk/provider-http", async (importActual) => {
       headers: new Headers(params.defaultHeaders),
       dispatcherPolicy: undefined,
     }),
-    waitProviderOperationPollInterval: async () => {},
   };
 });
 

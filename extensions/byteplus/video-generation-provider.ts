@@ -10,12 +10,11 @@ import {
   createProviderOperationDeadline,
   createProviderOperationTimeoutResolver,
   fetchProviderDownloadResponse,
-  fetchProviderOperationResponse,
+  pollProviderOperationJson,
   postJsonRequest,
   readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
-  waitProviderOperationPollInterval,
   type ProviderOperationTimeoutMs,
 } from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
@@ -163,40 +162,24 @@ async function pollBytePlusTask(params: {
     timeoutMs: params.timeoutMs,
     label: `BytePlus video generation task ${params.taskId}`,
   });
-  for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt += 1) {
-    const response = await fetchProviderOperationResponse({
-      stage: "poll",
-      url: `${params.baseUrl}/contents/generations/tasks/${params.taskId}`,
-      init: {
-        method: "GET",
-        headers: params.headers,
-      },
-      timeoutMs: createProviderOperationTimeoutResolver({
-        deadline,
-        defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
-      }),
-      fetchFn: params.fetchFn,
-      provider: "byteplus",
-      requestFailedMessage: "BytePlus video status request failed",
-    });
-    const payload = await readBytePlusJsonResponse<BytePlusTaskResponse>(
-      response,
-      "BytePlus video status request failed",
-    );
-    switch (readBytePlusTaskStatus(payload)) {
-      case "succeeded":
-        return payload;
-      case "failed":
-      case "cancelled":
-        throw new Error(
-          readBytePlusErrorMessage(payload.error) || "BytePlus video generation failed",
-        );
-      default:
-        await waitProviderOperationPollInterval({ deadline, pollIntervalMs: POLL_INTERVAL_MS });
-        break;
-    }
-  }
-  throw new Error(`BytePlus video generation task ${params.taskId} did not finish in time`);
+  return await pollProviderOperationJson<BytePlusTaskResponse>({
+    url: `${params.baseUrl}/contents/generations/tasks/${params.taskId}`,
+    headers: params.headers,
+    deadline,
+    defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+    fetchFn: params.fetchFn,
+    maxAttempts: MAX_POLL_ATTEMPTS,
+    pollIntervalMs: POLL_INTERVAL_MS,
+    requestFailedMessage: "BytePlus video status request failed",
+    timeoutMessage: `BytePlus video generation task ${params.taskId} did not finish in time`,
+    isComplete: (payload) => readBytePlusTaskStatus(payload) === "succeeded",
+    getFailureMessage: (payload) => {
+      const status = readBytePlusTaskStatus(payload);
+      return status === "failed" || status === "cancelled"
+        ? readBytePlusErrorMessage(payload.error) || "BytePlus video generation failed"
+        : undefined;
+    },
+  });
 }
 
 async function downloadBytePlusVideo(params: {
@@ -215,6 +198,9 @@ async function downloadBytePlusVideo(params: {
   });
   const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
   const buffer = await readResponseWithLimit(response, params.maxBytes, {
+    timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    onTimeout: ({ timeoutMs }) =>
+      new Error(`BytePlus generated video download timed out after ${timeoutMs}ms`),
     onOverflow: ({ maxBytes }) =>
       new Error(`BytePlus generated video download exceeds ${maxBytes} bytes`),
   });

@@ -9,6 +9,7 @@ import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
+  createProviderOperationTimeoutError,
   createProviderOperationDeadline,
   executeProviderOperationWithRetry,
   fetchWithTimeoutGuarded,
@@ -170,6 +171,9 @@ async function downloadTrackFromUrl(params: {
     const ext = extensionForMime(mimeType)?.replace(/^\./u, "") || "mp3";
     return {
       buffer: await readResponseWithLimit(result.response, params.maxBytes, {
+        timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+        onTimeout: ({ timeoutMs }) =>
+          new Error(`MiniMax generated music download timed out after ${timeoutMs}ms`),
         onOverflow: ({ maxBytes }) =>
           new Error(`MiniMax generated music download exceeds ${maxBytes} bytes`),
       }),
@@ -179,12 +183,6 @@ async function downloadTrackFromUrl(params: {
   } finally {
     await result.release();
   }
-}
-
-function createMinimaxMusicTimeoutError(deadline: ProviderOperationDeadline): Error {
-  const timeoutLabel =
-    typeof deadline.timeoutMs === "number" ? ` after ${deadline.timeoutMs}ms` : "";
-  return new Error(`${deadline.label} timed out${timeoutLabel}`);
 }
 
 function resolveBodyReadTimeoutMs(deadline: ProviderOperationDeadline): number {
@@ -210,65 +208,11 @@ async function readResponseBufferWithDeadline(
   deadline: ProviderOperationDeadline,
   maxBytes: number,
 ): Promise<Buffer> {
-  const body = response.body;
-  if (!body) {
-    return Buffer.alloc(0);
-  }
-
-  const reader = body.getReader();
-  const chunks: Uint8Array[] = [];
-  let totalBytes = 0;
-  try {
-    while (true) {
-      let timeoutId: ReturnType<typeof setTimeout> | undefined;
-      try {
-        const timeoutMs = resolveBodyReadTimeoutMs(deadline);
-        const timeoutPromise = new Promise<never>((_, reject) => {
-          timeoutId = setTimeout(() => reject(createMinimaxMusicTimeoutError(deadline)), timeoutMs);
-        });
-        const result = await Promise.race([reader.read(), timeoutPromise]);
-        if (result.done) {
-          break;
-        }
-        if (!result.value || result.value.length === 0) {
-          continue;
-        }
-        const nextTotalBytes = totalBytes + result.value.byteLength;
-        if (nextTotalBytes > maxBytes) {
-          const error = createGeneratedMusicTooLargeError(maxBytes);
-          try {
-            await reader.cancel(error);
-          } catch {
-            // Preserve the size-limit failure that caused cancellation.
-          }
-          throw error;
-        }
-        chunks.push(result.value);
-        totalBytes = nextTotalBytes;
-      } catch (error) {
-        try {
-          await reader.cancel(error);
-        } catch {
-          // Preserve the timeout or stream read failure that caused cancellation.
-        }
-        throw error;
-      } finally {
-        if (timeoutId) {
-          clearTimeout(timeoutId);
-        }
-      }
-    }
-  } finally {
-    reader.releaseLock();
-  }
-
-  const buffer = Buffer.allocUnsafe(totalBytes);
-  let offset = 0;
-  for (const chunk of chunks) {
-    buffer.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return buffer;
+  return await readResponseWithLimit(response, maxBytes, {
+    timeoutMs: () => resolveBodyReadTimeoutMs(deadline),
+    onTimeout: () => createProviderOperationTimeoutError(deadline),
+    onOverflow: ({ maxBytes: limit }) => createGeneratedMusicTooLargeError(limit),
+  });
 }
 
 async function readStreamingTrack(

@@ -142,9 +142,40 @@ export function resolveProviderOperationTimeoutMs(params: {
   }
   const remainingMs = deadlineAtMs - Date.now();
   if (remainingMs <= 0) {
-    throw new Error(`${params.deadline.label} timed out after ${params.deadline.timeoutMs}ms`);
+    throw createProviderOperationTimeoutError(params.deadline);
   }
   return Math.max(1, Math.min(defaultTimeoutMs, remainingMs));
+}
+
+/** Builds the canonical error for an exhausted provider operation deadline. */
+export function createProviderOperationTimeoutError(deadline: ProviderOperationDeadline): Error {
+  const timeoutLabel =
+    typeof deadline.timeoutMs === "number" ? ` after ${deadline.timeoutMs}ms` : "";
+  return new Error(`${deadline.label} timed out${timeoutLabel}`);
+}
+
+/** Resolves a static or lazy request timeout with a validated fallback. */
+export function resolveProviderRequestTimeoutMs(params: {
+  timeoutMs?: ProviderOperationTimeoutMs;
+  defaultTimeoutMs: number;
+}): number {
+  const resolved = typeof params.timeoutMs === "function" ? params.timeoutMs() : params.timeoutMs;
+  const fallback = resolveTimerTimeoutMs(params.defaultTimeoutMs, DEFAULT_GUARDED_HTTP_TIMEOUT_MS);
+  if (typeof resolved !== "number" || !Number.isFinite(resolved) || resolved <= 0) {
+    return fallback;
+  }
+  return resolveTimerTimeoutMs(resolved, fallback);
+}
+
+/** Returns lazy body-read options tied to the same absolute provider operation deadline. */
+export function createProviderOperationBodyReadOptions(params: {
+  deadline: ProviderOperationDeadline;
+  defaultTimeoutMs: number;
+}) {
+  return {
+    timeoutMs: createProviderOperationTimeoutResolver(params),
+    onTimeout: () => createProviderOperationTimeoutError(params.deadline),
+  };
 }
 
 /** Returns a lazy timeout resolver for code paths that retry or poll multiple HTTP calls. */
@@ -170,7 +201,7 @@ export async function waitProviderOperationPollInterval(params: {
   }
   const remainingMs = deadlineAtMs - Date.now();
   if (remainingMs <= 0) {
-    throw new Error(`${params.deadline.label} timed out after ${params.deadline.timeoutMs}ms`);
+    throw createProviderOperationTimeoutError(params.deadline);
   }
   await new Promise((resolve) => {
     setTimeout(resolve, Math.min(pollIntervalMs, remainingMs));
@@ -192,6 +223,10 @@ export async function pollProviderOperationJson<TPayload>(
     getFailureMessage?: (payload: TPayload) => string | undefined;
   } & GuardedProviderRequestParams,
 ): Promise<TPayload> {
+  const bodyReadOptions = createProviderOperationBodyReadOptions({
+    deadline: params.deadline,
+    defaultTimeoutMs: params.defaultTimeoutMs,
+  });
   for (let attempt = 0; attempt < params.maxAttempts; attempt += 1) {
     const init = {
       method: "GET",
@@ -217,6 +252,7 @@ export async function pollProviderOperationJson<TPayload>(
             return (await readProviderJsonObjectResponse(
               result.response,
               params.requestFailedMessage,
+              bodyReadOptions,
             )) as TPayload;
           } finally {
             await result.release();
@@ -232,6 +268,7 @@ export async function pollProviderOperationJson<TPayload>(
             requestFailedMessage: params.requestFailedMessage,
           }),
           params.requestFailedMessage,
+          bodyReadOptions,
         )) as TPayload);
     if (params.isComplete(payload)) {
       return payload;
@@ -263,14 +300,28 @@ export async function fetchProviderOperationResponse(params: {
     stage: params.stage,
     retry: params.retry,
     operation: async () => {
+      const timeoutMs = resolveProviderRequestTimeoutMs({
+        timeoutMs: params.timeoutMs,
+        defaultTimeoutMs: DEFAULT_GUARDED_HTTP_TIMEOUT_MS,
+      });
+      const requestDeadline = createProviderOperationDeadline({
+        timeoutMs,
+        label: params.requestFailedMessage ?? `${params.provider ?? "provider"} ${params.stage}`,
+      });
       const response = await fetchWithTimeout(
         params.url,
         params.init ?? {},
-        resolveProviderOperationRequestTimeoutMs(params.timeoutMs),
+        timeoutMs,
         params.fetchFn,
       );
       if (params.requestFailedMessage) {
-        await assertOkOrThrowHttpError(response, params.requestFailedMessage);
+        await assertOkOrThrowHttpError(response, params.requestFailedMessage, {
+          bodyTimeoutMs: createProviderOperationTimeoutResolver({
+            deadline: requestDeadline,
+            defaultTimeoutMs: timeoutMs,
+          }),
+          onBodyTimeout: () => createProviderOperationTimeoutError(requestDeadline),
+        });
       }
       return response;
     },
@@ -296,16 +347,6 @@ export async function fetchProviderDownloadResponse(params: {
     requestFailedMessage: params.requestFailedMessage,
     retry: params.retry,
   });
-}
-
-function resolveProviderOperationRequestTimeoutMs(
-  timeoutMs: ProviderOperationTimeoutMs | undefined,
-): number {
-  const resolved = typeof timeoutMs === "function" ? timeoutMs() : timeoutMs;
-  if (typeof resolved !== "number" || !Number.isFinite(resolved) || resolved <= 0) {
-    return DEFAULT_GUARDED_HTTP_TIMEOUT_MS;
-  }
-  return resolved;
 }
 
 function resolveGuardedHttpTimeoutMs(timeoutMs: number | undefined): number {
@@ -549,16 +590,30 @@ async function fetchGuardedProviderOperationResponse(params: {
     stage: params.stage,
     retry: params.retry,
     operation: async () => {
+      const timeoutMs = resolveProviderRequestTimeoutMs({
+        timeoutMs: params.timeoutMs,
+        defaultTimeoutMs: DEFAULT_GUARDED_HTTP_TIMEOUT_MS,
+      });
+      const requestDeadline = createProviderOperationDeadline({
+        timeoutMs,
+        label: params.requestFailedMessage ?? `${params.provider ?? "provider"} ${params.stage}`,
+      });
       const result = await fetchWithTimeoutGuarded(
         params.url,
         params.init,
-        resolveProviderOperationRequestTimeoutMs(params.timeoutMs),
+        timeoutMs,
         params.fetchFn,
         params.guardedOptions,
       );
       try {
         if (params.requestFailedMessage) {
-          await assertOkOrThrowHttpError(result.response, params.requestFailedMessage);
+          await assertOkOrThrowHttpError(result.response, params.requestFailedMessage, {
+            bodyTimeoutMs: createProviderOperationTimeoutResolver({
+              deadline: requestDeadline,
+              defaultTimeoutMs: timeoutMs,
+            }),
+            onBodyTimeout: () => createProviderOperationTimeoutError(requestDeadline),
+          });
         }
         return result;
       } catch (error) {

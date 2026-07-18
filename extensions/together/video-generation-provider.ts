@@ -163,6 +163,9 @@ async function downloadTogetherVideo(params: {
   });
   const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
   const buffer = await readResponseWithLimit(response, params.maxBytes, {
+    timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    onTimeout: ({ timeoutMs }) =>
+      new Error(`Together generated video download timed out after ${timeoutMs}ms`),
     onOverflow: ({ maxBytes }) =>
       new Error(`Together generated video download exceeds ${maxBytes} bytes`),
   });

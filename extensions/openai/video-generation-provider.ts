@@ -16,6 +16,7 @@ import {
   readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
+  resolveProviderRequestTimeoutMs,
   sanitizeConfiguredModelProviderRequest,
   type ProviderOperationTimeoutMs,
 } from "openclaw/plugin-sdk/provider-http";
@@ -183,13 +184,6 @@ async function pollOpenAIVideo(
   });
 }
 
-function resolveOpenAIVideoDownloadTimeoutMs(timeoutMs: ProviderOperationTimeoutMs | undefined) {
-  const resolved = typeof timeoutMs === "function" ? timeoutMs() : timeoutMs;
-  return typeof resolved === "number" && Number.isFinite(resolved) && resolved > 0
-    ? resolved
-    : DEFAULT_TIMEOUT_MS;
-}
-
 async function fetchOpenAIVideoDownload(
   params: {
     url: string;
@@ -220,7 +214,10 @@ async function fetchOpenAIVideoDownload(
       const result = await fetchWithTimeoutGuarded(
         params.url,
         params.init,
-        resolveOpenAIVideoDownloadTimeoutMs(params.timeoutMs),
+        resolveProviderRequestTimeoutMs({
+          timeoutMs: params.timeoutMs,
+          defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+        }),
         params.fetchFn,
         {
           ...(params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
@@ -268,6 +265,9 @@ async function downloadOpenAIVideo(
   try {
     const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
     const buffer = await readResponseWithLimit(response, params.maxBytes, {
+      timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      onTimeout: ({ timeoutMs }) =>
+        new Error(`OpenAI generated video download timed out after ${timeoutMs}ms`),
       onOverflow: ({ maxBytes }) =>
         new Error(`OpenAI generated video download exceeds ${maxBytes} bytes`),
     });

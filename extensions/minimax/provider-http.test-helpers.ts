@@ -161,6 +161,7 @@ vi.mock("openclaw/plugin-sdk/provider-http", async (importActual) => {
       label,
       timeoutMs,
     }),
+    createProviderOperationTimeoutError: actual.createProviderOperationTimeoutError,
     createProviderOperationTimeoutResolver:
       ({ defaultTimeoutMs }: { defaultTimeoutMs: number }) =>
       () =>

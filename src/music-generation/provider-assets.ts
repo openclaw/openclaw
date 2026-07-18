@@ -114,6 +114,9 @@ export async function downloadGeneratedMusicAsset(params: {
   const maxBytes = params.maxBytes ?? maxBytesForKind("audio");
   return {
     buffer: await readResponseWithLimit(response, maxBytes, {
+      timeoutMs: params.timeoutMs,
+      onTimeout: ({ timeoutMs }) =>
+        new Error(`${params.provider} generated music download timed out after ${timeoutMs}ms`),
       onOverflow: ({ maxBytes: maxBytesLocal }) =>
         new Error(`${params.provider} generated music download exceeds ${maxBytesLocal} bytes`),
     }),

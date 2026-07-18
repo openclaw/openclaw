@@ -3,6 +3,7 @@ import {
   assertOkOrThrowHttpError,
   executeProviderOperationWithRetry,
   fetchWithTimeoutGuarded,
+  resolveProviderRequestTimeoutMs,
   type ProviderOperationTimeoutMs,
 } from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
@@ -13,16 +14,6 @@ export type XaiVideoRequestPolicy = {
   allowPrivateNetwork: boolean;
   dispatcherPolicy?: NonNullable<Parameters<typeof fetchWithTimeoutGuarded>[4]>["dispatcherPolicy"];
 };
-
-function resolveXaiVideoFetchTimeoutMs(
-  timeoutMs: ProviderOperationTimeoutMs | undefined,
-  defaultTimeoutMs: number,
-) {
-  const resolved = typeof timeoutMs === "function" ? timeoutMs() : timeoutMs;
-  return typeof resolved === "number" && Number.isFinite(resolved) && resolved > 0
-    ? resolved
-    : defaultTimeoutMs;
-}
 
 export async function fetchXaiVideoResponse(
   params: {
@@ -43,7 +34,10 @@ export async function fetchXaiVideoResponse(
       const result = await fetchWithTimeoutGuarded(
         params.url,
         params.init,
-        resolveXaiVideoFetchTimeoutMs(params.timeoutMs, params.defaultTimeoutMs),
+        resolveProviderRequestTimeoutMs({
+          timeoutMs: params.timeoutMs,
+          defaultTimeoutMs: params.defaultTimeoutMs,
+        }),
         params.fetchFn,
         {
           ...(params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
@@ -86,6 +80,9 @@ export async function downloadXaiVideo(
   try {
     const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
     const buffer = await readResponseWithLimit(response, params.maxBytes, {
+      timeoutMs: params.timeoutMs ?? params.defaultTimeoutMs,
+      onTimeout: ({ timeoutMs }) =>
+        new Error(`xAI generated video download timed out after ${timeoutMs}ms`),
       onOverflow: ({ maxBytes }) =>
         new Error(`xAI generated video download exceeds ${maxBytes} bytes`),
     });
