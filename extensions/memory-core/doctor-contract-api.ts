@@ -49,6 +49,12 @@ import {
 } from "./src/dreaming-state.js";
 import { dreamingStateComparison } from "./src/migration/dreaming-state-comparison.js";
 import {
+  CREATE_LEGACY_MEMORY_FTS_MATCH_TABLE_SQL,
+  LEGACY_MEMORY_FTS_MATCH_TABLE,
+  buildLegacyMemoryFtsCopySql,
+  buildLegacyMemoryFtsMatchSql,
+} from "./src/migration/legacy-memory-sidecar-fts.js";
+import {
   SHORT_TERM_PHASE_SIGNAL_RELATIVE_PATH,
   SHORT_TERM_STORE_RELATIVE_PATH,
   normalizeShortTermPhaseSignalStore,
@@ -394,36 +400,23 @@ function copyLegacyMemoryFtsRows(db: DatabaseSync, schema: string): void {
   if (!tableExists(db, "main", MEMORY_INDEX_FTS_TABLE)) {
     return;
   }
-  db.exec(`
-    INSERT INTO main.${MEMORY_INDEX_FTS_TABLE} (
-      text, id, path, source, model, start_line, end_line
-    )
-    SELECT legacy.text, legacy.id, legacy.path, legacy.source, legacy.model,
-           legacy.start_line, legacy.end_line
-    FROM ${schema}.chunks AS legacy
-    JOIN main.${MEMORY_INDEX_CHUNKS_TABLE} AS chunk ON chunk.id = legacy.id
-    WHERE NOT EXISTS (
-      SELECT 1 FROM main.${MEMORY_INDEX_FTS_TABLE} AS canonical
-      WHERE canonical.id = legacy.id
+  if (!db.prepare(`SELECT 1 FROM ${schema}.chunks LIMIT 1`).get()) {
+    return;
+  }
+  db.exec(CREATE_LEGACY_MEMORY_FTS_MATCH_TABLE_SQL);
+  try {
+    db.exec(buildLegacyMemoryFtsMatchSql(schema));
+    assertLegacyDerivedRowsCopied(
+      db,
+      `SELECT COUNT(*) AS missing
+       FROM temp.${LEGACY_MEMORY_FTS_MATCH_TABLE}
+       WHERE exact = 0`,
+      "fts",
     );
-  `);
-  assertLegacyDerivedRowsCopied(
-    db,
-    `SELECT COUNT(*) AS missing
-     FROM ${schema}.chunks AS legacy
-     JOIN main.${MEMORY_INDEX_CHUNKS_TABLE} AS chunk ON chunk.id = legacy.id
-     WHERE NOT EXISTS (
-       SELECT 1 FROM main.${MEMORY_INDEX_FTS_TABLE} AS canonical
-       WHERE canonical.id = legacy.id
-         AND canonical.text IS legacy.text
-         AND canonical.path IS legacy.path
-         AND canonical.source IS legacy.source
-         AND canonical.model IS legacy.model
-         AND canonical.start_line IS legacy.start_line
-         AND canonical.end_line IS legacy.end_line
-     )`,
-    "fts",
-  );
+    db.exec(buildLegacyMemoryFtsCopySql(schema));
+  } finally {
+    db.exec(`DROP TABLE temp.${LEGACY_MEMORY_FTS_MATCH_TABLE}`);
+  }
 }
 
 function copyLegacyMemoryIndexRows(

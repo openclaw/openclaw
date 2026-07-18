@@ -152,6 +152,30 @@ describe("scripts/ci-run-node-test-shard.mjs", () => {
     expect(new Set(seen.map((run) => run.cache)).size).toBe(3);
   });
 
+  it("forwards trusted Vitest arguments after the target separator", async () => {
+    const scratchDir = makeScratchDir();
+    const seen: string[][] = [];
+    const exitCode = await runShardPlans(
+      resolveShardPlans({
+        OPENCLAW_NODE_TEST_CONFIGS_JSON: JSON.stringify(["test/vitest/vitest.unit.config.ts"]),
+      }),
+      {
+        concurrency: 1,
+        env: {
+          OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: JSON.stringify(["--hookTimeout=300000"]),
+        },
+        runChild: async (args: string[]) => {
+          seen.push(args);
+          return 0;
+        },
+        scratchDir,
+      },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(seen).toEqual([["test/vitest/vitest.unit.config.ts", "--", "--hookTimeout=300000"]]);
+  });
+
   it("reuses isolated persistent cache slots across serial work", async () => {
     const scratchDir = makeScratchDir();
     const persistentRoot = path.join(makeScratchDir(), "persistent");

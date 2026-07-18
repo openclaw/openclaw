@@ -5,6 +5,7 @@ import {
   embeddedAgentLog,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { replaceRuntimeAuthProfileStoreSnapshots } from "openclaw/plugin-sdk/agent-runtime";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import {
   onInternalDiagnosticEvent,
@@ -597,7 +598,22 @@ describe("runCodexAppServerAttempt", () => {
     const config = {
       auth: { profiles: { [authProfileId]: { provider: "openai", mode: "api_key" as const } } },
     };
-    vi.stubEnv("OPENAI_WORK_KEY", "work-key");
+    replaceRuntimeAuthProfileStoreSnapshots([
+      {
+        agentDir,
+        store: {
+          version: 1,
+          profiles: {
+            [authProfileId]: {
+              type: "api_key",
+              provider: "openai",
+              keyRef: { source: "env", provider: "default", id: "OPENAI_WORK_KEY" },
+              key: "work-key",
+            },
+          },
+        },
+      },
+    ]);
     let clientOptions: CodexAppServerClientOptions | undefined;
     const harness = createStartedThreadHarness(async () => undefined, {
       onStart: (_profileId, _agentDir, options) => {
@@ -2006,8 +2022,11 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("retires the shared Codex app-server client after one-shot cleanup turns", async () => {
-    const retireSpy = vi.spyOn(sharedClientModule, "retireSharedCodexAppServerClientIfCurrent");
-    retireSpy.mockReturnValue({ activeLeases: 0, closed: true });
+    const retireSpy = vi.spyOn(
+      sharedClientModule,
+      "clearSharedCodexAppServerClientIfCurrentAndUnclaimed",
+    );
+    retireSpy.mockReturnValue({ found: true, activeLeases: 0, pendingAcquires: 0, closed: true });
     const events: string[] = [];
     const closeAndWait = vi.fn(async () => {
       events.push("closeAndWait");
@@ -2070,8 +2089,11 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("retires the shared Codex app-server client after one-shot turn start failures", async () => {
-    const retireSpy = vi.spyOn(sharedClientModule, "retireSharedCodexAppServerClientIfCurrent");
-    retireSpy.mockReturnValue({ activeLeases: 0, closed: true });
+    const retireSpy = vi.spyOn(
+      sharedClientModule,
+      "clearSharedCodexAppServerClientIfCurrentAndUnclaimed",
+    );
+    retireSpy.mockReturnValue({ found: true, activeLeases: 0, pendingAcquires: 0, closed: true });
     const events: string[] = [];
     const closeAndWait = vi.fn(async () => {
       events.push("closeAndWait");
@@ -2116,7 +2138,10 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("keeps the shared Codex app-server client warm without one-shot cleanup", async () => {
-    const retireSpy = vi.spyOn(sharedClientModule, "retireSharedCodexAppServerClientIfCurrent");
+    const retireSpy = vi.spyOn(
+      sharedClientModule,
+      "clearSharedCodexAppServerClientIfCurrentAndUnclaimed",
+    );
     const closeAndWait = vi.fn(async () => true);
     let notify: ((notification: CodexServerNotification) => Promise<void>) | undefined;
     const request = vi.fn(async (method: string) => {

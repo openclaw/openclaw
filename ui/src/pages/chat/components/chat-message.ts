@@ -2,6 +2,7 @@
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { until } from "lit/directives/until.js";
+import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import { resolveLocalUserName } from "../../../app/user-identity.ts";
 import { renderCopyAsMarkdownButton } from "../../../components/copy-button.ts";
 import { icons, type IconName } from "../../../components/icons.ts";
@@ -53,6 +54,7 @@ import { getSafeLocalStorage } from "../../../local-storage.ts";
 import { renderChatAvatar } from "../chat-avatar.ts";
 import type { PlanStatus } from "../tool-stream.ts";
 import { renderChatPlanChecklist } from "./chat-plan-checklist.ts";
+import { renderChatQuestionCard } from "./chat-question-card.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
 import {
   isRunningToolCard,
@@ -88,6 +90,7 @@ const assistantAttachmentAvailabilityCache = new Map<string, AssistantAttachment
 const assistantAttachmentRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const pairingQrExpiryRefreshTimers = new Map<string, PairingQrExpiryRefreshTimer>();
 const ASSISTANT_ATTACHMENT_UNAVAILABLE_RETRY_MS = 5_000;
+const ASSISTANT_ATTACHMENT_METADATA_FETCH_TIMEOUT_MS = 30_000;
 const ASSISTANT_ATTACHMENT_MEDIA_TICKET_REFRESH_SKEW_MS = 30_000;
 let assistantAttachmentAvailabilityRenderVersion = 0;
 
@@ -560,7 +563,7 @@ function extractTranscriptAttachments(message: unknown): AttachmentItem[] {
 /** A contiguous run of in-flight streaming items rendered under one assistant group. */
 type StreamGroupPart = Extract<
   ChatItem,
-  { kind: "stream" } | { kind: "reading-indicator" } | { kind: "plan" }
+  { kind: "stream" } | { kind: "reading-indicator" } | { kind: "question" } | { kind: "plan" }
 >;
 
 type StreamGroupOptions = {
@@ -570,7 +573,24 @@ type StreamGroupOptions = {
   authToken?: string | null;
   planStatus?: PlanStatus | null;
   planActive?: boolean;
+  questionPrompts?: ReadonlyMap<string, QuestionPrompt>;
+  onQuestionChange?: () => void;
+  onQuestionSubmit?: (id: string, answers: Record<string, string[]>) => void | Promise<void>;
 };
+
+function renderQuestionStreamPart(
+  part: Extract<StreamGroupPart, { kind: "question" }>,
+  opts: StreamGroupOptions,
+) {
+  const prompt = opts.questionPrompts?.get(part.questionId);
+  return prompt
+    ? renderChatQuestionCard(prompt, {
+        nowMs: Date.now(),
+        onChange: opts.onQuestionChange ?? (() => {}),
+        onSubmit: (answers) => opts.onQuestionSubmit?.(prompt.id, answers),
+      })
+    : nothing;
+}
 
 // One assistant group per contiguous run of streaming items: a reply that
 // arrives as several stream segments renders under a single avatar/footer
@@ -600,21 +620,23 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
         ${parts.map((part) =>
           part.kind === "reading-indicator"
             ? renderChatWorkingIndicator(part)
-            : part.kind === "plan"
-              ? renderChatPlanChecklist(opts.planStatus, {
-                  active: opts.planActive === true,
-                  variant: "card",
-                })
-              : renderGroupedMessage(
-                  {
-                    role: "assistant",
-                    content: [{ type: "text", text: part.text }],
-                    timestamp: part.startedAt,
-                  },
-                  part.key,
-                  { isStreaming: part.isStreaming, showReasoning: false },
-                  onOpenSidebar,
-                ),
+            : part.kind === "question"
+              ? renderQuestionStreamPart(part, opts)
+              : part.kind === "plan"
+                ? renderChatPlanChecklist(opts.planStatus, {
+                    active: opts.planActive === true,
+                    variant: "card",
+                  })
+                : renderGroupedMessage(
+                    {
+                      role: "assistant",
+                      content: [{ type: "text", text: part.text }],
+                      timestamp: part.startedAt,
+                    },
+                    part.key,
+                    { isStreaming: part.isStreaming, showReasoning: false },
+                    onOpenSidebar,
+                  ),
         )}
         ${footerStartedAt !== null
           ? html`
@@ -1662,10 +1684,19 @@ function resolveAssistantAttachmentAvailability(
     if (normalizedAuthToken) {
       headers.set("Authorization", `Bearer ${normalizedAuthToken}`);
     }
+    const controller = new AbortController();
+    const timeout = setTimeout(
+      () =>
+        controller.abort(
+          new DOMException("assistant attachment metadata fetch timed out", "TimeoutError"),
+        ),
+      ASSISTANT_ATTACHMENT_METADATA_FETCH_TIMEOUT_MS,
+    );
     void fetch(buildAssistantAttachmentMetaUrl(source, basePath), {
       method: "GET",
       headers,
       credentials: "same-origin",
+      signal: controller.signal,
     })
       .then(async (res) => {
         const payload = (await res.json().catch(() => null)) as {
@@ -1710,6 +1741,7 @@ function resolveAssistantAttachmentAvailability(
         });
       })
       .finally(() => {
+        clearTimeout(timeout);
         onRequestUpdate?.();
       });
   }

@@ -24,7 +24,7 @@ import {
   normalizeAgentModelMapForConfig,
   normalizeAgentModelRefForConfig,
 } from "../config/model-input.js";
-import { CONFIG_PATH } from "../config/paths.js";
+import { CONFIG_PATH, resolveConfigPath } from "../config/paths.js";
 import { isPluginPackagingRuntimeOutputInvalidConfigSnapshot } from "../config/recovery-policy.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
 import { readBestEffortRuntimeConfigSchema } from "../config/runtime-schema.js";
@@ -47,6 +47,7 @@ import { diffConfigPaths } from "../gateway/config-diff.js";
 import { buildGatewayReloadPlan } from "../gateway/config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "../gateway/config-reload-settings.js";
 import { danger, info, success, warn } from "../globals.js";
+import { hasErrnoCode } from "../infra/errors.js";
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
@@ -365,9 +366,8 @@ function parseBracketPathSegment(raw: string, fullPath: string): string {
   return trimmed;
 }
 
-// A buffered key with characters that are all whitespace is stray text between a
-// "."/"]" and the next "."/"[" boundary (e.g. "agents.list[0] .id" or "agents.list[0] [1]").
-// Pushing it would silently collapse into a different key, so reject it like an empty segment.
+// A buffered key with characters that are all whitespace is stray text between
+// path boundaries (for example, "gateway. .port"). Reject it like an empty segment.
 function assertNotWhitespaceSegment(current: string, raw: string): void {
   if (current.length > 0 && !current.trim()) {
     throw new Error(`Invalid path (empty segment): ${raw}`);
@@ -382,8 +382,7 @@ function parsePath(raw: string): PathSegment[] {
   const parts: string[] = [];
   let current = "";
   // Tracks whether a bracket segment was emitted since the last "." boundary, so
-  // "foo[0].bar" is accepted while empty key segments (leading/trailing/double dots,
-  // whitespace-only segments) are rejected instead of silently collapsed.
+  // "foo[0].bar" is accepted while empty key segments are rejected.
   let segmentEmitted = false;
   let i = 0;
   while (i < trimmed.length) {
@@ -430,6 +429,10 @@ function parsePath(raw: string): PathSegment[] {
         throw new Error(`Invalid path (empty "[]"): ${raw}`);
       }
       parts.push(parseBracketPathSegment(inside, raw));
+      const next = trimmed[close + 1];
+      if (next !== undefined && next !== "." && next !== "[") {
+        throw new Error(`Invalid path (missing separator after bracket): ${raw}`);
+      }
       segmentEmitted = true;
       i = close + 1;
       continue;
@@ -1503,7 +1506,19 @@ async function readConfigPatchInput(opts: ConfigPatchOptions): Promise<unknown> 
     throw configPatchModeError("provide exactly one of --file <path> or --stdin.");
   }
   const sourceLabel = stdin ? "--stdin" : "--file";
-  const raw = stdin ? await readStdinText() : fs.readFileSync(file as string, "utf8");
+  let raw: string;
+  if (stdin) {
+    raw = await readStdinText();
+  } else {
+    try {
+      raw = fs.readFileSync(file as string, "utf8");
+    } catch (err) {
+      if (hasErrnoCode(err, "ENOENT")) {
+        throw new Error(`--file not found: ${file}`, { cause: err });
+      }
+      throw err;
+    }
+  }
   try {
     return JSON5.parse(raw);
   } catch (err) {
@@ -2575,8 +2590,7 @@ export async function runConfigUnset(opts: {
 async function runConfigFile(opts: { runtime?: RuntimeEnv }) {
   const runtime = opts.runtime ?? defaultRuntime;
   try {
-    const snapshot = await readConfigFileSnapshot();
-    runtime.log(snapshot.path);
+    runtime.log(resolveConfigPath());
   } catch (err) {
     runtime.error(danger(String(err)));
     runtime.exit(1);

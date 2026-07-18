@@ -17,6 +17,7 @@ const CORE_TOOL_FACTORY_DESCRIPTORS = [
   { name: "exec", family: "shell" },
   { name: "process", family: "shell" },
   { name: "agents_list", family: "openclaw" },
+  { name: "ask_user", family: "openclaw" },
   { name: "openclaw", family: "openclaw" },
   { name: "computer", family: "openclaw" },
   { name: "conversations_list", family: "openclaw" },

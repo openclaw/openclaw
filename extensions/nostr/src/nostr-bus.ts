@@ -514,6 +514,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
           circuitBreakers,
           healthTracker,
           onError,
+          event.id,
         );
       };
 
@@ -742,13 +743,19 @@ async function sendEncryptedDm(
   circuitBreakers: Map<string, CircuitBreaker>,
   healthTracker: RelayHealthTracker,
   onError?: (error: Error, context: string) => void,
+  replyToEventId?: string,
 ): Promise<void> {
   const ciphertext = encrypt(sk, toPubkey, text);
+  // NIP-04 uses an e tag to keep a reply attached to its verified inbound event.
+  const tags = [["p", toPubkey]];
+  if (replyToEventId) {
+    tags.push(["e", replyToEventId]);
+  }
   const reply = finalizeEvent(
     {
       kind: 4,
       content: ciphertext,
-      tags: [["p", toPubkey]],
+      tags,
       created_at: Math.floor(Date.now() / 1000),
     },
     sk,

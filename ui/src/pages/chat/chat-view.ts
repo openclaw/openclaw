@@ -8,6 +8,7 @@ import type {
   ControlUiSessionPullRequest,
 } from "../../../../src/gateway/control-ui-contract.js";
 import type { SessionsListResult } from "../../api/types.ts";
+import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import type { ChatSendShortcut } from "../../app/settings.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
@@ -87,6 +88,9 @@ export type ChatProps = {
   fallbackStatus?: FallbackStatus | null;
   planStatus?: PlanStatus | null;
   questionStatus?: QuestionStatus | null;
+  gatewayQuestionPrompts?: readonly QuestionPrompt[];
+  onGatewayQuestionChange?: () => void;
+  onGatewayQuestionSubmit?: (id: string, answers: Record<string, string[]>) => void | Promise<void>;
   messages: unknown[];
   historyPagination?: {
     loading: boolean;
@@ -285,6 +289,7 @@ export function renderChat(props: ChatProps) {
       runActive: Boolean(props.canAbort),
       runWorking: isChatRunWorking(props),
       planStatus: props.planStatus,
+      questionPrompts: props.gatewayQuestionPrompts,
       sessions: props.sessions,
       sessionHost: props.sessionHost,
       assistantName: props.assistantName,
@@ -306,6 +311,8 @@ export function renderChat(props: ChatProps) {
       onOpenSessionCheckpoints: props.onOpenSessionCheckpoints,
       onAssistantAttachmentLoaded: props.onAssistantAttachmentLoaded,
       onRequestUpdate: requestUpdate,
+      onQuestionChange: props.onGatewayQuestionChange,
+      onQuestionSubmit: props.onGatewayQuestionSubmit,
       onChatScroll: props.onChatScroll,
       onHistoryIntent: props.onHistoryIntent,
       onDraftChange: props.onDraftChange,

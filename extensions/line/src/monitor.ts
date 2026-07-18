@@ -166,6 +166,7 @@ export async function monitorLineProvider(
       logVerbose(`line: received message from ${displayName} (${ctxPayload.From})`);
       let replyTokenUsed = false;
       let turnAdopted = false;
+      const ingressLifecycle = deliveryControl.turnAdoptionLifecycle;
 
       try {
         const textLimit = 5000;
@@ -175,12 +176,12 @@ export async function monitorLineProvider(
           accountId: route.accountId,
           raw: ctx,
           turnAdoptionLifecycle: {
+            ...ingressLifecycle,
             admission: "exclusive",
             onAdopted: async () => {
-              await deliveryControl.onTurnAdopted?.();
+              await ingressLifecycle?.onAdopted();
               turnAdopted = true;
             },
-            ...(deliveryControl.abortSignal ? { abortSignal: deliveryControl.abortSignal } : {}),
           },
           adapter: {
             ingest: () => ({
@@ -195,8 +196,8 @@ export async function monitorLineProvider(
               ctxPayload,
               record: ctx.turn.record,
               replyPipeline: {},
-              ...(deliveryControl.abortSignal
-                ? { replyOptions: { abortSignal: deliveryControl.abortSignal } }
+              ...(ingressLifecycle?.abortSignal
+                ? { replyOptions: { abortSignal: ingressLifecycle.abortSignal } }
                 : {}),
               delivery: {
                 durable: (payload, info) =>

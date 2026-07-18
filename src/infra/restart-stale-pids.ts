@@ -10,6 +10,7 @@ import { formatErrorMessage, hasErrnoCode } from "./errors.js";
 import { isGatewayArgv, parseProcCmdline } from "./gateway-process-argv.js";
 import { parseStrictPositiveInteger } from "./parse-finite-number.js";
 import { resolveLsofCommandSync } from "./ports-lsof.js";
+import { spawnPsSync } from "./spawn-ps.js";
 import { getWindowsInstallRoots } from "./windows-install-roots.js";
 import {
   readWindowsListeningPidsOnPortSync,
@@ -110,10 +111,7 @@ function readParentPidFromProc(pid: number): number | null {
 
 function readParentPidFromPs(pid: number, spawnTimeoutMs: number): number | null {
   try {
-    const res = spawnSync("ps", ["-o", "ppid=", "-p", String(pid)], {
-      encoding: "utf8",
-      timeout: spawnTimeoutMs,
-    });
+    const res = spawnPsSync(["-o", "ppid=", "-p", String(pid)], spawnTimeoutMs);
     if (res.error || res.status !== 0 || !res.stdout.trim()) {
       return null;
     }
@@ -252,10 +250,7 @@ function readUnixProcessArgsSync(pid: number, spawnTimeoutMs: number): string[] 
       // Fall back to ps below; /proc may be unavailable or restricted.
     }
   }
-  const res = spawnSync("ps", ["-ww", "-p", String(pid), "-o", "command="], {
-    encoding: "utf8",
-    timeout: spawnTimeoutMs,
-  });
+  const res = spawnPsSync(["-ww", "-p", String(pid), "-o", "command="], spawnTimeoutMs);
   if (res.error || res.status !== 0 || !res.stdout.trim()) {
     return null;
   }

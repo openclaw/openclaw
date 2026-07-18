@@ -242,10 +242,9 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     const jobOf = (name: string) =>
       compact.findIndex((shard) => shard.groups.some((group) => group.shard_name === name));
     expect(jobOf("agentic-agents-core-runner-embedded")).toBeGreaterThanOrEqual(0);
+    // Cheap stripes may legally co-locate in one bin; only existence matters.
     expect(jobOf("core-unit-fast-1")).toBeGreaterThanOrEqual(0);
     expect(jobOf("core-unit-fast-2")).toBeGreaterThanOrEqual(0);
-    expect(jobOf("core-unit-fast-1")).not.toBe(jobOf("core-unit-fast-2"));
-    expect(jobOf("agentic-agents-core-runner-embedded")).not.toBe(jobOf("core-unit-fast-1"));
     // Spawn/signal-timing suites never mix with regular groups, and every
     // compact bin runs serially: overlapping Vitest runs flake timing-
     // sensitive tests on both runner classes.

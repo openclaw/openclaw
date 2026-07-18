@@ -593,4 +593,6 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   }
 }
 
-customElements.define("openclaw-model-providers-page", ModelProvidersPage);
+if (!customElements.get("openclaw-model-providers-page")) {
+  customElements.define("openclaw-model-providers-page", ModelProvidersPage);
+}

@@ -913,9 +913,15 @@ export function startGatewayConfigReloader(opts: {
       awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
       usePolling,
     });
-    next.on("add", scheduleExternalRefresh);
-    next.on("change", scheduleExternalRefresh);
-    next.on("unlink", scheduleExternalRefresh);
+    // A file event proves this watcher recovered. Reset only here so plugin
+    // metadata refreshes and consecutive watcher errors cannot refill the budget.
+    const scheduleFromWatcherEvent = () => {
+      watcherRecreateRetries = 0;
+      scheduleExternalRefresh();
+    };
+    next.on("add", scheduleFromWatcherEvent);
+    next.on("change", scheduleFromWatcherEvent);
+    next.on("unlink", scheduleFromWatcherEvent);
     next.on("error", (err) => {
       handleWatcherError(next, err);
     });

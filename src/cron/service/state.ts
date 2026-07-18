@@ -224,9 +224,6 @@ export type CronServiceState = {
   schedulingPaused: boolean;
   schedulerStarted: boolean;
   restartRecoveryPending: boolean;
-  /** Prevents maintenance reads from advancing deferred startup catch-up slots.
-   * Entries are removed when the deferred job runs or becomes irrelevant. */
-  pendingCatchupDeferralJobIds: Set<string>;
   activeManualRunJobIds: Set<string>;
   manualSetupTimeoutNotified: boolean;
   /** Bounds scheduled, manual, and on-exit work with one shared cron limit. */
@@ -258,7 +255,6 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     schedulingPaused: false,
     schedulerStarted: false,
     restartRecoveryPending: false,
-    pendingCatchupDeferralJobIds: new Set<string>(),
     activeManualRunJobIds: new Set<string>(),
     manualSetupTimeoutNotified: false,
     runAdmission: { active: 0, waiters: [] },
