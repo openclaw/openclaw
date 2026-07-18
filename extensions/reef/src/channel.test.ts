@@ -10,7 +10,8 @@ import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { generateIdentity } from "../protocol/index.js";
-import { reefPlugin, runReefChannelLifecycle } from "./channel.js";
+import { runReefChannelLifecycle } from "./channel-lifecycle.js";
+import { reefPlugin } from "./channel.js";
 import { resolveReefConfig } from "./config-schema.js";
 import { resolveReefInboundDispatchContent } from "./inbound.js";
 import { setReefRuntime } from "./runtime.js";
@@ -185,9 +186,9 @@ describe("Reef channel lifecycle abort inheritance", () => {
         seen.push(signal);
         return signal.aborted
           ? Promise.resolve()
-          : new Promise<void>((resolve) =>
-              signal.addEventListener("abort", () => resolve(), { once: true }),
-            );
+          : new Promise<void>((resolve) => {
+              signal.addEventListener("abort", () => resolve(), { once: true });
+            });
       },
       reconcile: async () => {},
       onReconcileError: () => {},
