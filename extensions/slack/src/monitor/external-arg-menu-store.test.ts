@@ -34,6 +34,23 @@ describe("createSlackExternalArgMenuStore", () => {
     expect(store.get(token, 1_700_000_001_000)).toBeUndefined();
   });
 
+  it("bounds unexpired external menus with least-recently-used eviction", () => {
+    const store = createSlackExternalArgMenuStore();
+    const now = 1_700_000_000_000;
+    const oldestToken = store.create({ choices, userId: "U0" }, now);
+    const secondToken = store.create({ choices, userId: "U1" }, now);
+
+    for (let index = 2; index < 256; index += 1) {
+      store.create({ choices, userId: `U${index}` }, now);
+    }
+    expect(store.get(oldestToken, now + 1)).toMatchObject({ userId: "U0" });
+    const newestToken = store.create({ choices, userId: "U256" }, now);
+
+    expect(store.get(secondToken, now + 1)).toBeUndefined();
+    expect(store.get(oldestToken, now + 1)).toMatchObject({ userId: "U0" });
+    expect(store.get(newestToken, now + 1)).toMatchObject({ userId: "U256" });
+  });
+
   it("reads only prefixed valid menu tokens", () => {
     const store = createSlackExternalArgMenuStore();
     const token = store.create({ choices, userId: "U1" }, 1_700_000_000_000);

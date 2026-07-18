@@ -1,4 +1,5 @@
 // Slack plugin module implements external arg menu store behavior.
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -13,6 +14,7 @@ const SLACK_EXTERNAL_ARG_MENU_TOKEN_PATTERN = new RegExp(
   `^[A-Za-z0-9_-]{${SLACK_EXTERNAL_ARG_MENU_TOKEN_LENGTH}}$`,
 );
 const SLACK_EXTERNAL_ARG_MENU_TTL_MS = 10 * 60 * 1000;
+const SLACK_EXTERNAL_ARG_MENU_MAX_ENTRIES = 256;
 
 export const SLACK_EXTERNAL_ARG_MENU_PREFIX = "openclaw_cmdarg_ext:";
 
@@ -66,6 +68,9 @@ export function createSlackExternalArgMenuStore() {
           userId: params.userId,
           expiresAt,
         });
+        // Each live entry retains the full choice list for its ten-minute lifetime.
+        // Keep recent menus usable without allowing command bursts to grow memory unchecked.
+        pruneMapToMaxSize(store, SLACK_EXTERNAL_ARG_MENU_MAX_ENTRIES);
       }
       return token;
     },
@@ -78,7 +83,12 @@ export function createSlackExternalArgMenuStore() {
     },
     get(token: string, now = Date.now()): SlackExternalArgMenuEntry | undefined {
       pruneSlackExternalArgMenuStore(store, now);
-      return store.get(token);
+      const entry = store.get(token);
+      if (entry) {
+        store.delete(token);
+        store.set(token, entry);
+      }
+      return entry;
     },
   };
 }
