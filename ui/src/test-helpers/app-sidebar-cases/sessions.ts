@@ -509,6 +509,8 @@ describe("AppSidebar session mutation feedback", () => {
 
   it("offers undo after archiving and restores a pinned active session", async () => {
     const { gateway, harness, sidebar } = await mountMutationHarness();
+    const setSessionKey = vi.fn();
+    (gateway.gateway as { setSessionKey: (key: string) => void }).setSessionKey = setSessionKey;
     const state = createSessionState("main", ["agent:main:main", "agent:main:a", "agent:main:b"]);
     const archivedRow = state.result?.sessions.find((row) => row.key === "agent:main:a");
     if (!archivedRow) {
@@ -538,7 +540,7 @@ describe("AppSidebar session mutation feedback", () => {
     toast.querySelector<HTMLButtonElement>(".app-toast__action")?.click();
 
     await vi.waitFor(() => expect(harness.patch).toHaveBeenCalledTimes(2));
-    await vi.waitFor(() => expect(gateway.setSessionKey).toHaveBeenLastCalledWith(archivedRow.key));
+    await vi.waitFor(() => expect(setSessionKey).toHaveBeenLastCalledWith(archivedRow.key));
     expect(harness.patch).toHaveBeenLastCalledWith(
       archivedRow.key,
       { archived: false, pinned: true },
