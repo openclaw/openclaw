@@ -148,7 +148,9 @@ describe("Microsoft Teams meeting runtime probes", () => {
       join: vi.fn(async () => ({ session, spoken: false })),
       list: () => [],
       refreshCaptionHealth: async (_session: TeamsMeetingsSession, timeoutMs: number) => {
-        await new Promise<void>((resolve) => setTimeout(resolve, timeoutMs + 50));
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, timeoutMs + 50);
+        });
         session.chrome!.health = {
           ...session.chrome!.health,
           lastCaptionText: "Too late",
