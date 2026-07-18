@@ -119,7 +119,7 @@ function installIgnoreAddStatePropagation(): void {
   if (prototype[IGNORE_ADD_STATE_PATCHED]) {
     return;
   }
-  const originalAdd = prototype.add;
+  const originalAdd = Reflect.get(prototype, "add") as IgnoreMatcher["add"];
   // node-ignore implements supported matcher composition in Ignore.add().
   // Preserve terminal deny metadata there so plain ignore().add(source)
   // cannot silently reopen a subtree that OpenClaw failed closed.
@@ -127,7 +127,7 @@ function installIgnoreAddStatePropagation(): void {
     this: IgnoreMatcher,
     pattern: Parameters<IgnoreMatcher["add"]>[0],
   ): IgnoreMatcher {
-    const result = originalAdd.call(this, pattern);
+    const result = Reflect.apply(originalAdd, this, [pattern]) as IgnoreMatcher;
     inheritIgnoreMatcherState(this, pattern);
     return result;
   } as IgnoreMatcher["add"];
