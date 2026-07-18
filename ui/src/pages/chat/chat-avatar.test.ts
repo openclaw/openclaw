@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { render } from "lit";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { refreshChatAvatar, renderChatAvatar } from "./chat-avatar.ts";
 
 vi.unmock("../../lib/agents/display.ts");
@@ -57,7 +57,9 @@ describe("renderChatAvatar", () => {
 });
 
 describe("refreshChatAvatar error handling", () => {
-  function createMockHost(overrides?: Partial<ChatAvatarHost>): ChatAvatarHost {
+  function createMockHost(
+    overrides?: Partial<Parameters<typeof refreshChatAvatar>[0]>,
+  ): Parameters<typeof refreshChatAvatar>[0] {
     return {
       connected: true,
       basePath: "",
@@ -76,10 +78,10 @@ describe("refreshChatAvatar error handling", () => {
     vi.restoreAllMocks();
   });
 
-  it("clears avatar state on fetch error (catch block handles AbortError)", async () => {
+  it("clears avatar state on fetch timeout (catch block handles TimeoutError)", async () => {
     globalThis.fetch = vi
       .fn()
-      .mockRejectedValue(new DOMException("The operation was aborted", "AbortError"));
+      .mockRejectedValue(new DOMException("The operation timed out", "TimeoutError"));
     const host = createMockHost();
     host.chatAvatarSource = "previous";
     host.chatAvatarStatus = "remote";
