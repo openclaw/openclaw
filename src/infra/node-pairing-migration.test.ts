@@ -90,7 +90,6 @@ describe("migrateLegacyNodePairingStore", () => {
   test("keeps an existing device surface over stale legacy rows", async () => {
     const baseDir = await suiteRootTracker.make("case");
     await seedNodeDevice(baseDir, "node-current");
-    const { requestNodePairing, approveNodePairing } = await import("./node-pairing.js");
     const pending = await requestNodePairing(
       { nodeId: "node-current", caps: ["screen"], commands: ["screen.snapshot"] },
       baseDir,
