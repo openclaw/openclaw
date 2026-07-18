@@ -642,7 +642,10 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         if (senderId === selfUserId) {
           return undefined;
         }
-        if (dropPreStartupMessages) {
+        if (dropPreStartupMessages && !ingressLifecycle) {
+          // The pre-startup drop targets stale sync-cache replays. A dispatch
+          // carrying an ingress lifecycle is a journaled replay of never-adopted
+          // work, so dropping it here would lose an accepted event after a crash.
           if (typeof eventTs === "number" && eventTs < startupMs - startupGraceMs) {
             return undefined;
           }
