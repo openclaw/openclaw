@@ -399,6 +399,37 @@ describe("secrets CLI", () => {
     }, "{invalid json");
   });
 
+  it("rejects --from when the plan file does not exist", async () => {
+    await expect(
+      createProgram().parseAsync(["secrets", "apply", "--from", "/nonexistent/path/plan.json"], {
+        from: "user",
+      }),
+    ).rejects.toThrow("__exit__:1");
+
+    const errorOutput = runtimeErrors.join("\n");
+    expect(errorOutput).toContain("Secrets plan file not found: /nonexistent/path/plan.json");
+    expect(errorOutput).not.toContain("ENOENT");
+    expect(runSecretsApply).not.toHaveBeenCalled();
+  });
+
+  it("preserves causes for unrelated apply errors with a similar message", async () => {
+    await withPlanFile(async (planPath) => {
+      runSecretsApply.mockRejectedValueOnce(
+        new Error("Secrets plan file not found during apply", {
+          cause: new Error("provider diagnostic"),
+        }),
+      );
+
+      await expect(
+        createProgram().parseAsync(["secrets", "apply", "--from", planPath], { from: "user" }),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(runtimeErrors.join("\n")).toContain(
+        "Secrets plan file not found during apply | provider diagnostic",
+      );
+    });
+  });
+
   it("does not print skipped-exec note when apply dry-run skippedExecRefs is zero", async () => {
     await withPlanFile(async (planPath) => {
       runSecretsApply.mockResolvedValue(createSecretsApplyResult({ resolvabilityComplete: false }));

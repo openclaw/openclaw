@@ -47,6 +47,7 @@ import { diffConfigPaths } from "../gateway/config-diff.js";
 import { buildGatewayReloadPlan } from "../gateway/config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "../gateway/config-reload-settings.js";
 import { danger, info, success, warn } from "../globals.js";
+import { hasErrnoCode } from "../infra/errors.js";
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
@@ -1505,7 +1506,19 @@ async function readConfigPatchInput(opts: ConfigPatchOptions): Promise<unknown> 
     throw configPatchModeError("provide exactly one of --file <path> or --stdin.");
   }
   const sourceLabel = stdin ? "--stdin" : "--file";
-  const raw = stdin ? await readStdinText() : fs.readFileSync(file as string, "utf8");
+  let raw: string;
+  if (stdin) {
+    raw = await readStdinText();
+  } else {
+    try {
+      raw = fs.readFileSync(file as string, "utf8");
+    } catch (err) {
+      if (hasErrnoCode(err, "ENOENT")) {
+        throw new Error(`--file not found: ${file}`, { cause: err });
+      }
+      throw err;
+    }
+  }
   try {
     return JSON5.parse(raw);
   } catch (err) {

@@ -1266,7 +1266,9 @@ html.openclaw-native-macos
   align-items: center;
   gap: 8px;
   min-height: 24px;
-  padding: 0 10px;
+  /* 9px left matches .sidebar-recent-session__link text inset so zone labels
+     and session titles share one left edge. */
+  padding: 0 10px 0 9px;
   color: color-mix(in srgb, var(--muted) 72%, var(--text) 28%);
 }
 
@@ -1283,10 +1285,6 @@ html.openclaw-native-macos
   top: 0;
   z-index: 2;
   background: var(--sidebar-bg);
-}
-
-.sidebar-recent-sessions__head .sidebar-recent-sessions__label-text {
-  flex: 1 1 auto;
 }
 
 .sidebar-session-group-toggle {
@@ -1317,13 +1315,11 @@ html.openclaw-native-macos
 }
 
 .sidebar-session-group-count {
-  width: 26px;
   flex: 0 0 auto;
   color: var(--muted);
   font-size: 10px;
   font-variant-numeric: tabular-nums;
   opacity: 0.7;
-  text-align: center;
 }
 
 .sidebar-session-group-count--error {

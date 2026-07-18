@@ -52,6 +52,7 @@ Version 3 was an unshipped development step folded into version 4.
 | 1       | Initial shared state database                                                                            | `v2026.5.30-beta.1` |
 | 2       | Metadata-only message audit events ([#103903](https://github.com/openclaw/openclaw/pull/103903))         | `v2026.7.2-beta.1`  |
 | 3       | `STRICT` tables and schema-drift hardening ([#108663](https://github.com/openclaw/openclaw/pull/108663)) | `v2026.7.2-beta.2`  |
+| 4       | Session watch provenance replaces encoded sentinel rows                                                  | Unreleased          |
 
 ## Integrity checks
 

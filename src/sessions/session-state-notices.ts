@@ -36,7 +36,7 @@ function shouldWakeWatcher(watcherSessionKey: string): boolean {
 // for one agent's child could be drained and acknowledged by another agent's global
 // turn — a cross-A2A metadata leak plus a lost notification. Until watcher identity
 // is agent-scoped end-to-end, such watchers get durable events and changesSince but
-// no notices. Non-notifiable ambient marker rows are also deliberately ignored.
+// no notices.
 export function isNotifiableWatcherKey(watcherSessionKey: string): boolean {
   return parseAgentSessionKey(watcherSessionKey) != null;
 }
