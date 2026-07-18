@@ -394,7 +394,6 @@ jobs:
     with:
       ref: ${{ needs.resolve_target.outputs.sha }}
       prepare_only: true
-      publish_bare_cache: true
       include_repo_e2e: false
       include_release_path_suites: false
       include_openwebui: false

@@ -200,11 +200,6 @@ on:
         required: false
         default: false
         type: boolean
-      publish_bare_cache:
-        description: Reuse or seed the package-independent content-addressed bare image cache
-        required: false
-        default: false
-        type: boolean
       ref:
         description: Ref, tag, or SHA to validate
         required: true
@@ -1907,7 +1902,7 @@ jobs:
     permissions:
       actions: read
       contents: read
-      packages: write
+      packages: read
     outputs:
       candidate_artifact_json: ${{ steps.candidate_manifest.outputs.json }}
       image: ${{ steps.image.outputs.image }}
@@ -2214,7 +2209,6 @@ jobs:
         shell: bash
         env:
           PACKAGE_TAG: ${{ steps.package.outputs.tag }}
-          PUBLISH_BARE_CACHE: ${{ inputs.publish_bare_cache }}
           SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           PROVIDED_BARE_IMAGE: ${{ inputs.docker_e2e_bare_image }}
           PROVIDED_FUNCTIONAL_IMAGE: ${{ inputs.docker_e2e_functional_image }}
@@ -2304,16 +2298,15 @@ jobs:
         env:
           CACHE_IMAGE_REF: ${{ steps.image.outputs.bare_cache_image }}
           IMAGE_REF: ${{ steps.image.outputs.bare_image }}
-          PUBLISH_BARE_CACHE: ${{ inputs.publish_bare_cache }}
         run: |
           set -euo pipefail
           cache=()
-          if [[ "$PUBLISH_BARE_CACHE" == "true" ]]; then
-            bash .release-harness/scripts/ci-docker-login-ghcr.sh
-            if docker manifest inspect "$CACHE_IMAGE_REF" >/dev/null 2>&1; then
-              bash .release-harness/scripts/ci-docker-pull-retry.sh "$CACHE_IMAGE_REF"
+          if docker manifest inspect "$CACHE_IMAGE_REF" >/dev/null 2>&1; then
+            if bash .release-harness/scripts/ci-docker-pull-retry.sh "$CACHE_IMAGE_REF"; then
               cache=(--cache-from "$CACHE_IMAGE_REF")
               echo "Using package-independent bare image cache: $CACHE_IMAGE_REF"
+            else
+              echo "::warning::Bare image cache pull failed; continuing with a cold build."
             fi
           fi
           timeout --kill-after=30s 45m env DOCKER_BUILDKIT=1 docker build \
@@ -2324,10 +2317,6 @@ jobs:
             --build-arg BUILDKIT_INLINE_CACHE=1 \
             "${cache[@]}" \
             .
-          if [[ "$PUBLISH_BARE_CACHE" == "true" ]]; then
-            docker tag "$IMAGE_REF" "$CACHE_IMAGE_REF"
-            timeout --kill-after=30s 15m docker push "$CACHE_IMAGE_REF"
-          fi
 
       - name: Build functional Docker E2E image artifact
         if: inputs.shared_image_policy == 'no-push-artifact' && steps.plan.outputs.needs_functional_image == '1' && inputs.shared_image_artifact_id == ''

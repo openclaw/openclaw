@@ -1662,9 +1662,13 @@ describe("package artifact reuse", () => {
       "inputs.shared_image_artifact_id != '' && '1' || steps.plan.outputs.needs_bare_image",
     );
     expect(workflow).toContain("env DOCKER_BUILDKIT=1 docker build");
+    expect(workflow).toContain(
+      'if bash .release-harness/scripts/ci-docker-pull-retry.sh "$CACHE_IMAGE_REF"; then',
+    );
+    expect(workflow).toContain("Bare image cache pull failed; continuing with a cold build.");
     expect(workflow).toContain("--build-context openclaw_package=.artifacts/docker-e2e-package");
     expect(workflow).toContain('cache=(--cache-from "$BARE_IMAGE_REF")');
-    expect(workflow).toContain('docker push "$CACHE_IMAGE_REF"');
+    expect(workflow).not.toContain('docker push "$CACHE_IMAGE_REF"');
     expect(workflow).toContain("uses: useblacksmith/setup-docker-builder@");
     expect(workflow).toContain("uses: useblacksmith/build-push-action@");
     expect(workflow).not.toContain("cache-from: type=gha,scope=docker-e2e");
@@ -1686,7 +1690,6 @@ describe("package artifact reuse", () => {
     expect(prepare.uses).toBe("./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml");
     expect(prepare.with).toMatchObject({
       prepare_only: true,
-      publish_bare_cache: true,
       shared_image_policy: "no-push-artifact",
     });
     expect(pluginDispatch.run).toContain(
