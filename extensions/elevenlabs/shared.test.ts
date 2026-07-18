@@ -48,21 +48,21 @@ describe("normalizeElevenLabsBaseUrl", () => {
     );
   });
 
-  it("strips query string", () => {
-    expect(normalizeElevenLabsBaseUrl("https://api.elevenlabs.io?key=value")).toBe(
-      "https://api.elevenlabs.io",
+  it("throws on query string", () => {
+    expect(() => normalizeElevenLabsBaseUrl("https://api.elevenlabs.io?key=value")).toThrow(
+      "Invalid ElevenLabs baseUrl: query string is not supported",
     );
   });
 
-  it("strips fragment", () => {
-    expect(normalizeElevenLabsBaseUrl("https://api.elevenlabs.io#section")).toBe(
-      "https://api.elevenlabs.io",
+  it("throws on fragment", () => {
+    expect(() => normalizeElevenLabsBaseUrl("https://api.elevenlabs.io#section")).toThrow(
+      "Invalid ElevenLabs baseUrl: fragment is not supported",
     );
   });
 
-  it("strips both query and fragment", () => {
-    expect(normalizeElevenLabsBaseUrl("https://api.elevenlabs.io?key=v#anchor")).toBe(
-      "https://api.elevenlabs.io",
+  it("throws on both query and fragment", () => {
+    expect(() => normalizeElevenLabsBaseUrl("https://api.elevenlabs.io?key=v#anchor")).toThrow(
+      "Invalid ElevenLabs baseUrl: query string is not supported",
     );
   });
 
@@ -72,9 +72,9 @@ describe("normalizeElevenLabsBaseUrl", () => {
     );
   });
 
-  it("preserves path and strips query", () => {
-    expect(normalizeElevenLabsBaseUrl("https://api.elevenlabs.io/v1?key=v")).toBe(
-      "https://api.elevenlabs.io/v1",
+  it("throws on query even when path is present", () => {
+    expect(() => normalizeElevenLabsBaseUrl("https://api.elevenlabs.io/v1?key=v")).toThrow(
+      "Invalid ElevenLabs baseUrl: query string is not supported",
     );
   });
 

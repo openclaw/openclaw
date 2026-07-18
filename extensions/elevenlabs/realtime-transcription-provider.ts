@@ -148,7 +148,12 @@ function normalizeElevenLabsRealtimeBaseUrl(value?: string): string {
         "(expected http, https, ws, or wss)",
     );
   }
-  // Strip query and fragment so they don't absorb the realtime path.
+  if (parsed.search) {
+    throw new Error("Invalid ElevenLabs realtime baseUrl: query string is not supported");
+  }
+  if (parsed.hash) {
+    throw new Error("Invalid ElevenLabs realtime baseUrl: fragment is not supported");
+  }
   // Preserve userinfo so proxy credentials survive normalization.
   const auth = parsed.username
     ? `${parsed.username}${parsed.password ? `:${parsed.password}` : ""}@`

@@ -254,15 +254,15 @@ describe("normalizeElevenLabsRealtimeBaseUrl", () => {
     );
   });
 
-  it("strips query string", () => {
-    expect(testing.normalizeElevenLabsRealtimeBaseUrl("wss://example.com?key=v")).toBe(
-      "wss://example.com",
+  it("throws on query string", () => {
+    expect(() => testing.normalizeElevenLabsRealtimeBaseUrl("wss://example.com?key=v")).toThrow(
+      "Invalid ElevenLabs realtime baseUrl: query string is not supported",
     );
   });
 
-  it("strips fragment", () => {
-    expect(testing.normalizeElevenLabsRealtimeBaseUrl("wss://example.com#anchor")).toBe(
-      "wss://example.com",
+  it("throws on fragment", () => {
+    expect(() => testing.normalizeElevenLabsRealtimeBaseUrl("wss://example.com#anchor")).toThrow(
+      "Invalid ElevenLabs realtime baseUrl: fragment is not supported",
     );
   });
 });
