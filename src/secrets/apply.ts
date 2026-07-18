@@ -47,6 +47,7 @@ import { isNonEmptyString, isRecord, writeTextFileAtomic } from "./shared.js";
 import {
   listAuthProfileStoreAgentDirs,
   listLegacyAuthJsonPaths,
+  listSecretsDotEnvPaths,
   parseEnvAssignmentValue,
   readJsonObjectIfExists,
 } from "./storage-scan.js";
@@ -340,7 +341,7 @@ async function projectPlanState(params: {
   });
 
   const envRawByPath = scrubEnvFiles({
-    env: params.env,
+    configPath,
     stateDir,
     scrubbedValues: targetMutations.scrubbedValues,
     changedFiles,
@@ -735,7 +736,7 @@ function scrubLegacyAuthJsonStores(params: {
 }
 
 function scrubEnvFiles(params: {
-  env: NodeJS.ProcessEnv;
+  configPath: string;
   stateDir: string;
   scrubbedValues: Set<string>;
   changedFiles: Set<string>;
@@ -745,19 +746,20 @@ function scrubEnvFiles(params: {
   if (!params.enabled || params.scrubbedValues.size === 0) {
     return envRawByPath;
   }
-  const envPath = path.join(params.stateDir, ".env");
-  if (!fs.existsSync(envPath)) {
-    return envRawByPath;
-  }
-  const current = fs.readFileSync(envPath, "utf8");
-  const scrubbed = scrubEnvRaw(
-    current,
-    params.scrubbedValues,
-    new Set(listKnownSecretEnvVarNames()),
-  );
-  if (scrubbed.removed > 0 && scrubbed.nextRaw !== current) {
-    envRawByPath.set(envPath, scrubbed.nextRaw);
-    params.changedFiles.add(envPath);
+  const knownSecretEnvVars = new Set(listKnownSecretEnvVarNames());
+  for (const envPath of listSecretsDotEnvPaths({
+    configPath: params.configPath,
+    stateDir: params.stateDir,
+  })) {
+    if (!fs.existsSync(envPath)) {
+      continue;
+    }
+    const current = fs.readFileSync(envPath, "utf8");
+    const scrubbed = scrubEnvRaw(current, params.scrubbedValues, knownSecretEnvVars);
+    if (scrubbed.removed > 0 && scrubbed.nextRaw !== current) {
+      envRawByPath.set(envPath, scrubbed.nextRaw);
+      params.changedFiles.add(envPath);
+    }
   }
   return envRawByPath;
 }

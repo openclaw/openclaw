@@ -855,4 +855,20 @@ describe("secrets audit", () => {
       await fs.rm(homeDir, { recursive: true, force: true });
     }
   });
+
+  it("scans config and state .env files when the config path is external", async () => {
+    await seedAuditFixture(fixture);
+    const configDir = path.join(fixture.rootDir, "config");
+    const configPath = path.join(configDir, "openclaw.json");
+    const configEnvPath = path.join(configDir, ".env");
+    await fs.mkdir(configDir, { recursive: true });
+    await fs.copyFile(fixture.configPath, configPath);
+    await fs.copyFile(fixture.envPath, configEnvPath);
+    fixture.env.OPENCLAW_CONFIG_PATH = configPath;
+
+    const report = await runSecretsAudit({ env: fixture.env });
+
+    expectFindingFile(report, configEnvPath);
+    expectFindingFile(report, fixture.envPath);
+  });
 });

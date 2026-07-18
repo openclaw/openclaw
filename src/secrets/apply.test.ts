@@ -1744,5 +1744,28 @@ describe("secrets apply", () => {
     expect(nextConfig.plugins?.allow).toEqual(["Vault"]);
     expect(nextConfig.plugins?.entries?.vault).toEqual({ enabled: true });
   });
+
+  it("scrubs config and state .env files when the config path is external", async () => {
+    const configDir = path.join(fixture.rootDir, "config");
+    const configPath = path.join(configDir, "openclaw.json");
+    const configEnvPath = path.join(configDir, ".env");
+    await fs.mkdir(configDir, { recursive: true });
+    await fs.copyFile(fixture.configPath, configPath);
+    await fs.copyFile(fixture.envPath, configEnvPath);
+    fixture.env.OPENCLAW_CONFIG_PATH = configPath;
+
+    const applied = await runSecretsApply({
+      plan: createPlan({
+        targets: [createOpenAiProviderTarget()],
+        options: createOneWayScrubOptions(),
+      }),
+      env: fixture.env,
+      write: true,
+    });
+
+    expect(applied.changedFiles).toEqual(expect.arrayContaining([configEnvPath, fixture.envPath]));
+    await expect(fs.readFile(configEnvPath, "utf8")).resolves.toBe("UNRELATED=value\n");
+    await expect(fs.readFile(fixture.envPath, "utf8")).resolves.toBe("UNRELATED=value\n");
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

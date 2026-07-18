@@ -38,6 +38,7 @@ import {
   listAgentModelsJsonPaths,
   listAuthProfileStoreAgentDirs,
   listLegacyAuthJsonPaths,
+  listSecretsDotEnvPaths,
   parseEnvAssignmentValue,
   readJsonObjectIfExists,
 } from "./storage-scan.js";
@@ -635,7 +636,7 @@ export async function runSecretsAudit(
   };
 
   const stateDir = resolveStateDir(env, os.homedir);
-  const envPath = path.join(stateDir, ".env");
+  const envPaths = listSecretsDotEnvPaths({ configPath, stateDir });
   const config = snapshot.valid ? snapshot.config : ({} as OpenClawConfig);
   let resolution = {
     refsChecked: 0,
@@ -684,10 +685,9 @@ export async function runSecretsAudit(
     });
   }
 
-  collectEnvPlaintext({
-    envPath,
-    collector,
-  });
+  for (const envPath of envPaths) {
+    collectEnvPlaintext({ envPath, collector });
+  }
   collectAuthJsonResidue({
     stateDir,
     collector,
