@@ -24,8 +24,8 @@ import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { countActiveRunsForSession } from "./subagent-registry.js";
 import { resolveSubagentTargetPolicy } from "./subagent-target-policy.js";
 
-export type SpawnMode = "run" | "session";
-export type SpawnBackendKind = "subagent" | "acp";
+type SpawnMode = "run" | "session";
+type SpawnBackendKind = "subagent" | "acp";
 
 export type PreparedSpawnThreadBinding = {
   channel: string;

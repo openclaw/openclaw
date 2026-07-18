@@ -61,7 +61,7 @@ type VisibleSessionsSpawnOptions = VisibleSessionsSpawnDeps & {
   inheritedToolDenylist?: string[];
 };
 
-export function summarizeSessionsSpawnError(error: unknown): string {
+function summarizeSessionsSpawnError(error: unknown): string {
   return error instanceof Error ? error.message : typeof error === "string" ? error : "error";
 }
 

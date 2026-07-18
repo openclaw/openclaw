@@ -1,7 +1,7 @@
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
 import { registerSubagentRun } from "./subagent-registry.js";
 
-export type SpawnPipelinePhase = "initialize" | "dispatch" | "register";
+type SpawnPipelinePhase = "initialize" | "dispatch" | "register";
 
 export type SpawnBackendAdapter<TState> = {
   initialize(): Promise<TState>;
@@ -15,7 +15,7 @@ export type SpawnBackendAdapter<TState> = {
 
 type RegisterSubagentRunInput = Parameters<typeof registerSubagentRun>[0];
 
-export type SpawnProgressOrigin = {
+type SpawnProgressOrigin = {
   channel?: string;
   accountId?: string;
   to?: string;
@@ -24,7 +24,7 @@ export type SpawnProgressOrigin = {
   messageId?: string | number;
 };
 
-export type SpawnPipelineResult<TState> =
+type SpawnPipelineResult<TState> =
   | { ok: true; state: TState; runId: string }
   | {
       ok: false;
