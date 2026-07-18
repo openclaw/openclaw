@@ -57,10 +57,10 @@ import {
   setGatewaySigusr1RestartPolicy,
   setPreRestartDeferralCheck,
 } from "../infra/restart.js";
+import { ensureSafetyEventStoreBridge } from "../infra/safety-event-store.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { upsertPresence } from "../infra/system-presence.js";
 import type { VoiceWakeRoutingConfig } from "../infra/voicewake-routing.js";
-import { ensureSafetyEventStoreBridge } from "../infra/safety-event-store.js";
 import { withDiagnosticPhase } from "../logging/diagnostic-phase.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
