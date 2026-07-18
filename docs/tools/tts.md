@@ -489,11 +489,20 @@ See the [speech-core Linux CLI reference](https://github.com/soniqo/speech-core/
 for release packages and model-directory settings.
 </Tab>
 <Tab title="Windows CLI">
-The speech-core LiteRT build produces `speech_supertonic_tts.exe`, a local
-Supertonic TTS command. Follow the
-[Windows build guide](https://soniqo.audio/getting-started/windows), download
-the [Supertonic LiteRT bundle](https://huggingface.co/soniqo/Supertonic-3-LiteRT),
-and keep `libLiteRt.dll` beside the executable or on `PATH`.
+Download the speech-core Windows release, extract it, and install the ONNX
+models once:
+
+```powershell
+$Version = "0.0.11"
+$Url = "https://github.com/soniqo/speech-core/releases/download/v$Version/speech-$Version-windows-x64.zip"
+Invoke-WebRequest $Url -OutFile speech.zip
+Expand-Archive speech.zip
+Set-Location "speech\speech-$Version-windows-x64\bin"
+Set-ExecutionPolicy -Scope Process Bypass
+.\speech_download_models.ps1
+```
+
+Then point Local CLI at the packaged Kokoro executable:
 
 ```json5
 {
@@ -503,8 +512,8 @@ and keep `libLiteRt.dll` beside the executable or on `PATH`.
       provider: "tts-local-cli",
       providers: {
         "tts-local-cli": {
-          command: "C:\\path\\to\\speech-core\\build\\Release\\speech_supertonic_tts.exe",
-          args: ["C:\\path\\to\\Supertonic-3-LiteRT", "{{Text}}", "en", "F1", "{{OutputPath}}"],
+          command: "C:\\path\\to\\speech-0.0.11-windows-x64\\bin\\speech_synthesize.exe",
+          args: ["{{OutputPath}}", "{{Text}}", "en"],
           outputFormat: "wav",
           timeoutMs: 120000,
         },
@@ -513,6 +522,9 @@ and keep `libLiteRt.dll` beside the executable or on `PATH`.
   },
 }
 ```
+
+See the [speech-core Windows CLI reference](https://github.com/soniqo/speech-core/blob/main/docs/cli.md)
+for the packaged server, model cache, and standalone command syntax.
 
   </Tab>
 </Tabs>
