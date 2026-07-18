@@ -2324,8 +2324,10 @@ async function applyStartupCatchupOutcomes(
     const currentOutcomes = filterCurrentCronRunOutcomes(outcomes);
     let finalizedOutcomes: TimedCronRunOutcome[] = [];
     await locked(state, async () => {
+      // Catch-up runners can rewrite delivery targets or remove their own jobs.
+      // Reload before merging outcomes so the startup snapshot cannot overwrite them.
       await ensureLoaded(state, {
-        forceReload: state.stopped,
+        forceReload: true,
         skipRecompute: true,
       });
       if (!state.store) {
