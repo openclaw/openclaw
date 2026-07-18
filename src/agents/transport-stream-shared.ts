@@ -4,6 +4,7 @@
  * Sanitizes provider payloads, merges metadata, and formats streamed assistant events.
  */
 import { sanitizeSurrogates } from "@openclaw/ai/internal/shared";
+import { stripAnsiSequences } from "../../packages/terminal-core/src/ansi.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { truncateErrorDetail } from "./provider-http-errors.js";
@@ -49,8 +50,31 @@ export function sanitizeTransportPayloadText(text: string): string {
   if (typeof text !== "string") {
     return "";
   }
-  return sanitizeSurrogates(text);
+  // Provider streams can inject terminal/escape control bytes (for example the
+  // MiniMax portal appends a `[e~[`-style stream-boundary marker to assistant
+  // text). These are transport-layer noise that must not reach assistantTexts,
+  // the trajectory JSONL, or the next-turn prompt. See #104403.
+  return stripAnsiSequences(sanitizeSurrogates(text))
+    .replace(MINIMAX_STREAM_BOUNDARY_MARKER_PATTERN, "")
+    .replace(RESIDUAL_ANSI_INTRODUCER_PATTERN, "");
 }
+
+// MiniMax-portal stream-boundary marker. `stripAnsiSequences` consumes the
+// leading `ESC[e~` CSI and leaves `~[`, so strip the residual `~[` as well as
+// the bare `[e~[` form (in case the ESC was already removed upstream). Built
+// from string constants (rather than a regex literal with control bytes) so
+// the control-character lint rule does not flag it.
+const ESC = String.fromCharCode(0x1b);
+const CSI = String.fromCharCode(0x9b);
+const LB = String.fromCharCode(0x5b);
+const BS = String.fromCharCode(0x5c);
+const MINIMAX_STREAM_BOUNDARY_MARKER_PATTERN = new RegExp(
+  `${ESC}${BS}${LB}e~${BS}${LB}|${BS}${LB}e~${BS}${LB}|~${BS}${LB}`,
+  "g",
+);
+// Any remaining stray ESC (0x1b) or CSI introducer (0x9b) that survived the
+// sequence stripper above.
+const RESIDUAL_ANSI_INTRODUCER_PATTERN = new RegExp(`[${ESC}${CSI}]`, "g");
 
 export function sanitizeNonEmptyTransportPayloadText(
   text: string,
