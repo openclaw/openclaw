@@ -286,6 +286,10 @@ export class ConfigPage extends OpenClawLightDomElement {
       (gateway) => this.synchronizeSystemInfoGateway(gateway),
     )
     .watch(
+      () => this.context?.nativeNotifications ?? undefined,
+      (nativeNotifications, notify) => nativeNotifications.subscribe(notify),
+    )
+    .watch(
       () => this.context?.webPush,
       (webPush, notify) => webPush.subscribe(notify),
     )
@@ -805,6 +809,10 @@ export class ConfigPage extends OpenClawLightDomElement {
       excludeSections,
       includeVirtualSections: this.pageId === "appearance" || this.pageId === "notifications",
       settingsLayout: this.pageId === "advanced" ? "accordion" : undefined,
+      nativeNotifications: this.context.nativeNotifications?.snapshot,
+      onNativeNotificationsRequestPermission: () =>
+        this.context.nativeNotifications?.requestPermission(),
+      onNativeNotificationsSendTest: () => this.context.nativeNotifications?.sendTest(),
       webPush: this.context.webPush.snapshot,
       onWebPushSubscribe: () => void this.context.webPush.enable(),
       onWebPushUnsubscribe: () => void this.context.webPush.disable(),
