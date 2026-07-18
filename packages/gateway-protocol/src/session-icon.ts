@@ -336,9 +336,16 @@ export function normalizeSessionIconInput(value: string): SessionIconNormalizati
       return { ok: false, reason: "invalid session SVG icon shape" };
     }
     const sanitized = sanitizeSvg(parsed.svg);
-    return sanitized
-      ? { ok: true, value: `${SVG_PREFIX}${sanitized}` }
-      : { ok: false, reason: "session SVG icon contains disallowed markup" };
+    if (!sanitized) {
+      return { ok: false, reason: "session SVG icon contains disallowed markup" };
+    }
+    const canonical = `${SVG_PREFIX}${sanitized}`;
+    // Entity re-encoding (e.g. " -> &quot;) can grow the canonical form past
+    // the raw-input cap; the stored bytes are what the bound protects.
+    if (new TextEncoder().encode(canonical).byteLength > SVG_MAX_BYTES) {
+      return { ok: false, reason: `session SVG icon exceeds ${SVG_MAX_BYTES} bytes` };
+    }
+    return { ok: true, value: canonical };
   }
   const parsed = parseSessionIcon(trimmed);
   if (!parsed) {

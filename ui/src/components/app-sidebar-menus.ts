@@ -333,8 +333,10 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
         this.onUpdateSidebarEntries?.(next);
       },
       onReset: () => {
-        const sessions = this.reconciledSidebarZone().entries.flatMap((entry) =>
-          entry.type === "session" ? [serializeSidebarEntry(entry)] : [],
+        // Canonical list, not the render list: unknown-state session slots
+        // (other agents, still-loading caches) must survive a route reset.
+        const sessions = this.reconciledSidebarZone().sidebarEntries.filter((entry) =>
+          entry.startsWith("session:"),
         );
         this.onUpdateSidebarEntries?.([...DEFAULT_SIDEBAR_ENTRIES, ...sessions]);
         this.closeCustomizeMenu({ restoreFocus: true });

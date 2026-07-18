@@ -40,4 +40,12 @@ describe("session icons", () => {
     const value = `svg:<svg><title>${"x".repeat(4096)}</title></svg>`;
     expect(normalizeSessionIconInput(value)).toMatchObject({ ok: false });
   });
+
+  it("rejects SVG whose canonical entity re-encoding exceeds the byte cap", () => {
+    // 900 double quotes inside a single-quoted attribute fit the raw cap but
+    // reserialize as &quot; (6 bytes each), overflowing the stored form.
+    const svg = `svg:<svg viewBox='0 0 16 16'><path d='${'"'.repeat(900)}'/></svg>`;
+    expect(new TextEncoder().encode(svg).byteLength).toBeLessThanOrEqual(4096);
+    expect(normalizeSessionIconInput(svg).ok).toBe(false);
+  });
 });
