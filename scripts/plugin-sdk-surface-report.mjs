@@ -147,7 +147,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: structured media placeholder formatter and its text-fact contract.
       // +15: AI safety/quality event taxonomy contract types (diagnostic-ai-safety-events).
       // +1: emitPluginSafetyEvent manifest-gated AI safety emission facade (diagnostic-runtime).
-      4737,
+      // +11: host-observable AI safety taxonomy event and metadata types.
+      4748,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
