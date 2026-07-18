@@ -1,7 +1,9 @@
 // Qa Lab tests cover cli plugin behavior.
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { QaScenarioPack } from "./scenario-catalog.js";
 
@@ -107,6 +109,7 @@ import { defaultQaModelForMode as defaultQaProviderModelForMode } from "./model-
 import type { QaProviderModeInput } from "./run-config.js";
 
 const DEFAULT_LIVE_FRONTIER_MODEL = defaultQaProviderModelForMode("live-frontier");
+const execFileAsync = promisify(execFile);
 
 function mockFirstObjectArg(mock: unknown): Record<string, unknown> {
   const calls = (mock as { mock?: { calls?: Array<Array<unknown>> } }).mock?.calls ?? [];
@@ -2881,6 +2884,36 @@ describe("qa cli runtime", () => {
       openSpy.mockRestore();
     }
   });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects credential payload FIFOs without waiting for a writer",
+    async () => {
+      const previousMaxBytes = process.env.OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_BYTES;
+      const payloadPath = path.join(suiteArtifactsDir, "fifo-credential.json");
+      await execFileAsync("mkfifo", [payloadPath]);
+      process.env.OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_BYTES = "32";
+      vi.stubEnv("OPENCLAW_QA_CONVEX_SECRET_MAINTAINER", "maint-secret");
+      const fetchImpl = vi.fn(async () => new Response("", { status: 200 }));
+      vi.stubGlobal("fetch", fetchImpl);
+
+      try {
+        await expect(
+          runQaCredentialsAddCommand({
+            kind: "telegram",
+            payloadFile: payloadPath,
+            siteUrl: "https://qa-cred.example.convex.site",
+          }),
+        ).rejects.toThrow("Payload file must be a regular JSON file.");
+        expect(fetchImpl).not.toHaveBeenCalled();
+      } finally {
+        if (previousMaxBytes === undefined) {
+          delete process.env.OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_BYTES;
+        } else {
+          process.env.OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_BYTES = previousMaxBytes;
+        }
+      }
+    },
+  );
 
   it("resolves docker scaffold paths relative to the explicit repo root", async () => {
     await runQaDockerScaffoldCommand({

@@ -1,5 +1,6 @@
 // Qa Lab plugin module implements cli behavior.
 import fs from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
 import path from "node:path";
 import {
   OPENCLAW_CRABLINE_DEFAULT_CHANNEL,
@@ -102,6 +103,11 @@ import {
 const QA_SUITE_INFRA_RETRY_LIMIT = 1;
 const QA_CREDENTIAL_PAYLOAD_MAX_BYTES_ENV = "OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_BYTES";
 const DEFAULT_QA_CREDENTIAL_PAYLOAD_MAX_BYTES = 64 * 1024 * 1024;
+const FS_CONSTANTS_WITH_OPTIONAL_NONBLOCK = fsConstants as typeof fsConstants & {
+  O_NONBLOCK?: number;
+};
+const QA_CREDENTIAL_PAYLOAD_OPEN_FLAGS =
+  fsConstants.O_RDONLY | (FS_CONSTANTS_WITH_OPTIONAL_NONBLOCK.O_NONBLOCK ?? 0);
 const QA_SUITE_INFRA_RETRY_NETWORK_ERROR_CODES = new Set([
   "ECONNRESET",
   "ECONNREFUSED",
@@ -639,7 +645,8 @@ function resolveQaCredentialPayloadFileMaxBytes(env: NodeJS.ProcessEnv = process
 
 async function readQaCredentialPayloadFile(filePath: string) {
   const maxBytes = resolveQaCredentialPayloadFileMaxBytes();
-  const handle = await fs.open(filePath, "r");
+  // Open non-blocking so FIFO payload paths fail fast before regular-file validation.
+  const handle = await fs.open(filePath, QA_CREDENTIAL_PAYLOAD_OPEN_FLAGS);
   let text: string;
   try {
     const stat = await handle.stat();
