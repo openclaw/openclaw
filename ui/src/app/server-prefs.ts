@@ -181,6 +181,9 @@ export function resetServerUiPrefsSync() {
   lastSeenServerPrefsKey = null;
   staleConfigHashes.clear();
   applyingServerPrefs = false;
+  queuedClient = null;
+  queuedPrefs = null;
+  pushDraining = false;
 }
 
 export function applyServerUiPrefs(
@@ -220,18 +223,21 @@ export function isApplyingServerUiPrefs(): boolean {
 }
 
 // Pending deltas coalesce into one object and drain serially, so rapid
-// changes cannot race each other's CAS hash and silently drop an update.
+// changes cannot race each other's CAS hash and silently drop an update. The
+// queue is bound to one gateway client; switching gateways drops undelivered
+// deltas for the old one (they stay device-local, per the sync contract).
+let queuedClient: GatewayBrowserClient | null = null;
 let queuedPrefs: ServerUiPrefs | null = null;
 let pushDraining = false;
 
 async function drainPrefsQueue(client: GatewayBrowserClient): Promise<void> {
-  while (queuedPrefs) {
+  while (queuedPrefs && queuedClient === client) {
     const prefs = queuedPrefs;
     queuedPrefs = null;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const snapshot = (await client.request("config.get", {})) as { hash?: string } | null;
       const baseHash = snapshot?.hash;
-      if (!baseHash) {
+      if (!baseHash || queuedClient !== client) {
         return;
       }
       try {
@@ -264,6 +270,13 @@ async function drainPrefsQueue(client: GatewayBrowserClient): Promise<void> {
  * keep the change device-local.
  */
 export function pushServerUiPrefs(client: GatewayBrowserClient, prefs: ServerUiPrefs): void {
+  if (queuedClient !== client) {
+    // New gateway: abandon the old queue (its drain loop sees the client
+    // change and stops) instead of writing one gateway's prefs to another.
+    queuedClient = client;
+    queuedPrefs = null;
+    pushDraining = false;
+  }
   queuedPrefs = { ...queuedPrefs, ...prefs };
   if (pushDraining) {
     return;
@@ -272,6 +285,8 @@ export function pushServerUiPrefs(client: GatewayBrowserClient, prefs: ServerUiP
   void drainPrefsQueue(client)
     .catch(() => undefined)
     .finally(() => {
-      pushDraining = false;
+      if (queuedClient === client) {
+        pushDraining = false;
+      }
     });
 }

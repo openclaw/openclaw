@@ -176,6 +176,43 @@ describe("pushServerUiPrefs", () => {
     );
   });
 
+  it("drops a stale gateway's queue instead of writing it to the next gateway", async () => {
+    let resolveFirstGet: ((value: { hash: string }) => void) | undefined;
+    const requestA = vi.fn(
+      (method: string) =>
+        new Promise((resolve) => {
+          if (method === "config.get") {
+            resolveFirstGet = resolve as (value: { hash: string }) => void;
+            return;
+          }
+          resolve({});
+        }),
+    );
+    const requestB = vi.fn(async (method: string) => {
+      if (method === "config.get") {
+        return { hash: "b-1" };
+      }
+      return {};
+    });
+    const clientA = { request: requestA } as unknown as Parameters<typeof pushServerUiPrefs>[0];
+    const clientB = { request: requestB } as unknown as Parameters<typeof pushServerUiPrefs>[0];
+
+    pushServerUiPrefs(clientA, { themeMode: "dark" });
+    pushServerUiPrefs(clientB, { textScale: 125 });
+    resolveFirstGet?.({ hash: "a-1" });
+
+    await vi.waitFor(() => {
+      expect(requestB.mock.calls.filter(([method]) => method === "config.patch").length).toBe(1);
+    });
+    // Gateway A's drain saw the client switch and never patched.
+    expect(requestA.mock.calls.filter(([method]) => method === "config.patch").length).toBe(0);
+    expect(requestB).toHaveBeenCalledWith("config.patch", {
+      baseHash: "b-1",
+      raw: JSON.stringify({ ui: { prefs: { textScale: 125 } } }),
+      note: "control-ui prefs sync",
+    });
+  });
+
   it("retries once on a hash conflict and gives up silently otherwise", async () => {
     let patchCalls = 0;
     const request = vi.fn(async (method: string) => {

@@ -327,6 +327,14 @@ export async function executeSystemAgentOperation(
               await runPluginUninstallCommand(pluginId, {}, pluginRuntime);
             });
           await ctx.commit(async () => {
+            // A concurrent config write can retarget the default route between
+            // the pre-approval check and this commit; re-verify at the last
+            // moment so the destructive removal never hits the active route.
+            if (await isPluginBackingDefaultInferenceRoute(operation.pluginId)) {
+              throw new Error(
+                `Uninstall aborted: ${operation.pluginId} now backs the active inference route. Exit OpenClaw and run \`openclaw plugins uninstall ${operation.pluginId}\` from a terminal.`,
+              );
+            }
             await runPluginUninstall(operation.pluginId, createNoExitRuntime(ctx.runtime));
           });
           return {

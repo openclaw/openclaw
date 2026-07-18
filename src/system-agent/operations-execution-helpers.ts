@@ -707,17 +707,32 @@ export async function isPluginBackingDefaultInferenceRoute(pluginId: string): Pr
   if (!route) {
     return false;
   }
+  // The route's execution owners are the provider plus whichever runtime
+  // component executes it (embedded harness override or the resolved model
+  // runtime policy, e.g. a CLI-backend harness plugin) — removing any of them
+  // breaks the session driving this change.
+  const { resolveModelRuntimePolicy } = await import("../agents/model-runtime-policy.js");
+  const runtimePolicyId = resolveModelRuntimePolicy({
+    config,
+    provider: route.provider,
+    modelId: route.model,
+    agentId: route.agentId,
+  }).policy?.id;
   const normalizedPluginId = pluginId.trim().toLowerCase();
-  const providers = [route.provider]
-    .map((provider) => provider?.trim().toLowerCase())
-    .filter((provider): provider is string => Boolean(provider));
-  // Same-name convention covers provider plugins with no resolvable metadata.
-  if (providers.includes(normalizedPluginId)) {
+  const components = [
+    route.provider,
+    runtimePolicyId,
+    route.runner === "embedded" ? route.agentHarnessRuntimeOverride : undefined,
+  ]
+    .map((component) => component?.trim().toLowerCase())
+    .filter((component): component is string => Boolean(component));
+  // Same-name convention covers components with no resolvable plugin metadata.
+  if (components.includes(normalizedPluginId)) {
     return true;
   }
   const { resolveOwningPluginIdsForProviderRef } = await import("../plugins/providers.js");
-  return providers.some((provider) =>
-    (resolveOwningPluginIdsForProviderRef({ provider, config }) ?? []).some(
+  return components.some((component) =>
+    (resolveOwningPluginIdsForProviderRef({ provider: component, config }) ?? []).some(
       (owner) => owner.trim().toLowerCase() === normalizedPluginId,
     ),
   );
