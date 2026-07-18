@@ -361,13 +361,13 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
                   aria-label=${label}
                   @click=${() => this.toggleSessionSection(section.id)}
                 >
+                  <span class="sidebar-recent-sessions__label-text">${label}</span>
                   <span class="sidebar-session-group-toggle__icon" aria-hidden="true"
                     >${collapsed ? icons.chevronRight : icons.chevronDown}</span
                   >
-                  <span class="sidebar-recent-sessions__label-text">${label}</span>
-                  ${section.work && totalRowCount === 0
-                    ? nothing
-                    : html`<span class="sidebar-session-group-count">${totalRowCount}</span>`}
+                  ${collapsed && totalRowCount > 0
+                    ? html`<span class="sidebar-session-group-count">${totalRowCount}</span>`
+                    : nothing}
                   ${collapsedRunningDot
                     ? html`<span
                         class="session-run-spinner sidebar-session-group-running"

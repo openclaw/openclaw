@@ -200,19 +200,21 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
             title=${hasError ? errorHelp : nothing}
             @click=${() => params.onToggleSection(sectionId)}
           >
+            <span class="sidebar-recent-sessions__label-text">${catalog.label}</span>
             <span class="sidebar-session-group-toggle__icon" aria-hidden="true"
               >${collapsed ? icons.chevronRight : icons.chevronDown}</span
             >
-            <span class="sidebar-recent-sessions__label-text">${catalog.label}</span>
             ${renderCatalogHeaderStatus(hasActiveRun, hasUnread)}
-            <span
-              class="sidebar-session-group-count ${hasError
-                ? "sidebar-session-group-count--error"
-                : ""}"
-              data-session-catalog-error=${hasError ? catalog.id : nothing}
-              aria-hidden="true"
-              >${hasError ? icons.alertTriangle : rows.length}</span
-            >
+            ${hasError || (collapsed && rows.length > 0)
+              ? html`<span
+                  class="sidebar-session-group-count ${hasError
+                    ? "sidebar-session-group-count--error"
+                    : ""}"
+                  data-session-catalog-error=${hasError ? catalog.id : nothing}
+                  aria-hidden="true"
+                  >${hasError ? icons.alertTriangle : rows.length}</span
+                >`
+              : nothing}
           </button>
           <button
             type="button"
