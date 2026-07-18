@@ -222,6 +222,20 @@ describe("managed-child-process", () => {
     }
   });
 
+  it("rejects deadlines above the Node-safe timer bound", async () => {
+    await expect(
+      runManagedCommand({
+        args: ["-e", "setInterval(() => {}, 1_000)"],
+        bin: process.execPath,
+        shell: false,
+        stdio: "ignore",
+        timeoutMs: 2_147_000_001,
+      }),
+    ).rejects.toThrow(
+      "managed command timeoutMs must be a positive integer no greater than 2147000000",
+    );
+  });
+
   posixIt(
     "kills managed child process group descendants when the runner is terminated",
     async () => {

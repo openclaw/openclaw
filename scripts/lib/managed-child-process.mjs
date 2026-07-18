@@ -6,6 +6,7 @@ import { resolveWindowsTaskkillPath } from "./windows-taskkill.mjs";
 
 const FORWARDED_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"];
 const FORCE_KILL_DELAY_MS = 5_000;
+const MAX_MANAGED_COMMAND_TIMEOUT_MS = 2_147_000_000;
 export const MANAGED_COMMAND_TIMEOUT_CODE = "OPENCLAW_MANAGED_COMMAND_TIMEOUT";
 const managedChildren = new Set();
 const signalHandlers = new Map();
@@ -103,8 +104,15 @@ export async function runManagedCommand({
   onReady,
   timeoutMs,
 }) {
-  if (timeoutMs !== undefined && (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0)) {
-    throw new TypeError("managed command timeoutMs must be a positive integer");
+  if (
+    timeoutMs !== undefined &&
+    (!Number.isSafeInteger(timeoutMs) ||
+      timeoutMs <= 0 ||
+      timeoutMs > MAX_MANAGED_COMMAND_TIMEOUT_MS)
+  ) {
+    throw new TypeError(
+      `managed command timeoutMs must be a positive integer no greater than ${MAX_MANAGED_COMMAND_TIMEOUT_MS}`,
+    );
   }
   const spawnSpec = createManagedCommandSpawnSpec({
     bin,
