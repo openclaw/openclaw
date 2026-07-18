@@ -48,7 +48,7 @@ struct DeviceAuthPayloadTests {
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         let databaseURL = tempDir.appendingPathComponent("openclaw.sqlite", isDirectory: false)
         defer { try? FileManager.default.removeItem(at: tempDir) }
-        let identity = try DeviceIdentityStore.loadOrCreate(
+        let identity = try DeviceIdentitySQLiteStore.loadOrCreate(
             databaseURL: databaseURL,
             destinationStateDirURL: tempDir,
             profile: .primary)
