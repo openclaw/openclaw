@@ -1,4 +1,4 @@
-import { readFileSync, statSync } from "node:fs";
+import { closeSync, fstatSync, openSync, readSync, statSync } from "node:fs";
 import { win32 } from "node:path";
 import { z } from "zod";
 import {
@@ -68,6 +68,7 @@ const SandboxPolicyLayerSchema = z
   .strict();
 
 const MAX_SANDBOX_POLICY_FILE_BYTES = 1024 * 1024;
+const SANDBOX_POLICY_READ_CHUNK_BYTES = 64 * 1024;
 
 export function loadSandboxBaselinePolicy(
   options: SandboxPolicyLoaderOptions = {},
@@ -95,13 +96,7 @@ export function loadSandboxBaselinePolicy(
 function readSandboxPolicyFile(policyPath: string): SandboxPolicyLayer {
   let parsed: unknown;
   try {
-    const fileSize = statSync(policyPath).size;
-    if (fileSize > MAX_SANDBOX_POLICY_FILE_BYTES) {
-      throw new Error(
-        `Sandbox policy file exceeds ${MAX_SANDBOX_POLICY_FILE_BYTES} bytes (${fileSize} bytes).`,
-      );
-    }
-    parsed = JSON.parse(readFileSync(policyPath, "utf-8"));
+    parsed = JSON.parse(readSandboxPolicyFileContents(policyPath));
   } catch (err) {
     throw policyFileError(policyPath, err);
   }
@@ -110,6 +105,42 @@ function readSandboxPolicyFile(policyPath: string): SandboxPolicyLayer {
     return parseSandboxPolicyLayer(parsed, policyPath);
   } catch (err) {
     throw policyFileError(policyPath, err);
+  }
+}
+
+function readSandboxPolicyFileContents(policyPath: string): string {
+  let fd: number | undefined;
+  try {
+    // Keep the size check and bounded read on one descriptor so replacing or
+    // growing the configured path cannot bypass the startup memory limit.
+    fd = openSync(policyPath, "r");
+    const fileSize = fstatSync(fd).size;
+    if (fileSize > MAX_SANDBOX_POLICY_FILE_BYTES) {
+      throw new Error(
+        `Sandbox policy file exceeds ${MAX_SANDBOX_POLICY_FILE_BYTES} bytes (${fileSize} bytes).`,
+      );
+    }
+
+    const chunks: Buffer[] = [];
+    const scratch = Buffer.allocUnsafe(SANDBOX_POLICY_READ_CHUNK_BYTES);
+    let totalBytes = 0;
+    while (true) {
+      const bytesRead = readSync(fd, scratch, 0, scratch.length, null);
+      if (bytesRead === 0) {
+        return Buffer.concat(chunks, totalBytes).toString("utf-8");
+      }
+      totalBytes += bytesRead;
+      if (totalBytes > MAX_SANDBOX_POLICY_FILE_BYTES) {
+        throw new Error(
+          `Sandbox policy file exceeds ${MAX_SANDBOX_POLICY_FILE_BYTES} bytes while being read.`,
+        );
+      }
+      chunks.push(Buffer.from(scratch.subarray(0, bytesRead)));
+    }
+  } finally {
+    if (fd !== undefined) {
+      closeSync(fd);
+    }
   }
 }
 

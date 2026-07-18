@@ -225,6 +225,9 @@ baseline:
 - A configured policy file that does not exist on the host is an error
   (`Configured sandbox policy file <path> does not exist. Remove it from
 mxcPolicyPaths or create the file.`), not a silent skip.
+- A policy file larger than 1 MiB is rejected before parsing. If an existing
+  policy exceeds this limit, remove unnecessary whitespace or split it into
+  multiple files listed in `mxcPolicyPaths`; files are layered in array order.
 - A policy file that is malformed JSON or includes an unsupported field fails
   with an error naming the policy file path and the invalid field.
 - Every `filesystem.additionalReadonlyPaths` and

@@ -54,6 +54,13 @@ test("rejects oversized policy files before reading them", () => {
   );
 });
 
+test("accepts policy files at the size limit", () => {
+  const policyPath = join(makeTestDir(), "maximum-policy.json");
+  writeFileSync(policyPath, `{${" ".repeat(1024 * 1024 - 2)}}`, "utf-8");
+
+  expect(loadSandboxBaselinePolicy({ policyPaths: [policyPath] }).process.timeoutSeconds).toBe(300);
+});
+
 describeOnWindows("loadSandboxBaselinePolicy", () => {
   test("resolves no configured policy files with the default baseline", () => {
     const policy = loadSandboxBaselinePolicy();
