@@ -93,7 +93,10 @@ hello from source
     await lockEntered.promise;
 
     const ingestQueued = deferred();
-    const originalEnqueue = KeyedAsyncQueue.prototype.enqueue;
+    const originalEnqueue = Object.getOwnPropertyDescriptor(
+      KeyedAsyncQueue.prototype,
+      "enqueue",
+    )?.value as KeyedAsyncQueue["enqueue"];
     const enqueueSpy = vi
       .spyOn(KeyedAsyncQueue.prototype, "enqueue")
       .mockImplementation(function (this: KeyedAsyncQueue, key, task, hooks) {
