@@ -894,7 +894,7 @@ describe("gateway startup config secret preflight", () => {
       ),
     ).resolves.toBe(degraded);
     const outerRevision = getActiveSecretsRuntimeSnapshotRevision();
-    const descendant = structuredClone(degraded);
+    const descendant: PreparedSecretsRuntimeSnapshot = structuredClone(degraded);
     descendant.degradedOwners?.push({
       ownerKind: "provider",
       ownerId: "openai",
@@ -1132,6 +1132,7 @@ describe("gateway startup config secret preflight", () => {
       models: {
         providers: {
           openai: {
+            baseUrl: "https://api.openai.com/v1",
             apiKey: { source: "env", provider: "default", id: "OPENAI_STABLE" },
             models: [],
           },

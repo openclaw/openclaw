@@ -12,7 +12,7 @@ describe("runtime secret assignments", () => {
       defaults: undefined,
       context,
       owner: {
-        ownerKind: "plugin",
+        ownerKind: "capability",
         ownerId: "example",
         requiredForGateway: false,
         disposition: "isolate",

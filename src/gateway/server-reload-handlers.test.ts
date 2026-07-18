@@ -522,7 +522,7 @@ function createManagedRestartSequenceHarness(
       recordReloadError = undefined;
     }),
   };
-  const activateRuntimeSecrets = vi.fn(async (config: OpenClawConfig) => {
+  const activateRuntimeSecrets = vi.fn(async (config: OpenClawConfig, _params: unknown) => {
     const secretInputs = [
       config.gateway?.auth?.token,
       config.models?.providers?.test?.apiKey,
@@ -4363,6 +4363,7 @@ describe("gateway Gmail hot reload handlers", () => {
               ownerKind: "capability" as const,
               ownerId: "tts",
               refKeys: ["env:default:TTS_THIRD"],
+              contractDigest: ttsContractDigest,
             },
           ],
           webTools: createEmptyRuntimeWebToolsMetadata(),
