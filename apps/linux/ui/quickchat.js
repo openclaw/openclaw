@@ -1,8 +1,21 @@
 // Pure stream helpers stay above browser bindings so the Node regression test can exercise the
 // Gateway-compatible assembler without constructing a WebView.
 function chatMessageText(message) {
-  const firstBlock = Array.isArray(message?.content) ? message.content[0] : null;
-  return typeof firstBlock?.text === "string" ? firstBlock.text : null;
+  const content = message?.content;
+  if (Array.isArray(content)) {
+    const textBlocks = content
+      .filter((block) => block?.type === "text" && typeof block.text === "string")
+      .map((block) => block.text);
+    if (textBlocks.length > 0) {
+      return textBlocks.join("\n\n");
+    }
+  }
+  // Match the Control UI fallback contract in ui/src/lib/chat/message-extract.ts: typed content
+  // blocks, then plain-string content, then top-level message.text.
+  if (typeof content === "string") {
+    return content;
+  }
+  return typeof message?.text === "string" ? message.text : null;
 }
 
 function assembleChatDelta(currentText, payload) {
@@ -227,9 +240,9 @@ function replyTargetMatches(target, payload) {
   return target.agentId == null || payload?.agentId === target.agentId;
 }
 
-function startReply(target, identity) {
+function startReply(target, identity, runId) {
   activeReply = {
-    runId: null,
+    runId,
     target: {
       sessionKey: target.sessionKey,
       agentId: typeof target.agentId === "string" ? target.agentId : null,
@@ -250,18 +263,12 @@ function startReply(target, identity) {
 }
 
 function applyChatEvent(payload) {
-  if (!activeReply || !replyTargetMatches(activeReply.target, payload)) {
+  if (!activeReply) {
     return;
   }
-  const eventRunId = typeof payload?.runId === "string" ? payload.runId.trim() : "";
-  if (!activeReply.runId) {
-    if (!eventRunId) {
-      return;
-    }
-    // A session can carry concurrent turns. Adopt the first matching run once, then require the
-    // exact runId so another surface cannot replace this reply area mid-stream.
-    activeReply.runId = eventRunId;
-  } else if (eventRunId !== activeReply.runId) {
+  // The chat.send ACK owns this reply. Exact runId equality is primary; the routing target remains
+  // a secondary guard so concurrent turns from other surfaces never enter this reply area.
+  if (payload?.runId !== activeReply.runId || !replyTargetMatches(activeReply.target, payload)) {
     return;
   }
   if (activeReply.terminal) {
@@ -287,6 +294,7 @@ function applyChatEvent(payload) {
   }
 
   activeReply.terminal = true;
+  pendingChatEvents = [];
   stopReplyThinking();
   elements.reply.classList.add("is-terminal");
   if (payload.state === "final") {
@@ -532,6 +540,7 @@ async function requestHide() {
   visibilitySequence += 1;
   const hideSequence = visibilitySequence;
   hiding = true;
+  pendingChatEvents = [];
   closePopover(false, false);
   document.body.classList.remove("shown");
   window.clearTimeout(hideTimer);
@@ -592,9 +601,12 @@ async function send(openDashboard) {
   updateSendButton();
   try {
     const sentIdentity = { ...activeIdentity };
-    const target = await invoke("quickchat_send", { message });
-    if (!target || typeof target.sessionKey !== "string") {
+    const result = await invoke("quickchat_send", { message });
+    if (!result || typeof result.sessionKey !== "string") {
       throw new Error("Gateway accepted the message without a routing target.");
+    }
+    if (typeof result.runId !== "string" || !result.runId) {
+      throw new Error("Gateway accepted the message without a run ID.");
     }
     sending = false;
     sendError = "";
@@ -605,11 +617,12 @@ async function send(openDashboard) {
       return;
     }
     accepted = true;
-    startReply(target, sentIdentity);
-    for (const payload of pendingChatEvents) {
+    startReply(result, sentIdentity, result.runId);
+    const bufferedEvents = pendingChatEvents;
+    pendingChatEvents = [];
+    for (const payload of bufferedEvents) {
       applyChatEvent(payload);
     }
-    pendingChatEvents = [];
     if (gatewayDisconnectSequence !== sendDisconnectSequence || gatewayState !== "up") {
       terminalizeDisconnectedReply();
     }

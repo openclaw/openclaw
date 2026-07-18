@@ -1,4 +1,4 @@
-use crate::gateway_ws::{AgentsListResult, ChatRoutingTarget, GatewayClient};
+use crate::gateway_ws::{AgentsListResult, ChatSendResult, GatewayClient};
 use crate::{tray, DesktopState};
 use serde::Serialize;
 use std::fs;
@@ -589,7 +589,7 @@ pub async fn quickchat_send(
     gateway: State<'_, GatewayClient>,
     state: State<'_, QuickChatState>,
     message: String,
-) -> Result<ChatRoutingTarget, String> {
+) -> Result<ChatSendResult, String> {
     require_quickchat_window(&window)?;
     let message = message.trim().to_string();
     if message.is_empty() {

@@ -215,6 +215,7 @@ struct ChatSendParams {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ChatSendAck {
+    run_id: String,
     status: String,
     #[serde(default)]
     error: Option<Value>,
@@ -227,6 +228,14 @@ struct ChatSendAck {
 pub(crate) struct ChatRoutingTarget {
     pub(crate) session_key: String,
     pub(crate) agent_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ChatSendResult {
+    #[serde(flatten)]
+    pub(crate) target: ChatRoutingTarget,
+    pub(crate) run_id: String,
 }
 
 enum GatewayRequest {
@@ -496,7 +505,7 @@ impl GatewayClient {
         scope: &str,
         main_key: &str,
         idempotency_key: &str,
-    ) -> Result<ChatRoutingTarget, String> {
+    ) -> Result<ChatSendResult, String> {
         let target = routing_target(scope, selected_agent_id, main_key);
         let response = self
             .request(GatewayRequest::ChatSend(ChatSendParams {
@@ -510,7 +519,10 @@ impl GatewayClient {
             return Err("Gateway returned the wrong response for chat.send.".to_string());
         };
         classify_chat_ack(&ack)?;
-        Ok(target)
+        Ok(ChatSendResult {
+            target,
+            run_id: ack.run_id,
+        })
     }
 
     pub fn resume_reconnect(&self) {
@@ -1381,6 +1393,7 @@ mod tests {
     fn chat_ack_acceptance_is_explicit() {
         for status in ["ok", "started", "in_flight"] {
             assert!(classify_chat_ack(&ChatSendAck {
+                run_id: "run-1".to_string(),
                 status: status.to_string(),
                 error: None,
                 message: None,
@@ -1389,6 +1402,7 @@ mod tests {
         }
         for status in ["error", "timeout", "queued"] {
             assert!(classify_chat_ack(&ChatSendAck {
+                run_id: "run-1".to_string(),
                 status: status.to_string(),
                 error: Some(json!({ "message": "not accepted" })),
                 message: None,
@@ -1645,6 +1659,18 @@ mod tests {
                     "idempotencyKey": "idempotency-1"
                 }
             })
+        );
+    }
+
+    #[test]
+    fn chat_send_result_flattens_route_and_ack_run_id() {
+        let result = ChatSendResult {
+            target: routing_target("global", "work", "main"),
+            run_id: "run-1".to_string(),
+        };
+        assert_eq!(
+            serde_json::to_value(result).expect("serialized chat send result"),
+            json!({ "sessionKey": "global", "agentId": "work", "runId": "run-1" })
         );
     }
 }
