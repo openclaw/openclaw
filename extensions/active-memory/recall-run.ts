@@ -106,13 +106,24 @@ async function cleanupActiveMemoryRecallSession(params: {
   sessionId: string;
   sessionKey: string;
   storePath: string;
+  abortSignal?: AbortSignal;
 }): Promise<void> {
   const sessionKeySegmentPrefix =
     parseAgentSessionKey(params.sessionKey)?.rest ?? params.sessionKey;
   let lastError: unknown;
   for (const delayMs of ACTIVE_MEMORY_CLEANUP_RETRY_DELAYS_MS) {
     if (delayMs > 0) {
-      await sleep(delayMs);
+      try {
+        await sleep(delayMs, undefined, { signal: params.abortSignal });
+      } catch (error) {
+        // A cancelled recall must not wait out the remaining backoff schedule.
+        // Return without throwing so the finally-chain caller keeps the main
+        // outcome instead of a late cleanup AbortError.
+        if (params.abortSignal?.aborted) {
+          return;
+        }
+        throw error;
+      }
     }
     try {
       const result = await cleanupSessionLifecycleArtifacts({
@@ -408,6 +419,7 @@ async function runRecallSubagent(params: {
           sessionId: subagentSessionId,
           sessionKey: subagentSessionKey,
           storePath,
+          abortSignal: params.abortSignal,
         }).catch((error: unknown) => {
           const message = toSingleLineLogValue(
             error instanceof Error ? error.message : String(error),
