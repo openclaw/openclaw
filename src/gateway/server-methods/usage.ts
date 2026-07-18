@@ -396,11 +396,7 @@ const parseDays = (raw: unknown): number | undefined => {
     if (!Number.isFinite(n)) {
       return undefined;
     }
-    const days = Math.floor(n);
-    if (days > MAX_USAGE_DAYS) {
-      return undefined;
-    }
-    return days;
+    return Math.min(Math.floor(n), MAX_USAGE_DAYS);
   };
   if (typeof raw === "number") {
     return fromFinite(raw);
