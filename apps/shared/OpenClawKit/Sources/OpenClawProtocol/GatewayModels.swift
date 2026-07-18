@@ -574,6 +574,28 @@ public struct ErrorShape: Codable, Sendable {
     }
 }
 
+public struct GatewayErrorDetails: Codable, Sendable {
+    public let code: String
+    public let missingscope: String
+    public let requiredscopes: [String]
+
+    public init(
+        code: String,
+        missingscope: String,
+        requiredscopes: [String])
+    {
+        self.code = code
+        self.missingscope = missingscope
+        self.requiredscopes = requiredscopes
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case code
+        case missingscope = "missingScope"
+        case requiredscopes = "requiredScopes"
+    }
+}
+
 public struct GatewaySuspendTaskBlocker: Codable, Sendable {
     public let taskid: String
     public let status: String
