@@ -539,9 +539,11 @@ extension OpenClawChatViewModel {
         let stateRevision = self.questionStateRevision
         do {
             let records = try await self.transport.listQuestions()
-            guard refreshGeneration == self.questionRefreshGeneration,
-                  stateRevision == self.questionStateRevision
-            else { return }
+            guard refreshGeneration == self.questionRefreshGeneration else { return }
+            guard stateRevision == self.questionStateRevision else {
+                self.restartQuestionRefreshAfterStateChange(generation: refreshGeneration)
+                return
+            }
             let listedIDs = Set(records.map(\.id))
             let missingPending = self.questionCards.filter { model in
                 model.record.status == .pending && !listedIDs.contains(model.id)
@@ -559,9 +561,11 @@ extension OpenClawChatViewModel {
                 }
             }
 
-            guard refreshGeneration == self.questionRefreshGeneration,
-                  stateRevision == self.questionStateRevision
-            else { return }
+            guard refreshGeneration == self.questionRefreshGeneration else { return }
+            guard stateRevision == self.questionStateRevision else {
+                self.restartQuestionRefreshAfterStateChange(generation: refreshGeneration)
+                return
+            }
 
             var changed = false
             for record in records {
@@ -600,9 +604,11 @@ extension OpenClawChatViewModel {
                     retryIndex: retryIndex)
             }
         } catch let error as GatewayResponseError where Self.questionListIsUnavailable(error) {
-            guard refreshGeneration == self.questionRefreshGeneration,
-                  stateRevision == self.questionStateRevision
-            else { return }
+            guard refreshGeneration == self.questionRefreshGeneration else { return }
+            guard stateRevision == self.questionStateRevision else {
+                self.restartQuestionRefreshAfterStateChange(generation: refreshGeneration)
+                return
+            }
             let previousCount = self.questionCards.count
             self.questionCards.removeAll {
                 let status = $0.status()
@@ -614,9 +620,11 @@ extension OpenClawChatViewModel {
                 self.markTimelineChanged()
             }
         } catch {
-            guard refreshGeneration == self.questionRefreshGeneration,
-                  stateRevision == self.questionStateRevision
-            else { return }
+            guard refreshGeneration == self.questionRefreshGeneration else { return }
+            guard stateRevision == self.questionStateRevision else {
+                self.restartQuestionRefreshAfterStateChange(generation: refreshGeneration)
+                return
+            }
             self.scheduleQuestionRefreshRetry(
                 generation: refreshGeneration,
                 retryIndex: retryIndex)
@@ -631,6 +639,12 @@ extension OpenClawChatViewModel {
 
     private nonisolated static func questionIsNotFound(_ error: GatewayResponseError) -> Bool {
         error.detailsReason == "QUESTION_NOT_FOUND"
+    }
+
+    private func restartQuestionRefreshAfterStateChange(generation: UInt64) {
+        // Local question mutations invalidate the whole lookup snapshot, not one transport attempt.
+        // Restart the bounded budget so a late mutation cannot consume the last reconciliation slot.
+        self.scheduleQuestionRefreshRetry(generation: generation, retryIndex: 0)
     }
 
     private func scheduleQuestionRefreshRetry(generation: UInt64, retryIndex: Int) {
