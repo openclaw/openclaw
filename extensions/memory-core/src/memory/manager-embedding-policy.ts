@@ -90,6 +90,11 @@ const RETRYABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE =
 const SPLITTABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE =
   /(request_headers_too_large|request header fields too large|other side closed|ECONNRESET|EPIPE|UND_ERR_SOCKET|socket hang up|socket terminated|read ECONN|connection (?:reset|aborted))/i;
 
+/** Matches provider rate-limit errors (429, quota exhaustion) that need longer
+ *  backoff than transient transport failures. */
+const RATE_LIMIT_MEMORY_EMBEDDING_ERROR_RE =
+  /(rate[_ ]limit|too many requests|429|resource has been exhausted|tokens per day)/i;
+
 function isRetryableMemoryEmbeddingTransportError(message: string): boolean {
   return RETRYABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE.test(message);
 }
@@ -103,6 +108,14 @@ export function isRetryableMemoryEmbeddingError(message: string): boolean {
     RETRYABLE_MEMORY_EMBEDDING_SERVICE_ERROR_RE.test(message) ||
     isRetryableMemoryEmbeddingTransportError(message)
   );
+}
+
+/** Returns true when the error is a provider-side rate limit (429, quota
+ *  exhausted) that should use longer backoff than transient transport errors.
+ *  Rate-limit windows are typically 60s; short retries land inside the same
+ *  still-active window and waste attempts. */
+function isRateLimitMemoryEmbeddingError(message: string): boolean {
+  return RATE_LIMIT_MEMORY_EMBEDDING_ERROR_RE.test(message);
 }
 
 export function resolveMemoryEmbeddingRetryDelay(
@@ -119,12 +132,30 @@ export async function runMemoryEmbeddingRetryLoop<T>(params: {
   waitForRetry: (delayMs: number) => Promise<void>;
   maxAttempts: number;
   baseDelayMs: number;
+  /** When provided, rate-limit errors (429, quota exhaustion) use these
+   *  longer backoff parameters instead of the default exponential schedule.
+   *  Rate-limit windows are typically 60s; short retries waste attempts. */
+  rateLimitBaseDelayMs?: number;
+  rateLimitMaxDelayMs?: number;
+  /** When provided, rate-limit errors use this many attempts instead of
+   *  the shared maxAttempts.  Defaults to maxAttempts when unset. */
+  rateLimitMaxAttempts?: number;
+  /** When provided and a rate-limit error is detected, extracts the
+   *  server-specified retry-after duration (in ms) from the error. If the
+   *  extracted value exceeds the computed backoff, it overrides it (still
+   *  capped at rateLimitMaxDelayMs). This honors provider Retry-After
+   *  headers so retries clear the cooldown window. */
+  extractRetryAfterMs?: (err: unknown) => number | undefined;
   /** Caller-owned cancellation; an aborted caller stops the retry loop. */
   signal?: AbortSignal;
 }): Promise<T> {
-  const attempts = Math.max(1, params.maxAttempts);
-  for (const attempt of Array.from({ length: attempts }, (_, index) => index + 1)) {
-    const delayMs = params.baseDelayMs * 2 ** (attempt - 1);
+  const maxAttempts = Math.max(1, params.maxAttempts);
+  const rlBaseDelay = params.rateLimitBaseDelayMs ?? params.baseDelayMs;
+  const rlMaxDelay = params.rateLimitMaxDelayMs ?? 60_000;
+  const rlMaxAttempts = Math.max(1, params.rateLimitMaxAttempts ?? maxAttempts);
+  const extractRetryAfter = params.extractRetryAfterMs;
+  const totalAttempts = Math.max(maxAttempts, rlMaxAttempts);
+  for (const attempt of Array.from({ length: totalAttempts }, (_, index) => index + 1)) {
     try {
       return await params.run();
     } catch (err) {
@@ -135,8 +166,23 @@ export async function runMemoryEmbeddingRetryLoop<T>(params: {
         throw err;
       }
       const message = formatErrorMessage(err);
-      if (!params.isRetryable(message) || attempt >= params.maxAttempts) {
+      const isRateLimit = isRateLimitMemoryEmbeddingError(message);
+      const effectiveMax = isRateLimit ? rlMaxAttempts : maxAttempts;
+      if (!params.isRetryable(message) || attempt >= effectiveMax) {
         throw err;
+      }
+      // Rate-limit errors use a separate, longer backoff schedule so retries
+      // clear the provider's rate-limit window instead of landing inside it.
+      let delayMs = isRateLimit
+        ? Math.min(rlMaxDelay, rlBaseDelay * 2 ** (attempt - 1))
+        : params.baseDelayMs * 2 ** (attempt - 1);
+      // Honor provider-specified Retry-After when available and longer than
+      // the computed backoff (still capped at the rate-limit ceiling).
+      if (isRateLimit && extractRetryAfter) {
+        const retryAfterMs = extractRetryAfter(err);
+        if (typeof retryAfterMs === "number" && retryAfterMs > delayMs) {
+          delayMs = Math.min(rlMaxDelay, retryAfterMs);
+        }
       }
       await params.waitForRetry(delayMs);
     }
@@ -152,6 +198,10 @@ export async function runMemoryEmbeddingBatchRetryWithSplit<TInput, TOutput>(par
   waitForRetry: (delayMs: number) => Promise<void>;
   maxAttempts: number;
   baseDelayMs: number;
+  rateLimitBaseDelayMs?: number;
+  rateLimitMaxDelayMs?: number;
+  rateLimitMaxAttempts?: number;
+  extractRetryAfterMs?: (err: unknown) => number | undefined;
   onSplit?: (info: { itemCount: number; splitAt: number; message: string }) => void;
 }): Promise<TOutput[]> {
   try {
@@ -161,6 +211,10 @@ export async function runMemoryEmbeddingBatchRetryWithSplit<TInput, TOutput>(par
       waitForRetry: params.waitForRetry,
       maxAttempts: params.maxAttempts,
       baseDelayMs: params.baseDelayMs,
+      rateLimitBaseDelayMs: params.rateLimitBaseDelayMs,
+      rateLimitMaxDelayMs: params.rateLimitMaxDelayMs,
+      rateLimitMaxAttempts: params.rateLimitMaxAttempts,
+      extractRetryAfterMs: params.extractRetryAfterMs,
     });
   } catch (err) {
     const message = formatErrorMessage(err);
