@@ -22,11 +22,12 @@ CREATE TABLE IF NOT EXISTS diagnostic_events (
   event_key TEXT NOT NULL,
   payload_json TEXT NOT NULL,
   created_at INTEGER NOT NULL,
+  sequence INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (scope, event_key)
 ) STRICT;
 
-CREATE INDEX IF NOT EXISTS idx_diagnostic_events_scope_created
-  ON diagnostic_events(scope, created_at, event_key);
+CREATE INDEX IF NOT EXISTS idx_diagnostic_events_scope_sequence
+  ON diagnostic_events(scope, sequence, event_key);
 
 CREATE TABLE IF NOT EXISTS skill_usage (
   skill_file TEXT NOT NULL PRIMARY KEY,

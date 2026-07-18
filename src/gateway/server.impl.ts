@@ -8,6 +8,7 @@ import {
 } from "../agents/embedded-agent-runner/run-state.js";
 import { clearSessionSuspensionTimers } from "../agents/session-suspension.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
+import { withCoreCanvasNodeCapability } from "../canvas/constants.js";
 import {
   getLoadedChannelPluginEntryById,
   listLoadedChannelPlugins,
@@ -2037,7 +2038,8 @@ export async function startGatewayServer(
         port,
         gatewayHost: bindHost ?? undefined,
         pluginSurfaceScheme,
-        getPluginNodeCapabilities: () => listPluginNodeCapabilities(pluginRegistry),
+        getPluginNodeCapabilities: () =>
+          withCoreCanvasNodeCapability(listPluginNodeCapabilities(pluginRegistry)),
         resolvedAuth,
         getResolvedAuth,
         getRequiredSharedGatewaySessionGeneration: () =>
