@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
+import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
 import type {
   BoardMcpAppDescriptor,
@@ -9,7 +10,11 @@ import type {
   BoardWidgetPutParams,
 } from "../../packages/gateway-protocol/src/index.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import {
+  runSqliteDeferredTransactionSync,
+  runSqliteImmediateTransactionSync,
+} from "../infra/sqlite-transaction.js";
+import { OPENCLAW_AGENT_BOARD_SCHEMA_SQL } from "../state/openclaw-agent-board-schema.js";
 import type {
   BoardTabs as BoardTabRow,
   BoardWidgets as BoardWidgetRow,
@@ -40,6 +45,25 @@ type StoredBoard = {
   tabRows: SelectedBoardTabRow[];
   widgetRows: SelectedBoardWidgetRow[];
 };
+
+const ensuredBoardDatabases = new WeakSet<DatabaseSync>();
+
+function ensureBoardSchema(database: OpenClawAgentDatabase): void {
+  if (ensuredBoardDatabases.has(database.db)) {
+    return;
+  }
+  const ensure = () => database.db.exec(OPENCLAW_AGENT_BOARD_SCHEMA_SQL);
+  if (database.db.isTransaction) {
+    ensure();
+  } else {
+    runSqliteImmediateTransactionSync(database.db, ensure, {
+      databaseLabel: database.path,
+      operationLabel: "board.ensure-schema",
+    });
+  }
+  // Additive-surface rule: fold this into the next natural schema bump, then delete this lazy ensure.
+  ensuredBoardDatabases.add(database.db);
+}
 
 export type SqliteBoardStoreOptions = {
   resolveAgentId: (sessionKey: string) => string;
@@ -277,10 +301,12 @@ export class SqliteBoardStore implements BoardStore {
   }
 
   private open(sessionKey: string, agentId?: string): OpenClawAgentDatabase {
-    return openOpenClawAgentDatabase({
+    const database = openOpenClawAgentDatabase({
       agentId: this.resolveAgentId(sessionKey, agentId),
       env: this.options.env,
     });
+    ensureBoardSchema(database);
+    return database;
   }
 
   getSnapshot(sessionKey: string): BoardSnapshot {
@@ -294,6 +320,7 @@ export class SqliteBoardStore implements BoardStore {
     const agentId = this.resolveAgentId(sessionKey);
     return runOpenClawAgentWriteTransaction(
       (database) => {
+        ensureBoardSchema(database);
         const previous = readStoredBoard(database, sessionKey);
         const layout = applyBoardOps(previous.snapshot, ops);
         const next: BoardSnapshot = {
@@ -318,6 +345,7 @@ export class SqliteBoardStore implements BoardStore {
     const viewGeneration = randomBytes(16).toString("hex");
     return runOpenClawAgentWriteTransaction(
       (database) => {
+        ensureBoardSchema(database);
         const previous = readStoredBoard(database, params.sessionKey);
         const next = createBoardWidgetPutSnapshot(previous.snapshot, params);
         const widget = next.widgets.find((candidate) => candidate.name === params.name)!;
@@ -365,6 +393,7 @@ export class SqliteBoardStore implements BoardStore {
     const agentId = this.resolveAgentId(sessionKey);
     return runOpenClawAgentWriteTransaction(
       (database) => {
+        ensureBoardSchema(database);
         const previous = readStoredBoard(database, sessionKey);
         const next = createBoardGrantSnapshot(previous.snapshot, name, decision);
         upsertTabs(database, previous, next);
@@ -403,6 +432,7 @@ export class SqliteBoardStore implements BoardStore {
       path: registered.path,
       env: this.options.env,
     });
+    ensureBoardSchema(database);
     const db = getNodeSqliteKysely<BoardDatabase>(database.db);
     const row = executeSqliteQuerySync(
       database.db,
@@ -445,6 +475,7 @@ export class SqliteBoardStore implements BoardStore {
         path: registered.path,
         env: this.options.env,
       });
+      ensureBoardSchema(database);
       const db = getNodeSqliteKysely<BoardDatabase>(database.db);
       for (const row of executeSqliteQuerySync(
         database.db,
@@ -460,6 +491,7 @@ export class SqliteBoardStore implements BoardStore {
     const resolvedAgentId = this.resolveAgentId(sessionKey, agentId);
     runOpenClawAgentWriteTransaction(
       (database) => {
+        ensureBoardSchema(database);
         const db = getNodeSqliteKysely<BoardDatabase>(database.db);
         executeSqliteQuerySync(
           database.db,

@@ -2,7 +2,6 @@ import type { DatabaseSync } from "node:sqlite";
 import type { SqliteWalMaintenance } from "../infra/sqlite-wal.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
 
-// v14 = persistent per-session dashboard tabs and widgets.
 // v13 = one durable generation token per raw session transcript.
 // v12 = session-owned ACP parent-stream events.
 // v11 = agent-scoped runtime leases, durable delivery operations, canonical
@@ -15,7 +14,7 @@ import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
 // The v4 session/transcript flip and main's v2 memory-identity
 // change is folded in structure-gated migrations, so v2 main DBs and
 // pre-merge v4 flip DBs both converge on this schema.
-export const OPENCLAW_AGENT_SCHEMA_VERSION = 14;
+export const OPENCLAW_AGENT_SCHEMA_VERSION = 13;
 
 /** Open per-agent SQLite database handle plus lifecycle maintenance. */
 export type OpenClawAgentDatabase = {

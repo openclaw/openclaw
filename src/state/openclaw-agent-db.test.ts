@@ -568,8 +568,8 @@ describe("openclaw agent database", () => {
     expect(registered?.sizeBytes).toBeGreaterThan(0);
   });
 
-  it("adds board storage while upgrading schema version 13", () => {
-    expect(OPENCLAW_AGENT_SCHEMA_VERSION).toBe(14);
+  it("opens a v13 database that already contains additive board storage", () => {
+    expect(OPENCLAW_AGENT_SCHEMA_VERSION).toBe(13);
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const opened = openOpenClawAgentDatabase({ agentId: "worker-1", env });
@@ -579,8 +579,6 @@ describe("openclaw agent database", () => {
     const { DatabaseSync } = requireNodeSqlite();
     const existingV13 = new DatabaseSync(databasePath);
     existingV13.exec(`
-      DROP TABLE board_widgets;
-      DROP TABLE board_tabs;
       PRAGMA user_version = 13;
       UPDATE schema_meta SET schema_version = 13 WHERE meta_key = 'primary';
     `);
@@ -606,7 +604,7 @@ describe("openclaw agent database", () => {
   });
 
   it("keeps additive heartbeat repair while upgrading schema version 12", () => {
-    expect(OPENCLAW_AGENT_SCHEMA_VERSION).toBe(14);
+    expect(OPENCLAW_AGENT_SCHEMA_VERSION).toBe(13);
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const opened = openOpenClawAgentDatabase({ agentId: "worker-1", env });

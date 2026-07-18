@@ -2,7 +2,11 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { InMemoryBoardStore, type BoardStore } from "./board-store.js";
 import { SqliteBoardStore } from "./sqlite-board-store.js";
@@ -156,6 +160,60 @@ describe.each([
 });
 
 describe("SqliteBoardStore persistence", () => {
+  it("lazily creates board tables for an existing v13 database", () => {
+    const stateDir = tempDirs.make("openclaw-board-lazy-schema-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const sessionKey = "agent:main:board";
+    const opened = openOpenClawAgentDatabase({ agentId: "main", env });
+    const databasePath = opened.path;
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const existingV13 = new DatabaseSync(databasePath);
+    existingV13.exec(`
+      DROP TABLE board_widgets;
+      DROP TABLE board_tabs;
+      PRAGMA user_version = 13;
+      UPDATE schema_meta SET schema_version = 13 WHERE meta_key = 'primary';
+    `);
+    existingV13.close();
+
+    const reopened = openOpenClawAgentDatabase({ agentId: "main", env });
+    expect(
+      reopened.db
+        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'board_tabs'")
+        .get(),
+    ).toBeUndefined();
+
+    const store = new SqliteBoardStore({ resolveAgentId: () => "main", env });
+    expect(store.getSnapshot(sessionKey)).toEqual({
+      sessionKey,
+      revision: 0,
+      tabs: [],
+      widgets: [],
+    });
+    expect(
+      reopened.db
+        .prepare(
+          "SELECT name FROM sqlite_schema WHERE type = 'table' AND name IN ('board_tabs', 'board_widgets') ORDER BY name",
+        )
+        .all(),
+    ).toEqual([{ name: "board_tabs" }, { name: "board_widgets" }]);
+    expect(
+      reopened.db
+        .prepare("SELECT strict FROM pragma_table_list WHERE name = 'board_widgets'")
+        .get(),
+    ).toEqual({ strict: 1 });
+    expect(
+      reopened.db
+        .prepare(
+          "SELECT name FROM sqlite_schema WHERE type = 'index' AND name = 'idx_agent_board_widgets_tab_position'",
+        )
+        .get(),
+    ).toEqual({ name: "idx_agent_board_widgets_tab_position" });
+  });
+
   it("does not create an unregistered agent database during widget byte lookup", () => {
     const stateDir = tempDirs.make("openclaw-board-no-create-");
     const store = new SqliteBoardStore({
