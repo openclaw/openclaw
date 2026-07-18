@@ -22,6 +22,7 @@ import {
   type ExecAsk,
   type ExecSecurity,
 } from "../../infra/exec-approvals.js";
+import { BLOCKED_TOOL_CALL_ABORT_FLOOR_MS } from "../../logging/diagnostic-run-activity.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import {
   createCliJsonlStreamingParser,
@@ -52,8 +53,9 @@ type ClaudeLiveTurn = {
   rawChars: number;
   sessionId?: string;
   noOutputTimer: NodeJS.Timeout | null;
+  /** Last stdout/stderr time; null until the process emits anything this turn. */
+  lastOutputAtMs: number | null;
   timeoutTimer: NodeJS.Timeout | null;
-  activeToolTimer: NodeJS.Timeout | null;
   activeTools: Map<string, ClaudeLiveActiveTool>;
   streamingParser: ReturnType<typeof createCliJsonlStreamingParser>;
   execPermission: ClaudeLiveExecPermission;
@@ -108,7 +110,6 @@ type ClaudeLiveToolUse = {
 };
 
 const CLAUDE_LIVE_IDLE_TIMEOUT_MS = 10 * 60 * 1_000;
-const CLAUDE_LIVE_ACTIVE_TOOL_PROGRESS_MS = 10_000;
 const CLAUDE_LIVE_MAX_SESSIONS = 16;
 const CLAUDE_LIVE_MAX_STDERR_CHARS = 64 * 1024;
 const CLAUDE_LIVE_DEFAULT_MAX_TURN_RAW_CHARS = 8 * 1024 * 1024;
@@ -376,10 +377,6 @@ function clearTurnTimers(turn: ClaudeLiveTurn): void {
     clearTimeout(turn.timeoutTimer);
     turn.timeoutTimer = null;
   }
-  if (turn.activeToolTimer) {
-    clearInterval(turn.activeToolTimer);
-    turn.activeToolTimer = null;
-  }
 }
 
 function clearDrainTimer(session: ClaudeLiveSession): void {
@@ -588,31 +585,6 @@ function readClaudeLiveToolResultIds(parsed: Record<string, unknown>): string[] 
   return toolResultIds;
 }
 
-function startClaudeLiveActiveToolHeartbeat(turn: ClaudeLiveTurn): void {
-  if (turn.activeToolTimer || turn.activeTools.size === 0) {
-    return;
-  }
-  turn.activeToolTimer = setInterval(() => {
-    if (turn.activeTools.size === 0) {
-      if (turn.activeToolTimer) {
-        clearInterval(turn.activeToolTimer);
-        turn.activeToolTimer = null;
-      }
-      return;
-    }
-    emitClaudeLiveProgress(turn, "cli_live:tool_running");
-  }, CLAUDE_LIVE_ACTIVE_TOOL_PROGRESS_MS);
-  turn.activeToolTimer.unref?.();
-}
-
-function stopClaudeLiveActiveToolHeartbeatIfIdle(turn: ClaudeLiveTurn): void {
-  if (turn.activeTools.size > 0 || !turn.activeToolTimer) {
-    return;
-  }
-  clearInterval(turn.activeToolTimer);
-  turn.activeToolTimer = null;
-}
-
 function markClaudeLiveToolStarted(turn: ClaudeLiveTurn, tool: ClaudeLiveToolUse): void {
   const now = Date.now();
   turn.activeTools.set(tool.toolCallId, {
@@ -630,7 +602,6 @@ function markClaudeLiveToolStarted(turn: ClaudeLiveTurn, tool: ClaudeLiveToolUse
     ...(tool.paramsSummary ? { paramsSummary: tool.paramsSummary } : {}),
   });
   emitClaudeLiveProgress(turn, "cli_live:tool_started");
-  startClaudeLiveActiveToolHeartbeat(turn);
 }
 
 function markClaudeLiveToolCompleted(turn: ClaudeLiveTurn, toolCallId: string): void {
@@ -653,7 +624,6 @@ function markClaudeLiveToolCompleted(turn: ClaudeLiveTurn, toolCallId: string): 
     ...event,
   });
   emitClaudeLiveProgress(turn, "cli_live:tool_result");
-  stopClaudeLiveActiveToolHeartbeatIfIdle(turn);
 }
 
 function completeActiveClaudeLiveTools(turn: ClaudeLiveTurn): void {
@@ -702,24 +672,44 @@ function noteClaudeLiveProgress(turn: ClaudeLiveTurn, parsed: Record<string, unk
   emitClaudeLiveProgress(turn, "cli_live:stream_progress");
 }
 
-function resetNoOutputTimer(session: ClaudeLiveSession): void {
-  const turn = session.currentTurn;
-  if (!turn) {
-    return;
-  }
+// The CLI emits a tool_use line, then nothing until the tool result, so a
+// quiet long-running tool is indistinguishable from a wedged process at the
+// stdout level. While observed tool calls are outstanding, extend the quiet
+// window to the blocked-tool floor instead of killing mid-tool.
+function armNoOutputTimer(session: ClaudeLiveSession, turn: ClaudeLiveTurn, delayMs: number): void {
   if (turn.noOutputTimer) {
     clearTimeout(turn.noOutputTimer);
   }
   turn.noOutputTimer = setTimeout(() => {
+    const quietSinceMs = turn.lastOutputAtMs ?? turn.startedAtMs;
+    if (turn.activeTools.size > 0) {
+      const quietBudgetMs = Math.max(session.noOutputTimeoutMs, BLOCKED_TOOL_CALL_ABORT_FLOOR_MS);
+      const remainingMs = quietSinceMs + quietBudgetMs - Date.now();
+      if (remainingMs > 0) {
+        armNoOutputTimer(session, turn, remainingMs);
+        return;
+      }
+    }
     closeLiveSession(
       session,
       "abort",
       createTimeoutError(
         session,
-        `CLI produced no output for ${Math.round(session.noOutputTimeoutMs / 1000)}s and was terminated.`,
+        `CLI produced no output for ${Math.round((Date.now() - quietSinceMs) / 1000)}s and was terminated.`,
+        // Retryable only when the process never produced any output this turn.
+        turn.lastOutputAtMs === null ? "cli_no_output_timeout" : undefined,
       ),
     );
-  }, session.noOutputTimeoutMs);
+  }, delayMs);
+}
+
+function resetNoOutputTimer(session: ClaudeLiveSession): void {
+  const turn = session.currentTurn;
+  if (!turn) {
+    return;
+  }
+  turn.lastOutputAtMs = Date.now();
+  armNoOutputTimer(session, turn, session.noOutputTimeoutMs);
 }
 
 function parseSessionId(parsed: Record<string, unknown>): string | undefined {
@@ -1164,8 +1154,8 @@ function createTurn(params: {
     rawLines: [],
     rawChars: 0,
     noOutputTimer: null,
+    lastOutputAtMs: null,
     timeoutTimer: null,
-    activeToolTimer: null,
     activeTools: new Map(),
     streamingParser: createCliJsonlStreamingParser({
       backend: params.context.preparedBackend.backend,
@@ -1179,17 +1169,7 @@ function createTurn(params: {
     resolve: params.resolve,
     reject: params.reject,
   };
-  turn.noOutputTimer = setTimeout(() => {
-    closeLiveSession(
-      params.session,
-      "abort",
-      createTimeoutError(
-        params.session,
-        `CLI produced no output for ${Math.round(params.noOutputTimeoutMs / 1000)}s and was terminated.`,
-        "cli_no_output_timeout",
-      ),
-    );
-  }, params.noOutputTimeoutMs);
+  armNoOutputTimer(params.session, turn, params.noOutputTimeoutMs);
   turn.timeoutTimer = setTimeout(() => {
     closeLiveSession(
       params.session,

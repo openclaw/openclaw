@@ -560,6 +560,37 @@ describe("embedded-agent runner run registry", () => {
     }
   });
 
+  it("expires stuck recovery as run_stalled with a live embedded handle", async () => {
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:reply-stuck-live",
+      sessionId: "session-reply-stuck-live",
+      resetTriggered: false,
+    });
+    const handle = createRunHandle({
+      abort: () => {
+        operation.abortByUser();
+      },
+    });
+    operation.attachBackend({
+      kind: "embedded",
+      cancel: handle.abort,
+      isStreaming: handle.isStreaming,
+    });
+    operation.setPhase("running");
+    setActiveEmbeddedRun("session-reply-stuck-live", handle);
+
+    const result = await abortAndDrainEmbeddedAgentRun({
+      sessionId: "session-reply-stuck-live",
+      sessionKey: "agent:main:reply-stuck-live",
+      reason: "stuck_recovery",
+      forceClear: true,
+      settleMs: 50,
+    });
+
+    expect(result.aborted).toBe(true);
+    expect(operation.result).toEqual({ kind: "failed", code: "run_stalled" });
+  });
+
   it("clamps oversized embedded run wait timers", async () => {
     vi.useFakeTimers();
     try {

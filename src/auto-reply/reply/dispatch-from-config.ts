@@ -67,15 +67,10 @@ import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { isAbortError } from "../../infra/unhandled-rejections.js";
-import type { StuckSessionRecoveryOutcome } from "../../logging/diagnostic-session-recovery.js";
 import {
   logMessageDispatchCompleted,
   logMessageDispatchStarted,
-  isStuckSessionRecoveryEnabled,
   markDiagnosticSessionProgress,
-  requestStuckDiagnosticSessionRecovery,
-  resolveStuckSessionAbortMs,
-  resolveStuckSessionWarnMs,
 } from "../../logging/diagnostic.js";
 import { createDiagnosticMessageLifecycle } from "../../logging/message-lifecycle.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -155,11 +150,7 @@ import type {
   ReplyDispatcher,
 } from "./reply-dispatcher.types.js";
 import { readDispatcherFailedCounts } from "./reply-dispatcher.types.js";
-import {
-  forceClearReplyRunBySessionId,
-  replyRunRegistry,
-  type ReplyOperation,
-} from "./reply-run-registry.js";
+import { replyRunRegistry, type ReplyOperation } from "./reply-run-registry.js";
 import {
   createReplyDeliveryContext,
   resolveReplyDeliveryAccountId,
@@ -812,31 +803,6 @@ export function getDispatcherFinalOutcomeCounts(dispatcher: DispatcherOutcomeCou
   };
 }
 
-function visibleRecoveryClearedActiveWork(outcome: StuckSessionRecoveryOutcome): boolean {
-  return (
-    outcome.status === "aborted" ||
-    outcome.status === "released" ||
-    (outcome.status === "noop" && outcome.reason === "no_active_work")
-  );
-}
-
-function isSameReplyOperation(
-  left: ReplyOperation | undefined,
-  right: ReplyOperation | undefined,
-): boolean {
-  return Boolean(left && right && left === right);
-}
-
-function visibleRecoveryShouldKeepWaiting(outcome: StuckSessionRecoveryOutcome): boolean {
-  return (
-    outcome.status === "skipped" &&
-    (outcome.reason === "active_reply_work" ||
-      outcome.reason === "active_embedded_run" ||
-      outcome.reason === "active_lane_task" ||
-      outcome.reason === "already_in_flight")
-  );
-}
-
 function transcriptMirrorForDeliveredPayload(
   metadata: TranscriptMirror,
   payload: ReplyPayload,
@@ -1237,10 +1203,6 @@ export async function dispatchReplyFromConfig(
       markDiagnosticSessionProgress({ sessionKey: acpDispatchSessionKey });
     }
   };
-  const visibleReplyRecoveryWaitMs = (() => {
-    const warnMs = resolveStuckSessionWarnMs(cfg);
-    return resolveStuckSessionAbortMs(cfg, warnMs);
-  })();
   const sessionStoreEntry = boundAcpDispatchSessionKey
     ? resolveSessionStoreLookup({ ...ctx, SessionKey: boundAcpDispatchSessionKey }, cfg)
     : initialSessionStoreEntry;
@@ -1332,7 +1294,7 @@ export async function dispatchReplyFromConfig(
     if (!dispatchOperationSessionKey) {
       return { status: "ready" };
     }
-    let operationSessionId =
+    const operationSessionId =
       dispatchAbortOperation?.sessionId ??
       initialSessionStoreEntry.entry?.sessionId ??
       sessionStoreEntry.entry?.sessionId ??
@@ -1346,23 +1308,7 @@ export async function dispatchReplyFromConfig(
         ctx,
         routeThreadId,
       });
-    const shouldRecoverStaleVisibleOperation =
-      phase === "dispatch" &&
-      replyTurnKind === "visible" &&
-      !allowSlackRoutedThreadBypass &&
-      isStuckSessionRecoveryEnabled(cfg) &&
-      params.replyOptions?.abortSignal?.aborted !== true;
-    const recoverStaleVisibleOperation = async (
-      activeOperation: ReplyOperation,
-    ): Promise<StuckSessionRecoveryOutcome | undefined> =>
-      requestStuckDiagnosticSessionRecovery({
-        sessionId: activeOperation.sessionId,
-        sessionKey: dispatchOperationSessionKey,
-        ageMs: visibleReplyRecoveryWaitMs,
-        queueDepth: 1,
-        staleActiveProgressAbortMs: visibleReplyRecoveryWaitMs,
-      });
-    let admission = await admitReplyTurn({
+    const admission = await admitReplyTurn({
       sessionKey: dispatchOperationSessionKey,
       sessionId: operationSessionId,
       kind: replyTurnKind,
@@ -1370,55 +1316,7 @@ export async function dispatchReplyFromConfig(
       routeThreadId,
       upstreamAbortSignal: params.replyOptions?.abortSignal,
       waitForActive: !allowActivePreDispatch && !allowSlackRoutedThreadBypass,
-      ...(shouldRecoverStaleVisibleOperation ? { waitTimeoutMs: visibleReplyRecoveryWaitMs } : {}),
     });
-    if (shouldRecoverStaleVisibleOperation) {
-      while (
-        admission.status === "skipped" &&
-        admission.reason === "active-run" &&
-        admission.activeOperation
-      ) {
-        operationSessionId = admission.activeOperation.sessionId;
-        const recovery = await recoverStaleVisibleOperation(admission.activeOperation);
-        let activeAfterRecovery = replyRunRegistry.get(dispatchOperationSessionKey);
-        if (
-          recovery &&
-          visibleRecoveryClearedActiveWork(recovery) &&
-          isSameReplyOperation(activeAfterRecovery, admission.activeOperation)
-        ) {
-          forceClearReplyRunBySessionId(
-            admission.activeOperation.sessionId,
-            new Error("Stale visible reply operation recovered without clearing reply registry"),
-          );
-          activeAfterRecovery = replyRunRegistry.get(dispatchOperationSessionKey);
-          if (isSameReplyOperation(activeAfterRecovery, admission.activeOperation)) {
-            break;
-          }
-        }
-        const replyOperationStillActive = Boolean(activeAfterRecovery);
-        if (
-          replyOperationStillActive &&
-          (!recovery ||
-            (!visibleRecoveryClearedActiveWork(recovery) &&
-              !visibleRecoveryShouldKeepWaiting(recovery)))
-        ) {
-          break;
-        }
-        if (activeAfterRecovery) {
-          operationSessionId = activeAfterRecovery.sessionId;
-        }
-        admission = await admitReplyTurn({
-          sessionKey: dispatchOperationSessionKey,
-          sessionId: operationSessionId,
-          kind: replyTurnKind,
-          resetTriggered: false,
-          routeThreadId,
-          upstreamAbortSignal: params.replyOptions?.abortSignal,
-          waitForActive: replyOperationStillActive,
-          waitTimeoutMs: visibleReplyRecoveryWaitMs,
-        });
-      }
-    }
     if (admission.status === "skipped") {
       if (allowActivePreDispatch && admission.reason === "active-run") {
         preDispatchAbortOperation = admission.activeOperation;
@@ -2837,6 +2735,7 @@ export async function dispatchReplyFromConfig(
         if (isDispatchOperationAborted()) {
           return;
         }
+        dispatchReplyOperation?.recordActivity();
         markProgress();
         if (options?.waitForDirectBlockReplyDelivery) {
           await waitForPendingDirectBlockReplyDelivery(dispatchAbortOperation?.abortSignal);
@@ -2972,6 +2871,7 @@ export async function dispatchReplyFromConfig(
               waitForDirectBlockReplyDelivery: true,
             }),
             onToolResult: (payload: ReplyPayload) => {
+              dispatchReplyOperation?.recordActivity();
               markProgress();
               const run = async () => {
                 if (isDispatchOperationAborted()) {

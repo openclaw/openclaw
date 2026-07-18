@@ -380,7 +380,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     });
   });
 
-  it("does not use completion timeout outcome for terminal timeout with active mutating item", async () => {
+  it("uses the terminal dead-client outcome for silent terminal timeouts", async () => {
     const harness = createStartedThreadHarness();
     const params = createParams(
       path.join(tempDir, "session.jsonl"),
@@ -415,7 +415,11 @@ describe("runCodexAppServerAttempt turn watches", () => {
     expect(result.codexAppServerFailure?.replaySafe).toBe(false);
     expect(result.codexAppServerFailure?.replayBlockedReason).toBe("potential_side_effect");
     expect(result.codexAppServerFailure?.diagnostics).toBeUndefined();
-    expect(result.promptTimeoutOutcome).toBeUndefined();
+    expect(result.promptTimeoutOutcome).toMatchObject({
+      message: expect.stringContaining("Codex stopped responding"),
+      replayInvalid: true,
+      livenessState: "abandoned",
+    });
   });
 
   it("does not use completion timeout outcome for non-completion timeout with assistant output", async () => {

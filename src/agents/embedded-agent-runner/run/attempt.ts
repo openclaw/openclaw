@@ -3141,6 +3141,16 @@ export async function runEmbeddedAttempt(
           idleTimeoutMs,
           (error) => idleTimeoutTrigger?.(error),
         );
+      } else {
+        // Local providers opt out of inter-chunk gap policing, but a request
+        // whose headers never arrive must still release the turn.
+        const localStreamCreationTimeoutMs = 300_000;
+        activeSession.agent.streamFn = streamWithIdleTimeout(
+          activeSession.agent.streamFn,
+          localStreamCreationTimeoutMs,
+          (error) => idleTimeoutTrigger?.(error),
+          { scope: "creation-only" },
+        );
       }
       let diagnosticModelCallSeq = 0;
       activeSession.agent.streamFn = wrapStreamFnWithDiagnosticModelCallEvents(

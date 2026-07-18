@@ -1011,6 +1011,7 @@ export function createFollowupRunner(params: {
                   emitLifecycleTerminal: false,
                   onAgentRunStart: () => opts?.onAgentRunStart?.(runId),
                   suppressAssistantBridge: run.silentExpected,
+                  onActivity: () => replyOperation?.recordActivity(),
                   onToolEvent: async (payload) => {
                     await cliToolSummaryTracker.noteToolEvent(payload);
                     if (payload.phase === "result") {
@@ -1252,6 +1253,7 @@ export function createFollowupRunner(params: {
                 shouldEmitToolOutput: shouldEmitToolOutputProgress,
                 onToolResult: deliverFollowupToolSummary,
                 onAgentEvent: (evt) => {
+                  replyOperation?.recordActivity();
                   lifecycleBackstop.note(evt);
                   return enqueueProgressDelivery(async () => {
                     await forwardFollowupProgressEvent({

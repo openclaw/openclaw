@@ -41,14 +41,16 @@ type TestReplyOperation = ReplyOperation & {
 };
 
 function createReplyOperation(): TestReplyOperation {
+  const now = Date.now();
   return {
     key: "test",
     sessionId: "session",
     abortSignal: new AbortController().signal,
     resetTriggered: false,
+    startedAtMs: now,
     phase: "queued",
     result: null,
-    lastActivityAtMs: Date.now(),
+    lastActivityAtMs: now,
     recordActivity: vi.fn<ReplyOperation["recordActivity"]>(),
     setPhase: vi.fn<ReplyOperation["setPhase"]>(),
     updateSessionId: vi.fn<ReplyOperation["updateSessionId"]>(),

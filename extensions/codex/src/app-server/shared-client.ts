@@ -26,6 +26,7 @@ type SharedCodexAppServerClientEntry = {
   activeLeases: number;
   pendingAcquires: number;
   closeWhenIdle: boolean;
+  closeError?: Error;
 };
 
 type SharedCodexAppServerClientState = {
@@ -43,6 +44,9 @@ type KeyedSharedCodexAppServerClientState = {
   leasedReleases?: unknown;
 };
 
+// Clients we already force-closed for suspect retirement; a repeat retire must
+// report closed:false instead of pretending to close the corpse again.
+const suspectClosedClients = new WeakSet<CodexAppServerClient>();
 const SHARED_CODEX_APP_SERVER_CLIENT_STATE = Symbol.for("openclaw.codexAppServerClientState");
 
 function getSharedCodexAppServerClientState(): SharedCodexAppServerClientState {
@@ -270,6 +274,9 @@ async function acquireSharedCodexAppServerClient(
       options?.timeoutMs ?? 0,
       "codex app-server initialize timed out",
     );
+    if (entry.closeError) {
+      throw entry.closeError;
+    }
     client.setActiveSharedLeaseCountProviderForUnscopedNotifications(() => entry.activeLeases);
     const release = leaseOptions?.leased ? retainSharedClientEntry(entry) : undefined;
     return release ? { client, release } : { client };
@@ -398,9 +405,18 @@ export function retainSharedCodexAppServerClientIfCurrent(
   return undefined;
 }
 
-/** Marks a matching shared client to close after active leases/acquires drain. */
+/**
+ * Retires a matching shared client. Default is graceful: detach from the map
+ * (future acquisitions get a fresh client) and close once leases drain.
+ * `failActiveLeases` is for suspect clients only (timed-out turns): it closes
+ * the physical connection immediately so co-leased attempts hit the normal
+ * client-closed retry path, and pending acquires reject instead of leasing
+ * the poisoned process. Routine cleanup must NOT use it — it would abort
+ * healthy sibling turns on a working client.
+ */
 export function retireSharedCodexAppServerClientIfCurrent(
   client: CodexAppServerClient | undefined,
+  opts?: { failActiveLeases?: boolean },
 ): { activeLeases: number; closed: boolean } | undefined {
   if (!client) {
     return undefined;
@@ -410,12 +426,28 @@ export function retireSharedCodexAppServerClientIfCurrent(
     if (entry.client === client) {
       state.clients.delete(key);
       entry.closeWhenIdle = true;
+      if (opts?.failActiveLeases) {
+        entry.closeError = new Error("codex app-server client is closed");
+        const closed = closeRetiredSharedClientEntry(entry);
+        if (closed) {
+          suspectClosedClients.add(client);
+        }
+        return { activeLeases: entry.activeLeases, closed };
+      }
       const closed = closeRetiredSharedClientEntryIfIdle(entry);
       return { activeLeases: entry.activeLeases, closed };
     }
   }
   const activeLeases = state.leasedReleases.get(client)?.length ?? 0;
   if (activeLeases > 0) {
+    // A gracefully detached client (e.g. one-shot cleanup) can still be leased
+    // when a later terminal-idle kill declares it suspect; the map miss must
+    // not let the poisoned process keep serving those co-leases.
+    if (opts?.failActiveLeases && !suspectClosedClients.has(client)) {
+      suspectClosedClients.add(client);
+      client.close();
+      return { activeLeases, closed: true };
+    }
     return { activeLeases, closed: false };
   }
   return undefined;
@@ -541,6 +573,16 @@ function closeRetiredSharedClientEntryIfIdle(entry: SharedCodexAppServerClientEn
   }
   const client = entry.client;
   entry.closeWhenIdle = false;
+  entry.client = undefined;
+  client.close();
+  return true;
+}
+
+function closeRetiredSharedClientEntry(entry: SharedCodexAppServerClientEntry): boolean {
+  const client = entry.client;
+  if (!client) {
+    return false;
+  }
   entry.client = undefined;
   client.close();
   return true;

@@ -341,6 +341,8 @@ type RunCliAgentWithLifecycleParams = {
   emitLifecycleTerminal?: boolean;
   onAgentRunStart?: () => void;
   suppressAssistantBridge?: boolean;
+  /** Stamped before every delivered CLI progress event. */
+  onActivity?: () => void;
   onAssistantText?: (text: string) => Promise<void>;
   onReasoningText?: (text: string) => Promise<void>;
   onToolEvent?: (payload: CliToolEventPayload) => Promise<void>;
@@ -445,6 +447,17 @@ async function runCliAgentWithLifecycleInternal(
       },
     });
   }
+  // Stamp every CLI event independently of delivery. Silent runs suppress
+  // callbacks but their real output must still refresh stale-run evidence.
+  const activityBridge = params.onActivity
+    ? createAgentEventBridge<Record<string, never>>({
+        runId: params.runId,
+        read: () => ({}),
+        deliver: async () => {
+          params.onActivity?.();
+        },
+      })
+    : undefined;
   const assistantBridge = createAssistantTextBridge({
     runId: params.runId,
     suppressed: params.suppressAssistantBridge,
@@ -473,6 +486,7 @@ async function runCliAgentWithLifecycleInternal(
     deliver: maybeAnnounceFastModeAutoOff,
   });
   const bridges = [
+    activityBridge,
     assistantBridge,
     reasoningBridge,
     toolBridge,

@@ -2291,6 +2291,7 @@ export async function runAgentTurnWithFallback(params: {
                   emitLifecycleTerminal: false,
                   onAgentRunStart: notifyAgentRunStart,
                   suppressAssistantBridge: params.followupRun.run.silentExpected,
+                  onActivity: () => params.replyOperation?.recordActivity(),
                   onAssistantText: async (text) => {
                     const textForTyping = await handlePartialForTyping({ text } as ReplyPayload);
                     if (textForTyping === undefined || !params.opts?.onPartialReply) {
@@ -2603,6 +2604,7 @@ export async function runAgentTurnWithFallback(params: {
                         : undefined,
                     onReasoningEnd: params.opts?.onReasoningEnd,
                     onAgentEvent: async (evt) => {
+                      params.replyOperation?.recordActivity();
                       lifecycleBackstop.note(evt);
                       // Signal run start only after the embedded agent emits real activity.
                       const hasLifecyclePhase =
@@ -2865,6 +2867,7 @@ export async function runAgentTurnWithFallback(params: {
                           return (payload: ReplyPayload) => {
                             toolResultChain = toolResultChain
                               .then(async () => {
+                                params.replyOperation?.recordActivity();
                                 const { text, skip } = normalizeStreamingText(payload);
                                 if (skip) {
                                   return;

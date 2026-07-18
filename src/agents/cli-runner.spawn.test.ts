@@ -1970,7 +1970,7 @@ ${JSON.stringify({
     expect(parsed.response.response.toolUseID).toBe("tool-allow-1");
   });
 
-  it("reports Claude live stream progress and keeps native tools fresh while they are running", async () => {
+  it("reports progress without heartbeats and extends the quiet-tool watchdog", async () => {
     vi.useFakeTimers({
       toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
     });
@@ -1982,6 +1982,7 @@ ${JSON.stringify({
       }
     });
     let stdoutListener: ((chunk: string) => void) | undefined;
+    const cancel = vi.fn();
     const stdin = {
       write: vi.fn((data: string, cb?: (err?: Error | null) => void) => {
         stdoutListener?.(
@@ -2021,7 +2022,7 @@ ${JSON.stringify({
         startedAtMs: Date.now(),
         stdin,
         wait: vi.fn(() => new Promise(() => {})),
-        cancel: vi.fn(),
+        cancel,
       };
     });
 
@@ -2034,7 +2035,7 @@ ${JSON.stringify({
         sessionKey: "agent:main:diagnostics",
         prompt: "hello",
         backend: { liveSession: "claude-stdio" },
-        timeoutMs: 120_000,
+        timeoutMs: 3_600_000,
       });
       const resultPromise = runClaudeLiveSessionTurn({
         context,
@@ -2072,11 +2073,16 @@ ${JSON.stringify({
       expect(
         getDiagnosticSessionActivitySnapshot({ sessionKey: "agent:main:diagnostics" })
           .lastProgressReason,
-      ).toBe("cli_live:tool_running");
+      ).toBe("cli_live:tool_started");
       expect(
         getDiagnosticSessionActivitySnapshot({ sessionKey: "agent:main:diagnostics" })
           .lastProgressAgeMs,
-      ).toBeLessThan(100);
+      ).toBeGreaterThanOrEqual(10_000);
+
+      // The 120s byte-silence budget must not kill an observed in-flight tool;
+      // it is extended to the shared 15-minute blocked-tool floor.
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(cancel).not.toHaveBeenCalled();
 
       stdoutListener?.(
         [

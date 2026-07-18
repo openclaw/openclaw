@@ -424,6 +424,7 @@ function createMockReplyOperation(): {
       resetTriggered: false,
       phase: "running",
       result: null,
+      startedAtMs: Date.now(),
       lastActivityAtMs: Date.now(),
       recordActivity: vi.fn(),
       setPhase: vi.fn(),

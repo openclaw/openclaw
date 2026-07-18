@@ -166,6 +166,84 @@ describe("runCliAgentWithLifecycle", () => {
       stopReason: "end_turn",
     });
   });
+
+  it("stamps activity for every delivered CLI bridge event", async () => {
+    cliDispatchState.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "assistant",
+        data: { text: "Visible answer" },
+      });
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "tool",
+        data: { name: "read", phase: "start" },
+      });
+      return { payloads: [], meta: { durationMs: 1 } } satisfies EmbeddedAgentRunResult;
+    });
+    const onActivity = vi.fn();
+
+    await runCliAgentWithLifecycle({
+      runId: "run-activity",
+      provider: "codex-cli",
+      onActivity,
+      onAssistantText: vi.fn(async () => undefined),
+      onToolEvent: vi.fn(async () => undefined),
+      runParams: {
+        sessionId: "session-1",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        prompt: "hello",
+        provider: "codex-cli",
+        model: "gpt-5.4",
+        thinkLevel: "off",
+        timeoutMs: 1_000,
+        runId: "run-activity",
+      },
+    });
+
+    expect(onActivity).toHaveBeenCalledTimes(2);
+  });
+
+  it("stamps activity when silent runs suppress delivery callbacks", async () => {
+    cliDispatchState.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "assistant",
+        data: { text: "Silent answer" },
+      });
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "tool",
+        data: { name: "read", phase: "start" },
+      });
+      return { payloads: [], meta: { durationMs: 1 } } satisfies EmbeddedAgentRunResult;
+    });
+    const onActivity = vi.fn();
+    const onAssistantText = vi.fn(async () => undefined);
+
+    await runCliAgentWithLifecycle({
+      runId: "run-activity-suppressed",
+      provider: "codex-cli",
+      suppressAssistantBridge: true,
+      onActivity,
+      onAssistantText,
+      runParams: {
+        sessionId: "session-1",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        prompt: "hello",
+        provider: "codex-cli",
+        model: "gpt-5.4",
+        thinkLevel: "off",
+        timeoutMs: 1_000,
+        runId: "run-activity-suppressed",
+      },
+    });
+
+    expect(onAssistantText).not.toHaveBeenCalled();
+    expect(onActivity).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("keepCliSessionBindingOnlyWhenReused", () => {
