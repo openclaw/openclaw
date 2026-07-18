@@ -1390,59 +1390,6 @@ extension RootTabs {
     }
 }
 
-/// Phone tabs push Settings routes (gateway, voice) onto their own stack so
-/// Back returns to the tab content the user navigated from; only global flows
-/// (deep links, onboarding, problem banner) jump to the canonical Settings tab.
-private struct PhoneTabSettingsHost<Content: View>: View {
-    @State private var settingsPath: [SettingsRoute] = []
-    private let resetRequestID: Int
-    private let content: (_ openSettingsRoute: @escaping (SettingsRoute) -> Void) -> Content
-
-    init(
-        resetRequestID: Int = 0,
-        @ViewBuilder content: @escaping (_ openSettingsRoute: @escaping (SettingsRoute) -> Void) -> Content)
-    {
-        self.resetRequestID = resetRequestID
-        self.content = content
-    }
-
-    var body: some View {
-        NavigationStack(path: self.$settingsPath) {
-            self.content { route in
-                self.settingsPath.append(route)
-            }
-            .navigationDestination(for: SettingsRoute.self) { route in
-                SettingsProTab(directRoute: route)
-            }
-        }
-        .onChange(of: self.resetRequestID) { _, _ in
-            self.settingsPath.removeAll()
-        }
-    }
-}
-
-private struct RootTabsHomeCanvasPayload: Codable {
-    var gatewayState: String
-    var eyebrow: String
-    var title: String
-    var subtitle: String
-    var gatewayLabel: String
-    var activeAgentName: String
-    var activeAgentBadge: String
-    var activeAgentCaption: String
-    var agentCount: Int
-    var agents: [RootTabsHomeCanvasAgentCard]
-    var footer: String
-}
-
-private struct RootTabsHomeCanvasAgentCard: Codable {
-    var id: String
-    var name: String
-    var badge: String
-    var caption: String
-    var isActive: Bool
-}
-
 private struct RootCameraFlashOverlay: View {
     var nonce: Int
 
