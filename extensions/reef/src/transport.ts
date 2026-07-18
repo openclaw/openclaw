@@ -36,7 +36,7 @@ export class ReefRelayError extends Error {
   }
 }
 
-export class ReefRelayUnavailableError extends Error {
+class ReefRelayUnavailableError extends Error {
   constructor(cause: unknown) {
     super(cause instanceof Error ? cause.message : String(cause), { cause });
     this.name = "ReefRelayUnavailableError";
@@ -67,10 +67,7 @@ export function isReefOwnershipRejection(error: unknown): boolean {
   return error instanceof ReefRelayError && error.message === "unknown_handle";
 }
 
-async function readReefRelaySuccessJson<T>(
-  response: Response,
-  signal?: AbortSignal,
-): Promise<T> {
+async function readReefRelaySuccessJson<T>(response: Response, signal?: AbortSignal): Promise<T> {
   try {
     return await readProviderJsonResponse<T>(response, "reef.relay", {
       maxBytes: REEF_RELAY_JSON_MAX_BYTES,

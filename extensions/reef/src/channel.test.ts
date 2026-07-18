@@ -17,6 +17,16 @@ import { resolveReefInboundDispatchContent } from "./inbound.js";
 import { setReefRuntime } from "./runtime.js";
 import { openReefTrustStore } from "./trust-store.js";
 
+function deferred() {
+  let resolve!: () => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<void>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 describe("Reef inbound dispatch content", () => {
   it("keeps provenance model-visible without storing it in the transcript body", () => {
     const content = resolveReefInboundDispatchContent({
@@ -215,8 +225,8 @@ describe("Reef channel lifecycle", () => {
   it("does not activate when the parent aborts during startup reconcile", async () => {
     const parent = new AbortController();
     const inbox = hangingInbox();
-    const reconcileStarted = Promise.withResolvers<void>();
-    const finishReconcile = Promise.withResolvers<void>();
+    const reconcileStarted = deferred();
+    const finishReconcile = deferred();
     const onReady = vi.fn(async () => {});
     const lifecycle = runReefChannelLifecycle({
       parentSignal: parent.signal,
@@ -239,8 +249,8 @@ describe("Reef channel lifecycle", () => {
   it("does not reject when startup reconcile fails after the parent aborts", async () => {
     const parent = new AbortController();
     const inbox = hangingInbox();
-    const reconcileStarted = Promise.withResolvers<void>();
-    const finishReconcile = Promise.withResolvers<void>();
+    const reconcileStarted = deferred();
+    const finishReconcile = deferred();
     const onReady = vi.fn(async () => {});
     const lifecycle = runReefChannelLifecycle({
       parentSignal: parent.signal,
@@ -263,8 +273,8 @@ describe("Reef channel lifecycle", () => {
   it("does not start the inbox when the parent aborts during activation", async () => {
     const parent = new AbortController();
     const inbox = hangingInbox();
-    const activationStarted = Promise.withResolvers<void>();
-    const finishActivation = Promise.withResolvers<void>();
+    const activationStarted = deferred();
+    const finishActivation = deferred();
     const lifecycle = runReefChannelLifecycle({
       parentSignal: parent.signal,
       startInbox: inbox.startInbox,
@@ -292,13 +302,15 @@ describe("Reef channel lifecycle", () => {
       startInbox: inbox.startInbox,
       reconcile: async () => {
         reconciles += 1;
-        throw new Error("rate_limited");
+        if (reconciles > 1) {
+          throw new Error("rate_limited");
+        }
       },
       onReconcileError: (error) => errors.push(error),
       reconcileIntervalMs: 5,
     });
     await vi.waitFor(() => {
-      expect(reconciles).toBeGreaterThanOrEqual(2);
+      expect(reconciles).toBeGreaterThanOrEqual(3);
     });
     expect(errors.length).toBeGreaterThanOrEqual(2);
     expect(inbox.isSettled()).toBe(false);

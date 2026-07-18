@@ -8,7 +8,6 @@ import { canonicalBytes, fromBase64url, sha256Hex } from "../protocol/index.js";
 import {
   ReefInboxConnection,
   ReefRelayError,
-  ReefRelayUnavailableError,
   ReefTransportClient,
   createReefWebSocket,
   isRetryableReefRelayFailure,
@@ -44,9 +43,6 @@ describe("isRetryableReefRelayFailure", () => {
     expect(
       isRetryableReefRelayFailure(Object.assign(new Error("timed out"), { name: "TimeoutError" })),
     ).toBe(true);
-    expect(
-      isRetryableReefRelayFailure(new ReefRelayUnavailableError(new TypeError("offline"))),
-    ).toBe(true);
   });
 
   it("rejects definitive relay and local failures", () => {
@@ -58,20 +54,17 @@ describe("isRetryableReefRelayFailure", () => {
 describe("ReefTransportClient network failures", () => {
   it("normalizes fetch failures without swallowing the cause", async () => {
     const cause = new TypeError("fetch failed");
-    const client = new ReefTransportClient(
-      "https://relay.example",
-      "alice",
-      keys,
-      async () => {
-        throw cause;
-      },
-    );
+    const client = new ReefTransportClient("https://relay.example", "alice", keys, async () => {
+      throw cause;
+    });
 
-    await expect(client.listFriends()).rejects.toMatchObject({
+    const error = await client.listFriends().catch((cause) => cause);
+    expect(error).toMatchObject({
       name: "ReefRelayUnavailableError",
       message: "fetch failed",
       cause,
     });
+    expect(isRetryableReefRelayFailure(error)).toBe(true);
   });
 
   it("normalizes connection loss while reading a successful response body", async () => {
