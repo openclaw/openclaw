@@ -259,6 +259,40 @@ describe("memory-wiki cli", () => {
     expect(index).not.toContain("Oversized Body");
   });
 
+  it("rejects non-regular apply synthesis --body-file before opening the path", async () => {
+    const { config } = await createCliVault();
+    const statSpy = vi.spyOn(fs, "stat").mockResolvedValue({ isFile: () => false } as never);
+    const openSpy = vi.spyOn(fs, "open").mockRejectedValue(new Error("should not open"));
+    const program = new Command();
+    program.name("test");
+    program.exitOverride();
+    program.configureOutput({
+      writeErr: () => {},
+      writeOut: () => {},
+    });
+    registerWikiCli(program, { config });
+
+    await expect(
+      program.parseAsync(
+        [
+          "wiki",
+          "apply",
+          "synthesis",
+          "Named Pipe",
+          "--body-file",
+          "ignored.pipe",
+          "--source-id",
+          "source.alpha",
+        ],
+        { from: "user" },
+      ),
+    ).rejects.toThrow("wiki apply synthesis --body-file must point to a regular file.");
+
+    expect(openSpy).not.toHaveBeenCalled();
+    statSpy.mockRestore();
+    openSpy.mockRestore();
+  });
+
   it("resolves --agent for local commands and requires it with multiple agent vaults", async () => {
     const { rootDir, config } = await createCliVault({
       config: { vault: { scope: "agent" } },

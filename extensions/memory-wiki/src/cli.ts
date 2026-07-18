@@ -388,16 +388,16 @@ function createOversizedWikiApplyBodyFileError(size?: number): Error {
 }
 
 async function readWikiApplyBodyFile(bodyFile: string): Promise<string> {
+  const stat = await fs.stat(bodyFile);
+  if (!stat.isFile()) {
+    throw new Error("wiki apply synthesis --body-file must point to a regular file.");
+  }
+  if (stat.size > WIKI_APPLY_BODY_FILE_MAX_BYTES) {
+    throw createOversizedWikiApplyBodyFileError(stat.size);
+  }
+
   const handle = await fs.open(bodyFile, "r");
   try {
-    const stat = await handle.stat();
-    if (!stat.isFile()) {
-      throw new Error("wiki apply synthesis --body-file must point to a regular file.");
-    }
-    if (stat.size > WIKI_APPLY_BODY_FILE_MAX_BYTES) {
-      throw createOversizedWikiApplyBodyFileError(stat.size);
-    }
-
     const chunks: Buffer[] = [];
     let totalBytes = 0;
     let position = 0;
