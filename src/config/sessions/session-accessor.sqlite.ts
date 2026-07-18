@@ -40,7 +40,9 @@ export {
 } from "./session-accessor.sqlite-checkpoint.js";
 export {
   forkSqliteSessionAtMessage,
+  listSqliteSessionBranches,
   rewindSqliteSessionToMessage,
+  switchSqliteSessionBranch,
 } from "./session-accessor.sqlite-message-cut.js";
 export {
   appendSqliteExpectedSessionTranscriptTurn,
