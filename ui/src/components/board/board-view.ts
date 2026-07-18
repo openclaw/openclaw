@@ -27,7 +27,8 @@ import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import "../../styles/board.css";
 import "../web-awesome-tabs.ts";
 import "../web-awesome.ts";
-import { OpenClawBoardWidgetCell, type BoardWidgetCellCallbacks } from "./board-widget-cell.ts";
+import type { BoardWidgetCellCallbacks } from "./board-widget-cell.ts";
+import "./board-widget-cell.ts";
 
 type BoardPointerGesture = {
   dropValid: boolean;
