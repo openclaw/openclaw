@@ -307,15 +307,29 @@ function isChannelPath(path: string, channel: ChannelKind): boolean {
   return path === channelPrefix || path.startsWith(`${channelPrefix}.`);
 }
 
+function hasCompetingChannelConfigChange(
+  changedPaths: readonly string[],
+  channel: ChannelKind,
+): boolean {
+  return changedPaths.some(
+    (path) => isChannelPath(path, channel) && !isChannelAccountIndexReloadPath(path, channel),
+  );
+}
+
+function shouldIncludeKnownAccountsForPluginReload(
+  changedPaths: readonly string[],
+  channel: ChannelKind,
+): boolean {
+  return !hasCompetingChannelConfigChange(changedPaths, channel);
+}
+
 function shouldIncludeKnownAccountsForAccountIndexReload(
   changedPaths: readonly string[],
   channel: ChannelKind,
 ): boolean {
   return (
     changedPaths.some((path) => isChannelAccountIndexReloadPath(path, channel)) &&
-    !changedPaths.some(
-      (path) => isChannelPath(path, channel) && !isChannelAccountIndexReloadPath(path, channel),
-    )
+    !hasCompetingChannelConfigChange(changedPaths, channel)
   );
 }
 
@@ -821,9 +835,13 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           channels: [...channelsStoppedBeforePluginReload],
           run: async (channel) => {
             params.logChannels.info(`restarting ${channel} channel after ${reason}`);
-            await runOutsideGatewayRootWorkAdmission(() =>
-              params.startChannel(channel, undefined, { includeKnownAccounts: true }),
-            );
+            if (shouldIncludeKnownAccountsForPluginReload(plan.changedPaths, channel)) {
+              await runOutsideGatewayRootWorkAdmission(() =>
+                params.startChannel(channel, undefined, { includeKnownAccounts: true }),
+              );
+            } else {
+              await runOutsideGatewayRootWorkAdmission(() => params.startChannel(channel));
+            }
             channelsStoppedBeforePluginReload.delete(channel);
           },
           onFailure: (channel, err) => {
@@ -1170,7 +1188,9 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
               return;
             }
             const includeKnownAccounts =
-              (plan.reloadPlugins && channelsStoppedBeforePluginReload.has(name)) ||
+              (plan.reloadPlugins &&
+                channelsStoppedBeforePluginReload.has(name) &&
+                shouldIncludeKnownAccountsForPluginReload(plan.changedPaths, name)) ||
               (!plan.reloadPlugins &&
                 shouldIncludeKnownAccountsForAccountIndexReload(plan.changedPaths, name));
             params.logChannels.info(`restarting ${name} channel`);
