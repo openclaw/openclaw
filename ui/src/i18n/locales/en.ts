@@ -2048,6 +2048,7 @@ export const en: TranslationMap = {
     linkDocs: "Docs",
     linkGitHub: "GitHub",
     linkDiscord: "Discord",
+    linkX: "X (Twitter)",
     linkChangelog: "Changelog",
     license: "© 2026 OpenClaw Foundation — MIT License.",
     artifactTitle: "Control UI",
