@@ -734,11 +734,9 @@ pub fn quickchat_set_shortcut(
     let candidate_already_registered = current.shortcut == candidate && current_registered;
 
     if !candidate_already_registered {
-        manager
-            .register(candidate)
-            .map_err(|error| {
-                format!("Could not register shortcut \"{candidate_accelerator}\": {error}")
-            })?;
+        manager.register(candidate).map_err(|error| {
+            format!("Could not register shortcut \"{candidate_accelerator}\": {error}")
+        })?;
     }
     if current.shortcut != candidate && current_registered {
         if let Err(error) = manager.unregister(current.shortcut) {

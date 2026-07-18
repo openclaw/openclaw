@@ -100,14 +100,13 @@ export function buildAgentSummaries(cfg: OpenClawConfig): AgentSummary[] {
       : configIdentity && (identityName || identityEmoji || identityAvatarUrl)
         ? "config"
         : undefined;
-    return {
+    const summary: AgentSummary = {
       id,
       name: normalizeOptionalString(
         configuredAgents.find((agent) => normalizeAgentId(agent.id) === id)?.name,
       ),
       identityName,
       identityEmoji,
-      ...(identityAvatarUrl ? { identityAvatarUrl } : {}),
       identitySource,
       workspace,
       agentDir: resolveAgentDir(cfg, id),
@@ -115,6 +114,10 @@ export function buildAgentSummaries(cfg: OpenClawConfig): AgentSummary[] {
       bindings: bindingCounts.get(id) ?? 0,
       isDefault: id === defaultAgentId,
     };
+    if (identityAvatarUrl) {
+      summary.identityAvatarUrl = identityAvatarUrl;
+    }
+    return summary;
   });
 }
 
