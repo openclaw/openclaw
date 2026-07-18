@@ -5,124 +5,70 @@ import {
   createNoopLogger,
   installCronTestHooks,
 } from "../service.test-harness.js";
-import type { CronDelivery, CronJobCreate, CronSchedule } from "../types.js";
+import type { CronDelivery, CronJobCreate } from "../types.js";
 import { resolveInitialCronDelivery } from "./initial-delivery.js";
 
-const schedule: CronSchedule = { kind: "at", at: "2026-01-01T00:00:00Z" };
-const everyMinute: CronSchedule = { kind: "every", everyMs: 60_000 };
-
-function agentTurn(overrides: Partial<CronJobCreate> = {}): CronJobCreate {
+function createInput(params: {
+  sessionTarget: CronJobCreate["sessionTarget"];
+  payload: CronJobCreate["payload"];
+  delivery?: CronDelivery;
+}): CronJobCreate {
   return {
-    name: "test-agent",
+    name: "initial delivery",
     enabled: true,
-    schedule,
-    sessionTarget: "main",
+    schedule: { kind: "every", everyMs: 60_000 },
+    sessionTarget: params.sessionTarget,
     wakeMode: "now",
     failureAlert: false,
-    payload: { kind: "agentTurn", message: "hello" },
-    ...overrides,
-  };
-}
-
-function command(overrides: Partial<CronJobCreate> = {}): CronJobCreate {
-  return {
-    name: "test-cmd",
-    enabled: true,
-    schedule,
-    sessionTarget: "main",
-    wakeMode: "now",
-    failureAlert: false,
-    payload: { kind: "command", argv: ["echo", "hi"] },
-    ...overrides,
-  };
-}
-
-function systemEvent(overrides: Partial<CronJobCreate> = {}): CronJobCreate {
-  return {
-    name: "test-event",
-    enabled: true,
-    schedule,
-    sessionTarget: "main",
-    wakeMode: "now",
-    failureAlert: false,
-    payload: { kind: "systemEvent", text: "boot" },
-    ...overrides,
+    payload: params.payload,
+    delivery: params.delivery,
   };
 }
 
 describe("resolveInitialCronDelivery", () => {
-  it("returns explicit delivery unchanged", () => {
-    const delivery: CronDelivery = { mode: "webhook", to: "https://example.com/hook" };
-    expect(resolveInitialCronDelivery(agentTurn({ delivery }))).toBe(delivery);
-  });
-
-  // isolated
-  it("defaults to announce for isolated agentTurn", () => {
-    expect(resolveInitialCronDelivery(agentTurn({ sessionTarget: "isolated" }))).toEqual({
-      mode: "announce",
-    });
-  });
-
-  it("defaults to announce for isolated command", () => {
-    expect(resolveInitialCronDelivery(command({ sessionTarget: "isolated" }))).toEqual({
-      mode: "announce",
-    });
-  });
-
-  // current
-  it("defaults to announce for current agentTurn", () => {
-    expect(resolveInitialCronDelivery(agentTurn({ sessionTarget: "current" }))).toEqual({
-      mode: "announce",
-    });
-  });
-
-  it("defaults to announce for current command", () => {
-    expect(resolveInitialCronDelivery(command({ sessionTarget: "current" }))).toEqual({
-      mode: "announce",
-    });
-  });
-
-  // session:<id>
-  it("defaults to announce for session:<id> agentTurn", () => {
-    expect(resolveInitialCronDelivery(agentTurn({ sessionTarget: "session:abc-123" }))).toEqual({
-      mode: "announce",
-    });
-  });
-
-  it("defaults to announce for session:<id> command", () => {
-    expect(resolveInitialCronDelivery(command({ sessionTarget: "session:abc-123" }))).toEqual({
-      mode: "announce",
-    });
-  });
-
-  // main
-  it("returns undefined for main agentTurn (no default delivery)", () => {
-    expect(resolveInitialCronDelivery(agentTurn({ sessionTarget: "main" }))).toBeUndefined();
-  });
-
-  it("returns undefined for main command (no default delivery)", () => {
-    expect(resolveInitialCronDelivery(command({ sessionTarget: "main" }))).toBeUndefined();
-  });
-
-  // systemEvent never gets auto-delivery
-  it("returns undefined for isolated systemEvent", () => {
-    expect(resolveInitialCronDelivery(systemEvent({ sessionTarget: "isolated" }))).toBeUndefined();
-  });
-
-  it("returns undefined for current systemEvent", () => {
-    expect(resolveInitialCronDelivery(systemEvent({ sessionTarget: "current" }))).toBeUndefined();
-  });
-
-  it("returns undefined for session:<id> systemEvent", () => {
+  it("preserves explicit delivery", () => {
+    const delivery: CronDelivery = { mode: "none" };
     expect(
-      resolveInitialCronDelivery(systemEvent({ sessionTarget: "session:abc-123" })),
+      resolveInitialCronDelivery(
+        createInput({
+          sessionTarget: "current",
+          payload: { kind: "agentTurn", message: "hello" },
+          delivery,
+        }),
+      ),
+    ).toBe(delivery);
+  });
+
+  it.each(["isolated", "current", "session:project-alpha"] as const)(
+    "defaults %s output jobs to announce",
+    (sessionTarget) => {
+      for (const payload of [
+        { kind: "agentTurn", message: "hello" },
+        { kind: "command", argv: ["echo", "hello"] },
+      ] as const) {
+        expect(resolveInitialCronDelivery(createInput({ sessionTarget, payload }))).toEqual({
+          mode: "announce",
+        });
+      }
+    },
+  );
+
+  it("does not default main-session output or system-event delivery", () => {
+    expect(
+      resolveInitialCronDelivery(
+        createInput({ sessionTarget: "main", payload: { kind: "agentTurn", message: "hello" } }),
+      ),
+    ).toBeUndefined();
+    expect(
+      resolveInitialCronDelivery(
+        createInput({ sessionTarget: "isolated", payload: { kind: "systemEvent", text: "tick" } }),
+      ),
     ).toBeUndefined();
   });
 });
 
-// Direct-service callers (CronService.add createJob and declarative convergence via
-// applyDeclarativeJobSpec) bypass normalizeCronJobCreate, so the service-level default
-// is the only announce default they get; exercise both through the public add contract.
+// Direct service callers do not pass through normalizeCronJobCreate, so keep
+// the public add and declarative convergence paths pinned to the same default.
 const logger = createNoopLogger();
 const { makeStorePath } = createCronStoreHarness({ prefix: "openclaw-cron-initial-delivery-" });
 installCronTestHooks({ logger });
@@ -138,16 +84,18 @@ function createDirectCronService(storePath: string) {
   });
 }
 
-describe("CronService direct-service delivery defaults", () => {
-  it.each(["current", "session:abc-123"] as const)(
-    "persists announce delivery for direct add with sessionTarget %s",
+describe("CronService initial delivery", () => {
+  it.each(["current", "session:project-alpha"] as const)(
+    "persists announce delivery for direct %s jobs",
     async (sessionTarget) => {
       const { storePath } = await makeStorePath();
       const cron = createDirectCronService(storePath);
       await cron.start();
 
       try {
-        const added = await cron.add(agentTurn({ sessionTarget, schedule: everyMinute }));
+        const added = await cron.add(
+          createInput({ sessionTarget, payload: { kind: "agentTurn", message: "hello" } }),
+        );
         expect(added.delivery).toEqual({ mode: "announce" });
         await expect(cron.readJob(added.id)).resolves.toMatchObject({
           delivery: { mode: "announce" },
@@ -158,35 +106,21 @@ describe("CronService direct-service delivery defaults", () => {
     },
   );
 
-  it("persists no delivery for direct add of a main systemEvent job", async () => {
+  it("keeps announce delivery when a declaration converges", async () => {
     const { storePath } = await makeStorePath();
     const cron = createDirectCronService(storePath);
     await cron.start();
-
-    try {
-      const added = await cron.add(systemEvent({ schedule: everyMinute }));
-      expect(added.delivery).toBeUndefined();
-      await expect(cron.readJob(added.id)).resolves.toMatchObject({
-        delivery: undefined,
-      });
-    } finally {
-      cron.stop();
-    }
-  });
-
-  it("keeps announce delivery when a session: declaration converges", async () => {
-    const { storePath } = await makeStorePath();
-    const cron = createDirectCronService(storePath);
-    await cron.start();
-
-    const declaration = agentTurn({
+    const declaration = {
+      ...createInput({
+        sessionTarget: "session:project-alpha",
+        payload: { kind: "agentTurn", message: "hello" },
+      }),
       declarationKey: "agent:ops:initial-delivery",
-      sessionTarget: "session:abc-123",
-      schedule: everyMinute,
-    });
+    };
+
     try {
       const created = await cron.add(declaration);
-      expect(created).toMatchObject({ delivery: { mode: "announce" } });
+      expect(created.delivery).toEqual({ mode: "announce" });
 
       const converged = await cron.add(declaration, { enabledExplicit: true });
       if (!("job" in converged)) {
@@ -197,8 +131,9 @@ describe("CronService direct-service delivery defaults", () => {
         updated: false,
         job: { delivery: { mode: "announce" } },
       });
-      const persisted = await cron.readJob(converged.job.id);
-      expect(persisted?.delivery).toEqual({ mode: "announce" });
+      await expect(cron.readJob(converged.job.id)).resolves.toMatchObject({
+        delivery: { mode: "announce" },
+      });
     } finally {
       cron.stop();
     }
