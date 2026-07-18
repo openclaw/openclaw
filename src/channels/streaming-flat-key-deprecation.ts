@@ -8,12 +8,13 @@ import type {
   ChannelStreamingConfig,
   TextChunkMode,
 } from "../config/types.base.js";
+import { createDedupeCache } from "../infra/dedupe.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { asBoolean } from "../utils/boolean.js";
 import type { StreamingCompatEntry } from "./streaming-compat-entry.js";
 
 const log = createSubsystemLogger("channels/streaming");
-const warnedFlatStreamingKeys = new Set<string>();
+const warnedFlatStreamingKeys = createDedupeCache({ maxSize: 4096, ttlMs: 0 });
 
 /** @internal Test-only reset for the flat streaming key deprecation warning cache. */
 export function resetFlatStreamingKeyDeprecationWarningsForTest(): void {
@@ -22,10 +23,9 @@ export function resetFlatStreamingKeyDeprecationWarningsForTest(): void {
 
 /** Warns once per process per flat key when a resolver used the flat fallback. */
 export function warnFlatStreamingKeyFallback(flatKey: string, nestedPath: string): void {
-  if (warnedFlatStreamingKeys.has(flatKey)) {
+  if (warnedFlatStreamingKeys.check(flatKey)) {
     return;
   }
-  warnedFlatStreamingKeys.add(flatKey);
   log.warn(
     `Flat channel streaming key "${flatKey}" is deprecated; move it to streaming.${nestedPath}. The flat fallback is removed after the next release train.`,
   );
