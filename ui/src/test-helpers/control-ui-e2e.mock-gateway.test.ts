@@ -151,6 +151,49 @@ describe("mock gateway stateful config", () => {
 });
 
 describe("mock gateway stateful sessions", () => {
+  it("keeps archive filtering opt-in for static session fixtures", async () => {
+    const script = createControlUiMockGatewayInitScript({
+      methodResponses: {
+        "sessions.list": {
+          count: 1,
+          defaults: {},
+          path: "",
+          sessions: [{ key: "agent:main:research", archived: false }],
+          ts: 0,
+        },
+        "sessions.patch": { ok: true },
+      },
+    });
+    window.sessionStorage.clear();
+    // oxlint-disable-next-line typescript/no-implied-eval -- Executes the generated init script standalone, proving it captures no module closures.
+    new Function(script)();
+
+    const socket = new WebSocket("ws://mock-gateway");
+    const frames: ResponseFrame[] = [];
+    socket.addEventListener("message", (event) => {
+      frames.push(JSON.parse(String((event as MessageEvent).data)) as ResponseFrame);
+    });
+    await flushMockTimers();
+
+    socket.send(
+      JSON.stringify({
+        type: "req",
+        id: "patch-1",
+        method: "sessions.patch",
+        params: { key: "agent:main:research", archived: true },
+      }),
+    );
+    await flushMockTimers();
+    socket.send(JSON.stringify({ type: "req", id: "list-1", method: "sessions.list", params: {} }));
+    await flushMockTimers();
+
+    expect(frames.find((frame) => frame.id === "list-1")?.payload).toMatchObject({
+      count: 1,
+      sessions: [{ key: "agent:main:research", archived: false }],
+    });
+    socket.close();
+  });
+
   it("moves archive patches between active and archived session lists", async () => {
     const script = createControlUiMockGatewayInitScript({
       methodResponses: {
@@ -166,6 +209,7 @@ describe("mock gateway stateful sessions", () => {
         },
         "sessions.patch": { ok: true },
       },
+      sessionArchiveFiltering: true,
     });
     window.sessionStorage.clear();
     // oxlint-disable-next-line typescript/no-implied-eval -- Executes the generated init script standalone, proving it captures no module closures.

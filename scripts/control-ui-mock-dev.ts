@@ -1378,6 +1378,7 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
       },
     },
     models: modelProviders.models,
+    sessionArchiveFiltering: true,
     sessionKey: "agent:main:main",
   };
 }
