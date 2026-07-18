@@ -372,9 +372,7 @@ function hasOnlySilentAssistantReply(assistantTexts?: readonly string[]): boolea
   );
 }
 
-export function hasAsyncStartedToolActivity(
-  toolMetas?: readonly { asyncStarted?: boolean }[],
-): boolean {
+function hasAsyncStartedToolActivity(toolMetas?: readonly { asyncStarted?: boolean }[]): boolean {
   return (toolMetas ?? []).some((entry) => entry.asyncStarted === true);
 }
 
