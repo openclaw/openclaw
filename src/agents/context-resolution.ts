@@ -196,14 +196,12 @@ export function resolveAnthropicFixedContextWindow(
   if (!isAnthropicProvider) {
     return undefined;
   }
-  if (
-    (provider === "anthropic" || provider === "anthropic-vertex" || provider === "claude-cli") &&
-    /^claude-fable-5(?=$|[^a-z0-9])/.test(modelId)
-  ) {
+  if (/^claude-fable-5(?=$|[^a-z0-9])/.test(modelId)) {
     return ANTHROPIC_FABLE_CONTEXT_TOKENS;
   }
+  // Mythos 5 is direct-API only; Claude CLI must keep its discovered or fallback window.
   if (
-    (provider === "anthropic" || provider === "anthropic-vertex" || provider === "claude-cli") &&
+    (provider === "anthropic" || provider === "anthropic-vertex") &&
     /^claude-mythos-5(?=$|[^a-z0-9])/.test(modelId)
   ) {
     return ANTHROPIC_MYTHOS_5_CONTEXT_TOKENS;

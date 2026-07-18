@@ -711,7 +711,7 @@ jobs:
              (.imageArtifactDigest | hex64) and
              (.imageArtifactRunId | tostring | digits) and
              (.imageArtifactRunAttempt | tostring | digits) and
-             (.imageArchiveSha256 | hex64)'
+             (.imageArchiveSha256 | hex64)' \
             <<< "$CANDIDATE_ARTIFACT_JSON" >/dev/null
 
   install_smoke_release_checks:

@@ -1712,7 +1712,7 @@ html.openclaw-native-macos
   width: 31px;
   height: 30px;
   flex: 0 0 31px;
-  padding: 0 1px 0 5px;
+  padding: 0 3px;
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -1750,10 +1750,6 @@ html.openclaw-native-macos
   font-size: 9px;
   font-variant-numeric: tabular-nums;
   line-height: 1;
-}
-
-.sidebar-child-session-toggle + .sidebar-recent-session__link {
-  padding-left: 0;
 }
 
 .sidebar-recent-session__link:hover {

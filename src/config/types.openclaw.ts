@@ -186,6 +186,27 @@ export type OpenClawConfig = {
       /** Assistant avatar (emoji, short text, or image URL/data URI). */
       avatar?: string;
     };
+    /**
+     * Operator display preferences. Canonical config home so agents can
+     * change them through the approval gate and clients stay in sync; the
+     * Control UI mirrors them into browser storage for instant boot.
+     */
+    prefs?: {
+      /** Control UI theme. */
+      theme?: "claw" | "knot" | "dash" | "custom";
+      /** Light/dark preference. */
+      themeMode?: "light" | "dark" | "system";
+      /** Text scale percentage stop. */
+      textScale?: 90 | 100 | 110 | 125 | 140;
+      /** BCP 47 UI locale, e.g. "en" or "pt-BR". */
+      locale?: string;
+      /** Show model thinking output in chat. */
+      chatShowThinking?: boolean;
+      /** Show tool call cards in chat. */
+      chatShowToolCalls?: boolean;
+      /** Chat send shortcut: Enter sends, or modifier+Enter sends. */
+      chatSendShortcut?: "enter" | "modifier-enter";
+    };
   };
   /** Terminal UI display settings. */
   tui?: {

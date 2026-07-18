@@ -512,12 +512,27 @@ See [Inferred commitments](/concepts/commitments).
       name: "OpenClaw",
       avatar: "CB", // emoji, short text, image URL, or data URI
     },
+    prefs: {
+      theme: "claw", // claw | knot | dash | custom
+      themeMode: "system", // light | dark | system
+      textScale: 100, // 90 | 100 | 110 | 125 | 140
+      locale: "en",
+      chatShowThinking: true,
+      chatShowToolCalls: true,
+      chatSendShortcut: "enter", // enter | modifier-enter
+    },
   },
 }
 ```
 
 - `seamColor`: accent color for native app UI chrome (Talk Mode bubble tint, etc.).
 - `assistant`: Control UI identity override. Falls back to active agent identity.
+- `prefs`: operator display preferences. This is the canonical home so agents can
+  change them through the approval gate and every Control UI client stays in
+  sync; browsers mirror the values into local storage for instant boot and keep
+  a device-local copy when they cannot write config (viewer scope, offline).
+  Clients reconcile server-side changes on connect and whenever they reload the
+  config snapshot.
 
 ---
 
