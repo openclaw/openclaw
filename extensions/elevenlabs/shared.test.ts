@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_ELEVENLABS_BASE_URL, normalizeElevenLabsBaseUrl } from "./shared.js";
+import {
+  DEFAULT_ELEVENLABS_BASE_URL,
+  normalizeElevenLabsBaseUrl,
+  normalizeElevenLabsRealtimeBaseUrl,
+} from "./shared.js";
 
 describe("normalizeElevenLabsBaseUrl", () => {
   it("returns the default when the base URL is missing or blank", () => {
@@ -59,5 +63,17 @@ describe("normalizeElevenLabsBaseUrl", () => {
       const url = new URL(normalized);
       expect(["http:", "https:"]).toContain(url.protocol);
     }
+  });
+
+  it("maps HTTP endpoints and preserves explicit WebSocket endpoints for realtime", () => {
+    expect(normalizeElevenLabsRealtimeBaseUrl("https://api.example.com/")).toBe(
+      "wss://api.example.com",
+    );
+    expect(normalizeElevenLabsRealtimeBaseUrl("wss://realtime.example.com/")).toBe(
+      "wss://realtime.example.com",
+    );
+    expect(normalizeElevenLabsRealtimeBaseUrl("ws://localhost:8080/")).toBe(
+      "ws://localhost:8080",
+    );
   });
 });
