@@ -30,6 +30,8 @@ type TransportOutputShape = {
   errorCode?: string;
   errorType?: string;
   errorBody?: string;
+  status?: number;
+  retryAfterSeconds?: number;
 };
 
 const EMPTY_TOOL_RESULT_TEXT = "(no output)";
@@ -149,6 +151,8 @@ type TransportErrorDetails = {
   errorCode?: string;
   errorType?: string;
   errorBody?: string;
+  status?: number;
+  retryAfterSeconds?: number;
 };
 
 function readStringLikeProperty(value: unknown, key: string): string | undefined {
@@ -213,6 +217,17 @@ function normalizeTransportErrorBody(value: unknown): string | undefined {
   return truncateErrorDetail(redactSensitiveText(text), 500);
 }
 
+function readFiniteNumberProperty(
+  value: unknown,
+  key: string,
+): number | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const raw = (value as Record<string, unknown>)[key];
+  return typeof raw === "number" && Number.isFinite(raw) ? raw : undefined;
+}
+
 function extractTransportErrorDetails(error: unknown): TransportErrorDetails {
   const errorObject = error && typeof error === "object" ? error : undefined;
   const nestedError = readObjectProperty(errorObject, "error");
@@ -229,11 +244,15 @@ function extractTransportErrorDetails(error: unknown): TransportErrorDetails {
     normalizeTransportErrorBody(readStringLikeProperty(errorObject, "body")) ??
     normalizeTransportErrorBody(readObjectProperty(errorObject, "body")) ??
     normalizeTransportErrorBody(nestedError);
+  const status = readFiniteNumberProperty(errorObject, "status");
+  const retryAfterSeconds = readFiniteNumberProperty(errorObject, "retryAfterSeconds");
 
   return {
     ...(errorCode ? { errorCode } : {}),
     ...(errorType ? { errorType } : {}),
     ...(errorBody ? { errorBody } : {}),
+    ...(status !== undefined ? { status } : {}),
+    ...(retryAfterSeconds !== undefined ? { retryAfterSeconds } : {}),
   };
 }
 

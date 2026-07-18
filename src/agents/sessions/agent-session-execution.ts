@@ -14,6 +14,14 @@ export abstract class AgentSessionExecution extends AgentSessionExtensions {
   // =========================================================================
 
   /**
+   * Maximum session-level retry delay.
+   * Caps server-specified retry-after values so a faulty or malicious upstream
+   * cannot stall the active turn indefinitely. Delays exceeding this bound are
+   * surfaced to the existing failover path.
+   */
+  private readonly MAX_RETRY_AFTER_MS = 60_000;
+
+  /**
    * Check if an error is retryable (overloaded, rate limit, server errors).
    * Context overflow errors are NOT retryable (handled by compaction instead).
    */
@@ -49,7 +57,18 @@ export abstract class AgentSessionExecution extends AgentSessionExtensions {
       return false;
     }
 
-    const delayMs = settings.baseDelayMs * 2 ** (this.retryCount - 1);
+    const exponentialDelayMs = settings.baseDelayMs * 2 ** (this.retryCount - 1);
+    const retryAfterSeconds = message.retryAfterSeconds;
+    const retryAfterMs =
+      retryAfterSeconds !== undefined &&
+      Number.isFinite(retryAfterSeconds) &&
+      retryAfterSeconds > 0
+        ? Math.ceil(retryAfterSeconds * 1000)
+        : 0;
+    const delayMs = Math.max(
+      exponentialDelayMs,
+      Math.min(retryAfterMs, this.MAX_RETRY_AFTER_MS),
+    );
 
     this.emit({
       type: "auto_retry_start",

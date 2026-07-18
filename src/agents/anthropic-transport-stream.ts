@@ -824,6 +824,21 @@ async function* parseAnthropicSseBody(
   }
 }
 
+function parseRetryAfterHeaderSeconds(headers: Headers): number | undefined {
+  const retryAfter = headers.get("retry-after")?.trim();
+  if (!retryAfter) {
+    return undefined;
+  }
+  if (/^\d+$/.test(retryAfter)) {
+    return parseInt(retryAfter, 10);
+  }
+  const dateMs = Date.parse(retryAfter);
+  if (Number.isFinite(dateMs)) {
+    return Math.max(0, (dateMs - Date.now()) / 1000);
+  }
+  return undefined;
+}
+
 function createAnthropicMessagesClient(params: {
   apiKey?: string | null;
   authToken?: string;
@@ -852,9 +867,15 @@ function createAnthropicMessagesClient(params: {
         });
         if (!response.ok) {
           const detail = await readAnthropicMessagesErrorBodySnippet(response);
-          throw new Error(
+          const retryAfterSeconds = parseRetryAfterHeaderSeconds(response.headers);
+          const error = new Error(
             detail || `Anthropic Messages request failed with HTTP ${response.status}`,
-          );
+          ) as Error & { status: number; retryAfterSeconds?: number };
+          error.status = response.status;
+          if (retryAfterSeconds !== undefined) {
+            error.retryAfterSeconds = retryAfterSeconds;
+          }
+          throw error;
         }
         if (!response.body) {
           return;
