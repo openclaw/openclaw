@@ -1192,46 +1192,44 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
 
   const runAuthFlow = isLocalMode
     ? async (params: { provider?: string }) =>
-        await withTuiSuspended(
-          async () => {
-            const provider = params.provider?.trim() || undefined;
+        await withTuiSuspended(async () => {
+          const provider = params.provider?.trim() || undefined;
 
-            // Codex owns its auth store; delegate when the CLI is available.
-            const codexBin =
-              provider === OPENAI_CODEX_PROVIDER ||
-              (!provider && sessionInfo.modelProvider === OPENAI_CODEX_PROVIDER)
-                ? await resolveCodexCliBin()
-                : null;
+          // Codex owns its auth store; delegate when the CLI is available.
+          const codexBin =
+            provider === OPENAI_CODEX_PROVIDER ||
+            (!provider && sessionInfo.modelProvider === OPENAI_CODEX_PROVIDER)
+              ? await resolveCodexCliBin()
+              : null;
 
-            return await new Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }>(
-              (resolve, reject) => {
-                let command: string;
-                let args: string[];
-                if (codexBin) {
-                  command = codexBin;
-                  args = ["login"];
-                } else {
-                  ({ command, args } = resolveLocalAuthCliInvocation());
-                  if (provider) {
-                    args.push("--provider", provider);
-                  }
+          return await new Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }>(
+            (resolve, reject) => {
+              let command: string;
+              let args: string[];
+              if (codexBin) {
+                command = codexBin;
+                args = ["login"];
+              } else {
+                ({ command, args } = resolveLocalAuthCliInvocation());
+                if (provider) {
+                  args.push("--provider", provider);
                 }
+              }
 
-                const invocation = resolveLocalAuthSpawnInvocation({ command, args });
-                const child = spawn(invocation.command, invocation.args, {
-                  cwd: resolveLocalAuthSpawnCwd({ args, defaultCwd: resolveUsableCwd() }),
-                  env: process.env,
-                  stdio: "inherit",
-                  ...invocation.options,
-                });
-                child.once("error", reject);
-                child.once("exit", (exitCode, signal) => {
-                  resolve({ exitCode, signal });
-                });
-              },
-            );
-          },
-        )
+              const invocation = resolveLocalAuthSpawnInvocation({ command, args });
+              const child = spawn(invocation.command, invocation.args, {
+                cwd: resolveLocalAuthSpawnCwd({ args, defaultCwd: resolveUsableCwd() }),
+                env: process.env,
+                stdio: "inherit",
+                ...invocation.options,
+              });
+              child.once("error", reject);
+              child.once("exit", (exitCode, signal) => {
+                resolve({ exitCode, signal });
+              });
+            },
+          );
+        })
     : undefined;
 
   const updateFooter = () => {
