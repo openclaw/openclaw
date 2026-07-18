@@ -9,7 +9,8 @@ private func questionRecord(
     isOther: Bool = true,
     createdAtMs: Int = 1_000_000,
     expiresAtMs: Int = 4_000_000_000_000,
-    status: QuestionStatus = .pending) -> QuestionRecord
+    status: QuestionStatus = .pending,
+    answers: QuestionAnswers? = nil) -> QuestionRecord
 {
     QuestionRecord(
         id: "ask_123",
@@ -29,7 +30,8 @@ private func questionRecord(
         sessionkey: "agent:main:main",
         createdatms: createdAtMs,
         expiresatms: expiresAtMs,
-        status: status)
+        status: status,
+        answers: answers)
 }
 
 @MainActor
@@ -49,6 +51,16 @@ private func questionRecord(
     let model = OpenClawQuestionCardModel(record: questionRecord(multiSelect: true))
     model.toggleOption(questionID: "meal", label: "Tacos")
     model.toggleOption(questionID: "meal", label: "Pizza")
+    #expect(model.beginSubmission() == ["meal": ["Pizza", "Tacos"]])
+}
+
+@MainActor
+@Test func `question card number selection uses declared option order`() {
+    let model = OpenClawQuestionCardModel(record: questionRecord(multiSelect: true))
+
+    #expect(model.toggleOption(questionID: "meal", optionNumber: 2))
+    #expect(model.toggleOption(questionID: "meal", optionNumber: 1))
+    #expect(!model.toggleOption(questionID: "meal", optionNumber: 4))
     #expect(model.beginSubmission() == ["meal": ["Pizza", "Tacos"]])
 }
 
@@ -83,23 +95,22 @@ private func questionRecord(
 }
 
 @MainActor
-@Test func `question card retains terminal feedback for gateway grace`() {
-    let observedAt = Date(timeIntervalSince1970: 1500)
+@Test func `question card ignores replayed pending record after terminal event`() {
     let model = OpenClawQuestionCardModel(record: questionRecord())
-    model.apply(resolved: .init(id: model.id, status: .answered), at: observedAt)
+    model.apply(resolved: .init(id: model.id, status: .answered))
 
-    #expect(model.shouldRetainAfterList(at: observedAt.addingTimeInterval(14)))
-    #expect(!model.shouldRetainAfterList(at: observedAt.addingTimeInterval(15)))
+    #expect(!model.apply(record: questionRecord(createdAtMs: 2_000_000)))
+    #expect(model.status() == .answeredElsewhere)
 }
 
 @MainActor
-@Test func `question card locally expired state enters terminal retention`() {
+@Test func `question card locally expired state remains terminal`() {
     let expiresAt = Date(timeIntervalSince1970: 1500)
     let model = OpenClawQuestionCardModel(record: questionRecord(expiresAtMs: 1_500_000))
 
     #expect(model.observeLocalExpiry(at: expiresAt))
-    #expect(model.shouldRetainAfterList(at: expiresAt.addingTimeInterval(14)))
-    #expect(!model.shouldRetainAfterList(at: expiresAt.addingTimeInterval(15)))
+    #expect(!model.observeLocalExpiry(at: expiresAt.addingTimeInterval(15)))
+    #expect(model.status(at: expiresAt.addingTimeInterval(15)) == .expired)
 }
 
 @MainActor
@@ -111,4 +122,35 @@ private func questionRecord(
     let data = try JSONEncoder().encode(model.record.answers)
     let json = try #require(String(data: data, encoding: .utf8))
     #expect(json.contains("\"meal\":{\"answers\":[\"Pizza\"]}"))
+}
+
+@MainActor
+@Test func `question card terminal summaries prefer resolved answers`() {
+    let answers = QuestionAnswers(answers: [
+        "meal": AnyCodable(["answers": ["Pizza", "extra hot"]]),
+    ])
+    let answered = OpenClawQuestionCardModel(record: questionRecord(status: .answered, answers: answers))
+    let question = answered.record.questions[0]
+    #expect(answered.terminalSummaryText(for: question) == "Pizza, extra hot")
+
+    let elsewhere = OpenClawQuestionCardModel(record: questionRecord(status: .answered))
+    #expect(elsewhere.terminalSummaryText(for: question) == "Answered elsewhere")
+
+    let skipped = OpenClawQuestionCardModel(record: questionRecord(status: .cancelled))
+    #expect(skipped.terminalSummaryText(for: question) == "Skipped")
+
+    let expired = OpenClawQuestionCardModel(record: questionRecord(status: .expired))
+    #expect(expired.terminalSummaryText(for: question) == "Expired")
+}
+
+@MainActor
+@Test func `question card skip transitions to persistent skipped summary`() {
+    let model = OpenClawQuestionCardModel(record: questionRecord())
+
+    #expect(model.beginSkip())
+    #expect(model.isSkipping)
+    model.markSkippedLocally()
+
+    #expect(model.status() == .cancelled)
+    #expect(model.terminalSummaryText(for: model.record.questions[0]) == "Skipped")
 }

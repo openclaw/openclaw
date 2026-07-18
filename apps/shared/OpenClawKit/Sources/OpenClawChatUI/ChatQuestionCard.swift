@@ -16,29 +16,31 @@ public enum OpenClawQuestionCardStatus: Sendable, Equatable {
 @MainActor
 @Observable
 public final class OpenClawQuestionCardModel: Identifiable {
-    private static let terminalRetentionSeconds: TimeInterval = 15
-
     public let id: String
     public private(set) var record: QuestionRecord
     public private(set) var isSubmitting = false
+    public private(set) var isSkipping = false
     public private(set) var wasAnsweredLocally = false
     public private(set) var errorText: String?
     public private(set) var selectedOptions: [String: Set<String>] = [:]
     public private(set) var otherText: [String: String] = [:]
-    private var terminalObservedAt: Date?
+    public private(set) var isLocallyExpired = false
 
     public init(record: QuestionRecord) {
         self.id = record.id
         self.record = record
-        self.terminalObservedAt = record.status == .pending ? nil : Date()
     }
 
     @discardableResult
-    public func apply(record: QuestionRecord, at date: Date = Date()) -> Bool {
-        guard record.id == self.id, !Self.recordsMatch(self.record, record) else { return false }
+    public func apply(record: QuestionRecord) -> Bool {
+        guard record.id == self.id,
+              !(self.record.status != .pending && record.status == .pending),
+              !Self.recordsMatch(self.record, record)
+        else { return false }
         self.record = record
         self.isSubmitting = self.isSubmitting && record.status == .pending
-        self.terminalObservedAt = record.status == .pending ? nil : (self.terminalObservedAt ?? date)
+        self.isSkipping = self.isSkipping && record.status == .pending
+        self.isLocallyExpired = false
         return true
     }
 
@@ -51,7 +53,7 @@ public final class OpenClawQuestionCardModel: Identifiable {
         case .expired:
             return .expired
         case .pending:
-            if date.timeIntervalSince1970 * 1000 >= Double(self.record.expiresatms) {
+            if self.isLocallyExpired || date.timeIntervalSince1970 * 1000 >= Double(self.record.expiresatms) {
                 return .expired
             }
             return self.isSubmitting ? .submitting : .pending
@@ -84,6 +86,17 @@ public final class OpenClawQuestionCardModel: Identifiable {
         self.errorText = nil
     }
 
+    @discardableResult
+    public func toggleOption(questionID: String, optionNumber: Int) -> Bool {
+        guard let question = self.record.questions.first(where: { $0.id == questionID }),
+              self.status() == .pending,
+              (1...4).contains(optionNumber),
+              question.options.indices.contains(optionNumber - 1)
+        else { return false }
+        self.toggleOption(questionID: questionID, label: question.options[optionNumber - 1].label)
+        return true
+    }
+
     public func setOtherText(questionID: String, value: String) {
         guard let question = self.record.questions.first(where: { $0.id == questionID }),
               question.options.isEmpty || question.isother == true,
@@ -103,14 +116,24 @@ public final class OpenClawQuestionCardModel: Identifiable {
     public func beginSubmission() -> [String: [String]]? {
         guard let answers = self.answers(), self.status() == .pending else { return nil }
         self.isSubmitting = true
+        self.isSkipping = false
         self.errorText = nil
         return answers
     }
 
-    public func markAnsweredLocally(at date: Date = Date()) {
+    public func beginSkip() -> Bool {
+        guard self.status() == .pending else { return false }
+        self.isSubmitting = true
+        self.isSkipping = true
+        self.errorText = nil
+        return true
+    }
+
+    public func markAnsweredLocally() {
         self.wasAnsweredLocally = true
         self.isSubmitting = false
-        self.terminalObservedAt = self.terminalObservedAt ?? date
+        self.isSkipping = false
+        self.isLocallyExpired = false
         self.record = QuestionRecord(
             id: self.record.id,
             questions: self.record.questions,
@@ -127,10 +150,41 @@ public final class OpenClawQuestionCardModel: Identifiable {
             resolvedby: self.record.resolvedby)
     }
 
-    public func apply(resolved: OpenClawQuestionResolvedEvent, at date: Date = Date()) {
+    public func markSkippedLocally() {
+        self.isSubmitting = false
+        self.isSkipping = false
+        self.isLocallyExpired = false
+        self.record = QuestionRecord(
+            id: self.record.id,
+            questions: self.record.questions,
+            agentid: self.record.agentid,
+            sessionkey: self.record.sessionkey,
+            createdatms: self.record.createdatms,
+            expiresatms: self.record.expiresatms,
+            status: .cancelled,
+            resolvedby: self.record.resolvedby)
+    }
+
+    public func markAnsweredElsewhere() {
+        self.isSubmitting = false
+        self.isSkipping = false
+        self.isLocallyExpired = false
+        self.record = QuestionRecord(
+            id: self.record.id,
+            questions: self.record.questions,
+            agentid: self.record.agentid,
+            sessionkey: self.record.sessionkey,
+            createdatms: self.record.createdatms,
+            expiresatms: self.record.expiresatms,
+            status: .answered,
+            resolvedby: self.record.resolvedby)
+    }
+
+    public func apply(resolved: OpenClawQuestionResolvedEvent) {
         guard resolved.id == self.id else { return }
         self.isSubmitting = false
-        self.terminalObservedAt = self.terminalObservedAt ?? date
+        self.isSkipping = false
+        self.isLocallyExpired = false
         self.record = QuestionRecord(
             id: self.record.id,
             questions: self.record.questions,
@@ -145,30 +199,38 @@ public final class OpenClawQuestionCardModel: Identifiable {
 
     public func failSubmission(_ message: String) {
         self.isSubmitting = false
+        self.isSkipping = false
         self.errorText = message
     }
 
-    func shouldRetainAfterList(at date: Date) -> Bool {
-        guard let terminalObservedAt else { return false }
-        return date.timeIntervalSince(terminalObservedAt) < Self.terminalRetentionSeconds
-    }
-
-    func terminalRetentionDelay(at date: Date) -> TimeInterval? {
-        guard let terminalObservedAt else { return nil }
-        return max(0, Self.terminalRetentionSeconds - date.timeIntervalSince(terminalObservedAt))
-    }
-
     func observeLocalExpiry(at date: Date) -> Bool {
-        guard self.record.status == .pending, self.terminalObservedAt == nil,
+        guard self.record.status == .pending, !self.isLocallyExpired,
               date.timeIntervalSince1970 * 1000 >= Double(self.record.expiresatms)
         else { return false }
-        self.terminalObservedAt = date
+        self.isLocallyExpired = true
+        self.isSubmitting = false
+        self.isSkipping = false
         return true
     }
 
     func localExpiryDelay(at date: Date) -> TimeInterval? {
-        guard self.record.status == .pending, self.terminalObservedAt == nil else { return nil }
+        guard self.record.status == .pending, !self.isLocallyExpired else { return nil }
         return max(0, Double(self.record.expiresatms) / 1000 - date.timeIntervalSince1970)
+    }
+
+    public func terminalSummaryText(for question: Question) -> String {
+        switch self.status() {
+        case .answered:
+            self.answerValues(questionID: question.id)?.joined(separator: ", ") ?? "Answered"
+        case .answeredElsewhere:
+            self.answerValues(questionID: question.id)?.joined(separator: ", ") ?? "Answered elsewhere"
+        case .cancelled:
+            "Skipped"
+        case .expired:
+            "Expired"
+        case .pending, .submitting:
+            "Pending"
+        }
     }
 
     private func answers() -> [String: [String]]? {
@@ -187,6 +249,19 @@ public final class OpenClawQuestionCardModel: Identifiable {
         return result
     }
 
+    private func answerValues(questionID: String) -> [String]? {
+        guard let answer = self.record.answers?.answers[questionID],
+              let data = try? JSONEncoder().encode(answer),
+              let decoded = try? JSONDecoder().decode(ResolvedAnswer.self, from: data),
+              !decoded.answers.isEmpty
+        else { return nil }
+        return decoded.answers
+    }
+
+    private struct ResolvedAnswer: Codable {
+        let answers: [String]
+    }
+
     private static func recordsMatch(_ lhs: QuestionRecord, _ rhs: QuestionRecord) -> Bool {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
@@ -198,6 +273,10 @@ public final class OpenClawQuestionCardModel: Identifiable {
 public struct OpenClawQuestionCard: View {
     @Bindable private var model: OpenClawQuestionCardModel
     private let onSubmit: @MainActor @Sendable (OpenClawQuestionCardModel) async -> Void
+    private let onSkip: (@MainActor @Sendable (OpenClawQuestionCardModel) async -> Void)?
+    #if os(macOS)
+    @FocusState private var focusedQuestionID: String?
+    #endif
 
     // periphery:ignore - Public construction is part of the exported SwiftUI component API.
     public init(
@@ -206,10 +285,30 @@ public struct OpenClawQuestionCard: View {
     {
         self.model = model
         self.onSubmit = onSubmit
+        self.onSkip = nil
+    }
+
+    public init(
+        model: OpenClawQuestionCardModel,
+        onSubmit: @escaping @MainActor @Sendable (OpenClawQuestionCardModel) async -> Void,
+        onSkip: @escaping @MainActor @Sendable (OpenClawQuestionCardModel) async -> Void)
+    {
+        self.model = model
+        self.onSubmit = onSubmit
+        self.onSkip = onSkip
     }
 
     // periphery:ignore - SwiftUI View witness must stay public for the exported component.
     public var body: some View {
+        let status = self.model.status()
+        if status == .pending || status == .submitting {
+            self.pendingCard
+        } else {
+            self.terminalSummary
+        }
+    }
+
+    private var pendingCard: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
             VStack(alignment: .leading, spacing: 14) {
                 ForEach(self.model.record.questions, id: \.id) { question in
@@ -221,6 +320,26 @@ public struct OpenClawQuestionCard: View {
             .background(OpenClawChatTheme.subtleCard, in: RoundedRectangle(cornerRadius: 16))
             .overlay(RoundedRectangle(cornerRadius: 16).stroke(.secondary.opacity(0.2)))
         }
+    }
+
+    private var terminalSummary: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            ForEach(self.model.record.questions, id: \.id) { question in
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    Text("\(question.header):")
+                        .font(OpenClawChatTypography.body(size: 14, weight: .semibold, relativeTo: .callout))
+                    Text(self.model.terminalSummaryText(for: question))
+                        .font(OpenClawChatTypography.body(size: 14, weight: .regular, relativeTo: .callout))
+                        .foregroundStyle(.secondary)
+                }
+                .accessibilityElement(children: .combine)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(OpenClawChatTheme.subtleCard, in: RoundedRectangle(cornerRadius: 12))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Question summary")
     }
 
     private func questionSection(_ question: Question, now: Date) -> some View {
@@ -246,11 +365,26 @@ public struct OpenClawQuestionCard: View {
                     .accessibilityLabel("Other answer")
             }
         }
+        #if os(macOS)
+        .focusable()
+        .focused(self.$focusedQuestionID, equals: question.id)
+        .onKeyPress(characters: .decimalDigits) { keyPress in
+            self.handleNumberKey(keyPress, question: question, now: now)
+        }
+        .onKeyPress(.return) {
+            guard self.model.status(at: now) == .pending, self.model.canSubmit else { return .ignored }
+            Task { await self.onSubmit(self.model) }
+            return .handled
+        }
+        #endif
     }
 
     private func optionRow(question: Question, option: QuestionOption, now: Date) -> some View {
         let selected = self.model.selectedOptions[question.id]?.contains(option.label) == true
         return Button {
+            #if os(macOS)
+            self.focusedQuestionID = question.id
+            #endif
             self.model.toggleOption(questionID: question.id, label: option.label)
         } label: {
             HStack(alignment: .top, spacing: 10) {
@@ -285,10 +419,22 @@ public struct OpenClawQuestionCard: View {
                     .font(OpenClawChatTypography.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
-                Button(status == .submitting ? "Submitting…" : "Submit") {
-                    Task { await self.onSubmit(self.model) }
+                if let onSkip = self.onSkip {
+                    Button {
+                        Task { await onSkip(self.model) }
+                    } label: {
+                        Text(self.model.isSkipping ? "Skipping…" : "Skip")
+                            .font(OpenClawChatTypography.body(size: 14, weight: .semibold, relativeTo: .callout))
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(status == .submitting)
                 }
-                .font(OpenClawChatTypography.body(size: 14, weight: .semibold, relativeTo: .callout))
+                Button {
+                    Task { await self.onSubmit(self.model) }
+                } label: {
+                    Text(status == .submitting && !self.model.isSkipping ? "Submitting…" : "Submit")
+                        .font(OpenClawChatTypography.body(size: 14, weight: .semibold, relativeTo: .callout))
+                }
                 .buttonStyle(.borderedProminent)
                 .disabled(!self.model.canSubmit || status == .submitting)
             }
@@ -297,36 +443,27 @@ public struct OpenClawQuestionCard: View {
                     .font(OpenClawChatTypography.caption)
                     .foregroundStyle(OpenClawChatTheme.danger)
             }
-        } else {
-            Label(self.terminalText(status), systemImage: self.terminalIcon(status))
-                .font(OpenClawChatTypography.captionSemiBold)
-                .foregroundStyle(.secondary)
         }
     }
 
     private func countdownText(now: Date) -> String {
         let seconds = self.model.remainingSeconds(at: now)
-        return seconds >= 60 ? "Expires in \(seconds / 60)m \(seconds % 60)s" : "Expires in \(seconds)s"
+        return String(format: "%d:%02d", seconds / 60, seconds % 60)
     }
 
-    private func terminalText(_ status: OpenClawQuestionCardStatus) -> String {
-        switch status {
-        case .answered: "Answered"
-        case .answeredElsewhere: "Answered elsewhere"
-        case .expired: "Expired"
-        case .cancelled: "Cancelled"
-        case .pending, .submitting: "Pending"
-        }
+    #if os(macOS)
+    private func handleNumberKey(
+        _ keyPress: KeyPress,
+        question: Question,
+        now: Date) -> KeyPress.Result
+    {
+        guard self.model.status(at: now) == .pending,
+              let digit = keyPress.characters.first?.wholeNumberValue,
+              self.model.toggleOption(questionID: question.id, optionNumber: digit)
+        else { return .ignored }
+        return .handled
     }
-
-    private func terminalIcon(_ status: OpenClawQuestionCardStatus) -> String {
-        switch status {
-        case .answered, .answeredElsewhere: "checkmark.circle.fill"
-        case .expired: "clock.badge.xmark"
-        case .cancelled: "xmark.circle"
-        case .pending, .submitting: "clock"
-        }
-    }
+    #endif
 }
 
 @MainActor
@@ -337,10 +474,18 @@ struct OpenClawQuestionCards: View {
         ForEach(self.viewModel.visibleQuestionCards) { card in
             OpenClawQuestionCard(model: card) { [weak viewModel = self.viewModel] model in
                 await viewModel?.submitQuestion(model)
+            } onSkip: { [weak viewModel = self.viewModel] model in
+                await viewModel?.skipQuestion(model)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
+}
+
+private enum QuestionLookupResult {
+    case record(QuestionRecord)
+    case notFound
+    case failed
 }
 
 extension OpenClawChatViewModel {
@@ -357,43 +502,95 @@ extension OpenClawChatViewModel {
     func refreshQuestions() async {
         self.questionRefreshGeneration &+= 1
         let refreshGeneration = self.questionRefreshGeneration
+        self.questionRefreshRetryTask?.cancel()
+        self.questionRefreshRetryTask = nil
+        await self.refreshQuestions(generation: refreshGeneration, retryIndex: 0)
+    }
+
+    private func refreshQuestions(generation refreshGeneration: UInt64, retryIndex: Int) async {
+        guard refreshGeneration == self.questionRefreshGeneration else { return }
         let stateRevision = self.questionStateRevision
         do {
             let records = try await self.transport.listQuestions()
             guard refreshGeneration == self.questionRefreshGeneration,
                   stateRevision == self.questionStateRevision
             else { return }
-            let existing = Dictionary(uniqueKeysWithValues: self.questionCards.map { ($0.id, $0) })
             let listedIDs = Set(records.map(\.id))
-            let now = Date()
-            let retainedTerminal = self.questionCards.filter { model in
-                !listedIDs.contains(model.id) && model.shouldRetainAfterList(at: now)
+            let missingPending = self.questionCards.filter { model in
+                model.record.status == .pending && !listedIDs.contains(model.id)
             }
-            var changed = records.count + retainedTerminal.count != self.questionCards.count
-            self.questionCards = records.map { record in
-                if let model = existing[record.id] {
-                    changed = model.apply(record: record) || changed
-                    return model
+
+            var lookups: [(OpenClawQuestionCardModel, QuestionLookupResult)] = []
+            for model in missingPending {
+                do {
+                    let record = try await self.transport.getQuestion(id: model.id)
+                    lookups.append((model, .record(record)))
+                } catch let error as GatewayResponseError where Self.questionIsNotFound(error) {
+                    lookups.append((model, .notFound))
+                } catch {
+                    lookups.append((model, .failed))
                 }
-                changed = true
-                return OpenClawQuestionCardModel(record: record)
-            } + retainedTerminal
-            self.syncQuestionEvictions()
+            }
+
+            guard refreshGeneration == self.questionRefreshGeneration,
+                  stateRevision == self.questionStateRevision
+            else { return }
+
+            var changed = false
+            for record in records {
+                if let model = self.questionCards.first(where: { $0.id == record.id }) {
+                    changed = model.apply(record: record) || changed
+                } else {
+                    self.questionCards.append(OpenClawQuestionCardModel(record: record))
+                    changed = true
+                }
+            }
+            var complete = true
+            for (model, result) in lookups {
+                guard self.questionCards.contains(where: { $0 === model }) else { continue }
+                switch result {
+                case let .record(record):
+                    changed = model.apply(record: record) || changed
+                case .notFound:
+                    model.markAnsweredElsewhere()
+                    changed = true
+                case .failed:
+                    complete = false
+                }
+            }
+            self.syncQuestionExpirations()
             if changed {
                 self.questionStateRevision &+= 1
                 self.markTimelineChanged()
             }
+            if complete {
+                self.questionRefreshRetryTask = nil
+            } else {
+                self.scheduleQuestionRefreshRetry(
+                    generation: refreshGeneration,
+                    retryIndex: retryIndex)
+            }
         } catch let error as GatewayResponseError where Self.questionListIsUnavailable(error) {
             guard refreshGeneration == self.questionRefreshGeneration,
-                  stateRevision == self.questionStateRevision,
-                  !self.questionCards.isEmpty
+                  stateRevision == self.questionStateRevision
             else { return }
-            self.questionCards = []
-            self.syncQuestionEvictions()
-            self.questionStateRevision &+= 1
-            self.markTimelineChanged()
+            let previousCount = self.questionCards.count
+            self.questionCards.removeAll {
+                let status = $0.status()
+                return status == .pending || status == .submitting
+            }
+            self.syncQuestionExpirations()
+            if self.questionCards.count != previousCount {
+                self.questionStateRevision &+= 1
+                self.markTimelineChanged()
+            }
         } catch {
-            // Question recovery is best-effort; chat bootstrap remains usable without this scope.
+            guard refreshGeneration == self.questionRefreshGeneration,
+                  stateRevision == self.questionStateRevision
+            else { return }
+            self.scheduleQuestionRefreshRetry(
+                generation: refreshGeneration,
+                retryIndex: retryIndex)
         }
     }
 
@@ -403,6 +600,26 @@ extension OpenClawChatViewModel {
             error.message == "missing scope: operator.questions"
     }
 
+    private nonisolated static func questionIsNotFound(_ error: GatewayResponseError) -> Bool {
+        error.detailsReason == "QUESTION_NOT_FOUND"
+    }
+
+    private func scheduleQuestionRefreshRetry(generation: UInt64, retryIndex: Int) {
+        guard generation == self.questionRefreshGeneration,
+              !self.questionRefreshRetryDelaysMs.isEmpty
+        else { return }
+        let delayIndex = min(retryIndex, self.questionRefreshRetryDelaysMs.count - 1)
+        let delayMs = self.questionRefreshRetryDelaysMs[delayIndex]
+        self.questionRefreshRetryTask?.cancel()
+        self.questionRefreshRetryTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(delayMs))
+            guard !Task.isCancelled, let self,
+                  generation == self.questionRefreshGeneration
+            else { return }
+            await self.refreshQuestions(generation: generation, retryIndex: delayIndex + 1)
+        }
+    }
+
     func upsertQuestion(_ record: QuestionRecord) {
         if let model = self.questionCards.first(where: { $0.id == record.id }) {
             guard model.apply(record: record) else { return }
@@ -410,14 +627,14 @@ extension OpenClawChatViewModel {
             self.questionCards.append(OpenClawQuestionCardModel(record: record))
         }
         self.questionStateRevision &+= 1
-        self.syncQuestionEvictions()
+        self.syncQuestionExpirations()
         self.markTimelineChanged()
     }
 
     func resolveQuestionEvent(_ event: OpenClawQuestionResolvedEvent) {
         self.questionCards.first(where: { $0.id == event.id })?.apply(resolved: event)
         self.questionStateRevision &+= 1
-        self.syncQuestionEvictions()
+        self.syncQuestionExpirations()
         self.markTimelineChanged()
     }
 
@@ -425,6 +642,8 @@ extension OpenClawChatViewModel {
         // Invalidate a list snapshot captured before this event, then fetch the
         // authoritative set so other pending cards from that snapshot are not lost.
         self.questionRefreshGeneration &+= 1
+        self.questionRefreshRetryTask?.cancel()
+        self.questionRefreshRetryTask = nil
         Task { [weak self] in await self?.refreshQuestions() }
     }
 
@@ -435,7 +654,7 @@ extension OpenClawChatViewModel {
             try await self.transport.resolveQuestion(id: model.id, answers: answers)
             model.markAnsweredLocally()
             self.questionStateRevision &+= 1
-            self.syncQuestionEvictions()
+            self.syncQuestionExpirations()
             self.markTimelineChanged()
         } catch {
             model.failSubmission(error.localizedDescription)
@@ -443,53 +662,63 @@ extension OpenClawChatViewModel {
         }
     }
 
-    func evictQuestionIfTerminalGraceElapsed(
+    func skipQuestion(_ model: OpenClawQuestionCardModel) async {
+        guard model.beginSkip() else { return }
+        self.questionStateRevision &+= 1
+        do {
+            try await self.transport.cancelQuestion(id: model.id)
+            model.markSkippedLocally()
+            self.questionStateRevision &+= 1
+            self.syncQuestionExpirations()
+            self.markTimelineChanged()
+        } catch {
+            model.failSubmission(error.localizedDescription)
+            self.questionStateRevision &+= 1
+        }
+    }
+
+    func expireQuestionIfNeeded(
         _ model: OpenClawQuestionCardModel,
         at date: Date = Date())
     {
         guard self.questionCards.first(where: { $0.id == model.id }) === model else { return }
         if model.observeLocalExpiry(at: date) {
             self.questionStateRevision &+= 1
+            self.syncQuestionExpirations(at: date)
             self.markTimelineChanged()
+            Task { [weak self] in await self?.refreshQuestions() }
+        } else {
+            self.syncQuestionExpirations(at: date)
         }
-        guard
-            !model.shouldRetainAfterList(at: date),
-            model.status(at: date) == .expired || model.record.status != .pending
-        else {
-            self.syncQuestionEvictions(at: date)
-            return
-        }
-        self.questionCards.removeAll { $0 === model }
-        self.questionEvictionTasks.removeValue(forKey: model.id)?.cancel()
-        self.questionEvictionDeadlines.removeValue(forKey: model.id)
-        self.questionStateRevision &+= 1
-        self.markTimelineChanged()
     }
 
-    private func syncQuestionEvictions(at date: Date = Date()) {
+    private func syncQuestionExpirations(at date: Date = Date()) {
         let modelsByID = Dictionary(uniqueKeysWithValues: self.questionCards.map { ($0.id, $0) })
-        let cancelledIDs = self.questionEvictionTasks.keys.filter { modelsByID[$0] == nil }
+        let cancelledIDs = self.questionExpiryTasks.keys.filter { modelsByID[$0] == nil }
         for id in cancelledIDs {
-            self.questionEvictionTasks.removeValue(forKey: id)?.cancel()
-            self.questionEvictionDeadlines.removeValue(forKey: id)
+            self.questionExpiryTasks.removeValue(forKey: id)?.cancel()
+            self.questionExpiryDeadlines.removeValue(forKey: id)
         }
         for model in self.questionCards {
-            guard let delay = model.terminalRetentionDelay(at: date) ?? model.localExpiryDelay(at: date)
-            else { continue }
+            guard let delay = model.localExpiryDelay(at: date) else {
+                self.questionExpiryTasks.removeValue(forKey: model.id)?.cancel()
+                self.questionExpiryDeadlines.removeValue(forKey: model.id)
+                continue
+            }
             let deadline = date.addingTimeInterval(delay)
-            if let scheduled = self.questionEvictionDeadlines[model.id],
+            if let scheduled = self.questionExpiryDeadlines[model.id],
                abs(scheduled.timeIntervalSince(deadline)) < 0.01
             {
                 continue
             }
-            self.questionEvictionTasks.removeValue(forKey: model.id)?.cancel()
-            self.questionEvictionDeadlines[model.id] = deadline
-            self.questionEvictionTasks[model.id] = Task { [weak self, weak model] in
+            self.questionExpiryTasks.removeValue(forKey: model.id)?.cancel()
+            self.questionExpiryDeadlines[model.id] = deadline
+            self.questionExpiryTasks[model.id] = Task { [weak self, weak model] in
                 try? await Task.sleep(for: .seconds(delay))
                 guard !Task.isCancelled, let self, let model else { return }
-                self.questionEvictionTasks.removeValue(forKey: model.id)
-                self.questionEvictionDeadlines.removeValue(forKey: model.id)
-                self.evictQuestionIfTerminalGraceElapsed(model)
+                self.questionExpiryTasks.removeValue(forKey: model.id)
+                self.questionExpiryDeadlines.removeValue(forKey: model.id)
+                self.expireQuestionIfNeeded(model)
             }
         }
     }

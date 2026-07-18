@@ -516,6 +516,18 @@ private actor AsyncCounter {
     }
 }
 
+private actor AsyncStringRecorder {
+    private var values: [String] = []
+
+    func append(_ value: String) {
+        self.values.append(value)
+    }
+
+    func current() -> [String] {
+        self.values
+    }
+}
+
 private actor SessionSubscribeGate {
     private var waiters: [CheckedContinuation<Void, Never>] = []
 
@@ -614,6 +626,8 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         (@Sendable (String, Int) async -> OpenClawChatRunObservation)?
     private let acquireSessionSettingsRouteLeaseHook: (@Sendable () async -> Void)?
     private let listQuestionsHook: (@Sendable () async throws -> [QuestionRecord])?
+    private let getQuestionHook: (@Sendable (String) async throws -> QuestionRecord)?
+    private let cancelQuestionHook: (@Sendable (String) async throws -> Void)?
     private let healthResponses: [Bool]
 
     private let stream: AsyncStream<OpenClawChatTransportEvent>
@@ -646,6 +660,8 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         waitForRunCompletionHook: (@Sendable (String, Int) async -> OpenClawChatRunObservation)? = nil,
         acquireSessionSettingsRouteLeaseHook: (@Sendable () async -> Void)? = nil,
         listQuestionsHook: (@Sendable () async throws -> [QuestionRecord])? = nil,
+        getQuestionHook: (@Sendable (String) async throws -> QuestionRecord)? = nil,
+        cancelQuestionHook: (@Sendable (String) async throws -> Void)? = nil,
         healthResponses: [Bool] = [true])
     {
         self.historyResponses = historyResponses
@@ -672,6 +688,8 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         self.waitForRunCompletionHook = waitForRunCompletionHook
         self.acquireSessionSettingsRouteLeaseHook = acquireSessionSettingsRouteLeaseHook
         self.listQuestionsHook = listQuestionsHook
+        self.getQuestionHook = getQuestionHook
+        self.cancelQuestionHook = cancelQuestionHook
         self.healthResponses = healthResponses
         var cont: AsyncStream<OpenClawChatTransportEvent>.Continuation!
         self.stream = AsyncStream { c in
@@ -961,6 +979,20 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
 
     func listQuestions() async throws -> [QuestionRecord] {
         try await self.listQuestionsHook?() ?? []
+    }
+
+    func getQuestion(id: String) async throws -> QuestionRecord {
+        guard let getQuestionHook else {
+            throw NSError(
+                domain: "TestChatTransport",
+                code: 0,
+                userInfo: [NSLocalizedDescriptionKey: "missing question.get fixture"])
+        }
+        return try await getQuestionHook(id)
+    }
+
+    func cancelQuestion(id: String) async throws {
+        try await self.cancelQuestionHook?(id)
     }
 
     func waitForRunCompletion(
@@ -1259,7 +1291,9 @@ private actor QuestionListEventRace {
 private func chatQuestionRecord(
     id: String,
     status: QuestionStatus = .pending,
-    expiresAtMs: Int = 4_000_000_000_000) -> QuestionRecord
+    expiresAtMs: Int = 4_000_000_000_000,
+    sessionKey: String? = "main",
+    answers: QuestionAnswers? = nil) -> QuestionRecord
 {
     QuestionRecord(
         id: id,
@@ -1271,15 +1305,16 @@ private func chatQuestionRecord(
                 options: [QuestionOption(label: "One"), QuestionOption(label: "Two")]),
         ],
         agentid: "main",
-        sessionkey: "main",
+        sessionkey: sessionKey,
         createdatms: 1,
         expiresatms: expiresAtMs,
-        status: status)
+        status: status,
+        answers: answers)
 }
 
 @Suite(.serialized)
 struct ChatViewModelTests {
-    @Test @MainActor func `locally expired question is evicted after terminal grace`() {
+    @Test @MainActor func `locally expired question remains in transcript`() {
         let viewModel = OpenClawChatViewModel(
             sessionKey: "main",
             transport: TestChatTransport(historyResponses: []))
@@ -1287,13 +1322,14 @@ struct ChatViewModelTests {
         viewModel.upsertQuestion(chatQuestionRecord(id: "ask_local", expiresAtMs: 1_500_000))
         let model = viewModel.questionCards[0]
 
-        viewModel.evictQuestionIfTerminalGraceElapsed(model, at: expiresAt)
+        viewModel.expireQuestionIfNeeded(model, at: expiresAt)
         #expect(viewModel.questionCards.map(\.id) == ["ask_local"])
+        #expect(model.status(at: expiresAt) == .expired)
 
-        viewModel.evictQuestionIfTerminalGraceElapsed(
+        viewModel.expireQuestionIfNeeded(
             model,
             at: expiresAt.addingTimeInterval(15))
-        #expect(viewModel.questionCards.isEmpty)
+        #expect(viewModel.questionCards.map(\.id) == ["ask_local"])
     }
 
     @Test @MainActor func `stale question list cannot overwrite a newer event`() async throws {
@@ -1382,7 +1418,7 @@ struct ChatViewModelTests {
         #expect(viewModel.questionCards.map(\.id) == ["ask_other"])
     }
 
-    @Test @MainActor func `question list retains recently resolved card`() async {
+    @Test @MainActor func `question list retains resolved card persistently`() async {
         let transport = TestChatTransport(
             historyResponses: [],
             listQuestionsHook: { [] })
@@ -1396,16 +1432,96 @@ struct ChatViewModelTests {
         #expect(viewModel.questionCards.first?.status() == .answeredElsewhere)
     }
 
-    @Test @MainActor func `question card is evicted after terminal grace`() {
-        let transport = TestChatTransport(historyResponses: [])
+    @Test @MainActor func `terminal question survives later empty list refresh`() async {
+        let transport = TestChatTransport(historyResponses: [], listQuestionsHook: { [] })
         let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
         viewModel.upsertQuestion(chatQuestionRecord(id: "ask_done"))
         viewModel.resolveQuestionEvent(.init(id: "ask_done", status: .answered))
-        let model = viewModel.questionCards[0]
 
-        viewModel.evictQuestionIfTerminalGraceElapsed(model, at: Date().addingTimeInterval(16))
+        await viewModel.refreshQuestions()
 
-        #expect(viewModel.questionCards.isEmpty)
+        #expect(viewModel.questionCards.map(\.id) == ["ask_done"])
+        #expect(viewModel.questionCards[0].status() == .answeredElsewhere)
+    }
+
+    @Test @MainActor func `missing pending question uses question get fallback`() async {
+        let answers = QuestionAnswers(answers: [
+            "choice": AnyCodable(["answers": ["Two"]]),
+        ])
+        let transport = TestChatTransport(
+            historyResponses: [],
+            listQuestionsHook: { [] },
+            getQuestionHook: { id in
+                chatQuestionRecord(id: id, status: .answered, answers: answers)
+            })
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        viewModel.upsertQuestion(chatQuestionRecord(id: "ask_missing"))
+
+        await viewModel.refreshQuestions()
+
+        #expect(viewModel.questionCards[0].status() == .answeredElsewhere)
+        #expect(viewModel.questionCards[0].terminalSummaryText(
+            for: viewModel.questionCards[0].record.questions[0]) == "Two")
+    }
+
+    @Test @MainActor func `question refresh retries transport failure`() async throws {
+        let listCalls = AsyncCounter()
+        let getCalls = AsyncCounter()
+        let transport = TestChatTransport(
+            historyResponses: [],
+            listQuestionsHook: {
+                let call = await listCalls.increment()
+                if call == 1 {
+                    throw GatewayResponseError(
+                        method: "question.list",
+                        code: "UNAVAILABLE",
+                        message: "retry",
+                        details: nil)
+                }
+                return []
+            },
+            getQuestionHook: { id in
+                _ = await getCalls.increment()
+                return chatQuestionRecord(id: id, status: .cancelled)
+            })
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        viewModel.questionRefreshRetryDelaysMs = [0]
+        viewModel.upsertQuestion(chatQuestionRecord(id: "ask_retry"))
+
+        await viewModel.refreshQuestions()
+        try await waitUntil("question refresh retry") { await getCalls.current() == 1 }
+
+        #expect(await listCalls.current() == 2)
+        #expect(viewModel.questionCards[0].status() == .cancelled)
+    }
+
+    @Test @MainActor func `visible questions filter by current session`() {
+        let viewModel = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: TestChatTransport(historyResponses: []))
+        viewModel.upsertQuestion(chatQuestionRecord(id: "ask_main"))
+        viewModel.upsertQuestion(chatQuestionRecord(id: "ask_other", sessionKey: "other"))
+        viewModel.upsertQuestion(chatQuestionRecord(id: "ask_unscoped", sessionKey: nil))
+
+        #expect(viewModel.visibleQuestionCards.map(\.id) == ["ask_main", "ask_unscoped"])
+    }
+
+    @Test @MainActor func `skip sends question cancellation and retains summary`() async {
+        let cancelledIDs = AsyncStringRecorder()
+        let transport = TestChatTransport(
+            historyResponses: [],
+            cancelQuestionHook: { id in
+                await cancelledIDs.append(id)
+            })
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        viewModel.upsertQuestion(chatQuestionRecord(id: "ask_skip"))
+
+        await viewModel.skipQuestion(viewModel.questionCards[0])
+
+        #expect(await cancelledIDs.current() == ["ask_skip"])
+        #expect(viewModel.questionCards[0].status() == .cancelled)
+        #expect(viewModel.questionCards[0].terminalSummaryText(
+            for: viewModel.questionCards[0].record.questions[0]) == "Skipped")
     }
 
     @Test func `context usage fraction validates freshness and token bounds`() {
