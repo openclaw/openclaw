@@ -33,6 +33,7 @@ import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.util.Base64
 import android.util.Log
+import androidx.annotation.RequiresApi
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -2263,20 +2264,16 @@ class TalkModeManager internal constructor(
       putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
       putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, context.packageName)
       when (rung) {
-        is PushToTalkRecognitionRung.RawAudioSegmented -> {
-          putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE, rung.source.readDescriptor)
-          putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_CHANNEL_COUNT, 1)
-          putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_ENCODING, AudioFormat.ENCODING_PCM_16BIT)
-          putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_SAMPLING_RATE, pushToTalkSampleRateHz)
-          putExtra(RecognizerIntent.EXTRA_SEGMENTED_SESSION, RecognizerIntent.EXTRA_AUDIO_SOURCE)
-        }
+        is PushToTalkRecognitionRung.RawAudioSegmented ->
+          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            applyRawAudioSegmentedExtras(this, rung.source)
+          }
         PushToTalkRecognitionRung.SilenceSegmented -> {
           putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 2500)
           putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1800)
-          putExtra(
-            RecognizerIntent.EXTRA_SEGMENTED_SESSION,
-            RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS,
-          )
+          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            applySilenceSegmentedExtras(this)
+          }
         }
         PushToTalkRecognitionRung.RestartingSingleSession -> {
           putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 2500)
@@ -2284,6 +2281,28 @@ class TalkModeManager internal constructor(
         }
       }
     }
+
+  // API 33 RecognizerIntent extras live behind @RequiresApi so min-SDK lint stays meaningful;
+  // segmented rungs are only ever constructed on TIRAMISU+ (see pushToTalkRecognitionCandidates).
+  @RequiresApi(Build.VERSION_CODES.TIRAMISU)
+  private fun applyRawAudioSegmentedExtras(
+    intent: Intent,
+    source: PushToTalkAudioSource,
+  ) {
+    intent.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE, source.readDescriptor)
+    intent.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_CHANNEL_COUNT, 1)
+    intent.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_ENCODING, AudioFormat.ENCODING_PCM_16BIT)
+    intent.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_SAMPLING_RATE, pushToTalkSampleRateHz)
+    intent.putExtra(RecognizerIntent.EXTRA_SEGMENTED_SESSION, RecognizerIntent.EXTRA_AUDIO_SOURCE)
+  }
+
+  @RequiresApi(Build.VERSION_CODES.TIRAMISU)
+  private fun applySilenceSegmentedExtras(intent: Intent) {
+    intent.putExtra(
+      RecognizerIntent.EXTRA_SEGMENTED_SESSION,
+      RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS,
+    )
+  }
 
   @SuppressLint("MissingPermission")
   private fun openPushToTalkAudioSource(): PushToTalkAudioSource {
