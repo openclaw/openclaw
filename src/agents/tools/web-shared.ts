@@ -311,8 +311,11 @@ export async function readResponseText(
       // charset that decodeResponseBytes resolved rather than hard-coding
       // UTF-8. This preserves legitimate U+FFFD in non-UTF-8 encodings.
       if (decoded.includes("�")) {
+        // Use the same charset resolution as decodeResponseBytes so
+        // BOM-sniffed encodings (e.g. UTF-16LE) are validated correctly.
         const contentType = responseContentType(res);
-        const charset = readCharsetParam(contentType) ?? "utf-8";
+        const charset =
+          readCharsetParam(contentType) ?? sniffCharset(contentType, rawBytes) ?? "utf-8";
         try {
           new TextDecoder(charset, { fatal: true }).decode(rawBytes);
           // strict decode passed — the U+FFFD is legitimate
