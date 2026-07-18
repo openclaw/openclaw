@@ -8,13 +8,27 @@ const IGNORE_FILE_NAMES = [".gitignore", ".ignore", ".fdignore"];
 // for monorepos while preventing a malicious or runaway file from OOMing the
 // workspace scanner.
 const IGNORE_FILE_MAX_BYTES = 4 * 1024 * 1024;
+const IGNORE_MATCHER_MAX_PATTERNS = 20_000;
+const IGNORE_PATTERN_MAX_CHARS = 16 * 1024;
+const IGNORE_MATCHER_MAX_PATTERN_CHARS = IGNORE_FILE_MAX_BYTES;
 // Returned instead of null when an ignore file exceeds IGNORE_FILE_MAX_BYTES so
 // the caller can fail closed.
 const OVERSIZED_IGNORE_FILE = Symbol("oversizedIgnoreFile");
+const COMPLEX_IGNORE_FILE = Symbol("complexIgnoreFile");
 
-export type IgnoreMatcher = ReturnType<typeof ignore>;
+type IgnoreRuleMatcher = ReturnType<typeof ignore>;
+type IgnoreMatcherState = {
+  rules: IgnoreRuleMatcher;
+  excludedSubtrees: Set<string>;
+  patternCount: number;
+  patternChars: number;
+};
+const IGNORE_MATCHER_STATE: unique symbol = Symbol("ignoreMatcherState");
 
-const literalExcludedSubtrees = new WeakMap<IgnoreMatcher, Set<string>>();
+export type IgnoreMatcher = {
+  readonly [IGNORE_MATCHER_STATE]: IgnoreMatcherState;
+  ignores(pathname: string): boolean;
+};
 
 function isInLiteralSubtree(pathname: string, subtrees: Set<string>): boolean {
   const posixPath = toPosixPath(pathname);
@@ -27,37 +41,66 @@ function isInLiteralSubtree(pathname: string, subtrees: Set<string>): boolean {
   return false;
 }
 
-function excludeLiteralSubtree(matcher: IgnoreMatcher, subtree: string): void {
-  const existing = literalExcludedSubtrees.get(matcher);
-  if (existing) {
-    existing.add(subtree);
-    return;
+function createIgnoreMatcher(): IgnoreMatcher {
+  const state: IgnoreMatcherState = {
+    rules: ignore(),
+    excludedSubtrees: new Set<string>(),
+    patternCount: 0,
+    patternChars: 0,
+  };
+  return {
+    [IGNORE_MATCHER_STATE]: state,
+    ignores: (pathname) =>
+      isInLiteralSubtree(pathname, state.excludedSubtrees) || state.rules.ignores(pathname),
+  };
+}
+
+function addFailClosedSubtree(matcher: IgnoreMatcher, prefix: string): void {
+  matcher[IGNORE_MATCHER_STATE].excludedSubtrees.add(
+    prefix.endsWith("/") ? prefix.slice(0, -1) : prefix,
+  );
+}
+
+function parseIgnorePatterns(
+  content: string,
+  prefix: string,
+  budget: { patterns: number; chars: number },
+): { patterns: string[]; chars: number } | typeof COMPLEX_IGNORE_FILE {
+  const patterns: string[] = [];
+  let patternChars = 0;
+  let lineStart = 0;
+
+  while (lineStart <= content.length) {
+    const newline = content.indexOf("\n", lineStart);
+    const lineEnd = newline === -1 ? content.length : newline;
+    const contentEnd = lineEnd > lineStart && content[lineEnd - 1] === "\r" ? lineEnd - 1 : lineEnd;
+    const pattern = prefixIgnorePattern(content.slice(lineStart, contentEnd), prefix);
+    if (pattern) {
+      if (pattern.length > IGNORE_PATTERN_MAX_CHARS || patterns.length >= budget.patterns) {
+        return COMPLEX_IGNORE_FILE;
+      }
+      patternChars += pattern.length;
+      if (patternChars > budget.chars) {
+        return COMPLEX_IGNORE_FILE;
+      }
+      patterns.push(pattern);
+    }
+    if (newline === -1) {
+      break;
+    }
+    lineStart = newline + 1;
   }
-
-  const subtrees = new Set([subtree]);
-  literalExcludedSubtrees.set(matcher, subtrees);
-  const originalIgnores = matcher.ignores.bind(matcher);
-  const originalTest = matcher.test.bind(matcher);
-  const originalCheckIgnore = matcher.checkIgnore.bind(matcher);
-
-  matcher.ignores = (pathname) =>
-    isInLiteralSubtree(pathname, subtrees) || originalIgnores(pathname);
-  matcher.test = (pathname) =>
-    isInLiteralSubtree(pathname, subtrees)
-      ? { ignored: true, unignored: false }
-      : originalTest(pathname);
-  matcher.checkIgnore = (pathname) =>
-    isInLiteralSubtree(pathname, subtrees)
-      ? { ignored: true, unignored: false }
-      : originalCheckIgnore(pathname);
-  matcher.filter = (pathnames) => pathnames.filter((pathname) => !matcher.ignores(pathname));
-  matcher.createFilter = () => (pathname) => !matcher.ignores(pathname);
+  return { patterns, chars: patternChars };
 }
 
 export const toPosixPath = (pathValue: string) => pathValue.split(sep).join("/");
 
 /** Adds nested ignore-file rules to a matcher using paths relative to the scan root. */
-export function addIgnoreRules(dir: string, rootDir: string, ig = ignore()): IgnoreMatcher {
+export function addIgnoreRules(
+  dir: string,
+  rootDir: string,
+  ig: IgnoreMatcher = createIgnoreMatcher(),
+): IgnoreMatcher {
   const relativeDir = relative(rootDir, dir);
   const prefix = relativeDir ? `${toPosixPath(relativeDir)}/` : "";
 
@@ -73,22 +116,25 @@ export function addIgnoreRules(dir: string, rootDir: string, ig = ignore()): Ign
       // the scan surface files the user asked to hide. Stop here so a later
       // ignore file in this directory cannot negate the exclusion and reopen a
       // subtree whose policy could not be parsed.
-      // Filesystem paths are literal, but gitignore patterns treat characters
-      // such as #, !, [, *, and ? specially. Keep the fail-closed subtree as a
-      // literal path predicate so unusual directory names cannot reopen it.
-      const subtree = prefix.endsWith("/") ? prefix.slice(0, -1) : prefix;
-      excludeLiteralSubtree(ig, subtree);
+      addFailClosedSubtree(ig, prefix);
       break;
     }
     if (content === null) {
       continue;
     }
-    const patterns = content
-      .split(/\r?\n/)
-      .map((line) => prefixIgnorePattern(line, prefix))
-      .filter((line): line is string => Boolean(line));
-    if (patterns.length > 0) {
-      ig.add(patterns);
+    const state = ig[IGNORE_MATCHER_STATE];
+    const parsed = parseIgnorePatterns(content, prefix, {
+      patterns: IGNORE_MATCHER_MAX_PATTERNS - state.patternCount,
+      chars: IGNORE_MATCHER_MAX_PATTERN_CHARS - state.patternChars,
+    });
+    if (parsed === COMPLEX_IGNORE_FILE) {
+      addFailClosedSubtree(ig, prefix);
+      break;
+    }
+    if (parsed.patterns.length > 0) {
+      state.rules.add(parsed.patterns);
+      state.patternCount += parsed.patterns.length;
+      state.patternChars += parsed.chars;
     }
   }
   return ig;
