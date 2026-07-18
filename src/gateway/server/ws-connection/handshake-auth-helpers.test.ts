@@ -225,7 +225,7 @@ describe("handshake auth helpers", () => {
 
   it("recommends device-token retry only for shared-token mismatch with device identity", () => {
     const resolved = resolveUnauthorizedHandshakeContext({
-      connectAuth: { token: "shared-token" },
+      connectAuth: { token: "test-token" },
       failedAuth: { ok: false, reason: "token_mismatch" },
       hasDeviceIdentity: true,
     });
@@ -239,13 +239,13 @@ describe("handshake auth helpers", () => {
 
   it("treats explicit device-token mismatch as credential update guidance", () => {
     const resolved = resolveUnauthorizedHandshakeContext({
-      connectAuth: { deviceToken: "device-token" },
+      connectAuth: { deviceToken: "test-device-token" },
       failedAuth: { ok: false, reason: "device_token_mismatch" },
       hasDeviceIdentity: true,
     });
 
     expect(resolved).toEqual({
-      authProvided: "device-token",
+      authProvided: "test-device-token",
       canRetryWithDeviceToken: false,
       recommendedNextStep: "update_auth_credentials",
     });
@@ -253,13 +253,13 @@ describe("handshake auth helpers", () => {
 
   it("treats device-token scope mismatch as configuration review guidance", () => {
     const resolved = resolveUnauthorizedHandshakeContext({
-      connectAuth: { deviceToken: "device-token" },
+      connectAuth: { deviceToken: "test-device-token" },
       failedAuth: { ok: false, reason: "scope_mismatch" },
       hasDeviceIdentity: true,
     });
 
     expect(resolved).toEqual({
-      authProvided: "device-token",
+      authProvided: "test-device-token",
       canRetryWithDeviceToken: false,
       recommendedNextStep: "review_auth_configuration",
     });
@@ -419,7 +419,7 @@ describe("handshake auth helpers", () => {
     ).toBe("remote");
     expect(
       resolveCliLoopbackLocality({
-        authMethod: "device-token",
+        authMethod: "test-device-token",
       }),
     ).toBe("remote");
   });
@@ -460,14 +460,14 @@ describe("handshake auth helpers", () => {
     expect(
       skipBackendSelfPairing({
         sharedAuthOk: false,
-        authMethod: "device-token",
+        authMethod: "test-device-token",
       }),
     ).toBe(true);
     expect(
       skipBackendSelfPairing({
         locality: "remote",
         sharedAuthOk: false,
-        authMethod: "device-token",
+        authMethod: "test-device-token",
       }),
     ).toBe(false);
     expect(
@@ -500,7 +500,7 @@ describe("handshake auth helpers", () => {
     ).toBe(false);
     expect(
       preserveLocalCliSharedAuthScopes({
-        authMethod: "device-token",
+        authMethod: "test-device-token",
       }),
     ).toBe(false);
     expect(
@@ -574,7 +574,7 @@ describe("handshake auth helpers", () => {
     expect(
       resolveNodeLoopbackLocality({
         sharedAuthOk: true,
-        authMethod: "device-token",
+        authMethod: "test-device-token",
       }),
     ).toBe("remote");
     expect(

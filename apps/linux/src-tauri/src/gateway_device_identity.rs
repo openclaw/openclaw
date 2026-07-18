@@ -263,12 +263,10 @@ fn select_auth(
     shared_token: Option<&str>,
     shared_password: Option<&str>,
 ) -> GatewayAuth {
-    let device_token = device_token
-        .map(str::trim)
-        .filter(|token| !token.is_empty());
+    let usable_device_token = device_token.map(str::trim).filter(|token| !token.is_empty());
     if device_token_gateway == Some(gateway) {
-        if let Some(device_token) = device_token {
-            return GatewayAuth::DeviceToken(device_token.to_string());
+        if let Some(token) = usable_device_token {
+            return GatewayAuth::DeviceToken(token.to_string());
         }
     }
     if let Some(password) = shared_password
@@ -439,7 +437,7 @@ mod tests {
         let mut original = GatewayDeviceIdentityStore::load_or_create(path.clone())
             .expect("create device identity");
         original
-            .persist_device_token("ws://127.0.0.1:18789", "device-token-1")
+            .persist_device_token("ws://127.0.0.1:18789", "test-token-fresh")
             .expect("persist device token");
         let reloaded = GatewayDeviceIdentityStore::load_or_create(path.clone())
             .expect("reload device identity");
@@ -454,7 +452,7 @@ mod tests {
         );
         assert_eq!(
             reloaded.identity.stored.device_token.as_deref(),
-            Some("device-token-1")
+            Some("test-token-fresh")
         );
         #[cfg(unix)]
         assert_eq!(
@@ -527,7 +525,7 @@ mod tests {
             GatewayDeviceIdentityStore::load_or_create(path.clone()).expect("create identity");
         let device_id = store.identity.stored.device_id.clone();
         store
-            .persist_device_token("wss://gateway.example", "stale-token")
+            .persist_device_token("wss://gateway.example", "test-token-stale")
             .expect("persist token");
         store
             .clear_device_token("wss://gateway.example")
