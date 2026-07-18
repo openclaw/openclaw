@@ -61,6 +61,16 @@ export function buildAssistantText(
       ? extractLatestToolOutput(input)
       : "");
   const toolJson = parseToolOutputJson(scenarioToolOutput);
+  const structuredToolText = Array.isArray(toolJson?.content)
+    ? toolJson.content
+        .map((entry) =>
+          entry && typeof entry === "object" && !Array.isArray(entry)
+            ? (entry as { text?: unknown }).text
+            : undefined,
+        )
+        .filter((value): value is string => typeof value === "string")
+        .join("\n")
+    : "";
   const userTexts = extractAllUserTexts(input);
   const allInputText = extractAllRequestTexts(input, body);
   const rememberedFact = extractRememberedFact(userTexts);
@@ -328,14 +338,15 @@ export function buildAssistantText(
   ) {
     const targetTool = extractToolSearchTarget(allInputText);
     if (targetTool === "ask_user") {
-      const deploy = /^Deploy:\s*(.+)$/m.exec(toolOutput)?.[1]?.trim();
+      const askUserResult = structuredToolText || toolOutput;
+      const deploy = /^Deploy:\s*(.+)$/m.exec(askUserResult)?.[1]?.trim();
       const checks = /^Checks:\s*(.+)$/m
-        .exec(toolOutput)?.[1]
+        .exec(askUserResult)?.[1]
         ?.split(",")
         .map((value) => value.replace(/\s*\(Recommended\)\s*$/, "").trim())
         .filter(Boolean)
         .join(",");
-      const note = /^Note:\s*(.+)$/m.exec(toolOutput)?.[1]?.trim();
+      const note = /^Note:\s*(.+)$/m.exec(askUserResult)?.[1]?.trim();
       if (deploy && checks && note) {
         return `ASK-USER-ROUNDTRIP-OK | deploy=${deploy} | checks=${checks} | note=${note}`;
       }
