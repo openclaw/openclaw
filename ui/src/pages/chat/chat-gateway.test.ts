@@ -293,6 +293,34 @@ describe("chat side result gateway events", () => {
     expect(state.chatRunId).toBeNull();
   });
 
+  it.each(["error", "aborted"] as const)(
+    "keeps a replayed %s side-result terminal frame out of chat after its session becomes visible",
+    (terminalState) => {
+      const state = createState({ sessionKey: "main" });
+      state.chatSideResultTerminalRuns?.add("btw-run-replayed");
+      const payload: ChatEventPayload = {
+        runId: "btw-run-replayed",
+        seq: 8,
+        sessionKey: "other",
+        state: terminalState,
+        errorMessage: "Detached side question failed.",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Side result must stay out of main chat." }],
+        },
+      };
+
+      expect(handleChatGatewayEvent(state, payload)).toBeNull();
+      expect(state.chatSideResultTerminalRuns?.has("btw-run-replayed")).toBe(false);
+
+      state.sessionKey = "other";
+      expect(handleChatGatewayEvent(state, payload)).toBeNull();
+      expect(state.chatMessages).toEqual([]);
+      expect(state.chatRunId).toBeNull();
+      expect(state.lastError).toBeNull();
+    },
+  );
+
   it("ignores side results from retired (superseded or dismissed) runs", () => {
     const state = createState();
     // A newer question retired the old pending run before its result arrived.

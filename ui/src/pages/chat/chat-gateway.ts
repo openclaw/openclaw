@@ -387,7 +387,19 @@ export function handleChatGatewayEvent(state: ChatState, payload?: ChatEventPayl
   if (!payload) {
     return null;
   }
-  if (shouldConsumeChatEventFrame(state, payload) && !acceptChatEventFrame(state, payload)) {
+  const sideResultTerminalRunId =
+    isTerminalChatState(payload.state) && typeof payload.runId === "string" ? payload.runId : null;
+  // Side-result markers consume terminal frames even when the selected session
+  // does not. Record them before clearing the marker so later replay stays swallowed.
+  const consumesSideResultTerminalFrame = Boolean(
+    sideResultTerminalRunId &&
+    (state.chatSideResultPending?.runId === sideResultTerminalRunId ||
+      state.chatSideResultTerminalRuns?.has(sideResultTerminalRunId) === true),
+  );
+  if (
+    (shouldConsumeChatEventFrame(state, payload) || consumesSideResultTerminalFrame) &&
+    !acceptChatEventFrame(state, payload)
+  ) {
     return null;
   }
   // A BTW run that fails before seeding context terminates with a plain chat
@@ -396,11 +408,7 @@ export function handleChatGatewayEvent(state: ChatState, payload?: ChatEventPayl
   // normal chat handling, where an idle pane would adopt them into the
   // transcript. Successful runs clear pending via the side_result handler
   // before their terminal chat event arrives.
-  if (
-    isTerminalChatState(payload?.state) &&
-    typeof payload?.runId === "string" &&
-    state.chatSideResultPending?.runId === payload.runId
-  ) {
+  if (sideResultTerminalRunId && state.chatSideResultPending?.runId === sideResultTerminalRunId) {
     appendChatSideChatTurn(state, {
       kind: "btw",
       runId: payload.runId,
@@ -414,9 +422,8 @@ export function handleChatGatewayEvent(state: ChatState, payload?: ChatEventPayl
     return null;
   }
   if (
-    isTerminalChatState(payload?.state) &&
-    typeof payload?.runId === "string" &&
-    state.chatSideResultTerminalRuns?.has(payload.runId) === true
+    sideResultTerminalRunId &&
+    state.chatSideResultTerminalRuns?.has(sideResultTerminalRunId) === true
   ) {
     state.chatSideResultTerminalRuns.delete(payload.runId);
     return null;
