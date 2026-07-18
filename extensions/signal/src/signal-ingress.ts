@@ -289,6 +289,8 @@ export async function startSignalIngressMonitor(params: {
     stop: async () => {
       clearInterval(timer);
       await drainPass?.catch(() => undefined);
+      // Accepted rows own shutdown: finish active dispatch before dispose aborts its claim.
+      await drain.waitForIdle();
       drain.dispose();
     },
   };
