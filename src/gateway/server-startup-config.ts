@@ -231,7 +231,6 @@ export function createRuntimeSecretsActivator(params: {
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins" | "manifestRegistry">;
   channelAutostartSuppression?: ChannelAutostartSuppression | null;
 }): ActivateRuntimeSecrets {
-  let secretsDegraded = false;
   let degradationGeneration = 0;
   let activeDegradationGeneration: number | null = null;
   let activeDegradationConfig: OpenClawConfig | null = null;
@@ -266,7 +265,7 @@ export function createRuntimeSecretsActivator(params: {
 
   const publishRecovery = (config: OpenClawConfig, expectedGeneration?: number) => {
     if (
-      !secretsDegraded ||
+      activeDegradationGeneration === null ||
       (expectedGeneration !== undefined && activeDegradationGeneration !== expectedGeneration)
     ) {
       return;
@@ -275,7 +274,6 @@ export function createRuntimeSecretsActivator(params: {
       "Secret resolution recovered; runtime remained on last-known-good during the outage.";
     params.logSecrets.info(`[SECRETS_RELOADER_RECOVERED] ${recoveredMessage}`);
     params.emitStateEvent("SECRETS_RELOADER_RECOVERED", recoveredMessage, config);
-    secretsDegraded = false;
     activeDegradationGeneration = null;
     activeDegradationConfig = null;
     activeDegradationSupportsSourceOnlyRecovery = false;
@@ -317,11 +315,9 @@ export function createRuntimeSecretsActivator(params: {
         });
       }
     }
-    if (activationParams.activate && secretsDegraded) {
+    if (activationParams.activate && activeDegradationGeneration !== null) {
       if (activationParams.publishRecovery === false) {
-        if (activeDegradationGeneration !== null) {
-          deferredRecoveryGenerations.set(prepared, activeDegradationGeneration);
-        }
+        deferredRecoveryGenerations.set(prepared, activeDegradationGeneration);
       } else {
         publishRecovery(prepared.config);
       }
@@ -346,7 +342,8 @@ export function createRuntimeSecretsActivator(params: {
         logSecretDegradation(params.logSecrets, degradation);
       }
       if (activationParams.reason !== "startup") {
-        if (!secretsDegraded) {
+        const wasDegraded = activeDegradationGeneration !== null;
+        if (!wasDegraded) {
           params.emitStateEvent(
             "SECRETS_RELOADER_DEGRADED",
             "Secret resolution failed; runtime remains on the last-known-good snapshot.",
@@ -361,10 +358,9 @@ export function createRuntimeSecretsActivator(params: {
           failedOwners.every(
             (owner) => owner.source === "config" && owner.degradationState === "cold",
           );
-        activeDegradationSupportsSourceOnlyRecovery = secretsDegraded
+        activeDegradationSupportsSourceOnlyRecovery = wasDegraded
           ? activeDegradationSupportsSourceOnlyRecovery && currentFailureSupportsSourceOnlyRecovery
           : currentFailureSupportsSourceOnlyRecovery;
-        secretsDegraded = true;
         activeDegradationGeneration = ++degradationGeneration;
         activeDegradationConfig = structuredClone(eventConfig);
       }
