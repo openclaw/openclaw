@@ -1,5 +1,5 @@
-import type { SessionTranscriptTargetParams } from "openclaw/plugin-sdk/session-transcript-runtime";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
+import type { SessionTranscriptTargetParams } from "openclaw/plugin-sdk/session-transcript-runtime";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 // CLI-runtime recalls dispatch through a fresh CLI process (spawn + MCP
