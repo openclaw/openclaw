@@ -692,13 +692,16 @@ extension OpenClawChatViewModel {
             return
         }
         let delayMs = self.questionRefreshRetryDelaysMs[retryIndex]
+        let stateRevision = self.questionStateRevision
         self.questionRefreshRetryTask?.cancel()
         self.questionRefreshRetryTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(delayMs))
             guard !Task.isCancelled, let self,
                   generation == self.questionRefreshGeneration
             else { return }
-            await self.refreshQuestions(generation: generation, retryIndex: retryIndex + 1)
+            // A mutation during backoff invalidates the reconciliation attempt, not the retry budget.
+            let nextRetryIndex = stateRevision == self.questionStateRevision ? retryIndex + 1 : 0
+            await self.refreshQuestions(generation: generation, retryIndex: nextRetryIndex)
         }
     }
 
