@@ -21,7 +21,11 @@ describe("renderChannelWizard", () => {
 
   it("copies setup text through the plain-HTTP clipboard fallback", async () => {
     vi.stubGlobal("navigator", {});
-    const execCommand = vi.fn().mockReturnValue(true);
+    let copiedText: string | undefined;
+    const execCommand = vi.fn().mockImplementation(() => {
+      copiedText = document.querySelector<HTMLTextAreaElement>("textarea")?.value;
+      return true;
+    });
     (document as unknown as { execCommand: typeof execCommand }).execCommand = execCommand;
     const container = document.createElement("div");
     document.body.append(container);
@@ -59,6 +63,7 @@ describe("renderChannelWizard", () => {
     copy?.click();
 
     await vi.waitFor(() => expect(execCommand).toHaveBeenCalledWith("copy"));
+    expect(copiedText).toBe("openclaw channels add");
     expect(document.querySelector("textarea")).toBeNull();
   });
 });
