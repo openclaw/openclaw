@@ -4636,6 +4636,82 @@ public struct SessionsCompactionRestoreResult: Codable, Sendable {
     }
 }
 
+public struct SessionsRewindParams: Codable, Sendable {
+    public let sessionkey: String
+    public let agentid: String?
+    public let entryid: String
+
+    public init(
+        sessionkey: String,
+        agentid: String? = nil,
+        entryid: String)
+    {
+        self.sessionkey = sessionkey
+        self.agentid = agentid
+        self.entryid = entryid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case agentid = "agentId"
+        case entryid = "entryId"
+    }
+}
+
+public struct SessionsRewindResult: Codable, Sendable {
+    public let editortext: String?
+
+    public init(
+        editortext: String? = nil)
+    {
+        self.editortext = editortext
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case editortext = "editorText"
+    }
+}
+
+public struct SessionsForkParams: Codable, Sendable {
+    public let sessionkey: String
+    public let agentid: String?
+    public let entryid: String
+
+    public init(
+        sessionkey: String,
+        agentid: String? = nil,
+        entryid: String)
+    {
+        self.sessionkey = sessionkey
+        self.agentid = agentid
+        self.entryid = entryid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case agentid = "agentId"
+        case entryid = "entryId"
+    }
+}
+
+public struct SessionsForkResult: Codable, Sendable {
+    public let sessionkey: String
+    public let editortext: String?
+
+    public init(
+        sessionkey: String,
+        editortext: String? = nil)
+    {
+        self.sessionkey = sessionkey
+        self.editortext = editortext
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case editortext = "editorText"
+    }
+}
+
 public struct SessionFileBrowserEntry: Codable, Sendable {
     public let path: String
     public let name: String

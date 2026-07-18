@@ -371,6 +371,65 @@ extension OpenClawChatViewModel {
         }
     }
 
+    public func rewindToMessage(_ message: OpenClawChatMessage) async {
+        guard let entryID = Self.sessionMutationEntryID(for: message) else { return }
+        guard !self.hasBlockingRunActivity, !self.isSending, !self.isAborting else { return }
+        let initiatingSession = self.currentSessionSnapshot()
+        do {
+            let result = try await self.transport.rewindSession(
+                sessionKey: initiatingSession.key,
+                entryId: entryID)
+            guard self.isCurrentSession(initiatingSession) else { return }
+            self.replyTarget = nil
+            self.runMessageScopesByRunID.removeAll()
+            self.provisionalFinalMessagesByID.removeAll()
+            self.input = result.editorText ?? ""
+            let historyRequest = self.beginHistoryRequest(for: initiatingSession)
+            _ = await self.refreshHistoryAfterRun(historyRequest: historyRequest)
+        } catch {
+            self.errorText = error.localizedDescription
+            chatSessionActionsLogger.error(
+                "sessions.rewind failed \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    public func forkAtMessage(_ message: OpenClawChatMessage) async {
+        guard let entryID = Self.sessionMutationEntryID(for: message) else { return }
+        guard !self.hasBlockingRunActivity, !self.isSending, !self.isAborting else { return }
+        guard self.canCreateSessionForImmediateSwitch() else { return }
+        let initiatingSession = self.currentSessionSnapshot()
+        do {
+            let result = try await self.transport.forkSessionAtMessage(
+                sessionKey: initiatingSession.key,
+                entryId: entryID)
+            let createdKey = result.sessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !createdKey.isEmpty else { return }
+            guard self.isCurrentSession(initiatingSession),
+                  !self.hasBlockingRunActivity,
+                  !self.isSending,
+                  !self.isAborting,
+                  self.canCreateSessionForImmediateSwitch()
+            else {
+                self.refreshSessions(limit: Self.sessionListFetchLimit)
+                return
+            }
+            self.switchSession(to: createdKey)
+            guard self.sessionKey == createdKey else { return }
+            self.input = result.editorText ?? ""
+        } catch {
+            self.errorText = error.localizedDescription
+            chatSessionActionsLogger.error(
+                "sessions.fork failed \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private static func sessionMutationEntryID(for message: OpenClawChatMessage) -> String? {
+        guard message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "user"
+        else { return nil }
+        let entryID = message.transcriptMessageID?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return entryID?.isEmpty == false ? entryID : nil
+    }
+
     public func setSessionUnread(key: String, unread: Bool) {
         let identityKey = self.sessionMutationIdentity(for: key)
         let previousEntry = self.sessions.first(where: { $0.key == key })
