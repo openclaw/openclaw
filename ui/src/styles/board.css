@@ -30,10 +30,20 @@ openclaw-board-view {
 }
 
 .board-tabs__track {
-  display: flex;
+  --track-width: 0;
+  display: block;
+  flex: 1 1 auto;
   min-width: 0;
   overflow-x: auto;
   scrollbar-width: none;
+}
+
+.board-tabs__track::part(nav) {
+  display: flex;
+}
+
+.board-tabs__track::part(body) {
+  display: none;
 }
 
 .board-tabs__track::-webkit-scrollbar {
@@ -41,12 +51,12 @@ openclaw-board-view {
 }
 
 .board-tabs__tab {
-  background: transparent;
-  border: 0;
-  border-bottom: 2px solid transparent;
   color: var(--muted, #8a919e);
   flex: 0 0 auto;
-  font: inherit;
+}
+
+.board-tabs__tab::part(base) {
+  border-bottom: 2px solid transparent;
   font-size: 12.5px;
   min-height: 38px;
   padding: 0 13px;
@@ -56,18 +66,18 @@ openclaw-board-view {
     color 120ms ease;
 }
 
-.board-tabs__tab:hover,
-.board-tabs__tab:focus-visible {
+.board-tabs__tab:hover::part(base),
+.board-tabs__tab:focus-visible::part(base) {
   background: color-mix(in srgb, var(--text, #d7dae0) 6%, transparent);
   color: var(--text, #d7dae0);
 }
 
-.board-tabs__tab--active {
+.board-tabs__tab--active::part(base) {
   border-bottom-color: var(--accent, #ff5c5c);
   color: var(--text, #d7dae0);
 }
 
-.board-tabs__tab--drop {
+.board-tabs__tab--drop::part(base) {
   background: color-mix(in srgb, var(--accent, #ff5c5c) 14%, transparent);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent, #ff5c5c) 70%, transparent);
 }
@@ -78,55 +88,42 @@ openclaw-board-view {
   position: relative;
 }
 
-.board-tabs__overflow > summary,
-.board-widget__menu > summary {
+.board-tabs__overflow-trigger,
+.board-widget__menu-trigger {
   align-items: center;
+  background: transparent;
+  border: 0;
   border-radius: 7px;
   color: var(--muted, #8a919e);
   cursor: pointer;
   display: inline-flex;
   justify-content: center;
-  list-style: none;
   user-select: none;
 }
 
-.board-tabs__overflow > summary::-webkit-details-marker,
-.board-widget__menu > summary::-webkit-details-marker {
-  display: none;
-}
-
-.board-tabs__overflow > summary {
+.board-tabs__overflow-trigger {
   height: 30px;
   width: 34px;
 }
 
-.board-tabs__overflow > summary:hover,
-.board-widget__menu > summary:hover {
+.board-tabs__overflow-trigger:hover,
+.board-widget__menu-trigger:hover {
   background: color-mix(in srgb, var(--text, #d7dae0) 10%, transparent);
   color: var(--text, #d7dae0);
 }
 
-.board-tabs__overflow-menu,
-.board-widget__menu-popover {
+.board-tabs__overflow::part(menu),
+.board-widget__menu::part(menu) {
   background: var(--panel, #171a20);
   border: 1px solid var(--board-line);
   border-radius: 10px;
   box-shadow: 0 18px 48px rgb(0 0 0 / 32%);
   min-width: 190px;
   padding: 6px;
-  position: absolute;
-  right: 0;
-  top: calc(100% + 5px);
-  z-index: 30;
 }
 
-.board-tabs__overflow-menu .board-tabs__tab {
-  border: 0;
-  border-radius: 6px;
-  display: block;
-  min-height: 32px;
-  text-align: left;
-  width: 100%;
+.board-tabs__overflow-item {
+  min-width: 180px;
 }
 
 .board-grid {
@@ -243,34 +240,11 @@ openclaw-board-widget-cell {
   margin-left: 0;
 }
 
-.board-widget__menu > summary {
+.board-widget__menu-trigger {
   font-size: 21px;
   height: 27px;
   line-height: 1;
   width: 27px;
-}
-
-.board-widget__menu-popover {
-  display: grid;
-  gap: 2px;
-  top: calc(100% + 3px);
-}
-
-.board-widget__menu-popover button {
-  background: transparent;
-  border: 0;
-  border-radius: 6px;
-  color: var(--text, #d7dae0);
-  font: inherit;
-  font-size: 12px;
-  min-height: 31px;
-  padding: 0 9px;
-  text-align: left;
-}
-
-.board-widget__menu-popover button:hover,
-.board-widget__menu-popover button:focus-visible {
-  background: color-mix(in srgb, var(--text, #d7dae0) 9%, transparent);
 }
 
 .board-widget__menu-heading {
@@ -287,16 +261,8 @@ openclaw-board-widget-cell {
   padding: 5px 9px;
 }
 
-.board-widget__preset-row {
-  display: grid;
-  gap: 3px;
-  grid-template-columns: repeat(4, 1fr);
-}
-
-.board-widget__preset-row button {
-  font-size: 10px;
-  padding: 0;
-  text-align: center;
+.board-widget__preset {
+  font-size: 11px;
 }
 
 .board-widget__menu-separator {
@@ -304,7 +270,7 @@ openclaw-board-widget-cell {
   margin: 5px 3px;
 }
 
-.board-widget__menu-popover .board-widget__menu-danger {
+.board-widget__menu-danger {
   color: var(--danger, #ff6b6b);
 }
 

@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   BOARD_GRID_COLUMNS,
   BOARD_GRID_GAP,
-  BOARD_GRID_MAX_HEIGHT,
   BOARD_GRID_ROW_HEIGHT,
   layout,
   nudge,
@@ -112,7 +111,7 @@ describe("board grid layout", () => {
     const rects = layout(items);
     expect(rects).toEqual([
       { name: "wide", x: 0, y: 0, w: 12, h: 1 },
-      { name: "tall", x: 0, y: 1, w: 1, h: BOARD_GRID_MAX_HEIGHT },
+      { name: "tall", x: 0, y: 1, w: 1, h: 20 },
     ]);
     expect(items).toEqual(before);
   });

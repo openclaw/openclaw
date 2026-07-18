@@ -25,6 +25,8 @@ import type {
 } from "../../lib/board/view-types.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import "../../styles/board.css";
+import "../web-awesome-tabs.ts";
+import "../web-awesome.ts";
 import { OpenClawBoardWidgetCell, type BoardWidgetCellCallbacks } from "./board-widget-cell.ts";
 
 type BoardPointerGesture = {
@@ -62,7 +64,7 @@ function itemsForWidgets(widgets: readonly BoardWidget[]): BoardGridItem[] {
   }));
 }
 
-export class OpenClawBoardView extends OpenClawLightDomElement {
+class OpenClawBoardView extends OpenClawLightDomElement {
   @property({ attribute: false }) snapshot?: BoardSnapshot;
   @property({ attribute: false }) activeTabId = "";
   @property({ attribute: false }) widgetFrameUrl?: BoardWidgetFrameUrl;
@@ -416,20 +418,47 @@ export class OpenClawBoardView extends OpenClawLightDomElement {
     });
   }
 
-  private renderTabButton(tab: BoardTab, activeTabId: string, menuItem = false): TemplateResult {
+  private readonly handleTabShow = (event: CustomEvent<{ name: string }>): void => {
+    const tabs = this.snapshot ? orderedTabs(this.snapshot) : [];
+    const currentTabId = this.activeTab(tabs)?.tabId ?? this.activeTabId;
+    if (event.detail.name !== currentTabId && tabs.some((tab) => tab.tabId === event.detail.name)) {
+      this.callbacks?.selectTab(event.detail.name);
+    }
+  };
+
+  private readonly handleOverflowSelect = (
+    event: CustomEvent<{ item: { value?: string } }>,
+  ): void => {
+    const tabId = event.detail.item.value;
+    if (tabId && this.snapshot?.tabs.some((tab) => tab.tabId === tabId)) {
+      this.callbacks?.selectTab(tabId);
+    }
+  };
+
+  private renderTab(tab: BoardTab, activeTabId: string): TemplateResult {
     const active = tab.tabId === activeTabId;
     const dropTarget = tab.tabId === this.hoverTabId;
     return html`
-      <button
+      <wa-tab
         class=${`board-tabs__tab ${active ? "board-tabs__tab--active" : ""} ${dropTarget ? "board-tabs__tab--drop" : ""}`}
-        type="button"
-        role=${menuItem ? "menuitem" : "tab"}
-        aria-selected=${menuItem ? nothing : active ? "true" : "false"}
+        panel=${tab.tabId}
+        ?active=${active}
         data-board-tab-id=${tab.tabId}
-        @click=${() => this.callbacks?.selectTab(tab.tabId)}
       >
         ${tab.title}
-      </button>
+      </wa-tab>
+    `;
+  }
+
+  private renderOverflowTab(tab: BoardTab): TemplateResult {
+    return html`
+      <wa-dropdown-item
+        class="board-tabs__overflow-item"
+        value=${tab.tabId}
+        data-board-tab-id=${tab.tabId}
+      >
+        ${tab.title}
+      </wa-dropdown-item>
     `;
   }
 
@@ -449,19 +478,33 @@ export class OpenClawBoardView extends OpenClawLightDomElement {
     const overflow = tabs.filter((tab) => !visibleIds.has(tab.tabId));
     return html`
       <nav class="board-tabs" aria-label=${t("board.tabsLabel")}>
-        <div class="board-tabs__track" role="tablist">
-          ${visible.map((tab) => this.renderTabButton(tab, activeTabId))}
-        </div>
+        <wa-tab-group
+          class="board-tabs__track"
+          .active=${activeTabId}
+          activation="manual"
+          without-scroll-controls
+          @wa-tab-show=${this.handleTabShow}
+        >
+          ${visible.map((tab) => this.renderTab(tab, activeTabId))}
+        </wa-tab-group>
         ${overflow.length > 0
           ? html`
-              <details class="board-tabs__overflow">
-                <summary aria-label=${t("board.moreTabs")} title=${t("board.moreTabs")}>
+              <wa-dropdown
+                class="board-tabs__overflow"
+                placement="bottom-end"
+                @wa-select=${this.handleOverflowSelect}
+              >
+                <button
+                  class="board-tabs__overflow-trigger"
+                  slot="trigger"
+                  type="button"
+                  aria-label=${t("board.moreTabs")}
+                  title=${t("board.moreTabs")}
+                >
                   •••
-                </summary>
-                <div class="board-tabs__overflow-menu" role="menu">
-                  ${overflow.map((tab) => this.renderTabButton(tab, activeTabId, true))}
-                </div>
-              </details>
+                </button>
+                ${overflow.map((tab) => this.renderOverflowTab(tab))}
+              </wa-dropdown>
             `
           : nothing}
       </nav>
@@ -572,5 +615,3 @@ declare global {
     "openclaw-board-view": OpenClawBoardView;
   }
 }
-
-export { OpenClawBoardWidgetCell };

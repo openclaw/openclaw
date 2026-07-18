@@ -1,7 +1,7 @@
 /** Temporary board view contract. A stitch commit will point these at gateway-protocol. */
 
-export type BoardChatDock = "left" | "right" | "bottom" | "hidden";
-export type BoardGrantState = "none" | "pending" | "granted" | "rejected";
+type BoardChatDock = "left" | "right" | "bottom" | "hidden";
+type BoardGrantState = "none" | "pending" | "granted" | "rejected";
 export type BoardGrantDecision = "granted" | "rejected";
 
 export type BoardTab = {

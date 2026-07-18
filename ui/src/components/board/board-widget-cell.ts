@@ -10,8 +10,9 @@ import type {
   BoardWidgetFrameUrl,
 } from "../../lib/board/view-types.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import "../web-awesome.ts";
 
-export const BOARD_SIZE_PRESETS = {
+const BOARD_SIZE_PRESETS = {
   sm: { w: 3, h: 3 },
   md: { w: 6, h: 4 },
   lg: { w: 8, h: 6 },
@@ -53,7 +54,10 @@ export class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
   }
 
   private closeMenu(): void {
-    this.querySelector<HTMLDetailsElement>(".board-widget__menu")?.removeAttribute("open");
+    const menu = this.querySelector<HTMLElement & { open: boolean }>(".board-widget__menu");
+    if (menu) {
+      menu.open = false;
+    }
   }
 
   private async runAction(action: () => Promise<void>): Promise<void> {
@@ -72,58 +76,82 @@ export class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     }
   }
 
+  private handleMenuSelect(
+    event: CustomEvent<{ item: { value?: string } }>,
+    widget: BoardWidget,
+    callbacks: BoardWidgetCellCallbacks,
+  ): void {
+    const value = event.detail.item.value;
+    if (value === "remove") {
+      void this.runAction(() => callbacks.remove(widget));
+      return;
+    }
+    if (value?.startsWith("move:")) {
+      void this.runAction(() => callbacks.moveToTab(widget, value.slice("move:".length)));
+      return;
+    }
+    if (value?.startsWith("resize:")) {
+      const preset = value.slice("resize:".length) as keyof typeof BOARD_SIZE_PRESETS;
+      const size = BOARD_SIZE_PRESETS[preset];
+      if (size) {
+        void this.runAction(() => callbacks.resizeTo(widget, size.w, size.h));
+      }
+    }
+  }
+
   private renderMenu(widget: BoardWidget, callbacks: BoardWidgetCellCallbacks): TemplateResult {
     const otherTabs = this.tabs.filter((tab) => tab.tabId !== widget.tabId);
     return html`
-      <details class="board-widget__menu">
-        <summary aria-label=${t("board.widget.menuLabel")} title=${t("board.widget.menuLabel")}>
+      <wa-dropdown
+        class="board-widget__menu"
+        placement="bottom-end"
+        @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) =>
+          this.handleMenuSelect(event, widget, callbacks)}
+      >
+        <button
+          class="board-widget__menu-trigger"
+          slot="trigger"
+          type="button"
+          aria-label=${t("board.widget.menuLabel")}
+          title=${t("board.widget.menuLabel")}
+        >
           ⋮
-        </summary>
-        <div class="board-widget__menu-popover" role="menu">
-          <div class="board-widget__menu-heading">${t("board.widget.moveToTab")}</div>
-          ${otherTabs.length > 0
-            ? otherTabs.map(
-                (tab) => html`
-                  <button
-                    type="button"
-                    role="menuitem"
-                    ?disabled=${this.busy || this.actionPending}
-                    @click=${() =>
-                      void this.runAction(() => callbacks.moveToTab(widget, tab.tabId))}
-                  >
-                    ${tab.title}
-                  </button>
-                `,
-              )
-            : html`<span class="board-widget__menu-empty">${t("board.widget.noOtherTabs")}</span>`}
-          <div class="board-widget__menu-heading">${t("board.widget.resize")}</div>
-          <div class="board-widget__preset-row" role="group" aria-label=${t("board.widget.resize")}>
-            ${Object.entries(BOARD_SIZE_PRESETS).map(
-              ([label, size]) => html`
-                <button
-                  type="button"
-                  title=${`${size.w}×${size.h}`}
+        </button>
+        <div class="board-widget__menu-heading">${t("board.widget.moveToTab")}</div>
+        ${otherTabs.length > 0
+          ? otherTabs.map(
+              (tab) => html`
+                <wa-dropdown-item
+                  value=${`move:${tab.tabId}`}
                   ?disabled=${this.busy || this.actionPending}
-                  @click=${() =>
-                    void this.runAction(() => callbacks.resizeTo(widget, size.w, size.h))}
                 >
-                  ${label.toUpperCase()}
-                </button>
+                  ${tab.title}
+                </wa-dropdown-item>
               `,
-            )}
-          </div>
-          <div class="board-widget__menu-separator"></div>
-          <button
-            class="board-widget__menu-danger"
-            type="button"
-            role="menuitem"
-            ?disabled=${this.busy || this.actionPending}
-            @click=${() => void this.runAction(() => callbacks.remove(widget))}
-          >
-            ${t("board.widget.remove")}
-          </button>
-        </div>
-      </details>
+            )
+          : html`<span class="board-widget__menu-empty">${t("board.widget.noOtherTabs")}</span>`}
+        <div class="board-widget__menu-heading">${t("board.widget.resize")}</div>
+        ${Object.entries(BOARD_SIZE_PRESETS).map(
+          ([label, size]) => html`
+            <wa-dropdown-item
+              class="board-widget__preset"
+              value=${`resize:${label}`}
+              ?disabled=${this.busy || this.actionPending}
+            >
+              ${label.toUpperCase()}
+              <span slot="details">${size.w}×${size.h}</span>
+            </wa-dropdown-item>
+          `,
+        )}
+        <div class="board-widget__menu-separator" role="separator"></div>
+        <wa-dropdown-item
+          class="board-widget__menu-danger"
+          value="remove"
+          ?disabled=${this.busy || this.actionPending}
+        >
+          ${t("board.widget.remove")}
+        </wa-dropdown-item>
+      </wa-dropdown>
     `;
   }
 

@@ -3,7 +3,7 @@
 export const BOARD_GRID_COLUMNS = 12;
 export const BOARD_GRID_ROW_HEIGHT = 56;
 export const BOARD_GRID_GAP = 12;
-export const BOARD_GRID_MAX_HEIGHT = 20;
+const BOARD_GRID_MAX_HEIGHT = 20;
 
 export type BoardGridItem = {
   name: string;
@@ -20,14 +20,14 @@ export type BoardGridRect = {
   h: number;
 };
 
-export type BoardGridCell = {
+type BoardGridCell = {
   x: number;
   y: number;
 };
 
 export type BoardGridDirection = "left" | "right" | "up" | "down";
 
-export type BoardGridPreview = {
+type BoardGridPreview = {
   items: BoardGridItem[];
   rects: BoardGridRect[];
 };

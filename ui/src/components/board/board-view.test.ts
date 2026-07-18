@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BoardSnapshot, BoardViewCallbacks, BoardWidget } from "../../lib/board/view-types.ts";
 import { applyBoardFixtureOps } from "../../test-helpers/board-fixture.ts";
-import { OpenClawBoardView, OpenClawBoardWidgetCell } from "./board-view.ts";
+import "./board-view.ts";
+
+type OpenClawBoardView = HTMLElementTagNameMap["openclaw-board-view"];
+type OpenClawBoardWidgetCell = HTMLElementTagNameMap["openclaw-board-widget-cell"];
 
 function boardWidget(overrides: Partial<BoardWidget> = {}): BoardWidget {
   return {
@@ -161,10 +164,13 @@ describe("openclaw-board-view", () => {
   it("routes tab selection and updates cells when the host changes the active prop", async () => {
     const selectTab = vi.fn();
     const view = await mount({ callbacks: callbacks({ selectTab }) });
-    const opsTab = [...view.querySelectorAll<HTMLButtonElement>(".board-tabs__tab")].find(
-      (button) => button.textContent?.trim() === "Operations",
+    expect(selectTab).not.toHaveBeenCalled();
+    view.querySelector(".board-tabs__track")?.dispatchEvent(
+      new CustomEvent("wa-tab-show", {
+        detail: { name: "ops" },
+        bubbles: true,
+      }),
     );
-    opsTab?.click();
     expect(selectTab).toHaveBeenCalledWith("ops");
 
     view.activeTabId = "ops";
@@ -356,7 +362,7 @@ describe("openclaw-board-view", () => {
       expect(
         cell.querySelector(".board-widget__resize-handle")?.getAttribute("tabindex"),
       ).toBeNull();
-      expect(cell.querySelector(".board-widget__menu summary")?.getAttribute("aria-label")).toBe(
+      expect(cell.querySelector(".board-widget__menu-trigger")?.getAttribute("aria-label")).toBe(
         "Widget options",
       );
     }
@@ -441,10 +447,15 @@ describe("openclaw-board-view", () => {
   it("moves widgets to another tab from the kebab menu", async () => {
     const applyOps = vi.fn(async () => undefined);
     const view = await mount({ callbacks: callbacks({ applyOps }) });
-    const moveButton = [
-      ...view.querySelectorAll<HTMLButtonElement>(".board-widget__menu-popover button"),
-    ].find((button) => button.textContent?.trim() === "Operations");
-    moveButton?.click();
+    const moveButton = [...view.querySelectorAll<HTMLElement>("wa-dropdown-item")].find(
+      (button) => button.textContent?.trim() === "Operations",
+    );
+    view.querySelector(".board-widget__menu")?.dispatchEvent(
+      new CustomEvent("wa-select", {
+        detail: { item: moveButton },
+        bubbles: true,
+      }),
+    );
     await vi.waitFor(() =>
       expect(applyOps).toHaveBeenCalledWith([
         { kind: "widget_move", name: "alpha", tabId: "ops", position: 1 },
@@ -462,11 +473,24 @@ describe("openclaw-board-view", () => {
       })),
       widgets: [],
     });
-    const view = await mount({ snapshot: source, activeTabId: "tab-7" });
-    expect(view.querySelector(".board-tabs__overflow > summary")?.getAttribute("aria-label")).toBe(
+    const selectTab = vi.fn();
+    const view = await mount({
+      snapshot: source,
+      activeTabId: "tab-7",
+      callbacks: callbacks({ selectTab }),
+    });
+    expect(view.querySelector(".board-tabs__overflow-trigger")?.getAttribute("aria-label")).toBe(
       "More dashboard tabs",
     );
-    expect(view.querySelectorAll(".board-tabs__overflow-menu [role='menuitem']")).toHaveLength(2);
+    expect(view.querySelectorAll(".board-tabs__overflow > wa-dropdown-item")).toHaveLength(2);
+    const firstOverflowTab = view.querySelector(".board-tabs__overflow > wa-dropdown-item");
+    view.querySelector(".board-tabs__overflow")?.dispatchEvent(
+      new CustomEvent("wa-select", {
+        detail: { item: firstOverflowTab },
+        bubbles: true,
+      }),
+    );
+    expect(selectTab).toHaveBeenCalledWith(firstOverflowTab?.getAttribute("value"));
   });
 
   it("applies mock moves as insertion and shifts sibling positions", () => {

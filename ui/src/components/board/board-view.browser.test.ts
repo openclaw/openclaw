@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BOARD_GRID_GAP, BOARD_GRID_ROW_HEIGHT } from "../../lib/board/grid.ts";
 import type { BoardSnapshot } from "../../lib/board/view-types.ts";
-import { OpenClawBoardView } from "./board-view.ts";
+import "./board-view.ts";
+
+type OpenClawBoardView = HTMLElementTagNameMap["openclaw-board-view"];
 
 const hasBrowserLayout = !navigator.userAgent.toLowerCase().includes("jsdom");
 
