@@ -42,7 +42,16 @@
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "required": ["vault", "items"],
+    "allOf": [
+      {
+        "if": { "required": ["vault"] },
+        "then": { "required": ["items"] }
+      },
+      {
+        "if": { "required": ["items"] },
+        "then": { "required": ["vault"] }
+      }
+    ],
     "properties": {
       "vault": {
         "type": "string",
