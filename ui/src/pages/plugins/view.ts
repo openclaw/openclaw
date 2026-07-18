@@ -768,7 +768,6 @@ function renderInstalled(props: PluginsViewProps) {
   const groups = groupInstalledByCategory(plugins);
   const filtered = Boolean(props.query || props.installedFilter !== "all");
   return html`
-    ${renderInstalledFilter(props)}
     ${groups.length === 0
       ? renderEmpty(
           filtered ? t("pluginsPage.noInstalledMatchTitle") : t("pluginsPage.noInstalledTitle"),
@@ -1260,6 +1259,14 @@ function renderActivePanel(props: PluginsViewProps) {
 
 export function renderPlugins(props: PluginsViewProps) {
   const canShowCatalog = Boolean(props.result);
+  const panelState =
+    props.loading && !canShowCatalog
+      ? "loading"
+      : props.error && !canShowCatalog
+        ? "error"
+        : !props.connected && !canShowCatalog
+          ? "offline"
+          : "content";
   return renderSettingsPage(
     html`
       <div class="plugins-toolbar">
@@ -1275,6 +1282,9 @@ export function renderPlugins(props: PluginsViewProps) {
           @input=${(event: Event) =>
             props.onQueryChange((event.currentTarget as HTMLInputElement).value)}
         />
+        ${props.activeTab === "installed" && panelState === "content"
+          ? renderInstalledFilter(props)
+          : nothing}
         <button
           type="button"
           class="btn btn--sm btn--icon plugins-refresh"
@@ -1318,11 +1328,11 @@ export function renderPlugins(props: PluginsViewProps) {
         active
         aria-labelledby=${`plugins-tab-${props.activeTab}`}
       >
-        ${props.loading && !canShowCatalog
+        ${panelState === "loading"
           ? html`<div class="plugins-search-state" role="status">${t("pluginsPage.loading")}</div>`
-          : props.error && !canShowCatalog
+          : panelState === "error"
             ? nothing
-            : !props.connected && !canShowCatalog
+            : panelState === "offline"
               ? renderEmpty(t("pluginsPage.offlineTitle"), t("pluginsPage.offlineBody"))
               : renderActivePanel(props)}
       </wa-tab-panel>
