@@ -419,7 +419,7 @@ describe("dispatchAgentHook trust handling", () => {
     // and no claim races occur.
     it("serializes same-session hook dispatch so no claim race occurs", async () => {
       const started: number[] = [];
-      let releaseFirst: () => void;
+      let releaseFirst!: () => void;
       const firstGate = new Promise<void>((resolve) => {
         releaseFirst = resolve;
       });
@@ -450,7 +450,7 @@ describe("dispatchAgentHook trust handling", () => {
     });
 
     it("serializes same-session hook dispatch", async () => {
-      let releaseFirst: () => void;
+      let releaseFirst!: () => void;
       const gate = new Promise<void>((resolve) => {
         releaseFirst = resolve;
       });
