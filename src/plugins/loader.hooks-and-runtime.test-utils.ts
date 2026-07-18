@@ -1832,7 +1832,7 @@ describe("loadOpenClawPlugins", () => {
 
     vi.useFakeTimers();
     try {
-      const run = runner.runAfterToolCall({ toolName: "exec", params: {} }, {});
+      const run = runner.runAfterToolCall({ toolName: "exec", params: {} }, { toolName: "exec" });
       await vi.advanceTimersByTimeAsync(30);
 
       await expect(run).resolves.toBeUndefined();
