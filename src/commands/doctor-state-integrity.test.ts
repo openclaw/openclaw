@@ -975,4 +975,46 @@ describe("doctor state integrity oauth dir checks", () => {
     const text = await runStateIntegrityText(cfg);
     expect(text).toContain("Main session transcript has only 1 line");
   });
+
+  it("keeps line counting fail-soft when closeSync throws", async () => {
+    const cfg: OpenClawConfig = {};
+    setupSessionState(cfg, process.env, tempHome);
+    const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => tempHome);
+    const transcriptPath = path.join(sessionsDir, "close-fail.jsonl");
+    fs.writeFileSync(transcriptPath, '{"type":"session"}\n{"x":1}\n');
+    writeSessionStore(cfg, {
+      "agent:main:main": {
+        sessionId: "close-fail",
+        updatedAt: Date.now(),
+      },
+    });
+
+    const realOpenSync = fs.openSync.bind(fs);
+    const realCloseSync = fs.closeSync.bind(fs);
+    const transcriptFds = new Set<number>();
+    const openSpy = vi.spyOn(fs, "openSync").mockImplementation(((
+      target: fs.PathLike,
+      flags: fs.OpenMode | undefined,
+      mode?: fs.Mode,
+    ) => {
+      const fd = realOpenSync(target, flags as never, mode as never);
+      if (typeof target === "string" && path.resolve(target) === path.resolve(transcriptPath)) {
+        transcriptFds.add(fd);
+      }
+      return fd;
+    }) as typeof fs.openSync);
+    const closeSpy = vi.spyOn(fs, "closeSync").mockImplementation(((fd: number) => {
+      if (transcriptFds.has(fd)) {
+        throw new Error("close boom");
+      }
+      return realCloseSync(fd);
+    }) as typeof fs.closeSync);
+    try {
+      const text = await runStateIntegrityText(cfg);
+      expect(text).not.toContain("Main session transcript has only");
+    } finally {
+      openSpy.mockRestore();
+      closeSpy.mockRestore();
+    }
+  });
 });

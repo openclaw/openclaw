@@ -286,10 +286,17 @@ function countJsonlLines(filePath: string): number {
     }
     return count;
   } catch {
+    // Preserve the old fail-soft contract: unreadable transcripts count as 0 lines.
     return 0;
   } finally {
+    // closeSync must not escape: a close failure used to abort doctor after a
+    // successful count when close ran outside this function's catch.
     if (fd !== undefined) {
-      fs.closeSync(fd);
+      try {
+        fs.closeSync(fd);
+      } catch {
+        // ignore close failures; the advisory line count already completed or failed soft
+      }
     }
   }
 }
