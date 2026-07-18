@@ -6,6 +6,7 @@ import {
   mountSidebar,
   type SidebarLifecycleState,
 } from "../app-sidebar.ts";
+import { waitForFast } from "../wait-for.ts";
 import "../../components/app-sidebar.ts";
 
 function createDataTransferStub() {
@@ -254,6 +255,38 @@ describe("AppSidebar interleaved zone", () => {
     dispatchDragEvent(target, "drop", dataTransfer);
 
     expect(onUpdate).toHaveBeenCalledWith(["route:plugins"]);
+  });
+
+  it("prunes only the unpinned session's entry and preserves unknown-agent slots", async () => {
+    const { sidebar, sessions } = await mountZone();
+    const result = sessions.sessions.state.result;
+    if (!result) {
+      throw new Error("expected session list");
+    }
+    sessions.publish({
+      result: {
+        ...result,
+        sessions: result.sessions.map((row) =>
+          row.key === "agent:main:alpha" ? Object.assign({}, row, { pinned: true }) : row,
+        ),
+      },
+    });
+    sidebar.sidebarEntries = ["session:agent:b:remote", "session:agent:main:alpha", "route:usage"];
+    const onUpdate = vi.fn();
+    sidebar.onUpdateSidebarEntries = onUpdate;
+    await sidebar.updateComplete;
+
+    // agent-b's session is not loaded here: it renders nothing but keeps its slot.
+    expect(sidebar.querySelector('[data-sidebar-entry="session:agent:b:remote"]')).toBeNull();
+
+    sidebar
+      .querySelector<HTMLButtonElement>(
+        '[data-session-key="agent:main:alpha"] [data-sidebar-session-pin="true"]',
+      )
+      ?.click();
+    await waitForFast(() =>
+      expect(onUpdate).toHaveBeenCalledWith(["session:agent:b:remote", "route:usage"]),
+    );
   });
 
   it("keeps pinned rows first in shift-range selection order", async () => {

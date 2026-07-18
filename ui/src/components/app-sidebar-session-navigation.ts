@@ -1,6 +1,6 @@
 import { state } from "lit/decorators.js";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
-import { SIDEBAR_NAV_ROUTES } from "../app-navigation.ts";
+import { SIDEBAR_NAV_ROUTES, serializeSidebarEntry } from "../app-navigation.ts";
 import { pathForRoute } from "../app-route-paths.ts";
 import { t } from "../i18n/index.ts";
 import {
@@ -267,12 +267,30 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
 
   protected reconciledSidebarZone() {
     const navigationState = this.getSessionNavigationState();
-    const pinnedRows = this.selectedAgentSessionRows(navigationState).filter((row) => row.pinned);
-    const reconciled = reconcileSidebarZone(this.sidebarEntries, pinnedRows, SIDEBAR_NAV_ROUTES);
+    const rows = this.selectedAgentSessionRows(navigationState);
+    const pinnedRows = rows.filter((row) => row.pinned);
+    // Only loaded rows count as authoritative unpinned state; entries for
+    // other agents' sessions must survive canonical writes untouched.
+    const knownUnpinnedKeys = new Set(rows.filter((row) => !row.pinned).map((row) => row.key));
+    const reconciled = reconcileSidebarZone(
+      this.sidebarEntries,
+      pinnedRows,
+      SIDEBAR_NAV_ROUTES,
+      knownUnpinnedKeys,
+    );
     return {
       ...reconciled,
       sessionRows: new Map(pinnedRows.map((row) => [row.key, row])),
     };
+  }
+
+  /** Drop one session entry from the persisted zone order (raw list, no reconcile-pruning). */
+  protected pruneSidebarSessionEntry(key: string) {
+    const serialized = serializeSidebarEntry({ type: "session", key });
+    if (!this.sidebarEntries.includes(serialized)) {
+      return;
+    }
+    this.onUpdateSidebarEntries?.(this.sidebarEntries.filter((entry) => entry !== serialized));
   }
 
   /** Rows in on-screen order; shift ranges and batch actions share this ordering. */

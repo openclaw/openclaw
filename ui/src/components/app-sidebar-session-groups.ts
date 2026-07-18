@@ -169,8 +169,8 @@ export abstract class AppSidebarSessionGroupsElement extends AppSidebarSessionMu
     const session = sessionKey ? this.findSidebarSessionByKey(sessionKey) : undefined;
     if (session?.pinned) {
       event.preventDefault();
+      // patchSession prunes the persisted zone entry once the unpin lands.
       void this.patchSession(session, { pinned: false });
-      this.removeSidebarEntry(serializeSidebarEntry({ type: "session", key: session.key }));
     }
     this.finishSidebarEntryDrag();
   }
@@ -417,14 +417,12 @@ export abstract class AppSidebarSessionGroupsElement extends AppSidebarSessionMu
       } else if (session) {
         const nextCategory = category ?? null;
         if (session.category !== nextCategory || session.pinned) {
+          // The pinned:false leg prunes the persisted zone entry via patchSession.
           this.assignSessionCategory(
             session,
             nextCategory,
             session.pinned ? { pinned: false } : {},
           );
-        }
-        if (session.pinned) {
-          this.removeSidebarEntry(serializeSidebarEntry({ type: "session", key: session.key }));
         }
       }
     }
