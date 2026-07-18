@@ -369,6 +369,18 @@ struct RootTabsPresentationTests {
         #expect(ChatProTab.transportAgentID(" Main ") == "main")
     }
 
+    @Test func `chat keeps active voice capture stoppable while attachment ownership is pinned`() {
+        #expect(ChatProTab.shouldExposeCaptureControl(
+            isAttachmentOwnerPinned: true,
+            isCaptureInFlight: true))
+        #expect(!ChatProTab.shouldExposeCaptureControl(
+            isAttachmentOwnerPinned: true,
+            isCaptureInFlight: false))
+        #expect(ChatProTab.shouldExposeCaptureControl(
+            isAttachmentOwnerPinned: false,
+            isCaptureInFlight: false))
+    }
+
     @Test func `chat view model rebuilds only when its transport owner changes`() {
         #expect(!ChatProTab.requiresViewModelRebuild(
             currentOwnerID: "gateway-a",

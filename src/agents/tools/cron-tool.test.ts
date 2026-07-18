@@ -25,7 +25,7 @@ import { createCronTool } from "./cron-tool.js";
 
 describe("cron tool", () => {
   type SchemaLike = {
-    anyOf?: Array<{ type?: string }>;
+    anyOf?: Array<SchemaLike>;
     description?: string;
     properties?: Record<string, SchemaLike>;
     type?: string;
@@ -744,6 +744,8 @@ describe("cron tool", () => {
     const patch = parameters.properties?.patch;
     const payload = patch?.properties?.payload;
     const delivery = patch?.properties?.delivery;
+    const jobPacing = parameters.properties?.job?.properties?.pacing;
+    const patchPacing = patch?.properties?.pacing?.anyOf?.find((entry) => entry.type === "object");
 
     expect(jobDelivery?.properties?.channel?.anyOf).toBeUndefined();
     expect(jobDelivery?.properties?.channel?.type).toBe("string");
@@ -777,6 +779,8 @@ describe("cron tool", () => {
       "object",
       "null",
     ]);
+    expect(jobPacing?.description).toContain("at least one of min or max is required");
+    expect(patchPacing?.description).toContain("at least one of min or max is required");
   });
 
   it.each([
@@ -929,6 +933,31 @@ describe("cron tool", () => {
         patch: { displayName: "   " },
       }),
     ).rejects.toThrow("displayName must be a non-empty string or null");
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "add",
+      {
+        action: "add",
+        job: { ...buildReminderAgentTurnJob(), pacing: {} },
+      },
+    ],
+    [
+      "update",
+      {
+        action: "update",
+        jobId: "paced-job",
+        patch: { pacing: {} },
+      },
+    ],
+  ])("rejects empty pacing on cron.%s before calling the gateway", async (_action, args) => {
+    const tool = createTestCronTool();
+
+    await expect(tool.execute("call-empty-pacing", args)).rejects.toThrow(
+      "cron pacing requires at least one of min or max",
+    );
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 

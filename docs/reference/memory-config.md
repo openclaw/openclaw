@@ -539,10 +539,10 @@ Session indexing is opt-in and runs asynchronously. Results can be slightly stal
 
 Ordinary model-invoked session transcript search obeys
 [`tools.sessions.visibility`](/gateway/config-tools#toolssessions). The default
-`tree` visibility only exposes the current session and sessions it spawned. To
-let ordinary `memory_search` calls inspect unrelated sessions, intentionally
-widen visibility to `agent` (or `all` only when cross-agent recall is also
-required and agent-to-agent policy allows it).
+`tree` visibility exposes the current session, sessions it spawned, and
+same-agent group sessions watched through ambient group awareness. Other
+unrelated sessions require `agent` visibility (or `all` only when cross-agent
+recall is also required and agent-to-agent policy allows it).
 
 `rememberAcrossConversations` does not widen that setting. It supplies a
 separate runtime-only authorization limited to same-agent private

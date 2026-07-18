@@ -561,6 +561,7 @@ final class NodeAppModel {
     private var chatDictationCaptureId: String?
     private var talkPttCommandEpoch: UInt64 = 0
     private var chatDictationCommandEpoch: UInt64 = 0
+    private(set) var isChatDictationPending = false
     private var talkPreparationInFlight = false
     private var auxiliaryAudioCapture: AuxiliaryAudioCapture?
     private var foregroundCaptureCancellations: [UUID: @MainActor () -> Void] = [:]
@@ -1290,12 +1291,15 @@ final class NodeAppModel {
     }
 
     private func requestTalkPermissionUpgrade() {
+        if self.forceOperatorTalkPermissionUpgradeRequest {
+            guard case .requestFailed = self.talkMode.gatewayTalkPermissionState else { return }
+            self.cancelTalkPermissionUpgrade()
+        }
         guard let config = activeGatewayConnectConfig else {
             self.talkMode.gatewayTalkPermissionState = .requestFailed("Gateway is not connected")
             self.talkMode.statusText = "Gateway not connected"
             return
         }
-        guard !self.forceOperatorTalkPermissionUpgradeRequest else { return }
         GatewayDiagnostics.log("talk permission upgrade requested")
         self.talkMode.gatewayTalkPermissionState = .requestingUpgrade
         self.talkMode.statusText = "Requesting Talk approval"
@@ -1342,10 +1346,24 @@ final class NodeAppModel {
     }
 
     private func requestTalkPermissionUpgradeIfNeeded() {
-        guard self.talkMode.isEnabled,
-              case .missingScope = self.talkMode.gatewayTalkPermissionState
+        guard Self.shouldRequestTalkPermissionUpgrade(
+            isTalkEnabled: self.talkMode.isEnabled,
+            state: self.talkMode.gatewayTalkPermissionState)
         else { return }
         self.requestTalkPermissionUpgrade()
+    }
+
+    nonisolated static func shouldRequestTalkPermissionUpgrade(
+        isTalkEnabled: Bool,
+        state: TalkGatewayPermissionState) -> Bool
+    {
+        guard isTalkEnabled else { return false }
+        return switch state {
+        case .missingScope, .requestFailed:
+            true
+        default:
+            false
+        }
     }
 
     private func startTalkPermissionUpgradePolling() {
@@ -2884,7 +2902,9 @@ final class NodeAppModel {
     /// Captures one locally recognized utterance for the chat draft. Unlike
     /// remote PTT, this returns text without starting an agent turn or TTS.
     func transcribeChatDraft() async throws -> String? {
-        guard self.chatDictationCaptureId == nil else { return nil }
+        guard !self.isChatDictationPending, self.chatDictationCaptureId == nil else { return nil }
+        self.isChatDictationPending = true
+        defer { self.isChatDictationPending = false }
 
         let commandEpoch = self.chatDictationCommandEpoch
         var reservedCaptureId: String?
@@ -2901,6 +2921,7 @@ final class NodeAppModel {
                         self.chatDictationCommandEpoch == commandEpoch && !self.isBackgrounded
                     },
                     onCaptureReserved: { captureId in
+                        self.isChatDictationPending = false
                         reservedCaptureId = captureId
                         self.chatDictationCaptureId = captureId
                         self.acquirePttVoiceWakeLease(for: captureId)
@@ -2955,6 +2976,8 @@ final class NodeAppModel {
         // Cancellation must also invalidate permission/preparation work before a
         // capture ID exists, or a dismissed dictation can start recording later.
         self.chatDictationCommandEpoch &+= 1
+        // The suspended starter owns the pending flag. Keep it set until that task
+        // unwinds so another start cannot overlap the cancelled preparation.
         guard let captureId = self.chatDictationCaptureId else { return }
         _ = self.talkMode.cancelPushToTalk(captureId: captureId)
         self.chatDictationCaptureId = nil

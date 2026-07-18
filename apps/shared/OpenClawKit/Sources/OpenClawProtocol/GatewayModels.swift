@@ -10737,6 +10737,7 @@ public struct CronJob: Codable, Sendable {
     public let updatedatms: Int
     public let configrevision: String?
     public let schedule: AnyCodable
+    public let pacing: [String: AnyCodable]?
     public let trigger: [String: AnyCodable]?
     public let sessiontarget: AnyCodable
     public let wakemode: AnyCodable
@@ -10770,6 +10771,7 @@ public struct CronJob: Codable, Sendable {
         updatedatms: Int,
         configrevision: String? = nil,
         schedule: AnyCodable,
+        pacing: [String: AnyCodable]? = nil,
         trigger: [String: AnyCodable]? = nil,
         sessiontarget: AnyCodable,
         wakemode: AnyCodable,
@@ -10802,6 +10804,7 @@ public struct CronJob: Codable, Sendable {
         self.updatedatms = updatedatms
         self.configrevision = configrevision
         self.schedule = schedule
+        self.pacing = pacing
         self.trigger = trigger
         self.sessiontarget = sessiontarget
         self.wakemode = wakemode
@@ -10836,6 +10839,7 @@ public struct CronJob: Codable, Sendable {
         case updatedatms = "updatedAtMs"
         case configrevision = "configRevision"
         case schedule
+        case pacing
         case trigger
         case sessiontarget = "sessionTarget"
         case wakemode = "wakeMode"
@@ -10923,6 +10927,7 @@ public struct CronAddParams: Codable, Sendable {
     public let enabled: Bool?
     public let deleteafterrun: Bool?
     public let schedule: AnyCodable
+    public let pacing: [String: AnyCodable]?
     public let trigger: [String: AnyCodable]?
     public let sessiontarget: AnyCodable
     public let wakemode: AnyCodable
@@ -10941,6 +10946,7 @@ public struct CronAddParams: Codable, Sendable {
         enabled: Bool? = nil,
         deleteafterrun: Bool? = nil,
         schedule: AnyCodable,
+        pacing: [String: AnyCodable]? = nil,
         trigger: [String: AnyCodable]? = nil,
         sessiontarget: AnyCodable,
         wakemode: AnyCodable,
@@ -10958,6 +10964,7 @@ public struct CronAddParams: Codable, Sendable {
         self.enabled = enabled
         self.deleteafterrun = deleteafterrun
         self.schedule = schedule
+        self.pacing = pacing
         self.trigger = trigger
         self.sessiontarget = sessiontarget
         self.wakemode = wakemode
@@ -10977,6 +10984,7 @@ public struct CronAddParams: Codable, Sendable {
         case enabled
         case deleteafterrun = "deleteAfterRun"
         case schedule
+        case pacing
         case trigger
         case sessiontarget = "sessionTarget"
         case wakemode = "wakeMode"
