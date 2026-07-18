@@ -67,7 +67,11 @@ import {
   parseCatalogSessionKey,
   type CatalogSessionKey,
 } from "../../lib/sessions/catalog-key.ts";
-import { resolveSessionKey, scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
+import {
+  resolveSessionKey,
+  scopedAgentParamsForSession,
+  visibleSessionMatches,
+} from "../../lib/sessions/index.ts";
 import {
   areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
@@ -87,6 +91,7 @@ import {
   clearChatHistory,
   loadChatHistory,
   loadOlderChatHistoryPage,
+  rewindChatHistory,
   resolveChatHistoryPagination,
   syncSelectedSessionMessageSubscription,
 } from "./chat-history.ts";
@@ -161,6 +166,7 @@ import { WIDGET_PROMPT_EVENT, type WidgetPromptEventDetail } from "./components/
 import {
   CHAT_COMPOSER_DRAFT_STORAGE_ERROR,
   loadChatComposerSnapshot,
+  persistChatComposerState,
   resolveStoredChatOutboxScope,
   storedChatOutboxScopeKey,
 } from "./composer-persistence.ts";
@@ -1305,6 +1311,49 @@ class ChatPane extends OpenClawLightDomElement {
       state.lastError = error instanceof Error ? error.message : String(error);
       state.chatSending = false;
       state.requestUpdate();
+    }
+  }
+
+  private async rewindToMessage(entryId: string): Promise<boolean> {
+    const state = this.state;
+    if (!state) {
+      return false;
+    }
+    const result = await rewindChatHistory(state, entryId);
+    if (!result) {
+      state.requestUpdate?.();
+      return false;
+    }
+    state.requestUpdate?.();
+    return true;
+  }
+
+  private async forkFromMessage(entryId: string): Promise<void> {
+    const state = this.state;
+    if (!state) {
+      return;
+    }
+    const sourceKey = state.sessionKey;
+    const agentParams = scopedAgentParamsForSession(state, sourceKey);
+    try {
+      const result = await state.sessions.forkAtMessage(sourceKey, entryId, agentParams);
+      const editorText = result.editorText ?? "";
+      const draftPersisted = persistChatComposerState(state, result.sessionKey, {
+        agentId: parseAgentSessionKey(result.sessionKey)?.agentId,
+        draft: editorText,
+      });
+      if (this.state !== state || !visibleSessionMatches(state, sourceKey, agentParams.agentId)) {
+        return;
+      }
+      this.onPaneSessionChange?.(this.paneId, result.sessionKey);
+      this.switchPaneSession(result.sessionKey);
+      if (!draftPersisted) {
+        state.handleChatDraftChange(editorText);
+      }
+    } catch (error) {
+      state.lastError = error instanceof Error ? error.message : String(error);
+      state.chatError = state.lastError;
+      state.requestUpdate?.();
     }
   }
 
@@ -2541,6 +2590,8 @@ class ChatPane extends OpenClawLightDomElement {
         state.chatReplyTarget = target;
         state.requestUpdate?.();
       },
+      onRewindMessage: (entryId) => this.rewindToMessage(entryId),
+      onForkMessage: (entryId) => this.forkFromMessage(entryId),
       onNewSession: () => void this.createSession(),
       onClearHistory: () => void clearChatHistory(state),
       agentsList: state.agentsList,

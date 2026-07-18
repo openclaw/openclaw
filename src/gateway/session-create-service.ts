@@ -28,6 +28,7 @@ import {
   createSessionEntryWithTranscript,
   resolveSessionEntryAccessTarget,
 } from "../config/sessions/session-accessor.js";
+import { inheritSessionSelection } from "../config/sessions/session-entry-selection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createInternalHookEvent,
@@ -123,34 +124,6 @@ export function resolveRequestedSessionAgentId(
 
 export function buildDashboardSessionKey(agentId: string): string {
   return `agent:${agentId}:dashboard:${randomUUID()}`;
-}
-
-function inheritSessionSelection(parentEntry: SessionEntry | undefined): Partial<SessionEntry> {
-  if (!parentEntry) {
-    return {};
-  }
-  return {
-    ...(parentEntry.providerOverride ? { providerOverride: parentEntry.providerOverride } : {}),
-    ...(parentEntry.modelOverride ? { modelOverride: parentEntry.modelOverride } : {}),
-    ...(parentEntry.modelOverrideSource
-      ? { modelOverrideSource: parentEntry.modelOverrideSource }
-      : {}),
-    ...(parentEntry.agentRuntimeOverride
-      ? { agentRuntimeOverride: parentEntry.agentRuntimeOverride }
-      : {}),
-    ...(parentEntry.thinkingLevel ? { thinkingLevel: parentEntry.thinkingLevel } : {}),
-    ...(parentEntry.fastMode !== undefined ? { fastMode: parentEntry.fastMode } : {}),
-    ...(parentEntry.verboseLevel ? { verboseLevel: parentEntry.verboseLevel } : {}),
-    ...(parentEntry.traceLevel ? { traceLevel: parentEntry.traceLevel } : {}),
-    ...(parentEntry.reasoningLevel ? { reasoningLevel: parentEntry.reasoningLevel } : {}),
-    ...(parentEntry.elevatedLevel ? { elevatedLevel: parentEntry.elevatedLevel } : {}),
-    ...(parentEntry.authProfileOverride
-      ? { authProfileOverride: parentEntry.authProfileOverride }
-      : {}),
-    ...(parentEntry.authProfileOverrideSource
-      ? { authProfileOverrideSource: parentEntry.authProfileOverrideSource }
-      : {}),
-  };
 }
 
 type CreatedGatewaySession = {

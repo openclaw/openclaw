@@ -364,6 +364,10 @@ import {
   SessionsCompactionGetParamsSchema,
   SessionsCompactionListParamsSchema,
   SessionsCompactionRestoreParamsSchema,
+  SessionsForkParamsSchema,
+  SessionsForkResultSchema,
+  SessionsRewindParamsSchema,
+  SessionsRewindResultSchema,
   SessionFileBrowserEntrySchema,
   SessionFileBrowserResultSchema,
   SessionFileEntrySchema,
@@ -720,6 +724,8 @@ export const validateSessionsCompactionBranchParams = lazyCompile(
 export const validateSessionsCompactionRestoreParams = lazyCompile(
   SessionsCompactionRestoreParamsSchema,
 );
+export const validateSessionsRewindParams = lazyCompile(SessionsRewindParamsSchema);
+export const validateSessionsForkParams = lazyCompile(SessionsForkParamsSchema);
 export const validateSessionsUsageParams = lazyCompile(SessionsUsageParamsSchema);
 export const validateTaskSuggestionsListParams = lazyCompile(TaskSuggestionsListParamsSchema);
 export const validateTaskSuggestionsCreateParams = lazyCompile(TaskSuggestionsCreateParamsSchema);
@@ -1071,6 +1077,10 @@ export {
   SessionsCompactionGetParamsSchema,
   SessionsCompactionBranchParamsSchema,
   SessionsCompactionRestoreParamsSchema,
+  SessionsForkParamsSchema,
+  SessionsForkResultSchema,
+  SessionsRewindParamsSchema,
+  SessionsRewindResultSchema,
   SessionPlacementStateSchema,
   SessionPlacementSchema,
   SessionWorktreeInfoSchema,
@@ -1676,6 +1686,10 @@ export type {
   SessionsReclaimParams,
   SessionsReclaimResult,
   SessionsCreateResult,
+  SessionsForkParams,
+  SessionsForkResult,
+  SessionsRewindParams,
+  SessionsRewindResult,
   SessionsPatchParams,
   SessionsResetParams,
   SessionsDeleteParams,

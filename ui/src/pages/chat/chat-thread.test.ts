@@ -8,9 +8,24 @@ import {
   coalesceStreamRuns,
   collapseCompletedTurnWork,
   getExpandedToolCards,
+  persistedMessageEntryId,
   resetChatThreadState,
   syncToolCardExpansionState,
 } from "./chat-thread.ts";
+
+describe("persistedMessageEntryId", () => {
+  it("rejects optimistic pending bubbles and accepts transcript identities", () => {
+    expect(
+      persistedMessageEntryId({
+        role: "user",
+        __openclaw: { id: "pending-send:1", kind: "pending-send" },
+      }),
+    ).toBeNull();
+    expect(persistedMessageEntryId({ role: "user", __openclaw: { id: "entry-1", seq: 2 } })).toBe(
+      "entry-1",
+    );
+  });
+});
 
 type CachedChatItemsProps = Parameters<typeof buildCachedChatItems>[0];
 type WorkGroupItem = Extract<

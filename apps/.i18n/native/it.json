@@ -23014,6 +23014,286 @@
       "translated": "Utente"
     },
     {
+      "id": "native.apple.b1cdcb906a43d5d6",
+      "source": "This session cannot be archived while it is active or running.",
+      "translated": "Questa sessione non può essere archiviata mentre è attiva o in esecuzione."
+    },
+    {
+      "id": "native.apple.5817e3f3dab1ee19",
+      "source": "The main session cannot be deleted.",
+      "translated": "La sessione principale non può essere eliminata."
+    },
+    {
+      "id": "native.apple.a6b8df3f18171c91",
+      "source": "Remove attachments or wait for delivery before archiving or deleting this session.",
+      "translated": "Rimuovi gli allegati o attendi la consegna prima di archiviare o eliminare questa sessione."
+    },
+    {
+      "id": "native.apple.476b3862e0449857",
+      "source": "Running",
+      "translated": "In esecuzione"
+    },
+    {
+      "id": "native.apple.83b41e41f428cffb",
+      "source": "Identity",
+      "translated": "Identità"
+    },
+    {
+      "id": "native.apple.ba6710da42846eed",
+      "source": "Name",
+      "translated": "Nome"
+    },
+    {
+      "id": "native.apple.bdb1928f7e63c4c6",
+      "source": "Key",
+      "translated": "Chiave"
+    },
+    {
+      "id": "native.apple.7259d51423f8def0",
+      "source": "Copy session key",
+      "translated": "Copia chiave della sessione"
+    },
+    {
+      "id": "native.apple.1494b638984ddca3",
+      "source": "Kind",
+      "translated": "Tipo"
+    },
+    {
+      "id": "native.apple.49cd6c21bdd0d8da",
+      "source": "Organization",
+      "translated": "Organizzazione"
+    },
+    {
+      "id": "native.apple.83e2ae5c4c7dbb94",
+      "source": "Group",
+      "translated": "Gruppo"
+    },
+    {
+      "id": "native.apple.1ba465bfa16ed23b",
+      "source": "None",
+      "translated": "Nessuno"
+    },
+    {
+      "id": "native.apple.2c7c9e5dc8ad574e",
+      "source": "Pinned",
+      "translated": "In evidenza"
+    },
+    {
+      "id": "native.apple.b0d3e265af9f562a",
+      "source": "Archived",
+      "translated": "Archiviata"
+    },
+    {
+      "id": "native.apple.de94ca2cf7d4d766",
+      "source": "Run",
+      "translated": "Esecuzione"
+    },
+    {
+      "id": "native.apple.f7a51dca3268b26c",
+      "source": "Status",
+      "translated": "Stato"
+    },
+    {
+      "id": "native.apple.12678de5fa43321d",
+      "source": "Model",
+      "translated": "Modello"
+    },
+    {
+      "id": "native.apple.8ec6bd6001df285d",
+      "source": "Provider",
+      "translated": "Provider"
+    },
+    {
+      "id": "native.apple.f43534cf1ee73605",
+      "source": "Runtime",
+      "translated": "Runtime"
+    },
+    {
+      "id": "native.apple.f0775e602bbe75ed",
+      "source": "Run duration",
+      "translated": "Durata dell'esecuzione"
+    },
+    {
+      "id": "native.apple.ecde91d89eab026b",
+      "source": "Worktree",
+      "translated": "Worktree"
+    },
+    {
+      "id": "native.apple.1ef1698bb3ff7166",
+      "source": "ID",
+      "translated": "ID"
+    },
+    {
+      "id": "native.apple.69bc49f9663fa205",
+      "source": "Branch",
+      "translated": "Branch"
+    },
+    {
+      "id": "native.apple.aa430e81e52e2354",
+      "source": "Repository root",
+      "translated": "Radice del repository"
+    },
+    {
+      "id": "native.apple.6e851b012a982d38",
+      "source": "Activity",
+      "translated": "Attività"
+    },
+    {
+      "id": "native.apple.bf87c6fd92c9315a",
+      "source": "Updated",
+      "translated": "Aggiornato"
+    },
+    {
+      "id": "native.apple.dcb1734cba578b79",
+      "source": "Last activity",
+      "translated": "Ultima attività"
+    },
+    {
+      "id": "native.apple.58ca290e3f032865",
+      "source": "Last interaction",
+      "translated": "Ultima interazione"
+    },
+    {
+      "id": "native.apple.7020bd521499f3b8",
+      "source": "Run started",
+      "translated": "Esecuzione avviata"
+    },
+    {
+      "id": "native.apple.abb2b24d6378b605",
+      "source": "Run ended",
+      "translated": "Esecuzione terminata"
+    },
+    {
+      "id": "native.apple.cd7c3095a22f80a9",
+      "source": "Session Info",
+      "translated": "Informazioni sulla sessione"
+    },
+    {
+      "id": "native.apple.e308b012d84b3b3e",
+      "source": "Groups",
+      "translated": "Gruppi"
+    },
+    {
+      "id": "native.apple.6438f66cfcaefaf7",
+      "source": "Rename…",
+      "translated": "Rinomina…"
+    },
+    {
+      "id": "native.apple.58b0f1df4985b0d1",
+      "source": "Delete…",
+      "translated": "Elimina…"
+    },
+    {
+      "id": "native.apple.bc70cc0f0b882179",
+      "source": "No groups",
+      "translated": "Nessun gruppo"
+    },
+    {
+      "id": "native.apple.cb3e1fa7783a35d2",
+      "source": "Create Group",
+      "translated": "Crea gruppo"
+    },
+    {
+      "id": "native.apple.4ac72aeb70f107d8",
+      "source": "Add Group",
+      "translated": "Aggiungi gruppo"
+    },
+    {
+      "id": "native.apple.23d628606fe0734f",
+      "source": "Session Groups",
+      "translated": "Gruppi della sessione"
+    },
+    {
+      "id": "native.apple.7777b2d2ec43ed59",
+      "source": "Done",
+      "translated": "Fine"
+    },
+    {
+      "id": "native.apple.0b0149661cacfe36",
+      "source": "Rename Group",
+      "translated": "Rinomina gruppo"
+    },
+    {
+      "id": "native.apple.8cbd863aa4d0524f",
+      "source": "Group name",
+      "translated": "Nome del gruppo"
+    },
+    {
+      "id": "native.apple.6021088d5ed9c301",
+      "source": "Rename",
+      "translated": "Rinomina"
+    },
+    {
+      "id": "native.apple.e697417338a47751",
+      "source": "Cancel",
+      "translated": "Annulla"
+    },
+    {
+      "id": "native.apple.cc89328a14af7a23",
+      "source": "Delete “%@”?",
+      "translated": "Eliminare “%@”?"
+    },
+    {
+      "id": "native.apple.4c09741db2e6c624",
+      "source": "Delete group?",
+      "translated": "Eliminare il gruppo?"
+    },
+    {
+      "id": "native.apple.ddb1bbbd3c1a9c5e",
+      "source": "Delete Group",
+      "translated": "Elimina gruppo"
+    },
+    {
+      "id": "native.apple.b049c8a4d2805e08",
+      "source": "Sessions in this group become ungrouped.",
+      "translated": "Le sessioni in questo gruppo non saranno più raggruppate."
+    },
+    {
+      "id": "native.apple.5aa6082d78027c5f",
+      "source": "Gateway changed. Close and reopen Groups to continue.",
+      "translated": "Il Gateway è cambiato. Chiudi e riapri Gruppi per continuare."
+    },
+    {
+      "id": "native.apple.bb4b44183929c881",
+      "source": "No agents are available on this gateway.",
+      "translated": "Nessun agente è disponibile su questo gateway."
+    },
+    {
+      "id": "native.apple.6c89f35d53506406",
+      "source": "New Session Options",
+      "translated": "Opzioni nuova sessione"
+    },
+    {
+      "id": "native.apple.5b0cde807ccb4241",
+      "source": "Agent",
+      "translated": "Agente"
+    },
+    {
+      "id": "native.apple.124a640f9620d9cd",
+      "source": "Create in a worktree",
+      "translated": "Crea in un worktree"
+    },
+    {
+      "id": "native.apple.632ce245d5575fea",
+      "source": "Base ref (optional)",
+      "translated": "Riferimento di base (facoltativo)"
+    },
+    {
+      "id": "native.apple.fd81909fc9719a59",
+      "source": "Retry",
+      "translated": "Riprova"
+    },
+    {
+      "id": "native.apple.a085278be62286b2",
+      "source": "Create",
+      "translated": "Crea"
+    },
+    {
+      "id": "native.apple.795ba37f6782cf28",
+      "source": "The session could not be created.",
+      "translated": "Non è stato possibile creare la sessione."
+    },
+    {
       "id": "native.apple.8ec708a3605a2cc3",
       "source": "Search sessions",
       "translated": "Cerca sessioni"
@@ -23037,6 +23317,11 @@
       "id": "native.apple.66ba42960eb4135b",
       "source": "New session",
       "translated": "Nuova sessione"
+    },
+    {
+      "id": "native.apple.2ef0e34db02ad255",
+      "source": "New session options",
+      "translated": "Opzioni nuova sessione"
     },
     {
       "id": "native.apple.36753ef2f1ed4264",
@@ -23087,6 +23372,11 @@
       "id": "native.apple.ac85292b16a7465f",
       "source": "Unread",
       "translated": "Da leggere"
+    },
+    {
+      "id": "native.apple.f57a4b9c14d31867",
+      "source": "Get Info…",
+      "translated": "Ottieni informazioni…"
     },
     {
       "id": "native.apple.a174cb1027a9b881",
@@ -23149,6 +23439,11 @@
       "translated": "Connessione…"
     },
     {
+      "id": "native.apple.79f708b3bc1d3a6c",
+      "source": "Retry session groups",
+      "translated": "Riprova gruppi di sessioni"
+    },
+    {
       "id": "native.apple.63320b6d5138c0db",
       "source": "Pinned",
       "translated": "Fissato"
@@ -23194,6 +23489,41 @@
       "translated": "Annulla"
     },
     {
+      "id": "native.apple.751e0f6b81cd374a",
+      "source": "Delete selected sessions?",
+      "translated": "Eliminare le sessioni selezionate?"
+    },
+    {
+      "id": "native.apple.aa679276581b0058",
+      "source": "Delete Sessions",
+      "translated": "Elimina sessioni"
+    },
+    {
+      "id": "native.apple.f837129cbee23297",
+      "source": "Each selected session and its transcript will be removed from the gateway.",
+      "translated": "Ogni sessione selezionata e la relativa trascrizione verranno rimosse dal Gateway."
+    },
+    {
+      "id": "native.apple.bf09df5e38a7a950",
+      "source": "Groups",
+      "translated": "Gruppi"
+    },
+    {
+      "id": "native.apple.64013cfee5e25305",
+      "source": "Manage session groups",
+      "translated": "Gestisci gruppi di sessioni"
+    },
+    {
+      "id": "native.apple.185f4688f98e244e",
+      "source": "Done",
+      "translated": "Fine"
+    },
+    {
+      "id": "native.apple.58133fc5791847e6",
+      "source": "Select",
+      "translated": "Seleziona"
+    },
+    {
       "id": "native.apple.b67eaecec1b423ac",
       "source": "No archived sessions",
       "translated": "Nessuna sessione archiviata"
@@ -23209,29 +23539,14 @@
       "translated": "Ripristina"
     },
     {
-      "id": "native.apple.666ba6eb696e649f",
-      "source": "Archive",
-      "translated": "Archivia"
-    },
-    {
-      "id": "native.apple.05cb1fecc5844b69",
-      "source": "Pinned",
-      "translated": "Fissato"
+      "id": "native.apple.158cfa096c57bcb9",
+      "source": "Get Info…",
+      "translated": "Ottieni informazioni…"
     },
     {
       "id": "native.apple.080fce25e4a9bb61",
       "source": "Rename",
       "translated": "Rinomina"
-    },
-    {
-      "id": "native.apple.d148288258094aa6",
-      "source": "Pin",
-      "translated": "Fissa"
-    },
-    {
-      "id": "native.apple.3c62aaf44e6ab4d4",
-      "source": "Unpin",
-      "translated": "Rimuovi"
     },
     {
       "id": "native.apple.6de479e9d780869a",
@@ -23247,6 +23562,31 @@
       "id": "native.apple.4f259c4409cfcc75",
       "source": "Mark Unread",
       "translated": "Segna come non letta"
+    },
+    {
+      "id": "native.apple.05cb1fecc5844b69",
+      "source": "Pinned",
+      "translated": "Fissato"
+    },
+    {
+      "id": "native.apple.d148288258094aa6",
+      "source": "Pin",
+      "translated": "Fissa"
+    },
+    {
+      "id": "native.apple.3c62aaf44e6ab4d4",
+      "source": "Unpin",
+      "translated": "Rimuovi"
+    },
+    {
+      "id": "native.apple.666ba6eb696e649f",
+      "source": "Archive",
+      "translated": "Archivia"
+    },
+    {
+      "id": "native.apple.b09b91392835fe58",
+      "source": "Delete",
+      "translated": "Elimina"
     },
     {
       "id": "native.apple.946b677d8dbf0f37",
@@ -23404,14 +23744,24 @@
       "translated": "in coda dopo la modifica del percorso"
     },
     {
-      "id": "native.apple.710c7bd117a7cc12",
-      "source": "Remove attachments or wait for delivery to resolve before switching chats.",
-      "translated": "Rimuovi gli allegati o attendi il completamento della consegna prima di cambiare chat."
+      "id": "native.apple.787047d0da6b8b9f",
+      "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
+      "translated": "Rimuovi gli allegati o attendi il completamento della consegna prima di iniziare una nuova chat."
+    },
+    {
+      "id": "native.apple.980f552bb0f96c0f",
+      "source": "Gateway changed before the session operation started.",
+      "translated": "Il Gateway è cambiato prima dell'inizio dell'operazione sulla sessione."
     },
     {
       "id": "native.apple.d93e6fe16ec1b0e5",
       "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
       "translated": "Rimuovi gli allegati o attendi il completamento della consegna prima di iniziare una nuova chat."
+    },
+    {
+      "id": "native.apple.710c7bd117a7cc12",
+      "source": "Remove attachments or wait for delivery to resolve before switching chats.",
+      "translated": "Rimuovi gli allegati o attendi il completamento della consegna prima di cambiare chat."
     },
     {
       "id": "native.apple.87ba543b42696b92",
@@ -23532,6 +23882,11 @@
       "id": "native.apple.eb58552e43c8dde2",
       "source": "New Session",
       "translated": "Nuova sessione"
+    },
+    {
+      "id": "native.apple.a7119fbf9d25df5e",
+      "source": "New Session Options…",
+      "translated": "Opzioni nuova sessione…"
     },
     {
       "id": "native.apple.5361129a24118af6",
