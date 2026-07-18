@@ -123,6 +123,7 @@ async function startVaultErrorFixture(
   errors = ["token not-a-real-sensitive-value denied"],
   lookupSucceeds = true,
   lookupErrors = errors,
+  lookupStatusCode = statusCode,
 ) {
   const requests: string[] = [];
   const server = createServer((request, response) => {
@@ -132,7 +133,8 @@ async function startVaultErrorFixture(
       response.end(JSON.stringify({ data: { id: "redacted-fixture-token" } }));
       return;
     }
-    response.statusCode = statusCode;
+    response.statusCode =
+      request.url === "/v1/auth/token/lookup-self" ? lookupStatusCode : statusCode;
     response.setHeader("content-type", "application/json");
     response.end(
       JSON.stringify({
@@ -798,6 +800,42 @@ describe("vault SecretRef resolver", () => {
 
   it("keeps ambiguous token self-lookup 403 responses scoped per id", async () => {
     const fixture = await startVaultErrorFixture(403, ["permission denied"], false);
+    const result = await runResolver({
+      request: {
+        protocolVersion: 1,
+        provider: "vault",
+        ids: ["providers/openai/apiKey", "tts/elevenlabs/apiKey"],
+      },
+      env: {
+        VAULT_ADDR: fixture.vaultAddr,
+        VAULT_TOKEN: "not-a-real-auth-header",
+      },
+    });
+
+    expect(result).toMatchObject({ code: 0, stderr: "" });
+    expect(JSON.parse(result.stdout)).toEqual({
+      protocolVersion: 1,
+      values: {},
+      errors: {
+        "providers/openai/apiKey": {
+          message: 'Vault read failed for "providers/openai/apiKey" (403).',
+        },
+        "tts/elevenlabs/apiKey": {
+          message: 'Vault read failed for "tts/elevenlabs/apiKey" (403).',
+        },
+      },
+    });
+    expect(fixture.requests.filter((url) => url === "/v1/auth/token/lookup-self")).toHaveLength(1);
+  });
+
+  it("keeps ACL failures scoped when token introspection is unavailable", async () => {
+    const fixture = await startVaultErrorFixture(
+      403,
+      ["permission denied"],
+      false,
+      ["temporarily unavailable"],
+      503,
+    );
     const result = await runResolver({
       request: {
         protocolVersion: 1,

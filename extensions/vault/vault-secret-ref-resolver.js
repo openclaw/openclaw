@@ -303,18 +303,18 @@ async function classifyVaultClientToken(baseUrl, vaultToken) {
     ({ response, payload } = await fetchVault(baseUrl, `${baseUrl}/v1/auth/token/lookup-self`, {
       headers,
     }));
-  } catch (error) {
-    throw new VaultProviderError("Vault token validation failed.", { cause: error });
+  } catch {
+    return "unknown";
   }
   if (response.ok) {
     return "valid";
   }
-  if (response.status === 403) {
-    // A valid no-default-policy token may lack lookup-self. Only Vault's explicit
-    // invalid-token marker distinguishes auth failure from a least-privilege ACL.
-    return isInvalidVaultTokenPayload(payload) ? "invalid" : "unknown";
+  if (response.status === 401 || isInvalidVaultTokenPayload(payload)) {
+    return "invalid";
   }
-  throw new VaultProviderError(`Vault token validation failed (${response.status}).`);
+  // Token introspection is advisory. Preserve the concrete per-id ACL failures
+  // when this probe is denied, unavailable, or otherwise inconclusive.
+  return "unknown";
 }
 
 function readStringField(payload, parsedId) {
