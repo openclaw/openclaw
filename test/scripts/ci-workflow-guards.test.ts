@@ -46,6 +46,7 @@ const MATURITY_GENERATED_PR_PATHS = [
 
 type WorkflowStep = {
   env?: Record<string, unknown>;
+  if?: string;
   name?: string;
   run?: string;
   uses?: string;
@@ -1950,10 +1951,10 @@ describe("ci workflow guards", () => {
     const preflightSteps = workflow.jobs.preflight.steps as WorkflowStep[];
     const refreshStep = preflightSteps.find(
       (step: WorkflowStep) => step.name === "Refresh sticky dependency snapshot",
-    );
+    )!;
     const maintainStep = preflightSteps.find(
       (step: WorkflowStep) => step.name === "Maintain sticky dependency store budget",
-    );
+    )!;
     expect(refreshStep.if).toContain("github.event_name == 'push'");
     expect(refreshStep.if).toContain("github.repository == 'openclaw/openclaw'");
     expect(refreshStep.if).toContain("github.ref == 'refs/heads/main'");
@@ -2511,7 +2512,7 @@ describe("ci workflow guards", () => {
     );
     const maintainStickyStoreStep = workflow.jobs.preflight.steps.find(
       (step: WorkflowStep) => step.name === "Maintain sticky dependency store budget",
-    );
+    )!;
 
     expect(warmer.concurrency["cancel-in-progress"]).toBe(false);
     expect(warmer.concurrency.group).toBe("vitest-cache-warm");
