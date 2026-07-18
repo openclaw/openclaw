@@ -604,6 +604,23 @@ describe("microsoft-foundry plugin", () => {
     );
   });
 
+  it.runIf(process.platform !== "win32")(
+    "terminates a SIGTERM-immune subprocess with SIGKILL on timeout (behavioral proof)",
+    async () => {
+      const real = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+      const start = Date.now();
+      expect(() => {
+        real.execFileSync(
+          process.execPath,
+          ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"],
+          { encoding: "utf-8", timeout: 500, killSignal: "SIGKILL" },
+        );
+      }).toThrow();
+      // Terminated within timeout + reasonable overhead, not hung
+      expect(Date.now() - start).toBeLessThan(2000);
+    },
+  );
+
   it("retries Entra token refresh after a failed attempt", async () => {
     const provider = registerProvider();
     const prepareRuntimeAuth = requirePrepareRuntimeAuth(provider);
