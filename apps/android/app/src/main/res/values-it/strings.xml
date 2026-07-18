@@ -1393,7 +1393,7 @@
     <string name="native_f1c3989a92ef10d1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Scansiona il codice QR per abbinare"</string>
     <string name="native_f2000dce9b5d40c8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Approvazione negata."</string>
     <string name="native_f200366d0c4352cb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Impossibile esaminare la proposta di Skill Workshop."</string>
-    <string name="native_f20c879465551f0d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Fissato"</string>
+    <string name="native_f20c879465551f0d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"In evidenza"</string>
     <string name="native_f211f2bf832dda14" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Profilo e dispositivo"</string>
     <string name="native_f22e1435c8dfffc1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Chiudi selettore livello di riflessione"</string>
     <string name="native_f2316e644b1d2621" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Impossibile mettere il messaggio in coda per inviarlo in seguito."</string>

@@ -745,6 +745,62 @@
       ]
     },
     {
+      "locale": "ar",
+      "source": "Archived",
+      "translations": [
+        "مؤرشف",
+        "مؤرشفة"
+      ]
+    },
+    {
+      "locale": "es",
+      "source": "Archived",
+      "translations": [
+        "Archivada",
+        "Archivadas"
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "Archived",
+      "translations": [
+        "Archivé",
+        "Archivée"
+      ]
+    },
+    {
+      "locale": "it",
+      "source": "Archived",
+      "translations": [
+        "Archiviata",
+        "Archiviato"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "Archived",
+      "translations": [
+        "Zarchiwizowana",
+        "Zarchiwizowane"
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "Archived",
+      "translations": [
+        "เก็บถาวรแล้ว",
+        "เก็บเข้าคลังแล้ว"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "Archived",
+      "translations": [
+        "Arşivlendi",
+        "Arşivlenmiş"
+      ]
+    },
+    {
       "locale": "fr",
       "source": "Asking OpenClaw",
       "translations": [
@@ -1956,6 +2012,38 @@
       ]
     },
     {
+      "locale": "nl",
+      "source": "Delete",
+      "translations": [
+        "Verwijder",
+        "Verwijderen"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "Delete",
+      "translations": [
+        "Radera",
+        "Ta bort"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "Delete Group",
+      "translations": [
+        "Radera grupp",
+        "Ta bort grupp"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "Delete Group",
+      "translations": [
+        "删除分组",
+        "删除群组"
+      ]
+    },
+    {
       "locale": "fa",
       "source": "Delete Session",
       "translations": [
@@ -1977,6 +2065,22 @@
       "translations": [
         "Удалить сеанс",
         "Удалить сессию"
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "Delete “%@”?",
+      "translations": [
+        "Supprimer « %@ » ?",
+        "Supprimer « %@ » ?"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "Delete “%@”?",
+      "translations": [
+        "Radera ”%@”?",
+        "Ta bort ”%@”?"
       ]
     },
     {
@@ -2425,6 +2529,14 @@
       "translations": [
         "Hecho",
         "Listo"
+      ]
+    },
+    {
+      "locale": "hi",
+      "source": "Done",
+      "translations": [
+        "पूर्ण",
+        "हो गया"
       ]
     },
     {
@@ -3512,11 +3624,52 @@
       ]
     },
     {
+      "locale": "ar",
+      "source": "Get Info…",
+      "translations": [
+        "إحضار المعلومات…",
+        "الحصول على معلومات…"
+      ]
+    },
+    {
+      "locale": "hi",
+      "source": "Get Info…",
+      "translations": [
+        "जानकारी पाएँ…",
+        "जानकारी प्राप्त करें…"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "Get Info…",
+      "translations": [
+        "Informacje…",
+        "Pokaż informacje…"
+      ]
+    },
+    {
+      "locale": "pt-BR",
+      "source": "Get Info…",
+      "translations": [
+        "Obter Informações…",
+        "Obter informações…"
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "Get Info…",
+      "translations": [
+        "Отримати інформацію…",
+        "Переглянути інформацію…"
+      ]
+    },
+    {
       "locale": "zh-CN",
       "source": "Group name",
       "translations": [
         "分组名称",
-        "组名称"
+        "组名称",
+        "群组名称"
       ]
     },
     {
@@ -4740,6 +4893,14 @@
       "translations": [
         "ขาด: %@",
         "ขาดหาย: %@"
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "Name",
+      "translations": [
+        "Имя",
+        "Название"
       ]
     },
     {
@@ -6277,11 +6438,28 @@
       ]
     },
     {
+      "locale": "ar",
+      "source": "Pinned",
+      "translations": [
+        "مثبّت",
+        "مثبّتة"
+      ]
+    },
+    {
       "locale": "es",
       "source": "Pinned",
       "translations": [
+        "Fijada",
         "Fijadas",
         "Fijado"
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "Pinned",
+      "translations": [
+        "Épinglé",
+        "Épinglée"
       ]
     },
     {
@@ -6291,6 +6469,14 @@
         "Fissati",
         "Fissato",
         "In evidenza"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "Pinned",
+      "translations": [
+        "Przypięta",
+        "Przypięte"
       ]
     },
     {
@@ -6379,6 +6565,30 @@
       "translations": [
         "Bağlantı Noktası",
         "Port"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "Provider",
+      "translations": [
+        "제공업체",
+        "제공자"
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "Provider",
+      "translations": [
+        "Поставщик",
+        "Провайдер"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "Provider",
+      "translations": [
+        "提供商",
+        "提供方"
       ]
     },
     {
@@ -6751,6 +6961,14 @@
       ]
     },
     {
+      "locale": "ar",
+      "source": "Rename",
+      "translations": [
+        "إعادة التسمية",
+        "إعادة تسمية"
+      ]
+    },
+    {
       "locale": "es",
       "source": "Rename",
       "translations": [
@@ -6763,7 +6981,8 @@
       "source": "Rename",
       "translations": [
         "Ganti Nama",
-        "Ubah Nama"
+        "Ubah Nama",
+        "Ubah nama"
       ]
     },
     {
@@ -6780,6 +6999,30 @@
       "translations": [
         "Hernoem",
         "Hernoemen"
+      ]
+    },
+    {
+      "locale": "es",
+      "source": "Rename Group",
+      "translations": [
+        "Cambiar nombre del grupo",
+        "Renombrar grupo"
+      ]
+    },
+    {
+      "locale": "id",
+      "source": "Rename Group",
+      "translations": [
+        "Ganti Nama Grup",
+        "Ubah Nama Grup"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "Rename Group",
+      "translations": [
+        "Groep hernoemen",
+        "Groepsnaam wijzigen"
       ]
     },
     {
@@ -6845,6 +7088,14 @@
       "translations": [
         "Перейменувати сеанс",
         "Перейменувати сесію"
+      ]
+    },
+    {
+      "locale": "ar",
+      "source": "Rename…",
+      "translations": [
+        "إعادة التسمية…",
+        "إعادة تسمية…"
       ]
     },
     {
@@ -7117,11 +7368,132 @@
       ]
     },
     {
+      "locale": "ar",
+      "source": "Run",
+      "translations": [
+        "التشغيل",
+        "تشغيل"
+      ]
+    },
+    {
+      "locale": "de",
+      "source": "Run",
+      "translations": [
+        "Ausführen",
+        "Ausführung"
+      ]
+    },
+    {
+      "locale": "es",
+      "source": "Run",
+      "translations": [
+        "Ejecución",
+        "Ejecutar"
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "Run",
+      "translations": [
+        "Exécuter",
+        "Exécution"
+      ]
+    },
+    {
       "locale": "hi",
       "source": "Run",
       "translations": [
         "चलाएँ",
-        "चलाएं"
+        "चलाएं",
+        "रन"
+      ]
+    },
+    {
+      "locale": "id",
+      "source": "Run",
+      "translations": [
+        "Jalankan",
+        "Proses"
+      ]
+    },
+    {
+      "locale": "it",
+      "source": "Run",
+      "translations": [
+        "Esecuzione",
+        "Esegui"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "Run",
+      "translations": [
+        "Uitvoeren",
+        "Uitvoering"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "Run",
+      "translations": [
+        "Uruchom",
+        "Uruchomienie"
+      ]
+    },
+    {
+      "locale": "pt-BR",
+      "source": "Run",
+      "translations": [
+        "Executar",
+        "Execução"
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "Run",
+      "translations": [
+        "Запуск",
+        "Запустить"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "Run",
+      "translations": [
+        "Kör",
+        "Körning"
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "Run",
+      "translations": [
+        "การทำงาน",
+        "เรียกใช้"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "Run",
+      "translations": [
+        "Çalıştır",
+        "Çalıştırma"
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "Run",
+      "translations": [
+        "Запуск",
+        "Запустити"
+      ]
+    },
+    {
+      "locale": "vi",
+      "source": "Run",
+      "translations": [
+        "Chạy",
+        "Lần chạy"
       ]
     },
     {
@@ -7154,6 +7526,7 @@
       "source": "Running",
       "translations": [
         "Actief",
+        "In uitvoering",
         "Wordt uitgevoerd"
       ]
     },
@@ -7161,6 +7534,7 @@
       "locale": "pl",
       "source": "Running",
       "translations": [
+        "Uruchomiona",
         "Uruchomione",
         "Uruchomiono",
         "W toku"
@@ -7180,6 +7554,54 @@
       "translations": [
         "正在运行",
         "运行中"
+      ]
+    },
+    {
+      "locale": "ar",
+      "source": "Runtime",
+      "translations": [
+        "بيئة التشغيل",
+        "وقت التشغيل"
+      ]
+    },
+    {
+      "locale": "es",
+      "source": "Runtime",
+      "translations": [
+        "Entorno de ejecución",
+        "Runtime"
+      ]
+    },
+    {
+      "locale": "fa",
+      "source": "Runtime",
+      "translations": [
+        "زمان اجرا",
+        "محیط اجرا"
+      ]
+    },
+    {
+      "locale": "pt-BR",
+      "source": "Runtime",
+      "translations": [
+        "Ambiente de execução",
+        "Tempo de execução"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "Runtime",
+      "translations": [
+        "Çalışma Zamanı",
+        "Çalışma zamanı"
+      ]
+    },
+    {
+      "locale": "vi",
+      "source": "Runtime",
+      "translations": [
+        "Môi trường chạy",
+        "Thời gian chạy"
       ]
     },
     {
