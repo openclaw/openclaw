@@ -56,21 +56,46 @@ struct PortGuardianRecordStoreTests {
         defer { fixture.cleanup() }
         let legacyWriterRunning = LockIsolated(false)
         let attempts = LockIsolated(0)
-        let guardian = PortGuardian(recordStoreFactory: {
-            attempts.withValue { $0 += 1 }
-            guard !legacyWriterRunning.withValue({ $0 }) else {
-                throw PortGuardianStoreError("legacy writer running")
-            }
-            return try PortGuardianRecordStore(databaseURL: fixture.databaseURL)
-        })
+        let guardian = PortGuardian(
+            recordStoreFactory: {
+                attempts.withValue { $0 += 1 }
+                return try PortGuardianRecordStore(databaseURL: fixture.databaseURL)
+            },
+            postSpawnCompatibilityCheck: {
+                guard !legacyWriterRunning.withValue({ $0 }) else {
+                    throw PortGuardianStoreError("legacy writer running")
+                }
+            })
 
-        _ = try await guardian.record(port: 18789, pid: 4242, command: "/usr/bin/ssh", mode: .remote)
+        let firstPreparation = try await guardian.prepareForTunnelSpawn()
+        _ = try await guardian.record(
+            port: 18789,
+            pid: 4242,
+            command: "/usr/bin/ssh",
+            mode: .remote,
+            preparation: firstPreparation)
+        let threatenedPreparation = try await guardian.prepareForTunnelSpawn()
         legacyWriterRunning.withValue { $0 = true }
         await #expect(throws: PortGuardianStoreError.self) {
-            try await guardian.record(port: 18790, pid: 4243, command: "/usr/bin/ssh", mode: .remote)
+            try await guardian.record(
+                port: 18790,
+                pid: 4243,
+                command: "/usr/bin/ssh",
+                mode: .remote,
+                preparation: threatenedPreparation)
         }
+        await #expect(throws: PortGuardianStoreError.self) {
+            try await guardian.prepareForTunnelSpawn()
+        }
+        await guardian.cancelTunnelSpawn(threatenedPreparation)
         legacyWriterRunning.withValue { $0 = false }
-        _ = try await guardian.record(port: 18791, pid: 4244, command: "/usr/bin/ssh", mode: .remote)
+        let finalPreparation = try await guardian.prepareForTunnelSpawn()
+        _ = try await guardian.record(
+            port: 18791,
+            pid: 4244,
+            command: "/usr/bin/ssh",
+            mode: .remote,
+            preparation: finalPreparation)
 
         #expect(attempts.withValue { $0 } == 3)
     }
@@ -83,7 +108,8 @@ struct PortGuardianRecordStoreTests {
         let guardian = PortGuardian(recordStoreFactory: {
             try PortGuardianRecordStore(databaseURL: fixture.databaseURL)
         })
-        let receipt = try await guardian.record(
+        let receipt = try await Self.record(
+            guardian: guardian,
             port: 18789,
             pid: 2_000_000_000,
             command: "/usr/bin/ssh",
@@ -107,10 +133,13 @@ struct PortGuardianRecordStoreTests {
                 $0 += 1
                 return $0
             }
-            guard attempt != 2 else { throw PortGuardianStoreError("injected delete failure") }
+            guard attempt != 2 else {
+                throw PortGuardianStoreError("injected delete failure")
+            }
             return try PortGuardianRecordStore(databaseURL: fixture.databaseURL)
         })
-        let receipt = try await guardian.record(
+        let receipt = try await Self.record(
+            guardian: guardian,
             port: 18789,
             pid: 2_000_000_000,
             command: "/usr/bin/ssh",
@@ -139,13 +168,15 @@ struct PortGuardianRecordStoreTests {
         })
 
         await #expect(throws: PortGuardianStoreError.self) {
-            try await guardian.record(
+            try await Self.record(
+                guardian: guardian,
                 port: 18789,
                 pid: 4242,
                 command: "/usr/bin/ssh",
                 mode: .remote)
         }
-        let receipt = try await guardian.record(
+        let receipt = try await Self.record(
+            guardian: guardian,
             port: 18789,
             pid: 4242,
             command: "/usr/bin/ssh",
@@ -153,6 +184,24 @@ struct PortGuardianRecordStoreTests {
 
         #expect(receipt.pid == 4242)
         #expect(attempts.withValue { $0 } == 2)
+    }
+
+    @Test
+    func `spawn preparation excludes migration until receipt or cancellation`() async throws {
+        let fixture = try Self.fixture()
+        defer { fixture.cleanup() }
+        let guardian = PortGuardian(recordStoreFactory: {
+            try PortGuardianRecordStore(databaseURL: fixture.databaseURL)
+        })
+
+        let first = try await guardian.prepareForTunnelSpawn()
+        await #expect(throws: PortGuardianStoreError.self) {
+            try await guardian.prepareForTunnelSpawn()
+        }
+
+        await guardian.cancelTunnelSpawn(first)
+        let second = try await guardian.prepareForTunnelSpawn()
+        await guardian.cancelTunnelSpawn(second)
     }
 
     @Test
@@ -602,5 +651,21 @@ struct PortGuardianRecordStoreTests {
         }
         defer { _ = flock(descriptor, LOCK_UN) }
         try JSONEncoder().encode(records).write(to: recordURL, options: [.atomic])
+    }
+
+    private static func record(
+        guardian: PortGuardian,
+        port: Int,
+        pid: Int32,
+        command: String,
+        mode: AppState.ConnectionMode) async throws -> PortGuardian.Record
+    {
+        let preparation = try await guardian.prepareForTunnelSpawn()
+        return try await guardian.record(
+            port: port,
+            pid: pid,
+            command: command,
+            mode: mode,
+            preparation: preparation)
     }
 }

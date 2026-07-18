@@ -160,9 +160,26 @@ final class RemotePortTunnel: @unchecked Sendable {
             Self.cleanupStderr(stderrHandle)
         }
 
+        let spawnPreparation: PortGuardian.SpawnPreparation
+        do {
+            // Legacy reconciliation can inspect many live processes. Complete it
+            // before spawn so a crash during migration cannot orphan this SSH child.
+            spawnPreparation = try await PortGuardian.shared.prepareForTunnelSpawn()
+        } catch {
+            Self.cleanupStderr(stderrHandle)
+            throw NSError(
+                domain: "RemotePortTunnel",
+                code: 5,
+                userInfo: [
+                    NSLocalizedDescriptionKey: "Could not prepare SSH tunnel ownership: \(error.localizedDescription)",
+                    NSUnderlyingErrorKey: error,
+                ])
+        }
+
         do {
             try process.run()
         } catch {
+            await PortGuardian.shared.cancelTunnelSpawn(spawnPreparation)
             Self.cleanupStderr(stderrHandle)
             throw error
         }
@@ -175,9 +192,13 @@ final class RemotePortTunnel: @unchecked Sendable {
                 port: Int(localPort),
                 pid: process.processIdentifier,
                 command: process.executableURL?.path ?? "ssh",
-                mode: .remote)
+                mode: .remote,
+                preparation: spawnPreparation)
         } catch {
             Self.terminateAndWait(process)
+            // Keep the reservation exclusive until this exact child is reaped.
+            // Only then may another operation migrate or open the ledger.
+            await PortGuardian.shared.cancelTunnelSpawn(spawnPreparation)
             Self.cleanupStderr(stderrHandle)
             throw NSError(
                 domain: "RemotePortTunnel",

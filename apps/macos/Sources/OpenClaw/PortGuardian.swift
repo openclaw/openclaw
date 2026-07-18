@@ -31,20 +31,32 @@ actor PortGuardian {
         let executablePath: String?
     }
 
+    struct SpawnPreparation: Sendable {
+        fileprivate let id: UUID
+        fileprivate let store: PortGuardianRecordStore
+    }
+
     /// Tunnels spawned by THIS process. SQLite holds the authoritative host-global
     /// union; this map only retains exact teardown receipts for the current process.
     private var ownRecords: [Int32: Record] = [:]
+    private var spawnReservations: Set<UUID> = []
     private let logger = Logger(subsystem: "ai.openclaw", category: "portguard")
     private let recordStoreFactory: @Sendable () throws -> PortGuardianRecordStore
+    private let postSpawnCompatibilityCheck: @Sendable () throws -> Void
     #if DEBUG
     private var testingDescriptors: [Int: Descriptor] = [:]
     #endif
     private init() {
         self.recordStoreFactory = { try PortGuardian.openRecordStore() }
+        self.postSpawnCompatibilityCheck = { try PortGuardian.requirePostSpawnCompatibility() }
     }
 
-    init(recordStoreFactory: @escaping @Sendable () throws -> PortGuardianRecordStore) {
+    init(
+        recordStoreFactory: @escaping @Sendable () throws -> PortGuardianRecordStore,
+        postSpawnCompatibilityCheck: @escaping @Sendable () throws -> Void = {})
+    {
         self.recordStoreFactory = recordStoreFactory
+        self.postSpawnCompatibilityCheck = postSpawnCompatibilityCheck
     }
 
     func sweep(mode: AppState.ConnectionMode) async {
@@ -98,16 +110,41 @@ actor PortGuardian {
         self.logger.info("port sweep done")
     }
 
-    func record(port: Int, pid: Int32, command: String, mode: AppState.ConnectionMode) throws -> Record {
-        let recordStore = try self.requireRecordStore()
+    /// Finishes legacy reconciliation before SSH starts. The returned store can
+    /// persist the child receipt without doing migration work after spawn.
+    func prepareForTunnelSpawn() throws -> SpawnPreparation {
+        let store = try self.requireRecordStore()
+        let preparation = SpawnPreparation(id: UUID(), store: store)
+        self.spawnReservations.insert(preparation.id)
+        return preparation
+    }
+
+    func cancelTunnelSpawn(_ preparation: SpawnPreparation) {
+        self.spawnReservations.remove(preparation.id)
+    }
+
+    func record(
+        port: Int,
+        pid: Int32,
+        command: String,
+        mode: AppState.ConnectionMode,
+        preparation: SpawnPreparation) throws -> Record
+    {
+        guard self.spawnReservations.contains(preparation.id) else {
+            throw PortGuardianStoreError("PortGuardian tunnel spawn preparation expired")
+        }
+        // Fail fast if an old writer appeared after preflight. Never migrate its
+        // ledger while a newly spawned SSH child is still unrecorded.
+        try self.postSpawnCompatibilityCheck()
         let record = Record(
             port: port,
             pid: pid,
             command: command,
             mode: mode.rawValue,
             timestamp: Date().timeIntervalSince1970)
-        try recordStore.upsert(record)
+        try preparation.store.upsert(record)
         self.ownRecords[pid] = record
+        self.spawnReservations.remove(preparation.id)
         return record
     }
 
@@ -648,7 +685,11 @@ actor PortGuardian {
     /// Reopen the gate for every ledger operation. An older app can launch after
     /// startup, so caching a successful mixed-version check would lose its JSON writes.
     private func requireRecordStore() throws -> PortGuardianRecordStore {
-        try self.recordStoreFactory()
+        guard self.spawnReservations.isEmpty else {
+            throw PortGuardianStoreError(
+                "PortGuardian tunnel spawn is awaiting its durable receipt")
+        }
+        return try self.recordStoreFactory()
     }
 
     private nonisolated static func openRecordStore() throws -> PortGuardianRecordStore {
@@ -670,6 +711,15 @@ actor PortGuardian {
                 process: self.tunnelProcessInfo(pid: legacy.pid))
         }
         return store
+    }
+
+    private nonisolated static func requirePostSpawnCompatibility() throws {
+        guard !self.hasLegacyOpenClawAppProcess(),
+              !FileManager.default.fileExists(atPath: PortGuardianRecordStore.liveLegacyRecordURL.path)
+        else {
+            throw PortGuardianStoreError(
+                "Older OpenClaw storage appeared after tunnel preflight; SSH launch cancelled")
+        }
     }
 
     /// Reconciles a cross-ledger PID collision from live process generation facts.
