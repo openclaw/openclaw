@@ -371,7 +371,7 @@ describe("vault SecretRef resolver", () => {
       },
       env: {
         VAULT_ADDR: fixture.vaultAddr,
-        VAULT_TOKEN: "not-a-real-auth-header",
+        VAULT_TOKEN: "test-token",
         VAULT_NAMESPACE: "team-a",
       },
     });
