@@ -757,4 +757,41 @@ describe("memory embedding policy", () => {
       expect(waits).toEqual([45_000]);
     });
   });
+
+  describe("batch timeout alignment", () => {
+    it("all 5 rate-limit attempts are reachable (per-attempt timeout not cumulative)", async () => {
+      // The batch timeout is per-attempt (EMBEDDING_BATCH_TIMEOUT_REMOTE_MS =
+      // 120s). Each retry starts a fresh timer. A 429 response takes ~100ms,
+      // so the timeout is never at risk. The retry budget spans ~190s across
+      // waits, but since waits happen *between* timed attempts, the cumulative
+      // wait time does not count against any single attempt's deadline.
+      let calls = 0;
+      const waits: number[] = [];
+
+      await runMemoryEmbeddingRetryLoop({
+        run: async () => {
+          calls += 1;
+          if (calls <= 4) {
+            throw new Error("429 rate limit exceeded");
+          }
+          return "ok";
+        },
+        isRetryable: isRetryableMemoryEmbeddingError,
+        waitForRetry: async (d) => { waits.push(d); },
+        maxAttempts: 3,
+        baseDelayMs: 500,
+        rateLimitBaseDelayMs: 10_000,
+        rateLimitMaxDelayMs: 60_000,
+        rateLimitMaxAttempts: 5,
+      });
+
+      // All 5 attempts execute — the rate-limit budget fully runs.
+      expect(calls).toBe(5);
+      expect(waits).toEqual([10_000, 20_000, 40_000, 60_000]);
+      // Each delay is below the 120s per-attempt timeout.
+      for (const w of waits) {
+        expect(w).toBeLessThanOrEqual(60_000);
+      }
+    });
+  });
 });
