@@ -115,22 +115,6 @@
   gap: 12px;
 }
 
-.login-gate__secret-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.login-gate__secret-row input {
-  flex: 1;
-}
-
-.login-gate__secret-row .btn--icon {
-  width: 40px;
-  min-width: 40px;
-  height: 40px;
-}
-
 .login-gate__connect {
   margin-top: 4px;
   width: 100%;
@@ -282,10 +266,11 @@
     min-height: 44px;
   }
 
-  .login-gate__secret-row .btn--icon {
-    width: 44px;
-    min-width: 44px;
-    height: 44px;
+  /* Inset reveal eye keeps a comfortable coarse-pointer hit area. */
+  .login-gate__form .settings-secret__toggle {
+    width: 32px;
+    height: 32px;
+    right: 6px;
   }
 
   .login-gate__connect {
