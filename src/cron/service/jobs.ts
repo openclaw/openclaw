@@ -181,17 +181,32 @@ function computeStaggeredCronPreviousRunAtMs(job: CronJob, nowMs: number) {
   return undefined;
 }
 
+function computeStaggeredCronPreviousRunAtOrBeforeMs(job: CronJob, nowMs: number) {
+  const previous = computeStaggeredCronPreviousRunAtMs(job, nowMs);
+  const probeMs = nowMs + 1_000;
+  if (!Number.isFinite(probeMs)) {
+    return previous;
+  }
+
+  // Croner previous-run queries are strict-before and second-granular. Keep
+  // the strict result, then probe past the current second to include a slot
+  // exactly at now without losing the prior slot between boundaries.
+  const boundary = computeStaggeredCronPreviousRunAtMs(job, probeMs);
+  if (
+    isFiniteTimestamp(boundary) &&
+    boundary <= nowMs &&
+    (!isFiniteTimestamp(previous) || boundary > previous)
+  ) {
+    return boundary;
+  }
+  return previous;
+}
+
 function isStaggeredCronRunAtMs(job: CronJob, runAtMs: number): boolean {
   if (job.schedule.kind !== "cron" || !isFiniteTimestamp(runAtMs)) {
     return false;
   }
-  // Probe past the candidate second. Croner-style second-granular schedules
-  // normalize a 1ms probe back to the candidate's second, so
-  // `previousRuns(1, runAtMs + 1)` returns the slot before the candidate
-  // rather than the candidate itself and exact-second slots get misclassified
-  // as stale. A 1s probe lands past the candidate second, matching the cursor
-  // step used elsewhere in this file (cf. #81691).
-  const previous = computeStaggeredCronPreviousRunAtMs(job, runAtMs + 1_000);
+  const previous = computeStaggeredCronPreviousRunAtOrBeforeMs(job, runAtMs);
   return previous === runAtMs;
 }
 
@@ -507,6 +522,15 @@ export function computeJobPreviousRunAtMs(job: CronJob, nowMs: number): number |
     return undefined;
   }
   const previous = computeStaggeredCronPreviousRunAtMs(job, nowMs);
+  return isFiniteTimestamp(previous) ? previous : undefined;
+}
+
+/** Computes the latest effective cron timestamp at or before the supplied time. */
+export function computeJobPreviousRunAtOrBeforeMs(job: CronJob, nowMs: number): number | undefined {
+  if (!isJobEnabled(job) || job.schedule.kind !== "cron") {
+    return undefined;
+  }
+  const previous = computeStaggeredCronPreviousRunAtOrBeforeMs(job, nowMs);
   return isFiniteTimestamp(previous) ? previous : undefined;
 }
 
