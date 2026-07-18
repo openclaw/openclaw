@@ -316,6 +316,7 @@ export function maybeRunCliInContainer(
     }),
     {
       stdio: "inherit",
+      timeout: 120_000,
       env: buildContainerExecEnv(resolvedDeps.env),
     },
   );
