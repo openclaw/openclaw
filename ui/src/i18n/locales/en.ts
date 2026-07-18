@@ -615,6 +615,7 @@ export const en: TranslationMap = {
     provider: "Provider",
     runtime: "Runtime",
     runDuration: "Run duration",
+    lastActive: "Last active {time}",
     surface: "Surface",
     subject: "Subject",
     room: "Room",
