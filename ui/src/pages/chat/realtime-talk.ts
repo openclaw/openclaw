@@ -101,6 +101,7 @@ function compactLaunchParams(
 export class RealtimeTalkSession {
   private transport: RealtimeTalkTransport | null = null;
   private closed = false;
+  private lifecycleGeneration = 0;
 
   constructor(
     private readonly client: GatewayBrowserClient,
@@ -111,26 +112,33 @@ export class RealtimeTalkSession {
   ) {}
 
   async start(): Promise<void> {
+    const generation = ++this.lifecycleGeneration;
     this.closed = false;
     this.callbacks.onStatus?.("connecting");
     const providerVideoCapable = await this.resolveVideoCapability();
-    if (this.closed) {
+    if (this.closed || generation !== this.lifecycleGeneration) {
       return;
     }
     const session = await this.createSession(
       providerVideoCapable ? { ...this.options, capabilities: ["camera-frame"] } : this.options,
     );
-    if (this.closed) {
-      return;
-    }
-    this.transport = createTransport(session, {
+    const transportContext = {
       client: this.client,
       sessionKey: this.sessionKey,
       callbacks: this.callbacks,
       inputDeviceId: this.localOptions.inputDeviceId,
       consultThinkingLevel: session.consultThinkingLevel,
       consultFastMode: session.consultFastMode,
-    });
+    };
+    if (this.closed || generation !== this.lifecycleGeneration) {
+      // Gateway relay creation allocates server state before returning. A late
+      // result still owns its close RPC after stop or a replacement start.
+      if (resolveTransport(session) === "gateway-relay") {
+        createTransport(session, transportContext).stop();
+      }
+      return;
+    }
+    this.transport = createTransport(session, transportContext);
     this.callbacks.onVideoCapability?.(
       providerVideoCapable && typeof this.transport.setVideoEnabled === "function",
     );
@@ -212,6 +220,7 @@ export class RealtimeTalkSession {
   }
 
   stop(): void {
+    this.lifecycleGeneration += 1;
     this.closed = true;
     this.callbacks.onStatus?.("idle");
     this.transport?.stop();
