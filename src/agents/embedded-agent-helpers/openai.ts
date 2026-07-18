@@ -125,7 +125,10 @@ function normalizeOpenAIResponsesIdPart(params: {
 function normalizeOpenAIResponsesFunctionCallId(id: string): string {
   const { callId, itemId } = splitOpenAIFunctionCallPairing(id);
   const normalizedCallId = normalizeOpenAIResponsesIdPart({
-    value: callId,
+    // Hash the full pairing so repeated native ids sharing a `callId` (e.g.
+    // `functions.<tool>:<index>` reused across turns) don't collide into the
+    // same `call_*` id and break Responses replay.
+    value: itemId ? `${callId}|${itemId}` : callId,
     prefix: "call_",
     isValid: (value) => OPENAI_RESPONSES_CALL_ID_RE.test(value),
   });
