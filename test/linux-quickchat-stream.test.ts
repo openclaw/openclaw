@@ -1,9 +1,13 @@
+// Exercises the pure stream-assembly helpers extracted from the Linux Quick Chat webview script.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import test from "node:test";
 import vm from "node:vm";
+import { it as test } from "vitest";
 
-const quickchatSource = readFileSync(new URL("../../ui/quickchat.js", import.meta.url), "utf8");
+const quickchatSource = readFileSync(
+  new URL("../apps/linux/ui/quickchat.js", import.meta.url),
+  "utf8",
+);
 const browserBindingsStart = quickchatSource.indexOf("const tauri = window");
 assert.notEqual(browserBindingsStart, -1, "quickchat pure-helper boundary");
 
@@ -178,10 +182,7 @@ test("snapshot extraction skips a leading non-text block", () => {
 });
 
 test("snapshot extraction falls back through string content and top-level text", () => {
-  assert.equal(
-    chatMessageText({ content: "string content", text: "top-level" }),
-    "string content",
-  );
+  assert.equal(chatMessageText({ content: "string content", text: "top-level" }), "string content");
   assert.equal(chatMessageText({ content: [], text: "top-level" }), "top-level");
 });
 
