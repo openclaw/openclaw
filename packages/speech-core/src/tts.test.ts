@@ -17,6 +17,7 @@ import type {
   SpeechTelephonySynthesisRequest,
 } from "openclaw/plugin-sdk/speech-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { readTtsPrefs } from "./tts-settings.js";
 
 type MockSpeechSynthesisResult = Awaited<ReturnType<SpeechProviderPlugin["synthesize"]>>;
 
@@ -238,6 +239,56 @@ async function expectTtsPayloadResult(params: {
     }
   }
 }
+
+describe("setTtsMaxLength validation", () => {
+  const prefsName = "openclaw-speech-core-maxlength-test";
+  const prefsPath = prefsPathFor(prefsName);
+
+  afterEach(() => {
+    rmSync(prefsPath, { force: true });
+  });
+
+  it("rejects NaN", () => {
+    expect(() => setTtsMaxLength(prefsPath, Number.NaN)).toThrow(RangeError);
+  });
+
+  it("rejects Infinity", () => {
+    expect(() => setTtsMaxLength(prefsPath, Infinity)).toThrow(RangeError);
+  });
+
+  it("rejects zero", () => {
+    expect(() => setTtsMaxLength(prefsPath, 0)).toThrow(RangeError);
+  });
+
+  it("rejects negative numbers", () => {
+    expect(() => setTtsMaxLength(prefsPath, -1)).toThrow(RangeError);
+  });
+
+  it("persists 1 (minimum valid)", () => {
+    expect(() => setTtsMaxLength(prefsPath, 1)).not.toThrow();
+    const saved = readTtsPrefs(prefsPath);
+    expect(saved.tts?.maxLength).toBe(1);
+  });
+
+  it("persists default value (1500)", () => {
+    expect(() => setTtsMaxLength(prefsPath, 1500)).not.toThrow();
+    const saved = readTtsPrefs(prefsPath);
+    expect(saved.tts?.maxLength).toBe(1500);
+  });
+
+  it("persists large valid value", () => {
+    expect(() => setTtsMaxLength(prefsPath, 99999)).not.toThrow();
+    const saved = readTtsPrefs(prefsPath);
+    expect(saved.tts?.maxLength).toBe(99999);
+  });
+
+  it("leaves prefs unchanged when a rejected value is provided", () => {
+    setTtsMaxLength(prefsPath, 1500);
+    expect(() => setTtsMaxLength(prefsPath, 0)).toThrow(RangeError);
+    const saved = readTtsPrefs(prefsPath);
+    expect(saved.tts?.maxLength).toBe(1500);
+  });
+});
 
 describe("speech-core native voice-note routing", () => {
   afterEach(() => {

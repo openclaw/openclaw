@@ -41,7 +41,20 @@ export function setTtsProvider(prefsPath: string, provider: TtsProvider): void {
   });
 }
 
+/**
+ * Set the TTS max text length preference.
+ *
+ * Contract:
+ * - `maxLength` must be a positive finite number (>0, not NaN, not Infinity).
+ * - On invalid input, a `RangeError` is thrown and the preferences file is
+ *   **not** modified.
+ * - On valid input, the preferences file is immediately persisted.
+ */
+
 export function setTtsMaxLength(prefsPath: string, maxLength: number): void {
+  if (!Number.isFinite(maxLength) || maxLength <= 0) {
+    throw new RangeError(`maxLength must be a positive finite number: ${maxLength}`);
+  }
   updateTtsPrefs(prefsPath, (prefs) => {
     prefs.tts = { ...prefs.tts, maxLength };
   });
