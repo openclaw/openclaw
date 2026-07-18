@@ -94,7 +94,7 @@ const CLAUDE_CODE_BILLING_SYSTEM_BLOCK = `x-anthropic-billing-header: cc_version
 const ANTHROPIC_MESSAGES_ERROR_BODY_MAX_BYTES = 8 * 1024;
 const ANTHROPIC_MESSAGES_ERROR_BODY_MAX_CHARS = 400;
 const ANTHROPIC_MESSAGES_ERROR_BODY_READ_IDLE_TIMEOUT_MS = 10_000;
-const ANTHROPIC_MESSAGES_DEFAULT_MAX_TOKENS = 8_192;
+const ANTHROPIC_MESSAGES_DEFAULT_MAX_TOKENS = 4_096;
 const ANTHROPIC_MESSAGES_FALLBACK_CONTEXT_DIVISOR = 4;
 // Mirror the fetch sanitizer cap here because compatible routes such as Kimi
 // bypass that layer; without a parser-local guard, partial frames grow forever.
@@ -270,7 +270,7 @@ function resolveAnthropicMessagesMaxTokens(params: {
     return undefined;
   }
   // Anthropic requires max_tokens even when an optional custom-model row has no output cap.
-  // Reserve most of a known context window for input instead of claiming it all for output.
+  // Use a conservative compatibility baseline; higher model limits require explicit metadata.
   const contextWindow = resolvePositiveAnthropicTokenLimit(params.modelContextWindow);
   return contextWindow === undefined
     ? ANTHROPIC_MESSAGES_DEFAULT_MAX_TOKENS

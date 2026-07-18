@@ -1301,7 +1301,7 @@ describe("anthropic transport stream", () => {
     expect(result.stopReason).toBe("stop");
     expect(latestAnthropicRequest().payload).toMatchObject({
       model: "custom-model",
-      max_tokens: 8_192,
+      max_tokens: 4_096,
       stream: true,
     });
   });
