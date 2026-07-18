@@ -105,10 +105,16 @@ export class CustodianPage extends OpenClawLightDomElement {
     return JSON.stringify([gatewayUrl, token, password, bootstrapToken, this.lastHelloDeviceToken]);
   }
 
+  private currentSessionScopeKey(): string {
+    // Mode selects the welcome contract, so changing it starts a new session
+    // instead of carrying the previous route's transcript across modes.
+    return JSON.stringify([this.onboarding, this.connectionScopeKey()]);
+  }
+
   private synchronizeClient(): void {
     const snapshot = this.context.gateway.snapshot;
     const client = snapshot.connected ? snapshot.client : null;
-    const scopeKey = this.connectionScopeKey();
+    const scopeKey = this.currentSessionScopeKey();
     const scopeChanged = this.sessionScopeKey !== null && this.sessionScopeKey !== scopeKey;
     if (client === this.activeClient && !scopeChanged) {
       return;
