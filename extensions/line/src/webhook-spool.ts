@@ -236,7 +236,13 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
           onDeferred: () => {
             if (!acceptsDeferredClaims) {
               settleDeferredClaim();
-              void boundLifecycle.onAbandoned();
+              void Promise.resolve()
+                .then(() => boundLifecycle.onAbandoned())
+                .catch((error: unknown) => {
+                  options.runtime.error?.(
+                    danger(`line: failed to abandon a late webhook delivery: ${errorText(error)}`),
+                  );
+                });
               return;
             }
             if (!deferredClaimSettled) {
