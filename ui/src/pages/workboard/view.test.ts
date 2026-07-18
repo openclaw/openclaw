@@ -1425,7 +1425,7 @@ describe("renderWorkboard", () => {
         "Card details: Inspect drawer focus",
       );
       expect(container.querySelector("#workboard-card-detail-description")?.textContent).toContain(
-        "Start or link a session",
+        "Start or link a thread",
       );
       dialog.dispatchEvent(new Event("cancel", { bubbles: true, cancelable: true }));
       await nextFrame();

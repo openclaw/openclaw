@@ -38,7 +38,7 @@ function readUiCss(): string {
 function sessionsTableHtml() {
   const headers = ["", "Key", "Kind", "Status", "Updated", "Tokens", "Actions"];
   const overviewTiles = [
-    ["3", "Sessions"],
+    ["3", "Threads"],
     ["1", "Live"],
     ["1", "Unread"],
     ["123k", "Tokens"],

@@ -263,7 +263,7 @@ describe("sessions view", () => {
     const counts = Array.from(container.querySelectorAll(".session-group-row__count")).map((el) =>
       el.textContent?.trim(),
     );
-    expect(counts).toEqual(["2 sessions", "1 session"]);
+    expect(counts).toEqual(["2 threads", "1 thread"]);
     expect(container.querySelector(".data-table-pagination")).toBeNull();
   });
 
@@ -435,10 +435,10 @@ describe("sessions view", () => {
 
     expect(activeField?.querySelector(".session-filter-label")?.textContent).toBe("Updated within");
     expect(tooltips).toEqual([
-      "Loads sessions updated in the last 120 minutes.",
-      "Max sessions to load.",
-      "Include global sessions.",
-      "Include unknown sessions.",
+      "Loads threads updated in the last 120 minutes.",
+      "Max threads to load.",
+      "Include global threads.",
+      "Include unknown threads.",
     ]);
   });
 
@@ -1380,7 +1380,7 @@ describe("sessions view", () => {
       tile.querySelector(".sessions-overview__value")?.textContent?.trim(),
     ];
     expect(tiles.map(readTile)).toEqual([
-      ["Sessions", "2"],
+      ["Threads", "2"],
       ["Live", "1"],
       ["Unread", "1"],
       ["Tokens", "1.5k"],
