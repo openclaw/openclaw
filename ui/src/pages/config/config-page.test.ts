@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { type ReactiveController } from "lit";
+import type { ReactiveController } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
