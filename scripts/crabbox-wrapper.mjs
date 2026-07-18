@@ -940,12 +940,20 @@ function blacksmithTestboxPrivateKeyPath(id) {
 
 // Crabbox claims bind raw Testbox ids to one repo before remote execution.
 // Check the same sidecar so a dependency exit bug cannot make refusal green.
-function blacksmithTestboxClaimRepoRoot(id) {
+function blacksmithTestboxClaimPath(id) {
+  return resolve(blacksmithTestboxClaimsDir(), `${id}.json`);
+}
+
+function blacksmithTestboxClaimsDir() {
   const configuredStateRoot = process.env.XDG_STATE_HOME?.trim();
   const stateDir = configuredStateRoot
     ? resolve(configuredStateRoot, "crabbox")
     : resolve(crabboxConfigDir(), "state");
-  const claimPath = resolve(stateDir, "claims", `${id}.json`);
+  return resolve(stateDir, "claims");
+}
+
+function blacksmithTestboxClaimRepoRoot(id) {
+  const claimPath = blacksmithTestboxClaimPath(id);
   if (!pathExists(claimPath)) {
     return "";
   }
@@ -983,6 +991,45 @@ function enforceCrabboxOwnedBlacksmithLease(commandArgs) {
       `[crabbox] lease ${id} is claimed by repo ${claimRepoRoot}; use --reclaim to claim it for ${repoRoot}`,
     );
     process.exit(2);
+  }
+}
+
+function restoreTemporaryBlacksmithTestboxClaim(commandArgs) {
+  if (childCwd === repoRoot || commandArgs[0] !== "run") {
+    return;
+  }
+  const id = optionValue(commandArgs, "--id");
+  if (!id) {
+    return;
+  }
+  try {
+    const claimPath = blacksmithTestboxClaimPath(id);
+    if (!pathExists(claimPath)) {
+      return;
+    }
+    const original = readFileSync(claimPath, "utf8");
+    const claim = JSON.parse(original);
+    if (!claim || typeof claim !== "object" || claim.repoRoot !== childCwd) {
+      return;
+    }
+    claim.repoRoot = repoRoot;
+    const temporaryPath = `${claimPath}.tmp-${process.pid}-${Date.now()}`;
+    try {
+      writeFileSync(temporaryPath, `${JSON.stringify(claim)}\n`, {
+        encoding: "utf8",
+        mode: 0o600,
+      });
+      if (readFileSync(claimPath, "utf8") !== original) {
+        return;
+      }
+      renameSync(temporaryPath, claimPath);
+    } finally {
+      rmSync(temporaryPath, { force: true });
+    }
+  } catch (error) {
+    console.error(
+      `[crabbox] warning: failed to restore temporary Testbox claim: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
 }
 
@@ -3520,6 +3567,11 @@ function cleanupOnce() {
   stopFullCheckoutKeepalive();
   wsl2ScriptBootstrap.cleanup();
   scriptBootstrap.cleanup();
+  if (canonicalProvider === "blacksmith-testbox") {
+    // Crabbox stamps claims with its cwd. Delegated runs use a throwaway sync checkout,
+    // so restore the real repo or every later reuse needs --reclaim.
+    restoreTemporaryBlacksmithTestboxClaim(normalizedArgs);
+  }
   preserveTemporaryCrabboxRuns();
   cleanupChildCwd();
 }
