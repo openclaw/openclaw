@@ -169,9 +169,11 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
                   ? icons.chevronDown
                   : icons.chevronRight}</span
               >
-              <span class="sidebar-child-session-toggle__count"
-                >${session.childSessionKeys.length}</span
-              >
+              ${this.isSessionChildrenExpanded(session)
+                ? nothing
+                : html`<span class="sidebar-child-session-toggle__count"
+                    >${session.childSessionKeys.length}</span
+                  >`}
             </button>`
           : nothing}
         <span class="sidebar-recent-session__aside session-row-aside">
