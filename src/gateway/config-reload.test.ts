@@ -724,6 +724,9 @@ function createReloaderHarness(
   const onRestart = vi.fn(
     options.onRestart ?? ((_plan: GatewayReloadPlan, _nextConfig: OpenClawConfig) => {}),
   );
+  const onConfigCandidateCommitted = vi.fn(
+    (_info: { path: string; persistedHash: string | null; changedPaths: readonly string[] }) => {},
+  );
   let writeListener: ((event: ConfigWriteNotification) => void) | null = null;
   const subscribeToWrites = vi.fn((listener: (event: ConfigWriteNotification) => void) => {
     writeListener = listener;
@@ -762,6 +765,7 @@ function createReloaderHarness(
     onNoopConfigCommit,
     onHotReload,
     onRestart,
+    onConfigCandidateCommitted,
     ...(options.runTransaction ? { runTransaction: options.runTransaction } : {}),
     log,
     watchPath: "/tmp/openclaw.json",
@@ -776,6 +780,7 @@ function createReloaderHarness(
     onNoopConfigCommit,
     onHotReload,
     onRestart,
+    onConfigCandidateCommitted,
     log,
     reloader,
     emitWrite(event: ConfigWriteNotification) {
@@ -847,6 +852,61 @@ describe("startGatewayConfigReloader", () => {
       await harness.reloader.stop();
     },
   );
+
+  it("notifies change listeners for every accepted external edit, including runtime-skipped ones", async () => {
+    const initialConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+    };
+    // ui.* is a no-op reload class: the runtime snapshot refreshes without a
+    // hot reload or restart — exactly the agent-changes-theme case.
+    const nextConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      ui: { prefs: { themeMode: "dark" } },
+    };
+    const readSnapshot = vi.fn(async () =>
+      makeSnapshot({ config: nextConfig, hash: "external-prefs-write" }),
+    );
+    const harness = createReloaderHarness(readSnapshot, { initialConfig });
+
+    harness.watcher.emit("change");
+    await vi.runAllTimersAsync();
+
+    expect(harness.onConfigCandidateCommitted).toHaveBeenCalledOnce();
+    expect(harness.onConfigCandidateCommitted).toHaveBeenCalledWith({
+      path: "/tmp/openclaw.json",
+      persistedHash: "external-prefs-write",
+      changedPaths: ["ui"],
+    });
+
+    // A same-content echo must not re-notify: nothing changed.
+    harness.onConfigCandidateCommitted.mockClear();
+    harness.watcher.emit("change");
+    await vi.runAllTimersAsync();
+    expect(harness.onConfigCandidateCommitted).not.toHaveBeenCalled();
+    await harness.reloader.stop();
+  });
+
+  it("notifies change listeners when reload mode off skips the runtime apply", async () => {
+    const initialConfig: OpenClawConfig = {
+      gateway: { reload: { mode: "off", debounceMs: 0 } },
+    };
+    const nextConfig: OpenClawConfig = {
+      gateway: { reload: { mode: "off", debounceMs: 0 } },
+      ui: { prefs: { themeMode: "light" } },
+    };
+    const readSnapshot = vi.fn(async () =>
+      makeSnapshot({ config: nextConfig, hash: "mode-off-write" }),
+    );
+    const harness = createReloaderHarness(readSnapshot, { initialConfig });
+
+    harness.watcher.emit("change");
+    await vi.runAllTimersAsync();
+
+    expect(harness.onHotReload).not.toHaveBeenCalled();
+    expect(harness.onRestart).not.toHaveBeenCalled();
+    expect(harness.onConfigCandidateCommitted).toHaveBeenCalledOnce();
+    await harness.reloader.stop();
+  });
 
   it("notifies lifecycle owners when a persisted edit reverts to the current baseline", async () => {
     const initialConfig: OpenClawConfig = {

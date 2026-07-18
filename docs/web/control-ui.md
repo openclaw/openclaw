@@ -94,11 +94,11 @@ The Control UI fetches its runtime settings from `/control-ui-config.json`, reso
 
 ## Gateway host status
 
-Open **Settings** in Simple view to see the **Gateway Host** card with the Gateway machine, LAN address, operating system, runtime, uptime, CPU load, memory, and state-volume disk space. The card refreshes every 10 seconds while visible through the `system.info` Gateway RPC, which requires the `operator.read` scope. Older Gateways and connections without that scope omit the card.
+Open **Settings → General** to see the **Gateway Host** card with the Gateway machine, LAN address, operating system, runtime, uptime, CPU load, memory, and state-volume disk space. The card refreshes every 10 seconds while visible through the `system.info` Gateway RPC, which requires the `operator.read` scope. Older Gateways and connections without that scope omit the card.
 
 ## Language support
 
-The Control UI localizes itself on first load based on your browser locale. To override it later, open **Settings -> General -> Language** (the picker lives in the General quick-settings card, not under Appearance).
+The Control UI localizes itself on first load based on your browser locale. To override it later, open **Settings -> General -> Language** (the picker lives on the General page, not under Appearance).
 
 - Supported locales: `en`, `ar`, `de`, `es`, `fa`, `fr`, `hi`, `id`, `it`, `ja-JP`, `ko`, `nl`, `pl`, `pt-BR`, `ru`, `th`, `tr`, `uk`, `vi`, `zh-CN`, `zh-TW`
 - Non-English translations are lazy-loaded in the browser.

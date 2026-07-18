@@ -4023,6 +4023,39 @@ describe("chat model controls", () => {
     expect(onModelSelect).toHaveBeenCalledWith(modelOption?.dataset.chatModelOption, "main");
   });
 
+  it("marks the inherited default muted and resets an override from the provenance row", () => {
+    const { state } = createChatHeaderState({
+      model: null,
+      models: [
+        { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
+        { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
+      ],
+    });
+    const container = document.createElement("div");
+    render(renderChatModelControls(createChatModelControlsProps(state)), container);
+
+    expect(
+      container.querySelector(".chat-controls__model-provenance-value--inherit"),
+    ).not.toBeNull();
+    expect(container.querySelector("[data-chat-model-reset]")).toBeNull();
+
+    const onModelSelect = vi.fn(async () => true);
+    render(
+      renderChatModelControls({
+        ...createChatModelControlsProps(state),
+        modelOverrides: { main: "openai/gpt-5.4" },
+        onModelSelect,
+      }),
+      container,
+    );
+
+    expect(container.querySelector(".chat-controls__model-provenance-value--inherit")).toBeNull();
+    const reset = container.querySelector<HTMLButtonElement>("[data-chat-model-reset]");
+    expect(reset).toBeInstanceOf(HTMLButtonElement);
+    reset?.click();
+    expect(onModelSelect).toHaveBeenCalledWith("", "main");
+  });
+
   it("hides model choices for locked sessions while preserving reasoning and speed", () => {
     const { state } = createChatHeaderState({
       model: "gpt-5.5",

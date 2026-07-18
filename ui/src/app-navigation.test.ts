@@ -201,7 +201,7 @@ describe("subtitleForRoute", () => {
       plugins: "Install and manage optional capabilities.",
       "skill-workshop": "Review, refine, and apply proposals before they become live skills.",
       nodes: "Paired devices, pairing approvals, and exec bindings.",
-      config: "Edit openclaw.json.",
+      config: "Model defaults, language, and gateway host.",
       profile: "Your agent's stats, streaks, and life in the reef.",
       communications: "Channels, messages, and audio settings.",
       appearance: "Theme, UI, and setup wizard settings.",

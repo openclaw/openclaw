@@ -1038,6 +1038,9 @@ export const en: TranslationMap = {
       },
     },
   },
+  // Historical namespace from the pre-restructure "quick settings" page; its
+  // keys now serve General, Privacy & Security, Appearance, and Profile.
+  // Renaming would force retranslation of every key, so the name stays.
   quickSettings: {
     language: "Language",
     model: {
@@ -1198,6 +1201,7 @@ export const en: TranslationMap = {
       xl: "XL",
       xxl: "XXL",
     },
+    syncedHint: "Synced across your devices through the gateway.",
     notifications: {
       title: "Push notifications",
       hint: "Receive browser push notifications from your gateway.",
@@ -1671,7 +1675,7 @@ export const en: TranslationMap = {
     nodes: "Paired devices, pairing approvals, and exec bindings.",
     chat: "Gateway chat for quick interventions.",
     custodian: "System setup and care.",
-    config: "Edit openclaw.json.",
+    config: "Model defaults, language, and gateway host.",
     profile: "Your agent's stats, streaks, and life in the reef.",
     communications: "Channels, messages, and audio settings.",
     appearance: "Theme, UI, and setup wizard settings.",
