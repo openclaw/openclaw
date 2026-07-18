@@ -202,6 +202,27 @@ describe("ModelsConfigSchema", () => {
     expect(result.success).toBe(false);
   });
 
+  // zaiToolStream is a boolean per the TS type (packages/llm-core/src/types.ts:465:
+  // `zaiToolStream?: boolean`). Non-boolean values must fail schema validation.
+  it("rejects a non-boolean zaiToolStream value", () => {
+    const result = ModelsConfigSchema.safeParse({
+      providers: {
+        "my-proxy": {
+          baseUrl: "https://my-proxy.example.com/v1",
+          models: [
+            {
+              id: "m1",
+              name: "M1",
+              compat: { zaiToolStream: "not-a-boolean" },
+            },
+          ],
+        },
+      },
+    });
+
+    expect(result.success).toBe(false);
+  });
+
   it("accepts catalog-declared temperature compatibility", () => {
     const result = ModelsConfigSchema.safeParse({
       providers: {
