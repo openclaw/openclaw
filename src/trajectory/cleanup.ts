@@ -6,11 +6,14 @@ import { resolveSessionFilePath } from "../config/sessions/paths.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { readFileWindowFullySync } from "../infra/file-read.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { readRegularFileSync } from "../infra/regular-file.js";
 import {
   resolveTrajectoryFilePath,
   resolveTrajectoryPointerFilePath,
   safeTrajectorySessionFileName,
 } from "./paths.js";
+
+const TRAJECTORY_POINTER_MAX_BYTES = 1 * 1024 * 1024;
 
 type RemovedTrajectoryArtifact = {
   kind: "pointer" | "runtime";
@@ -56,7 +59,7 @@ function readTrajectoryPointerFile(
     return null;
   }
   try {
-    const parsed: unknown = JSON.parse(fs.readFileSync(pointerPath, "utf8"));
+    const parsed: unknown = JSON.parse(readRegularFileSync({ filePath: pointerPath, maxBytes: TRAJECTORY_POINTER_MAX_BYTES }));
     if (!isRecord(parsed)) {
       return null;
     }
