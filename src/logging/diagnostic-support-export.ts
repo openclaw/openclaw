@@ -8,6 +8,7 @@ import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
 import { buildConfigSchema } from "../config/schema.js";
 import { resolveHomeRelativePath } from "../infra/home-dir.js";
+import { readRegularFileSync } from "../infra/regular-file.js";
 import { VERSION } from "../version.js";
 import {
   readDiagnosticStabilityBundleFileSync,
@@ -38,6 +39,7 @@ const DIAGNOSTIC_SUPPORT_EXPORT_VERSION = 1;
 
 const DEFAULT_LOG_LIMIT = 5000;
 const DEFAULT_LOG_MAX_BYTES = 1_000_000;
+const DIAGNOSTIC_CONFIG_MAX_BYTES = 8 * 1024 * 1024;
 const SUPPORT_EXPORT_PREFIX = "openclaw-diagnostics-";
 const SUPPORT_EXPORT_SUFFIX = ".zip";
 type Awaitable<T> = T | Promise<T>;
@@ -343,7 +345,7 @@ function readConfigExport(options: {
   let stat: fs.Stats | undefined;
   try {
     stat = fs.statSync(options.configPath);
-    const parsed = parseConfigJson5(fs.readFileSync(options.configPath, "utf8"));
+    const parsed = parseConfigJson5(readRegularFileSync({ filePath: options.configPath, maxBytes: DIAGNOSTIC_CONFIG_MAX_BYTES }));
     if (!parsed.ok) {
       return {
         shape: configShapeReadFailure({
