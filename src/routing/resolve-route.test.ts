@@ -1,7 +1,10 @@
 // Route resolution tests cover resolving channel route targets from input.
 import { describe, expect, test, vi } from "vitest";
+import { resolveEffectiveToolPolicy } from "../agents/agent-tools.policy.js";
+import { isToolAllowedByPolicyName } from "../agents/tool-policy-match.js";
 import type { OpenClawConfig } from "../config/config.js";
 import * as routingBindings from "./bindings.js";
+import { collectChannelRouteTargets } from "./channel-route-targets.js";
 import {
   deriveLastRoutePolicy,
   resolveAgentRoute,
@@ -114,6 +117,269 @@ describe("resolveAgentRoute", () => {
       lastRoutePolicy: "main",
       matchedBy: "default",
     });
+  });
+
+  test("routes only the exact Feishu account and conversation to the purchase agent", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "main" }, { id: "purchase" }, { id: "sender-agent" }],
+      },
+      bindings: [
+        {
+          type: "route",
+          agentId: "sender-agent",
+          match: {
+            channel: "feishu",
+            accountId: "default",
+            peer: { kind: "direct", id: "ou_test_sender" },
+          },
+        },
+        {
+          type: "route",
+          agentId: "purchase",
+          match: {
+            channel: "feishu",
+            accountId: "default",
+            conversationId: "oc_test_purchase_chat",
+          },
+        },
+      ],
+    };
+
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "feishu",
+      accountId: "default",
+      conversationId: "oc_test_purchase_chat",
+      peer: { kind: "direct", id: "ou_test_sender" },
+    });
+
+    expectResolvedRoute(route, {
+      agentId: "purchase",
+      matchedBy: "binding.conversation",
+    });
+    expect(route.bindingTargetAgentId).toBe("purchase");
+
+    const otherAccountRoute = resolveAgentRoute({
+      cfg,
+      channel: "feishu",
+      accountId: "secondary",
+      conversationId: "oc_test_purchase_chat",
+      peer: { kind: "direct", id: "ou_test_sender" },
+    });
+    expectResolvedRoute(otherAccountRoute, {
+      agentId: "main",
+      matchedBy: "default",
+    });
+  });
+
+  test.each([
+    {
+      name: "the same sender uses another conversation",
+      conversationId: "oc_test_other_chat",
+    },
+    {
+      name: "the provider conversation id is missing",
+      conversationId: undefined,
+    },
+  ])("does not match the purchase route when $name", ({ conversationId }) => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "main" }, { id: "purchase" }, { id: "sender-agent" }],
+      },
+      bindings: [
+        {
+          type: "route",
+          agentId: "sender-agent",
+          match: {
+            channel: "feishu",
+            accountId: "default",
+            peer: { kind: "direct", id: "ou_test_sender" },
+          },
+        },
+        {
+          type: "route",
+          agentId: "purchase",
+          match: {
+            channel: "feishu",
+            accountId: "default",
+            conversationId: "oc_test_purchase_chat",
+          },
+        },
+      ],
+    };
+
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "feishu",
+      accountId: "default",
+      conversationId,
+      peer: { kind: "direct", id: "ou_test_sender" },
+    });
+
+    expectResolvedRoute(route, {
+      agentId: "sender-agent",
+      matchedBy: "binding.peer",
+    });
+  });
+
+  test("preserves the exact binding target when its agent is not configured", () => {
+    const cfg = {
+      agents: {
+        list: [{ id: "main" }],
+      },
+      bindings: [
+        {
+          type: "route",
+          agentId: "missing-purchase",
+          match: {
+            channel: "feishu",
+            accountId: "default",
+            conversationId: "oc_test_purchase_chat",
+          },
+        },
+      ],
+    } satisfies OpenClawConfig;
+
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "feishu",
+      accountId: "default",
+      conversationId: "oc_test_purchase_chat",
+      peer: { kind: "direct", id: "ou_test_sender" },
+    });
+
+    expectResolvedRoute(route, {
+      agentId: "main",
+      matchedBy: "binding.conversation",
+    });
+    expect(route.bindingTargetAgentId).toBe("missing-purchase");
+  });
+
+  test("keeps channel/account-only diagnostic probes compatible", () => {
+    const cfg: OpenClawConfig = {
+      channels: { feishu: {} },
+      agents: { list: [{ id: "main" }, { id: "purchase" }] },
+      bindings: [
+        {
+          type: "route",
+          agentId: "purchase",
+          match: {
+            channel: "feishu",
+            accountId: "default",
+            conversationId: "oc_test_purchase_chat",
+          },
+        },
+      ],
+    };
+
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "feishu",
+      accountId: "default",
+    });
+
+    expectResolvedRoute(route, {
+      agentId: "main",
+      matchedBy: "default",
+    });
+    expect(collectChannelRouteTargets(cfg)).toEqual([
+      { agentId: "main", channels: ["feishu"] },
+      { agentId: "purchase", channels: ["feishu"] },
+    ]);
+  });
+
+  test("does not apply the Feishu-only fail-closed setting to other channels", () => {
+    const cfg = {
+      channels: {
+        feishu: { dmRouteFailClosed: true },
+      },
+      agents: {
+        list: [{ id: "main" }, { id: "discord-agent" }],
+      },
+      bindings: [
+        {
+          type: "route",
+          agentId: "discord-agent",
+          match: {
+            channel: "discord",
+            peer: { kind: "direct", id: "discord-user" },
+          },
+        },
+      ],
+    } as unknown as OpenClawConfig;
+
+    const matchedRoute = resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      accountId: "default",
+      peer: { kind: "direct", id: "discord-user" },
+    });
+    expectResolvedRoute(matchedRoute, {
+      agentId: "discord-agent",
+      matchedBy: "binding.peer",
+    });
+
+    const fallbackRoute = resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      accountId: "default",
+      peer: { kind: "direct", id: "other-user" },
+    });
+    expectResolvedRoute(fallbackRoute, {
+      agentId: "main",
+      matchedBy: "default",
+    });
+  });
+
+  test("reuses the routed agent tool allowlist for the purchase route", () => {
+    const disallowedTools = [
+      "grasp_query_bill",
+      "grasp_query_inventory",
+      "grasp_query_customer",
+      "grasp_query_product",
+      "grasp_prepare_bill",
+      "grasp_entry_message",
+    ];
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [
+          { id: "main" },
+          {
+            id: "purchase",
+            tools: {
+              allow: ["grasp_prepare_purchase_order"],
+              deny: disallowedTools,
+            },
+          },
+        ],
+      },
+      bindings: [
+        {
+          type: "route",
+          agentId: "purchase",
+          match: {
+            channel: "feishu",
+            accountId: "default",
+            conversationId: "oc_test_purchase_chat",
+          },
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "feishu",
+      accountId: "default",
+      conversationId: "oc_test_purchase_chat",
+      peer: { kind: "direct", id: "ou_test_sender" },
+    });
+    const policy = resolveEffectiveToolPolicy({
+      config: cfg,
+      agentId: route.agentId,
+    }).agentPolicy;
+
+    expect(isToolAllowedByPolicyName("grasp_prepare_purchase_order", policy)).toBe(true);
+    expect(disallowedTools.every((tool) => !isToolAllowedByPolicyName(tool, policy))).toBe(true);
   });
 
   test("uses the configured main session key for shared direct routes", () => {

@@ -215,6 +215,7 @@ const TARGET_KEYS = [
   "bindings[].match",
   "bindings[].match.channel",
   "bindings[].match.accountId",
+  "bindings[].match.conversationId",
   "bindings[].match.peer",
   "bindings[].match.peer.kind",
   "bindings[].match.peer.id",

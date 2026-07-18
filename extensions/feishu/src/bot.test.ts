@@ -1,7 +1,7 @@
 // Feishu tests cover bot plugin behavior.
 import type * as ConversationRuntime from "openclaw/plugin-sdk/conversation-runtime";
 import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
-import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
+import { resolveAgentIdFromSessionKey, type ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveGroupSessionKey } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
@@ -121,6 +121,8 @@ function createConfiguredFeishuRoute(): NonNullable<ConfiguredBindingRoute> {
         agentId: "codex",
       },
     },
+    boundSessionKey: "agent:codex:acp:binding:feishu:default:abc123",
+    boundAgentId: "codex",
     route: {
       agentId: "codex",
       channel: "feishu",
@@ -150,6 +152,32 @@ function createBoundConversation(): NonNullable<BoundConversation> {
     },
     status: "active",
     boundAt: 0,
+  };
+}
+
+function createDirectBoundConversation(): NonNullable<BoundConversation> {
+  return {
+    bindingId: "default:ou_sender_1",
+    targetSessionKey: "agent:codex:acp:binding:feishu:default:feedface",
+    targetKind: "session",
+    conversation: {
+      channel: "feishu",
+      accountId: "default",
+      conversationId: "ou_sender_1",
+    },
+    status: "active",
+    boundAt: 0,
+  };
+}
+
+function createPluginOwnedDirectBoundConversation(): NonNullable<BoundConversation> {
+  return {
+    ...createDirectBoundConversation(),
+    metadata: {
+      pluginBindingOwner: "plugin",
+      pluginId: "test-plugin",
+      pluginRoot: "/tmp/test-plugin",
+    },
   };
 }
 
@@ -386,12 +414,17 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
         return { bindingRecord: null, route: params.route };
       }
       mockTouchBinding(bindingRecord.bindingId);
+      if (bindingRecord.metadata?.pluginBindingOwner === "plugin") {
+        return { bindingRecord, route: params.route };
+      }
+      const boundAgentId = resolveAgentIdFromSessionKey(boundSessionKey) || params.route.agentId;
       return {
         bindingRecord,
         boundSessionKey,
-        boundAgentId: params.route.agentId,
+        boundAgentId,
         route: {
           ...params.route,
+          agentId: boundAgentId,
           sessionKey: boundSessionKey,
           lastRoutePolicy: boundSessionKey === params.route.mainSessionKey ? "main" : "session",
           matchedBy: "binding.channel",
@@ -492,12 +525,22 @@ describe("handleFeishuMessage ACP routing", () => {
 
   it("ensures configured ACP routes for Feishu DMs", async () => {
     mockResolveConfiguredBindingRoute.mockReturnValue(createConfiguredFeishuRoute());
+    const channelRuntime = createFeishuBotRuntime().channel;
 
     await dispatchMessage({
       cfg: {
+        agents: { list: [{ id: "main" }, { id: "codex" }] },
         session: { mainKey: "main", scope: "per-sender" },
-        channels: { feishu: { enabled: true, allowFrom: ["ou_sender_1"], dmPolicy: "open" } },
+        channels: {
+          feishu: {
+            enabled: true,
+            allowFrom: ["ou_sender_1"],
+            dmPolicy: "open",
+            dmRouteFailClosed: true,
+          },
+        },
       },
+      channelRuntime,
       event: {
         sender: { sender_id: { open_id: "ou_sender_1" } },
         message: {
@@ -512,6 +555,364 @@ describe("handleFeishuMessage ACP routing", () => {
 
     expect(mockResolveConfiguredBindingRoute).toHaveBeenCalledTimes(1);
     expect(mockEnsureConfiguredBindingRouteReady).toHaveBeenCalledTimes(1);
+    expect(channelRuntime.inbound.run).toHaveBeenCalledTimes(1);
+    expect(channelRuntime.session.recordInboundSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:codex:acp:binding:feishu:default:abc123",
+      }),
+    );
+    expect(mockResolveAgentRoute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "default",
+        conversationId: "oc_dm",
+        peer: { kind: "direct", id: "ou_sender_1" },
+      }),
+    );
+    expect(mockResolveAgentRoute.mock.invocationCallOrder[0]).toBeLessThan(
+      mockResolveConfiguredBindingRoute.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER,
+    );
+  });
+
+  it("preserves runtime ACP conversation overlays before the Feishu fail-closed gate", async () => {
+    mockResolveBoundConversation.mockReturnValue(createDirectBoundConversation());
+    const channelRuntime = createFeishuBotRuntime().channel;
+
+    await dispatchMessage({
+      cfg: {
+        agents: { list: [{ id: "main" }, { id: "codex" }] },
+        channels: {
+          feishu: {
+            enabled: true,
+            allowFrom: ["ou_sender_1"],
+            dmPolicy: "open",
+            dmRouteFailClosed: true,
+          },
+        },
+      },
+      channelRuntime,
+      event: {
+        sender: { sender_id: { open_id: "ou_sender_1" } },
+        message: {
+          message_id: "msg-runtime-overlay",
+          chat_id: "oc_test_runtime_overlay",
+          chat_type: "p2p",
+          message_type: "text",
+          content: JSON.stringify({ text: "hello" }),
+        },
+      },
+    });
+
+    expect(mockResolveConfiguredBindingRoute).toHaveBeenCalledTimes(1);
+    expect(mockResolveBoundConversation).toHaveBeenCalledTimes(1);
+    expect(mockTouchBinding).toHaveBeenCalledWith("default:ou_sender_1");
+    expect(channelRuntime.inbound.run).toHaveBeenCalledTimes(1);
+    expect(channelRuntime.session.recordInboundSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:codex:acp:binding:feishu:default:feedface",
+      }),
+    );
+  });
+
+  it("rejects plugin-owned runtime bindings that do not route to an agent", async () => {
+    mockResolveBoundConversation.mockReturnValue(createPluginOwnedDirectBoundConversation());
+    const channelRuntime = createFeishuBotRuntime().channel;
+
+    const runtime = await dispatchMessage({
+      cfg: {
+        agents: { list: [{ id: "main" }] },
+        channels: {
+          feishu: {
+            enabled: true,
+            allowFrom: ["ou_sender_1"],
+            dmPolicy: "open",
+            dmRouteFailClosed: true,
+          },
+        },
+      },
+      channelRuntime,
+      event: {
+        sender: { sender_id: { open_id: "ou_sender_1" } },
+        message: {
+          message_id: "msg-plugin-owned-runtime-binding",
+          chat_id: "oc_test_plugin_owned_binding",
+          chat_type: "p2p",
+          message_type: "text",
+          content: JSON.stringify({ text: "hello" }),
+        },
+      },
+    });
+
+    expect(mockTouchBinding).toHaveBeenCalledWith("default:ou_sender_1");
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("no_route (unmatched)"));
+    expect(channelRuntime.inbound.run).not.toHaveBeenCalled();
+    expect(mockCreateFeishuReplyDispatcher).not.toHaveBeenCalled();
+    expect(mockSendMessageFeishu).not.toHaveBeenCalled();
+  });
+
+  it("dispatches an exact core conversation route when Feishu fail-closed is enabled", async () => {
+    mockResolveAgentRoute.mockReturnValue({
+      ...buildDefaultResolveRoute(),
+      agentId: "purchase",
+      bindingTargetAgentId: "purchase",
+      sessionKey: "agent:purchase:feishu:direct:ou_sender_1",
+      matchedBy: "binding.conversation",
+    });
+    const channelRuntime = createFeishuBotRuntime().channel;
+
+    await dispatchMessage({
+      cfg: {
+        agents: { list: [{ id: "main" }, { id: "purchase" }] },
+        channels: {
+          feishu: {
+            enabled: true,
+            allowFrom: ["ou_sender_1"],
+            dmPolicy: "open",
+            dmRouteFailClosed: true,
+          },
+        },
+      },
+      channelRuntime,
+      event: {
+        sender: { sender_id: { open_id: "ou_sender_1" } },
+        message: {
+          message_id: "msg-purchase-route",
+          chat_id: "oc_test_purchase_chat",
+          chat_type: "p2p",
+          message_type: "text",
+          content: JSON.stringify({ text: "purchase request" }),
+        },
+      },
+    });
+
+    expect(mockResolveAgentRoute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "default",
+        conversationId: "oc_test_purchase_chat",
+        peer: { kind: "direct", id: "ou_sender_1" },
+      }),
+    );
+    expect(channelRuntime.inbound.run).toHaveBeenCalledTimes(1);
+    expect(channelRuntime.session.recordInboundSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:purchase:feishu:direct:ou_sender_1",
+      }),
+    );
+  });
+
+  it("rejects an unmatched DM after configured and runtime overlays", async () => {
+    const channelRuntime = createFeishuBotRuntime().channel;
+
+    const runtime = await dispatchMessage({
+      cfg: {
+        agents: { list: [{ id: "main" }, { id: "purchase" }] },
+        channels: {
+          feishu: {
+            enabled: true,
+            allowFrom: ["ou_sender_1"],
+            dmPolicy: "open",
+            dmRouteFailClosed: true,
+          },
+        },
+      },
+      channelRuntime,
+      event: {
+        sender: { sender_id: { open_id: "ou_sender_1" } },
+        message: {
+          message_id: "msg-route-unmatched",
+          chat_id: "oc_test_unmatched_chat",
+          chat_type: "p2p",
+          message_type: "text",
+          content: JSON.stringify({ text: "purchase request" }),
+        },
+      },
+    });
+
+    expect(mockResolveConfiguredBindingRoute).toHaveBeenCalledTimes(1);
+    expect(mockResolveBoundConversation).toHaveBeenCalledTimes(1);
+    expect(mockMaybeCreateDynamicAgent).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("no_route (unmatched)"));
+    expect(channelRuntime.inbound.run).not.toHaveBeenCalled();
+    expect(mockCreateFeishuReplyDispatcher).not.toHaveBeenCalled();
+    expect(mockSendMessageFeishu).not.toHaveBeenCalled();
+  });
+
+  it("rejects an exact DM binding whose target agent is missing", async () => {
+    mockResolveAgentRoute.mockReturnValue({
+      ...buildDefaultResolveRoute(),
+      bindingTargetAgentId: "missing-purchase",
+      matchedBy: "binding.conversation",
+    });
+    const channelRuntime = createFeishuBotRuntime().channel;
+
+    const runtime = await dispatchMessage({
+      cfg: {
+        agents: { list: [{ id: "main" }] },
+        channels: {
+          feishu: {
+            enabled: true,
+            allowFrom: ["ou_sender_1"],
+            dmPolicy: "open",
+            dmRouteFailClosed: true,
+          },
+        },
+      },
+      channelRuntime,
+      event: {
+        sender: { sender_id: { open_id: "ou_sender_1" } },
+        message: {
+          message_id: "msg-route-missing-agent",
+          chat_id: "oc_test_purchase_chat",
+          chat_type: "p2p",
+          message_type: "text",
+          content: JSON.stringify({ text: "purchase request" }),
+        },
+      },
+    });
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("no_route (agent_not_found)"),
+    );
+    expect(channelRuntime.inbound.run).not.toHaveBeenCalled();
+    expect(mockCreateFeishuReplyDispatcher).not.toHaveBeenCalled();
+    expect(mockSendMessageFeishu).not.toHaveBeenCalled();
+  });
+
+  it("rejects a fail-closed DM when the provider conversation id is missing", async () => {
+    const channelRuntime = createFeishuBotRuntime().channel;
+
+    const runtime = await dispatchMessage({
+      cfg: {
+        agents: { list: [{ id: "main" }] },
+        channels: {
+          feishu: {
+            enabled: true,
+            allowFrom: ["ou_sender_1"],
+            dmPolicy: "open",
+            dmRouteFailClosed: true,
+          },
+        },
+      },
+      channelRuntime,
+      event: {
+        sender: { sender_id: { open_id: "ou_sender_1" } },
+        message: {
+          message_id: "msg-route-missing-conversation",
+          chat_id: "",
+          chat_type: "p2p",
+          message_type: "text",
+          content: JSON.stringify({ text: "purchase request" }),
+        },
+      },
+    });
+
+    expect(mockResolveConfiguredBindingRoute).toHaveBeenCalledTimes(1);
+    expect(mockResolveBoundConversation).toHaveBeenCalledTimes(1);
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("no_route (conversation_id_missing)"),
+    );
+    expect(channelRuntime.inbound.run).not.toHaveBeenCalled();
+    expect(mockCreateFeishuReplyDispatcher).not.toHaveBeenCalled();
+    expect(mockSendMessageFeishu).not.toHaveBeenCalled();
+  });
+
+  it("preserves the existing main fallback when Feishu fail-closed is disabled", async () => {
+    const channelRuntime = createFeishuBotRuntime().channel;
+
+    await dispatchMessage({
+      cfg: {
+        agents: { list: [{ id: "main" }] },
+        channels: {
+          feishu: {
+            enabled: true,
+            allowFrom: ["ou_sender_1"],
+            dmPolicy: "open",
+            dmRouteFailClosed: false,
+          },
+        },
+      },
+      channelRuntime,
+      event: {
+        sender: { sender_id: { open_id: "ou_sender_1" } },
+        message: {
+          message_id: "msg-route-legacy-fallback",
+          chat_id: "oc_test_other_chat",
+          chat_type: "p2p",
+          message_type: "text",
+          content: JSON.stringify({ text: "hello" }),
+        },
+      },
+    });
+
+    expect(mockMaybeCreateDynamicAgent).toHaveBeenCalledTimes(1);
+    expect(channelRuntime.inbound.run).toHaveBeenCalledTimes(1);
+    expect(channelRuntime.session.recordInboundSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:feishu:direct:ou_sender_1",
+      }),
+    );
+  });
+
+  it.each([
+    {
+      name: "enables rejection from the current config",
+      initialFailClosed: false,
+      currentFailClosed: true,
+      rejected: true,
+    },
+    {
+      name: "disables rejection from the current config",
+      initialFailClosed: true,
+      currentFailClosed: false,
+      rejected: false,
+    },
+  ])("$name instead of using the stale message snapshot", async (testCase) => {
+    const channelRuntime = createFeishuBotRuntime().channel;
+
+    const runtime = await dispatchMessage({
+      cfg: {
+        agents: { list: [{ id: "main" }] },
+        channels: {
+          feishu: {
+            enabled: true,
+            allowFrom: ["ou_sender_1"],
+            dmPolicy: "open",
+            dmRouteFailClosed: testCase.initialFailClosed,
+          },
+        },
+      },
+      currentCfg: {
+        agents: { list: [{ id: "main" }] },
+        channels: {
+          feishu: {
+            enabled: true,
+            allowFrom: ["ou_sender_1"],
+            dmPolicy: "open",
+            dmRouteFailClosed: testCase.currentFailClosed,
+          },
+        },
+      },
+      channelRuntime,
+      event: {
+        sender: { sender_id: { open_id: "ou_sender_1" } },
+        message: {
+          message_id: `msg-route-current-${testCase.currentFailClosed}`,
+          chat_id: "oc_test_current_config",
+          chat_type: "p2p",
+          message_type: "text",
+          content: JSON.stringify({ text: "hello" }),
+        },
+      },
+    });
+
+    if (testCase.rejected) {
+      expect(mockMaybeCreateDynamicAgent).not.toHaveBeenCalled();
+      expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("no_route (unmatched)"));
+      expect(channelRuntime.inbound.run).not.toHaveBeenCalled();
+    } else {
+      expect(mockMaybeCreateDynamicAgent).toHaveBeenCalledTimes(1);
+      expect(runtime.error).not.toHaveBeenCalled();
+      expect(channelRuntime.inbound.run).toHaveBeenCalledTimes(1);
+    }
   });
 
   it("surfaces configured ACP initialization failures to the Feishu conversation", async () => {

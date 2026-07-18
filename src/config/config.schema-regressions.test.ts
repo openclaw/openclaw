@@ -472,6 +472,44 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts exact conversation route bindings", () => {
+    const res = validateConfigObject({
+      agents: {
+        list: [{ id: "main" }, { id: "purchase" }],
+      },
+      bindings: [
+        {
+          type: "route",
+          agentId: "purchase",
+          match: {
+            channel: "feishu",
+            accountId: "default",
+            conversationId: "oc_test_purchase_chat",
+          },
+        },
+      ],
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects non-string conversation route identifiers", () => {
+    const res = validateConfigObject({
+      bindings: [
+        {
+          type: "route",
+          agentId: "purchase",
+          match: {
+            channel: "feishu",
+            conversationId: 12345,
+          },
+        },
+      ],
+    });
+
+    expect(res.ok).toBe(false);
+  });
+
   it("accepts bindings that match normalized agents.list ids", () => {
     const res = validateConfigObject({
       agents: {

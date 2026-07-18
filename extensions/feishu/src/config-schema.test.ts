@@ -200,6 +200,35 @@ describe("FeishuConfigSchema replyInThread", () => {
   });
 });
 
+describe("FeishuConfigSchema dmRouteFailClosed", () => {
+  it("defaults to disabled when omitted", () => {
+    const result = FeishuConfigSchema.parse({});
+    expect(result.dmRouteFailClosed ?? false).toBe(false);
+  });
+
+  it("accepts top-level and account-level booleans", () => {
+    const result = FeishuConfigSchema.parse({
+      dmRouteFailClosed: true,
+      accounts: {
+        purchase: { dmRouteFailClosed: false },
+      },
+    });
+
+    expect(result.dmRouteFailClosed).toBe(true);
+    expect(result.accounts?.purchase?.dmRouteFailClosed).toBe(false);
+  });
+
+  it("rejects non-boolean values", () => {
+    const topLevel = FeishuConfigSchema.safeParse({ dmRouteFailClosed: "true" });
+    const accountLevel = FeishuConfigSchema.safeParse({
+      accounts: { purchase: { dmRouteFailClosed: "false" } },
+    });
+
+    expect(topLevel.success).toBe(false);
+    expect(accountLevel.success).toBe(false);
+  });
+});
+
 describe("FeishuConfigSchema optimization flags", () => {
   it("defaults top-level typingIndicator and resolveSenderNames to true", () => {
     const result = FeishuConfigSchema.parse({});

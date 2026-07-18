@@ -415,6 +415,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "bindings[].match": "Binding Match Rule",
   "bindings[].match.channel": "Binding Channel",
   "bindings[].match.accountId": "Binding Account ID",
+  "bindings[].match.conversationId": "Binding Conversation ID",
   "bindings[].match.peer": "Binding Peer Match",
   "bindings[].match.peer.kind": "Binding Peer Kind",
   "bindings[].match.peer.id": "Binding Peer ID",

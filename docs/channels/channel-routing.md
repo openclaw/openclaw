@@ -81,17 +81,24 @@ does not create a route-only session entry just because a message was observed.
 
 Routing picks **one agent** for each inbound message:
 
-1. **Exact peer match** (`bindings` with `peer.kind` + `peer.id`).
-2. **Parent peer match** (thread inheritance).
-3. **Peer wildcard match** (`peer.id: "*"` for a peer kind).
-4. **Guild + roles match** (Discord) via `guildId` + `roles`.
-5. **Guild match** (Discord) via `guildId`.
-6. **Team match** (Slack) via `teamId`.
-7. **Account match** (`accountId` on the channel).
-8. **Channel match** (any account on that channel, `accountId: "*"`).
-9. **Default agent** (`agents.list[].default`, else first list entry, fallback to `main`).
+1. **Exact conversation match** (`bindings` with `conversationId`; route bindings only).
+2. **Exact peer match** (`bindings` with `peer.kind` + `peer.id`).
+3. **Parent peer match** (thread inheritance).
+4. **Peer wildcard match** (`peer.id: "*"` for a peer kind).
+5. **Guild + roles match** (Discord) via `guildId` + `roles`.
+6. **Guild match** (Discord) via `guildId`.
+7. **Team match** (Slack) via `teamId`.
+8. **Account match** (`accountId` on the channel).
+9. **Channel match** (any account on that channel, `accountId: "*"`).
+10. **Default agent** (`agents.list[].default`, else first list entry, fallback to `main`).
 
-When a binding includes multiple match fields (`peer`, `guildId`, `teamId`, `roles`), **all provided fields must match** for that binding to apply.
+When a binding includes multiple match fields (`conversationId`, `peer`, `guildId`, `teamId`, `roles`), **all provided fields must match** for that binding to apply. `conversationId` is an exact, literal provider conversation/chat ID; wildcard, regular-expression, and fuzzy matching are not supported.
+
+Unmatched routes keep the existing default-agent behavior. Channels may add a
+channel-owned post-routing policy; for example, Feishu can reject unmatched DMs
+after its configured and runtime conversation overlays by enabling
+[`channels.feishu.dmRouteFailClosed`](/channels/feishu#exact-fail-closed-dm-conversation-routing).
+That policy does not change routing for other channels.
 
 The matched agent determines which workspace and session store are used.
 

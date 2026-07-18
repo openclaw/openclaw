@@ -36,6 +36,10 @@ const BindingMatchSchema = z
   })
   .strict();
 
+const RouteBindingMatchSchema = BindingMatchSchema.extend({
+  conversationId: z.string().trim().min(1).optional(),
+});
+
 const BindingSessionSchema = z
   .object({
     dmScope: z
@@ -54,7 +58,7 @@ const RouteBindingSchema = z
     type: z.literal("route").optional(),
     agentId: z.string(),
     comment: z.string().optional(),
-    match: BindingMatchSchema,
+    match: RouteBindingMatchSchema,
     session: BindingSessionSchema.optional(),
   })
   .strict();

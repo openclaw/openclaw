@@ -671,6 +671,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Channel/provider identifier this binding applies to, such as `telegram`, `discord`, or a plugin channel ID. Use the configured channel key exactly so binding evaluation works reliably.",
   "bindings[].match.accountId":
     "Optional account selector for multi-account channel setups so the binding applies only to one identity. Use this when account scoping is required for the route and leave unset otherwise.",
+  "bindings[].match.conversationId":
+    "Optional exact provider conversation/chat ID for route bindings. Use it for literal, account-scoped selection; wildcards, regular expressions, and fuzzy matching are not supported.",
   "bindings[].match.peer":
     "Optional peer matcher for specific conversations including peer kind and peer id. Use this when only one direct/group/channel target should be pinned to an agent.",
   "bindings[].match.peer.kind":

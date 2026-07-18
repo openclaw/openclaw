@@ -417,10 +417,64 @@ Use `bindings` to route Feishu/Lark DMs or groups to different agents.
 Routing fields:
 
 - `match.channel`: `"feishu"`
+- `match.accountId`: exact configured Feishu account ID
+- `match.conversationId`: exact Feishu `chat_id` for a route binding
 - `match.peer.kind`: `"direct"` (DM) or `"group"` (group chat)
 - `match.peer.id`: user Open ID (`ou_xxx`) or group ID (`oc_xxx`)
 
 See [Get group/user IDs](#get-groupuser-ids) for lookup tips.
+
+#### Exact fail-closed DM conversation routing
+
+A Feishu DM has both a sender Open ID and a chat ID. Peer routing uses the
+sender (`open_id`), so it can match the same person across their DMs. Use
+`match.conversationId` when one exact DM `chat_id` must route to a specialized
+agent without matching another conversation from the same sender.
+
+```json5
+{
+  agents: {
+    list: [
+      { id: "main" },
+      {
+        id: "purchase",
+        tools: {
+          allow: ["grasp_prepare_purchase_order"],
+        },
+      },
+    ],
+  },
+  channels: {
+    feishu: {
+      dmRouteFailClosed: true,
+    },
+  },
+  bindings: [
+    {
+      type: "route",
+      agentId: "purchase",
+      match: {
+        channel: "feishu",
+        accountId: "default",
+        conversationId: "oc_test_purchase_chat",
+      },
+    },
+  ],
+}
+```
+
+Conversation matching is literal and account-scoped. It does not accept
+wildcards, regular expressions, or fuzzy IDs. `dmRouteFailClosed` defaults to
+`false` and is also available as a per-account override. When enabled, Feishu
+first applies the core route plus existing configured and runtime ACP
+conversation overlays. It then rejects a DM instead of entering `main` when no
+exact route matched, the provider chat ID is missing, or the selected binding
+targets an agent absent from `agents.list`.
+
+This setting only affects Feishu DMs. Omitting it (or setting it to `false`)
+preserves existing Feishu fallback behavior, and other channels are unchanged.
+It does not replace Feishu `dmPolicy` or sender allowlists; ingress access
+control still runs independently.
 
 ## Per-user agent isolation (Dynamic Agent Creation)
 
