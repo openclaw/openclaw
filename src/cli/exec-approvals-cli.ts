@@ -592,10 +592,13 @@ async function resolvePendingApproval(
   decisionInput: string,
   opts: ExecApprovalsCliOpts,
 ): Promise<void> {
-  // Trimming pasted input is safe: whitespace-bearing ids are never displayed
-  // raw (they render as id64 tokens, which contain no whitespace), so a trim
-  // here cannot retarget one pending approval onto another.
-  const rawId = requireTrimmedNonEmpty(idInput, "Approval id required.");
+  // Never trim the id: `pending --json` emits ids verbatim, and a
+  // whitespace-bearing id fed back through a script must target exactly that
+  // approval, not its trimmed sibling.
+  if (idInput.length === 0) {
+    exitWithError("Approval id required.");
+  }
+  const rawId = idInput;
   const decision = requireTrimmedNonEmpty(decisionInput, "Decision required.");
   if (!isApprovalDecision(decision)) {
     exitWithError(`Decision must be one of: ${APPROVAL_DECISIONS.join(", ")}.`);
