@@ -688,6 +688,10 @@ pub async fn quickchat_send(
     tauri::async_runtime::spawn_blocking(move || {
         // Strict resolution: a pinned agent that vanished must fail the send loudly
         // rather than reroute the message to the default agent behind a stale chip.
+        // Validation is deliberately cache-fresh only (60s TTL): the CLI is the
+        // authoritative rejector of unknown agents and its failure surfaces as a
+        // notification, so a per-send `agents list` exec would add hot-path latency
+        // without closing the removal race.
         let agent = state.selected_agent(&desktop, MissingSelection::Fail)?;
         spawn_agent_turn(app, desktop, message, agent)
     })
