@@ -1064,7 +1064,7 @@ async function verifyCodexChatImageProbe(params: {
 
 function randomBitmapTextToken(length = 6): string {
   // Keep glyphs visually distinct so this checks image transport, not tiny-font OCR quality.
-  const alphabet = "247AT";
+  const alphabet = "247";
   return [...randomBytes(length)].map((byte) => alphabet[byte % alphabet.length]).join("");
 }
 
