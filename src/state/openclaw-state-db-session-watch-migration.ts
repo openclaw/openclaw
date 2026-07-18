@@ -1,6 +1,12 @@
 // Schema-v4 migration for legacy ambient session-watch sentinel rows.
 import type { DatabaseSync } from "node:sqlite";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../infra/kysely-sync.js";
 import { ensureColumn, tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
+import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
   SESSION_WATCH_PROVENANCE_AMBIENT_GROUP,
   SESSION_WATCH_PROVENANCE_EXPLICIT,
@@ -12,31 +18,31 @@ const SESSION_WATCH_PROVENANCE_COLUMN_SQL =
   `provenance TEXT NOT NULL DEFAULT '${SESSION_WATCH_PROVENANCE_EXPLICIT}' ` +
   `CHECK (provenance IN ('${SESSION_WATCH_PROVENANCE_EXPLICIT}', '${SESSION_WATCH_PROVENANCE_AMBIENT_GROUP}'))`;
 
-type LegacyAmbientWatchMarkerRow = {
-  watcher_session_key: string;
-  target_session_key: string;
-  updated_at: number;
-};
+type SessionWatchCursorDatabase = Pick<OpenClawStateKyselyDatabase, "session_watch_cursors">;
 
-export type SessionWatchCursorProvenanceMigrationResult = {
+type SessionWatchCursorProvenanceMigrationResult = {
   addedColumn: boolean;
   migratedAmbientWatches: number;
   removedLegacySentinels: number;
 };
 
+function getSessionWatchCursorKysely(db: DatabaseSync) {
+  return getNodeSqliteKysely<SessionWatchCursorDatabase>(db);
+}
+
 function hasLegacyAmbientWatchSentinels(db: DatabaseSync): boolean {
   if (!tableExists(db, "session_watch_cursors")) {
     return false;
   }
-  return Boolean(
-    db
-      .prepare(
-        `SELECT 1
-         FROM session_watch_cursors
-         WHERE watcher_session_key LIKE ?
-         LIMIT 1`,
-      )
-      .get(`${LEGACY_AMBIENT_GROUP_WATCH_MARKER_PREFIX}%`),
+  return (
+    executeSqliteQueryTakeFirstSync(
+      db,
+      getSessionWatchCursorKysely(db)
+        .selectFrom("session_watch_cursors")
+        .select("watcher_session_key")
+        .where("watcher_session_key", "like", `${LEGACY_AMBIENT_GROUP_WATCH_MARKER_PREFIX}%`)
+        .limit(1),
+    ) !== undefined
   );
 }
 
@@ -74,36 +80,50 @@ export function migrateSessionWatchCursorProvenance(
     "session_watch_cursors",
     SESSION_WATCH_PROVENANCE_COLUMN_SQL,
   );
-  const legacyMarkers = db
-    .prepare(
-      `SELECT watcher_session_key, target_session_key, updated_at
-       FROM session_watch_cursors
-       WHERE watcher_session_key LIKE ?`,
-    )
-    .all(`${LEGACY_AMBIENT_GROUP_WATCH_MARKER_PREFIX}%`) as LegacyAmbientWatchMarkerRow[];
-  const promoteWatch = db.prepare(
-    `UPDATE session_watch_cursors
-     SET provenance = ?, updated_at = max(updated_at, ?)
-     WHERE watcher_session_key = ? AND target_session_key = ?`,
-  );
-  const deleteMarker = db.prepare(
-    `DELETE FROM session_watch_cursors
-     WHERE watcher_session_key = ? AND target_session_key = ?`,
-  );
+  const kysely = getSessionWatchCursorKysely(db);
+  const legacyMarkers = executeSqliteQuerySync(
+    db,
+    kysely
+      .selectFrom("session_watch_cursors")
+      .select(["watcher_session_key", "target_session_key", "updated_at"])
+      .where("watcher_session_key", "like", `${LEGACY_AMBIENT_GROUP_WATCH_MARKER_PREFIX}%`),
+  ).rows;
   let migratedAmbientWatches = 0;
   for (const marker of legacyMarkers) {
     const watcherSessionKey = decodeLegacyAmbientWatchMarkerKey(marker.watcher_session_key);
     if (watcherSessionKey) {
-      migratedAmbientWatches += Number(
-        promoteWatch.run(
-          SESSION_WATCH_PROVENANCE_AMBIENT_GROUP,
-          marker.updated_at,
-          watcherSessionKey,
-          marker.target_session_key,
-        ).changes,
+      // Startup and doctor callers hold BEGIN IMMEDIATE across this migration,
+      // so the paired timestamp read and update cannot lose a concurrent write.
+      const watch = executeSqliteQueryTakeFirstSync(
+        db,
+        kysely
+          .selectFrom("session_watch_cursors")
+          .select("updated_at")
+          .where("watcher_session_key", "=", watcherSessionKey)
+          .where("target_session_key", "=", marker.target_session_key),
       );
+      if (watch) {
+        const promoted = executeSqliteQuerySync(
+          db,
+          kysely
+            .updateTable("session_watch_cursors")
+            .set({
+              provenance: SESSION_WATCH_PROVENANCE_AMBIENT_GROUP,
+              updated_at: Math.max(Number(watch.updated_at), Number(marker.updated_at)),
+            })
+            .where("watcher_session_key", "=", watcherSessionKey)
+            .where("target_session_key", "=", marker.target_session_key),
+        );
+        migratedAmbientWatches += Number(promoted.numAffectedRows ?? 0n);
+      }
     }
-    deleteMarker.run(marker.watcher_session_key, marker.target_session_key);
+    executeSqliteQuerySync(
+      db,
+      kysely
+        .deleteFrom("session_watch_cursors")
+        .where("watcher_session_key", "=", marker.watcher_session_key)
+        .where("target_session_key", "=", marker.target_session_key),
+    );
   }
   return {
     addedColumn,
