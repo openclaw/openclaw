@@ -97,12 +97,17 @@ async function resultWithinMs(
   stream: { result(): Promise<unknown> },
   timeoutMs = 25,
 ): Promise<unknown> {
-  return await Promise.race([
-    stream.result(),
-    new Promise<symbol>((resolve) => {
-      setTimeout(() => resolve(unresolved), timeoutMs);
-    }),
-  ]);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      stream.result(),
+      new Promise<symbol>((resolve) => {
+        timer = setTimeout(() => resolve(unresolved), timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function settledResult(stream: { result(): Promise<unknown> }): Promise<unknown> {
@@ -604,19 +609,20 @@ describe("streamProxy", () => {
 
 describe("streamProxy loopback /api/stream", () => {
   let server: http.Server | undefined;
-  const dripTimers = new Set<ReturnType<typeof setTimeout>>();
+  const dripIntervals = new Set<ReturnType<typeof setInterval>>();
 
   afterEach(async () => {
-    for (const timer of dripTimers) {
-      clearTimeout(timer);
+    for (const interval of dripIntervals) {
+      clearInterval(interval);
     }
-    dripTimers.clear();
+    dripIntervals.clear();
     if (!server) {
       return;
     }
-    server.closeAllConnections?.();
+    const closed = once(server, "close");
     server.close();
-    await once(server, "close").catch(() => undefined);
+    server.closeAllConnections();
+    await closed;
     server = undefined;
   });
 
@@ -638,9 +644,13 @@ describe("streamProxy loopback /api/stream", () => {
           return;
         }
         res.write(`data: ${JSON.stringify({ type: "start" })}\n\n`);
-        const timer = setTimeout(drip, 20);
-        dripTimers.add(timer);
       };
+      const interval = setInterval(drip, 20);
+      dripIntervals.add(interval);
+      res.once("close", () => {
+        clearInterval(interval);
+        dripIntervals.delete(interval);
+      });
       drip();
     });
     server.on("clientError", (_err, socket) => socket.destroy());
@@ -664,18 +674,13 @@ describe("streamProxy loopback /api/stream", () => {
       signal: controller.signal,
     });
 
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 120);
-    });
-    const startedAt = performance.now();
+    const firstEvent = await stream[Symbol.asyncIterator]().next();
+    expect(firstEvent).toMatchObject({ done: false, value: { type: "start" } });
     controller.abort();
-    const result = await stream.result();
-    const elapsedMs = performance.now() - startedAt;
 
-    expect(result).toMatchObject({
+    expect(await resultWithinMs(stream, 1_500)).toMatchObject({
       stopReason: "aborted",
       errorMessage: "Request aborted by user",
     });
-    expect(elapsedMs).toBeLessThan(1_500);
   });
 });
