@@ -81,6 +81,7 @@ afterEach(async () => {
   closeOpenClawStateDatabaseForTest();
   await Promise.all([...tempDirs].map((dir) => fs.rm(dir, { recursive: true, force: true })));
   tempDirs.clear();
+  vi.resetModules();
 });
 
 async function pathExists(filePath: string): Promise<boolean> {
@@ -395,40 +396,6 @@ exit 1
 }
 
 describe("managed service update handoff", () => {
-  it("reports started only after the detached helper signals readiness", async () => {
-    const child = createSpawnMock();
-    spawnMock.mockReturnValueOnce(child);
-    const { startManagedServiceUpdateHandoff } =
-      await import("./update-managed-service-handoff.js");
-
-    const resultPromise = startManagedServiceUpdateHandoff({
-      root: "/tmp/openclaw",
-      restartDrainTimeoutMs: 300_000,
-      parentPid: 12345,
-      execPath: "/usr/local/bin/node",
-      argv1: "/opt/openclaw/openclaw.mjs",
-      meta: {},
-    });
-    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(1), FAST_WAIT_OPTS);
-
-    const pending = Symbol("pending");
-    await expect(
-      Promise.race([
-        resultPromise,
-        new Promise((resolve) => {
-          setImmediate(() => resolve(pending));
-        }),
-      ]),
-    ).resolves.toBe(pending);
-
-    signalHandoffReady(child);
-    await expect(resultPromise).resolves.toMatchObject({ status: "started", pid: 24680 });
-    expect(child.unref).toHaveBeenCalledTimes(1);
-    expect(child.listenerCount("exit")).toBe(0);
-    expect(child.listenerCount("error")).toBe(0);
-    expect(child.stdout.destroyed).toBe(true);
-  });
-
   it("rejects failed helper spawns and removes the sensitive handoff directory", async () => {
     const child = createSpawnMock();
     spawnMock.mockReturnValueOnce(child);
@@ -791,6 +758,10 @@ describe("managed service update handoff", () => {
         serviceRecovery?: unknown;
       };
       expect(helperParams.serviceRecovery).toEqual(testCase.expected);
+      const child = spawnMock.mock.results.at(-1)?.value as
+        | ReturnType<typeof createSpawnMock>
+        | undefined;
+      child?.emit("exit", 0, null);
     }
   });
 

@@ -27,11 +27,12 @@ CREATE TABLE IF NOT EXISTS diagnostic_events (
   event_key TEXT NOT NULL,
   payload_json TEXT NOT NULL,
   created_at INTEGER NOT NULL,
+  sequence INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (scope, event_key)
 ) STRICT;
 
-CREATE INDEX IF NOT EXISTS idx_diagnostic_events_scope_created
-  ON diagnostic_events(scope, created_at, event_key);
+CREATE INDEX IF NOT EXISTS idx_diagnostic_events_scope_sequence
+  ON diagnostic_events(scope, sequence, event_key);
 
 CREATE TABLE IF NOT EXISTS skill_usage (
   skill_file TEXT NOT NULL PRIMARY KEY,
@@ -168,15 +169,17 @@ CREATE TABLE IF NOT EXISTS session_state_heads (
 ) STRICT;
 
 -- Notifiable watcher identity is the bare session key, matching the process-local
--- system-event queue it feeds. Ambient group watches also own non-notifiable marker
--- rows. Other bare keys (session.scope="global") are ambiguous across agents and
--- excluded until watcher identity is agent-scoped end-to-end.
+-- system-event queue it feeds. Provenance distinguishes explicit immediate-wake
+-- watches from ambient queue-only group watches. Other bare keys
+-- (session.scope="global") are ambiguous across agents and excluded until watcher
+-- identity is agent-scoped end-to-end.
 CREATE TABLE IF NOT EXISTS session_watch_cursors (
   watcher_session_key TEXT NOT NULL,
   target_session_key TEXT NOT NULL,
   last_seen_sequence INTEGER NOT NULL DEFAULT 0,
   notified_sequence INTEGER NOT NULL DEFAULT 0,
   material_sequence INTEGER NOT NULL DEFAULT 0,
+  provenance TEXT NOT NULL DEFAULT 'explicit' CHECK (provenance IN ('explicit', 'ambient-group')),
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (watcher_session_key, target_session_key)
 ) STRICT;

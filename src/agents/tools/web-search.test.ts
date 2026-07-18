@@ -744,6 +744,48 @@ describe("web_search normalized output contract", () => {
     expect(normalized.kind).toBe("raw");
   });
 
+  it("degrades to a safe error instead of throwing on unserializable provider output", () => {
+    const circular: Record<string, unknown> = { error: "boom" };
+    circular.self = circular;
+    for (const result of [
+      { error: 10n as unknown } as Record<string, unknown>,
+      circular,
+      {
+        content: "answer",
+        toJSON: () => {
+          throw new Error("hostile toJSON");
+        },
+      } as Record<string, unknown>,
+    ]) {
+      const normalized = normalizeWebSearchOutput({
+        provider: "external-demo",
+        query: "q",
+        result,
+      });
+      expect(Value.Check(WebSearchOutputSchema, normalized)).toBe(true);
+      expect(normalized.provider).toBe("external-demo");
+    }
+  });
+
+  it("never lets exotic provider fields produce an out-of-contract result", () => {
+    // A getter that flips its value between reads once slipped an undefined url
+    // into a results row; the boundary snapshot freezes provider data first.
+    let reads = 0;
+    const result = {
+      results: [
+        {
+          title: "t",
+          get url() {
+            reads += 1;
+            return reads === 1 ? "https://example.com" : undefined;
+          },
+        },
+      ],
+    } as unknown as Record<string, unknown>;
+    const normalized = normalizeWebSearchOutput({ provider: "p", query: "q", result });
+    expect(Value.Check(WebSearchOutputSchema, normalized)).toBe(true);
+  });
+
   it("reports a declared error even when an empty results array is present", () => {
     const normalized = normalizeWebSearchOutput({
       provider: "external-demo",

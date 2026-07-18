@@ -520,6 +520,29 @@ export const SessionsCompactionRestoreParamsSchema = closedObject({
   checkpointId: NonEmptyString,
 });
 
+/** Repoints a session to the active-path state before one persisted user message. */
+export const SessionsRewindParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+  entryId: NonEmptyString,
+});
+
+/** Creates a new session from the active-path state before one persisted user message. */
+export const SessionsForkParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+  entryId: NonEmptyString,
+});
+
+export const SessionsRewindResultSchema = closedObject({
+  editorText: Type.Optional(Type.String()),
+});
+
+export const SessionsForkResultSchema = closedObject({
+  sessionKey: NonEmptyString,
+  editorText: Type.Optional(Type.String()),
+});
+
 /** List response for session compaction checkpoints. */
 export const SessionsCompactionListResultSchema = closedObject({
   ok: Type.Literal(true),
@@ -625,6 +648,10 @@ export type SessionsCompactionListResult = Static<typeof SessionsCompactionListR
 export type SessionsCompactionGetResult = Static<typeof SessionsCompactionGetResultSchema>;
 export type SessionsCompactionBranchResult = Static<typeof SessionsCompactionBranchResultSchema>;
 export type SessionsCompactionRestoreResult = Static<typeof SessionsCompactionRestoreResultSchema>;
+export type SessionsRewindParams = Static<typeof SessionsRewindParamsSchema>;
+export type SessionsForkParams = Static<typeof SessionsForkParamsSchema>;
+export type SessionsRewindResult = Static<typeof SessionsRewindResultSchema>;
+export type SessionsForkResult = Static<typeof SessionsForkResultSchema>;
 export type SessionWorktreeInfo = Static<typeof SessionWorktreeInfoSchema>;
 export type SessionsCreateParams = Static<typeof SessionsCreateParamsSchema>;
 export type SessionsCreateResult = Static<typeof SessionsCreateResultSchema>;

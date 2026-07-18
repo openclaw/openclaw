@@ -39,6 +39,8 @@ export type {
   SessionCompactionCheckpointEntryBuilder,
   SessionCompactionCheckpointForkedTranscript,
   SessionCompactionCheckpointMutationResult,
+  SessionMessageCutMutationParams,
+  SessionMessageCutMutationResult,
   SessionCompactionCheckpointTranscriptForkResult,
   SessionCompactionCheckpointTranscriptForker,
   SessionEntryCandidateAccessScope,
@@ -112,6 +114,7 @@ export {
   listSessionEntries,
   loadExactSessionEntry,
   loadSessionEntry,
+  loadSessionEntryReadOnly,
   openSessionEntryReadView,
   patchSessionEntry,
   patchSessionEntryTarget,
@@ -153,6 +156,7 @@ export {
   rollbackAgentHarnessSessionEntryLifecycle,
   rollbackPluginOwnedSessionEntryLifecycle,
 } from "./session-accessor.lifecycle.js";
+export { forkSessionAtMessage, rewindSessionToMessage } from "./session-accessor.message-cut.js";
 export {
   commitReplySessionInitialization,
   loadReplySessionInitializationSnapshot,

@@ -703,6 +703,7 @@ async function captureMeetLeaveScript() {
       throw new Error(`unexpected browser request path ${String(request.path)}`);
     }),
     config,
+    meetingSessionId: "session-1",
     meetingUrl: "https://meet.google.com/abc-defg-hij",
     tab: { targetId: "local-meet-tab", openedByPlugin: false },
   });
@@ -845,10 +846,23 @@ type TestBridgeProcess = {
   stdout?: PassThrough | null;
   stderr: PassThrough;
   killed: boolean;
+  exitCode: number | null;
+  signalCode: NodeJS.Signals | null;
   kill: ReturnType<typeof vi.fn>;
   on: EventEmitter["on"];
   emit: EventEmitter["emit"];
 };
+
+function installTestBridgeKill(proc: TestBridgeProcess): void {
+  proc.killed = false;
+  proc.exitCode = null;
+  proc.signalCode = null;
+  proc.kill = vi.fn((signal?: NodeJS.Signals) => {
+    proc.killed = true;
+    proc.signalCode = signal ?? "SIGTERM";
+    return true;
+  });
+}
 
 describe("google-meet plugin", () => {
   beforeEach(() => {
@@ -6237,6 +6251,7 @@ describe("google-meet plugin", () => {
         runtime: expect.any(Object),
         nodeId: "meet-node",
         config: expect.any(Object),
+        meetingSessionId: expect.any(String),
         meetingUrl: "https://meet.google.com/drf-ihtb-pad",
         tab: { targetId: "created-meet-tab-a", openedByPlugin: true },
       });
@@ -6244,6 +6259,7 @@ describe("google-meet plugin", () => {
         runtime: expect.any(Object),
         nodeId: "meet-node",
         config: expect.any(Object),
+        meetingSessionId: expect.any(String),
         meetingUrl: "https://meet.google.com/qwe-rtyu-iop",
         tab: { targetId: "created-meet-tab-b", openedByPlugin: true },
       });
@@ -6471,6 +6487,7 @@ describe("google-meet plugin", () => {
       expect(leaveChromeMeet).toHaveBeenCalledWith({
         runtime: expect.any(Object),
         config: expect.any(Object),
+        meetingSessionId: expect.any(String),
         meetingUrl: "https://meet.google.com/abc-defg-hij",
         tab: { targetId: "shared-meet-tab", openedByPlugin: true },
       });
@@ -6534,6 +6551,7 @@ describe("google-meet plugin", () => {
       expect(leaveChromeMeet).toHaveBeenCalledWith({
         runtime: expect.any(Object),
         config: expect.any(Object),
+        meetingSessionId: expect.any(String),
         meetingUrl: "https://meet.google.com/abc-defg-hij",
         tab: { targetId: "old-meet-tab", openedByPlugin: true },
       });
@@ -6595,6 +6613,7 @@ describe("google-meet plugin", () => {
       expect(leaveChromeMeet).toHaveBeenCalledWith({
         runtime: expect.any(Object),
         config: expect.any(Object),
+        meetingSessionId: expect.any(String),
         meetingUrl: "https://meet.google.com/abc-defg-hij",
         tab: { targetId: "retained-meet-tab", openedByPlugin: true },
       });
@@ -6664,12 +6683,14 @@ describe("google-meet plugin", () => {
       expect(leaveChromeMeet).toHaveBeenNthCalledWith(2, {
         runtime: expect.any(Object),
         config: expect.any(Object),
+        meetingSessionId: expect.any(String),
         meetingUrl: "https://meet.google.com/abc-defg-hij",
         tab: { targetId: "replacement-meet-tab", openedByPlugin: true },
       });
       expect(leaveChromeMeet).toHaveBeenLastCalledWith({
         runtime: expect.any(Object),
         config: expect.any(Object),
+        meetingSessionId: expect.any(String),
         meetingUrl: "https://meet.google.com/abc-defg-hij",
         tab: { targetId: "retained-meet-tab", openedByPlugin: true },
       });
@@ -6853,6 +6874,7 @@ describe("google-meet plugin", () => {
       expect(leaveChromeMeet).toHaveBeenCalledWith({
         runtime: expect.any(Object),
         config: expect.any(Object),
+        meetingSessionId: expect.any(String),
         meetingUrl: "https://meet.google.com/abc-defg-hij",
         tab: { targetId: "meet-tab", openedByPlugin: true },
       });
@@ -7274,11 +7296,7 @@ describe("google-meet plugin", () => {
       proc.stdin = stdio.stdin;
       proc.stdout = stdio.stdout;
       proc.stderr = new PassThrough();
-      proc.killed = false;
-      proc.kill = vi.fn(() => {
-        proc.killed = true;
-        return true;
-      });
+      installTestBridgeKill(proc);
       return proc;
     };
     const outputStdin = new Writable({
@@ -7521,11 +7539,7 @@ describe("google-meet plugin", () => {
       proc.stdin = stdio.stdin;
       proc.stdout = stdio.stdout;
       proc.stderr = stdio.stderr;
-      proc.killed = false;
-      proc.kill = vi.fn(() => {
-        proc.killed = true;
-        return true;
-      });
+      installTestBridgeKill(proc);
       return proc;
     };
     const outputStdin = new Writable({
@@ -7650,11 +7664,7 @@ describe("google-meet plugin", () => {
       proc.stdin = stdio.stdin;
       proc.stdout = stdio.stdout;
       proc.stderr = new PassThrough();
-      proc.killed = false;
-      proc.kill = vi.fn(() => {
-        proc.killed = true;
-        return true;
-      });
+      installTestBridgeKill(proc);
       return proc;
     };
     const outputStdin = new Writable({
@@ -7872,11 +7882,7 @@ describe("google-meet plugin", () => {
       proc.stdin = stdio.stdin;
       proc.stdout = stdio.stdout;
       proc.stderr = new PassThrough();
-      proc.killed = false;
-      proc.kill = vi.fn(() => {
-        proc.killed = true;
-        return true;
-      });
+      installTestBridgeKill(proc);
       return proc;
     };
     const outputProcess = makeProcess({
@@ -7953,11 +7959,7 @@ describe("google-meet plugin", () => {
         proc.stdin = stdio.stdin;
         proc.stdout = stdio.stdout;
         proc.stderr = new PassThrough();
-        proc.killed = false;
-        proc.kill = vi.fn(() => {
-          proc.killed = true;
-          return true;
-        });
+        installTestBridgeKill(proc);
         return proc;
       };
       const outputProcess = makeProcess({
@@ -8169,11 +8171,7 @@ describe("google-meet plugin", () => {
       proc.stdin = stdio.stdin;
       proc.stdout = stdio.stdout;
       proc.stderr = new PassThrough();
-      proc.killed = false;
-      proc.kill = vi.fn(() => {
-        proc.killed = true;
-        return true;
-      });
+      installTestBridgeKill(proc);
       return proc;
     };
     const outputProcess = makeProcess({ stdin: outputStdin, stdout: null });

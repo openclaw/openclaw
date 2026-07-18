@@ -44,14 +44,16 @@ struct MacGatewayChatTransportMappingTests {
             agentID: "reviewer",
             patch: OpenClawChatSessionSettingsPatch(
                 model: .some("openai/gpt-5.6-sol"),
-                thinkingLevel: .some("high"),
+                thinkingLevel: .some(nil),
+                fastMode: .some(.on),
                 verboseLevel: .some("full")))
 
         #expect(request.method == "sessions.patch")
         #expect(request.params["key"]?.value as? String == "global")
         #expect(request.params["agentId"]?.value as? String == "reviewer")
         #expect(request.params["model"]?.value as? String == "openai/gpt-5.6-sol")
-        #expect(request.params["thinkingLevel"]?.value as? String == "high")
+        #expect(request.params["thinkingLevel"]?.value is NSNull)
+        #expect(request.params["fastMode"]?.value as? Bool == true)
         #expect(request.params["verboseLevel"]?.value as? String == "full")
     }
 

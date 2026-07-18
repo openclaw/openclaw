@@ -587,6 +587,9 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
         <div>
           <div class="page-title">${titleForRoute("model-providers")}</div>
         </div>
+        <button class="btn" @click=${() => this.context.navigate("model-setup")}>
+          ${t("modelSetup.heading")}
+        </button>
       </section>
       ${renderSettingsWorkspace(body)}
     `;

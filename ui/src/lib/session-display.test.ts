@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import {
   resolveChannelSessionInfo,
@@ -75,6 +76,34 @@ describe("resolveSessionDisplayName", () => {
     expect(resolveSessionDisplayName("agent:main:node-fleet-4de003fbff138fcb9239c9378b2e")).toBe(
       "node-fleet-…8b2e",
     );
+  });
+
+  it("can omit only the subagent prefix while preserving its untitled fallback", () => {
+    const key = "agent:main:subagent:worker";
+    expect(resolveSessionDisplayName(key, { label: "Research sources" })).toBe(
+      "Subagent: Research sources",
+    );
+    expect(
+      resolveSessionDisplayName(
+        key,
+        { label: "Subagent: Research sources" },
+        {
+          includeSubagentPrefix: false,
+        },
+      ),
+    ).toBe("Research sources");
+    expect(resolveSessionDisplayName(key, undefined, { includeSubagentPrefix: false })).toBe(
+      "Subagent:",
+    );
+    expect(
+      resolveSessionDisplayName(
+        "agent:main:cron:daily",
+        { label: "Daily" },
+        {
+          includeSubagentPrefix: false,
+        },
+      ),
+    ).toBe("Cron: Daily");
   });
 });
 

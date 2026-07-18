@@ -518,6 +518,9 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
   const { detectLegacyStateMigrations, runLegacyStateMigrations } =
     await import("../commands/doctor-state-migrations.js");
   const { note } = await loadNoteModule();
+  // Settle retired-plugin state cleanup (may replace ctx.cfg) before the
+  // legacy-state detect/migrate pair reads the config.
+  await runCoreContributionHealthRepair(ctx, ["core/doctor/removed-workspaces-state"]);
   const legacyState = await detectLegacyStateMigrations({
     cfg: ctx.cfg,
     doctorOnlyStateMigrations: true,
@@ -1604,7 +1607,7 @@ function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:legacy-state",
       label: "Legacy state",
-      healthCheckIds: ["core/doctor/legacy-state"],
+      healthCheckIds: ["core/doctor/legacy-state", "core/doctor/removed-workspaces-state"],
       run: runLegacyStateHealth,
     }),
     createDoctorHealthContribution({

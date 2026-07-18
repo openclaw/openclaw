@@ -12,9 +12,10 @@ import { applicationContext, type ApplicationContext } from "../../app/context.t
 import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
 import { fetchSessionMenuWork } from "../../components/session-menu-work.ts";
-import "../../components/session-menu.ts";
 import type { SessionMenuAction, SessionMenuWork } from "../../components/session-menu.ts";
+import "../../components/session-menu.ts";
 import { isStoppableCloudWorkerPlacement } from "../../components/session-row-badges.ts";
+import { renderSessionsHubTabs } from "../../components/sessions-hub-tabs.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { openEditor } from "../../lib/editor-links.ts";
@@ -35,6 +36,7 @@ import {
   resolveUiConfiguredMainKey,
 } from "../../lib/sessions/session-key.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
+import { showToast } from "../../lib/toast.ts";
 import { captureSessionToWorkboard } from "../../lib/workboard/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
@@ -65,6 +67,8 @@ type SessionsPageRequestScope = {
   workboard: ApplicationContext["workboard"];
   client: GatewayBrowserClient;
 };
+
+type SessionsPageMutationResult = "completed" | "failed" | "stale";
 
 class SessionsPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
@@ -592,6 +596,22 @@ class SessionsPage extends OpenClawLightDomElement {
     void this.loadSessions();
   }
 
+  private updateArchivedView(showArchived: boolean) {
+    const context = this.context;
+    if (showArchived === this.showArchived || !context) {
+      return;
+    }
+    this.showArchived = showArchived;
+    this.page = 0;
+    this.selectedKeys = new Set();
+    this.deepLinkSessionKey = null;
+    // Route navigation refetches (showArchived is in loaderDeps); mask the old
+    // view's rows until the new result applies via applyRouteData.
+    this.loading = true;
+    this.error = null;
+    context.navigate("sessions", showArchived ? { search: "?showArchived=1" } : undefined);
+  }
+
   private async deleteSelected() {
     const keys = [...this.selectedKeys];
     if (keys.length === 0 || this.loading || this.sessionMutationPending) {
@@ -607,7 +627,10 @@ class SessionsPage extends OpenClawLightDomElement {
     await this.deleteSessions(keys);
   }
 
-  private async deleteSessions(keys: string[]) {
+  private async deleteSessions(
+    keys: string[],
+    options: { deleteTranscript?: boolean; archivedOnly?: boolean } = {},
+  ) {
     if (keys.length === 0 || this.loading || this.sessionMutationPending) {
       return;
     }
@@ -621,6 +644,7 @@ class SessionsPage extends OpenClawLightDomElement {
         keys.map((key) => ({
           key,
           agentId: this.sessionAgentId(key, scope.context),
+          ...options,
         })),
       );
       if (!this.isRequestScopeCurrent(scope)) {
@@ -687,6 +711,58 @@ class SessionsPage extends OpenClawLightDomElement {
         this.sessionMutationPending = false;
       }
     }
+  }
+
+  private async deleteAllArchived() {
+    const scope = this.captureRequestScope();
+    if (!scope || this.loading || this.sessionMutationPending) {
+      return;
+    }
+    // The rendered list is bounded by the page's limit filter; re-enumerate the
+    // full archived set so "all archived" means all of them. Any abnormal page
+    // (failure, non-advancing offset) aborts: deleting a partial enumeration
+    // would silently violate the "all archived" contract.
+    const keys: string[] = [];
+    try {
+      // One options snapshot for every page: filter edits made while pages load
+      // must not mix enumeration populations.
+      const listOptions = this.sessionListOptions();
+      let offset = 0;
+      for (;;) {
+        const listed = await scope.sessions.list({ ...listOptions, limit: 1000, offset });
+        if (!this.isRequestScopeCurrent(scope)) {
+          return;
+        }
+        if (!listed) {
+          this.error = scope.sessions.state.error;
+          return;
+        }
+        for (const row of listed.sessions) {
+          if (row.archived === true) {
+            keys.push(row.key);
+          }
+        }
+        if (listed.hasMore !== true) {
+          break;
+        }
+        if (typeof listed.nextOffset !== "number" || listed.nextOffset <= offset) {
+          throw new Error("archived session enumeration did not advance");
+        }
+        offset = listed.nextOffset;
+      }
+    } catch (error) {
+      if (this.isRequestScopeCurrent(scope)) {
+        this.error = String(error);
+      }
+      return;
+    }
+    if (
+      keys.length === 0 ||
+      !window.confirm(t("sessionsView.deleteAllArchivedConfirm", { count: String(keys.length) }))
+    ) {
+      return;
+    }
+    await this.deleteSessions(keys, { deleteTranscript: true, archivedOnly: true });
   }
 
   private async deleteSessionFromMenu(row: GatewaySessionRow) {
@@ -798,21 +874,24 @@ class SessionsPage extends OpenClawLightDomElement {
     void this.patchSession(row.key, { label: normalizeOptionalString(value) ?? null });
   }
 
-  private async patchSession(key: string, patch: Parameters<SessionsProps["onPatch"]>[1]) {
-    const scope = this.captureRequestScope();
+  private async patchSession(
+    key: string,
+    patch: Parameters<SessionsProps["onPatch"]>[1],
+    scope: SessionsPageRequestScope | null = this.captureRequestScope(),
+  ): Promise<SessionsPageMutationResult> {
     if (!scope) {
-      return;
+      return "stale";
     }
     try {
       const patched = await scope.sessions.patch(key, patch, {
         agentId: this.sessionAgentId(key, scope.context),
       });
       if (!this.isRequestScopeCurrent(scope)) {
-        return;
+        return "stale";
       }
       if (!patched) {
         this.error = scope.sessions.state.error;
-        return;
+        return "failed";
       }
       const selectedKeys = new Set(this.selectedKeys);
       selectedKeys.delete(key);
@@ -834,11 +913,45 @@ class SessionsPage extends OpenClawLightDomElement {
           }),
         );
       }
+      return "completed";
     } catch (error) {
       if (this.isRequestScopeCurrent(scope)) {
         this.error = String(error);
+        return "failed";
       }
+      return "stale";
     }
+  }
+
+  private async archiveSessionWithUndo(row: GatewaySessionRow) {
+    const scope = this.captureRequestScope();
+    if (!scope) {
+      return;
+    }
+    const wasActive = areUiSessionKeysEquivalent(row.key, scope.gateway.snapshot.sessionKey);
+    const result = await this.patchSession(row.key, { archived: true }, scope);
+    if (result !== "completed" || !this.isRequestScopeCurrent(scope)) {
+      return;
+    }
+    showToast({
+      message: t("sessionsView.sessionArchived"),
+      actionLabel: t("common.undo"),
+      onAction: () => {
+        void (async () => {
+          if (!this.isRequestScopeCurrent(scope)) {
+            return;
+          }
+          const restored = await this.patchSession(
+            row.key,
+            { archived: false, ...(row.pinned === true ? { pinned: true } : {}) },
+            scope,
+          );
+          if (restored === "completed" && wasActive && this.isRequestScopeCurrent(scope)) {
+            scope.gateway.setSessionKey(row.key);
+          }
+        })();
+      },
+    });
   }
 
   private async forkSession(key: string) {
@@ -1124,7 +1237,11 @@ class SessionsPage extends OpenClawLightDomElement {
               this.requestNewCategory(row.key);
               break;
             case "toggle-archived":
-              void this.patchSession(row.key, { archived: row.archived !== true });
+              if (row.archived === true) {
+                void this.patchSession(row.key, { archived: false });
+              } else {
+                void this.archiveSessionWithUndo(row);
+              }
               break;
             case "stop-cloud-worker":
               void this.stopCloudWorker(row);
@@ -1148,6 +1265,14 @@ class SessionsPage extends OpenClawLightDomElement {
         <div>
           <div class="page-title">${titleForRoute("sessions")}</div>
         </div>
+        ${renderSessionsHubTabs({
+          active: "sessions",
+          onSelect: (tab) => {
+            if (tab !== "sessions") {
+              context.navigate(tab);
+            }
+          },
+        })}
         ${renderAgentScopeControl({
           agents: context.agents.state.agentsList?.agents ?? [],
           selection: context.agentSelection,
@@ -1222,6 +1347,8 @@ class SessionsPage extends OpenClawLightDomElement {
             this.page = 0;
           },
           onRefresh: () => void this.loadSessions(),
+          onArchivedViewChange: (showArchived) => this.updateArchivedView(showArchived),
+          onDeleteAllArchived: () => void this.deleteAllArchived(),
           onPatch: (key, patch) => void this.patchSession(key, patch),
           onToggleSelect: (key) => {
             const next = new Set(this.selectedKeys);
@@ -1256,6 +1383,7 @@ class SessionsPage extends OpenClawLightDomElement {
           onRestoreCheckpoint: (sessionKey, checkpointId) =>
             void this.restoreCheckpoint(sessionKey, checkpointId),
         }),
+        { id: "sessions-hub-panel" },
       )}
       ${this.renderSessionMenu()}
     `;

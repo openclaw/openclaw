@@ -1,5 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
-import { requestSessionCreate } from "./create.ts";
+import { requestSessionCreate, resolveSessionCreateParams } from "./create.ts";
+
+describe("resolveSessionCreateParams", () => {
+  it("marks a Control UI child as parallel to its selected parent", () => {
+    expect(resolveSessionCreateParams(" agent:main:signal:direct:42 ", " main ")).toEqual({
+      agentId: "main",
+      parentSessionKey: "agent:main:signal:direct:42",
+      emitCommandHooks: true,
+      succeedsParent: false,
+    });
+  });
+});
 
 describe("requestSessionCreate", () => {
   it("returns the started initial-run outcome", async () => {

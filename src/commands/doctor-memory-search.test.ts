@@ -483,6 +483,7 @@ describe("noteMemorySearchHealth", () => {
       remote: {},
     });
     const cfgWithLancedb = {
+      session: { dmScope: "per-peer" },
       plugins: {
         slots: { memory: "memory-lancedb" },
         entries: { "memory-lancedb": { enabled: true, config: { dbPath: ".openclaw/memory" } } },
@@ -504,6 +505,7 @@ describe("noteMemorySearchHealth", () => {
       remote: {},
     });
     const cfgWithSlotOnly = {
+      session: { dmScope: "per-peer" },
       plugins: { slots: { memory: "memory-lancedb" } },
     } as unknown as OpenClawConfig;
 
@@ -521,6 +523,7 @@ describe("noteMemorySearchHealth", () => {
       remote: {},
     });
     const cfgWithDisabledLancedb = {
+      session: { dmScope: "per-peer" },
       plugins: {
         slots: { memory: "memory-lancedb" },
         entries: { "memory-lancedb": { enabled: false } },
@@ -541,6 +544,7 @@ describe("noteMemorySearchHealth", () => {
       remote: {},
     });
     const cfgWithPlaceholderEntry = {
+      session: { dmScope: "per-peer" },
       plugins: {
         slots: { memory: "memory-lancedb" },
         entries: { "memory-lancedb": {} },
@@ -604,6 +608,196 @@ describe("noteMemorySearchHealth", () => {
     expect(checkQmdBinaryAvailability).not.toHaveBeenCalled();
     expect(note).toHaveBeenCalledTimes(1);
     expect(firstNoteMessage()).toContain("No active memory plugin is registered");
+  });
+
+  it("does not warn about conversation recall when the setting is off", async () => {
+    const qmdCfg = {
+      memory: { backend: "qmd", qmd: { command: "qmd" } },
+      agents: { list: [{ id: "personal", memorySearch: { rememberAcrossConversations: false } }] },
+    } as OpenClawConfig;
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "auto",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(qmdCfg, { skipQmdBinaryProbe: true });
+
+    expect(note).not.toHaveBeenCalled();
+  });
+
+  it("does not warn when conversation recall and Active Memory are available", async () => {
+    const qmdCfg = {
+      memory: { backend: "qmd", qmd: { command: "qmd" } },
+      agents: { list: [{ id: "personal", memorySearch: { rememberAcrossConversations: true } }] },
+      plugins: { entries: { "active-memory": { enabled: true } } },
+    } as OpenClawConfig;
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "auto",
+      local: {},
+      remote: {},
+      rememberAcrossConversations: true,
+      sources: ["memory", "sessions"],
+    });
+
+    await noteMemorySearchHealth(qmdCfg, { skipQmdBinaryProbe: true });
+
+    expect(note).not.toHaveBeenCalled();
+  });
+
+  it("does not treat Lossless Claw's context-engine slot as a memory-slot conflict", async () => {
+    const qmdCfg = {
+      memory: { backend: "qmd", qmd: { command: "qmd" } },
+      agents: { list: [{ id: "personal", memorySearch: { rememberAcrossConversations: true } }] },
+      plugins: {
+        slots: { contextEngine: "lossless-claw" },
+        entries: {
+          "active-memory": { enabled: true },
+          "lossless-claw": { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "auto",
+      local: {},
+      remote: {},
+      rememberAcrossConversations: true,
+      sources: ["memory", "sessions"],
+    });
+
+    await noteMemorySearchHealth(qmdCfg, { skipQmdBinaryProbe: true });
+
+    expect(note).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      memoryProvider: "memory-lancedb",
+      activeMemoryConfig: undefined,
+    },
+    {
+      memoryProvider: "custom-memory",
+      activeMemoryConfig: { toolsAllow: ["memory_search"] },
+    },
+  ])(
+    "warns when the $memoryProvider provider lacks protected transcript recall",
+    async ({ memoryProvider, activeMemoryConfig }) => {
+      const qmdCfg = {
+        memory: { backend: "qmd", qmd: { command: "qmd" } },
+        agents: {
+          list: [{ id: "personal", memorySearch: { rememberAcrossConversations: true } }],
+        },
+        plugins: {
+          slots: { memory: memoryProvider },
+          entries: {
+            "active-memory": {
+              enabled: true,
+              ...(activeMemoryConfig ? { config: activeMemoryConfig } : {}),
+            },
+          },
+        },
+      } as OpenClawConfig;
+      resolveMemorySearchConfig.mockReturnValue({
+        provider: "auto",
+        local: {},
+        remote: {},
+        rememberAcrossConversations: true,
+        sources: ["memory", "sessions"],
+      });
+
+      await noteMemorySearchHealth(qmdCfg, { skipQmdBinaryProbe: true });
+
+      expect(firstNoteMessage()).toBe(
+        'Remember across conversations is effectively enabled for agent "personal", but the current memory provider does not support protected private transcript recall. Set memorySearch.rememberAcrossConversations to false or use that provider\'s own recall path; advanced Active Memory can still use its recall tools.',
+      );
+    },
+  );
+
+  it("warns when conversation recall is enabled but Active Memory is disabled", async () => {
+    const qmdCfg = {
+      memory: { backend: "qmd", qmd: { command: "qmd" } },
+      agents: { list: [{ id: "personal", memorySearch: { rememberAcrossConversations: true } }] },
+      plugins: { entries: { "active-memory": { enabled: false } } },
+    } as OpenClawConfig;
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "auto",
+      local: {},
+      remote: {},
+      rememberAcrossConversations: true,
+      sources: ["memory", "sessions"],
+    });
+
+    await noteMemorySearchHealth(qmdCfg, { skipQmdBinaryProbe: true });
+
+    expect(firstNoteMessage()).toBe(
+      'Remember across conversations is effectively enabled for agent "personal", but the Active Memory plugin is disabled. Enable the plugin or set memorySearch.rememberAcrossConversations to false.',
+    );
+  });
+
+  it("warns when conversation recall is enabled but Active Memory is paused in plugin config", async () => {
+    const qmdCfg = {
+      memory: { backend: "qmd", qmd: { command: "qmd" } },
+      agents: { list: [{ id: "personal", memorySearch: { rememberAcrossConversations: true } }] },
+      plugins: {
+        entries: {
+          "active-memory": { enabled: true, config: { enabled: false } },
+        },
+      },
+    } as OpenClawConfig;
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "auto",
+      local: {},
+      remote: {},
+      rememberAcrossConversations: true,
+      sources: ["memory", "sessions"],
+    });
+
+    await noteMemorySearchHealth(qmdCfg, { skipQmdBinaryProbe: true });
+
+    expect(firstNoteMessage()).toContain("Active Memory plugin is disabled");
+  });
+
+  it("warns when Active Memory excludes memory_search for conversation recall", async () => {
+    const qmdCfg = {
+      memory: { backend: "qmd", qmd: { command: "qmd" } },
+      agents: { list: [{ id: "personal", memorySearch: { rememberAcrossConversations: true } }] },
+      plugins: {
+        entries: {
+          "active-memory": { enabled: true, config: { toolsAllow: ["memory_get"] } },
+        },
+      },
+    } as OpenClawConfig;
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "auto",
+      local: {},
+      remote: {},
+      rememberAcrossConversations: true,
+      sources: ["memory", "sessions"],
+    });
+
+    await noteMemorySearchHealth(qmdCfg, { skipQmdBinaryProbe: true });
+
+    expect(firstNoteMessage()).toBe(
+      'Remember across conversations is effectively enabled for agent "personal", but Active Memory does not allow memory_search. Add memory_search to the plugin toolsAllow list or set memorySearch.rememberAcrossConversations to false.',
+    );
+  });
+
+  it("warns when an opted-in agent has memory search disabled", async () => {
+    const qmdCfg = {
+      memory: { backend: "qmd", qmd: { command: "qmd" } },
+      agents: { list: [{ id: "personal", memorySearch: { rememberAcrossConversations: true } }] },
+    } as OpenClawConfig;
+    resolveMemorySearchConfig.mockImplementation((_cfg: OpenClawConfig, agentId: string) =>
+      agentId === "personal"
+        ? undefined
+        : { provider: "auto", local: {}, remote: {}, sources: ["memory"] },
+    );
+
+    await noteMemorySearchHealth(qmdCfg, { skipQmdBinaryProbe: true });
+
+    expect(firstNoteMessage()).toBe(
+      'Remember across conversations is effectively enabled for agent "personal", but memory search is disabled. Enable memory search or set memorySearch.rememberAcrossConversations to false.',
+    );
   });
 
   it("does not warn when QMD backend is active", async () => {

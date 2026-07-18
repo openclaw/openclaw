@@ -157,7 +157,6 @@ import {
   type CompactionStatus,
   type FallbackStatus,
   type PlanStatus,
-  type QuestionStatus,
   type ToolStreamEntry,
 } from "./tool-stream.ts";
 import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
@@ -238,7 +237,6 @@ export type ChatPageHost = ChatHost &
     compactionStatus: CompactionStatus | null;
     fallbackStatus: FallbackStatus | null;
     planStatus: PlanStatus | null;
-    questionStatus: QuestionStatus | null;
     chatRunStatus: ChatProps["runStatus"];
     chatNewMessagesBelow: boolean;
     chatMetadataRequestVersion: number;
@@ -1261,7 +1259,6 @@ export function createPageState(
     compactionStatus: null,
     fallbackStatus: null,
     planStatus: null,
-    questionStatus: null,
     chatAvatarUrl: null,
     chatAvatarStatus: null,
     chatAvatarReason: null,
@@ -1969,6 +1966,9 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     if (state) {
       state.realtimeTalkSession = null;
       state.realtimeTalkVideoStream = null;
+      state.realtimeTalkVideoCapable = false;
+      state.realtimeTalkVideoPending = false;
+      state.realtimeTalkCameraError = false;
       state.resetToolStream?.();
     }
   }
