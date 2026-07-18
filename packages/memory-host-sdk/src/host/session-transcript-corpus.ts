@@ -38,6 +38,13 @@ export type SessionTranscriptCorpusEntry = {
   generatedByDreamingNarrative?: boolean;
   /** True when this transcript belongs to an isolated cron run session. */
   generatedByCronRun?: boolean;
+  /**
+   * False when this transcript should be excluded from Dreaming ingestion.
+   * Archive artifacts (.jsonl.deleted.* / .jsonl.reset.*) are retained in the
+   * shared corpus for memory_search but must not be re-ingested by Dreaming,
+   * which learns only from the live session corpus.
+   */
+  eligibleForDreaming: boolean;
 };
 
 function fileContentRevision(filePath: string): string | undefined {
@@ -305,6 +312,7 @@ function toSessionStoreCorpusEntry(
   return {
     agentId,
     artifactKind: "active-session",
+    eligibleForDreaming: true,
     sessionFile: source.sessionFile,
     sessionId: source.sessionId,
     ...(contentRevision ? { contentRevision } : {}),
@@ -383,6 +391,9 @@ function toArtifactCorpusEntry(
   return {
     agentId,
     artifactKind: "archive-artifact",
+    // Archive artifacts remain in the corpus for memory_search but must not be
+    // ingested by Dreaming, which learns only from the live session corpus.
+    eligibleForDreaming: false,
     sessionFile: artifactPath,
     sessionId,
     ...(contentRevision ? { contentRevision } : {}),

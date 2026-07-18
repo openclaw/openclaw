@@ -824,9 +824,10 @@ async function collectSessionIngestionBatches(params: {
     for (const entry of await listSessionTranscriptCorpusEntriesForAgent(agentId)) {
       const absolutePath = entry.sessionFile;
       if (
-        // Dreaming learns only from the live corpus. Retained reset/delete
-        // archives stay in the shared corpus for QMD and memory_search.
-        entry.artifactKind === "archive-artifact" ||
+        // Dreaming learns only from the live corpus. Archive artifacts
+        // (reset/delete rotations) carry eligibleForDreaming: false so they
+        // remain accessible for memory_search without being re-ingested here.
+        !entry.eligibleForDreaming ||
         isCheckpointSessionTranscriptPath(absolutePath)
       ) {
         continue;
