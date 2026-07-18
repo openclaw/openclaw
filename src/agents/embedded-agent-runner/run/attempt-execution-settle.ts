@@ -408,8 +408,13 @@ export async function runEmbeddedAttemptSettledPhase(
       streamStrategy,
     },
     trajectoryRecorder,
+    onTrajectoryTerminal: (terminal) => {
+      state.trajectoryTerminalStatus = terminal.status;
+      state.trajectoryTerminalError = terminal.terminalError;
+    },
   });
-  state.trajectoryEndRecorded = true;
+  // Keep trajectoryEndRecorded false so cleanup can emit session.ended after
+  // resource teardown with a wall-clock timestamp later than model.completed (#102014).
   if (attempt.sessionKey && result.acceptedSessionSpawns?.length) {
     settleRequesterAfterSessionSpawns({
       requesterSessionKey: attempt.sessionKey,

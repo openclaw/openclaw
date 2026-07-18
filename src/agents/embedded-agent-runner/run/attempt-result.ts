@@ -15,6 +15,7 @@ import { log } from "../logger.js";
 import type { PromptCacheBreak, PromptCacheChange } from "../prompt-cache-observability.js";
 import { observeReplayMetadata, replayMetadataFromState } from "../replay-state.js";
 import { finalizeEmbeddedAttempt } from "./attempt-finalize.js";
+import type { AttemptTrajectoryTerminal } from "./attempt-trajectory-status.js";
 import { shouldRunLlmOutputHooksForAttempt } from "./attempt.run-decisions.js";
 import {
   buildAttemptReplayMetadata,
@@ -88,6 +89,7 @@ type CompleteEmbeddedAttemptResultInput = {
     streamStrategy: string;
   };
   trajectoryRecorder?: EmbeddedRunAttemptTrajectoryRecorder | null;
+  onTrajectoryTerminal?: (terminal: AttemptTrajectoryTerminal) => void;
 };
 
 function normalizeEmbeddedAttemptToolMetas(
@@ -419,5 +421,6 @@ export function completeEmbeddedAttemptResult(
     emptyAssistantReplyIsSilent,
     hasTerminalOutput,
     silentExpected: attempt.silentExpected,
+    onTrajectoryTerminal: input.onTrajectoryTerminal,
   });
 }

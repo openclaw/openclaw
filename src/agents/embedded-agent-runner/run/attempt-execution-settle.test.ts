@@ -270,7 +270,8 @@ describe("runEmbeddedAttemptSettledPhase", () => {
         beforeAgentRunBlocked: true,
         beforeAgentRunBlockedBy: "before_agent",
         promptError: null,
-        trajectoryEndRecorded: true,
+        // session.ended is deferred to cleanup so the flag stays false here (#102014).
+        trajectoryEndRecorded: false,
       }),
     );
     expect(fixture.sessionRuntimeState).toEqual(
