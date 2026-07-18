@@ -32,7 +32,11 @@ function advanceUpdateHandover(
   state: UpdateHandoverState,
   event: UpdateHandoverEvent,
 ): UpdateHandoverState {
-  if (event === "health-failed" && (state.phase === "starting" || state.phase === "new-active")) {
+  if (
+    event === "health-failed" &&
+    state.phase !== "rolling-back" &&
+    state.phase !== "rolled-back"
+  ) {
     return { ...state, phase: "rolling-back" };
   }
   if (
@@ -78,38 +82,79 @@ export async function runUpdateHandover(params: {
   onPhase?: (phase: UpdateHandoverPhase) => Promise<void> | void;
 }): Promise<UpdateHandoverState> {
   let state: UpdateHandoverState = { phase: "starting", confirmationTier: params.confirmationTier };
+  let oldPauseAttempted = false;
+  let newStartAttempted = false;
+  const operationErrors: unknown[] = [];
   const transition = async (event: UpdateHandoverEvent) => {
     state = advanceUpdateHandover(state, event);
     await params.onPhase?.(state.phase);
   };
-  if (!(await params.waitForInternalHealth())) {
-    await transition("health-failed");
-  } else {
-    await transition("internal-health-passed");
-    await params.pauseOldChannels();
-    await transition("old-channels-paused");
-    await params.startNewChannels();
-    await transition("new-channels-started");
-    const confirmed =
-      params.confirmationTier === "human"
-        ? await params.confirmHumanReply()
-        : await params.confirmDelivery();
-    if (confirmed) {
-      await transition(
-        params.confirmationTier === "human" ? "human-confirmed" : "delivery-confirmed",
-      );
-      await transition("complete");
-      return state;
-    }
-    if (params.confirmationTier === "delivery") {
+  try {
+    if (!(await params.waitForInternalHealth())) {
       await transition("health-failed");
     } else {
-      await transition("confirmation-timeout");
+      await transition("internal-health-passed");
+      oldPauseAttempted = true;
+      await params.pauseOldChannels();
+      await transition("old-channels-paused");
+      newStartAttempted = true;
+      await params.startNewChannels();
+      await transition("new-channels-started");
+      const confirmed =
+        params.confirmationTier === "human"
+          ? await params.confirmHumanReply()
+          : await params.confirmDelivery();
+      if (confirmed) {
+        await transition(
+          params.confirmationTier === "human" ? "human-confirmed" : "delivery-confirmed",
+        );
+        await transition("complete");
+        return state;
+      }
+      if (params.confirmationTier === "delivery") {
+        await transition("health-failed");
+      } else {
+        await transition("confirmation-timeout");
+      }
+    }
+  } catch (error) {
+    operationErrors.push(error);
+    if (state.phase !== "rolling-back") {
+      try {
+        await transition("health-failed");
+      } catch (transitionError) {
+        operationErrors.push(transitionError);
+      }
     }
   }
-  await params.stopNewChannels();
-  await params.restorePrevious();
-  await params.resumeOldChannels();
-  await transition("rollback-restored");
+
+  const rollbackErrors: unknown[] = [];
+  const compensate = async (operation: () => Promise<void>) => {
+    try {
+      await operation();
+    } catch (error) {
+      rollbackErrors.push(error);
+    }
+  };
+  if (newStartAttempted) {
+    await compensate(params.stopNewChannels);
+  }
+  await compensate(params.restorePrevious);
+  if (oldPauseAttempted) {
+    await compensate(params.resumeOldChannels);
+  }
+  if (rollbackErrors.length === 0) {
+    try {
+      await transition("rollback-restored");
+    } catch (error) {
+      rollbackErrors.push(error);
+    }
+  }
+  if (operationErrors.length > 0 || rollbackErrors.length > 0) {
+    throw new AggregateError(
+      [...operationErrors, ...rollbackErrors],
+      "Update handover failed after rollback compensation",
+    );
+  }
   return state;
 }
