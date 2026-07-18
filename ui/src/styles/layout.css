@@ -229,8 +229,7 @@ html.openclaw-native-web-chrome .shell:not(.shell--mobile-nav) .sidebar-brand .s
 }
 
 .shell--settings .content-header,
-.shell--settings .settings-workspace,
-.shell--settings .config-view-toggle-row {
+.shell--settings .settings-workspace {
   width: 100%;
   max-width: 1120px;
   margin-inline: auto;

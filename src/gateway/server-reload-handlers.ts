@@ -1850,6 +1850,16 @@ export function startManagedGatewayConfigReloader(
   const configReloader = startGatewayConfigReloader({
     initialConfig: params.initialConfig,
     initialCompareConfig: params.initialCompareConfig,
+    // Single notification point for every persisted config change — gateway
+    // RPC writes, agent/CLI config_set, doctor, and hand edits all land here
+    // once the candidate is accepted. Hash-only; clients refresh via config.get.
+    onConfigCandidateCommitted: (info) => {
+      params.broadcast(
+        "config.changed",
+        { path: info.path, hash: info.persistedHash, ts: Date.now() },
+        { dropIfSlow: true },
+      );
+    },
     ...(params.prepareConfigCandidate
       ? { prepareConfigCandidate: params.prepareConfigCandidate }
       : {}),

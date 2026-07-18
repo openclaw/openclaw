@@ -266,9 +266,10 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +3: question-gateway-runtime resolver plus request/result types.
       // +1: async memory prompt preparation registration.
       // +1: canonical memory host event normalization for SQLite storage.
+      // +1: centralized remember-across-conversations effective-default resolver.
       // +4: gateway-backed harness question runner, claim/cancel helpers, and caller type.
       // Harvest: internal question runtime exports -2.
-      8156,
+      8157,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -305,9 +306,10 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: question-gateway-runtime resolver.
       // +1: async memory prompt preparation registration.
       // +1: canonical memory host event normalization for SQLite storage.
+      // +1: centralized remember-across-conversations effective-default resolver.
       // +3: gateway-backed harness question runner and claim/cancel helpers.
       // Harvest: internal question runtime callable -1.
-      4538,
+      4539,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

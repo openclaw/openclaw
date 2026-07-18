@@ -232,13 +232,22 @@ describe("AppSidebar logo stand-in wiring", () => {
       );
     const logo = () => sidebar.querySelector(".sidebar-brand__logo");
     const standIn = () => sidebar.querySelector(".sidebar-brand__pet");
+    const standInHost = sidebar.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
+      "openclaw-lobster-logo-standin",
+    );
+    const settleStandIn = async () => {
+      await sidebar.updateComplete;
+      await standInHost?.updateComplete;
+    };
 
+    expect(standInHost).not.toBeNull();
+    await standInHost?.updateComplete;
     expect(logo()?.classList.contains("sidebar-brand__logo--vacated")).toBe(false);
     expect(standIn()).toBeNull();
 
     const look = createLobsterPetLook(70);
     dispatch({ phase: "in", look, name: "Pinchy" });
-    await sidebar.updateComplete;
+    await settleStandIn();
     expect(logo()?.classList.contains("sidebar-brand__logo--vacated")).toBe(true);
     const sprite = standIn();
     expect(sprite).not.toBeNull();
@@ -247,23 +256,23 @@ describe("AppSidebar logo stand-in wiring", () => {
     expect(sprite?.querySelector(".lobster-pet__svg")).not.toBeNull();
 
     dispatch({ phase: "leaving", look, name: "Pinchy" });
-    await sidebar.updateComplete;
+    await settleStandIn();
     expect(standIn()?.classList.contains("sidebar-brand__pet--leaving")).toBe(true);
 
     dispatch({ phase: "out", look: null, name: null });
-    await sidebar.updateComplete;
+    await settleStandIn();
     expect(standIn()).toBeNull();
     expect(logo()?.classList.contains("sidebar-brand__logo--vacated")).toBe(false);
 
     // A lookless scare phase hides the logo with no stand-in crab, and the
     // "out" edge restores it.
     dispatch({ phase: "in", look: null, name: null });
-    await sidebar.updateComplete;
+    await settleStandIn();
     expect(logo()?.classList.contains("sidebar-brand__logo--vacated")).toBe(true);
     expect(standIn()).toBeNull();
 
     dispatch({ phase: "out", look: null, name: null });
-    await sidebar.updateComplete;
+    await settleStandIn();
     expect(logo()?.classList.contains("sidebar-brand__logo--vacated")).toBe(false);
   });
 });

@@ -187,10 +187,35 @@ const COMMUNICATION_SETTINGS_BLOCKS = {
   },
 } as const satisfies Record<string, StaticSettingsBlockDescriptor>;
 
+// Sessions-hub workspace pages have no schema-backed config section, so they
+// only surface in search through these static entries.
+const WORKSPACE_SETTINGS_BLOCKS = {
+  sessions: {
+    routeId: "sessions",
+    labelKey: "sessionsView.title",
+    hash: "",
+    searchKeys: ["sessionsView.subtitle", "sessionsView.archivedOnly"],
+    aliases: "history archive overrides",
+  },
+  worktrees: {
+    routeId: "worktrees",
+    labelKey: "worktrees.title",
+    hash: "",
+    searchKeys: [
+      "worktrees.subtitle",
+      "worktrees.cleanupTitle",
+      "worktrees.cleanupMaxCount",
+      "worktrees.cleanupMaxSize",
+    ],
+    aliases: "git checkout branch cleanup",
+  },
+} as const satisfies Record<string, StaticSettingsBlockDescriptor>;
+
 const STATIC_SETTINGS_BLOCKS: readonly StaticSettingsBlockDescriptor[] = [
   ...Object.values(GENERAL_SETTINGS_BLOCKS),
   ...Object.values(APPEARANCE_SETTINGS_BLOCKS),
   ...Object.values(COMMUNICATION_SETTINGS_BLOCKS),
+  ...Object.values(WORKSPACE_SETTINGS_BLOCKS),
 ];
 
 const COMMUNICATION_SECTIONS = new Set<string>(COMMUNICATION_SECTION_KEYS);

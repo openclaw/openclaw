@@ -287,7 +287,82 @@
 .settings-theme-card__label {
   font-size: 13px;
   font-weight: 600;
-  color: var(--accent);
+  color: var(--text);
+}
+
+.settings-theme-card--active .settings-theme-card__label {
+  color: var(--text-strong);
+}
+
+/* Real-palette preview chips. Colors mirror the :root[data-theme] blocks in
+   base.css (claw = the default :root palette); keep both in sync when
+   retuning a theme. The custom card reads the live variables instead — it is
+   only rendered with chips while the imported theme is active. */
+.settings-theme-card__palette {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.settings-theme-card__chip {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 18%, transparent);
+}
+
+.settings-theme-card__chip--bg {
+  background: var(--theme-chip-bg);
+}
+
+.settings-theme-card__chip--accent {
+  background: var(--theme-chip-accent);
+}
+
+.settings-theme-card__chip--accent-2 {
+  background: var(--theme-chip-accent-2);
+}
+
+.settings-theme-card--claw {
+  --theme-chip-bg: #0e1015;
+  --theme-chip-accent: #ff5c5c;
+  --theme-chip-accent-2: #14b8a6;
+}
+
+.settings-theme-card--knot {
+  --theme-chip-bg: #080808;
+  --theme-chip-accent: #e5243b;
+  --theme-chip-accent-2: #8b1a2b;
+}
+
+.settings-theme-card--dash {
+  --theme-chip-bg: #1a1210;
+  --theme-chip-accent: #b47840;
+  --theme-chip-accent-2: #a88050;
+}
+
+:root[data-theme-mode="light"] .settings-theme-card--claw {
+  --theme-chip-bg: #faf9f7;
+  --theme-chip-accent: #bd4531;
+  --theme-chip-accent-2: #0d9488;
+}
+
+:root[data-theme-mode="light"] .settings-theme-card--knot {
+  --theme-chip-bg: #f9f9fb;
+  --theme-chip-accent: #c41e30;
+  --theme-chip-accent-2: #7a1420;
+}
+
+:root[data-theme-mode="light"] .settings-theme-card--dash {
+  --theme-chip-bg: #f7f2ec;
+  --theme-chip-accent: #6e4828;
+  --theme-chip-accent-2: #6a4e30;
+}
+
+.settings-theme-card--custom {
+  --theme-chip-bg: var(--bg);
+  --theme-chip-accent: var(--accent);
+  --theme-chip-accent-2: var(--accent-2);
 }
 
 .settings-theme-import {
