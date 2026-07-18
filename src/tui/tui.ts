@@ -39,7 +39,8 @@ import { ChatLog } from "./components/chat-log.js";
 import { CustomEditor } from "./components/custom-editor.js";
 import { resolveLocalRunShutdownGraceMs } from "./local-run-shutdown.js";
 import { editorTheme, theme } from "./theme/theme.js";
-import type { TuiBackend } from "./tui-backend.js";
+import type { ChatImageAttachment, TuiBackend } from "./tui-backend.js";
+import { readClipboardImage } from "./clipboard-image.js";
 import { addBlockedChatSubmitNotice } from "./tui-busy-notice.js";
 import { createCommandHandlers } from "./tui-command-handlers.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
@@ -1458,6 +1459,9 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     chatLog.addSystem(`${action} submit failed: ${message}`);
     tui.requestRender();
   };
+  // Clipboard image paste support: stash a pending image attachment.
+  let pendingImageAttachments: ChatImageAttachment[] = [];
+
   const submitHandler = createEditorSubmitHandler({
     editor,
     handleCommand,
@@ -1466,6 +1470,12 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     onSubmitError: notifySubmitError,
     admitMessage: admitChatMessage,
     onBlockedMessageSubmit: notifyBlockedChatSubmit,
+    consumeAttachments: () => {
+      if (pendingImageAttachments.length === 0) return undefined;
+      const att = pendingImageAttachments;
+      pendingImageAttachments = [];
+      return att;
+    },
   });
   editor.onSubmit = createSubmitBurstCoalescer({
     submit: submitHandler,
@@ -1538,6 +1548,22 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   editor.onCtrlT = () => {
     showThinking = !showThinking;
     void loadHistory();
+  };
+
+  editor.onPasteImage = () => {
+    void (async () => {
+      try {
+        const img = await readClipboardImage();
+        if (img) {
+          const base64 = Buffer.from(img.bytes).toString("base64");
+          pendingImageAttachments = [{ mimeType: img.mimeType, base64 }];
+          chatLog.addSystem("📎 Image attached from clipboard (will send with next message)");
+          tui.requestRender();
+        }
+      } catch {
+        // Clipboard read failed silently — no image available.
+      }
+    })();
   };
 
   tui.addInputListener((data) => {

@@ -55,12 +55,20 @@ export class CustomEditor extends Editor {
   onShiftTab?: () => void;
   onAltEnter?: () => void;
   onAltUp?: () => void;
+  onPasteImage?: () => void;
   shouldSubmitAutocomplete?: (text: string) => boolean;
 
   /** Dispatches TUI shortcuts before falling back to normal editor input handling. */
   override handleInput(data: string): void {
     if (isKeyRelease(data)) {
       return;
+    }
+
+    // Ctrl+V: check clipboard for an image before falling through to text paste.
+    if (matchesKey(data, Key.ctrl("v")) && this.onPasteImage) {
+      this.onPasteImage();
+      // Don't return — fall through so text paste still works if no image was found.
+      // The onPasteImage handler should set a flag; the next submit picks it up.
     }
 
     if (matchesKey(data, Key.alt("enter")) && this.onAltEnter) {
