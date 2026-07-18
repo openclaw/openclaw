@@ -20194,6 +20194,16 @@
       "translated": "回复 OpenClaw…（回复 yes 即可完成所有设置）"
     },
     {
+      "id": "native.apple.134b9ae1d8a543df",
+      "source": "Skip for now",
+      "translated": "暂时跳过"
+    },
+    {
+      "id": "native.apple.5435391fa338f227",
+      "source": "Recommended",
+      "translated": "推荐"
+    },
+    {
       "id": "native.apple.78d1ad73762a7ce8",
       "source": "Connect your AI",
       "translated": "连接你的 AI"
@@ -23297,11 +23307,6 @@
       "id": "native.apple.99df7de891c8235f",
       "source": "Listen",
       "translated": "聆听"
-    },
-    {
-      "id": "native.apple.f84b674ad395b694",
-      "source": "Jump to latest",
-      "translated": "跳转到最新"
     },
     {
       "id": "native.apple.429d825201b2cb85",

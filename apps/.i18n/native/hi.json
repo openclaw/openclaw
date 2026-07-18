@@ -20194,6 +20194,16 @@
       "translated": "OpenClaw को जवाब दें… (हाँ कहने पर सब कुछ सेट हो जाएगा)"
     },
     {
+      "id": "native.apple.134b9ae1d8a543df",
+      "source": "Skip for now",
+      "translated": "अभी के लिए छोड़ें"
+    },
+    {
+      "id": "native.apple.5435391fa338f227",
+      "source": "Recommended",
+      "translated": "अनुशंसित"
+    },
+    {
       "id": "native.apple.78d1ad73762a7ce8",
       "source": "Connect your AI",
       "translated": "अपने AI को कनेक्ट करें"
@@ -23297,11 +23307,6 @@
       "id": "native.apple.99df7de891c8235f",
       "source": "Listen",
       "translated": "सुनें"
-    },
-    {
-      "id": "native.apple.f84b674ad395b694",
-      "source": "Jump to latest",
-      "translated": "नवीनतम पर जाएँ"
     },
     {
       "id": "native.apple.429d825201b2cb85",

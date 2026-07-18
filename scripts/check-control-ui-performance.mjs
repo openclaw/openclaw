@@ -13,7 +13,7 @@ export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze({
   startupJsRequests: 18,
   startupCssRequests: 1,
   startupJsGzipBytes: 310 * KIB,
-  startupCssGzipBytes: 42 * KIB,
+  startupCssGzipBytes: 38 * KIB,
   largestJsGzipBytes: 215 * KIB,
   largestCssGzipBytes: 42 * KIB,
 });

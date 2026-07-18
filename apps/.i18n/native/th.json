@@ -20194,6 +20194,16 @@
       "translated": "ตอบกลับ OpenClaw… (พิมพ์ yes เพื่อตั้งค่าทุกอย่าง)"
     },
     {
+      "id": "native.apple.134b9ae1d8a543df",
+      "source": "Skip for now",
+      "translated": "ข้ามไปก่อน"
+    },
+    {
+      "id": "native.apple.5435391fa338f227",
+      "source": "Recommended",
+      "translated": "แนะนำ"
+    },
+    {
       "id": "native.apple.78d1ad73762a7ce8",
       "source": "Connect your AI",
       "translated": "เชื่อมต่อ AI ของคุณ"
@@ -23297,11 +23307,6 @@
       "id": "native.apple.99df7de891c8235f",
       "source": "Listen",
       "translated": "ฟัง"
-    },
-    {
-      "id": "native.apple.f84b674ad395b694",
-      "source": "Jump to latest",
-      "translated": "ข้ามไปยังล่าสุด"
     },
     {
       "id": "native.apple.429d825201b2cb85",

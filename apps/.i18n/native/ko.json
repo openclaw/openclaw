@@ -20194,6 +20194,16 @@
       "translated": "OpenClaw에 답장… (yes를 입력하면 모든 설정이 완료됩니다)"
     },
     {
+      "id": "native.apple.134b9ae1d8a543df",
+      "source": "Skip for now",
+      "translated": "지금은 건너뛰기"
+    },
+    {
+      "id": "native.apple.5435391fa338f227",
+      "source": "Recommended",
+      "translated": "권장"
+    },
+    {
       "id": "native.apple.78d1ad73762a7ce8",
       "source": "Connect your AI",
       "translated": "AI 연결"
@@ -23297,11 +23307,6 @@
       "id": "native.apple.99df7de891c8235f",
       "source": "Listen",
       "translated": "듣기"
-    },
-    {
-      "id": "native.apple.f84b674ad395b694",
-      "source": "Jump to latest",
-      "translated": "최신 항목으로 이동"
     },
     {
       "id": "native.apple.429d825201b2cb85",
