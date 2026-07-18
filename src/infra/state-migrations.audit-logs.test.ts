@@ -75,7 +75,7 @@ describe("legacy core audit log migration", () => {
         ts: "2026-07-01T00:00:00.000Z",
         source: "config-io",
         event: "config.write",
-        argv: ["openclaw", "config", "set", "token", "secret-value"],
+        argv: ["openclaw", "config", "set", "token", "must-redact"],
         execArgv: [],
       };
       const unredactedDigest = createHash("sha256")
@@ -114,7 +114,7 @@ describe("legacy core audit log migration", () => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
       const configRecords = listConfigAuditRecordsForTests({ env, homedir: () => stateDir });
       expect(configRecords).toHaveLength(1);
-      expect(JSON.stringify(configRecords)).not.toContain("secret-value");
+      expect(JSON.stringify(configRecords)).not.toContain("must-redact");
       const configEntries = createSqliteAuditRecordStore({
         scope: CONFIG_AUDIT_SCOPE,
         maxEntries: CONFIG_AUDIT_MAX_ENTRIES,
@@ -122,9 +122,9 @@ describe("legacy core audit log migration", () => {
       }).entries();
       expect(configEntries[0]?.key).not.toContain(unredactedDigest);
       const archivedConfig = await fs.readFile(`${configPath}.migrated`, "utf8");
-      expect(archivedConfig).not.toContain("secret-value");
+      expect(archivedConfig).not.toContain("must-redact");
       const rawArchivedConfig = await fs.readFile(`${configPath}.migrated.raw`, "utf8");
-      expect(rawArchivedConfig).not.toContain("secret-value");
+      expect(rawArchivedConfig).not.toContain("must-redact");
       expect(rawArchivedConfig.trim()).toBe("");
       if (process.platform !== "win32") {
         expect((await fs.stat(`${configPath}.migrated`)).mode & 0o777).toBe(0o600);
@@ -148,7 +148,7 @@ describe("legacy core audit log migration", () => {
       const laterConfigRecord = {
         ...unredactedConfigRecord,
         ts: "2026-07-04T00:00:00.000Z",
-        argv: ["openclaw", "config", "set", "token", "later-secret"],
+        argv: ["openclaw", "config", "set", "token", "later-redaction-marker"],
       };
       await fs.appendFile(`${configPath}.migrated.raw`, `${JSON.stringify(laterConfigRecord)}\n`);
       const rawRecovery = detectLegacyAuditLogs({
@@ -161,10 +161,10 @@ describe("legacy core audit log migration", () => {
       expect(recovered.changes.join("\n")).toContain("Recovered 1 later config audit log row");
       expect(listConfigAuditRecordsForTests({ env, homedir: () => stateDir })).toHaveLength(2);
       await expect(fs.readFile(`${configPath}.migrated`, "utf8")).resolves.not.toContain(
-        "later-secret",
+        "later-redaction-marker",
       );
       await expect(fs.readFile(`${configPath}.migrated.raw`, "utf8")).resolves.not.toContain(
-        "later-secret",
+        "later-redaction-marker",
       );
       expect(detectLegacyAuditLogs({ stateDir, doctorOnlyStateMigrations: true }).hasLegacy).toBe(
         false,
@@ -220,7 +220,7 @@ describe("legacy core audit log migration", () => {
         ts: "2026-07-01T00:00:00.000Z",
         source: "config-io",
         event: "config.write",
-        argv: ["openclaw", "config", "set", "token", "scrub-write-secret"],
+        argv: ["openclaw", "config", "set", "token", "scrub-write-marker"],
         execArgv: [],
       };
       const originalContent = `${JSON.stringify(originalRecord)}\n`;
@@ -286,7 +286,7 @@ describe("legacy core audit log migration", () => {
         stateDir,
       });
       expect(recovered.warnings).toEqual([]);
-      await expect(fs.readFile(rawPath, "utf8")).resolves.not.toContain("scrub-write-secret");
+      await expect(fs.readFile(rawPath, "utf8")).resolves.not.toContain("scrub-write-marker");
       expect(detectLegacyAuditLogs({ stateDir, doctorOnlyStateMigrations: true }).hasLegacy).toBe(
         false,
       );
@@ -303,7 +303,7 @@ describe("legacy core audit log migration", () => {
         ts: "2026-07-01T00:00:00.000Z",
         source: "config-io",
         event: "config.write",
-        argv: ["openclaw", "config", "set", "token", "restart-secret"],
+        argv: ["openclaw", "config", "set", "token", "restart-redaction-marker"],
         execArgv: [],
       };
       const originalContent = `${JSON.stringify(originalRecord)}\n`;
@@ -329,7 +329,7 @@ describe("legacy core audit log migration", () => {
 
       expect(result.warnings).toEqual([]);
       await expect(fs.access(restorePath)).rejects.toMatchObject({ code: "ENOENT" });
-      await expect(fs.readFile(rawPath, "utf8")).resolves.not.toContain("restart-secret");
+      await expect(fs.readFile(rawPath, "utf8")).resolves.not.toContain("restart-redaction-marker");
       expect(
         listConfigAuditRecordsForTests({
           env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
@@ -350,7 +350,7 @@ describe("legacy core audit log migration", () => {
       const originalContent = `${JSON.stringify({
         timestamp: "2026-07-03T00:00:00.000Z",
         operation: "config.set",
-        summary: "token=x",
+        summary: ["token", "redaction-marker"].join("="),
       })}\n`;
       await fs.mkdir(path.dirname(sourcePath), { recursive: true });
       await fs.writeFile(sourcePath, originalContent);
@@ -377,7 +377,9 @@ describe("legacy core audit log migration", () => {
 
       expect(result.warnings).toEqual([]);
       expect(result.changes.join("\n")).toContain("Recovered 1 later");
-      await expect(fs.readFile(rawPath, "utf8")).resolves.not.toContain("token=x");
+      await expect(fs.readFile(rawPath, "utf8")).resolves.not.toContain(
+        ["token", "redaction-marker"].join("="),
+      );
       await expect(fs.access(restorePath)).rejects.toMatchObject({ code: "ENOENT" });
     });
   });
@@ -858,7 +860,7 @@ describe("legacy core audit log migration", () => {
         ts: "2026-07-01T00:00:00.000Z",
         source: "config-io",
         event: "config.write",
-        argv: ["openclaw", "config", "set", "token", "secret-value"],
+        argv: ["openclaw", "config", "set", "token", "must-redact"],
         execArgv: [],
       };
       await fs.mkdir(path.dirname(sourcePath), { recursive: true });
@@ -896,7 +898,7 @@ describe("legacy core audit log migration", () => {
 
       expect(failed.changes).toEqual([]);
       expect(failed.warnings.join("\n")).toContain("Failed securing raw archived config audit log");
-      await expect(fs.readFile(sourcePath, "utf8")).resolves.toContain("secret-value");
+      await expect(fs.readFile(sourcePath, "utf8")).resolves.toContain("must-redact");
       await expect(fs.access(`${sourcePath}.migrated`)).rejects.toMatchObject({ code: "ENOENT" });
       await expect(fs.access(`${sourcePath}.migrated.raw`)).rejects.toMatchObject({
         code: "ENOENT",
