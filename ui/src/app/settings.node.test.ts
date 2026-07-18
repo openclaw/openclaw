@@ -608,6 +608,32 @@ describe("loadSettings default gateway URL derivation", () => {
     );
   });
 
+  it("normalizes and persists the device-local talk camera preference", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/",
+    });
+
+    const gwUrl = expectedGatewayUrl("");
+    const scopedKey = `openclaw.control.settings.v1:${gwUrl}`;
+    expect(loadSettings().talkCameraAutoEnable).toBeUndefined();
+
+    saveSettings({ ...loadSettings(), talkCameraAutoEnable: true });
+    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}").talkCameraAutoEnable).toBe(true);
+    expect(loadSettings().talkCameraAutoEnable).toBe(true);
+
+    saveSettings({ ...loadSettings(), talkCameraAutoEnable: false });
+    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}").talkCameraAutoEnable).toBe(false);
+    expect(loadSettings().talkCameraAutoEnable).toBe(false);
+
+    localStorage.setItem(
+      scopedKey,
+      JSON.stringify({ gatewayUrl: gwUrl, talkCameraAutoEnable: "true" }),
+    );
+    expect(loadSettings().talkCameraAutoEnable).toBeUndefined();
+  });
+
   it("clears the current-tab token when saving an empty token", () => {
     setTestLocation({
       protocol: "https:",

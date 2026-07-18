@@ -1117,6 +1117,36 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
       "config.schema": configMocks.schema,
       "sessions.patch": { ok: true },
       "sessions.diff": buildSessionDiffMock(),
+      // The worktrees page assumes the gateway contract shape; without this
+      // fixture the mock's {} fallback surfaces as a TypeError banner.
+      "worktrees.list": {
+        worktrees: [
+          {
+            id: "wt-mock-1",
+            name: "fix-session-icons",
+            repoFingerprint: "a1b2c3d4e5f60718",
+            repoRoot: "/Users/demo/Projects/openclaw",
+            path: "/Users/demo/Projects/openclaw/.openclaw/worktrees/fix-session-icons",
+            branch: "openclaw/fix-session-icons",
+            baseRef: "origin/main",
+            ownerKind: "session",
+            createdAt: baseTime - 3 * 86_400_000,
+            lastActiveAt: baseTime - 2 * 3_600_000,
+          },
+          {
+            id: "wt-mock-2",
+            name: "dashboard-polish",
+            repoFingerprint: "a1b2c3d4e5f60718",
+            repoRoot: "/Users/demo/Projects/openclaw",
+            path: "/Users/demo/Projects/openclaw/.openclaw/worktrees/dashboard-polish",
+            branch: "openclaw/dashboard-polish",
+            baseRef: "origin/main",
+            ownerKind: "manual",
+            createdAt: baseTime - 9 * 86_400_000,
+            lastActiveAt: baseTime - 26 * 3_600_000,
+          },
+        ],
+      },
       "plugins.list": buildPluginCatalogMock(),
       "channels.status": buildChannelsStatusMock(baseTime),
       "wizard.start": channelWizard.start,
