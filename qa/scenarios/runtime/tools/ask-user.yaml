@@ -54,6 +54,9 @@ flow:
             - ref: env
             - 60000
         - call: reset
+        - set: requestCursorBefore
+          value:
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
         - set: startIndex
           value:
             expr: state.getSnapshot().messages.length
@@ -105,12 +108,28 @@ flow:
             message:
               expr: "`ask_user resolution failed: ${JSON.stringify(resolution)}`"
         - call: waitForCondition
+          saveAs: resumedProviderRequest
+          args:
+            - lambda:
+                async: true
+                expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).find((request) => String(request.toolOutput ?? '').includes('Deploy:')) : true"
+            - expr: liveTurnTimeoutMs(env, 45000)
+            - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
+        - assert:
+            expr: "!env.mock || (String(resumedProviderRequest.toolOutput).includes('Production') && String(resumedProviderRequest.toolOutput).includes('Unit (Recommended)') && String(resumedProviderRequest.toolOutput).includes('E2E') && String(resumedProviderRequest.toolOutput).includes('night-shift'))"
+            message:
+              expr: "`ask_user answers did not reach the resumed provider request: ${JSON.stringify({ toolOutput: resumedProviderRequest?.toolOutput })}`"
+        - call: waitForCondition
           saveAs: finalMessage
           args:
             - lambda:
-                expr: "state.getSnapshot().messages.slice(startIndex).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === config.conversationId && candidate.text.includes(config.expectedFinal)).at(-1)"
+                expr: "state.getSnapshot().messages.slice(startIndex).find((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === config.conversationId && candidate !== promptMessage && !candidate.text.includes(config.promptNeedle))"
             - expr: liveTurnTimeoutMs(env, 45000)
             - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
+        - assert:
+            expr: "finalMessage.text.includes(config.expectedFinal)"
+            message:
+              expr: "`ask_user resumed with unexpected final text: ${JSON.stringify(finalMessage.text)}`"
         - set: terminalQuestion
           value:
             expr: "env.gateway.call('question.get', { id: pendingQuestion.id })"

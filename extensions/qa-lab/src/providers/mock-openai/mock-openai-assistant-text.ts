@@ -90,6 +90,11 @@ export function buildAssistantText(
       : "";
   const promptExactReplyDirective = extractExactReplyDirective(prompt);
   const promptExactMarkerDirective = extractExactMarkerDirective(prompt);
+  const allUserText = userTexts.join("\n");
+  const userExactReplyDirective =
+    promptExactReplyDirective ?? extractExactReplyDirective(allUserText);
+  const userExactMarkerDirective =
+    promptExactMarkerDirective ?? extractExactMarkerDirective(allUserText);
   const exactReplyDirective = promptExactReplyDirective ?? extractExactReplyDirective(allInputText);
   const exactMarkerDirective =
     promptExactMarkerDirective ?? extractExactMarkerDirective(allInputText);
@@ -161,11 +166,11 @@ export function buildAssistantText(
   if (/\bmarker\b/i.test(allInputText) && promptExactReplyDirective) {
     return promptExactReplyDirective;
   }
-  if (/\bmarker\b/i.test(allInputText) && exactMarkerDirective) {
-    return exactMarkerDirective;
+  if (/\bmarker\b/i.test(allInputText) && userExactMarkerDirective) {
+    return userExactMarkerDirective;
   }
-  if (/\bmarker\b/i.test(allInputText) && exactReplyDirective) {
-    return exactReplyDirective;
+  if (/\bmarker\b/i.test(allInputText) && userExactReplyDirective) {
+    return userExactReplyDirective;
   }
   if (promptExactReplyDirective) {
     return promptExactReplyDirective;
@@ -331,26 +336,30 @@ export function buildAssistantText(
     }
     return "";
   }
+  const askUserResult = structuredToolText || toolOutput;
+  const askUserDeploy = /^Deploy:\s*(.+)$/m.exec(askUserResult)?.[1]?.trim();
+  const askUserChecks = /^Checks:\s*(.+)$/m
+    .exec(askUserResult)?.[1]
+    ?.split(",")
+    .map((value) => value.replace(/\s*\(Recommended\)\s*$/, "").trim())
+    .filter(Boolean)
+    .join(",");
+  const askUserNote = /^Note:\s*(.+)$/m.exec(askUserResult)?.[1]?.trim();
+  if (
+    toolOutput &&
+    /"status"\s*:\s*"answered"/.test(askUserResult) &&
+    askUserDeploy &&
+    askUserChecks &&
+    askUserNote
+  ) {
+    return `ASK-USER-ROUNDTRIP-OK | deploy=${askUserDeploy} | checks=${askUserChecks} | note=${askUserNote}`;
+  }
   if (
     toolOutput &&
     (QA_TOOL_SEARCH_PROMPT_RE.test(allInputText) ||
       QA_TOOL_SEARCH_FAILURE_PROMPT_RE.test(allInputText))
   ) {
     const targetTool = extractToolSearchTarget(allInputText);
-    if (targetTool === "ask_user") {
-      const askUserResult = structuredToolText || toolOutput;
-      const deploy = /^Deploy:\s*(.+)$/m.exec(askUserResult)?.[1]?.trim();
-      const checks = /^Checks:\s*(.+)$/m
-        .exec(askUserResult)?.[1]
-        ?.split(",")
-        .map((value) => value.replace(/\s*\(Recommended\)\s*$/, "").trim())
-        .filter(Boolean)
-        .join(",");
-      const note = /^Note:\s*(.+)$/m.exec(askUserResult)?.[1]?.trim();
-      if (deploy && checks && note) {
-        return `ASK-USER-ROUNDTRIP-OK | deploy=${deploy} | checks=${checks} | note=${note}`;
-      }
-    }
     if (targetTool && toolOutput.includes(targetTool) && toolOutput.includes("FAKE_PLUGIN_OK")) {
       return `FAKE_PLUGIN_OK ${targetTool}`;
     }

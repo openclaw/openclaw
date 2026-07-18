@@ -4605,8 +4605,17 @@ describe("qa mock openai server", () => {
     const response = await postResponses(server, {
       stream: false,
       input: [
+        {
+          role: "system",
+          content: [
+            {
+              type: "input_text",
+              text: "Nothing to say: entire reply exactly NO_REPLY",
+            },
+          ],
+        },
         makeUserInput(
-          "tool search qa check target=ask_user. Ask structured questions, then summarize their actual answers.",
+          "QA routing marker: tool search qa check target=ask_user. Ask structured questions, then summarize their actual answers.",
         ),
         {
           type: "function_call_output",
@@ -4615,7 +4624,7 @@ describe("qa mock openai server", () => {
             content: [
               {
                 type: "text",
-                text: "Deploy: Canary\nChecks: Lint, Unit (Recommended)\nNote: weekend-only",
+                text: 'Deploy: Canary\nChecks: Lint, Unit (Recommended)\nNote: weekend-only\n\n{"status":"answered"}',
               },
             ],
           }),
