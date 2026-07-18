@@ -270,7 +270,6 @@
       "locale": "uk",
       "source": "Active",
       "translations": [
-        "Активний",
         "Активно",
         "Активні"
       ]
@@ -279,7 +278,6 @@
       "locale": "zh-CN",
       "source": "Active",
       "translations": [
-        "活动",
         "活跃",
         "进行中"
       ]
@@ -314,8 +312,7 @@
       "source": "Agent",
       "translations": [
         "Agent",
-        "代理",
-        "智能体"
+        "代理"
       ]
     },
     {
@@ -1059,6 +1056,14 @@
       ]
     },
     {
+      "locale": "vi",
+      "source": "Camera",
+      "translations": [
+        "Camera",
+        "Máy ảnh"
+      ]
+    },
+    {
       "locale": "zh-CN",
       "source": "Camera",
       "translations": [
@@ -1210,30 +1215,6 @@
       "translations": [
         "命令",
         "指令"
-      ]
-    },
-    {
-      "locale": "ar",
-      "source": "Configured",
-      "translations": [
-        "مهيأ",
-        "مُهيأ"
-      ]
-    },
-    {
-      "locale": "fa",
-      "source": "Configured",
-      "translations": [
-        "پیکربندی شده",
-        "پیکربندی‌شده"
-      ]
-    },
-    {
-      "locale": "ja-JP",
-      "source": "Configured",
-      "translations": [
-        "構成済み",
-        "設定済み"
       ]
     },
     {
@@ -2775,78 +2756,6 @@
       ]
     },
     {
-      "locale": "ar",
-      "source": "Enable Talk",
-      "translations": [
-        "تفعيل Talk",
-        "تمكين التحدث"
-      ]
-    },
-    {
-      "locale": "ja-JP",
-      "source": "Enable Talk",
-      "translations": [
-        "Talk を有効にする",
-        "トークを有効化"
-      ]
-    },
-    {
-      "locale": "nl",
-      "source": "Enable Talk",
-      "translations": [
-        "Gesprek inschakelen",
-        "Talk inschakelen"
-      ]
-    },
-    {
-      "locale": "pt-BR",
-      "source": "Enable Talk",
-      "translations": [
-        "Ativar Talk",
-        "Ativar conversa"
-      ]
-    },
-    {
-      "locale": "ru",
-      "source": "Enable Talk",
-      "translations": [
-        "Включить Talk",
-        "Включить разговор"
-      ]
-    },
-    {
-      "locale": "tr",
-      "source": "Enable Talk",
-      "translations": [
-        "Konuşmayı Etkinleştir",
-        "Talk’u etkinleştir"
-      ]
-    },
-    {
-      "locale": "uk",
-      "source": "Enable Talk",
-      "translations": [
-        "Увімкнути Talk",
-        "Увімкнути розмову"
-      ]
-    },
-    {
-      "locale": "zh-CN",
-      "source": "Enable Talk",
-      "translations": [
-        "启用 Talk",
-        "启用对话"
-      ]
-    },
-    {
-      "locale": "zh-TW",
-      "source": "Enable Talk",
-      "translations": [
-        "啟用 Talk",
-        "啟用對話"
-      ]
-    },
-    {
       "locale": "es",
       "source": "Enabled",
       "translations": [
@@ -4100,6 +4009,22 @@
       ]
     },
     {
+      "locale": "fa",
+      "source": "Listening",
+      "translations": [
+        "در حال گوش دادن",
+        "در حال گوش‌دادن"
+      ]
+    },
+    {
+      "locale": "hi",
+      "source": "Listening",
+      "translations": [
+        "सुन रहा है",
+        "सुना जा रहा है"
+      ]
+    },
+    {
       "locale": "ja-JP",
       "source": "Listening",
       "translations": [
@@ -4116,11 +4041,20 @@
       ]
     },
     {
+      "locale": "pl",
+      "source": "Listening",
+      "translations": [
+        "Nasłuchiwanie",
+        "Słuchanie"
+      ]
+    },
+    {
       "locale": "uk",
       "source": "Listening",
       "translations": [
         "Прослуховування",
-        "Слухання"
+        "Слухання",
+        "Слухаю"
       ]
     },
     {
@@ -5936,22 +5870,6 @@
       ]
     },
     {
-      "locale": "fr",
-      "source": "Open Gateway Settings",
-      "translations": [
-        "Ouvrir les paramètres de Gateway",
-        "Ouvrir les paramètres du Gateway"
-      ]
-    },
-    {
-      "locale": "vi",
-      "source": "Open Gateway Settings",
-      "translations": [
-        "Mở Cài đặt Gateway",
-        "Mở cài đặt Gateway"
-      ]
-    },
-    {
       "locale": "es",
       "source": "Open Settings",
       "translations": [
@@ -6382,6 +6300,14 @@
       ]
     },
     {
+      "locale": "hi",
+      "source": "Paused",
+      "translations": [
+        "रोका गया",
+        "रोके गए"
+      ]
+    },
+    {
       "locale": "ko",
       "source": "Paused",
       "translations": [
@@ -6411,6 +6337,14 @@
       "translations": [
         "Приостановленные",
         "Приостановлено"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "Paused",
+      "translations": [
+        "Pausad",
+        "Pausade"
       ]
     },
     {
@@ -7359,7 +7293,6 @@
       "source": "Retry",
       "translations": [
         "Retry",
-        "تلاش دوباره",
         "تلاش مجدد"
       ]
     },
@@ -7425,7 +7358,6 @@
       "locale": "pl",
       "source": "Retry",
       "translations": [
-        "Ponów",
         "Ponów próbę",
         "Retry",
         "Spróbuj ponownie"
@@ -7691,54 +7623,6 @@
       "translations": [
         "正在运行",
         "运行中"
-      ]
-    },
-    {
-      "locale": "ar",
-      "source": "Runtime",
-      "translations": [
-        "بيئة التشغيل",
-        "وقت التشغيل"
-      ]
-    },
-    {
-      "locale": "es",
-      "source": "Runtime",
-      "translations": [
-        "Entorno de ejecución",
-        "Runtime"
-      ]
-    },
-    {
-      "locale": "fa",
-      "source": "Runtime",
-      "translations": [
-        "زمان اجرا",
-        "محیط اجرا"
-      ]
-    },
-    {
-      "locale": "pt-BR",
-      "source": "Runtime",
-      "translations": [
-        "Ambiente de execução",
-        "Tempo de execução"
-      ]
-    },
-    {
-      "locale": "tr",
-      "source": "Runtime",
-      "translations": [
-        "Çalışma Zamanı",
-        "Çalışma zamanı"
-      ]
-    },
-    {
-      "locale": "vi",
-      "source": "Runtime",
-      "translations": [
-        "Môi trường chạy",
-        "Thời gian chạy"
       ]
     },
     {
@@ -8442,46 +8326,6 @@
       ]
     },
     {
-      "locale": "de",
-      "source": "Speakerphone",
-      "translations": [
-        "Freisprechen",
-        "Freisprecher"
-      ]
-    },
-    {
-      "locale": "hi",
-      "source": "Speakerphone",
-      "translations": [
-        "Speakerphone",
-        "स्पीकरफ़ोन"
-      ]
-    },
-    {
-      "locale": "th",
-      "source": "Speakerphone",
-      "translations": [
-        "ลำโพงโทรศัพท์",
-        "สปีกเกอร์โฟน"
-      ]
-    },
-    {
-      "locale": "uk",
-      "source": "Speakerphone",
-      "translations": [
-        "Гучний зв’язок",
-        "Гучномовець"
-      ]
-    },
-    {
-      "locale": "zh-TW",
-      "source": "Speakerphone",
-      "translations": [
-        "免持聽筒",
-        "擴音"
-      ]
-    },
-    {
       "locale": "ar",
       "source": "Speaking",
       "translations": [
@@ -8631,6 +8475,14 @@
       "translations": [
         "Говорить…",
         "Озвучення…"
+      ]
+    },
+    {
+      "locale": "zh-TW",
+      "source": "Speaking…",
+      "translations": [
+        "正在朗讀…",
+        "說話中…"
       ]
     },
     {
@@ -8791,99 +8643,6 @@
       "translations": [
         "Стан",
         "Статус"
-      ]
-    },
-    {
-      "locale": "ar",
-      "source": "Talk",
-      "translations": [
-        "التحدث",
-        "تحدث",
-        "تحدّث"
-      ]
-    },
-    {
-      "locale": "fa",
-      "source": "Talk",
-      "translations": [
-        "صحبت",
-        "گفتگو",
-        "گفت‌وگو"
-      ]
-    },
-    {
-      "locale": "ja-JP",
-      "source": "Talk",
-      "translations": [
-        "トーク",
-        "会話",
-        "話す"
-      ]
-    },
-    {
-      "locale": "ko",
-      "source": "Talk",
-      "translations": [
-        "대화",
-        "대화하기"
-      ]
-    },
-    {
-      "locale": "pl",
-      "source": "Talk",
-      "translations": [
-        "Rozmawiaj",
-        "Rozmowa"
-      ]
-    },
-    {
-      "locale": "pt-BR",
-      "source": "Talk",
-      "translations": [
-        "Conversar",
-        "Falar"
-      ]
-    },
-    {
-      "locale": "ru",
-      "source": "Talk",
-      "translations": [
-        "Говорить",
-        "Разговор"
-      ]
-    },
-    {
-      "locale": "uk",
-      "source": "Talk",
-      "translations": [
-        "Говорити",
-        "Розмова"
-      ]
-    },
-    {
-      "locale": "vi",
-      "source": "Talk",
-      "translations": [
-        "Nói chuyện",
-        "Trò chuyện"
-      ]
-    },
-    {
-      "locale": "zh-CN",
-      "source": "Talk",
-      "translations": [
-        "对话",
-        "通话"
-      ]
-    },
-    {
-      "locale": "zh-TW",
-      "source": "Talk",
-      "translations": [
-        "交談",
-        "對話",
-        "語音對話",
-        "說話"
       ]
     },
     {
@@ -9308,14 +9067,6 @@
       ]
     },
     {
-      "locale": "vi",
-      "source": "Transport",
-      "translations": [
-        "Phương thức truyền tải",
-        "Truyền tải"
-      ]
-    },
-    {
       "locale": "it",
       "source": "Unarchive",
       "translations": [
@@ -9345,6 +9096,14 @@
       "translations": [
         "Avarkivera",
         "Ta bort från arkiv"
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "Unavailable",
+      "translations": [
+        "利用できません",
+        "利用不可"
       ]
     },
     {
@@ -9621,14 +9380,6 @@
       ]
     },
     {
-      "locale": "uk",
-      "source": "Voice Mode",
-      "translations": [
-        "Голосовий режим",
-        "Режим голосу"
-      ]
-    },
-    {
       "locale": "de",
       "source": "Voice Wake",
       "translations": [
@@ -9761,7 +9512,7 @@
       "source": "Voice note",
       "translations": [
         "Voice note",
-        "ボイスメモ"
+        "ボイスノート"
       ]
     },
     {
@@ -9817,7 +9568,7 @@
       "source": "Voice note",
       "translations": [
         "Voice note",
-        "บันทึกเสียง"
+        "ข้อความเสียง"
       ]
     },
     {

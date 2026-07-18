@@ -1143,6 +1143,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Naming
   - H2: Finding IDs (directory)
   - H2: Limits
+  - H2: Inbound durability
   - H2: Access control (DMs)
   - H2: Group access (optional)
   - H3: Group mention gating
@@ -2470,6 +2471,17 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Highlights
   - H2: Full list
+  - H2: Related
+
+## concepts/main-session.md
+
+- Route: /concepts/main-session
+- Headings:
+  - H2: Home
+  - H2: What flows into the main session
+  - H2: Memory across resets and conversations
+  - H2: A rolling session, not an immortal one
+  - H2: When you want isolation instead
   - H2: Related
 
 ## concepts/managed-worktrees.md
@@ -7377,6 +7389,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Message adapter
   - H3: Inbound ingress (experimental)
   - H3: Durable ingress and replay dedupe
+  - H4: At-least-once side effects
   - H4: Account-scoped restart contract
   - H3: Typing indicators
   - H3: Media source params
@@ -9517,6 +9530,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /tools/ask-user
 - Headings:
   - H2: Answer a question
+  - H2: Platform behavior
   - H2: Timeout and no answer
   - H2: Tool schema
   - H2: Model guidance
@@ -10183,6 +10197,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /tools/show-widget
 - Headings:
   - H2: How widgets work
+  - H2: Design system
   - H2: Use the tool
   - H2: Interactive widgets
   - H2: Security and storage

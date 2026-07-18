@@ -116,6 +116,37 @@ guard when adopting the drain and size `completedTtlMs`/`completedMaxEntries`
 to cover the old guard window instead. Non-dedupe protections (age fences,
 outbound echo caches) are unrelated to this rule and stay.
 
+#### At-least-once side effects
+
+Drain dispatch runs command side effects before the ingress row reaches its
+completion tombstone. A process crash between those steps replays the row and
+can execute the side effect again. This at-least-once crash window is the
+default contract. For non-idempotent work such as config writes, storage
+clears, or visible acknowledgements outside the reply lane, use
+`createIngressEffectOnce(...)` from
+`openclaw/plugin-sdk/ingress-effect-once`. Give each call the stable ingress
+`eventId` plus an effect name. Create one helper per ingress queue/account and
+use a stable, unique `namespacePrefix` for that scope because transport event
+IDs may be queue-local. The helper commits its durable claim only after the
+effect succeeds; a thrown effect releases the claim so a drain retry can
+execute it again, while concurrent callers wait for the active claim. Durable
+state errors call `onDiskError` when provided and reject instead of falling
+back to process memory.
+
+Set the helper's `ttlMs` to at least the channel's ingress tombstone retention
+plus the maximum delay between effect commit and row completion, including
+bounded downtime and drain retries. The effect record's TTL starts at commit,
+while tombstone retention starts later at completion; if pending-row lifetime
+is unbounded, no finite TTL covers arbitrary downtime. After the tombstone can
+no longer replay the row, older effect records are dead weight. Size
+`stateMaxEntries` for every distinct event/effect key that can exist in that
+retention window, accounting for the queue's completed-entry bound and the
+maximum effects per event. A lower cap evicts the oldest record before its TTL
+and allows that effect to execute again. Residual at-least-once windows remain
+if the process dies or persistence fails after the effect succeeds but before
+the claim commits, or if the record expires while its ingress row is still
+pending.
+
 #### Account-scoped restart contract
 
 Channel config changes restart the whole channel by default. A multi-account

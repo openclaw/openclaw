@@ -58,6 +58,7 @@ import {
 import {
   chatScopedEventSessionMatches,
   isHiddenAssistantStreamText,
+  loadChatBranches,
   loadChatHistory,
   shouldHideAssistantChatMessage,
   type ChatMetadataResult,
@@ -517,6 +518,10 @@ export function resetChatStateForRouteSession(
   state.chatAttachments = [];
   state.chatReplyTarget = null;
   state.chatMessages = snapshot.messages;
+  state.chatBranches = [];
+  state.chatBranchesSessionKey = null;
+  state.chatBranchesConnectionEpoch = null;
+  state.chatBranchesLoading = false;
   state.chatToolMessages = [];
   state.chatStreamSegments = [];
   state.chatThinkingLevel = null;
@@ -1077,6 +1082,9 @@ function handleSessionMessageEvent(state: ChatPageHost, payload: unknown) {
     return;
   }
   const matchesChat = sessionMessageMatchesChat(state, event);
+  if (matchesChat) {
+    void loadChatBranches(state);
+  }
   if (matchesChat && event.archived !== null) {
     state.selectedChatSessionArchived = event.archived;
   }
@@ -1138,12 +1146,13 @@ function replayPendingSessionMessageReload(
 function handleSessionsChangedEvent(state: ChatPageHost, payload: unknown) {
   const runIdBeforeApply = state.chatRunId;
   const event = readSessionChangedEvent(payload);
-  if (
-    event &&
-    globalSessionEventMatchesChat(state, event) &&
-    sessionMessageMatchesChat(state, event) &&
-    event.archived !== null
-  ) {
+  const matchesChat = Boolean(
+    event && globalSessionEventMatchesChat(state, event) && sessionMessageMatchesChat(state, event),
+  );
+  if (matchesChat) {
+    void loadChatBranches(state);
+  }
+  if (event && matchesChat && event.archived !== null) {
     state.selectedChatSessionArchived = event.archived;
   }
   const result = reconcileSessionEvent(state, payload);
@@ -1151,7 +1160,7 @@ function handleSessionsChangedEvent(state: ChatPageHost, payload: unknown) {
     result.applied &&
     event &&
     runIdBeforeApply &&
-    sessionMessageMatchesChat(state, event) &&
+    matchesChat &&
     finishSessionMessageRunReconcile(
       state,
       event.key,
@@ -1239,6 +1248,10 @@ export function createPageState(
     chatSending: false,
     chatMessage: "",
     chatMessages: [] as unknown[],
+    chatBranches: [],
+    chatBranchesSessionKey: null,
+    chatBranchesConnectionEpoch: null,
+    chatBranchesLoading: false,
     chatToolMessages: [] as Record<string, unknown>[],
     chatThinkingLevel: null,
     chatVerboseLevel: null,

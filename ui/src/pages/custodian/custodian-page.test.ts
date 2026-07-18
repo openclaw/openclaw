@@ -156,7 +156,7 @@ describe("custodian page", () => {
       .fn()
       .mockResolvedValueOnce({
         sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
-        reply: "Welcome aboard.",
+        reply: "Welcome **aboard**.",
         action: "none",
         question,
       })
@@ -170,12 +170,16 @@ describe("custodian page", () => {
 
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
     await page.updateComplete;
+    const assistantGroup = page.querySelector<HTMLElement>(".chat-group.assistant")!;
+    expect(assistantGroup.querySelector("strong")?.textContent).toBe("aboard");
+    expect(assistantGroup.querySelector(".chat-avatar.assistant")?.textContent?.trim()).toBe("OC");
     const card = page.querySelector("openclaw-option-card")!;
     await card.updateComplete;
     expect(page.querySelector(".option-card__choice--recommended")?.textContent).toContain(
       "Talk to my agent",
     );
-    page.querySelector<HTMLButtonElement>('[data-option-value="Connect WhatsApp"]')!.click();
+    const connectOption = page.querySelectorAll<HTMLButtonElement>("[data-option-value]")[1]!;
+    connectOption.click();
 
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
     await page.updateComplete;
@@ -186,10 +190,9 @@ describe("custodian page", () => {
       welcomeVariant: "onboarding",
       message: "connect whatsapp",
     });
-    expect(page.textContent).toContain("Connect WhatsApp");
-    expect(
-      page.querySelector<HTMLButtonElement>('[data-option-value="Connect WhatsApp"]')?.disabled,
-    ).toBe(true);
+    const userGroup = page.querySelector<HTMLElement>(".chat-group.user")!;
+    expect(userGroup.textContent).toContain("Connect WhatsApp");
+    expect(connectOption.disabled).toBe(true);
   });
 
   it("keeps failed sensitive replies masked for correction and retry", async () => {
@@ -207,17 +210,17 @@ describe("custodian page", () => {
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
     await page.updateComplete;
     const input = page.querySelector<HTMLInputElement>(
-      '.custodian__composer input[type="password"]',
+      '.agent-chat__composer-combobox input[type="password"]',
     )!;
     input.value = "test-token-placeholder";
     input.dispatchEvent(new InputEvent("input", { bubbles: true }));
     await page.updateComplete;
-    page.querySelector<HTMLButtonElement>(".custodian__composer button")!.click();
+    page.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
 
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
     await waitForFast(() => expect(page.querySelector('[role="alert"]')).not.toBeNull());
     await page.updateComplete;
-    expect(page.querySelector('.custodian__composer input[type="password"]')).not.toBeNull();
+    expect(input.isConnected).toBe(true);
     expect(page.textContent).toContain("Sensitive reply sent");
     expect(page.innerHTML).not.toContain("test-token-placeholder");
   });
@@ -437,7 +440,7 @@ describe("custodian page", () => {
     composer.value = "test-token-placeholder";
     composer.dispatchEvent(new InputEvent("input", { bubbles: true }));
     await page.updateComplete;
-    page.querySelector<HTMLButtonElement>(".custodian__composer button")!.click();
+    page.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
 
     setGatewayDeviceToken("test-token-placeholder");
@@ -471,7 +474,7 @@ describe("custodian page", () => {
     composer.value = "install everything";
     composer.dispatchEvent(new Event("input"));
     await page.updateComplete;
-    page.querySelector<HTMLButtonElement>(".custodian__composer button")!.click();
+    page.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
 
     await waitForFast(() =>
       expect(page.querySelector('[role="alert"]')?.textContent).toContain("gateway timeout"),
@@ -502,7 +505,7 @@ describe("custodian page", () => {
     composer.value = sensitiveValue;
     composer.dispatchEvent(new Event("input"));
     await page.updateComplete;
-    page.querySelector<HTMLButtonElement>(".custodian__composer button")!.click();
+    page.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
 
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
     expect(request.mock.calls[1]?.[1]).toMatchObject({ message: sensitiveValue });
@@ -569,16 +572,21 @@ describe("custodian page", () => {
     const { page } = await mountPage(context);
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
     await page.updateComplete;
-    const input = page.querySelector<HTMLTextAreaElement>(".custodian__composer textarea")!;
-    input.value = "Something else";
+    const input = page.querySelector<HTMLTextAreaElement>(
+      ".agent-chat__composer-combobox textarea",
+    )!;
+    input.value = "**Something** else";
     input.dispatchEvent(new InputEvent("input", { bubbles: true }));
     await page.updateComplete;
 
-    page.querySelector<HTMLButtonElement>(".custodian__composer button")!.click();
+    page.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
 
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
     await page.updateComplete;
-    expect(request.mock.calls[1]?.[1]).toMatchObject({ message: "Something else" });
+    expect(request.mock.calls[1]?.[1]).toMatchObject({ message: "**Something** else" });
+    // Parity with the regular chat: user turns run through the same markdown pipeline.
+    const sentGroup = page.querySelector<HTMLElement>(".chat-group.user")!;
+    expect(sentGroup.querySelector("strong")?.textContent).toBe("Something");
     expect(page.querySelector<HTMLButtonElement>('[data-option-value="Ask first"]')?.disabled).toBe(
       true,
     );
@@ -603,7 +611,7 @@ describe("custodian page", () => {
     composer.value = "status";
     composer.dispatchEvent(new Event("input"));
     await page.updateComplete;
-    page.querySelector<HTMLButtonElement>(".custodian__composer button")!.click();
+    page.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
     expect(request.mock.calls[1]?.[1]).not.toHaveProperty("welcomeVariant");
     expect(request.mock.calls[1]?.[1]).toMatchObject({ message: "status" });

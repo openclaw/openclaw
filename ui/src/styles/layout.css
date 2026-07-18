@@ -132,19 +132,16 @@ html.openclaw-native-nav .topbar .topbar-nav-toggle {
 }
 
 /* Shipped Mac builds without web chrome only replace the sidebar toggle via
-   openclaw-native-nav. Web-chrome hosts replace toggle, search, and new-session
-   controls in-document; they keep the drawer hamburger because that toolbar
-   hides in compact layouts. */
+   openclaw-native-nav. Web-chrome hosts replace the toggle and brand search;
+   new-thread stays in the brand row and moves to the titlebar only when the
+   rail is collapsed. */
 html.openclaw-native-web-chrome .shell-nav-expand,
 html.openclaw-native-web-chrome .sidebar-brand__collapse {
   display: none;
 }
 
-/* The titlebar strip replaces brand search/new-session only while it is
-   visible; compact layouts hide the strip (.shell--mobile-nav), so the drawer
-   keeps its own copies there, matching the plain-browser drawer. */
-html.openclaw-native-web-chrome .shell:not(.shell--mobile-nav) .sidebar-brand .sidebar-search,
-html.openclaw-native-web-chrome .shell:not(.shell--mobile-nav) .sidebar-brand .sidebar-new-session {
+/* The titlebar strip replaces brand search only while it is visible. */
+html.openclaw-native-web-chrome .shell:not(.shell--mobile-nav) .sidebar-brand .sidebar-search {
   display: none;
 }
 
@@ -908,6 +905,17 @@ html.openclaw-native-web-chrome .shell:not(.shell--mobile-nav) .sidebar-brand .s
   stroke-linejoin: round;
 }
 
+.sidebar-brand__new-thread {
+  width: 32px;
+  height: 32px;
+  color: var(--text);
+}
+
+.sidebar-brand__new-thread svg {
+  width: 18px;
+  height: 18px;
+}
+
 .sidebar-shell__body {
   min-height: 0;
   flex: 1;
@@ -933,7 +941,7 @@ html.openclaw-native-web-chrome .shell:not(.shell--mobile-nav) .sidebar-brand .s
 
 .sidebar-shell__footer {
   flex-shrink: 0;
-  padding: 12px 0 0;
+  padding: 4px 0 0;
   border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
 }
 
@@ -1312,6 +1320,20 @@ html.openclaw-native-macos
   display: inline-flex;
   flex: 0 0 auto;
   opacity: 0.75;
+  transition: opacity var(--duration-fast) ease;
+}
+
+.sidebar-session-group-toggle[aria-expanded="true"] .sidebar-session-group-toggle__icon {
+  opacity: 0;
+}
+
+.sidebar-recent-sessions__head:hover
+  .sidebar-session-group-toggle[aria-expanded="true"]
+  .sidebar-session-group-toggle__icon,
+.sidebar-recent-sessions__head:focus-within
+  .sidebar-session-group-toggle[aria-expanded="true"]
+  .sidebar-session-group-toggle__icon {
+  opacity: 0.75;
 }
 
 .sidebar-session-group-toggle__icon svg {
@@ -1464,6 +1486,10 @@ html.openclaw-native-macos
 }
 
 @media (hover: none), (pointer: coarse) {
+  .sidebar-session-group-toggle[aria-expanded="true"] .sidebar-session-group-toggle__icon {
+    opacity: 0.75;
+  }
+
   .sidebar-session-group-actions {
     opacity: 1;
     pointer-events: auto;
@@ -1911,6 +1937,43 @@ html.openclaw-native-macos
 
 .sidebar-recent-session__aside {
   padding-right: 2px;
+}
+
+/* Resting rows give the title the full sidebar width: the trailing aside
+   overlays the row instead of reserving button width in-flow. It must not
+   intercept clicks on the link tail beneath it — the buttons re-enable
+   their own pointer-events on hover/focus. Child rows keep the in-flow
+   aside because their runtime trail is resting content, not a hover swap. */
+.sidebar-recent-session:not(.sidebar-recent-session--child) > .sidebar-recent-session__aside {
+  position: absolute;
+  top: 50%;
+  right: 2px;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+/* Rows with a child toggle keep it as the rightmost in-flow control; the
+   overlaid actions land just left of it, at the link's right edge — the
+   same link-relative geometry as toggle-less rows, so one mask fits both. */
+.sidebar-recent-session:not(.sidebar-recent-session--child):has(> .sidebar-child-session-toggle)
+  > .sidebar-recent-session__aside {
+  right: 35px;
+}
+
+/* While the actions are surfaced, the link content fades out beneath them.
+   A mask (not a background scrim) keeps the fade correct over rest, hover,
+   active, and selected row backgrounds alike. */
+.sidebar-recent-session:not(.sidebar-recent-session--child):hover > .sidebar-recent-session__link,
+.sidebar-recent-session:not(.sidebar-recent-session--child):focus-within
+  > .sidebar-recent-session__link {
+  mask-image: linear-gradient(to right, black calc(100% - 80px), transparent calc(100% - 52px));
+}
+
+/* Touch keeps the actions permanently visible, so the fade is permanent too. */
+@media (hover: none), (pointer: coarse) {
+  .sidebar-recent-session:not(.sidebar-recent-session--child) > .sidebar-recent-session__link {
+    mask-image: linear-gradient(to right, black calc(100% - 80px), transparent calc(100% - 52px));
+  }
 }
 
 .nav-collapse-toggle {
@@ -2743,13 +2806,13 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   margin-left: auto;
 }
 
-/* Zone 5: product chrome in one slim footer bar. */
+/* Zone 5: product chrome in one slim footer bar. The shell footer's top
+   border is the only divider (and the pet's ledge); no second line here. */
 .sidebar-footer-bar {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px 8px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  padding: 6px 12px;
 }
 
 .sidebar-footer-bar__logo {
@@ -2792,8 +2855,8 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: 28px;
+  height: 28px;
   flex: none;
   border: none;
   border-radius: var(--radius-md);
@@ -2812,8 +2875,8 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
 }
 
 .sidebar-footer-bar__settings svg {
-  width: 15px;
-  height: 15px;
+  width: 17px;
+  height: 17px;
   stroke: currentColor;
   fill: none;
   stroke-width: 1.5px;

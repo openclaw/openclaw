@@ -26,6 +26,7 @@ public enum ErrorCode: String, Codable, Sendable {
     case notPaired = "NOT_PAIRED"
     case agentTimeout = "AGENT_TIMEOUT"
     case invalidRequest = "INVALID_REQUEST"
+    case forbidden = "FORBIDDEN"
     case approvalNotFound = "APPROVAL_NOT_FOUND"
     case unavailable = "UNAVAILABLE"
 }
@@ -570,6 +571,28 @@ public struct ErrorShape: Codable, Sendable {
         case details
         case retryable
         case retryafterms = "retryAfterMs"
+    }
+}
+
+public struct GatewayErrorDetails: Codable, Sendable {
+    public let code: String
+    public let missingscope: String
+    public let requiredscopes: [String]
+
+    public init(
+        code: String,
+        missingscope: String,
+        requiredscopes: [String])
+    {
+        self.code = code
+        self.missingscope = missingscope
+        self.requiredscopes = requiredscopes
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case code
+        case missingscope = "missingScope"
+        case requiredscopes = "requiredScopes"
     }
 }
 
@@ -14020,6 +14043,7 @@ public struct ChatSendParams: Codable, Sendable {
     public let originatingto: String?
     public let originatingaccountid: String?
     public let originatingthreadid: String?
+    public let replytoid: String?
     public let attachments: [AnyCodable]?
     public let toolbindings: [String: AnyCodable]?
     public let timeoutms: Int?
@@ -14043,6 +14067,7 @@ public struct ChatSendParams: Codable, Sendable {
         originatingto: String? = nil,
         originatingaccountid: String? = nil,
         originatingthreadid: String? = nil,
+        replytoid: String? = nil,
         attachments: [AnyCodable]? = nil,
         toolbindings: [String: AnyCodable]? = nil,
         timeoutms: Int? = nil,
@@ -14065,6 +14090,7 @@ public struct ChatSendParams: Codable, Sendable {
         self.originatingto = originatingto
         self.originatingaccountid = originatingaccountid
         self.originatingthreadid = originatingthreadid
+        self.replytoid = replytoid
         self.attachments = attachments
         self.toolbindings = toolbindings
         self.timeoutms = timeoutms
@@ -14088,6 +14114,7 @@ public struct ChatSendParams: Codable, Sendable {
         originatingto: String? = nil,
         originatingaccountid: String? = nil,
         originatingthreadid: String? = nil,
+        replytoid: String? = nil,
         attachments: [AnyCodable]? = nil,
         toolbindings: [String: AnyCodable]? = nil,
         timeoutms: Int? = nil,
@@ -14111,6 +14138,7 @@ public struct ChatSendParams: Codable, Sendable {
             originatingto: originatingto,
             originatingaccountid: originatingaccountid,
             originatingthreadid: originatingthreadid,
+            replytoid: replytoid,
             attachments: attachments,
             toolbindings: toolbindings,
             timeoutms: timeoutms,
@@ -14135,6 +14163,7 @@ public struct ChatSendParams: Codable, Sendable {
         case originatingto = "originatingTo"
         case originatingaccountid = "originatingAccountId"
         case originatingthreadid = "originatingThreadId"
+        case replytoid = "replyToId"
         case attachments
         case toolbindings = "toolBindings"
         case timeoutms = "timeoutMs"

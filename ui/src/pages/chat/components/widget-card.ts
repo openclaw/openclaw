@@ -15,6 +15,7 @@ import {
   type EmbedSandboxMode,
 } from "../../../lib/chat/tool-display.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
+import { installWidgetThemeObserver, postWidgetTheme } from "./widget-theme.ts";
 
 export { WIDGET_PROMPT_EVENT };
 export type { WidgetPromptEventDetail };
@@ -196,6 +197,7 @@ function renderPreviewFrame(params: {
   promptCapable?: boolean;
 }) {
   installWidgetSizeListener();
+  installWidgetThemeObserver(() => widgetFrameRegistry);
   const sandbox = params.sandbox ?? "";
   const src = params.src ?? "";
   const reportedHeight = src ? widgetFrameHeightsBySrc.get(src) : undefined;
@@ -205,8 +207,12 @@ function renderPreviewFrame(params: {
   }
   const handleLoad = (event: Event) => {
     registerWidgetFrame(event);
-    if (params.promptCapable && event.currentTarget instanceof HTMLIFrameElement) {
-      adoptWidgetPromptPort(event.currentTarget);
+    if (event.currentTarget instanceof HTMLIFrameElement) {
+      const frame = event.currentTarget;
+      if (params.promptCapable) {
+        adoptWidgetPromptPort(frame);
+      }
+      postWidgetTheme(frame);
     }
   };
   return keyed(

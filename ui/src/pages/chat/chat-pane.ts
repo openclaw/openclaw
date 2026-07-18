@@ -118,6 +118,7 @@ import {
   loadOlderChatHistoryPage,
   rewindChatHistory,
   resolveChatHistoryPagination,
+  switchChatHistoryBranch,
   syncSelectedSessionMessageSubscription,
 } from "./chat-history.ts";
 import {
@@ -164,6 +165,7 @@ import {
   renderBackgroundTasksToggle,
   type BackgroundTasksProps,
 } from "./components/chat-background-tasks.ts";
+import { isChatRunWorking } from "./components/chat-composer.ts";
 import { renderChatControls } from "./components/chat-controls.ts";
 import {
   canRevealSessionWorkspace,
@@ -322,11 +324,11 @@ const WORKSPACE_RAIL_MAX_WIDTH = 280;
 const DETAIL_SIDEBAR_SIDE_MIN_WIDTH = 680;
 
 const NEW_SESSION_ACTIVE_RUN_MESSAGE =
-  "Start a new session after the active run or queued messages finish.";
+  "Start a new thread after the active run or queued messages finish.";
 const NEW_SESSION_LIST_LOADING_MESSAGE =
-  "Session list is still refreshing. Try New Chat again in a moment.";
+  "Thread list is still refreshing. Try New Chat again in a moment.";
 const NEW_SESSION_CREATE_FAILED_MESSAGE =
-  "New Chat could not create a new session. Try again in a moment.";
+  "New Chat could not create a new thread. Try again in a moment.";
 
 function keyboardEventPathMatches(event: KeyboardEvent, selector: string): boolean {
   return event
@@ -1434,6 +1436,15 @@ class ChatPane extends OpenClawLightDomElement {
       state.chatError = state.lastError;
       state.requestUpdate?.();
     }
+  }
+
+  private async switchToBranch(leafEntryId: string): Promise<void> {
+    const state = this.state;
+    if (!state) {
+      return;
+    }
+    await switchChatHistoryBranch(state, leafEntryId);
+    state.requestUpdate?.();
   }
 
   private readonly handleCommandPaletteSlashCommand = (command: string) => {
@@ -2630,6 +2641,23 @@ class ChatPane extends OpenClawLightDomElement {
         isGatewayMethodAdvertised(this.context.gateway.snapshot, "sessions.files.reveal") === true,
       hasAdminAccess: hasOperatorAdminAccess(this.context.gateway.snapshot.hello?.auth ?? null),
     });
+    const branchSwitchWorking = this.state
+      ? this.state.chatSending ||
+        isChatRunWorking({
+          canAbort: hasAbortableSessionRun(this.state),
+          onAbort: () => undefined,
+          queue: this.state.chatQueue,
+          runStatus: this.state.chatRunStatus,
+          sessionKey: this.state.sessionKey,
+        })
+      : false;
+    const branchSwitchDisabledReason = !hasOperatorAdminAccess(
+      this.context.gateway.snapshot.hello?.auth ?? null,
+    )
+      ? t("chat.sessionHeader.branchSwitchRequiresAdmin")
+      : branchSwitchWorking
+        ? t("chat.sessionHeader.branchSwitchUnavailable")
+        : null;
     return renderChatPaneHeader({
       paneId: this.paneId,
       narrow: this.narrow,
@@ -2642,6 +2670,11 @@ class ChatPane extends OpenClawLightDomElement {
       workspaceRoot: workspace.root,
       workspaceLabel: workspace.label,
       branch,
+      branches:
+        this.state && this.state.chatBranchesSessionKey === this.state.sessionKey
+          ? (this.state.chatBranches ?? [])
+          : [],
+      branchSwitchDisabledReason,
       platform: this.headerPlatform,
       canReveal,
       copiedAction: this.headerCopiedAction,
@@ -2674,6 +2707,7 @@ class ChatPane extends OpenClawLightDomElement {
           this.handleHeaderMenuAction(action, row, workspace.root, branch);
         }
       },
+      onBranchSelect: (leafEntryId) => void this.switchToBranch(leafEntryId),
       onOpenSplitView: this.onOpenSplitView,
       onSplitDown: this.onSplitDown,
       onSplitRight: this.onSplitRight,

@@ -548,6 +548,33 @@ export const SessionsForkResultSchema = closedObject({
   editorText: Type.Optional(Type.String()),
 });
 
+export const SessionBranchSchema = closedObject({
+  leafEntryId: NonEmptyString,
+  headline: Type.String(),
+  messageCount: Type.Integer({ minimum: 0 }),
+  updatedAt: Type.Optional(NonEmptyString),
+  active: Type.Boolean(),
+});
+
+/** Lists transcript DAG tips available for branch switching. */
+export const SessionsBranchesListParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+});
+
+export const SessionsBranchesListResultSchema = closedObject({
+  branches: Type.Array(SessionBranchSchema),
+});
+
+/** Repoints the active transcript path to one existing DAG tip. */
+export const SessionsBranchesSwitchParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+  leafEntryId: NonEmptyString,
+});
+
+export const SessionsBranchesSwitchResultSchema = closedObject({});
+
 /** List response for session compaction checkpoints. */
 export const SessionsCompactionListResultSchema = closedObject({
   ok: Type.Literal(true),
@@ -657,6 +684,11 @@ export type SessionsRewindParams = Static<typeof SessionsRewindParamsSchema>;
 export type SessionsForkParams = Static<typeof SessionsForkParamsSchema>;
 export type SessionsRewindResult = Static<typeof SessionsRewindResultSchema>;
 export type SessionsForkResult = Static<typeof SessionsForkResultSchema>;
+export type SessionBranch = Static<typeof SessionBranchSchema>;
+export type SessionsBranchesListParams = Static<typeof SessionsBranchesListParamsSchema>;
+export type SessionsBranchesListResult = Static<typeof SessionsBranchesListResultSchema>;
+export type SessionsBranchesSwitchParams = Static<typeof SessionsBranchesSwitchParamsSchema>;
+export type SessionsBranchesSwitchResult = Static<typeof SessionsBranchesSwitchResultSchema>;
 export type SessionWorktreeInfo = Static<typeof SessionWorktreeInfoSchema>;
 export type SessionsCreateParams = Static<typeof SessionsCreateParamsSchema>;
 export type SessionsCreateResult = Static<typeof SessionsCreateResultSchema>;

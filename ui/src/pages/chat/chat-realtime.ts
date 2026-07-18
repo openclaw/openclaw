@@ -170,6 +170,18 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
             state.realtimeTalkInputLevel.set(0);
           }
           state.requestUpdate();
+          // Remembered camera intent waits for "listening": capability is reported
+          // before transport start, and acquiring the camera while microphone
+          // startup can still fail would prompt for a call that never happens.
+          if (
+            status === "listening" &&
+            state.realtimeTalkVideoCapable &&
+            autoEnableCamera &&
+            !autoEnableCameraAttempted
+          ) {
+            autoEnableCameraAttempted = true;
+            void setRealtimeTalkCameraEnabled(true, { disableAutoEnableOnFailure: true });
+          }
         },
         onVideoCapability: (capable) => {
           if (state.realtimeTalkSession !== session) {
@@ -177,10 +189,6 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
           }
           state.realtimeTalkVideoCapable = capable;
           state.requestUpdate();
-          if (capable && autoEnableCamera && !autoEnableCameraAttempted) {
-            autoEnableCameraAttempted = true;
-            void setRealtimeTalkCameraEnabled(true, { disableAutoEnableOnFailure: true });
-          }
         },
         onInputLevel: (level) => {
           if (state.realtimeTalkSession !== session) {

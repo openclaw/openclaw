@@ -139,6 +139,9 @@ export type ConfigProps = {
   viewState: ConfigViewState;
   rawAvailable?: boolean;
   showModeToggle?: boolean;
+  /** Set when the form renders under a composite page's custom rows; an empty
+   *  schema section stays silent instead of claiming the page is empty. */
+  embeddedEditor?: boolean;
   formValue: Record<string, unknown> | null;
   originalValue: Record<string, unknown> | null;
   activeSection: string | null;
@@ -1889,6 +1892,7 @@ export function renderConfig(props: ConfigProps) {
                       schema: analysis.schema,
                       uiHints: props.uiHints,
                       value: props.formValue,
+                      embedded: props.embeddedEditor === true,
                       rawAvailable,
                       disabled: configBusy || !props.formValue,
                       unsupportedPaths: analysis.unsupportedPaths,
