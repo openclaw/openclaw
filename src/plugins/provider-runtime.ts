@@ -53,7 +53,10 @@ import {
   resolveOwningPluginIdsForProviderRef,
   resolveUsageHookProviderPluginContracts,
 } from "./providers.js";
-import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-state.js";
+import {
+  getActivePluginRegistryWorkspaceDirFromState,
+  getPluginRegistryState,
+} from "./runtime-state.js";
 import { resolveRuntimeTextTransforms } from "./text-transforms.runtime.js";
 import type {
   ProviderAuthDoctorHintContext,
@@ -113,12 +116,27 @@ type ProviderModelCatalogAugmentInvocation = {
   controller: AbortController;
   outcome: Promise<ProviderModelCatalogAugmentOutcome>;
 };
-// Plugin metadata is process-stable. Retain hung calls so uncached retries cannot
-// stack duplicate provider work after the caller's deadline has expired.
-const providerModelCatalogAugmentInFlight = new Map<
-  string,
-  ProviderModelCatalogAugmentInvocation
->();
+type ProviderModelCatalogAugmentInFlight = {
+  hook: ProviderModelCatalogAugmentHook;
+  invocation: ProviderModelCatalogAugmentInvocation;
+};
+type ProviderModelCatalogAugmentParams = {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderAugmentModelCatalogContext;
+};
+type ProviderModelCatalogAugmentScope = {
+  config: OpenClawConfig | undefined;
+  env: NodeJS.ProcessEnv;
+  registryKey: string | null;
+  registryVersion: number;
+  workspaceDir: string;
+  inFlight: Map<string, ProviderModelCatalogAugmentInFlight>;
+};
+// Retain hung calls only within one runtime/config/workspace scope so retries do
+// not overlap, while reloads can retire stale work and invoke replacements.
+let providerModelCatalogAugmentScope: ProviderModelCatalogAugmentScope | undefined;
 
 function matchesProviderPluginRef(provider: ProviderPlugin, providerId: string): boolean {
   const normalized = normalizeProviderId(providerId);
@@ -197,11 +215,19 @@ function resetExternalAuthFallbackWarningCacheForTest(): void {
   warnedExternalAuthFallbackPluginIds.clear();
 }
 
-function resetProviderModelCatalogAugmentInFlightForTest(): void {
-  for (const invocation of providerModelCatalogAugmentInFlight.values()) {
-    invocation.controller.abort();
+function retireProviderModelCatalogAugmentScope(): void {
+  if (!providerModelCatalogAugmentScope) {
+    return;
   }
-  providerModelCatalogAugmentInFlight.clear();
+  for (const item of providerModelCatalogAugmentScope.inFlight.values()) {
+    item.invocation.controller.abort();
+  }
+  providerModelCatalogAugmentScope.inFlight.clear();
+  providerModelCatalogAugmentScope = undefined;
+}
+
+function resetProviderModelCatalogAugmentInFlightForTest(): void {
+  retireProviderModelCatalogAugmentScope();
 }
 
 export const testing = {
@@ -1138,15 +1164,58 @@ function resolveProviderModelCatalogAugmentKey(plugin: ProviderPlugin): string {
   return `${plugin.pluginId ?? plugin.id}\0${plugin.id}`;
 }
 
+function resolveProviderModelCatalogAugmentInFlight(
+  params: ProviderModelCatalogAugmentParams,
+): Map<string, ProviderModelCatalogAugmentInFlight> {
+  const registryState = getPluginRegistryState();
+  const config = params.config ?? params.context.config;
+  const env = params.env ?? params.context.env;
+  const workspaceDir =
+    params.workspaceDir ??
+    params.context.workspaceDir ??
+    getActivePluginRegistryWorkspaceDirFromState() ??
+    "";
+  const registryKey = registryState?.key ?? null;
+  const registryVersion = registryState?.activeVersion ?? 0;
+  const current = providerModelCatalogAugmentScope;
+  if (
+    current &&
+    current.config === config &&
+    current.env === env &&
+    current.registryKey === registryKey &&
+    current.registryVersion === registryVersion &&
+    current.workspaceDir === workspaceDir
+  ) {
+    return current.inFlight;
+  }
+
+  retireProviderModelCatalogAugmentScope();
+  const inFlight = new Map<string, ProviderModelCatalogAugmentInFlight>();
+  providerModelCatalogAugmentScope = {
+    config,
+    env,
+    registryKey,
+    registryVersion,
+    workspaceDir,
+    inFlight,
+  };
+  return inFlight;
+}
+
 function resolveProviderModelCatalogAugmentInvocation(params: {
+  inFlight: Map<string, ProviderModelCatalogAugmentInFlight>;
   plugin: ProviderPlugin;
   hook: ProviderModelCatalogAugmentHook;
   context: ProviderAugmentModelCatalogContext;
 }): ProviderModelCatalogAugmentInvocation {
   const key = resolveProviderModelCatalogAugmentKey(params.plugin);
-  const existing = providerModelCatalogAugmentInFlight.get(key);
+  const existing = params.inFlight.get(key);
+  if (existing?.hook === params.hook) {
+    return existing.invocation;
+  }
   if (existing) {
-    return existing;
+    existing.invocation.controller.abort();
+    params.inFlight.delete(key);
   }
 
   const controller = new AbortController();
@@ -1170,10 +1239,10 @@ function resolveProviderModelCatalogAugmentInvocation(params: {
           controller.signal.aborted ? { status: "timed-out" } : { status: "rejected", error },
       ),
   } satisfies ProviderModelCatalogAugmentInvocation;
-  providerModelCatalogAugmentInFlight.set(key, invocation);
+  params.inFlight.set(key, { hook: params.hook, invocation });
   void invocation.outcome.then(() => {
-    if (providerModelCatalogAugmentInFlight.get(key) === invocation) {
-      providerModelCatalogAugmentInFlight.delete(key);
+    if (params.inFlight.get(key)?.invocation === invocation) {
+      params.inFlight.delete(key);
     }
   });
   return invocation;
@@ -1203,20 +1272,20 @@ function waitForProviderModelCatalogAugment(
   ]).finally(clearTimer);
 }
 
-export async function augmentModelCatalogWithProviderPluginsResult(params: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  context: ProviderAugmentModelCatalogContext;
-}) {
+export async function augmentModelCatalogWithProviderPluginsResult(
+  params: ProviderModelCatalogAugmentParams,
+) {
   const supplemental = [] as ProviderAugmentModelCatalogContext["entries"];
   let authoritative = true;
-  const pending = resolveProviderPluginsForCatalogHooks(params).flatMap((plugin) => {
+  const plugins = resolveProviderPluginsForCatalogHooks(params);
+  const inFlight = resolveProviderModelCatalogAugmentInFlight(params);
+  const pending = plugins.flatMap((plugin) => {
     const hook = plugin.augmentModelCatalog;
     if (!hook) {
       return [];
     }
     const invocation = resolveProviderModelCatalogAugmentInvocation({
+      inFlight,
       plugin,
       hook,
       context: params.context,
