@@ -145,6 +145,20 @@ describe("Microsoft Teams meeting platform adapter", () => {
     expect(window[MEETING_STATE_KEY]).toBe(priorMeeting);
   });
 
+  it("does not mask an in-call session conflict with talkback audio readiness", async () => {
+    const { result } = await runStatusScript({
+      allowMicrophone: true,
+      allowSessionAdoption: false,
+      leave: control({ label: "Leave" }),
+      priorMeeting: {
+        identity: "teams-work:19:meeting_test@thread.v2",
+        sessionId: "session-2",
+      },
+    });
+
+    expect(result).toMatchObject({ manualActionReason: "teams-session-conflict" });
+  });
+
   it("does not unmute or join until BlackHole is visibly selected as the Teams input", async () => {
     const camera = control({ label: "Turn camera on", pressed: false });
     const microphone = control({ label: "Turn microphone on", pressed: false });
@@ -396,6 +410,26 @@ describe("Microsoft Teams meeting platform adapter", () => {
     });
 
     expect(result).toEqual({ departed: false, sessionMatched: false, urlMatched: true });
+    expect(leave.clicks).toBe(0);
+  });
+
+  it("does not let an ID-less leave mutate a page-owned session", () => {
+    const leave = control({ label: "Leave" });
+    const { result } = runLeaveScript({
+      leave,
+      meetingSessionId: "",
+      priorMeeting: {
+        identity: "teams-work:19:meeting_test@thread.v2",
+        sessionId: "session-1",
+      },
+    });
+
+    expect(result).toEqual({
+      departed: false,
+      sessionConflict: true,
+      sessionMatched: false,
+      urlMatched: true,
+    });
     expect(leave.clicks).toBe(0);
   });
 

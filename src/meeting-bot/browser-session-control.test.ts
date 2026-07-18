@@ -1,13 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
+import { runMeetingBrowserAct } from "./browser-act-lock.js";
 import { leaveMeetingWithBrowser } from "./browser-session-control.js";
 
 describe("meeting browser leave ownership", () => {
-  async function leaveWithStep(step: {
-    departed: boolean;
-    sessionConflict?: boolean;
-    sessionMatched?: boolean;
-    urlMatched?: boolean;
-  }) {
+  async function leaveWithStep(
+    step: {
+      departed: boolean;
+      sessionConflict?: boolean;
+      sessionMatched?: boolean;
+      urlMatched?: boolean;
+    },
+    openedByPlugin = true,
+  ) {
     const buildLeaveScript = vi.fn(() => "() => '{}'");
     const deletedTabs: string[] = [];
     const result = await leaveMeetingWithBrowser({
@@ -34,14 +38,10 @@ describe("meeting browser leave ownership", () => {
       launch: true,
       meetingSessionId: "session-1",
       meetingUrl: "https://meet.test/meeting",
-      tab: { targetId: "target-1", openedByPlugin: true },
+      tab: { targetId: "target-1", openedByPlugin },
       timeoutMs: 1_000,
     });
-    expect(buildLeaveScript).toHaveBeenCalledWith({
-      leaveInitiated: false,
-      meetingSessionId: "session-1",
-      meetingUrl: "https://meet.test/meeting",
-    });
+    expect(buildLeaveScript).toHaveBeenCalledWith("https://meet.test/meeting");
     expect(deletedTabs).toEqual([]);
     return result;
   }
@@ -73,24 +73,40 @@ describe("meeting browser leave ownership", () => {
     });
   });
 
+  it("reports departure while keeping a reused tab open", async () => {
+    const result = await leaveWithStep({ departed: true, urlMatched: true }, false);
+
+    expect(result).toEqual({
+      left: true,
+      note: "Clicked Test meeting's Leave call button; kept the reused browser tab open.",
+    });
+  });
+
   it("carries initiated-leave evidence into the next page evaluation", async () => {
     const leaveInitiated: boolean[] = [];
     let evaluation = 0;
     const deletedTabs: string[] = [];
-    const result = await leaveMeetingWithBrowser({
+    let markDeleteStarted: (() => void) | undefined;
+    const deleteStarted = new Promise<void>((resolve) => {
+      markDeleteStarted = resolve;
+    });
+    let releaseDelete: (() => void) | undefined;
+    const deleteGate = new Promise<void>((resolve) => {
+      releaseDelete = resolve;
+    });
+    const leaving = leaveMeetingWithBrowser({
       adapter: {
         browserLabel: "Test meeting",
         browser: {
-          buildLeaveScript: (params: { leaveInitiated: boolean }) => {
-            leaveInitiated.push(params.leaveInitiated);
+          buildLeaveScript: () => "() => '{}'",
+          buildSessionLeaveScript: (context: { leaveInitiated: boolean }) => {
+            leaveInitiated.push(context.leaveInitiated);
             return "() => '{}'";
           },
           parseLeaveResult: () =>
             evaluation === 1
               ? { departed: false, leaveAction: "leave", urlMatched: true }
-              : evaluation === 2
-                ? { departed: false, urlMatched: true }
-                : { departed: true, sessionMatched: true, urlMatched: true },
+              : { departed: true, sessionMatched: false },
         },
       } as never,
       callBrowser: async (request) => {
@@ -103,6 +119,8 @@ describe("meeting browser leave ownership", () => {
         }
         if (request.method === "DELETE") {
           deletedTabs.push(request.path);
+          markDeleteStarted?.();
+          await deleteGate;
           return {};
         }
         throw new Error(`Unexpected browser request: ${request.method} ${request.path}`);
@@ -114,8 +132,23 @@ describe("meeting browser leave ownership", () => {
       timeoutMs: 1_000,
     });
 
-    expect(leaveInitiated).toEqual([false, true, true]);
+    await deleteStarted;
+    let concurrentStarted = false;
+    const concurrent = runMeetingBrowserAct({
+      deadline: Date.now() + 1_000,
+      targetId: "target-1",
+      operation: async () => {
+        concurrentStarted = true;
+      },
+    });
+    await Promise.resolve();
+    expect(concurrentStarted).toBe(false);
+    releaseDelete?.();
+    const result = await leaving;
+    await concurrent;
+    expect(leaveInitiated).toEqual([false, true]);
     expect(deletedTabs).toEqual(["/tabs/target-1"]);
+    expect(concurrentStarted).toBe(true);
     expect(result.left).toBe(true);
   });
 });

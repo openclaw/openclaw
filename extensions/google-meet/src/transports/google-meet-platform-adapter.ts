@@ -290,7 +290,7 @@ export const GOOGLE_MEET_PLATFORM_ADAPTER: MeetingPlatformAdapter<
       message:
         "Open the OpenClaw browser profile, finish Google Meet login, admission, or permission prompts, then retry.",
     }),
-    buildLeaveScript: ({ meetingUrl }) => meetLeaveScript(meetingUrl),
+    buildLeaveScript: meetLeaveScript,
     parseLeaveResult: parseMeetLeaveResult,
     captions: {
       enabled: (mode) => mode === "transcribe",

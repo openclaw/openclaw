@@ -203,13 +203,14 @@ export function teamsMeetingLeaveScript(params: {
   const leaveInitiated = ${JSON.stringify(params.leaveInitiated)};
   const currentIdentity = meetingIdentity(location.href);
   const state = window.__openclawTeamsMeeting;
-  if (!expectedSessionId) {
-    return JSON.stringify({ departed: false, sessionMatched: false, urlMatched: true });
-  }
-  if (state?.sessionId && state.sessionId !== expectedSessionId) {
+  const enforceSessionOwnership = Boolean(expectedSessionId);
+  if (!enforceSessionOwnership && state?.sessionId) {
     return JSON.stringify({ departed: false, sessionConflict: true, sessionMatched: false, urlMatched: true });
   }
-  const sessionMatched = state?.sessionId === expectedSessionId;
+  if (enforceSessionOwnership && state?.sessionId && state.sessionId !== expectedSessionId) {
+    return JSON.stringify({ departed: false, sessionConflict: true, sessionMatched: false, urlMatched: true });
+  }
+  const sessionMatched = !enforceSessionOwnership || state?.sessionId === expectedSessionId;
   const retainedLeaveOwnership = Boolean(!sessionMatched && leaveInitiated);
   if (!sessionMatched && !retainedLeaveOwnership) {
     return JSON.stringify({ departed: false, sessionMatched: false, urlMatched: true });

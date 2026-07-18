@@ -22,7 +22,7 @@ async function leaveMeetingInPage<
 >(params: {
   adapter: BrowserAdapter<Session, Mode, Health, Transcript>;
   callBrowser: MeetingBrowserRequestCaller;
-  meetingSessionId: string;
+  meetingSessionId?: string;
   meetingUrl: string;
   targetId: string;
   timeoutMs: number;
@@ -30,6 +30,7 @@ async function leaveMeetingInPage<
   departed: boolean;
   clickedLeave: boolean;
   clickedConfirmation: boolean;
+  ownershipRetained?: boolean;
   sessionConflict?: boolean;
   sessionMatched?: boolean;
   urlMatched?: boolean;
@@ -38,33 +39,35 @@ async function leaveMeetingInPage<
   let clickedLeave = false;
   let clickedConfirmation = false;
   do {
-    const evaluated = await runMeetingBrowserAct({
-      deadline,
-      targetId: params.targetId,
-      operation: async (remainingMs) =>
-        await params.callBrowser({
-          method: "POST",
-          path: "/act",
-          body: {
-            kind: "evaluate",
-            targetId: params.targetId,
-            fn: params.adapter.browser.buildLeaveScript({
-              leaveInitiated: clickedLeave,
-              meetingSessionId: params.meetingSessionId,
-              meetingUrl: params.meetingUrl,
-            }),
-          },
-          timeoutMs: remainingMs,
-        }),
+    const remainingMs = Math.floor(deadline - Date.now());
+    if (remainingMs <= 0) {
+      throw new Error("Meeting browser leave timed out.");
+    }
+    const evaluated = await params.callBrowser({
+      method: "POST",
+      path: "/act",
+      body: {
+        kind: "evaluate",
+        targetId: params.targetId,
+        fn:
+          params.adapter.browser.buildSessionLeaveScript?.({
+            leaveInitiated: clickedLeave,
+            meetingSessionId: params.meetingSessionId ?? "",
+            meetingUrl: params.meetingUrl,
+          }) ?? params.adapter.browser.buildLeaveScript(params.meetingUrl),
+      },
+      timeoutMs: remainingMs,
     });
     const step = params.adapter.browser.parseLeaveResult(evaluated);
     clickedLeave ||= step.leaveAction === "leave";
     clickedConfirmation ||= step.leaveAction === "confirm";
     if (step.sessionMatched === false) {
+      const ownershipRetained = clickedLeave && step.sessionConflict !== true;
       return {
-        departed: false,
+        departed: ownershipRetained ? step.departed : false,
         clickedLeave,
         clickedConfirmation,
+        ownershipRetained,
         sessionConflict: step.sessionConflict,
         sessionMatched: false,
         urlMatched: step.urlMatched,
@@ -101,7 +104,7 @@ export async function leaveMeetingWithBrowser<
   adapter: BrowserAdapter<Session, Mode, Health, Transcript>;
   callBrowser: MeetingBrowserRequestCaller;
   launch: boolean;
-  meetingSessionId: string;
+  meetingSessionId?: string;
   meetingUrl: string;
   tab: MeetingBrowserTab;
   timeoutMs: number;
@@ -126,15 +129,42 @@ export async function leaveMeetingWithBrowser<
       };
     }
     let leaveResult: Awaited<ReturnType<typeof leaveMeetingInPage>>;
+    let tabClosed = false;
     try {
-      leaveResult = await leaveMeetingInPage({
-        adapter: params.adapter,
-        callBrowser: params.callBrowser,
-        meetingSessionId: params.meetingSessionId,
-        meetingUrl: params.meetingUrl,
+      const locked = await runMeetingBrowserAct({
+        deadline: Date.now() + timeoutMs,
         targetId,
-        timeoutMs,
+        operation: async (remainingMs) => {
+          const operationDeadline = Date.now() + remainingMs;
+          const result = await leaveMeetingInPage({
+            adapter: params.adapter,
+            callBrowser: params.callBrowser,
+            meetingSessionId: params.meetingSessionId,
+            meetingUrl: params.meetingUrl,
+            targetId,
+            timeoutMs: remainingMs,
+          });
+          const canCloseTrackedTab =
+            openedByPlugin &&
+            (result.urlMatched === true || result.departed) &&
+            (result.sessionMatched !== false || result.ownershipRetained === true);
+          if (!canCloseTrackedTab) {
+            return { leaveResult: result, tabClosed: false };
+          }
+          const closeTimeoutMs = Math.floor(operationDeadline - Date.now());
+          if (closeTimeoutMs <= 0) {
+            throw new Error("Meeting browser leave timed out before the tab could close.");
+          }
+          await params.callBrowser({
+            method: "DELETE",
+            path: `/tabs/${targetId}`,
+            timeoutMs: closeTimeoutMs,
+          });
+          return { leaveResult: result, tabClosed: true };
+        },
       });
+      leaveResult = locked.leaveResult;
+      tabClosed = locked.tabClosed;
     } catch (error) {
       return {
         left: false,
@@ -149,7 +179,9 @@ export async function leaveMeetingWithBrowser<
         note: `${params.adapter.browserLabel} tab moved away from this session; left its current page untouched.`,
       };
     }
-    if (leaveResult.sessionMatched === false) {
+    // A verified Leave click happened under this target lock. A later document
+    // can lose its page marker without transferring ownership.
+    if (leaveResult.sessionMatched === false && leaveResult.ownershipRetained !== true) {
       if (leaveResult.sessionConflict !== true) {
         return {
           left: false,
@@ -161,33 +193,24 @@ export async function leaveMeetingWithBrowser<
         note: `${params.adapter.browserLabel} tab belongs to another OpenClaw meeting session; left its current call untouched.`,
       };
     }
-    if (leaveResult.urlMatched !== true) {
+    if (leaveResult.urlMatched !== true && !leaveResult.departed) {
       return {
         left: false,
         note: "Browser control could not verify that the tracked tab still showed this meeting.",
       };
     }
     const { clickedLeave, departed } = leaveResult;
-    if (!openedByPlugin) {
-      return {
-        left: departed,
-        note: departed
+    return {
+      left: openedByPlugin ? tabClosed : departed,
+      note: openedByPlugin
+        ? clickedLeave
+          ? `Clicked ${params.adapter.browserLabel}'s Leave call button and closed the ${params.adapter.browserLabel} tab.`
+          : `Closed the ${params.adapter.browserLabel} tab to leave the meeting (Leave call button was not found).`
+        : departed
           ? `Clicked ${params.adapter.browserLabel}'s Leave call button; kept the reused browser tab open.`
           : clickedLeave
             ? `Clicked ${params.adapter.browserLabel}'s Leave call button, but could not verify departure; leave it manually.`
             : `Could not find ${params.adapter.browserLabel}'s Leave call button in the reused browser tab; leave it manually.`,
-      };
-    }
-    await params.callBrowser({
-      method: "DELETE",
-      path: `/tabs/${targetId}`,
-      timeoutMs,
-    });
-    return {
-      left: true,
-      note: clickedLeave
-        ? `Clicked ${params.adapter.browserLabel}'s Leave call button and closed the ${params.adapter.browserLabel} tab.`
-        : `Closed the ${params.adapter.browserLabel} tab to leave the meeting (Leave call button was not found).`,
     };
   } catch (error) {
     return {

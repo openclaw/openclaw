@@ -70,7 +70,8 @@ type MeetingBrowserAdapter<
   classifyManualAction(health: Health): MeetingManualAction | undefined;
   shouldRetryJoinStatus?(health: Health): boolean;
   browserControlUnavailable(error: unknown): MeetingManualAction;
-  buildLeaveScript(params: {
+  buildLeaveScript(meetingUrl: string): string;
+  buildSessionLeaveScript?(params: {
     leaveInitiated: boolean;
     meetingSessionId: string;
     meetingUrl: string;

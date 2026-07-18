@@ -300,7 +300,13 @@ export const TEAMS_MEETINGS_PLATFORM_ADAPTER: MeetingPlatformAdapter<
       message:
         "Open the OpenClaw browser profile, finish the Teams sign-in, admission, or permission prompt, then retry.",
     }),
-    buildLeaveScript: teamsMeetingLeaveScript,
+    buildLeaveScript: (meetingUrl) =>
+      teamsMeetingLeaveScript({
+        leaveInitiated: false,
+        meetingSessionId: "",
+        meetingUrl,
+      }),
+    buildSessionLeaveScript: teamsMeetingLeaveScript,
     parseLeaveResult,
     captions: {
       enabled: (mode) => mode === "transcribe",

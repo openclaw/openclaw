@@ -566,7 +566,7 @@ export function teamsMeetingStatusCallSource(): string {
       text: entry.text,
     }));
   }
-  if (inCall && allowMicrophone) {
+  if (inCall && allowMicrophone && !manualActionReason) {
     if (audioInputRouted !== true || audioOutputRouted !== true) {
       manualActionReason = "teams-audio-choice-required";
       manualActionMessage = "Verify BlackHole 2ch is selected as both the Teams microphone and speaker before starting talk-back.";
