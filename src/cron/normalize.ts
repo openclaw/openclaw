@@ -9,6 +9,7 @@ import {
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { sanitizeAgentId } from "../routing/session-key.js";
 import { isRecord } from "../utils.js";
+import { shouldDefaultCronDeliveryToAnnounce } from "./delivery-defaults.js";
 import {
   TimeoutSecondsFieldSchema,
   TrimmedNonEmptyStringFieldSchema,
@@ -720,19 +721,10 @@ export function normalizeCronJobInput(
     const payload = isRecord(next.payload) ? next.payload : null;
     const payloadKind = payload && typeof payload.kind === "string" ? payload.kind : "";
     const sessionTarget = typeof next.sessionTarget === "string" ? next.sessionTarget : "";
-    // Resolved "current" and custom session ids still use isolated-agent
-    // delivery semantics, so they get the same default announce behavior.
-    const isDetachedDeliveryJob =
-      sessionTarget === "isolated" ||
-      sessionTarget === "current" ||
-      sessionTarget.startsWith("session:") ||
-      (sessionTarget === "" && (payloadKind === "agentTurn" || payloadKind === "command"));
+    // Omitted output targets were canonicalized to "isolated" above. Resolved
+    // "current" and custom session ids share those announce semantics.
     const hasDelivery = "delivery" in next && next.delivery !== undefined;
-    if (
-      !hasDelivery &&
-      isDetachedDeliveryJob &&
-      (payloadKind === "agentTurn" || payloadKind === "command")
-    ) {
+    if (!hasDelivery && shouldDefaultCronDeliveryToAnnounce({ payloadKind, sessionTarget })) {
       next.delivery = { mode: "announce" };
     }
   }
@@ -761,4 +753,3 @@ export function normalizeCronJobPatch(
     ...options,
   }) as CronJobPatch | null;
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

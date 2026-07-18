@@ -163,8 +163,9 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   // Registry sweep: 77 packages, zero fetch failures; channel-ingress and dead aliases
   // had zero consumers.
   // +11 each: durable channel-ingress drain seam (drain/lifecycle/claim/retry) mirrored by compat (#108656).
-  "channel-message": 241,
-  "channel-message-runtime": 238,
+  // +3 each: shared ingress monitor factory and lifecycle/result contracts.
+  "channel-message": 244,
+  "channel-message-runtime": 241,
   "channel-pairing-paths": 1,
   // Deprecated pairing/conversation exports from the SQLite pairing migration
   // landed on main (#105802) without entrypoint pins; not touched by this PR.
@@ -277,7 +278,9 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: explicit AgentModelPolicyConfig shared with provider setup surfaces.
       // +1: AgentHarnessSessionSupersededError lets harness plugins stop stale-owner fallback.
       // +1: AgentThinkingLevel shared by default-turn and compaction config.
-      8168,
+      // +9: shared ingress monitor factory and lifecycle/result contracts across
+      // channel-outbound and its two deprecated compatibility barrels.
+      8177,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -321,7 +324,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: shared persistent-dedupe claim loop.
       // +1: bounded raw transcript cursor reader.
       // +1: bounded visible transcript cursor reader.
-      4543,
+      // +3: shared ingress monitor factory across channel-outbound and compat mirrors.
+      4546,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -341,7 +345,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // deprecation-window barrels (#108656).
       // Harvest: retired dual-field plan payload builder -1; lower-only drift -8.
       // +1: AgentModelPolicyConfig mirrored by deprecated config-types.
-      3006,
+      // +6: ingress monitor lifecycle/result contracts through deprecated channel barrels.
+      3012,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

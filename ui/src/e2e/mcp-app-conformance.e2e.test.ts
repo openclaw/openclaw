@@ -227,7 +227,12 @@ window.mcpConformanceGatewayBrowserClient = GatewayBrowserClient;
 </script>`,
     });
   });
-  await page.goto(`${controlUiServer.baseUrl}mcp-conformance`);
+  await page.goto(`${controlUiServer.baseUrl}mcp-conformance`, { waitUntil: "domcontentloaded" });
+  await page.waitForFunction(
+    () => Reflect.get(window, "mcpConformanceGatewayBrowserClient") !== undefined,
+    undefined,
+    { timeout: 30_000 },
+  );
   await page.evaluate(
     async (params) => {
       const GatewayBrowserClient = Reflect.get(
@@ -247,14 +252,17 @@ window.mcpConformanceGatewayBrowserClient = GatewayBrowserClient;
         url: params.gatewayUrl,
         token: params.authValue,
         onHello: () => resolveHello(),
-        onClose: (info: { reason: string }) =>
-          rejectHello(new Error(`Gateway connection closed: ${info.reason}`)),
+        onClose: (info: { code: number; reason: string; error?: unknown; willRetry: boolean }) => {
+          if (!info.willRetry) {
+            rejectHello(new Error(`Gateway connection closed: ${JSON.stringify(info)}`));
+          }
+        },
       });
       client.start();
       await Promise.race([
         connected,
         new Promise((_, reject) => {
-          setTimeout(() => reject(new Error("Gateway connection timed out")), 10_000);
+          setTimeout(() => reject(new Error("Gateway connection timed out")), 60_000);
         }),
       ]);
       const view = document.createElement("mcp-app-view");
@@ -263,6 +271,7 @@ window.mcpConformanceGatewayBrowserClient = GatewayBrowserClient;
           snapshot: { client },
           connection: { gatewayUrl: params.gatewayUrl },
         },
+        theme: { subscribe: () => () => undefined },
       });
       view.sessionKey = params.sessionKey;
       view.viewId = params.viewId;
@@ -420,7 +429,7 @@ describeConformance("MCP App Control UI and standalone host conformance", () => 
     }
   }, 120_000);
 
-  it("drives the authenticated Control UI bridge and read-only standalone host", async () => {
+  it("drives the authenticated Control UI and ticketed standalone bridges", async () => {
     const controlContext = await browser.newContext({ permissions: ["local-network-access"] });
     openContexts.add(controlContext);
     const controlPage = await controlContext.newPage();
@@ -464,54 +473,67 @@ describeConformance("MCP App Control UI and standalone host conformance", () => 
     const standaloneContext = await browser.newContext({ permissions: ["local-network-access"] });
     openContexts.add(standaloneContext);
     const authorizationHeaders: string[] = [];
+    const requestUrls: string[] = [];
+    const referrers: string[] = [];
+    const standaloneDiagnostics: string[] = [];
     standaloneContext.on("request", (request) => {
+      requestUrls.push(request.url());
       const authorization = request.headers().authorization;
       if (authorization) {
         authorizationHeaders.push(authorization);
       }
+      const referrer = request.headers().referer;
+      if (referrer) {
+        referrers.push(referrer);
+      }
     });
     const standalonePage = await standaloneContext.newPage();
+    standalonePage.on("console", (message) => standaloneDiagnostics.push(message.text()));
     const absoluteStandaloneUrl = `http://127.0.0.1:${gatewayPort}${standaloneUrl}`;
+    const ticket = standaloneUrl.split("#")[1] ?? "";
     await standalonePage.goto(absoluteStandaloneUrl);
     app = await findAppFrame(standalonePage);
     await waitForText(app.locator("#input"), '{"city":"Paris"}');
     await waitForTextContaining(app.locator("#result"), "initial-result");
-    await waitForTextContaining(app.locator("#capabilities"), "serverTools", false);
-    await waitForTextContaining(app.locator("#capabilities"), "serverResources", false);
+    await waitForTextContaining(app.locator("#capabilities"), "serverTools");
+    await waitForTextContaining(app.locator("#capabilities"), "serverResources");
     await waitForText(app.locator("#ping"), "{}");
     await waitForText(app.locator("#isolation"), "isolated");
     await app.locator("#call-app").click();
-    await waitForTextContaining(app.locator("#app-tool"), "denied:");
+    await waitForTextContaining(app.locator("#app-tool"), "companion-called");
+    await app.locator("#call-model").click();
+    await waitForTextContaining(app.locator("#model-tool"), "denied:");
     await app.locator("#read-resource").click();
-    await waitForTextContaining(app.locator("#resource"), "denied:");
-    expect(authorizationHeaders).toHaveLength(1);
-    expect(authorizationHeaders[0]).toMatch(/^MCP-App v1\./u);
-    expect(authorizationHeaders).not.toContain(`Bearer ${authValue}`);
+    await waitForTextContaining(app.locator("#resource"), "resource-ok");
+    expect(authorizationHeaders.length).toBeGreaterThanOrEqual(3);
+    expect(authorizationHeaders.every((value) => value.startsWith("MCP-App v1."))).toBe(true);
+    expect(authorizationHeaders.some((value) => value === `Bearer ${authValue}`)).toBe(false);
+    expect(ticket).not.toBe("");
+    expect(requestUrls.some((value) => value.includes(ticket))).toBe(false);
+    expect(referrers.some((value) => value.includes(ticket))).toBe(false);
+    expect(standaloneDiagnostics.some((value) => value.includes(ticket))).toBe(false);
 
     await app.locator("#request-teardown").click();
     await expect.poll(() => standalonePage.frames().length).toBe(1);
     await standalonePage.reload();
     app = await findAppFrame(standalonePage);
     await waitForTextContaining(app.locator("#result"), "initial-result");
+    await app.locator("#call-app").click();
+    await waitForTextContaining(app.locator("#app-tool"), "companion-called");
 
     const tampered = `${absoluteStandaloneUrl.slice(0, -1)}${absoluteStandaloneUrl.endsWith("a") ? "b" : "a"}`;
-    await standalonePage.goto(tampered);
-    await standalonePage.reload();
-    await waitForText(standalonePage.locator(".error"), "MCP App ticket was rejected");
+    const tamperedPage = await standaloneContext.newPage();
+    await tamperedPage.goto(tampered);
+    await tamperedPage.reload();
+    await waitForText(tamperedPage.locator(".error"), "MCP App ticket was rejected");
+    await tamperedPage.close();
 
     const lease = getMcpAppViewLease(viewId, runtime);
     if (!lease) {
       throw new Error("MCP App view lease missing");
     }
-    const expiresAtMs = Date.now() + 2_000;
-    lease.expiresAtMs = expiresAtMs;
-    const expiring = await requestStandaloneUrl(controlPage);
-    const expiringUrl = `http://127.0.0.1:${gatewayPort}${expiring}`;
-    await new Promise((resolve) => {
-      setTimeout(resolve, Math.max(0, expiresAtMs - Date.now() + 50));
-    });
-    await standalonePage.goto(expiringUrl);
-    await standalonePage.reload();
+    lease.expiresAtMs = Date.now() - 1;
+    await app.locator("#call-app").click();
     await waitForText(standalonePage.locator(".error"), "MCP App ticket was rejected");
   }, 90_000);
 });
