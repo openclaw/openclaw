@@ -1,8 +1,14 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BoardSnapshot } from "../../../packages/gateway-protocol/src/index.js";
 import { resetBoardEventNoticeStateForTest } from "../../boards/board-notices.js";
-import { boardStore, InMemoryBoardStore } from "../../boards/board-store.js";
+import { InMemoryBoardStore } from "../../boards/board-store.js";
+import { SqliteBoardStore } from "../../boards/sqlite-board-store.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resolveCoreOperatorGatewayMethodScope } from "../methods/core-descriptors.js";
 import { createBoardHandlers } from "./board.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
@@ -38,9 +44,19 @@ function createHarness() {
 }
 
 describe("board gateway methods", () => {
+  const tempDirs: string[] = [];
+
   beforeEach(() => {
     resetBoardEventNoticeStateForTest();
     resetSystemEventsForTest();
+  });
+
+  afterEach(() => {
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    for (const tempDir of tempDirs.splice(0)) {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("registers every contract method with its required scope", () => {
@@ -80,6 +96,10 @@ describe("board gateway methods", () => {
       sessionKey: "agent:main:main",
       name: "status",
       content: { kind: "html", html: "<p>ok</p>" },
+      declared: {
+        netOrigins: ["https://status.example"],
+        tools: ["status.refresh"],
+      },
     });
     await invoke("board.widget.put", {
       sessionKey: "agent:main:main",
@@ -102,6 +122,10 @@ describe("board gateway methods", () => {
     expect(htmlFrameUrl).toMatch(
       /^\/__openclaw__\/board\/agent%3Amain%3Amain\/status\/index\.html\?bt=v1\./u,
     );
+    expect(first.widgets.find((widget) => widget.name === "status")?.declaredSummary).toEqual([
+      "Network access: https://status.example",
+      "Tool access: status.refresh",
+    ]);
     expect(first.widgets.find((widget) => widget.name === "app")).not.toHaveProperty("frameUrl");
 
     const secondResponse = await invoke("board.get", { sessionKey: "agent:main:main" });
@@ -139,6 +163,11 @@ describe("board gateway methods", () => {
       true,
       expect.objectContaining({
         widgets: [expect.objectContaining({ name: "weather", grantState: "pending" })],
+      }),
+    );
+    expect(put.mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({
+        widgets: [expect.objectContaining({ declaredSummary: ["Tool access: weather.refresh"] })],
       }),
     );
     expect(broadcast).toHaveBeenCalledWith("board.changed", {
@@ -236,6 +265,12 @@ describe("board gateway methods", () => {
 
   it("keeps board state across the real sessions.reset handler", async () => {
     const sessionKey = "agent:main:board-reset-proof";
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-board-reset-"));
+    tempDirs.push(stateDir);
+    const boardStore = new SqliteBoardStore({
+      resolveAgentId: () => "main",
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
     boardStore.putWidget({
       sessionKey,
       name: "status",

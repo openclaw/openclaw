@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { BoardSnapshotSchema } from "./board.js";
 
 describe("BoardSnapshotSchema", () => {
-  it("accepts an optional HTML widget frame URL", () => {
+  it("accepts optional HTML widget view metadata", () => {
     const snapshot = {
       sessionKey: "agent:main:main",
       revision: 1,
@@ -18,6 +18,7 @@ describe("BoardSnapshotSchema", () => {
           position: 0,
           grantState: "none",
           revision: 1,
+          declaredSummary: ["Network access: https://example.com"],
           frameUrl: "/__openclaw__/board/agent%3Amain%3Amain/status/index.html?bt=ticket",
         },
       ],
@@ -27,6 +28,12 @@ describe("BoardSnapshotSchema", () => {
       Value.Check(BoardSnapshotSchema, {
         ...snapshot,
         widgets: [{ ...snapshot.widgets[0], frameUrl: 42 }],
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(BoardSnapshotSchema, {
+        ...snapshot,
+        widgets: [{ ...snapshot.widgets[0], declaredSummary: [42] }],
       }),
     ).toBe(false);
   });

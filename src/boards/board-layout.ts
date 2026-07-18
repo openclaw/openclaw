@@ -47,6 +47,9 @@ function cloneWidget(widget: BoardWidget): BoardWidget {
     position: widget.position,
     grantState: widget.grantState,
     revision: widget.revision,
+    ...(widget.declaredSummary !== undefined
+      ? { declaredSummary: [...widget.declaredSummary] }
+      : {}),
   };
 }
 

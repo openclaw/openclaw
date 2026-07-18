@@ -14,7 +14,8 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { BoardValidationError } from "../../boards/board-layout.js";
 import { appendBoardEventNotice, BoardEventPayloadError } from "../../boards/board-notices.js";
-import { boardStore, type BoardStore } from "../../boards/board-store.js";
+import type { BoardStore } from "../../boards/board-store.js";
+import { boardStore } from "../board-store.js";
 import { buildBoardWidgetFrameUrl, createBoardViewTicket } from "../board-view-ticket.js";
 import type { GatewayRequestHandlers } from "./types.js";
 

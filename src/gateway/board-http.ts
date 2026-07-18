@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { BoardStore } from "../boards/board-store.js";
-import { boardStore } from "../boards/board-store.js";
+import { boardStore } from "./board-store.js";
 import { BOARD_HTTP_PATH_PREFIX, verifyBoardViewTicket } from "./board-view-ticket.js";
 import { sendMethodNotAllowed } from "./http-common.js";
 
