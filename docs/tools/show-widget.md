@@ -31,26 +31,27 @@ Capability transport covers embedded, Codex app-server, and CLI-backed model bac
 
 Every Canvas widget includes a classless base stylesheet and a small token set:
 
-| Token                                                                                 | Purpose                                    |
-| ------------------------------------------------------------------------------------- | ------------------------------------------ |
-| `--surface`                                                                           | Page-level surface color                   |
-| `--card`                                                                              | Card, button, and code background          |
-| `--elevated`                                                                          | Elevated form-control background           |
-| `--text`                                                                              | Default body and control text              |
-| `--text-strong`                                                                       | Headings and prominent values              |
-| `--muted`                                                                             | Secondary text and subtle borders          |
-| `--border`                                                                            | Standard separators and card borders       |
-| `--border-strong`                                                                     | Strong control borders                     |
-| `--accent`                                                                            | Links, focus rings, and the primary action |
-| `--accent-fg`                                                                         | Text on an accent background               |
-| `--ok`                                                                                | Success state                              |
-| `--warn`                                                                              | Warning state                              |
-| `--danger`                                                                            | Error or destructive state                 |
-| `--info`                                                                              | Informational state                        |
-| `--radius`                                                                            | Shared control and card corner radius      |
-| `--font-body`                                                                         | Host body font stack                       |
-| `--font-mono`                                                                         | Host monospace font stack                  |
-| `--accent-subtle`, `--ok-subtle`, `--warn-subtle`, `--danger-subtle`, `--info-subtle` | Derived translucent state backgrounds      |
+| Token                                                                                 | Purpose                               |
+| ------------------------------------------------------------------------------------- | ------------------------------------- |
+| `--surface`                                                                           | Page-level surface color              |
+| `--card`                                                                              | Card, button, and code background     |
+| `--elevated`                                                                          | Elevated form-control background      |
+| `--text`                                                                              | Default body and control text         |
+| `--text-strong`                                                                       | Headings and prominent values         |
+| `--muted`                                                                             | Secondary text and subtle borders     |
+| `--border`                                                                            | Standard separators and card borders  |
+| `--border-strong`                                                                     | Strong control borders                |
+| `--accent`                                                                            | Links and focus rings                 |
+| `--accent-fill`                                                                       | Primary action fill                   |
+| `--accent-fg`                                                                         | Text on a primary action              |
+| `--ok`                                                                                | Success state                         |
+| `--warn`                                                                              | Warning state                         |
+| `--danger`                                                                            | Error or destructive state            |
+| `--info`                                                                              | Informational state                   |
+| `--radius`                                                                            | Shared control and card corner radius |
+| `--font-body`                                                                         | Host body font stack                  |
+| `--font-mono`                                                                         | Host monospace font stack             |
+| `--accent-subtle`, `--ok-subtle`, `--warn-subtle`, `--danger-subtle`, `--info-subtle` | Derived translucent state backgrounds |
 
 Bare headings, paragraphs, links, buttons, inputs, selects, textareas, tables, and code blocks receive base styles. Helper classes provide common patterns:
 
@@ -67,7 +68,7 @@ Author widgets with three rules:
 
 1. Use the design variables for every color and background. Do not hardcode color values.
 2. Keep the page background transparent so the widget belongs to its host surface.
-3. Reserve the accent color for at most one primary action.
+3. Reserve `--accent-fill` for at most one primary action.
 
 ## Use the tool
 

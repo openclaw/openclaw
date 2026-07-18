@@ -1864,10 +1864,8 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await composer.fill("");
 
       // The background hydrate must not take the shared sessions loading
-      // flag, which would disable New Session for the whole request.
-      expect(await page.getByRole("button", { name: "New session" }).first().isEnabled()).toBe(
-        true,
-      );
+      // flag, which would disable New thread for the whole request.
+      expect(await page.getByRole("button", { name: "New thread" }).first().isEnabled()).toBe(true);
 
       await gateway.resolveDeferred("sessions.list");
       await page
@@ -1890,7 +1888,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
     try {
       await page.goto(`${server.baseUrl}chat`);
-      const newSessionButton = page.locator("openclaw-app-sidebar .sidebar-new-session");
+      const newSessionButton = page.locator("openclaw-app-sidebar .sidebar-brand__new-thread");
       await newSessionButton.waitFor({ state: "visible", timeout: 10_000 });
       await newSessionButton.click();
 

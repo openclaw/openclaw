@@ -1,4 +1,4 @@
-import { html, nothing, type TemplateResult } from "lit";
+import { html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import { titleForRoute } from "../app-navigation.ts";
@@ -34,6 +34,20 @@ const SIDEBAR_VISIBLE_CHILD_SESSION_LIMIT = 4;
 /** Session-list presentation and catalog renderer wiring. */
 export abstract class AppSidebarSessionListElement extends AppSidebarMenusElement {
   @state() protected catalogProjectGrouping = loadStoredSidebarCatalogGrouping();
+
+  protected override willUpdate(changed: PropertyValues<this>) {
+    super.willUpdate(changed);
+    // A fresh draft must be visible where it will live: genuinely expand a
+    // collapsed Threads section (persisted) instead of overriding at render
+    // time, so the header toggle keeps matching the visible state.
+    if (
+      changed.has("draftSessionAgentId") &&
+      this.draftSessionAgentId &&
+      this.collapsedSessionSections.has("ungrouped")
+    ) {
+      this.toggleSessionSection("ungrouped");
+    }
+  }
 
   private renderSessionState(session: SidebarRecentSession) {
     if (session.hasActiveRun || (session.isChild && session.status === "running")) {
@@ -330,6 +344,7 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
       totalRowCount?: number;
     },
     trailing: TemplateResult | typeof nothing = nothing,
+    showDraft = false,
   ) {
     const totalRowCount = section.totalRowCount ?? section.rows.length;
     const group = section.category;
@@ -501,8 +516,9 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
         ${collapsed
           ? nothing
           : html`
-              ${section.rows.length > 0
+              ${section.rows.length > 0 || showDraft
                 ? html`<div class="sidebar-recent-sessions__list" role="list" aria-label=${label}>
+                    ${showDraft ? this.renderDraftSessionRow() : nothing}
                     ${section.rows.map((session) => this.renderSessionTree(session))}
                   </div>`
                 : nothing}
@@ -534,8 +550,8 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
   ) {
     const { sections, expandedRows, visibleRows } = this.zonedVisibleSections(rows);
     return html`
-      ${options.showDraft ? this.renderDraftSessionRow() : nothing}
       ${sections.map((section) => {
+        const showDraft = section.id === "ungrouped" && options.showDraft;
         if (section.id === "work") {
           // Coding hosts live work/ACP rows plus the CLI catalogs; hide the
           // whole zone when both are empty.
@@ -544,7 +560,19 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
           }
           return this.renderSessionSection(section, options.codingTrailing ?? nothing);
         }
-        return this.renderSessionSection(section);
+        // Threads hides its bare header when empty, except while a draft needs
+        // a home or a session drag needs the unpin drop target. Empty custom
+        // categories keep rendering: they are user-created containers and the
+        // "New group…" / drag-into-group flows depend on seeing them.
+        if (
+          section.id === "ungrouped" &&
+          section.totalRowCount === 0 &&
+          !showDraft &&
+          this.draggingSessionKey === null
+        ) {
+          return nothing;
+        }
+        return this.renderSessionSection(section, nothing, showDraft);
       })}
       ${this.renderSessionPagination(expandedRows, visibleRows.length)}
     `;
