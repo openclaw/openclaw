@@ -166,6 +166,18 @@ describe("openclaw-exec-approval", () => {
     ]);
   });
 
+  it("ignores auto-repeated shortcut keydown events", async () => {
+    const { onDecision } = await renderApproval(createExecRequest());
+    const { modal } = await getRenderedModalDialog(container);
+
+    modal.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true, repeat: true }));
+    modal.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "A", shiftKey: true, bubbles: true, repeat: true }),
+    );
+
+    expect(onDecision).not.toHaveBeenCalled();
+  });
+
   it("guards shortcuts while busy, disallowed, or focused in text input", async () => {
     const restricted = createExecRequest({
       request: { command: "echo hello", allowedDecisions: ["allow-once", "deny"] },

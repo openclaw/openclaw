@@ -448,8 +448,16 @@ export function enqueueExecApprovalPrompt(
   entry: ExecApprovalRequest,
 ): void {
   state.execApprovalQueue = addExecApproval(state.execApprovalQueue, entry);
-  state.execApprovalError = null;
-  state.execApprovalErrorId = null;
+  // Oldest-first: a new arrival does not displace the active request, so a
+  // failure already shown for it must survive; errors are scoped by errorId
+  // and cleared when their request leaves the queue.
+  if (
+    state.execApprovalErrorId &&
+    !state.execApprovalQueue.some((item) => item.id === state.execApprovalErrorId)
+  ) {
+    state.execApprovalError = null;
+    state.execApprovalErrorId = null;
+  }
   scheduleApprovalExpiryPrune(state, entry);
   synchronizeApprovalCountdownTimer(state);
 }

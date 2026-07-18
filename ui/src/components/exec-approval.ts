@@ -331,7 +331,9 @@ class ExecApproval extends OpenClawLightDomContentsElement {
   }
 
   private handleKeydown(event: KeyboardEvent, active: ExecApprovalRequest): void {
-    if (event.defaultPrevented || this.props?.busy) {
+    // A held key auto-repeats: once a decision settles and the queue advances,
+    // the repeat would apply the same decision to the next request unseen.
+    if (event.defaultPrevented || event.repeat || this.props?.busy) {
       return;
     }
     const decision = shortcutDecision(event);

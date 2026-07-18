@@ -332,6 +332,32 @@ describe("approval queue ordering and countdown timer", () => {
     }
   });
 
+  it("preserves an active request's error when an unrelated approval arrives", () => {
+    vi.useFakeTimers();
+    try {
+      const state = createPromptState(
+        vi.fn<RequestFn>(async () => ({})),
+        [],
+      );
+      enqueueExecApprovalPrompt(state, createExecApproval({ id: "approval-a", createdAtMs: 1_000 }));
+      state.execApprovalError = "Approval failed: Error: gateway unavailable";
+      state.execApprovalErrorId = "approval-a";
+
+      enqueueExecApprovalPrompt(state, createExecApproval({ id: "approval-b", createdAtMs: 2_000 }));
+      expect(state.execApprovalError).toBe("Approval failed: Error: gateway unavailable");
+      expect(state.execApprovalErrorId).toBe("approval-a");
+
+      // Once the errored request leaves the queue, the next arrival clears it.
+      state.execApprovalQueue = state.execApprovalQueue.filter((entry) => entry.id !== "approval-a");
+      enqueueExecApprovalPrompt(state, createExecApproval({ id: "approval-c", createdAtMs: 3_000 }));
+      expect(state.execApprovalError).toBeNull();
+      expect(state.execApprovalErrorId).toBeNull();
+      clearExecApprovalTimers(state);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("publishes one shared countdown tick and cleans every timer", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-25T00:00:00.000Z"));
