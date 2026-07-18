@@ -517,45 +517,52 @@ export async function runDoctorConfigPreflight(
       }
     }
 
-    if (shouldRecordStartupCheckpoint) {
-      if (startupMigrationHeartbeatError) {
-        throw startupMigrationHeartbeatError instanceof Error
-          ? startupMigrationHeartbeatError
-          : new Error("OpenClaw startup migration lease heartbeat failed.");
-      }
-      if (startupMigrationWarnings.length > 0) {
-        throwStartupMigrationRefusal(
-          formatStartupMigrationFailure({
-            warnings: startupMigrationWarnings,
-            blockers: [],
-          }),
-        );
-      }
-      if (!snapshot.valid) {
-        throwStartupMigrationRefusal(
-          formatStartupMigrationFailure({
-            warnings: [],
-            blockers: ['OpenClaw config is invalid; run "openclaw doctor --fix" before startup.'],
-          }),
-        );
+    if (startupCheckpoint) {
+      if (shouldRecordStartupCheckpoint) {
+        if (startupMigrationHeartbeatError) {
+          throw startupMigrationHeartbeatError instanceof Error
+            ? startupMigrationHeartbeatError
+            : new Error("OpenClaw startup migration lease heartbeat failed.");
+        }
+        if (startupMigrationWarnings.length > 0) {
+          throwStartupMigrationRefusal(
+            formatStartupMigrationFailure({
+              warnings: startupMigrationWarnings,
+              blockers: [],
+            }),
+          );
+        }
+        if (!snapshot.valid) {
+          throwStartupMigrationRefusal(
+            formatStartupMigrationFailure({
+              warnings: [],
+              blockers: ['OpenClaw config is invalid; run "openclaw doctor --fix" before startup.'],
+            }),
+          );
+        }
       }
       // This state is established before the first Gateway plugin load and remains
-      // fixed for the boot, so repaired payloads require a deliberate restart.
+      // fixed for the boot. Refresh it on every process start because migration
+      // checkpoints do not persist plugin availability or quarantine state.
       setActiveDegradedPlugins([]);
-      const pluginConvergence = await runStartupUpgradeConvergence({
-        cfg: baseConfig,
-        env: process.env,
-      });
-      setActiveDegradedPlugins(pluginConvergence.quarantinedPlugins);
-      if (pluginConvergence.blockingDiagnostic) {
-        throwStartupMigrationRefusal(
-          formatStartupPluginVerificationFailure(pluginConvergence.blockingDiagnostic),
-        );
+      if (snapshot.valid) {
+        const pluginConvergence = await runStartupUpgradeConvergence({
+          cfg: baseConfig,
+          env: process.env,
+        });
+        setActiveDegradedPlugins(pluginConvergence.quarantinedPlugins);
+        if (pluginConvergence.blockingDiagnostic) {
+          throwStartupMigrationRefusal(
+            formatStartupPluginVerificationFailure(pluginConvergence.blockingDiagnostic),
+          );
+        }
       }
-      startupCheckpoint?.recordSuccessfulStartupMigrations({
-        env: startupMigrationEnv,
-        lease: startupMigrationLease,
-      });
+      if (shouldRecordStartupCheckpoint) {
+        startupCheckpoint.recordSuccessfulStartupMigrations({
+          env: startupMigrationEnv,
+          lease: startupMigrationLease,
+        });
+      }
     }
 
     return {

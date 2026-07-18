@@ -465,7 +465,48 @@ describe("runDoctorConfigPreflight state migration", () => {
     expect(startupMigrationLeaseRelease).toHaveBeenCalledOnce();
   });
 
-  it("does not acquire the startup migration lease when the checkpoint is current", async () => {
+  it("refreshes plugin quarantine without acquiring a migration lease when the checkpoint is current", async () => {
+    runPostCorePluginConvergence.mockResolvedValueOnce(
+      makeStartupConvergenceResult({
+        errored: true,
+        warnings: [
+          {
+            pluginId: "discord",
+            reason: "missing-main-entry: index.js",
+            message: 'Plugin "discord" failed post-core payload smoke check (missing): index.js',
+            guidance: ["Run `openclaw update repair` to retry plugin repair."],
+          },
+        ],
+        smokeFailures: [
+          {
+            pluginId: "discord",
+            installPath: "/plugins/discord",
+            reason: "missing-main-entry",
+            detail: "index.js",
+          },
+        ],
+      }),
+    );
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      exists: true,
+      valid: true,
+      config: {
+        gateway: { mode: "local", port: 19091 },
+        plugins: { entries: { discord: { enabled: true } } },
+      },
+      sourceConfig: {
+        gateway: { mode: "local", port: 19091 },
+        plugins: { entries: { discord: { enabled: true } } },
+      },
+      parsed: {
+        gateway: { mode: "local", port: 19091 },
+        plugins: { entries: { discord: { enabled: true } } },
+      },
+      legacyIssues: [],
+      warnings: [],
+      issues: [],
+    });
+
     await runDoctorConfigPreflight({
       migrateLegacyConfig: false,
       invalidConfigNote: false,
@@ -478,7 +519,14 @@ describe("runDoctorConfigPreflight state migration", () => {
     expect(repairLegacyCronStoreWithoutPrompt).not.toHaveBeenCalled();
     expect(autoMigrateLegacyState).not.toHaveBeenCalled();
     expect(autoMigrateLegacyTaskStateSidecars).not.toHaveBeenCalled();
-    expect(runPostCorePluginConvergence).not.toHaveBeenCalled();
+    expect(runPostCorePluginConvergence).toHaveBeenCalledOnce();
+    expect(listActiveDegradedPlugins()).toMatchObject([
+      {
+        pluginId: "discord",
+        state: "configured-unavailable",
+        diagnostic: { reason: "missing-main-entry" },
+      },
+    ]);
     expect(readConfigFileSnapshot).toHaveBeenCalledOnce();
   });
 
