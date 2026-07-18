@@ -55,7 +55,9 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
           type="button"
           class="sidebar-agent-card__main"
           aria-current=${this.activeSession ? "page" : nothing}
-          aria-label=${t("agentChip.openChat", { name: this.agentName })}
+          aria-label=${this.connected
+            ? t("agentChip.openChat", { name: this.agentName })
+            : t("agentChip.offlineOpenSettings")}
           @click=${() => this.onOpenMain?.()}
         >
           <span class="sidebar-agent-card__avatar">

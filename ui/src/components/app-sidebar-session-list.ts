@@ -400,9 +400,12 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
         ${collapsed
           ? nothing
           : html`
-              <div class="sidebar-recent-sessions__list" role="list" aria-label=${label}>
-                ${section.rows.map((session) => this.renderSessionTree(session))} ${trailing}
-              </div>
+              ${section.rows.length > 0
+                ? html`<div class="sidebar-recent-sessions__list" role="list" aria-label=${label}>
+                    ${section.rows.map((session) => this.renderSessionTree(session))}
+                  </div>`
+                : nothing}
+              ${trailing}
             `}
       </div>
     `;
