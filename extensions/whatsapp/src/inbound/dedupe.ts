@@ -8,13 +8,6 @@ const recentOutboundMessages = createDedupeCache({
   maxSize: RECENT_OUTBOUND_MESSAGE_MAX,
 });
 
-class WhatsAppRetryableInboundError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.name = "WhatsAppRetryableInboundError";
-  }
-}
-
 function buildMessageKey(params: {
   accountId: string;
   remoteJid: string;

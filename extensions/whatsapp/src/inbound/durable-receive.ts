@@ -10,14 +10,17 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { PluginJsonValue } from "openclaw/plugin-sdk/plugin-entry";
 import { getWhatsAppRuntime } from "../runtime.js";
-import { BufferJSON } from "../session.runtime.js";
+import {
+  deserializeWhatsAppDurableInboundMessage,
+  serializeWhatsAppDurableInboundMessage,
+  WhatsAppIngressPermanentError,
+  type SerializedWhatsAppDurableInboundMessage,
+} from "./durable-payload.js";
 
 const WHATSAPP_DURABLE_INBOUND_PENDING_MAX_ENTRIES = 450;
 const WHATSAPP_DURABLE_INBOUND_COMPLETED_MAX_ENTRIES = 5000;
 const WHATSAPP_DURABLE_INBOUND_PENDING_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const WHATSAPP_DURABLE_INBOUND_COMPLETED_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-
-type SerializedWhatsAppDurableInboundMessage = PluginJsonValue;
 
 export type WhatsAppReadReceiptTarget = {
   remoteJid: string;
@@ -52,17 +55,6 @@ type WhatsAppIngressFacts = {
   laneKey: string;
 };
 
-class WhatsAppIngressPermanentError extends Error {
-  constructor(
-    readonly reason: "invalid-payload" | "missing-message-key" | "event-id-mismatch",
-    message: string,
-    options?: ErrorOptions,
-  ) {
-    super(message, options);
-    this.name = "WhatsAppIngressPermanentError";
-  }
-}
-
 function hashNamespacePart(value: string): string {
   return createHash("sha256").update(value).digest("hex").slice(0, 24);
 }
@@ -72,40 +64,6 @@ export function createWhatsAppDurableInboundMessageId(params: {
   id: string;
 }): string {
   return createHash("sha256").update(`${params.remoteJid}\n${params.id}`).digest("hex");
-}
-
-function serializeWhatsAppDurableInboundMessage(
-  message: WAMessage,
-): SerializedWhatsAppDurableInboundMessage {
-  const timestamp = message.messageTimestamp;
-  let serializedMessage = message;
-  if (timestamp != null && typeof timestamp === "object") {
-    try {
-      const numericTimestamp = Number(timestamp);
-      if (Number.isFinite(numericTimestamp)) {
-        // Protobuf Long methods do not survive JSON. Persist the exact seconds
-        // value so append-age admission sees the same timestamp after replay.
-        serializedMessage = { ...message, messageTimestamp: numericTimestamp };
-      }
-    } catch {
-      // Leave malformed timestamp handling to the normal inbound admission path.
-    }
-  }
-  return JSON.parse(JSON.stringify(serializedMessage, BufferJSON.replacer)) as PluginJsonValue;
-}
-
-function deserializeWhatsAppDurableInboundMessage(
-  message: SerializedWhatsAppDurableInboundMessage,
-): WAMessage {
-  try {
-    return JSON.parse(JSON.stringify(message), BufferJSON.reviver) as WAMessage;
-  } catch (error) {
-    throw new WhatsAppIngressPermanentError(
-      "invalid-payload",
-      "WhatsApp ingress row contains an invalid serialized message",
-      { cause: error },
-    );
-  }
 }
 
 function inspectWhatsAppIngressMessage(message: WAMessage): WhatsAppIngressFacts {

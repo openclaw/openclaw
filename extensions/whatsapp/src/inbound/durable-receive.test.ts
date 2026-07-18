@@ -6,11 +6,13 @@ import type { WAMessage } from "baileys";
 import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { describe, expect, it } from "vitest";
 import {
+  deserializeWhatsAppDurableInboundMessage,
+  serializeWhatsAppDurableInboundMessage,
+} from "./durable-payload.js";
+import {
   createWhatsAppDurableInboundMessageId,
   createWhatsAppIngressDrain,
-  deserializeWhatsAppDurableInboundMessage,
   enqueueWhatsAppDurableInbound,
-  serializeWhatsAppDurableInboundMessage,
   type WhatsAppDurableInboundPayload,
 } from "./durable-receive.js";
 

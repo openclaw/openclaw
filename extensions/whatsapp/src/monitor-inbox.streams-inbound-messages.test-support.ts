@@ -5,7 +5,6 @@ import type { GroupMetadata, WAMessageKey } from "baileys";
 import "./monitor-inbox.test-harness.js";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { WhatsAppRetryableInboundError } from "./inbound/dedupe.js";
 import {
   readWhatsAppBaileysCacheEntry,
   type WhatsAppBaileysGroupMetadataCache,
@@ -1844,7 +1843,8 @@ describe("web monitor inbox", () => {
     const onMessage = vi.fn(async () => {
       attempts += 1;
       if (attempts === 1) {
-        throw new WhatsAppRetryableInboundError("retry me");
+        // Any non-permanent error is retryable to the drain classifier.
+        throw new Error("retry me");
       }
     });
 
