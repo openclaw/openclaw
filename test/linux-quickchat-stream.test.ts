@@ -11,20 +11,30 @@ const quickchatSource = readFileSync(
 const browserBindingsStart = quickchatSource.indexOf("const tauri = window");
 assert.notEqual(browserBindingsStart, -1, "quickchat pure-helper boundary");
 
-const context = {};
+const context: Record<
+  string,
+  {
+    assembleChatDelta: (state: unknown, payload: unknown) => unknown;
+    chatMessageText: (message: unknown) => string;
+  }
+> &
+  Record<string, unknown> = {};
 vm.runInNewContext(
   `${quickchatSource.slice(0, browserBindingsStart)}\nthis.helpers = { assembleChatDelta, chatMessageText };`,
   context,
 );
-const { assembleChatDelta, chatMessageText } = context.helpers;
+const { assembleChatDelta, chatMessageText } = context.helpers as {
+  assembleChatDelta: (state: unknown, payload: unknown) => { text: string; runId?: string };
+  chatMessageText: (message: unknown) => string;
+};
 
 function createFakeElement() {
   const classes = new Set();
   return {
     classList: {
-      add: (...names) => names.forEach((name) => classes.add(name)),
-      remove: (...names) => names.forEach((name) => classes.delete(name)),
-      toggle(name, force) {
+      add: (...names: string[]) => names.forEach((name) => classes.add(name)),
+      remove: (...names: string[]) => names.forEach((name) => classes.delete(name)),
+      toggle(name: string, force?: boolean) {
         const enabled = force ?? !classes.has(name);
         if (enabled) {
           classes.add(name);
@@ -66,7 +76,7 @@ function createQuickChatHarness() {
   const window = {
     __TAURI__: {
       core: {
-        invoke(method) {
+        invoke(method: string) {
           return method === "quickchat_send" ? sendResult : Promise.resolve(null);
         },
       },
@@ -74,7 +84,7 @@ function createQuickChatHarness() {
     },
     clearTimeout() {},
     matchMedia: () => ({ matches: true }),
-    requestAnimationFrame(callback) {
+    requestAnimationFrame(callback: () => void) {
       callback();
     },
     setTimeout: () => 1,
@@ -82,15 +92,15 @@ function createQuickChatHarness() {
   const document = {
     body: createFakeElement(),
     createElement: () => createFakeElement(),
-    createTextNode: (text) => ({ textContent: text }),
-    querySelector(selector) {
+    createTextNode: (text: string) => ({ textContent: text }),
+    querySelector(selector: string) {
       if (!elements.has(selector)) {
         elements.set(selector, createFakeElement());
       }
       return elements.get(selector);
     },
   };
-  const browserContext = { document, window };
+  const browserContext: Record<string, any> = { document, window };
   vm.runInNewContext(
     `${quickchatSource.slice(0, browserBindingsEnd)}
 this.harness = {
@@ -105,7 +115,7 @@ this.harness = {
 };`,
     browserContext,
   );
-  return { ...browserContext.harness, resolveSend };
+  return { ...(browserContext.harness as Record<string, (...args: any[]) => any>), resolveSend };
 }
 
 test("replace deltas are authoritative", () => {
