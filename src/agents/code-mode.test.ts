@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
 import { buildBlockedToolResult } from "./agent-tools.before-tool-call.js";
+import { createOpenClawReadTool } from "./agent-tools.read.js";
 import {
   clearCodeModeNamespacesForPlugin,
   createCodeModeNamespaceTool,
@@ -23,6 +24,7 @@ import {
   resolveCodeModeConfig,
 } from "./code-mode.js";
 import { testing } from "./code-mode.test-support.js";
+import { createReadTool } from "./sessions/index.js";
 import { createToolSearchCatalogRef, type ToolSearchCatalogRef } from "./tool-search.js";
 import {
   TOOL_CALL_RAW_TOOL_NAME,
@@ -1002,6 +1004,36 @@ describe("Code Mode", () => {
     expect(details.output).toEqual([{ type: "text", text: "created" }]);
     expect(details.telemetry).toMatchObject({ searchCount: 1, describeCount: 0, callCount: 1 });
     expect(ticket.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns ordinary read content through tools.callValue", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const read = createOpenClawReadTool(
+      createReadTool("/workspace", {
+        operations: {
+          access: async () => {},
+          detectImageMimeType: async () => null,
+          readFile: async () => Buffer.from("ordinary file content"),
+        },
+      }) as unknown as Parameters<typeof createOpenClawReadTool>[0],
+    );
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, read],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = await runUntilCompleted({
+      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
+      code: `return await tools.callValue("openclaw:core:read", { path: "notes.txt" });`,
+    });
+
+    expect(details.status).toBe("completed");
+    expect(details.value).toEqual({ kind: "text", content: "ordinary file content" });
   });
 
   it("resolves sequential bridge tool calls inline within one exec instead of a wait per call", async () => {
