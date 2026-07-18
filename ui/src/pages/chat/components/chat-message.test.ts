@@ -2674,6 +2674,24 @@ describe("grouped chat rendering", () => {
     await vi.waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(imageUrls.length));
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:managed-image-1");
     expect(revokeObjectURL).not.toHaveBeenCalledWith("blob:managed-image-0");
+
+    const replace = vi.fn();
+    const close = vi.fn();
+    const openedWindow = {
+      opener: window,
+      location: { replace },
+      close,
+    };
+    const openSpy = vi.spyOn(window, "open").mockReturnValue(openedWindow as unknown as Window);
+    const evictedImage = container.querySelector<HTMLImageElement>('img[alt="Generated image 2"]');
+    expect(evictedImage).toBeInstanceOf(HTMLImageElement);
+    evictedImage!.click();
+
+    expect(openSpy).toHaveBeenCalledWith("about:blank", "_blank");
+    expect(openedWindow.opener).toBeNull();
+    await vi.waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(imageUrls.length + 1));
+    expect(replace).toHaveBeenCalledWith("blob:managed-image-65");
+    expect(close).not.toHaveBeenCalled();
   });
 
   it("bounds managed outgoing image miss retention", async () => {

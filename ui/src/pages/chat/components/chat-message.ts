@@ -47,7 +47,7 @@ import {
 } from "../../../lib/format.ts";
 import "../../../components/tooltip.ts";
 import { getMediaFileExtension } from "../../../lib/media-file-extension.ts";
-import { openExternalUrlSafe } from "../../../lib/open-external-url.ts";
+import { openExternalUrlSafe, resolveSafeExternalUrl } from "../../../lib/open-external-url.ts";
 import { stripThinkingTags } from "../../../lib/strip-thinking-tags.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { getSafeLocalStorage } from "../../../local-storage.ts";
@@ -1364,8 +1364,37 @@ function renderMessageImages(images: RenderableImageBlock[], opts?: ImageRenderO
     return nothing;
   }
 
-  const openImage = (url: string) => {
-    openExternalUrlSafe(url, { allowDataImage: true });
+  const openImage = (img: RenderableImageBlock, previewUrl: string) => {
+    if (
+      !isManagedOutgoingImageSource(img.displayUrl) ||
+      readManagedOutgoingImageBlobUrl(img.displayUrl, opts) === previewUrl
+    ) {
+      openExternalUrlSafe(previewUrl, { allowDataImage: true });
+      return;
+    }
+
+    // Reserve the tab during the click's user activation. An evicted Blob URL
+    // must be refetched before navigation, after popup permission has expired.
+    const pendingWindow = window.open("about:blank", "_blank");
+    if (pendingWindow) {
+      pendingWindow.opener = null;
+    }
+    void resolveManagedOutgoingImageBlobUrl(img.displayUrl, opts)
+      .then((freshUrl) => {
+        const safeUrl = freshUrl
+          ? resolveSafeExternalUrl(freshUrl, window.location.href, { allowDataImage: true })
+          : null;
+        if (!safeUrl) {
+          pendingWindow?.close();
+          return;
+        }
+        if (pendingWindow) {
+          pendingWindow.location.replace(safeUrl);
+          return;
+        }
+        openExternalUrlSafe(safeUrl, { allowDataImage: true });
+      })
+      .catch(() => pendingWindow?.close());
   };
 
   const renderImageElement = (img: RenderableImageBlock, previewUrl: string) => html`
@@ -1375,7 +1404,7 @@ function renderMessageImages(images: RenderableImageBlock[], opts?: ImageRenderO
       class="chat-message-image"
       width=${img.width ?? nothing}
       height=${img.height ?? nothing}
-      @click=${() => openImage(previewUrl)}
+      @click=${() => openImage(img, previewUrl)}
     />
   `;
 
@@ -1605,13 +1634,29 @@ function buildManagedOutgoingImageFetchUrl(source: string, basePath?: string): s
   return `${normalizedBasePath}${source}`;
 }
 
+function resolveManagedOutgoingImageBlobUrlCacheKey(
+  source: string,
+  opts?: ImageRenderOptions,
+): string {
+  const authToken = opts?.authToken?.trim() ?? "";
+  const fetchUrl = buildManagedOutgoingImageFetchUrl(source, opts?.basePath);
+  return `${fetchUrl}::${authToken}`;
+}
+
+function readManagedOutgoingImageBlobUrl(
+  source: string,
+  opts?: ImageRenderOptions,
+): string | undefined {
+  return readManagedImageBlobUrl(resolveManagedOutgoingImageBlobUrlCacheKey(source, opts));
+}
+
 async function resolveManagedOutgoingImageBlobUrl(
   source: string,
   opts?: ImageRenderOptions,
 ): Promise<string | null> {
   const authToken = opts?.authToken?.trim() ?? "";
   const fetchUrl = buildManagedOutgoingImageFetchUrl(source, opts?.basePath);
-  const cacheKey = `${fetchUrl}::${authToken}`;
+  const cacheKey = resolveManagedOutgoingImageBlobUrlCacheKey(source, opts);
   const cached = readManagedImageBlobUrl(cacheKey);
   if (cached) {
     return cached;
