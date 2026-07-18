@@ -548,13 +548,18 @@ struct ChatNewSessionOptionsPopover: View {
         defer { self.isLoading = false }
         do {
             let routeLease = try await self.viewModel.newSessionRouteLease()
-            guard let response = try await routeLease.listAgents() else {
+            let response = try await routeLease.listAgents()
+            // An empty catalog must not retain the lease: a stray defaultId would
+            // enable Create for an agent the gateway never offered.
+            guard let response, !response.agents.isEmpty else {
                 self.errorText = String(localized: "No agents are available on this gateway.")
                 return
             }
             self.routeLease = routeLease
             self.agents = response.agents
-            self.selectedAgentID = response.defaultId
+            self.selectedAgentID = response.agents.contains(where: { $0.id == response.defaultId })
+                ? response.defaultId
+                : response.agents[0].id
         } catch {
             self.errorText = error.localizedDescription
         }
