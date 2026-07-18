@@ -135,7 +135,10 @@ export function createEventHandlers(context: EventHandlerContext) {
   const toolValidationDiagnostics = new Map<string, string>();
   // Agent frames can arrive late across transport/retry boundaries. Keep the
   // diagnostic projection monotonic so stale failures cannot replace newer progress.
-  const toolValidationDiagnosticSeqByRun = new Map<string, number>();
+  const toolValidationDiagnosticWatermarkByRun = new Map<
+    string,
+    { seq: number; lifecycleGeneration?: string; retiredGenerations: Set<string> }
+  >();
 
   const streamingWatchdogMs =
     typeof context.streamingWatchdogMs === "number" &&
@@ -221,7 +224,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     sessionRuns.clear();
     postFinalizingRuns.clear();
     toolValidationDiagnostics.clear();
-    toolValidationDiagnosticSeqByRun.clear();
+    toolValidationDiagnosticWatermarkByRun.clear();
     streamAssembler = new TuiStreamAssembler();
     pendingHistoryRefresh = false;
     clearPendingSubmit(state);
@@ -659,24 +662,58 @@ export function createEventHandlers(context: EventHandlerContext) {
   };
 
   const noteToolValidationDiagnostic = (evt: AgentEvent) => {
+    const data = evt.data ?? {};
+    const phase = asString(data.phase, "");
     const seq = typeof evt.seq === "number" && Number.isFinite(evt.seq) ? evt.seq : undefined;
-    const previousSeq = toolValidationDiagnosticSeqByRun.get(evt.runId);
-    if (seq !== undefined && previousSeq !== undefined && seq <= previousSeq) {
-      return;
-    }
     if (seq !== undefined) {
-      toolValidationDiagnosticSeqByRun.delete(evt.runId);
-      toolValidationDiagnosticSeqByRun.set(evt.runId, seq);
-      while (toolValidationDiagnosticSeqByRun.size > MAX_TRACKED_TOOL_VALIDATION_DIAGNOSTICS) {
-        const oldestRunId = toolValidationDiagnosticSeqByRun.keys().next().value;
+      const lifecycleGeneration =
+        typeof evt.lifecycleGeneration === "string" && evt.lifecycleGeneration.trim()
+          ? evt.lifecycleGeneration
+          : undefined;
+      const previous = toolValidationDiagnosticWatermarkByRun.get(evt.runId);
+      let next = previous;
+      if (
+        previous?.lifecycleGeneration &&
+        lifecycleGeneration &&
+        lifecycleGeneration !== previous.lifecycleGeneration
+      ) {
+        if (
+          previous.retiredGenerations.has(lifecycleGeneration) ||
+          evt.stream !== "lifecycle" ||
+          phase !== "start"
+        ) {
+          return;
+        }
+        next = {
+          seq,
+          lifecycleGeneration,
+          retiredGenerations: new Set([
+            ...previous.retiredGenerations,
+            previous.lifecycleGeneration,
+          ]),
+        };
+      } else {
+        if (previous && seq <= previous.seq) {
+          return;
+        }
+        next = {
+          seq,
+          lifecycleGeneration: lifecycleGeneration ?? previous?.lifecycleGeneration,
+          retiredGenerations: previous?.retiredGenerations ?? new Set<string>(),
+        };
+      }
+      toolValidationDiagnosticWatermarkByRun.delete(evt.runId);
+      toolValidationDiagnosticWatermarkByRun.set(evt.runId, next);
+      while (
+        toolValidationDiagnosticWatermarkByRun.size > MAX_TRACKED_TOOL_VALIDATION_DIAGNOSTICS
+      ) {
+        const oldestRunId = toolValidationDiagnosticWatermarkByRun.keys().next().value;
         if (!oldestRunId) {
           break;
         }
-        toolValidationDiagnosticSeqByRun.delete(oldestRunId);
+        toolValidationDiagnosticWatermarkByRun.delete(oldestRunId);
       }
     }
-    const data = evt.data ?? {};
-    const phase = asString(data.phase, "");
     if (
       evt.stream === "assistant" ||
       (evt.stream === "tool" && phase === "start") ||
@@ -1237,7 +1274,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     clearStreamingWatchdog();
     clearPendingTerminalLifecycleErrors();
     toolValidationDiagnostics.clear();
-    toolValidationDiagnosticSeqByRun.clear();
+    toolValidationDiagnosticWatermarkByRun.clear();
   };
 
   const consumeCompletedRunForPendingSend = (runId: string) => {

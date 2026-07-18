@@ -602,6 +602,50 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     );
   });
 
+  it("resets sequence tracking for a new lifecycle generation and rejects the retired one", () => {
+    const { state, chatLog, handleAgentEvent, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-validation-loop", sessionInfo: { verboseLevel: "off" } },
+    });
+
+    handleAgentEvent({
+      runId: "run-validation-loop",
+      seq: 5,
+      lifecycleGeneration: "attempt-a",
+      stream: "tool",
+      data: {
+        phase: "result",
+        toolErrorSummary: "edit tool validation failed: attempt a",
+      },
+      sessionKey: state.currentSessionKey,
+    });
+    handleAgentEvent({
+      runId: "run-validation-loop",
+      seq: 1,
+      lifecycleGeneration: "attempt-b",
+      stream: "lifecycle",
+      data: { phase: "start" },
+      sessionKey: state.currentSessionKey,
+    });
+    handleAgentEvent({
+      runId: "run-validation-loop",
+      seq: 6,
+      lifecycleGeneration: "attempt-a",
+      stream: "tool",
+      data: {
+        phase: "result",
+        toolErrorSummary: "edit tool validation failed: stale attempt a",
+      },
+      sessionKey: state.currentSessionKey,
+    });
+    handleChatEvent({
+      runId: "run-validation-loop",
+      sessionKey: state.currentSessionKey,
+      state: "aborted",
+    });
+
+    expect(chatLog.addSystem).toHaveBeenCalledWith("run aborted");
+  });
+
   it("sanitizes untrusted abort diagnostics before rendering", () => {
     const { state, chatLog, handleChatEvent } = createHandlersHarness({
       state: { activeChatRunId: "run-hostile" },
