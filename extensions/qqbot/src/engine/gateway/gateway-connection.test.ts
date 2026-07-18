@@ -3,8 +3,9 @@ import { EventEmitter } from "node:events";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EngineAdapters } from "../adapter/index.js";
-import { MAX_RECONNECT_ATTEMPTS } from "./constants.js";
+import { GatewayEvent, GatewayOp, MAX_RECONNECT_ATTEMPTS } from "./constants.js";
 import { GatewayConnection } from "./gateway-connection.js";
+import { QQBotIngressAdmissionError, type QQBotIngressMonitor } from "./ingress.js";
 import type { GatewayAccount, GatewayPluginRuntime } from "./types.js";
 
 const createQQWSClientMock = vi.hoisted(() => vi.fn());
@@ -44,7 +45,16 @@ vi.mock("../commands/slash-command-handler.js", () => ({
 class FakeWebSocket extends EventEmitter {
   readyState = 3; // CLOSED — keeps cleanup() from re-entering close()
   close = vi.fn();
+  terminate = vi.fn();
   send = vi.fn();
+}
+
+function createNoopIngressMonitor() {
+  return {
+    receive: vi.fn(async () => {}),
+    stop: vi.fn(async () => {}),
+    waitForIdle: vi.fn(async () => {}),
+  };
 }
 
 function makeAccount(): GatewayAccount {
@@ -57,7 +67,11 @@ function makeAccount(): GatewayAccount {
   };
 }
 
-async function startConnection(params: { onDisconnected?: (info: unknown) => void }) {
+async function startConnection(params: {
+  onDisconnected?: (info: unknown) => void;
+  onError?: (error: Error) => void;
+  createIngressMonitor?: () => QQBotIngressMonitor;
+}) {
   const ws = new FakeWebSocket();
   createQQWSClientMock.mockResolvedValue(ws);
   const controller = new AbortController();
@@ -68,7 +82,10 @@ async function startConnection(params: { onDisconnected?: (info: unknown) => voi
     runtime: {} as GatewayPluginRuntime,
     adapters: {} as EngineAdapters,
     handleMessage: async () => {},
+    createIngressMonitor: createNoopIngressMonitor,
+    ...(params.createIngressMonitor ? { createIngressMonitor: params.createIngressMonitor } : {}),
     onDisconnected: params.onDisconnected,
+    onError: params.onError,
   });
   const started = connection.start();
   await vi.waitFor(() => {
@@ -123,6 +140,7 @@ describe("GatewayConnection disconnect status", () => {
       runtime: {} as GatewayPluginRuntime,
       adapters: {} as EngineAdapters,
       handleMessage: async () => {},
+      createIngressMonitor: createNoopIngressMonitor,
       onDisconnected,
     });
     const started = connection.start();
@@ -168,6 +186,7 @@ describe("GatewayConnection disconnect status", () => {
       runtime: {} as GatewayPluginRuntime,
       adapters: {} as EngineAdapters,
       handleMessage: async () => {},
+      createIngressMonitor: createNoopIngressMonitor,
       onDisconnected,
     });
     const started = connection.start();
@@ -179,9 +198,11 @@ describe("GatewayConnection disconnect status", () => {
     // replacement is scheduled, then becomes live.
     staleWs.emit("open");
     staleWs.emit("message", JSON.stringify({ op: 7 }));
-    expect(onDisconnected).toHaveBeenCalledWith({
-      reason: "server requested reconnect",
-      fatal: false,
+    await vi.waitFor(() => {
+      expect(onDisconnected).toHaveBeenCalledWith({
+        reason: "server requested reconnect",
+        fatal: false,
+      });
     });
     await vi.advanceTimersByTimeAsync(1_100);
     await vi.waitFor(() => {
@@ -211,6 +232,7 @@ describe("GatewayConnection disconnect status", () => {
       runtime: {} as GatewayPluginRuntime,
       adapters: {} as EngineAdapters,
       handleMessage: async () => {},
+      createIngressMonitor: createNoopIngressMonitor,
       onDisconnected,
     });
     const started = connection.start();
@@ -220,9 +242,11 @@ describe("GatewayConnection disconnect status", () => {
 
     staleWs.emit("open");
     staleWs.emit("message", JSON.stringify({ op: 7 }));
-    expect(onDisconnected).toHaveBeenCalledWith({
-      reason: "server requested reconnect",
-      fatal: false,
+    await vi.waitFor(() => {
+      expect(onDisconnected).toHaveBeenCalledWith({
+        reason: "server requested reconnect",
+        fatal: false,
+      });
     });
     staleWs.emit("close", 1006, Buffer.from(""));
 
@@ -243,9 +267,11 @@ describe("GatewayConnection disconnect status", () => {
     ws.emit("open");
     ws.emit("message", JSON.stringify({ op: 9, d: false }));
 
-    expect(onDisconnected).toHaveBeenCalledWith({
-      reason: "session invalidated",
-      fatal: false,
+    await vi.waitFor(() => {
+      expect(onDisconnected).toHaveBeenCalledWith({
+        reason: "session invalidated",
+        fatal: false,
+      });
     });
 
     controller.abort();
@@ -260,6 +286,43 @@ describe("GatewayConnection disconnect status", () => {
     ws.emit("close", 1000, Buffer.from(""));
 
     expect(onDisconnected).not.toHaveBeenCalled();
+    await started;
+  });
+
+  it("terminates the socket when durable admission fails closed", async () => {
+    const admissionError = new QQBotIngressAdmissionError("sqlite unavailable");
+    const receive = vi.fn(async () => {
+      throw admissionError;
+    });
+    const onError = vi.fn();
+    const { ws, controller, started } = await startConnection({
+      onError,
+      createIngressMonitor: () => ({
+        receive,
+        stop: vi.fn(async () => {}),
+        waitForIdle: vi.fn(async () => {}),
+      }),
+    });
+
+    const event = JSON.stringify({
+      op: GatewayOp.DISPATCH,
+      t: GatewayEvent.C2C_MESSAGE_CREATE,
+      d: {
+        id: "message-1",
+        content: "hello",
+        timestamp: "2026-07-18T12:00:00Z",
+        author: { user_openid: "user-1" },
+      },
+    });
+    ws.emit("message", event);
+    ws.emit("message", event);
+
+    await vi.waitFor(() => expect(ws.terminate).toHaveBeenCalledTimes(1));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(receive).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledWith(admissionError);
+    controller.abort();
     await started;
   });
 });
