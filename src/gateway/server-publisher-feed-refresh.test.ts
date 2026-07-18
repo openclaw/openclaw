@@ -4,6 +4,7 @@ import { startGatewayPublisherFeedRefresh } from "./server-publisher-feed-refres
 describe("gateway publisher feed refresh", () => {
   it("refreshes serially, records bounded status, and stops future cycles", async () => {
     vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0);
     try {
       const log = { error: vi.fn() };
       const run = vi
@@ -39,16 +40,18 @@ describe("gateway publisher feed refresh", () => {
       expect(run).toHaveBeenCalledTimes(2);
 
       service.stop();
-      await vi.advanceTimersByTimeAsync(60_000);
+      await vi.advanceTimersByTimeAsync(120_000);
       expect(run).toHaveBeenCalledTimes(2);
       expect(service.status()).toMatchObject({ stopped: true });
     } finally {
+      vi.restoreAllMocks();
       vi.useRealTimers();
     }
   });
 
   it("keeps the scheduler alive after a cycle-level failure", async () => {
     vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0);
     try {
       const log = { error: vi.fn() };
       const run = vi.fn().mockRejectedValueOnce(new Error("database unavailable"));
@@ -65,6 +68,40 @@ describe("gateway publisher feed refresh", () => {
       );
       service.stop();
     } finally {
+      vi.restoreAllMocks();
+      vi.useRealTimers();
+    }
+  });
+
+  it("backs off after failures and returns to the regular cadence after recovery", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    try {
+      const run = vi
+        .fn()
+        .mockResolvedValueOnce([{ ok: false, error: "offline" }])
+        .mockResolvedValueOnce([{ ok: true }])
+        .mockResolvedValueOnce([{ ok: true }]);
+      const service = startGatewayPublisherFeedRefresh({
+        log: { error: vi.fn() },
+        intervalMs: 60_000,
+        initialDelayMs: 0,
+        dependencies: { run },
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(run).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(119_999);
+      expect(run).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(run).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(59_999);
+      expect(run).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(run).toHaveBeenCalledTimes(3);
+      service.stop();
+    } finally {
+      vi.restoreAllMocks();
       vi.useRealTimers();
     }
   });

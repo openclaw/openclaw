@@ -1,4 +1,5 @@
 import { getRuntimeConfig } from "../config/config.js";
+import { computeBackoff } from "../infra/backoff.js";
 import { refreshFollowedPublisherFeeds } from "../plugins/publisher-feed-follow-service.js";
 import { createSqlitePublisherFeedFollowStore } from "../plugins/publisher-feed-follow-store.js";
 import { createSqlitePublisherFeedStateStore } from "../plugins/publisher-feed-state-store.js";
@@ -27,6 +28,9 @@ type PublisherFeedRefreshDependencies = {
   run?: () => Promise<readonly { ok: boolean; error?: string }[]>;
   now?: () => Date;
 };
+
+const MAX_REFRESH_DELAY_MS = 24 * 60 * 60_000;
+const REFRESH_JITTER = 0.1;
 
 export function createNoopGatewayPublisherFeedRefresh(): GatewayPublisherFeedRefresh {
   const status = {
@@ -86,6 +90,18 @@ export function startGatewayPublisherFeedRefresh(params: {
   };
   let timer: ReturnType<typeof setTimeout> | null = null;
   let running: Promise<GatewayPublisherFeedRefreshStatus> | null = null;
+  let consecutiveFailureCount = 0;
+
+  const nextDelayMs = (baseMs: number, attempt: number) =>
+    computeBackoff(
+      {
+        initialMs: baseMs,
+        maxMs: MAX_REFRESH_DELAY_MS,
+        factor: 2,
+        jitter: REFRESH_JITTER,
+      },
+      attempt,
+    );
 
   const schedule = (delayMs: number) => {
     if (currentStatus.stopped) {
@@ -119,6 +135,7 @@ export function startGatewayPublisherFeedRefresh(params: {
             params.log.error(`publisher feed refresh failed: ${result.error}`);
           }
         }
+        consecutiveFailureCount = failureCount > 0 ? consecutiveFailureCount + 1 : 0;
         currentStatus = {
           ...currentStatus,
           running: false,
@@ -130,6 +147,7 @@ export function startGatewayPublisherFeedRefresh(params: {
         return { ...currentStatus };
       })
       .catch((error: unknown) => {
+        consecutiveFailureCount += 1;
         params.log.error(`publisher feed refresh cycle failed: ${String(error)}`);
         currentStatus = {
           ...currentStatus,
@@ -143,12 +161,12 @@ export function startGatewayPublisherFeedRefresh(params: {
       })
       .finally(() => {
         running = null;
-        schedule(intervalMs);
+        schedule(nextDelayMs(intervalMs, consecutiveFailureCount + 1));
       });
     return running;
   };
 
-  schedule(initialDelayMs);
+  schedule(nextDelayMs(initialDelayMs, 1));
   return {
     runNow: run,
     status: () => ({ ...currentStatus }),
