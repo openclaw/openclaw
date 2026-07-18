@@ -123,6 +123,10 @@ import {
   respondChatSessionRoutingChanged,
   runChatSendPreAdmission,
 } from "./chat-send-pre-admission.js";
+import {
+  applyChatSendReplyContextFields,
+  resolveChatSendReplyContext,
+} from "./chat-send-reply-context.js";
 import { createChatSendReplyDispatch } from "./chat-send-reply-dispatch.js";
 import { normalizeChatSendRequest } from "./chat-send-request.js";
 import { prepareChatSendSession } from "./chat-send-session.js";
@@ -1199,6 +1203,22 @@ export const chatHandlers: GatewayRequestHandlers = {
         logGateway: context.logGateway,
         userTurn,
       });
+      // Resolve the reply target from session history in parallel with the
+      // remaining dispatch prep so replies do not delay the first model call.
+      // Skipped entirely for non-reply sends so their dispatch path keeps its
+      // existing await ordering.
+      const replyContextFieldsPromise = p.replyToId
+        ? resolveChatSendReplyContext({
+            replyToId: p.replyToId,
+            cfg,
+            agentId,
+            sessionKey,
+            sessionEntry: entry,
+            storePath,
+            userSenderLabel: clientInfo?.displayName,
+            warn: (message) => context.logGateway.warn(message),
+          })
+        : undefined;
 
       let agentRunStarted = false;
       const { deliveredReplies, dispatcher, hasAppendedWebchatAgentMedia, onModelSelected } =
@@ -1262,6 +1282,9 @@ export const chatHandlers: GatewayRequestHandlers = {
             "gateway.chat_send.dispatch_inbound",
             async () => {
               applyChatSendManagedMediaFields(ctx, await pluginBoundMediaFieldsPromise);
+              if (replyContextFieldsPromise) {
+                applyChatSendReplyContextFields(ctx, await replyContextFieldsPromise);
+              }
               const dispatchResult = await dispatchInboundMessage({
                 ctx,
                 cfg,

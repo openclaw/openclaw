@@ -1,8 +1,9 @@
-import { html, nothing, type TemplateResult } from "lit";
+import { html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import { titleForRoute } from "../app-navigation.ts";
 import { t } from "../i18n/index.ts";
+import { sessionHasBoard } from "../lib/board/provider.ts";
 import { formatDurationCompact } from "../lib/format.ts";
 import { startHoverMarquee, stopHoverMarquee } from "../lib/hover-marquee.ts";
 import { openCatalogSessionInTerminal } from "../lib/sessions/catalog-terminal.ts";
@@ -24,6 +25,7 @@ import {
   type SidebarRecentSession,
 } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
+import { resolveSessionIcon } from "./session-icon-registry.ts";
 import { renderSessionRowBadges } from "./session-row-badges.ts";
 import "./elapsed-time.ts";
 
@@ -32,6 +34,20 @@ const SIDEBAR_VISIBLE_CHILD_SESSION_LIMIT = 4;
 /** Session-list presentation and catalog renderer wiring. */
 export abstract class AppSidebarSessionListElement extends AppSidebarMenusElement {
   @state() protected catalogProjectGrouping = loadStoredSidebarCatalogGrouping();
+
+  protected override willUpdate(changed: PropertyValues<this>) {
+    super.willUpdate(changed);
+    // A fresh draft must be visible where it will live: genuinely expand a
+    // collapsed Threads section (persisted) instead of overriding at render
+    // time, so the header toggle keeps matching the visible state.
+    if (
+      changed.has("draftSessionAgentId") &&
+      this.draftSessionAgentId &&
+      this.collapsedSessionSections.has("ungrouped")
+    ) {
+      this.toggleSessionSection("ungrouped");
+    }
+  }
 
   private renderSessionState(session: SidebarRecentSession) {
     if (session.hasActiveRun || (session.isChild && session.status === "running")) {
@@ -87,10 +103,19 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
         ? session.subtitle
         : undefined;
     const meta = display?.meta ?? session.meta;
+    const rowMeta = session.pinned ? "" : meta;
     const hasTrail = session.isChild && (session.runtimeMs != null || session.startedAt != null);
     const metaId = hasTrail ? sidebarSessionMetaId(session.key) : undefined;
     const menuSession = display ? { ...session, meta } : session;
-    const title = display?.title ?? [label, meta].filter(Boolean).join(" · ");
+    const title = display?.title ?? [label, rowMeta].filter(Boolean).join(" · ");
+    // Pinned rows reposition the state badge into the nav-item slot; render
+    // every state renderSessionState knows (spinner, unread, child terminal
+    // badges) so pinning a subagent session cannot hide its outcome.
+    const sessionState = this.renderSessionState(session);
+    const pinnedState =
+      session.pinned && sessionState !== nothing
+        ? html`<span class="nav-item__state">${sessionState}</span>`
+        : nothing;
     const rowClass = [
       "sidebar-recent-session",
       "session-row-host",
@@ -115,12 +140,13 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
               if (event.dataTransfer) {
                 writeSessionDragData(event.dataTransfer, session.key);
                 this.draggingSessionKey = session.key;
+                this.draggingSidebarEntry = session.pinned ? `session:${session.key}` : null;
               }
             }}
         @dragend=${session.isChild
           ? nothing
           : () => {
-              this.draggingSessionKey = null;
+              this.finishSidebarEntryDrag();
               this.sessionDropTarget = null;
             }}
         @contextmenu=${session.isChild
@@ -141,14 +167,28 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
           aria-describedby=${metaId ?? nothing}
           @click=${(event: MouseEvent) => this.handleSessionRowClick(event, session)}
         >
+          ${session.pinned
+            ? html`<span class="sidebar-pinned-session__icon" aria-hidden="true"
+                >${resolveSessionIcon(session.icon)}</span
+              >`
+            : nothing}
           <span class="sidebar-recent-session__text">
             <span class="sidebar-recent-session__name hover-marquee">${label}</span>
             ${subtitle
               ? html`<span class="sidebar-recent-session__subtitle">${subtitle}</span>`
               : nothing}
           </span>
-          ${this.renderSessionState(session)}
-          ${session.isChild ? nothing : renderSessionRowBadges(session)}
+          ${!session.isChild && sessionHasBoard(session.key)
+            ? html`<span
+                class="sidebar-board-glyph"
+                role="img"
+                aria-label=${t("sessionsView.dashboardAvailable")}
+                title=${t("sessionsView.dashboardAvailable")}
+                >${icons.barChart}</span
+              >`
+            : nothing}
+          ${session.pinned ? nothing : sessionState}
+          ${session.isChild ? nothing : renderSessionRowBadges(session)} ${pinnedState}
         </a>
         ${session.childSessionKeys.length > 0
           ? html`<button
@@ -289,6 +329,10 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
     </div>`;
   }
 
+  protected renderPinnedSidebarSession(session: SidebarRecentSession): TemplateResult {
+    return this.renderSessionTree(session);
+  }
+
   private renderSessionSection(
     section: {
       id: string;
@@ -300,6 +344,7 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
       totalRowCount?: number;
     },
     trailing: TemplateResult | typeof nothing = nothing,
+    showDraft = false,
   ) {
     const totalRowCount = section.totalRowCount ?? section.rows.length;
     const group = section.category;
@@ -471,8 +516,9 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
         ${collapsed
           ? nothing
           : html`
-              ${section.rows.length > 0
+              ${section.rows.length > 0 || showDraft
                 ? html`<div class="sidebar-recent-sessions__list" role="list" aria-label=${label}>
+                    ${showDraft ? this.renderDraftSessionRow() : nothing}
                     ${section.rows.map((session) => this.renderSessionTree(session))}
                   </div>`
                 : nothing}
@@ -504,8 +550,8 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
   ) {
     const { sections, expandedRows, visibleRows } = this.zonedVisibleSections(rows);
     return html`
-      ${options.showDraft ? this.renderDraftSessionRow() : nothing}
       ${sections.map((section) => {
+        const showDraft = section.id === "ungrouped" && options.showDraft;
         if (section.id === "work") {
           // Coding hosts live work/ACP rows plus the CLI catalogs; hide the
           // whole zone when both are empty.
@@ -514,7 +560,19 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
           }
           return this.renderSessionSection(section, options.codingTrailing ?? nothing);
         }
-        return this.renderSessionSection(section);
+        // Threads hides its bare header when empty, except while a draft needs
+        // a home or a session drag needs the unpin drop target. Empty custom
+        // categories keep rendering: they are user-created containers and the
+        // "New group…" / drag-into-group flows depend on seeing them.
+        if (
+          section.id === "ungrouped" &&
+          section.totalRowCount === 0 &&
+          !showDraft &&
+          this.draggingSessionKey === null
+        ) {
+          return nothing;
+        }
+        return this.renderSessionSection(section, nothing, showDraft);
       })}
       ${this.renderSessionPagination(expandedRows, visibleRows.length)}
     `;
@@ -563,7 +621,14 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
     const visibleSessions = this.selectedAgentSessionRows(navigationState);
     const expandedAgentId = this.expandedAgentId();
     return html`
-      <section class="sidebar-sessions">
+      <section
+        class="sidebar-sessions ${this.sessionListRemovalDrop
+          ? "sidebar-sessions--removal-drop"
+          : ""}"
+        @dragover=${(event: DragEvent) => this.handleSessionListDragOver(event)}
+        @dragleave=${(event: DragEvent) => this.handleSessionListDragLeave(event)}
+        @drop=${(event: DragEvent) => this.handleSessionListDrop(event)}
+      >
         ${this.sessionMutationError
           ? html`
               <div

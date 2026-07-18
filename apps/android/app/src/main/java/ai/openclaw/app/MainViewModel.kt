@@ -1092,7 +1092,11 @@ class MainViewModel private constructor(
     ensureRuntime().setTalkModeEnabled(enabled)
   }
 
-  suspend fun requestVoiceNotePermission(): Boolean {
+  suspend fun requestVoiceNotePermission(): Boolean = requestRecordAudioPermission()
+
+  suspend fun requestDictationPermission(): Boolean = requestRecordAudioPermission()
+
+  private suspend fun requestRecordAudioPermission(): Boolean {
     val requester = permissionRequester ?: return false
     return try {
       requester.requestIfMissing(listOf(Manifest.permission.RECORD_AUDIO))[Manifest.permission.RECORD_AUDIO] == true
@@ -1107,6 +1111,12 @@ class MainViewModel private constructor(
 
   internal fun releaseVoiceNoteMic() {
     runtimeRef.value?.releaseVoiceNoteMic()
+  }
+
+  internal fun tryAcquireDictationMic(): Boolean = runtimeRef.value?.tryAcquireDictationMic() == true
+
+  internal fun releaseDictationMic() {
+    runtimeRef.value?.releaseDictationMic()
   }
 
   fun setSpeakerEnabled(enabled: Boolean) {
@@ -1655,6 +1665,10 @@ class MainViewModel private constructor(
     answers: Map<String, List<String>>,
   ) {
     ensureRuntime().resolveChatQuestion(id, answers)
+  }
+
+  fun skipChatQuestion(id: String) {
+    ensureRuntime().skipChatQuestion(id)
   }
 
   suspend fun listBackgroundTasks(agentId: String): List<BackgroundTask> = ensureRuntime().listBackgroundTasks(agentId)

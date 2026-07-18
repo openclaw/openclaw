@@ -123,6 +123,8 @@ final class QuickChatModel {
     typealias PermissionStatusProvider = @MainActor ([Capability]) async -> [Capability: Bool]
     typealias PermissionGrantProvider = @MainActor ([Capability]) async -> [Capability: Bool]
     typealias ConnectionGateProvider = @MainActor () -> QuickChatConnectionGate
+    typealias FrontmostAppNameProvider = @MainActor () -> String
+    typealias TextContextCaptureProvider = @MainActor () async -> QuickChatTextContextCaptureOutcome
 
     static let trackedPermissions: [Capability] = [.notifications, .accessibility, .screenRecording]
 
@@ -149,6 +151,10 @@ final class QuickChatModel {
     private(set) var isGrantingPermissions = false
     private(set) var sendState: QuickChatSendState = .idle
     private(set) var isPresentationActive = false
+    private(set) var frontmostAppName = String(localized: "focused app")
+    private(set) var textContext: QuickChatTextContext?
+    private(set) var isCapturingTextContext = false
+    private(set) var textContextCaptureMessage: String?
     /// Route of the most recently accepted send; navigation reads this immutable value
     /// instead of sampling live routing state that an agent switch could move meanwhile.
     private(set) var lastAcceptedRoute: QuickChatRoutingTarget?
@@ -160,6 +166,8 @@ final class QuickChatModel {
     @ObservationIgnored private let permissionStatusProvider: PermissionStatusProvider
     @ObservationIgnored private let permissionGrantProvider: PermissionGrantProvider
     @ObservationIgnored private let connectionGateProvider: ConnectionGateProvider
+    @ObservationIgnored private let frontmostAppNameProvider: FrontmostAppNameProvider
+    @ObservationIgnored private let textContextCaptureProvider: TextContextCaptureProvider
     /// Invoked with the snapshotted route just before a send is dispatched, for every
     /// send path (text and capture); wires the reply consumer's pre-bind.
     @ObservationIgnored var onSendDispatched: ((QuickChatRoutingTarget) -> Void)?
@@ -172,6 +180,8 @@ final class QuickChatModel {
     @ObservationIgnored private var permissionPollTask: Task<Void, Never>?
     @ObservationIgnored private var retryIdentity: RetryIdentity?
     @ObservationIgnored private var capturePipelineID: UUID?
+    @ObservationIgnored private var textContextCaptureID: UUID?
+    @ObservationIgnored private var textContextCaptureTask: Task<Void, Never>?
 
     init(
         sessionKeyProvider: @escaping SessionKeyProvider = {
@@ -212,6 +222,12 @@ final class QuickChatModel {
             if appState.isPaused { return .paused }
             if ControlChannel.shared.state != .connected { return .disconnected }
             return .available
+        },
+        frontmostAppNameProvider: @escaping FrontmostAppNameProvider = {
+            QuickChatFocusedTextCaptureService.frontmostApplicationName()
+        },
+        textContextCaptureProvider: @escaping TextContextCaptureProvider = {
+            await QuickChatFocusedTextCaptureService.capture()
         })
     {
         self.sessionKeyProvider = sessionKeyProvider
@@ -221,6 +237,8 @@ final class QuickChatModel {
         self.permissionStatusProvider = permissionStatusProvider
         self.permissionGrantProvider = permissionGrantProvider
         self.connectionGateProvider = connectionGateProvider
+        self.frontmostAppNameProvider = frontmostAppNameProvider
+        self.textContextCaptureProvider = textContextCaptureProvider
     }
 
     var connectionGate: QuickChatConnectionGate {
@@ -241,18 +259,31 @@ final class QuickChatModel {
     }
 
     var canSend: Bool {
-        !self.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+        (!self.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || self.textContext != nil) &&
             !self.sessionKey.isEmpty &&
             self.connectionGate == .available &&
+            !self.isCapturingTextContext &&
             self.sendState != .sending
     }
 
     var canCaptureWindow: Bool {
-        !self.sessionKey.isEmpty && self.connectionGate == .available && self.sendState != .sending
+        !self.sessionKey.isEmpty &&
+            self.connectionGate == .available &&
+            !self.isGrantingPermissions &&
+            !self.isCapturingTextContext &&
+            self.sendState != .sending
+    }
+
+    var canCaptureTextContext: Bool {
+        self.canCaptureWindow && !self.isCapturingTextContext
     }
 
     var canSelectRecentSession: Bool {
-        !self.sessionKey.isEmpty && self.connectionGate == .available && self.sendState != .sending
+        !self.sessionKey.isEmpty &&
+            self.connectionGate == .available &&
+            !self.isGrantingPermissions &&
+            !self.isCapturingTextContext &&
+            self.sendState != .sending
     }
 
     var messagePlaceholder: String {
@@ -276,6 +307,10 @@ final class QuickChatModel {
         self.isPresentationActive = true
         self.sessionKey = ""
         self.sendAgentID = nil
+        self.frontmostAppName = self.frontmostAppNameProvider()
+        self.textContext = nil
+        self.textContextCaptureMessage = nil
+        self.cancelTextContextCapture()
         self.targetSessionOverride = nil
         self.baseRoutingTarget = nil
         // The cached list stays displayable, but routing metadata must wait for the fresh
@@ -358,6 +393,46 @@ final class QuickChatModel {
         await self.performSend(messageOverride: nil, attachments: [])
     }
 
+    func captureFocusedAppText() {
+        guard self.canCaptureTextContext, self.isPresentationActive else { return }
+        let captureID = UUID()
+        let presentationID = self.presentationID
+        self.textContextCaptureID = captureID
+        self.isCapturingTextContext = true
+        self.textContextCaptureMessage = nil
+        self.textContextCaptureTask?.cancel()
+        self.textContextCaptureTask = Task { [weak self] in
+            guard let self else { return }
+            let outcome = await self.textContextCaptureProvider()
+            guard self.isCurrentPresentation(presentationID),
+                  self.textContextCaptureID == captureID,
+                  !Task.isCancelled
+            else { return }
+            self.textContextCaptureID = nil
+            self.textContextCaptureTask = nil
+            self.isCapturingTextContext = false
+            switch outcome {
+            case let .captured(context):
+                self.replaceTextContext(context)
+            case let .failed(message):
+                self.textContextCaptureMessage = message
+            case .cancelled:
+                break
+            }
+        }
+    }
+
+    func replaceTextContext(_ context: QuickChatTextContext) {
+        self.textContext = context
+        self.textContextCaptureMessage = nil
+        self.retryIdentity = nil
+    }
+
+    func clearTextContext() {
+        self.textContext = nil
+        self.retryIdentity = nil
+    }
+
     /// Holds the send state for the whole capture pipeline so typing/Return cannot race
     /// the screenshot send. Returns an ownership token (nil when a send is already active);
     /// detached processing can outlive cancellation, so every later pipeline mutation must
@@ -381,18 +456,23 @@ final class QuickChatModel {
     func failCapturePipeline(_ id: UUID) {
         guard self.capturePipelineID == id else { return }
         self.capturePipelineID = nil
-        self.sendState = .failed("Couldn't capture that window.")
+        self.sendState = .failed(String(localized: "Couldn't capture that image."))
     }
 
     /// Pre-pipeline capture failures (enumeration, no candidates). Never clobbers a held
     /// send state; those failures belong to their owning pipeline token.
     func setCaptureFailure() {
         guard self.sendState != .sending else { return }
-        self.sendState = .failed("Couldn't capture that window.")
+        self.sendState = .failed(String(localized: "Couldn't capture that image."))
     }
 
-    func sendWindowScreenshot(pipelineID: UUID, data: Data, appName: String, title: String) async -> Bool {
-        // Bind the pipeline to the route visible when the user clicked the window; an agent
+    func sendCapturedImage(
+        pipelineID: UUID,
+        data: Data,
+        label: String,
+        fileName: String) async -> Bool
+    {
+        // Bind the pipeline to the route visible when the user completed the selection; an agent
         // switch or re-presentation during processing must drop the capture, not reroute it.
         guard self.capturePipelineID == pipelineID,
               let presentationID = self.activePresentationID
@@ -405,10 +485,9 @@ final class QuickChatModel {
         }
         let draft = self.text
         let trimmedDraft = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        let message = trimmedDraft.isEmpty
-            ? Self.defaultScreenshotCaption(appName: appName, title: title)
-            : trimmedDraft
-        let fileName = Self.screenshotFileName(appName: appName)
+        let baseMessage = trimmedDraft.isEmpty ? String(localized: "Screenshot: \(label)") : trimmedDraft
+        let textContext = self.textContext
+        let message = Self.assembleMessage(draft: baseMessage, context: textContext)
 
         let attachment: OpenClawChatAttachmentPayload
         do {
@@ -438,6 +517,7 @@ final class QuickChatModel {
             messageOverride: message,
             attachments: [attachment],
             draftOverride: draft,
+            textContextOverride: textContext,
             continuesCapturePipeline: true)
         if self.capturePipelineID == pipelineID {
             self.capturePipelineID = nil
@@ -463,6 +543,14 @@ final class QuickChatModel {
             agentID: nil)
     }
 
+    nonisolated static func assembleMessage(draft: String, context: QuickChatTextContext?) -> String {
+        let trimmedDraft = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let context else { return trimmedDraft }
+        let contextLabel = String(localized: "Context from \(context.appName) — \(context.windowTitle)")
+        let contextBlock = "[\(contextLabel)]\n\(context.text)"
+        return trimmedDraft.isEmpty ? contextBlock : "\(trimmedDraft)\n\n\(contextBlock)"
+    }
+
     nonisolated static func routingTarget(
         override: QuickChatSessionTargetOverride?,
         base: QuickChatRoutingTarget) -> QuickChatRoutingTarget
@@ -472,10 +560,6 @@ final class QuickChatModel {
         // agent owner as the selected base route when session scope is global.
         let agentID = override.key.lowercased() == "global" ? base.agentID : nil
         return QuickChatRoutingTarget(sessionKey: override.key, agentID: agentID)
-    }
-
-    nonisolated static func defaultScreenshotCaption(appName: String, title: String) -> String {
-        "Screenshot: \(appName) — \(title)"
     }
 
     nonisolated static func screenshotFileName(appName: String) -> String {
@@ -497,6 +581,11 @@ final class QuickChatModel {
         self.baseRoutingTarget = nil
         self.sessionKey = ""
         self.sendAgentID = nil
+        // Captured AX text is presentation-scoped: hiding the bar must erase it so a
+        // later recipient can never inherit stale focused-app context.
+        self.clearTextContext()
+        self.textContextCaptureMessage = nil
+        self.cancelTextContextCapture()
         // A dispatched chat.send may already be accepted; cancelling and retrying with a new UUID can duplicate it.
         self.cancelPermissionTask()
         self.cancelPermissionPolling()
@@ -508,6 +597,7 @@ final class QuickChatModel {
         self.retryIdentity = nil
         self.cancelPermissionTask()
         self.cancelPermissionPolling()
+        self.cancelTextContextCapture()
         if self.sendState == .sending { self.sendState = .idle }
     }
 
@@ -586,12 +676,14 @@ final class QuickChatModel {
         messageOverride: String?,
         attachments: [OpenClawChatAttachmentPayload],
         draftOverride: String? = nil,
+        textContextOverride: QuickChatTextContext? = nil,
         continuesCapturePipeline: Bool = false) async -> Bool
     {
         // The capture pipeline captured its draft before detached processing; edits made
         // meanwhile must survive, so the clear-decision compares against that original.
         let draft = draftOverride ?? self.text
-        let message = messageOverride ?? draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let textContext = textContextOverride ?? self.textContext
+        let message = messageOverride ?? Self.assembleMessage(draft: draft, context: textContext)
         guard !message.isEmpty, !self.sessionKey.isEmpty, self.connectionGate == .available else {
             // The capture pipeline unwinds its own held state after this returns false.
             return false
@@ -641,6 +733,9 @@ final class QuickChatModel {
             case .terminalSuccess, .inFlight:
                 self.retryIdentity = nil
                 self.lastAcceptedRoute = QuickChatRoutingTarget(sessionKey: sessionKey, agentID: agentID)
+                if self.textContext == textContext {
+                    self.textContext = nil
+                }
                 if self.text == draft {
                     self.sendState = .sent
                     self.text = ""
@@ -683,6 +778,13 @@ final class QuickChatModel {
         self.permissionTask?.cancel()
         self.permissionTask = nil
         self.isGrantingPermissions = false
+    }
+
+    private func cancelTextContextCapture() {
+        self.textContextCaptureTask?.cancel()
+        self.textContextCaptureTask = nil
+        self.textContextCaptureID = nil
+        self.isCapturingTextContext = false
     }
 
     private func recheckPermissions(id: UUID) async {

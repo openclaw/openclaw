@@ -619,7 +619,7 @@ class SessionsPage extends OpenClawLightDomElement {
     }
     if (
       !window.confirm(
-        `Delete ${keys.length} ${keys.length === 1 ? "session" : "sessions"}?\n\nThis will delete the session entries and archive their transcripts.`,
+        `Delete ${keys.length} ${keys.length === 1 ? "thread" : "threads"}?\n\nThis will delete the thread entries and archive their transcripts.`,
       )
     ) {
       return;
@@ -1049,7 +1049,7 @@ class SessionsPage extends OpenClawLightDomElement {
   }
 
   private async branchCheckpoint(sessionKey: string, checkpointId: string) {
-    if (!window.confirm("Create a new child session from this compacted checkpoint?")) {
+    if (!window.confirm("Create a new child thread from this compacted checkpoint?")) {
       return;
     }
     const scope = this.captureRequestScope();
@@ -1078,7 +1078,7 @@ class SessionsPage extends OpenClawLightDomElement {
   private async restoreCheckpoint(sessionKey: string, checkpointId: string) {
     if (
       !window.confirm(
-        "Restore this session to the selected compacted checkpoint?\n\nThis replaces the current active transcript for the session key.",
+        "Restore this thread to the selected compacted checkpoint?\n\nThis replaces the current active transcript for the session key.",
       )
     ) {
       return;
@@ -1181,6 +1181,7 @@ class SessionsPage extends OpenClawLightDomElement {
       <openclaw-session-menu
         .session=${{
           label: normalizeOptionalString(row.label) ?? row.key,
+          icon: row.icon,
           pinned: row.pinned === true,
           unread: row.unread === true,
           archived: row.archived === true,
@@ -1217,6 +1218,9 @@ class SessionsPage extends OpenClawLightDomElement {
               break;
             case "toggle-pin":
               void this.patchSession(row.key, { pinned: row.pinned !== true });
+              break;
+            case "set-icon":
+              void this.patchSession(row.key, { icon: action.icon });
               break;
             case "toggle-unread":
               void this.patchSession(row.key, { unread: row.unread !== true });

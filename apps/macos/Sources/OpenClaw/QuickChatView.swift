@@ -11,7 +11,9 @@ struct QuickChatView: View {
     let onSendAccepted: (Bool) -> Void
     let onShowAgentPicker: () -> Void
     let onShowRecentSessions: () -> Void
-    let onWindowScreenshot: () -> Void
+    let onCaptureTextContext: () -> Void
+    let onShowCaptureMenu: () -> Void
+    let onGrantPermissions: () -> Void
     let onContentHeightChange: (CGFloat) -> Void
     let onTextViewReady: (NSTextView) -> Void
 
@@ -27,9 +29,14 @@ struct QuickChatView: View {
             VStack(spacing: 0) {
                 self.inputRow
 
+                if let context = self.model.textContext {
+                    self.contextChip(context)
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+
                 if let status = self.statusLine {
                     HStack {
-                        Text(status.message)
+                        Text(verbatim: status.message)
                             .font(.caption)
                             .foregroundStyle(status.isError ? Color.red : Color.orange)
                         Spacer()
@@ -53,6 +60,7 @@ struct QuickChatView: View {
         .frame(width: 620)
         .fixedSize(horizontal: false, vertical: true)
         .animation(.spring(duration: 0.25), value: self.model.shouldShowPermissionStrip)
+        .animation(.easeOut(duration: 0.14), value: self.model.textContext)
         .animation(.easeOut(duration: 0.14), value: self.statusLine?.message)
         .animation(.spring(duration: 0.28), value: self.replyBinding.route)
         .onGeometryChange(for: CGFloat.self) { proxy in
@@ -106,10 +114,27 @@ struct QuickChatView: View {
                 .disabled(!self.model.canSelectRecentSession)
                 .help("Continue a recent conversation")
                 .accessibilityLabel("Continue a recent conversation")
-            }
 
-            if self.model.sendState != .sending {
-                Button(action: self.onWindowScreenshot) {
+                Button(action: self.onCaptureTextContext) {
+                    Group {
+                        if self.model.isCapturingTextContext {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Image(systemName: "doc.text")
+                                .font(.system(size: 16.5, weight: .medium))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .frame(width: 22, height: 22)
+                }
+                .buttonStyle(.plain)
+                .disabled(!self.model.canCaptureTextContext)
+                .help(String(localized: "Attach text from \(self.model.frontmostAppName)"))
+                .accessibilityLabel(Text(verbatim: String(
+                    localized: "Attach text from \(self.model.frontmostAppName)")))
+
+                Button(action: self.onShowCaptureMenu) {
                     Image(systemName: "camera.viewfinder")
                         .font(.system(size: 16.5, weight: .medium))
                         .foregroundStyle(.secondary)
@@ -117,8 +142,8 @@ struct QuickChatView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(!self.model.canCaptureWindow)
-                .help("Send a window screenshot")
-                .accessibilityLabel("Send a window screenshot")
+                .help("Capture a screenshot")
+                .accessibilityLabel("Capture a screenshot")
             }
 
             Button {
@@ -202,13 +227,13 @@ struct QuickChatView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Needs additional permissions")
                         .font(.caption.weight(.semibold))
-                    Text(self.model.missingPermissions.map(\.permissionDisplayName).joined(separator: ", "))
+                    Text(verbatim: self.model.missingPermissions.map(\.permissionDisplayName).joined(separator: ", "))
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
                 Button("Grant") {
-                    self.model.grantMissingPermissions()
+                    self.onGrantPermissions()
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
@@ -221,6 +246,29 @@ struct QuickChatView: View {
             }
             .padding(12)
         }
+    }
+
+    private func contextChip(_ context: QuickChatTextContext) -> some View {
+        HStack(spacing: 7) {
+            Image(systemName: "doc.text")
+                .foregroundStyle(Color.accentColor)
+            Text("\(context.appName) — \(context.windowTitle) (\(context.characterCount) chars)")
+                .font(.caption)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Button(action: self.model.clearTextContext) {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Remove attached text context")
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 5)
+        .background(Color.accentColor.opacity(0.1), in: Capsule())
+        .padding(.horizontal, 14)
+        .padding(.bottom, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func replyArea(viewModel: OpenClawChatViewModel) -> some View {
@@ -243,6 +291,9 @@ struct QuickChatView: View {
     private var statusLine: (message: String, isError: Bool)? {
         if case let .failed(message) = self.model.sendState {
             return (message, true)
+        }
+        if let message = self.model.textContextCaptureMessage {
+            return (message, false)
         }
         if let message = self.model.connectionStatusMessage {
             return (message, false)

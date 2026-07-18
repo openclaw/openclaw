@@ -38,6 +38,7 @@ export function buildGatewaySessionEventFields(params: {
     archivedAt: sessionRow.archivedAt ?? null,
     pinned: sessionRow.pinned ?? false,
     pinnedAt: sessionRow.pinnedAt ?? null,
+    icon: sessionRow.icon ?? null,
     unread: sessionRow.unread ?? false,
     lastReadAt: sessionRow.lastReadAt,
     lastActivityAt: sessionRow.lastActivityAt,

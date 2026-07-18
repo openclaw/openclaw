@@ -835,6 +835,7 @@ export class ConfigPage extends OpenClawLightDomElement {
           activeSection: "mcp",
           activeSubsection: null,
           showModeToggle: false,
+          embeddedEditor: true,
           navRootLabel: "MCP",
         }),
       });
@@ -856,7 +857,7 @@ export class ConfigPage extends OpenClawLightDomElement {
         onBrowserEnabledToggle: (enabled) =>
           runtimeConfig.patchForm(["browser", "enabled"], enabled),
         onToolProfileChange: (profile) => runtimeConfig.patchForm(["tools", "profile"], profile),
-        editor: renderConfig(props),
+        editor: renderConfig({ ...props, embeddedEditor: true }),
       });
     }
     return renderConfig(props);

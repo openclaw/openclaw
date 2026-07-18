@@ -96,7 +96,7 @@ export default definePluginEntry({
         currentConfig,
         forwarderUrl: (
           pluginCfg.forwarderUrl ??
-          process.env.SLACK_FORWARDER_URL ??
+          normalizeOptionalString(process.env.SLACK_FORWARDER_URL) ??
           "http://slack-forwarder:8750"
         ).replace(/\/$/, ""),
         abTestChannels: new Set(

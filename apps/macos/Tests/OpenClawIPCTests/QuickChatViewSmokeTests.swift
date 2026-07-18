@@ -32,7 +32,9 @@ struct QuickChatViewSmokeTests {
             onSendAccepted: { _ in },
             onShowAgentPicker: {},
             onShowRecentSessions: {},
-            onWindowScreenshot: {},
+            onCaptureTextContext: {},
+            onShowCaptureMenu: {},
+            onGrantPermissions: {},
             onContentHeightChange: { _ in },
             onTextViewReady: { _ in })
 
