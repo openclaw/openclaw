@@ -10,10 +10,10 @@ const KIB = 1024;
 // Small, explicit headroom over the optimized baseline. Budget changes should
 // accompany an intentional loading or chunking decision.
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze({
-  startupJsRequests: 28,
+  startupJsRequests: 18,
   startupCssRequests: 1,
-  startupJsGzipBytes: 370 * KIB,
-  startupCssGzipBytes: 42 * KIB,
+  startupJsGzipBytes: 310 * KIB,
+  startupCssGzipBytes: 38 * KIB,
   largestJsGzipBytes: 215 * KIB,
   largestCssGzipBytes: 42 * KIB,
 });
@@ -156,7 +156,11 @@ function formatViolation(violation) {
     violation.unit === "bytes"
       ? formatControlUiPerformanceBytes(violation.limit)
       : String(violation.limit);
-  return `${violation.metric}: ${actual} exceeds ${limit}`;
+  const exactBytes =
+    violation.unit === "bytes" && actual === limit
+      ? ` (${violation.actual} B vs ${violation.limit} B)`
+      : "";
+  return `${violation.metric}: ${actual} exceeds ${limit}${exactBytes}`;
 }
 
 export function formatControlUiPerformanceReport(

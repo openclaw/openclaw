@@ -9,6 +9,7 @@ import {
   validateSystemAgentSetupAuthStartParams,
   validateSystemAgentSetupDetectParams,
   validateSystemAgentSetupVerifyParams,
+  type SystemAgentChatQuestion,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
   SYSTEM_AGENT_APPROVAL_DECISIONS,
@@ -212,10 +213,11 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    await runSystemAgentGatewayTask(async () => {
-      const { detectSetupInference } = await import("../../system-agent/setup-inference.js");
-      respond(true, await detectSetupInference(), undefined);
-    });
+    // Detection is read-only and may load native provider code. Keep it outside
+    // the mutation lane and off the Gateway event loop so health stays live.
+    const { detectSetupInferenceIsolated } =
+      await import("../../system-agent/setup-inference-detection.js");
+    respond(true, await detectSetupInferenceIsolated(), undefined);
   },
   /** Re-run the exact current default-agent inference route without mutating setup. */
   "openclaw.setup.verify": async ({ params, respond }) => {
@@ -480,9 +482,12 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             operatorApprovalOnly: params.delegation !== undefined,
           });
           let welcome: string;
+          let welcomeQuestion: SystemAgentChatQuestion | undefined;
           try {
             if (params.welcomeVariant === "onboarding") {
-              welcome = await buildOnboardingWelcome({ engine });
+              const onboardingWelcome = await buildOnboardingWelcome({ engine });
+              welcome = onboardingWelcome.text;
+              welcomeQuestion = onboardingWelcome.question;
             } else {
               welcome = formatSystemAgentStartupMessage(await engine.loadOverview());
               engine.noteAssistantMessage(welcome);
@@ -496,16 +501,40 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             return;
           }
           await evictOldestSession(sessions, context);
-          session = { engine, welcome, lastUsedAt: Date.now(), delegationKey };
+          session = {
+            engine,
+            welcome,
+            ...(welcomeQuestion ? { welcomeQuestion } : {}),
+            lastUsedAt: Date.now(),
+            delegationKey,
+          };
           sessions.set(sessionId, session);
           if (params.message === undefined || !params.message.trim()) {
-            respond(true, { sessionId, reply: session.welcome, action: "none" }, undefined);
+            respond(
+              true,
+              {
+                sessionId,
+                reply: session.welcome,
+                action: "none",
+                ...(session.welcomeQuestion ? { question: session.welcomeQuestion } : {}),
+              },
+              undefined,
+            );
             return;
           }
         }
         session.lastUsedAt = Date.now();
         if (params.message === undefined || !params.message.trim()) {
-          respond(true, { sessionId, reply: session.welcome, action: "none" }, undefined);
+          respond(
+            true,
+            {
+              sessionId,
+              reply: session.welcome,
+              action: "none",
+              ...(session.welcomeQuestion ? { question: session.welcomeQuestion } : {}),
+            },
+            undefined,
+          );
           return;
         }
         let reply: Awaited<ReturnType<SystemAgentChatEngine["handle"]>>;
@@ -562,7 +591,11 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
                 ? "Setup here is done — continue with your agent."
                 : "Nothing to change."),
             action,
+            ...(action === "open-agent" && reply.agentDraft
+              ? { agentDraft: reply.agentDraft }
+              : {}),
             ...(reply.sensitive === true ? { sensitive: true } : {}),
+            ...(reply.question ? { question: reply.question } : {}),
             ...(proposalId ? { needsApproval: true, proposalId } : {}),
           },
           undefined,

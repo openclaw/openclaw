@@ -4,6 +4,7 @@ import { assertNoOAuthSecretRefPolicyViolations } from "../agents/auth-profiles/
 import type { AuthProfileCredential, AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { ProviderAuthAliasLookupParams } from "../agents/provider-auth-aliases.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
+import { setSecretAssignmentSource } from "./runtime-assignment-provenance.js";
 import { resolveAuthProfileSecretOwnerId } from "./runtime-auth-profile-owner.js";
 import {
   collectRuntimeSecretInputAssignment,
@@ -24,6 +25,16 @@ type TokenCredentialLike = AuthProfileCredential & {
   token?: string;
   tokenRef?: unknown;
 };
+
+function collectAuthStoreSecretInputAssignment(
+  params: Parameters<typeof collectRuntimeSecretInputAssignment>[0],
+): void {
+  const previousCount = params.context.assignments.length;
+  collectRuntimeSecretInputAssignment(params);
+  for (const assignment of params.context.assignments.slice(previousCount)) {
+    setSecretAssignmentSource(assignment, "auth-store");
+  }
+}
 
 function collectApiKeyProfileAssignment(params: {
   profile: ApiKeyCredentialLike;
@@ -67,7 +78,7 @@ function collectApiKeyProfileAssignment(params: {
     provider: params.profile.provider,
     profileId: params.profileId,
   });
-  collectRuntimeSecretInputAssignment({
+  collectAuthStoreSecretInputAssignment({
     value: resolvedKeyRef,
     path: `${params.agentDir}.auth-profiles.${params.profileId}.key`,
     expected: "string",
@@ -129,7 +140,7 @@ function collectTokenProfileAssignment(params: {
     provider: params.profile.provider,
     profileId: params.profileId,
   });
-  collectRuntimeSecretInputAssignment({
+  collectAuthStoreSecretInputAssignment({
     value: resolvedTokenRef,
     path: `${params.agentDir}.auth-profiles.${params.profileId}.token`,
     expected: "string",

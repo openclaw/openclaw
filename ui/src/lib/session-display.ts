@@ -15,12 +15,6 @@ const CHANNEL_LABELS: Record<string, string> = {
 
 const KNOWN_CHANNEL_KEYS = Object.keys(CHANNEL_LABELS);
 
-/** Human channel label for group headers and name fallbacks. */
-export function channelDisplayLabel(channel: string): string {
-  const normalized = normalizeLowercaseStringOrEmpty(channel);
-  return CHANNEL_LABELS[normalized] ?? capitalize(normalized || channel);
-}
-
 /** Raw peer ids stay out of the sidebar; keep a short recognizable tail only. */
 function shortenPeerId(identifier: string): string {
   const trimmed = identifier.trim();
@@ -97,6 +91,10 @@ type SessionDisplayRow = {
   displayName?: string;
   derivedTitle?: string;
 } & SessionWorktreeDisplayRow;
+
+type SessionDisplayOptions = {
+  includeSubagentPrefix?: boolean;
+};
 
 function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
@@ -175,7 +173,11 @@ function parseSessionKey(key: string): SessionKeyInfo {
   return { prefix: "", fallbackName: key };
 }
 
-export function resolveSessionDisplayName(key: string, row?: SessionDisplayRow): string {
+export function resolveSessionDisplayName(
+  key: string,
+  row?: SessionDisplayRow,
+  options: SessionDisplayOptions = {},
+): string {
   const label = normalizeOptionalString(row?.label) ?? "";
   const displayName = normalizeOptionalString(row?.displayName) ?? "";
   const derivedTitle = normalizeOptionalString(row?.derivedTitle) ?? "";
@@ -186,6 +188,9 @@ export function resolveSessionDisplayName(key: string, row?: SessionDisplayRow):
       return name;
     }
     const prefixPattern = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}\\s*`, "i");
+    if (prefix === "Subagent:" && options.includeSubagentPrefix === false) {
+      return name.replace(prefixPattern, "").trim() || fallbackName;
+    }
     return prefixPattern.test(name) ? name : `${prefix} ${name}`;
   };
 

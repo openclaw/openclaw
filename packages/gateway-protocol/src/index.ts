@@ -364,6 +364,10 @@ import {
   SessionsCompactionGetParamsSchema,
   SessionsCompactionListParamsSchema,
   SessionsCompactionRestoreParamsSchema,
+  SessionsForkParamsSchema,
+  SessionsForkResultSchema,
+  SessionsRewindParamsSchema,
+  SessionsRewindResultSchema,
   SessionFileBrowserEntrySchema,
   SessionFileBrowserResultSchema,
   SessionFileEntrySchema,
@@ -413,6 +417,7 @@ import {
   SessionsCatalogContinueResultSchema,
   SessionsCatalogListParamsSchema,
   SessionsCatalogListResultSchema,
+  SessionsCatalogHostEventSchema,
   SessionsCatalogReadParamsSchema,
   SessionsCatalogReadResultSchema,
   SessionsMessagesSubscribeParamsSchema,
@@ -489,6 +494,7 @@ import {
   WebLoginStartParamsSchema,
   WebLoginWaitParamsSchema,
   SystemAgentChatParamsSchema,
+  SystemAgentChatQuestionSchema,
   SystemAgentChatResultSchema,
   SystemAgentSetupDetectParamsSchema,
   SystemAgentSetupDetectResultSchema,
@@ -671,6 +677,7 @@ export const validateSecretsResolveParams = lazyCompile(SecretsResolveParamsSche
 export const validateSecretsResolveResult = lazyCompile(SecretsResolveResultSchema);
 export const validateSessionsListParams = lazyCompile(SessionsListParamsSchema);
 export const validateSessionsCatalogListParams = lazyCompile(SessionsCatalogListParamsSchema);
+export const validateSessionsCatalogHostEvent = lazyCompile(SessionsCatalogHostEventSchema);
 export const validateSessionsCatalogReadParams = lazyCompile(SessionsCatalogReadParamsSchema);
 export const validateSessionsCatalogContinueParams = lazyCompile(
   SessionsCatalogContinueParamsSchema,
@@ -717,6 +724,8 @@ export const validateSessionsCompactionBranchParams = lazyCompile(
 export const validateSessionsCompactionRestoreParams = lazyCompile(
   SessionsCompactionRestoreParamsSchema,
 );
+export const validateSessionsRewindParams = lazyCompile(SessionsRewindParamsSchema);
+export const validateSessionsForkParams = lazyCompile(SessionsForkParamsSchema);
 export const validateSessionsUsageParams = lazyCompile(SessionsUsageParamsSchema);
 export const validateTaskSuggestionsListParams = lazyCompile(TaskSuggestionsListParamsSchema);
 export const validateTaskSuggestionsCreateParams = lazyCompile(TaskSuggestionsCreateParamsSchema);
@@ -1033,6 +1042,7 @@ export {
   SessionCatalogTranscriptItemSchema,
   SessionsCatalogListParamsSchema,
   SessionsCatalogListResultSchema,
+  SessionsCatalogHostEventSchema,
   SessionsCatalogReadParamsSchema,
   SessionsCatalogReadResultSchema,
   SessionsCatalogContinueParamsSchema,
@@ -1067,6 +1077,10 @@ export {
   SessionsCompactionGetParamsSchema,
   SessionsCompactionBranchParamsSchema,
   SessionsCompactionRestoreParamsSchema,
+  SessionsForkParamsSchema,
+  SessionsForkResultSchema,
+  SessionsRewindParamsSchema,
+  SessionsRewindResultSchema,
   SessionPlacementStateSchema,
   SessionPlacementSchema,
   SessionWorktreeInfoSchema,
@@ -1133,6 +1147,7 @@ export {
   ConfigSchemaLookupResultSchema,
   UpdateStatusParamsSchema,
   SystemAgentChatParamsSchema,
+  SystemAgentChatQuestionSchema,
   SystemAgentChatResultSchema,
   SystemAgentSetupDetectParamsSchema,
   SystemAgentSetupDetectResultSchema,
@@ -1456,6 +1471,7 @@ export type {
   ConfigSchemaParams,
   ConfigSchemaResponse,
   SystemAgentChatParams,
+  SystemAgentChatQuestion,
   SystemAgentChatResult,
   SystemAgentSetupDetectParams,
   SystemAgentSetupDetectResult,
@@ -1670,6 +1686,10 @@ export type {
   SessionsReclaimParams,
   SessionsReclaimResult,
   SessionsCreateResult,
+  SessionsForkParams,
+  SessionsForkResult,
+  SessionsRewindParams,
+  SessionsRewindResult,
   SessionsPatchParams,
   SessionsResetParams,
   SessionsDeleteParams,

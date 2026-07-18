@@ -8,6 +8,7 @@ import {
 } from "../media-understanding/entry-capabilities.js";
 import { buildMediaUnderstandingCapabilityRegistry } from "../media-understanding/provider-capability-registry.js";
 import { collectAgentMemorySearchAssignments } from "./runtime-config-collectors-memory.js";
+import { collectAgentSandboxAssignments } from "./runtime-config-collectors-sandbox.js";
 import { collectTtsApiKeyAssignments } from "./runtime-config-collectors-tts.js";
 import { evaluateGatewayAuthSurfaceStates } from "./runtime-gateway-auth-surfaces.js";
 import {
@@ -556,92 +557,6 @@ function collectCronAssignments(params: {
   });
 }
 
-function collectSandboxSshAssignments(params: {
-  config: OpenClawConfig;
-  defaults: SecretDefaults | undefined;
-  context: ResolverContext;
-}): void {
-  const agents = isRecord(params.config.agents) ? params.config.agents : undefined;
-  if (!agents) {
-    return;
-  }
-  const defaultsAgent = isRecord(agents.defaults) ? agents.defaults : undefined;
-  const defaultsSandbox = isRecord(defaultsAgent?.sandbox) ? defaultsAgent.sandbox : undefined;
-  const defaultsSsh = isRecord(defaultsSandbox?.ssh)
-    ? (defaultsSandbox.ssh as Record<string, unknown>)
-    : undefined;
-  const defaultsBackend =
-    typeof defaultsSandbox?.backend === "string" ? defaultsSandbox.backend : undefined;
-  const defaultsMode = typeof defaultsSandbox?.mode === "string" ? defaultsSandbox.mode : undefined;
-
-  const inheritedDefaultsUsage = {
-    identityData: false,
-    certificateData: false,
-    knownHostsData: false,
-  };
-
-  const list = Array.isArray(agents.list) ? agents.list : [];
-  list.forEach((rawAgent, index) => {
-    const agentRecord = isRecord(rawAgent) ? (rawAgent as Record<string, unknown>) : null;
-    if (!agentRecord || agentRecord.enabled === false) {
-      return;
-    }
-    const sandbox = isRecord(agentRecord.sandbox) ? agentRecord.sandbox : undefined;
-    const ssh = isRecord(sandbox?.ssh) ? sandbox.ssh : undefined;
-    const effectiveBackend =
-      (typeof sandbox?.backend === "string" ? sandbox.backend : undefined) ??
-      defaultsBackend ??
-      "docker";
-    const effectiveMode =
-      (typeof sandbox?.mode === "string" ? sandbox.mode : undefined) ?? defaultsMode ?? "off";
-    const active =
-      normalizeOptionalLowercaseString(effectiveBackend) === "ssh" && effectiveMode !== "off";
-    for (const key of ["identityData", "certificateData", "knownHostsData"] as const) {
-      if (ssh && Object.hasOwn(ssh, key)) {
-        collectSecretInputAssignment({
-          value: ssh[key],
-          path: `agents.list.${index}.sandbox.ssh.${key}`,
-          expected: "string",
-          defaults: params.defaults,
-          context: params.context,
-          active,
-          inactiveReason: "sandbox SSH backend is not active for this agent.",
-          apply: (value) => {
-            ssh[key] = value;
-          },
-        });
-      } else if (active) {
-        // Defaults are active when at least one enabled SSH agent inherits this material.
-        inheritedDefaultsUsage[key] = true;
-      }
-    }
-  });
-
-  if (!defaultsSsh) {
-    return;
-  }
-
-  const defaultsActive =
-    (normalizeOptionalLowercaseString(defaultsBackend) === "ssh" && defaultsMode !== "off") ||
-    inheritedDefaultsUsage.identityData ||
-    inheritedDefaultsUsage.certificateData ||
-    inheritedDefaultsUsage.knownHostsData;
-  for (const key of ["identityData", "certificateData", "knownHostsData"] as const) {
-    collectSecretInputAssignment({
-      value: defaultsSsh[key],
-      path: `agents.defaults.sandbox.ssh.${key}`,
-      expected: "string",
-      defaults: params.defaults,
-      context: params.context,
-      active: defaultsActive || inheritedDefaultsUsage[key],
-      inactiveReason: "sandbox SSH backend is not active.",
-      apply: (value) => {
-        defaultsSsh[key] = value;
-      },
-    });
-  }
-}
-
 /** Collects SecretRef assignments from core non-plugin config surfaces. */
 export function collectCoreConfigAssignments(params: {
   config: OpenClawConfig;
@@ -669,7 +584,7 @@ export function collectCoreConfigAssignments(params: {
   collectAgentMemorySearchAssignments(params);
   collectTalkAssignments(params);
   collectGatewayAssignments(params);
-  collectSandboxSshAssignments(params);
+  collectAgentSandboxAssignments(params);
   collectMessagesTtsAssignments(params);
   collectAgentTtsAssignments(params);
   collectCronAssignments(params);

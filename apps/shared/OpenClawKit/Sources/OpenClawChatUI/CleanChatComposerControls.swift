@@ -206,6 +206,7 @@ struct OpenClawChatCameraPicker: UIViewControllerRepresentable {
 struct OpenClawChatMicButton: View {
     let dictationControl: OpenClawChatDictationControl?
     let voiceNoteControl: OpenClawChatVoiceNoteControl?
+    let isDictationPending: Bool
     let isRealtimeTalkActive: Bool
     let isComposerEnabled: Bool
     let isAttachmentInputEnabled: Bool
@@ -288,6 +289,7 @@ struct OpenClawChatMicButton: View {
             isComposerEnabled: self.isComposerEnabled,
             isAttachmentInputEnabled: self.isAttachmentInputEnabled,
             isDictationActive: self.dictationControl?.isActive == true,
+            isDictationPending: self.isDictationPending,
             isTalkActive: self.isRealtimeTalkActive || voiceNoteControl.isTalkActive,
             isRecording: voiceNoteControl.recorder.isRecording,
             isRequestingPermission: voiceNoteControl.recorder.isRequestingPermission)
@@ -307,6 +309,7 @@ struct OpenClawChatMicButton: View {
         isComposerEnabled: Bool,
         isAttachmentInputEnabled: Bool,
         isDictationActive: Bool,
+        isDictationPending: Bool,
         isTalkActive: Bool,
         isRecording: Bool,
         isRequestingPermission: Bool) -> Bool
@@ -314,6 +317,7 @@ struct OpenClawChatMicButton: View {
         isComposerEnabled
             && isAttachmentInputEnabled
             && !isDictationActive
+            && !isDictationPending
             && !isTalkActive
             && !isRecording
             && !isRequestingPermission

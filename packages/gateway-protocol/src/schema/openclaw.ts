@@ -31,6 +31,29 @@ export const SystemAgentChatParamsSchema = closedObject({
   ),
 });
 
+/**
+ * Structured choice attached to a chat reply. Card-capable clients render the
+ * options and send back `reply` (default: `label`) as the next message; text
+ * clients ignore this and use the reply prose, which always stands alone.
+ */
+export const SystemAgentChatQuestionSchema = closedObject({
+  id: NonEmptyString,
+  header: NonEmptyString,
+  question: NonEmptyString,
+  options: Type.Array(
+    closedObject({
+      label: NonEmptyString,
+      description: Type.Optional(Type.String()),
+      recommended: Type.Optional(Type.Boolean()),
+      /** Message text a client sends when this option is chosen; defaults to label. */
+      reply: Type.Optional(NonEmptyString),
+    }),
+    { minItems: 2, maxItems: 4 },
+  ),
+  /** Free-text answers are also accepted for this question. */
+  isOther: Type.Optional(Type.Boolean()),
+});
+
 /** One OpenClaw reply; `action` tells clients about conversation handoffs. */
 export const SystemAgentChatResultSchema = closedObject({
   sessionId: NonEmptyString,
@@ -44,8 +67,11 @@ export const SystemAgentChatResultSchema = closedObject({
     Type.Literal("open-agent"),
     Type.Literal("exit"),
   ]),
+  /** Optional localized-draft intent for an `open-agent` handoff. */
+  agentDraft: Type.Optional(Type.Literal("hatch")),
   needsApproval: Type.Optional(Type.Boolean()),
   proposalId: Type.Optional(NonEmptyString),
+  question: Type.Optional(SystemAgentChatQuestionSchema),
 });
 
 /**
@@ -226,6 +252,7 @@ export const SystemAgentSetupAuthStartResultSchema = WizardStartResultSchema;
 // Wire types derive directly from local schema consts so public d.ts graphs never
 // pull in the ProtocolSchemas registry.
 export type SystemAgentChatParams = Static<typeof SystemAgentChatParamsSchema>;
+export type SystemAgentChatQuestion = Static<typeof SystemAgentChatQuestionSchema>;
 export type SystemAgentChatResult = Static<typeof SystemAgentChatResultSchema>;
 export type SystemAgentSetupDetectParams = Static<typeof SystemAgentSetupDetectParamsSchema>;
 export type SystemAgentSetupDetectResult = Static<typeof SystemAgentSetupDetectResultSchema>;

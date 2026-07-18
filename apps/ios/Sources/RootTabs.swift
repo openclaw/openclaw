@@ -41,13 +41,8 @@ struct RootTabs: View {
     @State private var presentedSheet: PresentedSheet?
     @State private var showGatewayProblemDetails: Bool = false
     @State private var gatewayToastDragOffset: CGFloat = 0
-    // Swipe-up hides the toast only until the next problem report; every report
-    // (even an equal problem) must re-surface it or shake the visible toast.
+    // Swipe-up hides the toast only until the next problem report.
     @State private var isGatewayToastSwipeDismissed: Bool = false
-    @State private var gatewayToastShake: CGFloat = 0
-    // Mirror of the problem at the last handled report, used to tell a first
-    // appearance (animate in) from a re-report while visible (shake).
-    @State private var lastReportedGatewayProblem: GatewayConnectionProblem?
     @State private var showOnboarding: Bool = false
     @State private var onboardingAllowSkip: Bool = true
     @State private var didEvaluateOnboarding: Bool = false
@@ -666,7 +661,6 @@ struct RootTabs: View {
             .padding(.horizontal, 12)
             .safeAreaPadding(.top, 10)
             .offset(y: min(self.gatewayToastDragOffset, 0))
-            .modifier(GatewayToastShakeEffect(animatableData: self.gatewayToastShake))
             .gesture(self.gatewayToastSwipeGesture)
             // A drag cancelled by toast removal never fires onEnded; clear the
             // offset so the next toast doesn't render shifted up.
@@ -691,16 +685,8 @@ struct RootTabs: View {
     }
 
     private func handleGatewayProblemReport() {
-        let toastWasVisible = self.lastReportedGatewayProblem != nil && !self.isGatewayToastSwipeDismissed
-        self.lastReportedGatewayProblem = self.appModel.lastGatewayProblem
-        if self.isGatewayToastSwipeDismissed {
-            self.isGatewayToastSwipeDismissed = false
-            return
-        }
-        guard toastWasVisible, self.activeGatewayProblemToast != nil else { return }
-        withAnimation(self.reduceMotion ? nil : .linear(duration: 0.4)) {
-            self.gatewayToastShake += 1
-        }
+        guard self.isGatewayToastSwipeDismissed else { return }
+        self.isGatewayToastSwipeDismissed = false
     }
 
     private var canvasPresentationOverlay: some View {
@@ -759,7 +745,6 @@ struct RootTabs: View {
     private func rootAppearLifecycle(_ content: some View) -> some View {
         content
             .onAppear { self.updateIdleTimer() }
-            .onAppear { self.lastReportedGatewayProblem = self.appModel.lastGatewayProblem }
             .onAppear { self.updateCanvasState() }
             .onAppear { self.evaluateOnboardingPresentation(force: false) }
             .onAppear { self.maybeAutoOpenSettings() }
@@ -792,7 +777,6 @@ struct RootTabs: View {
             .onChange(of: self.appModel.lastGatewayProblem) { _, newValue in
                 if newValue == nil {
                     self.isGatewayToastSwipeDismissed = false
-                    self.lastReportedGatewayProblem = nil
                 }
             }
             .onChange(of: self.appModel.gatewayProblemReportCount) { _, _ in
@@ -1406,16 +1390,58 @@ extension RootTabs {
     }
 }
 
-/// Horizontal shake for re-reported gateway problems: three oscillations that
-/// settle back to identity at integer trigger values.
-private struct GatewayToastShakeEffect: GeometryEffect {
-    var animatableData: CGFloat
+/// Phone tabs push Settings routes (gateway, voice) onto their own stack so
+/// Back returns to the tab content the user navigated from; only global flows
+/// (deep links, onboarding, problem banner) jump to the canonical Settings tab.
+private struct PhoneTabSettingsHost<Content: View>: View {
+    @State private var settingsPath: [SettingsRoute] = []
+    private let resetRequestID: Int
+    private let content: (_ openSettingsRoute: @escaping (SettingsRoute) -> Void) -> Content
 
-    func effectValue(size _: CGSize) -> ProjectionTransform {
-        ProjectionTransform(CGAffineTransform(translationX: 7 * sin(self.animatableData * 6 * .pi), y: 0))
+    init(
+        resetRequestID: Int = 0,
+        @ViewBuilder content: @escaping (_ openSettingsRoute: @escaping (SettingsRoute) -> Void) -> Content)
+    {
+        self.resetRequestID = resetRequestID
+        self.content = content
+    }
+
+    var body: some View {
+        NavigationStack(path: self.$settingsPath) {
+            self.content { route in
+                self.settingsPath.append(route)
+            }
+            .navigationDestination(for: SettingsRoute.self) { route in
+                SettingsProTab(directRoute: route)
+            }
+        }
+        .onChange(of: self.resetRequestID) { _, _ in
+            self.settingsPath.removeAll()
+        }
     }
 }
 
+private struct RootTabsHomeCanvasPayload: Codable {
+    var gatewayState: String
+    var eyebrow: String
+    var title: String
+    var subtitle: String
+    var gatewayLabel: String
+    var activeAgentName: String
+    var activeAgentBadge: String
+    var activeAgentCaption: String
+    var agentCount: Int
+    var agents: [RootTabsHomeCanvasAgentCard]
+    var footer: String
+}
+
+private struct RootTabsHomeCanvasAgentCard: Codable {
+    var id: String
+    var name: String
+    var badge: String
+    var caption: String
+    var isActive: Bool
+}
 private struct RootCameraFlashOverlay: View {
     var nonce: Int
 

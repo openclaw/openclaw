@@ -720,11 +720,13 @@ export class MeetingSessionRuntime<
       };
     }
     if (health?.inCall === true) {
-      if (health.micMuted === true) {
+      if (health.micMuted !== false) {
+        const muted = health.micMuted === true;
+        // Unknown is transiently blocked: omitted mic controls cannot prove talk-back readiness.
         return {
           ready: false,
-          reason: speech.microphoneMutedReason,
-          message: speech.microphoneMuted,
+          reason: muted ? speech.microphoneMutedReason : speech.browserUnverifiedReason,
+          message: muted ? speech.microphoneMuted : speech.browserUnverified,
         };
       }
       return browser.hasAudioBridge

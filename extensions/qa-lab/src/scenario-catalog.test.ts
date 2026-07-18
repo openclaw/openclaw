@@ -140,14 +140,6 @@ describe("qa scenario catalog", () => {
   it("loads scenario-specific execution config from per-scenario YAML", () => {
     const discovery = readQaScenarioById("source-docs-discovery-report");
     const discoveryConfig = readQaScenarioExecutionConfig("source-docs-discovery-report");
-    const codexLeak = readQaScenarioById("codex-harness-no-meta-leak");
-    const codexLeakConfig = readQaScenarioExecutionConfig("codex-harness-no-meta-leak") as
-      | {
-          harnessRuntime?: string;
-          expectedReply?: string;
-          forbiddenReplySubstrings?: string[];
-        }
-      | undefined;
     const fallbackConfig = readQaScenarioExecutionConfig("memory-failure-fallback");
     const bundledSkill = readQaScenarioById("bundled-plugin-skill-runtime");
     const bundledSkillConfig = readQaScenarioExecutionConfig("bundled-plugin-skill-runtime") as
@@ -161,12 +153,6 @@ describe("qa scenario catalog", () => {
     expect((discoveryConfig?.requiredFiles as string[] | undefined)?.[0]).toBe(
       "repo/qa/scenarios/index.yaml",
     );
-    expect(codexLeak.title).toBe("Codex harness no meta leak");
-    expect(codexLeakConfig?.harnessRuntime).toBe("codex");
-    expect(JSON.stringify(codexLeak.execution.flow)).toContain("agentRuntime");
-    expect(JSON.stringify(codexLeak.execution.flow)).not.toContain("embeddedHarness");
-    expect(codexLeakConfig?.expectedReply).toBe("QA_LEAK_OK");
-    expect(codexLeakConfig?.forbiddenReplySubstrings).toContain("checking thread context");
     expect(fallbackConfig?.gracefulFallbackAny as string[] | undefined).toContain(
       "will not reveal",
     );
@@ -200,9 +186,12 @@ describe("qa scenario catalog", () => {
       );
 
     expect(scenarios.map((scenario) => scenario.id).toSorted()).toEqual([
+      "active-memory-preprompt-recall",
+      "cron-model-created-one-shot-recurring",
       "kitchen-sink-live-openai",
       "matrix-post-restart-room-continue",
       "matrix-restart-resume",
+      "remember-across-conversations",
       "slack-restart-resume",
       "subagent-stale-child-links",
       "telegram-repeated-command-authorization",
@@ -318,8 +307,6 @@ describe("qa scenario catalog", () => {
 
     expect(notApplicable).toStrictEqual(
       [
-        "auth-profile-codex-mixed-profiles",
-        "auth-profile-doctor-migration-safety",
         "codex-plugin-cold-install",
         "codex-plugin-pinned-new",
         "codex-plugin-pinned-old",
@@ -598,12 +585,7 @@ describe("qa scenario catalog", () => {
     expect(coldInstall.coverage?.secondary).toBeUndefined();
     expect(coldInstall.execution.kind).toBe("script");
 
-    const fixtureScenarioIds = [
-      "codex-plugin-pinned-old",
-      "codex-plugin-pinned-new",
-      "auth-profile-codex-mixed-profiles",
-      "auth-profile-doctor-migration-safety",
-    ];
+    const fixtureScenarioIds = ["codex-plugin-pinned-old", "codex-plugin-pinned-new"];
 
     for (const scenarioId of fixtureScenarioIds) {
       const scenario = readQaScenarioById(scenarioId);
@@ -616,9 +598,32 @@ describe("qa scenario catalog", () => {
       hostVersion: "2026.5.21",
       pluginRelation: "older",
     });
-    expect(readQaScenarioExecutionConfig("auth-profile-doctor-migration-safety")).toMatchObject({
-      matrixCells: ["oauth-only", "mixed-no-pin"],
+  });
+
+  it("routes the Codex doctor migration row through the product-backed Vitest", () => {
+    const scenario = readQaScenarioById("auth-profile-doctor-migration-safety");
+
+    expect(scenario.runtimeParityTier).toBeUndefined();
+    expect(scenario.runtimeParityUsage).toBeUndefined();
+    expect(scenario.execution).toMatchObject({
+      kind: "vitest",
+      path: "test/e2e/qa-lab/runtime/codex-auth-doctor-migration-product-proof.e2e.test.ts",
     });
+    expect(scenario.coverage?.primary).toContain("runtime.doctor-repair");
+    expect(scenario.coverage?.secondary).toContain("runtime.codex-plugin.auth");
+  });
+
+  it("routes the Codex mixed-profile row through the product-backed Vitest", () => {
+    const scenario = readQaScenarioById("auth-profile-codex-mixed-profiles");
+
+    expect(scenario.runtimeParityTier).toBeUndefined();
+    expect(scenario.runtimeParityUsage).toBeUndefined();
+    expect(scenario.execution).toMatchObject({
+      kind: "vitest",
+      path: "test/e2e/qa-lab/runtime/codex-auth-product-proof.e2e.test.ts",
+    });
+    expect(scenario.coverage?.primary).toContain("runtime.codex-plugin.auth");
+    expect(scenario.coverage?.secondary).toContain("runtime.doctor-repair");
   });
 
   it("keeps the character eval scenario natural and task-shaped", () => {
@@ -724,6 +729,7 @@ describe("qa scenario catalog", () => {
     expect(config?.requiredProviderMode).toBe("live-frontier");
     expect(config?.requiredProvider).toBe("openai");
     expect(config?.pluginSpec).toBe("npm:@openclaw/kitchen-sink@latest");
+    expect(JSON.stringify(scenario.execution.flow)).toContain('"--force"');
     expect(config?.pluginId).toBe("openclaw-kitchen-sink-fixture");
     expect(config?.pluginPersonality).toBe("conformance");
     expect(config?.adversarialPersonality).toBe("adversarial");
@@ -902,6 +908,7 @@ describe("qa scenario catalog", () => {
       "goal-context-survives-compaction",
       "goal-followthrough-live",
       "active-memory-preprompt-recall",
+      "remember-across-conversations",
       "memory-recall",
       "session-memory-ranking",
       "thread-memory-isolation",
@@ -937,6 +944,40 @@ describe("qa scenario catalog", () => {
     const scenario = readQaScenarioById("subagent-thread-spawn");
 
     expect(scenario.execution.channel).toBe("matrix");
+  });
+
+  it("keeps the Control UI transcript role boundary in the mock lane", () => {
+    const scenario = requireFlowScenario(
+      readQaScenarioById("control-ui-assistant-transcript-role-boundary"),
+    );
+
+    expect(scenario.execution.providerMode).toBe("mock-openai");
+  });
+
+  it("keeps remember-across-conversations isolated and product-only", () => {
+    const scenario = requireFlowScenario(readQaScenarioById("remember-across-conversations"));
+    const config = readQaScenarioExecutionConfig("remember-across-conversations") as
+      | { requiredChannelDriver?: string }
+      | undefined;
+
+    expect(scenario.execution.suiteIsolation).toBe("isolated");
+    expect(config?.requiredChannelDriver).toBe("qa-channel");
+    expect(scenario.gatewayConfigPatch).toMatchObject({
+      session: { dmScope: "per-channel-peer" },
+      agents: {
+        defaults: {
+          memorySearch: { rememberAcrossConversations: true },
+        },
+      },
+      plugins: {
+        entries: {
+          "active-memory": {
+            enabled: true,
+            config: { enabled: true, agents: [] },
+          },
+        },
+      },
+    });
   });
 
   it("routes native command session targeting through Crabline Telegram", () => {

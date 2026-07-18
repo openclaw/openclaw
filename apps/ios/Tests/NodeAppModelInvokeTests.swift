@@ -3117,6 +3117,33 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         #expect(appModel._test_pttVoiceWakeLeaseCaptureIds().isEmpty)
     }
 
+    @Test @MainActor func `cancelling invalidates dictation preparation before capture reservation`() async {
+        let talkMode = TalkModeManager(allowSimulatorCapture: true)
+        let appModel = NodeAppModel(talkMode: talkMode)
+        let barrier = TalkPreparationBarrier()
+        appModel._test_setTalkCapturePreparationHandler { await barrier.suspendFirstPreparation() }
+        defer {
+            barrier.release()
+            appModel._test_setTalkCapturePreparationHandler(nil)
+            appModel.voiceWake.stop()
+        }
+
+        let transcription = Task { @MainActor in
+            try await appModel.transcribeChatDraft()
+        }
+        await barrier.waitUntilEntered()
+
+        appModel.cancelChatDictation()
+        barrier.release()
+
+        await #expect(throws: Error.self) {
+            try await transcription.value
+        }
+        #expect(!appModel.isChatDictationActive)
+        #expect(talkMode._test_activePushToTalkCaptureId() == nil)
+        #expect(appModel._test_pttVoiceWakeLeaseCaptureIds().isEmpty)
+    }
+
     @Test @MainActor func `backgrounding cancels chat dictation and preserves audio admission`() async throws {
         let talkMode = TalkModeManager(allowSimulatorCapture: true)
         let appModel = NodeAppModel(talkMode: talkMode)

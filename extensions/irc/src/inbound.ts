@@ -409,6 +409,7 @@ export async function handleIrcInbound(params: {
     },
     route: {
       agentId: route.agentId,
+      dmScope: route.dmScope,
       accountId: route.accountId,
       routeSessionKey: route.sessionKey,
     },

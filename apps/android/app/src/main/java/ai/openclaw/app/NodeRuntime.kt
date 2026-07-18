@@ -11,6 +11,7 @@ import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatPlanStep
+import ai.openclaw.app.chat.ChatQuestionPrompt
 import ai.openclaw.app.chat.ChatSessionDeletion
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatThinkingLevelSelection
@@ -101,6 +102,7 @@ import ai.openclaw.app.voice.VoiceWakeManager
 import ai.openclaw.app.voice.VoiceWakeMatch
 import ai.openclaw.app.voice.VoiceWakePreferences
 import ai.openclaw.app.voice.VoiceWakeSuppressionReason
+import ai.openclaw.app.wear.WearProxyAgent
 import ai.openclaw.app.wear.WearProxyBridge
 import ai.openclaw.app.wear.WearProxyController
 import ai.openclaw.app.wear.WearProxyGatewayException
@@ -1138,6 +1140,30 @@ class NodeRuntime private constructor(
       requestGateway = ::requestWearGateway,
       isGatewayConnected = operatorSession::isReady,
       gatewayStatusText = { synchronized(gatewayStatusLock) { operatorStatusText } },
+      activeAgentId = {
+        resolveAgentIdFromMainSessionKey(mainSessionKey.value) ?: gatewayDefaultAgentId.value
+      },
+      activeSessionKey = { chatSessionKey.value },
+      selectedModelRef = { chatSelectedModelRef.value },
+      agents = {
+        gatewayAgents.value.map { agent ->
+          WearProxyAgent(
+            id = agent.id,
+            name = agent.name,
+            emoji = agent.emoji,
+          )
+        }
+      },
+      selectGatewayAgent = { agentId ->
+        if (gatewayAgents.value.none { agent -> agent.id == agentId }) {
+          false
+        } else {
+          selectChatAgent(agentId)
+          true
+        }
+      },
+      connectGateway = { refreshGatewayConnection() },
+      disconnectGateway = { disconnect() },
       startRealtimeTalk = { nodeId, sessionKey, attemptId, language ->
         if (startWearRealtimeTalk(nodeId, sessionKey, attemptId, language)) wearRealtimeTalkSnapshot.value else null
       },
@@ -2387,6 +2413,7 @@ class NodeRuntime private constructor(
   val chatModelCatalog: StateFlow<List<GatewayModelSummary>> = chat.modelCatalog
   val chatStreamingAssistantText: StateFlow<String?> = chat.streamingAssistantText
   val chatPendingToolCalls: StateFlow<List<ChatPendingToolCall>> = chat.pendingToolCalls
+  val chatQuestions: StateFlow<List<ChatQuestionPrompt>> = chat.questions
   val chatPlanSteps: StateFlow<List<ChatPlanStep>> = chat.planSteps
   val chatSessions: StateFlow<List<ChatSessionEntry>> = chat.sessions
   val pendingRunCount: StateFlow<Int> = chat.pendingRunCount
@@ -2400,6 +2427,11 @@ class NodeRuntime private constructor(
   fun retryChatOutboxCommand(id: String) = chat.retryOutboxCommand(id)
 
   fun deleteChatOutboxCommand(id: String) = chat.deleteOutboxCommand(id)
+
+  fun resolveChatQuestion(
+    id: String,
+    answers: Map<String, List<String>>,
+  ) = chat.resolveQuestion(id, answers)
 
   private fun applyScreenshotFixture() {
     check(BuildConfig.DEBUG) { "Android screenshot fixtures require a debug build" }
@@ -7394,7 +7426,7 @@ class NodeRuntime private constructor(
         .split(' ', '-', '_')
         .filter { it.isNotBlank() }
         .take(2)
-        .mapNotNull { token -> token.firstOrNull()?.uppercaseChar()?.toString() }
+        .mapNotNull { token -> token.uppercaseFirstGraphemeOrNull() }
         .joinToString("")
     return if (initials.isNotEmpty()) initials else "OC"
   }

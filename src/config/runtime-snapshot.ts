@@ -178,22 +178,6 @@ export function setAppliedRuntimeConfigSnapshot(
   runtimeConfigAppliedHash = hashRuntimeConfigValue(sourceConfig);
 }
 
-/** Publish a newer canonical source without changing the active runtime object. */
-export function setRuntimeConfigSourceSnapshotIfCurrent(params: {
-  expectedRevision: number;
-  sourceConfig: OpenClawConfig;
-}): boolean {
-  if (
-    !runtimeConfigSnapshot ||
-    !runtimeConfigSnapshotMetadata ||
-    runtimeConfigSnapshotMetadata.revision !== params.expectedRevision
-  ) {
-    return false;
-  }
-  setRuntimeConfigSnapshot(runtimeConfigSnapshot, params.sourceConfig);
-  return true;
-}
-
 export function resetConfigRuntimeState(): void {
   runtimeConfigSnapshot = null;
   runtimeConfigSourceSnapshot = null;

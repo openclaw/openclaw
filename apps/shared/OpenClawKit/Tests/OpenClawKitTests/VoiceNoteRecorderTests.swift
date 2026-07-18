@@ -234,6 +234,7 @@ final class VoiceNoteRecorderTests: XCTestCase {
             isComposerEnabled: true,
             isAttachmentInputEnabled: true,
             isDictationActive: false,
+            isDictationPending: false,
             isTalkActive: false,
             isRecording: false,
             isRequestingPermission: false))
@@ -244,6 +245,7 @@ final class VoiceNoteRecorderTests: XCTestCase {
             isComposerEnabled: true,
             isAttachmentInputEnabled: true,
             isDictationActive: true,
+            isDictationPending: false,
             isTalkActive: false,
             isRecording: false,
             isRequestingPermission: false))
@@ -251,6 +253,15 @@ final class VoiceNoteRecorderTests: XCTestCase {
             isComposerEnabled: true,
             isAttachmentInputEnabled: true,
             isDictationActive: false,
+            isDictationPending: true,
+            isTalkActive: false,
+            isRecording: false,
+            isRequestingPermission: false))
+        XCTAssertFalse(OpenClawChatMicButton.voiceNoteRecordingEnabled(
+            isComposerEnabled: true,
+            isAttachmentInputEnabled: true,
+            isDictationActive: false,
+            isDictationPending: false,
             isTalkActive: true,
             isRecording: false,
             isRequestingPermission: false))
@@ -258,6 +269,7 @@ final class VoiceNoteRecorderTests: XCTestCase {
             isComposerEnabled: true,
             isAttachmentInputEnabled: true,
             isDictationActive: false,
+            isDictationPending: false,
             isTalkActive: false,
             isRecording: true,
             isRequestingPermission: false))

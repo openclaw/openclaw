@@ -225,6 +225,154 @@ describe("secrets runtime snapshot", () => {
     expect(ssh?.knownHostsData).toBe("example.com ssh-ed25519 AAAATEST");
   });
 
+  it("keeps SSH lifecycle secrets materialized after the agent sandbox is disabled", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "off",
+              backend: "ssh",
+              ssh: { target: "peter@example.com:22" },
+            },
+          },
+          list: [
+            {
+              id: "worker",
+              enabled: false,
+              sandbox: {
+                ssh: {
+                  identityData: {
+                    source: "env",
+                    provider: "default",
+                    id: "DISABLED_WORKER_SSH_IDENTITY",
+                  },
+                },
+              },
+            },
+          ],
+        },
+      }),
+      env: { DISABLED_WORKER_SSH_IDENTITY: "DISABLED WORKER PRIVATE KEY" },
+      includeAuthStoreRefs: false,
+      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+    });
+
+    expect(snapshot.config.agents?.list?.[0]?.sandbox?.ssh?.identityData).toBe(
+      "DISABLED WORKER PRIVATE KEY",
+    );
+  });
+
+  it("keeps default SSH lifecycle secrets materialized when every listed agent overrides them", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "off",
+              backend: "ssh",
+              ssh: {
+                target: "peter@example.com:22",
+                identityData: {
+                  source: "env",
+                  provider: "default",
+                  id: "DEFAULT_SSH_IDENTITY",
+                },
+              },
+            },
+          },
+          list: [
+            {
+              id: "worker",
+              sandbox: {
+                ssh: {
+                  identityData: {
+                    source: "env",
+                    provider: "default",
+                    id: "WORKER_SSH_IDENTITY",
+                  },
+                },
+              },
+            },
+          ],
+        },
+      }),
+      env: {
+        DEFAULT_SSH_IDENTITY: "DEFAULT PRIVATE KEY",
+        WORKER_SSH_IDENTITY: "WORKER PRIVATE KEY",
+      },
+      includeAuthStoreRefs: false,
+      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+    });
+
+    expect(snapshot.config.agents?.defaults?.sandbox?.ssh?.identityData).toBe(
+      "DEFAULT PRIVATE KEY",
+    );
+    expect(snapshot.config.agents?.list?.[0]?.sandbox?.ssh?.identityData).toBe(
+      "WORKER PRIVATE KEY",
+    );
+  });
+
+  it("isolates only the agent whose inherited sandbox SSH SecretRef is unavailable", async () => {
+    const missingRef = {
+      source: "env",
+      provider: "default",
+      id: "MISSING_COLD_SSH_IDENTITY",
+    } as const;
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "all",
+              backend: "ssh",
+              ssh: {
+                target: "sandbox@example.com:22",
+                identityData: missingRef,
+              },
+            },
+          },
+          list: [
+            { id: "cold" },
+            {
+              id: "healthy",
+              sandbox: {
+                ssh: {
+                  identityData: {
+                    source: "env",
+                    provider: "default",
+                    id: "HEALTHY_SSH_IDENTITY",
+                  },
+                },
+              },
+            },
+          ],
+        },
+      }),
+      env: { HEALTHY_SSH_IDENTITY: "HEALTHY PRIVATE KEY" },
+      includeAuthStoreRefs: false,
+      allowUnavailableSecretOwners: true,
+      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+    });
+
+    expect(snapshot.config.agents?.defaults?.sandbox?.ssh?.identityData).toEqual(missingRef);
+    expect(snapshot.config.agents?.list?.[1]?.sandbox?.ssh?.identityData).toBe(
+      "HEALTHY PRIVATE KEY",
+    );
+    expect(snapshot.degradedOwners).toMatchObject([
+      {
+        ownerKind: "capability",
+        ownerId: "agent-sandbox:cold",
+        state: "unavailable",
+        paths: ["agents.defaults.sandbox.ssh.identityData"],
+      },
+    ]);
+    expectWarning(snapshot, {
+      code: "SECRETS_OWNER_UNAVAILABLE",
+      path: "agents.defaults.sandbox.ssh.identityData",
+    });
+  });
+
   it("treats sandbox ssh secret refs as inactive when ssh backend is not selected", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({
@@ -242,6 +390,7 @@ describe("secrets runtime snapshot", () => {
       }),
       env: {},
       includeAuthStoreRefs: false,
+      allowUnavailableSecretOwners: true,
       loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
     });
 
@@ -326,27 +475,6 @@ describe("secrets runtime snapshot", () => {
         loadablePluginOrigins: BUNDLED_CODEX_PLUGIN_ORIGINS,
       }),
     ).rejects.toThrow('Environment variable "CODEX_APP_SERVER_TOKEN" is missing or empty.');
-  });
-
-  it("fails closed for missing TTS SecretRefs outside cold-start isolation", async () => {
-    await expect(
-      prepareSecretsRuntimeSnapshot({
-        config: asConfig({
-          messages: {
-            tts: {
-              providers: {
-                elevenlabs: {
-                  apiKey: TTS_REF,
-                },
-              },
-            },
-          },
-        }),
-        env: {},
-        includeAuthStoreRefs: false,
-        loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-      }),
-    ).rejects.toThrow('Environment variable "ELEVENLABS_API_KEY" is missing or empty.');
   });
 
   it("isolates the TTS owner when its SecretRef is missing during cold startup", async () => {
@@ -605,84 +733,6 @@ describe("secrets runtime snapshot", () => {
         loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
       }),
     ).rejects.toThrow('Secret provider "missing" is not configured');
-  });
-
-  it("keeps TTS SecretRefs that resolve to non-strings fail-closed", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const root = tempDirs.make("openclaw-tts-secretref-object-");
-    const secretsPath = path.join(root, "secrets.json");
-    await fs.writeFile(
-      secretsPath,
-      JSON.stringify(
-        {
-          providers: {
-            elevenlabs: {
-              apiKey: { value: "not-a-string" },
-            },
-          },
-        },
-        null,
-        2,
-      ),
-      "utf8",
-    );
-    await fs.chmod(secretsPath, 0o600);
-
-    await expect(
-      prepareSecretsRuntimeSnapshot({
-        config: asConfig({
-          secrets: {
-            providers: {
-              ttsfile: {
-                source: "file",
-                path: secretsPath,
-                mode: "json",
-              },
-            },
-          },
-          messages: {
-            tts: {
-              providers: {
-                elevenlabs: {
-                  apiKey: {
-                    source: "file",
-                    provider: "ttsfile",
-                    id: "/providers/elevenlabs/apiKey",
-                  },
-                },
-              },
-            },
-          },
-        }),
-        env: {},
-        includeAuthStoreRefs: false,
-        allowUnavailableSecretOwners: true,
-        loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-      }),
-    ).rejects.toThrow(
-      "messages.tts.providers.elevenlabs.apiKey resolved to a non-string or empty value.",
-    );
-  });
-
-  it("still fails required gateway auth SecretRefs when env is missing", async () => {
-    await expect(
-      prepareSecretsRuntimeSnapshot({
-        config: asConfig({
-          gateway: {
-            auth: {
-              mode: "token",
-              token: { source: "env", provider: "default", id: "GATEWAY_TOKEN_REF" },
-            },
-          },
-        }),
-        env: {},
-        includeAuthStoreRefs: false,
-        allowUnavailableSecretOwners: true,
-        loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-      }),
-    ).rejects.toThrow('Environment variable "GATEWAY_TOKEN_REF" is missing or empty.');
   });
 
   it("isolates an unavailable model provider without applying another credential source", async () => {

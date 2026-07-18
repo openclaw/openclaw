@@ -12,7 +12,11 @@ private let chatSendingLogger = Logger(subsystem: "ai.openclaw", category: "Open
 
 extension OpenClawChatViewModel {
     public var canSend: Bool {
-        !isSubmittingDraft && !isSending && !self.hasBlockingRunActivity && self.hasDraftToSend
+        !isSubmittingDraft &&
+            !isSending &&
+            self.attachmentStagingCount == 0 &&
+            !self.hasBlockingRunActivity &&
+            self.hasDraftToSend
     }
 
     public var hasDraftToSend: Bool {
@@ -373,6 +377,12 @@ extension OpenClawChatViewModel {
     private func captureSendDraft() -> SendDraft? {
         guard !isSubmittingDraft, !isSending else {
             logDiagnostic("chat.ui send ignored reason=sending sessionKey=\(sessionKey)")
+            return nil
+        }
+        guard self.attachmentStagingCount == 0 else {
+            // File reads and image processing suspend before publishing the
+            // attachment. Do not let a programmatic send overtake that owner.
+            logDiagnostic("chat.ui send ignored reason=attachment-staging sessionKey=\(sessionKey)")
             return nil
         }
         guard !self.hasBlockingRunActivity else {

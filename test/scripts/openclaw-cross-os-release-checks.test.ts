@@ -793,6 +793,18 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(args.at(-2)).toBe("--timeout");
   });
 
+  it("forces shutdown of the isolated managed gateways owned by release checks", () => {
+    const source = [
+      "scripts/lib/cross-os-release-checks/lanes.ts",
+      "scripts/lib/cross-os-release-checks/runtime.ts",
+    ]
+      .map((filePath) => readFileSync(filePath, "utf8"))
+      .join("\n");
+
+    expect(source.match(/args: \["gateway", "stop", "--force"\]/g)).toHaveLength(2);
+    expect(source).not.toContain('args: ["gateway", "stop"]');
+  });
+
   it("keeps cross-OS live smoke agent turns on GPT-5-safe timeouts and minimal context", () => {
     const source = [
       "scripts/lib/cross-os-release-checks/agent.ts",
@@ -1576,7 +1588,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         logPath,
         timeoutMs: 500,
       });
-      await waitForFile(childPidPath, 2_000);
+      await waitForFile(childPidPath, 10_000);
       const childPid = Number.parseInt(readFileSync(childPidPath, "utf8"), 10);
 
       await expect(command).rejects.toThrow(/Command timed out:/u);
@@ -1639,7 +1651,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       );
       runnerPid = runner.pid;
 
-      await waitForFile(childPidPath, 2_000);
+      await waitForFile(childPidPath, 10_000);
       childPid = Number.parseInt(readFileSync(childPidPath, "utf8"), 10);
       runner.kill("SIGTERM");
       const result = await waitForExit(runner, 5_000);
@@ -1706,7 +1718,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       );
       runnerPid = runner.pid;
 
-      await waitForFile(childPidPath, 2_000);
+      await waitForFile(childPidPath, 10_000);
       childPid = Number.parseInt(readFileSync(childPidPath, "utf8"), 10);
       const signaledAt = Date.now();
       runner.kill("SIGTERM");

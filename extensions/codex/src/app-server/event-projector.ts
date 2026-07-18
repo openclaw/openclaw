@@ -13,10 +13,7 @@ import {
   type MessagingToolSourceReplyPayload,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { CodexAssistantProjection } from "./event-projector-assistant.js";
-import {
-  CodexProjectionDiagnostics,
-  isKnownNoopCodexNotificationMethod,
-} from "./event-projector-diagnostics.js";
+import { CodexProjectionDiagnostics } from "./event-projector-diagnostics.js";
 import { CodexEventProjection } from "./event-projector-events.js";
 import {
   itemName,
@@ -32,6 +29,7 @@ import { CodexToolTranscriptProjection } from "./event-projector-tool-transcript
 import {
   normalizeCodexResponseTokenUsage,
   normalizeCodexThreadTokenUsage,
+  readCodexThreadTokenUsage,
 } from "./event-projector-usage.js";
 import {
   readCodexErrorNotificationMessage,
@@ -269,7 +267,7 @@ export class CodexAppServerEventProjector {
         this.eventProjection.handleHook(notification.method, params);
         break;
       case "thread/tokenUsage/updated":
-        this.handleTokenUsage(params);
+        this.tokenUsage = readCodexThreadTokenUsage(params) ?? this.tokenUsage;
         break;
       case "turn/completed":
         await this.handleTurnCompleted(params);
@@ -288,10 +286,21 @@ export class CodexAppServerEventProjector {
         this.promptError = this.formatCodexErrorMessage(params) ?? "codex app-server error";
         this.promptErrorSource = "prompt";
         break;
+      case "thread/compacted":
+      case "turn/started":
+      case "turn/diff/updated":
+      case "item/reasoning/summaryPartAdded":
+      case "item/commandExecution/terminalInteraction":
+      case "item/fileChange/outputDelta":
+      case "item/fileChange/patchUpdated":
+      case "item/mcpToolCall/progress":
+      case "model/rerouted":
+      case "model/verification":
+      case "turn/moderationMetadata":
+      case "model/safetyBuffering/updated":
+        break;
       default:
-        if (!isKnownNoopCodexNotificationMethod(notification.method)) {
-          this.diagnostics.warnUnknownEvent(notification, params);
-        }
+        this.diagnostics.warnUnknownEvent(notification, params);
         break;
     }
   }
@@ -425,6 +434,9 @@ export class CodexAppServerEventProjector {
       successfulCronAdds: toolTelemetry.successfulCronAdds,
       cloudCodeAssistFormatError: false,
       attemptUsage: projectedUsage,
+      ...(this.completedCompactionCount > 0
+        ? { compactionCount: this.completedCompactionCount }
+        : {}),
       replayMetadata: {
         hadPotentialSideEffects,
         replaySafe: !hadPotentialSideEffects,
@@ -433,9 +445,6 @@ export class CodexAppServerEventProjector {
         startedCount: this.activeItemIds.size + this.completedItemIds.size,
         completedCount: this.completedItemIds.size,
         activeCount: this.activeItemIds.size,
-        ...(this.completedCompactionCount > 0
-          ? { compactionCount: this.completedCompactionCount }
-          : {}),
       },
       yieldDetected: options?.yieldDetected || false,
       didSendDeterministicApprovalPrompt:
@@ -578,18 +587,6 @@ export class CodexAppServerEventProjector {
       stream: "codex_app_server.item",
       data: { phase: "completed", itemId, type: item?.type },
     });
-  }
-
-  private handleTokenUsage(params: JsonObject): void {
-    const tokenUsage = isJsonObject(params.tokenUsage) ? params.tokenUsage : undefined;
-    const last = tokenUsage && isJsonObject(tokenUsage.last) ? tokenUsage.last : undefined;
-    if (!last) {
-      return;
-    }
-    const usage = normalizeCodexThreadTokenUsage(last);
-    if (usage) {
-      this.tokenUsage = usage;
-    }
   }
 
   private handleRawResponseCompleted(params: JsonObject): void {

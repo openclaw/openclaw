@@ -6,6 +6,44 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct QuickChatControllerTests {
+    @Test func `accepted global route opens chat with its agent`() async {
+        var openedRoute: QuickChatRoutingTarget?
+        let model = QuickChatModel(
+            sessionKeyProvider: { "main" },
+            agentsProvider: {
+                AgentsListResult(
+                    defaultid: "main",
+                    mainkey: "main",
+                    scope: AnyCodable("global"),
+                    agents: [
+                        AgentSummary(id: "main", name: "Main"),
+                        AgentSummary(id: "work", name: "Work"),
+                    ])
+            },
+            agentIdentityProvider: { _ in .placeholder },
+            sendProvider: { _, _, _, _, _ in "ok" },
+            permissionStatusProvider: { _ in [:] },
+            permissionGrantProvider: { _ in [:] },
+            connectionGateProvider: { .available })
+        let controller = QuickChatController(
+            enableUI: false,
+            model: model,
+            monitoringEnabled: false,
+            chatOpener: { sessionKey, agentID in
+                guard let sessionKey else { return }
+                openedRoute = QuickChatRoutingTarget(sessionKey: sessionKey, agentID: agentID)
+            })
+        let presentationID = model.beginPresentation()
+        await model.refreshForPresentation(id: presentationID)
+        model.selectAgent("work")
+        model.text = "hello"
+
+        #expect(await model.send())
+        controller.handleSendAcceptedForTesting(openChat: true)
+        #expect(openedRoute == QuickChatRoutingTarget(sessionKey: "global", agentID: "work"))
+        controller.stop()
+    }
+
     @Test func `controller lifecycle cleans monitor tokens without UI`() {
         let snapshots = QuickChatController.exerciseForTesting()
 

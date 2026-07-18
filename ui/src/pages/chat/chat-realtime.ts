@@ -22,11 +22,15 @@ export type ChatRealtimeState = {
   realtimeTalkInputLevel: RealtimeTalkLevelSignal;
   realtimeTalkConversation: RealtimeTalkConversationEntry[];
   realtimeTalkVideoStream: MediaStream | null;
+  realtimeTalkVideoCapable: boolean;
+  realtimeTalkVideoPending: boolean;
+  realtimeTalkCameraError: boolean;
   realtimeTalkSession: RealtimeTalkSession | null;
   realtimeTalkConversationState: RealtimeTalkConversationState;
   requestUpdate: () => void;
   resetRealtimeTalkConversation: () => void;
-  toggleRealtimeTalk: (options?: { video?: boolean }) => Promise<void>;
+  toggleRealtimeTalk: () => Promise<void>;
+  toggleRealtimeTalkCamera: () => Promise<void>;
 };
 
 export function createInitialChatRealtimeState() {
@@ -37,6 +41,9 @@ export function createInitialChatRealtimeState() {
     realtimeTalkInputLevel: new RealtimeTalkLevelSignal(),
     realtimeTalkConversation: [],
     realtimeTalkVideoStream: null,
+    realtimeTalkVideoCapable: false,
+    realtimeTalkVideoPending: false,
+    realtimeTalkCameraError: false,
     realtimeTalkSession: null,
     realtimeTalkConversationState: createRealtimeTalkConversationState(),
   };
@@ -58,6 +65,9 @@ export function dismissRealtimeTalkError(state: ChatRealtimeState) {
   state.realtimeTalkDetail = null;
   state.realtimeTalkInputLevel.set(0);
   state.realtimeTalkVideoStream = null;
+  state.realtimeTalkVideoCapable = false;
+  state.realtimeTalkVideoPending = false;
+  state.realtimeTalkCameraError = false;
   state.resetRealtimeTalkConversation();
 }
 
@@ -65,7 +75,7 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
   state.resetRealtimeTalkConversation = () => {
     resetChatRealtimeConversation(state);
   };
-  state.toggleRealtimeTalk = async (options = {}) => {
+  state.toggleRealtimeTalk = async () => {
     if (state.realtimeTalkSession) {
       state.realtimeTalkSession.stop();
       state.realtimeTalkSession = null;
@@ -74,6 +84,9 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
       state.realtimeTalkDetail = null;
       state.realtimeTalkInputLevel.set(0);
       state.realtimeTalkVideoStream = null;
+      state.realtimeTalkVideoCapable = false;
+      state.realtimeTalkVideoPending = false;
+      state.realtimeTalkCameraError = false;
       state.resetRealtimeTalkConversation();
       state.requestUpdate();
       return;
@@ -90,6 +103,9 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
     state.realtimeTalkActive = true;
     state.realtimeTalkStatus = "connecting";
     state.realtimeTalkDetail = null;
+    state.realtimeTalkVideoCapable = false;
+    state.realtimeTalkVideoPending = false;
+    state.realtimeTalkCameraError = false;
     state.realtimeTalkInputLevel.set(0);
     state.resetRealtimeTalkConversation();
     const session = new RealtimeTalkSession(
@@ -102,10 +118,18 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
           }
           state.realtimeTalkStatus = status;
           state.realtimeTalkDetail = detail ?? null;
+          state.realtimeTalkCameraError = false;
           state.realtimeTalkActive = status !== "idle";
           if (status === "idle" || status === "error") {
             state.realtimeTalkInputLevel.set(0);
           }
+          state.requestUpdate();
+        },
+        onVideoCapability: (capable) => {
+          if (state.realtimeTalkSession !== session) {
+            return;
+          }
+          state.realtimeTalkVideoCapable = capable;
           state.requestUpdate();
         },
         onInputLevel: (level) => {
@@ -129,12 +153,20 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
           if (state.realtimeTalkSession !== session) {
             return;
           }
+          if (stream && state.realtimeTalkStatus === "error") {
+            void session.setVideoEnabled(false).catch(() => undefined);
+            return;
+          }
           state.realtimeTalkVideoStream = stream;
+          if (stream) {
+            state.realtimeTalkDetail = null;
+            state.realtimeTalkCameraError = false;
+          }
           state.requestUpdate();
         },
       },
-      options.video ? { capabilities: ["camera-frame"] } : {},
-      { inputDeviceId, videoEnabled: options.video },
+      {},
+      { inputDeviceId },
     );
     state.realtimeTalkSession = session;
     try {
@@ -150,7 +182,44 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
       state.realtimeTalkDetail = error instanceof Error ? error.message : String(error);
       state.realtimeTalkInputLevel.set(0);
       state.realtimeTalkVideoStream = null;
+      state.realtimeTalkVideoCapable = false;
+      state.realtimeTalkVideoPending = false;
+      state.realtimeTalkCameraError = false;
       state.requestUpdate();
+    }
+  };
+  // Reads through a call so TS does not keep the early-guard narrowing across the
+  // await below; the status can legitimately become "error" while acquiring the camera.
+  const talkStatusIsError = () => state.realtimeTalkStatus === "error";
+  state.toggleRealtimeTalkCamera = async () => {
+    const session = state.realtimeTalkSession;
+    if (
+      !session ||
+      !state.realtimeTalkVideoCapable ||
+      state.realtimeTalkVideoPending ||
+      talkStatusIsError()
+    ) {
+      return;
+    }
+    const enabled = state.realtimeTalkVideoStream === null;
+    state.realtimeTalkVideoPending = true;
+    state.realtimeTalkCameraError = false;
+    state.realtimeTalkDetail = null;
+    state.requestUpdate();
+    try {
+      await session.setVideoEnabled(enabled);
+    } catch (error) {
+      if (state.realtimeTalkSession !== session || talkStatusIsError()) {
+        return;
+      }
+      state.realtimeTalkVideoStream = null;
+      state.realtimeTalkDetail = error instanceof Error ? error.message : String(error);
+      state.realtimeTalkCameraError = true;
+    } finally {
+      if (state.realtimeTalkSession === session) {
+        state.realtimeTalkVideoPending = false;
+        state.requestUpdate();
+      }
     }
   };
 }

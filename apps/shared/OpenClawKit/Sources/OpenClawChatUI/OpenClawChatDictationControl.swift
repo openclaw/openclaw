@@ -30,4 +30,9 @@ extension OpenClawChatViewModel {
             self.input += separator + transcript
         }
     }
+
+    func setDictationError(_ error: Error, for session: SessionSnapshot) {
+        guard self.isCurrentSession(session) else { return }
+        self.errorText = error.localizedDescription
+    }
 }

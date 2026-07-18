@@ -3370,6 +3370,7 @@ public struct SessionCatalogTranscriptItem: Codable, Sendable {
 public struct SessionsCatalogListParams: Codable, Sendable {
     public let catalogid: String?
     public let agentid: String?
+    public let progressid: String?
     public let search: String?
     public let limitperhost: Int?
     public let hostids: [String]?
@@ -3378,6 +3379,7 @@ public struct SessionsCatalogListParams: Codable, Sendable {
     public init(
         catalogid: String? = nil,
         agentid: String? = nil,
+        progressid: String? = nil,
         search: String? = nil,
         limitperhost: Int? = nil,
         hostids: [String]? = nil,
@@ -3385,6 +3387,7 @@ public struct SessionsCatalogListParams: Codable, Sendable {
     {
         self.catalogid = catalogid
         self.agentid = agentid
+        self.progressid = progressid
         self.search = search
         self.limitperhost = limitperhost
         self.hostids = hostids
@@ -3394,6 +3397,7 @@ public struct SessionsCatalogListParams: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case catalogid = "catalogId"
         case agentid = "agentId"
+        case progressid = "progressId"
         case search
         case limitperhost = "limitPerHost"
         case hostids = "hostIds"
@@ -5049,6 +5053,7 @@ public struct SessionsCreateParams: Codable, Sendable {
     public let parentsessionkey: String?
     public let fork: Bool?
     public let emitcommandhooks: Bool?
+    public let succeedsparent: Bool?
     public let task: String?
     public let message: String?
     public let attachments: [AnyCodable]?
@@ -5068,6 +5073,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         parentsessionkey: String? = nil,
         fork: Bool? = nil,
         emitcommandhooks: Bool? = nil,
+        succeedsparent: Bool? = nil,
         task: String? = nil,
         message: String? = nil,
         attachments: [AnyCodable]? = nil,
@@ -5086,6 +5092,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         self.parentsessionkey = parentsessionkey
         self.fork = fork
         self.emitcommandhooks = emitcommandhooks
+        self.succeedsparent = succeedsparent
         self.task = task
         self.message = message
         self.attachments = attachments
@@ -5106,6 +5113,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         case parentsessionkey = "parentSessionKey"
         case fork
         case emitcommandhooks = "emitCommandHooks"
+        case succeedsparent = "succeedsParent"
         case task
         case message
         case attachments
@@ -6900,23 +6908,29 @@ public struct SystemAgentChatResult: Codable, Sendable {
     public let reply: String
     public let sensitive: Bool?
     public let action: AnyCodable
+    public let agentdraft: String?
     public let needsapproval: Bool?
     public let proposalid: String?
+    public let question: [String: AnyCodable]?
 
     public init(
         sessionid: String,
         reply: String,
         sensitive: Bool? = nil,
         action: AnyCodable,
+        agentdraft: String? = nil,
         needsapproval: Bool? = nil,
-        proposalid: String? = nil)
+        proposalid: String? = nil,
+        question: [String: AnyCodable]? = nil)
     {
         self.sessionid = sessionid
         self.reply = reply
         self.sensitive = sensitive
         self.action = action
+        self.agentdraft = agentdraft
         self.needsapproval = needsapproval
         self.proposalid = proposalid
+        self.question = question
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -6924,8 +6938,10 @@ public struct SystemAgentChatResult: Codable, Sendable {
         case reply
         case sensitive
         case action
+        case agentdraft = "agentDraft"
         case needsapproval = "needsApproval"
         case proposalid = "proposalId"
+        case question
     }
 }
 
@@ -8663,21 +8679,29 @@ public struct AgentsDeleteResult: Codable, Sendable {
     public let ok: Bool
     public let agentid: String
     public let removedbindings: Int
+    public let removed: [[String: AnyCodable]]?
+    public let failed: [[String: AnyCodable]]?
 
     public init(
         ok: Bool,
         agentid: String,
-        removedbindings: Int)
+        removedbindings: Int,
+        removed: [[String: AnyCodable]]? = nil,
+        failed: [[String: AnyCodable]]? = nil)
     {
         self.ok = ok
         self.agentid = agentid
         self.removedbindings = removedbindings
+        self.removed = removed
+        self.failed = failed
     }
 
     private enum CodingKeys: String, CodingKey {
         case ok
         case agentid = "agentId"
         case removedbindings = "removedBindings"
+        case removed
+        case failed
     }
 }
 
@@ -13009,6 +13033,7 @@ public struct PluginCatalogEntry: Codable, Sendable {
     public let enabled: Bool
     public let state: AnyCodable
     public let featured: Bool?
+    public let featuredat: Int?
     public let order: Double?
     public let hasicon: Bool?
     public let install: PluginCatalogInstallAction?
@@ -13028,6 +13053,7 @@ public struct PluginCatalogEntry: Codable, Sendable {
         enabled: Bool,
         state: AnyCodable,
         featured: Bool? = nil,
+        featuredat: Int? = nil,
         order: Double? = nil,
         hasicon: Bool? = nil,
         install: PluginCatalogInstallAction? = nil,
@@ -13046,6 +13072,7 @@ public struct PluginCatalogEntry: Codable, Sendable {
         self.enabled = enabled
         self.state = state
         self.featured = featured
+        self.featuredat = featuredat
         self.order = order
         self.hasicon = hasicon
         self.install = install
@@ -13066,6 +13093,7 @@ public struct PluginCatalogEntry: Codable, Sendable {
         case enabled
         case state
         case featured
+        case featuredat = "featuredAt"
         case order
         case hasicon = "hasIcon"
         case install
@@ -13742,6 +13770,7 @@ public struct DevicePairRequestedEvent: Codable, Sendable {
     public let devicefamily: String?
     public let clientid: String?
     public let clientmode: String?
+    public let browserorigin: String?
     public let role: String?
     public let roles: [String]?
     public let scopes: [String]?
@@ -13759,6 +13788,7 @@ public struct DevicePairRequestedEvent: Codable, Sendable {
         devicefamily: String? = nil,
         clientid: String? = nil,
         clientmode: String? = nil,
+        browserorigin: String? = nil,
         role: String? = nil,
         roles: [String]? = nil,
         scopes: [String]? = nil,
@@ -13775,6 +13805,7 @@ public struct DevicePairRequestedEvent: Codable, Sendable {
         self.devicefamily = devicefamily
         self.clientid = clientid
         self.clientmode = clientmode
+        self.browserorigin = browserorigin
         self.role = role
         self.roles = roles
         self.scopes = scopes
@@ -13793,6 +13824,7 @@ public struct DevicePairRequestedEvent: Codable, Sendable {
         case devicefamily = "deviceFamily"
         case clientid = "clientId"
         case clientmode = "clientMode"
+        case browserorigin = "browserOrigin"
         case role
         case roles
         case scopes
@@ -13985,6 +14017,7 @@ public struct ChatSendParams: Codable, Sendable {
     public let originatingaccountid: String?
     public let originatingthreadid: String?
     public let attachments: [AnyCodable]?
+    public let toolbindings: [String: AnyCodable]?
     public let timeoutms: Int?
     public let systeminputprovenance: [String: AnyCodable]?
     public let systemprovenancereceipt: String?
@@ -14007,6 +14040,7 @@ public struct ChatSendParams: Codable, Sendable {
         originatingaccountid: String? = nil,
         originatingthreadid: String? = nil,
         attachments: [AnyCodable]? = nil,
+        toolbindings: [String: AnyCodable]? = nil,
         timeoutms: Int? = nil,
         systeminputprovenance: [String: AnyCodable]? = nil,
         systemprovenancereceipt: String? = nil,
@@ -14028,6 +14062,7 @@ public struct ChatSendParams: Codable, Sendable {
         self.originatingaccountid = originatingaccountid
         self.originatingthreadid = originatingthreadid
         self.attachments = attachments
+        self.toolbindings = toolbindings
         self.timeoutms = timeoutms
         self.systeminputprovenance = systeminputprovenance
         self.systemprovenancereceipt = systemprovenancereceipt
@@ -14050,6 +14085,7 @@ public struct ChatSendParams: Codable, Sendable {
         originatingaccountid: String? = nil,
         originatingthreadid: String? = nil,
         attachments: [AnyCodable]? = nil,
+        toolbindings: [String: AnyCodable]? = nil,
         timeoutms: Int? = nil,
         systeminputprovenance: [String: AnyCodable]? = nil,
         systemprovenancereceipt: String? = nil,
@@ -14072,6 +14108,7 @@ public struct ChatSendParams: Codable, Sendable {
             originatingaccountid: originatingaccountid,
             originatingthreadid: originatingthreadid,
             attachments: attachments,
+            toolbindings: toolbindings,
             timeoutms: timeoutms,
             systeminputprovenance: systeminputprovenance,
             systemprovenancereceipt: systemprovenancereceipt,
@@ -14095,6 +14132,7 @@ public struct ChatSendParams: Codable, Sendable {
         case originatingaccountid = "originatingAccountId"
         case originatingthreadid = "originatingThreadId"
         case attachments
+        case toolbindings = "toolBindings"
         case timeoutms = "timeoutMs"
         case systeminputprovenance = "systemInputProvenance"
         case systemprovenancereceipt = "systemProvenanceReceipt"
