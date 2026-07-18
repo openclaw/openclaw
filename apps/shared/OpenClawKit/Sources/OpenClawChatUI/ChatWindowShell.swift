@@ -213,6 +213,11 @@ public struct OpenClawChatWindowShell: View {
                 self.thinkingPicker
             }
 
+            self.verbosityPicker
+            if self.viewModel.selectedModelSupportsFastMode {
+                self.fastModeToggle
+            }
+
             if self.viewModel.showsModelPicker {
                 self.modelPicker
             }
@@ -223,11 +228,16 @@ public struct OpenClawChatWindowShell: View {
 
     private var thinkingPicker: some View {
         Picker(selection: Binding(
-            get: { self.viewModel.thinkingLevel },
+            get: { self.viewModel.thinkingSelectionID },
             set: { self.viewModel.selectThinkingLevel($0) }))
         {
+            Text(String(localized: "Default (inherited)"))
+                .font(OpenClawChatTypography.body)
+                .tag(OpenClawChatViewModel.inheritedThinkingSelectionID)
             ForEach(self.viewModel.thinkingLevelOptions) { option in
-                Text(option.label)
+                Text(String(
+                    format: String(localized: "%@ (override)"),
+                    option.label))
                     .font(OpenClawChatTypography.body)
                     .tag(option.id)
             }
@@ -236,7 +246,37 @@ public struct OpenClawChatWindowShell: View {
                 .font(OpenClawChatTypography.body)
         }
         .pickerStyle(.menu)
-        .help("Thinking level")
+        .help(String(localized: "Thinking level"))
+        .disabled(self.viewModel.isUpdatingSessionSettings)
+    }
+
+    private var verbosityPicker: some View {
+        Picker(selection: Binding(
+            get: { self.viewModel.verboseLevel },
+            set: { self.viewModel.selectVerboseLevel($0) }))
+        {
+            Text(String(localized: "Off")).tag("off")
+            Text(String(localized: "On")).tag("on")
+            Text(String(localized: "Full")).tag("full")
+        } label: {
+            Text(String(localized: "Verbosity"))
+                .font(OpenClawChatTypography.body)
+        }
+        .pickerStyle(.menu)
+        .help(String(localized: "Verbosity"))
+        .disabled(self.viewModel.isUpdatingSessionSettings)
+    }
+
+    private var fastModeToggle: some View {
+        Toggle(isOn: Binding(
+            get: { self.viewModel.fastModeEnabled },
+            set: { self.viewModel.setFastModeEnabled($0) }))
+        {
+            Label(String(localized: "Fast"), systemImage: "bolt.fill")
+        }
+        .toggleStyle(.button)
+        .help(String(localized: "Fast responses"))
+        .disabled(self.viewModel.isUpdatingSessionSettings)
     }
 
     private var modelPicker: some View {
@@ -248,17 +288,24 @@ public struct OpenClawChatWindowShell: View {
             Text(self.viewModel.defaultModelLabel)
                 .font(OpenClawChatTypography.body)
                 .tag(OpenClawChatViewModel.defaultModelSelectionID)
-            if sections.pinned.isEmpty, sections.recent.isEmpty {
-                self.modelOptions(sections.remaining)
-            } else {
-                if !sections.pinned.isEmpty {
-                    Section("Pinned") { self.modelOptions(sections.pinned) }
-                }
-                if !sections.recent.isEmpty {
-                    Section("Recent") { self.modelOptions(sections.recent) }
-                }
-                if !sections.remaining.isEmpty {
-                    Section("Models") { self.modelOptions(sections.remaining) }
+            if !sections.pinned.isEmpty {
+                Section("Pinned") { self.modelOptions(sections.pinned) }
+            }
+            if !sections.recent.isEmpty {
+                Section("Recent") { self.modelOptions(sections.recent) }
+            }
+            ForEach(sections.providers) { provider in
+                Section {
+                    self.modelOptions(provider.models)
+                } header: {
+                    HStack(spacing: 4) {
+                        Text(provider.displayName)
+                        if provider.isDefaultProvider {
+                            Text(String(localized: "Default"))
+                                .font(OpenClawChatTypography.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                 }
             }
         } label: {
@@ -267,13 +314,21 @@ public struct OpenClawChatWindowShell: View {
         }
         .pickerStyle(.menu)
         .help("Model")
+        .disabled(self.viewModel.isUpdatingSessionSettings)
     }
 
     private func modelOptions(_ models: [OpenClawChatModelChoice]) -> some View {
         ForEach(models) { model in
-            Text(model.displayLabel)
-                .font(OpenClawChatTypography.body)
-                .tag(model.selectionID)
+            HStack(spacing: 4) {
+                Text(model.displayLabel)
+                    .font(OpenClawChatTypography.body)
+                if self.viewModel.isDefaultModel(model) {
+                    Text(String(localized: "Default"))
+                        .font(OpenClawChatTypography.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .tag(model.selectionID)
         }
     }
 
