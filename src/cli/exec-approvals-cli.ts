@@ -417,11 +417,14 @@ function escapeApprovalTextForTerminal(value: string): string {
 // `approvals resolve <id>` without Commander eating it as an option.
 const APPROVAL_ID_TERMINAL_SAFE_RE = /^[A-Za-z0-9._:][A-Za-z0-9._:-]{0,127}$/;
 
+// Tokens encode UTF-16 code units, not UTF-8: ids are opaque JS strings and
+// UTF-8 replaces lone surrogates with U+FFFD, which would let two distinct
+// ids collide into one token on this remote-execution surface.
 function formatApprovalIdForTerminal(value: string): string {
   if (APPROVAL_ID_TERMINAL_SAFE_RE.test(value)) {
     return value;
   }
-  return `${APPROVAL_ID_TOKEN_PREFIX}${Buffer.from(value, "utf8").toString("base64url")}`;
+  return `${APPROVAL_ID_TOKEN_PREFIX}${Buffer.from(value, "utf16le").toString("base64url")}`;
 }
 
 function decodeDisplayedApprovalId(value: string): string | null {
@@ -432,8 +435,8 @@ function decodeDisplayedApprovalId(value: string): string | null {
   if (!encoded || !/^[a-zA-Z0-9_-]+$/.test(encoded)) {
     return null;
   }
-  const decoded = Buffer.from(encoded, "base64url").toString("utf8");
-  return Buffer.from(decoded, "utf8").toString("base64url") === encoded ? decoded : null;
+  const decoded = Buffer.from(encoded, "base64url").toString("utf16le");
+  return Buffer.from(decoded, "utf16le").toString("base64url") === encoded ? decoded : null;
 }
 
 function readPendingApprovalEntry(

@@ -167,7 +167,7 @@ function approvalDisplayId(id: string): string {
   // copyable id64 token.
   return /^[A-Za-z0-9._:][A-Za-z0-9._:-]{0,127}$/.test(id)
     ? id
-    : `id64_${Buffer.from(id).toString("base64url")}`;
+    : `id64_${Buffer.from(id, "utf16le").toString("base64url")}`;
 }
 
 function pendingApprovalSnapshot(params: {
@@ -551,7 +551,7 @@ describe("exec approvals CLI", () => {
     // the padded one.
     expect(approvalDisplayId("victim")).toBe("victim");
     expect(approvalDisplayId(" victim ")).toBe(
-      `id64_${Buffer.from(" victim ").toString("base64url")}`,
+      `id64_${Buffer.from(" victim ", "utf16le").toString("base64url")}`,
     );
   });
 
@@ -663,7 +663,7 @@ describe("exec approvals CLI", () => {
   it("rejects an id token that also exists as a raw approval id", async () => {
     // Explicit token form: the display helper renders safe ids raw, but the
     // resolve path must stay ambiguity-safe for pasted tokens regardless.
-    const displayId = `id64_${Buffer.from("foo").toString("base64url")}`;
+    const displayId = `id64_${Buffer.from("foo", "utf16le").toString("base64url")}`;
     callGatewayFromCli.mockImplementation(
       async (method: string, _opts: unknown, params?: unknown) => {
         if (method !== "approval.get") {
