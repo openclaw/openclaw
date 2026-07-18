@@ -367,6 +367,10 @@ export function createMattermostIngressMonitor(options: {
     stop: async () => {
       running = false;
       clearInterval(timer);
+      // A caller returning from stop() must know every accepted envelope is
+      // durably committed; an in-flight admission racing process exit would
+      // otherwise lose the post.
+      await admissionTail;
       drain?.dispose();
       await pumping;
       // The pump may have lazily created the drain after the first dispose.
