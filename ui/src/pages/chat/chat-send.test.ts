@@ -3900,6 +3900,40 @@ describe("handleSendChat", () => {
     }
   });
 
+  it("returns a confirmed clear to waiting-idle when a run starts during the dialog", async () => {
+    const confirmation = createDeferred<boolean>();
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.history") {
+        return idleChatHistory();
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const item = {
+      id: "clear-confirmation-race",
+      text: "/clear",
+      createdAt: 1,
+      localCommandArgs: "",
+      localCommandName: "clear",
+      sessionKey: "agent:main",
+    };
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatQueue: [item],
+      confirmConversationReset: vi.fn(async () => await confirmation.promise),
+    });
+    const reset = vi.spyOn(host.sessions, "reset");
+    admitHostQueueItems(host);
+
+    const draining = retryReconnectableQueuedChatSends(host);
+    await waitForFast(() => expect(host.chatQueue[0]?.sendState).toBe("executing-command"));
+    host.chatRunId = "run-started-during-confirmation";
+    confirmation.resolve(true);
+    await draining;
+
+    expect(host.chatQueue[0]?.sendState).toBe("waiting-idle");
+    expect(reset).not.toHaveBeenCalled();
+  });
+
   it("retires a queued local command without applying its late result after a route switch", async () => {
     const command = createDeferred<Awaited<ReturnType<ExecuteSlashCommand>>>();
     executeSlashCommandMock.mockImplementationOnce(() => command.promise);

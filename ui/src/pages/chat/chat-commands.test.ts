@@ -313,6 +313,34 @@ describe("conversation reset confirmation", () => {
     expect(sendResetMessage).toHaveBeenCalledOnce();
   });
 
+  it.each(["reset", "clear"])(
+    "defers /%s when a run starts during confirmation",
+    async (command) => {
+      let settleConfirmation: ((confirmed: boolean) => void) | undefined;
+      const confirmation = new Promise<boolean>((resolve) => {
+        settleConfirmation = resolve;
+      });
+      const sendResetMessage = vi.fn(async () => {});
+      const reset = vi.fn();
+      const host = {
+        chatRunId: null as string | null,
+        sessionKey: "agent:main:current",
+        confirmConversationReset: vi.fn(async () => await confirmation),
+        sessions: { reset },
+      };
+
+      const pending = dispatchChatSlashCommand(host as never, command, "", {
+        sendResetMessage,
+      });
+      host.chatRunId = "run-started-during-confirmation";
+      settleConfirmation?.(true);
+
+      await expect(pending).resolves.toBe("deferred");
+      expect(sendResetMessage).not.toHaveBeenCalled();
+      expect(reset).not.toHaveBeenCalled();
+    },
+  );
+
   it("keeps chat-only /reset unchanged", async () => {
     const sendResetMessage = vi.fn(async () => {});
     const result = await dispatchChatSlashCommand({} as never, "reset", "now", {

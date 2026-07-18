@@ -49,7 +49,7 @@ type ChatCommandSendOptions = ChatCommandResetOptions & {
   sendResetMessage: (message: string, opts: ChatCommandResetOptions) => Promise<void>;
 };
 
-type ChatCommandDispatchResult = "completed" | "failed" | "uncertain" | "cancelled";
+type ChatCommandDispatchResult = "completed" | "failed" | "uncertain" | "cancelled" | "deferred";
 
 export type ChatCommandHost = Parameters<typeof handleAbortChat>[0] &
   Parameters<typeof clearChatHistory>[0] & {
@@ -192,15 +192,20 @@ export function shouldQueueLocalSlashCommand(name: string): boolean {
   return !["stop", "export-session", "steer", "redirect", "new"].includes(name);
 }
 
-async function confirmConversationResetForCurrentSession(host: ChatCommandHost): Promise<boolean> {
+async function confirmConversationResetForCurrentSession(
+  host: ChatCommandHost,
+): Promise<"confirmed" | "cancelled" | "deferred"> {
   if (!host.confirmConversationReset) {
-    return true;
+    return "confirmed";
   }
   const resetSessionKey = host.sessionKey;
   if (!(await host.confirmConversationReset())) {
-    return false;
+    return "cancelled";
   }
-  return areUiSessionKeysEquivalent(host.sessionKey, resetSessionKey);
+  if (!areUiSessionKeysEquivalent(host.sessionKey, resetSessionKey)) {
+    return "cancelled";
+  }
+  return host.chatRunId ? "deferred" : "confirmed";
 }
 
 export async function dispatchChatSlashCommand(
@@ -220,17 +225,20 @@ export async function dispatchChatSlashCommand(
       }
       return (await host.createChatSession()) ? "completed" : "cancelled";
     case "reset": {
-      if (!(await confirmConversationResetForCurrentSession(host))) {
-        return "cancelled";
+      const confirmation = await confirmConversationResetForCurrentSession(host);
+      if (confirmation !== "confirmed") {
+        return confirmation;
       }
       await opts.sendResetMessage(args ? `/reset ${args}` : "/reset", opts);
       return "completed";
     }
-    case "clear":
-      if (!(await confirmConversationResetForCurrentSession(host))) {
-        return "cancelled";
+    case "clear": {
+      const confirmation = await confirmConversationResetForCurrentSession(host);
+      if (confirmation !== "confirmed") {
+        return confirmation;
       }
       return await clearChatHistory(host);
+    }
     case "export-session":
       await host.exportCurrentChat?.();
       return "completed";
