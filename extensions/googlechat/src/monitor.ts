@@ -14,6 +14,7 @@ import { maybeHandleGoogleChatApprovalCardClick } from "./approval-card-click.js
 import type { GoogleChatAudienceType } from "./auth.js";
 import { applyGoogleChatInboundAccessPolicy } from "./monitor-access.js";
 import { resolveGoogleChatDurableReplyOptions } from "./monitor-durable.js";
+import { createGoogleChatIngressSpool } from "./monitor-ingress.js";
 import { deliverGoogleChatReply, type GoogleChatTypingMessage } from "./monitor-reply-delivery.js";
 import {
   registerGoogleChatWebhookTarget,
@@ -31,6 +32,12 @@ import { isGoogleChatGroupSpace } from "./targets.js";
 import type { GoogleChatAttachment, GoogleChatEvent } from "./types.js";
 
 setGoogleChatWebhookEventProcessor(processGoogleChatEvent);
+
+const GOOGLECHAT_INGRESS_DRAIN_INTERVAL_MS = 500;
+
+type GoogleChatTurnAdoptionLifecycle = NonNullable<
+  Parameters<GoogleChatCoreRuntime["channel"]["inbound"]["run"]>[0]["turnAdoptionLifecycle"]
+>;
 
 function logVerbose(core: GoogleChatCoreRuntime, runtime: GoogleChatRuntimeEnv, message: string) {
   if (core.logging.shouldLogVerbose()) {
@@ -119,7 +126,11 @@ function shouldSuppressGoogleChatBotLoop(params: {
   return true;
 }
 
-async function processGoogleChatEvent(event: GoogleChatEvent, target: WebhookTarget) {
+async function processGoogleChatEvent(
+  event: GoogleChatEvent,
+  target: WebhookTarget,
+  turnAdoptionLifecycle?: GoogleChatTurnAdoptionLifecycle,
+) {
   const eventType = event.type ?? (event as { eventType?: string }).eventType;
   if (eventType === "CARD_CLICKED") {
     await maybeHandleGoogleChatApprovalCardClick({ event, target });
@@ -140,6 +151,7 @@ async function processGoogleChatEvent(event: GoogleChatEvent, target: WebhookTar
     core: target.core,
     statusSink: target.statusSink,
     mediaMaxMb: target.mediaMaxMb,
+    ...(turnAdoptionLifecycle ? { turnAdoptionLifecycle } : {}),
   });
 }
 
@@ -173,6 +185,7 @@ async function processMessageWithPipeline(params: {
   core: GoogleChatCoreRuntime;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
   mediaMaxMb: number;
+  turnAdoptionLifecycle?: GoogleChatTurnAdoptionLifecycle;
 }): Promise<void> {
   const { event, account, config, runtime, core, statusSink, mediaMaxMb } = params;
   const space = event.space;
@@ -383,6 +396,9 @@ async function processMessageWithPipeline(params: {
     channel: "googlechat",
     accountId: route.accountId,
     raw: message,
+    ...(params.turnAdoptionLifecycle
+      ? { turnAdoptionLifecycle: params.turnAdoptionLifecycle }
+      : {}),
     adapter: {
       ingest: () => ({
         id: message.name ?? spaceId,
@@ -485,7 +501,7 @@ function monitorGoogleChatProvider(options: GoogleChatMonitorOptions): () => voi
     log: options.runtime.log,
   });
 
-  const unregisterTarget = registerGoogleChatWebhookTarget({
+  const targetBase = {
     account: options.account,
     config: options.config,
     runtime: options.runtime,
@@ -495,9 +511,33 @@ function monitorGoogleChatProvider(options: GoogleChatMonitorOptions): () => voi
     audience,
     statusSink: options.statusSink,
     mediaMaxMb,
+  };
+  const ingress = createGoogleChatIngressSpool({
+    accountId: options.account.accountId,
+    runtime: options.runtime,
+    abortSignal: options.abortSignal,
+    deliver: async (event, turnAdoptionLifecycle) => {
+      await processGoogleChatEvent(event, webhookTarget, turnAdoptionLifecycle);
+    },
   });
+  const webhookTarget: WebhookTarget = { ...targetBase, ingress };
+  const unregisterTarget = registerGoogleChatWebhookTarget(webhookTarget);
+
+  const requestDrain = () => {
+    void ingress.drainOnce().catch((error: unknown) => {
+      options.runtime.error?.(
+        `[${options.account.accountId}] Google Chat ingress drain failed: ${String(error)}`,
+      );
+    });
+  };
+  const drainTimer = setInterval(requestDrain, GOOGLECHAT_INGRESS_DRAIN_INTERVAL_MS);
+  drainTimer.unref?.();
+  // Replay events journaled before a crash or restart; Google already saw a 200.
+  requestDrain();
 
   return () => {
+    clearInterval(drainTimer);
+    ingress.dispose();
     unregisterTarget();
   };
 }

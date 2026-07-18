@@ -98,6 +98,8 @@ function registerTwoTargets() {
   const sinkB = vi.fn();
   const logA = vi.fn();
   const logB = vi.fn();
+  const enqueueA = vi.fn(async () => ({ kind: "accepted", duplicate: false }));
+  const enqueueB = vi.fn(async () => ({ kind: "accepted", duplicate: false }));
   const core = {} as PluginRuntime;
   const config = {} as OpenClawConfig;
 
@@ -109,6 +111,7 @@ function registerTwoTargets() {
     path: "/googlechat",
     statusSink: sinkA,
     mediaMaxMb: 5,
+    ingress: { enqueue: enqueueA },
   });
   const unregisterB = registerGoogleChatWebhookTarget({
     account: baseAccount("B"),
@@ -118,6 +121,7 @@ function registerTwoTargets() {
     path: "/googlechat",
     statusSink: sinkB,
     mediaMaxMb: 5,
+    ingress: { enqueue: enqueueB },
   });
   webhookRouteHandler = expectDefined(registry.httpRoutes[0], "Google Chat webhook route").handler;
 
@@ -126,6 +130,8 @@ function registerTwoTargets() {
     logB,
     sinkA,
     sinkB,
+    enqueueA,
+    enqueueB,
     unregister: () => {
       unregisterA();
       unregisterB();

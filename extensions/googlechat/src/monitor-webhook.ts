@@ -348,6 +348,25 @@ export function createGoogleChatWebhookRequestHandler(params: {
 
         const dispatchTarget = selectedTarget;
         dispatchTarget.statusSink?.({ lastInboundAt: Date.now() });
+        const eventType = parsedEvent.type ?? (parsedEvent as { eventType?: string }).eventType;
+        if (eventType === "MESSAGE") {
+          // Google Chat treats the 200 as final and does not retry webhooks, so
+          // the event must be durable before acking; an enqueue failure
+          // propagates to the plugin route layer, which answers 500 instead.
+          const verdict = await dispatchTarget.ingress.enqueue(parsedEvent);
+          if (verdict.duplicate) {
+            dispatchTarget.runtime.log?.(
+              `[${dispatchTarget.account.accountId}] Google Chat webhook ignored duplicate message ${parsedEvent.message?.name ?? "unknown"}`,
+            );
+          }
+          res.statusCode = 200;
+          res.setHeader("Content-Type", "application/json");
+          res.end("{}");
+          return true;
+        }
+        // CARD_CLICKED approvals and space lifecycle events run dedicated
+        // non-agent workflows (same journal boundary as msteams #110357) and
+        // keep the detached path.
         // Reserve the detached task before the HTTP admission is released;
         // otherwise later queue work inherits a released admission root.
         void runDetachedWebhookWork(() => params.processEvent(parsedEvent, dispatchTarget)).catch(

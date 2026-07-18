@@ -243,6 +243,7 @@ describe("googlechat monitor webhook", () => {
   });
 
   it("accepts add-on payloads that carry systemIdToken in the body", async () => {
+    const enqueue = vi.fn(async () => ({ kind: "accepted", duplicate: false }));
     const target = {
       account: {
         accountId: "default",
@@ -252,6 +253,7 @@ describe("googlechat monitor webhook", () => {
       statusSink: vi.fn(),
       audienceType: "app-url",
       audience: "https://example.com/googlechat",
+      ingress: { enqueue },
     };
     installSimplePipeline([target]);
     readJsonWebhookBodyOrReject.mockResolvedValue({
@@ -286,17 +288,16 @@ describe("googlechat monitor webhook", () => {
       audience: "https://example.com/googlechat",
       expectedAddOnPrincipal: "chat-app",
     });
-    expect(processEvent).toHaveBeenCalledWith(
-      {
-        type: "MESSAGE",
-        space: { name: "spaces/AAA" },
-        message: { name: "spaces/AAA/messages/1", text: "hello" },
-        user: { name: "users/123" },
-        eventTime: "2026-03-22T00:00:00.000Z",
-      },
-      target,
-    );
-    expect(runDetachedWebhookWork).toHaveBeenCalledTimes(1);
+    // MESSAGE events are journaled before the ack; dispatch is the drain's job.
+    expect(enqueue).toHaveBeenCalledWith({
+      type: "MESSAGE",
+      space: { name: "spaces/AAA" },
+      message: { name: "spaces/AAA/messages/1", text: "hello" },
+      user: { name: "users/123" },
+      eventTime: "2026-03-22T00:00:00.000Z",
+    });
+    expect(processEvent).not.toHaveBeenCalled();
+    expect(runDetachedWebhookWork).not.toHaveBeenCalled();
     expect(res.statusCode).toBe(200);
     expect(res.headers["Content-Type"]).toBe("application/json");
     expect(res.body).toBe("{}");
@@ -484,6 +485,7 @@ describe("googlechat monitor webhook", () => {
         statusSink: vi.fn(),
         audienceType: "app-url",
         audience: "https://example.com/googlechat",
+        ingress: { enqueue: vi.fn(async () => ({ kind: "accepted", duplicate: false })) },
       },
     ]);
     readJsonWebhookBodyOrReject.mockResolvedValue({
@@ -521,6 +523,7 @@ describe("googlechat monitor webhook", () => {
   it("does not log failed candidate targets when another target verifies", async () => {
     const logA = vi.fn();
     const logB = vi.fn();
+    const enqueueB = vi.fn(async () => ({ kind: "accepted", duplicate: false }));
     const targetA = {
       account: {
         accountId: "acct-a",
@@ -539,6 +542,7 @@ describe("googlechat monitor webhook", () => {
       statusSink: vi.fn(),
       audienceType: "app-url",
       audience: "https://example.com/googlechat",
+      ingress: { enqueue: enqueueB },
     };
     installSimplePipeline([targetA, targetB]);
     readJsonWebhookBodyOrReject.mockResolvedValue({
@@ -571,19 +575,130 @@ describe("googlechat monitor webhook", () => {
 
     expect(logA).not.toHaveBeenCalled();
     expect(logB).not.toHaveBeenCalled();
-    expect(processEvent).toHaveBeenCalledWith(
-      {
-        type: "MESSAGE",
-        space: { name: "spaces/BBB" },
-        message: { name: "spaces/BBB/messages/1", text: "hi" },
-        user: { name: "users/123" },
-        eventTime: "2026-03-22T00:00:00.000Z",
-      },
-      targetB,
-    );
+    expect(enqueueB).toHaveBeenCalledWith({
+      type: "MESSAGE",
+      space: { name: "spaces/BBB" },
+      message: { name: "spaces/BBB/messages/1", text: "hi" },
+      user: { name: "users/123" },
+      eventTime: "2026-03-22T00:00:00.000Z",
+    });
+    expect(processEvent).not.toHaveBeenCalled();
     expect(res.statusCode).toBe(200);
     expect(res.headers["Content-Type"]).toBe("application/json");
     expect(res.body).toBe("{}");
+  });
+
+  it("acks duplicate MESSAGE deliveries without dispatching them again", async () => {
+    const logFn = vi.fn();
+    const enqueue = vi.fn(async () => ({ kind: "completed", duplicate: true }));
+    installSimplePipeline([
+      {
+        account: {
+          accountId: "acct-dup",
+          config: { appPrincipal: "chat-app" },
+        },
+        runtime: { log: logFn, error: vi.fn() },
+        statusSink: vi.fn(),
+        audienceType: "app-url",
+        audience: "https://example.com/googlechat",
+        ingress: { enqueue },
+      },
+    ]);
+    readJsonWebhookBodyOrReject.mockResolvedValue({
+      ok: true,
+      value: {
+        commonEventObject: { hostApp: "CHAT" },
+        authorizationEventObject: { systemIdToken: "addon-token" },
+        chat: {
+          eventTime: "2026-03-22T00:00:00.000Z",
+          user: { name: "users/123" },
+          messagePayload: {
+            space: { name: "spaces/AAA" },
+            message: { name: "spaces/AAA/messages/9", text: "hi" },
+          },
+        },
+      },
+    });
+    resolveWebhookTargetWithAuthOrReject.mockImplementation(async ({ isMatch, targets }) => {
+      for (const target of targets) {
+        if (await isMatch(target)) {
+          return target;
+        }
+      }
+      return null;
+    });
+    verifyGoogleChatRequest.mockResolvedValue({ ok: true });
+    const { processEvent, res } = await runWebhookHandler();
+
+    expect(enqueue).toHaveBeenCalledTimes(1);
+    expect(processEvent).not.toHaveBeenCalled();
+    expect(logFn).toHaveBeenCalledWith(
+      "[acct-dup] Google Chat webhook ignored duplicate message spaces/AAA/messages/9",
+    );
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toBe("{}");
+  });
+
+  it("rejects the request when durable admission fails instead of acking", async () => {
+    const enqueue = vi.fn(async () => {
+      throw new Error("sqlite unavailable");
+    });
+    installSimplePipeline([
+      {
+        account: {
+          accountId: "acct-err",
+          config: { appPrincipal: "chat-app" },
+        },
+        runtime: { log: vi.fn(), error: vi.fn() },
+        statusSink: vi.fn(),
+        audienceType: "app-url",
+        audience: "https://example.com/googlechat",
+        ingress: { enqueue },
+      },
+    ]);
+    readJsonWebhookBodyOrReject.mockResolvedValue({
+      ok: true,
+      value: {
+        commonEventObject: { hostApp: "CHAT" },
+        authorizationEventObject: { systemIdToken: "addon-token" },
+        chat: {
+          eventTime: "2026-03-22T00:00:00.000Z",
+          user: { name: "users/123" },
+          messagePayload: {
+            space: { name: "spaces/AAA" },
+            message: { name: "spaces/AAA/messages/1", text: "hi" },
+          },
+        },
+      },
+    });
+    resolveWebhookTargetWithAuthOrReject.mockImplementation(async ({ isMatch, targets }) => {
+      for (const target of targets) {
+        if (await isMatch(target)) {
+          return target;
+        }
+      }
+      return null;
+    });
+    verifyGoogleChatRequest.mockResolvedValue({ ok: true });
+    const processEvent = vi.fn(async () => {});
+    const handler = createGoogleChatWebhookRequestHandler({
+      webhookTargets: new Map(),
+      webhookRateLimiter: {
+        isRateLimited: vi.fn(() => false),
+        size: vi.fn(() => 0),
+        clear: vi.fn(),
+      },
+      webhookInFlightLimiter: {} as never,
+      processEvent,
+    });
+    const req = createRequest();
+    const res = createResponse();
+
+    // The plugin HTTP route layer converts this rejection into a 500, so Google
+    // never sees a false 200 for an event that was not journaled.
+    await expect(handler(req, res)).rejects.toThrow("sqlite unavailable");
+    expect(processEvent).not.toHaveBeenCalled();
+    expect(res.statusCode).not.toBe(200);
   });
 
   it("rejects missing add-on bearer tokens before dispatch", async () => {
