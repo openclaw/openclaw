@@ -228,11 +228,11 @@ export function teamsMeetingLeaveScript(params: {
       const sources = Array.isArray(entry?.sources)
         ? entry.sources
         : entry?.source
-          ? [{ element: entry.source, muted: Boolean(entry.sourceMuted) }]
+          ? [{ element: entry.source, muted: Boolean(entry.sourceMuted), stream: entry.stream }]
           : [];
       for (const source of sources) {
         const element = source?.element;
-        if (!element) continue;
+        if (!element || element.srcObject !== source.stream) continue;
         const detachedLiveSource = Boolean(
           element.isConnected === false &&
           element.srcObject?.getAudioTracks?.().some((track) => track.readyState === "live")
@@ -263,14 +263,6 @@ export function teamsMeetingLeaveScript(params: {
   const leave = first(selectors.leave);
   const confirmation = first(selectors.leaveConfirmation);
   const postCall = first(selectors.postCall);
-  if (postCall) {
-    retireOwnedAudioBridges();
-    if (sessionMatched) delete window.__openclawTeamsMeeting;
-    return JSON.stringify({ departed: true, sessionMatched: true, urlMatched: true });
-  }
-  if (!sessionMatched) {
-    return JSON.stringify({ departed: false, urlMatched: true });
-  }
   const currentUrlMatches = Boolean(expectedIdentity && currentIdentity === expectedIdentity);
   const preservedCallMatches = Boolean(
     expectedIdentity &&
@@ -297,13 +289,19 @@ export function teamsMeetingLeaveScript(params: {
     Date.now() - state?.verifiedAt < 5_000 &&
     !leave
   );
-  if (
-    !currentUrlMatches &&
-    !preservedCallMatches &&
-    !pendingLeaveMatches &&
-    !rerenderPendingMatches
-  ) {
+  const meetingIdentityMatches = Boolean(
+    currentUrlMatches || preservedCallMatches || pendingLeaveMatches || rerenderPendingMatches
+  );
+  if (postCall && (meetingIdentityMatches || leaveInitiated)) {
+    retireOwnedAudioBridges();
+    if (sessionMatched) delete window.__openclawTeamsMeeting;
+    return JSON.stringify({ departed: true, sessionMatched: true, urlMatched: true });
+  }
+  if (!meetingIdentityMatches) {
     return JSON.stringify({ departed: false, urlMatched: false });
+  }
+  if (!sessionMatched) {
+    return JSON.stringify({ departed: false, urlMatched: true });
   }
   if (confirmation) {
     confirmation.click();

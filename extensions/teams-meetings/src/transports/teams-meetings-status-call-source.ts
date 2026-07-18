@@ -217,7 +217,9 @@ export function teamsMeetingStatusCallSource(): string {
       }
     } else {
       audioOutputRouted = false;
-      if (canMutateSession) retireOwnedAudioBridges();
+      // Teams can briefly remove every media element during an in-call rerender.
+      // Suspend ownership until the source returns; call teardown retires it.
+      if (canMutateSession) suspendOwnedAudioBridges();
     }
   } else if (inCall && allowMicrophone) {
     audioOutputRouted = false;

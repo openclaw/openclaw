@@ -74,12 +74,14 @@ export function teamsMeetingStatusPreludeSource(params: TeamsMeetingStatusPrelud
   const bridgeSources = (entry) => Array.isArray(entry?.sources)
     ? entry.sources
     : entry?.source
-      ? [{ element: entry.source, muted: Boolean(entry.sourceMuted) }]
+      ? [{ element: entry.source, muted: Boolean(entry.sourceMuted), stream: entry.stream }]
       : [];
   const restoreAudioBridgeSources = (entry) => {
     bridgeSources(entry).forEach((source) => {
       const element = source?.element;
-      if (!element) return;
+      // Teams reuses media elements across stream changes. Only the stream this
+      // bridge muted may be restored or detached during cleanup.
+      if (!element || element.srcObject !== source.stream) return;
       const detachedLiveSource = Boolean(
         element.isConnected === false &&
         element.srcObject?.getAudioTracks?.().some((track) => track.readyState === "live")

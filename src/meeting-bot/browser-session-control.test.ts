@@ -151,4 +151,54 @@ describe("meeting browser leave ownership", () => {
     expect(concurrentStarted).toBe(true);
     expect(result.left).toBe(true);
   });
+
+  it("reserves enough time to close a plugin tab after leave polling expires", async () => {
+    vi.useFakeTimers();
+    try {
+      let evaluation = 0;
+      const deletedTabs: string[] = [];
+      const leaving = leaveMeetingWithBrowser({
+        adapter: {
+          browserLabel: "Test meeting",
+          browser: {
+            buildLeaveScript: () => "() => '{}'",
+            parseLeaveResult: () =>
+              evaluation === 1
+                ? { departed: false, leaveAction: "leave", urlMatched: true }
+                : { departed: false, urlMatched: true },
+          },
+        } as never,
+        callBrowser: async (request) => {
+          if (request.path === "/tabs") {
+            return { tabs: [{ targetId: "target-1", url: "https://meet.test/meeting" }] };
+          }
+          if (request.path === "/act") {
+            evaluation += 1;
+            return { result: "{}" };
+          }
+          if (request.method === "DELETE") {
+            deletedTabs.push(request.path);
+            return {};
+          }
+          throw new Error(`Unexpected browser request: ${request.method} ${request.path}`);
+        },
+        launch: true,
+        meetingSessionId: "session-1",
+        meetingUrl: "https://meet.test/meeting",
+        tab: { targetId: "target-1", openedByPlugin: true },
+        timeoutMs: 1_000,
+      });
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      const result = await leaving;
+      expect(evaluation).toBeGreaterThan(1);
+      expect(deletedTabs).toEqual(["/tabs/target-1"]);
+      expect(result).toEqual({
+        left: true,
+        note: "Clicked Test meeting's Leave call button and closed the Test meeting tab.",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

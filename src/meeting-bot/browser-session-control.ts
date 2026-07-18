@@ -136,13 +136,16 @@ export async function leaveMeetingWithBrowser<
         targetId,
         operation: async (remainingMs) => {
           const operationDeadline = Date.now() + remainingMs;
+          const closeReserveMs = openedByPlugin
+            ? Math.min(1_000, Math.max(250, Math.floor(remainingMs / 4)))
+            : 0;
           const result = await leaveMeetingInPage({
             adapter: params.adapter,
             callBrowser: params.callBrowser,
             meetingSessionId: params.meetingSessionId,
             meetingUrl: params.meetingUrl,
             targetId,
-            timeoutMs: remainingMs,
+            timeoutMs: Math.max(1, remainingMs - closeReserveMs),
           });
           const canCloseTrackedTab =
             openedByPlugin &&

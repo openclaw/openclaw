@@ -347,13 +347,14 @@ describe("Microsoft Teams meeting platform adapter", () => {
     });
   });
 
-  it("does not trust a stale identity marker to leave a different SPA call", () => {
+  it("does not trust a stale identity marker or post-call screen from another SPA call", () => {
     const staleLeave = control({ label: "Leave old call" });
     const currentLeave = control({ label: "Leave current call" });
     const bridge = { pause: vi.fn(), remove: vi.fn(), srcObject: {} };
     const { result, window } = runLeaveScript({
       currentUrl: "https://teams.microsoft.com/v2/",
       leave: currentLeave,
+      postCall: control({ label: "Rejoin" }),
       priorAudioOutputs: [
         {
           bridge,
@@ -373,6 +374,24 @@ describe("Microsoft Teams meeting platform adapter", () => {
     expect(currentLeave.clicks).toBe(0);
     expect(bridge.pause).not.toHaveBeenCalled();
     expect(window["__openclawTeamsAudioOutputs"]).toHaveLength(1);
+  });
+
+  it("does not use initiated-leave proof to act on a replacement SPA call", () => {
+    const staleLeave = control({ label: "Leave old call" });
+    const currentLeave = control({ label: "Leave current call" });
+    const { result } = runLeaveScript({
+      currentUrl: "https://teams.microsoft.com/v2/",
+      leave: currentLeave,
+      leaveInitiated: true,
+      priorMeeting: {
+        identity: "teams-work:19:meeting_test@thread.v2",
+        inCallControl: staleLeave,
+        inCallUrl: "https://teams.microsoft.com/v2/",
+      },
+    });
+
+    expect(result).toEqual({ departed: false, urlMatched: false });
+    expect(currentLeave.clicks).toBe(0);
   });
 
   it("does not leave a call owned by a newer OpenClaw session", () => {
@@ -474,6 +493,7 @@ describe("Microsoft Teams meeting platform adapter", () => {
           sessionId: "session-1",
           source: detachedSource,
           sourceMuted: false,
+          stream: detachedSource.srcObject,
         },
         foreignBridge,
       ],
@@ -493,6 +513,35 @@ describe("Microsoft Teams meeting platform adapter", () => {
     expect(detachedSource.srcObject).toBeNull();
     expect(detachedBridge.remove).toHaveBeenCalledOnce();
     expect(window["__openclawTeamsAudioOutputs"]).toEqual([foreignBridge]);
+  });
+
+  it("does not unmute a replacement stream during leave cleanup", () => {
+    const bridgedStream = { getAudioTracks: () => [{ readyState: "live" }] };
+    const replacementStream = { getAudioTracks: () => [{ readyState: "live" }] };
+    const source = { muted: true, srcObject: replacementStream };
+    const bridge = { pause: vi.fn(), remove: vi.fn(), srcObject: bridgedStream };
+    const { result } = runLeaveScript({
+      postCall: control({ label: "Rejoin" }),
+      priorAudioOutputs: [
+        {
+          bridge,
+          sessionId: "session-1",
+          source,
+          sourceMuted: false,
+          stream: bridgedStream,
+        },
+      ],
+      priorMeeting: {
+        identity: "teams-work:19:meeting_test@thread.v2",
+        sessionId: "session-1",
+      },
+    });
+
+    expect(result).toEqual({ departed: true, sessionMatched: true, urlMatched: true });
+    expect(source.muted).toBe(true);
+    expect(source.srcObject).toBe(replacementStream);
+    expect(bridge.pause).toHaveBeenCalledOnce();
+    expect(bridge.remove).toHaveBeenCalledOnce();
   });
 
   it.each([
