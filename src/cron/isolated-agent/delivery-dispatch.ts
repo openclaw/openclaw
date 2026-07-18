@@ -1,7 +1,10 @@
 /** Dispatches isolated cron output to direct delivery, mirrors, and follow-up queues. */
 import { isAudioFileName } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import {
+  withDirectDeliveryFallbackText,
+  type ReplyPayload,
+} from "../../auto-reply/reply-payload.js";
 import {
   isSilentReplyText,
   SILENT_REPLY_TOKEN,
@@ -467,153 +470,11 @@ function resolveDirectCronSummaryFallbackText(params: {
   );
 }
 
-function hasDirectCronVisiblePayloadContent(payload: ReplyPayload): boolean {
-  return hasDirectCronMergeAnchorPayloadContent(payload) || hasTelegramReactionChannelData(payload);
-}
-
-function hasDirectCronMergeAnchorPayloadContent(payload: ReplyPayload): boolean {
-  return hasReplyPayloadContent(payload, { trimText: true, hasChannelData: false });
-}
-
-function hasTelegramReactionChannelData(payload: ReplyPayload): boolean {
-  const telegramData = payload.channelData?.telegram;
-  return Boolean(
-    telegramData &&
-    typeof telegramData === "object" &&
-    !Array.isArray(telegramData) &&
-    "reaction" in telegramData,
+function shouldAttachDirectCronFallbackText(payload: ReplyPayload): boolean {
+  return (
+    Boolean(payload.channelData) &&
+    !hasReplyPayloadContent(payload, { trimText: true, hasChannelData: false })
   );
-}
-
-function mergeDirectCronChannelData(
-  visibleChannelData: ReplyPayload["channelData"],
-  textlessChannelData: ReplyPayload["channelData"],
-): ReplyPayload["channelData"] {
-  if (
-    !visibleChannelData ||
-    !textlessChannelData ||
-    typeof visibleChannelData !== "object" ||
-    typeof textlessChannelData !== "object" ||
-    Array.isArray(visibleChannelData) ||
-    Array.isArray(textlessChannelData)
-  ) {
-    return visibleChannelData ?? textlessChannelData;
-  }
-  const merged: Record<string, unknown> = {};
-  for (const key of new Set([
-    ...Object.keys(textlessChannelData),
-    ...Object.keys(visibleChannelData),
-  ])) {
-    merged[key] = mergeDirectCronMetadataValue(textlessChannelData[key], visibleChannelData[key]);
-  }
-  return merged;
-}
-
-function mergeDirectCronMetadataValue(textlessValue: unknown, visibleValue: unknown): unknown {
-  if (visibleValue === undefined) {
-    return textlessValue;
-  }
-  if (textlessValue === undefined) {
-    return visibleValue;
-  }
-  if (Array.isArray(visibleValue) && Array.isArray(textlessValue)) {
-    return [...visibleValue, ...textlessValue];
-  }
-  if (
-    visibleValue &&
-    textlessValue &&
-    typeof visibleValue === "object" &&
-    typeof textlessValue === "object" &&
-    !Array.isArray(visibleValue) &&
-    !Array.isArray(textlessValue)
-  ) {
-    const visibleRecord = visibleValue as Record<string, unknown>;
-    const textlessRecord = textlessValue as Record<string, unknown>;
-    const merged: Record<string, unknown> = {};
-    for (const key of new Set([...Object.keys(textlessRecord), ...Object.keys(visibleRecord)])) {
-      merged[key] = mergeDirectCronMetadataValue(textlessRecord[key], visibleRecord[key]);
-    }
-    return merged;
-  }
-  return visibleValue;
-}
-
-function mergeTextlessDirectCronPayloadIntoVisiblePayload(
-  visiblePayload: ReplyPayload,
-  textlessPayload: ReplyPayload,
-): ReplyPayload {
-  return {
-    ...textlessPayload,
-    ...visiblePayload,
-    channelData: mergeDirectCronChannelData(
-      visiblePayload.channelData,
-      textlessPayload.channelData,
-    ),
-    delivery: visiblePayload.delivery ?? textlessPayload.delivery,
-  };
-}
-
-function applyDirectCronSummaryFallbackToTextlessPayloads(params: {
-  payloads: ReplyPayload[];
-  fallbackText?: string;
-}): { payloads: ReplyPayload[]; droppedTextlessPayloadCount: number } {
-  const visiblePayloads: ReplyPayload[] = [];
-  const textlessPayloads: ReplyPayload[] = [];
-  for (const payload of params.payloads) {
-    if (hasDirectCronVisiblePayloadContent(payload)) {
-      visiblePayloads.push(payload);
-    } else {
-      textlessPayloads.push(payload);
-    }
-  }
-  if (visiblePayloads.length > 0) {
-    if (textlessPayloads.length === 0) {
-      return { payloads: visiblePayloads, droppedTextlessPayloadCount: 0 };
-    }
-    const mergeAnchorIndex = visiblePayloads.findLastIndex(hasDirectCronMergeAnchorPayloadContent);
-    if (mergeAnchorIndex < 0) {
-      const [firstTextlessPayload, ...remainingTextlessPayloads] = textlessPayloads;
-      const mergedTextlessPayload = firstTextlessPayload
-        ? remainingTextlessPayloads.reduce<ReplyPayload>(
-            (merged, payload) => mergeTextlessDirectCronPayloadIntoVisiblePayload(merged, payload),
-            firstTextlessPayload,
-          )
-        : undefined;
-      return {
-        payloads: params.fallbackText
-          ? [...visiblePayloads, { ...mergedTextlessPayload, text: params.fallbackText }]
-          : visiblePayloads,
-        droppedTextlessPayloadCount: params.fallbackText ? 0 : textlessPayloads.length,
-      };
-    }
-    let mergeAnchorPayload = visiblePayloads[mergeAnchorIndex] as ReplyPayload;
-    for (const textlessPayload of textlessPayloads) {
-      mergeAnchorPayload = mergeTextlessDirectCronPayloadIntoVisiblePayload(
-        mergeAnchorPayload,
-        textlessPayload,
-      );
-    }
-    const mergedPayloads = [...visiblePayloads];
-    mergedPayloads[mergeAnchorIndex] = mergeAnchorPayload;
-    return {
-      payloads: mergedPayloads,
-      droppedTextlessPayloadCount: 0,
-    };
-  }
-  if (!params.fallbackText) {
-    return { payloads: [], droppedTextlessPayloadCount: textlessPayloads.length };
-  }
-  const [firstTextlessPayload, ...remainingTextlessPayloads] = textlessPayloads;
-  const mergedTextlessPayload = firstTextlessPayload
-    ? remainingTextlessPayloads.reduce<ReplyPayload>(
-        (merged, payload) => mergeTextlessDirectCronPayloadIntoVisiblePayload(merged, payload),
-        firstTextlessPayload,
-      )
-    : undefined;
-  return {
-    payloads: [{ ...mergedTextlessPayload, text: params.fallbackText }],
-    droppedTextlessPayloadCount: 0,
-  };
 }
 
 function formatTargetCronDeliveryAwarenessText(text: string): string {
@@ -1275,13 +1136,15 @@ export async function dispatchCronDelivery(
       const normalizeDirectPayloads = (payloads: ReplyPayload[]) =>
         payloads
           .map((p) => {
-            if (!p.text) {
-              return p;
-            }
-            const normalized = normalizeSilentReplyText(p.text);
-            return Object.assign({}, p, {
-              text: normalized.strippedTrailingSilentToken ? undefined : normalized.text,
-            });
+            const normalized = p.text ? normalizeSilentReplyText(p.text) : undefined;
+            const payload = normalized
+              ? Object.assign({}, p, {
+                  text: normalized.strippedTrailingSilentToken ? undefined : normalized.text,
+                })
+              : p;
+            return shouldAttachDirectCronFallbackText(payload)
+              ? withDirectDeliveryFallbackText(payload, normalizedSummaryFallbackText)
+              : payload;
           })
           .filter((p) => hasReplyPayloadContent(p, { trimText: true }));
       let normalizedPayloads = normalizeDirectPayloads(
@@ -1289,18 +1152,6 @@ export async function dispatchCronDelivery(
       );
       if (normalizedPayloads.length === 0 && deliveryPayloads.length > 0) {
         normalizedPayloads = normalizeDirectPayloads(fallbackPayloads);
-      }
-      if (delivery.channel === "telegram") {
-        const fallbackAppliedPayloads = applyDirectCronSummaryFallbackToTextlessPayloads({
-          payloads: normalizedPayloads,
-          fallbackText: normalizedSummaryFallbackText,
-        });
-        normalizedPayloads = fallbackAppliedPayloads.payloads;
-        if (fallbackAppliedPayloads.droppedTextlessPayloadCount > 0) {
-          await logCronDeliveryWarn(
-            `[cron:${params.job.id}] skipped ${fallbackAppliedPayloads.droppedTextlessPayloadCount} textless direct delivery payload(s) after applying summary fallback`,
-          );
-        }
       }
       if (normalizedPayloads.length === 0) {
         return await finishSilentReplyDelivery();

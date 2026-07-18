@@ -417,7 +417,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(state.delivered).toBe(true);
   });
 
-  it("adds summary text to metadata-only direct payloads before Telegram delivery", async () => {
+  it("adds a generic summary fallback hint to metadata-only direct payloads", async () => {
     const params = makeBaseParams({ synthesizedText: undefined });
     params.summary = "Pablo Daily Summary\n- Review the stuck cron.";
     params.outputText = "Pablo Daily Summary\n- Review the stuck cron.";
@@ -441,8 +441,8 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       to: "123456",
       payloads: [
         {
-          text: "Pablo Daily Summary\n- Review the stuck cron.",
           channelData: {
+            openclawDirectDeliveryFallbackText: "Pablo Daily Summary\n- Review the stuck cron.",
             telegram: {
               buttons: [[{ text: "Open task", url: "https://example.test/task" }]],
             },
@@ -455,130 +455,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(state.delivered).toBe(true);
   });
 
-  it("merges metadata-only direct payloads into existing visible payloads", async () => {
-    const params = makeBaseParams({ synthesizedText: undefined });
-    params.summary = "Pablo Daily Summary\n- Review the stuck cron.";
-    params.outputText = "Pablo Daily Summary\n- Review the stuck cron.";
-    params.deliveryPayloadHasStructuredContent = true;
-    params.deliveryPayloads = [
-      { text: "Pablo Daily Summary\n- Review the stuck cron." },
-      {
-        text: "   ",
-        channelData: {
-          telegram: {
-            buttons: [[{ text: "Open task", url: "https://example.test/task" }]],
-          },
-        },
-      },
-    ] as never;
-
-    const state = await dispatchCronDelivery(params);
-
-    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
-    expectDeliveryCall(0, {
-      channel: "telegram",
-      to: "123456",
-      payloads: [
-        {
-          text: "Pablo Daily Summary\n- Review the stuck cron.",
-          channelData: {
-            telegram: {
-              buttons: [[{ text: "Open task", url: "https://example.test/task" }]],
-            },
-          },
-        },
-      ],
-      skipQueue: true,
-    });
-    expect(state.deliveryAttempted).toBe(true);
-    expect(state.delivered).toBe(true);
-  });
-
-  it("preserves nested Telegram channel data when merging metadata-only payloads", async () => {
-    const params = makeBaseParams({ synthesizedText: undefined });
-    params.summary = "Pablo Daily Summary\n- Review the stuck cron.";
-    params.outputText = "Pablo Daily Summary\n- Review the stuck cron.";
-    params.deliveryPayloadHasStructuredContent = true;
-    params.deliveryPayloads = [
-      {
-        text: "Pablo Daily Summary\n- Review the stuck cron.",
-        channelData: { telegram: { quoteText: "Original task" } },
-      },
-      {
-        text: "   ",
-        channelData: {
-          telegram: {
-            buttons: [[{ text: "Open task", url: "https://example.test/task" }]],
-          },
-        },
-      },
-    ] as never;
-
-    const state = await dispatchCronDelivery(params);
-
-    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
-    expectDeliveryCall(0, {
-      channel: "telegram",
-      to: "123456",
-      payloads: [
-        {
-          text: "Pablo Daily Summary\n- Review the stuck cron.",
-          channelData: {
-            telegram: {
-              quoteText: "Original task",
-              buttons: [[{ text: "Open task", url: "https://example.test/task" }]],
-            },
-          },
-        },
-      ],
-      skipQueue: true,
-    });
-    expect(state.deliveryAttempted).toBe(true);
-    expect(state.delivered).toBe(true);
-  });
-
-  it("merges trailing metadata-only direct payloads into the last visible payload", async () => {
-    const params = makeBaseParams({ synthesizedText: undefined });
-    params.summary = "Pablo Daily Summary\n- Review the stuck cron.";
-    params.outputText = "Pablo Daily Summary\n- Review the stuck cron.";
-    params.deliveryPayloadHasStructuredContent = true;
-    params.deliveryPayloads = [
-      { text: "Intro line." },
-      { text: "Pablo Daily Summary\n- Review the stuck cron." },
-      {
-        text: "   ",
-        channelData: {
-          telegram: {
-            buttons: [[{ text: "Open task", url: "https://example.test/task" }]],
-          },
-        },
-      },
-    ] as never;
-
-    const state = await dispatchCronDelivery(params);
-
-    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
-    expectDeliveryCall(0, {
-      channel: "telegram",
-      to: "123456",
-      payloads: [
-        { text: "Intro line." },
-        {
-          text: "Pablo Daily Summary\n- Review the stuck cron.",
-          channelData: {
-            telegram: {
-              buttons: [[{ text: "Open task", url: "https://example.test/task" }]],
-            },
-          },
-        },
-      ],
-      skipQueue: true,
-    });
-    expect(state.deliveryAttempted).toBe(true);
-    expect(state.delivered).toBe(true);
-  });
-
-  it("leaves Telegram reaction-only direct payloads textless", async () => {
+  it("leaves channel metadata payload text decisions to the channel adapter", async () => {
     const params = makeBaseParams({ synthesizedText: undefined });
     params.summary = "Pablo Daily Summary\n- Review the stuck cron.";
     params.outputText = "Pablo Daily Summary\n- Review the stuck cron.";
@@ -602,6 +479,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       payloads: [
         {
           channelData: {
+            openclawDirectDeliveryFallbackText: "Pablo Daily Summary\n- Review the stuck cron.",
             telegram: {
               reaction: { emoji: "👍", replyToId: "123" },
             },
@@ -614,7 +492,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(state.delivered).toBe(true);
   });
 
-  it("does not merge buttons-only direct payloads into reaction-only payloads", async () => {
+  it("preserves separate metadata-only direct payloads for channel-owned normalization", async () => {
     const params = makeBaseParams({ synthesizedText: undefined });
     params.summary = "Pablo Daily Summary\n- Review the stuck cron.";
     params.outputText = "Pablo Daily Summary\n- Review the stuck cron.";
@@ -646,14 +524,15 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       payloads: [
         {
           channelData: {
+            openclawDirectDeliveryFallbackText: "Pablo Daily Summary\n- Review the stuck cron.",
             telegram: {
               reaction: { emoji: "👍", replyToId: "123" },
             },
           },
         },
         {
-          text: "Pablo Daily Summary\n- Review the stuck cron.",
           channelData: {
+            openclawDirectDeliveryFallbackText: "Pablo Daily Summary\n- Review the stuck cron.",
             telegram: {
               buttons: [[{ text: "Open task", url: "https://example.test/task" }]],
             },
@@ -666,7 +545,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(state.delivered).toBe(true);
   });
 
-  it("keeps silent summary fallback suppressed for metadata-only direct payloads", async () => {
+  it("does not attach fallback hints when the direct summary is silent", async () => {
     const params = makeBaseParams({ synthesizedText: undefined });
     params.summary = SILENT_REPLY_TOKEN;
     params.outputText = SILENT_REPLY_TOKEN;
@@ -684,9 +563,23 @@ describe("dispatchCronDelivery — double-announce guard", () => {
 
     const state = await dispatchCronDelivery(params);
 
-    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expectDeliveryCall(0, {
+      channel: "telegram",
+      to: "123456",
+      payloads: [
+        {
+          channelData: {
+            telegram: {
+              buttons: [[{ text: "Open task", url: "https://example.test/task" }]],
+            },
+          },
+        },
+      ],
+      skipQueue: true,
+    });
     expect(state.deliveryAttempted).toBe(true);
-    expect(state.delivered).toBe(false);
+    expect(state.delivered).toBe(true);
   });
 
   it("uses summary fallback for non-Telegram direct payloads that normalize away", async () => {

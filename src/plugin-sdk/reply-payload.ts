@@ -20,6 +20,8 @@ export {
   isReplyPayloadNonTerminalToolErrorWarning,
   isReplyPayloadTtsSupplement,
   markReplyPayloadAsTtsSupplement,
+  readDirectDeliveryFallbackText,
+  withDirectDeliveryFallbackText,
 } from "../auto-reply/reply-payload.js";
 
 /** Normalized outbound reply payload accepted by channel send helpers. */
