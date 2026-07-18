@@ -4405,7 +4405,7 @@ describe("exec approval handlers", () => {
   it.each([
     ["ANSI escape", "approval-\u001b[31mred"],
     ["Unicode control", "approval-\u202Ehidden"],
-    ["trailing line feed", "approval-safe\n"],
+    ["embedded line feed", "approval-\nunsafe"],
     ["overlong value", "a".repeat(129)],
   ])("rejects an unsafe explicit approval id containing an %s", async (_label, id) => {
     const { manager, handlers, broadcasts, respond, context } = createExecApprovalFixture();
