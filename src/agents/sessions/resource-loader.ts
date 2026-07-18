@@ -3,7 +3,20 @@
  *
  * Loads extensions, skills, prompts, themes, AGENTS files, and system prompt fragments for a cwd.
  */
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  fstatSync,
+  openSync,
+  readdirSync,
+  readSync,
+  statSync,
+} from "node:fs";
+
+// Cap AGENTS.md/CLAUDE.md reads at 1 MiB — project context files are not meant to be large.
+// Cap user-supplied prompt input files at 10 MiB.
+const MAX_CONTEXT_FILE_BYTES = 1 * 1024 * 1024;
+const MAX_PROMPT_INPUT_FILE_BYTES = 10 * 1024 * 1024;
 import { homedir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import chalk from "chalk";
@@ -50,6 +63,46 @@ export interface ResourceLoader {
   reload(): Promise<void>;
 }
 
+/**
+ * Read a text file with a size cap to prevent OOM from oversized files.
+ * Opens the file first, stats the descriptor, then reads into a bounded buffer —
+ * this avoids the TOCTOU race where the file is replaced between check and read
+ * because the file descriptor is atomically bound to the opened inode.
+ *
+ * Returns the file content when the file is a regular file within the byte limit.
+ * Returns undefined when the file is missing, not a regular file, or exceeds the limit.
+ */
+function readTextFileSafely(filePath: string, maxBytes: number): string | undefined {
+  let fd: number | undefined;
+  try {
+    fd = openSync(filePath, "r");
+    const stats = fstatSync(fd);
+    if (!stats.isFile()) {
+      console.error(chalk.yellow(`Warning: Could not read ${filePath}: not a regular file`));
+      return undefined;
+    }
+    if (stats.size > maxBytes) {
+      console.error(
+        chalk.yellow(
+          `Warning: File too large (${stats.size} bytes > ${maxBytes} byte limit): ${filePath}`,
+        ),
+      );
+      return undefined;
+    }
+    // Read through the same descriptor so the bound is on the opened inode, not a re-resolved path.
+    const buffer = Buffer.alloc(stats.size);
+    readSync(fd, buffer, 0, stats.size, 0);
+    return buffer.toString("utf-8");
+  } catch {
+    console.error(chalk.yellow(`Warning: Could not read ${filePath}: unable to stat file`));
+    return undefined;
+  } finally {
+    if (fd !== undefined) {
+      closeSync(fd);
+    }
+  }
+}
+
 function resolvePromptInput(input: string | undefined, description: string): string | undefined {
   if (!input) {
     return undefined;
@@ -57,7 +110,7 @@ function resolvePromptInput(input: string | undefined, description: string): str
 
   if (existsSync(input)) {
     try {
-      return readFileSync(input, "utf-8");
+      return readTextFileSafely(input, MAX_PROMPT_INPUT_FILE_BYTES);
     } catch (error) {
       console.error(
         chalk.yellow(`Warning: Could not read ${description} file ${input}: ${String(error)}`),
@@ -73,15 +126,9 @@ function loadContextFileFromDir(dir: string): { path: string; content: string } 
   const candidates = ["AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"];
   for (const filename of candidates) {
     const filePath = join(dir, filename);
-    if (existsSync(filePath)) {
-      try {
-        return {
-          path: filePath,
-          content: readFileSync(filePath, "utf-8"),
-        };
-      } catch (error) {
-        console.error(chalk.yellow(`Warning: Could not read ${filePath}: ${String(error)}`));
-      }
+    const content = readTextFileSafely(filePath, MAX_CONTEXT_FILE_BYTES);
+    if (content !== undefined) {
+      return { path: filePath, content };
     }
   }
   return null;
