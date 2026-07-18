@@ -81,12 +81,6 @@ pub struct QuickChatState {
     hide_requested: Arc<AtomicBool>,
 }
 
-impl Default for QuickChatState {
-    fn default() -> Self {
-        Self::new(true)
-    }
-}
-
 impl QuickChatState {
     pub fn new(shortcuts_supported: bool) -> Self {
         let shortcut = parse_shortcut(QUICKCHAT_SHORTCUT)
@@ -577,24 +571,13 @@ fn show_quickchat(app: &AppHandle) -> Result<(), String> {
         .show()
         .map_err(|error| format!("Could not show Quick Chat: {error}"))?;
     if let Err(error) = window.set_focus() {
+        // X11 focus-stealing prevention can reject the focus grab; retract the bar
+        // instead of leaving an unfocusable always-on-top window on screen.
         app.state::<QuickChatState>()
             .hide_requested
             .store(true, Ordering::SeqCst);
-        return match window.hide() {
-            Ok(()) => Err(format!("Could not focus Quick Chat: {error}")),
-            Err(hide_error) => match window.destroy() {
-                Ok(()) => Err(format!(
-                    "Could not focus Quick Chat: {error}; could not hide it again: {hide_error}"
-                )),
-                Err(destroy_error) => {
-                    let _ = window.emit("quickchat:shown", ());
-                    Err(format!(
-                        "Could not focus Quick Chat: {error}; could not hide it again: \
-                         {hide_error}; could not destroy it: {destroy_error}"
-                    ))
-                }
-            },
-        };
+        let _ = window.hide();
+        return Err(format!("Could not focus Quick Chat: {error}"));
     }
     window
         .emit("quickchat:shown", ())
