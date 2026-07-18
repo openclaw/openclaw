@@ -1336,6 +1336,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H1: openclaw channels
   - H2: Common commands
   - H2: Status / capabilities / resolve / logs
+  - H2: Inbound dead letters
   - H2: Add / remove accounts
   - H2: Login and logout (interactive)
   - H2: Troubleshooting
