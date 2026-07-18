@@ -1,13 +1,15 @@
 // ACP bind live gateway tests exercise real ACP runtime sessions, cron visibility, and image probe routing.
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import { renderCatFacePngBase64 } from "../../test/helpers/live-image-probe.js";
 import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
 import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
+import type { ChannelOutboundContext } from "../channels/plugins/types.public.js";
 import {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
@@ -53,6 +55,10 @@ const ACP_CRON_MCP_PROBE_VERIFY_POLL_MS = 1_000;
 const DEFAULT_LIVE_CODEX_MODEL = "gpt-5.6-luna";
 const DEFAULT_LIVE_PARENT_MODEL = "openai/gpt-5.4";
 type LiveAcpAgent = "claude" | "codex" | "droid" | "gemini" | "opencode";
+type CapturedOutboundText = Pick<
+  ChannelOutboundContext,
+  "accountId" | "text" | "threadId" | "to"
+> & { atMs: number };
 
 function snapshotAcpBindLiveEnv(): LiveEnvSnapshot {
   return snapshotLiveEnv(["CODEX_HOME", "OPENCLAW_GATEWAY_PORT"]);
@@ -63,7 +69,7 @@ function resolveLiveTimeoutMs(raw: string | undefined, fallback: number): number
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
 }
 
-function createSlackCurrentConversationBindingRegistry() {
+function createSlackCurrentConversationBindingRegistry(deliveries: CapturedOutboundText[]) {
   return createTestRegistry([
     {
       pluginId: "slack",
@@ -85,6 +91,17 @@ function createSlackCurrentConversationBindingRegistry() {
         },
         conversationBindings: {
           supportsCurrentConversationBinding: true,
+        },
+        outbound: {
+          deliveryMode: "direct" as const,
+          shouldTreatDeliveredTextAsVisible: (params: {
+            kind: "tool" | "block" | "final";
+            text?: string;
+          }) => params.kind === "block" && Boolean(params.text?.trim()),
+          sendText: async ({ accountId, text, threadId, to }: ChannelOutboundContext) => {
+            deliveries.push({ accountId, text, threadId, to, atMs: Date.now() });
+            return { channel: "slack", messageId: `proof-${String(deliveries.length)}` };
+          },
         },
       },
     },
@@ -229,12 +246,23 @@ async function prepareCodexHomeForLiveBindTest(tempRoot: string): Promise<void> 
     }
   }
   const modelLine = `model = ${JSON.stringify(model)}`;
-  const nextConfig = /^model\s*=.*$/m.test(rawConfig)
+  let nextConfig = /^model\s*=.*$/m.test(rawConfig)
     ? rawConfig.replace(/^model\s*=.*$/m, modelLine)
     : `${modelLine}\n${rawConfig}`;
+  const modelProvider = process.env.MODEL_PROVIDER?.trim();
+  if (modelProvider) {
+    // codex-acp calls account/read before it passes MODEL_PROVIDER to thread/start.
+    // Persist the provider so that auth preflight evaluates the same session provider.
+    const modelProviderLine = `model_provider = ${JSON.stringify(modelProvider)}`;
+    nextConfig = /^model_provider\s*=.*$/m.test(nextConfig)
+      ? nextConfig.replace(/^model_provider\s*=.*$/m, modelProviderLine)
+      : `${modelProviderLine}\n${nextConfig}`;
+  }
   await fs.writeFile(configPath, nextConfig, "utf8");
   process.env.CODEX_HOME = codexHome;
-  logLiveStep(`using Codex ACP model ${model}`);
+  logLiveStep(
+    `using Codex ACP model ${model}${modelProvider ? ` via ${modelProvider}` : ""}`,
+  );
 }
 
 async function waitForGatewayPort(params: {
@@ -269,7 +297,12 @@ async function waitForGatewayPort(params: {
   throw new Error(`timed out waiting for gateway port ${params.host}:${String(params.port)}`);
 }
 
-async function connectClient(params: { url: string; token: string; timeoutMs?: number }) {
+async function connectClient(params: {
+  url: string;
+  token: string;
+  timeoutMs?: number;
+  onEvent?: (event: EventFrame) => void;
+}) {
   const timeoutMs = params.timeoutMs ?? CONNECT_TIMEOUT_MS;
   return await connectTestGatewayClient({
     ...params,
@@ -344,9 +377,13 @@ async function bindConversationAndWait(params: {
   originatingChannel: string;
   originatingTo: string;
   originatingAccountId: string;
+  cwd?: string;
   timeoutMs?: number;
 }): Promise<{ mainAssistantTexts: string[]; spawnedSessionKey: string }> {
   const timeoutMs = params.timeoutMs ?? LIVE_TIMEOUT_MS;
+  if (params.cwd && /\s/.test(params.cwd)) {
+    throw new Error("ACP live bind proof cwd must not contain whitespace");
+  }
   const startedAt = Date.now();
   let attempt = 0;
 
@@ -389,7 +426,7 @@ async function bindConversationAndWait(params: {
       client: params.client,
       sessionKey: params.sessionKey,
       idempotencyKey: `idem-bind-${randomUUID()}`,
-      message: `/acp spawn ${params.liveAgent} --bind here`,
+      message: `/acp spawn ${params.liveAgent} --bind here${params.cwd ? ` --cwd ${params.cwd}` : ""}`,
       originatingChannel: params.originatingChannel,
       originatingTo: params.originatingTo,
       originatingAccountId: params.originatingAccountId,
@@ -424,7 +461,18 @@ async function waitForAgentRunOk(
   runId: string,
   timeoutMs = LIVE_TIMEOUT_MS,
 ) {
-  const result: { status?: string } = await client.request(
+  const result = await waitForAgentRun(client, runId, timeoutMs);
+  if (result.status !== "ok") {
+    throw new Error(`agent.wait failed for ${runId}: status=${String(result.status)}`);
+  }
+}
+
+async function waitForAgentRun(
+  client: GatewayClient,
+  runId: string,
+  timeoutMs = LIVE_TIMEOUT_MS,
+): Promise<{ status?: string; stopReason?: string }> {
+  return await client.request(
     "agent.wait",
     {
       runId,
@@ -434,12 +482,9 @@ async function waitForAgentRunOk(
       timeoutMs: timeoutMs + 5_000,
     },
   );
-  if (result?.status !== "ok") {
-    throw new Error(`agent.wait failed for ${runId}: status=${String(result?.status)}`);
-  }
 }
 
-async function sendChatAndWait(params: {
+type ChatSendParams = {
   client: GatewayClient;
   sessionKey: string;
   idempotencyKey: string;
@@ -452,7 +497,9 @@ async function sendChatAndWait(params: {
     fileName: string;
     content: string;
   }>;
-}) {
+};
+
+async function startChat(params: ChatSendParams): Promise<string> {
   const started: { runId?: string; status?: string } = await params.client.request("chat.send", {
     sessionKey: params.sessionKey,
     message: params.message,
@@ -465,7 +512,198 @@ async function sendChatAndWait(params: {
   if (started?.status !== "started" || typeof started.runId !== "string") {
     throw new Error(`chat.send did not start correctly: ${JSON.stringify(started)}`);
   }
-  await waitForAgentRunOk(params.client, started.runId);
+  return started.runId;
+}
+
+async function sendChatAndWait(params: ChatSendParams) {
+  const runId = await startChat(params);
+  await waitForAgentRunOk(params.client, runId);
+}
+
+function readChatEventPayload(event: EventFrame, runId: string): Record<string, unknown> | null {
+  if (event.event !== "chat" || !event.payload || typeof event.payload !== "object") {
+    return null;
+  }
+  const payload = event.payload as Record<string, unknown>;
+  return payload.runId === runId ? payload : null;
+}
+
+function extractChatEventText(payload: Record<string, unknown>): string {
+  return extractFirstTextBlock(payload.message) ??
+    (typeof payload.deltaText === "string" ? payload.deltaText : "");
+}
+
+async function waitForStreamedPartial(params: {
+  events: EventFrame[];
+  runId: string;
+  phrase: string;
+  timeoutMs?: number;
+}): Promise<string> {
+  const timeoutMs = params.timeoutMs ?? LIVE_TIMEOUT_MS;
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    for (const event of params.events) {
+      const payload = readChatEventPayload(event, params.runId);
+      if (payload?.state !== "delta") {
+        continue;
+      }
+      const text = extractChatEventText(payload);
+      if (text.includes(params.phrase)) {
+        return text;
+      }
+    }
+    await sleep(50);
+  }
+  throw new Error("timed out waiting for the ACP partial on the Gateway stream");
+}
+
+async function waitForCapturedOutboundText(params: {
+  deliveries: CapturedOutboundText[];
+  phrase: string;
+  timeoutMs?: number;
+}): Promise<CapturedOutboundText> {
+  const timeoutMs = params.timeoutMs ?? LIVE_TIMEOUT_MS;
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const delivery = params.deliveries.find((entry) => entry.text.includes(params.phrase));
+    if (delivery) {
+      return delivery;
+    }
+    await sleep(50);
+  }
+  throw new Error("timed out waiting for the ACP partial to reach the bound channel");
+}
+
+function countLiteralOccurrences(texts: string[], phrase: string): number {
+  return texts.reduce((count, text) => count + text.split(phrase).length - 1, 0);
+}
+
+async function runCancelledPartialTranscriptProof(params: {
+  client: GatewayClient;
+  events: EventFrame[];
+  originalSessionKey: string;
+  spawnedSessionKey: string;
+  originatingChannel: string;
+  originatingTo: string;
+  originatingAccountId: string;
+  outboundDeliveries: CapturedOutboundText[];
+}): Promise<void> {
+  const partialPhrase = createAcpProbePhrase("amber current", randomBytes(4).toString("hex"));
+  const followupPhrase = createAcpProbePhrase("green compass", randomBytes(4).toString("hex"));
+  const authPaths = [
+    process.env.CODEX_HOME ? path.join(process.env.CODEX_HOME, "auth.json") : "",
+    process.env.OPENCLAW_STATE_DIR
+      ? path.join(process.env.OPENCLAW_STATE_DIR, "acpx", "codex-home", "auth.json")
+      : "",
+  ].filter(Boolean);
+  const authFilePresent = (
+    await Promise.all(
+      authPaths.map((authPath) => fs.access(authPath).then(() => true, () => false)),
+    )
+  ).some(Boolean);
+  const authPresent =
+    Boolean(process.env.OPENAI_API_KEY?.trim() || process.env.CODEX_API_KEY?.trim()) ||
+    authFilePresent;
+  expect(authPresent).toBe(false);
+
+  const runId = await startChat({
+    client: params.client,
+    sessionKey: params.originalSessionKey,
+    idempotencyKey: `idem-cancel-${randomUUID()}`,
+    message:
+      `Do not use tools. First output this harmless phrase exactly once: ${partialPhrase}. ` +
+      "Then keep writing consecutive integers, one per line, until interrupted.",
+    originatingChannel: params.originatingChannel,
+    originatingTo: params.originatingTo,
+    originatingAccountId: params.originatingAccountId,
+  });
+  const streamedPartial = await waitForStreamedPartial({
+    events: params.events,
+    runId,
+    phrase: partialPhrase,
+  });
+  const deliveredPartial = await waitForCapturedOutboundText({
+    deliveries: params.outboundDeliveries,
+    phrase: partialPhrase,
+  });
+  expect(deliveredPartial.to).toBe(params.originatingTo);
+  expect(deliveredPartial.accountId).toBe(params.originatingAccountId);
+  // Abort only after both the Gateway stream and the bound-channel adapter saw
+  // the partial; a fixed delay cannot prove user-visible delivery.
+  const abortResult: { aborted?: boolean; runIds?: unknown[] } = await params.client.request(
+    "chat.abort",
+    { sessionKey: params.originalSessionKey, runId },
+  );
+  expect(abortResult.aborted).toBe(true);
+  expect(abortResult.runIds).toContain(runId);
+  // Explicit chat.abort suppresses later chat frames for this run. agent.wait is
+  // the authoritative terminal outcome and retains the rpc stop reason.
+  const terminal = await waitForAgentRun(params.client, runId);
+  expect(terminal.status).toBe("error");
+  expect(terminal.stopReason).toBe("rpc");
+
+  const cancelledHistory = await waitForAssistantText({
+    client: params.client,
+    sessionKey: params.spawnedSessionKey,
+    contains: partialPhrase,
+    timeoutMs: 60_000,
+  });
+  const cancelledAssistantTexts = extractAssistantTexts(cancelledHistory.messages);
+  expect(countLiteralOccurrences(cancelledAssistantTexts, partialPhrase)).toBe(1);
+
+  await sendChatAndWait({
+    client: params.client,
+    sessionKey: params.originalSessionKey,
+    idempotencyKey: `idem-after-cancel-${randomUUID()}`,
+    message: createAcpSinglePhrasePrompt(followupPhrase),
+    originatingChannel: params.originatingChannel,
+    originatingTo: params.originatingTo,
+    originatingAccountId: params.originatingAccountId,
+  });
+  const followupHistory = await waitForAssistantText({
+    client: params.client,
+    sessionKey: params.spawnedSessionKey,
+    contains: followupPhrase,
+    minAssistantCount: cancelledAssistantTexts.length + 1,
+    timeoutMs: 90_000,
+  });
+  const followupAssistantTexts = extractAssistantTexts(followupHistory.messages);
+  expect(countLiteralOccurrences(followupAssistantTexts, partialPhrase)).toBe(1);
+
+  await sleep(2_000);
+  const settledHistory: { messages?: unknown[] } = await params.client.request("chat.history", {
+    sessionKey: params.spawnedSessionKey,
+    limit: 32,
+  });
+  const settledAssistantTexts = extractAssistantTexts(settledHistory.messages ?? []);
+  expect(countLiteralOccurrences(settledAssistantTexts, partialPhrase)).toBe(1);
+  expect(settledAssistantTexts.join("\n\n")).toContain(followupPhrase);
+  expect(
+    countLiteralOccurrences(
+      params.outboundDeliveries.map((entry) => entry.text),
+      partialPhrase,
+    ),
+  ).toBe(1);
+  expect(
+    countLiteralOccurrences(
+      params.outboundDeliveries.map((entry) => entry.text),
+      followupPhrase,
+    ),
+  ).toBe(1);
+
+  const preview = deliveredPartial.text.replace(/\s+/g, " ").slice(0, 96);
+  const digest = createHash("sha256").update(deliveredPartial.text).digest("hex").slice(0, 16);
+  console.info(
+    "[acp-abort-proof] agent=codex provider=ollama model=qwen2.5-coder:1.5b auth_present=false",
+  );
+  console.info(
+    `[acp-abort-proof] partial_delivered=true gateway_streamed=${String(streamedPartial.includes(partialPhrase))} target_matched=true chars=${String(deliveredPartial.text.length)} sha256=${digest} preview=${JSON.stringify(preview)}`,
+  );
+  console.info("[acp-abort-proof] abort_rpc=true run_matched=true");
+  console.info("[acp-abort-proof] terminal=error stop_reason=rpc");
+  console.info("[acp-abort-proof] followup_ok=true same_bound_session=true");
+  console.info("[acp-abort-proof] outbound_partial_copies=1 outbound_followup_copies=1");
+  console.info("[acp-abort-proof] assistant_partial_copies=1 stable_after_settle=true");
 }
 
 async function waitForAssistantText(params: {
@@ -580,7 +818,14 @@ describeLive("gateway live (ACP bind)", () => {
       const liveAgent = normalizeAcpAgent(process.env.OPENCLAW_LIVE_ACP_BIND_AGENT);
       const agentCommandOverride =
         process.env.OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND?.trim() || undefined;
+      const runCancelTranscriptProbe = isTruthyEnvValue(
+        process.env.OPENCLAW_LIVE_ACP_BIND_CANCEL_TRANSCRIPT_PROBE,
+      );
       const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-acp-bind-"));
+      const probeWorkspace = path.join(tempRoot, "workspace");
+      if (runCancelTranscriptProbe) {
+        await fs.mkdir(probeWorkspace, { recursive: true });
+      }
       const tempStateDir = path.join(tempRoot, "state");
       const tempConfigPath = path.join(tempRoot, "openclaw.json");
       const port = await getFreeGatewayPort();
@@ -595,6 +840,8 @@ describeLive("gateway live (ACP bind)", () => {
       const memoryToken = createAcpProbePhrase("quiet cedar", randomBytes(4).toString("hex"));
       let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
       let client: GatewayClient | undefined;
+      const gatewayEvents: EventFrame[] = [];
+      const outboundDeliveries: CapturedOutboundText[] = [];
       let pinnedChannelRegistry:
         | ReturnType<typeof createSlackCurrentConversationBindingRegistry>
         | undefined;
@@ -652,6 +899,10 @@ describeLive("gateway live (ACP bind)", () => {
             ...cfg.acp?.dispatch,
             enabled: true,
           },
+          stream: {
+            ...cfg.acp?.stream,
+            ...(runCancelTranscriptProbe ? { deliveryMode: "live" as const } : {}),
+          },
         },
         plugins: {
           ...cfg.plugins,
@@ -665,9 +916,11 @@ describeLive("gateway live (ACP bind)", () => {
               config: {
                 ...acpxEntry?.config,
                 probeAgent: liveAgent,
-                permissionMode: "approve-all",
+                // The cancellation proof needs text streaming only; denying ACP
+                // approvals prevents a model from expanding its read-only sandbox.
+                permissionMode: runCancelTranscriptProbe ? "deny-all" : "approve-all",
                 nonInteractivePermissions: "deny",
-                openClawToolsMcpBridge: true,
+                openClawToolsMcpBridge: !runCancelTranscriptProbe,
                 ...(agentCommandOverride
                   ? {
                       agents: {
@@ -710,9 +963,10 @@ describeLive("gateway live (ACP bind)", () => {
           url: `ws://127.0.0.1:${port}`,
           token,
           timeoutMs: CONNECT_TIMEOUT_MS,
+          onEvent: (event) => gatewayEvents.push(event),
         });
         logLiveStep("gateway websocket connected");
-        const channelRegistry = createSlackCurrentConversationBindingRegistry();
+        const channelRegistry = createSlackCurrentConversationBindingRegistry(outboundDeliveries);
         pinActivePluginChannelRegistry(channelRegistry);
         pinnedChannelRegistry = channelRegistry;
 
@@ -723,12 +977,32 @@ describeLive("gateway live (ACP bind)", () => {
           originatingChannel: "slack",
           originatingTo: conversationId,
           originatingAccountId: accountId,
+          cwd: runCancelTranscriptProbe ? probeWorkspace : undefined,
         });
         const { mainAssistantTexts, spawnedSessionKey } = bindResult;
         logLiveStep("bind command completed");
         expect(mainAssistantTexts.join("\n\n")).toContain("Bound this conversation to");
         expect(spawnedSessionKey).toMatch(new RegExp(`^agent:${liveAgent}:acp:`));
-        logLiveStep(`binding announced for session ${spawnedSessionKey ?? "missing"}`);
+        logLiveStep(
+          runCancelTranscriptProbe
+            ? "binding announced for redacted ACP session"
+            : `binding announced for session ${spawnedSessionKey ?? "missing"}`,
+        );
+
+        if (runCancelTranscriptProbe) {
+          expect(liveAgent).toBe("codex");
+          await runCancelledPartialTranscriptProof({
+            client,
+            events: gatewayEvents,
+            originalSessionKey,
+            spawnedSessionKey,
+            originatingChannel: "slack",
+            originatingTo: conversationId,
+            originatingAccountId: accountId,
+            outboundDeliveries,
+          });
+          return;
+        }
 
         let firstBoundHistory: Awaited<ReturnType<typeof waitForAssistantText>> | null = null;
         for (let attempt = 0; attempt < 3 && !firstBoundHistory; attempt += 1) {
