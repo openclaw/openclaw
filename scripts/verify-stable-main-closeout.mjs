@@ -49,6 +49,7 @@ function readJson(path) {
 function gitSha(dir) {
   return execFileSync("git", ["-C", dir, "rev-parse", "HEAD"], {
     encoding: "utf8",
+  timeout: STABLE_CLOSEOUT_TIMEOUT_MS,
   }).trim();
 }
 
@@ -91,3 +92,4 @@ try {
   console.error(error instanceof Error ? error.message : String(error));
   process.exitCode = 1;
 }
+
