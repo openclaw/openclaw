@@ -228,7 +228,10 @@ export function selectLatestMainPushCiRun(runs, headSha = null) {
 function getLatestCiRunId() {
   const raw = execPlainGh(
     ["run", "list", "--branch", "main", "--workflow", "CI", "--limit", "1", "--json", "databaseId"],
-    { encoding: "utf8", timeout: CI_RUN_TIMINGS_TIMEOUT_MS },
+    {
+      encoding: "utf8",
+      timeout: CI_RUN_TIMINGS_TIMEOUT_MS,
+    },
   );
   const runs = JSON.parse(raw);
   const runId = runs[0]?.databaseId;
@@ -266,7 +269,10 @@ function getLatestMainPushCiRunId() {
       "--json",
       "databaseId,headSha,event,status,conclusion",
     ],
-    { encoding: "utf8", timeout: CI_RUN_TIMINGS_TIMEOUT_MS },
+    {
+      encoding: "utf8",
+      timeout: CI_RUN_TIMINGS_TIMEOUT_MS,
+    },
   );
   const run = selectLatestMainPushCiRun(parseRunList(raw), headSha);
   if (!run?.databaseId) {
@@ -289,7 +295,10 @@ function listRecentSuccessfulCiRuns(limit) {
       "--json",
       "databaseId,headSha,status,conclusion",
     ],
-    { encoding: "utf8", timeout: CI_RUN_TIMINGS_TIMEOUT_MS },
+    {
+      encoding: "utf8",
+      timeout: CI_RUN_TIMINGS_TIMEOUT_MS,
+    },
   );
   return JSON.parse(raw)
     .filter((run) => run.status === "completed" && run.conclusion === "success")
@@ -303,7 +312,8 @@ function loadRun(runId) {
     runId,
     "--json",
     "status,conclusion,createdAt,updatedAt",
-  ], { timeout: CI_RUN_TIMINGS_TIMEOUT_MS });
+  ],
+  { timeout: CI_RUN_TIMINGS_TIMEOUT_MS });
   const repository = process.env.GITHUB_REPOSITORY || DEFAULT_GITHUB_REPOSITORY;
   const pages = [];
   let totalCount = null;
