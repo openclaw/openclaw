@@ -230,4 +230,26 @@ describe("startSshPortForward", () => {
       await expect(stopping ?? tunnel.stop()).resolves.toBeUndefined();
     },
   );
+
+  it("destroys stderr stream when stop() is called", async () => {
+    spawnFakeSshListening();
+
+    const tunnel = await startSshPortForward({
+      target: "me@example.com:2222",
+      localPortPreferred: 43210,
+      remotePort: 18789,
+      timeoutMs: 1000,
+    });
+
+    const child = mocks.spawn.mock.results[0]?.value as EventEmitter & {
+      stderr: EventEmitter & { destroy: () => void; destroyed: boolean };
+    };
+    let destroyed = false;
+    child.stderr.destroy = () => {
+      destroyed = true;
+    };
+
+    await tunnel.stop();
+    expect(destroyed).toBe(true);
+  });
 });
