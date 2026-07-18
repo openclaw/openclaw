@@ -229,7 +229,7 @@ internal fun terminalQuestionAnswer(
   if (status == ChatQuestionStatus.Cancelled) return nativeString("Skipped")
   if (status == ChatQuestionStatus.Expired) return nativeString("Expired")
   if (status == ChatQuestionStatus.Unavailable) return nativeString("Unavailable")
-  prompt.record.answers?.answers?.get(question.id)?.answers?.takeIf { it.isNotEmpty() }?.let {
+  prompt.record.answers?.answers?.get(question.questionId)?.takeIf { it.isNotEmpty() }?.let {
     return it.joinToString(", ")
   }
   return if (status == ChatQuestionStatus.AnsweredElsewhere) nativeString("Answered elsewhere") else nativeString("Answered")

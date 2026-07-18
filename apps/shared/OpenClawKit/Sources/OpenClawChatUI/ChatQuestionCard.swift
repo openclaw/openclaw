@@ -86,7 +86,7 @@ public final class OpenClawQuestionCardModel: Identifiable {
     }
 
     public func toggleOption(questionID: String, label: String) {
-        guard let question = self.record.questions.first(where: { $0.id == questionID }),
+        guard let question = self.record.questions.first(where: { $0.questionid == questionID }),
               question.options.contains(where: { $0.label == label }),
               self.status() == .pending
         else { return }
@@ -109,7 +109,7 @@ public final class OpenClawQuestionCardModel: Identifiable {
 
     @discardableResult
     public func toggleOption(questionID: String, optionNumber: Int) -> Bool {
-        guard let question = self.record.questions.first(where: { $0.id == questionID }),
+        guard let question = self.record.questions.first(where: { $0.questionid == questionID }),
               self.status() == .pending,
               (1...4).contains(optionNumber),
               question.options.indices.contains(optionNumber - 1)
@@ -119,7 +119,7 @@ public final class OpenClawQuestionCardModel: Identifiable {
     }
 
     public func setOtherText(questionID: String, value: String) {
-        guard let question = self.record.questions.first(where: { $0.id == questionID }),
+        guard let question = self.record.questions.first(where: { $0.questionid == questionID }),
               question.options.isEmpty || question.isother == true,
               self.status() == .pending
         else { return }
@@ -253,9 +253,9 @@ public final class OpenClawQuestionCardModel: Identifiable {
     public func terminalSummaryText(for question: Question) -> String {
         switch self.status() {
         case .answered:
-            self.answerValues(questionID: question.id)?.joined(separator: ", ") ?? String(localized: "Answered")
+            self.answerValues(questionID: question.questionid)?.joined(separator: ", ") ?? String(localized: "Answered")
         case .answeredElsewhere:
-            self.answerValues(questionID: question.id)?.joined(separator: ", ")
+            self.answerValues(questionID: question.questionid)?.joined(separator: ", ")
                 ?? String(localized: "Answered elsewhere")
         case .cancelled:
             String(localized: "Skipped")
@@ -334,7 +334,7 @@ struct OpenClawQuestionCard: View {
     private var pendingCard: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
             VStack(alignment: .leading, spacing: 14) {
-                ForEach(self.model.record.questions, id: \.id) { question in
+                ForEach(self.model.record.questions, id: \.questionid) { question in
                     self.questionSection(question, now: context.date)
                 }
                 self.footer(now: context.date)
@@ -347,7 +347,7 @@ struct OpenClawQuestionCard: View {
 
     private var terminalSummary: some View {
         VStack(alignment: .leading, spacing: 5) {
-            ForEach(self.model.record.questions, id: \.id) { question in
+            ForEach(self.model.record.questions, id: \.questionid) { question in
                 HStack(alignment: .firstTextBaseline, spacing: 5) {
                     Text(verbatim: "\(question.header):")
                         .font(OpenClawChatTypography.body(size: 14, weight: .semibold, relativeTo: .callout))
@@ -390,13 +390,13 @@ struct OpenClawQuestionCard: View {
         }
         #if os(macOS)
         .focusable()
-        .focused(self.$focusedQuestionID, equals: question.id)
+        .focused(self.$focusedQuestionID, equals: question.questionid)
         .onKeyPress(characters: .decimalDigits) { keyPress in
-            guard self.focusedQuestionID == question.id else { return .ignored }
+            guard self.focusedQuestionID == question.questionid else { return .ignored }
             return self.handleNumberKey(keyPress, question: question, now: now)
         }
         .onKeyPress(.return) {
-            guard self.focusedQuestionID == question.id,
+            guard self.focusedQuestionID == question.questionid,
                   self.model.status(at: now) == .pending,
                   self.model.canSubmit
             else { return .ignored }
@@ -496,7 +496,7 @@ struct OpenClawQuestionCard: View {
     {
         guard self.model.status(at: now) == .pending,
               let digit = keyPress.characters.first?.wholeNumberValue,
-              self.model.toggleOption(questionID: question.id, optionNumber: digit)
+              self.model.toggleOption(questionID: question.questionid, optionNumber: digit)
         else { return .ignored }
         return .handled
     }
