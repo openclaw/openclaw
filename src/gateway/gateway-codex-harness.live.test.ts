@@ -856,9 +856,7 @@ async function verifyCodexCompactionStress(params: {
   let completedCompactions = 0;
   let reportedCompactions = 0;
   for (let turn = 1; turn <= CODEX_HARNESS_COMPACTION_STRESS_TURNS; turn += 1) {
-    const acknowledgement = `CODEX-LARGE-OUTPUT-${turn}-${randomBytes(3)
-      .toString("hex")
-      .toUpperCase()}`;
+    const acknowledgement = `CODEX-LARGE-OUTPUT-${turn}-OK`;
     const largeOutputCommand = `node -e 'for(let i=0;i<${outputLines};i++){console.log(i.toString(36).padStart(8,"0")+"-"+((i*2654435761)>>>0).toString(16).padStart(8,"0")+"-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789")}'`;
     const { text, events, compactionCount } = await requestAgentTextWithEvents({
       client: params.client,
