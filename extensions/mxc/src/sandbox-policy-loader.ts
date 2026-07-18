@@ -67,6 +67,8 @@ const SandboxPolicyLayerSchema = z
   })
   .strict();
 
+const MAX_SANDBOX_POLICY_FILE_BYTES = 1024 * 1024;
+
 export function loadSandboxBaselinePolicy(
   options: SandboxPolicyLoaderOptions = {},
 ): LoadedSandboxBaselinePolicy {
@@ -93,6 +95,12 @@ export function loadSandboxBaselinePolicy(
 function readSandboxPolicyFile(policyPath: string): SandboxPolicyLayer {
   let parsed: unknown;
   try {
+    const fileSize = statSync(policyPath).size;
+    if (fileSize > MAX_SANDBOX_POLICY_FILE_BYTES) {
+      throw new Error(
+        `Sandbox policy file exceeds ${MAX_SANDBOX_POLICY_FILE_BYTES} bytes (${fileSize} bytes).`,
+      );
+    }
     parsed = JSON.parse(readFileSync(policyPath, "utf-8"));
   } catch (err) {
     throw policyFileError(policyPath, err);

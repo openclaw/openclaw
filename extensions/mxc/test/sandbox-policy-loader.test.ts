@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
@@ -41,6 +41,18 @@ function expectPolicyFileFailure(policyPath: string, action: () => unknown, deta
   }
   throw new Error("Expected policy loader failure.");
 }
+
+test("rejects oversized policy files before reading them", () => {
+  const policyPath = join(makeTestDir(), "oversized-policy.json");
+  writeFileSync(policyPath, "", "utf-8");
+  truncateSync(policyPath, 1024 * 1024 + 1);
+
+  expectPolicyFileFailure(
+    policyPath,
+    () => loadSandboxBaselinePolicy({ policyPaths: [policyPath] }),
+    "exceeds 1048576 bytes",
+  );
+});
 
 describeOnWindows("loadSandboxBaselinePolicy", () => {
   test("resolves no configured policy files with the default baseline", () => {
