@@ -5,7 +5,7 @@ import {
 } from "../sessions/session-key.ts";
 import type { BoardOp, BoardSnapshot, BoardTab } from "./types.ts";
 
-export type BoardCommand =
+type BoardCommand =
   | { kind: "focus_tab"; tabId: string }
   | { kind: "set_chat_dock"; dock: BoardTab["chatDock"] };
 
@@ -14,12 +14,12 @@ export type BoardCommandEvent = {
   command: BoardCommand;
 };
 
-export type BoardSnapshotSignal = {
+type BoardSnapshotSignal = {
   readonly value: BoardSnapshot;
   subscribe(listener: () => void): () => void;
 };
 
-export type BoardEventStream = {
+type BoardEventStream = {
   subscribe(listener: (event: BoardCommandEvent) => void): () => void;
 };
 
@@ -129,7 +129,7 @@ export function boardExists(snapshot: BoardSnapshot): boolean {
   return snapshot.tabs.length > 0 || snapshot.widgets.length > 0;
 }
 
-export class NullProvider implements BoardProvider {
+class NullProvider implements BoardProvider {
   readonly snapshot$: BoardSnapshotSignal;
   readonly events: BoardEventStream = new EventStream<BoardCommandEvent>();
 
@@ -142,7 +142,7 @@ export class NullProvider implements BoardProvider {
   async grant(_name: string, _decision: "granted" | "rejected"): Promise<void> {}
 }
 
-export class MockBoardProvider implements BoardProvider {
+class MockBoardProvider implements BoardProvider {
   readonly snapshot$: BoardSnapshotSignal;
   readonly events: BoardEventStream;
   private readonly snapshotSignal: ValueSignal<BoardSnapshot>;
@@ -341,16 +341,22 @@ function applyMockOp(snapshot: BoardSnapshot, op: BoardOp): BoardSnapshot {
 
 const nullProviders = new Map<string, NullProvider>();
 const mockProviders = new Map<string, MockBoardProvider>();
+let mockProviderScope: object | null = null;
+
+function resolveMockBoardScope(): object | null {
+  const location = globalThis.location;
+  if (new URLSearchParams(location?.search ?? "").get("mockBoard") === "1") {
+    return location;
+  }
+  return (
+    (typeof document !== "undefined" &&
+      document.querySelector("script[data-openclaw-control-ui-mock-gateway]")) ||
+    null
+  );
+}
 
 export function isMockBoardEnabled(): boolean {
-  const search = globalThis.location?.search ?? "";
-  if (new URLSearchParams(search).get("mockBoard") === "1") {
-    return true;
-  }
-  return Boolean(
-    typeof document !== "undefined" &&
-    document.querySelector("script[data-openclaw-control-ui-mock-gateway]"),
-  );
+  return resolveMockBoardScope() !== null;
 }
 
 function isMockBoardSession(sessionKey: string): boolean {
@@ -364,7 +370,12 @@ function boardProviderCacheKey(sessionKey: string): string {
 
 export function boardProviderForSession(sessionKey: string): BoardProvider {
   const key = boardProviderCacheKey(sessionKey);
-  if (isMockBoardEnabled() && isMockBoardSession(key)) {
+  const mockScope = resolveMockBoardScope();
+  if (mockScope && isMockBoardSession(key)) {
+    if (mockScope !== mockProviderScope) {
+      mockProviders.clear();
+      mockProviderScope = mockScope;
+    }
     let provider = mockProviders.get(key);
     if (!provider) {
       provider = new MockBoardProvider(key);

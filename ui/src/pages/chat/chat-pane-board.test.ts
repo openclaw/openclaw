@@ -5,8 +5,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import {
-  MockBoardProvider,
-  NullProvider,
+  boardProviderForSession,
   type BoardCommandEvent,
   type BoardProvider,
 } from "../../lib/board/provider.ts";
@@ -32,6 +31,17 @@ type TestChatPane = HTMLElement & {
   resolveBoardProvider: () => BoardProvider;
   resolveBoardView: () => { activeTabId: string; dock: string; face: string };
 };
+
+type MockProvider = BoardProvider & { emitCommand(command: BoardCommandEvent["command"]): void };
+
+function mockBoardProvider(sessionKey: string): MockProvider {
+  return boardProviderForSession(sessionKey) as MockProvider;
+}
+
+function nullBoardProvider(sessionKey: string): BoardProvider {
+  document.querySelector("script[data-openclaw-control-ui-mock-gateway]")?.remove();
+  return boardProviderForSession(sessionKey);
+}
 
 function createTestPane(sessions: SessionCapability = {} as SessionCapability) {
   const pane = document.createElement("openclaw-chat-pane") as unknown as TestChatPane;
@@ -66,9 +76,13 @@ function createTestPane(sessions: SessionCapability = {} as SessionCapability) {
 beforeEach(() => {
   vi.stubGlobal("localStorage", createStorageMock());
   vi.stubGlobal("sessionStorage", createStorageMock());
+  const marker = document.createElement("script");
+  marker.dataset.openclawControlUiMockGateway = "";
+  document.head.append(marker);
 });
 
 afterEach(() => {
+  document.querySelector("script[data-openclaw-control-ui-mock-gateway]")?.remove();
   localStorage.clear();
   sessionStorage.clear();
   vi.unstubAllGlobals();
@@ -80,7 +94,7 @@ describe("chat pane board shell", () => {
       create: vi.fn(async () => "agent:main:new"),
     } as unknown as SessionCapability;
     const pane = createTestPane(sessions);
-    pane.boardProvider = new MockBoardProvider("agent:main:current");
+    pane.boardProvider = mockBoardProvider("agent:main:current");
 
     const pending = pane.createSession();
     await Promise.resolve();
@@ -112,7 +126,7 @@ describe("chat pane board shell", () => {
       gateway: { snapshot: { client, connected: true } },
     } as unknown as ApplicationContext;
     pane.connectedClient = client;
-    pane.boardProvider = new MockBoardProvider("agent:main:current");
+    pane.boardProvider = mockBoardProvider("agent:main:current");
 
     const pending = pane.createSession();
     await Promise.resolve();
@@ -130,7 +144,7 @@ describe("chat pane board shell", () => {
       reset,
     } as unknown as SessionCapability;
     const pane = createTestPane(sessions);
-    pane.boardProvider = new MockBoardProvider("agent:main:current");
+    pane.boardProvider = mockBoardProvider("agent:main:current");
 
     const pending = pane.createSession();
     await Promise.resolve();
@@ -148,7 +162,7 @@ describe("chat pane board shell", () => {
       reset: vi.fn(async () => "completed" as const),
     } as unknown as SessionCapability;
     const pane = createTestPane(sessions);
-    pane.boardProvider = new MockBoardProvider("agent:main:current");
+    pane.boardProvider = mockBoardProvider("agent:main:current");
 
     const pending = pane.createSession();
     await Promise.resolve();
@@ -163,12 +177,12 @@ describe("chat pane board shell", () => {
 
   it("does not share reset confirmation across sessions", async () => {
     const pane = createTestPane();
-    pane.boardProvider = new MockBoardProvider("agent:main:first");
+    pane.boardProvider = mockBoardProvider("agent:main:first");
     pane.state.sessionKey = "agent:main:first";
 
     const first = pane.confirmConversationReset();
     pane.state.sessionKey = "agent:main:second";
-    pane.boardProvider = new MockBoardProvider("agent:main:second");
+    pane.boardProvider = mockBoardProvider("agent:main:second");
     const second = pane.confirmConversationReset();
 
     await expect(first).resolves.toBe(false);
@@ -179,7 +193,7 @@ describe("chat pane board shell", () => {
 
   it("keeps chat-only reset confirmation disabled", async () => {
     const pane = createTestPane();
-    pane.boardProvider = new NullProvider("agent:main:current");
+    pane.boardProvider = nullBoardProvider("agent:main:current");
 
     await expect(pane.confirmConversationReset()).resolves.toBe(true);
     expect(pane.resetConfirmationOpen).toBe(false);
@@ -187,7 +201,7 @@ describe("chat pane board shell", () => {
 
   it("reacts to transient set_chat_dock provider events", () => {
     const pane = createTestPane();
-    const provider = new MockBoardProvider("agent:main:current");
+    const provider = mockBoardProvider("agent:main:current");
     pane.boardProvider = provider;
     const unsubscribe = provider.events.subscribe((event) => pane.handleBoardCommand(event));
 
@@ -198,7 +212,7 @@ describe("chat pane board shell", () => {
   });
 
   it("restores the visible dock edge after hidden state reloads", () => {
-    const provider = new MockBoardProvider("agent:main:current");
+    const provider = mockBoardProvider("agent:main:current");
     const pane = createTestPane();
     pane.boardProvider = provider;
 
@@ -234,10 +248,10 @@ describe("chat pane board shell", () => {
       },
     };
     pane.state.sessionKey = "agent:main:main";
-    pane.boardProvider = new MockBoardProvider("main");
+    pane.boardProvider = mockBoardProvider("main");
     pane.persistBoardSessionView({ face: "dashboard", activeTabId: "research" });
 
-    pane.boardProvider = new MockBoardProvider("agent:main:main");
+    pane.boardProvider = mockBoardProvider("agent:main:main");
 
     expect(pane.resolveBoardView()).toMatchObject({
       activeTabId: "research",
@@ -247,7 +261,7 @@ describe("chat pane board shell", () => {
 
   it("uses in-memory board preferences before persisted settings", () => {
     const pane = createTestPane();
-    pane.boardProvider = new MockBoardProvider("agent:main:current");
+    pane.boardProvider = mockBoardProvider("agent:main:current");
     pane.state.settings = {
       ...loadSettings(),
       boardSessionViews: {
@@ -277,23 +291,23 @@ describe("chat pane board shell", () => {
     const firstPane = createTestPane();
     firstPane.state.sessionKey = "agent:main:first";
     firstPane.state.settings = initialSettings;
-    firstPane.boardProvider = new MockBoardProvider("agent:main:first");
+    firstPane.boardProvider = mockBoardProvider("agent:main:first");
     const secondPane = createTestPane();
     secondPane.state.sessionKey = "agent:main:second";
     secondPane.state.settings = initialSettings;
-    secondPane.boardProvider = new MockBoardProvider("agent:main:second");
+    secondPane.boardProvider = mockBoardProvider("agent:main:second");
 
     firstPane.persistBoardSessionView({ face: "dashboard", activeTabId: "research" });
 
     secondPane.state.sessionKey = "agent:main:first";
-    secondPane.boardProvider = new MockBoardProvider("agent:main:first");
+    secondPane.boardProvider = mockBoardProvider("agent:main:first");
     expect(secondPane.resolveBoardView()).toMatchObject({
       face: "dashboard",
       activeTabId: "research",
     });
 
     secondPane.state.sessionKey = "agent:main:second";
-    secondPane.boardProvider = new MockBoardProvider("agent:main:second");
+    secondPane.boardProvider = mockBoardProvider("agent:main:second");
     secondPane.persistBoardSessionView({ face: "dashboard", activeTabId: "main" });
 
     expect(loadSettings().boardSessionViews).toMatchObject({

@@ -2,7 +2,7 @@ import { css, html } from "lit";
 import { property } from "lit/decorators.js";
 import { t } from "../i18n/index.ts";
 import type { BoardViewCallbacks } from "../lib/board/provider.ts";
-import type { BoardSnapshot } from "../lib/board/types.ts";
+import type { BoardSnapshot, BoardWidget } from "../lib/board/types.ts";
 import { OpenClawLitElement } from "../lit/openclaw-element.ts";
 
 class OpenClawBoardViewPlaceholder extends OpenClawLitElement {
@@ -40,10 +40,11 @@ class OpenClawBoardViewPlaceholder extends OpenClawLitElement {
   `;
 
   override render() {
+    const widgets: readonly BoardWidget[] = this.snapshot?.widgets ?? [];
     return html`<div data-board-view-placeholder>
       ${t("chat.board.mockPlaceholder", {
         tabs: String(this.snapshot?.tabs.length ?? 0),
-        widgets: String(this.snapshot?.widgets.length ?? 0),
+        widgets: String(widgets.length),
       })}
     </div>`;
   }

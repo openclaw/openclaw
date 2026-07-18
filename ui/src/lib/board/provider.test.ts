@@ -1,11 +1,24 @@
 // @vitest-environment node
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  MockBoardProvider,
-  NullProvider,
   boardExists,
   boardProviderForSession,
+  type BoardCommandEvent,
+  type BoardProvider,
 } from "./provider.ts";
+
+type MockProvider = BoardProvider & { emitCommand(command: BoardCommandEvent["command"]): void };
+
+let mockLocation: { search: string };
+
+function mockBoardProvider(sessionKey: string): MockProvider {
+  return boardProviderForSession(sessionKey) as MockProvider;
+}
+
+beforeEach(() => {
+  mockLocation = { search: "?mockBoard=1" };
+  vi.stubGlobal("location", mockLocation);
+});
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -13,7 +26,8 @@ afterEach(() => {
 
 describe("board providers", () => {
   it("keeps the null provider chat-only", () => {
-    const provider = new NullProvider("agent:main:plain");
+    mockLocation.search = "";
+    const provider = boardProviderForSession("agent:main:plain");
 
     expect(boardExists(provider.snapshot$.value)).toBe(false);
     expect(provider.snapshot$.value).toEqual({
@@ -25,7 +39,7 @@ describe("board providers", () => {
   });
 
   it("provides two mock tabs with mixed widget sizes", () => {
-    const snapshot = new MockBoardProvider("agent:main:main").snapshot$.value;
+    const snapshot = mockBoardProvider("agent:main:main").snapshot$.value;
 
     expect(snapshot.tabs).toHaveLength(2);
     expect(snapshot.tabs.map((tab) => tab.chatDock)).toEqual(["right", "bottom"]);
@@ -35,7 +49,7 @@ describe("board providers", () => {
   });
 
   it("applies dock operations and publishes snapshots", async () => {
-    const provider = new MockBoardProvider("agent:main:main");
+    const provider = mockBoardProvider("agent:main:main");
     const changed = vi.fn();
     provider.snapshot$.subscribe(changed);
 
@@ -47,7 +61,7 @@ describe("board providers", () => {
   });
 
   it("preserves tabs when a reorder is not a complete permutation", async () => {
-    const provider = new MockBoardProvider("agent:main:main");
+    const provider = mockBoardProvider("agent:main:main");
 
     await provider.applyOps([{ kind: "tabs_reorder", tabIds: ["research"] }]);
 
@@ -55,7 +69,7 @@ describe("board providers", () => {
   });
 
   it("does not create or reorder duplicate tab ids", async () => {
-    const provider = new MockBoardProvider("agent:main:main");
+    const provider = mockBoardProvider("agent:main:main");
 
     await provider.applyOps([
       { kind: "tab_create", tabId: "main", title: "Duplicate" },
@@ -66,7 +80,7 @@ describe("board providers", () => {
   });
 
   it("reorders widgets after a named anchor", async () => {
-    const provider = new MockBoardProvider("agent:main:main");
+    const provider = mockBoardProvider("agent:main:main");
 
     await provider.applyOps([
       { kind: "widget_move", name: "session-status", after: "recent-findings" },
@@ -81,7 +95,7 @@ describe("board providers", () => {
   });
 
   it("moves widgets across tabs and normalizes both tab orders", async () => {
-    const provider = new MockBoardProvider("agent:main:main");
+    const provider = mockBoardProvider("agent:main:main");
 
     await provider.applyOps([
       { kind: "widget_move", name: "source-map", tabId: "main", after: "session-status" },
@@ -98,7 +112,7 @@ describe("board providers", () => {
   });
 
   it("clamps widget sizes to the board grid", async () => {
-    const provider = new MockBoardProvider("agent:main:main");
+    const provider = mockBoardProvider("agent:main:main");
 
     await provider.applyOps([
       { kind: "widget_resize", name: "session-status", sizeW: 99, sizeH: -5 },
@@ -108,7 +122,7 @@ describe("board providers", () => {
   });
 
   it("surfaces agent board commands", () => {
-    const provider = new MockBoardProvider("agent:main:main");
+    const provider = mockBoardProvider("agent:main:main");
     const listener = vi.fn();
     provider.events.subscribe(listener);
 
@@ -134,6 +148,6 @@ describe("board providers", () => {
   it("provides mock boards for canonical configured-main session keys", () => {
     vi.stubGlobal("location", { search: "?mockBoard=1" });
 
-    expect(boardProviderForSession("agent:work:primary")).toBeInstanceOf(MockBoardProvider);
+    expect(boardExists(boardProviderForSession("agent:work:primary").snapshot$.value)).toBe(true);
   });
 });

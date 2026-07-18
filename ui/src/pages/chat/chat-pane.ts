@@ -151,7 +151,12 @@ import {
   saveRouteSessionSettings,
   type ChatPageHost,
 } from "./chat-state.ts";
-import { renderChat, resetChatViewState, type ChatProps } from "./chat-view.ts";
+import {
+  renderChat,
+  renderChatResizableDivider,
+  resetChatViewState,
+  type ChatProps,
+} from "./chat-view.ts";
 import { renderCatalogTerminalButton } from "./components/catalog-terminal-button.ts";
 import { chatAttachmentFromDataUrl } from "./components/chat-attachments.ts";
 import {
@@ -1588,6 +1593,34 @@ class ChatPane extends OpenClawLightDomElement {
       .catch((error: unknown) => this.publishHeaderError(error));
   }
 
+  private renderBoardDivider(dock: VisibleBoardDock) {
+    return renderChatResizableDivider({
+      className: "board-session-surface__divider",
+      orientation: dock === "bottom" ? "horizontal" : "vertical",
+      splitRatio: 0.5,
+      minRatio: 0.2,
+      maxRatio: 0.8,
+      label: t("chat.board.resizeDock"),
+      onElement: (element) => {
+        if (!(element instanceof HTMLElement)) {
+          return;
+        }
+        queueMicrotask(() => {
+          const previous = element.previousElementSibling?.getBoundingClientRect();
+          const next = element.nextElementSibling?.getBoundingClientRect();
+          const previousSize = dock === "bottom" ? (previous?.height ?? 0) : (previous?.width ?? 0);
+          const nextSize = dock === "bottom" ? (next?.height ?? 0) : (next?.width ?? 0);
+          const total = previousSize + nextSize;
+          if (total > 0) {
+            (element as HTMLElement & { splitRatio: number }).splitRatio =
+              (dock === "left" ? nextSize : previousSize) / total;
+          }
+        });
+      },
+      onResize: (event) => this.handleBoardDockResize(dock, event),
+    });
+  }
+
   private handleBoardDockResize(
     dock: VisibleBoardDock,
     event: CustomEvent<{ splitRatio: number }>,
@@ -3011,6 +3044,9 @@ class ChatPane extends OpenClawLightDomElement {
             reopenDock: board.reopenDock,
             dockSize: this.boardChatDockSize,
             chat,
+            divider: this.renderBoardDivider(
+              board.dock === "hidden" ? board.reopenDock : board.dock,
+            ),
             callbacks: {
               applyOps: (ops) => board.provider.applyOps(ops),
               grant: (name, decision) => board.provider.grant(name, decision),
@@ -3020,7 +3056,6 @@ class ChatPane extends OpenClawLightDomElement {
               },
             } satisfies BoardViewCallbacks,
             onDockChange: (dock) => this.handleBoardDockChange(dock),
-            onResize: (dock, event) => this.handleBoardDockResize(dock, event),
           })
         : chat;
     return html`${this.renderPaneHeader(

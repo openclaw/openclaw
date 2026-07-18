@@ -2,36 +2,23 @@
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
-  gap: 2px;
   margin-left: auto;
-  padding: 2px;
-  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+}
+
+.chat-pane__face-switch .settings-segmented {
+  flex-wrap: nowrap;
   border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--panel-strong) 76%, transparent);
 }
 
-.chat-pane__face-switch button {
-  height: 24px;
-  padding: 0 9px;
-  border: 0;
-  border-radius: var(--radius-full);
-  color: var(--muted);
-  background: transparent;
-  font: inherit;
+.chat-pane__face-switch .settings-segmented__btn {
   font-size: 11px;
-  font-weight: 550;
-  cursor: pointer;
+  padding: 2px 9px;
+  border-radius: var(--radius-full);
 }
 
-.chat-pane__face-switch button[aria-selected="true"] {
-  color: var(--text);
+.chat-pane__face-switch .settings-segmented__btn--active {
   background: var(--panel);
-  box-shadow: 0 1px 3px color-mix(in srgb, black 18%, transparent);
-}
-
-.chat-pane__face-switch button:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
 }
 
 .chat-pane__face-switch + .chat-pane__actions {
@@ -179,7 +166,7 @@
 }
 
 @media (max-width: 560px) {
-  .chat-pane__face-switch button {
+  .chat-pane__face-switch .settings-segmented__btn {
     padding-inline: 7px;
   }
 }

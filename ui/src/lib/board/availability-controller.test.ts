@@ -2,11 +2,12 @@
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { BoardAvailabilityController } from "./availability-controller.ts";
-import { MockBoardProvider } from "./provider.ts";
+import { boardProviderForSession } from "./provider.ts";
 
 describe("BoardAvailabilityController", () => {
   it("invalidates its host when a visible session board snapshot changes", async () => {
-    const provider = new MockBoardProvider("agent:main:main");
+    vi.stubGlobal("location", { search: "?mockBoard=1" });
+    const provider = boardProviderForSession("agent:main:main");
     const requestUpdate = vi.fn();
     let controller: BoardAvailabilityController | undefined;
     const host: ReactiveControllerHost = {
