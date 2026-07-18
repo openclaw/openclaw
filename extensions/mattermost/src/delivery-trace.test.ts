@@ -24,7 +24,7 @@ import {
 } from "openclaw/plugin-sdk/reply-chunking";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
-import { describe, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createMattermostPost, type MattermostClient } from "./mattermost/client.js";
 import {
   createMattermostDraftPreviewBoundaryController,
@@ -270,4 +270,53 @@ describe("mattermost delivery trace goldens", () => {
       });
     });
   }
+
+  it("preserves draft preview when a tool-error final arrives after assistant reply (#109471)", async () => {
+    const events = await runDeliveryTraceScenario({
+      scenario: {
+        name: "tool-error-after-reply",
+        steps: [
+          { kind: "reply-start" },
+          { kind: "partial", text: "I'll deploy that for you." },
+          { kind: "advance", ms: 300 },
+          { kind: "partial", text: "I'll deploy that for you.\n\nDeploying to production..." },
+          { kind: "advance", ms: 300 },
+          { kind: "block-final", text: "I'll deploy that for you.\n\nDeploying to production..." },
+          { kind: "advance", ms: 100 },
+          // Tool error arrives as a final with isError: true
+          { kind: "final", text: "bash: deploy.sh: command not found", isError: true },
+          { kind: "advance", ms: 100 },
+          { kind: "idle" },
+        ],
+      },
+      setup: setupMattermostTrace,
+    });
+
+    // The event list is the application log for this scenario.
+    // Format: seq | at | dir | kind | data
+    console.log("\n=== Wire trace: tool-error-after-reply ===\n");
+    for (const event of events) {
+      const dir = event.dir === "in" ? "IN " : "OUT";
+      const dataStr = event.data ? ` ${JSON.stringify(event.data).slice(0, 120)}` : "";
+      console.log(
+        `  ${String(event.seq).padStart(3)} | ${String(event.at).padStart(4)} | ${dir} | ${event.kind}${dataStr}`,
+      );
+    }
+
+    // Verify no DELETE calls (the bug was that the preview was deleted)
+    const deleteEvents = events.filter((e) => e.dir === "out" && e.kind.startsWith("DELETE"));
+    expect(deleteEvents).toHaveLength(0);
+
+    // Verify the error was delivered as a normal post (not via preview edit)
+    const errorDeliveries = events.filter(
+      (e) =>
+        e.dir === "out" &&
+        e.kind === "POST /posts" &&
+        typeof (e.data as Record<string, unknown>)?.payload === "object" &&
+        ((e.data as Record<string, unknown>)?.payload as Record<string, unknown>)?.message
+          ?.toString()
+          ?.includes("deploy.sh"),
+    );
+    expect(errorDeliveries.length).toBeGreaterThanOrEqual(1);
+  });
 });

@@ -44,6 +44,20 @@ export async function deliverMattermostReplyWithDraftPreview(
     return;
   }
 
+  // Tool-error warnings must not finalize or clear the draft preview.
+  // Deliver them as standalone messages while preserving the existing
+  // assistant reply that was already shown via the preview post.
+  if (params.payload.isError) {
+    await deliverWithFinalizableLivePreviewAdapter({
+      kind: params.info.kind,
+      payload: params.payload,
+      deliverNormally: async (payload) => {
+        await params.deliverPayload(payload);
+      },
+    });
+    return;
+  }
+
   await deliverWithFinalizableLivePreviewAdapter({
     kind: params.info.kind,
     payload: params.payload,

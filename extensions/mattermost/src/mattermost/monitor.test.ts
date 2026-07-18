@@ -470,7 +470,7 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
     });
   });
 
-  it("does not flush error finals before normal delivery", async () => {
+  it("delivers error finals as standalone messages without clearing the draft preview", async () => {
     const draftStream = createDraftStreamMock();
     const deliverFinal = vi.fn(async () => {});
 
@@ -488,8 +488,9 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
     });
 
     expect(draftStream.flush).not.toHaveBeenCalled();
+    expect(draftStream.clear).not.toHaveBeenCalled();
+    expect(draftStream.discardPending).not.toHaveBeenCalled();
     expect(deliverFinal).toHaveBeenCalledTimes(1);
-    expect(draftStream.clear).toHaveBeenCalledTimes(1);
   });
 
   it("finalizes the preview in place when the final targets the same thread", async () => {
