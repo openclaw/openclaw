@@ -8,6 +8,7 @@ import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { readRegularFileSync } from "@openclaw/fs-safe/advanced";
 import type { createJiti } from "jiti/static";
 import * as bundledLlm from "openclaw/plugin-sdk/llm";
 // Static imports of packages that extensions may use.
@@ -487,15 +488,11 @@ const MAX_EXTENSION_SOURCE_BYTES = 10 * 1024 * 1024;
 
 function extensionSourceNeedsJitiAliasResolution(extensionPath: string): boolean {
   try {
-    const stats = fs.statSync(extensionPath);
-    if (!stats.isFile()) {
-      return true;
-    }
-    if (stats.size > MAX_EXTENSION_SOURCE_BYTES) {
-      // File is too large to read safely — assume jiti alias resolution is needed.
-      return true;
-    }
-    const source = fs.readFileSync(extensionPath, "utf8");
+    const { buffer } = readRegularFileSync({
+      filePath: extensionPath,
+      maxBytes: MAX_EXTENSION_SOURCE_BYTES,
+    });
+    const source = buffer.toString("utf8");
     return (
       EXTENSION_LOADER_ALIAS_IMPORT_PATTERN.test(source) ||
       RELATIVE_EXTENSION_IMPORT_PATTERN.test(source) ||
