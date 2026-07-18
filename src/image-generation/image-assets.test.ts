@@ -142,6 +142,23 @@ describe("image asset helpers", () => {
     ).toBe("source.png");
   });
 
+  it("drops oversized OpenAI-compatible entries before decoding when maxBytes is set (Codex OAuth route)", () => {
+    const smallBase64 = Buffer.from("tiny").toString("base64");
+    const oversizedBase64 = "A".repeat(200);
+    const images = parseOpenAiCompatibleImageResponse(
+      {
+        data: [
+          { b64_json: smallBase64 },
+          { b64_json: oversizedBase64 },
+        ],
+      },
+      { defaultMimeType: "image/png", maxBytes: 10 },
+    );
+
+    expect(images).toHaveLength(1);
+    expect(images[0]?.buffer).toEqual(Buffer.from("tiny"));
+  });
+
   it("rejects oversized base64 provider payload before decoding", () => {
     const oversizedBase64 = "A".repeat(200);
     expect(
