@@ -2027,7 +2027,14 @@ jobs:
           case "$TASK" in
             guards)
               pnpm check:no-conflict-markers
-              pnpm check:script-declarations
+              if has_package_script "check:script-declarations"; then
+                pnpm check:script-declarations
+              elif [[ "$HISTORICAL_TARGET" != "true" ]]; then
+                echo "Current CI targets must provide the check:script-declarations package script." >&2
+                exit 1
+              else
+                echo "[skip] historical target predates the script declaration contract"
+              fi
               pnpm tool-display:check
               pnpm check:host-env-policy:swift
               pnpm dup:check:coverage

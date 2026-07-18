@@ -3354,7 +3354,12 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
 
     expect(workflow).toContain("check-guards");
     expect(workflow).toContain("check-shrinkwrap");
+    expect(preflightGuards).toContain('has_package_script "check:script-declarations"');
     expect(preflightGuards).toContain("pnpm check:script-declarations");
+    expect(preflightGuards).toContain('[[ "$HISTORICAL_TARGET" != "true" ]]');
+    expect(preflightGuards).toContain(
+      "Current CI targets must provide the check:script-declarations package script.",
+    );
     expect(shrinkwrapGuards).toContain("pnpm deps:shrinkwrap:check");
     expect(preflightGuards).toContain("pnpm deps:patches:check");
     expect(parsedWorkflow.jobs.preflight.outputs.diff_base_revision).toBe(
