@@ -76,7 +76,8 @@ function resolveWorkspaceScopeOrRespond(
     return null;
   }
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-  const rawPath = params.path ?? "";
+  // Exact relative lookups; UI/paste padding must not turn a real file into not-found.
+  const rawPath = typeof params.path === "string" ? params.path.trim() : "";
   const portablePath = rawPath.replaceAll("\\", "/");
   if (path.posix.isAbsolute(portablePath) || path.win32.isAbsolute(rawPath)) {
     respond(
@@ -88,13 +89,13 @@ function resolveWorkspaceScopeOrRespond(
     );
     return null;
   }
-  const browserPath = normalizeRelativePath(params.path);
+  const browserPath = normalizeRelativePath(rawPath);
   if (!resolveWorkspacePath(workspaceDir, browserPath || ".")) {
     respond(
       false,
       undefined,
       workspaceError("workspace_path_invalid", "path escapes the agent workspace", {
-        path: params.path ?? "",
+        path: rawPath,
       }),
     );
     return null;

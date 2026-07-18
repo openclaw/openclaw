@@ -123,6 +123,33 @@ describe("agents.workspace RPC handlers", () => {
     ]);
   });
 
+  it("trims whitespace around workspace list and get paths", async () => {
+    const listed = expectOkPayload(
+      await invokeWorkspaceHandler("agents.workspace.list", {
+        agentId: "main",
+        path: " src ",
+      }),
+    );
+    expect(listed.path).toBe("src");
+    expect(listed.entries.map((entry: Record<string, unknown>) => entry.path)).toEqual([
+      "src/index.ts",
+      "src/util.ts",
+    ]);
+
+    const got = expectOkPayload(
+      await invokeWorkspaceHandler("agents.workspace.get", {
+        agentId: "main",
+        path: " notes.md ",
+      }),
+    );
+    expect(got.file).toMatchObject({
+      path: "notes.md",
+      name: "notes.md",
+      encoding: "utf8",
+      content: "# Notes\n",
+    });
+  });
+
   it("paginates large directories deterministically", async () => {
     for (let index = 0; index < 12; index += 1) {
       writeWorkspaceFile(workspaceRoot, `bulk/file-${String(index).padStart(2, "0")}.txt`, "x");
