@@ -182,6 +182,8 @@ export class GatewayConnection {
       };
     }
     msg.turnAdoptionLifecycle = lifecycle;
+    // Fleet at-least-once contract: a crash after slash-command side effects but before the
+    // completion tombstone can replay the command, matching complete-at-adoption behavior.
     const result = await trySlashCommand(msg, slashCtx);
     if (result === "handled") {
       return { kind: "completed" };
