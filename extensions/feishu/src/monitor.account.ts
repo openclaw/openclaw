@@ -13,7 +13,10 @@ import { handleFeishuCardAction, type FeishuCardActionEvent } from "./card-actio
 import { createEventDispatcher } from "./client.js";
 import { isRecord, readString } from "./comment-shared.js";
 import { hasProcessedFeishuMessage, warmupDedupFromPluginState } from "./dedup.js";
-import { applyBotIdentityState, startBotIdentityRecovery } from "./monitor.bot-identity.js";
+import {
+  applyBotIdentityState,
+  startBotIdentityRecoveryAfterProbe,
+} from "./monitor.bot-identity.js";
 import { createFeishuBotMenuHandler } from "./monitor.bot-menu-handler.js";
 import { createFeishuDriveCommentNoticeHandler } from "./monitor.comment-notice-handler.js";
 import type { FeishuStatusSink } from "./monitor.js";
@@ -486,10 +489,7 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
       : await fetchBotIdentityForMonitor(account, { runtime, abortSignal });
   const { botOpenId } = applyBotIdentityState(accountId, botIdentity);
   log(`feishu[${accountId}]: bot open_id resolved: ${botOpenId ?? "unknown"}`);
-
-  if (!botOpenId && !abortSignal?.aborted) {
-    startBotIdentityRecovery({ account, accountId, runtime, abortSignal });
-  }
+  startBotIdentityRecoveryAfterProbe({ account, accountId, runtime, abortSignal, botOpenId });
 
   const connectionMode = account.config.connectionMode ?? "websocket";
   if (connectionMode === "webhook" && !account.verificationToken?.trim()) {
