@@ -357,7 +357,8 @@ internal class WearViewModel(
             capabilities = current.proxyCapabilities,
           )
         mutableState.update { state ->
-          val currentSession = state.selectedSession?.takeIf { it.key == session.key } ?: return@update state
+          val currentSession = state.selectedSession ?: return@update state
+          if (!wearSessionRequestIsCurrent(session, currentSession, phoneNodeId)) return@update state
           val selectedSession = currentSession.copy(modelRef = acceptedModelRef)
           state.copy(
             selectedModelRef = acceptedModelRef,
@@ -371,7 +372,7 @@ internal class WearViewModel(
       } catch (err: CancellationException) {
         throw err
       } catch (err: Throwable) {
-        recordFailure(err, loading = false)
+        recordFailure(err)
       } finally {
         mutableState.update { it.copy(controlBusy = false) }
       }
@@ -510,7 +511,18 @@ internal class WearViewModel(
                 phoneNodeId = sessionList.phoneNodeId,
               )
             }
-          if (mutableState.value.selectedSession?.key != previousSession?.key) return@launch
+          if (
+            !wearSnapshotSourcesMatch(
+              firstPhoneNodeId = sessionList.phoneNodeId,
+              firstStreamId = sessionList.eventStreamId,
+              secondPhoneNodeId = modelList.phoneNodeId,
+              secondStreamId = modelList.eventStreamId,
+            )
+          ) {
+            loadSessions(status.phoneNodeId)
+            return@launch
+          }
+          if (mutableState.value.selectedSession != previousSession) return@launch
           val selectionChanged = selectedSession?.key != previousSession?.key
           val pendingEvents =
             finishSequenceSnapshot(
@@ -587,19 +599,25 @@ internal class WearViewModel(
         mutableState.update { it.copy(loading = true, error = null) }
         try {
           val transcript = repository.history(session.key, session.phoneNodeId)
+          val currentSession = mutableState.value.selectedSession ?: return@launch
           if (
-            mutableState.value.selectedSession?.key != session.key ||
+            !wearTranscriptRequestIsCurrent(session, currentSession, transcript.phoneNodeId) ||
             !historyLoadTracker.isCurrent(loadToken)
           ) {
             return@launch
           }
           val loadResult = historyLoadTracker.finish(loadToken)
           val loadedSession =
-            session.copy(
+            currentSession.copy(
               phoneNodeId = transcript.phoneNodeId,
-              modelRef = transcript.selectedModelRef ?: session.modelRef,
+              modelRef =
+                if (currentSession.modelRef != session.modelRef) {
+                  currentSession.modelRef
+                } else {
+                  transcript.selectedModelRef ?: session.modelRef
+                },
             )
-          val catalogScopeChanged = wearModelCatalogScopeChanged(session, loadedSession)
+          val catalogScopeChanged = wearModelCatalogScopeChanged(currentSession, loadedSession)
           val pendingEvents =
             finishSequenceSnapshot(
               streamId = transcript.eventStreamId,
@@ -617,7 +635,7 @@ internal class WearViewModel(
               sessions =
                 it.sessions.map { item ->
                   if (item.key == session.key) {
-                    item.copy(modelRef = transcript.selectedModelRef ?: item.modelRef)
+                    item.copy(modelRef = loadedSession.modelRef)
                   } else {
                     item
                   }
@@ -659,7 +677,7 @@ internal class WearViewModel(
     val capabilities = current.proxyCapabilities
     if (
       WearProxyCapability.ModelControls !in capabilities ||
-      !wearModelCatalogRequestIsCurrent(session, current.selectedSession, session.phoneNodeId)
+      !wearSessionRequestIsCurrent(session, current.selectedSession, session.phoneNodeId)
     ) {
       return
     }
@@ -675,7 +693,7 @@ internal class WearViewModel(
             )
           mutableState.update { state ->
             val selectedSession = state.selectedSession
-            if (!wearModelCatalogRequestIsCurrent(session, selectedSession, modelList.phoneNodeId)) {
+            if (!wearSessionRequestIsCurrent(session, selectedSession, modelList.phoneNodeId)) {
               state
             } else {
               state.copy(models = modelList.models)
@@ -685,7 +703,7 @@ internal class WearViewModel(
           throw err
         } catch (err: Throwable) {
           val selectedSession = mutableState.value.selectedSession
-          if (wearModelCatalogRequestIsCurrent(session, selectedSession, session.phoneNodeId)) {
+          if (wearSessionRequestIsCurrent(session, selectedSession, session.phoneNodeId)) {
             recordFailure(err)
           }
         }
@@ -951,7 +969,7 @@ internal fun wearModelCatalogScopeChanged(
   loadedSession.phoneNodeId != requestedSession.phoneNodeId ||
     loadedSession.modelRef != requestedSession.modelRef
 
-internal fun wearModelCatalogRequestIsCurrent(
+internal fun wearSessionRequestIsCurrent(
   requestedSession: WearSession,
   currentSession: WearSession?,
   responsePhoneNodeId: String,
@@ -960,6 +978,22 @@ internal fun wearModelCatalogRequestIsCurrent(
     currentSession.phoneNodeId == requestedSession.phoneNodeId &&
     responsePhoneNodeId == requestedSession.phoneNodeId &&
     currentSession.modelRef == requestedSession.modelRef
+
+internal fun wearTranscriptRequestIsCurrent(
+  requestedSession: WearSession,
+  currentSession: WearSession?,
+  responsePhoneNodeId: String,
+): Boolean =
+  currentSession?.key == requestedSession.key &&
+    currentSession.phoneNodeId == requestedSession.phoneNodeId &&
+    responsePhoneNodeId == requestedSession.phoneNodeId
+
+internal fun wearSnapshotSourcesMatch(
+  firstPhoneNodeId: String,
+  firstStreamId: String?,
+  secondPhoneNodeId: String,
+  secondStreamId: String?,
+): Boolean = firstPhoneNodeId == secondPhoneNodeId && firstStreamId == secondStreamId
 
 internal fun mergeEventMessage(
   messages: List<WearChatMessage>,

@@ -60,20 +60,51 @@ class WearSessionScopeTest {
         modelRef = "openai/model-a",
       )
 
-    assertEquals(true, wearModelCatalogRequestIsCurrent(requested, requested.copy(), "phone-a"))
+    assertEquals(true, wearSessionRequestIsCurrent(requested, requested.copy(), "phone-a"))
     assertEquals(
       false,
-      wearModelCatalogRequestIsCurrent(requested, requested.copy(key = "agent:other"), "phone-a"),
+      wearSessionRequestIsCurrent(requested, requested.copy(key = "agent:other"), "phone-a"),
     )
     assertEquals(
       false,
-      wearModelCatalogRequestIsCurrent(requested, requested.copy(modelRef = "openai/model-b"), "phone-a"),
+      wearSessionRequestIsCurrent(requested, requested.copy(modelRef = "openai/model-b"), "phone-a"),
     )
-    assertEquals(false, wearModelCatalogRequestIsCurrent(requested, requested.copy(), "phone-b"))
+    assertEquals(false, wearSessionRequestIsCurrent(requested, requested.copy(), "phone-b"))
     assertEquals(
       false,
-      wearModelCatalogRequestIsCurrent(requested, requested.copy(phoneNodeId = "phone-b"), "phone-b"),
+      wearSessionRequestIsCurrent(requested, requested.copy(phoneNodeId = "phone-b"), "phone-b"),
     )
+  }
+
+  @Test
+  fun transcriptResultPreservesNewerModelWithinTheSamePhoneSession() {
+    val requested =
+      WearSession(
+        key = "agent:main",
+        title = "Main",
+        updatedAt = null,
+        hasActiveRun = false,
+        phoneNodeId = "phone-a",
+        modelRef = "openai/model-a",
+      )
+
+    assertEquals(
+      true,
+      wearTranscriptRequestIsCurrent(requested, requested.copy(modelRef = "openai/model-b"), "phone-a"),
+    )
+    assertEquals(false, wearTranscriptRequestIsCurrent(requested, requested.copy(), "phone-b"))
+    assertEquals(
+      false,
+      wearTranscriptRequestIsCurrent(requested, requested.copy(phoneNodeId = "phone-b"), "phone-b"),
+    )
+  }
+
+  @Test
+  fun snapshotResponsesRequireTheSamePhoneAndEventStream() {
+    assertEquals(true, wearSnapshotSourcesMatch("phone-a", "stream-a", "phone-a", "stream-a"))
+    assertEquals(false, wearSnapshotSourcesMatch("phone-a", "stream-a", "phone-b", "stream-a"))
+    assertEquals(false, wearSnapshotSourcesMatch("phone-a", "stream-a", "phone-a", "stream-b"))
+    assertEquals(true, wearSnapshotSourcesMatch("phone-a", null, "phone-a", null))
   }
 
   @Test
