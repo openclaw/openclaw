@@ -3878,7 +3878,7 @@ describe("gateway Gmail hot reload handlers", () => {
     expect(clearGmailRestartAbortController).toHaveBeenCalledWith(abortController);
   });
 
-  it("commits runtime secrets for managed no-op config reloads", async () => {
+  it("retries managed no-op reloads without publishing superseded secret failures", async () => {
     vi.useFakeTimers();
     const writeListenerRef: { current: ((event: ConfigWriteNotification) => void) | null } = {
       current: null,
@@ -3891,14 +3891,36 @@ describe("gateway Gmail hot reload handlers", () => {
       gateway: { reload: { debounceMs: 0 } },
       messages: { visibleReplies: "message_tool" },
     };
-    const activateRuntimeSecrets = vi.fn(async (config: OpenClawConfig, _params: unknown) => ({
+    const snapshot = (config: OpenClawConfig): PreparedSecretsRuntimeSnapshot => ({
       sourceConfig: config,
       config,
       authStores: [],
       authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
       warnings: [],
-      webTools: {},
-    }));
+      webTools: createEmptyRuntimeWebToolsMetadata(),
+    });
+    const failurePublicationEligibility: boolean[] = [];
+    let preparationAttempt = 0;
+    const activateRuntimeSecrets = vi.fn(
+      async (
+        config: OpenClawConfig,
+        activation: { canPublishFailureAsDegraded?: () => boolean },
+      ) => {
+        const attempt = preparationAttempt++;
+        if (attempt === 0) {
+          failurePublicationEligibility.push(activation.canPublishFailureAsDegraded?.() ?? false);
+          activateSecretsRuntimeSnapshot(snapshot(initialConfig));
+          failurePublicationEligibility.push(activation.canPublishFailureAsDegraded?.() ?? true);
+          throw new Error("superseded secret preparation failure");
+        }
+        if (attempt === 1) {
+          queueMicrotask(() => {
+            queueMicrotask(() => activateSecretsRuntimeSnapshot(snapshot(initialConfig)));
+          });
+        }
+        return snapshot(config);
+      },
+    );
     const heartbeatRunner = { stop: vi.fn(), updateConfig: vi.fn() };
     const acceptTerminalConfig = vi.fn();
     const commitTerminalConfig = vi.fn();
@@ -3984,7 +4006,7 @@ describe("gateway Gmail hot reload handlers", () => {
     });
     await vi.runAllTimersAsync();
 
-    expect(activateRuntimeSecrets).toHaveBeenCalledTimes(1);
+    expect(activateRuntimeSecrets).toHaveBeenCalledTimes(3);
     expect(activateRuntimeSecrets).toHaveBeenCalledWith(nextConfig, {
       reason: "reload",
       activate: false,
@@ -3992,6 +4014,7 @@ describe("gateway Gmail hot reload handlers", () => {
       canPublishFailureAsDegraded: expect.any(Function),
       includeAuthStoreRefs: undefined,
     });
+    expect(failurePublicationEligibility).toEqual([true, false]);
     expect(getActiveSecretsRuntimeSnapshot()?.sourceConfig).toEqual(nextConfig);
     expect(acceptTerminalConfig).toHaveBeenCalledWith({
       retireRejectedRestart: true,
