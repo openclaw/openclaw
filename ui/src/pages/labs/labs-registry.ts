@@ -18,8 +18,9 @@ export const LAB_FEATURES = [
     configPath: ["tools", "codeMode", "enabled"],
     restartHint: null,
   },
-  // Swarm entry ships once tools.swarm exists in the config schema (#110325);
-  // rendering it earlier would write an unknown key and invalidate the config.
+  // Swarm entry ships once tools.swarm exists in the config schema
+  // (zod-schema.agent-runtime.ts, #110325); rendering it earlier would write an
+  // unknown key and invalidate the operator's config on save.
   // {
   //   id: "swarm",
   //   title: () => t("labsPage.swarm.title"),
