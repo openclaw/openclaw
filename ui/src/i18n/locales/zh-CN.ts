@@ -1681,7 +1681,6 @@ export const zh_CN: TranslationMap = {
     memoryImport: "导入记忆",
     debug: "调试",
     logs: "日志",
-    safety: "Safety",
     plugin: "插件",
   },
   subtitles: {
@@ -1715,7 +1714,6 @@ export const zh_CN: TranslationMap = {
     memoryImport: "将 Codex 和 Claude Code 的记忆导入代理工作区。",
     debug: "快照、事件、RPC。",
     logs: "实时网关日志。",
-    safety: "AI safety taxonomy events and severity trends.",
     plugin: "插件提供的面板。",
   },
   modelSetup: {

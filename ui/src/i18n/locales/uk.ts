@@ -1719,7 +1719,6 @@ export const uk: TranslationMap = {
     memoryImport: "Імпорт пам’яті",
     debug: "Налагодження",
     logs: "Журнали",
-    safety: "Safety",
     plugin: "Плагін",
   },
   subtitles: {
@@ -1754,7 +1753,6 @@ export const uk: TranslationMap = {
     memoryImport: "Перенесіть пам’ять Codex і Claude Code до робочого простору агента.",
     debug: "Знімки, події, RPC.",
     logs: "Журнали шлюзу в реальному часі.",
-    safety: "AI safety taxonomy events and severity trends.",
     plugin: "Панель, надана плагіном.",
   },
   modelSetup: {

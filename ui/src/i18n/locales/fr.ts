@@ -1732,7 +1732,6 @@ export const fr: TranslationMap = {
     memoryImport: "Importer la mémoire",
     debug: "Débogage",
     logs: "Journaux",
-    safety: "Safety",
     plugin: "Plugin",
   },
   subtitles: {
@@ -1768,7 +1767,6 @@ export const fr: TranslationMap = {
       "Importez la mémoire de Codex et de Claude Code dans l’espace de travail d’un agent.",
     debug: "Captures, événements, RPC.",
     logs: "Journaux Gateway en direct.",
-    safety: "AI safety taxonomy events and severity trends.",
     plugin: "Panneau fourni par le plugin.",
   },
   modelSetup: {

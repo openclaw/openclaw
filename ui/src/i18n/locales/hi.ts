@@ -1701,7 +1701,6 @@ export const hi: TranslationMap = {
     memoryImport: "मेमोरी इंपोर्ट करें",
     debug: "डीबग",
     logs: "लॉग्स",
-    safety: "Safety",
     plugin: "प्लगइन",
   },
   subtitles: {
@@ -1735,7 +1734,6 @@ export const hi: TranslationMap = {
     memoryImport: "Codex और Claude Code की मेमोरी को एजेंट वर्कस्पेस में लाएँ।",
     debug: "स्नैपशॉट, इवेंट, RPC।",
     logs: "लाइव gateway लॉग।",
-    safety: "AI safety taxonomy events and severity trends.",
     plugin: "प्लगइन द्वारा उपलब्ध कराया गया पैनल।",
   },
   modelSetup: {

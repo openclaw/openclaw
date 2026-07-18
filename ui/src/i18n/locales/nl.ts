@@ -1720,7 +1720,6 @@ export const nl: TranslationMap = {
     memoryImport: "Geheugen importeren",
     debug: "Debuggen",
     logs: "Logs",
-    safety: "Safety",
     plugin: "Plugin",
   },
   subtitles: {
@@ -1754,7 +1753,6 @@ export const nl: TranslationMap = {
     memoryImport: "Importeer geheugen van Codex en Claude Code in een agentwerkruimte.",
     debug: "Momentopnamen, gebeurtenissen, RPC.",
     logs: "Live Gateway-logs.",
-    safety: "AI safety taxonomy events and severity trends.",
     plugin: "Door een plugin geleverd paneel.",
   },
   modelSetup: {
