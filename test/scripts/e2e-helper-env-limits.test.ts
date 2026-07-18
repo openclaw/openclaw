@@ -267,17 +267,19 @@ describe("e2e helper numeric env limits", () => {
         { status: 200 },
       )) as typeof fetch;
 
+    const timeoutMs = 100;
     const startedAt = Date.now();
     await expect(
       probeHttpStatus({
         fetchImpl,
-        timeoutMs: 25,
+        timeoutMs,
         url: "http://127.0.0.1/probe",
       }),
     ).resolves.toBe(true);
 
     expect(cancelCalled).toBe(true);
-    expect(Date.now() - startedAt).toBeLessThan(1_000);
+    // Allow only scheduler jitter beyond the configured probe deadline.
+    expect(Date.now() - startedAt).toBeLessThan(timeoutMs + 100);
   });
 
   it("clamps oversized Open WebUI HTTP probe timers before scheduling", async () => {
