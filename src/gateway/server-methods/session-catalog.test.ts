@@ -23,6 +23,7 @@ vi.mock("../../plugins/runtime.js", () => ({
 }));
 
 vi.mock("../../sessions/session-state-events.js", () => ({
+  listAmbientGroupWatchTargets: () => new Set<string>(),
   recordSessionStateEvent: hoisted.recordSessionStateEvent,
 }));
 
