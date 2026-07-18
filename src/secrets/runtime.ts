@@ -11,6 +11,7 @@ import { getRuntimeAuthProfileStoreCredentialsRevision } from "../agents/auth-pr
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import {
   getRuntimeConfigSourceSnapshot,
+  getRuntimeConfigSnapshotMetadata,
   getRuntimeConfigSnapshot,
   type RuntimeConfigSnapshotRefreshParams,
 } from "../config/runtime-snapshot.js";
@@ -598,7 +599,8 @@ export async function refreshActiveProviderAuthRuntimeSnapshot(): Promise<boolea
     }
     const runtimeConfig = getRuntimeConfigSnapshot();
     const runtimeSourceConfig = getRuntimeConfigSourceSnapshot();
-    if (!runtimeConfig || !runtimeSourceConfig) {
+    const runtimeMetadata = getRuntimeConfigSnapshotMetadata();
+    if (!runtimeConfig || !runtimeSourceConfig || !runtimeMetadata) {
       return false;
     }
     const config = { ...runtimeConfig };
@@ -623,13 +625,21 @@ export async function refreshActiveProviderAuthRuntimeSnapshot(): Promise<boolea
       degradedOwners: mergeProviderAuthDegradedOwners(activeSnapshot, candidate.snapshot),
       secretOwners: mergeProviderAuthSecretOwners(activeSnapshot, candidate.snapshot),
     };
-    // The pinned config read and revision claim are synchronous: preserve gateway-owned
-    // runtime mutations while preventing a concurrently prepared secrets snapshot from winning.
-    const activateSnapshotIfCurrent = () =>
-      activateSecretsRuntimeSnapshotIfCurrent(refreshedSnapshot, candidate.expectedRevision, {
-        preserveActivationLineage: true,
-        runtimeSourceConfig,
-      });
+    // The revision check and activation are synchronous. A queued auth refresh must retry
+    // against gateway runtime mutations that landed after its pinned config read.
+    const activateSnapshotIfCurrent = () => {
+      if (getRuntimeConfigSnapshotMetadata()?.revision !== runtimeMetadata.revision) {
+        return false;
+      }
+      return activateSecretsRuntimeSnapshotIfCurrent(
+        refreshedSnapshot,
+        candidate.expectedRevision,
+        {
+          preserveActivationLineage: true,
+          runtimeSourceConfig,
+        },
+      );
+    };
     const activated = await activateProviderAuthRuntimeSnapshot({
       snapshot: refreshedSnapshot,
       expectedRevision: candidate.expectedRevision,
