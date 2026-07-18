@@ -21,6 +21,16 @@ type AgentSettingsManagerLike = {
   setCompactionEnabled?: (enabled: boolean) => void;
 };
 
+/**
+ * Config-level auto-compaction opt-out. Gates every OpenClaw-owned automatic
+ * compaction path (SDK auto-compactor, preflight synthetic overflow, overflow
+ * and timeout recovery); manual /compact stays available. Only an explicit
+ * false disables — absent or true keeps default-on behavior.
+ */
+export function isConfigAutoCompactionEnabled(cfg?: OpenClawConfig): boolean {
+  return cfg?.agents?.defaults?.compaction?.enabled !== false;
+}
+
 /** Resolves the configured reserve-token floor for agent compaction. */
 function resolveCompactionReserveTokensFloor(cfg?: OpenClawConfig): number {
   const raw = cfg?.agents?.defaults?.compaction?.reserveTokensFloor;

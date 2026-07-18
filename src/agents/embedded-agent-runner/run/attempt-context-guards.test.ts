@@ -68,6 +68,31 @@ describe("installEmbeddedAttemptContextGuards", () => {
     hoisted.installHistoryImagePruneContextTransform.mockReturnValue(vi.fn());
   });
 
+  it("drops the mid-turn precheck when config disables auto-compaction", () => {
+    const input = createInput({
+      attempt: {
+        config: {
+          agents: {
+            defaults: {
+              compaction: { enabled: false, midTurnPrecheck: { enabled: true } },
+            },
+          },
+        },
+        contextTokenBudget: 1_024,
+        model: { api: "anthropic-messages", contextWindow: 2_048 },
+        modelId: "model-1",
+        provider: "provider-1",
+        sessionFile: "/tmp/session.jsonl",
+      },
+    });
+    installEmbeddedAttemptContextGuards(input as never);
+    const guardOptions = hoisted.installToolResultContextGuard.mock.calls[0]?.[0];
+
+    // Precheck signals route into compaction recovery, which is dead-ended
+    // when config-level auto-compaction is disabled.
+    expect(guardOptions.midTurnPrecheck).toBeUndefined();
+  });
+
   it("tracks mid-turn requests and restores attempt-local transforms", async () => {
     const input = createInput();
     const originalTransform = input.activeSession.agent.transformContext;

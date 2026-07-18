@@ -141,6 +141,41 @@ describe("attempt prompt preflight", () => {
     expect(result.contextBudgetStatus?.overflowTokens).toBeGreaterThan(0);
   });
 
+  it("does not synthesize precheck overflow when config disables auto-compaction", async () => {
+    const result = await prepareEmbeddedAttemptPromptPreflight({
+      attempt: {
+        ...attempt,
+        config: { agents: { defaults: { compaction: { enabled: false } } } },
+      },
+      contextEngineAssemblySucceeded: false,
+      contextEnginePromptAuthority: "assembled",
+      contextTokenBudget: 100,
+      hookMessagesForCurrentPrompt: [],
+      includeBoundaryTimestamp: false,
+      promptForPrecheck: "x".repeat(4_000),
+      reserveTokens: 20,
+      sessionAgentId: "test",
+      sessionManager: SessionManager.inMemory(),
+      sessionMessageCount: 0,
+      state: {
+        contextBudgetStatus: undefined,
+        preflightRecovery: undefined,
+        promptError: null,
+        promptErrorSource: null,
+        skipPromptSubmission: false,
+      },
+      systemPrompt: "",
+      toolResultMaxChars: 1_000,
+      withOwnedSessionWriteLock: async (operation) => await operation(),
+    });
+
+    // The prompt goes to the provider; a real overflow surfaces without
+    // compaction recovery instead of being synthesized here.
+    expect(result.skipPromptSubmission).toBe(false);
+    expect(result.promptError).toBeNull();
+    expect(result.preflightRecovery).toBeUndefined();
+  });
+
   it("defers overflow admission to a context engine that owns compaction", async () => {
     const state: Parameters<typeof prepareEmbeddedAttemptPromptPreflight>[0]["state"] = {
       contextBudgetStatus: undefined,

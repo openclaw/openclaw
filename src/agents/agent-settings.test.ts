@@ -4,6 +4,7 @@ import {
   applyAgentAutoCompactionGuard,
   applyAgentCompactionSettingsFromConfig,
   DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR,
+  isConfigAutoCompactionEnabled,
   isSilentOverflowProneModel,
   resolveEffectiveCompactionMode,
 } from "./agent-settings.js";
@@ -169,6 +170,21 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
     });
 
     expect(settingsManager.getCompactionEnabled()).toBe(false);
+  });
+
+  it("treats only an explicit compaction.enabled=false as config-disabled", () => {
+    expect(
+      isConfigAutoCompactionEnabled({
+        agents: { defaults: { compaction: { enabled: false } } },
+      }),
+    ).toBe(false);
+    expect(
+      isConfigAutoCompactionEnabled({
+        agents: { defaults: { compaction: { enabled: true } } },
+      }),
+    ).toBe(true);
+    expect(isConfigAutoCompactionEnabled({})).toBe(true);
+    expect(isConfigAutoCompactionEnabled(undefined)).toBe(true);
   });
 
   it("does not propagate compaction.enabled=true, keeping the auto-compaction guard authoritative", () => {

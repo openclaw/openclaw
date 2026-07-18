@@ -2,6 +2,7 @@
  * Owns prompt overflow admission and mid-turn recovery routing.
  */
 import type { AssembleResult } from "../../../context-engine/types.js";
+import { isConfigAutoCompactionEnabled } from "../../agent-settings.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { SessionManager } from "../../sessions/index.js";
@@ -302,7 +303,10 @@ export async function prepareEmbeddedAttemptPromptPreflight(input: {
       skipPromptSubmission = true;
     }
   }
-  if (preemptiveCompaction?.shouldCompact) {
+  // With config-disabled auto-compaction, do not synthesize an overflow error:
+  // the prompt goes to the provider and a real overflow surfaces without
+  // compaction recovery (truncate-only routing above stays available) (#110065).
+  if (preemptiveCompaction?.shouldCompact && isConfigAutoCompactionEnabled(attempt.config)) {
     preflightRecovery =
       preemptiveCompaction.route === "compact_then_truncate"
         ? {

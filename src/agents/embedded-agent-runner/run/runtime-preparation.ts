@@ -1,5 +1,6 @@
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
+import { isConfigAutoCompactionEnabled } from "../../agent-settings.js";
 import { isProfileInCooldown } from "../../auth-profiles.js";
 import type { ResolvedProviderAuth } from "../../model-auth.js";
 import {
@@ -179,7 +180,11 @@ export async function prepareEmbeddedRunRuntime(input: {
     preparedAuthAttempts,
   } = preparedAuthPlan;
   let { activePreparedAuthPlan } = preparedAuthPlan;
-  const genericCompactionRecoveryAllowed = !pluginHarnessOwnsTransport;
+  // Config-level compaction.enabled=false must gate OpenClaw-owned overflow and
+  // timeout compaction recovery too, not just the SDK auto-compactor; otherwise
+  // recovery re-compacts a session the operator explicitly disabled (#110065).
+  const genericCompactionRecoveryAllowed =
+    !pluginHarnessOwnsTransport && isConfigAutoCompactionEnabled(params.config);
   const profileCandidates = preparedAuthAttempts.map((attempt) => attempt.profileId);
   const forwardedPluginHarnessProfileId = pluginHarnessOwnsTransport
     ? activePreparedAuthPlan.forwardedAuthProfileId

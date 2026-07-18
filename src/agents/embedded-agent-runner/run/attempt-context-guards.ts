@@ -1,4 +1,5 @@
 /** Installs attempt-local context engine, tool-result, image, and frame guards. */
+import { isConfigAutoCompactionEnabled } from "../../agent-settings.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
 import { buildContextEngineRuntimeSettings } from "../../../context-engine/runtime-settings.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
@@ -62,7 +63,10 @@ export function installEmbeddedAttemptContextGuards(input: {
   let pendingMidTurnPrecheckRequest: MidTurnPrecheckRequest | null = null;
   let afterTurnCheckpoint: number | null = null;
   const midTurnPrecheckOptions =
-    attempt.config?.agents?.defaults?.compaction?.midTurnPrecheck?.enabled === true
+    attempt.config?.agents?.defaults?.compaction?.midTurnPrecheck?.enabled === true &&
+    // Precheck signals route into compaction recovery, which is dead-ended
+    // when config-level auto-compaction is disabled (#110065).
+    isConfigAutoCompactionEnabled(attempt.config)
       ? {
           midTurnPrecheck: {
             enabled: true,
