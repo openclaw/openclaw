@@ -39,7 +39,9 @@ const DIAGNOSTIC_SUPPORT_EXPORT_VERSION = 1;
 
 const DEFAULT_LOG_LIMIT = 5000;
 const DEFAULT_LOG_MAX_BYTES = 1_000_000;
-const DIAGNOSTIC_CONFIG_MAX_BYTES = 8 * 1024 * 1024;
+// Support export must remain usable when the config is corrupt or unexpectedly
+// large. This defensive ceiling is not the product's general config-file limit.
+const SUPPORT_EXPORT_CONFIG_MAX_BYTES = 8 * 1024 * 1024;
 const SUPPORT_EXPORT_PREFIX = "openclaw-diagnostics-";
 const SUPPORT_EXPORT_SUFFIX = ".zip";
 type Awaitable<T> = T | Promise<T>;
@@ -347,7 +349,7 @@ function readConfigExport(options: {
     stat = fs.statSync(options.configPath);
     const { buffer } = readRegularFileSync({
       filePath: options.configPath,
-      maxBytes: DIAGNOSTIC_CONFIG_MAX_BYTES,
+      maxBytes: SUPPORT_EXPORT_CONFIG_MAX_BYTES,
     });
     const parsed = parseConfigJson5(buffer.toString("utf8"));
     if (!parsed.ok) {

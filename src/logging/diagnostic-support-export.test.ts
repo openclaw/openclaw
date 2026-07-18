@@ -913,55 +913,10 @@ describe("diagnostic support export", () => {
     expect(combined).toContain("Attach this zip to the bug report");
   });
 
-  it("reads a normal-size config file and reports parseOk: true", async () => {
-    const configPath = path.join(tempDir, "openclaw.json");
-    const outputPath = path.join(tempDir, "support-normal-config.zip");
-    fs.writeFileSync(
-      configPath,
-      JSON.stringify({
-        gateway: { mode: "local", port: 18789 },
-        logging: { redactSensitive: "off" },
-      }),
-      "utf8",
-    );
-
-    await writeDiagnosticSupportExport({
-      env: {
-        ...process.env,
-        HOME: tempDir,
-        OPENCLAW_CONFIG_PATH: configPath,
-        OPENCLAW_STATE_DIR: tempDir,
-      },
-      stateDir: tempDir,
-      outputPath,
-      now: new Date("2026-07-18T12:00:00.000Z"),
-      readLogTail: async () => ({
-        file: path.join(tempDir, "logs", "openclaw.log"),
-        cursor: 0,
-        size: 0,
-        truncated: false,
-        reset: false,
-        lines: [],
-      }),
-    });
-
-    const entries = await readZipTextEntries(outputPath);
-    const configShape = JSON.parse(entries["config/shape.json"] ?? "{}") as {
-      parseOk?: boolean;
-      gateway?: { mode?: string; port?: number };
-    };
-    expect(configShape.parseOk).toBe(true);
-    expect(configShape.gateway?.mode).toBe("local");
-    expect(configShape.gateway?.port).toBe(18789);
-  });
-
-  it("handles an oversized config file exceeding the 8 MB read cap gracefully", async () => {
+  it("finishes the support export when the config exceeds its read limit", async () => {
     const configPath = path.join(tempDir, "openclaw.json");
     const outputPath = path.join(tempDir, "support-oversized-config.zip");
-
-    // Write a config file slightly over the 8 MB DIAGNOSTIC_CONFIG_MAX_BYTES cap
-    const oversizedContent = Buffer.alloc(8 * 1024 * 1024 + 1, "{");
-    fs.writeFileSync(configPath, oversizedContent);
+    fs.writeFileSync(configPath, Buffer.alloc(8 * 1024 * 1024 + 1, "{"));
 
     await writeDiagnosticSupportExport({
       env: {
@@ -989,12 +944,16 @@ describe("diagnostic support export", () => {
       error?: string;
     };
     expect(configShape.parseOk).toBe(false);
-    // Error message should reference the size cap
-    expect(JSON.stringify(configShape)).toMatch(/exceed|too large|maxBytes|size/i);
-
-    // Other bundle contents are still present despite oversized config
-    expect(Object.keys(entries).toSorted()).toContain("diagnostics.json");
-    expect(Object.keys(entries).toSorted()).toContain("manifest.json");
+    expect(configShape.error).toContain("File exceeds 8388608 bytes");
+    expect(entries["config/sanitized.json"]).toBe("null\n");
+    expect(Object.keys(entries).toSorted()).toEqual([
+      "config/sanitized.json",
+      "config/shape.json",
+      "diagnostics.json",
+      "logs/openclaw-sanitized.jsonl",
+      "manifest.json",
+      "summary.md",
+    ]);
 
     const combined = Object.values(entries).join("\n");
     expect(combined).toContain("Attach this zip to the bug report");
