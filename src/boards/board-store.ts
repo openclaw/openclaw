@@ -15,13 +15,13 @@ import {
   type BoardSize,
 } from "./board-layout.js";
 
-export type BoardWidgetHtmlDocument = {
+type BoardWidgetHtmlDocument = {
   html: string;
   revision: number;
   sha256: string;
   viewGeneration: string;
 };
-export type BoardWidgetMcpAppDocument = {
+type BoardWidgetMcpAppDocument = {
   descriptor: BoardMcpAppDescriptor;
   revision: number;
 };
@@ -42,7 +42,7 @@ type StoredBoard = {
   documents: Map<string, BoardWidgetDocument>;
 };
 
-export function emptyBoardSnapshot(sessionKey: string): BoardSnapshot {
+function emptyBoardSnapshot(sessionKey: string): BoardSnapshot {
   return { sessionKey, revision: 0, tabs: [], widgets: [] };
 }
 
@@ -60,7 +60,7 @@ export function cloneBoardSnapshot(snapshot: BoardSnapshot): BoardSnapshot {
   };
 }
 
-export function createBoardWidgetDocument(
+function createBoardWidgetDocument(
   content: BoardWidgetContent,
   revision: number,
 ): BoardWidgetDocument {

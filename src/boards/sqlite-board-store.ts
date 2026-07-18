@@ -52,6 +52,7 @@ function ensureBoardSchema(database: OpenClawAgentDatabase): void {
   if (ensuredBoardDatabases.has(database.db)) {
     return;
   }
+  // sqlite-allow-raw: this one-time DDL bootstrap precedes Kysely table access.
   const ensure = () => database.db.exec(OPENCLAW_AGENT_BOARD_SCHEMA_SQL);
   if (database.db.isTransaction) {
     ensure();
@@ -65,7 +66,7 @@ function ensureBoardSchema(database: OpenClawAgentDatabase): void {
   ensuredBoardDatabases.add(database.db);
 }
 
-export type SqliteBoardStoreOptions = {
+type SqliteBoardStoreOptions = {
   resolveAgentId: (sessionKey: string) => string;
   env?: NodeJS.ProcessEnv;
 };

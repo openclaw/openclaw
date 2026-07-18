@@ -344,14 +344,6 @@ const config = {
   // reporting enabled. Suppress them only in this application-production scan.
   ignoreIssues: {
     "scripts/**": ["exports", "nsExports", "types", "nsTypes", "enumMembers", "namespaceMembers"],
-    // Board test fixtures exercise the in-memory store, layout error contracts,
-    // notice limits, and ticket helpers; production reaches their implementations
-    // through the SQLite store and gateway methods instead.
-    "src/boards/board-layout.ts": ["types"],
-    "src/boards/board-notices.ts": ["exports"],
-    "src/boards/board-store.ts": ["exports", "types"],
-    "src/boards/sqlite-board-store.ts": ["types"],
-    "src/gateway/board-view-ticket.ts": ["exports", "types"],
   },
   workspaces: {
     ".": {

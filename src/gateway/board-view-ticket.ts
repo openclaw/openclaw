@@ -7,12 +7,12 @@ export const BOARD_VIEW_TICKET_TTL_MS = 2 * 60_000;
 const BOARD_VIEW_TICKET_SCOPE = "board-widget-view";
 const ticketSecret = randomBytes(32);
 
-export type BoardViewTicket = {
+type BoardViewTicket = {
   ticket: string;
   expiresAtMs: number;
 };
 
-export type BoardViewTicketBinding = {
+type BoardViewTicketBinding = {
   sessionKey: string;
   name: string;
   revision: number;

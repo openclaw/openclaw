@@ -1,8 +1,8 @@
 import { enqueueSystemEvent } from "../infra/system-events.js";
 
-export const BOARD_EVENT_MAX_BYTES = 8 * 1024;
-export const BOARD_NOTICE_MAX_CHARS = 500;
-export const BOARD_EVENT_DEDUPE_MS = 5_000;
+const BOARD_EVENT_MAX_BYTES = 8 * 1024;
+const BOARD_NOTICE_MAX_CHARS = 500;
+const BOARD_EVENT_DEDUPE_MS = 5_000;
 
 const recentNotices = new Map<string, { summary: string; at: number }>();
 

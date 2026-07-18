@@ -15,7 +15,7 @@ export const BOARD_SIZE_PRESETS = {
 
 export type BoardSize = keyof typeof BOARD_SIZE_PRESETS;
 export type BoardLayout = Pick<BoardSnapshot, "tabs" | "widgets">;
-export type BoardValidationErrorCode = "conflict" | "invalid_operation" | "not_found";
+type BoardValidationErrorCode = "conflict" | "invalid_operation" | "not_found";
 
 export class BoardValidationError extends Error {
   readonly code: BoardValidationErrorCode;

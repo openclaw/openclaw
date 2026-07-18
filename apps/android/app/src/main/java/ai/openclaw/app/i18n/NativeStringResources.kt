@@ -412,6 +412,7 @@ internal val nativeStringResourceIds: Map<String, Int> =
     "Current session" to R.string.native_a32789d2b53dc704,
     "D" to R.string.native_3f39d5c348e5b79d,
     "DIARY" to R.string.native_6cb1e6a563098eba,
+    "Dashboard" to R.string.native_67b696468610b879,
     "Default" to R.string.native_21b111cbfe6e8fca,
     "Default Agent" to R.string.native_0349070711a2323d,
     "Default agent" to R.string.native_94da52ecd6c5c3b7,
