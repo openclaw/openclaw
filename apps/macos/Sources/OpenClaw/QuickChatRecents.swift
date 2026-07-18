@@ -16,7 +16,10 @@ enum QuickChatRecentMenuLogic {
     {
         let newMessage = QuickChatRecentMenuItem(
             id: "new-message",
-            title: "New message to \(agentName)",
+            // String(localized:) keeps the NSMenuItem title translatable; the relative
+            // age below uses the shared app-wide relativeAge helper, unlocalized here as
+            // everywhere else it is used (a separate app-wide follow-up).
+            title: String(localized: "New message to \(agentName)"),
             target: nil,
             isSelected: selectedTarget == nil)
         let recents = rows.prefix(5).map { row in

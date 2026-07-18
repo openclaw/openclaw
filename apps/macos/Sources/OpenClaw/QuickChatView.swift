@@ -62,13 +62,24 @@ struct QuickChatView: View {
         }
     }
 
+    @ViewBuilder private var placeholder: some View {
+        if let override = self.model.targetSessionOverride {
+            Text("Reply in \(override.displayName)")
+        } else {
+            Text("Message \(self.model.agentDisplay.name)")
+        }
+    }
+
     private var inputRow: some View {
         HStack(spacing: 10) {
             self.agentChip
 
             ZStack(alignment: .leading) {
                 if self.model.text.isEmpty {
-                    Text(self.model.messagePlaceholder)
+                    // Interpolated string literals keep the placeholder localizable
+                    // (SwiftUI's LocalizedStringKey path). Routing through a computed
+                    // String would select the verbatim initializer and drop translation.
+                    self.placeholder
                         .font(.system(size: 13.5))
                         .foregroundStyle(.tertiary)
                         .padding(.leading, 2)
