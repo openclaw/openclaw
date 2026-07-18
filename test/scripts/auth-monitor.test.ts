@@ -1,5 +1,8 @@
 // Auth monitor tests cover optional systemd and Termux helper script contracts.
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const AUTH_MONITOR_PATH = "scripts/auth-monitor.sh";
@@ -15,6 +18,40 @@ const TERMUX_WIDGET_PATHS = [
 
 function readScript(path: string): string {
   return readFileSync(path, "utf8");
+}
+
+function createAuthMonitorHarness() {
+  const home = mkdtempSync(join(tmpdir(), "openclaw-auth-monitor-"));
+  const binDir = join(home, "bin");
+  const curlLog = join(home, "curl.log");
+  const stateFile = join(home, ".openclaw", "auth-monitor-state");
+  mkdirSync(binDir);
+  writeFileSync(
+    join(binDir, "curl"),
+    '#!/bin/sh\nprintf "called\\n" >> "$FAKE_CURL_LOG"\nexit "$FAKE_CURL_EXIT_CODE"\n',
+    { mode: 0o755 },
+  );
+
+  return {
+    curlLog,
+    home,
+    stateFile,
+    cleanup: () => rmSync(home, { recursive: true, force: true }),
+    run: (curlExitCode: number) =>
+      spawnSync("bash", [AUTH_MONITOR_PATH], {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          FAKE_CURL_EXIT_CODE: String(curlExitCode),
+          FAKE_CURL_LOG: curlLog,
+          HOME: home,
+          NOTIFY_NTFY: "test-topic",
+          NOTIFY_PHONE: "",
+          PATH: `${binDir}:${process.env.PATH ?? ""}`,
+        },
+      }),
+  };
 }
 
 describe("auth monitoring scripts", () => {
@@ -53,7 +90,41 @@ describe("auth monitoring scripts", () => {
   it("bounds ntfy notification requests", () => {
     const script = readScript(AUTH_MONITOR_PATH);
 
-    expect(script).toContain("curl -s --connect-timeout 5 --max-time 15 -o /dev/null");
+    expect(script).toContain("curl -fsS --connect-timeout 5 --max-time 15 -o /dev/null");
+  });
+
+  it("retries after ntfy rejects a notification", () => {
+    const harness = createAuthMonitorHarness();
+
+    try {
+      const rejected = harness.run(22);
+      expect(rejected.status).toBe(1);
+      expect(existsSync(harness.stateFile)).toBe(false);
+      expect(rejected.stderr).toContain("No notification delivered; cooldown not updated");
+
+      const retry = harness.run(0);
+      expect(retry.stdout).toContain("Sending via ntfy.sh to test-topic...");
+      expect(retry.stdout).not.toContain("Skipping notification (sent recently)");
+      expect(readFileSync(harness.curlLog, "utf8").trim().split("\n")).toHaveLength(2);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("rate-limits after ntfy accepts a notification", () => {
+    const harness = createAuthMonitorHarness();
+
+    try {
+      const accepted = harness.run(0);
+      expect(accepted.status).toBe(1);
+      expect(existsSync(harness.stateFile)).toBe(true);
+
+      const throttled = harness.run(0);
+      expect(throttled.stdout).toContain("Skipping notification (sent recently)");
+      expect(readFileSync(harness.curlLog, "utf8").trim().split("\n")).toHaveLength(1);
+    } finally {
+      harness.cleanup();
+    }
   });
 
   it("keeps mobile reauth wired to local auth status and Claude token setup", () => {
