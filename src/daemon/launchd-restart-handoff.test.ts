@@ -1,4 +1,9 @@
 // Launchd restart handoff tests cover restart coordination on macOS.
+import { execFile } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
@@ -16,6 +21,8 @@ import { scheduleDetachedLaunchdRestartHandoff } from "./launchd-restart-handoff
 
 type SpawnCall = [string, string[], { env: Record<string, string | undefined> }];
 
+const execFileAsync = promisify(execFile);
+
 function requireSpawnCall(callIndex = 0): SpawnCall {
   const call = spawnMock.mock.calls[callIndex];
   if (!call) {
@@ -31,6 +38,65 @@ function requireSpawnCall(callIndex = 0): SpawnCall {
     throw new Error(`expected spawn call ${callIndex} with command, args, and options`);
   }
   return [command, args as string[], options as SpawnCall[2]];
+}
+
+async function executeReloadHandoff(launchctlStub: string): Promise<{
+  calls: string[];
+  exitCode: number;
+  log: string;
+}> {
+  const stubDir = fs.mkdtempSync(path.join(os.tmpdir(), "launchd-stub-"));
+  try {
+    const home = path.join(stubDir, "home");
+    const callsPath = path.join(stubDir, "launchctl.calls");
+    fs.mkdirSync(path.join(home, ".openclaw", "logs"), { recursive: true });
+    fs.writeFileSync(
+      path.join(stubDir, "launchctl"),
+      `#!/bin/sh\nprintf '%s\\n' "$*" >> "$LAUNCHCTL_CALLS_PATH"\n${launchctlStub}\n`,
+    );
+    fs.chmodSync(path.join(stubDir, "launchctl"), 0o755);
+    fs.writeFileSync(path.join(stubDir, "sleep"), "#!/bin/sh\nexit 0\n");
+    fs.chmodSync(path.join(stubDir, "sleep"), 0o755);
+
+    spawnMock.mockReturnValue({ pid: 4242, unref: unrefMock });
+    scheduleDetachedLaunchdRestartHandoff({
+      env: { HOME: home, OPENCLAW_PROFILE: "default" },
+      mode: "reload",
+      waitForPid: 1,
+    });
+    const [, args] = requireSpawnCall();
+
+    let exitCode = 0;
+    try {
+      await execFileAsync(
+        "/bin/sh",
+        ["-c", args[1], "handoff-test", "gui/501/test.label", "gui/501", "/tmp/test.plist", "1"],
+        {
+          env: {
+            ...process.env,
+            LAUNCHCTL_CALLS_PATH: callsPath,
+            LAUNCHCTL_STUB_DIR: stubDir,
+            PATH: `${stubDir}:${process.env.PATH}`,
+          },
+        },
+      );
+    } catch (error) {
+      const code = (error as { code?: unknown }).code;
+      if (typeof code !== "number") {
+        throw error;
+      }
+      exitCode = code;
+    }
+
+    const calls = fs.readFileSync(callsPath, "utf8").trim().split("\n");
+    const log = fs.readFileSync(
+      path.join(home, ".openclaw", "logs", "gateway-restart.log"),
+      "utf8",
+    );
+    return { calls, exitCode, log };
+  } finally {
+    fs.rmSync(stubDir, { recursive: true, force: true });
+  }
 }
 
 afterEach(() => {
@@ -95,7 +161,7 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     expect(args[1]).not.toContain('basename "$service_target"');
   });
 
-  it("outwaits the drain budget after bootout and retries bootstrap for reload mode", () => {
+  it("outwaits launchd's stop window after bootout and retries bootstrap for reload mode", () => {
     spawnMock.mockReturnValue({ pid: 4242, unref: unrefMock });
 
     scheduleDetachedLaunchdRestartHandoff({
@@ -112,8 +178,7 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     expect(args[1]).toContain('launchctl enable "$service_target"');
     expect(args[1]).toContain('launchctl bootout "$service_target"');
     // The unload poll must outlast launchd's ExitTimeOut SIGKILL ceiling plus
-    // margin (#110137): 35 × 1s vs the old 15 × 0.2s that stranded active-run
-    // restarts.
+    // margin (#110137): 35 × 1s vs the old 15 × 0.2s stop window.
     expect(args[1]).toContain('bootout_wait_count="35"');
     expect(args[1]).toContain('if ! launchctl print "$service_target" >/dev/null 2>&1; then');
     expect(args[1]).toContain("sleep 1");
@@ -127,57 +192,40 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     expect(args[1]).toContain("bootstrap_retry_count=$((bootstrap_retry_count - 1))");
   });
 
+  it("executes the generated reload handoff through a delayed launchd stop", async () => {
+    const result = await executeReloadHandoff(`
+case "$1" in
+  print)
+    count_file="$LAUNCHCTL_STUB_DIR/print-count"
+    count=0
+    [ -f "$count_file" ] && count=$(sed -n '1p' "$count_file")
+    count=$((count + 1))
+    printf '%s\n' "$count" > "$count_file"
+    [ "$count" -le 20 ] && exit 0
+    exit 113
+    ;;
+  bootstrap) exit 0 ;;
+  *) exit 0 ;;
+esac`);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.calls.filter((call) => call.startsWith("print "))).toHaveLength(21);
+    expect(result.calls.filter((call) => call.startsWith("bootstrap "))).toHaveLength(1);
+    expect(result.log).toContain("restart done");
+    expect(result.log).not.toContain("restart failed");
+  });
 
   it("reload retry exhaustion exits nonzero instead of reporting a successful restart", async () => {
-    // Execution-level: run the generated script with stubbed launchctl (always
-    // fails, label absent) so the exhausted retry path is exercised for real.
-    // A completed if with a false condition leaves $? at 0, which previously
-    // let this path log "restart done" while the LaunchAgent stayed
-    // deregistered.
-    const { execFile } = await vi.importActual<typeof import("node:child_process")>(
-      "node:child_process",
+    // A completed if with a false condition leaves $? at 0. Keep this
+    // execution-level check so exhausted retries cannot report success while
+    // the LaunchAgent remains deregistered.
+    const result = await executeReloadHandoff(
+      'case "$1" in bootstrap) exit 5 ;; print) exit 113 ;; *) exit 0 ;; esac',
     );
-    const { mkdtempSync, writeFileSync, chmodSync, mkdirSync, readFileSync } = await import(
-      "node:fs"
-    );
-    const { tmpdir } = await import("node:os");
-    const path = await import("node:path");
 
-    const stubDir = mkdtempSync(path.join(tmpdir(), "launchd-stub-"));
-    const home = path.join(stubDir, "home");
-    mkdirSync(path.join(home, ".openclaw", "logs"), { recursive: true });
-    writeFileSync(
-      path.join(stubDir, "launchctl"),
-      '#!/bin/sh\ncase "$1" in bootstrap) exit 5 ;; print) exit 113 ;; *) exit 0 ;; esac\n',
-    );
-    chmodSync(path.join(stubDir, "launchctl"), 0o755);
-    writeFileSync(path.join(stubDir, "sleep"), "#!/bin/sh\nexit 0\n");
-    chmodSync(path.join(stubDir, "sleep"), 0o755);
-
-    spawnMock.mockReturnValue({ pid: 4242, unref: unrefMock });
-    scheduleDetachedLaunchdRestartHandoff({
-      env: { HOME: home, OPENCLAW_PROFILE: "default" },
-      mode: "reload",
-      waitForPid: 1,
-    });
-    const [, args] = requireSpawnCall();
-
-    const exitCode = await new Promise<number>((resolve) => {
-      execFile(
-        "/bin/sh",
-        ["-c", args[1], "handoff-test", "gui/501/test.label", "gui/501", "/tmp/test.plist", "1"],
-        { env: { ...process.env, PATH: `${stubDir}:${process.env.PATH}` } },
-        (error) => {
-          resolve(error && typeof error.code === "number" ? error.code : 0);
-        },
-      );
-    });
-
-    expect(exitCode).not.toBe(0);
-    const log = readFileSync(
-      path.join(home, ".openclaw", "logs", "gateway-restart.log"),
-      "utf8",
-    );
+    expect(result.exitCode).toBe(5);
+    expect(result.calls.filter((call) => call.startsWith("bootstrap "))).toHaveLength(15);
+    const { log } = result;
     expect(log).toContain("restart failed");
     expect(log).not.toContain("restart done");
   });

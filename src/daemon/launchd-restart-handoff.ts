@@ -24,10 +24,10 @@ type LaunchdRestartTarget = {
 
 const START_AFTER_EXIT_PRINT_RETRY_COUNT = 15;
 const START_AFTER_EXIT_PRINT_RETRY_DELAY_SECONDS = 0.2;
-// The booted-out label stays registered until the old process exits; launchd
-// bounds that with the generated plist's ExitTimeOut SIGKILL, so the reload
-// wait is that ceiling plus teardown margin. A 3s poll gave up mid-window and
-// stranded the LaunchAgent whenever a run was active at restart (#110137).
+// The booted-out label stays registered until launchd finishes stopping the
+// old process. ExitTimeOut bounds that stop with SIGKILL, so the reload wait is
+// that ceiling plus teardown margin. A 3s poll could advance mid-stop and
+// strand the LaunchAgent (#110137).
 const RELOAD_BOOTOUT_WAIT_DELAY_SECONDS = 1;
 const RELOAD_BOOTOUT_WAIT_COUNT = LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS + 15;
 const RELOAD_BOOTSTRAP_RETRY_COUNT = 15;
@@ -146,10 +146,10 @@ exit "$status"
   if (mode === "reload") {
     // Reloading is required after plist content changes; kickstart alone keeps
     // launchd's already-loaded stdout/stderr/stdin paths.
-    // After bootout the label stays registered until the old gateway finishes
-    // its drain-before-exit window, so this poll must outlast the full drain
-    // budget — bootstrapping early fails with EIO (Bootstrap failed: 5) and a
-    // 3s poll stranded the LaunchAgent whenever a run was active (#110137).
+    // After bootout the label stays registered until launchd finishes its
+    // ExitTimeOut-bounded stop, so this poll must outlast that stop window.
+    // Bootstrapping early fails with EIO (Bootstrap failed: 5) and can leave
+    // the LaunchAgent deregistered (#110137).
     const bootoutWaitLoop = `bootout_wait_count="${RELOAD_BOOTOUT_WAIT_COUNT}"
 while [ "$bootout_wait_count" -gt 0 ]; do
   if ! launchctl print "$service_target" >/dev/null 2>&1; then
