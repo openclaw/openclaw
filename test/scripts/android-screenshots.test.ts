@@ -44,9 +44,11 @@ describe("android screenshots script", () => {
     const script = readFileSync(SCRIPT, "utf8");
     const fixture = readFileSync(SCREENSHOT_FIXTURE, "utf8");
 
-    expect(script).toContain('chat) printf \'%s\\n\' "The Android release is close."');
+    expect(script).toContain(
+      'chat) printf \'%s\\n\' "Draft a short status update for the team."',
+    );
     expect(script).not.toContain('chat) printf \'%s\\n\' "Ready when you are"');
-    expect(fixture).toContain('"The Android release is close.');
+    expect(fixture).toContain('"Draft a short status update for the team."');
     expect(script).toContain("settings) printf '%s\\n' \"OpenClaw mobile\"");
     expect(script).not.toContain("settings) printf '%s\\n' \"Settings\"");
     expect(script).toContain(

@@ -452,9 +452,9 @@ latest_play_debug_apk() {
 scene_ready_text() {
   case "$1" in
     home) printf '%s\n' "Overview" ;;
-    # The screenshot fixture seeds chat history, so wait for its final reply;
-    # empty-chat copy is absent once the timeline has hydrated.
-    chat) printf '%s\n' "The Android release is close." ;;
+    # The screenshot fixture seeds chat history and restores at the latest user
+    # turn, so wait for that visible anchor instead of empty-chat copy.
+    chat) printf '%s\n' "Draft a short status update for the team." ;;
     voice) printf '%s\n' "Ready to talk" ;;
     settings) printf '%s\n' "OpenClaw mobile" ;;
     voice-wake) printf '%s\n' "Wake listener" ;;
