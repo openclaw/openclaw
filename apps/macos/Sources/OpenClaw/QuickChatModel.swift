@@ -1170,6 +1170,11 @@ extension QuickChatModel {
                 } else {
                     self.currentSessionModelSelectionID = nil
                 }
+                // The refreshedSnapshot branch above already seeded currentSessionThinkingLevel
+                // from the authoritative fetch, so when the patch response omits both
+                // thinkingLevels and thinkingLevel both branches here are skipped and the
+                // refreshed level survives; these only override when the patch itself
+                // returned a level.
                 if result?.thinkingLevels != nil {
                     self.currentSessionThinkingLevel = result?.thinkingLevel
                 } else if let thinkingLevel = result?.thinkingLevel {
