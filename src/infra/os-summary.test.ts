@@ -94,4 +94,24 @@ describe("resolveOsSummary", () => {
     }
     expect(resolveOsSummary()).toEqual(expected);
   });
+
+  it("passes a timeout to the sw_vers probe so a hung binary cannot block startup", () => {
+    vi.spyOn(os, "platform").mockReturnValue("darwin");
+    vi.spyOn(os, "release").mockReturnValue("24.0.0");
+    vi.spyOn(os, "arch").mockReturnValue("arm64");
+    spawnSyncMock.mockReturnValue({
+      stdout: " 15.4 \n",
+      stderr: "",
+      pid: 1,
+      output: [],
+      status: 0,
+      signal: null,
+    });
+
+    resolveOsSummary();
+
+    const swVersCall = spawnSyncMock.mock.calls.find(([cmd]) => cmd === "sw_vers");
+    expect(swVersCall).toBeDefined();
+    expect(swVersCall?.[2]?.timeout).toBeGreaterThan(0);
+  });
 });

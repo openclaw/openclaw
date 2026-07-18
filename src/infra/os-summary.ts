@@ -13,7 +13,7 @@ type OsSummary = {
 const cachedOsSummaryByKey = new Map<string, OsSummary>();
 
 function macosVersion(): string {
-  const res = spawnSync("sw_vers", ["-productVersion"], { encoding: "utf-8" });
+  const res = spawnSync("sw_vers", ["-productVersion"], { encoding: "utf-8", timeout: 5_000 });
   const out = normalizeOptionalString(res.stdout) ?? "";
   return out || os.release();
 }
