@@ -1122,7 +1122,7 @@ export const en: TranslationMap = {
   configView: {
     categories: {
       core: "Core",
-      ai: "AI & Agents",
+      ai: "Agent Defaults",
       communication: "Communication",
       security: "Privacy & Security",
       automation: "Automation",
@@ -1634,7 +1634,7 @@ export const en: TranslationMap = {
     mcp: "MCP",
     infrastructure: "Infrastructure",
     about: "About",
-    aiAgents: "AI & Agents",
+    aiAgents: "Agent Defaults",
     modelSetup: "Model Setup",
     modelProviders: "Model Providers",
     memoryImport: "Import Memory",
@@ -1671,7 +1671,7 @@ export const en: TranslationMap = {
     mcp: "MCP servers, auth, tools, and diagnostics.",
     infrastructure: "Gateway, web, browser, and media settings.",
     about: "Control UI and connected Gateway build identity.",
-    aiAgents: "Agents, models, skills, tools, memory, session.",
+    aiAgents: "Global agent defaults: models, skills, tools, memory, session.",
     modelSetup: "Connect a verified AI model",
     modelProviders: "Configured providers with plan, quota, and cost.",
     memoryImport: "Bring Codex and Claude Code memory into an agent workspace.",
@@ -3706,6 +3706,9 @@ export const en: TranslationMap = {
       default: "Default",
       reasoning: "Reasoning",
       speed: "Speed",
+      sessionOverride: "Session override",
+      usingDefault: "Using default from Settings",
+      resetToDefault: "Reset to default ({model})",
     },
     sideChat: {
       title: "Side chat",
