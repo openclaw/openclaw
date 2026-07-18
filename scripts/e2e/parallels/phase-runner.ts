@@ -21,7 +21,9 @@ function appendTextTail(current: string, chunk: string, maxBytes: number): strin
   let tailStart = 0;
   while (tailStart < rawTail.length) {
     const byte = rawTail.at(tailStart);
-    if (byte === undefined || (byte & 0xc0) !== 0x80) break;
+    if (byte === undefined || (byte & 0xc0) !== 0x80) {
+      break;
+    }
     tailStart += 1;
   }
   const tail = rawTail.subarray(tailStart).toString("utf8");
