@@ -163,6 +163,53 @@ describe("RealtimeTalkSession", () => {
     expect(webRtcCtor).not.toHaveBeenCalled();
   });
 
+  it("closes a stale Gateway relay that resolves after stop and restart", async () => {
+    const resolveRequests: Array<(value: unknown) => void> = [];
+    const request = vi.fn(
+      () =>
+        new Promise<unknown>((resolve) => {
+          resolveRequests.push(resolve);
+        }),
+    );
+    const session = new RealtimeTalkSession({ request } as never, "main");
+
+    const firstStart = session.start();
+    await vi.waitFor(() => expect(resolveRequests).toHaveLength(1));
+    session.stop();
+    const secondStart = session.start();
+    await vi.waitFor(() => expect(resolveRequests).toHaveLength(2));
+    resolveRequests[1]!({
+      provider: "example",
+      transport: "gateway-relay",
+      relaySessionId: "relay-current",
+      audio: {
+        inputEncoding: "pcm16",
+        inputSampleRateHz: 24000,
+        outputEncoding: "pcm16",
+        outputSampleRateHz: 24000,
+      },
+    });
+    await secondStart;
+    resolveRequests[0]!({
+      provider: "example",
+      transport: "gateway-relay",
+      relaySessionId: "relay-stale",
+      audio: {
+        inputEncoding: "pcm16",
+        inputSampleRateHz: 24000,
+        outputEncoding: "pcm16",
+        outputSampleRateHz: 24000,
+      },
+    });
+    await firstStart;
+
+    expect(relayCtor).toHaveBeenCalledTimes(2);
+    expect(relayStart).toHaveBeenCalledTimes(1);
+    expect(relayStop).toHaveBeenCalledTimes(1);
+    expect(googleCtor).not.toHaveBeenCalled();
+    expect(webRtcCtor).not.toHaveBeenCalled();
+  });
+
   it("falls back to talk.session.create when gateway-relay is rejected by talk.client.create", async () => {
     const request = vi
       .fn()

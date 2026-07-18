@@ -356,6 +356,125 @@ describeControlUiE2e("Control UI browser Talk", () => {
     }
   });
 
+  it("closes a stale relay when stop and restart race its create response", async () => {
+    const context = await browser.newContext({ locale: "en-US", permissions: ["microphone"] });
+    const page = await context.newPage();
+    const currentRelaySessionId = "relay-current-e2e";
+    const staleRelaySessionId = "relay-stale-e2e";
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "talk.client.create": {
+          provider: "openai",
+          transport: "gateway-relay",
+          relaySessionId: currentRelaySessionId,
+          audio: {
+            inputEncoding: "pcm16",
+            inputSampleRateHz: 16_000,
+            outputEncoding: "pcm16",
+            outputSampleRateHz: 24_000,
+          },
+        },
+        "talk.session.appendAudio": {},
+        "talk.session.close": {},
+      },
+    });
+    await installTalkBrowserFixtures(page);
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await gateway.deferNext("talk.client.create");
+
+      await page.getByRole("button", { name: "Start voice input" }).click();
+      await expect
+        .poll(() => gateway.getRequests("talk.client.create").then((requests) => requests.length))
+        .toBe(1);
+      await page.getByRole("button", { name: "Stop voice input" }).click();
+      await page.getByRole("button", { name: "Start voice input" }).click();
+      await expect
+        .poll(() => gateway.getRequests("talk.client.create").then((requests) => requests.length))
+        .toBe(2);
+
+      await expect
+        .poll(() =>
+          page.evaluate(
+            () =>
+              (
+                window as Window & {
+                  openclawTalkE2eState?: { constraints: unknown[] };
+                }
+              ).openclawTalkE2eState?.constraints.length,
+          ),
+        )
+        .toBe(1);
+      await gateway.emitGatewayEvent("talk.event", {
+        relaySessionId: currentRelaySessionId,
+        type: "ready",
+      });
+      await expect
+        .poll(() => page.locator('.agent-chat__voice-activity[data-status="listening"]').count())
+        .toBe(1);
+
+      await gateway.resolveDeferred("talk.client.create", {
+        provider: "openai",
+        transport: "gateway-relay",
+        relaySessionId: staleRelaySessionId,
+        audio: {
+          inputEncoding: "pcm16",
+          inputSampleRateHz: 16_000,
+          outputEncoding: "pcm16",
+          outputSampleRateHz: 24_000,
+        },
+      });
+      await expect
+        .poll(() => gateway.getRequests("talk.session.close"))
+        .toEqual([
+          expect.objectContaining({
+            params: { sessionId: staleRelaySessionId },
+          }),
+        ]);
+
+      await page.evaluate(() => {
+        const state = (
+          window as Window & {
+            openclawTalkE2eState?: {
+              inputProcessor?: {
+                onaudioprocess?: (event: {
+                  inputBuffer: { getChannelData: () => Float32Array };
+                }) => void;
+              };
+            };
+          }
+        ).openclawTalkE2eState;
+        state?.inputProcessor?.onaudioprocess?.({
+          inputBuffer: { getChannelData: () => new Float32Array(4096).fill(0.1) },
+        });
+      });
+      await expect
+        .poll(() => gateway.getRequests("talk.session.appendAudio"))
+        .toEqual([
+          expect.objectContaining({
+            params: expect.objectContaining({ sessionId: currentRelaySessionId }),
+          }),
+        ]);
+      await expect
+        .poll(() => page.getByRole("button", { name: "Stop voice input" }).isVisible())
+        .toBe(true);
+      await captureComposerProof(page, "05-relay-create-race-current-stays-active.png");
+      console.info("[browser-talk-e2e] relay_create_race=stale-closed,current-audio-appended");
+
+      await page.getByRole("button", { name: "Stop voice input" }).click();
+      await expect
+        .poll(() =>
+          gateway
+            .getRequests("talk.session.close")
+            .then((requests) => requests.map((request) => request.params)),
+        )
+        .toEqual([{ sessionId: staleRelaySessionId }, { sessionId: currentRelaySessionId }]);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("keeps stop-voice and stop-run controls visually distinct while both are active", async () => {
     const context = await browser.newContext({ permissions: ["microphone"] });
     const page = await context.newPage();
