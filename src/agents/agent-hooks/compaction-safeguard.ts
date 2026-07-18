@@ -1448,7 +1448,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           type: "ai_safety.eval.result",
           sessionId: ctx.sessionManager.getSessionId(),
           evalName: "compaction.summary_quality",
-          score: quality.ok ? 1.0 : 0.0,
+          score: quality.ok ? 1 : 0,
           passed: quality.ok,
           severity: quality.ok ? "info" : "warn",
         });

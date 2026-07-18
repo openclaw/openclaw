@@ -92,8 +92,7 @@ function short(value: string | undefined, maxChars: number): string {
 
 function formatSafetyRows(events: SafetyEventRecord[]): string[] {
   return events
-    .slice()
-    .sort((a, b) => b.sequence - a.sequence)
+    .toSorted((a, b) => b.sequence - a.sequence)
     .map((event) => {
       const ts = timestampMsToIsoString(event.recordedAt);
       const badge = severityBadge(event.severity);

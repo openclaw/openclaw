@@ -156,7 +156,9 @@ async function main() {
   }
 
   // Allow synchronous dispatch to complete.
-  await new Promise((resolve) => setTimeout(resolve, 50));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 50);
+  });
 
   console.log("");
   console.log("--- Stage 2: dispatcher fan-out (trusted metadata attached) ---");
@@ -185,7 +187,9 @@ async function main() {
     }
   }
   // Allow any late dispatch to arrive.
-  await new Promise((resolve) => setTimeout(resolve, 50));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 50);
+  });
   const actualSpoofed = dispatched.length - dispatchedBeforeSpoof;
   console.log(
     `  result: ${actualSpoofed}/${events.length} untrusted ai_safety.* events reached the dispatcher (expected 0 — dropped by manifest gate)`,
@@ -223,7 +227,7 @@ async function main() {
   }
 }
 
-main().catch((e) => {
+main().catch((e: unknown) => {
   console.error(e);
   process.exit(1);
 });

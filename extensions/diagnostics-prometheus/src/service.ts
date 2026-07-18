@@ -1015,7 +1015,7 @@ function recordDiagnosticEvent(
         numericValue(evt.bytes),
         BYTE_BUCKETS,
       );
-      return;
+      break;
     default:
   }
 }

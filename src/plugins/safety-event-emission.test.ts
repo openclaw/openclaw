@@ -227,7 +227,7 @@ describe("emitPluginSafetyEvent — all taxonomy types accepted for trusted plug
       type: "ai_safety.eval.result",
       sessionId: "s",
       evalName: "test-eval",
-      score: 1.0,
+      score: 1,
       passed: true,
       severity: "info",
     },
