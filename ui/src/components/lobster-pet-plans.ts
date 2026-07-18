@@ -1,5 +1,9 @@
 import { getSafeLocalStorage } from "../local-storage.ts";
-import type { LobsterPetMode, LobsterPetPersonalityId } from "./lobster-pet-contract.ts";
+import type {
+  LobsterPetMode,
+  LobsterPetPersonalityId,
+  LobsterRunOutcome,
+} from "./lobster-pet-contract.ts";
 import { mulberry32, SPOT_ZONES } from "./lobster-pet-look.ts";
 
 export { SPOT_ZONES };
@@ -111,6 +115,24 @@ export const LOBSTER_PET_MODE_ACTS: Record<Exclude<LobsterPetMode, "idle">, ActP
     ],
   },
 };
+
+export function resolveLobsterActProfile(
+  mode: LobsterPetMode,
+  personality: LobsterPetPersonalityId | null,
+  now: Date = new Date(),
+): ActProfile | null {
+  if (mode === "busy" || mode === "offline") {
+    return LOBSTER_PET_MODE_ACTS[mode];
+  }
+  if (isLobsterNightTime(now)) {
+    return PERSONALITIES.sleepy;
+  }
+  return personality ? PERSONALITIES[personality] : null;
+}
+
+export function resolveLobsterFinishAct(outcome: LobsterRunOutcome): LobsterPetAct {
+  return outcome === "error" ? "droop" : outcome === "aborted" ? "startle" : "cheer";
+}
 
 export const ENTER_MS = 450;
 export const LEAVE_MS = 350;

@@ -9,16 +9,16 @@ export function playLobsterPetChirp(
   soundsEnabled: boolean,
   kind: LobsterPetChirpKind,
 ): AudioContext | null {
+  let ctx = audioCtx;
   if (!soundsEnabled) {
-    return audioCtx;
+    return ctx;
   }
   try {
     const Ctor = window.AudioContext;
     if (!Ctor) {
-      return audioCtx;
+      return ctx;
     }
-    audioCtx ??= new Ctor();
-    const ctx = audioCtx;
+    ctx ??= new Ctor();
     if (ctx.state === "suspended") {
       void ctx.resume();
     }
@@ -42,5 +42,5 @@ export function playLobsterPetChirp(
   } catch {
     // never let audio break the pet
   }
-  return audioCtx;
+  return ctx;
 }

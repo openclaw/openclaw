@@ -224,12 +224,7 @@ class LobsterPet extends LitElement {
         // reschedules from the new mode's pool.
         // Success cheers, failure droops, a user abort is nothing to
         // celebrate or mourn - just acknowledge the change.
-        const finishAct =
-          this.runOutcome === "error"
-            ? "droop"
-            : this.runOutcome === "aborted"
-              ? "startle"
-              : "cheer";
+        const finishAct = plans.resolveLobsterFinishAct(this.runOutcome);
         this.performAct(finished ? finishAct : "startle", presenceOwner);
       }
     }
@@ -658,16 +653,6 @@ class LobsterPet extends LitElement {
     return plans.SPOT_ZONES[side];
   }
 
-  private actProfile(): plans.ActProfile | null {
-    if (this.mode === "busy" || this.mode === "offline") {
-      return plans.LOBSTER_PET_MODE_ACTS[this.mode];
-    }
-    if (plans.isLobsterNightTime()) {
-      return plans.PERSONALITIES.sleepy;
-    }
-    return this.look ? plans.PERSONALITIES[this.look.personality] : null;
-  }
-
   private scheduleNextAct() {
     // Guard here, not just at activation: the visibilitychange resume path
     // must also stay inert for reduced-motion users and departed pets.
@@ -683,14 +668,17 @@ class LobsterPet extends LitElement {
     ) {
       return;
     }
-    const profile = this.actProfile();
+    const profile = plans.resolveLobsterActProfile(this.mode, this.look.personality);
     if (!profile) {
       return;
     }
     const delay = lobsterLook.randomBetween(this.rng, profile.delayMs[0], profile.delayMs[1]);
     this.idleTimer = window.setTimeout(() => {
       this.idleTimer = null;
-      const nextProfile = this.actProfile();
+      const nextProfile = plans.resolveLobsterActProfile(
+        this.mode,
+        this.look?.personality ?? null,
+      );
       // A crossing pauses the fidget loop: the pet is busy watching. The
       // passer-end timer restarts scheduling.
       if (!nextProfile || document.hidden || this.presence !== "in" || this.passer !== null) {
