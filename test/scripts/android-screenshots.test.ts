@@ -64,6 +64,13 @@ describe("android screenshots script", () => {
     expect(script).toContain("shell wm density reset");
   });
 
+  it("pins the device timezone before rendering seeded timestamps", () => {
+    const script = readFileSync(SCRIPT, "utf8");
+
+    expect(script).toContain("shell cmd time_zone_detector set_auto_detection_enabled false");
+    expect(script).toContain("shell cmd alarm set-timezone UTC");
+  });
+
   it("provisions a retained no-cutout screenshot emulator by default", () => {
     const script = readFileSync(SCRIPT, "utf8");
 

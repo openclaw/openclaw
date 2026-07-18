@@ -333,6 +333,10 @@ wait_for_explicit_device() {
 stabilize_device_for_screenshots() {
   local adb="$1"
   local serial="$2"
+  # Seeded chat timestamps use the device timezone; disable detection before
+  # pinning UTC so release captures do not inherit the runner's locale.
+  "$adb" -s "$serial" shell cmd time_zone_detector set_auto_detection_enabled false >/dev/null
+  "$adb" -s "$serial" shell cmd alarm set-timezone UTC >/dev/null
   "$adb" -s "$serial" shell settings put global window_animation_scale 0 >/dev/null 2>&1 || true
   "$adb" -s "$serial" shell settings put global transition_animation_scale 0 >/dev/null 2>&1 || true
   "$adb" -s "$serial" shell settings put global animator_duration_scale 0 >/dev/null 2>&1 || true
