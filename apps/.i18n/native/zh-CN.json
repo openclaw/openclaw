@@ -20154,6 +20154,11 @@
       "translated": "Gateway 无法规划 \\(plan.summary.errors) 个\\(Self.memoryNoun(plan.summary.errors))。请重试。"
     },
     {
+      "id": "native.apple.ba758aa97c24ffe6",
+      "source": "Wake up, my friend!",
+      "translated": "醒醒，我的朋友！"
+    },
+    {
       "id": "native.apple.1400567a01a8d7c0",
       "source": "<redacted secret>",
       "translated": "<已隐藏的密钥>"

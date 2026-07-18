@@ -20154,6 +20154,11 @@
       "translated": "Gateway ไม่สามารถวางแผน \\(plan.summary.errors) \\(Self.memoryNoun(plan.summary.errors)) ได้ โปรดลองอีกครั้ง"
     },
     {
+      "id": "native.apple.ba758aa97c24ffe6",
+      "source": "Wake up, my friend!",
+      "translated": "ตื่นได้แล้ว เพื่อนของฉัน!"
+    },
+    {
       "id": "native.apple.1400567a01a8d7c0",
       "source": "<redacted secret>",
       "translated": "<ข้อมูลลับถูกปกปิด>"

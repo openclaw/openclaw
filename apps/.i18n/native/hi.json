@@ -20154,6 +20154,11 @@
       "translated": "Gateway, \\(plan.summary.errors) \\(Self.memoryNoun(plan.summary.errors)) के लिए योजना नहीं बना सका। फिर से कोशिश करें।"
     },
     {
+      "id": "native.apple.ba758aa97c24ffe6",
+      "source": "Wake up, my friend!",
+      "translated": "जागो, मेरे दोस्त!"
+    },
+    {
       "id": "native.apple.1400567a01a8d7c0",
       "source": "<redacted secret>",
       "translated": "<गोपनीय जानकारी हटाई गई>"

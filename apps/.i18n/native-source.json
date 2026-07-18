@@ -32242,8 +32242,16 @@
       "id": "native.apple.2070bf43a67680ee"
     },
     {
+      "kind": "ui-localized-call",
+      "line": 10,
+      "path": "apps/macos/Sources/OpenClaw/OnboardingSystemAgentChat.swift",
+      "source": "Wake up, my friend!",
+      "surface": "apple",
+      "id": "native.apple.ba758aa97c24ffe6"
+    },
+    {
       "kind": "conditional-branch",
-      "line": 118,
+      "line": 129,
       "path": "apps/macos/Sources/OpenClaw/OnboardingSystemAgentChat.swift",
       "source": "<redacted secret>",
       "surface": "apple",
@@ -32251,7 +32259,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 217,
+      "line": 228,
       "path": "apps/macos/Sources/OpenClaw/OnboardingSystemAgentChat.swift",
       "source": "OpenClaw was interrupted. Restart to try again.",
       "surface": "apple",
@@ -32259,7 +32267,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 218,
+      "line": 229,
       "path": "apps/macos/Sources/OpenClaw/OnboardingSystemAgentChat.swift",
       "source": "The Gateway connection changed. Restart OpenClaw to reconnect.",
       "surface": "apple",
@@ -32267,7 +32275,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 242,
+      "line": 253,
       "path": "apps/macos/Sources/OpenClaw/OnboardingSystemAgentChat.swift",
       "source": "OpenClaw is working…",
       "surface": "apple",
@@ -32275,7 +32283,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 267,
+      "line": 278,
       "path": "apps/macos/Sources/OpenClaw/OnboardingSystemAgentChat.swift",
       "source": "Restart",
       "surface": "apple",
@@ -32283,7 +32291,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 278,
+      "line": 289,
       "path": "apps/macos/Sources/OpenClaw/OnboardingSystemAgentChat.swift",
       "source": "Enter secret…",
       "surface": "apple",
@@ -32291,7 +32299,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 280,
+      "line": 291,
       "path": "apps/macos/Sources/OpenClaw/OnboardingSystemAgentChat.swift",
       "source": "Reply to OpenClaw… (yes sets everything up)",
       "surface": "apple",

@@ -20154,6 +20154,11 @@
       "translated": "O Gateway não conseguiu planejar \\(plan.summary.errors) \\(Self.memoryNoun(plan.summary.errors)). Tente novamente."
     },
     {
+      "id": "native.apple.ba758aa97c24ffe6",
+      "source": "Wake up, my friend!",
+      "translated": "Acorde, meu amigo!"
+    },
+    {
       "id": "native.apple.1400567a01a8d7c0",
       "source": "<redacted secret>",
       "translated": "<segredo ocultado>"
