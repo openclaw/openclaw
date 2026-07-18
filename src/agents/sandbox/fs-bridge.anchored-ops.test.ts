@@ -255,10 +255,7 @@ describe("sandbox fs bridge anchored ops", () => {
 
       await expect(bridge.stat({ filePath: "note.txt" })).resolves.toBeNull();
 
-      const statCall = requireDockerCall(
-        findCallByScriptFragment("st.st_mtime_ns"),
-        "stat",
-      );
+      const statCall = requireDockerCall(findCallByScriptFragment("st.st_mtime_ns"), "stat");
       const statScript = getDockerScript(statCall[0]);
       expect(statScript).toContain(SANDBOX_STAT_MISSING_SENTINEL);
       expect(statScript).toContain("st.st_mtime_ns");
@@ -324,14 +321,9 @@ describe("sandbox fs bridge anchored ops", () => {
         }),
       });
 
-      await expect(
-        bridge.stat({ filePath: "note.txt" }),
-      ).rejects.toThrow("Permission denied");
+      await expect(bridge.stat({ filePath: "note.txt" })).rejects.toThrow("Permission denied");
 
-      const statCall = requireDockerCall(
-        findCallByScriptFragment("st.st_mtime_ns"),
-        "stat",
-      );
+      const statCall = requireDockerCall(findCallByScriptFragment("st.st_mtime_ns"), "stat");
       const statScript = getDockerScript(statCall[0]);
       expect(statScript).toContain("else\n  stat_status=$?\nfi");
       expect(statScript).toContain('exit "$stat_status"');
@@ -362,9 +354,7 @@ describe("sandbox fs bridge anchored ops", () => {
         }),
       });
 
-      await expect(
-        bridge.stat({ filePath: "note.txt" }),
-      ).resolves.toMatchObject({
+      await expect(bridge.stat({ filePath: "note.txt" })).resolves.toMatchObject({
         type: "file",
         size: Number.MAX_SAFE_INTEGER,
         mtimeMs: 0,
