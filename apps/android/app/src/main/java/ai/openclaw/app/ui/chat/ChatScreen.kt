@@ -2219,13 +2219,12 @@ private fun LiveTalkButton(
 
 @Composable
 private fun LiveTalkWaveform(modifier: Modifier = Modifier) {
-  val transition = rememberInfiniteTransition(label = "live-talk-waveform")
+  val transition = rememberInfiniteTransition()
   val phase by
     transition.animateFloat(
       initialValue = 0f,
       targetValue = (Math.PI * 2).toFloat(),
       animationSpec = infiniteRepeatable(animation = tween(durationMillis = 720, easing = LinearEasing), repeatMode = RepeatMode.Restart),
-      label = "live-talk-waveform-phase",
     )
 
   Canvas(modifier = modifier) {

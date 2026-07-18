@@ -834,7 +834,6 @@ internal val nativeStringResourceIds: Map<String, Int> =
     "Open the camera and frame the code from openclaw qr." to R.string.native_f991ae9cb081e1f3,
     "Open the current Canvas surface to inspect or interact with it." to R.string.native_0f8fe3a9688138a1,
     "Open thinking level selector" to R.string.native_f28cb795c9721dd0,
-    "Open voice" to R.string.native_b6c6d6aeafc3b04a,
     "OpenClaw" to R.string.native_a7b90ee8facf0aed,
     "OpenClaw \${BuildConfig.VERSION_NAME} (\${BuildConfig.VERSION_CODE})" to R.string.native_114c9789813fd2b0,
     "OpenClaw Active" to R.string.native_d056177742e27cf5,

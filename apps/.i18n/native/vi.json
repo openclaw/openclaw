@@ -7434,21 +7434,6 @@
       "translated": "Hết hạn sau ${seconds}s"
     },
     {
-      "id": "native.android.7c65a0e8c6e2a9d2",
-      "source": "Realtime Talk",
-      "translated": "Trò chuyện theo thời gian thực"
-    },
-    {
-      "id": "native.android.56e73fe98ab486ce",
-      "source": "Back",
-      "translated": "Quay lại"
-    },
-    {
-      "id": "native.android.b827945b6ee6c1e8",
-      "source": "Open Settings",
-      "translated": "Mở Cài đặt"
-    },
-    {
       "id": "native.android.118e8d239b18895e",
       "source": "Model",
       "translated": "Mô hình"
@@ -7734,9 +7719,14 @@
       "translated": "Nhắn tin cho OpenClaw"
     },
     {
-      "id": "native.android.97602a28629a331f",
-      "source": "Open voice",
-      "translated": "Mở giọng nói"
+      "id": "native.android.9b42791ed9da90d3",
+      "source": "End Talk",
+      "translated": "Kết thúc cuộc trò chuyện"
+    },
+    {
+      "id": "native.android.1d55fe6bab0d3f74",
+      "source": "Start Talk",
+      "translated": "Bắt đầu trò chuyện"
     },
     {
       "id": "native.android.6f4dc5330b262dea",

@@ -7434,21 +7434,6 @@
       "translated": "تنتهي الصلاحية خلال ${seconds}ث"
     },
     {
-      "id": "native.android.7c65a0e8c6e2a9d2",
-      "source": "Realtime Talk",
-      "translated": "المحادثة في الوقت الفعلي"
-    },
-    {
-      "id": "native.android.56e73fe98ab486ce",
-      "source": "Back",
-      "translated": "رجوع"
-    },
-    {
-      "id": "native.android.b827945b6ee6c1e8",
-      "source": "Open Settings",
-      "translated": "فتح الإعدادات"
-    },
-    {
       "id": "native.android.118e8d239b18895e",
       "source": "Model",
       "translated": "النموذج"
@@ -7734,9 +7719,14 @@
       "translated": "مراسلة OpenClaw"
     },
     {
-      "id": "native.android.97602a28629a331f",
-      "source": "Open voice",
-      "translated": "فتح الصوت"
+      "id": "native.android.9b42791ed9da90d3",
+      "source": "End Talk",
+      "translated": "إنهاء المحادثة"
+    },
+    {
+      "id": "native.android.1d55fe6bab0d3f74",
+      "source": "Start Talk",
+      "translated": "بدء المحادثة"
     },
     {
       "id": "native.android.6f4dc5330b262dea",

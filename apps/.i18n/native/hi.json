@@ -7434,21 +7434,6 @@
       "translated": "${seconds}s में समाप्त होगा"
     },
     {
-      "id": "native.android.7c65a0e8c6e2a9d2",
-      "source": "Realtime Talk",
-      "translated": "रीयलटाइम बातचीत"
-    },
-    {
-      "id": "native.android.56e73fe98ab486ce",
-      "source": "Back",
-      "translated": "वापस"
-    },
-    {
-      "id": "native.android.b827945b6ee6c1e8",
-      "source": "Open Settings",
-      "translated": "Settings खोलें"
-    },
-    {
       "id": "native.android.118e8d239b18895e",
       "source": "Model",
       "translated": "मॉडल"
@@ -7734,9 +7719,14 @@
       "translated": "OpenClaw को संदेश भेजें"
     },
     {
-      "id": "native.android.97602a28629a331f",
-      "source": "Open voice",
-      "translated": "वॉइस खोलें"
+      "id": "native.android.9b42791ed9da90d3",
+      "source": "End Talk",
+      "translated": "बातचीत समाप्त करें"
+    },
+    {
+      "id": "native.android.1d55fe6bab0d3f74",
+      "source": "Start Talk",
+      "translated": "Talk शुरू करें"
     },
     {
       "id": "native.android.6f4dc5330b262dea",

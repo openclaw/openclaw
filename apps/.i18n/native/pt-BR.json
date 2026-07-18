@@ -7434,21 +7434,6 @@
       "translated": "Expira em ${seconds}s"
     },
     {
-      "id": "native.android.7c65a0e8c6e2a9d2",
-      "source": "Realtime Talk",
-      "translated": "Conversa em tempo real"
-    },
-    {
-      "id": "native.android.56e73fe98ab486ce",
-      "source": "Back",
-      "translated": "Voltar"
-    },
-    {
-      "id": "native.android.b827945b6ee6c1e8",
-      "source": "Open Settings",
-      "translated": "Abrir Configurações"
-    },
-    {
       "id": "native.android.118e8d239b18895e",
       "source": "Model",
       "translated": "Modelo"
@@ -7734,9 +7719,14 @@
       "translated": "Mensagem para o OpenClaw"
     },
     {
-      "id": "native.android.97602a28629a331f",
-      "source": "Open voice",
-      "translated": "Abrir voz"
+      "id": "native.android.9b42791ed9da90d3",
+      "source": "End Talk",
+      "translated": "Encerrar conversa"
+    },
+    {
+      "id": "native.android.1d55fe6bab0d3f74",
+      "source": "Start Talk",
+      "translated": "Iniciar conversa"
     },
     {
       "id": "native.android.6f4dc5330b262dea",
