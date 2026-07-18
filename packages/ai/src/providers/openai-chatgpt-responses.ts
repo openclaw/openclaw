@@ -449,9 +449,7 @@ export const streamOpenAICodexResponses: StreamFunction<
           }
           lastError = error instanceof Error ? error : new Error(String(error));
           // Network errors are retryable
-          const lastErrorMessage =
-            typeof lastError.message === "string" ? lastError.message : String(lastError);
-          if (attempt < maxRetries && !lastErrorMessage.includes("usage limit")) {
+          if (attempt < maxRetries && !getErrorMessage(lastError).includes("usage limit")) {
             const delayMs = BASE_DELAY_MS * 2 ** attempt;
             await sleepWithAbort(delayMs, activeSignal);
             continue;
@@ -707,6 +705,10 @@ class CodexProtocolError extends Error {
 
 function isCodexNonTransportError(error: unknown): boolean {
   return error instanceof CodexApiError || error instanceof CodexProtocolError;
+}
+
+function getErrorMessage(error: Error): string {
+  return typeof error.message === "string" ? error.message : String(error);
 }
 
 function isWebSocketConnectionLimitReachedError(error: unknown): boolean {
