@@ -493,9 +493,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
       return t("agentChip.working");
     }
     if (latest) {
-      const label = resolveSessionDisplayName(latest.key, latest);
-      const meta = formatSidebarTimestamp(latest.updatedAt);
-      return meta ? `${label} · ${meta}` : label;
+      return resolveSessionDisplayName(latest.key, latest);
     }
     return t("agentChip.ready");
   }
