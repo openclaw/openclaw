@@ -13,8 +13,9 @@ import type {
 } from "./backend-handle.types.js";
 import { SANDBOX_PINNED_MUTATION_PYTHON } from "./fs-bridge-mutation-helper.js";
 import { createWritableRenameTargetResolver } from "./fs-bridge-rename-targets.js";
+import { SANDBOX_STAT_METADATA_PYTHON } from "./fs-bridge-shell-command-plans.js";
 import {
-  parseSandboxStatEpochSecondsMtimeMs,
+  parseSandboxStatEpochNanosMtimeMs,
   parseSandboxStatModeType,
   parseSandboxStatSize,
 } from "./fs-bridge-stat-parse.js";
@@ -259,7 +260,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       signal: params.signal,
     });
     const result = await this.runRemoteScript({
-      script: 'set -eu\nstat -c "%f|%s|%Y" -- "$1"',
+      script: ["set -eu", `python3 -c '${SANDBOX_STAT_METADATA_PYTHON}' "$1"`].join("\n"),
       args: [canonical],
       signal: params.signal,
     });
@@ -268,7 +269,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     return {
       type: parseSandboxStatModeType(kindRaw),
       size: parseSandboxStatSize(sizeRaw),
-      mtimeMs: parseSandboxStatEpochSecondsMtimeMs(mtimeRaw),
+      mtimeMs: parseSandboxStatEpochNanosMtimeMs(mtimeRaw),
     };
   }
 

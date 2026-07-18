@@ -169,8 +169,8 @@ function installDockerReadMock(params?: { canonicalPath?: string }) {
     if (script.includes('readlink -f -- "$cursor"')) {
       return dockerExecResult(`${canonicalPath ?? getDockerArg(args, 1)}\n`);
     }
-    if (script.includes('stat -c "%f|%s|%Y"')) {
-      return dockerExecResult("81a4|1|2");
+    if (script.includes("st.st_mtime_ns")) {
+      return dockerExecResult("81a4|1|2000000000");
     }
     if (script.includes('cat -- "$1"')) {
       return dockerExecResult("content");

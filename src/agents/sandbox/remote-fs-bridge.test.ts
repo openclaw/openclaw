@@ -32,7 +32,7 @@ function createStatRuntime(
       if (command.script.includes('stat -c "%f|%h"')) {
         return shellResult(`${outputs.hardlinks(command.script)}\n`);
       }
-      if (command.script.includes('stat -c "%f|%s|%Y"')) {
+      if (command.script.includes("st.st_mtime_ns")) {
         return shellResult(`${outputs.stat(command.script)}\n`);
       }
       throw new Error(`unexpected remote script: ${command.script}`);
@@ -249,7 +249,7 @@ describe("remote sandbox fs bridge", () => {
       await fs.mkdir(workspaceDir, { recursive: true });
       const runtime = createStatRuntime(workspaceDir, {
         hardlinks: () => "81a4|2",
-        stat: () => "81a4|12|1780056000",
+        stat: () => "81a4|12|1780056000123456789",
       });
       const bridge = createRemoteShellSandboxFsBridge({
         sandbox: createSandbox({
@@ -269,7 +269,7 @@ describe("remote sandbox fs bridge", () => {
       await fs.mkdir(workspaceDir, { recursive: true });
       const runtime = createStatRuntime(workspaceDir, {
         hardlinks: () => "81a4|0x2",
-        stat: () => "81a4|12|1780056000",
+        stat: () => "81a4|12|1780056000123456789",
       });
       const bridge = createRemoteShellSandboxFsBridge({
         sandbox: createSandbox({
@@ -282,7 +282,7 @@ describe("remote sandbox fs bridge", () => {
       await expect(bridge.stat({ filePath: "note.txt" })).resolves.toMatchObject({
         type: "file",
         size: 12,
-        mtimeMs: 1780056000000,
+        mtimeMs: 1780056000123.4568,
       });
     });
   });

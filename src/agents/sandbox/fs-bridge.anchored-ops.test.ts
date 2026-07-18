@@ -171,8 +171,8 @@ describe("sandbox fs bridge anchored ops", () => {
             const target = getDockerArg(args, 1);
             return dockerExecResult(`${target.replace("/workspace/alias", "/workspace/real")}\n`);
           }
-          if (script.includes('stat -c "%f|%s|%Y"')) {
-            return dockerExecResult("81a4|1|2");
+          if (script.includes("st.st_mtime_ns")) {
+            return dockerExecResult("81a4|1|2000000000");
           }
           return dockerExecResult("");
         });
@@ -216,7 +216,7 @@ describe("sandbox fs bridge anchored ops", () => {
 
       await bridge.stat({ filePath: "nested/file.txt" });
 
-      const statCall = findCallByScriptFragment('stat -c "%f|%s|%Y" -- "$2"');
+      const statCall = findCallByScriptFragment("st.st_mtime_ns");
       const args = requireDockerCall(statCall, "stat")[0];
       expect(getDockerArg(args, 1)).toBe("/workspace/nested");
       expect(getDockerArg(args, 2)).toBe("file.txt");
@@ -234,7 +234,7 @@ describe("sandbox fs bridge anchored ops", () => {
         if (script.includes('readlink -f -- "$cursor"')) {
           return dockerExecResult(`${getDockerArg(args, 1)}\n`);
         }
-        if (script.includes('stat -c "%f|%s|%Y"')) {
+        if (script.includes("st.st_mtime_ns")) {
           return {
             stdout: Buffer.from(`${SANDBOX_STAT_MISSING_SENTINEL}\n`),
             stderr: Buffer.from(
@@ -256,17 +256,17 @@ describe("sandbox fs bridge anchored ops", () => {
       await expect(bridge.stat({ filePath: "note.txt" })).resolves.toBeNull();
 
       const statCall = requireDockerCall(
-        findCallByScriptFragment('stat -c "%f|%s|%Y" -- "$2"'),
+        findCallByScriptFragment("st.st_mtime_ns"),
         "stat",
       );
       const statScript = getDockerScript(statCall[0]);
       expect(statScript).toContain(SANDBOX_STAT_MISSING_SENTINEL);
-      expect(statScript).toContain('stat_output=$(stat -c "%f|%s|%Y" -- "$2" 2>&1)');
+      expect(statScript).toContain("st.st_mtime_ns");
       expect(statScript.match(new RegExp(SANDBOX_STAT_MISSING_SENTINEL, "g"))).toHaveLength(3);
     });
   });
 
-  it("parses GNU epoch-second mtimes as milliseconds", async () => {
+  it("parses epoch-nanosecond mtimes as fractional milliseconds", async () => {
     await withTempDir("openclaw-fs-bridge-stat-mtime-", async (stateDir) => {
       const workspaceDir = path.join(stateDir, "workspace");
       await fs.mkdir(workspaceDir, { recursive: true });
@@ -276,8 +276,8 @@ describe("sandbox fs bridge anchored ops", () => {
         if (script.includes('readlink -f -- "$cursor"')) {
           return dockerExecResult(`${getDockerArg(args, 1)}\n`);
         }
-        if (script.includes('stat -c "%f|%s|%Y"')) {
-          return dockerExecResult("41ed|12|1780056000\n");
+        if (script.includes("st.st_mtime_ns")) {
+          return dockerExecResult("41ed|12|1780056000123456789\n");
         }
         return dockerExecResult("");
       });
@@ -292,7 +292,7 @@ describe("sandbox fs bridge anchored ops", () => {
       await expect(bridge.stat({ filePath: "note.txt" })).resolves.toEqual({
         type: "directory",
         size: 12,
-        mtimeMs: 1780056000000,
+        mtimeMs: 1780056000123.4568,
       });
     });
   });
@@ -307,7 +307,7 @@ describe("sandbox fs bridge anchored ops", () => {
         if (script.includes('readlink -f -- "$cursor"')) {
           return dockerExecResult(`${getDockerArg(args, 1)}\n`);
         }
-        if (script.includes('stat -c "%f|%s|%Y"')) {
+        if (script.includes("st.st_mtime_ns")) {
           return {
             stdout: Buffer.alloc(0),
             stderr: Buffer.from("stat: cannot stat 'note.txt': Permission denied\n"),
@@ -327,7 +327,7 @@ describe("sandbox fs bridge anchored ops", () => {
       await expect(bridge.stat({ filePath: "note.txt" })).rejects.toThrow("Permission denied");
 
       const statCall = requireDockerCall(
-        findCallByScriptFragment('stat -c "%f|%s|%Y" -- "$2"'),
+        findCallByScriptFragment("st.st_mtime_ns"),
         "stat",
       );
       const statScript = getDockerScript(statCall[0]);
@@ -346,7 +346,7 @@ describe("sandbox fs bridge anchored ops", () => {
         if (script.includes('readlink -f -- "$cursor"')) {
           return dockerExecResult(`${getDockerArg(args, 1)}\n`);
         }
-        if (script.includes('stat -c "%f|%s|%Y"')) {
+        if (script.includes("st.st_mtime_ns")) {
           return dockerExecResult("81a4|9007199254740992|8640000000001\n");
         }
         return dockerExecResult("");
