@@ -1136,6 +1136,7 @@ describe("agents.update", () => {
 describe("agents.delete", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.resolveAgentDir.mockReturnValue("/agents/test-agent");
     mocks.fsLstat.mockResolvedValue(null as unknown as import("node:fs").Stats);
     mocks.loadConfigReturn = {};
     mocks.findAgentEntryIndex.mockReturnValue(0);
