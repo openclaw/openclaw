@@ -27,8 +27,18 @@ function hasStoredAuthProfileFiles(agentDir?: string): boolean {
   );
 }
 
+// Cap auth-profile JSON reads at 10 MiB — credential stores are compact config files.
+const MAX_AUTH_PROFILE_JSON_BYTES = 10 * 1024 * 1024;
+
 function readJsonFile(pathname: string): unknown {
   try {
+    const stats = fs.statSync(pathname);
+    if (!stats.isFile()) {
+      return null;
+    }
+    if (stats.size > MAX_AUTH_PROFILE_JSON_BYTES) {
+      return null;
+    }
     return JSON.parse(fs.readFileSync(pathname, "utf8")) as unknown;
   } catch {
     return null;
