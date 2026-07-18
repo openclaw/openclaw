@@ -11,6 +11,7 @@ export * from "../providers/openai-responses-terminal-usage.js";
 export * from "../providers/openai-responses-tool-call-tracker.js";
 export * from "../providers/openai-stop-reason.js";
 export * from "../providers/openai-tool-projection.js";
+export * from "../providers/openai-tool-schema-compat.js";
 export * from "../providers/openai-tool-schema.js";
 export * from "../providers/schema-keyword-strip.js";
 export * from "../providers/tool-schema-json-projection.js";
