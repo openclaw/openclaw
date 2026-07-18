@@ -120,6 +120,17 @@ export function validateCandidateCheckout({
   toolingSha: unknown;
   workflowRef: unknown;
 };
+export function validateTrustedToolingPin({
+  toolingSha,
+  pinnedToolingSha,
+  latestTrustedToolingSha,
+  isAncestor,
+}: {
+  toolingSha: unknown;
+  pinnedToolingSha: unknown;
+  latestTrustedToolingSha: unknown;
+  isAncestor?: ((ancestor: string, target: string) => boolean) | undefined;
+}): string;
 export function candidateCumulativeShippedPullRequests(
   changelog: string,
   label: string,
