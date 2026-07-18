@@ -170,15 +170,16 @@ describe("runBootOnce", () => {
     });
   });
 
-  it("skips when BOOT.md exceeds the safe read size limit", async () => {
+  it("returns failed when BOOT.md exceeds the safe read size limit", async () => {
     await withBootWorkspace({ bootContent: "" }, async (workspaceDir) => {
       const bootPath = path.join(workspaceDir, "BOOT.md");
       const oversized = Buffer.alloc(16 * 1024 * 1024 + 1, "x");
       await fs.writeFile(bootPath, oversized);
-      await expect(runBootOnce({ cfg: {}, deps: makeDeps(), workspaceDir })).resolves.toEqual({
-        status: "skipped",
-        reason: "empty",
-      });
+      const result = await runBootOnce({ cfg: {}, deps: makeDeps(), workspaceDir });
+      expect(result.status).toBe("failed");
+      if (result.status === "failed") {
+        expect(result.reason).toContain("File exceeds 16777216 bytes");
+      }
       expect(agentCommand).not.toHaveBeenCalled();
     });
   });

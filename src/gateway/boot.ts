@@ -95,27 +95,16 @@ async function loadBootFile(
     throw err;
   }
 
-  try {
-    const { buffer } = await readRegularFile({
-      filePath: resolvedPath,
-      maxBytes: MAX_BOOT_FILE_BYTES,
-    });
-    const content = buffer.toString("utf-8");
-    const trimmed = content.trim();
-    if (!trimmed) {
-      return { status: "empty" };
-    }
-    return { status: "ok", content: trimmed };
-  } catch (err) {
-    const anyErr = err as { message?: string };
-    // Only an explicit size overflow should skip the boot check; directories,
-    // permission errors, and path races keep the current failed startup behavior
-    // so operators notice misconfigured BOOT.md paths.
-    if (anyErr.message?.startsWith("File exceeds")) {
-      return { status: "empty" };
-    }
-    throw err;
+  const { buffer } = await readRegularFile({
+    filePath: resolvedPath,
+    maxBytes: MAX_BOOT_FILE_BYTES,
+  });
+  const content = buffer.toString("utf-8");
+  const trimmed = content.trim();
+  if (!trimmed) {
+    return { status: "empty" };
   }
+  return { status: "ok", content: trimmed };
 }
 
 export async function runBootOnce(params: {
