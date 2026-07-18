@@ -67,12 +67,16 @@ function parseLocationOutput(
     ) {
       continue;
     }
-    const epochSeconds = /\((\d+)\s+seconds since the Epoch\)/u.exec(block)?.[1];
+    const epochSeconds = /\(([-+]?\d+)\s+seconds since the Epoch\)/u.exec(block)?.[1];
     const altitude = /Altitude:\s*([-+\d.]+)/u.exec(block)?.[1];
     const speed = /Speed:\s*([-+\d.]+)/u.exec(block)?.[1];
     const heading = /Heading:\s*([-+\d.]+)/u.exec(block)?.[1];
     const timestampMs = epochSeconds ? Number(epochSeconds) * 1000 : now().getTime();
-    if (!Number.isFinite(timestampMs) || !Number.isFinite(new Date(timestampMs).getTime())) {
+    if (
+      timestampMs < 0 ||
+      !Number.isFinite(timestampMs) ||
+      !Number.isFinite(new Date(timestampMs).getTime())
+    ) {
       continue;
     }
     const timestamp = new Date(timestampMs).toISOString();

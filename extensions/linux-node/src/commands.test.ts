@@ -290,15 +290,17 @@ describe("linux-node commands", () => {
     expect(payload.timestamp).toBe("2026-07-13T12:00:05.000Z");
   });
 
-  it("keeps GeoClue running past an out-of-range timestamp", async () => {
+  it("keeps GeoClue running past invalid and pre-epoch timestamps", async () => {
     const fix = (lat: number, epochSeconds: string) =>
       `\nNew location:\nLatitude: ${lat}\nLongitude: 16\nAccuracy: 25 meters\nTimestamp: now (${epochSeconds} seconds since the Epoch)\n`;
-    const invalid = fix(47, "9".repeat(400));
+    const invalid = fix(46, "9".repeat(400));
+    const preEpoch = fix(47, "-1000000");
     const valid = fix(48, "1783944005");
     const runCommand = vi.fn(async (_argv: string[], options: CommandOptions) => {
       expect(options.onOutputChunk?.(Buffer.from(invalid), "stdout")).toBe(true);
+      expect(options.onOutputChunk?.(Buffer.from(preEpoch), "stdout")).toBe(true);
       expect(options.onOutputChunk?.(Buffer.from(valid), "stdout")).toBe(false);
-      return success(`${invalid}${valid}`);
+      return success(`${invalid}${preEpoch}${valid}`);
     });
     const { command } = createHarness({ runCommand });
 
