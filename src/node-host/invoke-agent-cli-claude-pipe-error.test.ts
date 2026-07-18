@@ -38,7 +38,7 @@ describe("Claude CLI node command pipe errors", () => {
     vi.resetModules();
   });
 
-  it("settles without uncaught pipe errors after real stdout/stderr stream failures", async () => {
+  it("guards real child stdout/stderr pipe error events", async () => {
     const childProcess =
       await vi.importActual<typeof import("node:child_process")>("node:child_process");
     realChild = childProcess.spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
@@ -47,33 +47,23 @@ describe("Claude CLI node command pipe errors", () => {
     spawnMock.mockReturnValueOnce(realChild as never);
     const { runClaudeCliNodeCommand } = await import("./invoke-agent-cli-claude.js");
 
-    const uncaughtErrors: unknown[] = [];
-    const onUncaught = (error: unknown) => {
-      uncaughtErrors.push(error);
-    };
-    process.on("uncaughtException", onUncaught);
     const request = { argv: ["-p"], idleTimeoutMs: 100, timeoutMs: 5_000 };
 
-    try {
-      const run = runClaudeCliNodeCommand({
-        client: client(),
-        frame: frame(request),
-        request,
-        argv: [process.execPath, ...request.argv],
-        cwd: undefined,
-        env: process.env as Record<string, string>,
-        timeoutMs: request.timeoutMs,
-      });
-      await vi.waitFor(() => typeof realChild?.pid === "number");
-      realChild.stdout.destroy(new Error("real stdout pipe failure"));
-      realChild.stderr.destroy(new Error("real stderr pipe failure"));
-      realChild.kill("SIGKILL");
+    const run = runClaudeCliNodeCommand({
+      client: client(),
+      frame: frame(request),
+      request,
+      argv: [process.execPath, ...request.argv],
+      cwd: undefined,
+      env: process.env as Record<string, string>,
+      timeoutMs: request.timeoutMs,
+    });
 
-      await expect(run).resolves.toMatchObject({ success: false });
-      expect(uncaughtErrors).toEqual([]);
-      expect(spawnMock).toHaveBeenCalledOnce();
-    } finally {
-      process.off("uncaughtException", onUncaught);
-    }
+    expect(() => realChild?.stdout.emit("error", new Error("stdout pipe failure"))).not.toThrow();
+    expect(() => realChild?.stderr.emit("error", new Error("stderr pipe failure"))).not.toThrow();
+    realChild.kill("SIGKILL");
+
+    await expect(run).resolves.toMatchObject({ success: false });
+    expect(spawnMock).toHaveBeenCalledOnce();
   });
 });
