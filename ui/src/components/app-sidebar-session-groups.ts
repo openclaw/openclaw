@@ -96,38 +96,44 @@ export abstract class AppSidebarSessionGroupsElement extends AppSidebarSessionMu
     this.sidebarZoneDropTarget = null;
   }
 
+  /** Insert `entry` into the freshest canonical order at the captured drop slot. */
+  private writeSidebarEntryAt(
+    entry: string,
+    targetEntry: string | undefined,
+    position: "before" | "after" | undefined,
+  ) {
+    const next = this.reconciledSidebarZone().sidebarEntries.filter(
+      (candidate) => candidate !== entry,
+    );
+    const targetIndex = targetEntry ? next.indexOf(targetEntry) : -1;
+    const offset = position === "after" ? 1 : 0;
+    next.splice(targetIndex < 0 ? next.length : targetIndex + offset, 0, entry);
+    this.onUpdateSidebarEntries?.(next);
+  }
+
   protected handleSidebarZoneDrop(event: DragEvent, targetEntry?: string) {
     const entry = this.draggedSidebarEntry(event.dataTransfer);
-    if (!entry) {
+    if (!entry || (targetEntry === entry && targetEntry !== undefined)) {
+      this.finishSidebarEntryDrag();
       return;
     }
     event.preventDefault();
     event.stopPropagation();
-    const current = this.reconciledSidebarZone().sidebarEntries.filter(
-      (candidate) => candidate !== entry,
-    );
-    if (targetEntry && targetEntry !== entry) {
-      const targetIndex = current.indexOf(targetEntry);
-      const offset = this.sidebarZoneDropTarget?.position === "after" ? 1 : 0;
-      current.splice(targetIndex < 0 ? current.length : targetIndex + offset, 0, entry);
-    } else if (!targetEntry) {
-      current.push(entry);
-    } else {
-      this.finishSidebarEntryDrag();
-      return;
-    }
+    const position = this.sidebarZoneDropTarget?.position;
     const sessionKey = readSessionDragData(event.dataTransfer);
     const session = sessionKey ? this.findSidebarSessionByKey(sessionKey) : undefined;
     if (session && !session.pinned) {
-      // Persist the dropped slot only once the pin lands; a failed patch must
-      // not leave an unpinned session's slot in the synced order.
+      // Persist the dropped slot only once the pin lands, and recompute
+      // against the then-current order: a failed patch must not leave an
+      // unpinned slot behind, and a stale snapshot must not undo zone edits
+      // that raced the request.
       void this.patchSession(session, { pinned: true }).then((result) => {
         if (result === "completed") {
-          this.onUpdateSidebarEntries?.(current);
+          this.writeSidebarEntryAt(entry, targetEntry, position);
         }
       });
     } else {
-      this.onUpdateSidebarEntries?.(current);
+      this.writeSidebarEntryAt(entry, targetEntry, position);
     }
     this.finishSidebarEntryDrag();
   }
