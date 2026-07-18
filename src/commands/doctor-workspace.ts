@@ -208,19 +208,36 @@ export async function migrateLegacyRootMemoryFile(
       mergedLegacy: false,
     };
   }
+  // Preflight: read both memory files before archiving so oversized files
+  // leave the legacy file in place rather than failing after archival.
+  let canonicalText: string;
+  let legacyText: string;
+  try {
+    [canonicalText, legacyText] = await Promise.all([
+      readRegularFile({
+        filePath: detection.canonicalPath,
+        maxBytes: WORKSPACE_DOCTOR_MAX_BYTES,
+      }).then((r) => r.buffer.toString("utf-8")),
+      readRegularFile({
+        filePath: detection.legacyPath,
+        maxBytes: WORKSPACE_DOCTOR_MAX_BYTES,
+      }).then((r) => r.buffer.toString("utf-8")),
+    ]);
+  } catch {
+    // File exceeds size cap; skip migration and keep source intact.
+    return {
+      changed: false,
+      canonicalPath: detection.canonicalPath,
+      legacyPath: detection.legacyPath,
+      removedLegacy: false,
+      mergedLegacy: false,
+    };
+  }
+
   const archivedLegacyPath = await moveLegacyRootMemoryFileToArchive({
     workspaceDir: detection.workspaceDir,
     legacyPath: detection.legacyPath,
   });
-  const [canonicalText, legacyText] = await Promise.all([
-    readRegularFile({
-      filePath: detection.canonicalPath,
-      maxBytes: WORKSPACE_DOCTOR_MAX_BYTES,
-    }).then((r) => r.buffer.toString("utf-8")),
-    readRegularFile({ filePath: archivedLegacyPath, maxBytes: WORKSPACE_DOCTOR_MAX_BYTES }).then(
-      (r) => r.buffer.toString("utf-8"),
-    ),
-  ]);
   if (canonicalText !== legacyText) {
     const merged = `${canonicalText.trimEnd()}\n${buildMergedLegacyRootMemorySection({
       legacyText,
