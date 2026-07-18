@@ -1210,8 +1210,7 @@ describe("ci workflow guards", () => {
         "contents-client-id": "${{ inputs.contents-client-id }}",
         "contents-private-key": "${{ inputs.contents-private-key }}",
         "pull-request-client-id": "${{ inputs.pull-request-client-id }}",
-        "pull-request-contents-permission":
-          "${{ inputs.auto-merge == 'true' && 'write' || '' }}",
+        "pull-request-contents-permission": "${{ inputs.auto-merge == 'true' && 'write' || '' }}",
         "pull-request-private-key": "${{ inputs.pull-request-private-key }}",
       },
     });
@@ -4413,10 +4412,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "OPENAI_API_KEY",
       "OPENCLAW_MATURITY_SCORECARD_AGENT_OPENAI_API_KEY",
     ]);
-    for (const secret of [
-      "CLAWSWEEPER_APP_PRIVATE_KEY",
-      "MANTIS_GITHUB_APP_PRIVATE_KEY",
-    ]) {
+    for (const secret of ["CLAWSWEEPER_APP_PRIVATE_KEY", "MANTIS_GITHUB_APP_PRIVATE_KEY"]) {
       expect(maturityWorkflow.on.workflow_call.secrets[secret].required).toBe(false);
     }
     expect(qaEvidenceWorkflow.on.workflow_dispatch.inputs).not.toHaveProperty("fail_on_qa_failure");
