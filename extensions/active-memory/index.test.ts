@@ -15,6 +15,7 @@ import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/se
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { applyCliRuntimeRecallTimeoutDefault } from "./config.js";
 import plugin, { testing } from "./index.js";
+import { hasRememberAcrossConversationsAgent } from "./session-policy.js";
 
 // Match only lone surrogates so valid supplementary-plane characters remain allowed.
 const UNPAIRED_SURROGATE_RE =
@@ -505,6 +506,7 @@ describe("active-memory plugin", () => {
     }).clear();
     runEmbeddedAgent.mockReset();
     configFile = {
+      session: { dmScope: "per-peer" },
       plugins: {
         entries: {
           "active-memory": {
@@ -521,6 +523,7 @@ describe("active-memory plugin", () => {
       logging: true,
     });
     api.config = {
+      session: { dmScope: "per-peer" },
       agents: {
         defaults: {
           model: {
@@ -626,6 +629,19 @@ describe("active-memory plugin", () => {
     expect(typeof handler).toBe("function");
     expect(options).toEqual({ timeoutMs: 153_000 });
     expect(hookOptions.before_prompt_build?.timeoutMs).toBe(153_000);
+  });
+
+  it("does not synthesize a main agent when every configured agent opts out", () => {
+    expect(
+      hasRememberAcrossConversationsAgent({
+        agents: {
+          list: [
+            { id: "personal", memorySearch: { rememberAcrossConversations: false } },
+            { id: "support", memorySearch: { rememberAcrossConversations: false } },
+          ],
+        },
+      }),
+    ).toBe(false);
   });
 
   it("keeps the outer hook timeout at the live-config ceiling", () => {
@@ -1016,14 +1032,13 @@ describe("active-memory plugin", () => {
     }
   });
 
-  it("runs product recall without an explicit Active Memory config entry", async () => {
+  it("runs product recall by default for a personal install without Active Memory config", async () => {
     configFile = {
       agents: {
         list: [
           {
             id: "personal",
             model: { primary: "github-copilot/gpt-5.4-mini" },
-            memorySearch: { rememberAcrossConversations: true },
           },
         ],
       },
