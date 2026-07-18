@@ -45,6 +45,7 @@ async function executeReloadHandoff(launchctlStub: string): Promise<{
   exitCode: number;
   log: string;
 }> {
+  const noWaitPid = 0;
   const stubDir = fs.mkdtempSync(path.join(os.tmpdir(), "launchd-stub-"));
   try {
     const home = path.join(stubDir, "home");
@@ -62,7 +63,7 @@ async function executeReloadHandoff(launchctlStub: string): Promise<{
     scheduleDetachedLaunchdRestartHandoff({
       env: { HOME: home, OPENCLAW_PROFILE: "default" },
       mode: "reload",
-      waitForPid: 1,
+      waitForPid: noWaitPid,
     });
     const [, args] = requireSpawnCall();
     const script = args[1];
@@ -74,7 +75,15 @@ async function executeReloadHandoff(launchctlStub: string): Promise<{
     try {
       await execFileAsync(
         "/bin/sh",
-        ["-c", script, "handoff-test", "gui/501/test.label", "gui/501", "/tmp/test.plist", "1"],
+        [
+          "-c",
+          script,
+          "handoff-test",
+          "gui/501/test.label",
+          "gui/501",
+          "/tmp/test.plist",
+          String(noWaitPid),
+        ],
         {
           env: {
             ...process.env,
