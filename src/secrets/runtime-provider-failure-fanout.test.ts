@@ -9,6 +9,17 @@ import { asConfig, setupSecretsRuntimeSnapshotTestHooks } from "./runtime.test-s
 const EMPTY_LOADABLE_PLUGIN_ORIGINS = new Map();
 const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const EXEC_FIXTURE_TIMEOUT_MS = 20_000;
+
+function execFixtureProvider(command: string) {
+  return {
+    source: "exec" as const,
+    command,
+    passEnv: ["PATH"],
+    timeoutMs: EXEC_FIXTURE_TIMEOUT_MS,
+    noOutputTimeoutMs: EXEC_FIXTURE_TIMEOUT_MS,
+  };
+}
 
 afterEach(() => {
   clearSecretsRuntimeSnapshot();
@@ -31,7 +42,7 @@ describe("provider-scoped SecretRef failure fan-out", () => {
       config: asConfig({
         secrets: {
           providers: {
-            vault: { source: "exec", command: commandPath, passEnv: ["PATH"] },
+            vault: execFixtureProvider(commandPath),
           },
         },
         tools: { web: { search: { provider: "gemini" } } },
@@ -78,7 +89,7 @@ describe("provider-scoped SecretRef failure fan-out", () => {
       config: asConfig({
         secrets: {
           providers: {
-            shared: { source: "exec", command: commandPath, passEnv: ["PATH"] },
+            shared: execFixtureProvider(commandPath),
           },
         },
         models: {
@@ -139,8 +150,8 @@ describe("provider-scoped SecretRef failure fan-out", () => {
       config: asConfig({
         secrets: {
           providers: {
-            first: { source: "exec", command: firstCommand, passEnv: ["PATH"] },
-            second: { source: "exec", command: secondCommand, passEnv: ["PATH"] },
+            first: execFixtureProvider(firstCommand),
+            second: execFixtureProvider(secondCommand),
           },
         },
         models: {
@@ -198,8 +209,8 @@ describe("provider-scoped SecretRef failure fan-out", () => {
       config: asConfig({
         secrets: {
           providers: {
-            unavailable: { source: "exec", command: providerCommand, passEnv: ["PATH"] },
-            partial: { source: "exec", command: refCommand, passEnv: ["PATH"] },
+            unavailable: execFixtureProvider(providerCommand),
+            partial: execFixtureProvider(refCommand),
           },
         },
         models: {
