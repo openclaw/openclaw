@@ -335,7 +335,7 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
           <span class="sidebar-customize-menu__text">${t("nodes.pairing.button")}</span>
         </wa-dropdown-item>
         <wa-dropdown-item class="sidebar-customize-menu__item" value="command:apps">
-          <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.smartphone}</span>
+          <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.layoutGrid}</span>
           <span class="sidebar-customize-menu__text">${t("agentChip.getApps")}</span>
         </wa-dropdown-item>
         <wa-dropdown-item

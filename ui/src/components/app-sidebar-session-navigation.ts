@@ -166,8 +166,10 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
       }
       return {
         key: row.key,
+        // The sidebar's zone structure already says what forked from what;
+        // a "Subagent:" prefix on named threads is noise (other surfaces keep it).
         label: resolveSessionDisplayName(row.key, row, {
-          includeSubagentPrefix: !isChild,
+          includeSubagentPrefix: false,
         }),
         meta: formatSidebarTimestamp(row.updatedAt),
         subtitle: resolveSessionWorkSubtitle(row),
