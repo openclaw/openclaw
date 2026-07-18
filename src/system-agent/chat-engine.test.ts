@@ -415,7 +415,11 @@ describe("SystemAgentChatEngine", () => {
     expect(applySetup).toHaveBeenCalledOnce();
     expect(reply.action).toBe("open-tui");
     expect(reply.agentDraft).toBe("hatch");
-    expect(reply.handoff).toMatchObject({ kind: "open-tui", workspace: "/tmp/hatch-work" });
+    expect(reply.handoff).toMatchObject({
+      kind: "open-tui",
+      workspace: "/tmp/hatch-work",
+      agentDraft: "hatch",
+    });
     expect(reply.text).toContain("Your agent is hatching");
     expect(reply.text).toContain("Settings → Ask OpenClaw");
   });

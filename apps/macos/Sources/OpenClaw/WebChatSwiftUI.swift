@@ -804,6 +804,7 @@ final class WebChatSwiftUIWindowController {
     private let presentation: WebChatPresentation
     private let sessionKey: String
     private let initialActiveAgentID: String?
+    private let viewModel: OpenClawChatViewModel
     private let contentController: NSViewController
     private let sessionKeyRelay: WebChatSessionKeyRelay
     private let speech: OpenClawChatSpeechController
@@ -819,6 +820,7 @@ final class WebChatSwiftUIWindowController {
     convenience init(
         sessionKey: String,
         agentID: String? = nil,
+        initialDraft: String? = nil,
         presentation: WebChatPresentation)
     {
         // Connection-mode changes tear chat windows down via resetTunnels(),
@@ -829,6 +831,7 @@ final class WebChatSwiftUIWindowController {
         self.init(
             sessionKey: sessionKey,
             agentID: agentID,
+            initialDraft: initialDraft,
             presentation: presentation,
             cachedRoutingIdentity: context?.routingIdentity,
             store: context?.store)
@@ -837,6 +840,7 @@ final class WebChatSwiftUIWindowController {
     convenience init(
         sessionKey: String,
         agentID: String?,
+        initialDraft: String? = nil,
         presentation: WebChatPresentation,
         cachedRoutingIdentity: OpenClawChatSessionRoutingIdentity?,
         store: OpenClawChatSQLiteTranscriptCache?)
@@ -847,6 +851,7 @@ final class WebChatSwiftUIWindowController {
             cachedDefaultAgentID: cachedRoutingIdentity?.defaultAgentID)
         self.init(
             sessionKey: sessionKey,
+            initialDraft: initialDraft,
             presentation: presentation,
             transport: MacGatewayChatTransport(
                 outboxGatewayID: store?.gatewayID,
@@ -860,6 +865,7 @@ final class WebChatSwiftUIWindowController {
 
     init(
         sessionKey: String,
+        initialDraft: String? = nil,
         presentation: WebChatPresentation,
         transport: any OpenClawChatTransport,
         initialActiveAgentID: String? = nil,
@@ -909,6 +915,12 @@ final class WebChatSwiftUIWindowController {
             onVerbosePreferenceChanged: { level in
                 Self.persistVerbosePreference(level)
             })
+        if let initialDraft,
+           !initialDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            vm.input = initialDraft
+        }
+        self.viewModel = vm
         let explicitAgentID = WebChatRoute.normalizedAgentID(explicitAgentID)
         Task { @MainActor [weak vm] in
             let pushes = await GatewayConnection.shared.subscribe()
@@ -975,6 +987,14 @@ final class WebChatSwiftUIWindowController {
 
     var isVisible: Bool {
         self.window?.isVisible ?? false
+    }
+
+    func applyDraftIfEmpty(_ draft: String?) {
+        guard self.viewModel.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let draft,
+              !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return }
+        self.viewModel.input = draft
     }
 
     func show() {
@@ -1229,6 +1249,10 @@ final class WebChatSwiftUIWindowController {
 
     var _testActiveAgentID: String? {
         self.initialActiveAgentID
+    }
+
+    var _testDraft: String {
+        self.viewModel.input
     }
     #endif
 }

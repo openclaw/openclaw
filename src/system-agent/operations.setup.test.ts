@@ -1006,6 +1006,25 @@ describe("parseSystemAgentOperation", () => {
     );
   });
 
+  it("seeds a fresh hatch into the agent TUI", async () => {
+    const { runtime } = createSystemAgentTestRuntime();
+    const runTui = vi.fn(async () => ({ exitReason: "exit" as const }));
+
+    await executeSystemAgentOperation(
+      { kind: "open-tui", agentId: "work", agentDraft: "hatch" },
+      runtime,
+      { deps: { runTui } },
+    );
+
+    expect(runTui).toHaveBeenCalledWith({
+      local: true,
+      session: "agent:work:main",
+      deliver: false,
+      historyLimit: 200,
+      message: "Wake up, my friend!",
+    });
+  });
+
   it("re-enters the OpenClaw shell when the agent TUI returns without a request", async () => {
     const { runtime, lines } = createSystemAgentTestRuntime();
     const runTui = vi.fn(async () => ({

@@ -64,6 +64,7 @@ export type SystemAgentCommandDeps = {
     session?: string;
     deliver?: boolean;
     historyLimit?: number;
+    message?: string;
   }) => Promise<TuiResult | void>;
   /** Where setup side effects run; the gateway surface never manages its own daemon. */
   setupSurface?: "cli" | "gateway";

@@ -644,6 +644,7 @@ export class SystemAgentChatEngine {
         agentDraft: "hatch",
         handoff: {
           kind: "open-tui",
+          agentDraft: "hatch",
           ...(operation.workspace ? { workspace: operation.workspace } : {}),
         },
       };
