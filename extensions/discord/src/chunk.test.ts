@@ -22,6 +22,13 @@ describe("chunkDiscordText", () => {
     }
   });
 
+  it("counts the first line after each flush toward maxLines", () => {
+    expect(chunkDiscordText("first\nsecond", { maxChars: 2000, maxLines: 1 })).toEqual([
+      "first",
+      "second",
+    ]);
+  });
+
   it("uses default chunk limits for non-finite options", () => {
     const text = "x".repeat(2500);
     const chunks = chunkDiscordText(text, {
@@ -118,6 +125,21 @@ describe("chunkDiscordText", () => {
         expect(chunk.length).toBeLessThanOrEqual(50);
       }
     }
+  });
+
+  it("puts continued code on the line after a reopened fence", () => {
+    const text = `\`\`\`ts\nconst value = '${"x".repeat(80)}';\n\`\`\``;
+    const chunks = chunkDiscordText(text, { maxChars: 30, maxLines: 50 });
+
+    expect(chunks.length).toBeGreaterThan(1);
+    const fencedBodyChunks = chunks.filter((chunk) => /^```(?:ts)?\n[^`]/.test(chunk));
+    expect(fencedBodyChunks.length).toBeGreaterThan(1);
+    expect(
+      chunks
+        .filter((chunk) => chunk.startsWith("```"))
+        .every((chunk) => /^```(?:ts)?(?:\n|$)/.test(chunk)),
+    ).toBe(true);
+    expect(chunks.every((chunk) => chunk.length <= 30)).toBe(true);
   });
 
   it("preserves whitespace when splitting long lines", () => {

@@ -245,8 +245,8 @@ function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}): string
     for (let segIndex = 0; segIndex < segments.length; segIndex++) {
       const segment = segments[segIndex];
       const isLineContinuation = segIndex > 0;
-      const delimiter = isLineContinuation ? "" : current.length > 0 ? "\n" : "";
-      const addition = `${delimiter}${segment}`;
+      let delimiter = isLineContinuation ? "" : current.length > 0 ? "\n" : "";
+      let addition = `${delimiter}${segment}`;
       const nextLen = current.length + addition.length;
       const nextLines = currentLines + (isLineContinuation ? 0 : 1);
 
@@ -255,11 +255,15 @@ function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}): string
 
       if ((wouldExceedChars || wouldExceedLines) && current.length > 0) {
         flush();
+        // A fence-aware flush reopens the block as the new first line. Continuation text must
+        // start on the next line or Discord interprets it as part of the fence info string.
+        delimiter = current.length > 0 ? "\n" : "";
+        addition = `${delimiter}${segment}`;
       }
 
       if (current.length > 0) {
         current += addition;
-        if (!isLineContinuation) {
+        if (!isLineContinuation || delimiter) {
           currentLines += 1;
         }
       } else {
