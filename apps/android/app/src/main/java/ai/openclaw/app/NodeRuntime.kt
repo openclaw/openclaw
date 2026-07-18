@@ -2584,6 +2584,14 @@ class NodeRuntime private constructor(
       }
     }
 
+    scope.launch {
+      chatModelCatalog.drop(1).distinctUntilChanged().collect {
+        // Chat metadata arrives after the connection event. Invalidate the Watch snapshot so
+        // its Home model picker cannot stay empty until the user refreshes manually.
+        if (operatorSession.isReady()) wearProxyBridge()?.publishResync()
+      }
+    }
+
     updateHomeCanvasState()
   }
 

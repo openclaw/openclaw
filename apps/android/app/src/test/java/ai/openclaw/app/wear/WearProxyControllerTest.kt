@@ -225,6 +225,59 @@ class WearProxyControllerTest {
     }
 
   @Test
+  fun modelReferencesUseOneCanonicalNonLossyValue() =
+    runTest {
+      var selection: Pair<String, String>? = null
+      val overlongRef = "m".repeat(201)
+      val controller =
+        WearProxyController(
+          requestGateway = { _, _ -> buildJsonObject {} },
+          isGatewayConnected = { true },
+          gatewayStatusText = { "Connected" },
+          selectedModelRef = { " openai/gpt-a " },
+          models = {
+            listOf(
+              WearProxyModel(ref = " openai/gpt-a ", name = "GPT A"),
+              WearProxyModel(ref = "openai/gpt-a", name = "Duplicate"),
+              WearProxyModel(ref = overlongRef, name = "Too long"),
+            )
+          },
+          selectSessionModel = { sessionKey, modelRef ->
+            selection = sessionKey to modelRef
+            true
+          },
+        )
+
+      val status = controller.handle(request(WearRpcMethod.ProxyStatus))
+      val listed = controller.handle(request(WearRpcMethod.ModelsList))
+      val selected =
+        controller.handle(
+          request(
+            WearRpcMethod.ModelsSelect,
+            buildJsonObject {
+              put("sessionKey", "agent:main:thread-7")
+              put("modelRef", "openai/gpt-a")
+            },
+          ),
+        )
+
+      assertEquals(
+        "openai/gpt-a",
+        checkNotNull(status.result).jsonObject.getValue("selectedModelRef").jsonPrimitive.content,
+      )
+      assertEquals(
+        listOf("openai/gpt-a"),
+        checkNotNull(listed.result)
+          .jsonObject
+          .getValue("models")
+          .jsonArray
+          .map { it.jsonObject.getValue("ref").jsonPrimitive.content },
+      )
+      assertTrue(selected.ok)
+      assertEquals("agent:main:thread-7" to "openai/gpt-a", selection)
+    }
+
+  @Test
   fun modelSelectionRejectsAStaleModelBeforePatchingTheSession() =
     runTest {
       var selections = 0
@@ -466,7 +519,7 @@ class WearProxyControllerTest {
           assertEquals("chat.history", method)
           requestedParams = params
           json.parseToJsonElement(
-            """{"sessionKey":"main","messages":[{"id":"m1","role":"assistant","content":[{"type":"text","text":"hello 😀"},{"type":"image","base64":"private"}],"timestamp":9}],"defaults":{"token":"hidden"},"offset":40,"nextOffset":60,"totalMessages":80,"hasMore":true}""",
+            """{"sessionKey":"main","messages":[{"id":"m1","role":"assistant","content":[{"type":"text","text":"hello 😀"},{"type":"image","base64":"private"}],"timestamp":9}],"sessionInfo":{"model":"${"m".repeat(201)}"},"defaults":{"token":"hidden"},"offset":40,"nextOffset":60,"totalMessages":80,"hasMore":true}""",
           )
         }
 
@@ -491,6 +544,7 @@ class WearProxyControllerTest {
       )
       val result = checkNotNull(response.result).jsonObject
       assertFalse("defaults" in result)
+      assertFalse("selectedModelRef" in result)
       assertEquals(
         40,
         result

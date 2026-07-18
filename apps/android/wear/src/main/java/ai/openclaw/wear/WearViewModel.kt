@@ -499,9 +499,11 @@ internal class WearViewModel(
           val selectionChanged = selectedSession?.key != previousSession?.key
           val pendingEvents =
             finishSequenceSnapshot(
-              streamId = modelList.eventStreamId,
-              sequence = modelList.eventSequence,
-              sourceNodeId = modelList.phoneNodeId,
+              // sessions.list owns the state snapshot. models.list is fetched later and cannot
+              // cover session or transcript events emitted between the two responses.
+              streamId = sessionList.eventStreamId,
+              sequence = sessionList.eventSequence,
+              sourceNodeId = sessionList.phoneNodeId,
             )
           loadJob = null
           mutableState.update {
