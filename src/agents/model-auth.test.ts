@@ -1827,6 +1827,8 @@ describe("resolveApiKeyForProvider – synthetic local auth for custom providers
 
   it("respects allowPluginSyntheticAuth: false to block plugin synthetic auth", async () => {
     // When explicitly disabled, plugin synthetic auth should not be used
+    // This tests the explicit control path that gateway/cron jobs could use
+    // if they need to exclude both profile fallback AND plugin synthetic auth.
     await expect(
       resolveApiKeyForProvider({
         provider: "anthropic-vertex",
@@ -1843,6 +1845,87 @@ describe("resolveApiKeyForProvider – synthetic local auth for custom providers
         store: { version: 1, profiles: {} },
         allowAuthProfileFallback: false,
         allowPluginSyntheticAuth: false,
+      }),
+    ).rejects.toThrow(/No API key found for provider/);
+  });
+
+  it("simulates gateway direct auth route with allowAuthProfileFallback: false", async () => {
+    // This test simulates the exact gateway pattern from resolvePreparedRuntimeModelAuth:
+    // getApiKeyForModel({ ..., allowAuthProfileFallback: false })
+    // The fix ensures this path still allows plugin synthetic auth by default.
+    const auth = await getApiKeyForModel({
+      model: {
+        id: "claude-haiku-4-5",
+        name: "Claude Haiku 4.5",
+        provider: "ollama-gateway",
+        api: "ollama",
+        baseUrl: "http://192.168.1.100:11434",
+        contextWindow: 8192,
+        maxTokens: 4096,
+        input: ["text"],
+        output: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        reasoning: false,
+      },
+      cfg: {
+        models: {
+          providers: {
+            "ollama-gateway": {
+              api: "ollama",
+              baseUrl: "http://192.168.1.100:11434",
+              models: [{ id: "claude-haiku-4-5", name: "Claude Haiku 4.5" }],
+            },
+          },
+        },
+      },
+      store: { version: 1, profiles: {} },
+      allowAuthProfileFallback: false,
+      // Note: allowPluginSyntheticAuth is NOT specified, so it defaults to true
+      // This is the key fix - gateway path can now resolve plugin synthetic auth
+    });
+
+    // Should successfully resolve via plugin synthetic local auth
+    expectAuthFields(auth, {
+      apiKey: "ollama-local",
+      source: `models.providers.ollama-gateway (synthetic local key)`,
+      mode: "api-key",
+    });
+  });
+
+  it("gateway explicit allowPluginSyntheticAuth: false blocks plugin ollama synthetic auth", async () => {
+    // If a future gateway configuration explicitly wants to disable plugin synthetic auth,
+    // the new parameter provides that control without affecting other paths.
+    // This test uses a non-local baseUrl to avoid hasSyntheticLocalProviderAuthConfig
+    // and exercises the Ollama plugin synthetic auth path specifically.
+    await expect(
+      getApiKeyForModel({
+        model: {
+          id: "llama3",
+          name: "Llama 3",
+          provider: "ollama-remote",
+          api: "ollama",
+          baseUrl: "https://ollama.example.com:11434", // Non-local URL
+          contextWindow: 8192,
+          maxTokens: 4096,
+          input: ["text"],
+          output: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          reasoning: false,
+        },
+        cfg: {
+          models: {
+            providers: {
+              "ollama-remote": {
+                api: "ollama",
+                baseUrl: "https://ollama.example.com:11434",
+                models: [{ id: "llama3", name: "Llama 3" }],
+              },
+            },
+          },
+        },
+        store: { version: 1, profiles: {} },
+        allowAuthProfileFallback: false,
+        allowPluginSyntheticAuth: false, // Explicitly block plugin synthetic auth
       }),
     ).rejects.toThrow(/No API key found for provider/);
   });
