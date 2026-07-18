@@ -3,32 +3,22 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { detectBundleManifestFormat, loadBundleManifest } from "../../plugins/bundle-manifest.js";
+import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import type { PluginBundleFormat } from "../../plugins/manifest-types.js";
 import { resolvePackageExtensionEntries, type PackageManifest } from "../../plugins/manifest.js";
 import { validatePackageExtensionEntriesForInstall } from "../../plugins/package-entry-resolution.js";
 import { auditOpenClawPeerDependencyLink } from "../../plugins/plugin-peer-link.js";
+import type { PluginVerificationFailureReason } from "../../plugins/runtime-degraded-state.js";
 import { resolveUserPath } from "../../utils.js";
-
-type PluginPayloadSmokeFailureReason =
-  | "missing-install-path"
-  | "missing-package-dir"
-  | "missing-package-json"
-  | "unreadable-package-json"
-  | "invalid-package-json"
-  | "missing-bundle-manifest"
-  | "invalid-bundle-manifest"
-  | "missing-main-entry"
-  | "missing-extension-entry"
-  | "missing-openclaw-peer-link";
 
 export type PluginPayloadSmokeFailure = {
   pluginId: string;
   installPath?: string;
-  reason: PluginPayloadSmokeFailureReason;
+  reason: PluginVerificationFailureReason;
   detail: string;
 };
 
-type PluginPayloadSmokeResult = {
+export type PluginPayloadSmokeResult = {
   checked: string[];
   failures: PluginPayloadSmokeFailure[];
 };
@@ -116,6 +106,24 @@ export async function runPluginPayloadSmokeCheck(params: {
   }
 
   return { checked, failures };
+}
+
+/** Verifies the exact manifest records selected for this process. */
+export async function runPluginPayloadSmokeCheckForManifestRecords(params: {
+  plugins: readonly Pick<PluginManifestRecord, "id" | "rootDir" | "format">[];
+  env: NodeJS.ProcessEnv;
+}): Promise<PluginPayloadSmokeResult> {
+  const records = Object.fromEntries(
+    params.plugins.map((plugin) => [
+      plugin.id,
+      {
+        source: plugin.format === "bundle" ? "marketplace" : "npm",
+        installPath: plugin.rootDir,
+        ...(plugin.format === "bundle" ? { clawhubFamily: "bundle-plugin" as const } : {}),
+      } satisfies PluginInstallRecord,
+    ]),
+  );
+  return await runPluginPayloadSmokeCheck({ records, env: params.env });
 }
 
 type PackagePayloadManifest = PackageManifest & { main?: unknown; exports?: unknown };

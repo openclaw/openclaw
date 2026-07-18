@@ -115,6 +115,7 @@ const {
   buildTtsSystemPromptHint,
   getTtsPersona,
   getTtsProvider,
+  isTtsProviderConfigured,
   listSpeechVoices,
   maybeApplyTtsToPayload,
   prepareTtsRequest,
@@ -1192,6 +1193,28 @@ describe("speech-core native voice-note routing", () => {
 
     expect(getTtsPersona(config, prefsPath)?.id).toBe("alfred");
     expect(getTtsProvider(config, prefsPath)).toBe("mock");
+  });
+
+  it("treats provider configuration errors as unconfigured", () => {
+    installSpeechProviders([
+      createMockSpeechProvider("broken", {
+        resolveConfig: () => {
+          throw new Error("invalid provider URL");
+        },
+      }),
+    ]);
+    const cfg = {
+      messages: {
+        tts: {
+          providers: { broken: {} },
+          prefsPath: "/tmp/openclaw-speech-core-invalid-provider.json",
+        },
+      },
+    } as OpenClawConfig;
+    const config = resolveTtsConfig(cfg);
+
+    expect(isTtsProviderConfigured(config, "broken", cfg)).toBe(false);
+    expect(getTtsProvider(config, config.prefsPath ?? "")).toBe("");
   });
 
   it("merges active persona provider binding into synthesis config", async () => {

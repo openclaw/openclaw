@@ -1750,7 +1750,6 @@
                 "pages": [
                   "web/index",
                   "web/control-ui",
-                  "web/workspaces",
                   "web/dashboard",
                   "web/webchat",
                   "web/tui",
@@ -1946,6 +1945,7 @@
                   "reference/prompt-caching",
                   "reference/api-usage-costs",
                   "reference/transcript-hygiene",
+                  "reference/database-schemas",
                   "reference/memory-config",
                   "reference/rich-output-protocol",
                   "reference/session-management-compaction",

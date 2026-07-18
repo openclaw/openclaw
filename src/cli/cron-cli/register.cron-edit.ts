@@ -215,6 +215,20 @@ export function registerCronEditCommand(cron: Command) {
               "Isolated jobs cannot use --system-event; use --message, --command, or --session main.",
             );
           }
+          const hasExplicitChatDelivery =
+            typeof opts.channel === "string" ||
+            typeof opts.to === "string" ||
+            typeof opts.account === "string" ||
+            typeof opts.threadId === "string";
+          if (
+            sessionTarget === "main" &&
+            typeof opts.systemEvent === "string" &&
+            hasExplicitChatDelivery
+          ) {
+            throw new Error(
+              "--channel, --to, --account, and --thread-id require a non-main agentTurn or command job with delivery.",
+            );
+          }
           const hasWebhookDelivery = typeof opts.webhook === "string";
           const deliveryModeFlagCount = [
             Boolean(opts.announce),

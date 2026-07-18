@@ -25,6 +25,7 @@ import {
 import {
   getDiagnosticSessionActivitySnapshot,
   resetDiagnosticRunActivityForTest,
+  startDiagnosticRunActivityTracking,
 } from "../logging/diagnostic-run-activity.js";
 import type { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { RunExit } from "../process/supervisor/types.js";
@@ -96,6 +97,7 @@ beforeEach(() => {
   setDiagnosticsEnabledForProcess(true);
   resetAgentEventsForTest();
   resetDiagnosticRunActivityForTest();
+  startDiagnosticRunActivityTracking();
   resetClaudeLiveSessionsForTest();
   replyRunTesting.resetReplyRunRegistry();
   restoreCliRunnerPrepareTestDeps();

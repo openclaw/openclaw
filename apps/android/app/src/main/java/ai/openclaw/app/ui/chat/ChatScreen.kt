@@ -1,6 +1,5 @@
 package ai.openclaw.app.ui.chat
 
-import ai.openclaw.app.ChatComposerSendStartResult
 import ai.openclaw.app.GatewayAgentSummary
 import ai.openclaw.app.GatewayModelSummary
 import ai.openclaw.app.MainViewModel
@@ -14,6 +13,7 @@ import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatPlanStep
 import ai.openclaw.app.chat.ChatPlanStepStatus
+import ai.openclaw.app.chat.ChatQuestionPrompt
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatThinkingLevelOption
 import ai.openclaw.app.chat.ChatThinkingLevelSelection
@@ -22,6 +22,7 @@ import ai.openclaw.app.chat.MessageSpeechPhase
 import ai.openclaw.app.chat.MessageSpeechState
 import ai.openclaw.app.chat.VoiceNoteRecorderState
 import ai.openclaw.app.chat.chatOutboxQueueFailureText
+import ai.openclaw.app.chat.questionsForSession
 import ai.openclaw.app.chat.resolveChatComposerOwner
 import ai.openclaw.app.chat.resolveGatewayDefaultAgentId
 import ai.openclaw.app.currentAppLanguage
@@ -186,6 +187,7 @@ fun ChatScreen(
   val thinkingLevelSelection by viewModel.chatThinkingLevelSelection.collectAsState()
   val streamingAssistantText by viewModel.chatStreamingAssistantText.collectAsState()
   val pendingToolCalls by viewModel.chatPendingToolCalls.collectAsState()
+  val questions by viewModel.chatQuestions.collectAsState()
   val planSteps by viewModel.chatPlanSteps.collectAsState()
   val sessions by viewModel.chatSessions.collectAsState()
   val chatCommands by viewModel.chatCommands.collectAsState()
@@ -236,16 +238,16 @@ fun ChatScreen(
   val lifecycleState by lifecycleOwner.lifecycle.currentStateFlow.collectAsState()
   val resolver = context.applicationContext.contentResolver
   val scope = rememberCoroutineScope()
-  val inputDrafts = remember(viewModel) { viewModel.chatComposerTextDrafts }
+  val composerState = remember(viewModel) { viewModel.chatComposerState }
+  val inputDrafts = composerState.textDrafts
   val imagePickerOwnerCheckpoint =
-    rememberSaveable(saver = ChatComposerOwnerCheckpoint.Saver) { ChatComposerOwnerCheckpoint() }
-  val voiceNoteCommitCheckpoint = remember { ChatVoiceNoteCommitCheckpoint() }
+    rememberSaveable(saver = ChatComposerMediaCheckpoint.Saver) { ChatComposerMediaCheckpoint() }
+  val voiceNoteCommitCheckpoint = remember { ChatComposerMediaCheckpoint() }
   val input = inputDrafts[composerOwner]
-  val attachmentsByOwner by viewModel.chatComposerAttachments.collectAsState()
+  val attachmentsByOwner by composerState.attachments.collectAsState()
   val attachments = attachmentsByOwner[composerOwner].orEmpty()
-  val sendOwnersInFlight by viewModel.chatComposerSendOwners.collectAsState()
-  val sendAdmissions by viewModel.chatComposerSendAdmissions.collectAsState()
-  val attachmentNotices by viewModel.chatComposerAttachmentNotices.collectAsState()
+  val sendStates by composerState.sendStates.collectAsState()
+  val attachmentNotices by composerState.attachmentNotices.collectAsState()
   val shareOwnerRevision by viewModel.chatShareDraftOwnerRevision.collectAsState()
   val chatShareDraft =
     remember(chatShareDrafts, composerOwner, mainSessionKey, shareOwnerRevision) {
@@ -255,10 +257,10 @@ fun ChatScreen(
     }
   val shareStaging =
     chatShareDraft?.let { viewModel.chatShareDraftTargetsOwner(it.id, composerOwner, mainSessionKey) } == true
-  val sendAdmission = sendAdmissions[composerOwner]
+  val pendingSendAdmissionIds = sendStates[composerOwner]?.pendingAdmissionIds.orEmpty()
   val currentPickerOwner by rememberUpdatedState(composerOwner)
   val currentPickerMainSessionKey by rememberUpdatedState(mainSessionKey)
-  val sendInFlight = composerOwner in sendOwnersInFlight
+  val sendInFlight = composerOwner in sendStates
   var showModelPicker by rememberSaveable { mutableStateOf(false) }
   var showBackgroundTasks by rememberSaveable { mutableStateOf(false) }
   var sendMessageTooLong by rememberSaveable(composerOwner) { mutableStateOf(false) }
@@ -296,7 +298,7 @@ fun ChatScreen(
       mainSessionKey = mainSessionKey,
       onFinished = { recordingId, attachment ->
         val lease = voiceNoteCommitCheckpoint.consume(recordingId) ?: return@rememberVoiceNoteRecorderController
-        viewModel.addChatComposerAttachments(lease.owner, lease.authorizationId, listOf(attachment))
+        composerState.addAuthorizedAttachments(lease.owner, lease.authorizationId, listOf(attachment))
       },
     )
   val voiceNoteState by voiceNoteRecorder.state.collectAsState()
@@ -306,7 +308,7 @@ fun ChatScreen(
     rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
       val lease = imagePickerOwnerCheckpoint.consume() ?: return@rememberLauncherForActivityResult
       if (uris.isNullOrEmpty()) {
-        viewModel.cancelChatComposerMediaAcquisition(lease.authorizationId)
+        composerState.cancelMediaAcquisition(lease.authorizationId)
         return@rememberLauncherForActivityResult
       }
       val importOwner =
@@ -347,7 +349,7 @@ fun ChatScreen(
   LaunchedEffect(
     pendingAssistantAutoSend,
     assistantAutoSendInFlight,
-    sendOwnersInFlight,
+    sendStates,
     composerOwner,
     healthOk,
     pendingRunCount,
@@ -369,9 +371,9 @@ fun ChatScreen(
 
   val shareImportNotice =
     when (attachmentNotices[composerOwner]) {
-      ai.openclaw.app.ChatComposerAttachmentNotice.Attachment ->
+      ChatComposerAttachmentNotice.Attachment ->
         NativeText.Resource(source = "Could not stage an attachment for sending.", formatArgs = emptyList())
-      ai.openclaw.app.ChatComposerAttachmentNotice.Image ->
+      ChatComposerAttachmentNotice.Image ->
         nativeText("Some shared images were omitted or could not be added.")
       null ->
         when {
@@ -401,9 +403,10 @@ fun ChatScreen(
       mergeChatDraft(draft = claimed, currentInput = input, currentOwner = composerOwner) ?: return@LaunchedEffect
   }
 
-  LaunchedEffect(composerOwner, sendAdmission) {
-    val admission = sendAdmission ?: return@LaunchedEffect
-    viewModel.acknowledgeChatComposerSendAdmission(composerOwner, admission.id)
+  LaunchedEffect(composerOwner, pendingSendAdmissionIds) {
+    pendingSendAdmissionIds.forEach { admissionId ->
+      viewModel.acknowledgeChatComposerSendAdmission(composerOwner, admissionId)
+    }
   }
 
   // The process queue remembers the first owner; only an explicit alias/identity resolution
@@ -439,8 +442,8 @@ fun ChatScreen(
       // have been merged together, and disposal before this point leaves the head for retry.
       inputDrafts[ownerSnapshot] =
         mergeSharedChatText(sharedText = staged.text, currentInput = inputDrafts[ownerSnapshot])
-      val admissionOmissions = viewModel.addChatComposerAttachments(ownerSnapshot, staged.attachments)
-      viewModel.reportChatComposerImageOmission(
+      val admissionOmissions = composerState.addAttachments(ownerSnapshot, staged.attachments)
+      composerState.reportImageOmission(
         ownerSnapshot,
         staged.failedImageCount + staged.droppedImageCount + admissionOmissions,
       )
@@ -523,6 +526,7 @@ fun ChatScreen(
       historyLoading = historyLoading,
       pendingRunCount = pendingRunCount,
       pendingToolCalls = pendingToolCalls,
+      questions = questionsForSession(questions, sessionKey, mainSessionKey, activeAgentId),
       streamingAssistantText = streamingAssistantText,
       healthOk = healthOk,
       gatewayOffline = gatewayOffline,
@@ -540,6 +544,7 @@ fun ChatScreen(
         ),
       onRetryOutbox = viewModel::retryChatOutboxCommand,
       onDeleteOutbox = viewModel::deleteChatOutboxCommand,
+      onResolveQuestion = viewModel::resolveChatQuestion,
       onStarterPrompt = { prompt -> inputDrafts[composerOwner] = prompt },
       onReplyMessage = { value -> viewModel.setChatReplyDraft(value, composerOwner) },
       speechState = messageSpeechState,
@@ -576,18 +581,18 @@ fun ChatScreen(
       onDismissShareImportNotice = {
         sendMessageTooLong = false
         sendCheckpointFull = false
-        viewModel.clearChatComposerAttachmentOmission(composerOwner)
+        composerState.clearAttachmentOmission(composerOwner)
       },
       commands = chatCommands,
       onThinkingLevelChange = viewModel::setChatThinkingLevel,
       onOpenModelPicker = { showModelPicker = true },
       onPickImages = {
         if (!viewModel.isCurrentChatComposerOwner(composerOwner)) return@ChatComposer
-        val authorizationId = viewModel.beginChatComposerMediaAcquisition(composerOwner) ?: return@ChatComposer
+        val authorizationId = composerState.beginMediaAcquisition(composerOwner) ?: return@ChatComposer
         imagePickerOwnerCheckpoint.begin(composerOwner, authorizationId)
         pickImages.launch("image/*")
       },
-      onRemoveAttachment = { id -> viewModel.removeChatComposerAttachments(composerOwner, setOf(id)) },
+      onRemoveAttachment = { id -> composerState.removeAttachments(composerOwner, setOf(id)) },
       voiceNoteState = voiceNoteState,
       voiceNoteElapsedMs = voiceNoteElapsedMs,
       voiceNoteLevel = voiceNoteLevel,
@@ -595,30 +600,30 @@ fun ChatScreen(
       onStartVoiceNote = {
         scope.launch {
           val ownerSnapshot = composerOwner
-          val mediaAuthorizationId = viewModel.beginChatComposerMediaAcquisition(ownerSnapshot) ?: return@launch
+          val mediaAuthorizationId = composerState.beginMediaAcquisition(ownerSnapshot) ?: return@launch
           val recordingId = UUID.randomUUID().toString()
           if (!viewModel.isCurrentChatComposerOwner(ownerSnapshot)) {
-            viewModel.cancelChatComposerMediaAcquisition(mediaAuthorizationId)
+            composerState.cancelMediaAcquisition(mediaAuthorizationId)
             return@launch
           }
           if (voiceNoteRecorder.start(recordingId)) {
             if (
               viewModel.isCurrentChatComposerOwner(ownerSnapshot) &&
-              viewModel.isChatComposerMediaAcquisitionActive(mediaAuthorizationId)
+              composerState.isMediaAcquisitionActive(mediaAuthorizationId)
             ) {
-              voiceNoteCommitCheckpoint.begin(ownerSnapshot, recordingId, mediaAuthorizationId)
+              voiceNoteCommitCheckpoint.begin(ownerSnapshot, mediaAuthorizationId, recordingId)
             } else {
               voiceNoteRecorder.cancel()
-              viewModel.cancelChatComposerMediaAcquisition(mediaAuthorizationId)
+              composerState.cancelMediaAcquisition(mediaAuthorizationId)
             }
           } else {
-            viewModel.cancelChatComposerMediaAcquisition(mediaAuthorizationId)
+            composerState.cancelMediaAcquisition(mediaAuthorizationId)
           }
         }
       },
       onCancelVoiceNote = {
         voiceNoteCommitCheckpoint.clear()?.let { lease ->
-          viewModel.cancelChatComposerMediaAcquisition(lease.authorizationId)
+          composerState.cancelMediaAcquisition(lease.authorizationId)
         }
         voiceNoteRecorder.cancel()
       },
@@ -637,7 +642,7 @@ fun ChatScreen(
       onSend = {
         // Re-read the ViewModel so a stale click callback cannot beat StateFlow recomposition.
         val currentShare = viewModel.chatShareDraftForOwner(composerOwner, mainSessionKey)
-        if (currentShare != null || composerOwner in sendOwnersInFlight) {
+        if (currentShare != null || composerOwner in sendStates) {
           return@ChatComposer
         }
         val ownerSnapshot = composerOwner
@@ -963,6 +968,7 @@ private fun ChatMessageList(
   historyLoading: Boolean,
   pendingRunCount: Int,
   pendingToolCalls: List<ChatPendingToolCall>,
+  questions: List<ChatQuestionPrompt>,
   streamingAssistantText: String?,
   healthOk: Boolean,
   gatewayOffline: Boolean,
@@ -970,6 +976,7 @@ private fun ChatMessageList(
   recoveryOutboxItems: List<ChatOutboxItem>,
   onRetryOutbox: (String) -> Unit,
   onDeleteOutbox: (String) -> Unit,
+  onResolveQuestion: (String, Map<String, List<String>>) -> Unit,
   onStarterPrompt: (String) -> Unit,
   onReplyMessage: (String) -> Unit,
   speechState: MessageSpeechState?,
@@ -978,7 +985,7 @@ private fun ChatMessageList(
   modifier: Modifier = Modifier,
 ) {
   val timeline =
-    remember(messages, pendingRunCount, pendingToolCalls, streamingAssistantText, outboxItems, recoveryOutboxItems) {
+    remember(messages, pendingRunCount, pendingToolCalls, questions, streamingAssistantText, outboxItems, recoveryOutboxItems) {
       buildChatTimeline(
         messages = messages,
         pendingRunCount = pendingRunCount,
@@ -986,6 +993,7 @@ private fun ChatMessageList(
         streamingAssistantText = streamingAssistantText,
         outboxItems = outboxItems,
         recoveryOutboxItems = recoveryOutboxItems,
+        questions = questions,
       )
     }
   val readerScroll =
@@ -1041,6 +1049,8 @@ private fun ChatMessageList(
                 ),
             )
           is ChatTimelineItem.PendingTools -> ToolBubble(toolCalls = item.toolCalls)
+          is ChatTimelineItem.QuestionPrompt ->
+            ChatQuestionCard(prompt = item.prompt, onSubmit = onResolveQuestion)
           is ChatTimelineItem.StreamingAssistant ->
             ChatBubble(
               messageId = null,

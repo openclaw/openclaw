@@ -10,7 +10,7 @@ title: "Doctor"
 
 Health checks and quick fixes for the gateway, channels, plugins, skills, model routing, local state, and config migrations. Use it whenever something is not behaving as expected and you want one command to explain what is wrong.
 
-When Gateway status reports SecretRef owners isolated during cold startup, doctor prints a **Secret owners unavailable** warning with every owner and affected config path.
+When Gateway status reports SecretRef owners isolated during cold startup, doctor prints a **Secret runtime degradation** warning with every cold owner, affected config path, redacted reason, and the `openclaw secrets reload` retry command.
 
 Related:
 
@@ -206,6 +206,8 @@ the container normally.
 This includes retired MCP OAuth files under `<state-dir>/mcp-oauth/*.json`. Stop the Gateway before repair. Doctor imports valid credentials into `<state-dir>/state/openclaw.sqlite`, preserves an existing canonical SQLite session when both stores exist, drops the obsolete persisted OAuth `state` value, and uses its receipt to prevent a recreated stale file from resurrecting logged-out credentials. Retired `.lock` sidecars fail closed: if Doctor reports a stale owner, verify that no older OpenClaw process is running, remove that sidecar, and rerun Doctor.
 
 ## Shared state SQLite compaction
+
+See [Database schemas](/reference/database-schemas) for schema versioning, integrity checks, and downgrade recovery.
 
 `openclaw doctor --state-sqlite compact` is explicit offline maintenance for
 the canonical shared state database at

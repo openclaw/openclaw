@@ -617,6 +617,10 @@ function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; 
   }
 
   if (!isJobEnabled(job)) {
+    if (job.state.startupCatchupAtMs !== undefined) {
+      job.state.startupCatchupAtMs = undefined;
+      changed = true;
+    }
     if (job.state.nextRunAtMs !== undefined) {
       job.state.nextRunAtMs = undefined;
       changed = true;
@@ -792,32 +796,23 @@ export function recomputeNextRunsForMaintenance(
       nowMs,
       deferredAutoDisableNotifications: opts?.deferredAutoDisableNotifications,
     });
-  const deferralIds = state.pendingCatchupDeferralJobIds;
-  // Drop deferral markers for jobs that no longer exist in the store or
-  // are disabled. They will not fire, so no deferral is needed.
-  if (state.store && deferralIds.size > 0) {
-    const relevantDeferralIds = new Set(
-      state.store.jobs.filter((job) => isJobEnabled(job)).map((job) => job.id),
-    );
-    for (const jobId of deferralIds) {
-      if (!relevantDeferralIds.has(jobId)) {
-        deferralIds.delete(jobId);
-      }
-    }
-  }
   return walkSchedulableJobs(
     state,
     ({ job, nowMs: now }) => {
       let changed = false;
 
-      // Clear stale deferral markers once the deferred staggered slot arrives.
-      // After the slot fires, future repair is safe for this job again.
-      if (deferralIds.has(job.id)) {
-        const nextRun = job.state.nextRunAtMs;
-        if (hasScheduledNextRunAtMs(nextRun) && now >= nextRun) {
-          deferralIds.delete(job.id);
-          changed = true;
-        }
+      const startupCatchupAtMs = job.state.startupCatchupAtMs;
+      const nextRunAtMs = job.state.nextRunAtMs;
+      // The persisted marker owns only its exact future slot. Schedule edits,
+      // malformed state, or arrival at the slot release normal repair policy.
+      const hasPendingStartupCatchup =
+        isFiniteTimestamp(startupCatchupAtMs) &&
+        hasScheduledNextRunAtMs(nextRunAtMs) &&
+        startupCatchupAtMs === nextRunAtMs &&
+        now < startupCatchupAtMs;
+      if (startupCatchupAtMs !== undefined && !hasPendingStartupCatchup) {
+        job.state.startupCatchupAtMs = undefined;
+        changed = true;
       }
 
       if (!hasScheduledNextRunAtMs(job.state.nextRunAtMs)) {
@@ -826,7 +821,7 @@ export function recomputeNextRunsForMaintenance(
         }
       } else if (
         repairFutureCronNextRunAtMs &&
-        !deferralIds.has(job.id) &&
+        !hasPendingStartupCatchup &&
         shouldRepairFutureCronNextRunAtMs({ state, job, nowMs: now })
       ) {
         if (recomputeJob(job, now)) {

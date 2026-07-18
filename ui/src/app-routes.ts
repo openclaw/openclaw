@@ -6,6 +6,7 @@ import { page as aboutPage } from "./pages/about/route.ts";
 import { page as activityPage } from "./pages/activity/route.ts";
 import { page as agentsPage } from "./pages/agents/route.ts";
 import { page as approvalsPage } from "./pages/approvals/route.ts";
+import { page as appsPage } from "./pages/apps/route.ts";
 import { page as channelsPage } from "./pages/channels/route.ts";
 import { page as chatPage } from "./pages/chat/route.ts";
 import { pages as configPages } from "./pages/config/route.ts";
@@ -47,6 +48,7 @@ const APP_ROUTE_TREE = [
   custodianPage,
   newSessionPage,
   activityPage,
+  appsPage,
   agentsPage,
   approvalsPage,
   channelsPage,

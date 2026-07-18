@@ -530,6 +530,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       },
       route: {
         agentId: route.agentId,
+        dmScope: route.dmScope,
         accountId: route.accountId,
         routeSessionKey: route.sessionKey,
       },
@@ -598,7 +599,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       channel: "tlon",
       accountId: route.accountId,
       cfg,
-      route: { agentId: route.agentId, sessionKey: route.sessionKey },
+      route: { agentId: route.agentId, dmScope: route.dmScope, sessionKey: route.sessionKey },
       ctxPayload,
       delivery: {
         preparePayload: prepareReplyPayload,

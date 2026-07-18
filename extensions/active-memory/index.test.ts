@@ -15,6 +15,7 @@ import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/se
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { applyCliRuntimeRecallTimeoutDefault } from "./config.js";
 import plugin, { testing } from "./index.js";
+import { hasRememberAcrossConversationsAgent } from "./session-policy.js";
 
 // Match only lone surrogates so valid supplementary-plane characters remain allowed.
 const UNPAIRED_SURROGATE_RE =
@@ -180,6 +181,7 @@ describe("active-memory plugin", () => {
     agents: ["main"],
     logging: true,
   };
+  let apiConfig: Record<string, unknown> = {};
   const syncRuntimePluginConfig = (nextPluginConfig: Record<string, unknown>) => {
     pluginConfig = nextPluginConfig;
     const plugins = configFile.plugins as Record<string, unknown> | undefined;
@@ -220,7 +222,17 @@ describe("active-memory plugin", () => {
     set pluginConfig(nextPluginConfig: Record<string, unknown>) {
       syncRuntimePluginConfig(nextPluginConfig);
     },
-    config: {},
+    get config() {
+      return apiConfig;
+    },
+    set config(nextConfig: Record<string, unknown>) {
+      apiConfig = nextConfig;
+      const plugins = configFile.plugins;
+      configFile = {
+        ...nextConfig,
+        ...(plugins ? { plugins } : {}),
+      };
+    },
     id: "active-memory",
     name: "Active Memory",
     logger: { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() },
@@ -494,6 +506,7 @@ describe("active-memory plugin", () => {
     }).clear();
     runEmbeddedAgent.mockReset();
     configFile = {
+      session: { dmScope: "per-peer" },
       plugins: {
         entries: {
           "active-memory": {
@@ -510,6 +523,7 @@ describe("active-memory plugin", () => {
       logging: true,
     });
     api.config = {
+      session: { dmScope: "per-peer" },
       agents: {
         defaults: {
           model: {
@@ -615,6 +629,19 @@ describe("active-memory plugin", () => {
     expect(typeof handler).toBe("function");
     expect(options).toEqual({ timeoutMs: 153_000 });
     expect(hookOptions.before_prompt_build?.timeoutMs).toBe(153_000);
+  });
+
+  it("does not synthesize a main agent when every configured agent opts out", () => {
+    expect(
+      hasRememberAcrossConversationsAgent({
+        agents: {
+          list: [
+            { id: "personal", memorySearch: { rememberAcrossConversations: false } },
+            { id: "support", memorySearch: { rememberAcrossConversations: false } },
+          ],
+        },
+      }),
+    ).toBe(false);
   });
 
   it("keeps the outer hook timeout at the live-config ceiling", () => {
@@ -808,6 +835,317 @@ describe("active-memory plugin", () => {
     expect(api.logger.warn).toHaveBeenCalledWith(
       expect.stringContaining("failed to clean up recall session"),
     );
+  });
+
+  it("runs product recall for an opted-in direct session without an Active Memory agent entry", async () => {
+    syncRuntimePluginConfig({ agents: [], logging: true });
+    configFile = {
+      ...configFile,
+      agents: {
+        list: [
+          {
+            id: "personal",
+            workspace: "/tmp/live-personal-workspace",
+            agentDir: "/tmp/live-personal-agent",
+            model: { primary: "openai/gpt-5.5" },
+            memorySearch: { rememberAcrossConversations: true },
+          },
+        ],
+      },
+    };
+    const sessionKey = "agent:personal:telegram:direct:owner";
+    hoisted.sessionStore[sessionKey] = { sessionId: "s-personal", updatedAt: 0 };
+
+    await requireHook("before_prompt_build")(
+      { prompt: "what do I usually order?", messages: [] },
+      {
+        agentId: "personal",
+        trigger: "user",
+        sessionKey,
+        messageProvider: "telegram",
+        channelId: "owner",
+      },
+    );
+
+    expect(lastEmbeddedRunParams().conversationRecall).toEqual({
+      anchorSessionKey: sessionKey,
+      scope: "same-agent-private",
+      corpus: "sessions",
+    });
+    expect(lastEmbeddedRunParams().toolsAllow).toEqual(["memory_search"]);
+    expect(lastEmbeddedRunParams()).toMatchObject({
+      workspaceDir: "/tmp/live-personal-workspace",
+      agentDir: "/tmp/live-personal-agent",
+      provider: "openai",
+      model: "gpt-5.5",
+    });
+    expect(embeddedRunConfig()).toMatchObject({
+      agents: {
+        list: [
+          {
+            id: "personal",
+            workspace: "/tmp/live-personal-workspace",
+            agentDir: "/tmp/live-personal-agent",
+            model: { primary: "openai/gpt-5.5" },
+            memorySearch: { rememberAcrossConversations: true },
+          },
+        ],
+      },
+    });
+  });
+
+  it("keeps product recall available when Lossless Claw owns the context-engine slot", async () => {
+    syncRuntimePluginConfig({ agents: [], logging: true });
+    configFile = {
+      ...configFile,
+      agents: {
+        list: [
+          {
+            id: "personal",
+            model: { primary: "github-copilot/gpt-5.4-mini" },
+            memorySearch: { rememberAcrossConversations: true },
+          },
+        ],
+      },
+      plugins: {
+        ...(configFile.plugins as Record<string, unknown>),
+        slots: { contextEngine: "lossless-claw" },
+      },
+    };
+    const sessionKey = "agent:personal:telegram:direct:owner";
+    hoisted.sessionStore[sessionKey] = { sessionId: "s-personal", updatedAt: 0 };
+
+    await requireHook("before_prompt_build")(
+      { prompt: "what do I usually order?", messages: [] },
+      {
+        agentId: "personal",
+        trigger: "user",
+        sessionKey,
+        messageProvider: "telegram",
+        channelId: "owner",
+      },
+    );
+
+    expect(lastEmbeddedRunParams().conversationRecall).toEqual({
+      anchorSessionKey: sessionKey,
+      scope: "same-agent-private",
+      corpus: "sessions",
+    });
+    expect(hasWarnLine("does not support protected private transcript recall")).toBe(false);
+  });
+
+  it("matches case-preserved conversation ids against lowercased deny lists", async () => {
+    api.pluginConfig = {
+      agents: ["main"],
+      allowedChatTypes: ["direct", "group"],
+      deniedChatIds: ["AbCdEfGh=="],
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+
+    const result = await requireHook("before_prompt_build")(
+      { prompt: "hi", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:signal:group:AbCdEfGh==",
+        messageProvider: "signal",
+        channelId: "signal",
+      },
+    );
+
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    expect(result).toBeUndefined();
+  });
+
+  it.each([
+    {
+      name: "a denylisted main-scope DM",
+      sessionKey: "agent:personal:main",
+      messageProvider: "telegram",
+      channelId: "owner",
+      pluginConfig: { agents: [], logging: true, deniedChatIds: ["owner"] },
+      memorySlot: "memory-core",
+      warn: undefined,
+    },
+    {
+      name: "a group destination",
+      sessionKey: "agent:personal:telegram:group:family",
+      messageProvider: "telegram",
+      channelId: "family",
+      pluginConfig: { agents: [], logging: true },
+      memorySlot: "memory-core",
+      warn: undefined,
+    },
+    {
+      name: "a headless explicit destination",
+      sessionKey: "agent:personal:explicit:headless-run",
+      messageProvider: undefined,
+      channelId: undefined,
+      pluginConfig: { agents: [], logging: true },
+      memorySlot: "memory-core",
+      warn: undefined,
+    },
+    {
+      name: "an unsupported memory provider",
+      sessionKey: "agent:personal:telegram:direct:owner",
+      messageProvider: "telegram",
+      channelId: "owner",
+      pluginConfig: { agents: [], toolsAllow: ["memory_search"], logging: true },
+      memorySlot: "memory-lancedb",
+      warn: "does not support protected private transcript recall",
+    },
+    {
+      name: "a missing memory_search tool",
+      sessionKey: "agent:personal:telegram:direct:owner",
+      messageProvider: "telegram",
+      channelId: "owner",
+      pluginConfig: { agents: [], toolsAllow: ["memory_get"], logging: true },
+      memorySlot: "memory-core",
+      warn: "memory_search is unavailable",
+    },
+  ])("fails closed without product recall for $name", async (testCase) => {
+    syncRuntimePluginConfig(testCase.pluginConfig);
+    setMemorySlot(testCase.memorySlot);
+    configFile = {
+      ...configFile,
+      agents: {
+        list: [{ id: "personal", memorySearch: { rememberAcrossConversations: true } }],
+      },
+    };
+    hoisted.sessionStore[testCase.sessionKey] = { sessionId: "s-personal", updatedAt: 0 };
+
+    const result = await requireHook("before_prompt_build")(
+      { prompt: "what do I usually order?", messages: [] },
+      {
+        agentId: "personal",
+        trigger: "user",
+        sessionKey: testCase.sessionKey,
+        messageProvider: testCase.messageProvider,
+        channelId: testCase.channelId,
+      },
+    );
+
+    expect(result).toBeUndefined();
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    if (testCase.warn) {
+      expect(hasWarnLine(testCase.warn)).toBe(true);
+    }
+  });
+
+  it("runs product recall by default for a personal install without Active Memory config", async () => {
+    configFile = {
+      agents: {
+        list: [
+          {
+            id: "personal",
+            model: { primary: "github-copilot/gpt-5.4-mini" },
+          },
+        ],
+      },
+      plugins: { entries: {} },
+    };
+    const sessionKey = "agent:personal:telegram:direct:owner";
+    hoisted.sessionStore[sessionKey] = { sessionId: "s-personal", updatedAt: 0 };
+
+    await requireHook("before_prompt_build")(
+      { prompt: "what do I usually order?", messages: [] },
+      {
+        agentId: "personal",
+        trigger: "user",
+        sessionKey,
+        messageProvider: "telegram",
+        channelId: "owner",
+      },
+    );
+
+    expect(lastEmbeddedRunParams().conversationRecall).toEqual({
+      anchorSessionKey: sessionKey,
+      scope: "same-agent-private",
+      corpus: "sessions",
+    });
+  });
+
+  it("keeps advanced recall corpora separate from product recall", async () => {
+    syncRuntimePluginConfig({ agents: ["personal"], allowedChatTypes: ["direct", "group"] });
+    configFile = {
+      ...configFile,
+      agents: {
+        list: [
+          {
+            id: "personal",
+            model: { primary: "github-copilot/gpt-5.4-mini" },
+            memorySearch: { rememberAcrossConversations: true },
+          },
+        ],
+      },
+    };
+    const directSessionKey = "agent:personal:telegram:direct:owner";
+    hoisted.sessionStore[directSessionKey] = { sessionId: "s-personal", updatedAt: 0 };
+
+    await requireHook("before_prompt_build")(
+      { prompt: "what do I usually order?", messages: [] },
+      {
+        agentId: "personal",
+        trigger: "user",
+        sessionKey: directSessionKey,
+        messageProvider: "telegram",
+        channelId: "owner",
+      },
+    );
+    expect(lastEmbeddedRunParams().conversationRecall).toEqual({
+      anchorSessionKey: directSessionKey,
+      scope: "same-agent-private",
+      corpus: "configured",
+    });
+
+    await requireHook("before_prompt_build")(
+      { prompt: "what context helps here?", messages: [] },
+      {
+        agentId: "personal",
+        trigger: "user",
+        sessionKey: "agent:personal:telegram:group:family",
+        messageProvider: "telegram",
+        channelId: "family",
+      },
+    );
+    expect(lastEmbeddedRunParams().conversationRecall).toBeUndefined();
+  });
+
+  it("lets a remember-only agent pause recall for one session", async () => {
+    syncRuntimePluginConfig({ agents: [], logging: true });
+    configFile = {
+      ...configFile,
+      agents: {
+        list: [{ id: "personal", memorySearch: { rememberAcrossConversations: true } }],
+      },
+    };
+    const sessionKey = "agent:personal:telegram:direct:owner";
+    hoisted.sessionStore[sessionKey] = { sessionId: "s-personal", updatedAt: 0 };
+
+    const offResult = await registeredCommands["active-memory"].handler({
+      channel: "telegram",
+      isAuthorizedSender: true,
+      sessionKey,
+      args: "off",
+      commandBody: "/active-memory off",
+      config: configFile,
+      requestConversationBinding: async () => ({ status: "error", message: "unsupported" }),
+      detachConversationBinding: async () => ({ removed: false }),
+      getCurrentConversationBinding: async () => null,
+    });
+    await requireHook("before_prompt_build")(
+      { prompt: "what do I usually order?", messages: [] },
+      {
+        agentId: "personal",
+        trigger: "user",
+        sessionKey,
+        messageProvider: "telegram",
+        channelId: "owner",
+      },
+    );
+
+    expect(offResult.text).toBe("Active Memory: off for this session.");
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
   it("registers a session-scoped active-memory toggle command", async () => {

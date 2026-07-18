@@ -1700,7 +1700,8 @@
       "source": "Default",
       "translations": [
         "Default",
-        "افتراضي"
+        "افتراضي",
+        "الافتراضي"
       ]
     },
     {
@@ -1780,6 +1781,7 @@
       "source": "Default",
       "translations": [
         "Default",
+        "Domyślne",
         "Domyślnie"
       ]
     },
@@ -2985,6 +2987,54 @@
         "分叉",
         "分支",
         "创建分支"
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "Full",
+      "translations": [
+        "フル",
+        "最大"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "Full",
+      "translations": [
+        "Pełna",
+        "Pełny"
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "Full",
+      "translations": [
+        "Полная",
+        "Полный"
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "Full",
+      "translations": [
+        "เต็ม",
+        "เต็มรูปแบบ"
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "Full",
+      "translations": [
+        "Повна",
+        "Повний"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "Full",
+      "translations": [
+        "完全",
+        "完整"
       ]
     },
     {
@@ -5360,6 +5410,22 @@
       ]
     },
     {
+      "locale": "es",
+      "source": "Not selected",
+      "translations": [
+        "No seleccionada",
+        "No seleccionado"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "Not selected",
+      "translations": [
+        "Inte vald",
+        "Inte valt"
+      ]
+    },
+    {
       "locale": "de",
       "source": "Notifications",
       "translations": [
@@ -5453,7 +5519,8 @@
       "source": "Off",
       "translations": [
         "꺼짐",
-        "끄기"
+        "끄기",
+        "끔"
       ]
     },
     {
@@ -5631,7 +5698,16 @@
       "source": "On",
       "translations": [
         "켜기",
-        "켜짐"
+        "켜짐",
+        "켬"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "On",
+      "translations": [
+        "Wł.",
+        "Włączone"
       ]
     },
     {
@@ -7525,6 +7601,30 @@
       ]
     },
     {
+      "locale": "es",
+      "source": "Selected",
+      "translations": [
+        "Seleccionada",
+        "Seleccionado"
+      ]
+    },
+    {
+      "locale": "fa",
+      "source": "Selected",
+      "translations": [
+        "انتخاب شده",
+        "انتخاب‌شده"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "Selected",
+      "translations": [
+        "Vald",
+        "Valt"
+      ]
+    },
+    {
       "locale": "tr",
       "source": "Selected",
       "translations": [
@@ -7643,6 +7743,14 @@
       "translations": [
         "جلسه‌ها در دسترس نیستند",
         "نشست‌ها در دسترس نیستند"
+      ]
+    },
+    {
+      "locale": "fa",
+      "source": "Sessions…",
+      "translations": [
+        "جلسه‌ها…",
+        "نشست‌ها…"
       ]
     },
     {

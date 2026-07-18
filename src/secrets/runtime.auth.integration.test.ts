@@ -64,10 +64,12 @@ vi.mock("./runtime-prepare.runtime.js", () => ({
       diagnostics: [],
     },
     degradedOwners: [],
+    secretOwners: [],
   }),
 }));
 
 vi.mock("./runtime-owner-assignments.js", () => ({
+  listSecretAssignmentOwners: () => [],
   resolveAndApplySecretAssignments: async () => [],
 }));
 

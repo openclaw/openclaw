@@ -105,7 +105,7 @@ function realtimeTalkAbortReason(signal: AbortSignal): Error {
 
 export async function openRealtimeTalkInput(
   inputDeviceId: string | undefined,
-  options: { video?: boolean; signal?: AbortSignal } = {},
+  options: { signal?: AbortSignal } = {},
 ): Promise<MediaStream> {
   const devices = globalThis.navigator?.mediaDevices;
   if (!devices?.getUserMedia) {
@@ -130,31 +130,25 @@ export async function openRealtimeTalkInput(
     audio.getTracks().forEach((track) => track.stop());
     throw realtimeTalkAbortReason(options.signal);
   }
-  if (!options.video) {
-    return audio;
-  }
+  return audio;
+}
 
-  let audioStopped = false;
-  const stopAudio = () => {
-    if (audioStopped) {
-      return;
-    }
-    audioStopped = true;
-    audio.getTracks().forEach((track) => track.stop());
-  };
-  options.signal?.addEventListener("abort", stopAudio, { once: true });
-  let camera: MediaStream | undefined;
+export async function openRealtimeTalkCamera(signal?: AbortSignal): Promise<MediaStream> {
+  const devices = globalThis.navigator?.mediaDevices;
+  if (!devices?.getUserMedia) {
+    throw new Error(t("chat.composer.cameraAccessFailed"));
+  }
+  let camera: MediaStream;
   try {
     camera = await devices.getUserMedia({ video: true });
-    if (options.signal?.aborted) {
-      throw realtimeTalkAbortReason(options.signal);
+    if (signal?.aborted) {
+      camera.getTracks().forEach((track) => track.stop());
+      throw realtimeTalkAbortReason(signal);
     }
-    return new MediaStream([...audio.getAudioTracks(), ...camera.getVideoTracks()]);
+    return camera;
   } catch (error) {
-    camera?.getTracks().forEach((track) => track.stop());
-    stopAudio();
-    if (options.signal?.aborted) {
-      throw realtimeTalkAbortReason(options.signal);
+    if (signal?.aborted) {
+      throw realtimeTalkAbortReason(signal);
     }
     if (error instanceof DOMException && error.name === "NotAllowedError") {
       throw new Error(t("chat.composer.cameraPermissionBlocked"), { cause: error });
@@ -165,8 +159,6 @@ export async function openRealtimeTalkInput(
     if (error instanceof DOMException && error.name === "NotReadableError") {
       throw new Error(t("chat.composer.cameraBusy"), { cause: error });
     }
-    throw error;
-  } finally {
-    options.signal?.removeEventListener("abort", stopAudio);
+    throw new Error(t("chat.composer.cameraAccessFailed"), { cause: error });
   }
 }

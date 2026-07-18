@@ -126,7 +126,7 @@ const legacyStorePatterns = [
   /\b(?:crestodian|openclaw)\/rescue-pending\/[^"'`]*\.json\b/u,
   /\bcron\/(?:runs\/[^"'`]+\.jsonl|jobs\.json|jobs-state\.json)\b/u,
   /\b(?:process-leases|session-toggles|known-users|msteams-conversations|msteams-polls|msteams-sso-tokens|bot-storage|sync-store|thread-bindings|inbound-dedupe|startup-verification|storage-meta|crypto-idb-snapshot|command-deploy-cache|plugin-binding-approvals|plugins\/installs|config-health|port-guard|restart-sentinel|gateway-restart-intent|gateway-supervisor-restart-handoff)\.json\b/u,
-  /\b(?:calls|ref-index|audit\/file-transfer|audit\/openclaw)\.jsonl\b/u,
+  /\b(?:calls|ref-index|config-audit|audit\/(?:file-transfer|openclaw|system-agent|crestodian))\.jsonl\b/u,
   /\b(?:reply-cache|sent-echoes|events|claims)\.jsonl\b/u,
   /\bplugin-state\/state\.sqlite\b/u,
   /\btasks\/(?:runs\.sqlite|flows\/registry\.sqlite)\b/u,
@@ -161,9 +161,7 @@ const allowedRuntimeMigrationPaths = [
 
 const allowedFixturePaths = new Set(["extensions/qa-lab/src/providers/shared/auth-store.ts"]);
 
-const allowedCurrentLegacyWriteViolations = [
-  "extensions/memory-wiki/src/compile.ts:legacy store filesystem write:root.write(relativePath, content)",
-];
+const allowedCurrentLegacyWriteViolations = [];
 
 const sourceFileExtensions = new Set([".cjs", ".cts", ".js", ".mjs", ".mts", ".ts", ".tsx"]);
 
