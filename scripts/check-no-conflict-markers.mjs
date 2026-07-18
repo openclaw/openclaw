@@ -122,7 +122,7 @@ function parseGitGrepConflictMarkerOutput(stdout) {
 export function findConflictMarkersInTrackedFiles(cwd = process.cwd(), run = spawnSync) {
   const result = run(
     "git",
-    ["grep", "-n", "-z", "-o", "-I", "-E", CONFLICT_MARKER_GREP_PATTERN, "--", "."],
+    ["grep", "--no-color", "-n", "-z", "-o", "-I", "-E", CONFLICT_MARKER_GREP_PATTERN, "--", "."],
     {
       cwd,
       encoding: "buffer",

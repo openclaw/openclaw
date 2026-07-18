@@ -93,6 +93,28 @@ describe("check-no-conflict-markers", () => {
     ]);
   });
 
+  it("disables configured git grep colors before parsing records", () => {
+    const rootDir = createTempDir("openclaw-conflict-markers-");
+    git(rootDir, "init", "-q");
+    git(rootDir, "config", "user.email", "test@example.com");
+    git(rootDir, "config", "user.name", "Test User");
+    git(rootDir, "config", "color.grep", "always");
+    git(rootDir, "config", "color.grep.lineNumber", "red");
+
+    const conflictFile = "src/conflict.ts";
+    const conflictPath = path.join(rootDir, conflictFile);
+    fs.mkdirSync(path.dirname(conflictPath), { recursive: true });
+    fs.writeFileSync(conflictPath, "<<<<<<< HEAD\nleft\n=======\nright\n>>>>>>> branch\n");
+    git(rootDir, "add", conflictFile);
+
+    expect(findConflictMarkersInTrackedFiles(rootDir)).toEqual([
+      {
+        filePath: conflictFile,
+        lines: [1, 3, 5],
+      },
+    ]);
+  });
+
   it("returns no violations when tracked files have no conflict markers", () => {
     const rootDir = createTempDir("openclaw-conflict-markers-");
     git(rootDir, "init", "-q");
