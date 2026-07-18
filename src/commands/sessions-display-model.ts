@@ -139,7 +139,7 @@ export function resolveSessionDisplayModelRef(
   cfg: OpenClawConfig,
   row: SessionDisplayModelRow,
 ): SessionDisplayModelRef {
-  const agentId = row.key.startsWith("agent:") ? row.key.split(":")[1] : undefined;
+  const agentId = row.key.startsWith("agent:") ? row.key.slice("agent:".length) : undefined;
   const defaultRef = resolveDefaultModelRef(cfg, agentId);
   const normalizedOverride = normalizeStoredOverrideModel({
     providerOverride: row.providerOverride,

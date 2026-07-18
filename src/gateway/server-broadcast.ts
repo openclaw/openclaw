@@ -92,7 +92,13 @@ function serializeFrameField(name: "payload" | "stateVersion", value: unknown): 
   const fieldJSON = JSON.stringify({ [name]: value });
   const keyJSON = JSON.stringify(name);
   const prefix = `{${keyJSON}:`;
-  return fieldJSON.startsWith(prefix) ? `,${keyJSON}:${fieldJSON.slice(prefix.length, -1)}` : "";
+  if (!fieldJSON.startsWith(prefix)) {
+    process.emitWarning(
+      `serializeFrameField: unexpected serialization for ${name}, frame may be truncated`,
+    );
+    return "";
+  }
+  return `,${keyJSON}:${fieldJSON.slice(prefix.length, -1)}`;
 }
 
 function hasEventScope(
