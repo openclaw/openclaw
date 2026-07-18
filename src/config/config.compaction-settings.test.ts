@@ -95,33 +95,10 @@ describe("config compaction settings", () => {
     expect(compaction?.qualityGuard?.maxRetries).toBe(99);
   });
 
-  it("preserves compaction thinkingLevel when set to off", () => {
-    const compaction = materializeCompactionConfig({
-      thinkingLevel: "off",
-    });
-
-    expect(compaction?.thinkingLevel).toBe("off");
-  });
-
-  it("preserves compaction thinkingLevel when set to enabled level", () => {
-    const compaction = materializeCompactionConfig({
-      thinkingLevel: "low",
-    });
-
-    expect(compaction?.thinkingLevel).toBe("low");
-  });
-
-  it("does not set thinkingLevel when compaction config is empty", () => {
-    const compaction = materializeCompactionConfig({});
-
-    expect(compaction?.thinkingLevel).toBeUndefined();
-  });
-
-  it("preserves xhigh and adaptive thinking levels", () => {
-    const xhigh = materializeCompactionConfig({ thinkingLevel: "xhigh" });
-    const adaptive = materializeCompactionConfig({ thinkingLevel: "adaptive" });
-
-    expect(xhigh?.thinkingLevel).toBe("xhigh");
-    expect(adaptive?.thinkingLevel).toBe("adaptive");
-  });
+  it.each(["off", "low", "adaptive", "max", "ultra"] as const)(
+    "preserves compaction thinkingLevel=%s during materialization",
+    (thinkingLevel) => {
+      expect(materializeCompactionConfig({ thinkingLevel })?.thinkingLevel).toBe(thinkingLevel);
+    },
+  );
 });

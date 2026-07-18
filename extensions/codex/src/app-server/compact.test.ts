@@ -1554,7 +1554,7 @@ describe("maybeCompactCodexAppServerSession", () => {
             compaction: {
               model: "openai/gpt-5.4",
               provider: "custom-summary",
-              thinkingLevel: "off",
+              thinkingLevel: "ultra",
             },
           },
         },

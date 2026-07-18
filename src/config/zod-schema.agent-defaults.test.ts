@@ -344,6 +344,28 @@ describe("agent defaults schema", () => {
     expect(result.compaction?.maxActiveTranscriptBytes).toBe("20mb");
   });
 
+  it.each([
+    "off",
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "adaptive",
+    "max",
+    "ultra",
+  ] as const)("accepts compaction.thinkingLevel=%s", (thinkingLevel) => {
+    const result = AgentDefaultsSchema.parse({ compaction: { thinkingLevel } })!;
+    expect(result.compaction?.thinkingLevel).toBe(thinkingLevel);
+  });
+
+  it("rejects an unknown compaction thinking level", () => {
+    expectSchemaFailurePath(
+      AgentDefaultsSchema.safeParse({ compaction: { thinkingLevel: "extreme" } }),
+      "compaction.thinkingLevel",
+    );
+  });
+
   it("rejects unsafe byte-size strings in compaction defaults", () => {
     const unsafe = String(Number.MAX_SAFE_INTEGER + 1);
     expect(

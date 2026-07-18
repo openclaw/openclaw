@@ -24,6 +24,17 @@ export type EmbeddedAgentExecutionContract = "default" | "strict-agentic";
 export type SubagentDelegationMode = "suggest" | "prefer";
 /** Image compression/detail preference used before sending image inputs to models. */
 export type AgentImageQualityPreference = "auto" | "efficient" | "balanced" | "high";
+/** Canonical thinking levels accepted by agent defaults and compaction overrides. */
+export type AgentThinkingLevel =
+  | "off"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "adaptive"
+  | "max"
+  | "ultra";
 
 export type Gpt5PromptOverlayConfig = {
   /** Friendly interaction-style layer for GPT-5-family models (default: friendly). */
@@ -361,16 +372,7 @@ export type AgentDefaultsConfig = {
   /** Vector memory search configuration (per-agent overrides supported). */
   memorySearch?: MemorySearchConfig;
   /** Default thinking level when no /think directive is present. */
-  thinkingDefault?:
-    | "off"
-    | "minimal"
-    | "low"
-    | "medium"
-    | "high"
-    | "xhigh"
-    | "adaptive"
-    | "max"
-    | "ultra";
+  thinkingDefault?: AgentThinkingLevel;
   /** Default verbose level when no /verbose directive is present. */
   verboseDefault?: "off" | "on" | "full";
   /**
@@ -528,15 +530,9 @@ export type AgentCompactionMidTurnPrecheckConfig = {
 export type AgentCompactionConfig = {
   /** Compaction summarization mode. */
   mode?: AgentCompactionMode;
-  /** Id of a registered compaction provider plugin. */
-  provider?: string;
-  /**
-   * Override the thinking level used during compaction summarization.
-   * When set, compaction uses this level instead of the session's current thinking level.
-   * Default: unset (uses session thinking level, typically "off" for embedded runners).
-   */
-  thinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | "max";
-  /** Embedded OpenClaw reserve tokens target before floor enforcement. */
+  /** Override the session thinking level for embedded OpenClaw compaction summaries. */
+  thinkingLevel?: AgentThinkingLevel;
+  /** Embedded OpenClaw reserve target before floor and context-window caps. */
   reserveTokens?: number;
   /** Embedded OpenClaw keepRecentTokens budget used for cut-point selection. */
   keepRecentTokens?: number;
@@ -573,7 +569,13 @@ export type AgentCompactionConfig = {
   /** Maximum time in seconds for a single compaction operation (default: 180). */
   timeoutSeconds?: number;
   /**
-   * Rotate the active session JSONL file after compaction so the next turn
+   * Id of a registered compaction provider plugin.
+   * When set, the provider's summarize() is called instead of
+   * the built-in summarizeInStages(). Falls back to built-in on failure.
+   */
+  provider?: string;
+  /**
+   * Rotate the active session transcript after compaction so the next turn
    * starts from the compaction summary and unsummarized tail while the old
    * transcript stays archived.
    * Default: false (existing behavior preserved).
