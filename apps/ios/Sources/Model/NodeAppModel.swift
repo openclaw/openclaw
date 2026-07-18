@@ -1290,12 +1290,15 @@ final class NodeAppModel {
     }
 
     private func requestTalkPermissionUpgrade() {
+        if self.forceOperatorTalkPermissionUpgradeRequest {
+            guard case .requestFailed = self.talkMode.gatewayTalkPermissionState else { return }
+            self.cancelTalkPermissionUpgrade()
+        }
         guard let config = activeGatewayConnectConfig else {
             self.talkMode.gatewayTalkPermissionState = .requestFailed("Gateway is not connected")
             self.talkMode.statusText = "Gateway not connected"
             return
         }
-        guard !self.forceOperatorTalkPermissionUpgradeRequest else { return }
         GatewayDiagnostics.log("talk permission upgrade requested")
         self.talkMode.gatewayTalkPermissionState = .requestingUpgrade
         self.talkMode.statusText = "Requesting Talk approval"
@@ -1342,10 +1345,24 @@ final class NodeAppModel {
     }
 
     private func requestTalkPermissionUpgradeIfNeeded() {
-        guard self.talkMode.isEnabled,
-              case .missingScope = self.talkMode.gatewayTalkPermissionState
+        guard Self.shouldRequestTalkPermissionUpgrade(
+            isTalkEnabled: self.talkMode.isEnabled,
+            state: self.talkMode.gatewayTalkPermissionState)
         else { return }
         self.requestTalkPermissionUpgrade()
+    }
+
+    nonisolated static func shouldRequestTalkPermissionUpgrade(
+        isTalkEnabled: Bool,
+        state: TalkGatewayPermissionState) -> Bool
+    {
+        guard isTalkEnabled else { return false }
+        return switch state {
+        case .missingScope, .requestFailed:
+            true
+        default:
+            false
+        }
     }
 
     private func startTalkPermissionUpgradePolling() {

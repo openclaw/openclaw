@@ -755,6 +755,9 @@ struct OpenClawChatComposer: View {
                     isRealtimeTalkActive: self.talkControl?.isEnabled == true,
                     isComposerEnabled: self.isComposerEnabled,
                     isAttachmentInputEnabled: self.isAttachmentInputEnabled,
+                    onCancelDictation: {
+                        self.cancelActiveDictation()
+                    },
                     onStartDictation: {
                         if let dictationControl = self.dictationControl {
                             self.startDictation(dictationControl)
