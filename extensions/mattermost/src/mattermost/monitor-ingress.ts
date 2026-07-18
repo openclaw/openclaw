@@ -283,6 +283,11 @@ export function createMattermostIngressMonitor(options: {
       for (;;) {
         requested = false;
         await pruneIfDue();
+        // stop() may have run during the async prune; creating the lazy drain
+        // now would leave an undisposed instance dispatching after stop.
+        if (!running) {
+          break;
+        }
         const activeDrain = getDrain();
         const { started } = await activeDrain.drainOnce();
         await activeDrain.waitForIdle();
@@ -353,6 +358,8 @@ export function createMattermostIngressMonitor(options: {
       clearInterval(timer);
       drain?.dispose();
       await pumping;
+      // The pump may have lazily created the drain after the first dispose.
+      drain?.dispose();
       await drain?.waitForIdle();
     },
     waitForIdle: async () => {

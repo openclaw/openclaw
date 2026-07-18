@@ -217,6 +217,29 @@ describe("Mattermost durable ingress", () => {
     });
   });
 
+  it("never dispatches from a pump racing stop through the async prune", async () => {
+    await withQueue(async (queue) => {
+      let releasePrune = () => {};
+      const pruneGate = new Promise<void>((resolve) => {
+        releasePrune = resolve;
+      });
+      const prune = queue.prune.bind(queue);
+      queue.prune = async (...args) => {
+        await pruneGate;
+        return await prune(...args);
+      };
+      const dispatch = vi.fn();
+      const ingress = startMonitor(queue, dispatch);
+      await ingress.receive(postedEvent({ postId: "post-stop-race" }));
+
+      const stopping = ingress.stop();
+      releasePrune();
+      await stopping;
+
+      expect(dispatch).not.toHaveBeenCalled();
+    });
+  });
+
   it("retries a transient append failure and escalates a persistent one", async () => {
     await withQueue(async (queue) => {
       let failures = 2;
