@@ -218,6 +218,49 @@ describe("IRC durable ingress", () => {
     });
   });
 
+  it("quiesces an active pump while paused and resumes without charging the next event", async () => {
+    await withQueue(async (queue) => {
+      const dispatchStarted = createDeferred();
+      const releaseDispatch = createDeferred();
+      const dispatch = vi.fn<IrcIngressDispatch>(async (message, lifecycle) => {
+        if (message.messageId.endsWith("000000000001")) {
+          dispatchStarted.resolve();
+          await releaseDispatch.promise;
+        }
+        await lifecycle.onAdopted();
+      });
+      const ingress = startIngress(queue, dispatch);
+      try {
+        const connection = ingress.openConnection("connection-paused");
+        await connection.accept(CHANNEL_LINE, "bot");
+        await dispatchStarted.promise;
+        let pauseSettled = false;
+        const pausing = ingress.pause().then(() => {
+          pauseSettled = true;
+        });
+        await connection.accept(CHANNEL_LINE, "bot");
+        await Promise.resolve();
+        expect(pauseSettled).toBe(false);
+
+        releaseDispatch.resolve();
+        await pausing;
+        expect(dispatch).toHaveBeenCalledOnce();
+        expect(await queue.listPending({ limit: "all" })).toEqual([
+          expect.objectContaining({
+            id: "local:connection-paused:000000000002",
+            attempts: 0,
+          }),
+        ]);
+
+        ingress.start();
+        await ingress.waitForIdle();
+        expect(dispatch).toHaveBeenCalledTimes(2);
+      } finally {
+        await ingress.stop();
+      }
+    });
+  });
+
   it("dead-letters a malformed persisted raw line without dispatch", async () => {
     await withQueue(async (queue) => {
       const eventId = "local:connection-bad:000000000001";

@@ -53,6 +53,7 @@ export async function monitorIrcProvider(
   });
 
   let client: IrcClient | null = null;
+  let ingressPause: Promise<void> = Promise.resolve();
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let stopped = false;
   const monitorAbort = new AbortController();
@@ -161,6 +162,7 @@ export async function monitorIrcProvider(
           if (stopped || monitorAbort.signal.aborted) {
             return;
           }
+          ingressPause = ingress.pause();
           client = null;
           logger.warn?.(
             `[${account.accountId}] IRC connection closed; reconnecting in ${IRC_MONITOR_RECONNECT_DELAY_MS}ms`,
@@ -183,6 +185,10 @@ export async function monitorIrcProvider(
       return;
     }
     client = nextClient;
+    await ingressPause;
+    if (client !== nextClient || !nextClient.isReady()) {
+      return;
+    }
     ingress.start();
 
     logger.info(

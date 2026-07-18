@@ -133,6 +133,7 @@ type IrcIngressConnection = {
 export type IrcIngressMonitor = {
   openConnection: (connectionEpoch?: string) => IrcIngressConnection;
   start: () => void;
+  pause: () => Promise<void>;
   stop: () => Promise<void>;
   waitForIdle: () => Promise<void>;
 };
@@ -152,6 +153,7 @@ export function createIrcIngressMonitor(options: {
   let requested = false;
   let pumping: Promise<void> | undefined;
   let pollTimer: ReturnType<typeof setInterval> | undefined;
+  let pauseTask: Promise<void> | undefined;
   let lastPrunedAt = 0;
   let admissionTail: Promise<void> = Promise.resolve();
   const shutdown = new AbortController();
@@ -246,6 +248,23 @@ export function createIrcIngressMonitor(options: {
     pumping = runPump();
   };
 
+  const pause = (): Promise<void> => {
+    running = false;
+    requested = false;
+    if (pollTimer) {
+      clearInterval(pollTimer);
+      pollTimer = undefined;
+    }
+    const activePump = pumping;
+    if (!activePump) {
+      return Promise.resolve();
+    }
+    pauseTask ??= activePump.finally(() => {
+      pauseTask = undefined;
+    });
+    return pauseTask;
+  };
+
   const admitOnce = async (params: {
     eventId: string;
     rawLine: string;
@@ -338,22 +357,19 @@ export function createIrcIngressMonitor(options: {
       }
       requestDrain();
     },
+    pause,
     stop: async () => {
       if (stopped) {
         await admissionTail;
         return;
       }
       stopped = true;
-      running = false;
-      if (pollTimer) {
-        clearInterval(pollTimer);
-        pollTimer = undefined;
-      }
+      const paused = pause();
       // Every callback accepted before stop must finish its durable append.
       await admissionTail;
       shutdown.abort();
       drain?.dispose();
-      await pumping;
+      await paused;
       // A pump may have created the lazy drain before observing running=false.
       drain?.dispose();
       await drain?.waitForIdle();
