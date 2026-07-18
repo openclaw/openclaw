@@ -1,6 +1,7 @@
 /** Tests CLI JSON/JSONL output parsing, streamed deltas, and error extraction. */
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import type { CliBackendConfig } from "../config/types.js";
 import {
   createCliJsonlStreamingParser,
   extractCliErrorMessage,
@@ -2629,6 +2630,184 @@ describe("createCliJsonlStreamingParser", () => {
     parser.finish();
 
     expect(commentaryTexts).toEqual(["Reading the file now.", "Now searching."]);
+  });
+
+  const claudeStreamJsonBackend = {
+    command: "claude",
+    output: "jsonl",
+    jsonlDialect: "claude-stream-json",
+    sessionIdFields: ["session_id"],
+  } satisfies CliBackendConfig;
+  const streamEventLine = (event: Record<string, unknown>) =>
+    JSON.stringify({ type: "stream_event", event });
+  const textDeltaLine = (text: string) =>
+    streamEventLine({ type: "content_block_delta", delta: { type: "text_delta", text } });
+  const toolUseStartLine = (id: string) =>
+    streamEventLine({
+      type: "content_block_start",
+      index: 1,
+      content_block: { type: "tool_use", id, name: "Read", input: {} },
+    });
+
+  it("emits completed block segments with message ordinals across tool boundaries", () => {
+    const segments: Array<{ text: string; assistantMessageIndex: number }> = [];
+    const deltas: Array<{ text: string; delta: string }> = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: claudeStreamJsonBackend,
+      providerId: "claude-cli",
+      onAssistantDelta: (delta) => deltas.push({ text: delta.text, delta: delta.delta }),
+      onAssistantBlockText: (segment) => segments.push(segment),
+    });
+
+    parser.push(
+      [
+        JSON.stringify({ type: "init", session_id: "session-blocks" }),
+        textDeltaLine("Inspecting the repo."),
+        toolUseStartLine("toolu_1"),
+        streamEventLine({ type: "message_stop" }),
+        textDeltaLine("Short wrap-up."),
+        streamEventLine({ type: "message_stop" }),
+        JSON.stringify({ type: "result", result: "Short wrap-up.", session_id: "session-blocks" }),
+      ].join("\n") + "\n",
+    );
+    parser.finish();
+
+    expect(segments).toEqual([
+      { text: "Inspecting the repo.", assistantMessageIndex: 0 },
+      { text: "Short wrap-up.", assistantMessageIndex: 1 },
+    ]);
+    // Without a commentary consumer the preview lane still streams per delta.
+    expect(deltas).toEqual([
+      { text: "Inspecting the repo.", delta: "Inspecting the repo." },
+      { text: "Inspecting the repo.Short wrap-up.", delta: "Short wrap-up." },
+    ]);
+    expect(parser.getOutput()?.text).toBe("Short wrap-up.");
+  });
+
+  it("emits pre-tool block segments alongside commentary when both consumers are wired", () => {
+    const segments: Array<{ text: string; assistantMessageIndex: number }> = [];
+    const commentaryTexts: string[] = [];
+    const deltas: Array<{ text: string; delta: string }> = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: claudeStreamJsonBackend,
+      providerId: "claude-cli",
+      onAssistantDelta: (delta) => deltas.push({ text: delta.text, delta: delta.delta }),
+      onCommentaryText: (text) => commentaryTexts.push(text),
+      onAssistantBlockText: (segment) => segments.push(segment),
+    });
+
+    parser.push(
+      [
+        JSON.stringify({ type: "init", session_id: "session-both-lanes" }),
+        textDeltaLine("Checking the config."),
+        toolUseStartLine("toolu_1"),
+        streamEventLine({ type: "message_stop" }),
+        textDeltaLine("Done."),
+        streamEventLine({ type: "message_stop" }),
+      ].join("\n") + "\n",
+    );
+    parser.finish();
+
+    expect(commentaryTexts).toEqual(["Checking the config."]);
+    expect(segments).toEqual([
+      { text: "Checking the config.", assistantMessageIndex: 0 },
+      { text: "Done.", assistantMessageIndex: 1 },
+    ]);
+    expect(deltas).toEqual([{ text: "Done.", delta: "Done." }]);
+  });
+
+  it("splits block segments at text block boundaries within one message", () => {
+    const segments: Array<{ text: string; assistantMessageIndex: number }> = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: claudeStreamJsonBackend,
+      providerId: "claude-cli",
+      onAssistantDelta: () => undefined,
+      onAssistantBlockText: (segment) => segments.push(segment),
+    });
+
+    parser.push(
+      [
+        JSON.stringify({ type: "init", session_id: "session-split" }),
+        textDeltaLine("First block."),
+        streamEventLine({ type: "content_block_start", index: 2, content_block: { type: "text" } }),
+        textDeltaLine("Second block."),
+        streamEventLine({ type: "message_stop" }),
+      ].join("\n") + "\n",
+    );
+    parser.finish();
+
+    expect(segments).toEqual([
+      { text: "First block.", assistantMessageIndex: 0 },
+      { text: "Second block.", assistantMessageIndex: 0 },
+    ]);
+  });
+
+  it("reports the tail block segment when a result event arrives without message_stop", () => {
+    const segments: Array<{ text: string; assistantMessageIndex: number }> = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: claudeStreamJsonBackend,
+      providerId: "claude-cli",
+      onAssistantDelta: () => undefined,
+      onAssistantBlockText: (segment) => segments.push(segment),
+    });
+
+    parser.push(
+      [
+        JSON.stringify({ type: "init", session_id: "session-tail" }),
+        textDeltaLine("Tail text."),
+        JSON.stringify({ type: "result", result: "Tail text.", session_id: "session-tail" }),
+      ].join("\n") + "\n",
+    );
+    parser.finish();
+
+    expect(segments).toEqual([{ text: "Tail text.", assistantMessageIndex: 0 }]);
+  });
+
+  it("flushes the trailing block segment when the stream ends without terminal events", () => {
+    const segments: Array<{ text: string; assistantMessageIndex: number }> = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: claudeStreamJsonBackend,
+      providerId: "claude-cli",
+      onAssistantDelta: () => undefined,
+      onAssistantBlockText: (segment) => segments.push(segment),
+    });
+
+    parser.push(
+      [
+        JSON.stringify({ type: "init", session_id: "session-truncated" }),
+        textDeltaLine("Partial narration."),
+      ].join("\n") + "\n",
+    );
+    parser.finish();
+
+    expect(segments).toEqual([{ text: "Partial narration.", assistantMessageIndex: 0 }]);
+  });
+
+  it("does not emit block segments for the gemini stream-json dialect", () => {
+    const segments: Array<{ text: string; assistantMessageIndex: number }> = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "gemini",
+        output: "jsonl",
+        jsonlDialect: "gemini-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "google-gemini-cli",
+      onAssistantDelta: () => undefined,
+      onAssistantBlockText: (segment) => segments.push(segment),
+    });
+
+    parser.push(
+      [
+        JSON.stringify({ type: "message", role: "assistant", content: "Gemini text." }),
+        JSON.stringify({ type: "result", status: "success" }),
+      ].join("\n") + "\n",
+    );
+    parser.finish();
+
+    // Gemini terminal results already include all streamed text, so no segment lane.
+    expect(segments).toEqual([]);
+    expect(parser.getOutput()?.text).toBe("Gemini text.");
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

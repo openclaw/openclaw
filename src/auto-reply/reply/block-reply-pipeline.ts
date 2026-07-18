@@ -358,7 +358,11 @@ export function createBlockReplyPipeline(params: {
           return true;
         }
       }
-      return false;
+      // CLI terminal results can merge several assistant messages into one
+      // payload (interim result + post-notification result). Full-run fragment
+      // coverage still proves delivery, so compare across messages in send order.
+      const allFragments = Array.from(streamedTextFragmentsByMessage.values()).flat();
+      return allFragments.length > 0 && normalize(allFragments.join("")) === target;
     },
     getSentMediaUrls: () => Array.from(sentMediaUrls),
   };

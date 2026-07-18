@@ -127,6 +127,13 @@ export type CliThinkingProgress = {
   progressTokens: number;
 };
 
+/** Completed assistant text segment emitted at Claude stream block boundaries. */
+export type CliAssistantBlockDelta = {
+  text: string;
+  /** Ordinal of the assistant message this segment belongs to (message_stop advances it). */
+  assistantMessageIndex: number;
+};
+
 export type CliPlanUpdate = {
   steps: AgentPlanStep[];
 };
@@ -1211,6 +1218,7 @@ export function createCliJsonlStreamingParser(params: {
   onToolUseStart?: (delta: CliToolUseStartDelta) => void;
   onToolResult?: (delta: CliToolResultDelta) => void;
   onCommentaryText?: (text: string) => void;
+  onAssistantBlockText?: (delta: CliAssistantBlockDelta) => void;
   onSessionId?: (sessionId: string) => void;
   onAssistantMessage?: (message: unknown) => void;
   onUsage?: (usage: CliUsage, terminal: boolean) => void;
@@ -1232,7 +1240,28 @@ export function createCliJsonlStreamingParser(params: {
   // always has a destination; a separate enable flag let it be dropped (#92092).
   const classifyClaudeCommentary =
     Boolean(params.onCommentaryText) && supportsCliJsonlToolEvents(params);
+  // Completed-segment tracking is Claude-dialect only: the Claude terminal result
+  // carries only the final message, so earlier segments need their own durable
+  // path. Other dialects fold all streamed text into the terminal result already.
+  const wantAssistantBlocks =
+    Boolean(params.onAssistantBlockText) && isClaudeStreamJsonDialect(params);
+  // Marks the assistantText suffix that has not been reported as a completed segment.
+  let assistantBlockStart = 0;
+  let assistantMessageIndex = 0;
   const thinkingTracker = createThinkingTracker();
+
+  const emitAssistantBlockSegment = (segmentText: string) => {
+    const text = segmentText.trim();
+    if (text && wantAssistantBlocks) {
+      params.onAssistantBlockText?.({ text, assistantMessageIndex });
+    }
+  };
+
+  const flushAssistantBlockFromAccumulated = () => {
+    const segment = assistantText.slice(assistantBlockStart);
+    assistantBlockStart = assistantText.length;
+    emitAssistantBlockSegment(segment);
+  };
 
   const flushPendingClaudeAssistantText = () => {
     if (!pendingClaudeText) {
@@ -1257,6 +1286,9 @@ export function createCliJsonlStreamingParser(params: {
     pendingClaudeText = "";
     if (text) {
       params.onCommentaryText?.(text);
+      // Commentary-classified text never joins assistantText, so report the
+      // completed pre-tool segment directly instead of via the accumulated marker.
+      emitAssistantBlockSegment(text);
     }
   };
 
@@ -1308,8 +1340,11 @@ export function createCliJsonlStreamingParser(params: {
       return;
     }
 
-    if (classifyClaudeCommentary && parsed.type === "result") {
+    if ((classifyClaudeCommentary || wantAssistantBlocks) && parsed.type === "result") {
       flushPendingClaudeAssistantText();
+      // Terminal result without a preceding message_stop (truncated stream)
+      // still owes the tail segment before result handling below returns.
+      flushAssistantBlockFromAccumulated();
     }
 
     const result = parseClaudeCliJsonlResult({
@@ -1374,16 +1409,30 @@ export function createCliJsonlStreamingParser(params: {
       }
     }
 
-    if (classifyClaudeCommentary && parsed.type === "stream_event" && isRecord(parsed.event)) {
+    if (
+      (classifyClaudeCommentary || wantAssistantBlocks) &&
+      parsed.type === "stream_event" &&
+      isRecord(parsed.event)
+    ) {
       const evt = parsed.event;
       if (
         evt.type === "content_block_start" &&
         isRecord(evt.content_block) &&
         isClaudeToolUseBlockType(evt.content_block.type)
       ) {
-        flushPendingClaudeCommentaryText();
+        if (classifyClaudeCommentary) {
+          flushPendingClaudeCommentaryText();
+        } else {
+          // Without a commentary consumer pre-tool text stays in assistantText;
+          // the tool boundary still completes it as a durable segment.
+          flushAssistantBlockFromAccumulated();
+        }
       } else if (evt.type === "content_block_start" || evt.type === "message_stop") {
         flushPendingClaudeAssistantText();
+        flushAssistantBlockFromAccumulated();
+        if (evt.type === "message_stop") {
+          assistantMessageIndex += 1;
+        }
       }
     }
 
@@ -1527,6 +1576,8 @@ export function createCliJsonlStreamingParser(params: {
       if (classifyClaudeCommentary) {
         flushPendingClaudeAssistantText();
       }
+      // Streams that end without message_stop or result still owe the tail segment.
+      flushAssistantBlockFromAccumulated();
     },
     getErrorText() {
       return parseErrorText || null;
