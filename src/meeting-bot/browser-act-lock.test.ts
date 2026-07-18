@@ -93,4 +93,27 @@ describe("meeting browser act lock", () => {
     expect(expiredStarted).toBe(false);
     vi.useRealTimers();
   });
+
+  it("does not time out after the evaluation acquires the target", async () => {
+    vi.useFakeTimers();
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let settled = false;
+    const running = runMeetingBrowserAct({
+      deadline: Date.now() + 1_000,
+      targetId: "target-running",
+      operation: async () => await gate,
+    }).finally(() => {
+      settled = true;
+    });
+
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(settled).toBe(false);
+    release?.();
+    await expect(running).resolves.toBeUndefined();
+    vi.useRealTimers();
+  });
 });

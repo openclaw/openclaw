@@ -347,7 +347,9 @@ export function runLeaveScript(params: {
   bodyText?: string;
   currentUrl?: string;
   leave?: PageControl;
+  leaveInitiated?: boolean;
   meetingSessionId?: string;
+  omitMeetingState?: boolean;
   postCall?: PageControl;
   priorAudioOutputs?: unknown[];
   priorMeeting?: Record<string, unknown>;
@@ -370,17 +372,18 @@ export function runLeaveScript(params: {
       return undefined;
     },
   };
-  const window: Record<string, unknown> = {
-    [MEETING_STATE_KEY]: {
+  const window: Record<string, unknown> = {};
+  if (!params.omitMeetingState) {
+    window[MEETING_STATE_KEY] = {
       sessionId: params.meetingSessionId ?? "session-1",
       ...params.priorMeeting,
-    },
-  };
+    };
+  }
   if (params.priorAudioOutputs) {
     window["__openclawTeamsAudioOutputs"] = params.priorAudioOutputs;
   }
   const run = runInNewContext(
-    `(${teamsMeetingLeaveScript({ meetingSessionId: params.meetingSessionId ?? "session-1", meetingUrl: URL })})`,
+    `(${teamsMeetingLeaveScript({ leaveInitiated: params.leaveInitiated ?? false, meetingSessionId: params.meetingSessionId ?? "session-1", meetingUrl: URL })})`,
     {
       URL: globalThis.URL,
       document,

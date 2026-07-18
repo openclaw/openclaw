@@ -49,6 +49,7 @@ async function leaveMeetingInPage<
             kind: "evaluate",
             targetId: params.targetId,
             fn: params.adapter.browser.buildLeaveScript({
+              leaveInitiated: clickedLeave,
               meetingSessionId: params.meetingSessionId,
               meetingUrl: params.meetingUrl,
             }),

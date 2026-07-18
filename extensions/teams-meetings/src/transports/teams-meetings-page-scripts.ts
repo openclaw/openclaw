@@ -188,7 +188,11 @@ export function teamsMeetingTranscriptScript(
 }`;
 }
 
-export function teamsMeetingLeaveScript(params: { meetingSessionId: string; meetingUrl: string }) {
+export function teamsMeetingLeaveScript(params: {
+  leaveInitiated: boolean;
+  meetingSessionId: string;
+  meetingUrl: string;
+}) {
   const selectors = JSON.stringify(TEAMS_MEETING_SELECTORS);
   const expectedIdentity = normalizeTeamsMeetingUrlForReuse(params.meetingUrl);
   return `() => {
@@ -196,13 +200,19 @@ export function teamsMeetingLeaveScript(params: { meetingSessionId: string; meet
   const selectors = ${selectors};
   const expectedIdentity = ${JSON.stringify(expectedIdentity)};
   const expectedSessionId = ${JSON.stringify(params.meetingSessionId)};
+  const leaveInitiated = ${JSON.stringify(params.leaveInitiated)};
   const currentIdentity = meetingIdentity(location.href);
   const state = window.__openclawTeamsMeeting;
-  if (!expectedSessionId || !state?.sessionId) {
+  if (!expectedSessionId) {
     return JSON.stringify({ departed: false, sessionMatched: false, urlMatched: true });
   }
-  if (state.sessionId !== expectedSessionId) {
+  if (state?.sessionId && state.sessionId !== expectedSessionId) {
     return JSON.stringify({ departed: false, sessionConflict: true, sessionMatched: false, urlMatched: true });
+  }
+  const sessionMatched = state?.sessionId === expectedSessionId;
+  const retainedLeaveOwnership = Boolean(!sessionMatched && leaveInitiated);
+  if (!sessionMatched && !retainedLeaveOwnership) {
+    return JSON.stringify({ departed: false, sessionMatched: false, urlMatched: true });
   }
   const retireOwnedAudioBridges = () => {
     const entries = Array.isArray(window.__openclawTeamsAudioOutputs)
@@ -252,6 +262,14 @@ export function teamsMeetingLeaveScript(params: { meetingSessionId: string; meet
   const leave = first(selectors.leave);
   const confirmation = first(selectors.leaveConfirmation);
   const postCall = first(selectors.postCall);
+  if (postCall) {
+    retireOwnedAudioBridges();
+    if (sessionMatched) delete window.__openclawTeamsMeeting;
+    return JSON.stringify({ departed: true, sessionMatched: true, urlMatched: true });
+  }
+  if (!sessionMatched) {
+    return JSON.stringify({ departed: false, urlMatched: true });
+  }
   const currentUrlMatches = Boolean(expectedIdentity && currentIdentity === expectedIdentity);
   const preservedCallMatches = Boolean(
     expectedIdentity &&
@@ -285,11 +303,6 @@ export function teamsMeetingLeaveScript(params: { meetingSessionId: string; meet
     !rerenderPendingMatches
   ) {
     return JSON.stringify({ departed: false, urlMatched: false });
-  }
-  if (postCall) {
-    retireOwnedAudioBridges();
-    delete window.__openclawTeamsMeeting;
-    return JSON.stringify({ departed: true, urlMatched: true });
   }
   if (confirmation) {
     confirmation.click();

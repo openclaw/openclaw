@@ -399,6 +399,22 @@ describe("Microsoft Teams meeting platform adapter", () => {
     expect(leave.clicks).toBe(0);
   });
 
+  it("accepts post-call proof after an initiated leave replaces the document", () => {
+    const pending = runLeaveScript({
+      leaveInitiated: true,
+      omitMeetingState: true,
+    });
+    expect(pending.result).toEqual({ departed: false, urlMatched: true });
+
+    const { result } = runLeaveScript({
+      leaveInitiated: true,
+      omitMeetingState: true,
+      postCall: control({ label: "Rejoin" }),
+    });
+
+    expect(result).toEqual({ departed: true, sessionMatched: true, urlMatched: true });
+  });
+
   it("retires only the departing session's audio bridges", () => {
     const source = { muted: true };
     const bridge = { pause: vi.fn(), remove: vi.fn(), srcObject: {} };
@@ -433,7 +449,7 @@ describe("Microsoft Teams meeting platform adapter", () => {
       },
     });
 
-    expect(result).toEqual({ departed: true, urlMatched: true });
+    expect(result).toEqual({ departed: true, sessionMatched: true, urlMatched: true });
     expect(source.muted).toBe(false);
     expect(bridge.pause).toHaveBeenCalledOnce();
     expect(bridge.remove).toHaveBeenCalledOnce();
