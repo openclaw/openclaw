@@ -4,6 +4,8 @@
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { DiagnosticTraceContext } from "./diagnostic-trace-context.js";
 
+export const AI_SAFETY_EVENT_SCHEMA_VERSION = "ai.diagnostics.v1" as const;
+
 type DiagnosticAISafetyBaseFields = {
   ts: number;
   seq: number;
