@@ -123,6 +123,24 @@ describe("normalizeCronJobCreate", () => {
     expect(normalized.payload).toMatchObject({ kind: "systemEvent", text: "Nightly digest" });
   });
 
+  it("does not isolate mode-only announce delivery without a routable target", () => {
+    // A bare `{ mode: "announce" }` has no channel/to/threadId/accountId, so
+    // isolating it would not produce a deliverable job -- it would just move
+    // the existing rejection from create time to execution time. Keep it on
+    // main so the current creation-time validation still applies.
+    const normalized = normalizeCronJobCreate({
+      name: "targetless-announce",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 30_000 },
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "No target here" },
+      delivery: { mode: "announce" },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.sessionTarget).toBe("main");
+    expect(normalized.payload).toMatchObject({ kind: "systemEvent", text: "No target here" });
+  });
+
   it("normalizes trigger scripts and preserves patch clears", () => {
     const normalized = normalizeCronJobCreate({
       name: "watcher",

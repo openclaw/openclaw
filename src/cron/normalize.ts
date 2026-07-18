@@ -526,10 +526,16 @@ function normalizeWakeMode(raw: unknown) {
 }
 
 /**
- * True when a not-yet-targeted job carries an explicit announce delivery block.
- * `delivery` is already coerced by this point, so a normalized `mode` of
- * "announce" (or a channel/to without an explicit non-announce mode) signals
- * the caller genuinely wants the result pushed to a channel.
+ * True when a not-yet-targeted job carries an announce delivery block with a
+ * concrete, routable destination.
+ *
+ * `delivery` is already coerced here, so `mode` is normalized. We require both
+ * an announce intent (`mode: "announce"`, or mode omitted, which
+ * `resolveCronDeliveryPlan` treats as announce) AND an explicit target
+ * (`channel`/`to`/`threadId`/`accountId`). A bare `{ mode: "announce" }` with
+ * no target is intentionally excluded: isolating it would not produce a
+ * routable job, so it must keep the existing creation-time rejection rather
+ * than deferring the same failure to execution time.
  */
 function systemEventRequestsAnnounceDelivery(job: UnknownRecord): boolean {
   const delivery = job.delivery;
@@ -537,20 +543,16 @@ function systemEventRequestsAnnounceDelivery(job: UnknownRecord): boolean {
     return false;
   }
   const mode = typeof delivery.mode === "string" ? delivery.mode : undefined;
-  if (mode === "announce") {
-    return true;
-  }
   if (mode === "none" || mode === "webhook") {
     return false;
   }
-  // Mode omitted but a concrete channel target present: resolveCronDeliveryPlan
-  // treats this as an announce request, so honor it the same way here.
-  return (
+  const hasRoutableTarget =
     typeof delivery.channel === "string" ||
     typeof delivery.to === "string" ||
     typeof delivery.threadId === "string" ||
-    typeof delivery.accountId === "string"
-  );
+    typeof delivery.accountId === "string";
+  // mode === "announce" or mode omitted (both mean announce); require a target.
+  return hasRoutableTarget;
 }
 
 /** Returns the trimmed text of a systemEvent payload, or undefined when empty. */
