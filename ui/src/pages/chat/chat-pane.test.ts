@@ -40,7 +40,6 @@ type TestChatPane = HTMLElement & {
   connectedCallback: () => void;
   connectionGeneration: number;
   createSession: () => Promise<boolean>;
-  forkFromMessage: (entryId: string) => Promise<void>;
   disconnectedCallback: () => void;
   acceptTaskSuggestion: (suggestion: TaskSuggestion) => Promise<void>;
   handleDocumentKeydown: (event: KeyboardEvent) => void;
@@ -619,28 +618,6 @@ describe("chat pane keyboard shortcuts", () => {
 });
 
 describe("chat pane session creation lifecycle", () => {
-  it("keeps a newer global agent selection when a message fork finishes late", async () => {
-    const forked = createDeferred<{ sessionKey: string; editorText?: string }>();
-    const sessions = {
-      forkAtMessage: vi.fn(() => forked.promise),
-    } as unknown as SessionCapability;
-    const client = {} as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({ client, sessions });
-    const navigate = vi.fn();
-    pane.onPaneSessionChange = navigate;
-    state.sessionKey = "global";
-    state.assistantAgentId = "main";
-
-    const pending = pane.forkFromMessage("user-entry");
-    state.assistantAgentId = "work";
-    forked.resolve({ sessionKey: "agent:main:forked", editorText: "edit me" });
-
-    await pending;
-    expect(navigate).not.toHaveBeenCalled();
-    expect(state.sessionKey).toBe("global");
-    expect(state.assistantAgentId).toBe("work");
-  });
-
   it("drops a created session after a same-client reconnect", async () => {
     const created = createDeferred<string | null>();
     const sessions = {

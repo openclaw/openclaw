@@ -1145,10 +1145,12 @@ function renderChatThreadContents(
       },
       onRewind:
         rewindEntryId && props.onRewindMessage
-          ? async () => {
-              if (await props.onRewindMessage?.(rewindEntryId)) {
-                props.onFocusComposer?.();
-              }
+          ? () => {
+              void Promise.resolve(props.onRewindMessage?.(rewindEntryId)).then((rewound) => {
+                if (rewound) {
+                  props.onFocusComposer?.();
+                }
+              });
             }
           : undefined,
       rewindDisabled: Boolean(props.runActive || props.runWorking),

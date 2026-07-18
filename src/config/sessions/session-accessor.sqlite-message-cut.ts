@@ -185,15 +185,21 @@ function resolveMessageCut(
   if (targetIndex < 0) {
     return { status: "off-active-path" };
   }
+  const prefix: TranscriptEvent[] = [];
+  for (const node of activePath.slice(0, targetIndex)) {
+    const entry = asRecord(node.entry);
+    // Spread (not Object.assign) so a parsed own `__proto__` key stays an inert
+    // data property instead of rebinding the copy's prototype.
+    prefix.push(
+      entry && entry.parentId !== node.parentId
+        ? ({ ...entry, parentId: node.parentId } as TranscriptEvent)
+        : node.entry,
+    );
+  }
   return {
     editorText: extractEditorText(message.content),
     parentId: target.parentId,
-    prefix: activePath.slice(0, targetIndex).map((node) => {
-      const entry = asRecord(node.entry);
-      return entry && entry.parentId !== node.parentId
-        ? { ...entry, parentId: node.parentId }
-        : node.entry;
-    }),
+    prefix,
   };
 }
 

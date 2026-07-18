@@ -250,7 +250,9 @@ async function mutateSessionAtMessage(
               sessionKey: result.key,
               ...(result.editorText ? { editorText: result.editorText } : {}),
             }
-          : { ...(result.editorText ? { editorText: result.editorText } : {}) },
+          : result.editorText
+            ? { editorText: result.editorText }
+            : {},
         undefined,
       );
       emitSessionsChanged(context, {
