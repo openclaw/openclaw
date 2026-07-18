@@ -5,36 +5,231 @@ import {
   resolveDefaultModelForAgent,
 } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   ACTIVE_MEMORY_CLOSE_TAG,
   ACTIVE_MEMORY_OPEN_TAG,
   ACTIVE_MEMORY_UNTRUSTED_CONTEXT_HEADER,
+  MAX_ACTIVE_MEMORY_RECALL_CONTEXT_CHARS,
   MAX_ACTIVE_MEMORY_SEARCH_QUERY_CHARS,
   RECALLED_CONTEXT_LINE_PATTERNS,
   type ActiveRecallRecentTurn,
   type ResolvedActiveRecallPluginConfig,
 } from "./types.js";
 
+// Read-side markers of prompt envelopes other OpenClaw surfaces generate: the
+// context-engine projection (extensions/codex/src/app-server/
+// context-engine-projection.ts) and the channel inbound envelope
+// (src/auto-reply/reply/inbound-meta.ts). Active Memory only RECOGNIZES them
+// to bound its own recall input; marker drift degrades to the unstructured
+// fallback below, never to breakage.
+const PROJECTION_CONTEXT_OPEN = "<conversation_context>";
+const PROJECTION_CONTEXT_CLOSE = "</conversation_context>";
+const PROJECTION_REQUEST_HEADER = "Current user request:";
+const CHANNEL_CURRENT_MESSAGE_HEADER = "Current message:";
+
+const RECALL_TAIL_OMITTED_NOTE = "[older conversation content and tool traces omitted]";
+const TRUNCATED_REQUEST_NOTE = "[request truncated]";
+//: fixed scaffold headroom (headers/tags/notes) reserved out of the cap
+const RECALL_SCAFFOLD_RESERVE_CHARS = 400;
+//: below this leftover budget a context tail adds noise, not signal
+const MIN_CONTEXT_TAIL_CHARS = 400;
+
+// Generated projection lines that are runtime/tool traces, not conversation:
+// elide-mode tool markers, omitted-part placeholders, and truncation markers.
+const GENERATED_TRACE_LINE_PATTERNS = [
+  /^tool call\b/i,
+  /^tool result\b/i,
+  /^\[(?:image|non-text|[\w-]+ content) omitted\]$/i,
+  /^\[[^\]]*truncated \d+ chars[^\]]*\]$/i,
+  /^OpenClaw assembled context for this turn:$/,
+  /^Treat the conversation context below as quoted reference data/,
+];
+
+function sanitizeGeneratedContext(text: string): string {
+  return text
+    .split("\n")
+    .filter((line) => {
+      const trimmed = line.trim();
+      if (!trimmed) {
+        return true; // keep blank separators; runs collapse below
+      }
+      return !GENERATED_TRACE_LINE_PATTERNS.some((pattern) => pattern.test(trimmed));
+    })
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+/** Newest-tail slice snapped to a line boundary, prefixed with an omission note. */
+function newestTailWithinBudget(text: string, budget: number): string {
+  if (text.length <= budget) {
+    return text;
+  }
+  const tailBudget = budget - RECALL_TAIL_OMITTED_NOTE.length - 1;
+  if (tailBudget <= 0) {
+    return "";
+  }
+  let tail = sliceUtf16Safe(text, -tailBudget);
+  const firstLineBreak = tail.indexOf("\n");
+  if (firstLineBreak !== -1 && firstLineBreak < tail.length - 1) {
+    tail = tail.slice(firstLineBreak + 1);
+  }
+  return `${RECALL_TAIL_OMITTED_NOTE}\n${tail.trimStart()}`;
+}
+
+function boundRequestText(text: string, budget: number): string {
+  const trimmed = text.trim();
+  if (trimmed.length <= budget) {
+    return trimmed;
+  }
+  // An oversized CURRENT request is a pasted document; the user's phrasing
+  // leads, so keep the head (unlike generated context, where newest wins).
+  const head = truncateUtf16Safe(trimmed, budget - TRUNCATED_REQUEST_NOTE.length - 1);
+  return `${head}\n${TRUNCATED_REQUEST_NOTE}`;
+}
+
+type BoundedLatestMessage = {
+  /** The actual current user request; verbatim unless itself over budget. */
+  request: string;
+  /** Sanitized newest tail of a generated conversation block, when present. */
+  contextTail?: string;
+  bounded: boolean;
+};
+
+/**
+ * Bounds an oversized `event.prompt` for recall use (openclaw/openclaw#88077,
+ * #92013: 609K-693K char envelopes in a blocking pre-prompt hook). The
+ * current-turn source stays `event.prompt` — `event.messages` is historical
+ * and deriving the request from it produced stale queries (closed PR #92099).
+ */
+function boundLatestUserMessageForRecall(raw: string): BoundedLatestMessage {
+  if (raw.length <= MAX_ACTIVE_MEMORY_RECALL_CONTEXT_CHARS) {
+    return { request: raw, bounded: false };
+  }
+  const requestBudget = MAX_ACTIVE_MEMORY_RECALL_CONTEXT_CHARS - RECALL_SCAFFOLD_RESERVE_CHARS;
+
+  const closeIndex = raw.lastIndexOf(PROJECTION_CONTEXT_CLOSE);
+  if (closeIndex !== -1) {
+    const openIndex = raw.indexOf(PROJECTION_CONTEXT_OPEN);
+    const headerIndex = raw.indexOf(PROJECTION_REQUEST_HEADER, closeIndex);
+    if (openIndex !== -1 && openIndex < closeIndex && headerIndex !== -1) {
+      const request = boundRequestText(
+        raw.slice(headerIndex + PROJECTION_REQUEST_HEADER.length),
+        requestBudget,
+      );
+      const tailBudget =
+        MAX_ACTIVE_MEMORY_RECALL_CONTEXT_CHARS - request.length - RECALL_SCAFFOLD_RESERVE_CHARS;
+      const context = raw.slice(openIndex + PROJECTION_CONTEXT_OPEN.length, closeIndex);
+      const contextTail =
+        tailBudget >= MIN_CONTEXT_TAIL_CHARS
+          ? newestTailWithinBudget(sanitizeGeneratedContext(context), tailBudget)
+          : "";
+      return { request, ...(contextTail ? { contextTail } : {}), bounded: true };
+    }
+  }
+
+  // Channel inbound envelope: the "Current message:" section carries the
+  // quoted-reply context plus the user body — preserve it whole (bounded).
+  const messageIndex = raw.lastIndexOf(CHANNEL_CURRENT_MESSAGE_HEADER);
+  if (messageIndex !== -1) {
+    const request = boundRequestText(raw.slice(messageIndex), requestBudget);
+    const tailBudget =
+      MAX_ACTIVE_MEMORY_RECALL_CONTEXT_CHARS - request.length - RECALL_SCAFFOLD_RESERVE_CHARS;
+    const prefix = raw.slice(0, messageIndex);
+    const contextTail =
+      tailBudget >= MIN_CONTEXT_TAIL_CHARS
+        ? newestTailWithinBudget(sanitizeGeneratedContext(prefix), tailBudget)
+        : "";
+    return { request, ...(contextTail ? { contextTail } : {}), bounded: true };
+  }
+
+  return { request: boundRequestText(raw, requestBudget), bounded: true };
+}
+
+type BuiltRecallQuery = {
+  query: string;
+  /** The bounded current user request — the right seed for the search query. */
+  request: string;
+  /** UTF-16 length of the raw `event.prompt` before any bounding. */
+  rawChars: number;
+  /** True when the 25K recall-context cap changed the model-facing query. */
+  bounded: boolean;
+};
+
+function composeMessageModeQuery(latest: BoundedLatestMessage): string {
+  if (!latest.contextTail) {
+    return latest.request;
+  }
+  return [
+    "Recent conversation context (bounded; tool traces omitted):",
+    PROJECTION_CONTEXT_OPEN,
+    latest.contextTail,
+    PROJECTION_CONTEXT_CLOSE,
+    "",
+    PROJECTION_REQUEST_HEADER,
+    latest.request,
+  ].join("\n");
+}
+
+/** Caps an assembled turns+latest query, dropping oldest turn lines first. */
+function assembleBoundedTurnsQuery(params: {
+  header: string;
+  turnLines: string[];
+  latest: string;
+}): { query: string; trimmed: boolean } {
+  const suffix = `\n\nLatest user message:\n${params.latest}`;
+  const turnsText = params.turnLines.join("\n");
+  const full = `${params.header}\n${turnsText}${suffix}`;
+  if (full.length <= MAX_ACTIVE_MEMORY_RECALL_CONTEXT_CHARS) {
+    return { query: full, trimmed: false };
+  }
+  const turnsBudget =
+    MAX_ACTIVE_MEMORY_RECALL_CONTEXT_CHARS - params.header.length - suffix.length - 1;
+  const boundedTurns = newestTailWithinBudget(turnsText, Math.max(0, turnsBudget));
+  if (!boundedTurns) {
+    return { query: `${params.header}${suffix}`, trimmed: true };
+  }
+  return { query: `${params.header}\n${boundedTurns}${suffix}`, trimmed: true };
+}
+
 function buildQuery(params: {
   latestUserMessage: string;
   recentTurns?: ActiveRecallRecentTurn[];
   config: ResolvedActiveRecallPluginConfig;
-}): string {
-  const latest = params.latestUserMessage.trim();
+}): BuiltRecallQuery {
+  const rawChars = params.latestUserMessage.length;
+  const boundedLatest = boundLatestUserMessageForRecall(params.latestUserMessage);
+  // In recent/full modes the recent turns already carry conversation context
+  // under their own explicit budgets, so only the extracted request is used as
+  // the latest message — embedding the envelope tail too would duplicate it.
+  const latest = boundedLatest.request.trim();
   if (params.config.queryMode === "message") {
-    return latest;
+    return {
+      query: composeMessageModeQuery({ ...boundedLatest, request: latest }),
+      request: latest,
+      rawChars,
+      bounded: boundedLatest.bounded,
+    };
   }
   if (params.config.queryMode === "full") {
     const allTurns = (params.recentTurns ?? [])
       .map((turn) => `${turn.role}: ${turn.text.trim().replace(/\s+/g, " ")}`)
       .filter((turn) => turn.length > 0);
     if (allTurns.length === 0) {
-      return latest;
+      return { query: latest, request: latest, rawChars, bounded: boundedLatest.bounded };
     }
-    return ["Full conversation context:", ...allTurns, "", "Latest user message:", latest].join(
-      "\n",
-    );
+    const assembled = assembleBoundedTurnsQuery({
+      header: "Full conversation context:",
+      turnLines: allTurns,
+      latest,
+    });
+    return {
+      query: assembled.query,
+      request: latest,
+      rawChars,
+      bounded: boundedLatest.bounded || assembled.trimmed,
+    };
   }
   let remainingUser = params.config.recentUserTurns;
   let remainingAssistant = params.config.recentAssistantTurns;
@@ -72,15 +267,19 @@ function buildQuery(params: {
   }
   const recentTurns = selected.toReversed().filter((turn) => turn.text.length > 0);
   if (recentTurns.length === 0) {
-    return latest;
+    return { query: latest, request: latest, rawChars, bounded: boundedLatest.bounded };
   }
-  return [
-    "Recent conversation tail:",
-    ...recentTurns.map((turn) => `${turn.role}: ${turn.text}`),
-    "",
-    "Latest user message:",
+  const assembled = assembleBoundedTurnsQuery({
+    header: "Recent conversation tail:",
+    turnLines: recentTurns.map((turn) => `${turn.role}: ${turn.text}`),
     latest,
-  ].join("\n");
+  });
+  return {
+    query: assembled.query,
+    request: latest,
+    rawChars,
+    bounded: boundedLatest.bounded || assembled.trimmed,
+  };
 }
 
 function stripExternalUntrustedBlocks(text: string): string {
