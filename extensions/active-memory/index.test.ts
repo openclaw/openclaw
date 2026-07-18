@@ -180,6 +180,7 @@ describe("active-memory plugin", () => {
     agents: ["main"],
     logging: true,
   };
+  let apiConfig: Record<string, unknown> = {};
   const syncRuntimePluginConfig = (nextPluginConfig: Record<string, unknown>) => {
     pluginConfig = nextPluginConfig;
     const plugins = configFile.plugins as Record<string, unknown> | undefined;
@@ -220,7 +221,17 @@ describe("active-memory plugin", () => {
     set pluginConfig(nextPluginConfig: Record<string, unknown>) {
       syncRuntimePluginConfig(nextPluginConfig);
     },
-    config: {},
+    get config() {
+      return apiConfig;
+    },
+    set config(nextConfig: Record<string, unknown>) {
+      apiConfig = nextConfig;
+      const plugins = configFile.plugins;
+      configFile = {
+        ...nextConfig,
+        ...(plugins ? { plugins } : {}),
+      };
+    },
     id: "active-memory",
     name: "Active Memory",
     logger: { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() },
@@ -872,7 +883,13 @@ describe("active-memory plugin", () => {
     configFile = {
       ...configFile,
       agents: {
-        list: [{ id: "personal", memorySearch: { rememberAcrossConversations: true } }],
+        list: [
+          {
+            id: "personal",
+            model: { primary: "github-copilot/gpt-5.4-mini" },
+            memorySearch: { rememberAcrossConversations: true },
+          },
+        ],
       },
       plugins: {
         ...(configFile.plugins as Record<string, unknown>),
@@ -1002,7 +1019,13 @@ describe("active-memory plugin", () => {
   it("runs product recall without an explicit Active Memory config entry", async () => {
     configFile = {
       agents: {
-        list: [{ id: "personal", memorySearch: { rememberAcrossConversations: true } }],
+        list: [
+          {
+            id: "personal",
+            model: { primary: "github-copilot/gpt-5.4-mini" },
+            memorySearch: { rememberAcrossConversations: true },
+          },
+        ],
       },
       plugins: { entries: {} },
     };
@@ -1032,7 +1055,13 @@ describe("active-memory plugin", () => {
     configFile = {
       ...configFile,
       agents: {
-        list: [{ id: "personal", memorySearch: { rememberAcrossConversations: true } }],
+        list: [
+          {
+            id: "personal",
+            model: { primary: "github-copilot/gpt-5.4-mini" },
+            memorySearch: { rememberAcrossConversations: true },
+          },
+        ],
       },
     };
     const directSessionKey = "agent:personal:telegram:direct:owner";

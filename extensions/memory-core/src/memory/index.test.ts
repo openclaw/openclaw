@@ -2993,27 +2993,16 @@ describe("memory index", () => {
         return;
       }
 
-      const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-      await fs.mkdir(sessionsDir, { recursive: true });
-      await fs.writeFile(
-        path.join(sessionsDir, "remember-only.jsonl"),
-        [
-          JSON.stringify({
-            type: "session",
-            id: "remember-only",
-            timestamp: "2026-04-07T15:24:04.113Z",
-          }),
-          JSON.stringify({
-            type: "message",
-            message: {
-              role: "assistant",
-              timestamp: "2026-04-07T15:25:04.113Z",
-              content: [{ type: "text", text: "Recall-only canary is NEBULA-47." }],
-            },
-          }),
-        ].join("\n") + "\n",
-        "utf8",
-      );
+      await seedMemoryIndexSessionTranscript({
+        sessionId: "remember-only",
+        messages: [
+          {
+            role: "assistant",
+            timestamp: "2026-04-07T15:25:04.113Z",
+            content: "Recall-only canary is NEBULA-47.",
+          },
+        ],
+      });
 
       await manager.sync({ reason: "test", force: true });
 
