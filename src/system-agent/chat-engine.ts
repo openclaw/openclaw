@@ -623,10 +623,27 @@ export class SystemAgentChatEngine {
     }
     const verify = result?.applied ? await this.verifyConfigAfterWrite() : null;
     const followUp = this.armFollowUp(result?.followUp);
+    const baseText = [capture.read() || "Applied. Audit entry written.", verify, followUp]
+      .filter(Boolean)
+      .join("\n\n");
+    // The hatch is a ceremony: a fresh-install setup just created the agent,
+    // so hand the user straight into it instead of parking them here. The
+    // seeded BOOTSTRAP runs the birth sequence on the agent's first turn.
+    if (operation.kind === "setup" && result?.applied) {
+      return {
+        text: [
+          baseText,
+          "Your agent is hatching — handing you over now. You can always find me in Settings → Ask OpenClaw.",
+        ].join("\n\n"),
+        action: "open-tui",
+        handoff: {
+          kind: "open-tui",
+          ...(operation.workspace ? { workspace: operation.workspace } : {}),
+        },
+      };
+    }
     return {
-      text: [capture.read() || "Applied. Audit entry written.", verify, followUp]
-        .filter(Boolean)
-        .join("\n\n"),
+      text: baseText,
       action: "none",
     };
   }

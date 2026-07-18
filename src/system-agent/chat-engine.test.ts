@@ -385,6 +385,52 @@ describe("SystemAgentChatEngine", () => {
     expect(engine.hasPendingProposal()).toBe(false);
   });
 
+  it("hatches into the agent after a fresh setup applies", async () => {
+    useTempStateDir();
+    const verifyInferenceConfig = vi.fn(async () => ({
+      ok: true as const,
+      modelRef: "openai/gpt-5.5",
+      latencyMs: 100,
+    }));
+    const applySetup = vi.fn(async () => ({
+      configPath: "/tmp/openclaw.json",
+      configHashBefore: "before",
+      configHashAfter: "after",
+      lines: ["Workspace: /tmp/hatch-work"],
+    }));
+    const engine = new SystemAgentChatEngine({
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      classifyApproval: async ({ message }) => (message === "yes" ? "approve" : "other"),
+      deps: {
+        applySetup,
+        verifyInferenceConfig,
+        loadOverview: fakeOverviewLoader({ defaultModel: "openai/gpt-5.5" }),
+      },
+    });
+    engine.propose({ kind: "setup", workspace: "/tmp/hatch-work" });
+
+    const reply = await engine.handle("yes");
+
+    expect(applySetup).toHaveBeenCalledOnce();
+    expect(reply.action).toBe("open-tui");
+    expect(reply.handoff).toMatchObject({ kind: "open-tui", workspace: "/tmp/hatch-work" });
+    expect(reply.text).toContain("Your agent is hatching");
+    expect(reply.text).toContain("Settings → Ask OpenClaw");
+  });
+
+  it("does not hand off when a non-setup persistent operation applies", async () => {
+    useTempStateDir();
+    const runConfigSet = vi.fn(async () => {});
+    const engine = new SystemAgentChatEngine({ deps: { runConfigSet } });
+    engine.propose({ kind: "config-set", path: "gateway.port", value: "19002" });
+
+    const reply = await engine.handle("yes");
+
+    expect(reply.action).toBe("none");
+    expect(reply.handoff).toBeUndefined();
+  });
+
   it("rejects a seeded approval when its binding changes during classification", async () => {
     const baseConfig = {
       agents: { defaults: { model: "openai/gpt-5.5" } },

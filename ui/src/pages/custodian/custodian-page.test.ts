@@ -620,6 +620,22 @@ describe("custodian page", () => {
     expect(request.mock.calls[1]?.[1]).not.toHaveProperty("message");
   });
 
+  it("hands off to agent chat with the hatch draft on open-agent", async () => {
+    const request = vi.fn().mockResolvedValue({
+      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+      reply: "Your agent is hatching — handing you over now.",
+      action: "open-agent",
+    });
+    const { context } = createContext(request);
+    const { page } = await mountPage(context);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    await page.updateComplete;
+
+    expect(context.navigate).toHaveBeenCalledWith("chat", {
+      search: `?draft=${encodeURIComponent("Wake up, my friend!")}`,
+    });
+  });
+
   it("exits setup through normal chat navigation", async () => {
     const request = vi.fn().mockResolvedValue({
       sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",

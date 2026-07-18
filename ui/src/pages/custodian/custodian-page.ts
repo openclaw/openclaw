@@ -198,7 +198,13 @@ export class CustodianPage extends OpenClawLightDomElement {
       this.sensitive = result.sensitive === true;
       this.retryParams = null;
       this.appendAssistant(result.reply, parseCustodianQuestion(result.question));
-      if (result.action === "open-agent" || result.action === "exit") {
+      if (result.action === "open-agent") {
+        // Hatch handoff: land in the agent chat with the birth-sequence opener
+        // prefilled so one Send wakes the freshly seeded BOOTSTRAP.
+        this.context.navigate("chat", {
+          search: `?draft=${encodeURIComponent(t("custodian.hatchDraft"))}`,
+        });
+      } else if (result.action === "exit") {
         this.exitSetup();
       }
     } catch (error) {
