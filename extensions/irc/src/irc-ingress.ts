@@ -25,6 +25,7 @@ type IrcIngressPayload = {
   version: 1;
   eventId: string;
   receivedAt: number;
+  connectionEpoch: string;
   connectedNick: string;
   rawLine: string;
 };
@@ -45,7 +46,7 @@ export type IrcIngressDispatchResult =
 type IrcIngressDispatch = (
   message: IrcInboundMessage,
   lifecycle: IrcIngressLifecycle,
-  context: { connectedNick: string },
+  context: { connectedNick: string; connectionEpoch: string },
 ) => Promise<IrcIngressDispatchResult | void> | IrcIngressDispatchResult | void;
 
 class IrcIngressPayloadError extends Error {
@@ -93,6 +94,7 @@ function parseClaimedEvent(
 ): {
   message: IrcInboundMessage;
   connectedNick: string;
+  connectionEpoch: string;
 } {
   if (
     !payload ||
@@ -102,6 +104,8 @@ function parseClaimedEvent(
     (payload as Partial<IrcIngressPayload>).eventId !== claimedId ||
     !Number.isSafeInteger((payload as Partial<IrcIngressPayload>).receivedAt) ||
     ((payload as Partial<IrcIngressPayload>).receivedAt ?? 0) <= 0 ||
+    typeof (payload as Partial<IrcIngressPayload>).connectionEpoch !== "string" ||
+    !(payload as Partial<IrcIngressPayload>).connectionEpoch?.trim() ||
     typeof (payload as Partial<IrcIngressPayload>).connectedNick !== "string" ||
     !(payload as Partial<IrcIngressPayload>).connectedNick?.trim() ||
     typeof (payload as Partial<IrcIngressPayload>).rawLine !== "string"
@@ -117,6 +121,7 @@ function parseClaimedEvent(
       timestamp: validPayload.receivedAt,
     },
     connectedNick: validPayload.connectedNick.trim(),
+    connectionEpoch: validPayload.connectionEpoch.trim(),
   };
 }
 
@@ -127,6 +132,7 @@ function resolveIrcIngressNonRetryableFailure(error: unknown) {
 }
 
 type IrcIngressConnection = {
+  connectionEpoch: string;
   accept: (rawLine: string, connectedNick: string) => Promise<void>;
 };
 
@@ -186,6 +192,7 @@ export function createIrcIngressMonitor(options: {
         const claimed = parseClaimedEvent(record.payload, record.id);
         const result = await options.dispatch(claimed.message, lifecycle, {
           connectedNick: claimed.connectedNick,
+          connectionEpoch: claimed.connectionEpoch,
         });
         if (shutdown.signal.aborted && result?.kind !== "deferred") {
           return {
@@ -269,8 +276,13 @@ export function createIrcIngressMonitor(options: {
     eventId: string;
     rawLine: string;
     receivedAt: number;
+    connectionEpoch: string;
     connectedNick: string;
   }): Promise<void> => {
+    const connectionEpoch = params.connectionEpoch.trim();
+    if (!connectionEpoch) {
+      throw new Error("IRC ingress connection epoch is required.");
+    }
     const connectedNick = params.connectedNick.trim();
     if (!connectedNick) {
       throw new Error("IRC ingress connected nickname is required.");
@@ -304,6 +316,7 @@ export function createIrcIngressMonitor(options: {
             version: IRC_INGRESS_PAYLOAD_VERSION,
             eventId: params.eventId,
             receivedAt: params.receivedAt,
+            connectionEpoch,
             connectedNick,
             rawLine: params.rawLine,
           },
@@ -326,6 +339,7 @@ export function createIrcIngressMonitor(options: {
       }
       let sequence = 0;
       return {
+        connectionEpoch: epoch,
         accept: (rawLine, connectedNick) => {
           if (stopped) {
             return Promise.reject(new Error("IRC ingress is stopped."));
@@ -336,7 +350,13 @@ export function createIrcIngressMonitor(options: {
           const eventId = `local:${epoch}:${String(sequence).padStart(12, "0")}`;
           const receivedAt = Date.now();
           const admission = admissionTail.then(async () => {
-            await admitOnce({ eventId, rawLine, receivedAt, connectedNick });
+            await admitOnce({
+              eventId,
+              rawLine,
+              receivedAt,
+              connectionEpoch: epoch,
+              connectedNick,
+            });
           });
           admissionTail = admission.catch(() => undefined);
           return admission;

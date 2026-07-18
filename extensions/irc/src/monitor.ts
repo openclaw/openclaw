@@ -53,6 +53,7 @@ export async function monitorIrcProvider(
   });
 
   let client: IrcClient | null = null;
+  let activeConnectionEpoch: string | null = null;
   let ingressPause: Promise<void> = Promise.resolve();
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let stopped = false;
@@ -75,7 +76,7 @@ export async function monitorIrcProvider(
     dispatch: async (
       message,
       turnAdoptionLifecycle: IrcIngressLifecycle,
-      context: { connectedNick: string },
+      context: { connectedNick: string; connectionEpoch: string },
     ) => {
       const activeClient = client;
       if (!activeClient || stopped || monitorAbort.signal.aborted) {
@@ -88,6 +89,14 @@ export async function monitorIrcProvider(
         normalizeLowercaseStringOrEmpty(message.senderNick) ===
         normalizeLowercaseStringOrEmpty(context.connectedNick)
       ) {
+        return { kind: "completed" };
+      }
+      // IRC nicknames can change owners between connections. Channel replay is
+      // safe, but a stale DM recipient cannot be revalidated after reconnect.
+      if (!message.isGroup && context.connectionEpoch !== activeConnectionEpoch) {
+        logger.warn?.(
+          `[${account.accountId}] dropping replayed IRC DM after the connection changed`,
+        );
         return { kind: "completed" };
       }
       if (opts.onMessage) {
@@ -105,6 +114,9 @@ export async function monitorIrcProvider(
           const replyClient = client;
           if (!replyClient || !replyClient.isReady() || stopped || monitorAbort.signal.aborted) {
             throw new Error("IRC transport disconnected before reply send.");
+          }
+          if (!message.isGroup && context.connectionEpoch !== activeConnectionEpoch) {
+            throw new Error("IRC connection changed before private reply send.");
           }
           replyClient.sendPrivmsg(target, text);
           opts.statusSink?.({ lastOutboundAt: Date.now() });
@@ -163,6 +175,9 @@ export async function monitorIrcProvider(
             return;
           }
           ingressPause = ingress.pause();
+          if (activeConnectionEpoch === ingressConnection.connectionEpoch) {
+            activeConnectionEpoch = null;
+          }
           client = null;
           logger.warn?.(
             `[${account.accountId}] IRC connection closed; reconnecting in ${IRC_MONITOR_RECONNECT_DELAY_MS}ms`,
@@ -191,8 +206,12 @@ export async function monitorIrcProvider(
       return;
     }
     client = nextClient;
+    activeConnectionEpoch = ingressConnection.connectionEpoch;
     await ingressPause;
     if (client !== nextClient || !nextClient.isReady()) {
+      if (activeConnectionEpoch === ingressConnection.connectionEpoch) {
+        activeConnectionEpoch = null;
+      }
       return;
     }
     ingress.start();
@@ -227,6 +246,7 @@ export async function monitorIrcProvider(
         }
         client?.quit("shutdown");
         client = null;
+        activeConnectionEpoch = null;
         await ingress.stop();
       })();
       return stopTask;

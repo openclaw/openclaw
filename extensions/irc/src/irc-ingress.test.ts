@@ -119,7 +119,10 @@ describe("IRC durable ingress", () => {
           text: "hello",
           isGroup: true,
         });
-        expect(recoveredDispatch.mock.calls[0]?.[2]).toEqual({ connectedNick: "receipt-bot" });
+        expect(recoveredDispatch.mock.calls[0]?.[2]).toEqual({
+          connectedNick: "receipt-bot",
+          connectionEpoch: "connection-restart",
+        });
       } finally {
         await recovered.stop();
       }

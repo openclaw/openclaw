@@ -367,7 +367,7 @@ describe("irc monitor reconnect", () => {
     });
   });
 
-  it("sends a delayed reply through the reconnected client", async () => {
+  it("does not send a delayed private reply through the reconnected client", async () => {
     await withIngressQueue(async (ingressQueue) => {
       let resolvePairing = (_result: { code: string; created: boolean }) => {};
       let markPairingStarted = () => {};
@@ -409,15 +409,15 @@ describe("irc monitor reconnect", () => {
           "expected IRC monitor to establish the replacement connection",
         );
         resolvePairing({ code: "CODE", created: true });
-        await waitForIrcCondition(
-          () =>
-            server.linesByConnection[1]?.some((line) =>
-              line.startsWith("PRIVMSG alice :OpenClaw: access not configured."),
-            ) === true,
-          "expected delayed reply on the replacement connection",
+        await waitForIrcAsyncCondition(
+          async () => (await ingressQueue.listPending({ limit: "all" })).length === 0,
+          "expected the stale private reply to settle",
         );
         expect(
           server.linesByConnection[0]?.some((line) => line.startsWith("PRIVMSG alice :")),
+        ).toBe(false);
+        expect(
+          server.linesByConnection[1]?.some((line) => line.startsWith("PRIVMSG alice :")),
         ).toBe(false);
       } finally {
         resolvePairing({ code: "CODE", created: true });
@@ -505,6 +505,7 @@ describe("irc monitor inbound target", () => {
           version: 1,
           eventId,
           receivedAt,
+          connectionEpoch: "previous-connection",
           connectedNick: "receipt-bot",
           rawLine: ":receipt-bot!ident@example.org PRIVMSG #openclaw :echo",
         },
@@ -533,6 +534,57 @@ describe("irc monitor inbound target", () => {
         await waitForIrcAsyncCondition(
           async () => (await ingressQueue.listPending({ limit: "all" })).length === 0,
           "expected the replayed self echo to settle",
+        );
+        expect(onMessage).not.toHaveBeenCalled();
+      } finally {
+        if (monitor) {
+          await monitor.stop();
+        }
+        await server.close();
+      }
+    });
+  });
+
+  it("does not replay a DM after the accepting connection changed", async () => {
+    await withIngressQueue(async (ingressQueue) => {
+      installMonitorRuntime();
+      const eventId = "local:previous-connection:000000000002";
+      const receivedAt = Date.now();
+      await ingressQueue.enqueue(
+        eventId,
+        {
+          version: 1,
+          eventId,
+          receivedAt,
+          connectionEpoch: "previous-connection",
+          connectedNick: "receipt-bot",
+          rawLine: ":alice!ident@example.org PRIVMSG receipt-bot :private",
+        },
+        { receivedAt, laneKey: "direct:alice" },
+      );
+      const server = await startInboundIrcServer(undefined, "receipt-bot");
+      const onMessage = vi.fn();
+      let monitor: { stop: () => Promise<void> } | undefined;
+      try {
+        monitor = await monitorIrcProvider({
+          config: {
+            channels: {
+              irc: {
+                host: "127.0.0.1",
+                port: server.port,
+                tls: false,
+                nick: "receipt-bot",
+                username: "bot",
+                realname: "OpenClaw",
+              },
+            },
+          } as CoreConfig,
+          ingressQueue,
+          onMessage,
+        });
+        await waitForIrcAsyncCondition(
+          async () => (await ingressQueue.listPending({ limit: "all" })).length === 0,
+          "expected the replayed DM to settle",
         );
         expect(onMessage).not.toHaveBeenCalled();
       } finally {
