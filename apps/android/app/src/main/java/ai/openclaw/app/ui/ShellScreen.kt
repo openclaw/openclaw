@@ -24,7 +24,6 @@ import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.resolveNativeTextResource
 import ai.openclaw.app.i18n.verbatimText
 import ai.openclaw.app.node.CanvasController
-import ai.openclaw.app.ui.chat.ChatScreen
 import ai.openclaw.app.ui.design.AgentAvatarSource
 import ai.openclaw.app.ui.design.ClawAgentAvatar
 import ai.openclaw.app.ui.design.ClawBottomNav
@@ -252,7 +251,6 @@ fun ShellScreen(
           Tab.Chat ->
             UnifiedChatShellScreen(
               viewModel = viewModel,
-              onOpenVoiceSettings = { nav.openSettingsRoute(SettingsRoute.Voice) },
               onOpenSessions = { nav.openDetailTab(Tab.Sessions) },
               onOpenGatewaySettings = { nav.openSettingsRoute(SettingsRoute.Gateway) },
             )
@@ -1491,26 +1489,6 @@ private fun RecentSessionRowContent(
         tint = ClawTheme.colors.textMuted,
       )
     }
-  }
-}
-
-@Composable
-private fun ChatShellScreen(
-  viewModel: MainViewModel,
-  onStartTalk: () -> Unit,
-  onOpenSessions: () -> Unit,
-  onOpenGatewaySettings: () -> Unit,
-) {
-  ClawScaffold(
-    contentPadding = PaddingValues(start = 0.dp, top = 8.dp, end = 0.dp, bottom = 0.dp),
-    contentWindowInsets = shellContentInsets,
-  ) {
-    ChatScreen(
-      viewModel = viewModel,
-      onStartTalk = onStartTalk,
-      onOpenSessions = onOpenSessions,
-      onOpenGatewaySettings = onOpenGatewaySettings,
-    )
   }
 }
 

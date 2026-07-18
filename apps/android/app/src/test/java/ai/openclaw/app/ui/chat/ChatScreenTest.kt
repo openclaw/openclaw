@@ -17,12 +17,28 @@ class ChatScreenTest {
       resolveChatRealtimeTalkLaunch(hasMicPermission = false, requiresSetup = true),
     )
     assertEquals(
-      ChatRealtimeTalkLaunch.ShowSetupInline,
+      ChatRealtimeTalkLaunch.ShowSetupMessage,
       resolveChatRealtimeTalkLaunch(hasMicPermission = true, requiresSetup = true),
     )
     assertEquals(
       ChatRealtimeTalkLaunch.StartTalk,
       resolveChatRealtimeTalkLaunch(hasMicPermission = true, requiresSetup = false),
+    )
+  }
+
+  @Test
+  fun activeTalkAlwaysKeepsTheStopControlVisible() {
+    assertEquals(
+      ChatComposerTrailingAction.StopTalk,
+      resolveChatComposerTrailingAction(talkActive = true, sendEnabled = true),
+    )
+    assertEquals(
+      ChatComposerTrailingAction.Send,
+      resolveChatComposerTrailingAction(talkActive = false, sendEnabled = true),
+    )
+    assertEquals(
+      ChatComposerTrailingAction.StartTalk,
+      resolveChatComposerTrailingAction(talkActive = false, sendEnabled = false),
     )
   }
 
