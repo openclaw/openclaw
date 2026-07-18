@@ -30,6 +30,27 @@ import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
 import { resetTelegramReplyFenceForTest as resetTelegramReplyFenceForTests } from "./runtime.test-support.js";
 import { createTelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
 
+const traceInboundDispatch = vi.hoisted(
+  (): {
+    current?: TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"];
+  } => ({}),
+);
+
+vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>();
+  const { createTelegramChannelInboundTestRunner } =
+    await import("./bot-channel-inbound.test-support.js");
+  return {
+    ...actual,
+    runChannelInboundEvent: createTelegramChannelInboundTestRunner(actual, () => {
+      if (!traceInboundDispatch.current) {
+        throw new Error("trace inbound dispatcher was not configured");
+      }
+      return traceInboundDispatch.current;
+    }),
+  };
+});
+
 type RecordedWireCall = Parameters<WireRecorder["recordWireCall"]>[0];
 type BufferedDispatcherParams = Parameters<
   TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"]
@@ -140,6 +161,15 @@ function createTraceTelegramDeps(captured: {
   replyOptions?: BufferedDispatcherParams["replyOptions"];
   resolveDispatch?: (result: BufferedDispatcherResult) => void;
 }): TelegramBotDeps {
+  const dispatchReplyWithBufferedBlockDispatcher: TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"] =
+    (params) => {
+      captured.dispatcherOptions = params.dispatcherOptions;
+      captured.replyOptions = params.replyOptions;
+      return new Promise((resolve) => {
+        captured.resolveDispatch = resolve;
+      });
+    };
+  traceInboundDispatch.current = dispatchReplyWithBufferedBlockDispatcher;
   return {
     getRuntimeConfig: (() => ({
       config: baseTelegramMessageContextConfig,
@@ -159,13 +189,7 @@ function createTraceTelegramDeps(captured: {
     // its deliver wiring here; the trace drives those callbacks directly and
     // resolves this promise at the scripted idle step, exactly where the real
     // agent loop would settle.
-    dispatchReplyWithBufferedBlockDispatcher: ((params: BufferedDispatcherParams) => {
-      captured.dispatcherOptions = params.dispatcherOptions;
-      captured.replyOptions = params.replyOptions;
-      return new Promise((resolve) => {
-        captured.resolveDispatch = resolve;
-      });
-    }) as TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"],
+    dispatchReplyWithBufferedBlockDispatcher,
     buildModelsProviderData: (async () => ({
       byProvider: new Map<string, Set<string>>(),
       providers: [],

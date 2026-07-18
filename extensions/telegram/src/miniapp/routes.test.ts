@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { BOOTSTRAP_HANDOFF_OPERATOR_SCOPES } from "openclaw/plugin-sdk/device-bootstrap";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -151,7 +152,7 @@ describe("registerTelegramMiniAppRoutes", () => {
     expect(issueDeviceBootstrapToken).toHaveBeenCalledWith({
       profile: {
         roles: ["operator"],
-        scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
+        scopes: [...BOOTSTRAP_HANDOFF_OPERATOR_SCOPES],
         purpose: "control-ui",
       },
     });

@@ -213,6 +213,19 @@ const buildModelsProviderData = modelProviderDataHoisted.buildModelsProviderData
 export const replySpy = replySpyHoisted.replySpy;
 export const dispatchReplyWithBufferedBlockDispatcher =
   dispatchReplyHoisted.dispatchReplyWithBufferedBlockDispatcher;
+
+vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>();
+  const { createTelegramChannelInboundTestRunner } =
+    await import("./bot-channel-inbound.test-support.js");
+  return {
+    ...actual,
+    runChannelInboundEvent: createTelegramChannelInboundTestRunner(
+      actual,
+      () => dispatchReplyHoisted.dispatchReplyWithBufferedBlockDispatcher,
+    ),
+  };
+});
 const menuSyncHoisted = vi.hoisted(() => ({
   syncTelegramMenuCommands: vi.fn(async ({ bot, commandsToRegister }) => {
     await bot.api.setMyCommands(commandsToRegister);
