@@ -150,7 +150,7 @@ private func questionRecord(
 }
 
 @MainActor
-@Test func `local answer and skip override unavailable recovery race`() throws {
+@Test func `question completions override unavailable recovery race`() throws {
     let answered = OpenClawQuestionCardModel(record: questionRecord())
     answered.toggleOption(questionID: "meal", label: "Pizza")
     let answers = try #require(answered.beginSubmission())
@@ -163,6 +163,11 @@ private func questionRecord(
     skipped.markRecoveryUnavailable()
     skipped.markSkippedLocally()
     #expect(skipped.status() == .cancelled)
+
+    let answeredElsewhere = OpenClawQuestionCardModel(record: questionRecord())
+    answeredElsewhere.markRecoveryUnavailable()
+    answeredElsewhere.markAnsweredElsewhere()
+    #expect(answeredElsewhere.status() == .answeredElsewhere)
 }
 
 @MainActor
