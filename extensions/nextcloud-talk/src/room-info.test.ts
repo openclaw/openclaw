@@ -264,7 +264,7 @@ describe("nextcloud talk room info", () => {
         config,
       },
     };
-    params["room" + "Token"] = "test-room";
+    Reflect.set(params, "roomToken", "test-room");
 
     await expect(resolveNextcloudTalkRoomKind(params as never)).resolves.toBeUndefined();
     expect(cancelBody).toHaveBeenCalledTimes(1);
