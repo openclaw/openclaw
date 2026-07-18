@@ -6,6 +6,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { sanitizeInboundSystemTags } from "../../auto-reply/reply/inbound-text.js";
 import type { CliDeps } from "../../cli/deps.types.js";
 import { getRuntimeConfig } from "../../config/io.js";
@@ -16,6 +17,7 @@ import {
 } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RunCronAgentTurnResult } from "../../cron/isolated-agent/run.types.js";
+import { resolveCronAgentSessionKey } from "../../cron/isolated-agent/session-key.js";
 import type { CronJob } from "../../cron/types.js";
 import { requestHeartbeat } from "../../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
@@ -104,7 +106,7 @@ function createSessionKeyedHookDispatchQueue() {
       () => undefined,
     );
     hookAgentDispatchTails.set(sessionKey, tail);
-    // Same-session hook agent runs append to one Codex session. Serializing avoids
+    // Same-session hook agent runs append to one agent session. Serializing avoids
     // optimistic lifecycle-claim races while preserving parallelism across sessions.
     void tail.finally(() => {
       if (hookAgentDispatchTails.get(sessionKey) === tail) {
@@ -126,6 +128,11 @@ export function createGatewayHooksRequestHandler(params: {
 }) {
   const { deps, getHooksConfig, getClientIpConfig, bindHost, port, logHooks } = params;
   const enqueueHookAgentDispatch = createSessionKeyedHookDispatchQueue();
+  let isolatedAgentModulePromise:
+    | Promise<typeof import("../../cron/isolated-agent.js")>
+    | undefined;
+  const loadIsolatedAgentModule = () =>
+    (isolatedAgentModulePromise ??= import("../../cron/isolated-agent.js"));
 
   const dispatchWakeHook = (value: { text: string; mode: "now" | "next-heartbeat" }) => {
     const sessionKey = resolveMainSessionKeyFromConfig();
@@ -172,25 +179,56 @@ export function createGatewayHooksRequestHandler(params: {
       delivery,
       state: { nextRunAtMs: nowMs },
     };
-
     let hookEventSessionKey: string | undefined;
+    const reportHookFailure = (err: unknown) => {
+      logHooks.warn(`hook agent failed: ${String(err)}`);
+      enqueueSystemEvent(`Hook ${safeName} (error): ${String(err)}`, {
+        sessionKey: hookEventSessionKey ?? resolveMainSessionKeyFromConfig(),
+      });
+      if (value.wakeMode === "now") {
+        requestHeartbeat({
+          source: "hook",
+          intent: "immediate",
+          reason: `hook:${jobId}:error`,
+        });
+      }
+    };
+    let dispatchCfg: OpenClawConfig;
+    try {
+      dispatchCfg = getRuntimeConfig();
+    } catch (err) {
+      // Config resolution historically failed after the hook response returned.
+      // Preserve that detached failure contract while queue keys stay canonical.
+      void runWithGatewayIndependentRootWorkContinuation(async () => reportHookFailure(err));
+      return runId;
+    }
+    const agentId = value.agentId ?? resolveDefaultAgentId(dispatchCfg);
+    const queueKey = resolveCronAgentSessionKey({
+      sessionKey,
+      agentId,
+      mainKey: dispatchCfg.session?.mainKey,
+      cfg: dispatchCfg,
+    });
+    // Acceptance fixes the target identity; queued execution still reads fresh
+    // settings. Otherwise reload can move one FIFO entry to another session.
+    job.agentId = agentId;
     void runWithGatewayIndependentRootWorkContinuation(() =>
-      enqueueHookAgentDispatch(sessionKey, async () => {
+      enqueueHookAgentDispatch(queueKey, async () => {
         try {
           // Agent hooks run after the HTTP response path has returned, so failure
           // handling must record a system event instead of throwing to the caller.
           const cfg = getRuntimeConfig();
           hookEventSessionKey = resolveHookEventSessionKey({
             cfg,
-            agentId: value.agentId,
+            agentId,
           });
-          const { runCronIsolatedAgentTurn } = await import("../../cron/isolated-agent.js");
+          const { runCronIsolatedAgentTurn } = await loadIsolatedAgentModule();
           const result = await runCronIsolatedAgentTurn({
             cfg,
             deps,
             job,
             message: value.message,
-            sessionKey,
+            sessionKey: queueKey,
             lane: "cron",
           });
           const summary = resolveHookRunSummary(result);
@@ -235,17 +273,7 @@ export function createGatewayHooksRequestHandler(params: {
             });
           }
         } catch (err) {
-          logHooks.warn(`hook agent failed: ${String(err)}`);
-          enqueueSystemEvent(`Hook ${safeName} (error): ${String(err)}`, {
-            sessionKey: hookEventSessionKey ?? resolveMainSessionKeyFromConfig(),
-          });
-          if (value.wakeMode === "now") {
-            requestHeartbeat({
-              source: "hook",
-              intent: "immediate",
-              reason: `hook:${jobId}:error`,
-            });
-          }
+          reportHookFailure(err);
         }
       }),
     );
