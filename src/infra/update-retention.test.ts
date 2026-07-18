@@ -18,7 +18,10 @@ describe("update package retention", () => {
     temporaryRoots.push(root);
     const globalRoot = path.join(root, "lib", "node_modules");
     const packageRoot = path.join(globalRoot, "openclaw");
+    const abandonedStage = path.join(root, "lib", ".openclaw-previous.stage-4242-1000");
     await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
+    await fs.mkdir(abandonedStage, { recursive: true });
+    await fs.writeFile(path.join(abandonedStage, "partial-copy"), "stale");
     await fs.writeFile(
       path.join(packageRoot, "package.json"),
       JSON.stringify({ name: "openclaw", version: "1.9.0" }),
@@ -41,6 +44,7 @@ describe("update package retention", () => {
         return { stdout: command.stdout, stderr: command.stderr, code: command.code };
       },
       timeoutMs: 5_000,
+      processAlive: () => false,
     });
 
     expect(result.step.exitCode).toBe(0);
@@ -69,6 +73,7 @@ describe("update package retention", () => {
         return { stdout: command.stdout, stderr: command.stderr, code: command.code };
       },
       timeoutMs: 5_000,
+      processAlive: () => false,
     });
 
     expect(replacement.step.exitCode).toBe(0);

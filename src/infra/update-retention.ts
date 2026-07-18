@@ -6,6 +6,7 @@ import { formatErrorMessage } from "./errors.js";
 import { collectInstalledGlobalPackageErrors, type CommandRunner } from "./update-global.js";
 
 const RETAINED_UPDATE_PACKAGE_DIRNAME = ".openclaw-previous";
+const RETENTION_STAGE_SEPARATOR = ".stage-";
 
 type RetainedUpdatePackageResult = {
   retainedRoot: string | null;
@@ -24,6 +25,40 @@ async function removeTree(targetPath: string): Promise<void> {
   await fs.rm(targetPath, { recursive: true, force: true, maxRetries: 2, retryDelay: 100 });
 }
 
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
+async function removeAbandonedStages(params: {
+  retentionParent: string;
+  retainedRoot: string;
+  processAlive: (pid: number) => boolean;
+}): Promise<void> {
+  const stagePrefix = `${path.basename(params.retainedRoot)}${RETENTION_STAGE_SEPARATOR}`;
+  const entries = await fs.readdir(params.retentionParent, { withFileTypes: true }).catch(() => []);
+  await Promise.allSettled(
+    entries.map(async (entry) => {
+      if (!entry.name.startsWith(stagePrefix)) {
+        return;
+      }
+      const match = /^(\d+)-(\d+)$/.exec(entry.name.slice(stagePrefix.length));
+      if (!match) {
+        return;
+      }
+      const pid = Number.parseInt(match[1] ?? "", 10);
+      if (!Number.isSafeInteger(pid) || pid <= 0 || params.processAlive(pid)) {
+        return;
+      }
+      await removeTree(path.join(params.retentionParent, entry.name));
+    }),
+  );
+}
+
 /** Retain the current package beside its manager root, replacing only the older retained copy. */
 export async function retainCurrentPackageForUpdate(params: {
   packageRoot: string;
@@ -33,16 +68,22 @@ export async function retainCurrentPackageForUpdate(params: {
   nodePath: string;
   timeoutMs: number;
   env?: NodeJS.ProcessEnv;
+  processAlive?: (pid: number) => boolean;
 }): Promise<RetainedUpdatePackageResult> {
   const startedAt = Date.now();
   const ownerRoot = path.resolve(params.globalRoot ?? path.dirname(params.packageRoot));
   const retentionParent = path.dirname(ownerRoot);
   const retainedRoot = path.join(retentionParent, RETAINED_UPDATE_PACKAGE_DIRNAME);
-  const stagedRoot = `${retainedRoot}.stage-${process.pid}-${Date.now()}`;
+  const stagedRoot = `${retainedRoot}${RETENTION_STAGE_SEPARATOR}${process.pid}-${Date.now()}`;
   const command = `retain ${params.packageRoot} -> ${retainedRoot}`;
   try {
     await fs.mkdir(retentionParent, { recursive: true });
-    await removeTree(stagedRoot);
+    // Reclaim killed-process clones without touching another updater's active staging tree.
+    await removeAbandonedStages({
+      retentionParent,
+      retainedRoot,
+      processAlive: params.processAlive ?? isProcessAlive,
+    });
     await fs.cp(params.packageRoot, stagedRoot, {
       recursive: true,
       dereference: true,
