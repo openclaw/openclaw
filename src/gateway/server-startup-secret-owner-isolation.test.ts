@@ -21,6 +21,63 @@ import {
   testState,
 } from "./test-helpers.js";
 
+const { webSearchProviders } = vi.hoisted(() => {
+  const credentialPath = "plugins.entries.google.config.webSearch.apiKey";
+  return {
+    webSearchProviders: [
+      {
+        pluginId: "google",
+        id: "gemini",
+        label: "Gemini",
+        hint: "Gateway startup owner-isolation provider",
+        envVars: ["GEMINI_API_KEY"],
+        placeholder: "gemini-...",
+        signupUrl: "https://example.com/gemini",
+        autoDetectOrder: 20,
+        credentialPath,
+        inactiveSecretPaths: [credentialPath],
+        getCredentialValue: (config: { apiKey?: unknown } | undefined) => config?.apiKey,
+        setCredentialValue: (config: { apiKey?: unknown }, value: unknown) => {
+          config.apiKey = value;
+        },
+        getConfiguredCredentialValue: (config: OpenClawConfig | undefined) => {
+          const pluginConfig = config?.plugins?.entries?.google?.config;
+          return pluginConfig && typeof pluginConfig === "object"
+            ? (pluginConfig as { webSearch?: { apiKey?: unknown } }).webSearch?.apiKey
+            : undefined;
+        },
+        setConfiguredCredentialValue: () => {},
+        createTool: () => null,
+      },
+    ],
+  };
+});
+
+vi.mock("../secrets/runtime-web-tools-manifest.runtime.js", () => ({
+  resolveManifestContractPluginIds: ({ contract }: { contract: string }) =>
+    contract === "webSearchProviders" ? ["google"] : [],
+  resolveManifestContractOwnerPluginId: ({ value }: { value: string }) =>
+    value === "gemini" ? "google" : undefined,
+  resolveManifestContractPluginIdsByCompatibilityRuntimePath: () => [],
+}));
+
+vi.mock("../plugins/web-provider-public-artifacts.explicit.js", () => ({
+  resolveBundledExplicitWebSearchProvidersFromPublicArtifacts: () => webSearchProviders,
+  resolveBundledExplicitWebFetchProvidersFromPublicArtifacts: () => [],
+}));
+
+vi.mock("../secrets/runtime-web-tools-public-artifacts.runtime.js", () => ({
+  resolveBundledWebSearchProvidersFromPublicArtifacts: () => webSearchProviders,
+  resolveBundledWebFetchProvidersFromPublicArtifacts: () => [],
+}));
+
+vi.mock("../secrets/runtime-web-tools-fallback.runtime.js", () => ({
+  runtimeWebToolsFallbackProviders: {
+    resolvePluginWebSearchProviders: () => webSearchProviders,
+    resolvePluginWebFetchProviders: () => [],
+  },
+}));
+
 installGatewayTestHooks({ scope: "suite" });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -132,7 +189,7 @@ describe("Gateway startup SecretRef owner isolation", () => {
     );
   });
 
-  it("fans one Vault auth outage out to every affected owner", async () => {
+  it("fans one Vault auth outage out to standard and web-tool owners", async () => {
     if (process.platform === "win32") {
       return;
     }
@@ -172,6 +229,20 @@ describe("Gateway startup SecretRef owner isolation", () => {
             },
           },
         },
+        tools: { web: { search: { provider: "gemini" } } },
+        plugins: {
+          enabled: true,
+          entries: {
+            google: {
+              enabled: true,
+              config: {
+                webSearch: {
+                  apiKey: { source: "exec", provider: "vault", id: "web/gemini" },
+                },
+              },
+            },
+          },
+        },
       });
 
       const port = await getFreePort();
@@ -180,7 +251,7 @@ describe("Gateway startup SecretRef owner isolation", () => {
 
       expect(ready.status).toBe(200);
       await expect(ready.json()).resolves.toMatchObject({ ready: true });
-      expect(readFileSync(callLogPath, "utf8").trim().split("\n")).toHaveLength(1);
+      expect(readFileSync(callLogPath, "utf8").trim().split("\n")).toHaveLength(2);
       expect(getActiveSecretsRuntimeSnapshot()?.degradedOwners).toMatchObject([
         {
           ownerKind: "provider",
@@ -190,6 +261,11 @@ describe("Gateway startup SecretRef owner isolation", () => {
         {
           ownerKind: "capability",
           ownerId: "tts",
+          providerFailures: [{ source: "exec", provider: "vault" }],
+        },
+        {
+          ownerKind: "capability",
+          ownerId: "web-search:gemini",
           providerFailures: [{ source: "exec", provider: "vault" }],
         },
       ]);
