@@ -112,6 +112,7 @@ type PublishablePluginPackageCandidate<TPackageJson extends PluginPackageJson = 
   };
 
 export const OPENCLAW_PLUGIN_NPM_REPOSITORY_URL = "https://github.com/openclaw/openclaw";
+const PLUGIN_NPM_VIEW_TIMEOUT_MS = 60_000;
 
 export function collectRequiredLatestDependencies(packageJson: PluginPackageJson): {
   dependencies: RequiredLatestDependency[];
@@ -649,10 +650,21 @@ function runNpmView(args: string[]): string {
   writeFileSync(userconfigPath, "");
 
   try {
-    return execFileSync("npm", ["view", ...args, "--userconfig", userconfigPath], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    }).trim();
+    try {
+      return execFileSync("npm", ["view", ...args, "--userconfig", userconfigPath], {
+        encoding: "utf8",
+        killSignal: "SIGKILL",
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: PLUGIN_NPM_VIEW_TIMEOUT_MS,
+      }).trim();
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ETIMEDOUT") {
+        throw new Error(`npm view timed out after ${PLUGIN_NPM_VIEW_TIMEOUT_MS}ms.`, {
+          cause: error,
+        });
+      }
+      throw error;
+    }
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
