@@ -21,7 +21,7 @@ export function messageAction(label: string, text?: string): Action {
   return {
     type: "message",
     label: truncateLineActionLabel(label),
-    text: text ?? label,
+    text: truncateLineActionData(text ?? label),
   };
 }
 

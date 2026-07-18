@@ -61,6 +61,19 @@ describe("messageAction", () => {
       expect((action as { text: string }).text, testCase.name).toBe(testCase.expectedText);
     }
   });
+
+  it("truncates message text to LINE's 300 character action limit", () => {
+    const action = messageAction("Go", "x".repeat(301)) as { text: string };
+
+    expect(action.text).toHaveLength(300);
+  });
+
+  it("truncates message text without leaving a dangling surrogate", () => {
+    const action = messageAction("Go", `${"x".repeat(299)}\u{1f600}`) as { text: string };
+
+    expect(action.text).toBe("x".repeat(299));
+    expect(action.text).not.toMatch(/[\uD800-\uDBFF]$/u);
+  });
 });
 
 describe("uriAction", () => {
