@@ -1,4 +1,3 @@
-// Canonical agent creation: workspace, identity, transcripts, and config entry.
 import fs from "node:fs/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { applyAgentBindings, parseBindingSpecs } from "../commands/agents.bindings.js";
@@ -21,32 +20,30 @@ import {
 } from "./identity-file.js";
 import { DEFAULT_IDENTITY_FILENAME, ensureAgentWorkspace } from "./workspace.js";
 
-export type CreateAgentErrorReason =
-  | "invalid-name"
-  | "reserved-id"
-  | "already-exists"
-  | "invalid-bindings"
-  | "unsafe-identity-file";
+export type CreateAgentResult =
+  | {
+      status: "created";
+      agentId: string;
+      name: string;
+      workspace: string;
+      agentDir: string;
+      model?: string;
+      bootstrapPending: boolean;
+      bindingResult?: ReturnType<typeof applyAgentBindings>;
+    }
+  | {
+      status: "error";
+      reason:
+        | "invalid-name"
+        | "reserved-id"
+        | "already-exists"
+        | "invalid-bindings"
+        | "unsafe-identity-file";
+      agentId?: string;
+      message: string;
+    };
 
-type CreateAgentCreated = {
-  status: "created";
-  agentId: string;
-  name: string;
-  workspace: string;
-  agentDir: string;
-  model?: string;
-  bootstrapPending: boolean;
-  bindingResult?: ReturnType<typeof applyAgentBindings>;
-};
-
-type CreateAgentError = {
-  status: "error";
-  reason: CreateAgentErrorReason;
-  agentId?: string;
-  message: string;
-};
-
-export type CreateAgentResult = CreateAgentCreated | CreateAgentError;
+type CreateError = Extract<CreateAgentResult, { status: "error" }>;
 
 export type CreateAgentParams = {
   name: string;
@@ -63,10 +60,10 @@ class DuplicateAgentError extends Error {}
 class InvalidAgentBindingsError extends Error {}
 
 function createError(
-  reason: CreateAgentErrorReason,
+  reason: CreateError["reason"],
   message: string,
   agentId?: string,
-): CreateAgentError {
+): CreateError {
   return { status: "error", reason, message, ...(agentId ? { agentId } : {}) };
 }
 
@@ -91,7 +88,6 @@ async function writeIdentityFile(params: {
   await workspaceRoot.write(DEFAULT_IDENTITY_FILENAME, content, { encoding: "utf8" });
 }
 
-/** Create one agent through the canonical production config-write path. */
 export async function createAgent(params: CreateAgentParams): Promise<CreateAgentResult> {
   const rawName = params.name.trim();
   if (!rawName) {
@@ -149,12 +145,10 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
           const bindingResult = bindingParse.bindings.length
             ? applyAgentBindings(nextConfig, bindingParse.bindings)
             : undefined;
-          if (bindingResult) {
-            nextConfig = bindingResult.config;
-          }
+          nextConfig = bindingResult?.config ?? nextConfig;
 
-          // The outer lock makes this transform single-attempt: setup finishes
-          // before the final entry becomes visible to readers or delete flows.
+          // The outer lock makes this result-bearing transform single-attempt: setup
+          // finishes before the final entry becomes visible to readers or delete flows.
           const workspace = await ensureAgentWorkspace({
             dir: workspaceDir,
             ensureBootstrapFiles: !nextConfig.agents?.defaults?.skipBootstrap,
@@ -184,10 +178,7 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
           };
         },
       });
-      if (!committed.result) {
-        throw new Error("Agent config mutation did not return a result.");
-      }
-      return committed.result;
+      return committed.result!;
     });
   } catch (error) {
     if (error instanceof DuplicateAgentError) {

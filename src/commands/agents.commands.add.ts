@@ -126,17 +126,11 @@ export async function agentsAddCommand(
       runtime.log(`Normalized agent id to "${agentId}".`);
     }
 
-    const workspaceDir = resolveUserPath(workspaceFlag);
-    const explicitAgentDir = opts.agentDir?.trim()
-      ? resolveUserPath(opts.agentDir.trim())
-      : undefined;
-    const model = opts.model?.trim();
-
     const created = await createAgent({
       name: nameInput,
-      workspace: workspaceDir,
-      ...(explicitAgentDir ? { agentDir: explicitAgentDir } : {}),
-      ...(model ? { model } : {}),
+      workspace: workspaceFlag,
+      ...(opts.agentDir ? { agentDir: opts.agentDir } : {}),
+      ...(opts.model ? { model: opts.model } : {}),
       ...(opts.bind?.length ? { bindingSpecs: opts.bind } : {}),
       transformConfig: transformConfigWithPendingPluginInstalls,
     });
@@ -178,8 +172,8 @@ export async function agentsAddCommand(
       runtime.log(`Agent: ${agentId}`);
       runtime.log(`Workspace: ${shortenHomePath(created.workspace)}`);
       runtime.log(`Agent dir: ${shortenHomePath(created.agentDir)}`);
-      if (model) {
-        runtime.log(`Model: ${model}`);
+      if (created.model) {
+        runtime.log(`Model: ${created.model}`);
       }
       if (bindingResult.conflicts.length > 0) {
         runtime.error(

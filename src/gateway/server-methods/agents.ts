@@ -21,7 +21,7 @@ import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope
 import {
   createAgentIdentityConfig,
   mergeIdentityMarkdownContent,
-  normalizeIdentityConfigForFile,
+  normalizeIdentityForFile,
   sanitizeAgentIdentityLine,
 } from "../../agents/identity-file.js";
 import { resolveAgentIdentity } from "../../agents/identity.js";
@@ -538,9 +538,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
       });
     }
 
-    const persistedIdentity = normalizeIdentityConfigForFile(
-      resolveAgentIdentity(nextConfig, agentId),
-    );
+    const persistedIdentity = normalizeIdentityForFile(resolveAgentIdentity(nextConfig, agentId));
     if (persistedIdentity && (workspaceDir || hasIdentityFields)) {
       const identityWorkspaceDir = resolveAgentWorkspaceDir(nextConfig, agentId);
       const previousWorkspaceDir = resolveAgentWorkspaceDir(cfg, agentId);

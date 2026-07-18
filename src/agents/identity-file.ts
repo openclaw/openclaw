@@ -45,43 +45,39 @@ const IDENTITY_PLACEHOLDER_VALUES = new Set([
   "workspace-relative path, http(s) url, or data uri",
 ]);
 
-/** Collapse user-facing identity fields to one safe Markdown line. */
 export function sanitizeAgentIdentityLine(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
-/** Build the config identity shared by agent creation and update surfaces. */
+const IDENTITY_CONFIG_FIELDS = ["name", "theme", "emoji", "avatar"] as const;
+
+function compactIdentityConfig(identity: IdentityConfig): IdentityConfig | undefined {
+  const resolved: IdentityConfig = {};
+  for (const field of IDENTITY_CONFIG_FIELDS) {
+    const value = identity[field]?.trim();
+    if (value) {
+      resolved[field] = value;
+    }
+  }
+  return Object.keys(resolved).length ? resolved : undefined;
+}
+
 export function createAgentIdentityConfig(params: {
   name?: string;
   emoji?: unknown;
   avatar?: unknown;
 }): IdentityConfig | undefined {
-  const emoji = normalizeOptionalString(params.emoji);
-  const avatar = normalizeOptionalString(params.avatar);
-  const identity = {
+  return compactIdentityConfig({
     ...(params.name ? { name: sanitizeAgentIdentityLine(params.name) } : {}),
-    ...(emoji ? { emoji: sanitizeAgentIdentityLine(emoji) } : {}),
-    ...(avatar ? { avatar: sanitizeAgentIdentityLine(avatar) } : {}),
-  } satisfies IdentityConfig;
-  return identity.name || identity.emoji || identity.avatar ? identity : undefined;
+    emoji: sanitizeAgentIdentityLine(normalizeOptionalString(params.emoji) ?? ""),
+    avatar: sanitizeAgentIdentityLine(normalizeOptionalString(params.avatar) ?? ""),
+  });
 }
 
-/** Trim config identity values before merging them into IDENTITY.md. */
-export function normalizeIdentityConfigForFile(
+export function normalizeIdentityForFile(
   identity: IdentityConfig | undefined,
 ): IdentityConfig | undefined {
-  if (!identity) {
-    return undefined;
-  }
-  const resolved = {
-    name: identity.name?.trim() || undefined,
-    theme: identity.theme?.trim() || undefined,
-    emoji: identity.emoji?.trim() || undefined,
-    avatar: identity.avatar?.trim() || undefined,
-  } satisfies IdentityConfig;
-  return resolved.name || resolved.theme || resolved.emoji || resolved.avatar
-    ? resolved
-    : undefined;
+  return identity ? compactIdentityConfig(identity) : undefined;
 }
 
 function normalizeIdentityValue(value: string): string {
