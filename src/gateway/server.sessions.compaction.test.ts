@@ -13,6 +13,7 @@ import {
   loadTranscriptEvents,
   patchSessionEntry as patchAccessorSessionEntry,
   replaceSessionEntry,
+  replaceTranscriptEvents,
   upsertSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import {
@@ -1586,6 +1587,56 @@ test("sessions.compact maxLines trims SQLite transcript rows and returns an arch
 
   ws.close();
 });
+
+test(
+  "sessions.compact maxLines clamps absurd values to the manual trim cap",
+  // Seeding and trimming 100k+ transcript rows runs multi-second synchronous
+  // SQLite transactions that also stall the test process event loop.
+  { timeout: 180_000 },
+  async () => {
+    const { storePath } = await createSessionStoreDir();
+    await seedSessionEntry({
+      entry: sessionStoreEntry("sess-main"),
+      sessionKey: "agent:main:main",
+      storePath,
+    });
+    // Seed one row past the 100k cap so the clamped value is observable: an
+    // uncapped maxLines of 1e12 would keep all 100_001 rows as an expensive
+    // no-op, while the clamped cap trims to exactly 100_000.
+    await replaceTranscriptEvents(
+      {
+        sessionId: "sess-main",
+        sessionKey: "agent:main:main",
+        storePath,
+      },
+      buildSessionTranscriptLines("sess-main", 100_001).map((line): unknown => JSON.parse(line)),
+    );
+
+    const { ws } = await openClient();
+    const compacted = await rpcReq<{
+      ok: true;
+      key: string;
+      compacted: boolean;
+      kept?: number;
+      archived?: string;
+    }>(ws, "sessions.compact", { key: "main", maxLines: 1e12 }, 150_000);
+
+    expect(compacted.ok).toBe(true);
+    expect(compacted.payload?.compacted).toBe(true);
+    expect(compacted.payload?.kept).toBe(100_000);
+    expect(compacted.payload?.archived).toContain(`sqlite:main:sess-main:${storePath}.bak.`);
+
+    const retained = await loadTranscriptRows({
+      sessionId: "sess-main",
+      sessionKey: "agent:main:main",
+      storePath,
+    });
+    expect(retained).toHaveLength(100_000);
+    expect(retained[0]).toMatchObject({ type: "session", id: "sess-main" });
+
+    ws.close();
+  },
+);
 
 test("sessions.compact maxLines refuses an active run without trimming rows", async () => {
   const { dir, storePath } = await createSessionStoreDir();

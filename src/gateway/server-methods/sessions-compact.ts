@@ -42,6 +42,11 @@ import {
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
+// 100k transcript lines: an unbounded maxLines makes the manual trim load and
+// rewrite the entire transcript as an expensive no-op. Callers that want to
+// keep full history should omit maxLines and use model-backed compaction.
+const MAX_COMPACT_MAX_LINES = 100_000;
+
 export const sessionCompactHandlers: GatewayRequestHandlers = {
   "sessions.compact": async ({ params, respond, context, client, isWebchatConnect }) => {
     if (!assertValidParams(params, validateSessionsCompactParams, "sessions.compact", respond)) {
@@ -58,7 +63,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
 
     const maxLines =
       typeof p.maxLines === "number" && Number.isFinite(p.maxLines)
-        ? Math.max(1, Math.floor(p.maxLines))
+        ? Math.min(Math.max(1, Math.floor(p.maxLines)), MAX_COMPACT_MAX_LINES)
         : undefined;
 
     const cfg = context.getRuntimeConfig();
