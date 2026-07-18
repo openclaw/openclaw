@@ -91,6 +91,10 @@ export function resolveMcpAppSandboxPort(gatewayPort: number, configuredPort?: n
   return sandboxPort;
 }
 
+// Malformed input must throw: the gateway sandbox endpoint relies on it to fail
+// closed with 400 instead of serving proxy HTML under a default policy. That
+// includes valid JSON that is not a usable CSP — encodeCsp omits the query
+// param entirely in that case, so a present-but-empty value is never legitimate.
 export function decodeMcpAppSandboxCsp(value: string | null): McpAppCsp | undefined {
   if (!value) {
     return undefined;
@@ -99,7 +103,11 @@ export function decodeMcpAppSandboxCsp(value: string | null): McpAppCsp | undefi
     throw new Error("MCP App CSP metadata is too large");
   }
   const decoded = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as unknown;
-  return normalizeMcpAppCsp(decoded);
+  const normalized = normalizeMcpAppCsp(decoded);
+  if (!normalized) {
+    throw new Error("MCP App CSP metadata is not a valid policy");
+  }
+  return normalized;
 }
 
 /** Trusted outer document. The untrusted app HTML is written only into its inner iframe. */
