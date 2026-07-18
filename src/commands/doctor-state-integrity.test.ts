@@ -923,4 +923,56 @@ describe("doctor state integrity oauth dir checks", () => {
     const text = await runStateIntegrityText(cfg);
     expect(text).not.toContain("recent sessions are missing transcripts");
   });
+
+  it("counts a multi-chunk main transcript without readFileSync", async () => {
+    const cfg: OpenClawConfig = {};
+    setupSessionState(cfg, process.env, tempHome);
+    const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => tempHome);
+    const transcriptPath = path.join(sessionsDir, "chunked-main.jsonl");
+    const fd = fs.openSync(transcriptPath, "w");
+    try {
+      const line = `${"x".repeat(64 * 1024)}\n`;
+      for (let i = 0; i < 8; i += 1) {
+        fs.writeSync(fd, line);
+      }
+    } finally {
+      fs.closeSync(fd);
+    }
+    writeSessionStore(cfg, {
+      "agent:main:main": {
+        sessionId: "chunked-main",
+        updatedAt: Date.now(),
+      },
+    });
+
+    const readFileSyncSpy = vi.spyOn(fs, "readFileSync");
+    try {
+      const text = await runStateIntegrityText(cfg);
+      expect(text).not.toContain("Main session transcript has only");
+      expect(
+        readFileSyncSpy.mock.calls.some((call) => {
+          const target = call[0];
+          return typeof target === "string" && path.resolve(target) === path.resolve(transcriptPath);
+        }),
+      ).toBe(false);
+    } finally {
+      readFileSyncSpy.mockRestore();
+    }
+  });
+
+  it("still warns when the main transcript has only one line", async () => {
+    const cfg: OpenClawConfig = {};
+    setupSessionState(cfg, process.env, tempHome);
+    const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => tempHome);
+    fs.writeFileSync(path.join(sessionsDir, "short-main.jsonl"), '{"type":"session"}');
+    writeSessionStore(cfg, {
+      "agent:main:main": {
+        sessionId: "short-main",
+        updatedAt: Date.now(),
+      },
+    });
+
+    const text = await runStateIntegrityText(cfg);
+    expect(text).toContain("Main session transcript has only 1 line");
+  });
 });
