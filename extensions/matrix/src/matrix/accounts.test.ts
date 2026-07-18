@@ -621,6 +621,34 @@ describe("resolveMatrixAccount", () => {
     });
   });
 
+  it("inherits and overrides Matrix read receipt modes per account", () => {
+    const cfg: CoreConfig = {
+      channels: {
+        matrix: {
+          homeserver: "https://matrix.example.org",
+          accessToken: "main-token",
+          readReceiptMode: "on-reply",
+          accounts: {
+            inherited: { accessToken: "inherited-token" },
+            immediate: {
+              accessToken: "immediate-token",
+              readReceiptMode: "immediate",
+            },
+            disabled: { accessToken: "disabled-token", readReceiptMode: "off" },
+          },
+        },
+      },
+    };
+
+    expect(resolveMatrixAccount({ cfg, accountId: "inherited" }).config.readReceiptMode).toBe(
+      "on-reply",
+    );
+    expect(resolveMatrixAccount({ cfg, accountId: "immediate" }).config.readReceiptMode).toBe(
+      "immediate",
+    );
+    expect(resolveMatrixAccount({ cfg, accountId: "disabled" }).config.readReceiptMode).toBe("off");
+  });
+
   it("filters channel-level groups by room account in multi-account setups", () => {
     expectMultiAccountMatrixScopedEntries(createMatrixScopedEntriesConfig("groups"), "groups");
   });

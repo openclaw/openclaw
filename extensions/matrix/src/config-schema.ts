@@ -104,11 +104,22 @@ const matrixStreamingSchema = z
   })
   .strict();
 
+const matrixReadReceiptModeSchema = z.enum(["immediate", "on-reply", "off"]);
+
 const MatrixConfigSchema = z.object({
   name: z.string().optional(),
   enabled: z.boolean().optional(),
   defaultAccount: z.string().optional(),
-  accounts: z.record(z.string(), z.unknown()).optional(),
+  accounts: z
+    .record(
+      z.string(),
+      z
+        .object({
+          readReceiptMode: matrixReadReceiptModeSchema.optional(),
+        })
+        .passthrough(),
+    )
+    .optional(),
   markdown: MarkdownConfigSchema,
   homeserver: z.string().optional(),
   network: matrixNetworkSchema,
@@ -130,6 +141,7 @@ const MatrixConfigSchema = z.object({
   contextVisibility: ContextVisibilityModeSchema.optional(),
   streaming: matrixStreamingSchema.optional(),
   replyToMode: z.enum(["off", "first", "all", "batched"]).optional(),
+  readReceiptMode: matrixReadReceiptModeSchema.optional(),
   threadReplies: z.enum(["off", "inbound", "always"]).optional(),
   textChunkLimit: z.number().optional(),
   responsePrefix: z.string().optional(),

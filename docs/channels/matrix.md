@@ -880,6 +880,7 @@ Room allowlist keys (`groups`, legacy `rooms`) should be room IDs or aliases. Pl
 ### Reply behavior
 
 - `replyToMode`: `"off"` (default), `"first"`, `"all"`, or `"batched"`.
+- `readReceiptMode`: `"immediate"` (default) marks accepted inbound messages read while processing starts, `"on-reply"` waits until a visible final reply is delivered successfully, and `"off"` disables read receipts. This can be overridden per account.
 - `threadReplies`: `"off"` (top-level default resolves to `"inbound"` unless explicitly set), `"inbound"`, or `"always"`.
 - `threadBindings`: per-channel overrides for thread-bound session routing and lifecycle.
 - `streaming`: nested object `{ mode, chunkMode, block: { enabled, coalesce }, preview: { toolProgress }, progress: { label, labels, maxLines, maxLineChars, toolProgress } }`. `mode` is `"off"` (default), `"partial"`, `"quiet"`, or `"progress"`. Legacy scalar/boolean spellings migrate via `openclaw doctor --fix`.
