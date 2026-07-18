@@ -17,8 +17,8 @@ import {
   type MemoryQmdStartupMode,
   type OpenClawConfig,
   resolveMemoryHostAgentWorkspaceDir,
+  resolveMemoryHostSearchPathConfig,
   normalizeAgentId,
-  resolveMemorySearchConfig,
   resolveMemoryHostUserPath,
   type SessionSendPolicyConfig,
   splitShellArgs,
@@ -446,7 +446,7 @@ export function resolveMemoryBackendConfig(params: {
 
   const workspaceDir = resolveMemoryHostAgentWorkspaceDir(params.cfg, normalizedAgentId);
   const qmdCfg = params.cfg.memory?.qmd;
-  const memorySearch = resolveMemorySearchConfig(params.cfg, normalizedAgentId);
+  const memorySearch = resolveMemoryHostSearchPathConfig(params.cfg, normalizedAgentId);
   const includeDefaultMemory = qmdCfg?.includeDefaultMemory !== false;
   const nameSet = new Set<string>();
   const agentEntry = params.cfg.agents?.list?.find(

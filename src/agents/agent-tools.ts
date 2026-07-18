@@ -65,8 +65,8 @@ import {
   resolveConversationCapabilityProfile,
   type ResolvedConversationCapabilityProfile,
 } from "./conversation-capability-profile.js";
-import type { OpenClawCodingToolConstructionPlan } from "./core-tool-factory-descriptors.js";
 import type { ConversationRecallContext } from "./conversation-recall.types.js";
+import type { OpenClawCodingToolConstructionPlan } from "./core-tool-factory-descriptors.js";
 import { applyDelegationCapability, type DelegationCapability } from "./delegation-capability.js";
 import { resolveImageSanitizationLimits } from "./image-sanitization.js";
 import { createLazyExecTool, resolveExecToolConfig } from "./lazy-exec-tool.js";
@@ -210,8 +210,6 @@ export function resolveProcessToolScopeKey(params: {
   scopeKey?: string;
   sessionKey?: string;
   sessionId?: string;
-  /** Trusted runtime-only authorization for one bounded cross-conversation recall pass. */
-  conversationRecall?: ConversationRecallContext;
   agentId?: string;
 }): string | undefined {
   const explicitScopeKey = params.scopeKey?.trim();
@@ -286,6 +284,8 @@ type OpenClawCodingToolsOptions = {
   clientCaps?: string[];
   /** Out-of-band plugin bindings attached by the run initiator. */
   toolBindings?: Readonly<Record<string, unknown>>;
+  /** Trusted runtime-only authorization for one bounded cross-conversation recall pass. */
+  conversationRecall?: ConversationRecallContext;
   /** Normalized conversation kind when the caller already has channel metadata. */
   chatType?: ChatType;
   /** Specific ingress provider used only for transport tool availability. */
