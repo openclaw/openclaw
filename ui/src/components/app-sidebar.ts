@@ -40,7 +40,11 @@ function scheduleLobsterPetLoad() {
     return;
   }
   const start = () => {
-    lobsterPetModuleLoad ??= import("./lobster-pet.ts");
+    // A failed chunk fetch must not pin a rejected promise forever: clear the
+    // cache so a later scheduling call can retry instead of never registering.
+    lobsterPetModuleLoad ??= import("./lobster-pet.ts").catch(() => {
+      lobsterPetModuleLoad = null;
+    });
   };
   if ("requestIdleCallback" in window) {
     requestIdleCallback(() => start(), { timeout: 3000 });
