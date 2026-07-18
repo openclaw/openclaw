@@ -3,6 +3,7 @@
  * toggle JSON into the plugin state keyed store used by current runtimes.
  */
 import crypto from "node:crypto";
+import { statSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -32,9 +33,25 @@ function normalizeLegacyUpdatedAt(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : Date.now();
 }
 
+// Legacy toggle state is a single-session JSON file — cap at 10 MiB.
+const MAX_LEGACY_TOGGLE_FILE_BYTES = 10 * 1024 * 1024;
+
+async function readLegacyFileSafely(filePath: string): Promise<string> {
+  const stat = statSync(filePath);
+  if (!stat.isFile()) {
+    throw new Error(`not a regular file: ${filePath}`);
+  }
+  if (stat.size > MAX_LEGACY_TOGGLE_FILE_BYTES) {
+    throw new Error(
+      `file too large: ${stat.size} bytes exceeds ${MAX_LEGACY_TOGGLE_FILE_BYTES} bytes: ${filePath}`,
+    );
+  }
+  return await fs.readFile(filePath, "utf8");
+}
+
 async function readLegacyToggleEntries(filePath: string): Promise<ActiveMemoryToggleEntry[]> {
   try {
-    const parsed = JSON.parse(await fs.readFile(filePath, "utf8")) as unknown;
+    const parsed = JSON.parse(await readLegacyFileSafely(filePath)) as unknown;
     if (!parsed || typeof parsed !== "object") {
       return [];
     }

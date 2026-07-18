@@ -1,3 +1,4 @@
+import { statSync } from "node:fs";
 // Device Pair doctor contract migrates shipped plugin-owned state.
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -19,9 +20,27 @@ function resolveLegacyNotifyStatePath(stateDir: string): string {
   return path.join(stateDir, DEVICE_PAIR_NOTIFY_LEGACY_STATE_FILE);
 }
 
+// Legacy notify state is a small JSON file — cap at 10 MiB.
+const MAX_LEGACY_NOTIFY_FILE_BYTES = 10 * 1024 * 1024;
+
+async function readLegacyNotifyFileSafely(filePath: string): Promise<string> {
+  const stat = statSync(filePath);
+  if (!stat.isFile()) {
+    throw new Error(`not a regular file: ${filePath}`);
+  }
+  if (stat.size > MAX_LEGACY_NOTIFY_FILE_BYTES) {
+    throw new Error(
+      `file too large: ${stat.size} bytes exceeds ${MAX_LEGACY_NOTIFY_FILE_BYTES} bytes: ${filePath}`,
+    );
+  }
+  return await fs.readFile(filePath, "utf8");
+}
+
 async function readLegacyNotifyState(filePath: string): Promise<LegacyNotifyStateFile | null> {
   try {
-    return normalizeLegacyNotifyState(JSON.parse(await fs.readFile(filePath, "utf8")) as unknown);
+    return normalizeLegacyNotifyState(
+      JSON.parse(await readLegacyNotifyFileSafely(filePath)) as unknown,
+    );
   } catch {
     return null;
   }

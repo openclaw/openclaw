@@ -1,3 +1,4 @@
+import { statSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { ChannelDoctorLegacyConfigRule } from "openclaw/plugin-sdk/channel-contract";
@@ -80,6 +81,23 @@ type ReefLegacyRegistrationSource =
       parse: typeof parseReefSetupSession;
       label: string;
     };
+
+// Legacy Reef state files are small JSON config blobs — cap at 10 MiB to
+// prevent OOM on corrupted or artificially inflated migration sources.
+const MAX_LEGACY_REEF_FILE_BYTES = 10 * 1024 * 1024;
+
+async function readLegacyReefFileSafely(filePath: string): Promise<string> {
+  const stat = statSync(filePath);
+  if (!stat.isFile()) {
+    throw new Error(`not a regular file: ${filePath}`);
+  }
+  if (stat.size > MAX_LEGACY_REEF_FILE_BYTES) {
+    throw new Error(
+      `file too large: ${stat.size} bytes exceeds ${MAX_LEGACY_REEF_FILE_BYTES} bytes: ${filePath}`,
+    );
+  }
+  return await fs.readFile(filePath, "utf8");
+}
 
 const REEF_LEGACY_REGISTRATION_SOURCES: ReefLegacyRegistrationSource[] = [
   {
@@ -290,7 +308,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       });
       let keys: ReefKeys;
       try {
-        keys = parseReefKeys(JSON.parse(await fs.readFile(filePath, "utf8")) as unknown);
+        keys = parseReefKeys(JSON.parse(await readLegacyReefFileSafely(filePath)) as unknown);
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") {
           return { changes, warnings };
@@ -418,7 +436,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         }
         let legacy: ReefIdentityBinding | ReefSetupSession | undefined;
         try {
-          legacy = source.parse(JSON.parse(await fs.readFile(filePath, "utf8")) as unknown);
+          legacy = source.parse(JSON.parse(await readLegacyReefFileSafely(filePath)) as unknown);
         } catch {
           // The structural validation below owns the fail-closed warning.
         }
