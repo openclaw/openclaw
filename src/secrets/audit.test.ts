@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   resolveAuthProfileDatabasePath,
   writePersistedAuthProfileStoreRaw,
@@ -24,6 +25,7 @@ type AuditFixture = {
 
 const OPENAI_API_KEY_MARKER = "OPENAI_API_KEY"; // pragma: allowlist secret
 const MAX_AUDIT_MODELS_JSON_BYTES = 5 * 1024 * 1024;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function countNonEmptyLines(value: string): number {
   let count = 0;
@@ -809,7 +811,7 @@ describe("secrets audit", () => {
     // path the old resolveConfigDir call could not reach: resolveConfigDir
     // always returns $HOME/.openclaw, so it would miss the .env inside
     // .clawdbot.  resolveStateDir finds .clawdbot via its legacy-dir scan.
-    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-audit-legacy-"));
+    const homeDir = tempDirs.make("openclaw-secrets-audit-legacy-");
     const legacyStateDir = path.join(homeDir, ".clawdbot");
     const configPath = path.join(legacyStateDir, "openclaw.json");
     const envPath = path.join(legacyStateDir, ".env");

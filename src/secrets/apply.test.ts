@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { registerResolvedAgentDir } from "../agents/agent-dir-registry.js";
 import { getRuntimeAuthProfileStoreCredentialMutationToken } from "../agents/auth-profiles/runtime-snapshots.js";
 import {
@@ -45,6 +46,7 @@ vi.mock("./runtime.js", () => ({
 let runSecretsApply: typeof import("./apply.js").runSecretsApply;
 let applyTesting: typeof import("./apply.js").testing;
 let clearSecretsRuntimeSnapshot: typeof import("./runtime.js").clearSecretsRuntimeSnapshot;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const OPENAI_API_KEY_ENV_REF = {
   source: "env",
@@ -1582,7 +1584,7 @@ describe("secrets apply", () => {
     // .clawdbot (no .openclaw) exercises the scrub path so the old
     // resolveConfigDir call (which always returns $HOME/.openclaw) would
     // miss the .env inside .clawdbot.
-    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-apply-legacy-"));
+    const homeDir = tempDirs.make("openclaw-secrets-apply-legacy-");
     const legacyStateDir = path.join(homeDir, ".clawdbot");
     const configPath = path.join(legacyStateDir, "openclaw.json");
     const agentDir = path.join(legacyStateDir, "agents", "main", "agent");
@@ -1644,7 +1646,7 @@ describe("secrets apply", () => {
     // Set up a HOME where both .openclaw and .clawdbot exist.
     // resolveStateDir returns .openclaw when both exist because it checks
     // .openclaw first. The apply must use that same root for .env.
-    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-apply-root-"));
+    const homeDir = tempDirs.make("openclaw-secrets-apply-root-");
     const openclawDir = path.join(homeDir, ".openclaw");
     const clawdbotDir = path.join(homeDir, ".clawdbot");
     const configPath = path.join(openclawDir, "openclaw.json");
