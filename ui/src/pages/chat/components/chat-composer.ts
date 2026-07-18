@@ -1824,7 +1824,6 @@ function renderMicrophonePicker(props: MicrophonePickerProps) {
                   class="chat-talk-input-picker__item"
                   value=${option.deviceId}
                   type="checkbox"
-                  .checked=${selected}
                   role="menuitemradio"
                   aria-checked=${String(selected)}
                   ${ref((element) => syncDropdownItemRadio(element, selected))}
