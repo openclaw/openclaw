@@ -117,6 +117,14 @@ function isLegacyPreserveSideRunsError(err: unknown): boolean {
   return message.includes("invalid chat.abort params") && message.includes("preservesideruns");
 }
 
+function isLegacySucceedsParentError(err: unknown): boolean {
+  if (!(err instanceof GatewayClientRequestError) || err.gatewayCode !== "INVALID_REQUEST") {
+    return false;
+  }
+  const message = err.message.toLowerCase();
+  return message.includes("invalid sessions.create params") && message.includes("succeedsparent");
+}
+
 type GatewaySessionList = TuiSessionList;
 type GatewayAgentsList = TuiAgentsList;
 type GatewayModelChoice = TuiModelChoice;
@@ -304,10 +312,21 @@ export class GatewayChatClient implements TuiBackend {
   }
 
   async createSession(opts: TuiSessionCreateOptions): Promise<TuiSessionMutationResult> {
-    return await this.client.request<TuiSessionMutationResult>("sessions.create", {
+    const params = {
       ...opts,
       emitCommandHooks: Boolean(opts.parentSessionKey),
-    });
+    };
+    try {
+      return await this.client.request<TuiSessionMutationResult>("sessions.create", params);
+    } catch (err) {
+      if (opts.succeedsParent === undefined || !isLegacySucceedsParentError(err)) {
+        throw err;
+      }
+      // Schema validation rejected the request before execution, so retrying
+      // without the additive field is safe against an older remote Gateway.
+      const { succeedsParent: _succeedsParent, ...legacyParams } = params;
+      return await this.client.request<TuiSessionMutationResult>("sessions.create", legacyParams);
+    }
   }
 
   async resetSession(
