@@ -258,8 +258,9 @@ export function formatContextEngineHealthLine(summary: HealthSummary): string | 
 export function buildDeliveryQueueHealthSummary(): DeliveryQueueHealthSummary | undefined {
   // Queue health reads are diagnostic; a storage failure must not take the
   // gateway health endpoint down with it.
+  let failed: DeliveryQueueHealthSummary["failed"] = [];
   try {
-    const failed = countFailedDeliveryQueueEntries().map((queue) => {
+    failed = countFailedDeliveryQueueEntries().map((queue) => {
       const entry: DeliveryQueueHealthSummary["failed"][number] = {
         queueName: queue.queueName,
         count: queue.count,
@@ -269,7 +270,12 @@ export function buildDeliveryQueueHealthSummary(): DeliveryQueueHealthSummary | 
       }
       return entry;
     });
-    const ingressFailed = countFailedChannelIngressQueueEntries().map((queue) => {
+  } catch (error) {
+    debugHealth(undefined, "outbound delivery queue health read failed", error);
+  }
+  let ingressFailed: NonNullable<DeliveryQueueHealthSummary["ingressFailed"]> = [];
+  try {
+    ingressFailed = countFailedChannelIngressQueueEntries().map((queue) => {
       const entry: NonNullable<DeliveryQueueHealthSummary["ingressFailed"]>[number] = {
         channelId: queue.channelId,
         accountId: queue.accountId,
@@ -280,17 +286,16 @@ export function buildDeliveryQueueHealthSummary(): DeliveryQueueHealthSummary | 
       }
       return entry;
     });
-    if (failed.length === 0 && ingressFailed.length === 0) {
-      return undefined;
-    }
-    return {
-      failed,
-      ...(ingressFailed.length > 0 ? { ingressFailed } : {}),
-    };
   } catch (error) {
-    debugHealth(undefined, "delivery queue health read failed", error);
+    debugHealth(undefined, "channel ingress queue health read failed", error);
+  }
+  if (failed.length === 0 && ingressFailed.length === 0) {
     return undefined;
   }
+  return {
+    failed,
+    ...(ingressFailed.length > 0 ? { ingressFailed } : {}),
+  };
 }
 
 /** Formats dead-lettered delivery queue entries for text health output. */

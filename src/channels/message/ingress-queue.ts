@@ -81,12 +81,22 @@ type ChannelIngressQueueCompletedRecord<TCompletedMetadata = unknown> = {
   metadata?: TCompletedMetadata;
 };
 
-/** Failed ingress event retained for diagnostics and operator recovery. */
-type ChannelIngressQueueFailedRecord<TPayload = unknown, TMetadata = unknown> = {
+/** Failed ingress event tombstone retained for duplicate detection. */
+type ChannelIngressQueueFailedRecord = {
   id: string;
   channelId: string;
   accountId: string;
   queueName: string;
+  failedAt: number;
+  reason: string;
+  message?: string;
+};
+
+/** Rich failed ingress event retained for diagnostics and operator recovery. */
+type ChannelIngressQueueDeadLetterRecord<
+  TPayload = unknown,
+  TMetadata = unknown,
+> = ChannelIngressQueueFailedRecord & {
   payload?: TPayload;
   metadata?: TMetadata;
   receivedAt: number;
@@ -94,9 +104,6 @@ type ChannelIngressQueueFailedRecord<TPayload = unknown, TMetadata = unknown> = 
   laneKey?: string;
   attempts: number;
   lastAttemptAt?: number;
-  failedAt: number;
-  reason: string;
-  message?: string;
 };
 
 /** Outcome of asking a channel/account queue to re-enqueue one failed event. */
@@ -108,7 +115,7 @@ type ChannelIngressQueueResubmitResult<
   | {
       kind: "resubmitted";
       record: ChannelIngressQueueRecord<TPayload, TMetadata>;
-      previous: ChannelIngressQueueFailedRecord<TPayload, TMetadata>;
+      previous: ChannelIngressQueueDeadLetterRecord<TPayload, TMetadata>;
     }
   | { kind: "not-found" }
   | {
@@ -118,7 +125,7 @@ type ChannelIngressQueueResubmitResult<
   | { kind: "active"; status: "pending" | "claimed" }
   | {
       kind: "unrecoverable";
-      record: ChannelIngressQueueFailedRecord<TPayload, TMetadata>;
+      record: ChannelIngressQueueDeadLetterRecord<TPayload, TMetadata>;
     };
 
 /** Per-channel/account dead-letter count used by health and doctor. */
@@ -166,7 +173,7 @@ type ChannelIngressQueueEnqueueResult<TPayload, TMetadata, TCompletedMetadata> =
   | {
       kind: "failed";
       duplicate: true;
-      record: ChannelIngressQueueFailedRecord<TPayload, TMetadata>;
+      record: ChannelIngressQueueFailedRecord;
     };
 
 /** Durable FIFO-ish ingress queue with claims, duplicate detection, and retention pruning. */
@@ -188,7 +195,7 @@ export type ChannelIngressQueue<TPayload, TMetadata = unknown, TCompletedMetadat
   /** Additive SDK seam; optional so existing external queue test doubles remain compatible. */
   listFailed?(options?: {
     limit?: number | "all";
-  }): Promise<Array<ChannelIngressQueueFailedRecord<TPayload, TMetadata>>>;
+  }): Promise<Array<ChannelIngressQueueDeadLetterRecord<TPayload, TMetadata>>>;
   claimNext(options?: {
     ownerId?: string;
     blockedLaneKeys?: Iterable<string>;
@@ -375,7 +382,7 @@ function completedRecord<TCompletedMetadata>(
 
 function failedRecord<TPayload, TMetadata>(
   row: ChannelIngressRow,
-): ChannelIngressQueueFailedRecord<TPayload, TMetadata> {
+): ChannelIngressQueueDeadLetterRecord<TPayload, TMetadata> {
   const payloadResult = parseFailedPayload(row.payload_json);
   const metadataResult = row.metadata_json === null ? null : parseJson(row.metadata_json);
   return {
