@@ -42,6 +42,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Ask-user availability and delivery:** keep `ask_user` available to primary sessions under the default `coding` and chat-only `messaging` tool profiles, and deliver its question prompt even when verbose tool progress is disabled.
 - **Bounded input and provider responses:** cap pasted auth/config input and enforce wall-clock deadlines across generated-media downloads, polling JSON, and failed response details so oversized or slow-drip streams cannot exceed resource budgets (thanks @Pick-cat).
 - **Cloud worker derived workspace caches:** exclude Python caches, dependency trees, and macOS metadata symmetrically from outbound sync and inbound reconciliation so local cache rewrites cannot fence later cloud results or worker reclaim.
 - **Codex model status diagnostics:** report a configured Codex route as unavailable when its harness plugin is disabled, missing, or quarantined, while preserving the separate credential result and making `models status --check` fail instead of silently treating fallback execution as healthy. Thanks @shakkernerd.

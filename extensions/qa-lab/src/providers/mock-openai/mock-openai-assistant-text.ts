@@ -327,6 +327,19 @@ export function buildAssistantText(
       QA_TOOL_SEARCH_FAILURE_PROMPT_RE.test(allInputText))
   ) {
     const targetTool = extractToolSearchTarget(allInputText);
+    if (targetTool === "ask_user") {
+      const deploy = /^Deploy:\s*(.+)$/m.exec(toolOutput)?.[1]?.trim();
+      const checks = /^Checks:\s*(.+)$/m
+        .exec(toolOutput)?.[1]
+        ?.split(",")
+        .map((value) => value.replace(/\s*\(Recommended\)\s*$/, "").trim())
+        .filter(Boolean)
+        .join(",");
+      const note = /^Note:\s*(.+)$/m.exec(toolOutput)?.[1]?.trim();
+      if (deploy && checks && note) {
+        return `ASK-USER-ROUNDTRIP-OK | deploy=${deploy} | checks=${checks} | note=${note}`;
+      }
+    }
     if (targetTool && toolOutput.includes(targetTool) && toolOutput.includes("FAKE_PLUGIN_OK")) {
       return `FAKE_PLUGIN_OK ${targetTool}`;
     }

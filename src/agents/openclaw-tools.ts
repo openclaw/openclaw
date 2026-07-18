@@ -591,6 +591,7 @@ export function createOpenClawTools(
           createAskUserTool({
             agentId: sessionAgentId,
             sessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+            runId: options?.runId,
           }),
         ]
       : []),

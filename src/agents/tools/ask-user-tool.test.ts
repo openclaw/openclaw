@@ -5,9 +5,11 @@ import { steerActiveSessionWithOptionalDeliveryWait } from "../embedded-agent-ru
 import {
   createAskUserTool,
   isAskUserPromptActive,
+  isAskUserPromptPending,
   normalizeAskUserParams,
   reserveAskUserPromptDelivery,
   settleAskUserPromptDelivery,
+  waitForAskUserPromptReady,
 } from "./ask-user-tool.js";
 import { resetPendingAskUserQuestionsForTest } from "./ask-user-tool.test-support.js";
 
@@ -98,6 +100,116 @@ describe("ask_user normalization", () => {
     ],
   ])("rejects %s", (_name, args, error) => {
     expect(() => normalizeAskUserParams(args)).toThrow(error);
+  });
+});
+
+describe("ask_user prompt delivery", () => {
+  it("uses the Gateway record when the executor has isolated runtime state", async () => {
+    const questions = normalizeAskUserParams(validArgs).questions;
+    const reservation = reserveAskUserPromptDelivery({
+      toolCallId: "call-isolated-runtime",
+      sessionKey: "agent:main:isolated-runtime",
+      questions,
+    });
+    if (!reservation) {
+      throw new Error("expected prompt reservation");
+    }
+    const gateway = gatewayStub(async (method, _opts, params) => {
+      expect(method).toBe("question.list");
+      expect(params).toEqual({});
+      return { questions: [{ id: reservation.questionId, status: "pending" }] };
+    });
+
+    await expect(waitForAskUserPromptReady(reservation.questionId, gateway.call)).resolves.toEqual(
+      questions,
+    );
+    await expect(isAskUserPromptPending(reservation.questionId, gateway.call)).resolves.toBe(true);
+  });
+
+  it("rejects prompt delivery after the Gateway question terminalizes", async () => {
+    const questions = normalizeAskUserParams(validArgs).questions;
+    const reservation = reserveAskUserPromptDelivery({
+      toolCallId: "call-terminal-before-delivery",
+      sessionKey: "agent:main:terminal-before-delivery",
+      questions,
+    });
+    if (!reservation) {
+      throw new Error("expected prompt reservation");
+    }
+    const gateway = gatewayStub(async () => ({
+      questions: [{ id: reservation.questionId, status: "expired" }],
+    }));
+
+    await expect(isAskUserPromptPending(reservation.questionId, gateway.call)).resolves.toBe(false);
+  });
+
+  it("retains an active prompt when Gateway revalidation fails transiently", async () => {
+    const questions = normalizeAskUserParams(validArgs).questions;
+    const reservation = reserveAskUserPromptDelivery({
+      toolCallId: "call-revalidation-failure",
+      sessionKey: "agent:main:revalidation-failure",
+      questions,
+    });
+    if (!reservation) {
+      throw new Error("expected prompt reservation");
+    }
+    const gateway = gatewayStub(async () => {
+      throw new Error("temporary Gateway disconnect");
+    });
+
+    await expect(isAskUserPromptPending(reservation.questionId, gateway.call)).resolves.toBe(true);
+  });
+
+  it("shares prompt readiness across bundled module instances", async () => {
+    const runId = "run-split-module";
+    const toolCallId = "call-split-module";
+    const questions = normalizeAskUserParams(validArgs).questions;
+    const reservation = reserveAskUserPromptDelivery({
+      toolCallId,
+      runId,
+      sessionKey: "agent:main:subscriber-session",
+      questions,
+    });
+    if (!reservation) {
+      throw new Error("expected prompt reservation");
+    }
+    let finishWait: ((value: unknown) => void) | undefined;
+    const gateway = gatewayStub(async (method, _opts, params) => {
+      if (method === "question.request") {
+        return { id: params.id };
+      }
+      if (method === "question.waitAnswer") {
+        return await new Promise((resolve) => {
+          finishWait = resolve;
+        });
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+
+    vi.resetModules();
+    const isolatedModule = await import("./ask-user-tool.js");
+    const pending = isolatedModule
+      .createAskUserTool({
+        runId,
+        sessionKey: "agent:main:executor-session",
+        gatewayCall: gateway.call,
+      })
+      .execute(toolCallId, validArgs);
+    await vi.waitFor(() =>
+      expect(gateway.mock.mock.calls.some(([method]) => method === "question.request")).toBe(true),
+    );
+    let readyQuestions: unknown;
+    void waitForAskUserPromptReady(reservation.questionId).then((value) => {
+      readyQuestions = value;
+    });
+    await vi.waitFor(() => expect(readyQuestions).toEqual(questions));
+
+    settleAskUserPromptDelivery(reservation.questionId);
+    finishWait?.({
+      status: "answered",
+      answers: { answers: { deploy_target: { answers: ["Production"] } } },
+    });
+    await expect(pending).resolves.toMatchObject({ details: { status: "answered" } });
   });
 });
 
