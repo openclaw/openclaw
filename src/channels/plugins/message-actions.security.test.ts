@@ -416,6 +416,20 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     expect(handleAction).toHaveBeenCalledOnce();
   });
 
+  it("delegates Mattermost cross-channel policy to its bundled provider gate", async () => {
+    setReadPlugin({ channel: "mattermost", origin: "bundled" });
+
+    await dispatchChannelMessageAction({
+      channel: "mattermost",
+      action: "read",
+      cfg: {} as OpenClawConfig,
+      params: { channelId: "configured" },
+      conversationReadOrigin: "delegated",
+    });
+
+    expect(handleAction).toHaveBeenCalledOnce();
+  });
+
   it("keeps unaudited bundled adapters on the exact-current host limit", async () => {
     setReadPlugin({ channel: "telegram", origin: "bundled" });
 

@@ -27,6 +27,7 @@ import { mattermostPlugin } from "./channel.js";
 import {
   createMattermostReactionFetchMock,
   createMattermostTestConfig,
+  requestUrl,
   withMockedGlobalFetch,
 } from "./mattermost/reactions.test-helpers.js";
 
@@ -676,8 +677,10 @@ describe("mattermostPlugin", () => {
 
       const actions = getDescribedActions(cfg);
       expect(actions).toContain("react");
+      expect(actions).toContain("read");
       expect(actions).toContain("send");
       expect(mattermostPlugin.actions?.supportsAction?.({ action: "react" })).toBe(true);
+      expect(mattermostPlugin.actions?.supportsAction?.({ action: "read" })).toBe(true);
       expect(mattermostPlugin.actions?.supportsAction?.({ action: "send" })).toBe(true);
     });
 
@@ -724,7 +727,47 @@ describe("mattermostPlugin", () => {
 
       const actions = getDescribedActions(cfg);
       expect(actions).not.toContain("react");
+      expect(actions).toContain("read");
       expect(actions).toContain("send");
+    });
+
+    it("hides read when actions.messages is false", () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          mattermost: {
+            enabled: true,
+            botToken: "test-token",
+            baseUrl: "https://chat.example.com",
+            actions: { messages: false },
+          },
+        },
+      };
+
+      const actions = getDescribedActions(cfg);
+      expect(actions).not.toContain("read");
+      expect(actions).toContain("react");
+      expect(actions).toContain("send");
+    });
+
+    it("respects per-account actions.messages in message discovery", () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          mattermost: {
+            enabled: true,
+            actions: { messages: false },
+            accounts: {
+              default: {
+                enabled: true,
+                botToken: "test-token",
+                baseUrl: "https://chat.example.com",
+                actions: { messages: true },
+              },
+            },
+          },
+        },
+      };
+
+      expect(getDescribedActions(cfg)).toContain("read");
     });
 
     it("respects per-account actions.reactions in message discovery", () => {
@@ -773,8 +816,8 @@ describe("mattermostPlugin", () => {
         },
       };
 
-      expect(getDescribedActions(cfg, "default")).toEqual(["send"]);
-      expect(getDescribedActions(cfg, "work")).toEqual(["send", "react"]);
+      expect(getDescribedActions(cfg, "default")).toEqual(["send", "read"]);
+      expect(getDescribedActions(cfg, "work")).toEqual(["send", "react", "read"]);
     });
 
     it("blocks react when default account disables reactions and accountId is omitted", async () => {
@@ -804,6 +847,111 @@ describe("mattermostPlugin", () => {
           }),
         ),
       ).rejects.toThrow("Mattermost reactions are disabled in config");
+    });
+
+    it("blocks read when the selected account disables messages", async () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          mattermost: {
+            enabled: true,
+            actions: { messages: true },
+            accounts: {
+              default: {
+                enabled: true,
+                botToken: "test-token",
+                baseUrl: "https://chat.example.com",
+                actions: { messages: false },
+              },
+            },
+          },
+        },
+      };
+      const fetchImpl = vi.fn<typeof fetch>();
+
+      await expect(
+        withMockedGlobalFetch(fetchImpl, async () =>
+          mattermostPlugin.actions?.handleAction?.(
+            createMattermostActionContext({
+              action: "read",
+              params: { target: "channel:CURRENT" },
+              cfg,
+              accountId: "default",
+              conversationReadOrigin: "direct-operator",
+            }),
+          ),
+        ),
+      ).rejects.toThrow("Mattermost message reads are disabled in config");
+      expect(fetchImpl).not.toHaveBeenCalled();
+    });
+
+    it("reads posts into the shared JSON result with normalized timestamps", async () => {
+      const cfg = createMattermostTestConfig(`read-action-${++reactionActionSequence}`);
+      const fetchImpl = vi.fn<typeof fetch>(async (input) => {
+        const url = requestUrl(input);
+        if (!url.includes("/api/v4/channels/CURRENT/posts?per_page=2")) {
+          throw new Error(`Unexpected Mattermost request: ${url}`);
+        }
+        return Response.json({
+          order: ["post-2", "post-1"],
+          posts: {
+            "post-1": { id: "post-1", message: "older", create_at: 1_700_000_001_000 },
+            "post-2": { id: "post-2", message: "newer", create_at: 1_700_000_002_000 },
+          },
+        });
+      });
+
+      const result = await withMockedGlobalFetch(fetchImpl, async () =>
+        mattermostPlugin.actions?.handleAction?.(
+          createMattermostActionContext({
+            action: "read",
+            params: { target: "channel:CURRENT", to: "channel:CURRENT", limit: 2 },
+            cfg,
+            accountId: "default",
+            requesterAccountId: "default",
+            conversationReadOrigin: "delegated",
+            toolContext: {
+              currentChannelProvider: "mattermost",
+              currentChannelId: "channel:CURRENT",
+            },
+          }),
+        ),
+      );
+
+      expect(result?.details).toMatchObject({
+        ok: true,
+        channelId: "CURRENT",
+        messages: [
+          { id: "post-2", message: "newer", timestampMs: 1_700_000_002_000 },
+          { id: "post-1", message: "older", timestampMs: 1_700_000_001_000 },
+        ],
+        hasMore: false,
+      });
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    });
+
+    it("rejects invalid read cursors and limits before provider access", async () => {
+      const cfg = createMattermostTestConfig(`read-validation-${++reactionActionSequence}`);
+      const fetchImpl = vi.fn<typeof fetch>();
+
+      for (const params of [
+        { target: "channel:CURRENT", before: "p1", after: "p2" },
+        { target: "channel:CURRENT", limit: 0 },
+      ]) {
+        await expect(
+          withMockedGlobalFetch(fetchImpl, async () =>
+            mattermostPlugin.actions?.handleAction?.(
+              createMattermostActionContext({
+                action: "read",
+                params,
+                cfg,
+                accountId: "default",
+                conversationReadOrigin: "direct-operator",
+              }),
+            ),
+          ),
+        ).rejects.toThrow();
+      }
+      expect(fetchImpl).not.toHaveBeenCalled();
     });
 
     it("rejects a disabled account before provider access", async () => {

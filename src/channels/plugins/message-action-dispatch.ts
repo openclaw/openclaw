@@ -45,6 +45,7 @@ const BUNDLED_CHANNELS_WITH_PROVIDER_READ_GATES = new Set([
   "discord",
   "feishu",
   "matrix",
+  "mattermost",
   "msteams",
   "slack",
 ]);
