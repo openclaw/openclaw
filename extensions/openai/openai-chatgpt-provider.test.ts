@@ -122,8 +122,8 @@ describe("OpenAI provider Codex transport hooks", () => {
         api: "openai-chatgpt-responses",
         baseUrl: "https://chatgpt.com/backend-api/codex",
         input: ["text", "image"],
-        contextWindow: 372_000,
-        contextTokens: 372_000,
+        contextWindow: 272_000,
+        contextTokens: 272_000,
         maxTokens: 128_000,
         thinkingLevelMap: { off: null, xhigh: "xhigh", max: "max" },
       });
