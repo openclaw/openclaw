@@ -42,7 +42,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **Canvas core compatibility:** keep `tools.deny: ["canvas"]` covering `show_widget`, honor the shipped Canvas host-disable switches for core routes and tools, and make retired Workspaces cleanup fingerprint- and agent-workspace-safe while reporting stale state during report-only doctor runs.
 - **Bounded input and provider responses:** cap pasted auth/config input and enforce wall-clock deadlines across generated-media downloads, polling JSON, and failed response details so oversized or slow-drip streams cannot exceed resource budgets (thanks @Pick-cat).
 - **Cloud worker derived workspace caches:** exclude Python caches, dependency trees, and macOS metadata symmetrically from outbound sync and inbound reconciliation so local cache rewrites cannot fence later cloud results or worker reclaim.
 - **Codex model status diagnostics:** report a configured Codex route as unavailable when its harness plugin is disabled, missing, or quarantined, while preserving the separate credential result and making `models status --check` fail instead of silently treating fallback execution as healthy. Thanks @shakkernerd.
