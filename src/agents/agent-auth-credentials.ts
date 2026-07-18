@@ -2,8 +2,10 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles.js";
+import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
 
 // Converts auth-profile credentials into the compact credential map consumed by
 // agent runtimes. Secret refs can be represented by markers without reading
@@ -22,6 +24,10 @@ export type AgentCredentialMap = Record<string, AgentCredential>;
 
 type ResolveAgentCredentialMapOptions = {
   includeSecretRefPlaceholders?: boolean;
+  /** Optional config so discovery can honor `auth.order` / auth.profiles. */
+  config?: OpenClawConfig;
+  /** Session or caller preferred profile id for providers that match it. */
+  preferredProfile?: string;
 };
 
 const AGENT_SECRET_REF_CONFIGURED_MARKER = "openclaw-secret-ref-configured";
@@ -71,7 +77,9 @@ function convertAuthProfileCredentialToAgent(
     const access = normalizeOptionalString(cred.access) ?? "";
     const refresh = normalizeOptionalString(cred.refresh) ?? "";
     const expires = asDateTimestampMs(cred.expires);
-    if (!access || !refresh || expires === undefined || expires <= 0) {
+    // Reject expired OAuth the same way tokens are rejected so discovery cannot
+    // surface a dead access token as a usable provider credential.
+    if (!access || !refresh || expires === undefined || Date.now() >= expires) {
       return null;
     }
     return {
@@ -85,20 +93,47 @@ function convertAuthProfileCredentialToAgent(
   return null;
 }
 
+function listProvidersInStore(store: AuthProfileStore): string[] {
+  const providers = new Set<string>();
+  for (const credential of Object.values(store.profiles)) {
+    const provider = normalizeProviderId(credential.provider ?? "");
+    if (provider) {
+      providers.add(provider);
+    }
+  }
+  // Deterministic map key order for stable discovery payloads / prompt cache.
+  return [...providers].toSorted();
+}
+
 /** Build one credential per normalized provider from an auth profile store. */
 export function resolveAgentCredentialMapFromStore(
   store: AuthProfileStore,
   options?: ResolveAgentCredentialMapOptions,
 ): AgentCredentialMap {
   const credentials: AgentCredentialMap = {};
-  for (const credential of Object.values(store.profiles)) {
-    const provider = normalizeProviderId(credential.provider ?? "");
-    if (!provider || credentials[provider]) {
-      continue;
-    }
-    const converted = convertAuthProfileCredentialToAgent(credential, options);
-    if (converted) {
-      credentials[provider] = converted;
+  const readinessMode = options?.includeSecretRefPlaceholders === true ? "read-only" : "execution";
+
+  // Prefer the canonical auth-profile order (auth.order, OAuth-over-api_key,
+  // eligibility) instead of raw store insertion order. First convertible
+  // profile in that order wins for each provider.
+  for (const provider of listProvidersInStore(store)) {
+    const profileIds = resolveAuthProfileOrder({
+      store,
+      provider,
+      cfg: options?.config,
+      preferredProfile: options?.preferredProfile,
+      readinessMode,
+    });
+    for (const profileId of profileIds) {
+      const credential = store.profiles[profileId];
+      if (!credential) {
+        continue;
+      }
+      const converted = convertAuthProfileCredentialToAgent(credential, options);
+      if (converted) {
+        credentials[provider] = converted;
+        break;
+      }
     }
   }
   return credentials;

@@ -130,6 +130,94 @@ describe("discoverAuthStorage", () => {
     expect(credentials.openai).toBeUndefined();
   });
 
+  it("prefers OAuth over an earlier same-provider api_key in store insertion order", () => {
+    // Background discovery used to keep the first convertible profile in raw
+    // store order, which broke ChatGPT-mode paths when api_key preceded OAuth.
+    const credentials = resolveAgentCredentialMapFromStore({
+      version: 1,
+      profiles: {
+        "openai:api-first": {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-api-first",
+        },
+        "openai:oauth-second": {
+          type: "oauth",
+          provider: "openai",
+          access: "oauth-access",
+          refresh: "oauth-refresh",
+          expires: Date.now() + 60_000,
+        },
+      },
+    });
+
+    expect(credentials.openai).toEqual({
+      type: "oauth",
+      access: "oauth-access",
+      refresh: "oauth-refresh",
+      expires: expect.any(Number),
+    });
+  });
+
+  it("honors auth.order when selecting one discovery credential per provider", () => {
+    const credentials = resolveAgentCredentialMapFromStore(
+      {
+        version: 1,
+        profiles: {
+          "openai:a": {
+            type: "api_key",
+            provider: "openai",
+            key: "sk-order-a",
+          },
+          "openai:b": {
+            type: "api_key",
+            provider: "openai",
+            key: "sk-order-b",
+          },
+        },
+      },
+      {
+        config: {
+          auth: {
+            order: {
+              openai: ["openai:b", "openai:a"],
+            },
+          },
+        } as never,
+      },
+    );
+
+    expect(credentials.openai).toEqual({
+      type: "api_key",
+      key: "sk-order-b",
+    });
+  });
+
+  it("skips expired OAuth and falls through to a later same-provider credential", () => {
+    const credentials = resolveAgentCredentialMapFromStore({
+      version: 1,
+      profiles: {
+        "openai:expired-oauth": {
+          type: "oauth",
+          provider: "openai",
+          access: "oauth-expired-access",
+          refresh: "oauth-refresh",
+          expires: Date.now() - 1_000,
+        },
+        "openai:api-fallback": {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-api-fallback",
+        },
+      },
+    });
+
+    expect(credentials.openai).toEqual({
+      type: "api_key",
+      key: "sk-api-fallback",
+    });
+  });
+
   it("keeps keyRef and tokenRef profiles visible only for read-only agent discovery", () => {
     const credentials = resolveAgentCredentialMapFromStore({
       version: 1,
@@ -179,9 +267,67 @@ describe("discoverAuthStorage", () => {
 
     expect(credentials.openrouter).toBeUndefined();
     expect(credentials.anthropic).toBeUndefined();
-    expect(discoveryCredentials.openrouter?.type).toBe("api_key");
-    expect(discoveryCredentials.anthropic?.type).toBe("api_key");
+    // Read-only discovery must keep configured SecretRef markers, not drop the
+    // provider when resolveAuthProfileOrder runs in readinessMode "read-only".
+    expect(discoveryCredentials.openrouter).toEqual({
+      type: "api_key",
+      key: "openclaw-secret-ref-configured",
+    });
+    expect(discoveryCredentials.anthropic).toEqual({
+      type: "api_key",
+      key: "openclaw-secret-ref-configured",
+    });
     expect(discoveryCredentials.expired).toBeUndefined();
+  });
+
+  it("keeps keyRef-only profiles through ordered read-only discovery", () => {
+    // Regression for SecretRef-backed providers: ordering must not filter
+    // unresolved_ref profiles when discovery requests placeholders.
+    const store = {
+      version: 1 as const,
+      profiles: {
+        "openai:ref-only": {
+          type: "api_key" as const,
+          provider: "openai",
+          keyRef: { source: "env" as const, provider: "default", id: "OPENAI_API_KEY" },
+        },
+        "openai:literal-second": {
+          type: "api_key" as const,
+          provider: "openai",
+          key: "sk-literal-fallback",
+        },
+      },
+    };
+    const executionMap = resolveAgentCredentialMapFromStore(store, {
+      config: {
+        auth: {
+          order: {
+            openai: ["openai:ref-only", "openai:literal-second"],
+          },
+        },
+      } as never,
+    });
+    const readOnlyMap = resolveAgentCredentialMapFromStore(store, {
+      includeSecretRefPlaceholders: true,
+      config: {
+        auth: {
+          order: {
+            openai: ["openai:ref-only", "openai:literal-second"],
+          },
+        },
+      } as never,
+    });
+
+    // Execution mode cannot resolve the SecretRef, so it falls through.
+    expect(executionMap.openai).toEqual({
+      type: "api_key",
+      key: "sk-literal-fallback",
+    });
+    // Read-only discovery keeps the ordered keyRef profile as the configured marker.
+    expect(readOnlyMap.openai).toEqual({
+      type: "api_key",
+      key: "openclaw-secret-ref-configured",
+    });
   });
 
   it("marks keyRef-only auth profiles configured for read-only model discovery", async () => {

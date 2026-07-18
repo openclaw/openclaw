@@ -52,6 +52,9 @@ export function resolveAgentCredentialsForDiscovery(
   const credentials = addEnvBackedAgentCredentials(
     resolveAgentCredentialMapFromStore(store, {
       includeSecretRefPlaceholders: options?.readOnly === true,
+      // Pass config so discovery uses the same auth.order / profile ranking as
+      // interactive resolution instead of raw store insertion order.
+      ...(options?.config ? { config: options.config } : {}),
     }),
     {
       config: options?.config,
