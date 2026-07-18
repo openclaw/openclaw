@@ -84,7 +84,7 @@ describe("navigationIconForRoute", () => {
       chat: "messageSquare",
       custodian: "lobster",
       activity: "activity",
-      apps: "layoutGrid",
+      apps: "smartphone",
       approvals: "shieldCheck",
       workboard: "kanban",
       worktrees: "folder",

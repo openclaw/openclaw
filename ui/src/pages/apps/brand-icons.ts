@@ -1,9 +1,18 @@
 import { html } from "lit";
 
-// Platform brand marks for the Apps page cards. Kept local (not in the shared
-// lucide `icons` set) because they are solid fills, not stroked glyphs;
-// apps.css targets .icon--filled to render fill: currentColor.
+// Platform marks for the Apps page cards. Kept local (not in the shared
+// lucide `icons` set) so the page owns its one-off glyphs and the shared
+// icon file stays under its size cap; apps.css targets .icon--filled to
+// render solid fills while unclassed glyphs stay stroked.
 export const appsBrandIcons = {
+  watch: html`
+    <svg viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="6" />
+      <polyline points="12 10 12 12 13 13" />
+      <path d="m16.13 7.66-.81-4.05a2 2 0 0 0-2-1.61h-2.68a2 2 0 0 0-2 1.61l-.78 4.05" />
+      <path d="m7.88 16.36.8 4a2 2 0 0 0 2 1.61h2.72a2 2 0 0 0 2-1.61l.81-4.05" />
+    </svg>
+  `,
   apple: html`
     <svg viewBox="0 0 24 24" class="icon--filled">
       <path

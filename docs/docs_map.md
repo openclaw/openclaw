@@ -10507,6 +10507,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Language support
   - H2: Appearance themes
   - H2: Manage plugins
+  - H2: Apps and extensions
   - H2: Sidebar navigation
   - H2: New session page
   - H2: What it can do (today)

@@ -71,7 +71,7 @@ function getPaletteBaseItems(): PaletteItem[] {
     {
       id: "nav-apps",
       label: t("palette.items.apps"),
-      icon: "layoutGrid",
+      icon: "smartphone",
       category: "navigation",
       action: "nav:apps",
     },

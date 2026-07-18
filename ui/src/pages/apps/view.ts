@@ -9,7 +9,7 @@ import "../../styles/apps.css";
 import { brandIcons } from "../about/brand-icons.ts";
 import { appsBrandIcons } from "./brand-icons.ts";
 
-export type AppsProps = {
+type AppsProps = {
   onNavigate: (routeId: RouteId) => void;
 };
 
@@ -84,7 +84,7 @@ const APP_SECTIONS: readonly AppSection[] = [
       {
         id: "apple-watch",
         gradient: ["#f472b6", "#be185d"],
-        icon: icons.watch,
+        icon: appsBrandIcons.watch,
         title: () => t("appsPage.cards.appleWatch.title"),
         desc: () => t("appsPage.cards.appleWatch.desc"),
         badge: () => t("appsPage.badgeBundledIos"),
@@ -93,7 +93,7 @@ const APP_SECTIONS: readonly AppSection[] = [
       {
         id: "wear-os",
         gradient: ["#22d3ee", "#0e7490"],
-        icon: icons.watch,
+        icon: appsBrandIcons.watch,
         title: () => t("appsPage.cards.wearOs.title"),
         desc: () => t("appsPage.cards.wearOs.desc"),
         badge: () => t("appsPage.badgeBundledAndroid"),
