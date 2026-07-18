@@ -46,7 +46,6 @@ Docs: https://docs.openclaw.ai
 - **External supervisor restart health:** accept device-identity policy closes only when the replacement gateway lock and listener PID agree, preventing OCM-managed restarts from timing out after a successful handoff. Thanks @shakkernerd.
 - **ACPX cleanup process inspection:** bound host process-table reads so stalled `ps` calls cannot hang gateway startup or session cleanup while retaining fail-closed ownership checks. Thanks @Alix-007.
 - **Cron lifecycle conflict retries:** preserve execution-phase retry decisions across scheduled, manual, and startup-recovered runs so post-execution claim conflicts cannot replay completed messages or tools. Fixes #108428. Thanks @yetval.
-- **Cron main-session wake delivery:** let a `wakeMode: "now"` job ignore only its own active marker so the awaited heartbeat delivers before the run reports success. (#109440) Thanks @harjothkhara.
 - **Discord gateway metadata deadline:** carry the existing lookup deadline through DNS and proxy preflight, request headers, and response bodies so stalled gateway startup aborts cleanly. (#104580) Thanks @hugenshen.
 - **Control UI cloud session thinking:** expose reasoning level in the New Session model picker and persist the selected level before cloud dispatch.
 - **iOS fresh-install setup:** atomically redact spent setup credentials before Keychain cleanup so a deferred item deletion no longer disconnects a successfully paired device. Fixes #107591. Thanks @dagmarjeeves-lab.
