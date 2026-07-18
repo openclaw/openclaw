@@ -827,7 +827,6 @@ async function readCodexHarnessCompactionCount(params: {
 }
 
 async function verifyCodexCompactionStress(params: {
-  baselineCount?: number;
   client: GatewayClient;
   events: EventFrame[];
   sessionKey: string;
@@ -841,6 +840,12 @@ async function verifyCodexCompactionStress(params: {
       `Remember this as durable slot A: ${hiddenMarker}`,
       `Reply exactly ${hiddenMarker} and nothing else.`,
     ].join("\n"),
+  });
+  const baselineCount = await readCodexHarnessCompactionCount({
+    client: params.client,
+    events: params.events,
+    minimum: 0,
+    sessionKey: params.sessionKey,
   });
 
   const outputLines = Math.ceil(CODEX_HARNESS_LARGE_OUTPUT_BYTES / 90);
@@ -892,12 +897,18 @@ async function verifyCodexCompactionStress(params: {
   expect(reportedCompactions, "agent result dropped native automatic compactions").toBe(
     completedCompactions,
   );
+  // `/status` stops in the local command handler (`shouldContinue: false`), so
+  // these snapshots cannot introduce an unobserved native Codex compaction.
   const persistedCount = await readCodexHarnessCompactionCount({
     client: params.client,
     events: params.events,
-    minimum: (params.baselineCount ?? 0) + completedCompactions,
+    minimum: baselineCount + completedCompactions,
     sessionKey: params.sessionKey,
   });
+  expect(
+    persistedCount - baselineCount,
+    "persisted session count did not match this wave's native compactions",
+  ).toBe(completedCompactions);
   const recalled = await requestAgentText({
     client: params.client,
     sessionKey: params.sessionKey,
@@ -906,6 +917,7 @@ async function verifyCodexCompactionStress(params: {
   });
   expect(recalled.trim()).toBe(hiddenMarker);
   logCodexLiveStep("compaction-stress:complete", {
+    baselineCount,
     completedCompactions,
     outputBytes: CODEX_HARNESS_LARGE_OUTPUT_BYTES,
     outputTurns: CODEX_HARNESS_COMPACTION_STRESS_TURNS,
@@ -1936,7 +1948,6 @@ describeLive("gateway live (Codex harness)", () => {
           }
           if (CODEX_HARNESS_COMPACTION_STRESS) {
             const continued = await verifyCodexCompactionStress({
-              baselineCount: resumeStressState.persistedCompactionCount,
               client,
               events: gatewayEvents,
               sessionKey: resumeStressState.sessionKey,
