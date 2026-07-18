@@ -15,6 +15,7 @@ import {
   type DevicePairSetupAccess,
 } from "../lib/device-pair-setup.ts";
 import {
+  clearExecApprovalTimers,
   clearResolvedExecApprovalPrompt,
   dismissExecApprovalPrompt,
   enqueueExecApprovalPrompt,
@@ -42,6 +43,8 @@ type ApplicationOverlaySnapshot = {
   approvalQueue: readonly ExecApprovalRequest[];
   approvalBusy: boolean;
   approvalError: string | null;
+  approvalErrorId: string | null;
+  approvalNowMs: number;
   devicePairSetupOpen: boolean;
   devicePairSetupLoading: boolean;
   devicePairSetupError: string | null;
@@ -54,7 +57,7 @@ export type ApplicationOverlays = {
   readonly snapshot: ApplicationOverlaySnapshot;
   subscribe: (listener: (snapshot: ApplicationOverlaySnapshot) => void) => () => void;
   runUpdate: () => Promise<void>;
-  decideApproval: (decision: ExecApprovalDecision) => Promise<void>;
+  decideApproval: (decision: ExecApprovalDecision, approvalId?: string) => Promise<void>;
   openDevicePairSetup: () => Promise<void>;
   refreshDevicePairSetup: () => Promise<void>;
   setDevicePairSetupAccess: (access: DevicePairSetupAccess) => Promise<void>;
@@ -222,6 +225,8 @@ export function createApplicationOverlays(
     approvalQueue: [],
     approvalBusy: false,
     approvalError: null,
+    approvalErrorId: null,
+    approvalNowMs: Date.now(),
     devicePairSetupOpen: false,
     devicePairSetupLoading: false,
     devicePairSetupError: null,
@@ -256,6 +261,8 @@ export function createApplicationOverlays(
     execApprovalQueue: [],
     execApprovalBusy: false,
     execApprovalError: null,
+    execApprovalErrorId: null,
+    execApprovalNowMs: Date.now(),
     execApprovalExpiryTimers: new Map(),
   };
 
@@ -270,13 +277,15 @@ export function createApplicationOverlays(
       approvalQueue: promptState.execApprovalQueue,
       approvalBusy: promptState.execApprovalBusy,
       approvalError: promptState.execApprovalError,
+      approvalErrorId: promptState.execApprovalErrorId ?? null,
+      approvalNowMs: promptState.execApprovalNowMs ?? Date.now(),
       ...readDevicePairSetupSnapshot(devicePairSetupState),
     };
     for (const listener of listeners) {
       listener(snapshot);
     }
   };
-  promptState.execApprovalExpired = publish;
+  promptState.execApprovalChanged = publish;
   const publishDevicePairSetupOperation = async (operation: Promise<void>) => {
     publish();
     await operation;
@@ -477,11 +486,9 @@ export function createApplicationOverlays(
       promptState.execApprovalQueue = [];
       promptState.execApprovalBusy = false;
       promptState.execApprovalError = null;
+      promptState.execApprovalErrorId = null;
       snapshot = { ...snapshot, updateAvailable: null, updateRunning: false };
-      for (const timer of promptState.execApprovalExpiryTimers?.values() ?? []) {
-        globalThis.clearTimeout(timer);
-      }
-      promptState.execApprovalExpiryTimers?.clear();
+      clearExecApprovalTimers(promptState);
       publish();
       return;
     }
@@ -628,14 +635,17 @@ export function createApplicationOverlays(
         }
       }
     },
-    async decideApproval(decision) {
-      const active = promptState.execApprovalQueue[0];
+    async decideApproval(decision, approvalId) {
+      const active = approvalId
+        ? promptState.execApprovalQueue.find((entry) => entry.id === approvalId)
+        : promptState.execApprovalQueue[0];
       const client = gateway.snapshot.client;
       if (!active || !client || promptState.execApprovalBusy || disposed) {
         return;
       }
       promptState.execApprovalBusy = true;
       promptState.execApprovalError = null;
+      promptState.execApprovalErrorId = null;
       const operation = { client, epoch: connectedEpoch, id: active.id };
       approvalDecision = operation;
       const isCurrentOperation = () =>
@@ -662,8 +672,12 @@ export function createApplicationOverlays(
           }
           return;
         }
-        if (isCurrentOperation() && promptState.execApprovalQueue[0]?.id === active.id) {
+        if (
+          isCurrentOperation() &&
+          promptState.execApprovalQueue.some((entry) => entry.id === active.id)
+        ) {
           promptState.execApprovalError = `Approval failed: ${error instanceof Error ? error.message : String(error)}`;
+          promptState.execApprovalErrorId = active.id;
         }
       } finally {
         // Reconnect can admit a new decision while this request is still settling.
@@ -712,10 +726,7 @@ export function createApplicationOverlays(
       closeDevicePairSetupState(devicePairSetupState);
       stopGateway();
       stopEvents();
-      for (const timer of promptState.execApprovalExpiryTimers?.values() ?? []) {
-        globalThis.clearTimeout(timer);
-      }
-      promptState.execApprovalExpiryTimers?.clear();
+      clearExecApprovalTimers(promptState);
       listeners.clear();
     },
   };

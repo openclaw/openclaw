@@ -182,7 +182,7 @@ describe("application approval overlays", () => {
     overlays.dispose();
   });
 
-  it("does not attach an older resolve failure to a newer approval", async () => {
+  it("keeps a resolve failure attached to its older request", async () => {
     const resolveAttempt = deferred();
     const request = vi.fn<RequestFn>((method) =>
       method.endsWith(".list") ? Promise.resolve([]) : resolveAttempt.promise,
@@ -197,11 +197,31 @@ describe("application approval overlays", () => {
     await decision;
 
     expect(overlays.snapshot.approvalQueue.map((entry) => entry.id)).toEqual([
-      "approval-newer",
       "approval-active",
+      "approval-newer",
     ]);
-    expect(overlays.snapshot.approvalError).toBeNull();
+    expect(overlays.snapshot.approvalError).toBe("Approval failed: gateway unavailable");
+    expect(overlays.snapshot.approvalErrorId).toBe("approval-active");
     expect(overlays.snapshot.approvalBusy).toBe(false);
+    overlays.dispose();
+  });
+
+  it("resolves a selected queued approval by id", async () => {
+    const request = vi.fn<RequestFn>(async (method) =>
+      method.endsWith(".list") ? [] : { ok: true },
+    );
+    const harness = createGatewayHarness(client(request));
+    const overlays = createApplicationOverlays(harness.gateway);
+    harness.emitApproval("approval-oldest", 1_000);
+    harness.emitApproval("approval-newer", 2_000);
+
+    await overlays.decideApproval("deny", "approval-newer");
+
+    expect(request).toHaveBeenCalledWith("exec.approval.resolve", {
+      id: "approval-newer",
+      decision: "deny",
+    });
+    expect(overlays.snapshot.approvalQueue.map((entry) => entry.id)).toEqual(["approval-oldest"]);
     overlays.dispose();
   });
 

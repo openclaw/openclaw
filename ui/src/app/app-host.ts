@@ -55,6 +55,7 @@ import { findSettingsSearchBlocks } from "../pages/config/settings-search.ts";
 import { newSessionSearch, type NewSessionTarget } from "../pages/new-session/location.ts";
 import { renderDevicePairSetup } from "../pages/nodes/view-pairing.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.ts";
+import { findInlineApproval } from "./approval-presentation.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
 import {
   applicationContext,
@@ -1296,6 +1297,10 @@ class OpenClawShell extends OpenClawLightDomElement {
     // its scrolling and pins the composer dock to the bottom.
     const chatLikeRoute =
       activeRoute === "chat" || activeRoute === "custodian" || activeRoute === "new-session";
+    const inlineApproval =
+      activeRoute === "chat"
+        ? findInlineApproval(overlaySnapshot.approvalQueue, this.activeSessionKey)
+        : null;
     // Optional tags stay mounted before definition. Lit replays their properties on upgrade,
     // and the upgraded panels catch the first toggle instead of dropping the event.
     return html`
@@ -1498,8 +1503,13 @@ class OpenClawShell extends OpenClawLightDomElement {
             queue: overlaySnapshot.approvalQueue,
             busy: overlaySnapshot.approvalBusy,
             error: overlaySnapshot.approvalError,
-            onDecision: (decision: Parameters<typeof context.overlays.decideApproval>[0]) =>
-              context.overlays.decideApproval(decision),
+            errorId: overlaySnapshot.approvalErrorId,
+            nowMs: overlaySnapshot.approvalNowMs,
+            inlineApprovalId: inlineApproval?.id ?? null,
+            onDecision: (
+              approvalId: string,
+              decision: Parameters<typeof context.overlays.decideApproval>[0],
+            ) => context.overlays.decideApproval(decision, approvalId),
           }}
         ></openclaw-exec-approval>
         ${renderDevicePairSetup({

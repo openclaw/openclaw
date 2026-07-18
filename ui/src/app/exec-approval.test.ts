@@ -2,10 +2,11 @@
 // Control UI tests cover exec approval behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
+  clearExecApprovalTimers,
+  clearResolvedExecApprovalPrompt,
   enqueueExecApprovalPrompt,
   isStaleApprovalResolutionError,
   parseApprovalRequestedEvent,
-  clearResolvedExecApprovalPrompt,
   refreshPendingApprovalQueue,
   type ExecApprovalPromptState,
   type ExecApprovalRequest,
@@ -304,7 +305,79 @@ describe("clearResolvedExecApprovalPrompt", () => {
   });
 });
 
+describe("approval queue ordering and countdown timer", () => {
+  it("keeps newly received approvals oldest-first", () => {
+    vi.useFakeTimers();
+    try {
+      const state = createPromptState(
+        vi.fn<RequestFn>(async () => ({})),
+        [],
+      );
+      enqueueExecApprovalPrompt(
+        state,
+        createExecApproval({ id: "approval-newer", createdAtMs: 2_000 }),
+      );
+      enqueueExecApprovalPrompt(
+        state,
+        createExecApproval({ id: "approval-oldest", createdAtMs: 1_000 }),
+      );
+
+      expect(state.execApprovalQueue.map((entry) => entry.id)).toEqual([
+        "approval-oldest",
+        "approval-newer",
+      ]);
+      clearExecApprovalTimers(state);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("publishes one shared countdown tick and cleans every timer", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-25T00:00:00.000Z"));
+    try {
+      const state = createPromptState(
+        vi.fn<RequestFn>(async () => ({})),
+        [],
+      );
+      state.execApprovalExpiryTimers = new Map();
+      state.execApprovalChanged = vi.fn();
+      enqueueExecApprovalPrompt(state, createExecApproval({ expiresAtMs: Date.now() + 60_000 }));
+
+      vi.advanceTimersByTime(1_000);
+      expect(state.execApprovalChanged).toHaveBeenCalledTimes(1);
+      expect(state.execApprovalNowMs).toBe(Date.now());
+
+      clearExecApprovalTimers(state);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("refreshPendingApprovalQueue", () => {
+  it("sorts refreshed approvals oldest-first", async () => {
+    const request = vi.fn<RequestFn>(async (method) => {
+      if (method === "exec.approval.list") {
+        return [
+          createExecApproval({ id: "approval-newer", createdAtMs: 2_000 }),
+          createExecApproval({ id: "approval-oldest", createdAtMs: 1_000 }),
+        ];
+      }
+      return [];
+    });
+    const state = createPromptState(request, []);
+
+    await refreshPendingApprovalQueue(state);
+
+    expect(state.execApprovalQueue.map((entry) => entry.id)).toEqual([
+      "approval-oldest",
+      "approval-newer",
+    ]);
+    clearExecApprovalTimers(state);
+  });
+
   it("keeps approvals received while a refresh is in flight", async () => {
     let resolveExecList: (value: unknown[]) => void = () => {};
     const execApprovalList = new Promise<unknown[]>((resolve) => {
@@ -437,13 +510,13 @@ describe("refreshPendingApprovalQueue", () => {
             {
               id: "approval-active-expiring",
               request: { command: "pnpm check:changed" },
-              createdAtMs: Date.now() + 1,
+              createdAtMs: Date.now(),
               expiresAtMs: activeExpiresAtMs,
             },
             {
               id: "approval-queued",
               request: { command: "pnpm test" },
-              createdAtMs: Date.now(),
+              createdAtMs: Date.now() + 1,
               expiresAtMs: queuedExpiresAtMs,
             },
           ];
@@ -462,6 +535,7 @@ describe("refreshPendingApprovalQueue", () => {
 
       expect(state.execApprovalQueue.map((entry) => entry.id)).toEqual(["approval-queued"]);
       expect(state.execApprovalError).toBeNull();
+      clearExecApprovalTimers(state);
     } finally {
       vi.useRealTimers();
     }
