@@ -60,6 +60,37 @@ function textMessage(role: string, text: string): Record<string, unknown> {
 }
 
 describe("chat.history truncation logging (real diagnostic bus)", () => {
+  it("preserves idempotency metadata on oversized history placeholders", () => {
+    const message = {
+      role: "assistant",
+      timestamp: 1_789_000_000_000,
+      content: [{ type: "text", text: "x".repeat(5000) }],
+      __openclaw: {
+        id: "oversized-message",
+        seq: 7,
+        idempotencyKey: "oversized-key",
+      },
+    };
+
+    const result = replaceOversizedChatHistoryMessages({
+      messages: [message],
+      maxSingleMessageBytes: 500,
+    });
+
+    expect(result.replacedCount).toBe(1);
+    expect(result.messages[0]).toMatchObject({
+      role: "assistant",
+      timestamp: 1_789_000_000_000,
+      __openclaw: {
+        id: "oversized-message",
+        seq: 7,
+        idempotencyKey: "oversized-key",
+        truncated: true,
+        reason: "oversized",
+      },
+    });
+  });
+
   it("emits a truncated diagnostic when history is trimmed to the last message", () => {
     const big = textMessage("user", "x".repeat(8000));
     const last = textMessage("assistant", "ok");

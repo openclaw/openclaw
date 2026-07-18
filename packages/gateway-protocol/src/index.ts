@@ -223,6 +223,26 @@ import {
   DeviceTokenRevokeParamsSchema,
   type DeviceTokenRotateParams,
   DeviceTokenRotateParamsSchema,
+  type DurableCoordinationGetParams,
+  DurableCoordinationGetParamsSchema,
+  type DurableCoordinationGetResult,
+  DurableCoordinationGetResultSchema,
+  type DurableCoordinationProjection,
+  DurableCoordinationProjectionSchema,
+  type DurableLimitParams,
+  DurableLimitParamsSchema,
+  type DurableObligationsListResult,
+  DurableObligationsListResultSchema,
+  type DurableWakeDeliveryAttemptsListParams,
+  DurableWakeDeliveryAttemptsListParamsSchema,
+  type DurableWakeDeliveryAttemptsListResult,
+  DurableWakeDeliveryAttemptsListResultSchema,
+  type DurableWakeIdParams,
+  DurableWakeIdParamsSchema,
+  type DurableWakeInspectResult,
+  DurableWakeInspectResultSchema,
+  type DurableWakeListResult,
+  DurableWakeListResultSchema,
   type ExecApprovalsGetParams,
   ExecApprovalsGetParamsSchema,
   type ExecApprovalsNodeGetParams,
@@ -253,6 +273,7 @@ import {
   PluginsUiDescriptorsParamsSchema,
   PluginsUiDescriptorsResultSchema,
   ErrorCodes,
+  type ErrorCode,
   type EnvironmentSummary,
   EnvironmentSummarySchema,
   type EnvironmentsListParams,
@@ -835,6 +856,28 @@ export const validateSessionsUsageParams =
 export const validateTasksListParams = lazyCompile<TasksListParams>(TasksListParamsSchema);
 export const validateTasksGetParams = lazyCompile<TasksGetParams>(TasksGetParamsSchema);
 export const validateTasksCancelParams = lazyCompile<TasksCancelParams>(TasksCancelParamsSchema);
+export const validateDurableCoordinationGetParams = lazyCompile<DurableCoordinationGetParams>(
+  DurableCoordinationGetParamsSchema,
+);
+export const validateDurableCoordinationGetResult = lazyCompile<DurableCoordinationGetResult>(
+  DurableCoordinationGetResultSchema,
+);
+export const validateDurableLimitParams = lazyCompile<DurableLimitParams>(DurableLimitParamsSchema);
+export const validateDurableWakeIdParams =
+  lazyCompile<DurableWakeIdParams>(DurableWakeIdParamsSchema);
+export const validateDurableWakeDeliveryAttemptsListParams =
+  lazyCompile<DurableWakeDeliveryAttemptsListParams>(DurableWakeDeliveryAttemptsListParamsSchema);
+export const validateDurableWakeListResult = lazyCompile<DurableWakeListResult>(
+  DurableWakeListResultSchema,
+);
+export const validateDurableObligationsListResult = lazyCompile<DurableObligationsListResult>(
+  DurableObligationsListResultSchema,
+);
+export const validateDurableWakeInspectResult = lazyCompile<DurableWakeInspectResult>(
+  DurableWakeInspectResultSchema,
+);
+export const validateDurableWakeDeliveryAttemptsListResult =
+  lazyCompile<DurableWakeDeliveryAttemptsListResult>(DurableWakeDeliveryAttemptsListResultSchema);
 export const validateConfigGetParams = lazyCompile<ConfigGetParams>(ConfigGetParamsSchema);
 export const validateConfigSetParams = lazyCompile<ConfigSetParams>(ConfigSetParamsSchema);
 export const validateConfigApplyParams = lazyCompile<ConfigApplyParams>(ConfigApplyParamsSchema);
@@ -1249,6 +1292,16 @@ export {
   TasksGetResultSchema,
   TasksCancelParamsSchema,
   TasksCancelResultSchema,
+  DurableCoordinationGetParamsSchema,
+  DurableCoordinationProjectionSchema,
+  DurableCoordinationGetResultSchema,
+  DurableLimitParamsSchema,
+  DurableWakeIdParamsSchema,
+  DurableWakeDeliveryAttemptsListParamsSchema,
+  DurableWakeListResultSchema,
+  DurableObligationsListResultSchema,
+  DurableWakeInspectResultSchema,
+  DurableWakeDeliveryAttemptsListResultSchema,
   ConfigGetParamsSchema,
   ConfigSetParamsSchema,
   ConfigApplyParamsSchema,
@@ -1461,6 +1514,7 @@ export type {
   ConfigPatchParams,
   ConfigSchemaParams,
   ConfigSchemaResponse,
+  ErrorCode,
   CrestodianChatParams,
   CrestodianChatResult,
   CrestodianSetupDetectParams,
@@ -1638,6 +1692,16 @@ export type {
   TasksGetResult,
   TasksCancelParams,
   TasksCancelResult,
+  DurableCoordinationGetParams,
+  DurableCoordinationProjection,
+  DurableCoordinationGetResult,
+  DurableLimitParams,
+  DurableWakeIdParams,
+  DurableWakeDeliveryAttemptsListParams,
+  DurableWakeListResult,
+  DurableObligationsListResult,
+  DurableWakeInspectResult,
+  DurableWakeDeliveryAttemptsListResult,
   CronJob,
   CronListParams,
   CronStatusParams,

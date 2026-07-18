@@ -13,6 +13,7 @@ import {
   SUBAGENT_ENDED_REASON_ERROR,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
+import type { DeferredCleanupDecision } from "./subagent-registry-cleanup.js";
 import { createSubagentRegistryLifecycleController } from "./subagent-registry-lifecycle.js";
 import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-manager.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -33,6 +34,13 @@ const helperMocks = vi.hoisted(() => ({
   persistSubagentSessionTiming: vi.fn(async () => {}),
   safeRemoveAttachmentsDir: vi.fn(async () => {}),
   logAnnounceGiveUp: vi.fn(),
+}));
+
+const cleanupMocks = vi.hoisted(() => ({
+  resolveDeferredCleanupDecision: vi.fn<() => DeferredCleanupDecision>(() => ({
+    kind: "give-up",
+    reason: "retry-limit",
+  })),
 }));
 
 const runtimeMocks = vi.hoisted(() => ({
@@ -87,7 +95,7 @@ vi.mock("./subagent-announce.js", () => ({
 
 vi.mock("./subagent-registry-cleanup.js", () => ({
   resolveCleanupCompletionReason: () => SUBAGENT_ENDED_REASON_COMPLETE,
-  resolveDeferredCleanupDecision: () => ({ kind: "give-up", reason: "retry-limit" }),
+  resolveDeferredCleanupDecision: cleanupMocks.resolveDeferredCleanupDecision,
 }));
 
 vi.mock("./subagent-registry-helpers.js", () => ({
@@ -274,6 +282,11 @@ describe("subagent registry lifecycle hardening", () => {
     browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd.mockClear();
     bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey.mockClear();
     bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey.mockResolvedValue(true);
+    cleanupMocks.resolveDeferredCleanupDecision.mockReset();
+    cleanupMocks.resolveDeferredCleanupDecision.mockReturnValue({
+      kind: "give-up",
+      reason: "retry-limit",
+    });
   });
 
   it("does not reject completion when task finalization throws", async () => {
@@ -1737,6 +1750,44 @@ describe("subagent registry lifecycle hardening", () => {
     expect(taskExecutorMocks.failTaskRunByRunId).not.toHaveBeenCalled();
   });
 
+  it("marks explicit blocker completions blocked without failing the task", async () => {
+    const entry = createRunEntry({
+      expectsCompletionMessage: true,
+    });
+    const blockedReport = [
+      "I diagnosed the request, but it needs protected gateway auth changes.",
+      "",
+      "state: blocked",
+      "human_action_required: true",
+      "human_action_summary: Please approve updating gateway auth settings.",
+    ].join("\n");
+
+    const controller = createLifecycleController({
+      entry,
+      captureSubagentCompletionReply: vi.fn(async () => blockedReport),
+    });
+
+    await controller.completeSubagentRun({
+      runId: entry.runId,
+      endedAt: 4_000,
+      outcome: { status: "ok" },
+      reason: SUBAGENT_ENDED_REASON_COMPLETE,
+      triggerCleanup: false,
+    });
+
+    expectFields(firstCallArg(taskExecutorMocks.completeTaskRunByRunId), {
+      runId: entry.runId,
+      runtime: "subagent",
+      sessionKey: entry.childSessionKey,
+      progressSummary: blockedReport,
+      terminalOutcome: "blocked",
+    });
+    expect(firstCallArg(taskExecutorMocks.completeTaskRunByRunId).terminalSummary).toContain(
+      "Required completion reported a blocker:",
+    );
+    expect(taskExecutorMocks.failTaskRunByRunId).not.toHaveBeenCalled();
+  });
+
   it("marks missing required completions blocked while preserving real final reports", async () => {
     const missingEntry = createRunEntry({
       expectsCompletionMessage: true,
@@ -1983,6 +2034,78 @@ describe("subagent registry lifecycle hardening", () => {
       runId: entry.runId,
       deliveryStatus: "delivered",
     });
+  });
+
+  it("keeps restart-draining announce failures pending without spending retry budget", async () => {
+    cleanupMocks.resolveDeferredCleanupDecision.mockReturnValue({
+      kind: "retry",
+      retryCount: 2,
+      resumeDelayMs: 1,
+      countAttempt: false,
+    });
+    const persist = vi.fn();
+    const resumedRuns = new Set<string>();
+    const resumeSubagentRun = vi.fn();
+    const entry = createRunEntry({
+      expectsCompletionMessage: true,
+      delivery: {
+        status: "pending",
+        attemptCount: 2,
+        lastAttemptAt: 3_000,
+      },
+      retainAttachmentsOnKeep: true,
+    });
+    const runSubagentAnnounceFlow: LifecycleControllerParams["runSubagentAnnounceFlow"] = vi.fn(
+      async (announceParams) => {
+        announceParams.onDeliveryResult?.({
+          delivered: false,
+          path: "direct",
+          error:
+            "GatewayDrainingError: Gateway is draining for restart; new tasks are not accepted",
+        });
+        return false;
+      },
+    );
+
+    const controller = createLifecycleController({
+      entry,
+      persist,
+      resumedRuns,
+      resumeSubagentRun,
+      runSubagentAnnounceFlow,
+    });
+
+    await expect(
+      controller.completeSubagentRun({
+        runId: entry.runId,
+        endedAt: 4_000,
+        outcome: { status: "ok" },
+        reason: SUBAGENT_ENDED_REASON_COMPLETE,
+        triggerCleanup: true,
+      }),
+    ).resolves.toBeUndefined();
+
+    await vi.waitFor(() => expect(entry.delivery?.lastAttemptAt).not.toBe(3_000));
+
+    expect(entry.delivery?.status).toBe("pending");
+    expect(entry.delivery?.attemptCount).toBe(2);
+    expect(entry.delivery?.lastError).toContain("GatewayDrainingError");
+    expect(entry.delivery?.payload).toMatchObject({
+      requesterSessionKey: entry.requesterSessionKey,
+      childSessionKey: entry.childSessionKey,
+      childRunId: entry.runId,
+    });
+    expect(entry.cleanupHandled).toBe(false);
+    expect(entry.cleanupCompletedAt).toBeUndefined();
+    expect(resumedRuns.has(entry.runId)).toBe(false);
+    expect(helperMocks.logAnnounceGiveUp).not.toHaveBeenCalled();
+    expect(taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: entry.runId,
+        deliveryStatus: "failed",
+      }),
+    );
+    await vi.waitFor(() => expect(resumeSubagentRun).toHaveBeenCalledWith(entry.runId));
   });
 
   it("finalizes terminal visible-send failures without scheduling completion retry", async () => {

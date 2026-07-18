@@ -50,12 +50,19 @@ export type OpenClawStateDatabaseOptions = {
   path?: string;
 };
 
+export type OpenClawStateDatabaseLease = {
+  database: OpenClawStateDatabase;
+  release: () => void;
+};
+
 export type OpenClawStateDatabaseSchemaMigration = {
   kind: "agent-databases-composite-primary-key";
   path: string;
 };
 
 const cachedDatabases = new Map<string, OpenClawStateDatabase>();
+const cachedDatabaseLeaseCounts = new Map<string, number>();
+const cachedDatabasePendingClosePaths = new Set<string>();
 
 type OpenClawStateMetadataDatabase = Pick<OpenClawStateKyselyDatabase, "schema_meta">;
 
@@ -256,6 +263,78 @@ function repairAgentDatabasesCompositePrimaryKey(db: DatabaseSync): boolean {
     ALTER TABLE agent_databases_migration_new RENAME TO agent_databases;
   `);
   return true;
+}
+
+function hasGeneralizedDurableParentWakeConstraint(db: DatabaseSync): boolean {
+  if (!tableExists(db, "durable_runtime_parent_wakes")) {
+    return true;
+  }
+  const row = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?")
+    .get("durable_runtime_parent_wakes") as { sql?: string | null } | undefined;
+  const createSql = row?.sql ?? "";
+  return !createSql.includes("CHECK (parent_run_id IS NOT NULL OR parent_session_key IS NOT NULL)");
+}
+
+function repairDurableParentWakeConstraint(db: DatabaseSync): void {
+  if (hasGeneralizedDurableParentWakeConstraint(db)) {
+    return;
+  }
+  db.exec(`
+    DROP TABLE IF EXISTS durable_runtime_parent_wakes_migration_new;
+    CREATE TABLE durable_runtime_parent_wakes_migration_new (
+      wake_id TEXT NOT NULL PRIMARY KEY,
+      parent_run_id TEXT,
+      parent_session_key TEXT,
+      target_agent TEXT,
+      target_session TEXT,
+      target_channel TEXT,
+      target_kind TEXT,
+      target_ref TEXT,
+      owner_kind TEXT,
+      owner_ref TEXT,
+      report_route_ref TEXT,
+      target_resolution_status TEXT,
+      target_resolution_reason TEXT,
+      reason TEXT NOT NULL,
+      facts_ref TEXT,
+      source_run_id TEXT,
+      dedupe_key TEXT NOT NULL,
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      last_attempt_at INTEGER,
+      acked_at INTEGER,
+      failed_reason TEXT,
+      status TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      metadata_json TEXT,
+      CHECK (
+        parent_run_id IS NOT NULL
+        OR parent_session_key IS NOT NULL
+        OR target_ref IS NOT NULL
+        OR report_route_ref IS NOT NULL
+        OR target_resolution_status IN ('ambiguous', 'missing', 'unauthorized', 'inspect_only')
+      )
+    );
+    INSERT INTO durable_runtime_parent_wakes_migration_new (
+      wake_id, parent_run_id, parent_session_key, target_agent, target_session,
+      target_channel, target_kind, target_ref, owner_kind, owner_ref,
+      report_route_ref, target_resolution_status, target_resolution_reason,
+      reason, facts_ref, source_run_id, dedupe_key, attempt_count,
+      last_attempt_at, acked_at, failed_reason, status, created_at, updated_at,
+      metadata_json
+    )
+    SELECT
+      wake_id, parent_run_id, parent_session_key, target_agent, target_session,
+      target_channel, target_kind, target_ref, owner_kind, owner_ref,
+      report_route_ref, target_resolution_status, target_resolution_reason,
+      reason, facts_ref, source_run_id, dedupe_key, attempt_count,
+      last_attempt_at, acked_at, failed_reason, status, created_at, updated_at,
+      metadata_json
+    FROM durable_runtime_parent_wakes;
+    DROP TABLE durable_runtime_parent_wakes;
+    ALTER TABLE durable_runtime_parent_wakes_migration_new RENAME TO durable_runtime_parent_wakes;
+  `);
 }
 
 function assertCanonicalStateSchemaShape(db: DatabaseSync, pathname: string): void {
@@ -936,11 +1015,31 @@ function ensureAdditiveStateColumns(db: DatabaseSync): void {
     repairLegacyTaskDeliveryStatuses(db);
   });
   ensureColumn(db, "subagent_runs", "task_name TEXT");
+  ensureColumn(db, "durable_runtime_runs", "parent_runtime_run_id TEXT");
+  ensureColumn(db, "durable_runtime_runs", "parent_step_id TEXT");
+  ensureColumn(db, "durable_runtime_runs", "message_id TEXT");
+  ensureColumn(db, "durable_runtime_runs", "turn_id TEXT");
+  ensureColumn(db, "durable_runtime_runs", "work_unit_id TEXT");
+  ensureColumn(db, "durable_runtime_runs", "report_route_id TEXT");
+  ensureColumn(db, "durable_runtime_runs", "claimed_by TEXT");
+  ensureColumn(db, "durable_runtime_runs", "claim_expires_at INTEGER");
+  ensureColumn(db, "durable_runtime_runs", "heartbeat_at INTEGER");
+  ensureColumn(db, "durable_runtime_steps", "claimed_by TEXT");
+  ensureColumn(db, "durable_runtime_steps", "claim_expires_at INTEGER");
+  ensureColumn(db, "durable_runtime_steps", "heartbeat_at INTEGER");
+  ensureColumn(db, "durable_runtime_parent_wakes", "target_kind TEXT");
+  ensureColumn(db, "durable_runtime_parent_wakes", "target_ref TEXT");
+  ensureColumn(db, "durable_runtime_parent_wakes", "owner_kind TEXT");
+  ensureColumn(db, "durable_runtime_parent_wakes", "owner_ref TEXT");
+  ensureColumn(db, "durable_runtime_parent_wakes", "report_route_ref TEXT");
+  ensureColumn(db, "durable_runtime_parent_wakes", "target_resolution_status TEXT");
+  ensureColumn(db, "durable_runtime_parent_wakes", "target_resolution_reason TEXT");
 }
 
 function ensureSchema(db: DatabaseSync, pathname: string): void {
   assertSupportedSchemaVersion(db, pathname);
   ensureAdditiveStateColumns(db);
+  repairDurableParentWakeConstraint(db);
   assertCanonicalStateSchemaShape(db, pathname);
   db.exec(OPENCLAW_STATE_SCHEMA_SQL);
   ensureAdditiveStateColumns(db);
@@ -991,6 +1090,8 @@ export function openOpenClawStateDatabase(
     cached.walMaintenance.close();
     clearNodeSqliteKyselyCacheForDatabase(cached.db);
     cachedDatabases.delete(pathname);
+    cachedDatabaseLeaseCounts.delete(pathname);
+    cachedDatabasePendingClosePaths.delete(pathname);
   }
 
   ensureOpenClawStatePermissions(pathname, env);
@@ -1017,7 +1118,43 @@ export function openOpenClawStateDatabase(
   ensureOpenClawStatePermissions(pathname, env);
   const database = { db, path: pathname, walMaintenance };
   cachedDatabases.set(pathname, database);
+  cachedDatabaseLeaseCounts.set(pathname, 0);
   return database;
+}
+
+function closeOpenClawStateDatabaseHandle(pathname: string, database: OpenClawStateDatabase): void {
+  database.walMaintenance.close();
+  clearNodeSqliteKyselyCacheForDatabase(database.db);
+  if (database.db.isOpen) {
+    database.db.close();
+  }
+  cachedDatabases.delete(pathname);
+  cachedDatabaseLeaseCounts.delete(pathname);
+  cachedDatabasePendingClosePaths.delete(pathname);
+}
+
+export function acquireOpenClawStateDatabaseLease(
+  options: OpenClawStateDatabaseOptions,
+): OpenClawStateDatabaseLease {
+  const database = openOpenClawStateDatabase(options);
+  const pathname = database.path;
+  cachedDatabaseLeaseCounts.set(pathname, (cachedDatabaseLeaseCounts.get(pathname) ?? 0) + 1);
+  let released = false;
+
+  return {
+    database,
+    release: () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      const leaseCount = Math.max((cachedDatabaseLeaseCounts.get(pathname) ?? 1) - 1, 0);
+      cachedDatabaseLeaseCounts.set(pathname, leaseCount);
+      if (leaseCount === 0 && cachedDatabasePendingClosePaths.has(pathname)) {
+        closeOpenClawStateDatabaseHandle(pathname, database);
+      }
+    },
+  };
 }
 
 /** Run a synchronous immediate transaction against the shared state database. */
@@ -1025,15 +1162,21 @@ export function runOpenClawStateWriteTransaction<T>(
   operation: (database: OpenClawStateDatabase) => T,
   options: OpenClawStateDatabaseOptions = {},
 ): T {
-  const database = openOpenClawStateDatabase(options);
-  const result = runSqliteImmediateTransactionSync(database.db, () => operation(database));
+  const lease = acquireOpenClawStateDatabaseLease(options);
   try {
-    ensureOpenClawStatePermissions(database.path, options.env ?? process.env);
-  } catch {
-    // The write already committed; permission hardening is best-effort here so
-    // callers never retry an operation that is durable in SQLite.
+    const result = runSqliteImmediateTransactionSync(lease.database.db, () =>
+      operation(lease.database),
+    );
+    try {
+      ensureOpenClawStatePermissions(lease.database.path, options.env ?? process.env);
+    } catch {
+      // The write already committed; permission hardening is best-effort here so
+      // callers never retry an operation that is durable in SQLite.
+    }
+    return result;
+  } finally {
+    lease.release();
   }
-  return result;
 }
 
 /** Close all cached shared state database handles. */
@@ -1046,6 +1189,26 @@ export function closeOpenClawStateDatabase(): void {
     }
   }
   cachedDatabases.clear();
+  cachedDatabaseLeaseCounts.clear();
+  cachedDatabasePendingClosePaths.clear();
+}
+
+/** Close one cached shared state database handle resolved from the provided options. */
+export function closeOpenClawStateDatabaseForPath(
+  options: OpenClawStateDatabaseOptions = {},
+): void {
+  const pathname = resolveDatabasePath(options);
+  const database = cachedDatabases.get(pathname);
+  if (!database) {
+    return;
+  }
+  const leaseCount = cachedDatabaseLeaseCounts.get(pathname) ?? 0;
+  if (leaseCount > 0) {
+    cachedDatabasePendingClosePaths.add(pathname);
+    database.walMaintenance.checkpoint();
+    return;
+  }
+  closeOpenClawStateDatabaseHandle(pathname, database);
 }
 
 /** Test whether any cached shared state database handle is still open. */
