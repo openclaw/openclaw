@@ -15,11 +15,21 @@ export type ResolveQuestionOverGatewayResult =
 export type ResolveQuestionOverGatewayParams = {
   cfg: OpenClawConfig;
   questionId: string;
-  optionValue: string;
   senderId?: string | null;
   gatewayUrl?: string;
   clientDisplayName?: string;
-};
+} & (
+  | {
+      /** Rendered option value carried by the pressed control (reactions). */
+      optionValue: string;
+      optionIndex?: never;
+    }
+  | {
+      /** Compact callback index; mapped to the canonical label via question.get. */
+      optionIndex: number;
+      optionValue?: never;
+    }
+);
 
 function readTerminalReason(error: unknown): "already-terminal" | "not-found" | undefined {
   if (!(error instanceof Error) || error.name !== "GatewayClientRequestError") {
@@ -43,7 +53,10 @@ export async function resolveQuestionOverGateway(
   if (!QUESTION_RECORD_ID_PATTERN.test(params.questionId)) {
     throw new Error("question resolution requires a valid question record id");
   }
-  if (!params.optionValue) {
+  if (params.optionValue === undefined && !Number.isInteger(params.optionIndex)) {
+    throw new Error("question resolution requires an option value or index");
+  }
+  if (params.optionValue !== undefined && !params.optionValue) {
     throw new Error("question resolution requires a non-empty option value");
   }
   const gatewayOptions = {
@@ -76,13 +89,17 @@ export async function resolveQuestionOverGateway(
   if (!question || question.multiSelect || question.isSecret) {
     throw new Error("question button resolution requires one tappable question");
   }
+  const optionValue = params.optionValue ?? question.options[params.optionIndex as number]?.label;
+  if (!optionValue) {
+    throw new Error("question resolution index does not match a declared option");
+  }
   try {
     await callGateway<QuestionResolveResult>({
       ...gatewayOptions,
       method: "question.resolve",
       params: {
         id: params.questionId,
-        answers: { answers: { [question.id]: { answers: [params.optionValue] } } },
+        answers: { answers: { [question.id]: { answers: [optionValue] } } },
         resolvedBy: params.senderId?.trim() || undefined,
       },
     });
@@ -93,5 +110,5 @@ export async function resolveQuestionOverGateway(
     }
     throw error;
   }
-  return { status: "answered", questionId: question.id, optionValue: params.optionValue };
+  return { status: "answered", questionId: question.id, optionValue };
 }

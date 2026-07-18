@@ -2202,7 +2202,14 @@ class ChatController internal constructor(
       if (prompts.any { it.record.id == record.id }) {
         prompts.map { prompt ->
           if (prompt.record.id == record.id) {
-            prompt.copy(record = record, submitting = prompt.submitting && record.status == "pending")
+            prompt.copy(
+              record = record,
+              submitting = prompt.submitting && record.status == "pending",
+              // A replayed pending event must drop stale terminal retention or
+              // the zero-delay eviction loop respins without ever removing it.
+              terminalObservedAtMs =
+                if (record.status == "pending") null else prompt.terminalObservedAtMs,
+            )
           } else {
             prompt
           }
