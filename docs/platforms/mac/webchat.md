@@ -26,7 +26,9 @@ Click the history button to choose from the five most recently updated sessions 
 
 Command-Return opens the conversation of the agent that received the send, including when session scope is global.
 
-The camera button starts a window screenshot: every visible window gets a labeled overlay, and clicking one captures it and sends it (with any typed text as the caption) to the selected agent. The first use asks for macOS Screen Recording access. Escape or clicking empty space cancels.
+The camera button opens a menu for **Capture Window…** or **Capture Area…**. Window capture labels every visible window; area capture dims each display while you drag a region and shows its live size. The selected screenshot is sent to the chosen agent with any typed text as its caption. The first use asks for macOS Screen Recording access. Escape, clicking empty space, or clicking without a meaningful area drag cancels.
+
+Use the document-text button to attach text from the focused app's focused window. Quick Chat shows the result as a removable context chip rather than placing the captured text in the composer; sending appends the chip's text to the outgoing message and then clears it. This requires macOS Accessibility permission. Attached text also clears whenever Quick Chat closes, so context from one presentation cannot leak into a later send.
 
 Disable the feature entirely with **Settings → General → Quick Chat**; the same section hosts the shortcut recorder.
 

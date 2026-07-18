@@ -139,6 +139,9 @@ export type ConfigProps = {
   viewState: ConfigViewState;
   rawAvailable?: boolean;
   showModeToggle?: boolean;
+  /** Set when the form renders under a composite page's custom rows; an empty
+   *  schema section stays silent instead of claiming the page is empty. */
+  embeddedEditor?: boolean;
   formValue: Record<string, unknown> | null;
   originalValue: Record<string, unknown> | null;
   activeSection: string | null;
@@ -867,7 +870,9 @@ const BUILTIN_THEME_OPTIONS: ThemeOption[] = [
    back to the spark icon otherwise. */
 function renderThemeCardVisual(id: ThemeName, activeTheme: ThemeName) {
   if (id === "custom" && activeTheme !== "custom") {
-    return html`<span class="settings-theme-card__icon" aria-hidden="true">${icons.spark}</span>`;
+    return html`<span class="settings-theme-card__icon" aria-hidden="true"
+      >${icons.download}</span
+    >`;
   }
   return html`
     <span class="settings-theme-card__palette" aria-hidden="true">
@@ -1887,6 +1892,7 @@ export function renderConfig(props: ConfigProps) {
                       schema: analysis.schema,
                       uiHints: props.uiHints,
                       value: props.formValue,
+                      embedded: props.embeddedEditor === true,
                       rawAvailable,
                       disabled: configBusy || !props.formValue,
                       unsupportedPaths: analysis.unsupportedPaths,

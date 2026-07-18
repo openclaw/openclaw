@@ -983,6 +983,7 @@ export function applyJobPatch(
     cronConfig?: CronConfig;
   },
 ) {
+  const previousScheduleKind = job.schedule.kind;
   if ("name" in patch) {
     job.name = normalizeRequiredName(patch.name);
   }
@@ -1008,8 +1009,21 @@ export function applyJobPatch(
   if (typeof patch.enabled === "boolean") {
     job.enabled = patch.enabled;
   }
-  if (typeof patch.deleteAfterRun === "boolean") {
+  const hasDeleteAfterRunPatch = typeof patch.deleteAfterRun === "boolean";
+  if (hasDeleteAfterRunPatch) {
     job.deleteAfterRun = patch.deleteAfterRun;
+  } else if (
+    patch.schedule?.kind === "at" &&
+    (previousScheduleKind === "every" || previousScheduleKind === "cron")
+  ) {
+    // A schedule-kind transition starts a new retention contract. Do not let a
+    // recurring job's ignored/stale flag defeat the one-shot cleanup default.
+    job.deleteAfterRun = true;
+  } else if (
+    previousScheduleKind === "at" &&
+    (patch.schedule?.kind === "every" || patch.schedule?.kind === "cron")
+  ) {
+    delete job.deleteAfterRun;
   }
   if (patch.schedule) {
     if (patch.schedule.kind === "cron") {

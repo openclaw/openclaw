@@ -222,6 +222,28 @@ export function resetChatViewState(paneId?: string) {
   resetChatThreadPresentationState(paneId);
 }
 
+export function renderChatResizableDivider(props: {
+  className?: string;
+  label: string;
+  maxRatio?: number;
+  minRatio?: number;
+  onElement?: (element: Element | undefined) => void;
+  onResize: (event: CustomEvent<{ splitRatio: number }>) => void;
+  orientation: "horizontal" | "vertical";
+  splitRatio: number;
+}) {
+  return html`<resizable-divider
+    ${ref(props.onElement ?? (() => {}))}
+    class=${props.className ?? nothing}
+    .splitRatio=${props.splitRatio}
+    .minRatio=${props.minRatio ?? 0.4}
+    .maxRatio=${props.maxRatio ?? 0.7}
+    .label=${props.label}
+    .orientation=${props.orientation}
+    @resize=${props.onResize}
+  ></resizable-divider>`;
+}
+
 export function renderChat(props: ChatProps) {
   const requestUpdate = props.onRequestUpdate ?? (() => {});
   const splitRatio = props.splitRatio ?? 0.6;
@@ -570,14 +592,12 @@ export function renderChat(props: ChatProps) {
             </div>
 
             ${sidebarOpen
-              ? html`
-                  <resizable-divider
-                    .splitRatio=${splitRatio}
-                    .label=${t("nav.resize")}
-                    .orientation=${sidebarStacked ? "horizontal" : "vertical"}
-                    @resize=${(event: CustomEvent) =>
-                      props.onSplitRatioChange?.(event.detail.splitRatio)}
-                  ></resizable-divider>
+              ? html`${renderChatResizableDivider({
+                    label: t("nav.resize"),
+                    orientation: sidebarStacked ? "horizontal" : "vertical",
+                    splitRatio,
+                    onResize: (event) => props.onSplitRatioChange?.(event.detail.splitRatio),
+                  })}
                   <openclaw-chat-detail-panel
                     class="chat-sidebar"
                     .content=${props.sidebarContent ?? null}
@@ -588,8 +608,7 @@ export function renderChat(props: ChatProps) {
                     .onOpenWorkspaceFile=${props.onOpenWorkspaceFile ?? null}
                     .onRevealInWorkspace=${props.onRevealWorkspaceFile ?? null}
                     @chat-detail-panel-close=${() => props.onCloseSidebar?.()}
-                  ></openclaw-chat-detail-panel>
-                `
+                  ></openclaw-chat-detail-panel> `
               : nothing}
           </div>
         </div>

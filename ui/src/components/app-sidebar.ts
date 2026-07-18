@@ -10,6 +10,8 @@ import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts"
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
+import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
+import { BoardAvailabilityController } from "../lib/board/availability-controller.ts";
 import "./menu-surface.ts";
 import "./session-menu.ts";
 import "./sidebar-agent-card.ts";
@@ -18,7 +20,7 @@ import "./sidebar-build-chip.ts";
 import "./sidebar-update-card.ts";
 import "./theme-mode-toggle.ts";
 import "./tooltip.ts";
-import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
+import { sessionHasBoard } from "../lib/board/provider.ts";
 import { searchForSession } from "../lib/sessions/index.ts";
 import { areUiSessionKeysEquivalent, normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { shouldHandleNavigationClick } from "./app-sidebar-nav-menus.ts";
@@ -69,6 +71,15 @@ class AppSidebar extends AppSidebarSessionListElement {
 
   constructor() {
     super();
+    void new BoardAvailabilityController(this, () => {
+      const mainKey = this.selectedAgentMainSessionKey(this.activeChipAgent().activeId);
+      return [
+        mainKey,
+        ...this.visibleSessionRowsInOrder()
+          .filter((session) => !session.isChild)
+          .map((session) => session.key),
+      ];
+    });
     // The footer pet announces logo stand-in phases through this bubbling event.
     this.addEventListener(LOBSTER_LOGO_VISIT_EVENT, this.handleLogoVisit as EventListener);
   }
@@ -161,8 +172,7 @@ class AppSidebar extends AppSidebarSessionListElement {
     `;
   }
 
-  /** Home: the first page. Opens the agent's rolling main session and carries
-      its unread/running state; later grows into the docked dashboard surface. */
+  /** Home: the first page. Opens the rolling main session on its saved face. */
   private renderHomeRow() {
     const agentId = this.activeChipAgent().activeId;
     const mainKey = this.selectedAgentMainSessionKey(agentId);
@@ -199,6 +209,15 @@ class AppSidebar extends AppSidebarSessionListElement {
       >
         <span class="nav-item__icon" aria-hidden="true">${icons.home}</span>
         <span class="nav-item__text">${t("nav.home")}</span>
+        ${sessionHasBoard(mainKey)
+          ? html`<span
+              class="sidebar-board-glyph"
+              role="img"
+              aria-label=${t("sessionsView.dashboardAvailable")}
+              title=${t("sessionsView.dashboardAvailable")}
+              >${icons.barChart}</span
+            >`
+          : nothing}
         ${stateBadge}
       </a>
     `;
