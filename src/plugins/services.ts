@@ -6,12 +6,12 @@ import {
   emitTrustedDiagnosticEventWithPrivateData,
   onTrustedInternalDiagnosticEvent,
 } from "../infra/diagnostic-events.js";
-import { emitPluginSafetyEvent } from "./safety-event-emission.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isPluginJsonValue, type PluginJsonValue } from "./host-hook-json.js";
 import { withPluginHttpRouteRegistry } from "./http-registry.js";
 import type { PluginServiceRegistration } from "./registry-types.js";
 import type { PluginRegistry } from "./registry.js";
+import { emitPluginSafetyEvent } from "./safety-event-emission.js";
 import { encodeStartupTraceSegment } from "./startup-trace-segment.js";
 import type { OpenClawPluginServiceContext, PluginLogger } from "./types.js";
 
@@ -70,7 +70,8 @@ function createServiceContext(params: {
         emitPluginSafetyEvent({
           pluginId: params.service.pluginId,
           event,
-          trusted: params.service.origin === "bundled" || params.service.trustedOfficialInstall === true,
+          trusted:
+            params.service.origin === "bundled" || params.service.trustedOfficialInstall === true,
           declaredSafetyEventTypes: params.service.safetyEventTypes,
         }),
     },

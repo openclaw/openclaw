@@ -163,8 +163,8 @@ class SafetyEventStore {
     }
     values.push(limit + 1);
     const results = (
-      openOpenClawStateDatabase().db
-        .prepare(
+      openOpenClawStateDatabase()
+        .db.prepare(
           `SELECT sequence, event_type, severity, session_id, agent_id, channel,
                   message, meta_json, recorded_at_ms
              FROM ai_safety_events
@@ -200,8 +200,8 @@ class SafetyEventStore {
       byType: {},
     }));
 
-    const entries = openOpenClawStateDatabase().db
-      .prepare(
+    const entries = openOpenClawStateDatabase()
+      .db.prepare(
         `SELECT sequence, event_type, severity, session_id, agent_id, channel,
                 message, meta_json, recorded_at_ms
            FROM ai_safety_events

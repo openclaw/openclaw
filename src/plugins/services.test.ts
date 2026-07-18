@@ -184,9 +184,7 @@ describe("startPluginServices", () => {
     } finally {
       unsubscribe();
     }
-    expect(observed).toEqual([
-      { type: "ai_safety.external_content.consumed", trusted: false },
-    ]);
+    expect(observed).toEqual([{ type: "ai_safety.external_content.consumed", trusted: false }]);
   });
 
   it("starts services and stops them in reverse order", async () => {

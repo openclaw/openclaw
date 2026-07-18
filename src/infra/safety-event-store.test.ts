@@ -2,12 +2,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { emitTrustedAISafetyEvent } from "./diagnostic-ai-safety-events.js";
-import {
-  ensureSafetyEventStoreBridge,
-  querySafetyEvents,
-} from "./safety-event-store.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { emitTrustedAISafetyEvent } from "./diagnostic-ai-safety-events.js";
+import { ensureSafetyEventStoreBridge, querySafetyEvents } from "./safety-event-store.js";
 
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 const tempDirs: string[] = [];
