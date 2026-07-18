@@ -337,4 +337,35 @@ describe("readResponseText", () => {
     });
     expect(text).toHaveBeenCalledTimes(1);
   });
+
+  it("returns empty when res.text() produces U+FFFD replacement characters", async () => {
+    const corrupted = "valid prefix" + "�" + "suffix";
+    const text = vi.fn(async () => corrupted);
+    const response = {
+      headers: new Headers(),
+      text,
+    } as unknown as Response;
+
+    await expect(readResponseText(response)).resolves.toEqual({
+      text: "",
+      truncated: false,
+      bytesRead: 0,
+    });
+  });
+
+  it("returns empty when res.text() rejects instead of swallowing the error", async () => {
+    const text = vi.fn(async () => {
+      throw new Error("network failure");
+    });
+    const response = {
+      headers: new Headers(),
+      text,
+    } as unknown as Response;
+
+    await expect(readResponseText(response)).resolves.toEqual({
+      text: "",
+      truncated: false,
+      bytesRead: 0,
+    });
+  });
 });

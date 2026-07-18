@@ -313,6 +313,11 @@ export async function readResponseText(
 
   try {
     const text = await res.text();
+    // WHATWG res.text() uses a forgiving UTF-8 decoder; detect silent
+    // corruption when invalid bytes were replaced with U+FFFD.
+    if (text.includes("�")) {
+      return { text: "", truncated: false, bytesRead: 0 };
+    }
     const bytes = new TextEncoder().encode(text);
     return { text, truncated: false, bytesRead: bytes.byteLength };
   } catch {
