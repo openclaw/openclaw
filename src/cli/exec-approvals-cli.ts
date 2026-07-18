@@ -19,7 +19,6 @@ import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { readBestEffortConfig, type OpenClawConfig } from "../config/config.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE, type OperatorScope } from "../gateway/method-scopes.js";
-import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   collectExecPolicyScopeSnapshots,
@@ -450,7 +449,13 @@ function readPendingApprovalEntry(
   // them, or two ids differing only in whitespace collapse into one display
   // form and resolving could target the wrong request. Whitespace-bearing ids
   // fail the terminal-safe charset and render as exact-round-trip id64 tokens.
-  const id = typeof value.id === "string" && value.id.length > 0 ? value.id : null;
+  // Ill-formed (lone-surrogate) ids are skipped outright: the unified
+  // approval.get/resolve schema rejects them, so listing one would advertise
+  // a token that can never be resolved.
+  const id =
+    typeof value.id === "string" && value.id.length > 0 && value.id.isWellFormed()
+      ? value.id
+      : null;
   const createdAtMs = value.createdAtMs;
   const expiresAtMs = value.expiresAtMs;
   if (
@@ -470,10 +475,13 @@ function readPendingApprovalEntry(
   const description =
     typeof request.description === "string" && request.description ? request.description : null;
   const prose = title && description ? `${title}: ${description}` : (title ?? description);
+  // System-agent approvals stay on their reviewer-safe presentation (title,
+  // description); the raw operation is host-local by contract and must not
+  // leak into terminals, scripts, or logs.
   const summarySource =
     kind === "exec"
       ? command
-      : command
+      : kind === "plugin" && command
         ? `${prose ? `${prose} — ` : ""}Command: ${command}`
         : prose;
   return {
@@ -608,14 +616,11 @@ async function resolvePendingApproval(
     exitWithError("Reason must not be empty.");
   }
 
-  let deviceIdentity;
-  try {
-    deviceIdentity = loadOrCreateDeviceIdentity();
-  } catch {
-    deviceIdentity = null;
-  }
+  // No explicit device identity: operator.admin authorizes resolution on its
+  // own (canReviewOperatorApproval), and forcing a local identity onto a
+  // loopback token/password session can trigger pairing for an otherwise
+  // authorized credential.
   const approvalCallOptions = {
-    ...(deviceIdentity ? { deviceIdentity } : {}),
     scopes: [ADMIN_SCOPE, APPROVALS_SCOPE] as OperatorScope[],
   };
 

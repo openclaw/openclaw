@@ -22,7 +22,6 @@ const mocks = vi.hoisted(() => {
   const runtimeErrors: string[] = [];
   const stringifyArgs = (args: unknown[]) => args.map((value) => String(value)).join(" ");
   const readBestEffortConfig = vi.fn(async () => ({}));
-  const loadOrCreateDeviceIdentity = vi.fn(() => ({ deviceId: "cli-device" }));
   const defaultRuntime = {
     log: vi.fn(),
     error: vi.fn((...args: unknown[]) => {
@@ -81,7 +80,6 @@ const mocks = vi.hoisted(() => {
       },
     ),
     defaultRuntime,
-    loadOrCreateDeviceIdentity,
     readBestEffortConfig,
     runtimeErrors,
   };
@@ -90,7 +88,6 @@ const mocks = vi.hoisted(() => {
 const {
   callGatewayFromCli,
   defaultRuntime,
-  loadOrCreateDeviceIdentity,
   readBestEffortConfig,
   runtimeErrors,
 } = mocks;
@@ -254,10 +251,6 @@ vi.mock("./gateway-rpc.js", () => ({
     mocks.callGatewayFromCli(method, opts, params, extra),
 }));
 
-vi.mock("../infra/device-identity.js", () => ({
-  loadOrCreateDeviceIdentity: () => mocks.loadOrCreateDeviceIdentity(),
-}));
-
 vi.mock("./nodes-cli/rpc.js", async () => {
   const actual = await vi.importActual<typeof import("./nodes-cli/rpc.js")>("./nodes-cli/rpc.js");
   return {
@@ -342,8 +335,6 @@ describe("exec approvals CLI", () => {
     resetLocalSnapshot();
     runtimeErrors.length = 0;
     callGatewayFromCli.mockClear();
-    loadOrCreateDeviceIdentity.mockReset();
-    loadOrCreateDeviceIdentity.mockReturnValue({ deviceId: "cli-device" });
     readBestEffortConfig.mockClear();
     defaultRuntime.log.mockClear();
     defaultRuntime.error.mockClear();
@@ -468,7 +459,10 @@ describe("exec approvals CLI", () => {
     expect(output).toContain(approvalDisplayId("system-agent:1"));
     expect(output).toContain(approvalDisplayId("plugin:blank"));
     expect(output).toContain("Publish package");
-    expect(output).toContain("Command: apply-system-change --force");
+    // System-agent approvals show only their reviewer-safe presentation; the
+    // raw host-local operation must never reach the terminal.
+    expect(output).not.toContain("apply-system-change");
+    expect(output).toContain("OpenClaw change: Change the system configuration");
     expect(output).toContain("\\u{9}");
     expect(output).toContain("Full request text");
     expect(output).toContain("--osc-hidden-action");
@@ -535,6 +529,14 @@ describe("exec approvals CLI", () => {
             createdAtMs: now - 1_000,
             expiresAtMs: now + 60_000,
           },
+          {
+            // Ill-formed ids are unresolvable through the unified schema and
+            // must be skipped rather than listed with a dead token.
+            id: "bad-\uD800",
+            request: { command: "echo surrogate" },
+            createdAtMs: now - 500,
+            expiresAtMs: now + 60_000,
+          },
         ];
       }
       return [];
@@ -547,6 +549,7 @@ describe("exec approvals CLI", () => {
     );
     expect(ids).toContain(" victim ");
     expect(ids).toContain("victim");
+    expect(ids).not.toContain("bad-\uD800");
     // Display forms stay distinct: raw for the safe id, exact id64 token for
     // the padded one.
     expect(approvalDisplayId("victim")).toBe("victim");
@@ -591,7 +594,6 @@ describe("exec approvals CLI", () => {
     });
     for (const call of callGatewayFromCli.mock.calls) {
       expect(call[3]).toEqual({
-        deviceIdentity: { deviceId: "cli-device" },
         scopes: ["operator.admin", "operator.approvals"],
       });
     }
@@ -626,10 +628,7 @@ describe("exec approvals CLI", () => {
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
   });
 
-  it("continues with shared credentials when device identity storage is unavailable", async () => {
-    loadOrCreateDeviceIdentity.mockImplementationOnce(() => {
-      throw new Error("read-only state directory");
-    });
+  it("resolves with shared credentials and no device identity", async () => {
     callGatewayFromCli.mockImplementation(async (method: string) => {
       if (method === "approval.get") {
         return pendingApprovalSnapshot({ id: "approval-no-device" });
