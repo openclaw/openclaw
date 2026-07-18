@@ -33,7 +33,7 @@ export function resolveNextcloudTalkApiCredentialsResult(params: {
     return { status: "available", value: { apiUser, apiPassword: inlinePassword } };
   }
 
-  if (!params.apiPasswordFile) {
+  if (!params.apiPasswordFile?.trim()) {
     return { status: "missing" };
   }
   const result = tryReadSecretFileSync(

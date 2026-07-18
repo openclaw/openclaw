@@ -65,6 +65,12 @@ describe("resolveNextcloudTalkApiCredentials", () => {
     ).toBeUndefined();
   });
 
+  it("treats a blank API password file path as missing", () => {
+    expect(
+      resolveNextcloudTalkApiCredentialsResult({ apiUser: "admin", apiPasswordFile: "   " }),
+    ).toEqual({ status: "missing" });
+  });
+
   it("returns a typed redacted diagnostic for a missing explicit file", () => {
     const missingFile = createFixtureFile("unused");
     rmSync(missingFile);
