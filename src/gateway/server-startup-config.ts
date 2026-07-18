@@ -65,8 +65,8 @@ type RuntimeSecretsActivationParams = {
   includeAuthStoreRefs?: boolean;
   /** Raw config source paired with an otherwise fully activated prepared snapshot. */
   runtimeSourceConfig?: OpenClawConfig;
-  /** Defer recovery until a larger transaction can no longer roll activation back. */
-  publishRecovery?: boolean;
+  /** Defer degradation/recovery publication until a larger transaction can no longer roll back. */
+  deferStatePublication?: boolean;
 };
 
 /** Gateway startup hook that prepares secrets and optionally activates the prepared snapshot. */
@@ -87,18 +87,18 @@ export type ActivateRuntimeSecrets = ((
   ) => Promise<PreparedRuntimeSecretsSnapshot | null>;
 };
 
-const runtimeSecretsRecoveryPublishers = new WeakMap<
+const runtimeSecretsStatePublishers = new WeakMap<
   ActivateRuntimeSecrets,
   (snapshot: PreparedRuntimeSecretsSnapshot, options?: { sourceOnly?: boolean }) => void
 >();
 
-/** Publishes recovery after a prepared source-only snapshot wins its commit CAS. */
-export function publishRuntimeSecretsRecovery(
+/** Publishes a deferred degradation or recovery after the prepared snapshot wins its commit CAS. */
+export function publishRuntimeSecretsStateTransition(
   activateRuntimeSecrets: ActivateRuntimeSecrets,
   snapshot: PreparedRuntimeSecretsSnapshot,
   options?: { sourceOnly?: boolean },
 ): void {
-  runtimeSecretsRecoveryPublishers.get(activateRuntimeSecrets)?.(snapshot, options);
+  runtimeSecretsStatePublishers.get(activateRuntimeSecrets)?.(snapshot, options);
 }
 
 function logSecretDegradation(log: GatewayStartupLog, degradation: SecretDegradation): void {
@@ -157,6 +157,10 @@ export function createRuntimeSecretsActivator(params: {
   let activeDegradationGeneration: number | null = null;
   let activeDegradationConfig: OpenClawConfig | null = null;
   let activeDegradationSupportsSourceOnlyRecovery = false;
+  const deferredDegradationReasons = new WeakMap<
+    object,
+    RuntimeSecretsActivationParams["reason"]
+  >();
   const deferredRecoveryGenerations = new WeakMap<object, number>();
   let secretsActivationTail: Promise<void> = Promise.resolve();
   const loadSecretsRuntime = createLazyPromise(() => import("../secrets/runtime.js"), {
@@ -202,6 +206,39 @@ export function createRuntimeSecretsActivator(params: {
     activeDegradationSupportsSourceOnlyRecovery = false;
   };
 
+  const publishDegradation = (
+    prepared: PreparedRuntimeSecretsSnapshot,
+    reason: RuntimeSecretsActivationParams["reason"],
+  ) => {
+    for (const owner of prepared.degradedOwners ?? []) {
+      logSecretDegradation(params.logSecrets, {
+        kind: owner.ownerKind,
+        id: owner.ownerId,
+        reason: owner.reason,
+        state: owner.degradationState ?? "cold",
+        retryHint: SECRET_DEGRADATION_RETRY_HINT,
+      });
+    }
+    if (reason === "startup") {
+      return;
+    }
+    if (!secretsDegraded) {
+      params.emitStateEvent(
+        "SECRETS_RELOADER_DEGRADED",
+        "Secret resolution degraded one or more owners; healthy owners were refreshed.",
+        prepared.config,
+      );
+    }
+    const currentSupportsSourceOnlyRecovery =
+      preparedDegradationSupportsSourceOnlyRecovery(prepared);
+    activeDegradationSupportsSourceOnlyRecovery = secretsDegraded
+      ? activeDegradationSupportsSourceOnlyRecovery && currentSupportsSourceOnlyRecovery
+      : currentSupportsSourceOnlyRecovery;
+    secretsDegraded = true;
+    activeDegradationGeneration = ++degradationGeneration;
+    activeDegradationConfig = structuredClone(prepared.sourceConfig);
+  };
+
   const finishPreparedSnapshot = async (
     prepared: PreparedRuntimeSecretsSnapshot,
     activationParams: RuntimeSecretsActivationParams,
@@ -227,34 +264,13 @@ export function createRuntimeSecretsActivator(params: {
       params.logSecrets.warn(`[${warning.code}] ${warning.message}`);
     }
     if (activationParams.activate && (prepared.degradedOwners?.length ?? 0) > 0) {
-      for (const owner of prepared.degradedOwners ?? []) {
-        logSecretDegradation(params.logSecrets, {
-          kind: owner.ownerKind,
-          id: owner.ownerId,
-          reason: owner.reason,
-          state: owner.degradationState ?? "cold",
-          retryHint: SECRET_DEGRADATION_RETRY_HINT,
-        });
-      }
-      if (activationParams.reason !== "startup") {
-        if (!secretsDegraded) {
-          params.emitStateEvent(
-            "SECRETS_RELOADER_DEGRADED",
-            "Secret resolution degraded one or more owners; healthy owners were refreshed.",
-            prepared.config,
-          );
-        }
-        const currentSupportsSourceOnlyRecovery =
-          preparedDegradationSupportsSourceOnlyRecovery(prepared);
-        activeDegradationSupportsSourceOnlyRecovery = secretsDegraded
-          ? activeDegradationSupportsSourceOnlyRecovery && currentSupportsSourceOnlyRecovery
-          : currentSupportsSourceOnlyRecovery;
-        secretsDegraded = true;
-        activeDegradationGeneration = ++degradationGeneration;
-        activeDegradationConfig = structuredClone(prepared.sourceConfig);
+      if (activationParams.deferStatePublication === true) {
+        deferredDegradationReasons.set(prepared, activationParams.reason);
+      } else {
+        publishDegradation(prepared, activationParams.reason);
       }
     } else if (activationParams.activate && secretsDegraded) {
-      if (activationParams.publishRecovery === false) {
+      if (activationParams.deferStatePublication === true) {
         if (activeDegradationGeneration !== null) {
           deferredRecoveryGenerations.set(prepared, activeDegradationGeneration);
         }
@@ -490,7 +506,13 @@ export function createRuntimeSecretsActivator(params: {
       handleSecretsActivationError(error, providerAuthActivationParams, snapshot.sourceConfig),
   });
 
-  runtimeSecretsRecoveryPublishers.set(activateRuntimeSecrets, (snapshot, options) => {
+  runtimeSecretsStatePublishers.set(activateRuntimeSecrets, (snapshot, options) => {
+    const deferredDegradationReason = deferredDegradationReasons.get(snapshot);
+    deferredDegradationReasons.delete(snapshot);
+    if (deferredDegradationReason !== undefined) {
+      publishDegradation(snapshot, deferredDegradationReason);
+      return;
+    }
     const expectedGeneration = deferredRecoveryGenerations.get(snapshot);
     deferredRecoveryGenerations.delete(snapshot);
     const sourceOnlyContractRecovered =

@@ -81,7 +81,7 @@ import {
   type SharedGatewaySessionGenerationState,
 } from "./server-shared-auth-generation.js";
 import {
-  publishRuntimeSecretsRecovery,
+  publishRuntimeSecretsStateTransition,
   type ActivateRuntimeSecrets,
 } from "./server-startup-config.js";
 import { resolveHookClientIpConfig } from "./server/hook-client-ip-config.js";
@@ -2001,7 +2001,7 @@ export function startManagedGatewayConfigReloader(
               {
                 reason: "reload",
                 activate: true,
-                publishRecovery: false,
+                deferStatePublication: true,
                 runtimeSourceConfig: sourceConfig,
               },
               undefined,
@@ -2040,7 +2040,7 @@ export function startManagedGatewayConfigReloader(
         return {
           rollback: rollbackPublishedSource,
           commit: () =>
-            publishRuntimeSecretsRecovery(params.activateRuntimeSecrets, activated, {
+            publishRuntimeSecretsStateTransition(params.activateRuntimeSecrets, activated, {
               sourceOnly: true,
             }),
         };
@@ -2070,7 +2070,7 @@ export function startManagedGatewayConfigReloader(
             {
               reason: "reload",
               activate: true,
-              publishRecovery: false,
+              deferStatePublication: true,
               runtimeSourceConfig: sourceConfig,
             },
             undefined,
@@ -2104,7 +2104,8 @@ export function startManagedGatewayConfigReloader(
       }
       return {
         rollback: rollbackPublishedSource,
-        commit: () => publishRuntimeSecretsRecovery(params.activateRuntimeSecrets, activated),
+        commit: () =>
+          publishRuntimeSecretsStateTransition(params.activateRuntimeSecrets, activated),
       };
     },
     onNoopConfigCommit: async (plan, nextConfig, transactionOwnership, sourceConfig) => {
