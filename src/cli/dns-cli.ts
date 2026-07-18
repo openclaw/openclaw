@@ -15,13 +15,16 @@ import {
 } from "../infra/widearea-dns.js";
 import { defaultRuntime } from "../runtime.js";
 
-type RunOpts = { allowFailure?: boolean; inherit?: boolean };
+type RunOpts = { allowFailure?: boolean; inherit?: boolean; timeoutMs?: number };
+
+export const PROBE_TIMEOUT_MS = 15_000;
 
 function run(cmd: string, args: string[], opts?: RunOpts): string {
   const res = spawnSync(cmd, args, {
     encoding: "utf-8",
     stdio: opts?.inherit ? "inherit" : "pipe",
-    timeout: 15_000,
+    timeout: opts?.timeoutMs,
+    killSignal: opts?.timeoutMs ? "SIGKILL" : undefined,
   });
   if (res.error) {
     throw res.error;
@@ -52,7 +55,6 @@ function writeFileSudoIfNeeded(filePath: string, content: string): void {
     input: content,
     encoding: "utf-8",
     stdio: ["pipe", "ignore", "inherit"],
-    timeout: 15_000,
   });
   if (res.error) {
     throw res.error;
@@ -88,8 +90,8 @@ function zoneFileNeedsBootstrap(zonePath: string): boolean {
   }
 }
 
-function detectBrewPrefix(): string {
-  const out = run("brew", ["--prefix"]);
+export function detectBrewPrefix(): string {
+  const out = run("brew", ["--prefix"], { timeoutMs: PROBE_TIMEOUT_MS });
   const prefix = out.trim();
   if (!prefix) {
     throw new Error("failed to resolve Homebrew prefix");
