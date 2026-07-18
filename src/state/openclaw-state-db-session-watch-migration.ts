@@ -109,7 +109,7 @@ export function migrateSessionWatchCursorProvenance(
             .updateTable("session_watch_cursors")
             .set({
               provenance: SESSION_WATCH_PROVENANCE_AMBIENT_GROUP,
-              updated_at: Math.max(Number(watch.updated_at), Number(marker.updated_at)),
+              updated_at: Math.max(watch.updated_at, marker.updated_at),
             })
             .where("watcher_session_key", "=", watcherSessionKey)
             .where("target_session_key", "=", marker.target_session_key),
