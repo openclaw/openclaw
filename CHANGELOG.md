@@ -42,7 +42,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **Cron one-shot update cleanup:** apply the one-shot cleanup default when recurring jobs are converted to `at` schedules through the Gateway, CLI, or Control UI, while preserving explicit keep-after-run requests. Fixes #110411.
 - **Gateway control-plane rate limiting:** use per-method buckets with a 30-per-minute budget so interactive admin writes remain responsive while retaining runaway-loop protection.
 - **External supervisor restart health:** accept device-identity policy closes only when the replacement gateway lock and listener PID agree, preventing OCM-managed restarts from timing out after a successful handoff. Thanks @shakkernerd.
 - **ACPX cleanup process inspection:** bound host process-table reads so stalled `ps` calls cannot hang gateway startup or session cleanup while retaining fail-closed ownership checks. Thanks @Alix-007.
