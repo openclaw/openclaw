@@ -944,6 +944,12 @@ describe("qa scenario catalog", () => {
     expect(scenario.execution.channel).toBe("matrix");
   });
 
+  it("keeps the Control UI transcript role boundary in the mock lane", () => {
+    const scenario = readQaScenarioById("control-ui-assistant-transcript-role-boundary");
+
+    expect(scenario.execution.providerMode).toBe("mock-openai");
+  });
+
   it("routes native command session targeting through Crabline Telegram", () => {
     const scenario = readQaScenarioById("native-command-session-target");
     const config = readQaScenarioExecutionConfig("native-command-session-target") as
