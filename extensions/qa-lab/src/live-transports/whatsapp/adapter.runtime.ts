@@ -14,7 +14,9 @@ import { __testing as whatsappLive } from "./whatsapp-live.runtime.js";
 
 type AdapterFactory = NonNullable<QaRunnerCliRegistration["adapterFactory"]>;
 type FactoryContext = Parameters<AdapterFactory["create"]>[0];
-type AdapterDefinition = Awaited<ReturnType<AdapterFactory["create"]>>;
+type AdapterDefinition = Awaited<ReturnType<AdapterFactory["create"]>> & {
+  cleanupAfterGatewayStop?: () => Promise<void>;
+};
 type WhatsAppRuntimeEnv = ReturnType<typeof whatsappLive.resolveWhatsAppQaRuntimeEnv>;
 
 export async function createWhatsAppQaTransportAdapter(
@@ -54,11 +56,17 @@ export async function createWhatsAppQaTransportAdapter(
     sutAuthDir = unpackedSutAuthDir;
     driver = await startWhatsAppQaDriverSession({ authDir: driverAuthDir });
   } catch (error) {
-    await driver?.close().catch(() => undefined);
-    await heartbeat.stop();
-    await lease.release();
-    if (authRoot) {
-      await fs.rm(authRoot, { force: true, recursive: true });
+    try {
+      await driver?.close().catch(() => undefined);
+      await heartbeat.stop();
+    } finally {
+      try {
+        await lease.release();
+      } finally {
+        if (authRoot) {
+          await fs.rm(authRoot, { force: true, recursive: true });
+        }
+      }
     }
     throw error;
   }
@@ -188,9 +196,19 @@ export async function createWhatsAppQaTransportAdapter(
       stopped = true;
       await polling.catch(() => undefined);
       await driver.close();
-      await heartbeat.stop();
-      await lease.release();
-      await fs.rm(authRoot, { force: true, recursive: true });
+    },
+    async cleanupAfterGatewayStop() {
+      // The Gateway still uses SUT auth and the shared lease after the driver closes.
+      // Release them only after the suite confirms Gateway teardown succeeded.
+      try {
+        await heartbeat.stop();
+      } finally {
+        try {
+          await lease.release();
+        } finally {
+          await fs.rm(authRoot, { force: true, recursive: true });
+        }
+      }
     },
   };
 }

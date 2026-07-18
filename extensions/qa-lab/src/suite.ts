@@ -295,6 +295,70 @@ async function waitForQaLabReadyOrStopOwned(params: {
   }
 }
 
+async function runQaSuiteCleanupSteps(steps: ReadonlyArray<() => Promise<void>>) {
+  const errors: unknown[] = [];
+  for (const step of steps) {
+    try {
+      await step();
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  return errors;
+}
+
+async function runQaFlowSuiteCleanupPlan(params: {
+  closeWebSessions?: () => Promise<void>;
+  cleanupTransportBeforeGatewayStop: () => Promise<void>;
+  cleanupTransportAfterGatewayStop: () => Promise<void>;
+  stopGateway?: () => Promise<void>;
+  disposeAgentHarnesses: () => Promise<void>;
+  stopProvider?: () => Promise<void>;
+  finishLab: () => Promise<void>;
+}) {
+  const errors = await runQaSuiteCleanupSteps([
+    ...(params.closeWebSessions ? [params.closeWebSessions] : []),
+    // Drain transport HTTP work before stopping the gateway; otherwise a completed suite can
+    // emit an unhandled response-close rejection during delivery.
+    params.cleanupTransportBeforeGatewayStop,
+  ]);
+  let gatewayStopped = !params.stopGateway;
+  if (params.stopGateway) {
+    const gatewayErrors = await runQaSuiteCleanupSteps([params.stopGateway]);
+    errors.push(...gatewayErrors);
+    gatewayStopped = gatewayErrors.length === 0;
+  }
+  errors.push(
+    ...(await runQaSuiteCleanupSteps([
+      // Never release a credential-backed transport until gateway teardown proves
+      // that the isolated runtime reached its terminal boundary.
+      ...(gatewayStopped ? [params.cleanupTransportAfterGatewayStop] : []),
+      params.disposeAgentHarnesses,
+      ...(params.stopProvider ? [params.stopProvider] : []),
+      params.finishLab,
+    ])),
+  );
+  return errors;
+}
+
+function throwQaSuiteCleanupErrors(params: {
+  cleanupErrors: unknown[];
+  runFailed: boolean;
+  runError: unknown;
+}) {
+  if (params.cleanupErrors.length === 0) {
+    return;
+  }
+  if (params.cleanupErrors.length === 1 && !params.runFailed) {
+    throw params.cleanupErrors[0];
+  }
+  throw new AggregateError(
+    params.runFailed ? [params.runError, ...params.cleanupErrors] : params.cleanupErrors,
+    params.runFailed ? "QA suite and cleanup failed" : "QA suite cleanup failed",
+    params.runFailed ? { cause: params.runError } : undefined,
+  );
+}
+
 function requireQaSuiteStartLab(startLab: QaSuiteStartLabFn | undefined): QaSuiteStartLabFn {
   if (startLab) {
     return startLab;
@@ -972,7 +1036,7 @@ async function runQaRuntimeParitySuite(params: {
       watchUrl: lab.baseUrl,
     } satisfies QaSuiteResult;
   } finally {
-    await transportFactoryResult.cleanup();
+    await transportFactoryResult.cleanupWithoutGateway();
     if (ownsLab) {
       await lab.stop();
     }
@@ -1428,7 +1492,16 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
         });
     };
 
+    let isolatedRunFailed = false;
+    let isolatedRunError: unknown;
+    let parentTransportCleaned = false;
     try {
+      if (params?.channelDriver === "live") {
+        // The parent only renders aggregate artifacts. Release its live credentials
+        // before child workers acquire the same exclusive transport lease.
+        parentTransportCleaned = true;
+        await transportFactoryResult.cleanupWithoutGateway();
+      }
       updateScenarioRun();
       const workerStartStaggerMs =
         params?.workerStartStaggerMs ?? resolveQaSuiteWorkerStartStaggerMs(concurrency);
@@ -1592,12 +1665,24 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
         scenarios,
         watchUrl: lab.baseUrl,
       } satisfies QaSuiteResult;
+    } catch (error) {
+      isolatedRunFailed = true;
+      isolatedRunError = error;
+      throw error;
     } finally {
-      await transportFactoryResult.cleanup();
-      await disposeRegisteredAgentHarnesses();
+      const cleanupSteps: Array<() => Promise<void>> = [
+        ...(!parentTransportCleaned ? [() => transportFactoryResult.cleanupWithoutGateway()] : []),
+        () => disposeRegisteredAgentHarnesses(),
+      ];
       if (ownsLab) {
-        await lab.stop();
+        cleanupSteps.push(() => lab.stop());
       }
+      const cleanupErrors = await runQaSuiteCleanupSteps(cleanupSteps);
+      throwQaSuiteCleanupErrors({
+        cleanupErrors,
+        runFailed: isolatedRunFailed,
+        runError: isolatedRunError,
+      });
     }
   }
 
@@ -1631,6 +1716,8 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
   let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
   let env: QaSuiteEnvironment | undefined;
   let preserveGatewayRuntimeDir: string | undefined;
+  let runFailed = false;
+  let runError: unknown;
   try {
     writeQaSuiteProgress(progressEnabled, `provider start: ${providerMode}`);
     const activeMock = await startQaProviderServer(providerMode, {
@@ -1891,28 +1978,38 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
       ...(runtimeParityCell ? { runtimeParityCell } : {}),
     } satisfies QaSuiteResult;
   } catch (error) {
+    runFailed = true;
+    runError = error;
     preserveGatewayRuntimeDir = path.join(outputDir, "artifacts", "gateway-runtime");
     throw error;
   } finally {
-    if (env) {
-      await closeQaWebSessions(env.webSessionIds);
-    }
+    const activeEnv = env;
     const keepTemp = process.env.OPENCLAW_QA_KEEP_TEMP === "1" || false;
-    await gateway?.stop({
-      keepTemp,
-      preserveToDir: keepTemp ? undefined : preserveGatewayRuntimeDir,
+    const activeGateway = gateway;
+    const activeMock = mock;
+    const cleanupErrors = await runQaFlowSuiteCleanupPlan({
+      closeWebSessions: activeEnv ? () => closeQaWebSessions(activeEnv.webSessionIds) : undefined,
+      cleanupTransportBeforeGatewayStop: () => transportFactoryResult.cleanupBeforeGatewayStop(),
+      cleanupTransportAfterGatewayStop: () => transportFactoryResult.cleanupAfterGatewayStop(),
+      stopGateway: activeGateway
+        ? () =>
+            activeGateway.stop({
+              keepTemp,
+              preserveToDir: keepTemp ? undefined : preserveGatewayRuntimeDir,
+            })
+        : undefined,
+      disposeAgentHarnesses: () => disposeRegisteredAgentHarnesses(),
+      stopProvider: activeMock ? () => activeMock.stop() : undefined,
+      finishLab: ownsLab
+        ? () => lab.stop()
+        : async () => {
+            lab.setControlUi({
+              controlUiUrl: null,
+              controlUiProxyTarget: null,
+            });
+          },
     });
-    await transportFactoryResult.cleanup();
-    await disposeRegisteredAgentHarnesses();
-    await mock?.stop();
-    if (ownsLab) {
-      await lab.stop();
-    } else {
-      lab.setControlUi({
-        controlUiUrl: null,
-        controlUiProxyTarget: null,
-      });
-    }
+    throwQaSuiteCleanupErrors({ cleanupErrors, runFailed, runError });
   }
 }
 
@@ -1927,12 +2024,14 @@ export const qaSuiteProgressTesting = {
   mergeQaRuntimeEnvPatches,
   parseQaSuiteBooleanEnv,
   remapModelRefForForcedRuntime,
+  runQaFlowSuiteCleanupPlan,
   resolveQaSuiteControlUiEnabled,
   scenarioRequiresControlUi,
   resolveQaSuiteTransportReadyTimeoutMs,
   sanitizeQaSuiteProgressValue,
   shouldRunQaSuiteWithIsolatedScenarioWorkers,
   shouldLogQaSuiteProgress,
+  throwQaSuiteCleanupErrors,
   waitForQaLabReadyOrStopOwned,
   writeQaSuiteArtifacts,
 };

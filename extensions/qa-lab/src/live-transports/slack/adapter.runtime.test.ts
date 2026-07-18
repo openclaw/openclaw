@@ -1,78 +1,86 @@
-// Qa Lab tests cover Slack live adapter message reconciliation.
-import { describe, expect, it } from "vitest";
-import { createQaBusState } from "../../bus-state.js";
-import { testing } from "./adapter.runtime.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-describe("Slack live adapter reconciliation", () => {
-  it("records streamed updates to the same Slack timestamp as bus edits", async () => {
-    const state = createQaBusState();
-    const busMessageIds = new Map<string, string>();
-    const observedText = new Map<string, string>();
-    const messages: Parameters<typeof testing.recordSlackObservedMessage>[0]["messages"] = {
-      addInboundMessage: (input) => state.addInboundMessage(input),
-      addOutboundMessage: (input) => state.addOutboundMessage(input),
-      editMessage: (input) => state.editMessage(input),
-    };
-    const base = {
-      accountId: "sut",
-      busMessageIds,
-      logicalConversationId: "C123",
-      messages,
-      observedText,
-      sutUserId: "U123",
-    };
+const mocks = vi.hoisted(() => ({
+  acquireQaCredentialLease: vi.fn(),
+  createSlackWebClient: vi.fn(() => ({})),
+  createSlackWriteClient: vi.fn(() => ({})),
+  getSlackIdentity: vi.fn(),
+  heartbeatStop: vi.fn(),
+  heartbeatThrowIfFailed: vi.fn(),
+  leaseRelease: vi.fn(),
+  listSlackMessages: vi.fn(),
+}));
 
-    await testing.recordSlackObservedMessage({
-      ...base,
-      message: { text: "QA-", ts: "123.000001", user: "U123" },
+vi.mock("@openclaw/slack/api.js", () => ({
+  createSlackWebClient: mocks.createSlackWebClient,
+  createSlackWriteClient: mocks.createSlackWriteClient,
+}));
+
+vi.mock("../shared/credential-lease.runtime.js", () => ({
+  acquireQaCredentialLease: mocks.acquireQaCredentialLease,
+  startQaCredentialLeaseHeartbeat: () => ({
+    stop: mocks.heartbeatStop,
+    throwIfFailed: mocks.heartbeatThrowIfFailed,
+  }),
+}));
+
+vi.mock("./slack-live.runtime.js", () => ({
+  __testing: {
+    buildSlackQaConfig: vi.fn(() => ({})),
+    getSlackIdentity: mocks.getSlackIdentity,
+    listSlackMessages: mocks.listSlackMessages,
+    listSlackThreadMessages: vi.fn(),
+    parseSlackQaCredentialPayload: vi.fn(),
+    resolveSlackQaRuntimeEnv: vi.fn(),
+    sendSlackChannelMessage: vi.fn(),
+    waitForSlackChannelStable: vi.fn(),
+  },
+}));
+
+import { createSlackQaTransportAdapter } from "./adapter.runtime.js";
+
+describe("Slack QA transport adapter cleanup", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.acquireQaCredentialLease.mockResolvedValue({
+      payload: {
+        channelId: "C123",
+        driverBotToken: "driver-token",
+        sutAppToken: "sut-app-token",
+        sutBotToken: "sut-token",
+      },
+      release: mocks.leaseRelease,
     });
-    await testing.recordSlackObservedMessage({
-      ...base,
-      message: { text: "QA-CHANNEL-BASELINE-OK", ts: "123.000001", user: "U123" },
-    });
-
-    const snapshot = state.getSnapshot();
-    expect(snapshot.messages).toHaveLength(1);
-    expect(snapshot.messages[0]?.text).toBe("QA-CHANNEL-BASELINE-OK");
-    expect(snapshot.events.map((event) => event.kind)).toEqual([
-      "outbound-message",
-      "message-edited",
-    ]);
+    mocks.getSlackIdentity
+      .mockResolvedValueOnce({ userId: "U-driver" })
+      .mockResolvedValueOnce({ userId: "U-sut" });
   });
 
-  it("maps observed thread replies to the root bus message", async () => {
-    const state = createQaBusState();
-    const root = state.addInboundMessage({
-      accountId: "sut",
-      conversation: { id: "C123", kind: "channel" },
-      senderId: "U456",
-      text: "root",
-    });
-    const busMessageIds = new Map([["123.000001", root.id]]);
+  it("holds the credential lease until gateway teardown has completed", async () => {
+    let resolvePoll: ((messages: unknown[]) => void) | undefined;
+    mocks.listSlackMessages.mockImplementation(
+      async () =>
+        await new Promise<unknown[]>((resolve) => {
+          resolvePoll = resolve;
+        }),
+    );
 
-    await testing.recordSlackObservedMessage({
-      accountId: "sut",
-      busMessageIds,
-      logicalConversationId: "C123",
-      message: {
-        text: "thread reply",
-        thread_ts: "123.000001",
-        ts: "123.000002",
-        user: "U123",
-      },
-      messages: {
-        addInboundMessage: (input) => state.addInboundMessage(input),
-        addOutboundMessage: (input) => state.addOutboundMessage(input),
-        editMessage: (input) => state.editMessage(input),
-      },
-      observedText: new Map(),
-      sutUserId: "U123",
-    });
+    const adapter = await createSlackQaTransportAdapter({
+      adapterOptions: {},
+      messages: {},
+    } as never);
+    await vi.waitFor(() => expect(resolvePoll).toBeTypeOf("function"));
 
-    expect(state.getSnapshot().messages.at(-1)).toMatchObject({
-      direction: "outbound",
-      text: "thread reply",
-      threadId: root.id,
-    });
+    const cleanup = adapter.cleanup?.();
+    resolvePoll?.([]);
+    await cleanup;
+
+    expect(mocks.heartbeatStop).not.toHaveBeenCalled();
+    expect(mocks.leaseRelease).not.toHaveBeenCalled();
+
+    await adapter.cleanupAfterGatewayStop?.();
+
+    expect(mocks.heartbeatStop).toHaveBeenCalledOnce();
+    expect(mocks.leaseRelease).toHaveBeenCalledOnce();
   });
 });

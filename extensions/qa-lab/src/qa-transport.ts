@@ -183,7 +183,9 @@ export function createFailureAwareTransportWaitForCondition(state: QaTransportSt
 
 type QaTransportAdapterDefinition = Awaited<
   ReturnType<NonNullable<QaRunnerCliRegistration["adapterFactory"]>["create"]>
->;
+> & {
+  cleanupAfterGatewayStop?: () => Promise<void>;
+};
 
 export type QaTransportAdapter = Omit<
   QaTransportAdapterDefinition,
@@ -358,6 +360,9 @@ export function createQaStateBackedTransportAdapter(
       ? { createRuntimeEnvPatch: params.createRuntimeEnvPatch }
       : {}),
     ...(params.cleanup ? { cleanup: params.cleanup } : {}),
+    ...(params.cleanupAfterGatewayStop
+      ? { cleanupAfterGatewayStop: params.cleanupAfterGatewayStop }
+      : {}),
   });
   return adapter;
 }

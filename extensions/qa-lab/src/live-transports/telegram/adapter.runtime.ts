@@ -10,7 +10,9 @@ import { __testing as telegramLive } from "./telegram-live.runtime.js";
 
 type AdapterFactory = NonNullable<QaRunnerCliRegistration["adapterFactory"]>;
 type FactoryContext = Parameters<AdapterFactory["create"]>[0];
-type AdapterDefinition = Awaited<ReturnType<AdapterFactory["create"]>>;
+type AdapterDefinition = Awaited<ReturnType<AdapterFactory["create"]>> & {
+  cleanupAfterGatewayStop?: () => Promise<void>;
+};
 type TelegramRuntimeEnv = ReturnType<typeof telegramLive.resolveTelegramQaRuntimeEnv>;
 
 export async function createTelegramQaTransportAdapter(
@@ -25,6 +27,13 @@ export async function createTelegramQaTransportAdapter(
     parsePayload: telegramLive.parseTelegramQaCredentialPayload,
   });
   const heartbeat = startQaCredentialLeaseHeartbeat(credentialLease);
+  const releaseCredentialLease = async () => {
+    try {
+      await heartbeat.stop();
+    } finally {
+      await credentialLease.release();
+    }
+  };
   const runtimeEnv = credentialLease.payload;
   let driverIdentity: { id: number; username?: string };
   let sutIdentity: { id: number; username?: string };
@@ -39,8 +48,7 @@ export async function createTelegramQaTransportAdapter(
       telegramLive.flushTelegramUpdates(runtimeEnv.driverToken),
     ]);
   } catch (error) {
-    await heartbeat.stop();
-    await credentialLease.release();
+    await releaseCredentialLease();
     throw error;
   }
   let stopped = false;
@@ -175,8 +183,9 @@ export async function createTelegramQaTransportAdapter(
     async cleanup() {
       stopped = true;
       await polling.catch(() => undefined);
-      await heartbeat.stop();
-      await credentialLease.release();
+    },
+    async cleanupAfterGatewayStop() {
+      await releaseCredentialLease();
     },
   };
 }

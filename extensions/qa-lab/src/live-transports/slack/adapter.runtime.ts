@@ -10,7 +10,9 @@ import { __testing as slackLive } from "./slack-live.runtime.js";
 
 type AdapterFactory = NonNullable<QaRunnerCliRegistration["adapterFactory"]>;
 type FactoryContext = Parameters<AdapterFactory["create"]>[0];
-type AdapterDefinition = Awaited<ReturnType<AdapterFactory["create"]>>;
+type AdapterDefinition = Awaited<ReturnType<AdapterFactory["create"]>> & {
+  cleanupAfterGatewayStop?: () => Promise<void>;
+};
 type SlackRuntimeEnv = ReturnType<typeof slackLive.resolveSlackQaRuntimeEnv>;
 type SlackObservedMessage = Awaited<ReturnType<typeof slackLive.listSlackMessages>>[number];
 
@@ -76,8 +78,11 @@ export async function createSlackQaTransportAdapter(
       slackLive.getSlackIdentity(runtimeEnv.sutBotToken),
     ]);
   } catch (error) {
-    await heartbeat.stop();
-    await lease.release();
+    try {
+      await heartbeat.stop();
+    } finally {
+      await lease.release();
+    }
     throw error;
   }
   const driverClient = createSlackWriteClient(runtimeEnv.driverBotToken);
@@ -205,8 +210,13 @@ export async function createSlackQaTransportAdapter(
     async cleanup() {
       stopped = true;
       await polling.catch(() => undefined);
-      await heartbeat.stop();
-      await lease.release();
+    },
+    async cleanupAfterGatewayStop() {
+      try {
+        await heartbeat.stop();
+      } finally {
+        await lease.release();
+      }
     },
   };
 }
