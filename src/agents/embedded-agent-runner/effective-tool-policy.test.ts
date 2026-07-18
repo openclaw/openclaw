@@ -35,7 +35,17 @@ function applyFinalPolicy(
     warn?: (message: string) => void;
   } & Pick<
     ConversationCapabilityProfileParams,
-    "sessionKey" | "messageProvider" | "senderId" | "groupId" | "groupChannel"
+    | "sessionKey"
+    | "messageProvider"
+    | "senderId"
+    | "groupId"
+    | "groupChannel"
+    | "senderE164"
+    | "senderIsOwner"
+    | "sandboxSessionKey"
+    | "spawnedBy"
+    | "senderName"
+    | "senderUsername"
   >,
 ): AnyAgentTool[] {
   const { bundledTools, config, warn, ...profileParams } = params;
@@ -280,5 +290,150 @@ describe("applyFinalEffectiveToolPolicy", () => {
     });
 
     expect(filtered).toStrictEqual([]);
+  });
+
+  // ──  fix #109025: sender-scoped tool policy for subagents  ──────────────
+  //
+  //  A spawned subagent has no external sender identity, so
+  //  `resolveSenderToolPolicy` would fall through all exact sender matchers
+  //  and return the wildcard "*" entry, stripping filesystem/runtime tools.
+  //  The fix skips sender-policy resolution for recognized subagent
+  //  envelopes (`isSubagentEnvelopeSession`), letting the child inherit the
+  //  parent's already-resolved policy. Subagent restrictions are still
+  //  applied independently so the final clamp is preserved.
+  //
+  //  1. Parent with exact E164 identity   → all tools pass sender policy
+  //  2. Anonymous user (no sender fields)  → wildcard deny strips tools
+  //  3. Spawned subagent from E164 parent  → senderPolicy skipped, subagent
+  //     restrictions still narrow the final inventory
+  //  4. Spawned subagent without subagent  → subagent restrictions still
+  //     restrict (inherited allowlist applies on top)
+
+  it("fix #109025: parent with E164 gets exact toolsBySender allow (no denies)", () => {
+    // WhatsApp parent with E164 → exact allow override, no wildcard denies
+    const filtered = applyFinalPolicy({
+      bundledTools: [
+        makeTool("exec"),
+        makeTool("fs_read"),
+        makeTool("message"),
+      ],
+      config: {
+        tools: {
+          toolsBySender: {
+            "e164:+1234567890": { allow: ["*"] },
+            "*": { deny: ["exec", "process", "fs_read", "fs_write"] },
+          },
+        },
+      },
+      sessionKey: "main",
+      messageProvider: "whatsapp",
+      senderE164: "+1234567890",
+      senderIsOwner: false,
+      warn: () => {},
+    });
+
+    // Parent keeps all tools — wildcard deny is not applied
+    expect(filtered.map((t) => t.name)).toEqual(
+      expect.arrayContaining(["exec", "fs_read", "message"]),
+    );
+  });
+
+  it("fix #109025: anonymous user without sender identity gets wildcard deny", () => {
+    // No sender fields → wildcard deny applies, stripping fs/runtime tools
+    const filtered = applyFinalPolicy({
+      bundledTools: [
+        makeTool("exec"),
+        makeTool("fs_read"),
+        makeTool("message"),
+      ],
+      config: {
+        tools: {
+          toolsBySender: {
+            "e164:+1234567890": { allow: ["*"] },
+            "*": { deny: ["exec", "process", "fs_read", "fs_write"] },
+          },
+        },
+      },
+      sessionKey: "main",
+      messageProvider: "whatsapp",
+      senderIsOwner: false,
+      warn: () => {},
+    });
+
+    expect(filtered.map((t) => t.name)).toEqual(["message"]);
+  });
+
+  it("fix #109025: spawned subagent skips sender policy, retains parent tools", () => {
+    // Subagent with subagent session key → isSubagentEnvelopeSession
+    // detected → senderPolicy = undefined (skipped), so exec/fs_read survive
+    // the sender-policy step. Subagent restrictions still apply but nothing
+    // is configured here, so all tools pass.
+    const filtered = applyFinalPolicy({
+      bundledTools: [
+        makeTool("exec"),
+        makeTool("fs_read"),
+        makeTool("message"),
+      ],
+      config: {
+        tools: {
+          toolsBySender: {
+            "e164:+1234567890": { allow: ["*"] },
+            "*": { deny: ["exec", "process", "fs_read", "fs_write"] },
+          },
+        },
+      },
+      sessionKey: "subagent:child::main",
+      sandboxSessionKey: "subagent:child::main",
+      spawnedBy: "main",
+      messageProvider: "whatsapp",
+      senderE164: "+1234567890",
+      senderIsOwner: false,
+      warn: () => {},
+    });
+
+    // Subagent inherits parent's tools via senderPolicy skip
+    expect(filtered.map((t) => t.name)).toEqual(
+      expect.arrayContaining(["exec", "fs_read", "message"]),
+    );
+  });
+
+  it("fix #109025: subagent restrictions still narrow tools after sender-policy skip", () => {
+    // Subagent skips sender policy (retains parent tools), but
+    // subagent tools.deny still removes the configured restricted tools.
+    const filtered = applyFinalPolicy({
+      bundledTools: [
+        makeTool("exec"),
+        makeTool("fs_read"),
+        makeTool("fs_write"),
+        makeTool("message"),
+      ],
+      config: {
+        tools: {
+          toolsBySender: {
+            "e164:+1234567890": { allow: ["*"] },
+            "*": { deny: ["exec", "process", "fs_read", "fs_write"] },
+          },
+          subagents: {
+            tools: {
+              deny: ["fs_write"],
+            },
+          },
+        },
+      },
+      sessionKey: "subagent:child::main",
+      sandboxSessionKey: "subagent:child::main",
+      spawnedBy: "main",
+      messageProvider: "whatsapp",
+      senderE164: "+1234567890",
+      senderIsOwner: false,
+      warn: () => {},
+    });
+
+    // Subagent retains exec and fs_read (sender policy skipped), but
+    // fs_write is removed by the subagent restriction layer
+    expect(filtered.map((t) => t.name)).toEqual(
+      expect.arrayContaining(["exec", "fs_read", "message"]),
+    );
+    expect(filtered.map((t) => t.name)).not.toContain("fs_write");
   });
 });
