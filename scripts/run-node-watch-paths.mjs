@@ -37,6 +37,10 @@ export const runNodeWatchedPaths = [...runNodeSourceRoots, ...runNodeConfigFiles
 /** Plugin metadata files that require a runtime restart even without source edits. */
 export const extensionRestartMetadataFiles = new Set(["openclaw.plugin.json", "package.json"]);
 
+const ignoredRunNodeRepoPathPatterns = [
+  /^extensions\/[^/]+\/src\/host\/.+\/\.bundle\.hash$/u,
+  /^extensions\/[^/]+\/src\/host\/.+\/[^/]+\.bundle\.js$/u,
+];
 const extensionSourceFilePattern = /\.(?:[cm]?[jt]sx?)$/;
 
 /** Normalizes watch paths to repository-style POSIX separators. */
@@ -70,7 +74,10 @@ const isRelevantRunNodePath = (
   generatedPluginAssetPaths,
 ) => {
   const normalizedPath = normalizeRunNodePath(repoPath).replace(/^\.\/+/, "");
-  if (generatedPluginAssetPaths.has(normalizedPath)) {
+  if (
+    generatedPluginAssetPaths.has(normalizedPath) ||
+    ignoredRunNodeRepoPathPatterns.some((pattern) => pattern.test(normalizedPath))
+  ) {
     return false;
   }
   if (runNodeConfigFiles.includes(normalizedPath)) {
