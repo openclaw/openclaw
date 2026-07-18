@@ -511,7 +511,11 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     }
   }
 
-  private async waitForEmbeddingRetry(delayMs: number, action: string, err?: unknown): Promise<void> {
+  private async waitForEmbeddingRetry(
+    delayMs: number,
+    action: string,
+    err?: unknown,
+  ): Promise<void> {
     // When the error is a rate-limit (429 / resource exhausted), use a longer
     // max delay since the reset window is typically 60s.
     const maxDelayMs =
