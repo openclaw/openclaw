@@ -31,7 +31,7 @@ export function status(manualActionReason: string, manualActionMessage = "manual
   return health;
 }
 
-export type PageControl = {
+type PageControl = {
   checked?: boolean;
   disabled?: boolean;
   clicks: number;
