@@ -5,6 +5,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { findChatChannelMeta, normalizeChatChannelId } from "../channels/registry.js";
 import { readRegularFileSync } from "../infra/regular-file.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { isRecord, resolveConfigDir, resolveUserPath } from "../utils.js";
 import type { PluginAutoEnableCandidate } from "./plugin-auto-enable.types.js";
@@ -12,6 +13,7 @@ import type { OpenClawConfig } from "./types.openclaw.js";
 
 /** Maximum bytes to read from an external catalog file before rejecting it. */
 const MAX_EXTERNAL_CATALOG_BYTES = 16 * 1024 * 1024;
+const log = createSubsystemLogger("config/plugin-catalog");
 
 type ExternalCatalogChannelEntry = {
   id: string;
@@ -97,8 +99,15 @@ function resolveExternalCatalogPreferOver(channelId: string, env: NodeJS.Process
       if (channel) {
         return channel.preferOver;
       }
-    } catch {
-      // Ignore invalid catalog files.
+    } catch (err) {
+      // Surface oversized catalogs so operators know a configured file was
+      // skipped — unlike parse or permission errors which mean the file is
+      // genuinely unusable.
+      if (err instanceof Error && err.message.startsWith("File exceeds")) {
+        log.warn(
+          `skipping oversized external catalog file (max ${MAX_EXTERNAL_CATALOG_BYTES} bytes): ${resolved}`,
+        );
+      }
     }
   }
   return [];

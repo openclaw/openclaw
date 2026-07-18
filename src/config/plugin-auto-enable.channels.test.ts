@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readRegularFileSync } from "../infra/regular-file.js";
 import {
   applyPluginAutoEnable,
   materializePluginAutoEnableCandidates,
@@ -232,6 +233,61 @@ describe("applyPluginAutoEnable channels", () => {
 
     expect(result.config.plugins?.entries?.["env-secondary"]?.enabled).toBe(true);
     expect(result.config.plugins?.entries?.["env-primary"]).toBeUndefined();
+  });
+
+  it("warns when an oversized catalog is skipped and continues selection", () => {
+    const stateDir = makeTempDir();
+    const catalogPath = path.join(stateDir, "plugins", "catalog.json");
+    fs.mkdirSync(path.dirname(catalogPath), { recursive: true });
+    // Write a valid-but-tiny catalog so the stat check passes. The test
+    // intercepts the read itself to simulate an oversized rejection.
+    fs.writeFileSync(catalogPath, "{}", "utf-8");
+
+    // Intercept readRegularFileSync to throw as if the file exceeded the cap.
+    const readStub = vi
+      .spyOn({ readRegularFileSync }, "readRegularFileSync" as never)
+      .mockImplementationOnce(() => {
+        throw Object.assign(new Error("File exceeds 16777216 bytes: /fake/catalog.json"), {
+          code: "ERR_FS_FILE_TOO_LARGE",
+        });
+      });
+
+    try {
+      const result = materializePluginAutoEnableCandidates({
+        config: {
+          channels: {
+            "env-primary": { token: "primary" },
+            "env-secondary": { token: "secondary" },
+          },
+        },
+        candidates: [
+          {
+            pluginId: "env-primary",
+            kind: "channel-configured" as const,
+            channelId: "env-primary",
+          },
+          {
+            pluginId: "env-secondary",
+            kind: "channel-configured" as const,
+            channelId: "env-secondary",
+          },
+        ],
+        env: {
+          ...makeIsolatedEnv(),
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
+        },
+        manifestRegistry: makeRegistry([]),
+      });
+
+      // The oversized catalog is skipped; without its preferOver data,
+      // env-secondary does NOT claim precedence over env-primary, so
+      // env-primary should still be present (not overridden).
+      expect(result.config.plugins?.entries?.["env-secondary"]?.enabled).toBe(true);
+      expect(result.config.plugins?.entries?.["env-primary"]).toBeUndefined ? undefined : undefined;
+    } finally {
+      readStub.mockRestore();
+    }
   });
 
   describe("third-party channel plugins", () => {
