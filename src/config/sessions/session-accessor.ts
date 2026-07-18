@@ -114,6 +114,7 @@ export {
   listSessionEntries,
   loadExactSessionEntry,
   loadSessionEntry,
+  loadSessionEntryReadOnly,
   openSessionEntryReadView,
   patchSessionEntry,
   patchSessionEntryTarget,

@@ -33898,8 +33898,24 @@
       "id": "native.apple.144b21229f65f2a4"
     },
     {
+      "kind": "ui-localized-call",
+      "line": 22,
+      "path": "apps/macos/Sources/OpenClaw/QuickChatRecents.swift",
+      "source": "New message to \\(agentName)",
+      "surface": "apple",
+      "id": "native.apple.b5524e37a230e571"
+    },
+    {
       "kind": "ui-call",
-      "line": 62,
+      "line": 67,
+      "path": "apps/macos/Sources/OpenClaw/QuickChatView.swift",
+      "source": "Reply in \\(override.displayName)",
+      "surface": "apple",
+      "id": "native.apple.b99799f97999f481"
+    },
+    {
+      "kind": "ui-call",
+      "line": 69,
       "path": "apps/macos/Sources/OpenClaw/QuickChatView.swift",
       "source": "Message \\(self.model.agentDisplay.name)",
       "surface": "apple",
@@ -33907,7 +33923,15 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 88,
+      "line": 108,
+      "path": "apps/macos/Sources/OpenClaw/QuickChatView.swift",
+      "source": "Continue a recent conversation",
+      "surface": "apple",
+      "id": "native.apple.da0b9bd07a337bda"
+    },
+    {
+      "kind": "ui-modifier",
+      "line": 121,
       "path": "apps/macos/Sources/OpenClaw/QuickChatView.swift",
       "source": "Send a window screenshot",
       "surface": "apple",
@@ -33915,7 +33939,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 112,
+      "line": 145,
       "path": "apps/macos/Sources/OpenClaw/QuickChatView.swift",
       "source": "Send message",
       "surface": "apple",
@@ -33923,7 +33947,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 170,
+      "line": 203,
       "path": "apps/macos/Sources/OpenClaw/QuickChatView.swift",
       "source": "Needs additional permissions",
       "surface": "apple",
@@ -33931,7 +33955,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 177,
+      "line": 210,
       "path": "apps/macos/Sources/OpenClaw/QuickChatView.swift",
       "source": "Grant",
       "surface": "apple",
@@ -33939,7 +33963,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 183,
+      "line": 216,
       "path": "apps/macos/Sources/OpenClaw/QuickChatView.swift",
       "source": "Not now",
       "surface": "apple",

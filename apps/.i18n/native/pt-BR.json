@@ -21189,9 +21189,24 @@
       "translated": "Continuar"
     },
     {
+      "id": "native.apple.b5524e37a230e571",
+      "source": "New message to \\(agentName)",
+      "translated": "Nova mensagem para \\(agentName)"
+    },
+    {
+      "id": "native.apple.b99799f97999f481",
+      "source": "Reply in \\(override.displayName)",
+      "translated": "Responder em \\(override.displayName)"
+    },
+    {
       "id": "native.apple.b3700cf60f4520dc",
       "source": "Message \\(self.model.agentDisplay.name)",
-      "translated": "Enviar mensagem para \\(self.model.agentDisplay.name)"
+      "translated": "Mensagem para \\(self.model.agentDisplay.name)"
+    },
+    {
+      "id": "native.apple.da0b9bd07a337bda",
+      "source": "Continue a recent conversation",
+      "translated": "Continuar uma conversa recente"
     },
     {
       "id": "native.apple.edf12ff583307f43",

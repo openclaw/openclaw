@@ -67,6 +67,60 @@
   width: min(680px, 90%);
 }
 
+.custodian__nudge {
+  display: flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 4px;
+  max-width: min(680px, 96%);
+  padding: 4px 5px 4px 12px;
+  border: 1px solid color-mix(in srgb, var(--warn) 42%, var(--border));
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--warn) 9%, var(--bg-elevated));
+  color: var(--text);
+}
+
+.custodian__nudge-action,
+.custodian__nudge-dismiss {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+}
+
+.custodian__nudge-action {
+  padding: 5px 2px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.custodian__nudge-action:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.custodian__nudge-dismiss {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 50%;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.custodian__nudge-action:focus-visible,
+.custodian__nudge-dismiss:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.custodian__nudge-dismiss:hover {
+  background: var(--bg-hover);
+  color: var(--text-strong);
+}
+
 .custodian__message--assistant {
   align-self: flex-start;
 }

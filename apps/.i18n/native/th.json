@@ -21189,9 +21189,24 @@
       "translated": "ดำเนินการต่อ"
     },
     {
+      "id": "native.apple.b5524e37a230e571",
+      "source": "New message to \\(agentName)",
+      "translated": "ข้อความใหม่ถึง \\(agentName)"
+    },
+    {
+      "id": "native.apple.b99799f97999f481",
+      "source": "Reply in \\(override.displayName)",
+      "translated": "ตอบกลับใน \\(override.displayName)"
+    },
+    {
       "id": "native.apple.b3700cf60f4520dc",
       "source": "Message \\(self.model.agentDisplay.name)",
       "translated": "ส่งข้อความถึง \\(self.model.agentDisplay.name)"
+    },
+    {
+      "id": "native.apple.da0b9bd07a337bda",
+      "source": "Continue a recent conversation",
+      "translated": "สนทนาต่อล่าสุด"
     },
     {
       "id": "native.apple.edf12ff583307f43",

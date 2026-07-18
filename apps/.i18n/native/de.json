@@ -21189,9 +21189,24 @@
       "translated": "Fortfahren"
     },
     {
+      "id": "native.apple.b5524e37a230e571",
+      "source": "New message to \\(agentName)",
+      "translated": "Neue Nachricht an \\(agentName)"
+    },
+    {
+      "id": "native.apple.b99799f97999f481",
+      "source": "Reply in \\(override.displayName)",
+      "translated": "In \\(override.displayName) antworten"
+    },
+    {
       "id": "native.apple.b3700cf60f4520dc",
       "source": "Message \\(self.model.agentDisplay.name)",
       "translated": "Nachricht an \\(self.model.agentDisplay.name)"
+    },
+    {
+      "id": "native.apple.da0b9bd07a337bda",
+      "source": "Continue a recent conversation",
+      "translated": "Eine kürzlich geführte Unterhaltung fortsetzen"
     },
     {
       "id": "native.apple.edf12ff583307f43",

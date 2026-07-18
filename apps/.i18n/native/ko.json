@@ -21189,9 +21189,24 @@
       "translated": "계속"
     },
     {
+      "id": "native.apple.b5524e37a230e571",
+      "source": "New message to \\(agentName)",
+      "translated": "\\(agentName)에게 보내는 새 메시지"
+    },
+    {
+      "id": "native.apple.b99799f97999f481",
+      "source": "Reply in \\(override.displayName)",
+      "translated": "\\(override.displayName)에서 답장"
+    },
+    {
       "id": "native.apple.b3700cf60f4520dc",
       "source": "Message \\(self.model.agentDisplay.name)",
       "translated": "\\(self.model.agentDisplay.name)에게 메시지 보내기"
+    },
+    {
+      "id": "native.apple.da0b9bd07a337bda",
+      "source": "Continue a recent conversation",
+      "translated": "최근 대화 계속하기"
     },
     {
       "id": "native.apple.edf12ff583307f43",

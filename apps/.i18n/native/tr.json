@@ -21189,9 +21189,24 @@
       "translated": "Devam et"
     },
     {
+      "id": "native.apple.b5524e37a230e571",
+      "source": "New message to \\(agentName)",
+      "translated": "\\(agentName) için yeni mesaj"
+    },
+    {
+      "id": "native.apple.b99799f97999f481",
+      "source": "Reply in \\(override.displayName)",
+      "translated": "\\(override.displayName) içinde yanıtla"
+    },
+    {
       "id": "native.apple.b3700cf60f4520dc",
       "source": "Message \\(self.model.agentDisplay.name)",
-      "translated": "\\(self.model.agentDisplay.name) adlı temsilciye mesaj gönder"
+      "translated": "\\(self.model.agentDisplay.name) adlı kişiye mesaj gönder"
+    },
+    {
+      "id": "native.apple.da0b9bd07a337bda",
+      "source": "Continue a recent conversation",
+      "translated": "Yakın tarihli bir konuşmaya devam et"
     },
     {
       "id": "native.apple.edf12ff583307f43",

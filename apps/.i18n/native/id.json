@@ -21189,9 +21189,24 @@
       "translated": "Lanjutkan"
     },
     {
+      "id": "native.apple.b5524e37a230e571",
+      "source": "New message to \\(agentName)",
+      "translated": "Pesan baru kepada \\(agentName)"
+    },
+    {
+      "id": "native.apple.b99799f97999f481",
+      "source": "Reply in \\(override.displayName)",
+      "translated": "Balas di \\(override.displayName)"
+    },
+    {
       "id": "native.apple.b3700cf60f4520dc",
       "source": "Message \\(self.model.agentDisplay.name)",
-      "translated": "Kirim pesan ke \\(self.model.agentDisplay.name)"
+      "translated": "Kirim pesan kepada \\(self.model.agentDisplay.name)"
+    },
+    {
+      "id": "native.apple.da0b9bd07a337bda",
+      "source": "Continue a recent conversation",
+      "translated": "Lanjutkan percakapan terbaru"
     },
     {
       "id": "native.apple.edf12ff583307f43",

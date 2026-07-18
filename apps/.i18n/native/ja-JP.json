@@ -21189,9 +21189,24 @@
       "translated": "続ける"
     },
     {
+      "id": "native.apple.b5524e37a230e571",
+      "source": "New message to \\(agentName)",
+      "translated": "\\(agentName)への新しいメッセージ"
+    },
+    {
+      "id": "native.apple.b99799f97999f481",
+      "source": "Reply in \\(override.displayName)",
+      "translated": "\\(override.displayName)で返信"
+    },
+    {
       "id": "native.apple.b3700cf60f4520dc",
       "source": "Message \\(self.model.agentDisplay.name)",
-      "translated": "\\(self.model.agentDisplay.name)にメッセージを送信"
+      "translated": "\\(self.model.agentDisplay.name)にメッセージ"
+    },
+    {
+      "id": "native.apple.da0b9bd07a337bda",
+      "source": "Continue a recent conversation",
+      "translated": "最近の会話を続ける"
     },
     {
       "id": "native.apple.edf12ff583307f43",

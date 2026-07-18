@@ -21189,9 +21189,24 @@
       "translated": "继续"
     },
     {
+      "id": "native.apple.b5524e37a230e571",
+      "source": "New message to \\(agentName)",
+      "translated": "发给 \\(agentName) 的新消息"
+    },
+    {
+      "id": "native.apple.b99799f97999f481",
+      "source": "Reply in \\(override.displayName)",
+      "translated": "在 \\(override.displayName) 中回复"
+    },
+    {
       "id": "native.apple.b3700cf60f4520dc",
       "source": "Message \\(self.model.agentDisplay.name)",
       "translated": "给 \\(self.model.agentDisplay.name) 发消息"
+    },
+    {
+      "id": "native.apple.da0b9bd07a337bda",
+      "source": "Continue a recent conversation",
+      "translated": "继续最近的对话"
     },
     {
       "id": "native.apple.edf12ff583307f43",
