@@ -2,9 +2,10 @@
  * Normalized `web_search` output contract.
  *
  * Every bundled or external provider payload is normalized at the core tool
- * boundary into one of four closed branches (error / results / answer / raw),
- * so transport-specific extras never reach the model and the declared contract
- * cannot drift per provider.
+ * boundary into one of four closed branches (error / results / answer / raw).
+ * The boundary owns the untrusted-content envelope: provider prose is
+ * re-wrapped here unconditionally, so no provider-controlled metadata can
+ * spoof the trust marker and transport-specific extras never reach the model.
  */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Static } from "typebox";
@@ -16,7 +17,7 @@ const WebSearchExternalContentSchema = Type.Object(
     untrusted: Type.Literal(true),
     source: Type.Literal("web_search"),
     wrapped: Type.Literal(true),
-    provider: Type.Optional(Type.String()),
+    provider: Type.String(),
   },
   { additionalProperties: false },
 );
@@ -57,7 +58,6 @@ export const WebSearchOutputSchema = Type.Union([
       kind: Type.Literal("results"),
       provider: Type.String(),
       query: Type.String(),
-      queryTerms: Type.Optional(Type.Array(Type.String())),
       count: Type.Number(),
       tookMs: Type.Optional(Type.Number()),
       results: Type.Array(WebSearchResultSchema),
@@ -94,16 +94,18 @@ export const WebSearchOutputSchema = Type.Union([
 
 export type WebSearchOutput = Static<typeof WebSearchOutputSchema>;
 
-function readFiniteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+// Matches well-formed envelope framing lines from wrapExternalContent. Provider
+// text is stripped of any existing (or forged) envelopes before the boundary
+// applies its own, so output carries exactly one provable envelope per field.
+const ENVELOPE_LINE_RE =
+  /^[ \t]*<<<(?:END_)?EXTERNAL_UNTRUSTED_CONTENT id="[0-9a-f]+">>>[ \t]*$\n?|^Source: [^\n]*\n---\n/gmu;
+
+function unwrapEnvelopes(value: string): string {
+  return value.replace(ENVELOPE_LINE_RE, "").trim();
 }
 
-// externalContent.wrapped is a downstream trust signal: it must only be true
-// when the untrusted strings really carry security markers. Providers that
-// wrapped their own output pass through; for everything else the normalizer
-// wraps here before stamping.
-function providerAlreadyWrapped(raw: Record<string, unknown>): boolean {
-  return isRecord(raw.externalContent) && raw.externalContent.wrapped === true;
+function readFiniteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function isHttpUrl(value: string): boolean {
@@ -116,40 +118,35 @@ function isHttpUrl(value: string): boolean {
 }
 
 const ERROR_CODE_RE = /^[A-Za-z0-9_.-]{1,64}$/u;
+// Purely structural date charset; free-form dates could smuggle instructions.
+const PUBLISHED_RE = /^\d{4}-\d{2}-\d{2}(?:[T ][\d:.+Z-]{0,20})?$/u;
 
-function normalizeExternalContent(raw: Record<string, unknown>): WebSearchExternalContent {
-  const externalContent = isRecord(raw.externalContent) ? raw.externalContent : undefined;
-  return {
-    untrusted: true,
-    source: "web_search",
-    wrapped: true,
-    ...(typeof externalContent?.provider === "string"
-      ? { provider: externalContent.provider }
-      : {}),
-  };
+function wrapProse(value: string): string {
+  const inner = unwrapEnvelopes(value);
+  return inner.length === 0 ? "" : wrapWebContent(inner, "web_search");
 }
 
-function normalizeCitations(
-  value: unknown,
-  options: { wrapText: (value: string) => string; alreadyWrapped: boolean },
-): Array<{ url: string; title?: string }> | undefined {
+function externalContentStamp(provider: string): WebSearchExternalContent {
+  return { untrusted: true, source: "web_search", wrapped: true, provider };
+}
+
+function normalizeCitations(value: unknown): Array<{ url: string; title?: string }> | undefined {
   if (!Array.isArray(value)) {
     return undefined;
   }
-  // On the core-wrapping path a citation url must actually parse as http(s);
-  // free text in a url slot would bypass the untrusted-content envelope.
-  const urlOk = (value: string) => options.alreadyWrapped || isHttpUrl(value);
+  // A citation url must actually parse as http(s); free text in a url slot
+  // would bypass the untrusted-content envelope.
   return value.flatMap((entry) => {
     if (typeof entry === "string") {
-      return urlOk(entry) ? [{ url: entry }] : [];
+      return isHttpUrl(entry) ? [{ url: entry }] : [];
     }
-    if (!isRecord(entry) || typeof entry.url !== "string" || !urlOk(entry.url)) {
+    if (!isRecord(entry) || typeof entry.url !== "string" || !isHttpUrl(entry.url)) {
       return [];
     }
     return [
       {
         url: entry.url,
-        ...(typeof entry.title === "string" ? { title: options.wrapText(entry.title) } : {}),
+        ...(typeof entry.title === "string" ? { title: wrapProse(entry.title) } : {}),
       },
     ];
   });
@@ -162,23 +159,11 @@ export function normalizeWebSearchOutput(params: {
   query: string;
 }): WebSearchOutput {
   const { result, provider } = params;
-  const alreadyWrapped = providerAlreadyWrapped(result);
-  const wrapText = (value: string): string =>
-    alreadyWrapped || value.length === 0 ? value : wrapWebContent(value, "web_search");
   const tookMs = readFiniteNumber(result.tookMs);
   const cached = result.cached === true ? true : undefined;
-  // Provider-echoed query text is only trusted from providers that wrapped
-  // their own output; otherwise the model's own request query is authoritative.
-  const queryTerms =
-    alreadyWrapped && Array.isArray(result.searchQueries)
-      ? result.searchQueries.filter((entry): entry is string => typeof entry === "string")
-      : undefined;
-  const query =
-    queryTerms !== undefined
-      ? (queryTerms[0] ?? params.query)
-      : alreadyWrapped && typeof result.query === "string"
-        ? result.query
-        : params.query;
+  // The model's own request query is authoritative; provider echoes are
+  // untrusted text and add nothing the model does not already know.
+  const query = params.query;
 
   // A results branch requires conforming rows; anything else is preserved as
   // raw so nonstandard external payloads are never silently gutted.
@@ -188,8 +173,7 @@ export function normalizeWebSearchOutput(params: {
       isRecord(entry) &&
       typeof entry.title === "string" &&
       typeof entry.url === "string" &&
-      entry.url.length > 0 &&
-      (alreadyWrapped || isHttpUrl(entry.url)),
+      isHttpUrl(entry.url),
   );
   if (rows && conformingRows) {
     const results = rows.map((row) => {
@@ -201,44 +185,40 @@ export function normalizeWebSearchOutput(params: {
             : Array.isArray(row.snippets)
               ? row.snippets.find((value): value is string => typeof value === "string")
               : undefined;
-      // On the core-wrapping path only purely structural published values
-      // survive; free-form dates could smuggle instructions past the stamp.
       const published =
-        typeof row.published === "string" &&
-        (alreadyWrapped || /^\d{4}-\d{2}-\d{2}(?:[T ][\d:.+Z-]{0,20})?$/u.test(row.published))
+        typeof row.published === "string" && PUBLISHED_RE.test(row.published)
           ? row.published
           : undefined;
       return {
-        title: wrapText(row.title as string),
+        title: wrapProse(row.title as string),
         url: row.url as string,
-        ...(snippet !== undefined ? { snippet: wrapText(snippet) } : {}),
+        ...(snippet !== undefined ? { snippet: wrapProse(snippet) } : {}),
         ...(published !== undefined ? { published } : {}),
-        ...(typeof row.siteName === "string" ? { siteName: wrapText(row.siteName) } : {}),
+        ...(typeof row.siteName === "string" ? { siteName: wrapProse(row.siteName) } : {}),
       };
     });
     return {
       kind: "results",
       provider,
       query,
-      ...(queryTerms !== undefined ? { queryTerms } : {}),
       count: readFiniteNumber(result.count) ?? results.length,
       ...(tookMs !== undefined ? { tookMs } : {}),
       results,
-      externalContent: normalizeExternalContent(result),
+      externalContent: externalContentStamp(provider),
       ...(cached ? { cached } : {}),
     };
   }
 
   if (typeof result.content === "string") {
-    const citations = normalizeCitations(result.citations, { wrapText, alreadyWrapped });
+    const citations = normalizeCitations(result.citations);
     return {
       kind: "answer",
       provider,
       query,
       ...(tookMs !== undefined ? { tookMs } : {}),
-      content: wrapText(result.content),
+      content: wrapProse(result.content),
       ...(citations !== undefined ? { citations } : {}),
-      externalContent: normalizeExternalContent(result),
+      externalContent: externalContentStamp(provider),
       ...(cached ? { cached } : {}),
     };
   }
@@ -254,7 +234,7 @@ export function normalizeWebSearchOutput(params: {
       kind: "error",
       provider,
       error,
-      message: wrapText(rawMessage),
+      message: wrapProse(rawMessage),
       ...(typeof result.docs === "string" && isHttpUrl(result.docs) ? { docs: result.docs } : {}),
     };
   }
