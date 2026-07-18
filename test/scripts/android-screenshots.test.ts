@@ -66,9 +66,19 @@ describe("android screenshots script", () => {
 
   it("pins the device timezone before rendering seeded timestamps", () => {
     const script = readFileSync(SCRIPT, "utf8");
+    const requireEmulatorIndex = script.indexOf('require_emulator_device "$ADB_BIN" "$ADB_SERIAL"');
+    const stabilizeDeviceIndex = script.indexOf(
+      'stabilize_device_for_screenshots "$ADB_BIN" "$ADB_SERIAL"',
+    );
 
     expect(script).toContain("shell cmd time_zone_detector set_auto_detection_enabled false");
     expect(script).toContain("shell cmd alarm set-timezone UTC");
+    expect(script).toContain('shell cmd alarm set-timezone "$ORIGINAL_TIME_ZONE"');
+    expect(script).toContain(
+      'shell cmd time_zone_detector set_auto_detection_enabled "$ORIGINAL_AUTO_TIME_ZONE"',
+    );
+    expect(requireEmulatorIndex).toBeGreaterThan(-1);
+    expect(stabilizeDeviceIndex).toBeGreaterThan(requireEmulatorIndex);
   });
 
   it("provisions a retained no-cutout screenshot emulator by default", () => {

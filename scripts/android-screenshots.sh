@@ -47,6 +47,9 @@ DISPLAY_OVERRIDDEN=0
 ORIGINAL_WM_SIZE=""
 ORIGINAL_WM_DENSITY=""
 SCREENSHOT_DENSITY=""
+TIMEZONE_OVERRIDDEN=0
+ORIGINAL_AUTO_TIME_ZONE=""
+ORIGINAL_TIME_ZONE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -151,6 +154,18 @@ restore_device_display() {
   fi
 }
 
+restore_device_timezone() {
+  if [[ "$TIMEZONE_OVERRIDDEN" != "1" || -z "${ADB_BIN:-}" || -z "${ADB_SERIAL:-}" ]]; then
+    return
+  fi
+  if [[ -n "$ORIGINAL_TIME_ZONE" ]]; then
+    "$ADB_BIN" -s "$ADB_SERIAL" shell cmd alarm set-timezone "$ORIGINAL_TIME_ZONE" >/dev/null 2>&1 || true
+  fi
+  if [[ "$ORIGINAL_AUTO_TIME_ZONE" == "true" || "$ORIGINAL_AUTO_TIME_ZONE" == "false" ]]; then
+    "$ADB_BIN" -s "$ADB_SERIAL" shell cmd time_zone_detector set_auto_detection_enabled "$ORIGINAL_AUTO_TIME_ZONE" >/dev/null 2>&1 || true
+  fi
+}
+
 cleanup_emulator_log() {
   if [[ -n "$EMULATOR_LOG" && -f "$EMULATOR_LOG" ]]; then
     rm -f "$EMULATOR_LOG"
@@ -159,6 +174,7 @@ cleanup_emulator_log() {
 
 cleanup() {
   restore_device_display
+  restore_device_timezone
   cleanup_started_emulator
   cleanup_emulator_log
 }
@@ -333,8 +349,20 @@ wait_for_explicit_device() {
 stabilize_device_for_screenshots() {
   local adb="$1"
   local serial="$2"
-  # Seeded chat timestamps use the device timezone; disable detection before
-  # pinning UTC so release captures do not inherit the runner's locale.
+  ORIGINAL_AUTO_TIME_ZONE="$("$adb" -s "$serial" shell cmd time_zone_detector is_auto_detection_enabled 2>/dev/null | tr -d '\r')"
+  ORIGINAL_TIME_ZONE="$("$adb" -s "$serial" shell getprop persist.sys.timezone 2>/dev/null | tr -d '\r')"
+  if [[ "$ORIGINAL_AUTO_TIME_ZONE" != "true" && "$ORIGINAL_AUTO_TIME_ZONE" != "false" ]]; then
+    echo "Could not determine emulator automatic timezone setting." >&2
+    return 1
+  fi
+  if [[ -z "$ORIGINAL_TIME_ZONE" ]]; then
+    echo "Could not determine emulator timezone." >&2
+    return 1
+  fi
+  # Arm cleanup before the first mutation; restoring an unchanged snapshot is safe.
+  TIMEZONE_OVERRIDDEN=1
+  # Seeded chat timestamps use the device timezone, so disable detection before
+  # pinning UTC to avoid inheriting the runner's locale.
   "$adb" -s "$serial" shell cmd time_zone_detector set_auto_detection_enabled false >/dev/null
   "$adb" -s "$serial" shell cmd alarm set-timezone UTC >/dev/null
   "$adb" -s "$serial" shell settings put global window_animation_scale 0 >/dev/null 2>&1 || true
@@ -408,7 +436,6 @@ boot_emulator() {
 
   serial="$(wait_for_single_device "$adb")"
   wait_for_boot_completed "$adb" "$serial"
-  stabilize_device_for_screenshots "$adb" "$serial"
   ADB_SERIAL="$serial"
 }
 
@@ -420,7 +447,6 @@ resolve_device() {
 
   if [[ -n "$DEVICE" ]]; then
     wait_for_explicit_device "$adb" "$DEVICE"
-    stabilize_device_for_screenshots "$adb" "$DEVICE"
     ADB_SERIAL="$DEVICE"
     return
   fi
@@ -433,7 +459,6 @@ resolve_device() {
       echo "Stop it so the script can boot '${AVD}', or pass --device '${devices}' to override the no-cutout profile." >&2
       return 1
     fi
-    stabilize_device_for_screenshots "$adb" "$devices"
     ADB_SERIAL="$devices"
     return
   fi
@@ -574,6 +599,7 @@ fi
 ADB_BIN="$(adb_bin)"
 resolve_device "$ADB_BIN"
 require_emulator_device "$ADB_BIN" "$ADB_SERIAL"
+stabilize_device_for_screenshots "$ADB_BIN" "$ADB_SERIAL"
 configure_screenshot_display "$ADB_BIN" "$ADB_SERIAL"
 mkdir -p "$OUTPUT_DIR"
 rm -f "$OUTPUT_DIR"/*.png "$OUTPUT_DIR"/*.jpg "$OUTPUT_DIR"/*.jpeg
