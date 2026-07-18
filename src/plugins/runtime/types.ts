@@ -22,6 +22,8 @@ type SubagentRunParams = {
   extraSystemPrompt?: string;
   lane?: string;
   lightContext?: boolean;
+  /** When true, skip all tool construction for this subagent run. */
+  disableTools?: boolean;
   deliver?: boolean;
   idempotencyKey?: string;
   cwd?: string;

@@ -961,7 +961,7 @@ export function runAgentAttempt(params: {
     oneShotCliRun: params.opts.oneShotCliRun,
     modelRun: params.opts.modelRun,
     promptMode: params.opts.promptMode,
-    disableTools: params.opts.modelRun === true,
+    disableTools: params.opts.modelRun === true || params.opts.disableTools === true,
     onAgentEvent: params.onAgentEvent,
     deferTerminalLifecycle: params.deferTerminalLifecycle,
     suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,

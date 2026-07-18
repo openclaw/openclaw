@@ -44,6 +44,8 @@ export type AgentRunRequest = {
   idempotencyKey: string;
   sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
   disableMessageTool?: boolean;
+  /** When true, bypass all tool construction. Forwarded from plugin subagent runs. */
+  disableTools?: boolean;
   forceRestartSafeTools?: boolean;
   timeout?: number;
   bestEffortDeliver?: boolean;
