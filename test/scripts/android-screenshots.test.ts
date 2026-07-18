@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const SCRIPT = "scripts/android-screenshots.sh";
+const SCREENSHOT_FIXTURE =
+  "apps/android/app/src/main/java/ai/openclaw/app/AndroidScreenshotFixture.kt";
 
 function runAndroidScreenshots(args: string[], env: NodeJS.ProcessEnv = {}) {
   return spawnSync("bash", [SCRIPT, ...args], {
@@ -38,9 +40,13 @@ describe("android screenshots script", () => {
     expect(result.stdout).not.toContain(`Android screenshot artifacts: ${process.env.HOME}\n`);
   });
 
-  it("waits for content unique to the settings and gateway screens", () => {
+  it("waits for fixture content unique to the chat, settings, and gateway screens", () => {
     const script = readFileSync(SCRIPT, "utf8");
+    const fixture = readFileSync(SCREENSHOT_FIXTURE, "utf8");
 
+    expect(script).toContain('chat) printf \'%s\\n\' "The Android release is close."');
+    expect(script).not.toContain('chat) printf \'%s\\n\' "Ready when you are"');
+    expect(fixture).toContain('"The Android release is close.');
     expect(script).toContain("settings) printf '%s\\n' \"OpenClaw mobile\"");
     expect(script).not.toContain("settings) printf '%s\\n' \"Settings\"");
     expect(script).toContain(

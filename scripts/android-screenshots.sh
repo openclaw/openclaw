@@ -452,7 +452,9 @@ latest_play_debug_apk() {
 scene_ready_text() {
   case "$1" in
     home) printf '%s\n' "Overview" ;;
-    chat) printf '%s\n' "Ready when you are" ;;
+    # The screenshot fixture seeds chat history, so wait for its final reply;
+    # empty-chat copy is absent once the timeline has hydrated.
+    chat) printf '%s\n' "The Android release is close." ;;
     voice) printf '%s\n' "Ready to talk" ;;
     settings) printf '%s\n' "OpenClaw mobile" ;;
     voice-wake) printf '%s\n' "Wake listener" ;;
