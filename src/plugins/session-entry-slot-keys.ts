@@ -1,5 +1,5 @@
 /** Reserves session-entry keys so plugin extension slots cannot collide with core session state. */
-import type { SessionEntry } from "../config/sessions/types.js";
+import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 
 const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "__proto__",
@@ -18,6 +18,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "updatedAt",
   "archivedAt",
   "pinnedAt",
+  "icon",
   "lastReadAt",
   "markedUnreadAt",
   "lastActivityAt",
@@ -33,6 +34,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "subagentControlScope",
   "inheritedToolDeny",
   "inheritedToolAllow",
+  "mainRestartRecovery",
   "subagentRecovery",
   "pluginOwnerId",
   "systemSent",
@@ -76,6 +78,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "modelOverrideSource",
   "modelOverrideFallbackOriginProvider",
   "modelOverrideFallbackOriginModel",
+  "modelFallback",
   "authProfileOverride",
   "authProfileOverrideSource",
   "authProfileOverrideCompactionCount",
@@ -99,7 +102,22 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "pendingFinalDeliveryContext",
   "pendingFinalDeliveryIntentId",
   "restartRecoveryDeliveryContext",
+  "restartRecoveryDeliveryMediaUrls",
+  "restartRecoveryDisableMessageTool",
+  "restartRecoverySuppressTextDelivery",
+  "restartRecoveryDeliveryRequestFingerprint",
   "restartRecoveryDeliveryRunId",
+  "restartRecoveryDeliverySourceRunId",
+  "restartRecoveryBeforeAgentReplyState",
+  "restartRecoveryDeliveryReceiptState",
+  "restartRecoveryDeliveryToolCallId",
+  "restartRecoveryRequesterAccountId",
+  "restartRecoveryRequesterSenderId",
+  "restartRecoverySameChannelThreadRequired",
+  "restartRecoverySourceIngress",
+  "restartRecoverySourceReplyDeliveryMode",
+  "restartRecoveryTerminalDeliveryEvidence",
+  "restartRecoveryTerminalRunIds",
   "totalTokensFresh",
   "estimatedCostUsd",
   "cacheRead",
@@ -142,6 +160,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "skillsSnapshot",
   "systemPromptReport",
   "pluginDebugEntries",
+  "hookExternalContentSource",
   "acp",
   "quotaSuspension",
 ] as const satisfies ReadonlyArray<keyof SessionEntry | "__proto__" | "constructor" | "prototype">;

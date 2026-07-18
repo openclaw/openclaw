@@ -16,6 +16,7 @@ import ai.openclaw.app.NodeRuntime
 import ai.openclaw.app.R
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.currentAppLanguage
+import ai.openclaw.app.firstGraphemeOrNull
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.joinedNativeText
 import ai.openclaw.app.i18n.nativeString
@@ -23,7 +24,6 @@ import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.resolveNativeTextResource
 import ai.openclaw.app.i18n.verbatimText
 import ai.openclaw.app.node.CanvasController
-import ai.openclaw.app.ui.chat.ChatScreen
 import ai.openclaw.app.ui.design.AgentAvatarSource
 import ai.openclaw.app.ui.design.ClawAgentAvatar
 import ai.openclaw.app.ui.design.ClawBottomNav
@@ -138,7 +138,7 @@ internal enum class Tab(
   Files(key = "files", label = nativeText("Files"), icon = Icons.Outlined.Folder),
 }
 
-private val shellNavTabs = listOf(Tab.Overview, Tab.Chat, Tab.Voice, Tab.Settings)
+private val shellNavTabs = listOf(Tab.Overview, Tab.Chat, Tab.Settings)
 
 private val shellContentInsets: WindowInsets
   @Composable get() = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)
@@ -166,7 +166,7 @@ fun ShellScreen(
   ClawDesignTheme(dark = shellDark) {
     val nav = rememberSaveable(saver = ShellNavigation.Saver) { ShellNavigation() }
     var commandOpen by rememberSaveable { mutableStateOf(false) }
-    var voiceScreenWasActive by rememberSaveable { mutableStateOf(false) }
+    var conversationScreenWasActive by rememberSaveable { mutableStateOf(false) }
     val requestedHomeDestination by viewModel.requestedHomeDestination.collectAsState()
     val pendingTrust by viewModel.pendingGatewayTrust.collectAsState()
     val runtimeInitialized by viewModel.runtimeInitialized.collectAsState()
@@ -186,20 +186,25 @@ fun ShellScreen(
         when (destination) {
           HomeDestination.Connect -> Tab.Overview
           HomeDestination.Chat -> Tab.Chat
-          HomeDestination.Voice -> Tab.Voice
+          HomeDestination.Voice -> Tab.Chat
           HomeDestination.Screen -> Tab.Overview
           HomeDestination.Settings -> Tab.Settings
         },
       )
+      // Screenshot scenes can target a settings detail route alongside the tab.
+      viewModel.requestedSettingsRoute.value?.let { route ->
+        nav.openSettingsRoute(route)
+        viewModel.clearRequestedSettingsRoute()
+      }
       viewModel.clearRequestedHomeDestination()
     }
 
     LaunchedEffect(nav.activeTab, runtimeInitialized) {
-      val voiceScreenActive = nav.activeTab == Tab.Voice
-      if (voiceScreenActive || voiceScreenWasActive || runtimeInitialized) {
-        viewModel.setVoiceScreenActive(voiceScreenActive)
+      val conversationScreenActive = nav.activeTab == Tab.Chat
+      if (conversationScreenActive || conversationScreenWasActive || runtimeInitialized) {
+        viewModel.setVoiceScreenActive(conversationScreenActive)
       }
-      voiceScreenWasActive = voiceScreenActive
+      conversationScreenWasActive = conversationScreenActive
     }
 
     BackHandler(enabled = nav.activeTab != Tab.Overview) {
@@ -244,9 +249,8 @@ fun ShellScreen(
               onOpenCommand = { commandOpen = true },
             )
           Tab.Chat ->
-            ChatShellScreen(
+            UnifiedChatShellScreen(
               viewModel = viewModel,
-              onVoice = { nav.selectTab(Tab.Voice) },
               onOpenSessions = { nav.openDetailTab(Tab.Sessions) },
               onOpenGatewaySettings = { nav.openSettingsRoute(SettingsRoute.Gateway) },
             )
@@ -291,7 +295,7 @@ fun ShellScreen(
               commandOpen = false
             },
             onOpenVoice = {
-              nav.selectTab(Tab.Voice)
+              nav.selectTab(Tab.Chat)
               commandOpen = false
             },
             onOpenSessions = {
@@ -306,8 +310,8 @@ fun ShellScreen(
               nav.openSettingsRoute(SettingsRoute.Home)
               commandOpen = false
             },
-            onOpenSession = { sessionKey ->
-              viewModel.switchChatSession(sessionKey)
+            onOpenSession = { sessionKey, ownerAgentId ->
+              viewModel.switchChatSession(sessionKey, ownerAgentId)
               nav.selectTab(Tab.Chat)
               commandOpen = false
             },
@@ -519,7 +523,7 @@ private fun OverviewScreen(
             sessionCount = overviewSessionCount,
             cronJobCount = cronStatus.jobs,
             onOpenChat = { onSelectTab(Tab.Chat) },
-            onOpenVoice = { onSelectTab(Tab.Voice) },
+            onOpenVoice = { onSelectTab(Tab.Chat) },
             onOpenAgent = { onOpenSettingsRoute(SettingsRoute.Agents) },
             onOpenGateway = { onOpenSettingsRoute(SettingsRoute.Gateway) },
           )
@@ -540,7 +544,7 @@ private fun OverviewScreen(
         }
 
         item {
-          TalkEntryPanel(onOpenVoice = { onSelectTab(Tab.Voice) }, onOpenVoiceSettings = { onOpenSettingsRoute(SettingsRoute.Voice) })
+          TalkEntryPanel(onOpenVoice = { onSelectTab(Tab.Chat) }, onOpenVoiceSettings = { onOpenSettingsRoute(SettingsRoute.Voice) })
         }
 
         item { RecentSessionsHeader(onOpenSessions = { onSelectTab(Tab.Sessions) }) }
@@ -557,8 +561,8 @@ private fun OverviewScreen(
           item {
             RecentSessionList(
               rows = visibleRecentRows,
-              onOpen = { sessionKey ->
-                viewModel.switchChatSession(sessionKey)
+              onOpen = { sessionKey, ownerAgentId ->
+                viewModel.switchChatSession(sessionKey, ownerAgentId)
                 onSelectTab(Tab.Chat)
               },
             )
@@ -594,7 +598,7 @@ private fun OverviewHeader(
     verticalAlignment = Alignment.CenterVertically,
     horizontalArrangement = Arrangement.spacedBy(10.dp),
   ) {
-    OpenClawMascot(modifier = Modifier.size(25.dp), tint = ClawTheme.colors.text)
+    OpenClawMascot(modifier = Modifier.size(25.dp))
     Text(
       text = nativeString("OpenClaw"),
       style = ClawTheme.type.title.copy(fontSize = 17.sp, lineHeight = 21.sp),
@@ -845,6 +849,12 @@ internal fun localizedUppercase(
   languageTag: String?,
   fallbackLocale: Locale = Locale.getDefault(),
 ): String = value.uppercase(languageTag?.let(Locale::forLanguageTag) ?: fallbackLocale)
+
+internal fun localizedInitial(
+  value: String,
+  languageTag: String?,
+  fallbackLocale: Locale = Locale.getDefault(),
+): String? = value.firstGraphemeOrNull()?.let { localizedUppercase(it, languageTag, fallbackLocale) }
 
 @Composable
 private fun OverviewProgressBar(
@@ -1193,7 +1203,7 @@ private fun agentInitials(name: String): String =
     .split(' ', '-', '_')
     .filter { it.isNotBlank() }
     .take(2)
-    .mapNotNull { part -> part.firstOrNull()?.let { localizedUppercase(it.toString(), currentAppLanguage().languageTag) } }
+    .mapNotNull { part -> localizedInitial(part, currentAppLanguage().languageTag) }
     .joinToString("")
     .ifBlank { "OC" }
 
@@ -1377,6 +1387,7 @@ internal data class RecentSessionListItem(
   val title: String,
   val source: String,
   val metadata: String,
+  val ownerAgentId: String? = null,
 )
 
 internal fun overviewRecentSessionRows(
@@ -1389,6 +1400,7 @@ internal fun overviewRecentSessionRows(
       val title = displaySessionTitle(session.displayName)
       RecentSessionListItem(
         key = session.key,
+        ownerAgentId = session.ownerAgentId,
         title = title,
         source = sessionSourceLabel(session.key, channelsSummary),
         metadata = (session.lastActivityAt ?: session.updatedAtMs)?.let(::overviewRelativeSessionTime) ?: "",
@@ -1417,7 +1429,7 @@ private fun RecentSessionListItem.withStableFieldsFrom(previousRow: RecentSessio
 @Composable
 private fun RecentSessionList(
   rows: List<RecentSessionListItem>,
-  onOpen: (String) -> Unit,
+  onOpen: (String, String?) -> Unit,
 ) {
   OverviewLayeredPanel(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)) {
     Column {
@@ -1426,7 +1438,7 @@ private fun RecentSessionList(
           title = row.title,
           source = row.source,
           metadata = row.metadata,
-          onClick = { onOpen(row.key) },
+          onClick = { onOpen(row.key, row.ownerAgentId) },
         )
         if (index != rows.lastIndex) {
           HorizontalDivider(color = ClawTheme.colors.border.copy(alpha = 0.48f), thickness = 1.dp)
@@ -1477,26 +1489,6 @@ private fun RecentSessionRowContent(
         tint = ClawTheme.colors.textMuted,
       )
     }
-  }
-}
-
-@Composable
-private fun ChatShellScreen(
-  viewModel: MainViewModel,
-  onVoice: () -> Unit,
-  onOpenSessions: () -> Unit,
-  onOpenGatewaySettings: () -> Unit,
-) {
-  ClawScaffold(
-    contentPadding = PaddingValues(start = 0.dp, top = 8.dp, end = 0.dp, bottom = 0.dp),
-    contentWindowInsets = shellContentInsets,
-  ) {
-    ChatScreen(
-      viewModel = viewModel,
-      onVoice = onVoice,
-      onOpenSessions = onOpenSessions,
-      onOpenGatewaySettings = onOpenGatewaySettings,
-    )
   }
 }
 
@@ -1636,7 +1628,7 @@ private fun SettingsShellScreen(
             route = SettingsRoute.ProvidersModels,
           ),
           SettingsRow(nativeText("Approvals"), verbatimText(approvalsSummary(pendingApprovalsCount)), Icons.Default.Lock, status = approvalsStatus(pendingApprovalsCount), route = SettingsRoute.Approvals),
-          SettingsRow(nativeText("Cron Jobs"), verbatimText(cronJobsSummary(cronStatus.jobs)), Icons.Outlined.AccessTime, status = if (cronStatus.jobs > 0) cronStatus.enabled else null, route = SettingsRoute.CronJobs),
+          SettingsRow(nativeText("Automations"), verbatimText(cronJobsSummary(cronStatus.jobs)), Icons.Outlined.AccessTime, status = if (cronStatus.jobs > 0) cronStatus.enabled else null, route = SettingsRoute.CronJobs),
           SettingsRow(nativeText("Usage"), verbatimText(usageSummaryText(usageSummary.providers.size)), Icons.Default.Storage, status = if (usageSummary.providers.isNotEmpty()) true else null, route = SettingsRoute.Usage),
           SettingsRow(nativeText("Skills"), verbatimText(skillsSummaryText(skillsSummary.skills)), Icons.Default.Settings, status = skillsStatus(skillsSummary.skills), route = SettingsRoute.Skills),
           SettingsRow(
@@ -1951,10 +1943,7 @@ private fun ProfilePanel(
         Box(contentAlignment = Alignment.Center) {
           Text(
             text =
-              displayName
-                .firstOrNull()
-                ?.let { localizedUppercase(it.toString(), currentAppLanguage().languageTag) }
-                ?: "O",
+              localizedInitial(displayName, currentAppLanguage().languageTag) ?: "O",
             style = ClawTheme.type.title.copy(fontSize = 14.sp, lineHeight = 17.sp),
             color = ClawTheme.colors.text,
             textAlign = TextAlign.Center,

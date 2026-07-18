@@ -101,7 +101,7 @@ describeControlUiE2e("Control UI route CSS mocked Gateway E2E", () => {
 
       const skillsResponse = await page.goto(`${server.baseUrl}skills`);
       expect(skillsResponse?.status()).toBe(200);
-      await page.locator(".card-title", { hasText: "Skills" }).waitFor();
+      await page.locator(".settings-section__heading", { hasText: "ClawHub" }).waitFor();
 
       const skillsStyles = await page.evaluate(() => {
         const probe = document.createElement("article");

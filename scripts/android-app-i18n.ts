@@ -3,7 +3,7 @@ import { readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
-import { NATIVE_I18N_LOCALES } from "./native-app-i18n.ts";
+import { NATIVE_I18N_LOCALES } from "./native-i18n-locales.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
@@ -461,8 +461,18 @@ const ALLOWED_UI_LITERALS = new Map<string, ReadonlySet<string>>([
     new Set(["$versionName-dev"]),
   ],
   [
+    "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt",
+    // Plan checklist chrome: numeric done-counter and checkmark glyph.
+    new Set(["$completedCount/${steps.size}", "✓"]),
+  ],
+  [
+    "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
+    // Discovered-gateway subtitles are host:port endpoints, not translatable copy.
+    new Set(["${endpoint.host}:${endpoint.port}"]),
+  ],
+  [
     "apps/android/app/src/main/java/ai/openclaw/app/ui/VoiceScreen.kt",
-    new Set(["${normalized.take(87)}..."]),
+    new Set(["${normalized.takeUtf16Safe(87)}..."]),
   ],
   [
     "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatCommandControls.kt",

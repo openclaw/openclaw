@@ -433,12 +433,21 @@ class ConnectionManagerTest {
       listOf(
         "operator.admin",
         "operator.approvals",
+        "operator.questions",
         "operator.read",
         "operator.talk.secrets",
         "operator.write",
       ),
       options.scopes,
     )
+    assertEquals(listOf(ConnectionManager.INLINE_WIDGETS_CLIENT_CAPABILITY), options.caps)
+  }
+
+  @Test
+  fun buildOperatorConnectOptions_omitsInlineWidgetsWithoutIsolatedWebViews() {
+    val options = newManager(inlineWidgetsAvailable = false).buildOperatorConnectOptions()
+
+    assertTrue(options.caps.isEmpty())
   }
 
   @Test
@@ -539,6 +548,17 @@ class ConnectionManagerTest {
   }
 
   @Test
+  fun buildNodeConnectOptions_advertisesVoiceWakeOnlyWhenEnabledAndAvailable() {
+    val disabled = newManager(voiceWakeEnabled = false).buildNodeConnectOptions()
+    val unavailable = newManager(voiceWakeEnabled = true, voiceWakeAvailable = false).buildNodeConnectOptions()
+    val enabled = newManager(voiceWakeEnabled = true).buildNodeConnectOptions()
+
+    assertFalse(disabled.caps.contains(OpenClawCapability.VoiceWake.rawValue))
+    assertFalse(unavailable.caps.contains(OpenClawCapability.VoiceWake.rawValue))
+    assertTrue(enabled.caps.contains(OpenClawCapability.VoiceWake.rawValue))
+  }
+
+  @Test
   fun buildNodeConnectOptions_advertisesDeviceAppsOnlyWhenUserOptedIn() {
     val disabled = newManager(installedAppsSharingEnabled = false).buildNodeConnectOptions()
     val enabled = newManager(installedAppsSharingEnabled = true).buildNodeConnectOptions()
@@ -606,13 +626,22 @@ class ConnectionManagerTest {
     callLogAvailable: Boolean = false,
     photosAvailable: Boolean = false,
     installedAppsSharingEnabled: Boolean = false,
+    voiceWakeEnabled: Boolean = false,
+    voiceWakeAvailable: Boolean = true,
+    inlineWidgetsAvailable: Boolean = true,
   ): ConnectionManager {
     val context = RuntimeEnvironment.getApplication()
+    context
+      .getSharedPreferences("openclaw.node", android.content.Context.MODE_PRIVATE)
+      .edit()
+      .clear()
+      .commit()
     val prefs =
       SecurePrefs(
         context,
         securePrefsOverride = context.getSharedPreferences("connection-manager-test", android.content.Context.MODE_PRIVATE),
       )
+    prefs.setVoiceWakeEnabled(voiceWakeEnabled)
 
     return ConnectionManager(
       prefs = prefs,
@@ -626,6 +655,8 @@ class ConnectionManagerTest {
       callLogAvailable = { callLogAvailable },
       photosAvailable = { photosAvailable },
       installedAppsSharingEnabled = { installedAppsSharingEnabled },
+      voiceWakeAvailable = { voiceWakeAvailable },
+      inlineWidgetsAvailable = { inlineWidgetsAvailable },
       manualTls = { false },
     )
   }

@@ -52,6 +52,11 @@ function buildRuntime(
   resolve: GatewayPluginRuntime["channel"]["routing"]["resolveAgentRoute"],
 ): GatewayPluginRuntime {
   return {
+    state: {
+      openChannelIngressQueue: () => {
+        throw new Error("unexpected durable ingress access");
+      },
+    },
     channel: {
       activity: { record: vi.fn() },
       routing: { resolveAgentRoute: resolve },
@@ -80,13 +85,13 @@ function buildAllowAccess(): QQBotInboundAccess {
 }
 
 function buildDeps(
-  cfg: unknown,
+  cfg: StubCfg,
   runtime: GatewayPluginRuntime,
   account: GatewayAccount,
 ): InboundPipelineDeps {
   return {
     account,
-    cfg,
+    cfg: cfg as InboundPipelineDeps["cfg"],
     runtime,
     startTyping: vi.fn(),
     adapters: {

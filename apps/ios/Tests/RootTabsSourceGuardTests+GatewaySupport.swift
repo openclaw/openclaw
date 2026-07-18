@@ -63,6 +63,9 @@ extension RootTabsSourceGuardTests {
         #expect(scannerLifecycle.contains("self.stopScannerCapture()"))
 
         #expect(sectionsSource.contains("var gatewayDestination: some View"))
+        #expect(sectionsSource.contains("This phone has limited Gateway access."))
+        #expect(sectionsSource.contains("Use a secure wss:// or Tailscale Serve Gateway"))
+        #expect(sectionsSource.contains("Label(\"Scan Full-Access Code\""))
         #expect(sectionsSource.contains("self.gatewayActions"))
         #expect(sectionsSource.contains("self.manualGatewayCard"))
         #expect(sectionsSource.contains("self.gatewaySetupCard"))
@@ -96,10 +99,11 @@ extension RootTabsSourceGuardTests {
         // root's only remediation surface must not depend on aggregate status.
         #expect(activeProblemToast.contains("appModel.lastGatewayProblem"))
         #expect(!activeProblemToast.contains("gatewayStatus"))
-        // Every problem report re-surfaces a swiped-away toast or shakes the
-        // visible one; value equality alone must not keep the toast hidden.
+        // Every problem report re-surfaces a swiped-away toast. Visible problem
+        // banners stay stationary when reconnects re-report the same failure.
         #expect(rootSource.contains("self.appModel.gatewayProblemReportCount"))
-        #expect(rootSource.contains("GatewayToastShakeEffect"))
+        #expect(rootSource.contains("guard self.isGatewayToastSwipeDismissed else { return }"))
+        #expect(!rootSource.contains("GatewayToastShakeEffect"))
 
         #expect(actionsSource.contains("await self.gatewayController.connectActiveGateway()"))
         #expect(actionsSource.contains("self.gatewayController.refreshActiveGatewayRegistrationFromSettings()"))

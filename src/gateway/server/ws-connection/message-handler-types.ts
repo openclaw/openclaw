@@ -12,7 +12,7 @@ import type { DeviceBootstrapProfile } from "../../../shared/device-bootstrap-pr
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import type { GatewayAuthResult, ResolvedGatewayAuth } from "../../auth.js";
 import type { GatewayMethodRegistry } from "../../methods/registry.js";
-import type { NodePairingAutoApproveClientIpSource } from "../../node-pairing-auto-approve.js";
+import type { NodePairingAutoApproveClientIpSource } from "../../node-pairing-auto-approve.types.js";
 import type { NodeReapprovalCoordinator } from "../../node-reapproval-coordinator.js";
 import type { PluginNodeCapabilitySurface } from "../../plugin-node-capability.js";
 import type { GatewayRole } from "../../role-policy.js";

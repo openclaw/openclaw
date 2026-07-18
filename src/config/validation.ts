@@ -32,7 +32,7 @@ import {
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import { hasKind } from "../plugins/slots.js";
 import { resolveWebSearchInstallCatalogEntries } from "../plugins/web-search-install-catalog.js";
-import { collectUnsupportedSecretRefConfigCandidates } from "../secrets/unsupported-surface-policy.js";
+import { unsupportedSecretRefSurfacePolicy } from "../secrets/unsupported-surface-policy.js";
 import {
   hasAvatarUriScheme,
   isAvatarDataUrl,
@@ -205,6 +205,17 @@ function toConfigPathSegments(pathLocal3: unknown): ConfigPathSegment[] {
 
 function formatConfigPath(segments: readonly ConfigPathSegment[]): string {
   return segments.join(".");
+}
+
+function withConfigIssuePath(
+  issue: ConfigValidationIssue,
+  pathSegments: readonly ConfigPathSegment[],
+): ConfigValidationIssue {
+  Object.defineProperty(issue, "pathSegments", {
+    value: [...pathSegments],
+    enumerable: false,
+  });
+  return issue;
 }
 
 function formatMissingOfficialExternalPluginWarning(
@@ -631,7 +642,7 @@ function isRouteTypeMismatchIssue(issue: UnknownIssueRecord): boolean {
 
 function extractBindingsSpecificUnionIssue(
   record: UnknownIssueRecord,
-  parentPath: string,
+  parentPathSegments: readonly ConfigPathSegment[],
 ): ConfigValidationIssue | null {
   if (!isBindingsIssuePath(toConfigPathSegments(record.path)) || !Array.isArray(record.errors)) {
     return null;
@@ -700,11 +711,16 @@ function extractBindingsSpecificUnionIssue(
     return null;
   }
 
-  const subPath = formatConfigPath(toConfigPathSegments(matchingBranchIssue.path));
-  const fullPath = parentPath && subPath ? `${parentPath}.${subPath}` : parentPath || subPath;
+  const fullPathSegments = [
+    ...parentPathSegments,
+    ...toConfigPathSegments(matchingBranchIssue.path),
+  ];
   const subMessage =
     typeof matchingBranchIssue.message === "string" ? matchingBranchIssue.message : "Invalid input";
-  return { path: fullPath, message: subMessage };
+  return withConfigIssuePath(
+    { path: formatConfigPath(fullPathSegments), message: subMessage },
+    fullPathSegments,
+  );
 }
 
 function isObjectSecretRefCandidate(value: unknown): boolean {
@@ -739,7 +755,7 @@ function pushUnsupportedMutableSecretRefIssue(
 
 function collectUnsupportedMutableSecretRefIssues(raw: unknown): ConfigValidationIssue[] {
   const issues: ConfigValidationIssue[] = [];
-  for (const candidate of collectUnsupportedSecretRefConfigCandidates(raw)) {
+  for (const candidate of unsupportedSecretRefSurfacePolicy.collectConfigCandidates(raw)) {
     pushUnsupportedMutableSecretRefIssue(issues, candidate.path, candidate.value);
   }
 
@@ -824,7 +840,8 @@ export function collectUnsupportedSecretRefPolicyIssues(raw: unknown): ConfigVal
 
 function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue {
   const record = toIssueRecord(issue);
-  const pathItem = formatConfigPath(toConfigPathSegments(record?.path));
+  const pathSegments = toConfigPathSegments(record?.path);
+  const pathItem = formatConfigPath(pathSegments);
   const message = typeof record?.message === "string" ? record.message : "Invalid input";
 
   // Numeric ceiling/floor hints (too_big / too_small with numeric origin).
@@ -843,22 +860,25 @@ function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue {
     record.code === "invalid_union" &&
     !allowedValuesSummary
   ) {
-    const betterIssue = extractBindingsSpecificUnionIssue(record, pathItem);
+    const betterIssue = extractBindingsSpecificUnionIssue(record, pathSegments);
     if (betterIssue) {
       return betterIssue;
     }
   }
 
   if (!allowedValuesSummary) {
-    return { path: pathItem, message: enrichedMessage };
+    return withConfigIssuePath({ path: pathItem, message: enrichedMessage }, pathSegments);
   }
 
-  return {
-    path: pathItem,
-    message: appendAllowedValuesHint(enrichedMessage, allowedValuesSummary),
-    allowedValues: allowedValuesSummary.values,
-    allowedValuesHiddenCount: allowedValuesSummary.hiddenCount,
-  };
+  return withConfigIssuePath(
+    {
+      path: pathItem,
+      message: appendAllowedValuesHint(enrichedMessage, allowedValuesSummary),
+      allowedValues: allowedValuesSummary.values,
+      allowedValuesHiddenCount: allowedValuesSummary.hiddenCount,
+    },
+    pathSegments,
+  );
 }
 
 function collectExplicitPluginReferences(raw: unknown): ExplicitPluginReferences {
@@ -935,15 +955,15 @@ function resolveExplicitPluginReferencePath(
   }
   return undefined;
 }
-
-export const testing = {
-  mapZodIssueToConfigIssue,
-};
-
 function isWorkspaceAvatarPath(value: string, workspaceDir: string): boolean {
   const workspaceRoot = path.resolve(workspaceDir);
   const resolved = path.resolve(workspaceRoot, value);
   return isPathWithinRoot(workspaceRoot, resolved);
+}
+
+function createIdentityAvatarIssue(index: number, message: string): ConfigValidationIssue {
+  const pathSegments = ["agents", "list", index, "identity", "avatar"] as const;
+  return withConfigIssuePath({ path: formatConfigPath(pathSegments), message }, pathSegments);
 }
 
 function validateIdentityAvatar(config: OpenClawConfig): ConfigValidationIssue[] {
@@ -968,18 +988,22 @@ function validateIdentityAvatar(config: OpenClawConfig): ConfigValidationIssue[]
       continue;
     }
     if (avatar.startsWith("~")) {
-      issues.push({
-        path: `agents.list.${index}.identity.avatar`,
-        message: "identity.avatar must be a workspace-relative path, http(s) URL, or data URI.",
-      });
+      issues.push(
+        createIdentityAvatarIssue(
+          index,
+          "identity.avatar must be a workspace-relative path, http(s) URL, or data URI.",
+        ),
+      );
       continue;
     }
     const hasScheme = hasAvatarUriScheme(avatar);
     if (hasScheme && !isWindowsAbsolutePath(avatar)) {
-      issues.push({
-        path: `agents.list.${index}.identity.avatar`,
-        message: "identity.avatar must be a workspace-relative path, http(s) URL, or data URI.",
-      });
+      issues.push(
+        createIdentityAvatarIssue(
+          index,
+          "identity.avatar must be a workspace-relative path, http(s) URL, or data URI.",
+        ),
+      );
       continue;
     }
     const workspaceDir = resolveAgentWorkspaceDir(
@@ -987,10 +1011,9 @@ function validateIdentityAvatar(config: OpenClawConfig): ConfigValidationIssue[]
       entry.id ?? resolveDefaultAgentId(config),
     );
     if (!isWorkspaceAvatarPath(avatar, workspaceDir)) {
-      issues.push({
-        path: `agents.list.${index}.identity.avatar`,
-        message: "identity.avatar must stay within the agent workspace.",
-      });
+      issues.push(
+        createIdentityAvatarIssue(index, "identity.avatar must stay within the agent workspace."),
+      );
     }
   }
   return issues;
@@ -2127,4 +2150,4 @@ function validateConfigObjectWithPluginsBase(
 
   return { ok: true, config: mutatedConfig, warnings };
 }
-export { testing as __testing };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

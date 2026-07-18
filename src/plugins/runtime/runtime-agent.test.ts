@@ -130,6 +130,8 @@ describe("plugin runtime session creation", () => {
       const created = await runtime.session.createSessionEntry({
         cfg: {},
         key,
+        execNode: "node-a",
+        execCwd: "/work/on-node",
         initialEntry: {
           cliBackendId: "claude-cli",
           model: "claude-opus-4-8",
@@ -147,6 +149,9 @@ describe("plugin runtime session creation", () => {
         providerOverride: "claude-cli",
         modelOverride: "claude-opus-4-8",
         modelSelectionLocked: true,
+        execHost: "node",
+        execNode: "node-a",
+        execCwd: "/work/on-node",
         cliSessionBindings: {
           "claude-cli": {
             sessionId: "claude-source",

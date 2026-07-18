@@ -13,6 +13,7 @@ import {
   ADMIN_SCOPE,
   APPROVALS_SCOPE,
   PAIRING_SCOPE,
+  QUESTIONS_SCOPE,
   READ_SCOPE,
   TALK_SECRETS_SCOPE,
   WRITE_SCOPE,
@@ -24,8 +25,8 @@ export {
   ADMIN_SCOPE,
   APPROVALS_SCOPE,
   PAIRING_SCOPE,
+  QUESTIONS_SCOPE,
   READ_SCOPE,
-  TALK_SECRETS_SCOPE,
   WRITE_SCOPE,
   type OperatorScope,
 };
@@ -36,6 +37,7 @@ export const CLI_DEFAULT_OPERATOR_SCOPES: OperatorScope[] = [
   READ_SCOPE,
   WRITE_SCOPE,
   APPROVALS_SCOPE,
+  QUESTIONS_SCOPE,
   PAIRING_SCOPE,
   TALK_SECRETS_SCOPE,
 ];
@@ -83,6 +85,7 @@ const SESSIONS_PATCH_WRITE_SCOPE_FIELDS: ReadonlySet<string> = new Set([
   "agentId",
   "label",
   "category",
+  "icon",
   "pinned",
   "archived",
   "unread",

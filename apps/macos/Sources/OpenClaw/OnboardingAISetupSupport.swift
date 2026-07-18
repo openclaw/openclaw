@@ -15,6 +15,18 @@ extension OnboardingAISetupModel {
         }
     }
 
+    struct CandidatePresentation: Equatable {
+        let icon: String?
+        let website: String?
+    }
+
+    struct UnavailableCandidate: Identifiable, Equatable, Decodable {
+        let id: String
+        let label: String
+        let detail: String
+        let reason: String
+    }
+
     enum CandidateStatus: Equatable {
         case untried
         case testing
@@ -50,6 +62,8 @@ extension OnboardingAISetupModel {
         let id: String
         let label: String
         let hint: String?
+        let icon: String?
+        let website: String?
     }
 
     struct AuthOption: Identifiable, Equatable, Decodable {
@@ -57,8 +71,18 @@ extension OnboardingAISetupModel {
         let label: String
         let hint: String?
         let groupLabel: String?
+        let icon: String?
+        let website: String?
         let kind: String
         let featured: Bool
+    }
+
+    struct RecommendedInstall: Identifiable, Equatable, Decodable {
+        let id: String
+        let label: String
+        let hint: String
+        let website: String
+        let icon: String
     }
 
     static func canAcceptProviderAuthReconciliation(
@@ -84,7 +108,7 @@ extension OnboardingAISetupModel {
         // Codex can spend 305s installing its runtime plugin before the 90s live probe.
         // Keep a bounded client deadline with room for registry refresh and finalization.
         kind == "codex-cli"
-            ? OnboardingCrestodianResumeStore.maximumActivationTimeoutMs
+            ? OnboardingSystemAgentResumeStore.maximumActivationTimeoutMs
             : 150_000
     }
 
@@ -97,7 +121,7 @@ extension OnboardingAISetupModel {
             return code == "UNKNOWN_METHOD" ||
                 (code == "INVALID_REQUEST" &&
                     (message.contains("unknown method") ||
-                        message.contains("invalid crestodian.setup.activate params")))
+                        message.contains("invalid openclaw.setup.activate params")))
         }
         return error is GatewayConnectAuthError ||
             error is GatewayTLSValidationError ||

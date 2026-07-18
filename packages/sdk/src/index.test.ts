@@ -1371,7 +1371,13 @@ describe("OpenClaw SDK", () => {
     });
     const oc = new OpenClaw({ transport });
 
-    const session = await oc.sessions.create({ key: "session-main" });
+    const session = await oc.sessions.create({
+      key: "session-main",
+      thinkingLevel: "high",
+      parentSessionKey: "main",
+      emitCommandHooks: true,
+      succeedsParent: false,
+    });
     const run = await session.send({ message: "continue", thinking: "medium", timeoutMs: 1_500 });
     const noTimeoutRun = await session.send({ message: "continue without timeout", timeoutMs: 0 });
     await session.compact();
@@ -1382,7 +1388,13 @@ describe("OpenClaw SDK", () => {
       {
         method: "sessions.create",
         options: undefined,
-        params: { key: "session-main" },
+        params: {
+          key: "session-main",
+          thinkingLevel: "high",
+          parentSessionKey: "main",
+          emitCommandHooks: true,
+          succeedsParent: false,
+        },
       },
       {
         method: "sessions.send",
@@ -1655,3 +1667,4 @@ describe("OpenClaw SDK", () => {
     expect(timedOut.data).toEqual({ phase: "end", stopReason: "timeout" });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

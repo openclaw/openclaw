@@ -4,7 +4,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerOnboardCommand } from "./register.onboard.js";
 
 const mocks = vi.hoisted(() => ({
-  runCrestodianWithInference: vi.fn(),
+  acknowledgeOnboardRecommendationsCommand: vi.fn(),
+  onboardRecommendationsCommand: vi.fn(),
+  refreshOnboardRecommendationsCommand: vi.fn(),
+  runSystemAgentWithInference: vi.fn(),
   setupWizardCommandMock: vi.fn(),
   runtime: {
     log: vi.fn(),
@@ -49,8 +52,14 @@ vi.mock("../../commands/onboard.js", () => ({
   setupWizardCommand: mocks.setupWizardCommandMock,
 }));
 
-vi.mock("../../commands/crestodian-with-inference.js", () => ({
-  runCrestodianWithInference: mocks.runCrestodianWithInference,
+vi.mock("../../commands/onboard-recommendations.js", () => ({
+  acknowledgeOnboardRecommendationsCommand: mocks.acknowledgeOnboardRecommendationsCommand,
+  onboardRecommendationsCommand: mocks.onboardRecommendationsCommand,
+  refreshOnboardRecommendationsCommand: mocks.refreshOnboardRecommendationsCommand,
+}));
+
+vi.mock("../../commands/system-agent-with-inference.js", () => ({
+  runSystemAgentWithInference: mocks.runSystemAgentWithInference,
 }));
 
 vi.mock("../../runtime.js", () => ({
@@ -75,8 +84,29 @@ describe("registerOnboardCommand", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.runCrestodianWithInference.mockResolvedValue(undefined);
+    mocks.runSystemAgentWithInference.mockResolvedValue(undefined);
     setupWizardCommandMock.mockResolvedValue(undefined);
+  });
+
+  it("routes the read-only recommendations subcommand", async () => {
+    await runCli(["onboard", "recommendations", "--json"]);
+
+    expect(mocks.onboardRecommendationsCommand).toHaveBeenCalledWith({ json: true }, runtime);
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("routes the recommendations acknowledgement subcommand", async () => {
+    await runCli(["onboard", "recommendations", "acknowledge"]);
+
+    expect(mocks.acknowledgeOnboardRecommendationsCommand).toHaveBeenCalledWith(runtime);
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("routes the recommendations refresh subcommand", async () => {
+    await runCli(["onboard", "recommendations", "refresh"]);
+
+    expect(mocks.refreshOnboardRecommendationsCommand).toHaveBeenCalledWith(runtime);
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
   });
 
   it("defaults installDaemon to undefined when no daemon flags are provided", async () => {
@@ -122,6 +152,12 @@ describe("registerOnboardCommand", () => {
     expect(setupWizardOptions().skipBootstrap).toBe(true);
   });
 
+  it("forwards --tui to guided onboarding", async () => {
+    await runCli(["onboard", "--tui"]);
+
+    expect(setupWizardOptions().tui).toBe(true);
+  });
+
   it("parses --mistral-api-key and forwards mistralApiKey", async () => {
     await runCli(["onboard", "--mistral-api-key", "sk-mistral-test"]);
     expect(setupWizardOptions().mistralApiKey).toBe("sk-mistral-test"); // pragma: allowlist secret
@@ -164,10 +200,10 @@ describe("registerOnboardCommand", () => {
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
-  it("routes --modern through the inference-gated Crestodian entrypoint", async () => {
+  it("routes --modern through the inference-gated OpenClaw entrypoint", async () => {
     await runCli(["onboard", "--modern", "--json"]);
 
-    expect(mocks.runCrestodianWithInference).toHaveBeenCalledWith(
+    expect(mocks.runSystemAgentWithInference).toHaveBeenCalledWith(
       {
         yes: false,
         json: true,
@@ -183,7 +219,7 @@ describe("registerOnboardCommand", () => {
   it("uses the single-output noninteractive overview behind the inference gate", async () => {
     await runCli(["onboard", "--modern", "--non-interactive", "--accept-risk"]);
 
-    expect(mocks.runCrestodianWithInference).toHaveBeenCalledWith(
+    expect(mocks.runSystemAgentWithInference).toHaveBeenCalledWith(
       {
         yes: false,
         json: false,
@@ -199,7 +235,7 @@ describe("registerOnboardCommand", () => {
   it("preserves guided fallback context for --modern", async () => {
     await runCli(["onboard", "--modern", "--workspace", "/tmp/work", "--accept-risk"]);
 
-    expect(mocks.runCrestodianWithInference).toHaveBeenCalledWith(
+    expect(mocks.runSystemAgentWithInference).toHaveBeenCalledWith(
       expect.objectContaining({
         welcomeVariant: "onboarding",
         setupWorkspace: "/tmp/work",
@@ -218,7 +254,7 @@ describe("registerOnboardCommand", () => {
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("--accept-risk"));
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("onboard --modern"));
     expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(mocks.runCrestodianWithInference).not.toHaveBeenCalled();
+    expect(mocks.runSystemAgentWithInference).not.toHaveBeenCalled();
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
   });
 
@@ -236,14 +272,14 @@ describe("registerOnboardCommand", () => {
 
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(args[0]!));
     expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(mocks.runCrestodianWithInference).not.toHaveBeenCalled();
+    expect(mocks.runSystemAgentWithInference).not.toHaveBeenCalled();
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
   });
 
   it("keeps noninteractive JSON modern onboarding to one overview request", async () => {
     await runCli(["onboard", "--modern", "--non-interactive", "--accept-risk", "--json"]);
 
-    expect(mocks.runCrestodianWithInference).toHaveBeenCalledWith(
+    expect(mocks.runSystemAgentWithInference).toHaveBeenCalledWith(
       expect.objectContaining({
         json: true,
         interactive: false,
@@ -252,6 +288,6 @@ describe("registerOnboardCommand", () => {
       runtime,
       { acceptRisk: true },
     );
-    expect(mocks.runCrestodianWithInference.mock.calls[0]?.[0]).not.toHaveProperty("message");
+    expect(mocks.runSystemAgentWithInference.mock.calls[0]?.[0]).not.toHaveProperty("message");
   });
 });

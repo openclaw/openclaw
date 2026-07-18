@@ -3,12 +3,16 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import { AUTH_PROFILE_FILENAME } from "../agents/auth-profiles/path-constants.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  activateSecretsRuntimeSnapshot,
+  getActiveSecretsRuntimeSnapshot,
+  prepareSecretsRuntimeSnapshot,
+} from "../secrets/runtime.js";
 import { deleteTestEnvValue } from "../test-utils/env.js";
-import { testing as controlPlaneRateLimitTesting } from "./control-plane-rate-limit.js";
 import {
   connectOk,
   installGatewayTestHooks,
@@ -24,6 +28,7 @@ const CONFIG_SECRETREF_RPC_TIMEOUT_MS = 20_000;
 
 let startedServer: Awaited<ReturnType<typeof startServerWithClient>> | null = null;
 let sharedTempRoot: string;
+let rateLimitEpochMs = Date.now();
 
 function requireWs(): Awaited<ReturnType<typeof startServerWithClient>>["ws"] {
   if (!startedServer) {
@@ -46,6 +51,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  vi.restoreAllMocks();
   if (!startedServer) {
     return;
   }
@@ -173,10 +179,118 @@ async function writeUnresolvedAuthProfileTokenRef(missingEnvVar: string) {
 }
 
 beforeEach(() => {
-  controlPlaneRateLimitTesting.resetControlPlaneRateLimitState();
+  rateLimitEpochMs += 60_000;
+  vi.spyOn(Date, "now").mockReturnValue(rateLimitEpochMs);
 });
 
 describe("gateway config methods", () => {
+  it("reloads owners independently and reports a changed unresolved owner as cold", async () => {
+    const original = await getCurrentConfigObject();
+    const secretFile = path.join(await resetTempDir("owner-reload"), "secrets.json");
+    await writeJsonFile(secretFile, { first: "first-old", second: "second-old" });
+    await fs.chmod(secretFile, 0o600);
+    const ref = (id: string) => ({ source: "file", provider: "reload-proof", id });
+    const providerConfig = {
+      secrets: {
+        providers: {
+          "reload-proof": { source: "file", path: secretFile, mode: "json" },
+        },
+      },
+      models: {
+        providers: {
+          "reload-first": {
+            apiKey: ref("/first"),
+            baseUrl: "https://first.example.invalid/v1",
+            models: [],
+          },
+          "reload-second": {
+            apiKey: ref("/second"),
+            baseUrl: "https://second.example.invalid/v1",
+            models: [],
+          },
+        },
+      },
+    };
+
+    try {
+      const seed = await rpcReq<{ degradedSecretOwners?: unknown[] }>(
+        requireWs(),
+        "config.patch",
+        {
+          raw: JSON.stringify(providerConfig),
+          baseHash: original.hash,
+        },
+        CONFIG_SECRETREF_RPC_TIMEOUT_MS,
+      );
+      expect(seed.ok).toBe(true);
+      expect(seed.payload?.degradedSecretOwners).toBeUndefined();
+
+      await writeJsonFile(secretFile, { second: "second-new" });
+      await fs.chmod(secretFile, 0o600);
+      const reload = await rpcReq<{ warningCount?: number }>(
+        requireWs(),
+        "secrets.reload",
+        {},
+        CONFIG_SECRETREF_RPC_TIMEOUT_MS,
+      );
+      expect(reload.ok).toBe(true);
+      const stale = getActiveSecretsRuntimeSnapshot();
+      expect(stale?.config.models?.providers?.["reload-first"]?.apiKey).toBe("first-old");
+      expect(stale?.config.models?.providers?.["reload-second"]?.apiKey).toBe("second-new");
+      expect(stale?.degradedOwners).toMatchObject([
+        { ownerKind: "provider", ownerId: "reload-first", degradationState: "stale" },
+      ]);
+
+      const beforeCold = await getCurrentConfigObject();
+      const cold = await rpcReq<{
+        degradedSecretOwners?: Array<{ ownerId?: string; state?: string }>;
+      }>(
+        requireWs(),
+        "config.patch",
+        {
+          raw: JSON.stringify({
+            models: {
+              providers: {
+                "reload-first": { apiKey: ref("/changed") },
+              },
+            },
+          }),
+          baseHash: beforeCold.hash,
+        },
+        CONFIG_SECRETREF_RPC_TIMEOUT_MS,
+      );
+      expect(cold.ok).toBe(true);
+      expect(cold.payload?.degradedSecretOwners).toEqual([
+        expect.objectContaining({ ownerId: "reload-first", state: "cold" }),
+      ]);
+      const coldSnapshot = getActiveSecretsRuntimeSnapshot();
+      expect(coldSnapshot?.config.models?.providers?.["reload-first"]?.apiKey).toEqual(
+        ref("/changed"),
+      );
+      expect(coldSnapshot?.config.models?.providers?.["reload-second"]?.apiKey).toBe("second-new");
+    } finally {
+      await restoreConfigFileForTest(original);
+      activateSecretsRuntimeSnapshot(
+        await prepareSecretsRuntimeSnapshot({
+          config: original.config,
+          includeAuthStoreRefs: true,
+        }),
+      );
+    }
+  });
+
+  it("includes the active runtime config revision", async () => {
+    const current = await rpcReq<{
+      hash?: string;
+      configRevisionHash?: string;
+      appliedConfigHash?: string | null;
+    }>(requireWs(), "config.get", {});
+
+    expect(current.ok).toBe(true);
+    expect(current.payload).toHaveProperty("configRevisionHash");
+    expect(current.payload).toHaveProperty("appliedConfigHash");
+  });
+
   it("rejects config.set when SecretRef resolution fails", async () => {
     const missingEnvVar = `OPENCLAW_MISSING_SECRETREF_${Date.now()}`;
     deleteTestEnvValue(missingEnvVar);
@@ -1119,3 +1233,4 @@ describe("gateway server sessions", () => {
     expect(loadSessionEntry({ agentId: "ops", sessionKey: "main", storePath })).toBeUndefined();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

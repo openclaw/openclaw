@@ -9,6 +9,7 @@ import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { PluginHookChannelContext } from "../../plugins/hook-types.js";
+import type { RuntimePluginToolGrant } from "../../plugins/runtime/tool-grant.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type {
   UserTurnInput,
@@ -17,6 +18,7 @@ import type {
 import type { ExecElevatedDefaults } from "../bash-tools.exec-types.js";
 import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
 import type { CliSessionBindingFacts } from "../cli-runner/types.js";
+import type { MainSessionRecoveryOwnerLease } from "../main-session-recovery-store.js";
 import type { AgentStreamParams, ClientToolDefinition } from "./shared-types.js";
 
 /** Image content block for Claude API multimodal messages. */
@@ -25,13 +27,12 @@ export type ImageContent = {
   data: string;
   mimeType: string;
 };
-export type { AgentStreamParams } from "./shared-types.js";
 
 /** Metadata overrides for trusted internal agent command callers. */
 export type AgentCommandResultMetaOverrides = {
   transport?: "embedded";
   fallbackFrom?: "gateway";
-  fallbackReason?: "gateway_timeout";
+  fallbackReason?: "gateway_timeout" | "gateway_closed";
   fallbackSessionId?: string;
   fallbackSessionKey?: string;
 };
@@ -114,6 +115,8 @@ export type AgentCommandOpts = {
   allowModelOverride?: boolean;
   /** Optional runtime tool allow-list; when set, only these tools are exposed for this run. */
   toolsAllow?: string[];
+  /** Trusted owner-scoped plugin tool grant; normal policy and deny rules still apply. */
+  runtimePluginToolGrant?: RuntimePluginToolGrant;
   /** Internal marker for an auto-applied cap that CLI runtimes must omit. */
   toolsAllowIsDefault?: boolean;
   /** Preserve the originating run's message-tool policy across internal continuation turns. */
@@ -148,6 +151,9 @@ export type AgentCommandOpts = {
   disableMessageTool?: boolean;
   /** Restrict this reconstructed run to restart-safe tools. */
   forceRestartSafeTools?: boolean;
+  /** Host-owned exact media set for a scoped automatic recovery delivery. */
+  internalDeliveryMediaUrls?: string[];
+  internalDeliverySuppressText?: boolean;
   /** Gateway ingress that already persisted visible activity can skip the duplicate pre-run touch. */
   skipInitialSessionTouch?: boolean;
   /** Per-call stream param overrides (best-effort). */
@@ -168,6 +174,10 @@ export type AgentCommandOpts = {
   oneShotCliRun?: boolean;
   /** Gateway-owned runs can late-bind plugin subagent and node runtime helpers. */
   allowGatewaySubagentBinding?: boolean;
+  /** Opaque foreground fence transferred by Gateway after atomic session admission. */
+  mainRestartRecoveryOwnerLease?: MainSessionRecoveryOwnerLease;
+  /** Gateway already consumed this automatic recovery run's durable reservation. */
+  mainRestartRecoveryAdmitted?: boolean;
   /** Internal local CLI callers can annotate result metadata before JSON/text output. */
   resultMetaOverrides?: AgentCommandResultMetaOverrides;
   /** Called when the actual run model is selected, including fallback retries. */
