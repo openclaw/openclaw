@@ -11,6 +11,7 @@ import {
   isSecretResolutionError,
 } from "./resolve-errors.js";
 import { resolveSecretRefValues, resolveSecretRefValuesSettledByProvider } from "./resolve.js";
+import { getSecretAssignmentSource } from "./runtime-assignment-provenance.js";
 import { resolveAuthProfileSecretOwnerId } from "./runtime-auth-profile-owner.js";
 import type {
   DegradedSecretOwner,
@@ -71,7 +72,7 @@ function registerResolvedValuesForRedaction(resolved: ReadonlyMap<string, unknow
 }
 
 function assignmentOwnerKey(assignment: SecretAssignment): string {
-  return `${assignment.source ?? "config"}\0${assignment.ownerKind}\0${assignment.ownerId}`;
+  return `${getSecretAssignmentSource(assignment)}\0${assignment.ownerKind}\0${assignment.ownerId}`;
 }
 
 function groupAssignmentsByOwner(assignments: SecretAssignment[]): SecretAssignment[][] {
@@ -139,8 +140,16 @@ function associateAssignmentFailureOwners(params: {
   const validationFailures = getSecretAssignmentValidationFailures(params.error);
   const validationFailureRefKeys = new Set(validationFailures.map((failure) => failure.refKey));
   const validationFailureOwnerKeys = new Set(
-    validationFailures.map(
-      (failure) => `${failure.source ?? "config"}\0${failure.ownerKind}\0${failure.ownerId}`,
+    validationFailures.flatMap((failure) =>
+      params.assignments
+        .filter(
+          (assignment) =>
+            assignment.ownerKind === failure.ownerKind &&
+            assignment.ownerId === failure.ownerId &&
+            assignment.expected === failure.expected &&
+            secretRefKey(assignment.ref) === failure.refKey,
+        )
+        .map(assignmentOwnerKey),
     ),
   );
   const reason =
@@ -173,7 +182,7 @@ function associateAssignmentFailureOwners(params: {
           config: params.config,
         }),
         failureMatched,
-        source: assignments[0]?.source ?? "config",
+        source: getSecretAssignmentSource(assignments[0]!),
       },
     ];
   });
