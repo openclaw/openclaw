@@ -5,6 +5,8 @@ import { isLikelyRepoFilePath, runKnip, uniqueSorted } from "./deadcode-knip-run
 
 const KNIP_ISSUES = "exports,nsExports,types,nsTypes,enumMembers,namespaceMembers";
 
+// One config, two modes: production fails on exports no production module
+// consumes, full-tree makes tests entrypoints and fails on dead test support.
 const KNIP_SCANS = [
   {
     name: "production unused-export scan",
@@ -12,22 +14,13 @@ const KNIP_SCANS = [
   },
   {
     name: "full-tree unused-export scan",
-    args: ["--config", "config/knip.all-exports.config.ts"],
-  },
-  {
-    name: "script unused-export scan",
-    args: ["--config", "config/knip.scripts-exports.config.ts", "--include-entry-exports"],
+    args: ["--config", "config/knip.config.ts"],
   },
 ];
 
-const KNIP_COMMON_ARGS = [
-  "--no-progress",
-  "--reporter",
-  "compact",
-  "--include",
-  KNIP_ISSUES,
-  "--no-config-hints",
-];
+// Config hints are left enabled, but the compact reporter does not render them.
+// To audit stale ignore entries, rerun a scan with `--reporter symbols`.
+const KNIP_COMMON_ARGS = ["--no-progress", "--reporter", "compact", "--include", KNIP_ISSUES];
 
 /** Parses compact Knip export sections into one path-and-symbol entry per finding. */
 export function parseKnipCompactUnusedExportsResult(output) {
@@ -96,7 +89,7 @@ export function checkUnusedExports(output) {
 }
 
 async function main() {
-  // The scans are independent Knip child processes over separate configs;
+  // The scans are independent Knip child processes over the same config;
   // running them concurrently cuts the lane's serial wall clock roughly 2x.
   const results = await Promise.all(
     KNIP_SCANS.map(async (scan) => ({
