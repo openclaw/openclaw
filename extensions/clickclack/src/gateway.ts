@@ -7,7 +7,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import type { RawData } from "ws";
 import { resolveClickClackInboundAccess } from "./access.js";
-import { resolveClickClackAccount } from "./accounts.js";
+import { resolveClickClackRuntimeAccount } from "./accounts.js";
 import { syncClickClackCommandMenu } from "./command-menu.js";
 import { createClickClackClient, normalizeClickClackCorrelationId } from "./http-client.js";
 import { handleClickClackInbound } from "./inbound.js";
@@ -170,7 +170,7 @@ async function drainEventBacklog(params: {
 export async function startClickClackGatewayAccount(
   ctx: ChannelGatewayContext<ResolvedClickClackAccount>,
 ) {
-  const configuredAccount = resolveClickClackAccount({
+  const configuredAccount = await resolveClickClackRuntimeAccount({
     cfg: ctx.cfg,
     accountId: ctx.account.accountId,
   });

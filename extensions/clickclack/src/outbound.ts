@@ -13,7 +13,7 @@ import {
   type OutboundMediaLoadOptions,
 } from "openclaw/plugin-sdk/outbound-media";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
-import { resolveClickClackAccount } from "./accounts.js";
+import { resolveClickClackRuntimeAccount } from "./accounts.js";
 import { createClickClackClient, type ClickClackClient } from "./http-client.js";
 import { resolveChannelId, resolveWorkspaceId } from "./resolve.js";
 import { parseClickClackTarget } from "./target.js";
@@ -136,12 +136,15 @@ async function attachUploadRetrySafe(params: {
   }
 }
 
-function createOutboundContext(params: {
+async function createOutboundContext(params: {
   cfg: CoreConfig;
   accountId?: string | null;
   correlationId?: string;
 }) {
-  const account = resolveClickClackAccount({ cfg: params.cfg, accountId: params.accountId });
+  const account = await resolveClickClackRuntimeAccount({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
   const client = createClickClackClient({
     baseUrl: account.baseUrl,
     token: account.token,
@@ -178,7 +181,7 @@ export async function sendClickClackText(params: {
   if (!text) {
     return undefined;
   }
-  const { account, client } = createOutboundContext(params);
+  const { account, client } = await createOutboundContext(params);
   const workspaceId = await resolveWorkspaceId(client, account.workspace);
   const dispatch = createDispatchOnce(params.onPlatformSendDispatch);
   const message = await createTargetMessage({
@@ -229,7 +232,7 @@ export async function sendClickClackMedia(params: {
         mediaLocalRoots: params.mediaLocalRoots,
         mediaReadFile: params.mediaReadFile,
       });
-  const { account, client } = createOutboundContext(params);
+  const { account, client } = await createOutboundContext(params);
   const workspaceId = await resolveWorkspaceId(client, account.workspace);
   const persistedUpload = nonces.upload
     ? await client.findUploadByNonce({ workspaceId, nonce: nonces.upload })
@@ -303,7 +306,7 @@ export async function reconcileClickClackUnknownSend(
     };
   }
   const mediaUrls = collectReconciliationMediaUrls(ctx);
-  const { account, client } = createOutboundContext({
+  const { account, client } = await createOutboundContext({
     cfg: ctx.cfg as CoreConfig,
     accountId: ctx.accountId,
   });

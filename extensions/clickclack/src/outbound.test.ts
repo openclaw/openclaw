@@ -24,15 +24,18 @@ const message = vi.hoisted(() =>
 );
 const createClientOptions = vi.hoisted(() => vi.fn());
 const loadOutboundMediaFromUrl = vi.hoisted(() => vi.fn());
+const resolveClickClackRuntimeAccount = vi.hoisted(() =>
+  vi.fn(async () => ({
+    baseUrl: "https://clickclack.example",
+    token: "test-token-placeholder",
+    workspace: "wsp_1",
+  })),
+);
 
 vi.mock("openclaw/plugin-sdk/outbound-media", () => ({ loadOutboundMediaFromUrl }));
 
 vi.mock("./accounts.js", () => ({
-  resolveClickClackAccount: () => ({
-    baseUrl: "https://clickclack.example",
-    token: "test-token-placeholder",
-    workspace: "wsp_1",
-  }),
+  resolveClickClackRuntimeAccount,
 }));
 
 vi.mock("./http-client.js", () => ({
@@ -71,6 +74,7 @@ describe("sendClickClackText routing", () => {
     attachUpload.mockClear();
     message.mockClear();
     createClientOptions.mockClear();
+    resolveClickClackRuntimeAccount.mockClear();
     loadOutboundMediaFromUrl.mockReset();
   });
 
@@ -114,6 +118,31 @@ describe("sendClickClackText routing", () => {
       baseUrl: "https://clickclack.example",
       token: "test-token-placeholder",
       correlationId: "fakeco.case_1",
+    });
+  });
+
+  it("uses the runtime account token for outbound ClickClack HTTP calls", async () => {
+    resolveClickClackRuntimeAccount.mockResolvedValueOnce({
+      baseUrl: "https://clickclack.example",
+      token: "runtime-secretref-token",
+      workspace: "wsp_1",
+    });
+
+    await sendClickClackText({
+      cfg,
+      accountId: "service",
+      to: "channel:general",
+      text: "hi",
+    });
+
+    expect(resolveClickClackRuntimeAccount).toHaveBeenCalledWith({
+      cfg,
+      accountId: "service",
+    });
+    expect(createClientOptions).toHaveBeenCalledWith({
+      baseUrl: "https://clickclack.example",
+      token: "runtime-secretref-token",
+      correlationId: undefined,
     });
   });
 
@@ -212,6 +241,7 @@ describe("sendClickClackMedia", () => {
     attachUpload.mockReset().mockResolvedValue(undefined);
     message.mockReset().mockResolvedValue({ id: "msg_out", attachments: [] });
     createClientOptions.mockClear();
+    resolveClickClackRuntimeAccount.mockClear();
     loadOutboundMediaFromUrl.mockReset().mockResolvedValue({
       buffer: Buffer.from("const proof = true;"),
       contentType: "text/typescript",
@@ -479,6 +509,7 @@ describe("reconcileClickClackUnknownSend", () => {
     attachUpload.mockReset().mockResolvedValue(undefined);
     message.mockReset().mockResolvedValue({ id: "msg_out", attachments: [] });
     createClientOptions.mockClear();
+    resolveClickClackRuntimeAccount.mockClear();
     loadOutboundMediaFromUrl.mockClear();
   });
 
