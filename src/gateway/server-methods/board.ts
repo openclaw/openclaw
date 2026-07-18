@@ -6,20 +6,24 @@ import {
   type BoardUpdateParams,
   type BoardWidgetGrantParams,
   type BoardWidgetPutParams,
+  type BoardWidgetPutRequestParams,
   validateBoardEventParams,
   validateBoardGetParams,
   validateBoardUpdateParams,
+  validateBoardWidgetContent,
   validateBoardWidgetGrantParams,
   validateBoardWidgetPutParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { BoardValidationError } from "../../boards/board-layout.js";
 import { appendBoardEventNotice, BoardEventPayloadError } from "../../boards/board-notices.js";
 import type { BoardStore } from "../../boards/board-store.js";
+import { readCanvasDocumentHtml } from "../../canvas/documents.js";
 import { boardStore } from "../board-store.js";
 import { buildBoardWidgetFrameUrl, createBoardViewTicket } from "../board-view-ticket.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 type NoticeAppender = typeof appendBoardEventNotice;
+type CanvasDocumentReader = (docId: string) => Promise<string>;
 
 function invalidParams(
   method: string,
@@ -50,6 +54,7 @@ function respondBoardError(
 export function createBoardHandlers(
   store: BoardStore,
   appendNotice: NoticeAppender = appendBoardEventNotice,
+  readCanvasHtml: CanvasDocumentReader = readCanvasDocumentHtml,
 ): GatewayRequestHandlers {
   return {
     "board.get": ({ params, respond }) => {
@@ -99,13 +104,22 @@ export function createBoardHandlers(
         respondBoardError(error, respond);
       }
     },
-    "board.widget.put": ({ params, respond, context }) => {
+    "board.widget.put": async ({ params, respond, context }) => {
       if (!validateBoardWidgetPutParams(params)) {
         invalidParams("board.widget.put", validateBoardWidgetPutParams.errors, respond);
         return;
       }
       try {
-        const boardParams = params as BoardWidgetPutParams;
+        const requestParams = params as BoardWidgetPutRequestParams;
+        const content =
+          requestParams.content.kind === "canvas-doc"
+            ? { kind: "html" as const, html: await readCanvasHtml(requestParams.content.docId) }
+            : requestParams.content;
+        if (!validateBoardWidgetContent(content)) {
+          invalidParams("board.widget.put content", validateBoardWidgetContent.errors, respond);
+          return;
+        }
+        const boardParams: BoardWidgetPutParams = { ...requestParams, content };
         const snapshot = store.putWidget(boardParams);
         context.broadcast("board.changed", {
           sessionKey: snapshot.sessionKey,

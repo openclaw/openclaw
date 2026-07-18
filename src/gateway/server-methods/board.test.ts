@@ -26,10 +26,10 @@ vi.mock("./sessions.runtime.js", () => ({
   })),
 }));
 
-function createHarness() {
+function createHarness(readCanvasHtml?: Parameters<typeof createBoardHandlers>[2]) {
   const store = new InMemoryBoardStore();
   const broadcast = vi.fn();
-  const handlers = createBoardHandlers(store);
+  const handlers = createBoardHandlers(store, undefined, readCanvasHtml);
   const invoke = async (method: string, params: Record<string, unknown>) => {
     const respond = vi.fn<RespondFn>();
     await handlers[method]!({
@@ -220,6 +220,52 @@ describe("board gateway methods", () => {
       sessionKey: "session",
       revision: 2,
     });
+  });
+
+  it("materializes canvas document sources before storing and broadcasting", async () => {
+    const readCanvasHtml = vi.fn(async () => "<!doctype html><p>same wrapped bytes</p>");
+    const { invoke, store, broadcast } = createHarness(readCanvasHtml);
+
+    const response = await invoke("board.widget.put", {
+      sessionKey: "session",
+      name: "canvas-widget",
+      title: "Canvas widget",
+      content: { kind: "canvas-doc", docId: "cv_123" },
+    });
+
+    expect(readCanvasHtml).toHaveBeenCalledWith("cv_123");
+    expect(store.readWidgetHtml("session", "canvas-widget")).toMatchObject({
+      html: "<!doctype html><p>same wrapped bytes</p>",
+      revision: 1,
+    });
+    expect(response).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ widgets: [expect.objectContaining({ name: "canvas-widget" })] }),
+    );
+    expect(broadcast).toHaveBeenCalledWith("board.changed", {
+      sessionKey: "session",
+      revision: 1,
+      widget: "canvas-widget",
+    });
+  });
+
+  it("rejects a resolved canvas document above the board HTML limit", async () => {
+    const readCanvasHtml = vi.fn(async () => "x".repeat(262_145));
+    const { invoke, store, broadcast } = createHarness(readCanvasHtml);
+
+    const response = await invoke("board.widget.put", {
+      sessionKey: "session",
+      name: "oversized-canvas-widget",
+      content: { kind: "canvas-doc", docId: "cv_oversized" },
+    });
+
+    expect(response).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "INVALID_REQUEST" }),
+    );
+    expect(store.getSnapshot("session").widgets).toEqual([]);
+    expect(broadcast).not.toHaveBeenCalled();
   });
 
   it("supports rejected grants and rejects grants from non-pending state", async () => {
