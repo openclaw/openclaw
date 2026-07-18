@@ -4273,14 +4273,7 @@ extension TalkModeManager {
     private static func missingTalkScope(from error: Error) -> String? {
         let targetScope = "operator.talk.secrets"
         if let gatewayError = error as? GatewayResponseError {
-            if Self.errorTextIndicatesMissingScope(gatewayError.message, scope: targetScope) {
-                return targetScope
-            }
-            if let missingScope = gatewayError.details["missingScope"]?.value as? String,
-               missingScope == targetScope
-            {
-                return targetScope
-            }
+            return gatewayError.missingScope == targetScope ? targetScope : nil
         }
         if Self.errorTextIndicatesMissingScope(error.localizedDescription, scope: targetScope) {
             return targetScope

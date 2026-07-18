@@ -1392,6 +1392,28 @@ struct ChatViewModelTests {
         #expect(viewModel.questionCards.isEmpty)
     }
 
+    @Test @MainActor func `structured missing question scope clears stale cards`() async {
+        let transport = TestChatTransport(
+            historyResponses: [],
+            listQuestionsHook: {
+                throw GatewayResponseError(
+                    method: "question.list",
+                    code: "FORBIDDEN",
+                    message: "permission denied",
+                    details: [
+                        "code": AnyCodable("MISSING_SCOPE"),
+                        "missingScope": AnyCodable("operator.questions"),
+                        "requiredScopes": AnyCodable(["operator.questions"]),
+                    ])
+            })
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        viewModel.upsertQuestion(chatQuestionRecord(id: "ask_stale"))
+
+        await viewModel.refreshQuestions()
+
+        #expect(viewModel.questionCards.isEmpty)
+    }
+
     @Test @MainActor func `transient question list rejection preserves event cards`() async {
         let transport = TestChatTransport(
             historyResponses: [],

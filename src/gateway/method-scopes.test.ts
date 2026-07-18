@@ -117,6 +117,60 @@ describe("method scope resolution", () => {
     expect(resolveLeastPrivilegeOperatorScopesForMethod("node.pending.drain")).toStrictEqual([]);
   });
 
+  it("raises agent reset commands from write to admin scope", () => {
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("agent", { message: "hello" })).toEqual([
+      "operator.write",
+    ]);
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("agent", { message: "/reset" })).toEqual([
+      "operator.admin",
+    ]);
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("agent", { message: "/new follow up" }),
+    ).toEqual(["operator.admin"]);
+    expect(
+      authorizeOperatorScopesForMethod("agent", ["operator.write"], { message: "/reset" }),
+    ).toEqual({ allowed: false, missingScope: "operator.admin" });
+  });
+
+  it("raises host-sensitive node commands from write to admin scope", () => {
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("node.invoke", { command: "device.info" }),
+    ).toEqual(["operator.write"]);
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("node.invoke", { command: "browser.proxy" }),
+    ).toEqual(["operator.admin"]);
+    expect(
+      authorizeOperatorScopesForMethod("node.invoke", ["operator.write"], {
+        command: "fs.listDir",
+      }),
+    ).toEqual({ allowed: false, missingScope: "operator.admin" });
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("node.invoke", {
+        command: "browser.proxy",
+        params: { method: "POST", path: "/profiles/create" },
+      }),
+    ).toEqual(["operator.write"]);
+  });
+
+  it("adds talk secret scope only when unredacted config is requested", () => {
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("talk.config", {})).toEqual([
+      "operator.read",
+    ]);
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("talk.config", { includeSecrets: true }),
+    ).toEqual(["operator.read", "operator.talk.secrets"]);
+    expect(
+      authorizeOperatorScopesForMethod("talk.config", ["operator.read"], {
+        includeSecrets: true,
+      }),
+    ).toEqual({ allowed: false, missingScope: "operator.talk.secrets" });
+    expect(
+      authorizeOperatorScopesForMethod("talk.config", ["operator.read", "operator.talk.secrets"], {
+        includeSecrets: true,
+      }),
+    ).toEqual({ allowed: true });
+  });
+
   it("classifies plugin session actions with a CLI-safe default operator scope", () => {
     expect(resolveLeastPrivilegeOperatorScopesForMethod("plugins.sessionAction")).toEqual([
       "operator.write",

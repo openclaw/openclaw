@@ -1,4 +1,5 @@
 export * from "./clawhub-trust-error-details.js";
+export { readMissingScopeError, readMissingScopeErrorDetails } from "./gateway-error-details.js";
 export * from "./session-icon.js";
 export * from "./terminal-validators.js";
 export {

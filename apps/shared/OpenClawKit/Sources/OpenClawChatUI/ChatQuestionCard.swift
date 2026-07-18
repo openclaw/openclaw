@@ -675,9 +675,8 @@ extension OpenClawChatViewModel {
     }
 
     private nonisolated static func questionListIsUnavailable(_ error: GatewayResponseError) -> Bool {
-        guard error.code == "INVALID_REQUEST" else { return false }
-        return error.message == "unknown method: question.list" ||
-            error.message == "missing scope: operator.questions"
+        if error.missingScope == "operator.questions" { return true }
+        return error.code == "INVALID_REQUEST" && error.message == "unknown method: question.list"
     }
 
     private nonisolated static func questionIsNotFound(_ error: GatewayResponseError) -> Bool {

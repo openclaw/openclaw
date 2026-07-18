@@ -40,6 +40,11 @@ missing-scope details:
   `requiredScopes` is the complete known scope set for the requested operation.
   The legacy `missing scope: <scope>` message is retained for older clients.
 
+Clients should read `details` first and use the legacy message only as a compatibility
+fallback. `readMissingScopeError` and `readMissingScopeErrorDetails` are exported from
+`@openclaw/gateway-protocol/gateway-error-details`; the browser-safe gateway client
+re-exports them from `@openclaw/gateway-client/browser`.
+
 The schemas are exported as `GatewayErrorDetailsSchema`,
 `MissingScopeErrorDetailsSchema` from `@openclaw/gateway-protocol/schema`.
 HTTP scope failures mirror the `MISSING_SCOPE` object under `error.details` and

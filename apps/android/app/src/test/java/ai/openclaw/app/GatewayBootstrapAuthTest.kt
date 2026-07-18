@@ -2,9 +2,9 @@ package ai.openclaw.app
 
 import ai.openclaw.app.gateway.DeviceAuthStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
-import ai.openclaw.app.gateway.GatewayConnectErrorDetails
 import ai.openclaw.app.gateway.GatewayConnectOptions
 import ai.openclaw.app.gateway.GatewayEndpoint
+import ai.openclaw.app.gateway.GatewayErrorDetails
 import ai.openclaw.app.gateway.GatewayRegistryEntry
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
 import ai.openclaw.app.gateway.GatewaySession
@@ -91,7 +91,7 @@ class GatewayBootstrapAuthTest {
         code = "UNAUTHORIZED",
         message = "unauthorized",
         details =
-          GatewayConnectErrorDetails(
+          GatewayErrorDetails(
             code = "AUTH_TOKEN_MISSING",
             canRetryWithDeviceToken = false,
             recommendedNextStep = "provide_token",
@@ -129,7 +129,7 @@ class GatewayBootstrapAuthTest {
         code = "NOT_PAIRED",
         message = "pairing required",
         details =
-          GatewayConnectErrorDetails(
+          GatewayErrorDetails(
             code = "PAIRING_REQUIRED",
             canRetryWithDeviceToken = false,
             recommendedNextStep = "wait_then_retry",

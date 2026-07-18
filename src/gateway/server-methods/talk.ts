@@ -9,6 +9,7 @@ import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
+  missingScopeErrorShape,
   type TalkSpeakParams,
   validateTalkCatalogParams,
   validateTalkConfigParams,
@@ -51,7 +52,7 @@ import {
   synthesizeSpeech,
   type TtsDirectiveOverrides,
 } from "../../tts/tts.js";
-import { ADMIN_SCOPE, TALK_SECRETS_SCOPE } from "../operator-scopes.js";
+import { ADMIN_SCOPE, READ_SCOPE, TALK_SECRETS_SCOPE } from "../operator-scopes.js";
 import { resolveConfiguredSecretInputString } from "../resolve-configured-secret-input-string.js";
 import { formatForLog } from "../ws-log.js";
 import { inferSpeechMimeType } from "./speech-mime.js";
@@ -727,7 +728,10 @@ export const talkHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `missing scope: ${TALK_SECRETS_SCOPE}`),
+        missingScopeErrorShape({
+          missingScope: TALK_SECRETS_SCOPE,
+          requiredScopes: [READ_SCOPE, TALK_SECRETS_SCOPE],
+        }),
       );
       return;
     }
