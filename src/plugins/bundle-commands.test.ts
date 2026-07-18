@@ -8,6 +8,11 @@ import type { PluginManifestRecord } from "./manifest-registry.js";
 
 const mocks = vi.hoisted(() => ({
   plugins: [] as PluginManifestRecord[],
+  warn: vi.fn(),
+}));
+
+vi.mock("../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => ({ warn: mocks.warn }),
 }));
 
 vi.mock("./manifest-registry.js", () => ({
@@ -36,6 +41,7 @@ const tempDirs: string[] = [];
 
 afterEach(async () => {
   mocks.plugins = [];
+  mocks.warn.mockReset();
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
@@ -225,11 +231,10 @@ describe("loadEnabledClaudeBundleCommands", () => {
     );
   });
 
-  it("skips oversized bundle command markdown files exceeding 1 MB and continues loading siblings", async () => {
+  it("warns and skips oversized bundle commands without dropping siblings", async () => {
     const homeDir = await createTempDir("openclaw-bundle-commands-oversized-");
     const workspaceDir = await createTempDir("openclaw-bundle-commands-oversized-ws-");
 
-    // Write a normal command file alongside an oversized one
     await writeClaudeBundleCommandFixture({
       homeDir,
       pluginId: "oversized-test",
@@ -246,38 +251,25 @@ describe("loadEnabledClaudeBundleCommands", () => {
       ],
     });
 
-    // Create the oversized command file (> 1 MB) alongside the normal one
     const pluginRoot = resolveBundlePluginRoot(homeDir, "oversized-test");
     const oversizedFilePath = path.join(pluginRoot, "commands", "oversized.md");
     await fs.mkdir(path.dirname(oversizedFilePath), { recursive: true });
     const oversizedContent = Buffer.alloc(1 * 1024 * 1024 + 1, "x");
     await fs.writeFile(oversizedFilePath, oversizedContent);
 
-    // Suppress console.warn for this test
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-
-    try {
-      const commands = loadEnabledClaudeBundleCommands({
-        workspaceDir,
-        cfg: {
-          plugins: {
-            entries: { "oversized-test": { enabled: true } },
-          },
+    const commands = loadEnabledClaudeBundleCommands({
+      workspaceDir,
+      cfg: {
+        plugins: {
+          entries: { "oversized-test": { enabled: true } },
         },
-      });
+      },
+    });
 
-      // Normal command still loads
-      const names = commands.map((entry) => entry.rawName);
-      expect(names).toContain("normal");
-      expect(names).not.toContain("oversized");
-
-      // console.warn was called with the oversized file path
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining("[bundle-commands]"),
-        expect.any(String),
-      );
-    } finally {
-      warnSpy.mockRestore();
-    }
+    expect(commands.map((entry) => entry.rawName)).toEqual(["normal"]);
+    expect(mocks.warn).toHaveBeenCalledOnce();
+    const warning = String(mocks.warn.mock.calls[0]?.[0]);
+    expect(warning).toContain(oversizedFilePath);
+    expect(warning).toContain("1048576");
   });
 });
