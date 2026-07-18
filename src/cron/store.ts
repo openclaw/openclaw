@@ -12,6 +12,10 @@ import { replaceFileAtomic } from "../infra/replace-file.js";
 // Cron quarantine sidecars are small JSON files; cap reads so a corrupted or
 // hostile file cannot OOM the cron load path.
 const CRON_QUARANTINE_MAX_BYTES = 8 * 1024 * 1024;
+// Maximum number of quarantine archive files to retain. When a new archive is
+// created past this limit the oldest archives are pruned to prevent unbounded
+// disk growth from repeated overflow recovery.
+const CRON_QUARANTINE_ARCHIVE_MAX_COUNT = 5;
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -395,4 +399,56 @@ async function archiveQuarantineFile(quarantinePath: string): Promise<void> {
   }
   const archivePath = `${quarantinePath}.${Date.now()}.${Math.random().toString(36).slice(2)}.archive.json`;
   await fs.promises.rename(quarantinePath, archivePath);
+  // Prune oldest archives beyond the retention limit so repeated overflow
+  // recovery cannot exhaust disk with unbounded archive accumulation.
+  await pruneOldQuarantineArchives(quarantinePath);
+}
+
+/** Lists quarantine archive files for the given sidecar path, sorted oldest first. */
+async function listQuarantineArchives(
+  quarantinePath: string,
+): Promise<Array<{ name: string; ts: number }>> {
+  const dir = path.dirname(quarantinePath);
+  const base = path.basename(quarantinePath);
+  const prefix = `${base}.`;
+  const suffix = ".archive.json";
+  const entries: Array<{ name: string; ts: number }> = [];
+  try {
+    const names = await fs.promises.readdir(dir);
+    for (const name of names) {
+      if (name.startsWith(prefix) && name.endsWith(suffix)) {
+        // Filename: {base}.{ts}.{random}.archive.json — extract the timestamp
+        // part between the base prefix and the next dot.
+        const afterPrefix = name.slice(prefix.length);
+        const dotIdx = afterPrefix.indexOf(".");
+        if (dotIdx === -1) continue;
+        const tsStr = afterPrefix.slice(0, dotIdx);
+        const ts = Number(tsStr);
+        if (Number.isFinite(ts)) {
+          entries.push({ name, ts });
+        }
+      }
+    }
+  } catch {
+    return [];
+  }
+  entries.sort((a, b) => a.ts - b.ts);
+  return entries;
+}
+
+/** Removes the oldest archive files when the archive count exceeds the retention limit. */
+async function pruneOldQuarantineArchives(quarantinePath: string): Promise<void> {
+  const archives = await listQuarantineArchives(quarantinePath);
+  if (archives.length <= CRON_QUARANTINE_ARCHIVE_MAX_COUNT) {
+    return;
+  }
+  const dir = path.dirname(quarantinePath);
+  const toRemove = archives.slice(0, archives.length - CRON_QUARANTINE_ARCHIVE_MAX_COUNT);
+  await Promise.all(
+    toRemove.map((entry) =>
+      fs.promises.unlink(path.join(dir, entry.name)).catch(() => {
+        // Best-effort prune; ignore concurrent deletion races.
+      }),
+    ),
+  );
 }

@@ -372,6 +372,35 @@ describe("cron store", () => {
     expect(dir.some((name) => name.endsWith(".archive.json"))).toBe(true);
   });
 
+  it("prunes oldest archives when the retention limit is exceeded", async () => {
+    const { storePath } = await makeStorePath();
+    const quarantinePath = resolveCronQuarantinePath(storePath);
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+
+    // Create more quarantine sidecars than the retention limit so the oldest
+    // archives are pruned when each overflow triggers a new archive.
+    const paddingSize = 8 * 1024 * 1024 - 512;
+    for (let i = 0; i < 7; i++) {
+      const existingJobs = Array.from({ length: 5 }, (_, j) => ({
+        sourceIndex: j,
+        reason: `overflow-${i}`,
+        job: { id: `overflow-job-${i}-${j}`, padding: "x".repeat(Math.floor(paddingSize / 5)) },
+      }));
+      await fs.writeFile(
+        quarantinePath,
+        JSON.stringify({ version: 1, jobs: existingJobs }, null, 2),
+        "utf-8",
+      );
+      const entry = { sourceIndex: 99, reason: `new-entry-${i}`, job: { id: `new-job-${i}` } };
+      await saveCronQuarantineFile({ storePath, nowMs: i * 1000, entries: [entry] });
+    }
+
+    const dir = await fs.readdir(path.dirname(quarantinePath));
+    const archives = dir.filter((name) => name.endsWith(".archive.json"));
+    // At most 5 archives should be retained; the oldest should be pruned.
+    expect(archives.length).toBeLessThanOrEqual(5);
+  });
+
   it("does not rewrite quarantine files when every entry is already present", async () => {
     const { storePath } = await makeStorePath();
     const quarantinePath = resolveCronQuarantinePath(storePath);
