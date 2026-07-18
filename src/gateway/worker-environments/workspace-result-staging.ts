@@ -237,7 +237,7 @@ async function readGitBlob(params: {
   return result.stdout;
 }
 
-export async function stageWorkerWorkspaceResult(params: {
+async function stageWorkerWorkspaceResult(params: {
   root: string;
   stagingRoot: string;
   stagedResultRef: string;
@@ -501,7 +501,7 @@ export async function applyStagedWorkerWorkspaceResult(params: {
   };
 }
 
-export async function prepareRequestedWorkerWorkspaceResult(params: {
+async function prepareRequestedWorkerWorkspaceResult(params: {
   request: WorkerWorkspaceReconcileRequest;
   stagingRoot: string;
   currentManifestRef: string;
@@ -565,3 +565,8 @@ export async function deleteStagedWorkerWorkspaceResult(params: {
     await requireGit(root, ["update-ref", "-d", preparedWorkerWorkspaceResultRef(stagedResultRef)]);
   }
 }
+
+export const workerWorkspaceResultStaging = {
+  prepareRequestedWorkerWorkspaceResult,
+  stageWorkerWorkspaceResult,
+};

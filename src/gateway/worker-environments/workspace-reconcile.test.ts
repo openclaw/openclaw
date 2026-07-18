@@ -20,12 +20,14 @@ import {
   applyStagedWorkerWorkspaceResult,
   deleteStagedWorkerWorkspaceResult,
   hasWorkerWorkspaceResultRef,
-  prepareRequestedWorkerWorkspaceResult,
   preparedWorkerWorkspaceResultRef,
-  stageWorkerWorkspaceResult,
+  workerWorkspaceResultStaging,
   workerWorkspaceResultRef,
   workerWorkspaceTransferPaths,
 } from "./workspace-result-staging.js";
+
+const { prepareRequestedWorkerWorkspaceResult, stageWorkerWorkspaceResult } =
+  workerWorkspaceResultStaging;
 
 const roots: string[] = [];
 

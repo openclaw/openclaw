@@ -13,9 +13,11 @@ import { type PlacementStore, REQUEST } from "./placement-dispatch-test-fixtures
 import { createHarness } from "./placement-dispatch-test-harness.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import {
-  stageWorkerWorkspaceResult,
   workerWorkspaceResultRef,
+  workerWorkspaceResultStaging,
 } from "./workspace-result-staging.js";
+
+const { stageWorkerWorkspaceResult } = workerWorkspaceResultStaging;
 
 describe("staged worker placement result recovery", () => {
   let root: string;

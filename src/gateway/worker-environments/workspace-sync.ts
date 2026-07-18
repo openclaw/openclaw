@@ -28,7 +28,7 @@ import {
   recoverWorkerWorkspaceReconciliation,
 } from "./workspace-reconcile.js";
 import {
-  prepareRequestedWorkerWorkspaceResult,
+  workerWorkspaceResultStaging,
   workerWorkspaceTransferPaths,
 } from "./workspace-result-staging.js";
 import {
@@ -590,7 +590,7 @@ export function createWorkerWorkspaceActions(
       if (currentRef === request.baseManifestRef) {
         await verifyStable(currentRef);
         const stagedResult = request.stagedResult
-          ? await prepareRequestedWorkerWorkspaceResult({
+          ? await workerWorkspaceResultStaging.prepareRequestedWorkerWorkspaceResult({
               request,
               stagingRoot,
               currentManifestRef: currentRef,
@@ -678,7 +678,7 @@ export function createWorkerWorkspaceActions(
       // before destroying the remote owner.
       await verifyStable(currentRef);
       const stagedResult = request.stagedResult
-        ? await prepareRequestedWorkerWorkspaceResult({
+        ? await workerWorkspaceResultStaging.prepareRequestedWorkerWorkspaceResult({
             request,
             stagingRoot,
             currentManifestRef: currentRef,
