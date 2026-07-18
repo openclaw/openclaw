@@ -2678,6 +2678,108 @@ describe("grouped chat rendering", () => {
     expectSameOriginGet(fetchInit);
   });
 
+  it("bounds managed outgoing image blob URLs with least-recently-used eviction", async () => {
+    const imageUrls = Array.from(
+      { length: 65 },
+      () => `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`,
+    );
+    let objectUrlIndex = 0;
+    const createObjectURL = vi.fn(() => `blob:managed-image-${objectUrlIndex++}`);
+    const revokeObjectURL = vi.fn();
+    const NativeUrl = URL;
+    vi.stubGlobal(
+      "URL",
+      class extends NativeUrl {
+        static override createObjectURL = createObjectURL;
+        static override revokeObjectURL = revokeObjectURL;
+      },
+    );
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      blob: async () => new Blob(["png"], { type: "image/png" }),
+    }));
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const container = document.createElement("div");
+    renderAssistantMessage(container, {
+      role: "assistant",
+      content: imageUrls.slice(0, 64).map((url, index) => ({
+        type: "image",
+        url,
+        alt: `Generated image ${index + 1}`,
+      })),
+      timestamp: Date.now(),
+    });
+    await vi.waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(64));
+
+    const recentContainer = document.createElement("div");
+    renderAssistantMessage(recentContainer, {
+      role: "assistant",
+      content: [{ type: "image", url: imageUrls[0], alt: "Recently viewed image" }],
+      timestamp: Date.now(),
+    });
+    expect(createObjectURL).toHaveBeenCalledTimes(64);
+
+    const overflowContainer = document.createElement("div");
+    renderAssistantMessage(overflowContainer, {
+      role: "assistant",
+      content: [{ type: "image", url: imageUrls[64], alt: "Newest image" }],
+      timestamp: Date.now(),
+    });
+    await vi.waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(imageUrls.length));
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:managed-image-1");
+    expect(revokeObjectURL).not.toHaveBeenCalledWith("blob:managed-image-0");
+
+    const replace = vi.fn();
+    const close = vi.fn();
+    const openedWindow = {
+      opener: window,
+      location: { replace },
+      close,
+    };
+    const openSpy = vi.spyOn(window, "open").mockReturnValue(openedWindow as unknown as Window);
+    const evictedImage = container.querySelector<HTMLImageElement>('img[alt="Generated image 2"]');
+    expect(evictedImage).toBeInstanceOf(HTMLImageElement);
+    evictedImage!.click();
+
+    expect(openSpy).toHaveBeenCalledWith("about:blank", "_blank");
+    expect(openedWindow.opener).toBeNull();
+    await vi.waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(imageUrls.length + 1));
+    expect(replace).toHaveBeenCalledWith("blob:managed-image-65");
+    expect(close).not.toHaveBeenCalled();
+  });
+
+  it("bounds managed outgoing image miss retention", async () => {
+    const imageUrls = Array.from(
+      { length: 65 },
+      () => `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`,
+    );
+    const fetchMock = vi.fn(async () => ({ ok: false }));
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const container = document.createElement("div");
+
+    renderAssistantMessage(container, {
+      role: "assistant",
+      content: imageUrls.map((url, index) => ({
+        type: "image",
+        url,
+        alt: `Missing image ${index + 1}`,
+      })),
+      timestamp: Date.now(),
+    });
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(imageUrls.length));
+    await flushAssistantAttachmentAvailabilityChecks();
+
+    const retryContainer = document.createElement("div");
+    renderAssistantMessage(retryContainer, {
+      role: "assistant",
+      content: [{ type: "image", url: imageUrls[0], alt: "Oldest missing image" }],
+      timestamp: Date.now(),
+    });
+
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(imageUrls.length + 1));
+  });
+
   it("does not send auth to cross-origin managed-image-looking URLs", () => {
     const fetchMock = vi.fn(async () => {
       throw new Error("cross-origin image URL should not be fetched with Control UI auth");

@@ -14,13 +14,15 @@ type NavigationItem = {
 // lives in the collapsed "More" section. Chat is reachable through the session
 // list and Settings/Docs live in the sidebar footer, so neither is listed here.
 // Skills and Skill Workshop are tabs inside the Plugins hub, not sidebar items.
-// Session management lives in Settings (SETTINGS_NAVIGATION_GROUPS below).
+// Worktrees is a tab of the Sessions hub, so it is not listed either.
 export const SIDEBAR_NAV_ROUTES = [
   "custodian",
   "workboard",
   "usage",
   "cron",
   "tasks",
+  "sessions",
+  "activity",
   "plugins",
 ] as const satisfies readonly NavigationRouteId[];
 
@@ -34,6 +36,14 @@ const PLUGINS_HUB_ROUTES: ReadonlySet<NavigationRouteId> = new Set([
 
 export function isPluginsHubRoute(routeId: NavigationRouteId): boolean {
   return PLUGINS_HUB_ROUTES.has(routeId);
+}
+
+// Worktrees renders as a tab of the Sessions hub; the sidebar highlights the
+// Sessions entry for both routes, mirroring the Plugins hub behavior.
+const SESSIONS_HUB_ROUTES: ReadonlySet<NavigationRouteId> = new Set(["sessions", "worktrees"]);
+
+export function isSessionsHubRoute(routeId: NavigationRouteId): boolean {
+  return SESSIONS_HUB_ROUTES.has(routeId);
 }
 
 export type SidebarNavRoute = (typeof SIDEBAR_NAV_ROUTES)[number];
@@ -121,44 +131,39 @@ export function settingsSearchTextMatches(value: string, query: string): boolean
   return settingsSearchHasWordPrefix(candidate, normalizedQuery);
 }
 
-// Grouping feeds the full-page settings sidebar (settings-sidebar.ts).
+// Grouping feeds the full-page settings sidebar (settings-sidebar.ts). Ordered
+// by user attention: personal/look-and-feel first, system plumbing last.
+// Management surfaces (sessions, worktrees, activity, memory import) are
+// workspace destinations, not settings; model setup is a subpage of Models.
 export const SETTINGS_NAVIGATION_GROUPS = [
-  { labelKey: null, routes: ["custodian", "profile", "config", "appearance"] },
+  { labelKey: null, routes: ["custodian", "profile", "config", "appearance", "notifications"] },
   {
     labelKey: "nav.settingsGroupConnections",
-    routes: ["connection", "channels", "communications"],
+    routes: ["connection", "channels", "communications", "nodes"],
   },
   {
     labelKey: "nav.settingsGroupAgents",
-    routes: [
-      "agents",
-      "ai-agents",
-      "sessions",
-      "memory-import",
-      "model-setup",
-      "model-providers",
-      "automation",
-      "mcp",
-    ],
+    routes: ["agents", "ai-agents", "model-providers", "mcp", "automation"],
+  },
+  {
+    labelKey: "nav.settingsGroupSecurity",
+    routes: ["security", "approvals"],
   },
   {
     labelKey: "nav.settingsGroupSystem",
-    routes: [
-      "infrastructure",
-      "nodes",
-      "approvals",
-      "worktrees",
-      "debug",
-      "logs",
-      "activity",
-      "about",
-    ],
+    routes: ["infrastructure", "advanced", "debug", "logs", "about"],
   },
 ] as const satisfies readonly SettingsNavigationGroup[];
 
-const SETTINGS_NAVIGATION_ROUTES: readonly NavigationRouteId[] = SETTINGS_NAVIGATION_GROUPS.flatMap(
-  (group) => group.routes,
-);
+// Settings subpages render with settings chrome but stay out of the sidebar:
+// model setup is reached from the Models page ("Run setup"). The sidebar
+// highlights nothing for them; search still deep-links via their owning page.
+const SETTINGS_SUBPAGE_ROUTES: readonly NavigationRouteId[] = ["model-setup"];
+
+const SETTINGS_NAVIGATION_ROUTES: readonly NavigationRouteId[] = [
+  ...SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.routes),
+  ...SETTINGS_SUBPAGE_ROUTES,
+];
 
 // Custodian is linked from Settings, but remains a workspace destination with
 // normal app chrome when opened from either Settings or the pinned sidebar.
@@ -196,6 +201,9 @@ const NAVIGATION_ICONS: NavigationItem = {
   "model-setup": "spark",
   "model-providers": "plug",
   "memory-import": "download",
+  notifications: "send",
+  security: "shieldCheck",
+  advanced: "fileCode",
   debug: "bug",
   logs: "scrollText",
   plugin: "puzzle",
@@ -297,6 +305,9 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
     subtitleKey: "subtitles.modelProviders",
   },
   "memory-import": { titleKey: "tabs.memoryImport", subtitleKey: "subtitles.memoryImport" },
+  notifications: { titleKey: "tabs.notifications", subtitleKey: "subtitles.notifications" },
+  security: { titleKey: "tabs.security", subtitleKey: "subtitles.security" },
+  advanced: { titleKey: "tabs.advanced", subtitleKey: "subtitles.advanced" },
   debug: { titleKey: "tabs.debug", subtitleKey: "subtitles.debug" },
   logs: { titleKey: "tabs.logs", subtitleKey: "subtitles.logs" },
   plugin: { titleKey: "tabs.plugin", subtitleKey: "subtitles.plugin" },

@@ -324,9 +324,9 @@ export function createSessionVisibilityRowChecker(params: {
     const targetAgentId = row.agentId ?? resolveAgentIdFromSessionKey(targetSessionKey);
     const isRequesterSession =
       targetSessionKey === params.requesterSessionKey || targetSessionKey === "current";
-    // Only a durable ambient-group marker makes the paired target
-    // ownership-equivalent for same-agent reads. Explicit A2A watches, absent
-    // markers, send access, and cross-agent targets remain fail-closed.
+    // Only durable ambient-group provenance makes the target ownership-equivalent
+    // for same-agent reads. Explicit A2A watches, send access, and cross-agent
+    // targets remain fail-closed.
     const isWatchedRead =
       params.action !== "send" &&
       params.visibility === "tree" &&

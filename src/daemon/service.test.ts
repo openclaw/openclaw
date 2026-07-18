@@ -222,6 +222,27 @@ describe("startGatewayService", () => {
     expect(result.state.running).toBe(true);
   });
 
+  it("returns already-running without restarting a loaded running service", async () => {
+    const service = createService({
+      readCommand: vi.fn(async () => ({
+        programArguments: ["openclaw", "gateway", "run"],
+      })),
+      isLoaded: vi.fn(async () => true),
+      readRuntime: vi.fn(async () => ({ status: "running", pid: 4242 })),
+    });
+
+    const result = await startGatewayService(service, {
+      env: {},
+      stdout: process.stdout,
+    });
+
+    expect(result.outcome).toBe("already-running");
+    if (result.outcome === "already-running") {
+      expect(result.state.runtime?.pid).toBe(4242);
+    }
+    expect(service.restart).not.toHaveBeenCalled();
+  });
+
   it("requests repair before start when the loaded service version is stale", async () => {
     const service = createService({
       readCommand: vi.fn(async () => ({
@@ -253,7 +274,7 @@ describe("startGatewayService", () => {
         environment: { OPENCLAW_GATEWAY_PORT: "19001" },
       })),
       isLoaded: vi.fn(async () => true),
-      readRuntime: vi.fn(async () => ({ status: "running" })),
+      readRuntime: vi.fn(async () => ({ status: "stopped" })),
     });
 
     const result = await startGatewayService(
@@ -282,7 +303,7 @@ describe("startGatewayService", () => {
         environment: { OPENCLAW_GATEWAY_PORT: "18789" },
       })),
       isLoaded: vi.fn(async () => true),
-      readRuntime: vi.fn(async () => ({ status: "running" })),
+      readRuntime: vi.fn(async () => ({ status: "stopped" })),
     });
 
     const result = await startGatewayService(

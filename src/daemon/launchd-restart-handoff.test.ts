@@ -141,7 +141,8 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     expect(args[7]).toBe("ai.openclaw.gateway");
     expect(args[1]).toContain('while kill -0 "$wait_pid" >/dev/null 2>&1; do');
     expect(args[1]).toContain("exec >>'/Users/test/.openclaw/logs/gateway-restart.log' 2>&1");
-    expect(args[1]).toContain("openclaw restart attempt source=launchd-handoff mode=kickstart");
+    expect(args[1]).toContain("openclaw restart attempt source=handoff mode=kickstart");
+    expect(args[1]).toContain("pid=%s interactive=0");
     expect(args[1]).toContain('launchctl enable "$service_target"');
     expect(args[1]).toContain('if launchctl kickstart -k "$service_target"; then');
     expect(args[1]).toContain(
@@ -187,7 +188,7 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     });
 
     const [, args] = requireSpawnCall();
-    expect(args[1]).toContain("openclaw restart attempt source=launchd-handoff mode=reload");
+    expect(args[1]).toContain("openclaw restart attempt source=handoff mode=reload");
     expect(args[1]).toContain('launchctl enable "$service_target"');
     expect(args[1]).toContain('launchctl bootout "$service_target"');
     // The unload poll must outlast launchd's ExitTimeOut SIGKILL ceiling plus

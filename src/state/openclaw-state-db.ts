@@ -49,6 +49,7 @@ import {
   tableHasColumn,
   tablePrimaryKeyColumns,
 } from "./openclaw-state-db-schema-helpers.js";
+import * as sessionWatchMigration from "./openclaw-state-db-session-watch-migration.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
   resolveOpenClawStateSqliteDir,
@@ -63,9 +64,10 @@ import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.generated.js"
  * tables, private file permissions, cached handles, and audit rows for
  * migrations/backups that operate on local state.
  */
-// v3 rebuilds every OpenClaw-owned table with SQLite STRICT type enforcement.
-// database_verifications is additive derived cache; no bump preserves safe downgrades.
-export const OPENCLAW_STATE_SCHEMA_VERSION = 3;
+// v4 replaces ambient session-watch sentinel rows with cursor provenance.
+// database_verifications remains additive derived cache within this version.
+export const OPENCLAW_STATE_SCHEMA_VERSION = 4;
+const OPENCLAW_STATE_STRICT_SCHEMA_VERSION = 3;
 /** Maximum time one synchronous SQLite call may wait for a lock. */
 export const OPENCLAW_SQLITE_BUSY_TIMEOUT_MS = 5_000;
 /** User-facing guide for schema refusals; lives here so error sites avoid import cycles. */
@@ -130,6 +132,7 @@ export type OpenClawStateDatabaseSchemaMigration = {
     | "agent-databases-composite-primary-key"
     | "audit-events-v2"
     | "operator-approvals-system-agent"
+    | "session-watch-cursor-provenance-v4"
     | "strict-tables-v3";
   path: string;
 };
@@ -918,17 +921,18 @@ export function detectOpenClawStateDatabaseSchemaMigrations(
   const db = new sqlite.DatabaseSync(pathname, { readOnly: true });
   try {
     const migrations: OpenClawStateDatabaseSchemaMigration[] = [];
+    const userVersion = readSqliteUserVersion(db);
     if (!hasCanonicalAgentDatabasesPrimaryKey(db)) {
       migrations.push({ kind: "agent-databases-composite-primary-key", path: pathname });
     }
     if (!hasCanonicalAuditEventsSchema(db)) {
       migrations.push({ kind: "audit-events-v2", path: pathname });
     }
-    if (
-      tableExists(db, "audit_events") &&
-      readSqliteUserVersion(db) < OPENCLAW_STATE_SCHEMA_VERSION
-    ) {
+    if (tableExists(db, "audit_events") && userVersion < OPENCLAW_STATE_STRICT_SCHEMA_VERSION) {
       migrations.push({ kind: "strict-tables-v3", path: pathname });
+    }
+    if (sessionWatchMigration.needsSessionWatchCursorProvenanceMigration(db, userVersion)) {
+      migrations.push({ kind: "session-watch-cursor-provenance-v4", path: pathname });
     }
     migrations.push(
       ...operatorApprovalMigration.detectOperatorApprovalSchemaMigration(db, pathname),
@@ -959,6 +963,7 @@ export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabase
       db,
       () => {
         const applied: string[] = [];
+        const previousVersion = readSqliteUserVersion(db);
         if (repairAgentDatabasesCompositePrimaryKey(db)) {
           applied.push(`Migrated shared state agent database registry primary key → agent_id,path`);
         }
@@ -968,6 +973,14 @@ export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabase
           );
         }
         applied.push(...operatorApprovalMigration.repairOperatorApprovalSchema(db));
+        const needsSessionWatchMigration =
+          sessionWatchMigration.needsSessionWatchCursorProvenanceMigration(db, previousVersion);
+        const sessionWatchResult = sessionWatchMigration.migrateSessionWatchCursorProvenance(db);
+        if (needsSessionWatchMigration) {
+          applied.push(
+            `Migrated shared state session watch cursors → provenance column (${sessionWatchResult.migratedAmbientWatches} ambient, ${sessionWatchResult.removedLegacySentinels} sentinels removed)`,
+          );
+        }
         assertCanonicalStateSchemaShape(db, pathname);
         if (tableExists(db, "audit_events")) {
           ensureAdditiveStateColumns(db);
@@ -1743,10 +1756,11 @@ function ensureSchema(db: DatabaseSync, pathname: string): void {
         assertSupportedSchemaVersion(db, pathname);
         const previousVersion = readSqliteUserVersion(db);
         ensureAdditiveStateColumns(db);
+        sessionWatchMigration.migrateSessionWatchCursorProvenance(db);
         assertCanonicalStateSchemaShape(db, pathname);
         db.exec(OPENCLAW_STATE_SCHEMA_SQL);
         migrateLegacyCronRunLogsToTaskRuns(db);
-        if (previousVersion < OPENCLAW_STATE_SCHEMA_VERSION) {
+        if (previousVersion < OPENCLAW_STATE_STRICT_SCHEMA_VERSION) {
           migrateSqliteSchemaToStrictInTransaction(db, OPENCLAW_STATE_SCHEMA_SQL, {
             databaseLabel: pathname,
           });

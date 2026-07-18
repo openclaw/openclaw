@@ -558,7 +558,7 @@ describe("session state events", () => {
 
     const rows = openOpenClawStateDatabase(database)
       .db.prepare(
-        `SELECT watcher_session_key, target_session_key, updated_at
+        `SELECT watcher_session_key, target_session_key, provenance, updated_at
          FROM session_watch_cursors
          WHERE watcher_session_key = ?`,
       )
@@ -567,6 +567,7 @@ describe("session state events", () => {
       {
         watcher_session_key: watcher,
         target_session_key: group,
+        provenance: "ambient-group",
         updated_at: 100,
       },
     ]);
@@ -639,7 +640,7 @@ describe("session state events", () => {
     expect(wakes).not.toHaveBeenCalled();
   });
 
-  it("prunes orphaned ambient markers while retaining markers for active cursors", () => {
+  it("prunes dormant ambient cursors while retaining active cursors", () => {
     const database = createDatabaseOptions();
     const dormantGroup = "agent:main:slack:channel:dormant";
     const registeredAt = 100;
@@ -669,7 +670,7 @@ describe("session state events", () => {
     const cursors = openOpenClawStateDatabase(database)
       .db.prepare("SELECT COUNT(*) AS count FROM session_watch_cursors")
       .get() as { count: number };
-    expect(cursors.count).toBe(2);
+    expect(cursors.count).toBe(1);
   });
 
   it("keeps explicit A2A group watches on the immediate wake path", async () => {
@@ -716,6 +717,14 @@ describe("session state events", () => {
 
     registerSessionStateWatch({ watcherSessionKey: watcher, targetSessionKey: group }, database);
     expect(listAmbientGroupWatchTargets(watcher, database)).toEqual(new Set());
+    expect(
+      openOpenClawStateDatabase(database)
+        .db.prepare(
+          `SELECT provenance FROM session_watch_cursors
+           WHERE watcher_session_key = ? AND target_session_key = ?`,
+        )
+        .get(watcher, group),
+    ).toEqual({ provenance: "explicit" });
     // Later inbound group registration must not downgrade the explicit watch.
     registerMainSessionGroupWatch(
       { sessionKey: group, agentId: "main", dmScope: "main" },

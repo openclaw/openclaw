@@ -22604,9 +22604,49 @@
       "translated": "%@%% des Kontexts verwendet"
     },
     {
+      "id": "native.apple.e57eb66d14768bdb",
+      "source": "%@ (override)",
+      "translated": "%@ (überschrieben)"
+    },
+    {
       "id": "native.apple.510c6dfa05924ae2",
       "source": "Thinking",
       "translated": "Denkt nach"
+    },
+    {
+      "id": "native.apple.e47fcaaf47e5d6bc",
+      "source": "Full",
+      "translated": "Vollständig"
+    },
+    {
+      "id": "native.apple.f434793807b778ce",
+      "source": "Verbosity",
+      "translated": "Ausführlichkeit"
+    },
+    {
+      "id": "native.apple.d3426c54f223c4d8",
+      "source": "Default (inherited)",
+      "translated": "Standard (übernommen)"
+    },
+    {
+      "id": "native.apple.575a78c2f3daf366",
+      "source": "On",
+      "translated": "Ein"
+    },
+    {
+      "id": "native.apple.75bebec90215a705",
+      "source": "Off",
+      "translated": "Aus"
+    },
+    {
+      "id": "native.apple.17481e3865493e34",
+      "source": "Fast",
+      "translated": "Schnell"
+    },
+    {
+      "id": "native.apple.e5f91b8690e705e2",
+      "source": "Fast responses",
+      "translated": "Schnelle Antworten"
     },
     {
       "id": "native.apple.745b004e0b5b6b80",
@@ -22619,14 +22659,14 @@
       "translated": "Zuletzt verwendet"
     },
     {
-      "id": "native.apple.aa321cf4820426ef",
-      "source": "Models",
-      "translated": "Modelle"
-    },
-    {
       "id": "native.apple.0fce9d743a640218",
       "source": "Model",
       "translated": "Modell"
+    },
+    {
+      "id": "native.apple.6045352c168e07cb",
+      "source": "Default",
+      "translated": "Standard"
     },
     {
       "id": "native.apple.75550b03f06d6abc",
@@ -22902,6 +22942,11 @@
       "id": "native.apple.6b18ea1d85b5d3a2",
       "source": "Running tools…",
       "translated": "Tools werden ausgeführt…"
+    },
+    {
+      "id": "native.apple.51ef5e41f9124819",
+      "source": "Other",
+      "translated": "Sonstige"
     },
     {
       "id": "native.apple.3b932a47b4223a43",
@@ -23404,6 +23449,11 @@
       "translated": "Sitzungen"
     },
     {
+      "id": "native.apple.c13dbe6b5c01e9bd",
+      "source": "%@ (override)",
+      "translated": "%@ (überschrieben)"
+    },
+    {
       "id": "native.apple.b1f10b5e9113881d",
       "source": "Thinking",
       "translated": "Nachdenken"
@@ -23412,6 +23462,41 @@
       "id": "native.apple.48dde5fe65b841a3",
       "source": "Thinking level",
       "translated": "Denkstufe"
+    },
+    {
+      "id": "native.apple.ca556b80c9adcae8",
+      "source": "Full",
+      "translated": "Vollständig"
+    },
+    {
+      "id": "native.apple.1ae2d7073bba214b",
+      "source": "Verbosity",
+      "translated": "Ausführlichkeit"
+    },
+    {
+      "id": "native.apple.b56645c4fa60fe23",
+      "source": "Default (inherited)",
+      "translated": "Standard (übernommen)"
+    },
+    {
+      "id": "native.apple.17277ea10fd23846",
+      "source": "On",
+      "translated": "Ein"
+    },
+    {
+      "id": "native.apple.8f2830ece961d651",
+      "source": "Off",
+      "translated": "Aus"
+    },
+    {
+      "id": "native.apple.0acac602f7cc68fc",
+      "source": "Fast",
+      "translated": "Schnell"
+    },
+    {
+      "id": "native.apple.16e00cf511074484",
+      "source": "Fast responses",
+      "translated": "Schnelle Antworten"
     },
     {
       "id": "native.apple.17ea1ddec4a7b7a8",
@@ -23424,14 +23509,14 @@
       "translated": "Zuletzt verwendet"
     },
     {
-      "id": "native.apple.f41f892742244520",
-      "source": "Models",
-      "translated": "Modelle"
-    },
-    {
       "id": "native.apple.273aa7b9194a8d0d",
       "source": "Model",
       "translated": "Modell"
+    },
+    {
+      "id": "native.apple.68c4c3dd439d182b",
+      "source": "Default",
+      "translated": "Standard"
     },
     {
       "id": "native.apple.eb58552e43c8dde2",
