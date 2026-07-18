@@ -34,6 +34,8 @@ type ChatPaneHeaderProps = {
   diffAction: TemplateResult | typeof nothing;
   backgroundTasksAction: TemplateResult | typeof nothing;
   workspaceAction: TemplateResult | typeof nothing;
+  faceControl?: TemplateResult | typeof nothing;
+  boardDockAction?: TemplateResult | typeof nothing;
   onBeginRename: () => void;
   onRenameInput: (value: string) => void;
   onCommitRename: () => void;
@@ -221,8 +223,9 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
             </wa-dropdown>
           `
         : nothing}
+      ${props.faceControl ?? nothing}
       <div class="chat-pane__actions">
-        ${props.terminalAction}
+        ${props.boardDockAction ?? nothing} ${props.terminalAction}
         ${props.catalog
           ? nothing
           : html`${props.diffAction} ${props.backgroundTasksAction} ${props.workspaceAction}`}

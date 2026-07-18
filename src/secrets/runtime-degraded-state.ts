@@ -26,13 +26,20 @@ export type DegradedSecretOwner = {
   ownerKind: Exclude<SecretOwnerKind, "unknown">;
   ownerId: string;
   state: "unavailable";
+  /** Operator-facing reload state. Omitted legacy/runtime-discovered owners are cold. */
+  degradationState?: "cold" | "stale";
   paths: string[];
   refKeys: string[];
   reason: string;
 };
 
 /** SecretRef identities resolved for one owner in an active runtime snapshot. */
-export type SecretOwnerRefState = Pick<DegradedSecretOwner, "ownerKind" | "ownerId" | "refKeys">;
+export type SecretOwnerRefState = Pick<DegradedSecretOwner, "ownerKind" | "ownerId" | "refKeys"> & {
+  /** Identity of the full owner config that may use these values. */
+  contractDigest?: string;
+  /** Last materialized values, kept process-local for unchanged-ref reload fallback. */
+  resolvedValues?: Array<{ refKey: string; value: unknown }>;
+};
 
 /** One owner from an atomic resolution attempt, including whether it caused the failure. */
 type SecretResolutionErrorOwner = DegradedSecretOwner & {
@@ -42,6 +49,11 @@ type SecretResolutionErrorOwner = DegradedSecretOwner & {
 };
 
 export const SECRET_DEGRADATION_RETRY_HINT = "openclaw secrets reload" as const;
+
+/** Only transient/unavailable resolution failures may enter degraded runtime state. */
+export function isRetryableSecretDegradationReason(reason: string): boolean {
+  return reason === "secret provider failed" || reason === "secret reference was not found";
+}
 
 /** Redacted owner details for one structured degradation warning. */
 export type SecretDegradation = {
@@ -199,7 +211,10 @@ export function findActiveDegradedSecretOwner(
 ): DegradedSecretOwner | undefined {
   const owner =
     activeDegradedOwners.find(
-      (entry) => entry.ownerKind === ownerKind && entry.ownerId === ownerId,
+      (entry) =>
+        entry.ownerKind === ownerKind &&
+        entry.ownerId === ownerId &&
+        entry.degradationState !== "stale",
     ) ?? activeCredentialDegradedOwners.get(ownerKey(ownerKind, ownerId));
   return owner ? cloneOwner(owner) : undefined;
 }

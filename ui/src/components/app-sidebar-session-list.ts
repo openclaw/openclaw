@@ -3,6 +3,7 @@ import { state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import { titleForRoute } from "../app-navigation.ts";
 import { t } from "../i18n/index.ts";
+import { sessionHasBoard } from "../lib/board/provider.ts";
 import { formatDurationCompact } from "../lib/format.ts";
 import { startHoverMarquee, stopHoverMarquee } from "../lib/hover-marquee.ts";
 import { openCatalogSessionInTerminal } from "../lib/sessions/catalog-terminal.ts";
@@ -163,6 +164,15 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
               ? html`<span class="sidebar-recent-session__subtitle">${subtitle}</span>`
               : nothing}
           </span>
+          ${!session.isChild && sessionHasBoard(session.key)
+            ? html`<span
+                class="sidebar-board-glyph"
+                role="img"
+                aria-label=${t("sessionsView.dashboardAvailable")}
+                title=${t("sessionsView.dashboardAvailable")}
+                >${icons.barChart}</span
+              >`
+            : nothing}
           ${session.pinned ? nothing : sessionState}
           ${session.isChild ? nothing : renderSessionRowBadges(session)} ${pinnedState}
         </a>

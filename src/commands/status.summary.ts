@@ -573,12 +573,13 @@ export async function getStatusSummary(
     channelSummary,
     queuedSystemEvents,
     degradedSecretOwners: listActiveDegradedSecretOwners().map(
-      ({ ownerKind, ownerId, state, paths: ownerPaths, reason }) => {
+      ({ ownerKind, ownerId, state, degradationState, paths: ownerPaths, reason }) => {
         const redactedReason: string = redactSecretDegradationReason(reason);
         return {
           ownerKind,
           ownerId,
           state,
+          degradationState: degradationState ?? "cold",
           paths: ownerPaths,
           reason: redactedReason,
         };

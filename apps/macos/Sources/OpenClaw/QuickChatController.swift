@@ -27,6 +27,27 @@ private final class QuickChatAgentMenuTarget: NSObject {
     }
 }
 
+private enum QuickChatCaptureMenuAction: String {
+    case window
+    case area
+}
+
+@MainActor
+private final class QuickChatCaptureMenuTarget: NSObject {
+    let onSelect: (QuickChatCaptureMenuAction) -> Void
+
+    init(onSelect: @escaping (QuickChatCaptureMenuAction) -> Void) {
+        self.onSelect = onSelect
+    }
+
+    @objc func selectCapture(_ sender: NSMenuItem) {
+        guard let rawValue = sender.representedObject as? String,
+              let action = QuickChatCaptureMenuAction(rawValue: rawValue)
+        else { return }
+        self.onSelect(action)
+    }
+}
+
 private final class QuickChatRecentMenuSelection: NSObject {
     let target: QuickChatSessionTargetOverride?
 
@@ -257,6 +278,7 @@ final class QuickChatController: NSObject, NSWindowDelegate {
         guard self.isVisible else { return }
         // System permission dialogs steal key focus mid-grant; the bar must survive that flow.
         guard !self.model.isGrantingPermissions,
+              !self.model.isCapturingTextContext,
               self.windowPicker?.isInteractionActive != true,
               !self.isMenuActive
         else { return }
@@ -342,8 +364,14 @@ final class QuickChatController: NSObject, NSWindowDelegate {
             onShowRecentSessions: { [weak self] in
                 self?.showRecentSessionsPicker()
             },
-            onWindowScreenshot: { [weak self] in
-                self?.startWindowPicker()
+            onCaptureTextContext: { [weak self] in
+                self?.captureFocusedAppText()
+            },
+            onShowCaptureMenu: { [weak self] in
+                self?.showCaptureMenu()
+            },
+            onGrantPermissions: { [weak self] in
+                self?.grantMissingPermissions()
             },
             onContentHeightChange: { [weak self] height in
                 self?.updateContentHeight(height)
@@ -419,6 +447,7 @@ final class QuickChatController: NSObject, NSWindowDelegate {
     private func dismissIfClickOutside(at point: NSPoint) {
         guard self.isVisible,
               !self.model.isGrantingPermissions,
+              !self.model.isCapturingTextContext,
               self.windowPicker?.isInteractionActive != true,
               !self.isMenuActive,
               let panel = self.panel
@@ -465,11 +494,13 @@ final class QuickChatController: NSObject, NSWindowDelegate {
         let contentPoint = contentView.convert(windowPoint, from: nil)
         // Competing interaction: invalidate any in-flight recents fetch before blocking.
         self.invalidateRecentsFetch()
-        menu.popUp(positioning: nil, at: contentPoint, in: contentView)
+        withExtendedLifetime(target) {
+            _ = menu.popUp(positioning: nil, at: contentPoint, in: contentView)
+        }
     }
 
     private func showRecentSessionsPicker() {
-        guard self.model.canSelectRecentSession, self.recentSessionsTask == nil else { return }
+        guard self.canShowRecentSessions, self.recentSessionsTask == nil else { return }
         let requestID = UUID()
         let presentationID = self.model.activePresentationID
         self.recentSessionsRequestID = requestID
@@ -484,12 +515,11 @@ final class QuickChatController: NSObject, NSWindowDelegate {
                 let rows = try await self.recentSessionsProvider()
                 guard !Task.isCancelled,
                       self.recentSessionsRequestID == requestID,
-                      self.isVisible,
                       self.model.activePresentationID == presentationID,
                       // Eligibility can lapse while the fetch is in flight (a send may
                       // have started); a menu whose selections would be ignored is worse
                       // than no menu.
-                      self.model.canSelectRecentSession
+                      self.canShowRecentSessions
                 else { return }
                 self.presentRecentSessionsMenu(rows: rows)
             } catch {
@@ -497,6 +527,25 @@ final class QuickChatController: NSObject, NSWindowDelegate {
                     "quick chat recent sessions failed: \(error.localizedDescription, privacy: .public)")
             }
         }
+    }
+
+    private var canShowRecentSessions: Bool {
+        self.isVisible &&
+            self.model.canSelectRecentSession &&
+            !self.model.isGrantingPermissions &&
+            !self.model.isCapturingTextContext &&
+            self.windowPicker?.isInteractionActive != true &&
+            !self.isMenuActive
+    }
+
+    private func captureFocusedAppText() {
+        self.invalidateRecentsFetch()
+        self.model.captureFocusedAppText()
+    }
+
+    private func grantMissingPermissions() {
+        self.invalidateRecentsFetch()
+        self.model.grantMissingPermissions()
     }
 
     private func presentRecentSessionsMenu(rows: [SessionRow]) {
@@ -535,10 +584,56 @@ final class QuickChatController: NSObject, NSWindowDelegate {
         }
         let windowPoint = panel.convertPoint(fromScreen: NSEvent.mouseLocation)
         let contentPoint = contentView.convert(windowPoint, from: nil)
-        menu.popUp(positioning: nil, at: contentPoint, in: contentView)
+        withExtendedLifetime(target) {
+            _ = menu.popUp(positioning: nil, at: contentPoint, in: contentView)
+        }
     }
 
-    private func startWindowPicker() {
+    private func showCaptureMenu() {
+        guard self.model.canCaptureWindow,
+              let panel,
+              let contentView = panel.contentView
+        else { return }
+
+        self.isMenuActive = true
+        self.removeDismissMonitors()
+        defer {
+            self.isMenuActive = false
+            if self.isVisible { self.installDismissMonitors() }
+            self.focusEditor()
+        }
+
+        let target = QuickChatCaptureMenuTarget { [weak self] action in
+            switch action {
+            case .window:
+                self?.startCapturePicker(area: false)
+            case .area:
+                self?.startCapturePicker(area: true)
+            }
+        }
+        let menu = NSMenu()
+        for (title, action) in [
+            (String(localized: "Capture Window…"), QuickChatCaptureMenuAction.window),
+            (String(localized: "Capture Area…"), QuickChatCaptureMenuAction.area),
+        ] {
+            let item = NSMenuItem(
+                title: title,
+                action: #selector(QuickChatCaptureMenuTarget.selectCapture(_:)),
+                keyEquivalent: "")
+            item.target = target
+            item.representedObject = action.rawValue
+            menu.addItem(item)
+        }
+        let windowPoint = panel.convertPoint(fromScreen: NSEvent.mouseLocation)
+        let contentPoint = contentView.convert(windowPoint, from: nil)
+        // Competing interaction: invalidate any in-flight recents fetch before blocking.
+        self.invalidateRecentsFetch()
+        withExtendedLifetime(target) {
+            _ = menu.popUp(positioning: nil, at: contentPoint, in: contentView)
+        }
+    }
+
+    private func startCapturePicker(area: Bool) {
         guard self.isVisible, self.model.canCaptureWindow else { return }
         if self.windowPicker == nil {
             self.windowPicker = QuickChatWindowPicker(
@@ -553,7 +648,13 @@ final class QuickChatController: NSObject, NSWindowDelegate {
         guard let windowPicker = self.windowPicker else { return }
         // Competing interaction: a recents menu must not pop over the picker overlays.
         self.invalidateRecentsFetch()
-        Task { await windowPicker.begin() }
+        Task {
+            if area {
+                await windowPicker.beginArea()
+            } else {
+                await windowPicker.beginWindow()
+            }
+        }
     }
 
     private func pickerInteractionChanged(_ active: Bool) {
@@ -563,12 +664,18 @@ final class QuickChatController: NSObject, NSWindowDelegate {
             self.installDismissMonitors()
         }
         guard let panel else { return }
+        if active {
+            // Synchronous hide: overlays are clickable immediately, and a fast drag's
+            // capture (80ms settle) must never include a still-fading composer.
+            panel.alphaValue = 0
+            return
+        }
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.12
-            panel.animator().alphaValue = active ? 0.35 : 1
+            panel.animator().alphaValue = 1
         } completionHandler: { [weak self] in
             Task { @MainActor in
-                if active == false { self?.focusEditor() }
+                self?.focusEditor()
             }
         }
     }
