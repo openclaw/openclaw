@@ -95,6 +95,7 @@ function defaultRunGh(args, options = {}) {
   return execFileSync("gh", args, {
     encoding: "utf8",
     timeout: CLOSE_DUPES_TIMEOUT_MS,
+    killSignal: "SIGKILL",
     stdio: options.input ? ["pipe", "pipe", "inherit"] : ["ignore", "pipe", "inherit"],
     ...(options.input ? { input: options.input } : {}),
   });
