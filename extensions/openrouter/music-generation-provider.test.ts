@@ -211,7 +211,10 @@ describe("openrouter music generation provider", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it("releases OpenRouter audio stream readers after completion", async () => {
+  it("preserves completed OpenRouter audio when reader cleanup fails", async () => {
+    const cancel = vi.fn(() => {
+      throw new Error("cancel failed");
+    });
     const releaseLock = vi.fn();
     postJsonRequestMock.mockResolvedValue({
       response: sseResponse(
@@ -219,7 +222,7 @@ describe("openrouter music generation provider", () => {
           audio: Buffer.from("wav-bytes").toString("base64"),
           done: true,
         }),
-        { releaseLock },
+        { cancel, releaseLock },
       ),
       release: vi.fn(async () => {}),
     });
@@ -234,6 +237,7 @@ describe("openrouter music generation provider", () => {
     ).resolves.toMatchObject({
       tracks: [{ mimeType: "audio/wav" }],
     });
+    expect(cancel).toHaveBeenCalledTimes(1);
     expect(releaseLock).toHaveBeenCalledTimes(1);
   });
 
