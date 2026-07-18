@@ -145,7 +145,7 @@ async function startVaultErrorFixture() {
 async function startVaultStalledBodyFixture() {
   const server = createServer((_request, response) => {
     response.setHeader("content-type", "application/json");
-    response.write('{"data":{"data":{"apiKey":"partial');
+    response.write('{"data":{"data":{"value":"partial');
   });
   await new Promise<void>((resolve) => {
     server.listen(0, "127.0.0.1", resolve);
