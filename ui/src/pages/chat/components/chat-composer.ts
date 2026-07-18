@@ -1835,7 +1835,7 @@ function renderChatPrimaryActions(props: ChatRunControlsProps) {
                       : t("chat.composer.turnCameraOn")}
                     aria-pressed=${props.voiceVideoEnabled ? "true" : "false"}
                   >
-                    ${icons.camera}
+                    ${props.voiceVideoEnabled ? icons.cameraOff : icons.camera}
                     <span class="agent-chat__control-label"
                       >${props.voiceVideoEnabled
                         ? t("chat.composer.turnCameraOff")
