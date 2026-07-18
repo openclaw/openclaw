@@ -57,4 +57,38 @@ describe("stripBootEchoFromOutboundText", () => {
     expect(tail.length).toBeGreaterThan(80);
     expect(stripBootEchoFromOutboundText(tail, LONG_BOOT_PROMPT)).toBe("");
   });
+
+  it("skips surrogate-shortened windows to avoid false positives", () => {
+    // Regression: when a boot prompt contains non-BMP characters at
+    // positions that cause the 80-char sliding window to cross surrogate
+    // pair boundaries, sliceUtf16SafeMinLen shortens the result.
+    // The old while-loop then extended past minLen, breaking the
+    // minimum-window invariant. The fix skips shortened windows entirely.
+    const prefix = "x".repeat(79);
+    const emoji = "\u{1F600}"; // 😀 — 2 UTF-16 code units
+    const bootPrompt = prefix + emoji + "y".repeat(20);
+
+    // Outbound text shares the 79-char prefix but not 80 contiguous chars
+    const outbound = prefix + " (safe continuation)";
+    expect(stripBootEchoFromOutboundText(outbound, bootPrompt)).toBe(outbound);
+  });
+
+  it("correctly detects echoes with non-BMP characters", () => {
+    // Non-BMP characters in the shared substring must still be detected
+    const emoji = "\u{1F600}"; // 😀
+    const bootPrompt = "A".repeat(40) + emoji + "A".repeat(40); // 82 code units
+    // Outbound text containing a full 80-char+ contiguous substring
+    const outbound = "prefix: " + "A".repeat(40) + emoji + "A".repeat(39);
+    expect(stripBootEchoFromOutboundText(outbound, bootPrompt)).toBe("");
+  });
+
+  it("handles outbound text ending at a low-surrogate boundary", () => {
+    // Terminal low-surrogate regression: the last window in the haystack
+    // should not crash or produce false positives when it ends at a
+    // surrogate pair boundary.
+    const bootPrompt = "A".repeat(100);
+    const emoji = "\u{1F600}"; // 😀
+    const outbound = "A".repeat(79) + emoji; // 81 code units, < 80 A's shared
+    expect(stripBootEchoFromOutboundText(outbound, bootPrompt)).toBe(outbound);
+  });
 });
