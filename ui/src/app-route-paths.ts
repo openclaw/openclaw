@@ -6,6 +6,7 @@ const APP_ROUTE_DEFINITIONS = {
   custodian: { path: "/custodian" },
   "new-session": { path: "/new" },
   activity: { path: "/activity" },
+  apps: { path: "/apps" },
   agents: { path: "/settings/agents", aliases: ["/agents"] },
   channels: { path: "/settings/channels", aliases: ["/channels"] },
   connection: { path: "/settings/connection" },

@@ -101,6 +101,7 @@ async function openSidebarTestPage() {
   const page = await context.newPage();
   await installMockGateway(page);
   await page.goto(`${server.baseUrl}chat`);
+  await page.waitForFunction(() => Boolean(customElements.get("openclaw-lobster-pet")));
   return { context, page };
 }
 

@@ -116,6 +116,32 @@ guard when adopting the drain and size `completedTtlMs`/`completedMaxEntries`
 to cover the old guard window instead. Non-dedupe protections (age fences,
 outbound echo caches) are unrelated to this rule and stay.
 
+#### Account-scoped restart contract
+
+Channel config changes restart the whole channel by default. A multi-account
+channel may set `reload.accountScopedRestart: true` only when configuration
+resolution reads channel-wide shared fields plus the selected account, never a
+sibling account, and the Gateway can stop and start one `(channel, accountId)`
+runtime without replacing sibling runtimes.
+
+The scoped path applies only to changes under
+`channels.<channel>.accounts.<non-default-id>.*`. Changes to shared channel
+fields, `accounts.default`, removed or unresolvable accounts, and mixed changes
+that can affect inheritance are promoted to a whole-channel restart. Plugins
+that do not opt in always use the whole-channel path.
+
+For channels using the durable ingress drain, the account monitor's stop path
+must first settle all accepted transport admissions, then dispose and await its
+drain. Starting the account opens the same account-keyed queue, whose initial
+drain recovers undispatched durable rows. Do not add a second reload-specific
+replay pass; queue recovery is the canonical restart path.
+
+Treat this flag as a capability claim, not a performance preference. Contract
+tests should prove that adding and editing one named account leaves a sibling's
+resolved config unchanged, stopping one account settles only that account's
+monitor and drain, and a fresh monitor recovers that account's rows exactly
+once. If any guarantee cannot be proved, omit the flag.
+
 ### Typing indicators
 
 If your channel supports typing indicators outside inbound replies, expose

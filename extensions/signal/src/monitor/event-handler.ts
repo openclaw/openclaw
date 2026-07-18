@@ -75,6 +75,7 @@ import {
   type SignalSender,
 } from "../identity.js";
 import { normalizeSignalMessagingTarget } from "../normalize.js";
+import { maybeResolveSignalQuestionReaction } from "../question-reactions.js";
 import { resolveSignalReactionLevel } from "../reaction-level.js";
 import { registerSignalReplyContext } from "../reply-authors.js";
 import {
@@ -595,6 +596,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           },
           dispatcherOptions,
           delivery,
+          // Signal retries the whole debounced flush below so the keyed lane and durable claims
+          // remain owned during backoff; a nested dispatch retry breaks shutdown cancellation.
+          sessionInitRetry: { delaysMs: [] },
           replyOptions: {
             ...(entry.turnAdoptionLifecycle
               ? bindIngressLifecycleToReplyOptions(entry.turnAdoptionLifecycle)
@@ -893,6 +897,23 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       logVerbose(
         `Blocked signal reaction sender ${params.senderDisplay} (${params.accessDecision.reasonCode})`,
       );
+      return true;
+    }
+    if (
+      conversationKey &&
+      (await maybeResolveSignalQuestionReaction({
+        cfg: deps.cfg,
+        accountId: deps.accountId,
+        conversationKey,
+        messageId,
+        reactionKey: emojiLabel,
+        isRemove: Boolean(params.reaction.isRemove),
+        actorId: formatSignalSenderId(params.sender),
+        targetAuthor: params.reaction.targetAuthor,
+        targetAuthorUuid: params.reaction.targetAuthorUuid,
+        logDebug: logVerbose,
+      }))
+    ) {
       return true;
     }
     const targets = deps.resolveSignalReactionTargets(params.reaction);

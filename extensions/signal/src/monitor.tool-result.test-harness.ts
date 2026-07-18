@@ -44,6 +44,32 @@ const signalToolResultSessionStorePath = vi.hoisted(
   () => `/tmp/openclaw-signal-tool-result-sessions-${process.pid}.json`,
 );
 let signalToolResultStateDir: string | undefined;
+let signalToolResultIngressQueue: ReturnType<typeof createChannelIngressQueueForTests> | undefined;
+
+export function toSignalToolResultTestError(value: unknown, fallbackMessage: string): Error {
+  return value instanceof Error ? value : new Error(fallbackMessage, { cause: value });
+}
+
+export async function waitForSignalToolResultIngressIdle() {
+  const queue = signalToolResultIngressQueue;
+  if (!queue) {
+    throw new Error("Signal tool-result ingress queue is not initialized");
+  }
+  await vi.waitFor(
+    async () => {
+      // Pending must be read before claims so a pending→claimed transition cannot
+      // disappear between two concurrent snapshots and produce a false idle.
+      const pending = await queue.listPending({ limit: "all" });
+      const claims = await queue.listClaims();
+      if (pending.length > 0 || claims.length > 0) {
+        throw new Error(
+          `Signal tool-result ingress still active: ${pending.length} pending, ${claims.length} claimed, ${replyMock.mock.calls.length} replies, ${sendMock.mock.calls.length} sends`,
+        );
+      }
+    },
+    { interval: 10, timeout: 5_000 },
+  );
+}
 
 export function getSignalToolResultTestMocks(): SignalToolResultTestMocks {
   return {
@@ -130,69 +156,30 @@ vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/reply-runtime")>(
-    "openclaw/plugin-sdk/reply-runtime",
+vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-inbound")>(
+    "openclaw/plugin-sdk/channel-inbound",
   );
   return {
     ...actual,
-    getReplyFromConfig: (...args: unknown[]) => replyMock(...args),
-    dispatchInboundMessage: async (params: {
-      ctx: unknown;
-      cfg: unknown;
-      replyOptions?: {
-        turnAdoptionLifecycle?: { onAdopted?: () => void | Promise<void> };
-      };
-      dispatcher: {
-        sendFinalReply: (payload: {
-          text?: string;
-          mediaUrl?: string;
-          mediaUrls?: string[];
-        }) => boolean;
-        markComplete?: () => void;
-        waitForIdle?: () => Promise<void>;
-      };
-    }) => {
-      type TestReplyPayload = {
-        text?: string;
-        mediaUrl?: string;
-        mediaUrls?: string[];
-        isCompactionNotice?: boolean;
-        isFallbackNotice?: boolean;
-        isStatusNotice?: boolean;
-        replyToId?: string;
-        replyToTag?: boolean;
-        replyToCurrent?: boolean;
-      };
-      const resolved = (await replyMock(params.ctx, {}, params.cfg)) as
-        | {
-            replies?: TestReplyPayload[];
-          }
-        | TestReplyPayload
-        | TestReplyPayload[]
-        | undefined;
-      const resolvedPayloads = Array.isArray(resolved)
-        ? resolved
-        : Array.isArray((resolved as { replies?: unknown })?.replies)
-          ? (resolved as { replies: TestReplyPayload[] }).replies
-          : resolved
-            ? [resolved as TestReplyPayload]
-            : [];
-      let queuedFinal = false;
-      for (const resolvedPayload of resolvedPayloads) {
-        const text = typeof resolvedPayload.text === "string" ? resolvedPayload.text.trim() : "";
-        const hasMedia =
-          typeof resolvedPayload.mediaUrl === "string" ||
-          (Array.isArray(resolvedPayload.mediaUrls) && resolvedPayload.mediaUrls.length > 0);
-        if (text || hasMedia) {
-          queuedFinal = true;
-          params.dispatcher.sendFinalReply(resolvedPayload);
-        }
-      }
-      params.dispatcher.markComplete?.();
-      await params.dispatcher.waitForIdle?.();
-      await params.replyOptions?.turnAdoptionLifecycle?.onAdopted?.();
-      return { queuedFinal };
+    runChannelInboundEvent: async (params: Parameters<typeof actual.runChannelInboundEvent>[0]) => {
+      const resolveTurn = params.adapter.resolveTurn;
+      return await actual.runChannelInboundEvent({
+        ...params,
+        adapter: {
+          ...params.adapter,
+          resolveTurn: async (...args: Parameters<typeof resolveTurn>) => {
+            const resolved = await resolveTurn(...args);
+            if ("runDispatch" in resolved) {
+              return resolved;
+            }
+            return {
+              ...resolved,
+              replyResolver: (...replyArgs: unknown[]) => replyMock(...replyArgs),
+            } as typeof resolved;
+          },
+        },
+      });
     },
   };
 });
@@ -277,6 +264,7 @@ export function installSignalToolResultTestHooks() {
     );
     const stateDir = await fs.realpath(createdStateDir);
     signalToolResultStateDir = stateDir;
+    signalToolResultIngressQueue = undefined;
     setSignalRuntime({
       logging: {
         getChildLogger: () => ({
@@ -294,11 +282,13 @@ export function installSignalToolResultTestHooks() {
         openChannelIngressQueue: (
           options?: Omit<Parameters<typeof createChannelIngressQueueForTests>[0], "channelId">,
         ) => {
-          return createChannelIngressQueueForTests({
+          const queue = createChannelIngressQueueForTests({
             ...options,
             channelId: "signal",
             stateDir: options?.stateDir ?? stateDir,
           });
+          signalToolResultIngressQueue = queue;
+          return queue;
         },
       },
     } as unknown as PluginRuntime);
@@ -327,6 +317,7 @@ export function installSignalToolResultTestHooks() {
 
   afterEach(async () => {
     clearSignalRuntimeForTest();
+    signalToolResultIngressQueue = undefined;
     closeOpenClawStateDatabaseForTest();
     if (signalToolResultStateDir) {
       await fs.rm(signalToolResultStateDir, { recursive: true, force: true });

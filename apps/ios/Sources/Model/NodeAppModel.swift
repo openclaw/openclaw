@@ -428,7 +428,7 @@ final class NodeAppModel {
     var gatewayPairingPaused: Bool = false
     var gatewayPairingRequestId: String?
     // Bumped on every non-nil assignment, including re-reports of an equal problem;
-    // value equality alone cannot tell the UI to re-surface or shake the toast.
+    // value equality alone cannot tell the UI to re-surface a dismissed toast.
     private(set) var gatewayProblemReportCount = 0
     private(set) var lastGatewayProblem: GatewayConnectionProblem? {
         didSet { if self.lastGatewayProblem != nil { self.gatewayProblemReportCount &+= 1 } }
@@ -4869,10 +4869,10 @@ extension NodeAppModel {
         if includeAdminScope {
             scopes.append("operator.admin")
         }
-        // Preserve reconnect compatibility for older paired operator tokens that were
-        // approved before iOS requested operator.approvals by default.
+        // Older paired tokens request a scope upgrade before interactive prompts can arrive.
         if includeApprovalScope {
             scopes.append("operator.approvals")
+            scopes.append("operator.questions")
         }
         return GatewayConnectOptions(
             role: "operator",

@@ -38,6 +38,33 @@ export type SecretAssignment = {
   apply: (value: unknown) => void;
 };
 
+type SecretAssignmentValidationFailure = Pick<
+  SecretAssignment,
+  "ownerKind" | "ownerId" | "expected"
+> & {
+  refKey: string;
+};
+
+class SecretAssignmentValidationError extends Error {
+  readonly failures: SecretAssignmentValidationFailure[];
+
+  constructor(params: { failures: SecretAssignmentValidationFailure[]; error: Error }) {
+    super(params.error.message, { cause: params.error });
+    this.name = "SecretAssignmentValidationError";
+    this.failures = params.failures.map((failure) => ({ ...failure }));
+  }
+}
+
+/** Returns every assignment whose resolved value failed its target shape contract. */
+export function getSecretAssignmentValidationFailures(
+  error: unknown,
+): SecretAssignmentValidationFailure[] {
+  if (!(error instanceof SecretAssignmentValidationError)) {
+    return [];
+  }
+  return error.failures.map((failure) => ({ ...failure }));
+}
+
 export type SecretAssignmentOwner = Pick<
   SecretAssignment,
   "ownerKind" | "ownerId" | "requiredForGateway" | "disposition"
@@ -172,21 +199,37 @@ export function applyResolvedAssignments(params: {
   resolved: Map<string, unknown>;
 }): void {
   const values: unknown[] = [];
+  const failures: SecretAssignmentValidationFailure[] = [];
+  let firstValidationError: Error | undefined;
   for (const assignment of params.assignments) {
     const key = secretRefKey(assignment.ref);
     if (!params.resolved.has(key)) {
       throw new Error(`Secret reference "${key}" resolved to no value.`);
     }
     const value = params.resolved.get(key);
-    assertExpectedResolvedSecretValue({
-      value,
-      expected: assignment.expected,
-      errorMessage:
-        assignment.expected === "string"
-          ? `${assignment.path} resolved to a non-string or empty value.`
-          : `${assignment.path} resolved to an unsupported value type.`,
-    });
+    try {
+      assertExpectedResolvedSecretValue({
+        value,
+        expected: assignment.expected,
+        errorMessage:
+          assignment.expected === "string"
+            ? `${assignment.path} resolved to a non-string or empty value.`
+            : `${assignment.path} resolved to an unsupported value type.`,
+      });
+    } catch (error) {
+      const validationError = error instanceof Error ? error : new Error(String(error));
+      firstValidationError ??= validationError;
+      failures.push({
+        ownerKind: assignment.ownerKind,
+        ownerId: assignment.ownerId,
+        expected: assignment.expected,
+        refKey: key,
+      });
+    }
     values.push(value);
+  }
+  if (firstValidationError) {
+    throw new SecretAssignmentValidationError({ error: firstValidationError, failures });
   }
   for (const [index, assignment] of params.assignments.entries()) {
     assignment.apply(values[index]);

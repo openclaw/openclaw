@@ -22,6 +22,7 @@ const { resolveRuntimeWebToolsMock, runtimePrepareImportMock } = vi.hoisted(() =
       diagnostics: [],
     },
     degradedOwners: [],
+    secretOwners: [],
   })),
   runtimePrepareImportMock: vi.fn(),
 }));
@@ -44,6 +45,7 @@ vi.mock("./runtime-prepare.runtime.js", () => {
 });
 
 vi.mock("./runtime-owner-assignments.js", () => ({
+  listSecretAssignmentOwners: () => [],
   resolveAndApplySecretAssignments: async () => [],
 }));
 
