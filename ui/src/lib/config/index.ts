@@ -727,6 +727,8 @@ async function autoSaveConfig(
   if (state.configRawOriginalParsePending) {
     // JSON5 originals parse asynchronously on first load; sanitize needs them.
     // Await only when pending: teardown flushes rely on a synchronous prefix.
+    // Entry stays serialized across this await: runAutoSave's synchronous
+    // in-flight check folds concurrent triggers into one trailing save.
     await state.configRawOriginalParsePending;
     if (!isCurrent() || !state.configFormDirty || state.configFormMode !== "form") {
       return false;
