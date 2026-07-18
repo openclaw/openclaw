@@ -254,6 +254,17 @@ describe("AppSidebar logo stand-in wiring", () => {
     await sidebar.updateComplete;
     expect(standIn()).toBeNull();
     expect(logo()?.classList.contains("sidebar-brand__logo--vacated")).toBe(false);
+
+    // A lookless scare phase hides the logo with no stand-in crab, and the
+    // "out" edge restores it.
+    dispatch({ phase: "in", look: null, name: null });
+    await sidebar.updateComplete;
+    expect(logo()?.classList.contains("sidebar-brand__logo--vacated")).toBe(true);
+    expect(standIn()).toBeNull();
+
+    dispatch({ phase: "out", look: null, name: null });
+    await sidebar.updateComplete;
+    expect(logo()?.classList.contains("sidebar-brand__logo--vacated")).toBe(false);
   });
 });
 
