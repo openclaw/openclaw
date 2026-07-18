@@ -132,6 +132,8 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   assignmentConfig?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   agentDirs?: string[];
+  /** Skip config and web-tool refs when only auth-profile stores need materialization. */
+  includeConfigRefs?: boolean;
   includeAuthStoreRefs?: boolean;
   loadAuthStore?: (agentDir?: string) => AuthProfileStore;
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
@@ -146,6 +148,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   const sourceConfig = structuredClone(params.config);
   const assignmentSourceConfig = structuredClone(params.assignmentConfig ?? params.config);
   const resolvedConfig = structuredClone(assignmentSourceConfig);
+  const includeConfigRefs = params.includeConfigRefs ?? true;
   const includeAuthStoreRefs = params.includeAuthStoreRefs ?? true;
   let authStores: Array<{ agentDir: string; store: AuthProfileStore }> = [];
   const fastPathLoadAuthStore = params.loadAuthStore ?? loadAuthProfileStoreWithoutExternalProfiles;
@@ -160,7 +163,12 @@ export async function prepareSecretsRuntimeSnapshot(params: {
       });
     }
   }
-  if (canUseSecretsRuntimeFastPath({ sourceConfig: assignmentSourceConfig, authStores })) {
+  if (
+    canUseSecretsRuntimeFastPath({
+      sourceConfig: includeConfigRefs ? assignmentSourceConfig : {},
+      authStores,
+    })
+  ) {
     const manifestRegistry =
       params.manifestRegistry ?? params.pluginMetadataSnapshot?.manifestRegistry;
     const snapshot = {
@@ -175,6 +183,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
     setPreparedSecretsRuntimeSnapshotRefreshContext(snapshot, {
       env: runtimeEnv,
       explicitAgentDirs: params.agentDirs?.length ? [...candidateDirs] : null,
+      includeConfigRefs,
       includeAuthStoreRefs,
       loadAuthStore: fastPathLoadAuthStore,
       loadablePluginOrigins: params.loadablePluginOrigins ?? new Map<string, PluginOrigin>(),
@@ -209,11 +218,13 @@ export async function prepareSecretsRuntimeSnapshot(params: {
     ...(manifestRegistry ? { manifestRegistry } : {}),
   });
 
-  collectConfigAssignments({
-    config: resolvedConfig,
-    context,
-    loadablePluginOrigins,
-  });
+  if (includeConfigRefs) {
+    collectConfigAssignments({
+      config: resolvedConfig,
+      context,
+      loadablePluginOrigins,
+    });
+  }
 
   if (includeAuthStoreRefs) {
     const loadAuthStore = params.loadAuthStore ?? loadAuthProfileStoreForSecretsRuntime;
@@ -247,12 +258,17 @@ export async function prepareSecretsRuntimeSnapshot(params: {
         })
       : [];
 
-  const webTools = await resolveRuntimeWebTools({
-    sourceConfig,
-    resolvedConfig,
-    context,
-    allowUnavailableSecretOwners: params.allowUnavailableSecretOwners,
-  });
+  const webTools = includeConfigRefs
+    ? await resolveRuntimeWebTools({
+        sourceConfig,
+        resolvedConfig,
+        context,
+        allowUnavailableSecretOwners: params.allowUnavailableSecretOwners,
+      })
+    : {
+        metadata: createEmptyRuntimeWebToolsMetadata(),
+        degradedOwners: [],
+      };
   const snapshot = {
     sourceConfig,
     config: resolvedConfig,
@@ -265,6 +281,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   setPreparedSecretsRuntimeSnapshotRefreshContext(snapshot, {
     env: runtimeEnv,
     explicitAgentDirs: params.agentDirs?.length ? [...candidateDirs] : null,
+    includeConfigRefs,
     includeAuthStoreRefs,
     loadAuthStore: params.loadAuthStore ?? loadAuthProfileStoreForSecretsRuntime,
     loadablePluginOrigins,
@@ -341,6 +358,7 @@ async function prepareActiveSecretsRuntimeRefresh(
       assignmentConfig: snapshotConfig,
       env: activeRefreshContext.env,
       agentDirs: resolveRefreshAgentDirs(sourceConfig, activeRefreshContext),
+      includeConfigRefs: activeRefreshContext.includeConfigRefs ?? true,
       includeAuthStoreRefs: includeAuthStoreRefs ?? activeRefreshContext.includeAuthStoreRefs,
       loadablePluginOrigins: activeRefreshContext.loadablePluginOrigins,
       ...(activeRefreshContext.manifestRegistry

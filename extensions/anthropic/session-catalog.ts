@@ -17,6 +17,7 @@ import {
   adoptedSourceKey,
   CLAUDE_LOCAL_SESSION_HOST_ID,
 } from "./session-catalog-adoption.js";
+import { isExactClaudeSessionCursor } from "./session-catalog-cursor.js";
 import { importClaudeHistory } from "./session-catalog-history.js";
 import { createNodeListFailedError, resolveNodeLabel } from "./session-catalog-node-helpers.js";
 import {
@@ -55,8 +56,6 @@ const MAX_TRANSCRIPT_LIMIT = 50;
 const MAX_HOSTS = 100;
 const MAX_STRING_LENGTH = 4096;
 const MAX_SEARCH_LENGTH = 500;
-const MAX_CURSOR_LENGTH = 256;
-
 const MAX_CATALOG_DISCOVERY_FILES = 10_000;
 const MAX_CATALOG_DISCOVERY_CACHE_ENTRIES = 20_000;
 const CLAUDE_METADATA_PREFIX_BYTES = 1024 * 1024;
@@ -608,11 +607,11 @@ function encodeOffset(offset: number): string {
   return Buffer.from(JSON.stringify({ offset }), "utf8").toString("base64url");
 }
 
-function decodeOffset(cursor: unknown, label: string): number {
+function decodeOffset(cursor: string | undefined, label: string): number {
   if (cursor === undefined) {
     return 0;
   }
-  if (typeof cursor !== "string" || !cursor || cursor.length > MAX_CURSOR_LENGTH) {
+  if (!isExactClaudeSessionCursor(cursor)) {
     throw new ClaudeCatalogParamsError(`${label} cursor is invalid`);
   }
   try {
@@ -640,6 +639,20 @@ function readLimit(value: unknown, fallback: number, max: number): number {
   return value as number;
 }
 
+function readRequiredCursor(value: unknown, message: string): string {
+  if (!isExactClaudeSessionCursor(value)) {
+    throw new ClaudeCatalogParamsError(message);
+  }
+  return value;
+}
+
+function readOptionalCursor(value: unknown, label: string): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  return readRequiredCursor(value, `${label} cursor is invalid`);
+}
+
 function readListParams(value: unknown): {
   cursor?: string;
   limit: number;
@@ -656,7 +669,7 @@ function readListParams(value: unknown): {
   if (unknown) {
     throw new ClaudeCatalogParamsError(`unknown Claude session catalog parameter: ${unknown}`);
   }
-  const cursor = optionalString(value.cursor, MAX_CURSOR_LENGTH);
+  const cursor = readOptionalCursor(value.cursor, "catalog");
   const searchTerm = optionalString(value.searchTerm, MAX_SEARCH_LENGTH);
   return {
     limit: readLimit(value.limit, DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT),
@@ -711,7 +724,7 @@ function readTranscriptParams(
   if (!threadId || !/^[A-Za-z0-9._:-]+$/.test(threadId)) {
     throw new ClaudeCatalogParamsError("threadId is invalid");
   }
-  const cursor = optionalString(value.cursor, MAX_CURSOR_LENGTH);
+  const cursor = readOptionalCursor(value.cursor, "transcript");
   return {
     threadId,
     limit: readLimit(value.limit, DEFAULT_TRANSCRIPT_LIMIT, MAX_TRANSCRIPT_LIMIT),
@@ -823,6 +836,19 @@ export async function readLocalClaudeTranscriptPage(
   }
 }
 
+function readNodePageCursor(
+  value: Record<string, unknown>,
+  invalidPageMessage: string,
+): string | undefined {
+  if (!("nextCursor" in value)) {
+    return undefined;
+  }
+  if (!isExactClaudeSessionCursor(value.nextCursor)) {
+    throw new Error(invalidPageMessage);
+  }
+  return value.nextCursor;
+}
+
 function parseCatalogPage(value: unknown): ClaudeSessionCatalogPage {
   if (
     !isRecord(value) ||
@@ -896,10 +922,7 @@ function parseCatalogPage(value: unknown): ClaudeSessionCatalogPage {
       ...(gitBranch ? { gitBranch } : {}),
     };
   });
-  const nextCursor = optionalString(value.nextCursor, MAX_CURSOR_LENGTH);
-  if ("nextCursor" in value && !nextCursor) {
-    throw new Error("Claude node returned an invalid session page");
-  }
+  const nextCursor = readNodePageCursor(value, "Claude node returned an invalid session page");
   return { sessions, ...(nextCursor ? { nextCursor } : {}) };
 }
 
@@ -955,11 +978,7 @@ function parseGatewayQuery(value: unknown): {
     }
     cursors = Object.fromEntries(
       Object.entries(value.cursors).map(([hostId, cursor]) => {
-        const normalized = optionalString(cursor, MAX_CURSOR_LENGTH);
-        if (!normalized) {
-          throw new ClaudeCatalogParamsError(`cursor for ${hostId} is invalid`);
-        }
-        return [hostId, normalized];
+        return [hostId, readRequiredCursor(cursor, `cursor for ${hostId} is invalid`)];
       }),
     );
   }
@@ -974,6 +993,7 @@ function parseGatewayQuery(value: unknown): {
 async function listClaudeSessionCatalog(params: {
   runtime: PluginRuntime;
   query?: unknown;
+  onHost?: (host: ClaudeSessionCatalogHost) => void;
 }): Promise<ClaudeSessionCatalogResult> {
   const query = parseGatewayQuery(params.query);
   const requested = query.hostIds ? new Set(query.hostIds) : undefined;
@@ -990,7 +1010,7 @@ async function listClaudeSessionCatalog(params: {
                 ...(await listLocalClaudeSessionPage({
                   limit: query.limitPerHost,
                   ...(query.search ? { searchTerm: query.search } : {}),
-                  ...(query.cursors?.[CLAUDE_LOCAL_SESSION_HOST_ID]
+                  ...(query.cursors?.[CLAUDE_LOCAL_SESSION_HOST_ID] !== undefined
                     ? { cursor: query.cursors[CLAUDE_LOCAL_SESSION_HOST_ID] }
                     : {}),
                 })),
@@ -1011,6 +1031,11 @@ async function listClaudeSessionCatalog(params: {
           })(),
         ]
       : [];
+  for (const host of localHosts) {
+    if (params.onHost) {
+      void host.then(params.onHost).catch(() => undefined);
+    }
+  }
   const wantsNodes = !requested || query.hostIds?.some((hostId) => hostId.startsWith("node:"));
   if (!wantsNodes) {
     return { hosts: await Promise.all(localHosts) };
@@ -1019,18 +1044,17 @@ async function listClaudeSessionCatalog(params: {
   try {
     nodes = (await params.runtime.nodes.list()).nodes;
   } catch (error) {
+    const registryHost: ClaudeSessionCatalogHost = {
+      hostId: "node:registry",
+      label: "Paired nodes",
+      kind: "node",
+      connected: false,
+      sessions: [],
+      error: createNodeListFailedError(error),
+    };
+    params.onHost?.(registryHost);
     return {
-      hosts: [
-        ...(await Promise.all(localHosts)),
-        {
-          hostId: "node:registry",
-          label: "Paired nodes",
-          kind: "node",
-          connected: false,
-          sessions: [],
-          error: createNodeListFailedError(error),
-        },
-      ],
+      hosts: [...(await Promise.all(localHosts)), registryHost],
     };
   }
   const eligible = nodes
@@ -1059,30 +1083,49 @@ async function listClaudeSessionCatalog(params: {
         ...catalogTerminal.claudeNodeTerminalCapability(node),
       };
       if (node.connected !== true) {
-        return Object.assign(common, {
+        const host: ClaudeSessionCatalogHost = Object.assign({}, common, {
           sessions: [],
           error: { code: "NODE_OFFLINE", message: "Paired node is offline" },
         });
+        params.onHost?.(host);
+        return host;
       }
-      try {
-        const raw = await withTimeout(
-          params.runtime.nodes.invoke({
+      const eventualHost = Promise.resolve()
+        .then(async () => {
+          const raw = await params.runtime.nodes.invoke({
             nodeId: node.nodeId,
             command: CLAUDE_SESSIONS_LIST_COMMAND,
             params: {
               limit: query.limitPerHost,
               ...(query.search ? { searchTerm: query.search } : {}),
-              ...(query.cursors?.[hostId] ? { cursor: query.cursors[hostId] } : {}),
+              ...(query.cursors?.[hostId] !== undefined ? { cursor: query.cursors[hostId] } : {}),
             },
             timeoutMs: NODE_INVOKE_TIMEOUT_MS,
             scopes: ["operator.write"],
-          }),
-          NODE_CATALOG_LIST_RESPONSE_TIMEOUT_MS,
-          { message: "paired node Claude session catalog timed out" },
+          });
+          return Object.assign({}, common, parseCatalogPage(unwrapNodePayload(raw)));
+        })
+        .catch(
+          (): ClaudeSessionCatalogHost =>
+            Object.assign({}, common, {
+              sessions: [],
+              error: {
+                code: "NODE_INVOKE_FAILED",
+                message: "Paired node Claude sessions are unavailable",
+              },
+            }),
         );
-        return Object.assign(common, parseCatalogPage(unwrapNodePayload(raw)));
+      if (params.onHost) {
+        // The fail-soft response can finish first; the original node invoke still
+        // publishes its authoritative host page whenever cold discovery completes.
+        void eventualHost.then(params.onHost).catch(() => undefined);
+      }
+      try {
+        return await withTimeout(eventualHost, NODE_CATALOG_LIST_RESPONSE_TIMEOUT_MS, {
+          message: "paired node Claude session catalog timed out",
+        });
       } catch {
-        return Object.assign(common, {
+        return Object.assign({}, common, {
           sessions: [],
           error: {
             code: "NODE_INVOKE_FAILED",
@@ -1102,6 +1145,7 @@ async function readClaudeSessionTranscript(params: {
   cursor?: string;
   limit: number;
 }): Promise<ClaudeSessionTranscriptPage> {
+  const cursor = readOptionalCursor(params.cursor, "transcript");
   if (params.hostId === CLAUDE_LOCAL_SESSION_HOST_ID) {
     return {
       hostId: params.hostId,
@@ -1109,7 +1153,7 @@ async function readClaudeSessionTranscript(params: {
       ...(await readLocalClaudeTranscriptPage({
         threadId: params.threadId,
         limit: params.limit,
-        ...(params.cursor ? { cursor: params.cursor } : {}),
+        ...(cursor !== undefined ? { cursor } : {}),
       })),
     };
   }
@@ -1132,7 +1176,7 @@ async function readClaudeSessionTranscript(params: {
     params: {
       threadId: params.threadId,
       limit: params.limit,
-      ...(params.cursor ? { cursor: params.cursor } : {}),
+      ...(cursor !== undefined ? { cursor } : {}),
     },
     timeoutMs: NODE_INVOKE_TIMEOUT_MS,
     scopes: ["operator.write"],
@@ -1148,14 +1192,13 @@ async function readClaudeSessionTranscript(params: {
   ) {
     throw new Error("Claude node returned an invalid transcript page");
   }
+  const nextCursor = readNodePageCursor(page, "Claude node returned an invalid transcript page");
   return {
     hostId: params.hostId,
     label: resolveNodeLabel(node),
     threadId: params.threadId,
     items: page.items as ClaudeTranscriptItem[],
-    ...(optionalString(page.nextCursor, MAX_CURSOR_LENGTH)
-      ? { nextCursor: optionalString(page.nextCursor, MAX_CURSOR_LENGTH) }
-      : {}),
+    ...(nextCursor !== undefined ? { nextCursor } : {}),
   };
 }
 
@@ -1425,8 +1468,15 @@ export function registerClaudeSessionCatalog(api: OpenClawPluginApi): void {
     list: async (query) => {
       const adopted = listBoundClaudeSessions(api);
       const localCliAvailable = catalogTerminal.isClaudeCliAvailable();
-      const result = await listClaudeSessionCatalog({ runtime: api.runtime, query });
-      return result.hosts.map((host) => toGenericClaudeHost(host, adopted, localCliAvailable));
+      const { onHost, ...gatewayQuery } = query;
+      const mapHost = (host: ClaudeSessionCatalogHost) =>
+        toGenericClaudeHost(host, adopted, localCliAvailable);
+      const result = await listClaudeSessionCatalog({
+        runtime: api.runtime,
+        query: gatewayQuery,
+        ...(onHost ? { onHost: (host) => onHost(mapHost(host)) } : {}),
+      });
+      return result.hosts.map(mapHost);
     },
     read: async (request) => {
       const page = await readClaudeSessionTranscript({

@@ -62,6 +62,21 @@ describe("session-store-runtime compatibility surface", () => {
     });
   }
 
+  function expectRecoveryCleared(params: {
+    sessionId: string;
+    sessionKey: string;
+    storePath: string;
+  }): void {
+    const entry = loadInternalSessionEntry({
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+    });
+    expect(entry).toMatchObject({ sessionId: params.sessionId });
+    expect(entry?.abortedLastRun).not.toBe(true);
+    expect(entry?.restartRecoveryRuns).toBeUndefined();
+    expect(entry).not.toHaveProperty("mainRestartRecovery");
+  }
+
   it("keeps the public session read shape while using accessor-backed exports", async () => {
     const sessionKey = "agent:main:main";
     await upsertSessionEntry({
@@ -726,32 +741,12 @@ describe("session-store-runtime compatibility surface", () => {
       storePath: upsertStorePath,
     });
 
-    expect(loadInternalSessionEntry({ sessionKey: patchKey, storePath })).toMatchObject({
-      abortedLastRun: false,
-      sessionId: "patch-after",
-    });
-    expect(
-      loadInternalSessionEntry({ sessionKey: patchKey, storePath })?.restartRecoveryRuns,
-    ).toBeUndefined();
-    expect(loadInternalSessionEntry({ sessionKey: patchKey, storePath })).not.toHaveProperty(
-      "mainRestartRecovery",
-    );
-    expect(
-      loadInternalSessionEntry({ sessionKey: upsertKey, storePath: upsertStorePath }),
-    ).toMatchObject({
+    expectRecoveryCleared({ sessionId: "patch-after", sessionKey: patchKey, storePath });
+    expectRecoveryCleared({
       sessionId: "upsert-after",
+      sessionKey: upsertKey,
+      storePath: upsertStorePath,
     });
-    expect(
-      loadInternalSessionEntry({ sessionKey: upsertKey, storePath: upsertStorePath })
-        ?.abortedLastRun,
-    ).not.toBe(true);
-    expect(
-      loadInternalSessionEntry({ sessionKey: upsertKey, storePath: upsertStorePath })
-        ?.restartRecoveryRuns,
-    ).toBeUndefined();
-    expect(
-      loadInternalSessionEntry({ sessionKey: upsertKey, storePath: upsertStorePath }),
-    ).not.toHaveProperty("mainRestartRecovery");
   });
 
   it("clears core recovery state when public patches change session identity", async () => {
@@ -807,29 +802,12 @@ describe("session-store-runtime compatibility surface", () => {
       update: () => ({ sessionId: "update-after", updatedAt: 20 }),
     });
 
-    expect(loadInternalSessionEntry({ sessionKey: patchKey, storePath })).toMatchObject({
-      abortedLastRun: false,
-      sessionId: "patch-after",
-    });
-    expect(
-      loadInternalSessionEntry({ sessionKey: patchKey, storePath })?.restartRecoveryRuns,
-    ).toBeUndefined();
-    expect(loadInternalSessionEntry({ sessionKey: patchKey, storePath })).not.toHaveProperty(
-      "mainRestartRecovery",
-    );
-    expect(
-      loadInternalSessionEntry({ sessionKey: updateKey, storePath: updateStorePath }),
-    ).toMatchObject({
-      abortedLastRun: false,
+    expectRecoveryCleared({ sessionId: "patch-after", sessionKey: patchKey, storePath });
+    expectRecoveryCleared({
       sessionId: "update-after",
+      sessionKey: updateKey,
+      storePath: updateStorePath,
     });
-    expect(
-      loadInternalSessionEntry({ sessionKey: updateKey, storePath: updateStorePath })
-        ?.restartRecoveryRuns,
-    ).toBeUndefined();
-    expect(
-      loadInternalSessionEntry({ sessionKey: updateKey, storePath: updateStorePath }),
-    ).not.toHaveProperty("mainRestartRecovery");
   });
 
   it("preserves resolved maintenance settings through entry patches", async () => {

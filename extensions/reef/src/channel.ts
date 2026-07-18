@@ -30,7 +30,7 @@ import {
 import { isRephrasedReefResend } from "./rejection-resend.js";
 import { getActiveReef, getOptionalReefRuntime, getReefRuntime, setActiveReef } from "./runtime.js";
 import { reefSetupAdapter, reefSetupWizard } from "./setup.js";
-import { assertReefIdentityBinding, loadKeys, openStores } from "./state.js";
+import { assertReefIdentityBinding, loadKeys, openStores, ReefInboxCursorStore } from "./state.js";
 import {
   ReefInboxConnection,
   ReefTransportClient,
@@ -219,16 +219,18 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
       }
       const runtime = getReefRuntime();
       const keys = await loadKeys(runtime);
-      assertReefIdentityBinding(runtime, {
+      const identityBinding = {
         handle: ctx.account.config.handle!,
         relayUrl: parseReefRelayUrl(ctx.account.config.relayUrl),
-      });
+      };
+      assertReefIdentityBinding(runtime, identityBinding);
       const transport = new ReefTransportClient(
         ctx.account.config.relayUrl,
         ctx.account.config.handle!,
         keys,
       );
       const stores = openStores(runtime, keys);
+      const inboxCursor = new ReefInboxCursorStore(runtime, identityBinding);
       const reviews = stores.reviews;
       const pairing = createChannelPairingController({
         core: runtime,
@@ -419,20 +421,37 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
               ctx.log?.error?.(`reef rejection notice processing failed: ${String(error)}`),
           }),
         createReefWebSocket,
-        (state) => {
-          if (ctx.abortSignal.aborted) {
-            return;
-          }
-          ctx.setStatus(
-            state === "connected"
-              ? {
-                  accountId: "default",
-                  running: true,
-                  connected: true,
-                  lastConnectedAt: Date.now(),
-                }
-              : { accountId: "default", running: true, connected: false },
-          );
+        {
+          initialCursor: inboxCursor.load(),
+          persistCursor: (cursor) => inboxCursor.advance(cursor),
+          onState: (state) => {
+            if (ctx.abortSignal.aborted) {
+              return;
+            }
+            ctx.setStatus(
+              state === "connected"
+                ? {
+                    accountId: "default",
+                    running: true,
+                    connected: true,
+                    lastConnectedAt: Date.now(),
+                    lastError: null,
+                  }
+                : { accountId: "default", running: true, connected: false },
+            );
+          },
+          onError: (error) => {
+            if (ctx.abortSignal.aborted) {
+              return;
+            }
+            ctx.log?.error?.(`reef inbox connection failed: ${error.message}`);
+            ctx.setStatus({
+              accountId: "default",
+              running: true,
+              connected: false,
+              lastError: error.message,
+            });
+          },
         },
       );
       const reconciliationLoop = async () => {

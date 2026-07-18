@@ -177,6 +177,18 @@ impl DesktopState {
         *self.inner.tray.lock().expect("tray mutex poisoned") = Some(handles);
     }
 
+    pub(crate) fn set_quickchat_shortcut_checked(&self, checked: bool) {
+        if let Some(tray) = self
+            .inner
+            .tray
+            .lock()
+            .expect("tray mutex poisoned")
+            .as_ref()
+        {
+            tray.set_quickchat_shortcut_checked(checked);
+        }
+    }
+
     pub fn connect(&self, app: &AppHandle) -> Result<GatewaySnapshot, String> {
         let _operation = self
             .inner
@@ -663,6 +675,8 @@ async fn gateway_action(
 
 fn main() {
     let global_shortcuts_supported = tray::global_shortcuts_supported();
+    let quickchat_state = quickchat::QuickChatState::new(global_shortcuts_supported);
+    let quickchat_shortcut_state = quickchat_state.clone();
     // Single-instance must run first so it can pass deep-link argv to the primary process.
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -678,9 +692,9 @@ fn main() {
     let builder = if global_shortcuts_supported {
         builder.plugin(
             tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(|app, shortcut, event| {
+                .with_handler(move |app, shortcut, event| {
                     if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
-                        if shortcut.matches(Modifiers::CONTROL | Modifiers::SHIFT, Code::Space) {
+                        if quickchat_shortcut_state.matches_shortcut(shortcut) {
                             quickchat::toggle_quickchat(app);
                         } else if shortcut
                             .matches(Modifiers::CONTROL | Modifiers::SHIFT, Code::KeyO)
@@ -725,7 +739,7 @@ fn main() {
         }
 
         app.manage(discovery::GatewayDiscovery::default());
-        app.manage(quickchat::QuickChatState::default());
+        app.manage(quickchat_state.clone());
         app.manage(updater::UpdaterState::default());
         #[cfg(target_os = "linux")]
         match canvas::CanvasBridge::start(app.handle().clone()) {
@@ -747,10 +761,15 @@ fn main() {
         discovery::discover_gateways,
         install_cli,
         gateway_action,
+        quickchat::quickchat_agents,
         quickchat::quickchat_hide,
         quickchat::quickchat_identity,
         quickchat::quickchat_ready,
+        quickchat::quickchat_select_agent,
         quickchat::quickchat_send,
+        quickchat::quickchat_set_expanded,
+        quickchat::quickchat_set_shortcut,
+        quickchat::quickchat_shortcut,
         quickchat::quickchat_show_dashboard,
         updater::open_release_page,
         updater::relaunch,
@@ -765,10 +784,15 @@ fn main() {
         discovery::discover_gateways,
         install_cli,
         gateway_action,
+        quickchat::quickchat_agents,
         quickchat::quickchat_hide,
         quickchat::quickchat_identity,
         quickchat::quickchat_ready,
+        quickchat::quickchat_select_agent,
         quickchat::quickchat_send,
+        quickchat::quickchat_set_expanded,
+        quickchat::quickchat_set_shortcut,
+        quickchat::quickchat_shortcut,
         quickchat::quickchat_show_dashboard,
         updater::open_release_page,
         updater::relaunch,

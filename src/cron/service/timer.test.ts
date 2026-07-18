@@ -129,6 +129,7 @@ describe("cron service timer seam coverage", () => {
       reason: "cron:main-heartbeat-job",
       agentId: undefined,
       sessionKey: cronRunSessionKey,
+      owningCronJobMarker: undefined,
       heartbeat: { target: "last" },
     });
   });
@@ -247,7 +248,7 @@ describe("cron service timer seam coverage", () => {
     const saveSpy = vi
       .spyOn(cronStoreModule, "saveCronJobsStore")
       .mockImplementation(async (...args) => {
-        const marker = args[1].jobs[0]?.state.runningAtMs;
+        const marker = args[1].jobs[0]?.state.queuedAtMs;
         if (reservedAt === undefined && typeof marker === "number") {
           reservedAt = marker;
         }

@@ -373,6 +373,67 @@ describe("runAgentTurnWithFallback: provider failures", () => {
   );
 
   it.each(["tool_execution_started", "assistant_output_started"] as const)(
+    "does not replay a CLI timeout after %s",
+    async (phase) => {
+      state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+        params.onExecutionPhase?.({ phase });
+        throw new FailoverError("CLI exceeded timeout (600s) and was terminated.", {
+          reason: "timeout",
+          provider: "claude-cli",
+          code: "cli_overall_timeout",
+          cliTimeout: {
+            mode: "overall",
+            timeoutSeconds: 600,
+            observedActivity: true,
+            activeToolCount: phase === "tool_execution_started" ? 1 : 0,
+            backgroundTaskCount: 0,
+          },
+        });
+      });
+
+      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+      const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+
+      expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+      expect(result.kind).toBe("final");
+      if (result.kind === "final") {
+        expect(result.payload.text).toContain("overall turn limit");
+        expect(result.payload.text).toContain("did not replay this turn automatically");
+      }
+    },
+  );
+
+  it("warns about partial effects when an active CLI tool hits the no-output watchdog", async () => {
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      params.onExecutionPhase?.({ phase: "tool_execution_started" });
+      throw new FailoverError("CLI produced no output for 120s and was terminated.", {
+        reason: "timeout",
+        provider: "claude-cli",
+        code: "cli_no_output_timeout",
+        cliTimeout: {
+          mode: "no-output",
+          timeoutSeconds: 120,
+          observedActivity: true,
+          activeToolCount: 1,
+          backgroundTaskCount: 0,
+        },
+      });
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toContain("no-output watchdog");
+      expect(result.payload.text).toContain("1 active CLI tool call");
+      expect(result.payload.text).toMatch(/effects may be partial/i);
+      expect(result.payload.text).toContain("did not replay this turn automatically");
+    }
+  });
+
+  it.each(["tool_execution_started", "assistant_output_started"] as const)(
     "cancels the pending overload notice after %s",
     async (phase) => {
       vi.useFakeTimers();

@@ -294,7 +294,16 @@ function findRecoverableTab<
     params.adapter.urls.isRecoverableTab(tab, params.requestedMeetingUrl),
   );
   if (!params.requestedMeetingUrl) {
-    return candidates[0];
+    // Untargeted recovery also admits login fallbacks. Prefer a real meeting
+    // identity so browser enumeration order cannot select a sign-in tab first.
+    const meetingCandidates = candidates.filter((tab) =>
+      params.adapter.urls.normalizeForReuse(tab.url),
+    );
+    return (
+      meetingCandidates.find((tab) => params.adapter.urls.isPreferredJoinUrl(tab.url)) ??
+      meetingCandidates[0] ??
+      candidates[0]
+    );
   }
   const accountHint = params.adapter.urls.accountHint(params.requestedMeetingUrl);
   const accountCandidates = accountHint
