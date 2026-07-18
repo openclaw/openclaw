@@ -94,8 +94,7 @@ export async function loadMemoryWikiVaultIdentity(
             : typeof candidateParent === "string" && candidateParent.trim()
               ? candidateParent.trim()
               : undefined;
-        const candidateSourceGeneration =
-          parsed.details?.[COMPILED_CACHE_SOURCE_GENERATION_FIELD];
+        const candidateSourceGeneration = parsed.details?.[COMPILED_CACHE_SOURCE_GENERATION_FIELD];
         const normalizedSourceGeneration =
           typeof candidateSourceGeneration === "string" && candidateSourceGeneration.trim()
             ? candidateSourceGeneration.trim()

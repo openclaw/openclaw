@@ -104,9 +104,7 @@ async function seedCompiledDigest(params: {
     timestamp: "2026-07-17T00:00:00.000Z",
     details: { compiledCacheReservationId: reservationId },
   });
-  const sourceGeneration = await resolveMemoryWikiVaultSourceGeneration(
-    params.config.vault.path,
-  );
+  const sourceGeneration = await resolveMemoryWikiVaultSourceGeneration(params.config.vault.path);
   await appendMemoryWikiLog(params.config.vault.path, {
     type: "compile",
     timestamp: "2026-07-17T00:00:00.000Z",

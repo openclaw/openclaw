@@ -312,9 +312,7 @@ export function createMemoryWikiCompiledCacheStore(
       const durableIdentity = await loadDurableIdentity();
       if (durableIdentity.compiledCachePublicationId) {
         try {
-          await store.lookup(
-            publicationKey(ownerId, durableIdentity.compiledCachePublicationId),
-          );
+          await store.lookup(publicationKey(ownerId, durableIdentity.compiledCachePublicationId));
         } catch (error) {
           options.onReadError?.(error);
           throw error;
@@ -327,8 +325,7 @@ export function createMemoryWikiCompiledCacheStore(
       if (
         !confirmedIdentity.vaultGeneration ||
         confirmedIdentity.vaultGeneration !== durableIdentity.vaultGeneration ||
-        confirmedIdentity.compiledCachePublicationId !==
-          durableIdentity.compiledCachePublicationId
+        confirmedIdentity.compiledCachePublicationId !== durableIdentity.compiledCachePublicationId
       ) {
         activeVaults.delete(ownerId);
         return;
@@ -353,9 +350,7 @@ export function createMemoryWikiCompiledCacheStore(
     },
 
     async deletePublication(config, publicationId) {
-      await deleteKey(
-        publicationKey(resolveMemoryWikiCompiledCacheOwnerId(config), publicationId),
-      );
+      await deleteKey(publicationKey(resolveMemoryWikiCompiledCacheOwnerId(config), publicationId));
     },
 
     async deleteOwnersExcept(ownerIds) {

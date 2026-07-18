@@ -287,12 +287,7 @@ describe("Memory Wiki compiled cache lifecycle", () => {
         compiledCacheSourceGeneration: sourceGeneration,
       },
     });
-    await createCacheStore().write(
-      config,
-      nextSnapshot,
-      nextGeneration,
-      nextPublicationId,
-    );
+    await createCacheStore().write(config, nextSnapshot, nextGeneration, nextPublicationId);
 
     await expect(preparePrompt(config)).resolves.not.toContain("after");
     await activateVault(config);
@@ -335,12 +330,7 @@ describe("Memory Wiki compiled cache lifecycle", () => {
                   compiledCacheSourceGeneration: sourceGeneration,
                 },
               });
-              await externalStore.write(
-                config,
-                nextSnapshot,
-                nextGeneration,
-                nextPublicationId,
-              );
+              await externalStore.write(config, nextSnapshot, nextGeneration, nextPublicationId);
             }
             return entry;
           },
@@ -532,9 +522,7 @@ describe("Memory Wiki compiled cache lifecycle", () => {
     releaseCallback.resolve();
 
     await expect(staleWrite).rejects.toThrow("vault changed");
-    expect((await loadMemoryWikiCompiledCache(config))?.claims[0]?.text).toBe(
-      "accepted successor",
-    );
+    expect((await loadMemoryWikiCompiledCache(config))?.claims[0]?.text).toBe("accepted successor");
   });
 
   it("loads a prepared snapshot without prompt-path file I/O", async () => {
