@@ -42,6 +42,22 @@ describe("Microsoft Teams meeting platform adapter", () => {
     ).toBe(false);
   });
 
+  it("retries transcribe join readiness until live captions are enabled", () => {
+    const pending = {
+      captionCaptureRequested: true,
+      captioning: false,
+      inCall: true,
+    };
+
+    expect(TEAMS_MEETINGS_PLATFORM_ADAPTER.browser.shouldRetryJoinStatus?.(pending)).toBe(true);
+    expect(
+      TEAMS_MEETINGS_PLATFORM_ADAPTER.browser.shouldRetryJoinStatus?.({
+        ...pending,
+        captioning: true,
+      }),
+    ).toBe(false);
+  });
+
   it.each([
     ["camera", "Turn camera off", undefined, "on"],
     ["camera", "Turn camera on", undefined, "off"],
@@ -537,6 +553,35 @@ describe("Microsoft Teams meeting platform adapter", () => {
     expect(source.srcObject).toBe(replacementStream);
     expect(bridge.pause).toHaveBeenCalledOnce();
     expect(bridge.remove).toHaveBeenCalledOnce();
+  });
+
+  it("retires the page-owned audio bridge from the required URL-only leave callback", () => {
+    const stream = { getAudioTracks: () => [{ readyState: "live" }] };
+    const source = { muted: true, srcObject: stream };
+    const bridge = { pause: vi.fn(), remove: vi.fn(), srcObject: stream };
+    const { result, window } = runLeaveScript({
+      meetingSessionId: "",
+      postCall: control({ label: "Rejoin" }),
+      priorAudioOutputs: [
+        {
+          bridge,
+          sessionId: "session-1",
+          source,
+          sourceMuted: false,
+          stream,
+        },
+      ],
+      priorMeeting: {
+        identity: "teams-work:19:meeting_test@thread.v2",
+        sessionId: "session-1",
+      },
+    });
+
+    expect(result).toEqual({ departed: true, sessionMatched: true, urlMatched: true });
+    expect(source.muted).toBe(false);
+    expect(bridge.pause).toHaveBeenCalledOnce();
+    expect(bridge.remove).toHaveBeenCalledOnce();
+    expect(window).not.toHaveProperty("__openclawTeamsAudioOutputs");
   });
 
   it.each([

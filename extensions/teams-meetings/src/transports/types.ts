@@ -43,6 +43,7 @@ export type TeamsMeetingsChromeHealth = MeetingBrowserHealth<
   micMuted?: boolean;
   cameraOff?: boolean;
   lobbyWaiting?: boolean;
+  captionCaptureRequested?: boolean;
   captioning?: boolean;
   captionsEnabledAttempted?: boolean;
   transcriptLines?: number;

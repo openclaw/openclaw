@@ -584,6 +584,7 @@ export function teamsMeetingStatusCallSource(): string {
     micMuted,
     cameraOff,
     lobbyWaiting,
+    captionCaptureRequested: captureCaptions,
     captioning,
     captionsEnabledAttempted,
     transcriptLines,

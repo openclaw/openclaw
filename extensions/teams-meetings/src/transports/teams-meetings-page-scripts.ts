@@ -217,8 +217,12 @@ export function teamsMeetingLeaveScript(params: {
       ? window.__openclawTeamsAudioOutputs
       : [];
     const retained = [];
+    const activeSessionId = expectedSessionId || state?.sessionId;
     for (const entry of entries) {
-      if (entry?.sessionId !== expectedSessionId) {
+      const ownedByActiveSession = Boolean(
+        !entry?.sessionId || (activeSessionId && entry.sessionId === activeSessionId)
+      );
+      if (!ownedByActiveSession) {
         retained.push(entry);
         continue;
       }

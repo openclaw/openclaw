@@ -76,6 +76,10 @@ function parseBrowserStatus(result: unknown): TeamsMeetingsChromeHealth | undefi
     micMuted: typeof parsed.micMuted === "boolean" ? parsed.micMuted : undefined,
     cameraOff: typeof parsed.cameraOff === "boolean" ? parsed.cameraOff : undefined,
     lobbyWaiting: typeof parsed.lobbyWaiting === "boolean" ? parsed.lobbyWaiting : undefined,
+    captionCaptureRequested:
+      typeof parsed.captionCaptureRequested === "boolean"
+        ? parsed.captionCaptureRequested
+        : undefined,
     captioning: typeof parsed.captioning === "boolean" ? parsed.captioning : undefined,
     captionsEnabledAttempted:
       typeof parsed.captionsEnabledAttempted === "boolean"
@@ -289,9 +293,10 @@ export const TEAMS_MEETINGS_PLATFORM_ADAPTER: MeetingPlatformAdapter<
     classifyManualAction,
     shouldRetryJoinStatus: (health) =>
       health.inCall === true &&
-      health.manualActionReason === "teams-audio-choice-required" &&
-      !health.audioInputRouteError &&
-      !health.audioOutputRouteError,
+      ((health.manualActionReason === "teams-audio-choice-required" &&
+        !health.audioInputRouteError &&
+        !health.audioOutputRouteError) ||
+        (health.captionCaptureRequested === true && health.captioning !== true)),
     browserControlUnavailable: () => ({
       category: "browser-control-unavailable",
       reason: "browser-control-unavailable",
