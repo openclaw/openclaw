@@ -48,6 +48,7 @@ export type MeetingBrowserStatusScriptParams<Mode extends string> =
 export type MeetingBrowserLeaveStep = {
   departed: boolean;
   leaveAction?: "leave" | "confirm";
+  sessionConflict?: boolean;
   sessionMatched?: boolean;
   urlMatched?: boolean;
 };

@@ -30,6 +30,7 @@ async function leaveMeetingInPage<
   departed: boolean;
   clickedLeave: boolean;
   clickedConfirmation: boolean;
+  sessionConflict?: boolean;
   sessionMatched?: boolean;
   urlMatched?: boolean;
 }> {
@@ -63,6 +64,7 @@ async function leaveMeetingInPage<
         departed: false,
         clickedLeave,
         clickedConfirmation,
+        sessionConflict: step.sessionConflict,
         sessionMatched: false,
         urlMatched: step.urlMatched,
       };
@@ -147,6 +149,12 @@ export async function leaveMeetingWithBrowser<
       };
     }
     if (leaveResult.sessionMatched === false) {
+      if (leaveResult.sessionConflict !== true) {
+        return {
+          left: false,
+          note: `Browser control could not verify that the ${params.adapter.browserLabel} tab still belongs to this OpenClaw meeting session.`,
+        };
+      }
       return {
         left: true,
         note: `${params.adapter.browserLabel} tab belongs to another OpenClaw meeting session; left its current call untouched.`,

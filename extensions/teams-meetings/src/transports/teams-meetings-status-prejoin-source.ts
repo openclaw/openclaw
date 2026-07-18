@@ -78,7 +78,19 @@ export function teamsMeetingStatusPreludeSource(params: TeamsMeetingStatusPrelud
       : [];
   const restoreAudioBridgeSources = (entry) => {
     bridgeSources(entry).forEach((source) => {
-      if (source?.element) source.element.muted = Boolean(source.muted);
+      const element = source?.element;
+      if (!element) return;
+      const detachedLiveSource = Boolean(
+        element.isConnected === false &&
+        element.srcObject?.getAudioTracks?.().some((track) => track.readyState === "live")
+      );
+      if (detachedLiveSource) {
+        element.muted = true;
+        element.pause?.();
+        element.srcObject = null;
+        return;
+      }
+      element.muted = Boolean(source.muted);
     });
   };
   const retireAudioBridge = (entry, restoreSources = true) => {

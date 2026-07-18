@@ -60,8 +60,12 @@ export function teamsMeetingStatusCallSource(): string {
           for (const entry of previousBridgeEntries) {
             if (bridgeEntries.includes(entry)) continue;
             for (const source of bridgeSources(entry)) {
-              if (!source?.element || source.muted || !currentSources.has(source.element)) continue;
+              if (!source?.element || source.muted) continue;
+              const sourceStillPresent = currentSources.has(source.element);
+              const detachedLiveSource = !sourceStillPresent && Boolean(liveStream(source.element));
+              if (!sourceStillPresent && !detachedLiveSource) continue;
               suspendedBySource.set(source.element, {
+                detached: detachedLiveSource,
                 sessionId: entry.sessionId || sessionId,
                 source: source.element,
                 sourceMuted: false,
@@ -74,10 +78,10 @@ export function teamsMeetingStatusCallSource(): string {
             // One bridge owns one Teams playback element. Stream or element replacement
             // retires that bridge so it cannot keep playing or satisfy route verification.
             previousBridgeEntries.filter((entry) => !bridgeEntries.includes(entry)).forEach((entry) => {
-              const sourceStillPresent = bridgeSources(entry).some((source) =>
-                source?.element && currentSources.has(source.element)
+              const sourceRemainsSuspended = bridgeSources(entry).some((source) =>
+                source?.element && suspendedBySource.has(source.element)
               );
-              retireAudioBridge(entry, !sourceStillPresent);
+              retireAudioBridge(entry, !sourceRemainsSuspended);
             });
           }
           const routed = [];

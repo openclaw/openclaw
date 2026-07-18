@@ -373,7 +373,7 @@ describe("Microsoft Teams meeting audio routing", () => {
     ).toBe(replacementStream);
   });
 
-  it("restores and drops bridge ownership when its media element detaches", async () => {
+  it("keeps a detached live source muted until its stream ends", async () => {
     const stream = { getAudioTracks: () => [{ readyState: "live" }] };
     const source: PageMedia = {
       muted: false,
@@ -421,8 +421,20 @@ describe("Microsoft Teams meeting audio routing", () => {
       priorMeeting: first.window[MEETING_STATE_KEY] as Record<string, unknown>,
     });
     expect(second.result.audioOutputRouted).toBe(true);
+    expect(source.muted).toBe(true);
+    expect(second.window["__openclawTeamsAudioOutputs"]).toEqual([
+      expect.objectContaining({ detached: true, source, sourceMuted: false, suspended: true }),
+    ]);
+
+    source.srcObject = undefined;
+    const third = await runStatusScript({
+      ...params,
+      media: [directSource],
+      priorAudioOutputs: second.window["__openclawTeamsAudioOutputs"] as unknown[],
+      priorMeeting: second.window[MEETING_STATE_KEY] as Record<string, unknown>,
+    });
     expect(source.muted).toBe(false);
-    expect(second.window).not.toHaveProperty("__openclawTeamsAudioOutputs");
+    expect(third.window).not.toHaveProperty("__openclawTeamsAudioOutputs");
   });
 
   it("tears down audio bridges and restores sources after the call ends", async () => {

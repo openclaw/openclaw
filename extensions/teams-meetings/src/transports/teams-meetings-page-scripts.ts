@@ -198,8 +198,11 @@ export function teamsMeetingLeaveScript(params: { meetingSessionId: string; meet
   const expectedSessionId = ${JSON.stringify(params.meetingSessionId)};
   const currentIdentity = meetingIdentity(location.href);
   const state = window.__openclawTeamsMeeting;
-  if (!expectedSessionId || state?.sessionId !== expectedSessionId) {
+  if (!expectedSessionId || !state?.sessionId) {
     return JSON.stringify({ departed: false, sessionMatched: false, urlMatched: true });
+  }
+  if (state.sessionId !== expectedSessionId) {
+    return JSON.stringify({ departed: false, sessionConflict: true, sessionMatched: false, urlMatched: true });
   }
   const retireOwnedAudioBridges = () => {
     const entries = Array.isArray(window.__openclawTeamsAudioOutputs)
@@ -217,7 +220,19 @@ export function teamsMeetingLeaveScript(params: { meetingSessionId: string; meet
           ? [{ element: entry.source, muted: Boolean(entry.sourceMuted) }]
           : [];
       for (const source of sources) {
-        if (source?.element) source.element.muted = Boolean(source.muted);
+        const element = source?.element;
+        if (!element) continue;
+        const detachedLiveSource = Boolean(
+          element.isConnected === false &&
+          element.srcObject?.getAudioTracks?.().some((track) => track.readyState === "live")
+        );
+        if (detachedLiveSource) {
+          element.muted = true;
+          element.pause?.();
+          element.srcObject = null;
+        } else {
+          element.muted = Boolean(source.muted);
+        }
       }
       entry?.bridge?.pause?.();
       if (entry?.bridge) entry.bridge.srcObject = null;

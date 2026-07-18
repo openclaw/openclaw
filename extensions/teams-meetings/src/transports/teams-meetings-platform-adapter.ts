@@ -165,6 +165,7 @@ function classifyManualAction(health: TeamsMeetingsChromeHealth) {
 function parseLeaveResult(result: unknown): {
   departed: boolean;
   leaveAction?: "leave" | "confirm";
+  sessionConflict?: boolean;
   sessionMatched?: boolean;
   urlMatched?: boolean;
 } {
@@ -181,6 +182,9 @@ function parseLeaveResult(result: unknown): {
     return {
       departed: parsed.departed === true,
       ...(leaveAction ? { leaveAction } : {}),
+      ...(typeof parsed.sessionConflict === "boolean"
+        ? { sessionConflict: parsed.sessionConflict }
+        : {}),
       ...(typeof parsed.sessionMatched === "boolean"
         ? { sessionMatched: parsed.sessionMatched }
         : {}),

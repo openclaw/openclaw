@@ -376,6 +376,25 @@ describe("Microsoft Teams meeting platform adapter", () => {
       },
     });
 
+    expect(result).toEqual({
+      departed: false,
+      sessionConflict: true,
+      sessionMatched: false,
+      urlMatched: true,
+    });
+    expect(leave.clicks).toBe(0);
+  });
+
+  it("does not claim departure when page session ownership is missing", () => {
+    const leave = control({ label: "Leave" });
+    const { result } = runLeaveScript({
+      leave,
+      priorMeeting: {
+        identity: "teams-work:19:meeting_test@thread.v2",
+        sessionId: "",
+      },
+    });
+
     expect(result).toEqual({ departed: false, sessionMatched: false, urlMatched: true });
     expect(leave.clicks).toBe(0);
   });
@@ -383,6 +402,13 @@ describe("Microsoft Teams meeting platform adapter", () => {
   it("retires only the departing session's audio bridges", () => {
     const source = { muted: true };
     const bridge = { pause: vi.fn(), remove: vi.fn(), srcObject: {} };
+    const detachedSource = {
+      isConnected: false,
+      muted: true,
+      pause: vi.fn(),
+      srcObject: { getAudioTracks: () => [{ readyState: "live" }] },
+    };
+    const detachedBridge = { pause: vi.fn(), remove: vi.fn(), srcObject: {} };
     const foreignBridge = { sessionId: "session-2" };
     const { result, window } = runLeaveScript({
       postCall: control({ label: "Rejoin" }),
@@ -391,6 +417,12 @@ describe("Microsoft Teams meeting platform adapter", () => {
           bridge,
           sessionId: "session-1",
           source,
+          sourceMuted: false,
+        },
+        {
+          bridge: detachedBridge,
+          sessionId: "session-1",
+          source: detachedSource,
           sourceMuted: false,
         },
         foreignBridge,
@@ -406,6 +438,10 @@ describe("Microsoft Teams meeting platform adapter", () => {
     expect(bridge.pause).toHaveBeenCalledOnce();
     expect(bridge.remove).toHaveBeenCalledOnce();
     expect(bridge.srcObject).toBeNull();
+    expect(detachedSource.muted).toBe(true);
+    expect(detachedSource.pause).toHaveBeenCalledOnce();
+    expect(detachedSource.srcObject).toBeNull();
+    expect(detachedBridge.remove).toHaveBeenCalledOnce();
     expect(window["__openclawTeamsAudioOutputs"]).toEqual([foreignBridge]);
   });
 
