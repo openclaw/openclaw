@@ -114,7 +114,7 @@ describe("SQLite active transcript event projection", () => {
       "root",
       "active",
     ]);
-    expect(page.events.map((entry) => entry.seq)).toEqual([1, 2]);
+    expect(page.events.map((entry) => entry.seq)).toEqual([2, 4]);
     expect(page.totalMessages).toBe(2);
     expect(
       database.db
@@ -396,10 +396,11 @@ describe("SQLite active transcript event projection", () => {
     expect(tail).toMatchObject({
       kind: "page",
       events: [
-        { eventSeq: 3, seq: 3 },
-        { eventSeq: 4, seq: 4 },
+        { eventSeq: 3, seq: 4 },
+        { eventSeq: 4, seq: 5 },
       ],
       hasMore: true,
+      rawTranscriptSeq: 5,
       totalMessages: 4,
     });
     if (tail.kind !== "page") {
@@ -423,11 +424,12 @@ describe("SQLite active transcript event projection", () => {
     expect(older).toMatchObject({
       kind: "page",
       events: [
-        { eventSeq: 1, seq: 1 },
-        { eventSeq: 2, seq: 2 },
+        { eventSeq: 1, seq: 2 },
+        { eventSeq: 2, seq: 3 },
       ],
       generation: tail.generation,
       hasMore: false,
+      rawTranscriptSeq: 6,
       totalMessages: 5,
     });
 
@@ -668,15 +670,15 @@ describe("SQLite active transcript event projection", () => {
     expect(page.totalMessages).toBe(100_000);
     expect(page.events).toHaveLength(25);
     expect(page.events.map((entry) => entry.seq)).toEqual(
-      Array.from({ length: 25 }, (_, index) => 99_976 + index),
+      Array.from({ length: 25 }, (_, index) => 99_977 + index),
     );
     expect(recent.totalMessages).toBe(100_000);
     expect(recent.events).toHaveLength(10);
-    expect(recent.events.at(-1)?.seq).toBe(100_000);
+    expect(recent.events.at(-1)?.seq).toBe(100_001);
     expect(lineCappedRecent.events).toHaveLength(3);
-    expect(lineCappedRecent.events.at(-1)?.seq).toBe(100_000);
+    expect(lineCappedRecent.events.at(-1)?.seq).toBe(100_001);
     expect(readSessionTranscriptMessageEventCount(scope)).toBe(100_000);
-    expect(byId?.seq).toBe(100_000);
+    expect(byId?.seq).toBe(100_001);
     expect(anchor).toMatchObject({
       found: true,
       hasOverreadContext: true,
@@ -684,7 +686,7 @@ describe("SQLite active transcript event projection", () => {
       totalMessages: 100_000,
     });
     expect(anchor.events).toHaveLength(6);
-    expect(anchor.events.at(-1)?.seq).toBe(100_000);
+    expect(anchor.events.at(-1)?.seq).toBe(100_001);
 
     database.db
       .prepare("UPDATE transcript_events SET event_json = ? WHERE session_id = ? AND seq = 1")

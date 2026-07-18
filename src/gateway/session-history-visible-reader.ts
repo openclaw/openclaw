@@ -16,6 +16,7 @@ export type ReadVisibleSessionMessagesResult =
       hasMore: boolean;
       kind: "page";
       messages: unknown[];
+      rawTranscriptSeq: number;
       totalMessages: number;
       transcriptPath: string;
     }
@@ -55,6 +56,7 @@ export async function readVisibleSessionMessagesAsync(
     hasMore: result.hasMore,
     kind: "page",
     messages: entries.map(({ message }) => message),
+    rawTranscriptSeq: result.rawTranscriptSeq,
     totalMessages: result.totalMessages,
     transcriptPath: target.sessionFile,
   };
