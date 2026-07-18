@@ -442,7 +442,20 @@ describe("gateway startup config secret preflight", () => {
   });
 
   it("signals degradation for a snapshot activated by an external CAS owner", async () => {
-    const initial = preparedSnapshot(gatewayTokenConfig({}));
+    const initial = preparedSnapshot(
+      gatewayTokenConfig(
+        asConfig({
+          models: {
+            providers: {
+              openai: {
+                apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+                models: [],
+              },
+            },
+          },
+        }),
+      ),
+    );
     const candidate = {
       ...preparedSnapshotWithGatewayToken(initial.sourceConfig, "candidate-token"),
       degradedOwners: [
@@ -492,6 +505,162 @@ describe("gateway startup config secret preflight", () => {
       expect.stringContaining("[SECRETS_DEGRADED] stale provider:openai"),
       expect.objectContaining({ event: "secrets.degraded", state: "stale" }),
     );
+  });
+
+  it("does not recover an unrelated reload failure during provider-auth publication", async () => {
+    const config = gatewayTokenConfig({});
+    const initial = preparedSnapshot(config);
+    const candidate = preparedSnapshot(config);
+    const failure = new Error("gateway secret unavailable");
+    associateSecretResolutionErrorOwners(failure, [
+      {
+        ownerKind: "gateway",
+        ownerId: "ingress-auth",
+        state: "unavailable",
+        paths: ["gateway.auth.token"],
+        refKeys: ["env:default:GATEWAY_TOKEN"],
+        reason: "secret reference was not found",
+        degradationState: "cold",
+        failureMatched: true,
+        source: "config",
+      },
+    ]);
+    const emitStateEvent = vi.fn();
+    const activateRuntimeSecrets = runtimeSecretsActivatorForTest({
+      emitStateEvent,
+      prepareRuntimeSecretsSnapshot: vi.fn(async () => {
+        throw failure;
+      }),
+      activateRuntimeSecretsSnapshot: activateSecretsRuntimeSnapshotForTest,
+    });
+    activateSecretsRuntimeSnapshotForTest(initial);
+
+    await expect(
+      activateRuntimeSecrets(config, {
+        reason: "reload",
+        activate: false,
+        publishFailureAsDegraded: true,
+      }),
+    ).rejects.toThrow(failure.message);
+    const expectedRevision = getActiveSecretsRuntimeSnapshotRevision();
+    await expect(
+      activateProviderAuthRuntimeSnapshot({
+        snapshot: candidate,
+        expectedRevision,
+        activateSnapshotIfCurrent: () => {
+          activateSecretsRuntimeSnapshotForTest(candidate);
+          return true;
+        },
+      }),
+    ).resolves.toBe(true);
+
+    expect(emitStateEvent.mock.calls.map((call) => call[0])).toEqual(["SECRETS_RELOADER_DEGRADED"]);
+  });
+
+  it("promotes provider-auth degradation when a later full reload fails", async () => {
+    const config = gatewayTokenConfig(
+      asConfig({ models: { providers: { openai: { apiKey: "fixture", models: [] } } } }),
+    );
+    const initial = preparedSnapshot(config);
+    const providerDegraded = {
+      ...preparedSnapshot(config),
+      degradedOwners: [
+        {
+          ownerKind: "provider" as const,
+          ownerId: "openai",
+          state: "unavailable" as const,
+          paths: ["models.providers.openai.apiKey"],
+          refKeys: ["env:default:OPENAI_API_KEY"],
+          reason: "secret provider failed" as const,
+          degradationState: "stale" as const,
+        },
+      ],
+    };
+    const failure = new Error("gateway secret unavailable");
+    associateSecretResolutionErrorOwners(failure, [
+      {
+        ownerKind: "gateway",
+        ownerId: "ingress-auth",
+        state: "unavailable",
+        paths: ["gateway.auth.token"],
+        refKeys: ["env:default:GATEWAY_TOKEN"],
+        reason: "secret reference was not found",
+        degradationState: "cold",
+        failureMatched: true,
+        source: "config",
+      },
+    ]);
+    const emitStateEvent = vi.fn();
+    const activateRuntimeSecrets = runtimeSecretsActivatorForTest({
+      emitStateEvent,
+      prepareRuntimeSecretsSnapshot: vi.fn(async () => {
+        throw failure;
+      }),
+      activateRuntimeSecretsSnapshot: activateSecretsRuntimeSnapshotForTest,
+    });
+    activateSecretsRuntimeSnapshotForTest(initial);
+
+    await activateProviderAuthRuntimeSnapshot({
+      snapshot: providerDegraded,
+      expectedRevision: getActiveSecretsRuntimeSnapshotRevision(),
+      activateSnapshotIfCurrent: () => {
+        activateSecretsRuntimeSnapshotForTest(providerDegraded);
+        return true;
+      },
+    });
+    await expect(
+      activateRuntimeSecrets(config, {
+        reason: "reload",
+        activate: false,
+        publishFailureAsDegraded: true,
+      }),
+    ).rejects.toThrow(failure.message);
+    const recovered = preparedSnapshot(config);
+    await activateProviderAuthRuntimeSnapshot({
+      snapshot: recovered,
+      expectedRevision: getActiveSecretsRuntimeSnapshotRevision(),
+      activateSnapshotIfCurrent: () => {
+        activateSecretsRuntimeSnapshotForTest(recovered);
+        return true;
+      },
+    });
+
+    expect(emitStateEvent.mock.calls.map((call) => call[0])).toEqual(["SECRETS_RELOADER_DEGRADED"]);
+  });
+
+  it("does not publish web-tool degradation as provider-auth state", async () => {
+    const config = gatewayTokenConfig({});
+    const candidate = {
+      ...preparedSnapshot(config),
+      degradedOwners: [
+        {
+          ownerKind: "provider" as const,
+          ownerId: "web-search:external",
+          state: "unavailable" as const,
+          paths: ["plugins.entries.external.config.webSearch.apiKey"],
+          refKeys: ["env:default:EXTERNAL_SEARCH_REF"],
+          reason: "secret provider failed" as const,
+          degradationState: "stale" as const,
+        },
+      ],
+    };
+    const emitStateEvent = vi.fn();
+    runtimeSecretsActivatorForTest({
+      emitStateEvent,
+      prepareRuntimeSecretsSnapshot: vi.fn(),
+      activateRuntimeSecretsSnapshot: activateSecretsRuntimeSnapshotForTest,
+    });
+    activateSecretsRuntimeSnapshotForTest(candidate);
+
+    await expect(
+      activateProviderAuthRuntimeSnapshot({
+        snapshot: candidate,
+        expectedRevision: getActiveSecretsRuntimeSnapshotRevision(),
+        activateSnapshotIfCurrent: () => true,
+      }),
+    ).resolves.toBe(true);
+
+    expect(emitStateEvent).not.toHaveBeenCalled();
   });
 
   it("publishes prepared degradation only after the reload transaction commits", async () => {

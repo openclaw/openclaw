@@ -1,11 +1,10 @@
-/** Shared helpers for web-tool secret metadata resolution. */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef, type SecretRef } from "../config/types.secrets.js";
 import { createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
 import { setPathExistingStrict } from "./path-utils.js";
 import type { SecretDegradationReason } from "./runtime-degraded-state.js";
-import { digestSecretOwnerContract } from "./runtime-owner-contract.js";
+import { digestRuntimeWebOwnerContract } from "./runtime-owner-contract.js";
 import type { ResolverContext, SecretDefaults } from "./runtime-shared.js";
 import { pushInactiveSurfaceWarning, pushWarning } from "./runtime-shared.js";
 import {
@@ -33,9 +32,7 @@ const loadResolveManifestContractOwnerPluginId = createLazyRuntimeNamedExport(
   "resolveManifestContractOwnerPluginId",
 );
 
-/**
- * Metadata fields shared by runtime web search and fetch provider selection.
- */
+/** Metadata fields shared by runtime web search and fetch provider selection. */
 type RuntimeWebProviderMetadataBase<TSource extends string> = {
   providerConfigured?: string;
   providerSource: "configured" | "auto-detect" | "none";
@@ -398,12 +395,7 @@ export async function resolveRuntimeWebProviderSelection<
 
   const unavailableProviders: RuntimeWebUnavailableProvider[] = [];
   const resolveProviderContractDigest = (providerId: string) =>
-    digestSecretOwnerContract({
-      scopePath: params.scopePath,
-      configuredProvider: params.configuredProvider,
-      toolConfig: params.toolConfig,
-      provider: params.providers.find((entry) => entry.id === providerId),
-    });
+    digestRuntimeWebOwnerContract({ ...params, providerId });
   let selectedProvider: string | undefined;
   let selectedPath: string | undefined;
   let selectedResolution: SecretResolutionResult<TSource> | undefined;

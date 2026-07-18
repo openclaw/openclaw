@@ -102,6 +102,7 @@ function createChannelAccountSecretOwner(
   accountId: string,
   channel: Record<string, unknown>,
   account: Record<string, unknown>,
+  contract?: unknown,
 ): SecretAssignmentOwner {
   const { accounts: _accounts, ...channelDefaults } = channel;
   return {
@@ -109,7 +110,7 @@ function createChannelAccountSecretOwner(
     ownerId: `${channelKey}:${normalizeAccountId(accountId)}`,
     requiredForGateway: false,
     disposition: "isolate",
-    contract: { channel: channelDefaults, account },
+    contract: contract ?? { channel: channelDefaults, account },
   };
 }
 
@@ -235,6 +236,13 @@ function collectTopLevelChannelFieldAssignments(params: {
   }
   // One inherited ref can own several accounts. Duplicate only the assignment metadata so a
   // failed shared credential degrades every consumer without collapsing unrelated accounts.
+  const { accounts: _accounts, ...channelDefaults } = params.channel;
+  const inheritedContract = {
+    channel: channelDefaults,
+    consumers: owners
+      .map(({ accountId, account }) => ({ accountId: normalizeAccountId(accountId), account }))
+      .toSorted((left, right) => left.accountId.localeCompare(right.accountId)),
+  };
   for (const { accountId, account } of owners) {
     collectSecretInputAssignment({
       value: params.value,
@@ -242,7 +250,13 @@ function collectTopLevelChannelFieldAssignments(params: {
       expected: params.expected,
       defaults: params.defaults,
       context: params.context,
-      owner: createChannelAccountSecretOwner(params.channelKey, accountId, params.channel, account),
+      owner: createChannelAccountSecretOwner(
+        params.channelKey,
+        accountId,
+        params.channel,
+        account,
+        inheritedContract,
+      ),
       apply: params.apply,
     });
   }

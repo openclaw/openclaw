@@ -804,6 +804,50 @@ describe("runtime web tools resolution", () => {
     ]);
   });
 
+  it("does not reuse a web credential after its plugin routing config changes", async () => {
+    const pluginId = "external.search";
+    const provider: PluginWebSearchProviderEntry = {
+      ...createTestProvider({ provider: "brave", pluginId, order: 10 }),
+      id: "external",
+    };
+    resolvePluginWebSearchProvidersMock.mockReturnValue([provider]);
+    loadInstalledPluginIndexInstallRecordsSyncMock.mockReturnValue({
+      [pluginId]: { source: "npm", spec: "@openclaw/external-search" },
+    });
+    resolveManifestContractOwnerPluginIdMock.mockReturnValue(undefined);
+    const config = (baseUrl: string) =>
+      asConfig({
+        tools: { web: { search: { enabled: true, provider: "external" } } },
+        plugins: {
+          entries: {
+            [pluginId]: {
+              config: {
+                webSearch: {
+                  baseUrl,
+                  apiKey: { source: "env", provider: "default", id: "EXTERNAL_SEARCH_REF" },
+                },
+              },
+            },
+          },
+        },
+      });
+    const activeConfig = config("https://old.example.invalid/v1");
+    const active = await runRuntimeWebTools({
+      config: activeConfig,
+      env: { EXTERNAL_SEARCH_REF: "web-last-known-good" },
+    });
+    activateRuntimeWebToolsResult(activeConfig, active);
+
+    const failed = await runRuntimeWebTools({
+      config: config("https://new.example.invalid/v1"),
+      allowUnavailableSecretOwners: true,
+    });
+
+    expect(failed.degradedOwners).toMatchObject([
+      { ownerId: "web-search:external", degradationState: "cold" },
+    ]);
+  });
+
   it("resolves selected provider SecretRef even when provider config is disabled", async () => {
     const { metadata, resolvedConfig, context } = await runRuntimeWebTools({
       config: asConfig({

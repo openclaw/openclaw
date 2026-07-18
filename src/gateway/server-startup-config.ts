@@ -1,6 +1,7 @@
 // Gateway startup config loads, repairs, validates, and activates runtime config
 // plus secrets snapshots before the server exposes user-facing surfaces.
 import { isDeepStrictEqual } from "node:util";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { applyConfigOverrides } from "../config/runtime-overrides.js";
 import type { GatewayAuthConfig, GatewayTailscaleConfig } from "../config/types.gateway.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
@@ -80,6 +81,8 @@ type DeferredSecretsStateTransition =
       activationRevision: number;
       degradationGeneration: number;
     };
+
+type SecretsStateScope = "full" | "provider-auth";
 
 /** Gateway startup hook that prepares secrets and optionally activates the prepared snapshot. */
 export type ActivateRuntimeSecrets = ((
@@ -172,6 +175,7 @@ export function createRuntimeSecretsActivator(params: {
   let activeDegradationGeneration: number | null = null;
   let activeDegradationConfig: OpenClawConfig | null = null;
   let activeDegradationSupportsSourceOnlyRecovery = false;
+  let activeDegradationScope: SecretsStateScope | null = null;
   const deferredStateTransitions = new WeakMap<object, DeferredSecretsStateTransition>();
   let secretsActivationTail: Promise<void> = Promise.resolve();
   const loadSecretsRuntime = createLazyPromise(() => import("../secrets/runtime.js"), {
@@ -200,10 +204,15 @@ export function createRuntimeSecretsActivator(params: {
     return (await loadSecretsRuntime()).activateSecretsRuntimeSnapshot;
   };
 
-  const publishRecovery = (config: OpenClawConfig, expectedGeneration?: number) => {
+  const publishRecovery = (
+    config: OpenClawConfig,
+    expectedGeneration?: number,
+    scope: SecretsStateScope = "full",
+  ) => {
     if (
       !secretsDegraded ||
-      (expectedGeneration !== undefined && activeDegradationGeneration !== expectedGeneration)
+      (expectedGeneration !== undefined && activeDegradationGeneration !== expectedGeneration) ||
+      (scope === "provider-auth" && activeDegradationScope !== "provider-auth")
     ) {
       return;
     }
@@ -215,11 +224,13 @@ export function createRuntimeSecretsActivator(params: {
     activeDegradationGeneration = null;
     activeDegradationConfig = null;
     activeDegradationSupportsSourceOnlyRecovery = false;
+    activeDegradationScope = null;
   };
 
   const publishDegradation = (
     prepared: PreparedRuntimeSecretsSnapshot,
     reason: RuntimeSecretsActivationParams["reason"],
+    scope: SecretsStateScope = "full",
   ) => {
     for (const owner of prepared.degradedOwners ?? []) {
       logSecretDegradation(params.logSecrets, {
@@ -231,6 +242,9 @@ export function createRuntimeSecretsActivator(params: {
       });
     }
     if (reason === "startup") {
+      return;
+    }
+    if (scope === "provider-auth" && activeDegradationScope === "full") {
       return;
     }
     if (!secretsDegraded) {
@@ -248,6 +262,7 @@ export function createRuntimeSecretsActivator(params: {
     secretsDegraded = true;
     activeDegradationGeneration = ++degradationGeneration;
     activeDegradationConfig = structuredClone(prepared.sourceConfig);
+    activeDegradationScope = scope;
   };
 
   const finishPreparedSnapshot = async (
@@ -257,6 +272,8 @@ export function createRuntimeSecretsActivator(params: {
       activateRuntimeSecretsSnapshot?: (snapshot: PreparedRuntimeSecretsSnapshot) => void;
       onActivated?: () => void;
       alreadyActivated?: boolean;
+      stateScope?: SecretsStateScope;
+      stateDegradedOwners?: PreparedRuntimeSecretsSnapshot["degradedOwners"];
     },
   ) => {
     assertRuntimeGatewayAuthNotKnownWeak(prepared.config);
@@ -274,7 +291,11 @@ export function createRuntimeSecretsActivator(params: {
     for (const warning of prepared.warnings) {
       params.logSecrets.warn(`[${warning.code}] ${warning.message}`);
     }
-    if (activationParams.activate && (prepared.degradedOwners?.length ?? 0) > 0) {
+    const statePrepared = options?.stateDegradedOwners
+      ? { ...prepared, degradedOwners: options.stateDegradedOwners }
+      : prepared;
+    const stateScope = options?.stateScope ?? "full";
+    if (activationParams.activate && (statePrepared.degradedOwners?.length ?? 0) > 0) {
       if (activationParams.deferStatePublication === true) {
         deferredStateTransitions.set(prepared, {
           kind: "degraded",
@@ -282,7 +303,7 @@ export function createRuntimeSecretsActivator(params: {
           reason: activationParams.reason,
         });
       } else {
-        publishDegradation(prepared, activationParams.reason);
+        publishDegradation(statePrepared, activationParams.reason, stateScope);
       }
     } else if (activationParams.activate && secretsDegraded) {
       if (activationParams.deferStatePublication === true) {
@@ -294,7 +315,7 @@ export function createRuntimeSecretsActivator(params: {
           });
         }
       } else {
-        publishRecovery(prepared.config);
+        publishRecovery(prepared.config, undefined, stateScope);
       }
     }
     return prepared;
@@ -338,6 +359,7 @@ export function createRuntimeSecretsActivator(params: {
         secretsDegraded = true;
         activeDegradationGeneration = ++degradationGeneration;
         activeDegradationConfig = structuredClone(eventConfig);
+        activeDegradationScope = "full";
       }
     }
     if (activationParams.reason === "startup") {
@@ -517,8 +539,26 @@ export function createRuntimeSecretsActivator(params: {
       hasCurrentAuthStoreCredentialsRevision(snapshot),
     assertValid: (snapshot) => assertRuntimeGatewayAuthNotKnownWeak(snapshot.config),
     publish: async (snapshot) => {
+      const modelProviderOwnerIds = new Set(
+        Object.keys(snapshot.sourceConfig.models?.providers ?? {}).map(
+          (providerId) => normalizeOptionalLowercaseString(providerId) ?? providerId,
+        ),
+      );
+      const authOwnerIds = new Set(
+        snapshot.authStores.flatMap(({ agentDir, store }) =>
+          Object.keys(store.profiles).map((profileId) =>
+            resolveAuthProfileSecretOwnerId({ agentDir, profileId }),
+          ),
+        ),
+      );
       await finishPreparedSnapshot(snapshot, providerAuthActivationParams, {
         alreadyActivated: true,
+        stateScope: "provider-auth",
+        stateDegradedOwners: (snapshot.degradedOwners ?? []).filter(
+          (owner) =>
+            (owner.ownerKind === "provider" && modelProviderOwnerIds.has(owner.ownerId)) ||
+            (owner.ownerKind === "account" && authOwnerIds.has(owner.ownerId)),
+        ),
       });
     },
     onError: (error, snapshot) =>
