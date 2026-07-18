@@ -697,18 +697,13 @@ function teardownFlushConfigDraft(
   client: GatewayBrowserClient,
   baseHash: string,
 ): void {
-  const send = () => {
-    const raw = serializeFormForSubmit(state);
-    void client.request("config.set", { raw, baseHash }).catch(() => undefined);
-  };
-  // Best-effort flush still defers to a pending JSON5 original parse so the
-  // sanitize step never submits unrestorable redaction placeholders.
-  const pending = state.configRawOriginalParsePending;
-  if (pending) {
-    void pending.then(send);
-    return;
-  }
-  send();
+  // Must stay synchronous: page unload destroys the context before any
+  // deferred work runs. If a JSON5 original parse is still pending, sanitize
+  // passes placeholders through; the gateway restores restorable sentinels
+  // (restoreRedactedValues) and rejects unrestorable ones, so the worst case
+  // matches not flushing at all while the common case saves the draft.
+  const raw = serializeFormForSubmit(state);
+  void client.request("config.set", { raw, baseHash }).catch(() => undefined);
 }
 
 /**

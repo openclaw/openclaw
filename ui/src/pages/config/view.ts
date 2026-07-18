@@ -46,7 +46,7 @@ import {
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import type { ConfigAutoSaveStatus } from "../../lib/config/index.ts";
-import { parseJson5Text, warmJson5 } from "../../lib/json5-runtime.ts";
+import { isJson5Warm, parseJson5Text, warmJson5 } from "../../lib/json5-runtime.ts";
 import type { RealtimeTalkInputDevice } from "../chat/realtime-talk-input.ts";
 import { renderSettingsSelectRow } from "./settings-select-row.ts";
 import {
@@ -770,7 +770,12 @@ function computeRawDiff(
     viewState.rawDiffCache = { original, current, diff };
     return diff;
   } catch {
-    viewState.rawDiffCache = { original, current, diff: [] };
+    // While the lazy JSON5 parser is still loading, a parse failure may be
+    // transient; skip the cache so the next render retries instead of pinning
+    // an empty diff for this text pair.
+    if (isJson5Warm()) {
+      viewState.rawDiffCache = { original, current, diff: [] };
+    }
     return [];
   }
 }

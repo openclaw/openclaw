@@ -5,6 +5,10 @@ type Json5Module = { parse: (text: string) => unknown };
 let json5: Json5Module | null = null;
 let json5Loading: Promise<Json5Module> | null = null;
 
+export function isJson5Warm(): boolean {
+  return json5 !== null;
+}
+
 export function warmJson5(): Promise<Json5Module> {
   json5Loading ??= import("json5").then((mod) => {
     json5 = mod.default;
