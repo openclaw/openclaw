@@ -81,7 +81,7 @@ type SlackTestState = {
 // keeps every module incarnation and the cached client converged.
 const slackTestState: SlackTestState = vi.hoisted(() => {
   const globalState = globalThis as { __slackTestState?: SlackTestState };
-  globalState.__slackTestState ??= {
+  globalState["__slackTestState"] ??= {
     config: {} as Record<string, unknown>,
     appConstructorArgs: undefined,
     appStartMock: vi.fn(),
@@ -98,7 +98,7 @@ const slackTestState: SlackTestState = vi.hoisted(() => {
     socketModeLogger: undefined,
     createSlackStartupAuthClientMock: vi.fn(),
   } as SlackTestState;
-  return globalState.__slackTestState;
+  return globalState["__slackTestState"];
 });
 
 export const getSlackTestState = (): SlackTestState => slackTestState;
@@ -256,7 +256,7 @@ export async function stopSlackMonitor(params: {
   await params.run;
   // A stopped provider's handlers must not satisfy the next start's
   // waitForSlackEvent — see the reset-time clear above.
-  (globalThis as { __slackHandlers?: Map<string, SlackHandler> }).__slackHandlers?.clear();
+  (globalThis as { __slackHandlers?: Map<string, SlackHandler> })["__slackHandlers"]?.clear();
 }
 
 async function runSlackEventOnce(
@@ -311,7 +311,7 @@ export function resetSlackTestState(config: Record<string, unknown> = defaultSla
   // with isolate=false a stale "message" handler makes waitForSlackEvent
   // return before THIS test's provider registers, dispatching through the old
   // provider's closure config (reactions silently suppressed, replies fine).
-  (globalThis as { __slackHandlers?: Map<string, SlackHandler> }).__slackHandlers?.clear();
+  (globalThis as { __slackHandlers?: Map<string, SlackHandler> })["__slackHandlers"]?.clear();
   if (lastSlackTestStateDir) {
     fs.rmSync(lastSlackTestStateDir, { recursive: true, force: true });
   }
