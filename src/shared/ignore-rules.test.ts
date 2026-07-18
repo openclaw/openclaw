@@ -114,7 +114,9 @@ describe("addIgnoreRules", () => {
       const nestedDir = path.join(tempDir, name);
       fs.mkdirSync(nestedDir);
       fs.writeFileSync(path.join(nestedDir, ".gitignore"), oversized, "utf-8");
-      ig = addIgnoreRules(nestedDir, tempDir, ig);
+      ig = ig
+        ? addIgnoreRules(nestedDir, tempDir, ig, { ignoreCase: true })
+        : addIgnoreRules(nestedDir, tempDir);
 
       expect(ig.ignores(name)).toBe(true);
       expect(ig.ignores(`${name}/secret.txt`)).toBe(true);
@@ -146,7 +148,7 @@ describe("addIgnoreRules", () => {
     const otherDir = path.join(tempDir, "Other");
     fs.mkdirSync(otherDir);
     fs.writeFileSync(path.join(otherDir, ".gitignore"), oversizedIgnoreFileContent(), "utf-8");
-    addIgnoreRules(otherDir, tempDir, ig);
+    addIgnoreRules(otherDir, tempDir, ig, { ignoreCase: false });
     expect(ig.ignores("Other/secret.txt")).toBe(true);
     expect(ig.ignores("other/secret.txt")).toBe(false);
   });
@@ -156,7 +158,7 @@ describe("addIgnoreRules", () => {
     fs.mkdirSync(nestedDir);
     fs.writeFileSync(path.join(nestedDir, ".gitignore"), oversizedIgnoreFileContent(), "utf-8");
 
-    const ig = addIgnoreRules(nestedDir, tempDir, ignore());
+    const ig = addIgnoreRules(nestedDir, tempDir, ignore(), { ignoreCase: true });
 
     expect(ig.ignores("Private/secret.txt")).toBe(true);
     expect(ig.ignores("private/secret.txt")).toBe(true);
@@ -169,7 +171,7 @@ describe("addIgnoreRules", () => {
     fs.mkdirSync(nestedDir);
     fs.writeFileSync(path.join(nestedDir, ".gitignore"), oversizedIgnoreFileContent(), "utf-8");
 
-    addIgnoreRules(nestedDir, tempDir, inherited);
+    addIgnoreRules(nestedDir, tempDir, inherited, { ignoreCase: true });
 
     expect(inherited.ignores("Private/secret.txt")).toBe(true);
     expect(inherited.ignores("private/secret.txt")).toBe(true);
@@ -182,7 +184,7 @@ describe("addIgnoreRules", () => {
     const ig = addIgnoreRules(nestedDir, tempDir);
 
     fs.writeFileSync(path.join(tempDir, ".gitignore"), "!locked/\n!locked/secret.txt\n", "utf-8");
-    addIgnoreRules(tempDir, tempDir, ig);
+    addIgnoreRules(tempDir, tempDir, ig, { ignoreCase: true });
 
     expect(ig.ignores("locked")).toBe(true);
     expect(ig.ignores("locked/secret.txt")).toBe(true);
@@ -197,7 +199,7 @@ describe("addIgnoreRules", () => {
     fs.writeFileSync(path.join(tempDir, ".gitignore"), "from-file\n", "utf-8");
     const configured = ignore().add("preconfigured");
 
-    const ig = addIgnoreRules(tempDir, tempDir, configured);
+    const ig = addIgnoreRules(tempDir, tempDir, configured, { ignoreCase: true });
 
     expect(ig).toBe(configured);
     expect(ig.ignores("preconfigured")).toBe(true);

@@ -19,7 +19,7 @@ const COMPLEX_IGNORE_FILE = Symbol("complexIgnoreFile");
 export type IgnoreMatcher = ReturnType<typeof ignore>;
 type IgnoreMatcherOptions = {
   /** Match node-ignore's ignorecase option for a supplied matcher. */
-  ignoreCase?: boolean;
+  ignoreCase: boolean;
 };
 
 type IgnoreMatcherState = {
@@ -201,16 +201,26 @@ function parseIgnorePatterns(
 export const toPosixPath = (pathValue: string) => pathValue.split(sep).join("/");
 
 /** Adds nested ignore-file rules to a matcher using paths relative to the scan root. */
+export function addIgnoreRules(dir: string, rootDir: string): IgnoreMatcher;
+export function addIgnoreRules(
+  dir: string,
+  rootDir: string,
+  ig: IgnoreMatcher,
+  options: IgnoreMatcherOptions,
+): IgnoreMatcher;
 export function addIgnoreRules(
   dir: string,
   rootDir: string,
   ig?: IgnoreMatcher,
-  options: IgnoreMatcherOptions = {},
+  options?: IgnoreMatcherOptions,
 ): IgnoreMatcher {
+  if (ig && !options) {
+    throw new Error("addIgnoreRules requires ignoreCase when a matcher is supplied");
+  }
   const matcher = ig ?? ignore();
   // node-ignore does not expose its configured case mode. Keep its default;
   // callers supplying ignorecase:false must carry that fact alongside it.
-  const state = getIgnoreMatcherState(matcher, options.ignoreCase ?? true);
+  const state = getIgnoreMatcherState(matcher, options?.ignoreCase ?? true);
   const relativeDir = relative(rootDir, dir);
   const prefix = relativeDir ? `${toPosixPath(relativeDir)}/` : "";
 
