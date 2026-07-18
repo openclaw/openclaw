@@ -180,6 +180,14 @@
     "target": "诊断导出"
   },
   {
+    "source": "Durable Core Beta 3 Architecture",
+    "target": "Durable Core Beta 3 架构"
+  },
+  {
+    "source": "Durable Core Beta 3 Test Plan",
+    "target": "Durable Core Beta 3 测试计划"
+  },
+  {
     "source": "Agent harness plugins",
     "target": "Agent harness plugins"
   },
