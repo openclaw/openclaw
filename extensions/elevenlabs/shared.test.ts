@@ -72,8 +72,6 @@ describe("normalizeElevenLabsBaseUrl", () => {
     expect(normalizeElevenLabsRealtimeBaseUrl("wss://realtime.example.com/")).toBe(
       "wss://realtime.example.com",
     );
-    expect(normalizeElevenLabsRealtimeBaseUrl("ws://localhost:8080/")).toBe(
-      "ws://localhost:8080",
-    );
+    expect(normalizeElevenLabsRealtimeBaseUrl("ws://localhost:8080/")).toBe("ws://localhost:8080");
   });
 });
