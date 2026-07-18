@@ -34443,7 +34443,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 187,
+      "line": 250,
       "path": "apps/macos/Sources/OpenClaw/RemotePortTunnel.swift",
       "source": "ssh tunnel exited before listening",
       "surface": "apple",
@@ -34451,7 +34451,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 203,
+      "line": 264,
       "path": "apps/macos/Sources/OpenClaw/RemotePortTunnel.swift",
       "source": "ssh tunnel did not open local port \\(localPort)",
       "surface": "apple",
@@ -34459,7 +34459,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 203,
+      "line": 264,
       "path": "apps/macos/Sources/OpenClaw/RemotePortTunnel.swift",
       "source": "ssh tunnel failed: \\(stderr)",
       "surface": "apple",
@@ -34467,7 +34467,7 @@
     },
     {
       "kind": "plist-string",
-      "line": 45,
+      "line": 47,
       "path": "apps/macos/Sources/OpenClaw/Resources/Info.plist",
       "source": "OpenClaw needs notification permission to show alerts for agent actions.",
       "surface": "apple",
@@ -34475,7 +34475,7 @@
     },
     {
       "kind": "plist-string",
-      "line": 47,
+      "line": 49,
       "path": "apps/macos/Sources/OpenClaw/Resources/Info.plist",
       "source": "OpenClaw captures the screen when the agent needs screenshots for context.",
       "surface": "apple",
@@ -34483,7 +34483,7 @@
     },
     {
       "kind": "plist-string",
-      "line": 49,
+      "line": 51,
       "path": "apps/macos/Sources/OpenClaw/Resources/Info.plist",
       "source": "OpenClaw can capture photos or short video clips when requested by the agent.",
       "surface": "apple",
@@ -34491,7 +34491,7 @@
     },
     {
       "kind": "plist-string",
-      "line": 55,
+      "line": 57,
       "path": "apps/macos/Sources/OpenClaw/Resources/Info.plist",
       "source": "OpenClaw can share your location when requested by the agent.",
       "surface": "apple",
@@ -34499,7 +34499,7 @@
     },
     {
       "kind": "plist-string",
-      "line": 57,
+      "line": 59,
       "path": "apps/macos/Sources/OpenClaw/Resources/Info.plist",
       "source": "OpenClaw uses the local network to connect to your remote OpenClaw gateway over LAN, Tailnet, or SSH.",
       "surface": "apple",
@@ -34507,7 +34507,7 @@
     },
     {
       "kind": "plist-string",
-      "line": 59,
+      "line": 61,
       "path": "apps/macos/Sources/OpenClaw/Resources/Info.plist",
       "source": "OpenClaw needs the mic for Voice Wake tests and agent audio capture.",
       "surface": "apple",
@@ -34515,7 +34515,7 @@
     },
     {
       "kind": "plist-string",
-      "line": 61,
+      "line": 63,
       "path": "apps/macos/Sources/OpenClaw/Resources/Info.plist",
       "source": "OpenClaw uses speech recognition to detect your Voice Wake trigger phrase.",
       "surface": "apple",
@@ -34523,7 +34523,7 @@
     },
     {
       "kind": "plist-string",
-      "line": 63,
+      "line": 65,
       "path": "apps/macos/Sources/OpenClaw/Resources/Info.plist",
       "source": "OpenClaw needs Automation (AppleScript) permission to drive Terminal and other apps for agent actions.",
       "surface": "apple",
@@ -34531,7 +34531,7 @@
     },
     {
       "kind": "plist-string",
-      "line": 65,
+      "line": 67,
       "path": "apps/macos/Sources/OpenClaw/Resources/Info.plist",
       "source": "OpenClaw can access Reminders when requested by the agent for the apple-reminders skill.",
       "surface": "apple",

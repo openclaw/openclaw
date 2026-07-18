@@ -1834,6 +1834,22 @@ html.openclaw-native-macos
   flex: none;
 }
 
+.sidebar-board-glyph {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: color-mix(in srgb, var(--accent) 76%, var(--muted));
+}
+
+.sidebar-board-glyph svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .sidebar-recent-session__name {
   flex: 1 1 auto;
   min-width: 0;

@@ -890,6 +890,45 @@ INSERT INTO device_identities VALUES (
     );
   });
 
+  it("adopts a canonical native PortGuardian seed without losing records", () => {
+    const stateDir = createTempStateDir();
+    const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+    fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+    const { DatabaseSync } = requireNodeSqlite();
+    const seed = new DatabaseSync(databasePath);
+    seed.exec(`
+CREATE TABLE macos_port_guardian_records (
+  pid INTEGER NOT NULL PRIMARY KEY,
+  port INTEGER NOT NULL,
+  command TEXT NOT NULL,
+  mode TEXT NOT NULL,
+  timestamp REAL NOT NULL
+) STRICT;
+CREATE INDEX idx_macos_port_guardian_records_port
+  ON macos_port_guardian_records(port, timestamp DESC);
+INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 'remote', 42.5);
+`);
+    seed.close();
+
+    const database = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+
+    expect(
+      database.db.prepare("SELECT * FROM macos_port_guardian_records WHERE pid = 4242").get(),
+    ).toEqual({
+      pid: 4242,
+      port: 18789,
+      command: "/usr/bin/ssh",
+      mode: "remote",
+      timestamp: 42.5,
+    });
+    expect(readSqliteNumberPragma(database.db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+    expect(collectSqliteSchemaShape(database.db)).toEqual(
+      createSqliteSchemaShapeFromSql(new URL("./openclaw-state-schema.sql", import.meta.url)),
+    );
+  });
+
   it("doctor migrates existing APNs tombstone tables to STRICT without losing rows", () => {
     const stateDir = createTempStateDir();
     const options = { env: { OPENCLAW_STATE_DIR: stateDir } };

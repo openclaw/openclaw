@@ -1,32 +1,15 @@
 import CryptoKit
 import Darwin
 import Foundation
+import OpenClawNativeState
 import SQLite3
 
 enum DeviceIdentitySQLiteStore {
-    // Keep aligned with OPENCLAW_STATE_SCHEMA_VERSION. Swift never upgrades this database.
-    private static let maximumSupportedSchemaVersion: Int64 = 4
     private static let busyTimeoutMilliseconds: Int32 = 5000
     private static let maximumLegacyIdentityBytes = 64 * 1024
     private static let maximumLegacyAuthBytes = 4 * 1024 * 1024
     private static let doctorClaimSuffix = ".doctor-importing"
     private static let nativeClaimSuffix = ".native-importing"
-    private static let tableName = "device_identities"
-    private static let indexName = "idx_device_identities_device"
-
-    private static let createSchemaSQL = """
-    CREATE TABLE IF NOT EXISTS device_identities (
-      identity_key TEXT NOT NULL PRIMARY KEY,
-      device_id TEXT NOT NULL,
-      public_key_pem TEXT NOT NULL,
-      private_key_pem TEXT NOT NULL,
-      created_at_ms INTEGER NOT NULL,
-      updated_at_ms INTEGER NOT NULL
-    ) STRICT;
-
-    CREATE INDEX IF NOT EXISTS idx_device_identities_device
-      ON device_identities(device_id, updated_at_ms DESC);
-    """
 
     private struct LegacyClaim {
         let source: DeviceIdentityPaths.LegacyIdentitySource
@@ -46,14 +29,6 @@ enum DeviceIdentitySQLiteStore {
     private struct LegacyAuthCandidate {
         let data: Data
         let store: DeviceAuthStoreFile
-    }
-
-    private struct Column: Equatable {
-        let name: String
-        let type: String
-        let notNull: Bool
-        let primaryKeyPosition: Int32
-        let hidden: Int32
     }
 
     private final class IdentityCoordinator {
@@ -118,6 +93,27 @@ enum DeviceIdentitySQLiteStore {
         beforeLegacyClaim: ((DeviceIdentityPaths.LegacyIdentitySource) throws -> Void)?,
         afterLegacyCommit: (() throws -> Void)?) throws -> DeviceIdentity
     {
+        do {
+            return try self.loadOrCreateNativeState(
+                databaseURL: databaseURL,
+                destinationStateDirURL: destinationStateDirURL,
+                profile: profile,
+                legacySources: legacySources,
+                beforeLegacyClaim: beforeLegacyClaim,
+                afterLegacyCommit: afterLegacyCommit)
+        } catch let error as OpenClawNativeStateError {
+            throw DeviceIdentityStore.storageError(error.message)
+        }
+    }
+
+    private static func loadOrCreateNativeState(
+        databaseURL: URL,
+        destinationStateDirURL: URL,
+        profile: GatewayDeviceIdentityProfile,
+        legacySources: [DeviceIdentityPaths.LegacyIdentitySource],
+        beforeLegacyClaim: ((DeviceIdentityPaths.LegacyIdentitySource) throws -> Void)?,
+        afterLegacyCommit: (() throws -> Void)?) throws -> DeviceIdentity
+    {
         try self.secureDirectory(destinationStateDirURL)
         try self.secureDirectory(databaseURL.deletingLastPathComponent())
         var claims: [LegacyClaim] = []
@@ -156,65 +152,42 @@ enum DeviceIdentitySQLiteStore {
         let generatedMaterial = claims.isEmpty ? DeviceIdentityStore.generateMaterial() : nil
         let writeTimestampMs = Int64(Date().timeIntervalSince1970 * 1000)
 
-        var database: OpaquePointer?
-        let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
-        let openResult = sqlite3_open_v2(databaseURL.path, &database, flags, nil)
-        guard openResult == SQLITE_OK, let database else {
-            let message = database.map { String(cString: sqlite3_errmsg($0)) } ?? "unknown SQLite error"
-            if let database { sqlite3_close(database) }
-            throw DeviceIdentityStore.storageError("Could not open device identity database: \(message)")
-        }
-        defer {
-            sqlite3_close(database)
-            try? self.secureDatabaseFiles(databaseURL)
-        }
-        guard sqlite3_busy_timeout(database, self.busyTimeoutMilliseconds) == SQLITE_OK else {
-            throw self.databaseError(database, operation: "configure SQLite busy timeout")
-        }
-        try self.secureDatabaseFiles(databaseURL)
-
-        try self.execute(database, sql: "BEGIN IMMEDIATE")
-        var committed = false
-        defer {
-            if !committed {
-                try? self.execute(database, sql: "ROLLBACK")
+        let database = try OpenClawNativeStateSQLite(databaseURL: databaseURL)
+        let authoritative = try database.withImmediateTransaction {
+            try database.ensureCanonicalTable(.deviceIdentities)
+            let existing = try self.readIdentity(database, key: profile.rawValue)
+            let selected: DeviceIdentityMaterial
+            if let existing {
+                if let migrated = claims.first?.material,
+                   !self.hasSameKeyMaterial(migrated, existing)
+                {
+                    throw DeviceIdentityStore.storageError(
+                        "Legacy device identity conflicts with SQLite identity key " +
+                            "\(profile.rawValue); source preserved")
+                }
+                selected = existing
+            } else {
+                guard let candidate = claims.first?.material ?? generatedMaterial else {
+                    throw DeviceIdentityStore.storageError("Device identity candidate is unavailable")
+                }
+                selected = candidate
+                try self.insertIdentity(
+                    database,
+                    key: profile.rawValue,
+                    material: selected,
+                    updatedAtMs: writeTimestampMs)
             }
-        }
 
-        try self.ensureSchema(database, allowFreshCreation: true)
-        let existing = try self.readIdentity(database, key: profile.rawValue)
-        let selected: DeviceIdentityMaterial
-        if let existing {
-            if let migrated = claims.first?.material,
-               !self.hasSameKeyMaterial(migrated, existing)
-            {
-                throw DeviceIdentityStore.storageError(
-                    "Legacy device identity conflicts with SQLite identity key \(profile.rawValue); source preserved")
+            // The row reread under the write transaction is authoritative. Never return generated
+            // or migrated key material unless SQLite reports the exact canonical receipt.
+            guard let authoritative = try self.readIdentity(database, key: profile.rawValue),
+                  authoritative == selected
+            else {
+                throw DeviceIdentityStore.storageError("SQLite did not preserve the authoritative device identity")
             }
-            selected = existing
-        } else {
-            guard let candidate = claims.first?.material ?? generatedMaterial else {
-                throw DeviceIdentityStore.storageError("Device identity candidate is unavailable")
-            }
-            selected = candidate
-            try self.insertIdentity(
-                database,
-                key: profile.rawValue,
-                material: selected,
-                updatedAtMs: writeTimestampMs)
+            try database.ensureCanonicalTable(.deviceIdentities, allowVersionZeroCreation: false)
+            return authoritative
         }
-
-        // The row reread under the write transaction is authoritative. Never return generated
-        // or migrated key material unless SQLite reports the exact canonical receipt.
-        guard let authoritative = try self.readIdentity(database, key: profile.rawValue),
-              authoritative == selected
-        else {
-            throw DeviceIdentityStore.storageError("SQLite did not preserve the authoritative device identity")
-        }
-        try self.ensureSchema(database, allowFreshCreation: false)
-        try self.execute(database, sql: "COMMIT")
-        committed = true
-        try self.secureDatabaseFiles(databaseURL)
 
         if !claims.isEmpty {
             try afterLegacyCommit?()
@@ -257,9 +230,17 @@ enum DeviceIdentitySQLiteStore {
         }
         do {
             guard sqlite3_busy_timeout(database, self.busyTimeoutMilliseconds) == SQLITE_OK else {
-                throw self.databaseError(database, operation: "configure device identity coordinator timeout")
+                throw DeviceIdentityStore.storageError(
+                    "Could not configure device identity coordinator timeout: " +
+                        String(cString: sqlite3_errmsg(database)))
             }
-            try self.execute(database, sql: "BEGIN EXCLUSIVE")
+            var errorMessage: UnsafeMutablePointer<CChar>?
+            guard sqlite3_exec(database, "BEGIN EXCLUSIVE", nil, nil, &errorMessage) == SQLITE_OK else {
+                let detail = errorMessage.map { String(cString: $0) }
+                    ?? String(cString: sqlite3_errmsg(database))
+                sqlite3_free(errorMessage)
+                throw DeviceIdentityStore.storageError("Could not acquire device identity coordinator: \(detail)")
+            }
             try self.secureFile(coordinatorURL)
             return IdentityCoordinator(database: database)
         } catch {
@@ -319,217 +300,54 @@ enum DeviceIdentitySQLiteStore {
         return canonical.standardizedFileURL.path
     }
 
-    private static func ensureSchema(_ database: OpaquePointer, allowFreshCreation: Bool) throws {
-        let userVersion = try self.queryInt64(database, sql: "PRAGMA user_version")
-        guard userVersion <= self.maximumSupportedSchemaVersion else {
-            let message =
-                "Device identity database uses newer schema version \(userVersion); " +
-                "this build supports \(self.maximumSupportedSchemaVersion)"
-            throw DeviceIdentityStore.storageError(message)
-        }
-
-        if try !self.schemaObjectExists(database, type: "table", name: self.tableName) {
-            let objectCount = try self.queryInt64(
-                database,
-                sql: "SELECT COUNT(*) FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'")
-            guard allowFreshCreation, userVersion == 0, objectCount == 0 else {
-                throw DeviceIdentityStore.storageError("Nonempty OpenClaw database is missing device_identities")
-            }
-            try self.execute(database, sql: self.createSchemaSQL)
-        }
-        try self.validateDatabaseOwnership(database, userVersion: userVersion)
-
-        let expectedColumns = [
-            Column(name: "identity_key", type: "TEXT", notNull: true, primaryKeyPosition: 1, hidden: 0),
-            Column(name: "device_id", type: "TEXT", notNull: true, primaryKeyPosition: 0, hidden: 0),
-            Column(name: "public_key_pem", type: "TEXT", notNull: true, primaryKeyPosition: 0, hidden: 0),
-            Column(name: "private_key_pem", type: "TEXT", notNull: true, primaryKeyPosition: 0, hidden: 0),
-            Column(name: "created_at_ms", type: "INTEGER", notNull: true, primaryKeyPosition: 0, hidden: 0),
-            Column(name: "updated_at_ms", type: "INTEGER", notNull: true, primaryKeyPosition: 0, hidden: 0),
-        ]
-        guard try self.tableColumns(database) == expectedColumns else {
-            throw DeviceIdentityStore.storageError("device_identities has an incompatible schema")
-        }
-        let tableSQL = try self.queryText(
-            database,
-            sql: "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'device_identities'") ?? ""
-        let normalizedTableSQL = tableSQL
-            .split(whereSeparator: \.isWhitespace)
-            .joined(separator: " ")
-            .uppercased()
-        guard normalizedTableSQL.hasSuffix(") STRICT") else {
-            throw DeviceIdentityStore.storageError("device_identities must be a STRICT table")
-        }
-        guard try self.validRequiredIndex(database) else {
-            throw DeviceIdentityStore.storageError("idx_device_identities_device has an incompatible schema")
-        }
-    }
-
-    private static func validateDatabaseOwnership(
-        _ database: OpaquePointer,
-        userVersion: Int64) throws
-    {
-        if userVersion == 0 {
-            let statement = try self.prepare(
-                database,
-                sql: """
-                SELECT type, name
-                FROM sqlite_schema
-                WHERE name NOT LIKE 'sqlite_%'
-                ORDER BY type, name
-                """)
-            defer { sqlite3_finalize(statement) }
-            var objects: [(String, String)] = []
-            while true {
-                let result = sqlite3_step(statement)
-                if result == SQLITE_DONE { break }
-                guard result == SQLITE_ROW else {
-                    throw self.databaseError(database, operation: "validate Swift identity database ownership")
-                }
-                try objects.append((
-                    self.requiredText(statement, column: 0, field: "schema object type"),
-                    self.requiredText(statement, column: 1, field: "schema object name")))
-            }
-            guard objects.count == 2,
-                  objects[0].0 == "index", objects[0].1 == self.indexName,
-                  objects[1].0 == "table", objects[1].1 == self.tableName
-            else {
-                throw DeviceIdentityStore.storageError(
-                    "Schema version zero database contains objects not owned by the Swift identity store")
-            }
-            return
-        }
-
-        let statement = try self.prepare(
-            database,
-            sql: "SELECT role, schema_version FROM schema_meta WHERE meta_key = 'primary' LIMIT 1")
-        defer { sqlite3_finalize(statement) }
-        guard sqlite3_step(statement) == SQLITE_ROW,
-              try self.requiredText(statement, column: 0, field: "schema role") == "global",
-              sqlite3_column_type(statement, 1) == SQLITE_INTEGER,
-              sqlite3_column_int64(statement, 1) == userVersion,
-              sqlite3_step(statement) == SQLITE_DONE
-        else {
-            throw DeviceIdentityStore.storageError(
-                "OpenClaw state database schema metadata does not match its global schema version")
-        }
-    }
-
-    private static func tableColumns(_ database: OpaquePointer) throws -> [Column] {
-        let statement = try self.prepare(database, sql: "PRAGMA table_xinfo('device_identities')")
-        defer { sqlite3_finalize(statement) }
-        var columns: [Column] = []
-        while true {
-            let result = sqlite3_step(statement)
-            if result == SQLITE_DONE { return columns }
-            guard result == SQLITE_ROW else {
-                throw self.databaseError(database, operation: "inspect device identity columns")
-            }
-            try columns.append(Column(
-                name: self.requiredText(statement, column: 1, field: "column name"),
-                type: self.requiredText(statement, column: 2, field: "column type").uppercased(),
-                notNull: sqlite3_column_int(statement, 3) == 1,
-                primaryKeyPosition: sqlite3_column_int(statement, 5),
-                hidden: sqlite3_column_int(statement, 6)))
-        }
-    }
-
-    private static func validRequiredIndex(_ database: OpaquePointer) throws -> Bool {
-        let list = try self.prepare(database, sql: "PRAGMA index_list('device_identities')")
-        defer { sqlite3_finalize(list) }
-        var found = false
-        while true {
-            let result = sqlite3_step(list)
-            if result == SQLITE_DONE { break }
-            guard result == SQLITE_ROW else {
-                throw self.databaseError(database, operation: "inspect device identity indexes")
-            }
-            let name = try self.requiredText(list, column: 1, field: "index name")
-            if name == self.indexName {
-                found = sqlite3_column_int(list, 2) == 0 && sqlite3_column_int(list, 4) == 0
-            }
-        }
-        guard found else { return false }
-
-        let details = try self.prepare(database, sql: "PRAGMA index_xinfo('idx_device_identities_device')")
-        defer { sqlite3_finalize(details) }
-        var keyColumns: [(String, Bool)] = []
-        while true {
-            let result = sqlite3_step(details)
-            if result == SQLITE_DONE { break }
-            guard result == SQLITE_ROW else {
-                throw self.databaseError(database, operation: "inspect device identity index columns")
-            }
-            guard sqlite3_column_int(details, 5) == 1 else { continue }
-            try keyColumns.append((
-                self.requiredText(details, column: 2, field: "index column"),
-                sqlite3_column_int(details, 3) == 1))
-        }
-        return keyColumns.count == 2
-            && keyColumns[0].0 == "device_id" && !keyColumns[0].1
-            && keyColumns[1].0 == "updated_at_ms" && keyColumns[1].1
-    }
-
     private static func readIdentity(
-        _ database: OpaquePointer,
+        _ database: OpenClawNativeStateSQLite,
         key: String) throws -> DeviceIdentityMaterial?
     {
-        let statement = try self.prepare(
-            database,
-            sql: """
-            SELECT device_id, public_key_pem, private_key_pem, created_at_ms, updated_at_ms
-            FROM device_identities
-            WHERE identity_key = ?
-            """)
-        defer { sqlite3_finalize(statement) }
-        try self.bindText(statement, index: 1, value: key, database: database)
-        let result = sqlite3_step(statement)
-        if result == SQLITE_DONE { return nil }
-        guard result == SQLITE_ROW else {
-            throw self.databaseError(database, operation: "read device identity")
-        }
-        guard sqlite3_column_type(statement, 3) == SQLITE_INTEGER,
-              sqlite3_column_type(statement, 4) == SQLITE_INTEGER,
-              sqlite3_column_int64(statement, 4) >= 0
+        let statement = try database.prepare("""
+        SELECT device_id, public_key_pem, private_key_pem, created_at_ms, updated_at_ms
+        FROM device_identities
+        WHERE identity_key = ?
+        """)
+        try statement.bindText(key, at: 1)
+        let result = try statement.step()
+        if result == .done { return nil }
+        guard statement.valueType(at: 3) == .integer,
+              statement.valueType(at: 4) == .integer,
+              statement.int64(at: 4) >= 0
         else {
             throw DeviceIdentityStore.storageError("SQLite device identity timestamps must be integers")
         }
         let material = try DeviceIdentityStore.material(
-            deviceId: self.requiredText(statement, column: 0, field: "device_id"),
-            publicKeyPEM: self.requiredText(statement, column: 1, field: "public_key_pem"),
-            privateKeyPEM: self.requiredText(statement, column: 2, field: "private_key_pem"),
-            createdAtMs: sqlite3_column_int64(statement, 3))
-        guard sqlite3_step(statement) == SQLITE_DONE else {
+            deviceId: statement.requiredText(at: 0, field: "device_id"),
+            publicKeyPEM: statement.requiredText(at: 1, field: "public_key_pem"),
+            privateKeyPEM: statement.requiredText(at: 2, field: "private_key_pem"),
+            createdAtMs: statement.int64(at: 3))
+        guard try statement.step() == .done else {
             throw DeviceIdentityStore.storageError("SQLite returned duplicate device identity keys")
         }
         return material
     }
 
     private static func insertIdentity(
-        _ database: OpaquePointer,
+        _ database: OpenClawNativeStateSQLite,
         key: String,
         material: DeviceIdentityMaterial,
         updatedAtMs: Int64) throws
     {
-        let statement = try self.prepare(
-            database,
-            sql: """
-            INSERT INTO device_identities (
-              identity_key, device_id, public_key_pem, private_key_pem, created_at_ms, updated_at_ms
-            ) VALUES (?, ?, ?, ?, ?, ?)
-            """)
-        defer { sqlite3_finalize(statement) }
-        try self.bindText(statement, index: 1, value: key, database: database)
-        try self.bindText(statement, index: 2, value: material.identity.deviceId, database: database)
-        try self.bindText(statement, index: 3, value: material.publicKeyPEM, database: database)
-        try self.bindText(statement, index: 4, value: material.privateKeyPEM, database: database)
-        guard sqlite3_bind_int64(statement, 5, material.identity.createdAtMs) == SQLITE_OK,
-              sqlite3_bind_int64(statement, 6, updatedAtMs) == SQLITE_OK
-        else {
-            throw self.databaseError(database, operation: "bind device identity timestamps")
-        }
-        guard sqlite3_step(statement) == SQLITE_DONE, sqlite3_changes(database) == 1 else {
-            throw self.databaseError(database, operation: "insert device identity")
+        let statement = try database.prepare("""
+        INSERT INTO device_identities (
+          identity_key, device_id, public_key_pem, private_key_pem, created_at_ms, updated_at_ms
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        """)
+        try statement.bindText(key, at: 1)
+        try statement.bindText(material.identity.deviceId, at: 2)
+        try statement.bindText(material.publicKeyPEM, at: 3)
+        try statement.bindText(material.privateKeyPEM, at: 4)
+        try statement.bindInt64(material.identity.createdAtMs, at: 5)
+        try statement.bindInt64(updatedAtMs, at: 6)
+        guard try statement.step() == .done, database.changes == 1 else {
+            throw DeviceIdentityStore.storageError("SQLite did not insert the device identity")
         }
     }
 
@@ -856,103 +674,6 @@ enum DeviceIdentitySQLiteStore {
                 "Could not restore legacy device identity: \(String(cString: strerror(renameError)))")
         }
     }
-
-    private static func schemaObjectExists(
-        _ database: OpaquePointer,
-        type: String,
-        name: String) throws -> Bool
-    {
-        let statement = try self.prepare(
-            database,
-            sql: "SELECT 1 FROM sqlite_schema WHERE type = ? AND name = ? LIMIT 1")
-        defer { sqlite3_finalize(statement) }
-        try self.bindText(statement, index: 1, value: type, database: database)
-        try self.bindText(statement, index: 2, value: name, database: database)
-        let result = sqlite3_step(statement)
-        if result == SQLITE_ROW { return true }
-        if result == SQLITE_DONE { return false }
-        throw self.databaseError(database, operation: "inspect SQLite schema")
-    }
-
-    private static func queryInt64(_ database: OpaquePointer, sql: String) throws -> Int64 {
-        let statement = try self.prepare(database, sql: sql)
-        defer { sqlite3_finalize(statement) }
-        guard sqlite3_step(statement) == SQLITE_ROW,
-              sqlite3_column_type(statement, 0) == SQLITE_INTEGER
-        else {
-            throw self.databaseError(database, operation: "read SQLite integer")
-        }
-        let value = sqlite3_column_int64(statement, 0)
-        guard sqlite3_step(statement) == SQLITE_DONE else {
-            throw DeviceIdentityStore.storageError("SQLite integer query returned multiple rows")
-        }
-        return value
-    }
-
-    private static func queryText(_ database: OpaquePointer, sql: String) throws -> String? {
-        let statement = try self.prepare(database, sql: sql)
-        defer { sqlite3_finalize(statement) }
-        let result = sqlite3_step(statement)
-        if result == SQLITE_DONE { return nil }
-        guard result == SQLITE_ROW else {
-            throw self.databaseError(database, operation: "read SQLite text")
-        }
-        let value = try self.requiredText(statement, column: 0, field: "query result")
-        guard sqlite3_step(statement) == SQLITE_DONE else {
-            throw DeviceIdentityStore.storageError("SQLite text query returned multiple rows")
-        }
-        return value
-    }
-
-    private static func execute(_ database: OpaquePointer, sql: String) throws {
-        var errorMessage: UnsafeMutablePointer<CChar>?
-        let result = sqlite3_exec(database, sql, nil, nil, &errorMessage)
-        guard result == SQLITE_OK else {
-            let detail = errorMessage.map { String(cString: $0) } ?? String(cString: sqlite3_errmsg(database))
-            sqlite3_free(errorMessage)
-            throw DeviceIdentityStore.storageError("SQLite operation failed: \(detail)")
-        }
-    }
-
-    private static func prepare(_ database: OpaquePointer, sql: String) throws -> OpaquePointer {
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK, let statement else {
-            throw self.databaseError(database, operation: "prepare SQLite statement")
-        }
-        return statement
-    }
-
-    private static func bindText(
-        _ statement: OpaquePointer,
-        index: Int32,
-        value: String,
-        database: OpaquePointer) throws
-    {
-        let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
-        guard sqlite3_bind_text(statement, index, value, -1, transient) == SQLITE_OK else {
-            throw self.databaseError(database, operation: "bind SQLite text")
-        }
-    }
-
-    private static func requiredText(
-        _ statement: OpaquePointer,
-        column: Int32,
-        field: String) throws -> String
-    {
-        guard sqlite3_column_type(statement, column) == SQLITE_TEXT,
-              let pointer = sqlite3_column_text(statement, column)
-        else {
-            throw DeviceIdentityStore.storageError("SQLite \(field) must be text")
-        }
-        return String(cString: pointer)
-    }
-
-    private static func databaseError(
-        _ database: OpaquePointer,
-        operation: String) -> NSError
-    {
-        DeviceIdentityStore.storageError("Could not \(operation): \(String(cString: sqlite3_errmsg(database)))")
-    }
 }
 
 extension DeviceIdentitySQLiteStore {
@@ -973,12 +694,5 @@ extension DeviceIdentitySQLiteStore {
         attributes[.protectionKey] = FileProtectionType.completeUntilFirstUserAuthentication
         #endif
         try FileManager.default.setAttributes(attributes, ofItemAtPath: url.path)
-    }
-
-    private static func secureDatabaseFiles(_ databaseURL: URL) throws {
-        try self.secureFile(databaseURL)
-        for suffix in ["-wal", "-shm", "-journal"] {
-            try self.secureFile(URL(fileURLWithPath: databaseURL.path + suffix, isDirectory: false))
-        }
     }
 }

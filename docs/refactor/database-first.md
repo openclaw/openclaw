@@ -1238,7 +1238,17 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   logs go to unified logging, and durable Gateway diagnostics stay SQLite-backed.
 - The macOS port-guardian record list now uses typed shared SQLite
   `macos_port_guardian_records` rows instead of an Application Support JSON file
-  or opaque singleton blob.
+  or opaque singleton blob. All macOS app profiles use the same host-global native
+  database because they coordinate machine-local ports. Every ledger operation
+  blocks while an older JSON-writing app copy is running. Migration joins the old
+  ledger's stable file-lock protocol only to snapshot and later revalidate the
+  source. It resolves every legacy row from live command and process-start facts
+  without holding that lock, then rereads authoritative SQLite rows, applies the
+  plan, verifies every receipt, and removes the source. Removal retries replan
+  missing rows so retired stale receipts cannot resurrect. The lock stays
+  short-lived so it cannot strand an older writer after SSH has spawned. Cutover is
+  intentionally one-way: steady-state runtime never reads, projects, or writes JSON,
+  and rollback to JSON-only builds does not preserve newer SQLite receipts.
 - Gateway singleton locks now use typed shared SQLite `state_leases` rows under
   the `gateway_locks` scope instead of temp-dir lock files. Fly and OAuth
   troubleshooting docs now point at the SQLite lease/auth refresh lock instead
