@@ -10439,6 +10439,11 @@
       "translated": "แชทใหม่ใน Worktree"
     },
     {
+      "id": "native.apple.a1b0d289758e2213",
+      "source": "Sessions…",
+      "translated": "เซสชัน…"
+    },
+    {
       "id": "native.apple.17c13312e7532c89",
       "source": "Background Tasks",
       "translated": "งานเบื้องหลัง"
@@ -10447,6 +10452,11 @@
       "id": "native.apple.ced228bb4d20a726",
       "source": "Export Transcript",
       "translated": "ส่งออกบันทึกการสนทนา"
+    },
+    {
+      "id": "native.apple.f26cef22f417abb4",
+      "source": "Show reasoning & tool activity",
+      "translated": "แสดงการให้เหตุผลและกิจกรรมของเครื่องมือ"
     },
     {
       "id": "native.apple.940e1f943750c94b",
@@ -13109,6 +13119,11 @@
       "translated": "เรียกใช้การทดสอบตัวเองของการแชร์"
     },
     {
+      "id": "native.apple.c2cab769e36ad25d",
+      "source": "Apple Health",
+      "translated": "สุขภาพ Apple"
+    },
+    {
       "id": "native.apple.dfbbe0f7c038894a",
       "source": "Discovery Debug Logs",
       "translated": "บันทึกดีบักการค้นพบ"
@@ -14299,6 +14314,36 @@
       "translated": "ไม่ต้องแสดงอีก"
     },
     {
+      "id": "native.apple.e80408b30ca670f4",
+      "source": "Apple Health Summaries",
+      "translated": "สรุปข้อมูลสุขภาพ Apple"
+    },
+    {
+      "id": "native.apple.1d9253b4d79e1a6b",
+      "source": "Apple Health data is unavailable on this device.",
+      "translated": "ข้อมูลสุขภาพ Apple ไม่พร้อมใช้งานบนอุปกรณ์นี้"
+    },
+    {
+      "id": "native.apple.f332b4fb6215a12a",
+      "source": "Reads steps, sleep, resting heart rate, and workouts from Apple Health only when a summary is requested. Only the aggregate leaves this device through your Gateway to your configured AI provider; raw samples stay on this device and results may remain in chat history.",
+      "translated": "อ่านข้อมูลจำนวนก้าว การนอนหลับ อัตราการเต้นของหัวใจขณะพัก และการออกกำลังกายจาก Apple Health เฉพาะเมื่อมีการขอสรุปเท่านั้น มีเพียงข้อมูลรวมที่ออกจากอุปกรณ์นี้ผ่าน Gateway ไปยังผู้ให้บริการ AI ที่คุณกำหนดค่าไว้ ส่วนข้อมูลตัวอย่างดิบจะยังคงอยู่ในอุปกรณ์นี้ และผลลัพธ์อาจยังคงอยู่ในประวัติการแชท"
+    },
+    {
+      "id": "native.apple.279758eb7531d811",
+      "source": "Creates read-only summaries from the Apple Health app for steps, sleep, resting heart rate, and workouts. Only requested summaries leave this device through your Gateway to your configured AI provider; raw samples stay on this device.",
+      "translated": "สร้างสรุปแบบอ่านอย่างเดียวจากแอปสุขภาพ Apple สำหรับจำนวนก้าว การนอนหลับ อัตราการเต้นของหัวใจขณะพัก และการออกกำลังกาย เฉพาะสรุปที่ขอเท่านั้นที่จะออกจากอุปกรณ์นี้ผ่าน Gateway ไปยังผู้ให้บริการ AI ที่คุณกำหนดค่าไว้ ส่วนตัวอย่างข้อมูลดิบจะยังคงอยู่ในอุปกรณ์นี้"
+    },
+    {
+      "id": "native.apple.9e29919ede21527e",
+      "source": "Turn Off Summaries",
+      "translated": "ปิดสรุปข้อมูล"
+    },
+    {
+      "id": "native.apple.c229e9c6fa7bac3b",
+      "source": "Enable Apple Health Summaries",
+      "translated": "เปิดใช้สรุปข้อมูลสุขภาพ Apple"
+    },
+    {
       "id": "native.apple.cf820096080f7031",
       "source": "OpenClaw uses your calendars to show events and scheduling context when you enable calendar access.",
       "translated": "OpenClaw ใช้ปฏิทินของคุณเพื่อแสดงกิจกรรมและบริบทการจัดกำหนดการเมื่อคุณเปิดใช้งานการเข้าถึงปฏิทิน"
@@ -14344,14 +14389,14 @@
       "translated": "OpenClaw อาจใช้ข้อมูลการเคลื่อนไหวเพื่อรองรับการโต้ตอบและระบบอัตโนมัติที่รับรู้ถึงอุปกรณ์"
     },
     {
-      "id": "native.apple.c86f7ba5b3762eb7",
-      "source": "After you enable Health Summaries, OpenClaw reads steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider.",
-      "translated": "หลังจากเปิดใช้สรุปข้อมูลสุขภาพ OpenClaw จะอ่านจำนวนก้าว การนอนหลับ อัตราการเต้นของหัวใจขณะพัก และการออกกำลังกาย เพื่อแชร์ข้อมูลสรุปรวมที่ร้องขอกับผู้ให้บริการ AI ที่คุณกำหนดค่าไว้"
+      "id": "native.apple.1d3a6099d7e11895",
+      "source": "OpenClaw reads your steps, sleep, resting heart rate, and workouts from the Apple Health app to create summaries you request and send them through your Gateway to your configured AI provider.",
+      "translated": "OpenClaw อ่านจำนวนก้าว การนอนหลับ อัตราการเต้นของหัวใจขณะพัก และการออกกำลังกายของคุณจากแอปสุขภาพ Apple เพื่อสร้างสรุปที่คุณขอและส่งผ่าน Gateway ไปยังผู้ให้บริการ AI ที่คุณกำหนดค่าไว้"
     },
     {
-      "id": "native.apple.89de9bad79f17038",
-      "source": "OpenClaw does not write or change Health data. Health Summaries read steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider.",
-      "translated": "OpenClaw ไม่เขียนหรือเปลี่ยนแปลงข้อมูล Health การสรุปสุขภาพจะอ่านจำนวนก้าว การนอน อัตราการเต้นของหัวใจขณะพัก และการออกกำลังกาย เพื่อแชร์ข้อมูลรวมที่ร้องขอกับผู้ให้บริการ AI ที่คุณกำหนดค่าไว้"
+      "id": "native.apple.c90a204b3232c401",
+      "source": "OpenClaw does not write to the Apple Health app. It uses read-only data to create summaries you request and send them through your Gateway to your configured AI provider.",
+      "translated": "OpenClaw ไม่เขียนข้อมูลลงในแอปสุขภาพ Apple โดยใช้ข้อมูลแบบอ่านอย่างเดียวเพื่อสร้างสรุปที่คุณขอและส่งผ่าน Gateway ไปยังผู้ให้บริการ AI ที่คุณกำหนดค่าไว้"
     },
     {
       "id": "native.apple.40ed4259ec869f1b",
@@ -15519,11 +15564,6 @@
       "translated": "เพิ่มได้เท่านั้น"
     },
     {
-      "id": "native.apple.33df187e4402065a",
-      "source": "Health Summaries",
-      "translated": "สรุปข้อมูลสุขภาพ"
-    },
-    {
       "id": "native.apple.0b10201d7e452dc4",
       "source": "Allow",
       "translated": "อนุญาต"
@@ -15532,31 +15572,6 @@
       "id": "native.apple.3cb9ed2ae352f95c",
       "source": "Open Settings",
       "translated": "เปิดการตั้งค่า"
-    },
-    {
-      "id": "native.apple.3f902cdb4d4e9176",
-      "source": "Health data is unavailable on this device.",
-      "translated": "ข้อมูลสุขภาพไม่พร้อมใช้งานบนอุปกรณ์นี้"
-    },
-    {
-      "id": "native.apple.33316ec020810816",
-      "source": "Shares only requested step, sleep, resting heart rate, and workout aggregates through your Gateway with your configured AI provider. Results may remain in chat history.",
-      "translated": "แชร์เฉพาะข้อมูลสรุปรวมที่ร้องขอเกี่ยวกับจำนวนก้าว การนอนหลับ อัตราการเต้นของหัวใจขณะพัก และการออกกำลังกายผ่าน Gateway ของคุณกับผู้ให้บริการ AI ที่กำหนดค่าไว้ ผลลัพธ์อาจยังคงอยู่ในประวัติการแชท"
-    },
-    {
-      "id": "native.apple.53fb25cb6e6aae6e",
-      "source": "Off by default. Enabling lets requested aggregates leave this iPhone through your Gateway and configured AI provider.",
-      "translated": "ปิดไว้เป็นค่าเริ่มต้น การเปิดใช้จะอนุญาตให้ข้อมูลสรุปรวมที่ร้องขอออกจาก iPhone เครื่องนี้ผ่าน Gateway และผู้ให้บริการ AI ที่คุณกำหนดค่าไว้"
-    },
-    {
-      "id": "native.apple.6c2be9b001fb95b0",
-      "source": "Disable",
-      "translated": "ปิดใช้"
-    },
-    {
-      "id": "native.apple.9eab20fbad55a0a9",
-      "source": "Enable & Share Summaries",
-      "translated": "เปิดใช้และแชร์สรุป"
     },
     {
       "id": "native.apple.d9f9a74e25431256",
@@ -18769,6 +18784,16 @@
       "translated": "เปิดใช้งานการกะพริบและขยับเล็กน้อยเมื่อไม่ได้ใช้งานบนไอคอนสถานะ"
     },
     {
+      "id": "native.apple.093df96ad9d52a40",
+      "source": "Quick Chat",
+      "translated": "แชทด่วน"
+    },
+    {
+      "id": "native.apple.a66e340b4e1bd972",
+      "source": "Show a floating composer for quick messages, summoned with a global shortcut.",
+      "translated": "แสดงช่องเขียนข้อความแบบลอยสำหรับส่งข้อความด่วน ซึ่งเรียกใช้ได้ด้วยปุ่มลัดส่วนกลาง"
+    },
+    {
       "id": "native.apple.d908ab245711bbd2",
       "source": "Quick Chat shortcut",
       "translated": "ปุ่มลัดแชตด่วน"
@@ -21104,9 +21129,9 @@
       "translated": "ส่งข้อความถึง \\(self.model.agentDisplay.name)"
     },
     {
-      "id": "native.apple.c1fec5e4735d8995",
-      "source": "main session",
-      "translated": "เซสชันหลัก"
+      "id": "native.apple.edf12ff583307f43",
+      "source": "Send a window screenshot",
+      "translated": "ส่งภาพหน้าจอของหน้าต่าง"
     },
     {
       "id": "native.apple.136cef9f750d3803",
@@ -22529,9 +22554,49 @@
       "translated": "ใช้บริบทไปแล้ว %@%%"
     },
     {
+      "id": "native.apple.e57eb66d14768bdb",
+      "source": "%@ (override)",
+      "translated": "%@ (แทนที่)"
+    },
+    {
       "id": "native.apple.510c6dfa05924ae2",
       "source": "Thinking",
       "translated": "กำลังคิด"
+    },
+    {
+      "id": "native.apple.e47fcaaf47e5d6bc",
+      "source": "Full",
+      "translated": "เต็ม"
+    },
+    {
+      "id": "native.apple.f434793807b778ce",
+      "source": "Verbosity",
+      "translated": "ระดับรายละเอียด"
+    },
+    {
+      "id": "native.apple.d3426c54f223c4d8",
+      "source": "Default (inherited)",
+      "translated": "ค่าเริ่มต้น (สืบทอด)"
+    },
+    {
+      "id": "native.apple.575a78c2f3daf366",
+      "source": "On",
+      "translated": "เปิด"
+    },
+    {
+      "id": "native.apple.75bebec90215a705",
+      "source": "Off",
+      "translated": "ปิด"
+    },
+    {
+      "id": "native.apple.17481e3865493e34",
+      "source": "Fast",
+      "translated": "เร็ว"
+    },
+    {
+      "id": "native.apple.e5f91b8690e705e2",
+      "source": "Fast responses",
+      "translated": "ตอบกลับอย่างรวดเร็ว"
     },
     {
       "id": "native.apple.745b004e0b5b6b80",
@@ -22544,14 +22609,14 @@
       "translated": "ล่าสุด"
     },
     {
-      "id": "native.apple.aa321cf4820426ef",
-      "source": "Models",
-      "translated": "โมเดล"
-    },
-    {
       "id": "native.apple.0fce9d743a640218",
       "source": "Model",
       "translated": "โมเดล"
+    },
+    {
+      "id": "native.apple.6045352c168e07cb",
+      "source": "Default",
+      "translated": "ค่าเริ่มต้น"
     },
     {
       "id": "native.apple.75550b03f06d6abc",
@@ -22719,6 +22784,41 @@
       "translated": "ใช้โทเค็นไป %@ รายการ"
     },
     {
+      "id": "native.apple.ccfd6ae994d82449",
+      "source": "Loading full message…",
+      "translated": "กำลังโหลดข้อความฉบับเต็ม…"
+    },
+    {
+      "id": "native.apple.669ad52de4a26b87",
+      "source": "Full message unavailable",
+      "translated": "ไม่สามารถดูข้อความฉบับเต็มได้"
+    },
+    {
+      "id": "native.apple.6f79794ee74caf99",
+      "source": "Full Message",
+      "translated": "ข้อความฉบับเต็ม"
+    },
+    {
+      "id": "native.apple.d648251591db5dec",
+      "source": "Close",
+      "translated": "ปิด"
+    },
+    {
+      "id": "native.apple.ba3963204bda5e84",
+      "source": "The full message is no longer available.",
+      "translated": "ข้อความฉบับเต็มไม่พร้อมใช้งานแล้ว"
+    },
+    {
+      "id": "native.apple.8bb98bd86ae85c1c",
+      "source": "The full message has no readable text.",
+      "translated": "ข้อความฉบับเต็มไม่มีข้อความที่อ่านได้"
+    },
+    {
+      "id": "native.apple.2f43669d87c0e26d",
+      "source": "The full message could not be loaded.",
+      "translated": "ไม่สามารถโหลดข้อความฉบับเต็มได้"
+    },
+    {
       "id": "native.apple.2c865ac4a69645d3",
       "source": "Widget unavailable",
       "translated": "วิดเจ็ตไม่พร้อมใช้งาน"
@@ -22792,6 +22892,11 @@
       "id": "native.apple.6b18ea1d85b5d3a2",
       "source": "Running tools…",
       "translated": "กำลังเรียกใช้เครื่องมือ…"
+    },
+    {
+      "id": "native.apple.51ef5e41f9124819",
+      "source": "Other",
+      "translated": "อื่นๆ"
     },
     {
       "id": "native.apple.3b932a47b4223a43",
@@ -23104,9 +23209,29 @@
       "translated": "ฟัง"
     },
     {
+      "id": "native.apple.f84b674ad395b694",
+      "source": "Jump to latest",
+      "translated": "ข้ามไปยังล่าสุด"
+    },
+    {
+      "id": "native.apple.429d825201b2cb85",
+      "source": "Jump to latest reply",
+      "translated": "ข้ามไปยังการตอบกลับล่าสุด"
+    },
+    {
+      "id": "native.apple.9ab586b85834705c",
+      "source": "Refresh",
+      "translated": "รีเฟรช"
+    },
+    {
       "id": "native.apple.fe9f30f12f1dcfaf",
       "source": "Copy Message",
       "translated": "คัดลอกข้อความ"
+    },
+    {
+      "id": "native.apple.90bc8a8045e7017e",
+      "source": "Open Full Message",
+      "translated": "เปิดข้อความฉบับเต็ม"
     },
     {
       "id": "native.apple.b37ec7bd7dc1579a",
@@ -23122,21 +23247,6 @@
       "id": "native.apple.3b44a67aa284886f",
       "source": "Assistant",
       "translated": "ผู้ช่วย"
-    },
-    {
-      "id": "native.apple.f84b674ad395b694",
-      "source": "Jump to latest",
-      "translated": "ข้ามไปยังล่าสุด"
-    },
-    {
-      "id": "native.apple.429d825201b2cb85",
-      "source": "Jump to latest reply",
-      "translated": "ข้ามไปยังการตอบกลับล่าสุด"
-    },
-    {
-      "id": "native.apple.9ab586b85834705c",
-      "source": "Refresh",
-      "translated": "รีเฟรช"
     },
     {
       "id": "native.apple.28c2691c03030434",
@@ -23254,6 +23364,11 @@
       "translated": "เซสชัน"
     },
     {
+      "id": "native.apple.c13dbe6b5c01e9bd",
+      "source": "%@ (override)",
+      "translated": "%@ (แทนที่)"
+    },
+    {
       "id": "native.apple.b1f10b5e9113881d",
       "source": "Thinking",
       "translated": "กำลังคิด"
@@ -23262,6 +23377,41 @@
       "id": "native.apple.48dde5fe65b841a3",
       "source": "Thinking level",
       "translated": "ระดับการคิด"
+    },
+    {
+      "id": "native.apple.ca556b80c9adcae8",
+      "source": "Full",
+      "translated": "เต็ม"
+    },
+    {
+      "id": "native.apple.1ae2d7073bba214b",
+      "source": "Verbosity",
+      "translated": "ระดับรายละเอียด"
+    },
+    {
+      "id": "native.apple.b56645c4fa60fe23",
+      "source": "Default (inherited)",
+      "translated": "ค่าเริ่มต้น (สืบทอด)"
+    },
+    {
+      "id": "native.apple.17277ea10fd23846",
+      "source": "On",
+      "translated": "เปิด"
+    },
+    {
+      "id": "native.apple.8f2830ece961d651",
+      "source": "Off",
+      "translated": "ปิด"
+    },
+    {
+      "id": "native.apple.0acac602f7cc68fc",
+      "source": "Fast",
+      "translated": "เร็ว"
+    },
+    {
+      "id": "native.apple.16e00cf511074484",
+      "source": "Fast responses",
+      "translated": "ตอบกลับอย่างรวดเร็ว"
     },
     {
       "id": "native.apple.17ea1ddec4a7b7a8",
@@ -23274,14 +23424,14 @@
       "translated": "ล่าสุด"
     },
     {
-      "id": "native.apple.f41f892742244520",
-      "source": "Models",
-      "translated": "โมเดล"
-    },
-    {
       "id": "native.apple.273aa7b9194a8d0d",
       "source": "Model",
       "translated": "โมเดล"
+    },
+    {
+      "id": "native.apple.68c4c3dd439d182b",
+      "source": "Default",
+      "translated": "ค่าเริ่มต้น"
     },
     {
       "id": "native.apple.eb58552e43c8dde2",
@@ -23349,9 +23499,14 @@
       "translated": "ส่งออกสำเนาบทสนทนา…"
     },
     {
-      "id": "native.apple.3294ababd29c4457",
-      "source": "Show reasoning & tool activity",
-      "translated": "แสดงกระบวนการให้เหตุผลและการทำงานของเครื่องมือ"
+      "id": "native.apple.ebb130189022c7ec",
+      "source": "Show Reasoning",
+      "translated": "แสดงกระบวนการให้เหตุผล"
+    },
+    {
+      "id": "native.apple.d0dba9aad550fa6e",
+      "source": "Show Tool Activity",
+      "translated": "แสดงกิจกรรมของเครื่องมือ"
     },
     {
       "id": "native.apple.4b24d792545e5086",

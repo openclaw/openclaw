@@ -25,26 +25,6 @@ internal data class PendingChatComposerSend(
   val inputSnapshot: String?,
 )
 
-internal data class ChatComposerSendPayload(
-  val inputSnapshot: String,
-  val message: String,
-  val attachments: List<PendingAttachment>,
-)
-
-/** Captures the owner stores at admission time; Compose values may lag a synchronous edit. */
-internal fun captureChatComposerSendPayload(
-  owner: ChatComposerOwner,
-  textDrafts: ChatComposerTextDraftStore,
-  attachmentStore: ChatComposerAttachmentStore,
-): ChatComposerSendPayload {
-  val inputSnapshot = textDrafts[owner]
-  return ChatComposerSendPayload(
-    inputSnapshot = inputSnapshot,
-    message = inputSnapshot.trim(),
-    attachments = attachmentStore.get(owner),
-  )
-}
-
 internal data class ChatComposerDraftSnapshot(
   val drafts: Map<ChatComposerOwner, String> = emptyMap(),
   val pendingSends: List<PendingChatComposerSend> = emptyList(),
@@ -266,74 +246,24 @@ internal fun ChatComposerOwner.matchesSession(
   return ownerKey == deletedKey && (this.agentId == agentId || !routingVerified)
 }
 
-internal class ChatComposerOwnerCheckpoint(
+/** One-shot owner lease for picker and voice results; requestId distinguishes recordings. */
+internal class ChatComposerMediaCheckpoint(
   var owner: ChatComposerOwner? = null,
+  private var requestId: String? = null,
   private var mediaAuthorizationId: String? = null,
 ) {
   fun begin(
     owner: ChatComposerOwner,
     mediaAuthorizationId: String,
+    requestId: String? = null,
   ) {
     this.owner = owner
+    this.requestId = requestId
     this.mediaAuthorizationId = mediaAuthorizationId
   }
 
-  fun consume(): ChatComposerMediaLease? {
-    val capturedOwner = owner ?: return null
-    val capturedAuthorizationId = mediaAuthorizationId ?: return null
-    return ChatComposerMediaLease(capturedOwner, capturedAuthorizationId).also { clear() }
-  }
-
-  fun clear() {
-    owner = null
-    mediaAuthorizationId = null
-  }
-
-  companion object {
-    val Saver =
-      listSaver<ChatComposerOwnerCheckpoint, String>(
-        save = { checkpoint ->
-          val capturedOwner = checkpoint.owner
-          val capturedAuthorizationId = checkpoint.mediaAuthorizationId
-          if (capturedOwner == null || capturedAuthorizationId == null) {
-            emptyList()
-          } else {
-            capturedOwner.toCheckpointValues() + capturedAuthorizationId
-          }
-        },
-        restore = { values ->
-          ChatComposerOwnerCheckpoint(
-            owner = chatComposerOwnerFromCheckpointValues(values.take(5)),
-            mediaAuthorizationId = values.getOrNull(5),
-          )
-        },
-      )
-  }
-}
-
-internal data class ChatComposerMediaLease(
-  val owner: ChatComposerOwner,
-  val authorizationId: String,
-)
-
-/** Binds an asynchronous voice-note preparation to the recording that started it. */
-internal class ChatVoiceNoteCommitCheckpoint {
-  var owner: ChatComposerOwner? = null
-  private var recordingId: String? = null
-  private var mediaAuthorizationId: String? = null
-
-  fun begin(
-    owner: ChatComposerOwner,
-    recordingId: String,
-    mediaAuthorizationId: String,
-  ) {
-    this.owner = owner
-    this.recordingId = recordingId
-    this.mediaAuthorizationId = mediaAuthorizationId
-  }
-
-  fun consume(recordingId: String): ChatComposerMediaLease? {
-    if (this.recordingId != recordingId) return null
+  fun consume(requestId: String? = null): ChatComposerMediaLease? {
+    if (this.requestId != requestId) return null
     val capturedOwner = owner ?: return null
     val capturedAuthorizationId = mediaAuthorizationId ?: return null
     return ChatComposerMediaLease(capturedOwner, capturedAuthorizationId).also { clear() }
@@ -347,11 +277,38 @@ internal class ChatVoiceNoteCommitCheckpoint {
         }
       }
     owner = null
-    recordingId = null
+    requestId = null
     mediaAuthorizationId = null
     return lease
   }
+
+  companion object {
+    val Saver =
+      listSaver<ChatComposerMediaCheckpoint, String>(
+        save = { checkpoint ->
+          val capturedOwner = checkpoint.owner
+          val capturedAuthorizationId = checkpoint.mediaAuthorizationId
+          if (capturedOwner == null || capturedAuthorizationId == null) {
+            emptyList()
+          } else {
+            capturedOwner.toCheckpointValues() + capturedAuthorizationId + checkpoint.requestId.orEmpty()
+          }
+        },
+        restore = { values ->
+          ChatComposerMediaCheckpoint(
+            owner = chatComposerOwnerFromCheckpointValues(values.take(5)),
+            mediaAuthorizationId = values.getOrNull(5),
+            requestId = values.getOrNull(6)?.takeIf(String::isNotEmpty),
+          )
+        },
+      )
+  }
 }
+
+internal data class ChatComposerMediaLease(
+  val owner: ChatComposerOwner,
+  val authorizationId: String,
+)
 
 internal fun ChatComposerOwner.toCheckpointValues(): List<String> =
   listOf(
@@ -398,11 +355,6 @@ internal fun shouldMigrateComposerDraft(
   }
   return previous.agentId == current.agentId && mainAliasResolved
 }
-
-internal fun canCommitComposerResult(
-  ownerSnapshot: ChatComposerOwner,
-  currentOwner: ChatComposerOwner,
-): Boolean = ownerSnapshot == currentOwner
 
 internal fun mergeChatDraft(
   draft: ChatDraft?,
@@ -520,7 +472,7 @@ internal fun canCommitStagedChatShare(
   currentOwner: ChatComposerOwner,
 ): Boolean =
   currentHead?.id == stagedId &&
-    canCommitComposerResult(ownerSnapshot = ownerSnapshot, currentOwner = currentOwner)
+    ownerSnapshot == currentOwner
 
 internal fun chatComposerSendEnabled(
   voiceNoteState: VoiceNoteRecorderState,

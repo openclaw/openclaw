@@ -108,6 +108,7 @@ export async function dispatchSynologyChatInboundEvent(params: {
           },
           route: {
             agentId: resolved.route.agentId,
+            dmScope: resolved.route.dmScope,
             accountId: params.account.accountId,
             routeSessionKey: resolved.sessionKey,
             dispatchSessionKey: resolved.sessionKey,
@@ -131,6 +132,7 @@ export async function dispatchSynologyChatInboundEvent(params: {
           accountId: params.account.accountId,
           route: {
             agentId: resolved.route.agentId,
+            dmScope: resolved.route.dmScope,
             sessionKey: resolved.route.sessionKey,
           },
           ctxPayload: msgCtx,

@@ -278,6 +278,17 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   padding-left: 52px;
 }
 
+/* Native macOS desktop shells: the pane header is the window's top surface,
+   so it adopts the app titlebar height (52px injected by
+   DashboardWindowController; the 50px fallback mirrors
+   .macos-titlebar-controls for older app builds). The web 48px default would
+   center the session title/actions 2px above the traffic-light/hosted-button
+   centerline. Drawer layouts instead fold titlebar clearance into their 58px
+   topbar row (layout.mobile.css). */
+html.openclaw-native-macos .shell:not(.shell--mobile-nav) .chat-pane__header {
+  min-height: var(--openclaw-native-titlebar-height, 50px);
+}
+
 /* Native macOS: with the nav column collapsed the top-left pane header is the
    window's top surface, so its content shifts right of the floating window
    chrome (Safari-style) instead of hiding under it. Traffic lights end at

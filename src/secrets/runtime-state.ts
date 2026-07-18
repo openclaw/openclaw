@@ -54,6 +54,7 @@ export type PreparedSecretsRuntimeSnapshot = {
 export type SecretsRuntimeRefreshContext = {
   env: Record<string, string | undefined>;
   explicitAgentDirs: string[] | null;
+  includeConfigRefs?: boolean;
   includeAuthStoreRefs: boolean;
   loadAuthStore?: (agentDir?: string) => AuthProfileStore;
   loadablePluginOrigins: ReadonlyMap<string, PluginOrigin>;
@@ -109,6 +110,7 @@ function cloneSecretsRuntimeRefreshContext(
   const cloned: SecretsRuntimeRefreshContext = {
     env: { ...context.env },
     explicitAgentDirs: context.explicitAgentDirs ? [...context.explicitAgentDirs] : null,
+    includeConfigRefs: context.includeConfigRefs ?? true,
     includeAuthStoreRefs: context.includeAuthStoreRefs,
     loadablePluginOrigins: new Map(context.loadablePluginOrigins),
     ...(context.manifestRegistry

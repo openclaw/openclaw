@@ -1,3 +1,6 @@
+import { existsSync } from "node:fs";
+import path from "node:path";
+import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace.js";
 import {
   ensureOnboardingPluginInstalled,
   type OnboardingPluginInstallEntry,
@@ -14,6 +17,12 @@ import {
 import type { RuntimeEnv } from "../runtime.js";
 import { installSkillFromClawHub } from "../skills/lifecycle/clawhub.js";
 import {
+  acknowledgeOnboardingRecommendations,
+  readOnboardingRecommendations,
+  writeOnboardingRecommendationsOffer,
+  type OnboardingRecommendationsRecord,
+} from "../state/onboarding-recommendations.js";
+import {
   getSetupAppRecommendations,
   type SetupAppRecommendationMatch,
   type SetupAppRecommendationsResult,
@@ -28,6 +37,10 @@ type SetupAppRecommendationDeps = {
   ensurePlugin?: typeof ensureOnboardingPluginInstalled;
   installSkill?: typeof installSkillFromClawHub;
   resolveOfficialEntry?: (pluginId: string) => OnboardingPluginInstallEntry | undefined;
+  readStored?: () => OnboardingRecommendationsRecord | null;
+  writeOffer?: typeof writeOnboardingRecommendationsOffer;
+  acknowledgeStored?: typeof acknowledgeOnboardingRecommendations;
+  deferOfferToBootstrap?: () => boolean;
 };
 
 function resolveOfficialEntry(pluginId: string): OnboardingPluginInstallEntry | undefined {
@@ -87,34 +100,66 @@ export async function setupAppRecommendations(params: {
   ) {
     return params.config;
   }
-
-  const progress = params.prompter.progress(t("wizard.appRecommendations.scanning"));
-  let result: SetupAppRecommendationsResult;
-  try {
-    result = params.deps?.recommend
-      ? await params.deps.recommend()
-      : await getSetupAppRecommendations({
-          inventorySource: async () => await scanInstalledApps({ platform }),
-          runtime: params.runtime,
-        });
-  } catch (error) {
-    progress.stop();
-    params.runtime.log(
-      t("wizard.appRecommendations.skipped", { reason: formatErrorMessage(error) }),
-    );
+  const readStored = params.deps?.readStored ?? readOnboardingRecommendations;
+  const stored = readStored();
+  if (typeof stored?.acceptedAt === "number") {
     return params.config;
   }
-  progress.stop();
-  if (result.status !== "ok") {
-    params.runtime.log(t("wizard.appRecommendations.noneFound"));
-    return params.config;
+  const writeOffer = params.deps?.writeOffer ?? writeOnboardingRecommendationsOffer;
+  const acknowledgeStored = params.deps?.acknowledgeStored ?? acknowledgeOnboardingRecommendations;
+  const deferOfferToBootstrap =
+    params.deps?.deferOfferToBootstrap ??
+    (() => existsSync(path.join(params.workspaceDir, DEFAULT_BOOTSTRAP_FILENAME)));
+
+  // A pending stored offer means a completed scan's app labels already left
+  // the machine once; never rescan or re-query the model for it. Either the
+  // bootstrap still owns the ask, or the wizard presents the stored matches.
+  let matches: SetupAppRecommendationMatch[];
+  let appLabels: string[];
+  let recordAnswer: () => void;
+  if (stored) {
+    if (deferOfferToBootstrap()) {
+      return params.config;
+    }
+    matches = stored.matches;
+    appLabels = [...new Set(stored.matches.map((match) => match.appLabel))];
+    recordAnswer = () => void acknowledgeStored();
+  } else {
+    const progress = params.prompter.progress(t("wizard.appRecommendations.scanning"));
+    let result: SetupAppRecommendationsResult;
+    try {
+      result = params.deps?.recommend
+        ? await params.deps.recommend()
+        : await getSetupAppRecommendations({
+            inventorySource: async () => await scanInstalledApps({ platform }),
+            runtime: params.runtime,
+          });
+    } catch (error) {
+      progress.stop();
+      params.runtime.log(
+        t("wizard.appRecommendations.skipped", { reason: formatErrorMessage(error) }),
+      );
+      return params.config;
+    }
+    progress.stop();
+    if (result.status !== "ok") {
+      params.runtime.log(t("wizard.appRecommendations.noneFound"));
+      return params.config;
+    }
+    if (deferOfferToBootstrap()) {
+      writeOffer({ inventory: result.apps, matches: result.matches, answered: false });
+      return params.config;
+    }
+    const scanned = result;
+    matches = scanned.matches;
+    appLabels = scanned.apps.map((app) => app.label);
+    recordAnswer = () =>
+      void writeOffer({ inventory: scanned.apps, matches: scanned.matches, answered: true });
   }
 
   await params.prompter.note(
     [
-      t("wizard.appRecommendations.detected", {
-        apps: result.apps.map((app) => app.label).join(", "),
-      }),
+      t("wizard.appRecommendations.detected", { apps: appLabels.join(", ") }),
       t("wizard.appRecommendations.disclosure"),
     ].join("\n"),
     t("wizard.appRecommendations.title"),
@@ -123,7 +168,7 @@ export async function setupAppRecommendations(params: {
     message: t("wizard.appRecommendations.select"),
     options: [
       { value: SKIP_VALUE, label: t("common.skipForNow") },
-      ...result.matches.map((match, index) => ({
+      ...matches.map((match, index) => ({
         value: selectionValue(index),
         label:
           match.candidate.source === "clawhub-skill"
@@ -143,12 +188,15 @@ export async function setupAppRecommendations(params: {
     // reaches the matcher prompt, so a listing can promote itself to
     // "recommended". Only official catalog entries may be pre-selected;
     // third-party skills always require an explicit opt-in tick.
-    initialValues: result.matches.flatMap((match, index) =>
+    initialValues: matches.flatMap((match, index) =>
       match.tier === "recommended" && match.candidate.source !== "clawhub-skill"
         ? [selectionValue(index)]
         : [],
     ),
   });
+  // Returning from the prompt means the user answered even when every option
+  // was deselected. Cancellation throws before this point.
+  recordAnswer();
   if (selected.includes(SKIP_VALUE)) {
     return params.config;
   }
@@ -156,7 +204,7 @@ export async function setupAppRecommendations(params: {
   let next = params.config;
   const ensurePlugin = params.deps?.ensurePlugin ?? ensureOnboardingPluginInstalled;
   const installSkill = params.deps?.installSkill ?? installSkillFromClawHub;
-  for (const match of uniqueSelectedMatches(result.matches, selected)) {
+  for (const match of uniqueSelectedMatches(matches, selected)) {
     try {
       if (match.candidate.source === "clawhub-skill") {
         const installed = await installSkill({

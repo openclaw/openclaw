@@ -144,6 +144,18 @@ export async function handleAgentExecutionError(params: {
     }
     return undefined;
   };
+  const waitForRetryBackoff = async (delayMs: number, abortSignal?: AbortSignal) => {
+    try {
+      await sleepWithAbort(delayMs, abortSignal);
+    } catch (error) {
+      const abortAction = resolveReplyOperationAbortAction(error);
+      if (!abortAction) {
+        throw error;
+      }
+      return abortAction;
+    }
+    return undefined;
+  };
   if (err instanceof LiveSessionModelSwitchError) {
     if (params.liveModelSwitchRetries <= MAX_LIVE_SWITCH_RETRIES) {
       params.state.pendingLifecycleTerminal = undefined;
@@ -380,14 +392,9 @@ export async function handleAgentExecutionError(params: {
       `Overloaded provider before reply (${sanitizeForLog(message)}). ` +
         `Retrying ${retryCount}/${MAX_OVERLOAD_RETRIES} in ${retryDelayMs}ms.`,
     );
-    try {
-      await sleepWithAbort(retryDelayMs, retryAbortSignal);
-    } catch (sleepError) {
-      const abortAction = resolveReplyOperationAbortAction(sleepError);
-      if (abortAction) {
-        return abortAction;
-      }
-      throw sleepError;
+    const abortAction = await waitForRetryBackoff(retryDelayMs, retryAbortSignal);
+    if (abortAction) {
+      return abortAction;
     }
     params.state.pendingLifecycleTerminal = undefined;
     turn.replyOperation?.recordActivity();
@@ -402,14 +409,20 @@ export async function handleAgentExecutionError(params: {
       payload: markAgentRunFailureReplyPayload({ text: providerRequestError.userMessage }),
     };
   }
-  if (isTransientHttp && params.consumeTransientHttpRetry()) {
+  if (
+    isTransientHttp &&
+    !params.overloadRetryState.unsafeToReplay &&
+    params.consumeTransientHttpRetry()
+  ) {
     params.state.pendingLifecycleTerminal = undefined;
     defaultRuntime.error(
       `Transient HTTP provider error before reply (${message}). Retrying once in ${TRANSIENT_HTTP_RETRY_DELAY_MS}ms.`,
     );
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, TRANSIENT_HTTP_RETRY_DELAY_MS);
-    });
+    const retryAbortSignal = turn.replyOperation?.abortSignal ?? turn.opts?.abortSignal;
+    const abortAction = await waitForRetryBackoff(TRANSIENT_HTTP_RETRY_DELAY_MS, retryAbortSignal);
+    if (abortAction) {
+      return abortAction;
+    }
     return { kind: "retry" };
   }
   defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
@@ -440,6 +453,7 @@ export async function handleAgentExecutionError(params: {
             includeAuthProfileId: !isNonDirectConversationContext(turn.sessionCtx),
             includeDetails: isVerboseFailureDetailEnabled(turn.resolvedVerboseLevel),
             isHeartbeat: turn.isHeartbeat,
+            replayPrevented: params.overloadRetryState.unsafeToReplay,
           },
         )
       : undefined;

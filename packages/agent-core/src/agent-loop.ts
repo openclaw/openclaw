@@ -7,8 +7,8 @@ import type {
   Context,
   EventStream,
   ToolResultMessage,
-} from "../../llm-core/src/index.js";
-import type { EventStream as SourceEventStream } from "../../llm-core/src/index.js";
+} from "@openclaw/llm-core";
+import type { EventStream as SourceEventStream } from "@openclaw/llm-core";
 import { TranscriptNotContinuableError } from "./errors.js";
 import { resolveAgentReasoningOption } from "./reasoning.js";
 import { type AgentCoreStreamRuntimeDeps, resolveAgentCoreStreamFn } from "./runtime-deps.js";

@@ -9,6 +9,10 @@ import {
 import { resolveGatewayInstallEntrypoint } from "../daemon/gateway-entrypoint.js";
 import { type CommandOptions, runCommandWithTimeout } from "../process/exec.js";
 import {
+  parsePackageOpenClawSchemaVersions,
+  type OpenClawSchemaVersions,
+} from "../state/openclaw-schema-versions.js";
+import {
   resolveControlUiDistIndexHealth,
   resolveControlUiDistIndexPathForRoot,
 } from "./control-ui-assets.js";
@@ -163,7 +167,10 @@ type UpdateRunnerOptions = {
   deferConfiguredPluginInstallRepair?: boolean;
   allowGatewayServiceRepair?: boolean;
   allowGatewayActivation?: boolean;
-  beforeGitMutation?: () => Promise<{
+  beforeGitMutation?: (target: {
+    schemaVersions?: OpenClawSchemaVersions;
+    metadataUnreadable?: string;
+  }) => Promise<{
     allowGatewayServiceRepair?: boolean;
     allowGatewayActivation?: boolean;
   } | void>;
@@ -197,6 +204,41 @@ type UpdateInstallSurface =
       root?: string;
       packageRoot?: undefined;
     };
+
+// Only a target we actually read may skip the schema guard as legacy; a failed
+// read must abort before mutation or the guard is silently bypassed.
+type GitTargetSchemaMetadata =
+  | { status: "ok"; schemaVersions?: OpenClawSchemaVersions }
+  | { status: "unreadable"; reason: string };
+
+async function readGitTargetSchemaVersions(params: {
+  runCommand: CommandRunner;
+  root: string;
+  revision: string;
+  timeoutMs: number;
+}): Promise<GitTargetSchemaMetadata> {
+  let result: Awaited<ReturnType<CommandRunner>>;
+  try {
+    result = await params.runCommand(
+      ["git", "-C", params.root, "show", `${params.revision}:package.json`],
+      { cwd: params.root, timeoutMs: params.timeoutMs },
+    );
+  } catch (error) {
+    return { status: "unreadable", reason: String(error) };
+  }
+  if (result.code !== 0) {
+    return {
+      status: "unreadable",
+      reason: `git show ${params.revision}:package.json exited ${result.code}`,
+    };
+  }
+  try {
+    const schemaVersions = parsePackageOpenClawSchemaVersions(JSON.parse(result.stdout) as unknown);
+    return { status: "ok", ...(schemaVersions ? { schemaVersions } : {}) };
+  } catch (error) {
+    return { status: "unreadable", reason: `target package.json unparseable: ${String(error)}` };
+  }
+}
 
 function mapManagerResolutionFailure(
   reason: UpdatePackageManagerFailureReason,
@@ -896,11 +938,23 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     let gitMutationPrepared = false;
     let createdDevBranchDuringUpdate = false;
     let localDevBranchExists: boolean | null = null;
-    const prepareGitMutation = async () => {
+    const prepareGitMutation = async (targetRevision: string) => {
       if (gitMutationPrepared) {
         return;
       }
-      const preparation = await opts.beforeGitMutation?.();
+      const targetMetadata = await readGitTargetSchemaVersions({
+        runCommand,
+        root: gitRoot,
+        revision: targetRevision,
+        timeoutMs,
+      });
+      const preparation = await opts.beforeGitMutation?.(
+        targetMetadata.status === "ok"
+          ? targetMetadata.schemaVersions
+            ? { schemaVersions: targetMetadata.schemaVersions }
+            : {}
+          : { metadataUnreadable: targetMetadata.reason },
+      );
       if (typeof preparation?.allowGatewayServiceRepair === "boolean") {
         allowGatewayServiceRepair = preparation.allowGatewayServiceRepair;
       }
@@ -1420,7 +1474,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       }
 
       if (devTargetRef) {
-        await prepareGitMutation();
+        await prepareGitMutation(selectedSha);
         const failure = await runRequiredGitStep(
           `git checkout ${selectedSha}`,
           ["git", "-C", gitRoot, "checkout", "--detach", selectedSha],
@@ -1430,7 +1484,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
           return failure;
         }
       } else {
-        await prepareGitMutation();
+        await prepareGitMutation(selectedSha);
         let checkedOutSelectedSha = false;
         if (needsCheckoutMain) {
           const hasLocalDevBranch = localDevBranchExists !== false;
@@ -1530,7 +1584,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         };
       }
 
-      await prepareGitMutation();
+      await prepareGitMutation(tag);
       const failure = await runRequiredGitStep(
         `git checkout ${tag}`,
         ["git", "-C", gitRoot, "checkout", "--detach", tag],

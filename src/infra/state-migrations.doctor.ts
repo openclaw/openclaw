@@ -80,6 +80,10 @@ import {
   discardLegacyRescuePending,
 } from "./state-migrations.rescue-pending.js";
 import {
+  detectLegacyRestartSentinel,
+  migrateLegacyRestartSentinel,
+} from "./state-migrations.restart-sentinel.js";
+import {
   migrateLegacyConfigHealth,
   migrateLegacyCurrentConversationBindings,
   migrateLegacyPluginBindingApprovals,
@@ -150,6 +154,8 @@ function describeStateSchemaMigration(migration: OpenClawStateDatabaseSchemaMigr
       return "audit event ledger → versioned message lifecycle schema";
     case "operator-approvals-system-agent":
       return "operator approvals → OpenClaw system changes";
+    case "session-watch-cursor-provenance-v4":
+      return "session watch cursors → provenance column";
     case "strict-tables-v3":
       return "tables → SQLite STRICT typing";
   }
@@ -416,6 +422,7 @@ export async function detectLegacyStateMigrations(params: {
     stateDir,
     doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
   });
+  const restartSentinel = detectLegacyRestartSentinel({ stateDir });
   const workspace = detectLegacyWorkspaceState({
     cfg: params.cfg,
     stateDir,
@@ -598,6 +605,9 @@ export async function detectLegacyStateMigrations(params: {
   if (mcpOauth.hasLegacy) {
     preview.push("- MCP OAuth credentials: legacy JSON → shared SQLite state");
   }
+  if (restartSentinel.hasLegacy) {
+    preview.push("- Restart sentinel: legacy JSON → shared SQLite state");
+  }
   if (workspace.hasLegacy) {
     preview.push("- Workspace setup and attestations: legacy files → shared SQLite state");
   }
@@ -701,6 +711,7 @@ export async function detectLegacyStateMigrations(params: {
     managedOutgoingImages,
     apns,
     mcpOauth,
+    restartSentinel,
     workspace,
     webPush,
     nodeHost,
@@ -909,6 +920,11 @@ export async function runLegacyStateMigrations(params: {
     env,
     stateDir: detected.stateDir,
   });
+  const restartSentinel = await migrateLegacyRestartSentinel({
+    detected: detected.restartSentinel,
+    env,
+    stateDir: detected.stateDir,
+  });
   const workspace = await migrateLegacyWorkspaceState({
     detected: detected.workspace,
     env,
@@ -968,6 +984,7 @@ export async function runLegacyStateMigrations(params: {
     managedOutgoingImages,
     apns,
     mcpOauth,
+    restartSentinel,
     workspace,
     webPush,
     nodeHost,
@@ -993,6 +1010,7 @@ export async function runLegacyStateMigrations(params: {
       ...managedOutgoingImages.changes,
       ...apns.changes,
       ...mcpOauth.changes,
+      ...restartSentinel.changes,
       ...workspace.changes,
       ...webPush.changes,
       ...nodeHost.changes,
@@ -1025,6 +1043,7 @@ export async function runLegacyStateMigrations(params: {
       ...managedOutgoingImages.warnings,
       ...apns.warnings,
       ...mcpOauth.warnings,
+      ...restartSentinel.warnings,
       ...workspace.warnings,
       ...webPush.warnings,
       ...nodeHost.warnings,
@@ -1187,6 +1206,11 @@ export async function autoMigrateLegacyState(params: {
       detected: detected.currentConversationBindings,
       stateDir: detected.stateDir,
     });
+    const restartSentinel = await migrateLegacyRestartSentinel({
+      detected: detected.restartSentinel,
+      env,
+      stateDir: detected.stateDir,
+    });
     const channelPairing = migrateLegacyChannelPairingState({
       detected: detected.channelPairing,
       env: { ...env, OPENCLAW_STATE_DIR: detected.stateDir },
@@ -1214,6 +1238,7 @@ export async function autoMigrateLegacyState(params: {
       ...configHealth.changes,
       ...pluginBindingApprovals.changes,
       ...currentConversationBindings.changes,
+      ...restartSentinel.changes,
       ...channelPairing.changes,
       ...preSessionChannelPlans.changes,
       ...pluginPlans.changes,
@@ -1234,11 +1259,19 @@ export async function autoMigrateLegacyState(params: {
       ...configHealth.warnings,
       ...pluginBindingApprovals.warnings,
       ...currentConversationBindings.warnings,
+      ...restartSentinel.warnings,
       ...channelPairing.warnings,
       ...preSessionChannelPlans.warnings,
       ...pluginPlans.warnings,
     ];
-    const noticeSources = [stateDirResult, detected, pluginInstallIndex, updateCheck, pluginPlans];
+    const noticeSources = [
+      stateDirResult,
+      detected,
+      pluginInstallIndex,
+      updateCheck,
+      restartSentinel,
+      pluginPlans,
+    ];
     const notices = mergeNotices(noticeSources);
     logMigrationResults(changes, warnings, notices);
     return {
@@ -1257,6 +1290,7 @@ export async function autoMigrateLegacyState(params: {
         configHealth.changes.length > 0 ||
         pluginBindingApprovals.changes.length > 0 ||
         currentConversationBindings.changes.length > 0 ||
+        restartSentinel.changes.length > 0 ||
         channelPairing.changes.length > 0 ||
         preSessionChannelPlans.changes.length > 0 ||
         pluginPlans.changes.length > 0,
@@ -1282,6 +1316,7 @@ export async function autoMigrateLegacyState(params: {
     !detected.configHealth.hasLegacy &&
     !detected.pluginBindingApprovals.hasLegacy &&
     !detected.currentConversationBindings.hasLegacy &&
+    !detected.restartSentinel?.hasLegacy &&
     !detected.workspace.hasLegacy &&
     !detected.channelPairing.hasLegacy
   ) {
@@ -1350,6 +1385,11 @@ export async function autoMigrateLegacyState(params: {
     detected: detected.currentConversationBindings,
     stateDir: detected.stateDir,
   });
+  const restartSentinel = await migrateLegacyRestartSentinel({
+    detected: detected.restartSentinel,
+    env,
+    stateDir: detected.stateDir,
+  });
   const channelPairing = migrateLegacyChannelPairingState({
     detected: detected.channelPairing,
     env: { ...env, OPENCLAW_STATE_DIR: detected.stateDir },
@@ -1390,6 +1430,7 @@ export async function autoMigrateLegacyState(params: {
     ...configHealth.changes,
     ...pluginBindingApprovals.changes,
     ...currentConversationBindings.changes,
+    ...restartSentinel.changes,
     ...channelPairing.changes,
     ...preSessionChannelPlans.changes,
     ...pluginPlans.changes,
@@ -1414,6 +1455,7 @@ export async function autoMigrateLegacyState(params: {
     ...configHealth.warnings,
     ...pluginBindingApprovals.warnings,
     ...currentConversationBindings.warnings,
+    ...restartSentinel.warnings,
     ...channelPairing.warnings,
     ...preSessionChannelPlans.warnings,
     ...pluginPlans.warnings,
@@ -1422,7 +1464,14 @@ export async function autoMigrateLegacyState(params: {
     ...agentDir.warnings,
     ...channelPlans.warnings,
   ];
-  const noticeSources = [stateDirResult, detected, pluginInstallIndex, updateCheck, pluginPlans];
+  const noticeSources = [
+    stateDirResult,
+    detected,
+    pluginInstallIndex,
+    updateCheck,
+    restartSentinel,
+    pluginPlans,
+  ];
   const notices = mergeNotices(noticeSources);
 
   logMigrationResults(changes, warnings, notices);
