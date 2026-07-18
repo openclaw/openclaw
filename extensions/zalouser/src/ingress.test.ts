@@ -188,6 +188,53 @@ describe("Zalouser durable ingress", () => {
     });
   });
 
+  it("settles deferred bookkeeping when the adoption watchdog aborts a claim", async () => {
+    await withZalouserIngressTestQueue(async (queue) => {
+      let deferredLifecycle: ZalouserIngressLifecycle | undefined;
+      const dispatch = vi.fn(async (_message, lifecycle: ZalouserIngressLifecycle) => {
+        deferredLifecycle = lifecycle;
+        lifecycle.onDeferred();
+      });
+      const ingress = createZalouserIngressMonitor({
+        accountId: "default",
+        ownUserId: "owner-1",
+        runtime: runtime(),
+        queue,
+        dispatch,
+        adoptionStallTimeoutMs: 10,
+      });
+      await ingress.receive(createRawZalouserMessage({ msgId: "deferred-timeout" }));
+      await waitForZalouserIngressVerdict(queue, "deferred-timeout", "failed");
+      expect(deferredLifecycle?.abortSignal.aborted).toBe(true);
+
+      await ingress.stop();
+    });
+  });
+
+  it("aborts deferred bookkeeping during shutdown without waiting for adoption", async () => {
+    await withZalouserIngressTestQueue(async (queue) => {
+      let deferredLifecycle: ZalouserIngressLifecycle | undefined;
+      const dispatch = vi.fn(async (_message, lifecycle: ZalouserIngressLifecycle) => {
+        deferredLifecycle = lifecycle;
+        lifecycle.onDeferred();
+      });
+      const ingress = createZalouserIngressMonitor({
+        accountId: "default",
+        ownUserId: "owner-1",
+        runtime: runtime(),
+        queue,
+        dispatch,
+      });
+      await ingress.receive(createRawZalouserMessage({ msgId: "deferred-stop" }));
+      await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce());
+      expect(await queue.listClaims()).toHaveLength(1);
+
+      await ingress.stop();
+      expect(deferredLifecycle?.abortSignal.aborted).toBe(true);
+      expect(await queue.listClaims()).toHaveLength(1);
+    });
+  });
+
   it("dead-letters malformed persisted envelopes without dispatch", async () => {
     await withZalouserIngressTestQueue(async (queue) => {
       await queue.enqueue(

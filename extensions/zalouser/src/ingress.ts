@@ -230,16 +230,27 @@ export function createZalouserIngressMonitor(options: {
           resolveDeferredClaim = resolve;
         });
         let deferredClaimSettled = false;
+        let onLifecycleAbort: (() => void) | undefined;
         const settleDeferredClaim = () => {
           if (deferredClaimSettled) {
             return;
           }
           deferredClaimSettled = true;
+          if (onLifecycleAbort) {
+            lifecycle.abortSignal.removeEventListener("abort", onLifecycleAbort);
+          }
           if (deferredClaims.get(claimed.id) === deferredClaim) {
             deferredClaims.delete(claimed.id);
           }
           resolveDeferredClaim();
         };
+        // The drain can guillotine or dispose a deferred claim without invoking
+        // the reply lifecycle again. Release local bookkeeping on that abort.
+        onLifecycleAbort = settleDeferredClaim;
+        lifecycle.abortSignal.addEventListener("abort", onLifecycleAbort, { once: true });
+        if (lifecycle.abortSignal.aborted) {
+          settleDeferredClaim();
+        }
         const delivery = Promise.resolve(
           options.dispatch(message, {
             ...bound,
@@ -399,6 +410,9 @@ export function createZalouserIngressMonitor(options: {
         shutdown.abort(new Error("Zalouser ingress stopped."));
         await pumping;
         await Promise.allSettled(activeDeliveries);
+        // Abort deferred per-claim lifecycles so their durable rows stay available
+        // for recovery instead of holding shutdown open indefinitely.
+        drain?.dispose();
         await Promise.allSettled(deferredClaims.values());
         await drain?.waitForIdle();
         // Dispose remains safe if monitor cleanup repeats.
