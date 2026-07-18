@@ -11,6 +11,7 @@ import {
   type ConnectParams,
   ErrorCodes,
   errorShape,
+  missingScopeErrorShape,
   validateNodeDescribeParams,
   validateNodeEventParams,
   validateNodeInvokeParams,
@@ -1020,7 +1021,10 @@ export const nodeHandlers: GatewayRequestHandlers = {
         respond(
           false,
           undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, `missing scope: ${approved.missingScope}`),
+          missingScopeErrorShape({
+            missingScope: approved.missingScope,
+            requiredScopes: [approved.missingScope],
+          }),
         );
         return;
       }

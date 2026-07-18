@@ -1,6 +1,7 @@
 // Shared Gateway HTTP helpers handle small JSON/text responses, SSE headers,
 // body-size errors, and client disconnect aborts.
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { buildMissingScopeErrorDetails } from "../../packages/gateway-protocol/src/index.js";
 import {
   logRejectedLargePayload,
   parseContentLengthHeader,
@@ -76,18 +77,30 @@ export function sendInvalidRequest(res: ServerResponse, message: string) {
   });
 }
 
-export function buildMissingScopeForbiddenBody(missingScope: string | undefined) {
+export function buildMissingScopeForbiddenBody(
+  missingScope: string,
+  requiredScopes: readonly string[] = [missingScope],
+) {
+  const details = buildMissingScopeErrorDetails({
+    missingScope,
+    requiredScopes,
+  });
   return {
     ok: false,
     error: {
       type: "forbidden",
       message: `missing scope: ${missingScope}`,
+      details,
     },
   };
 }
 
-export function sendMissingScopeForbidden(res: ServerResponse, missingScope: string | undefined) {
-  sendJson(res, 403, buildMissingScopeForbiddenBody(missingScope));
+export function sendMissingScopeForbidden(
+  res: ServerResponse,
+  missingScope: string,
+  requiredScopes: readonly string[] = [missingScope],
+) {
+  sendJson(res, 403, buildMissingScopeForbiddenBody(missingScope, requiredScopes));
 }
 
 export async function readJsonBodyOrError(
