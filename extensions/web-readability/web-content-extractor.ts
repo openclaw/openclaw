@@ -65,7 +65,7 @@ function findClosingRawTextTagStart(lowerHtml: string, tagName: string, start: n
   return -1;
 }
 
-function exceedsEstimatedHtmlNestingDepth(html: string, maxDepth: number): boolean {
+export function exceedsEstimatedHtmlNestingDepth(html: string, maxDepth: number): boolean {
   let depth = 0;
   const len = html.length;
   const lowerHtml = html.toLowerCase();
@@ -143,6 +143,7 @@ function exceedsEstimatedHtmlNestingDepth(html: string, maxDepth: number): boole
       continue;
     }
 
+    // Count apparent starts conservatively even when the bounded scan misses a distant `>`.
     depth += 1;
     if (depth > maxDepth) {
       return true;

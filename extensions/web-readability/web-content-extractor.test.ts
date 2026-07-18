@@ -1,6 +1,9 @@
 // Web Readability tests cover web content extractor plugin behavior.
 import { describe, expect, it } from "vitest";
-import { createReadabilityWebContentExtractor } from "./web-content-extractor.js";
+import {
+  createReadabilityWebContentExtractor,
+  exceedsEstimatedHtmlNestingDepth,
+} from "./web-content-extractor.js";
 
 const SAMPLE_HTML = `<!doctype html>
 <html lang="en">
@@ -131,5 +134,11 @@ describe("web readability extractor", () => {
       extractMode: "markdown",
     });
     expect(result).toBeNull();
+  });
+
+  it("counts deeply nested valid tags with long attributes", () => {
+    const attr = "x".repeat(210);
+    const html = Array.from({ length: 6 }, () => `<div data-long="${attr}">`).join("");
+    expect(exceedsEstimatedHtmlNestingDepth(html, 5)).toBe(true);
   });
 });
