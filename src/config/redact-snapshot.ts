@@ -8,6 +8,7 @@ import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ConfigUiHints } from "../shared/config-ui-hints-types.js";
+import { createRedactedArrayOriginalResolver } from "./redact-snapshot.array-identity.js";
 import {
   replaceSensitiveValuesInRaw,
   shouldFallbackToStructuredRawRedaction,
@@ -616,17 +617,56 @@ function maybeRestoreSecretRefId(params: {
   return { handled: true, value: { ...incomingObj, id: originalObj.id } };
 }
 
+/**
+ * Returns an original array item's `id` as the client receives it, by running
+ * the id through the redactor itself. Restoring by identity only works against
+ * the value the client can send back, and the redaction rules (hint paths, the
+ * `*` wildcard, pattern fallback, explicit non-sensitive hints, env
+ * placeholders, URL scrubbing, and sensitive-primitive handling) are far too
+ * subtle to re-implement here: any divergence would either fail unchanged saves
+ * closed or silently drop back to positional restore. Ids that redact away all
+ * collapse to the same sentinel, which the caller reads as ambiguous.
+ */
+function createArrayVisibleIdReader(params: {
+  path: string;
+  lookup?: Set<string>;
+  hints?: ConfigUiHints;
+}): (item: unknown) => string | undefined {
+  return (item) => {
+    if (!isObjectRecord(item) || typeof item.id !== "string" || item.id.length === 0) {
+      return undefined;
+    }
+    const probe = params.lookup
+      ? redactObjectWithLookup({ id: item.id }, params.lookup, params.path, [], params.hints ?? {})
+      : redactObjectGuessing({ id: item.id }, params.path, [], params.hints);
+    const visibleId = isObjectRecord(probe) ? probe.id : undefined;
+    return typeof visibleId === "string" && visibleId.length > 0 ? visibleId : undefined;
+  };
+}
+
 function mapRedactedArray(params: {
   incoming: unknown[];
   original: unknown;
   path: string;
-  mapItem: (item: unknown, index: number, originalArray: unknown[]) => unknown;
+  // Returns an original item's `id` as the client receives it (post-redaction),
+  // so identity matching compares against what can actually be sent back.
+  visibleIdOf: (item: unknown) => string | undefined;
+  mapItem: (item: unknown, index: number, resolvedOriginal: unknown) => unknown;
 }): unknown[] {
   const originalArray = Array.isArray(params.original) ? params.original : [];
-  if (params.incoming.length < originalArray.length) {
+  const resolver = createRedactedArrayOriginalResolver(
+    originalArray,
+    params.incoming,
+    params.visibleIdOf,
+  );
+  if (!resolver.identityKeyed && params.incoming.length < originalArray.length) {
+    // Only positional arrays truncate here; identity-keyed arrays match removed
+    // and reordered rows by id, so a shorter array is not a lossy truncation.
     log.warn(`Redacted config array key ${params.path} has been truncated`);
   }
-  return params.incoming.map((item, index) => params.mapItem(item, index, originalArray));
+  return params.incoming.map((item, index) =>
+    params.mapItem(item, index, resolver.resolve(item, index)),
+  );
 }
 
 function toObjectRecord(value: unknown): Record<string, unknown> {
@@ -649,18 +689,17 @@ function toRestoreArrayContext(
 
 function restoreArrayItemWithLookup(params: {
   item: unknown;
-  index: number;
-  originalArray: unknown[];
+  original: unknown;
   lookup: Set<string>;
   path: string;
   hints: ConfigUiHints;
 }): unknown {
   if (params.item === REDACTED_SENTINEL) {
-    return params.originalArray[params.index];
+    return params.original;
   }
   return restoreRedactedValuesWithLookup(
     params.item,
-    params.originalArray[params.index],
+    params.original,
     params.lookup,
     params.path,
     params.hints,
@@ -669,8 +708,7 @@ function restoreArrayItemWithLookup(params: {
 
 function restoreArrayItemWithGuessing(params: {
   item: unknown;
-  index: number;
-  originalArray: unknown[];
+  original: unknown;
   path: string;
   hints?: ConfigUiHints;
 }): unknown {
@@ -679,14 +717,9 @@ function restoreArrayItemWithGuessing(params: {
     isSensitivePath(params.path) &&
     params.item === REDACTED_SENTINEL
   ) {
-    return params.originalArray[params.index];
+    return params.original;
   }
-  return restoreRedactedValuesGuessing(
-    params.item,
-    params.originalArray[params.index],
-    params.path,
-    params.hints,
-  );
+  return restoreRedactedValuesGuessing(params.item, params.original, params.path, params.hints);
 }
 
 function restoreGuessingArray(
@@ -699,11 +732,11 @@ function restoreGuessingArray(
     incoming,
     original,
     path,
-    mapItem: (item, index, originalArray) =>
+    visibleIdOf: createArrayVisibleIdReader({ path, hints }),
+    mapItem: (item, _index, resolvedOriginal) =>
       restoreArrayItemWithGuessing({
         item,
-        index,
-        originalArray,
+        original: resolvedOriginal,
         path,
         hints,
       }),
@@ -780,10 +813,12 @@ function restoreRedactedValuesWithLookup(
 
   const arrayContext = toRestoreArrayContext(incoming, prefix);
   if (arrayContext) {
-    // Note: If the user removed an item in the middle of the array,
-    // we have no way of knowing which one. In this case, the last
-    // element(s) get(s) chopped off. Not good, so please don't put
-    // sensitive string array in the config...
+    // Object arrays whose items carry a unique string `id` are matched by
+    // identity (see mapRedactedArray), so removing or reordering a row restores
+    // each retained row's own values. Arrays without that stable identity (e.g.
+    // bare sensitive string arrays) still restore positionally: if the user
+    // removed a middle item we cannot tell which one, so the last element(s)
+    // get chopped off — avoid putting bare sensitive string arrays in config.
     const { incoming: incomingArray, path } = arrayContext;
     if (!lookup.has(path)) {
       // Keep behavior symmetric with object fallback: if hints miss the path,
@@ -794,11 +829,11 @@ function restoreRedactedValuesWithLookup(
       incoming: incomingArray,
       original,
       path,
-      mapItem: (item, index, originalArray) =>
+      visibleIdOf: createArrayVisibleIdReader({ path, lookup, hints }),
+      mapItem: (item, _index, resolvedOriginal) =>
         restoreArrayItemWithLookup({
           item,
-          index,
-          originalArray,
+          original: resolvedOriginal,
           lookup,
           path,
           hints,
@@ -865,10 +900,12 @@ function restoreRedactedValuesGuessing(
 
   const arrayContext = toRestoreArrayContext(incoming, prefix);
   if (arrayContext) {
-    // Note: If the user removed an item in the middle of the array,
-    // we have no way of knowing which one. In this case, the last
-    // element(s) get(s) chopped off. Not good, so please don't put
-    // sensitive string array in the config...
+    // Object arrays whose items carry a unique string `id` are matched by
+    // identity (see mapRedactedArray), so removing or reordering a row restores
+    // each retained row's own values. Arrays without that stable identity (e.g.
+    // bare sensitive string arrays) still restore positionally: if the user
+    // removed a middle item we cannot tell which one, so the last element(s)
+    // get chopped off — avoid putting bare sensitive string arrays in config.
     const { incoming: incomingArray, path } = arrayContext;
     return restoreGuessingArray(incomingArray, original, path, hints);
   }
