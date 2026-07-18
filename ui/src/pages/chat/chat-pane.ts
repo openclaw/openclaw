@@ -2671,7 +2671,7 @@ class ChatPane extends OpenClawLightDomElement {
       workspaceLabel: workspace.label,
       branch,
       branches:
-        this.state?.chatBranchesSessionKey === this.state?.sessionKey
+        this.state && this.state.chatBranchesSessionKey === this.state.sessionKey
           ? (this.state.chatBranches ?? [])
           : [],
       branchSwitchDisabledReason,

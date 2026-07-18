@@ -279,7 +279,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
                           branch.messageCount === 1
                             ? "chat.sessionHeader.oneMessage"
                             : "chat.sessionHeader.messages",
-                          { count: branch.messageCount },
+                          { count: String(branch.messageCount) },
                         )}${relativeTime ? ` · ${relativeTime}` : ""}</span
                       >
                     </span>

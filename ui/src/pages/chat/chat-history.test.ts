@@ -193,6 +193,7 @@ describe("switchChatHistoryBranch", () => {
         },
       ]),
       switchBranch: vi.fn().mockResolvedValue({}),
+      setModelOverride: vi.fn(),
     };
     cacheChatSessionSnapshot(
       state.chatMessagesBySession,
@@ -227,7 +228,7 @@ describe("switchChatHistoryBranch", () => {
     };
     state.chatBranchesSessionKey = state.sessionKey;
     state.chatBranchesConnectionEpoch = state.connectionEpoch - 1;
-    state.sessions = { listBranches: vi.fn().mockResolvedValue([]) };
+    state.sessions = { listBranches: vi.fn().mockResolvedValue([]), setModelOverride: vi.fn() };
 
     await loadChatHistory(state);
 
