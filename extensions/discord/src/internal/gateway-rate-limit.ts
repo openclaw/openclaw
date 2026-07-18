@@ -1,6 +1,7 @@
 // Discord plugin module implements gateway rate limit behavior.
 const GATEWAY_SEND_LIMIT = 120;
 const GATEWAY_SEND_WINDOW_MS = 60_000;
+const GATEWAY_SEND_QUEUE_LIMIT = GATEWAY_SEND_LIMIT;
 
 type QueuedGatewaySend = {
   payload: string;
@@ -20,6 +21,13 @@ export class GatewaySendLimiter {
     if (options?.critical || this.canSend(Date.now())) {
       this.sendSerialized(serialized);
       return;
+    }
+    // Keep at most one additional send window. A larger backlog retains memory
+    // indefinitely under sustained overload and replays increasingly stale events.
+    if (this.outboundQueue.length >= GATEWAY_SEND_QUEUE_LIMIT) {
+      throw new Error(
+        `Discord gateway outbound queue is full (max ${GATEWAY_SEND_QUEUE_LIMIT} events)`,
+      );
     }
     this.outboundQueue.push({ payload: serialized });
     this.scheduleFlush();
