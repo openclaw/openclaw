@@ -297,7 +297,7 @@ final class ChatViewModelAttachmentTests: XCTestCase {
     }
 
     @MainActor
-    func testPartialIdentitySyncPreservesTheOtherDeferredComponent() {
+    func testPartialIdentitySyncPreservesTheOtherDeferredComponent() async {
         let oldContract = "per-sender|main|main"
         let newContract = "per-sender|work-main|main"
         let contractViewModel = OpenClawChatViewModel(
@@ -342,7 +342,7 @@ final class ChatViewModelAttachmentTests: XCTestCase {
     }
 
     @MainActor
-    func testAttachmentStagingPinsSessionAndIdentityUntilItFinishes() {
+    func testAttachmentStagingPinsSessionAndIdentityUntilItFinishes() async {
         let viewModel = OpenClawChatViewModel(
             sessionKey: "main",
             transport: AttachmentProcessingTransport(),
@@ -369,7 +369,7 @@ final class ChatViewModelAttachmentTests: XCTestCase {
     }
 
     @MainActor
-    func testRecordingPinsSessionAndIdentityUntilItEnds() {
+    func testRecordingPinsSessionAndIdentityUntilItEnds() async {
         let ownerActivity = AttachmentOwnerActivity()
         let viewModel = OpenClawChatViewModel(
             sessionKey: "main",
@@ -446,8 +446,12 @@ final class ChatViewModelAttachmentTests: XCTestCase {
                 outbox: outbox)
         }
         await MainActor.run { viewModel.load() }
+        // Wait for outbox restore too: until it completes, sends deliberately
+        // route behind the outbox (FIFO gate), which is not the path under test.
         try await waitUntil("legacy gateway bootstrap completed") {
-            await MainActor.run { viewModel.healthOK && !viewModel.isLoading }
+            await MainActor.run {
+                viewModel.healthOK && !viewModel.isLoading && viewModel.hasRestoredOutboxMessages
+            }
         }
         await MainActor.run {
             viewModel.attachments = [

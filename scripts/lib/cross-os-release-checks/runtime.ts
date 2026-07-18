@@ -25,6 +25,7 @@ import {
   buildCrossOsReleaseSmokePluginAllowlist,
   buildReleaseProviderConfigOverride,
   gatewayReadyDeadlineMs,
+  managedGatewayRestartCommandTimeoutMs,
 } from "./config.ts";
 import { installedEntryPath } from "./install.ts";
 import {
@@ -96,7 +97,7 @@ export async function exerciseManagedGatewayLifecycle(
     env: params.env,
     cwd: params.lane.homeDir,
     logPath: `${params.logPrefix}-restart.log`,
-    timeoutMs: 2 * 60 * 1000,
+    timeoutMs: managedGatewayRestartCommandTimeoutMs(),
   });
   await ensureManagedGatewayReady({
     lane: params.lane,
@@ -108,7 +109,7 @@ export async function exerciseManagedGatewayLifecycle(
   logLanePhase(params.lane, "gateway-stop");
   await runInstalledCli({
     cliPath: params.cliPath,
-    args: ["gateway", "stop"],
+    args: ["gateway", "stop", "--force"],
     env: params.env,
     cwd: params.lane.homeDir,
     logPath: `${params.logPrefix}-stop.log`,

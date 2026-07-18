@@ -97,15 +97,23 @@ function realtimeTalkAudioConstraints(inputDeviceId: string | undefined): MediaT
   };
 }
 
+function realtimeTalkAbortReason(signal: AbortSignal): Error {
+  return signal.reason instanceof Error
+    ? signal.reason
+    : new DOMException("Realtime Talk input cancelled", "AbortError");
+}
+
 export async function openRealtimeTalkInput(
   inputDeviceId: string | undefined,
+  options: { signal?: AbortSignal } = {},
 ): Promise<MediaStream> {
   const devices = globalThis.navigator?.mediaDevices;
   if (!devices?.getUserMedia) {
     throw new Error(t("chat.composer.realtimeTalkRequiresMicrophone"));
   }
+  let audio: MediaStream;
   try {
-    return await devices.getUserMedia({
+    audio = await devices.getUserMedia({
       audio: realtimeTalkAudioConstraints(inputDeviceId),
     });
   } catch (error) {
@@ -117,5 +125,40 @@ export async function openRealtimeTalkInput(
       throw new Error(t("chat.composer.selectedMicrophoneUnavailable"), { cause: error });
     }
     throw error;
+  }
+  if (options.signal?.aborted) {
+    audio.getTracks().forEach((track) => track.stop());
+    throw realtimeTalkAbortReason(options.signal);
+  }
+  return audio;
+}
+
+export async function openRealtimeTalkCamera(signal?: AbortSignal): Promise<MediaStream> {
+  const devices = globalThis.navigator?.mediaDevices;
+  if (!devices?.getUserMedia) {
+    throw new Error(t("chat.composer.cameraAccessFailed"));
+  }
+  let camera: MediaStream;
+  try {
+    camera = await devices.getUserMedia({ video: true });
+    if (signal?.aborted) {
+      camera.getTracks().forEach((track) => track.stop());
+      throw realtimeTalkAbortReason(signal);
+    }
+    return camera;
+  } catch (error) {
+    if (signal?.aborted) {
+      throw realtimeTalkAbortReason(signal);
+    }
+    if (error instanceof DOMException && error.name === "NotAllowedError") {
+      throw new Error(t("chat.composer.cameraPermissionBlocked"), { cause: error });
+    }
+    if (error instanceof DOMException && error.name === "NotFoundError") {
+      throw new Error(t("chat.composer.cameraNoneFound"), { cause: error });
+    }
+    if (error instanceof DOMException && error.name === "NotReadableError") {
+      throw new Error(t("chat.composer.cameraBusy"), { cause: error });
+    }
+    throw new Error(t("chat.composer.cameraAccessFailed"), { cause: error });
   }
 }

@@ -5,6 +5,7 @@ export {
   listSqliteSessionTranscriptInstances,
   loadExactSqliteSessionEntry,
   loadSqliteSessionEntry,
+  loadSqliteSessionEntryReadOnly,
   patchSqliteSessionEntry,
   patchSqliteSessionEntryTarget,
   readSqliteSessionUpdatedAt,
@@ -38,6 +39,10 @@ export {
   restoreSqliteCompactionCheckpointSession,
 } from "./session-accessor.sqlite-checkpoint.js";
 export {
+  forkSqliteSessionAtMessage,
+  rewindSqliteSessionToMessage,
+} from "./session-accessor.sqlite-message-cut.js";
+export {
   appendSqliteExpectedSessionTranscriptTurn,
   appendSqliteTranscriptEvent,
   appendSqliteTranscriptEventSync,
@@ -54,7 +59,9 @@ export { previewSqliteSessionDiskBudget } from "./session-accessor.sqlite-mainte
 export {
   findSqliteTranscriptEvent,
   loadLatestSqliteAssistantText,
+  loadSqliteTranscriptEventRowsAfterSeqSync,
   loadSqliteTranscriptEvents,
   loadSqliteTranscriptEventsSync,
+  readSqliteTranscriptEventAtSeqSync,
   readSqliteTranscriptStatsSync,
 } from "./session-accessor.sqlite-read.js";

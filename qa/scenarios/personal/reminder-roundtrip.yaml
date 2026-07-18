@@ -29,7 +29,7 @@ scenario:
   execution:
     kind: flow
     summary: Verify a fake personal reminder roundtrip stays local to the QA channel.
-    driver: qa-channel
+    channel: qa-channel
     config:
       channelId: qa-personal-room
       channelTitle: QA Personal Room

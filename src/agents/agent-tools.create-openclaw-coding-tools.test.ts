@@ -756,6 +756,30 @@ describe("createOpenClawCodingTools", () => {
     expect(latestCreateOpenClawToolsOptions().disablePluginTools).toBe(true);
   });
 
+  it("forwards trusted conversation recall to OpenClaw tool construction", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+    const conversationRecall = {
+      anchorSessionKey: "agent:main:telegram:direct:owner",
+      scope: "same-agent-private" as const,
+      corpus: "sessions" as const,
+    };
+
+    createOpenClawCodingTools({
+      config: testConfig,
+      conversationRecall,
+      toolConstructionPlan: {
+        includeBaseCodingTools: false,
+        includeShellTools: false,
+        includeChannelTools: false,
+        includeOpenClawTools: true,
+        includePluginTools: true,
+      },
+    });
+
+    expect(latestCreateOpenClawToolsOptions().conversationRecall).toEqual(conversationRecall);
+  });
+
   it("keeps plugin-only construction off the OpenClaw core factory", () => {
     const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
     createOpenClawToolsMock.mockClear();
@@ -791,6 +815,7 @@ describe("createOpenClawCodingTools", () => {
         modelProvider: "openrouter",
         modelId: "openrouter/auto",
         nativeChannelId: "oc_native_chat",
+        clientCaps: ["inline-widgets"],
         toolConstructionPlan: {
           includeBaseCodingTools: false,
           includeShellTools: false,
@@ -806,6 +831,7 @@ describe("createOpenClawCodingTools", () => {
       expect(pluginToolOptions?.modelProvider).toBe("openrouter");
       expect(pluginToolOptions?.modelId).toBe("openrouter/auto");
       expect(pluginToolOptions?.nativeChannelId).toBe("oc_native_chat");
+      expect(pluginToolOptions?.clientCaps).toEqual(["inline-widgets"]);
     } finally {
       resolvePluginToolsSpy.mockRestore();
     }

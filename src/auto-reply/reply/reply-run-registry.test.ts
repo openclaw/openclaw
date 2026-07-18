@@ -1057,6 +1057,27 @@ describe("reply run registry", () => {
     }
   });
 
+  it("waits for reply-run completion without a timer when requested", async () => {
+    vi.useFakeTimers();
+    try {
+      const operation = createReplyOperation({
+        sessionKey: "agent:main:unbounded",
+        sessionId: "session-unbounded",
+        resetTriggered: false,
+      });
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+      const waitPromise = waitForReplyRunEndBySessionId("session-unbounded", null);
+
+      expect(setTimeoutSpy).not.toHaveBeenCalled();
+      operation.complete();
+      await expect(waitPromise).resolves.toBe(true);
+    } finally {
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
   it("queues messages only through the active running backend", () => {
     const queueMessage = vi.fn(async () => {});
     const operation = createReplyOperation({
@@ -1112,6 +1133,37 @@ describe("reply run registry", () => {
       taskSuggestionDeliveryMode: "gateway",
     });
     expect(queueMessage).toHaveBeenNthCalledWith(2, "internal completion");
+  });
+
+  it("queues images only through backends that preserve them", () => {
+    const queueMessage = vi.fn(async () => {});
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:main",
+      sessionId: "session-images",
+      resetTriggered: false,
+    });
+    operation.attachBackend({
+      kind: "embedded",
+      cancel: vi.fn(),
+      isStreaming: () => true,
+      queueMessage,
+    });
+    operation.setPhase("running");
+    const images = [{ type: "image" as const, data: "png", mimeType: "image/png" }];
+
+    expect(queueReplyRunMessage("session-images", "inspect", { images })).toBe(false);
+    expect(queueMessage).not.toHaveBeenCalled();
+
+    operation.attachBackend({
+      kind: "embedded",
+      cancel: vi.fn(),
+      isStreaming: () => true,
+      queueMessage,
+      supportsQueueMessageImages: true,
+    });
+
+    expect(queueReplyRunMessage("session-images", "inspect", { images })).toBe(true);
+    expect(queueMessage).toHaveBeenCalledWith("inspect", { images });
   });
 
   it("queues messages through active non-streaming backends with live stopped state", () => {

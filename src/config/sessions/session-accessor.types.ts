@@ -199,6 +199,11 @@ export type SessionTranscriptStats = {
   sizeBytes: number;
 };
 
+export type SessionTranscriptEventRow = {
+  event: TranscriptEvent;
+  seq: number;
+};
+
 export type TranscriptMessageAppendOptions<TMessage> = {
   /** Runtime config used for message redaction and transcript header metadata. */
   config?: OpenClawConfig;
@@ -562,6 +567,30 @@ export type SessionCompactionCheckpointMutationResult =
   | { status: "missing-boundary" }
   | { status: "model-selection-locked" }
   | { status: "failed" };
+
+export type SessionMessageCutMutationResult =
+  | {
+      status: "created";
+      key: string;
+      entry: SessionEntry;
+      editorText?: string;
+    }
+  | { status: "missing-session" }
+  | { status: "missing-entry" }
+  | { status: "not-user-message" }
+  | { status: "off-active-path" }
+  | { status: "unsupported-storage" }
+  | { status: "failed" };
+
+export type SessionMessageCutMutationParams = {
+  agentId?: string;
+  entryId: string;
+  env?: NodeJS.ProcessEnv;
+  sessionKey: string;
+  sessionStoreKey?: string;
+  storePath?: string;
+  targetKey?: string;
+};
 
 export type SessionCompactionCheckpointEntryBuildContext = {
   /** Checkpoint row selected from the current persisted session entry. */

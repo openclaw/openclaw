@@ -39,6 +39,8 @@ export type {
   SessionCompactionCheckpointEntryBuilder,
   SessionCompactionCheckpointForkedTranscript,
   SessionCompactionCheckpointMutationResult,
+  SessionMessageCutMutationParams,
+  SessionMessageCutMutationResult,
   SessionCompactionCheckpointTranscriptForkResult,
   SessionCompactionCheckpointTranscriptForker,
   SessionEntryCandidateAccessScope,
@@ -71,6 +73,7 @@ export type {
   SessionPatchProjectionSnapshot,
   SessionPatchProjectionTarget,
   SessionTranscriptAccessScope,
+  SessionTranscriptEventRow,
   SessionTranscriptManualTrimPreflightResult,
   SessionTranscriptManualTrimResult,
   SessionTranscriptReadScope,
@@ -111,6 +114,7 @@ export {
   listSessionEntries,
   loadExactSessionEntry,
   loadSessionEntry,
+  loadSessionEntryReadOnly,
   openSessionEntryReadView,
   patchSessionEntry,
   patchSessionEntryTarget,
@@ -152,6 +156,7 @@ export {
   rollbackAgentHarnessSessionEntryLifecycle,
   rollbackPluginOwnedSessionEntryLifecycle,
 } from "./session-accessor.lifecycle.js";
+export { forkSessionAtMessage, rewindSessionToMessage } from "./session-accessor.message-cut.js";
 export {
   commitReplySessionInitialization,
   loadReplySessionInitializationSnapshot,
@@ -163,11 +168,13 @@ export {
   appendTranscriptMessage,
   appendTranscriptMessageSync,
   findTranscriptEvent,
+  loadTranscriptEventRowsAfterSeqSync,
   loadTranscriptEvents,
   loadTranscriptEventsSync,
   preflightSessionTranscriptForManualCompact,
   publishTranscriptUpdate,
   readLatestTranscriptAssistantText,
+  readTranscriptEventAtSeqSync,
   readTranscriptStatsSync,
   replaceTranscriptEvents,
   replaceTranscriptEventsSync,
@@ -177,6 +184,21 @@ export {
   withTranscriptWriteTransaction,
 } from "./session-accessor.transcript.js";
 export { persistSessionTranscriptTurn } from "./session-accessor.transcript-turn.js";
+export {
+  isSessionTranscriptProjectionUnavailableError,
+  readRecentSessionTranscriptMessageEvents,
+  readSessionTranscriptMessageAnchorPage,
+  readSessionTranscriptMessageEventById,
+  readSessionTranscriptMessageEventCount,
+  readSessionTranscriptMessageEventPage,
+  readSessionTranscriptMessageEvents,
+  SessionTranscriptProjectionUnavailableError,
+} from "./session-accessor.sqlite-active-events.js";
+export type {
+  SessionTranscriptMessageAnchorPage,
+  SessionTranscriptMessageEvent,
+  SessionTranscriptMessageEventPage,
+} from "./session-accessor.sqlite-active-events.js";
 export {
   resolveSessionTranscriptReadTarget,
   resolveSessionTranscriptRuntimeReadTarget,

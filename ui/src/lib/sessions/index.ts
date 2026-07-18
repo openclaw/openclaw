@@ -11,8 +11,10 @@ import type {
   SessionsCompactionBranchResult,
   SessionsCompactionListResult,
   SessionsCompactionRestoreResult,
+  SessionsForkResult,
   SessionsListResult,
   SessionsPatchResult,
+  SessionsRewindResult,
   SessionWorkspaceGetResult,
   SessionWorkspaceListResult,
   SessionWorkspaceSetResult,
@@ -66,6 +68,7 @@ type SessionGroupMutationResult = "completed" | "stale";
 
 export type SessionListOptions = {
   agentId?: string;
+  spawnedBy?: string;
   activeMinutes?: number;
   search?: string;
   offset?: number;
@@ -73,6 +76,7 @@ export type SessionListOptions = {
   includeGlobal?: boolean;
   includeUnknown?: boolean;
   configuredAgentsOnly?: boolean;
+  includeDerivedTitles?: boolean;
   showArchived?: boolean;
   append?: boolean;
 };
@@ -96,12 +100,14 @@ export type { SessionPatch } from "./patch.ts";
 type SessionDeleteOptions = {
   agentId?: string;
   deleteTranscript?: boolean;
+  archivedOnly?: boolean;
 };
 
 type SessionDeleteTarget = {
   key: string;
   agentId?: string;
   deleteTranscript?: boolean;
+  archivedOnly?: boolean;
 };
 
 /** Dirty/unpushed checkouts survive session deletion; callers surface them. */
@@ -177,6 +183,7 @@ export type SessionCapability = {
   reconcileChanged: (payload: unknown, options?: SessionReconcileOptions) => SessionChangedResult;
   reconcileRunTerminal: (terminal: SessionRunTerminal) => boolean;
   refresh: (options?: SessionRefreshOptions) => Promise<void>;
+  refreshReplacement: (agentId?: string | null) => Promise<void>;
   createResult: (params?: SessionCreateParams) => Promise<SessionCreateOutcome | null>;
   create: (params?: SessionCreateParams) => Promise<string | null>;
   patch: SessionPatchRoute;
@@ -224,6 +231,16 @@ export type SessionCapability = {
     checkpointId: string,
     options?: { agentId?: string | null },
   ) => Promise<SessionsCompactionRestoreResult>;
+  rewind: (
+    key: string,
+    entryId: string,
+    options?: { agentId?: string | null },
+  ) => Promise<SessionsRewindResult>;
+  forkAtMessage: (
+    key: string,
+    entryId: string,
+    options?: { agentId?: string | null },
+  ) => Promise<SessionsForkResult>;
   /** Loads the gateway-owned group catalog, coalescing successful connection attempts. */
   groupsLoad: () => Promise<void>;
   /** Replaces the group catalog; stale means the initiating connection retired. */
@@ -294,6 +311,9 @@ function buildSessionListParams(options: SessionListOptions = {}): Record<string
   if (options.configuredAgentsOnly !== undefined) {
     params.configuredAgentsOnly = options.configuredAgentsOnly;
   }
+  if (options.includeDerivedTitles === true) {
+    params.includeDerivedTitles = true;
+  }
   if (options.showArchived === true) {
     params.archived = true;
   }
@@ -307,9 +327,13 @@ function buildSessionListParams(options: SessionListOptions = {}): Record<string
     params.activeMinutes = activeMinutes;
   }
   const agentId = options.agentId?.trim();
+  const spawnedBy = options.spawnedBy?.trim();
   const search = options.search?.trim();
   if (agentId) {
     params.agentId = agentId;
+  }
+  if (spawnedBy) {
+    params.spawnedBy = spawnedBy;
   }
   if (search) {
     params.search = search;
@@ -351,6 +375,7 @@ function requestSessionDelete(
   return client.request<SessionDeleteResponse>("sessions.delete", {
     ...buildSessionRequestParams(key, options.agentId),
     deleteTranscript: options.deleteTranscript ?? true,
+    ...(options.archivedOnly === true ? { archivedOnly: true } : {}),
   });
 }
 
@@ -505,6 +530,30 @@ function restoreSessionCheckpoint(
   });
 }
 
+function rewindSessionAtMessage(
+  client: SessionRequestClient,
+  key: string,
+  entryId: string,
+  options: { agentId?: string | null } = {},
+): Promise<SessionsRewindResult> {
+  return client.request<SessionsRewindResult>("sessions.rewind", {
+    ...buildSessionRequestParams(key, options.agentId),
+    entryId,
+  });
+}
+
+function forkSessionAtMessage(
+  client: SessionRequestClient,
+  key: string,
+  entryId: string,
+  options: { agentId?: string | null } = {},
+): Promise<SessionsForkResult> {
+  return client.request<SessionsForkResult>("sessions.fork", {
+    ...buildSessionRequestParams(key, options.agentId),
+    entryId,
+  });
+}
+
 function appendSessionResults(
   previous: SessionsListResult,
   page: SessionsListResult,
@@ -626,6 +675,8 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
   >();
   let subscribedClient: GatewayBrowserClient | null = null;
   let lastListOptions: SessionListOptions = {};
+  let hasForegroundListOptions = false;
+  let hasSeededListOptions = false;
   const listeners = new Set<(next: SessionState) => void>();
   const createdListeners = new Set<(key: string) => void>();
 
@@ -702,7 +753,19 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       return;
     }
     const { append = false, force: _force, backgroundHydrate = false, ...requestOptions } = options;
-    lastListOptions = requestOptions;
+    const durableListOptions: SessionListOptions = { ...requestOptions };
+    // Pagination is request-local. Replacement refreshes restart at page one
+    // while retaining the filters and response enrichments that shape the list.
+    delete durableListOptions.offset;
+    // Foreground options become authoritative before I/O so a concurrent
+    // mutation cannot queue a replacement refresh with stale filters.
+    if (!backgroundHydrate) {
+      lastListOptions = durableListOptions;
+      hasForegroundListOptions = true;
+    } else if (!hasForegroundListOptions && !hasSeededListOptions) {
+      lastListOptions = durableListOptions;
+      hasSeededListOptions = true;
+    }
     if (!backgroundHydrate) {
       publish({ ...state, loading: true, error: null, deletedSessions: [] });
     }
@@ -798,6 +861,15 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     return request;
   };
 
+  const refreshReplacement = (agentId?: string | null) => {
+    const options = { ...lastListOptions };
+    const normalizedAgentId = agentId?.trim();
+    if (normalizedAgentId) {
+      options.agentId = normalizedAgentId;
+    }
+    return refresh({ ...options, force: true });
+  };
+
   const createResult = async (params: SessionCreateParams = {}) => {
     const scope = captureConnection();
     if (!scope) {
@@ -812,7 +884,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       if (!isCurrentConnection(scope)) {
         return null;
       }
-      await refresh({ agentId: params.agentId, force: true });
+      await refreshReplacement(params.agentId);
       if (!isCurrentConnection(scope)) {
         return null;
       }
@@ -1073,7 +1145,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         restoreModelOverride();
         return null;
       }
-      await refresh({ agentId: options.agentId, force: true });
+      await refreshReplacement(options.agentId);
       if (!isCurrentConnection(scope)) {
         restoreModelOverride();
         return null;
@@ -1160,7 +1232,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       }
       publish({ ...state, deletedSessions: [{ key, agentId: options.agentId }] });
       setModelOverride(key, undefined);
-      await refresh({ agentId: options.agentId, force: true });
+      await refreshReplacement(options.agentId);
       return {
         deleted: isCurrentConnection(scope),
         ...(response.worktreePreserved ? { worktreePreserved: response.worktreePreserved } : {}),
@@ -1212,7 +1284,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       for (const key of deleted) {
         setModelOverride(key, undefined);
       }
-      await refresh({ force: true });
+      await refreshReplacement();
     }
     return isCurrentConnection(scope)
       ? { deleted, errors, preservedWorktrees }
@@ -1360,10 +1432,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     if (!isCurrentConnection(scope)) {
       throw new Error("Session checkpoint operation completed on a replaced Gateway connection");
     }
-    await refresh({
-      agentId: options.agentId ?? state.agentId ?? undefined,
-      force: true,
-    });
+    await refreshReplacement(options.agentId ?? state.agentId ?? undefined);
     if (!isCurrentConnection(scope)) {
       throw new Error("Session checkpoint operation completed on a replaced Gateway connection");
     }
@@ -1383,12 +1452,41 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     if (!isCurrentConnection(scope)) {
       throw new Error("Session checkpoint operation completed on a replaced Gateway connection");
     }
-    await refresh({
-      agentId: options.agentId ?? state.agentId ?? undefined,
-      force: true,
-    });
+    await refreshReplacement(options.agentId ?? state.agentId ?? undefined);
     if (!isCurrentConnection(scope)) {
       throw new Error("Session checkpoint operation completed on a replaced Gateway connection");
+    }
+    return result;
+  };
+
+  const rewind = async (
+    key: string,
+    entryId: string,
+    options: { agentId?: string | null } = {},
+  ): Promise<SessionsRewindResult> => {
+    const scope = captureConnection();
+    if (!scope) {
+      throw new Error("Session rewind requires an active Gateway connection");
+    }
+    const result = await rewindSessionAtMessage(scope.client, key, entryId, options);
+    if (isCurrentConnection(scope)) {
+      await refreshReplacement(options.agentId ?? state.agentId ?? undefined).catch(() => {});
+    }
+    return result;
+  };
+
+  const forkAtMessage = async (
+    key: string,
+    entryId: string,
+    options: { agentId?: string | null } = {},
+  ): Promise<SessionsForkResult> => {
+    const scope = captureConnection();
+    if (!scope) {
+      throw new Error("Session fork requires an active Gateway connection");
+    }
+    const result = await forkSessionAtMessage(scope.client, key, entryId, options);
+    if (isCurrentConnection(scope)) {
+      await refreshReplacement(options.agentId ?? state.agentId ?? undefined).catch(() => {});
     }
     return result;
   };
@@ -1436,6 +1534,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
             const sessionKey = gateway.snapshot.sessionKey?.trim();
             await refresh({
               ...(sessionKey ? scopedAgentListParamsForSession(gateway.snapshot, sessionKey) : {}),
+              includeDerivedTitles: true,
               backgroundHydrate: true,
               force: true,
             });
@@ -1496,6 +1595,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     reconcileChanged,
     reconcileRunTerminal,
     refresh,
+    refreshReplacement,
     createResult,
     create,
     patch,
@@ -1513,6 +1613,8 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     listCheckpoints,
     branchCheckpoint,
     restoreCheckpoint,
+    rewind,
+    forkAtMessage,
     groupsLoad,
     groupsPut,
     groupsRename,
