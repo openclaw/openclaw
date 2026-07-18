@@ -218,11 +218,11 @@ struct ChatToolActivityRow: View {
             }
 
             if let stat = self.resolvedDiff?.stat {
-                Text("+\(stat.added)")
+                Text(verbatim: "+\(stat.added)")
                     .font(OpenClawChatTypography.mono(size: 12, relativeTo: .footnote))
                     .foregroundStyle(Color.green.opacity(0.9))
                     .lineLimit(1)
-                Text("−\(stat.removed)")
+                Text(verbatim: "−\(stat.removed)")
                     .font(OpenClawChatTypography.mono(size: 12, relativeTo: .footnote))
                     .foregroundStyle(Color.red.opacity(0.9))
                     .lineLimit(1)
@@ -254,7 +254,7 @@ struct ChatToolActivityRow: View {
         } else {
             HStack(spacing: 6) {
                 if let lineNo = line.lineNo {
-                    Text("\(lineNo)")
+                    Text(verbatim: "\(lineNo)")
                         .font(OpenClawChatTypography.mono(size: 10, relativeTo: .caption2))
                         .foregroundStyle(.secondary.opacity(0.6))
                         .frame(minWidth: 34, alignment: .trailing)

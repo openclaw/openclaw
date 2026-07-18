@@ -38362,30 +38362,6 @@
       "id": "native.apple.065f4da5ddaf14a1"
     },
     {
-      "kind": "ui-call",
-      "line": 221,
-      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatToolActivityViews.swift",
-      "source": "+\\(stat.added)",
-      "surface": "apple",
-      "id": "native.apple.6a40eab4ba296b77"
-    },
-    {
-      "kind": "ui-call",
-      "line": 225,
-      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatToolActivityViews.swift",
-      "source": "−\\(stat.removed)",
-      "surface": "apple",
-      "id": "native.apple.e1fea5bf84fcbe90"
-    },
-    {
-      "kind": "ui-call",
-      "line": 257,
-      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatToolActivityViews.swift",
-      "source": "\\(lineNo)",
-      "surface": "apple",
-      "id": "native.apple.e37561f1fb3469c3"
-    },
-    {
       "kind": "conditional-branch",
       "line": 1347,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatTranscriptCache.swift",
