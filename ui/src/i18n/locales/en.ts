@@ -479,6 +479,8 @@ export const en: TranslationMap = {
     cloudWorker: "Cloud · {profile}",
     cloudWorkerProvider: "Cloud worker provider: {provider}",
     cloudRequiresWorktree: "Cloud workers require a managed worktree",
+    cloudRequiresOpenClawRuntime:
+      "Cloud workers require the OpenClaw runtime; {runtime} is selected.",
     cloudSecureContextRequired:
       "Cloud workers need a secure browser context so recovery can protect your task.",
     cloudStartFailed: "The session was created locally, but cloud startup failed: {error}",

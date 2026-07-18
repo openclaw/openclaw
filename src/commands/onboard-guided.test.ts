@@ -273,7 +273,7 @@ describe("runGuidedOnboarding", () => {
     );
   });
 
-  it("hands the custodian hatch to the browser after apply and recommendations", async () => {
+  it("hands the custodian hatch to the browser on Linux after apply and recommendations", async () => {
     const prompter = createWizardPrompter();
     const applySetup = vi.fn(async () => ({
       configPath: "/tmp/openclaw.json",
@@ -292,7 +292,7 @@ describe("runGuidedOnboarding", () => {
       runAppRecommendations,
       probeBrowserHandoffGateway,
       runBrowserHandoff,
-      platform: "darwin",
+      platform: "linux",
     });
 
     await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
