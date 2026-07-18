@@ -42,6 +42,9 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
   const { params, options, appServer, runAbortController } = connection;
   const state = {
     latestStartupErrorNotification: undefined as CodexServerNotification | undefined,
+    // Latest mid-turn usage-limit error with no later turn activity; finalize
+    // surfaces it as the structured usage-limit failure when the turn times out.
+    latestUsageLimitErrorNotification: undefined as CodexServerNotification | undefined,
     rateLimitsRevisionBeforeLastTurnStart: undefined as number | undefined,
     completed: false,
     terminalTurnNotificationQueued: false,

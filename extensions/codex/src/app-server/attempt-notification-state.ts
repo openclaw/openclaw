@@ -16,6 +16,7 @@ import {
   isReasoningProgressNotification,
   isReasoningItemCompletionNotification,
   isRetryableErrorNotification,
+  isUsageLimitErrorNotification,
   readCodexNotificationItem,
   readNotificationItemId,
   shouldDisarmAssistantCompletionIdleWatch,
@@ -199,9 +200,16 @@ export function applyCodexTurnNotificationState(params: {
   };
 
   if (isCurrentTurnNotification && notification.method === "error") {
-    if (isRetryableErrorNotification(notification.params)) {
+    if (
+      isRetryableErrorNotification(notification.params) &&
+      !isUsageLimitErrorNotification(notification.params)
+    ) {
       turnWatches.disarmCompletionIdleWatch();
     } else {
+      // Usage-limit errors are flagged willRetry, but the app-server's silent
+      // retry can wait until the limit resets (potentially hours). Keep the
+      // completion watch pinned so the silence stays bounded; resumed retry
+      // activity still touches the watch and lets the turn continue.
       turnWatches.armCompletionIdleWatch({ pinnedByTerminalError: true });
     }
     turnWatches.disarmAssistantCompletionIdleWatch();

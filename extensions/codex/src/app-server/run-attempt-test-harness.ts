@@ -283,6 +283,7 @@ export function mockClientRuntimeMethods() {
   return {
     getRuntimeIdentity: getMockRuntimeIdentity,
     getServerVersion: getMockServerVersion,
+    getInstanceId: () => "codex-test-client-instance",
   };
 }
 

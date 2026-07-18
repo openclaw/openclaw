@@ -9,6 +9,7 @@ import {
   type JsonObject,
   type JsonValue,
 } from "./protocol.js";
+import { isCodexUsageLimitError } from "./rate-limits.js";
 
 const CODEX_TURN_ABORT_MARKER_START = "<turn_aborted>";
 const CODEX_TURN_ABORT_MARKER_END = "</turn_aborted>";
@@ -318,6 +319,14 @@ function readRawAssistantTextPreview(item: JsonObject): string | undefined {
 /** Returns true for app-server error notifications that will retry. */
 export function isRetryableErrorNotification(value: JsonValue | undefined): boolean {
   return isJsonObject(value) && value.willRetry === true;
+}
+
+/** Returns true for app-server error notifications caused by a Codex usage limit. */
+export function isUsageLimitErrorNotification(value: JsonValue | undefined): boolean {
+  if (!isJsonObject(value) || !isJsonObject(value.error)) {
+    return false;
+  }
+  return isCodexUsageLimitError(value.error.codexErrorInfo);
 }
 
 /** Returns true for terminal app-server thread status strings. */

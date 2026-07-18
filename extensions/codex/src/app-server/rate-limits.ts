@@ -225,7 +225,8 @@ export function buildCodexAppServerUsageSnapshot(value: unknown): ProviderUsageS
   };
 }
 
-function isCodexUsageLimitError(codexErrorInfo: JsonValue | null | undefined): boolean {
+/** Returns true when Codex error info marks a usage-limit failure. */
+export function isCodexUsageLimitError(codexErrorInfo: JsonValue | null | undefined): boolean {
   if (codexErrorInfo === "usageLimitExceeded") {
     return true;
   }
