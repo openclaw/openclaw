@@ -231,8 +231,9 @@ function loadIdentityFromFile(identityPath: string): AgentIdentityFile | null {
 export async function loadAgentIdentityFromFile(
   identityPath: string,
 ): Promise<AgentIdentityFile | null> {
+  let resolvedPath: string | undefined;
   try {
-    const resolvedPath = await fs.promises.realpath(identityPath);
+    resolvedPath = await fs.promises.realpath(identityPath);
     const { buffer } = await readRegularFile({
       filePath: resolvedPath,
       maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
@@ -243,7 +244,13 @@ export async function loadAgentIdentityFromFile(
     }
     return parsed;
   } catch (error) {
-    if (error instanceof Error && error.message.includes("exceeds")) {
+    // fs-safe currently exposes this legacy overflow as a plain Error, so use
+    // its complete message contract; path substrings must not change diagnosis.
+    if (
+      resolvedPath &&
+      error instanceof Error &&
+      error.message === `File exceeds ${MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES} bytes: ${resolvedPath}`
+    ) {
       throw new Error(
         `Identity file ${identityPath} exceeds the maximum size of ${MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES} bytes`,
         { cause: error },

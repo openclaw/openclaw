@@ -188,6 +188,12 @@ describe("loadAgentIdentityFromWorkspace", () => {
     });
   });
 
+  it("does not infer an overflow from a missing path containing exceeds", async () => {
+    const identityPath = path.join(tempDir, "identity-exceeds-limit.md");
+
+    await expect(loadAgentIdentityFromFile(identityPath)).resolves.toBeNull();
+  });
+
   it("returns null when IDENTITY.md exceeds the size cap", () => {
     fs.writeFileSync(
       path.join(tempDir, "IDENTITY.md"),
