@@ -71,7 +71,7 @@ function convertAuthProfileCredentialToAgent(
     const access = normalizeOptionalString(cred.access) ?? "";
     const refresh = normalizeOptionalString(cred.refresh) ?? "";
     const expires = asDateTimestampMs(cred.expires);
-    if (!access || !refresh || expires === undefined || expires <= 0) {
+    if (!access || !refresh || expires === undefined || expires <= 0 || Date.now() >= expires) {
       return null;
     }
     return {

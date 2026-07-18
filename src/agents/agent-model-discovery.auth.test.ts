@@ -130,6 +130,27 @@ describe("discoverAuthStorage", () => {
     expect(credentials.openai).toBeUndefined();
   });
 
+  // Regression: the oauth branch checked expires <= 0 but did NOT check
+  // Date.now() >= expires, while the token branch did. An expired OAuth
+  // credential in the past could pass conversion, poisoning the per-provider
+  // credential map used by background/automatic operations.
+  it("rejects an OAuth credential whose expiry is in the past", () => {
+    const credentials = resolveAgentCredentialMapFromStore({
+      version: 1,
+      profiles: {
+        "openai:expired-oauth": {
+          type: "oauth",
+          provider: "openai",
+          access: "access",
+          refresh: "refresh",
+          expires: Date.now() - 3600_000,
+        },
+      },
+    });
+
+    expect(credentials.openai).toBeUndefined();
+  });
+
   it("keeps keyRef and tokenRef profiles visible only for read-only agent discovery", () => {
     const credentials = resolveAgentCredentialMapFromStore({
       version: 1,
