@@ -144,6 +144,7 @@ describe("Reef channel lifecycle", () => {
         throw new Error("rate_limited");
       },
       onReconcileError: (error) => errors.push(error),
+      shouldContinueAfterStartupReconcileError: () => true,
       onReady: async () => {
         reconcilesAtActivation = reconciles;
         errorsAtActivation = errors.length;
@@ -188,6 +189,97 @@ describe("Reef channel lifecycle", () => {
     });
     parent.abort();
     await lifecycle;
+  });
+
+  it("rejects startup when the reconcile error is not retryable", async () => {
+    const parent = new AbortController();
+    const inbox = hangingInbox();
+    const onReady = vi.fn(async () => {});
+    const error = new Error("approval store unavailable");
+    await expect(
+      runReefChannelLifecycle({
+        parentSignal: parent.signal,
+        startInbox: inbox.startInbox,
+        reconcile: async () => {
+          throw error;
+        },
+        onReconcileError: () => {},
+        shouldContinueAfterStartupReconcileError: () => false,
+        onReady,
+      }),
+    ).rejects.toBe(error);
+    expect(onReady).not.toHaveBeenCalled();
+    expect(inbox.seen).toHaveLength(0);
+  });
+
+  it("does not activate when the parent aborts during startup reconcile", async () => {
+    const parent = new AbortController();
+    const inbox = hangingInbox();
+    const reconcileStarted = Promise.withResolvers<void>();
+    const finishReconcile = Promise.withResolvers<void>();
+    const onReady = vi.fn(async () => {});
+    const lifecycle = runReefChannelLifecycle({
+      parentSignal: parent.signal,
+      startInbox: inbox.startInbox,
+      reconcile: async () => {
+        reconcileStarted.resolve();
+        await finishReconcile.promise;
+      },
+      onReconcileError: () => {},
+      onReady,
+    });
+    await reconcileStarted.promise;
+    parent.abort();
+    finishReconcile.resolve();
+    await lifecycle;
+    expect(onReady).not.toHaveBeenCalled();
+    expect(inbox.seen).toHaveLength(0);
+  });
+
+  it("does not reject when startup reconcile fails after the parent aborts", async () => {
+    const parent = new AbortController();
+    const inbox = hangingInbox();
+    const reconcileStarted = Promise.withResolvers<void>();
+    const finishReconcile = Promise.withResolvers<void>();
+    const onReady = vi.fn(async () => {});
+    const lifecycle = runReefChannelLifecycle({
+      parentSignal: parent.signal,
+      startInbox: inbox.startInbox,
+      reconcile: async () => {
+        reconcileStarted.resolve();
+        await finishReconcile.promise;
+      },
+      onReconcileError: () => {},
+      onReady,
+    });
+    await reconcileStarted.promise;
+    parent.abort();
+    finishReconcile.reject(new DOMException("aborted", "AbortError"));
+    await expect(lifecycle).resolves.toBeUndefined();
+    expect(onReady).not.toHaveBeenCalled();
+    expect(inbox.seen).toHaveLength(0);
+  });
+
+  it("does not start the inbox when the parent aborts during activation", async () => {
+    const parent = new AbortController();
+    const inbox = hangingInbox();
+    const activationStarted = Promise.withResolvers<void>();
+    const finishActivation = Promise.withResolvers<void>();
+    const lifecycle = runReefChannelLifecycle({
+      parentSignal: parent.signal,
+      startInbox: inbox.startInbox,
+      reconcile: async () => {},
+      onReconcileError: () => {},
+      onReady: async () => {
+        activationStarted.resolve();
+        await finishActivation.promise;
+      },
+    });
+    await activationStarted.promise;
+    parent.abort();
+    finishActivation.resolve();
+    await lifecycle;
+    expect(inbox.seen).toHaveLength(0);
   });
 
   it("keeps running when a periodic reconcile fails", async () => {
@@ -265,6 +357,6 @@ describe("Reef channel lifecycle abort inheritance", () => {
       onReconcileError: () => {},
       reconcileIntervalMs: 5,
     });
-    expect(seen[0]?.aborted).toBe(true);
+    expect(seen).toHaveLength(0);
   });
 });

@@ -33,7 +33,12 @@ import { isRephrasedReefResend } from "./rejection-resend.js";
 import { getActiveReef, getOptionalReefRuntime, getReefRuntime, setActiveReef } from "./runtime.js";
 import { reefSetupAdapter, reefSetupWizard } from "./setup.js";
 import { assertReefIdentityBinding, loadKeys, openStores, ReefInboxCursorStore } from "./state.js";
-import { ReefInboxConnection, ReefTransportClient, createReefWebSocket } from "./transport.js";
+import {
+  ReefInboxConnection,
+  ReefTransportClient,
+  createReefWebSocket,
+  isRetryableReefRelayFailure,
+} from "./transport.js";
 import { isReefPairingApprovalToken, openReefTrustStore } from "./trust-store.js";
 import type { ReefAccount, ReefIngressMessage } from "./types.js";
 
@@ -401,12 +406,15 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
           });
         });
       };
-      // Refresh peer keys before recovery can dispatch an agent turn. Activate
-      // only after reconciliation, but before that turn can use Reef outbound.
+      // Attempt the peer-key refresh before recovery can dispatch an agent
+      // turn. The lifecycle activates only after that attempt is classified.
       // The lifecycle owns both the ordering and the reconcile failure policy.
       const activate = async () => {
-        setActiveReef({ flow, friends, reviews });
         await receiptNotifier.notifyRejections(trust.pendingOutboundRejections());
+        if (ctx.abortSignal.aborted) {
+          return;
+        }
+        setActiveReef({ flow, friends, reviews });
         ctx.setStatus({ accountId: "default", running: true, connected: false });
       };
       const inbox = new ReefInboxConnection(
@@ -474,6 +482,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
           },
           onReconcileError: (error) =>
             ctx.log?.error?.(`reef friend reconcile failed: ${String(error)}`),
+          shouldContinueAfterStartupReconcileError: isRetryableReefRelayFailure,
           onReady: activate,
         });
       } finally {

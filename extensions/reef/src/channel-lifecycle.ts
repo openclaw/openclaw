@@ -1,18 +1,24 @@
 import { abortableSleep } from "./transport.js";
 
 const REEF_RECONCILE_INTERVAL_MS = 30_000;
+const CONTINUE_AFTER_RECONCILE_ERROR = () => true;
+const STOP_AFTER_RECONCILE_ERROR = () => false;
 
-// Startup and periodic reconcile share one failure policy: a transient relay
-// failure (429, network) reports and continues. Letting one escape startAccount
-// hands the supervisor a crash to restart, and that restart cycle is itself
-// what escalates relay rate limiting.
 async function runReconcileStep(params: {
   reconcile: () => Promise<void>;
   onReconcileError: (error: unknown) => void;
+  shouldContinueAfterError: (error: unknown) => boolean;
+  signal: AbortSignal;
 }): Promise<void> {
   try {
     await params.reconcile();
   } catch (error) {
+    if (params.signal.aborted) {
+      return;
+    }
+    if (!params.shouldContinueAfterError(error)) {
+      throw error;
+    }
     params.onReconcileError(error);
   }
 }
@@ -26,8 +32,11 @@ export async function runReefChannelLifecycle(params: {
   startInbox: (signal: AbortSignal) => Promise<void>;
   reconcile: () => Promise<void>;
   onReconcileError: (error: unknown) => void;
-  // Runs after the startup reconcile refreshes peer keys, before the inbox can
-  // dispatch a turn that uses Reef outbound.
+  // Startup may continue only for errors the channel classifies as retryable.
+  // Periodic reconcile remains best-effort once the account is already active.
+  shouldContinueAfterStartupReconcileError?: (error: unknown) => boolean;
+  // Runs after the startup reconcile either refreshes peer keys or reports a
+  // classified retryable failure, before the inbox can dispatch a turn.
   onReady?: () => Promise<void>;
   reconcileIntervalMs?: number;
 }): Promise<void> {
@@ -45,7 +54,11 @@ export async function runReefChannelLifecycle(params: {
       if (lifecycle.signal.aborted) {
         return;
       }
-      await runReconcileStep(params);
+      await runReconcileStep({
+        ...params,
+        shouldContinueAfterError: CONTINUE_AFTER_RECONCILE_ERROR,
+        signal: lifecycle.signal,
+      });
     }
   };
   // Declared outside the try so the finally can await it even when the startup
@@ -53,9 +66,20 @@ export async function runReefChannelLifecycle(params: {
   let inboxTask: Promise<void> | undefined;
   try {
     if (!lifecycle.signal.aborted) {
-      await runReconcileStep(params);
+      await runReconcileStep({
+        ...params,
+        shouldContinueAfterError:
+          params.shouldContinueAfterStartupReconcileError ?? STOP_AFTER_RECONCILE_ERROR,
+        signal: lifecycle.signal,
+      });
+    }
+    if (lifecycle.signal.aborted) {
+      return;
     }
     await params.onReady?.();
+    if (lifecycle.signal.aborted) {
+      return;
+    }
     inboxTask = params.startInbox(lifecycle.signal);
     await Promise.all([inboxTask, reconciliationLoop()]);
   } finally {
