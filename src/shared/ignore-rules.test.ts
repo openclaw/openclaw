@@ -131,6 +131,50 @@ describe("addIgnoreRules", () => {
     }
   });
 
+  it("preserves case-sensitive semantics for a supplied matcher", () => {
+    const nestedDir = path.join(tempDir, "Private");
+    fs.mkdirSync(nestedDir);
+    fs.writeFileSync(path.join(nestedDir, ".gitignore"), oversizedIgnoreFileContent(), "utf-8");
+
+    const ig = addIgnoreRules(nestedDir, tempDir, ignore({ ignorecase: false }), {
+      ignoreCase: false,
+    });
+
+    expect(ig.ignores("Private/secret.txt")).toBe(true);
+    expect(ig.ignores("private/secret.txt")).toBe(false);
+
+    const otherDir = path.join(tempDir, "Other");
+    fs.mkdirSync(otherDir);
+    fs.writeFileSync(path.join(otherDir, ".gitignore"), oversizedIgnoreFileContent(), "utf-8");
+    addIgnoreRules(otherDir, tempDir, ig);
+    expect(ig.ignores("Other/secret.txt")).toBe(true);
+    expect(ig.ignores("other/secret.txt")).toBe(false);
+  });
+
+  it("preserves case-insensitive semantics for a supplied default matcher", () => {
+    const nestedDir = path.join(tempDir, "Private");
+    fs.mkdirSync(nestedDir);
+    fs.writeFileSync(path.join(nestedDir, ".gitignore"), oversizedIgnoreFileContent(), "utf-8");
+
+    const ig = addIgnoreRules(nestedDir, tempDir, ignore());
+
+    expect(ig.ignores("Private/secret.txt")).toBe(true);
+    expect(ig.ignores("private/secret.txt")).toBe(true);
+  });
+
+  it("adopts the explicit case mode after matcher composition", () => {
+    const source = addIgnoreRules(tempDir, tempDir);
+    const inherited = ignore().add(source);
+    const nestedDir = path.join(tempDir, "Private");
+    fs.mkdirSync(nestedDir);
+    fs.writeFileSync(path.join(nestedDir, ".gitignore"), oversizedIgnoreFileContent(), "utf-8");
+
+    addIgnoreRules(nestedDir, tempDir, inherited);
+
+    expect(inherited.ignores("Private/secret.txt")).toBe(true);
+    expect(inherited.ignores("private/secret.txt")).toBe(true);
+  });
+
   it("keeps fail-closed metadata when the matcher is extended", () => {
     const nestedDir = path.join(tempDir, "locked");
     fs.mkdirSync(nestedDir);
