@@ -330,7 +330,18 @@ export function createDiscordAutoPresenceController(params: {
       return;
     }
 
-    params.gateway.updatePresence(decision.presence);
+    try {
+      params.gateway.updatePresence(decision.presence);
+    } catch (err) {
+      // Failed sends must leave the applied signature untouched so the same
+      // presence is retried after the gateway backlog or socket recovers.
+      params.log?.(
+        warn(
+          `discord: auto-presence update failed for account ${params.accountId}: ${String(err)}`,
+        ),
+      );
+      return;
+    }
     lastAppliedSignature = signature;
     lastAppliedAt = ts;
   };
