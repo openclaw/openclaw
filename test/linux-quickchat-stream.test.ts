@@ -65,7 +65,7 @@ function createFakeElement() {
   };
 }
 
-function createQuickChatHarness() {
+function createQuickChatHarness(): Record<string, any> {
   const browserBindingsEnd = quickchatSource.indexOf("elements.input.addEventListener");
   assert.notEqual(browserBindingsEnd, -1, "quickchat browser binding boundary");
   const elements = new Map();
