@@ -515,7 +515,7 @@ describe("containerRestRequest", () => {
     ).rejects.toThrow(`Signal REST 500: ${"x".repeat(16 * 1024)}`);
   });
 
-  it("times out stalled REST error bodies before reporting the HTTP failure", async () => {
+  it("preserves the deadline error for stalled REST error bodies", async () => {
     vi.useFakeTimers();
     try {
       let observedSignal: AbortSignal | undefined;
@@ -534,12 +534,11 @@ describe("containerRestRequest", () => {
 
       await vi.advanceTimersByTimeAsync(0);
       expect(observedSignal).toBeInstanceOf(AbortSignal);
-      const requestRejection = expect(request).rejects.toThrow(
-        "Signal REST 500: Internal Server Error",
-      );
+      const requestRejection = expect(request).rejects.toThrow("Signal REST request timed out");
 
       await vi.advanceTimersByTimeAsync(25);
       await requestRejection;
+      expect(observedSignal?.aborted).toBe(true);
     } finally {
       vi.useRealTimers();
     }

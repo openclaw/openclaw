@@ -112,10 +112,7 @@ async function withSignalRestDeadline<T>(
   const safeTimeoutMs = resolveTimerTimeoutMs(timeoutMs, DEFAULT_TIMEOUT_MS);
   const deadlineAtMs = Date.now() + safeTimeoutMs;
   const controller = new AbortController();
-  const timer = setTimeout(
-    () => controller.abort(signalRestRequestTimeoutError()),
-    safeTimeoutMs,
-  );
+  const timer = setTimeout(() => controller.abort(signalRestRequestTimeoutError()), safeTimeoutMs);
   timer.unref?.();
   try {
     return await run({
@@ -341,10 +338,7 @@ async function containerRestRequest<T = unknown>(
     throw new Error("fetch is not available");
   }
 
-  return await withSignalRestDeadline(timeoutMs, async ({
-    signal,
-    timeoutMs: bodyTimeoutMs,
-  }) => {
+  return await withSignalRestDeadline(timeoutMs, async ({ signal, timeoutMs: bodyTimeoutMs }) => {
     const res = await fetchImpl(url, { ...init, signal });
     if (res.status === 204) {
       return undefined as T;
@@ -398,10 +392,7 @@ async function containerFetchAttachment(
     throw new Error("fetch is not available");
   }
 
-  return await withSignalRestDeadline(timeoutMs, async ({
-    signal,
-    timeoutMs: bodyTimeoutMs,
-  }) => {
+  return await withSignalRestDeadline(timeoutMs, async ({ signal, timeoutMs: bodyTimeoutMs }) => {
     let res: Response | undefined;
     try {
       const fetched = await fetchImpl(url, { method: "GET", signal });
