@@ -21179,9 +21179,9 @@
       "translated": "Continua"
     },
     {
-      "id": "native.apple.b3700cf60f4520dc",
-      "source": "Message \\(self.model.agentDisplay.name)",
-      "translated": "Invia un messaggio a \\(self.model.agentDisplay.name)"
+      "id": "native.apple.da0b9bd07a337bda",
+      "source": "Continue a recent conversation",
+      "translated": "Continua una conversazione recente"
     },
     {
       "id": "native.apple.edf12ff583307f43",

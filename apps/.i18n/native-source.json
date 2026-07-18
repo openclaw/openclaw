@@ -33882,16 +33882,16 @@
       "id": "native.apple.144b21229f65f2a4"
     },
     {
-      "kind": "ui-call",
-      "line": 62,
+      "kind": "ui-modifier",
+      "line": 97,
       "path": "apps/macos/Sources/OpenClaw/QuickChatView.swift",
-      "source": "Message \\(self.model.agentDisplay.name)",
+      "source": "Continue a recent conversation",
       "surface": "apple",
-      "id": "native.apple.b3700cf60f4520dc"
+      "id": "native.apple.da0b9bd07a337bda"
     },
     {
       "kind": "ui-modifier",
-      "line": 88,
+      "line": 110,
       "path": "apps/macos/Sources/OpenClaw/QuickChatView.swift",
       "source": "Send a window screenshot",
       "surface": "apple",
@@ -33899,7 +33899,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 112,
+      "line": 134,
       "path": "apps/macos/Sources/OpenClaw/QuickChatView.swift",
       "source": "Send message",
       "surface": "apple",
@@ -33907,7 +33907,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 170,
+      "line": 192,
       "path": "apps/macos/Sources/OpenClaw/QuickChatView.swift",
       "source": "Needs additional permissions",
       "surface": "apple",
@@ -33915,7 +33915,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 177,
+      "line": 199,
       "path": "apps/macos/Sources/OpenClaw/QuickChatView.swift",
       "source": "Grant",
       "surface": "apple",
@@ -33923,7 +33923,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 183,
+      "line": 205,
       "path": "apps/macos/Sources/OpenClaw/QuickChatView.swift",
       "source": "Not now",
       "surface": "apple",
