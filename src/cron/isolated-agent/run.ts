@@ -22,6 +22,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   claimAgentRunContext,
+  consumeCronNextCheckProposal,
   getAgentEventLifecycleGeneration,
   getAgentRunContext,
   releaseAgentRunContext,
@@ -1773,6 +1774,8 @@ export async function runCronIsolatedAgentTurn(params: {
             : existingRunContext.sessionKey,
         sessionId: initialSessionId,
         lifecycleGeneration: runLifecycleGeneration,
+        cronJobId: params.job.id,
+        cronPacingEnabled: params.job.pacing !== undefined,
       },
       {
         trackOwner: true,
@@ -1848,8 +1851,12 @@ export async function runCronIsolatedAgentTurn(params: {
       outcome = "error";
       outcomeError = finalized.error;
     }
-    return finalized;
+    const delayMs = consumeCronNextCheckProposal(initialSessionId, params.job.id);
+    return finalized.status !== "ok" || delayMs === undefined
+      ? finalized
+      : { ...finalized, nextCheck: { delayMs } };
   } catch (err) {
+    consumeCronNextCheckProposal(initialSessionId, params.job.id);
     const isCronLaneTimeout = isAborted() || isCronNestedLaneTaskTimeoutError(err);
     const error = isCronLaneTimeout ? abortReason() : String(err);
     outcome = "error";

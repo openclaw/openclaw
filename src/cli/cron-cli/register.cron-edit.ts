@@ -113,6 +113,9 @@ export function registerCronEditCommand(cron: Command) {
       .option("--wake <mode>", "Wake mode (now|next-heartbeat)")
       .option("--at <when>", "Set one-shot time (ISO, offset-less uses --tz) or duration like 20m")
       .option("--every <duration>", "Set interval duration like 10m")
+      .option("--pacing-min <duration>", "Set minimum delay for a dynamic next check")
+      .option("--pacing-max <duration>", "Set maximum delay for a dynamic next check")
+      .option("--clear-pacing", "Remove dynamic-cadence bounds", false)
       .option("--cron <expr>", "Set cron expression")
       .option(
         "--tz <iana>",
@@ -290,6 +293,30 @@ export function registerCronEditCommand(cron: Command) {
           }
           if (opts.clearSessionKey) {
             patch.sessionKey = null;
+          }
+
+          const pacingMin = normalizeOptionalString(opts.pacingMin);
+          const pacingMax = normalizeOptionalString(opts.pacingMax);
+          const hasPacingMin = typeof opts.pacingMin === "string";
+          const hasPacingMax = typeof opts.pacingMax === "string";
+          if (hasPacingMin && !pacingMin) {
+            throw new Error("--pacing-min must not be blank");
+          }
+          if (hasPacingMax && !pacingMax) {
+            throw new Error("--pacing-max must not be blank");
+          }
+          if (opts.clearPacing && (hasPacingMin || hasPacingMax)) {
+            throw new Error("Use --clear-pacing or pacing bounds, not both");
+          }
+          if (opts.clearPacing) {
+            patch.pacing = null;
+          } else if (hasPacingMin || hasPacingMax) {
+            const existing = await readCronJobForEdit(opts, String(id));
+            patch.pacing = {
+              ...existing.pacing,
+              ...(pacingMin ? { min: pacingMin } : {}),
+              ...(pacingMax ? { max: pacingMax } : {}),
+            };
           }
 
           const triggerScriptPath = normalizeOptionalString(opts.triggerScript);

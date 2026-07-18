@@ -501,6 +501,7 @@ function finalizeUpdatedJob(params: {
   }
 
   nextJob.updatedAtMs = now;
+  nextJob.state.pacedNextRunAtMs = undefined;
   if (schedulingInputsChanged) {
     nextJob.state.startupCatchupAtMs = undefined;
     if (isJobEnabled(nextJob)) {
@@ -545,6 +546,7 @@ async function persistUpdatedJob(params: {
 function declarativeFields(job: CronJob, includeEnabled: boolean) {
   return {
     schedule: job.schedule,
+    pacing: job.pacing,
     trigger: job.trigger,
     payload: job.payload,
     delivery: job.delivery,

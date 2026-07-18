@@ -79,6 +79,36 @@ describe("cron trigger CLI options", () => {
     );
   });
 
+  it("sends pacing bounds on add", async () => {
+    const program = new Command().exitOverride();
+    registerCronAddCommand(program);
+
+    await program.parseAsync(
+      [
+        "add",
+        "--name",
+        "paced",
+        "--every",
+        "30m",
+        "--pacing-min",
+        "15m",
+        "--pacing-max",
+        "4h",
+        "--system-event",
+        "check",
+        "--session",
+        "main",
+      ],
+      { from: "user" },
+    );
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith(
+      "cron.add",
+      expect.anything(),
+      expect.objectContaining({ pacing: { min: "15m", max: "4h" } }),
+    );
+  });
+
   it("accepts trigger script files at the byte limit", async () => {
     const scriptPath = path.join(fixtureRoot, "at-limit.js");
     await fs.writeFile(scriptPath, "x".repeat(65_536), "utf8");
@@ -136,6 +166,19 @@ describe("cron trigger CLI options", () => {
       "cron.update",
       expect.objectContaining({ clearTrigger: true }),
       { id: "job-1", patch: { trigger: null } },
+    );
+  });
+
+  it("maps --clear-pacing to a nullable edit patch", async () => {
+    const program = new Command().exitOverride();
+    registerCronEditCommand(program);
+
+    await program.parseAsync(["edit", "job-1", "--clear-pacing"], { from: "user" });
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith(
+      "cron.update",
+      expect.objectContaining({ clearPacing: true }),
+      { id: "job-1", patch: { pacing: null } },
     );
   });
 });
