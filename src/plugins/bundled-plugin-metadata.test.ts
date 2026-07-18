@@ -51,6 +51,7 @@ const EXPECTED_BUNDLED_STARTUP_PLUGIN_IDS = [
   "lobster",
   "logbook",
   "memory-wiki",
+  "msgraph-mail-wake",
   "ollama",
   "opencode",
   "openshell",

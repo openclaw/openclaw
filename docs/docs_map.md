@@ -5990,6 +5990,17 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Plugin author checklist
   - H2: Related docs
 
+## plugins/msgraph-mail-wake.md
+
+- Route: /plugins/msgraph-mail-wake
+- Headings:
+  - H2: Prerequisites
+  - H2: Configure mailboxes
+  - H2: How it works
+  - H2: Wake payload schema
+  - H2: Delivery guarantees
+  - H2: Related
+
 ## plugins/oc-path.md
 
 - Route: /plugins/oc-path
@@ -6752,6 +6763,15 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /plugins/reference/moonshot
 - Headings:
   - H1: Moonshot plugin
+  - H2: Distribution
+  - H2: Surface
+  - H2: Related docs
+
+## plugins/reference/msgraph-mail-wake.md
+
+- Route: /plugins/reference/msgraph-mail-wake
+- Headings:
+  - H1: Msgraph Mail Wake plugin
   - H2: Distribution
   - H2: Surface
   - H2: Related docs

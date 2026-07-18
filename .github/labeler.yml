@@ -397,6 +397,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/webhooks/**"
+"extensions: msgraph-mail-wake":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/msgraph-mail-wake/**"
+          - "docs/plugins/msgraph-mail-wake.md"
 "extensions: device-pair":
   - changed-files:
       - any-glob-to-any-file:

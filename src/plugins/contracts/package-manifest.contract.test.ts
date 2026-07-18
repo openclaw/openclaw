@@ -52,6 +52,10 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
     pluginLocalRuntimeDeps: ["@azure/identity", "@microsoft/teams.apps"],
     minHostVersionBaseline: "2026.3.22",
   },
+  {
+    pluginId: "msgraph-mail-wake",
+    pluginLocalRuntimeDeps: ["@azure/identity"],
+  },
   { pluginId: "nextcloud-talk", minHostVersionBaseline: "2026.3.22" },
   {
     pluginId: "nostr",

@@ -1307,6 +1307,7 @@
                   "plugins/teams-meetings",
                   "plugins/workboard",
                   "plugins/webhooks",
+                  "plugins/msgraph-mail-wake",
                   "plugins/admin-http-rpc",
                   "plugins/voice-call",
                   "plugins/vault",

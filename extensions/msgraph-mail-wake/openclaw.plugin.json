@@ -1,0 +1,131 @@
+{
+  "id": "msgraph-mail-wake",
+  "activation": {
+    "onStartup": true
+  },
+  "name": "Microsoft Graph Mail Wake",
+  "description": "Microsoft Graph mailbox change notifications that wake OpenClaw agent sessions.",
+  "configContracts": {
+    "secretInputs": {
+      "paths": [
+        {
+          "path": "auth.clientSecret",
+          "expected": "string"
+        },
+        {
+          "path": "auth.bearerToken",
+          "expected": "string"
+        }
+      ]
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "$defs": {
+      "nonBlankString": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "\\S"
+      },
+      "secretRef": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "source": {
+            "type": "string",
+            "enum": ["env", "file", "exec"]
+          },
+          "provider": { "$ref": "#/$defs/nonBlankString" },
+          "id": { "$ref": "#/$defs/nonBlankString" }
+        },
+        "required": ["source", "provider", "id"]
+      },
+      "secretInput": {
+        "anyOf": [
+          { "$ref": "#/$defs/nonBlankString" },
+          { "$ref": "#/$defs/secretRef" }
+        ]
+      }
+    },
+    "properties": {
+      "enabled": { "type": "boolean" },
+      "path": { "type": "string", "minLength": 1 },
+      "notificationUrl": {
+        "type": "string",
+        "minLength": 1,
+        "format": "uri",
+        "pattern": "^https://"
+      },
+      "auth": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["bearerToken"],
+            "properties": {
+              "bearerToken": { "$ref": "#/$defs/secretInput" }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["tenantId", "clientId", "clientSecret"],
+            "properties": {
+              "tenantId": { "$ref": "#/$defs/nonBlankString" },
+              "clientId": { "$ref": "#/$defs/nonBlankString" },
+              "clientSecret": { "$ref": "#/$defs/secretInput" }
+            }
+          }
+        ]
+      },
+      "subscription": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "expirationMinutes": { "type": "number" },
+          "renewEveryMinutes": { "type": "number" },
+          "handleLifecycleEvents": { "type": "boolean" }
+        }
+      },
+      "mailboxes": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "user": { "type": "string", "minLength": 1 },
+            "folder": { "type": "string", "minLength": 1 },
+            "changeType": { "type": "string", "minLength": 1 },
+            "fetchMessage": { "type": "boolean" },
+            "wake": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["sessionKey"],
+              "properties": {
+                "sessionKey": { "type": "string", "minLength": 1 },
+                "agentId": { "type": "string", "minLength": 1 },
+                "deliveryMode": { "type": "string", "enum": ["none", "announce"] }
+              }
+            }
+          },
+          "required": ["user", "wake"]
+        }
+      }
+    },
+    "allOf": [
+      {
+        "if": {
+          "required": ["mailboxes"],
+          "properties": {
+            "mailboxes": { "minProperties": 1 }
+          }
+        },
+        "then": {
+          "required": ["auth", "notificationUrl"]
+        }
+      }
+    ]
+  }
+}

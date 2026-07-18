@@ -1266,6 +1266,19 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/msgraph-mail-wake:
+    dependencies:
+      '@azure/identity':
+        specifier: 4.13.1
+        version: 4.13.1
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/msteams:
     dependencies:
       '@azure/identity':
