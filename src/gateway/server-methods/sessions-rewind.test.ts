@@ -264,6 +264,25 @@ describe("session message-cut methods", () => {
     }
   });
 
+  it.each(["sessions.rewind", "sessions.branches.switch"] as const)(
+    "rejects %s for upstream-linked sessions even with a fork-capable harness",
+    async (method) => {
+      mocks.external = true;
+      mocks.capability = true;
+      const respond = await invoke(method, "user-entry");
+
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: ErrorCodes.INVALID_REQUEST,
+          message: expect.stringContaining("external agent harness"),
+        }),
+      );
+      expect(mocks.upstreamFork).not.toHaveBeenCalled();
+    },
+  );
+
   it("forks an upstream-linked session and binds the local mirror", async () => {
     mocks.external = true;
     mocks.capability = true;

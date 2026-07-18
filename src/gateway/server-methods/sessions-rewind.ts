@@ -193,7 +193,9 @@ async function mutateSessionAtMessage(
   const initialSessionId = initial.entry.sessionId;
   const initialLifecycleRevision = initial.entry.lifecycleRevision;
   const initialUpstreamLink = readSessionUpstreamLink(initial.canonicalKey, initial.target.agentId);
-  if (initialUpstreamLink && action === "rewind") {
+  // Only fork may cross to an upstream-owned conversation (it creates a new thread).
+  // Rewind and switch would mutate the shared upstream history in place; fail closed.
+  if (initialUpstreamLink && action !== "fork") {
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, EXTERNAL_CONVERSATION_ERROR));
     return;
   }
@@ -288,7 +290,7 @@ async function mutateSessionAtMessage(
         return;
       }
       const upstreamLink = readSessionUpstreamLink(current.canonicalKey, current.target.agentId);
-      if (upstreamLink && action === "rewind") {
+      if (upstreamLink && action !== "fork") {
         respond(
           false,
           undefined,
