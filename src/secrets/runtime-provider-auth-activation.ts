@@ -9,7 +9,7 @@ type ProviderAuthRuntimeSnapshotActivation = (params: {
 
 let activationHandler: ProviderAuthRuntimeSnapshotActivation | null = null;
 
-export function registerProviderAuthRuntimeSnapshotActivation(
+function registerProviderAuthRuntimeSnapshotActivation(
   handler: ProviderAuthRuntimeSnapshotActivation,
 ): void {
   activationHandler = handler;

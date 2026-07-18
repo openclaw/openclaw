@@ -9,6 +9,7 @@ import type { ResolverContext, SecretDefaults } from "./runtime-shared.js";
 import { pushInactiveSurfaceWarning, pushWarning } from "./runtime-shared.js";
 import {
   RuntimeWebProviderUnavailableError,
+  type RuntimeWebResolveSecretInputParams,
   type RuntimeWebProviderSelectionResult,
   type RuntimeWebUnavailableProvider,
   type RuntimeWebWarningCode,
@@ -17,11 +18,9 @@ import {
 import type { RuntimeWebDiagnostic } from "./runtime-web-tools.types.js";
 export { isRecord } from "./shared.js";
 export {
-  RuntimeWebProviderUnavailableError,
   type RuntimeWebProviderSelectionResult,
   type RuntimeWebSecretOwner,
   type RuntimeWebUnavailableProvider,
-  type RuntimeWebWarningCode,
   type SecretResolutionResult,
 } from "./runtime-web-tools-selection.types.js";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -85,12 +84,9 @@ type RuntimeWebProviderSelectionParams<
     toolConfig: TToolConfig;
   }) => { path: string; value: unknown } | undefined;
   /** Resolves inline/env/SecretRef credentials and reports the winning source. */
-  resolveSecretInput: (params: {
-    providerId: string;
-    value: unknown;
-    path: string;
-    envVars: string[];
-  }) => Promise<SecretResolutionResult<TSource>>;
+  resolveSecretInput: (
+    params: RuntimeWebResolveSecretInputParams,
+  ) => Promise<SecretResolutionResult<TSource>>;
   /** Writes the selected credential into the resolved runtime config snapshot. */
   setResolvedCredential: (params: {
     resolvedConfig: OpenClawConfig;
@@ -418,6 +414,7 @@ export async function resolveRuntimeWebProviderSelection<
     let keylessFallbackProvider: TProvider | undefined;
 
     for (const provider of candidates) {
+      const contractDigest = resolveProviderContractDigest(provider.id);
       const isKeyless = provider.requiresCredential === false;
       if (isKeyless) {
         if (!params.configuredProvider && !params.allowKeylessAutoSelect) {
@@ -440,6 +437,7 @@ export async function resolveRuntimeWebProviderSelection<
         value,
         path,
         envVars: getProviderEnvVars(provider),
+        contractDigest,
       });
       let selectedCandidatePath = path;
       let selectedCandidateResolution = resolution;
@@ -457,6 +455,7 @@ export async function resolveRuntimeWebProviderSelection<
             value: fallback.value,
             path: fallback.path,
             envVars: getProviderEnvVars(provider),
+            contractDigest,
           });
         }
       } else if (resolution.source === "env" && !resolution.secretRefConfigured) {
@@ -474,6 +473,7 @@ export async function resolveRuntimeWebProviderSelection<
             value: fallback.value,
             path: fallback.path,
             envVars: getProviderEnvVars(provider),
+            contractDigest,
           });
           if (fallbackResolution.source === "secretRef" && fallbackResolution.value) {
             // Preserve transcript/config bytes for env-selected providers while materializing refs.
@@ -497,7 +497,7 @@ export async function resolveRuntimeWebProviderSelection<
           ref: selectedCandidateResolution.secretRef,
           refKey: selectedCandidateResolution.secretRefKey,
           reason: selectedCandidateResolution.unresolvedRefReason,
-          contractDigest: resolveProviderContractDigest(provider.id),
+          contractDigest,
           restoreResolvedValue: (resolvedValue) =>
             params.setResolvedCredential({
               resolvedConfig: params.resolvedConfig,

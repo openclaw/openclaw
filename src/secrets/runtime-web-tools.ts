@@ -390,6 +390,7 @@ async function resolveSecretInputWithEnvFallback(params: {
   value: unknown;
   path: string;
   envVars: string[];
+  contractDigest: string;
   restrictEnvRefsToEnvVars?: boolean;
 }): Promise<SecretResolutionResult<SecretResolutionSource>> {
   const { ref } = resolveSecretInputRef({
@@ -452,6 +453,7 @@ async function resolveSecretInputWithEnvFallback(params: {
               ref,
               refKey: secretRefKey(ref),
               reason: "resolved secret value was invalid",
+              contractDigest: params.contractDigest,
             },
           ],
         });
@@ -475,6 +477,7 @@ async function resolveSecretInputWithEnvFallback(params: {
                 ref,
                 refKey: secretRefKey(ref),
                 reason,
+                contractDigest: params.contractDigest,
               },
             ],
           });
@@ -886,7 +889,7 @@ export async function resolveRuntimeWebTools(params: {
           config,
           search: toolConfig,
         }),
-      resolveSecretInput: ({ providerId, value, path, envVars }) =>
+      resolveSecretInput: ({ providerId, value, path, envVars, contractDigest }) =>
         resolveSecretInputWithEnvFallback({
           kind: "search",
           providerId,
@@ -896,6 +899,7 @@ export async function resolveRuntimeWebTools(params: {
           value,
           path,
           envVars,
+          contractDigest,
         }),
       setResolvedCredential: ({ resolvedConfig, provider, value }) =>
         setResolvedWebSearchApiKey({
@@ -1019,7 +1023,7 @@ export async function resolveRuntimeWebTools(params: {
           config,
           fetch: toolConfig,
         }),
-      resolveSecretInput: ({ providerId, value, path, envVars }) =>
+      resolveSecretInput: ({ providerId, value, path, envVars, contractDigest }) =>
         resolveSecretInputWithEnvFallback({
           kind: "fetch",
           providerId,
@@ -1029,6 +1033,7 @@ export async function resolveRuntimeWebTools(params: {
           value,
           path,
           envVars,
+          contractDigest,
           restrictEnvRefsToEnvVars: true,
         }),
       setResolvedCredential: ({ resolvedConfig, provider, value }) =>

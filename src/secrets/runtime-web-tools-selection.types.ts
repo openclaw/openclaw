@@ -6,6 +6,14 @@ import type { RuntimeWebDiagnosticCode } from "./runtime-web-tools.types.js";
 
 export type RuntimeWebWarningCode = Extract<RuntimeWebDiagnosticCode, SecretResolverWarningCode>;
 
+export type RuntimeWebResolveSecretInputParams = {
+  providerId: string;
+  value: unknown;
+  path: string;
+  envVars: string[];
+  contractDigest: string;
+};
+
 export type SecretResolutionResult<TSource extends string> = {
   value?: string;
   source: TSource;
