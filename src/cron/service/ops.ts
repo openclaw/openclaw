@@ -12,6 +12,7 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import {
   clearCronJobActive,
   isCronActiveJobMarkerCurrent,
+  isCronJobActive,
   markCronJobActive,
   type CronActiveJobMarker,
 } from "../active-jobs.js";
@@ -29,6 +30,7 @@ import {
   computeJobNextRunAtMs,
   createJob,
   findJobOrThrow,
+  hasActiveCronRun,
   hasScheduledNextRunAtMs,
   isJobEnabled,
   isJobDue,
@@ -506,7 +508,11 @@ function finalizeUpdatedJob(params: {
     } else {
       nextJob.state.nextRunAtMs = undefined;
       nextJob.state.queuedAtMs = undefined;
-      nextJob.state.runningAtMs = undefined;
+      // Preserve only genuine execution. Queued reservations must clear so a
+      // disabled job can accept a later force run with the same timestamp.
+      if (!isCronJobActive(nextJob.id)) {
+        nextJob.state.runningAtMs = undefined;
+      }
     }
   } else if (isJobEnabled(nextJob) && !hasScheduledNextRunAtMs(nextJob.state.nextRunAtMs)) {
     nextJob.state.nextRunAtMs = computeJobNextRunAtMs(nextJob, now);
@@ -876,7 +882,7 @@ async function inspectManualRunPreflight(
       await skipInvalidPersistedManualRun({ state, job, mode, runId, terminalTracker, error });
       return { ok: true, ran: false, reason: "invalid-spec" as const };
     }
-    if (typeof job.state.queuedAtMs === "number" || typeof job.state.runningAtMs === "number") {
+    if (hasActiveCronRun(job)) {
       return { ok: true, ran: false, reason: "already-running" as const };
     }
     const now = state.deps.nowMs();
@@ -955,7 +961,7 @@ async function prepareManualRun(
       });
       return { ok: true, ran: false, reason: "invalid-spec" as const };
     }
-    if (typeof job.state.queuedAtMs === "number" || typeof job.state.runningAtMs === "number") {
+    if (hasActiveCronRun(job)) {
       return { ok: true, ran: false, reason: "already-running" as const };
     }
     const reservationAt = state.deps.nowMs();

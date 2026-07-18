@@ -5,6 +5,7 @@ sidebarTitle: "Show widget"
 read_when:
   - You want an agent to render an interactive result in web chat, a native app, or Discord
   - You want widget buttons to send follow-up prompts into the chat
+  - You want to theme widgets with the shared design tokens
   - You need the show_widget input, security, or retention contract
 ---
 
@@ -14,16 +15,59 @@ read_when:
 
 When the agent calls `show_widget`, OpenClaw core wraps `widget_code` in a minimal HTML document, stores it as a Canvas document, and returns a preview handle. The Control UI renders that handle as a sandboxed iframe directly under the tool call, while native apps use an isolated web view. Both restore the widget after history reload.
 
-For browser embedding, the wrapper document injects two small host bridges around the widget code:
+For browser embedding, the wrapper document injects three small host bridges around the widget code:
 
 - A size reporter posts the rendered content height to the embedding chat, which clamps it and fits the iframe (160 to 1200 pixels).
 - A prompt bridge defines a global `sendPrompt(text)` function that widget scripts can call to submit a follow-up message into the chat. The bridge creates a private message channel and offers one endpoint to the chat before any widget code runs; the chat adopts only that first offer. See [Interactive widgets](#interactive-widgets).
+- A theme bridge listens for the Control UI's current design tokens and applies them as CSS variables, on load and again on every theme change.
 
 Everything else stays inside the frame: the document runs in an opaque origin with a strict Content Security Policy, so widget scripts cannot reach the Control UI, the Gateway, or the network.
 
 The core implementation is available only when the originating Gateway client declares the `inline-widgets` capability. The Control UI and supported native apps declare this capability automatically. The Discord implementation is available only in Discord sessions with Activities configured. Other channel runs do not receive `show_widget`.
 
 Capability transport covers embedded, Codex app-server, and CLI-backed model backends. Grant-authenticated MCP callers and direct HTTP tool-invoke callers remain fail closed because they do not declare client capabilities.
+
+## Design system
+
+Every Canvas widget includes a classless base stylesheet and a small token set:
+
+| Token                                                                                 | Purpose                                    |
+| ------------------------------------------------------------------------------------- | ------------------------------------------ |
+| `--surface`                                                                           | Page-level surface color                   |
+| `--card`                                                                              | Card, button, and code background          |
+| `--elevated`                                                                          | Elevated form-control background           |
+| `--text`                                                                              | Default body and control text              |
+| `--text-strong`                                                                       | Headings and prominent values              |
+| `--muted`                                                                             | Secondary text and subtle borders          |
+| `--border`                                                                            | Standard separators and card borders       |
+| `--border-strong`                                                                     | Strong control borders                     |
+| `--accent`                                                                            | Links, focus rings, and the primary action |
+| `--accent-fg`                                                                         | Text on an accent background               |
+| `--ok`                                                                                | Success state                              |
+| `--warn`                                                                              | Warning state                              |
+| `--danger`                                                                            | Error or destructive state                 |
+| `--info`                                                                              | Informational state                        |
+| `--radius`                                                                            | Shared control and card corner radius      |
+| `--font-body`                                                                         | Host body font stack                       |
+| `--font-mono`                                                                         | Host monospace font stack                  |
+| `--accent-subtle`, `--ok-subtle`, `--warn-subtle`, `--danger-subtle`, `--info-subtle` | Derived translucent state backgrounds      |
+
+Bare headings, paragraphs, links, buttons, inputs, selects, textareas, tables, and code blocks receive base styles. Helper classes provide common patterns:
+
+- `.card` for a bordered content surface
+- `.badge`, plus `.ok`, `.warn`, `.danger`, or `.info`, for compact status labels
+- `.metric` for a prominent numeric value
+- `.muted` for secondary text
+- `.row` for a wrapping horizontal layout
+- `button.primary` for the primary action
+
+The Control UI posts an `openclaw:widget-theme` message with the active theme values when a widget loads and whenever the theme changes. Widgets therefore track every theme family, including Claw, Knot, Dash, and custom themes, without reloading. Outside the Control UI, including native apps and direct opens, widgets use the baked light or dark palette selected by `prefers-color-scheme`.
+
+Author widgets with three rules:
+
+1. Use the design variables for every color and background. Do not hardcode color values.
+2. Keep the page background transparent so the widget belongs to its host surface.
+3. Reserve the accent color for at most one primary action.
 
 ## Use the tool
 

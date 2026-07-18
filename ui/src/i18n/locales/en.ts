@@ -1662,6 +1662,7 @@ export const en: TranslationMap = {
     automation: "Automation",
     mcp: "MCP",
     infrastructure: "Infrastructure",
+    labs: "Labs",
     about: "About",
     aiAgents: "Agent Defaults",
     modelSetup: "Model Setup",
@@ -1700,6 +1701,7 @@ export const en: TranslationMap = {
     automation: "Commands, hooks, cron, and plugins.",
     mcp: "MCP servers, auth, tools, and diagnostics.",
     infrastructure: "Gateway, web, browser, and media settings.",
+    labs: "Experimental agent and tool capabilities.",
     about: "Control UI and connected Gateway build identity.",
     aiAgents: "Global agent defaults: models, skills, tools, memory, session.",
     modelSetup: "Connect a verified AI model",
@@ -2051,6 +2053,24 @@ export const en: TranslationMap = {
     enabledRestart: "Enabled {name}. A Gateway restart is required to apply the change.",
     disabledSuccess: "Disabled {name}.",
     disabledRestart: "Disabled {name}. A Gateway restart is required to apply the change.",
+  },
+  labsPage: {
+    intro:
+      "Labs contains experimental capabilities that may change, break, or disappear between releases.",
+    sectionTitle: "Experimental features",
+    sectionDescription: "Changes save immediately and apply to future agent runs.",
+    documentation: "Documentation",
+    restartRequired: "Gateway restart required.",
+    saveErrorTitle: "Could not update feature",
+    saveFailed: "The feature setting could not be saved.",
+    codeMode: {
+      title: "Code Mode",
+      description: "Let agents combine tools in compact, sandboxed JavaScript workflows.",
+    },
+    swarm: {
+      title: "Swarm",
+      description: "Let Code Mode orchestrate groups of subagents in parallel.",
+    },
   },
   aboutPage: {
     productName: "OpenClaw",

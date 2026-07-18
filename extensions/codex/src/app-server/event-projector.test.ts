@@ -1101,6 +1101,7 @@ describe("CodexAppServerEventProjector", () => {
 
     expect(result.assistantTexts).toStrictEqual([]);
     expect(result.toolMediaUrls).toEqual([savedPath]);
+    expect(result.hostOwnedToolMediaUrls).toEqual([savedPath]);
     expect(result.replayMetadata).toStrictEqual({
       hadPotentialSideEffects: true,
       replaySafe: false,
@@ -1130,6 +1131,7 @@ describe("CodexAppServerEventProjector", () => {
 
     expect(result.assistantTexts).toStrictEqual([]);
     expect(result.toolMediaUrls).toHaveLength(1);
+    expect(result.hostOwnedToolMediaUrls).toEqual(result.toolMediaUrls);
     expect(mediaUrl).toContain(`${path.sep}media${path.sep}tool-image-generation${path.sep}`);
     expect(mediaUrl?.endsWith(".png")).toBe(true);
     await expect(fs.readFile(mediaUrl ?? "")).resolves.toEqual(
@@ -1349,6 +1351,7 @@ describe("CodexAppServerEventProjector", () => {
 
     expect(result.toolMediaUrls).toHaveLength(2);
     expect(new Set(result.toolMediaUrls)).toHaveLength(2);
+    expect(result.hostOwnedToolMediaUrls).toEqual(result.toolMediaUrls);
   });
 
   it("does not append native Codex image-generation media after explicit media delivery", async () => {
@@ -1375,6 +1378,7 @@ describe("CodexAppServerEventProjector", () => {
     });
 
     expect(result.toolMediaUrls).toStrictEqual([]);
+    expect(result.hostOwnedToolMediaUrls).toBeUndefined();
   });
 
   it("propagates message-tool-only source reply delivery telemetry", async () => {

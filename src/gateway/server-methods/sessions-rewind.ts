@@ -31,7 +31,6 @@ import { hasVisibleActiveSessionRun } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import {
   loadAccessorSessionEntryForGatewayTarget,
-  rejectWebchatSessionMutation,
   resolveSessionWorkerPlacementMutationError,
   respondSessionWorkerPlacementMutationError,
 } from "./sessions-shared.js";
@@ -145,7 +144,7 @@ async function mutateSessionAtMessage(
   options: GatewayRequestHandlerOptions,
   action: MessageCutAction,
 ): Promise<void> {
-  const { params, respond, context, client, isWebchatConnect } = options;
+  const { params, respond, context } = options;
   const sessionKey = typeof params.sessionKey === "string" ? params.sessionKey.trim() : "";
   const entryId =
     action === "switch"
@@ -155,16 +154,6 @@ async function mutateSessionAtMessage(
       : typeof params.entryId === "string"
         ? params.entryId.trim()
         : "";
-  if (
-    rejectWebchatSessionMutation({
-      action,
-      client,
-      isWebchatConnect,
-      respond,
-    })
-  ) {
-    return;
-  }
   const cfg = context.getRuntimeConfig();
   const requestedAgent = resolveRequestedGlobalAgentId(
     cfg,
