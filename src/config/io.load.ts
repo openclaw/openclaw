@@ -189,11 +189,8 @@ export function loadConfigFromContext(
     );
     return context.finalizeLoadedRuntimeConfig(cfg);
   } catch (error) {
-    // Restore env mutations from this config read before any rethrow.
-    // resolveConfigForRead() applies env.vars to process.env; any subsequent
-    // failure (INVALID_CONFIG, DuplicateAgentDirError, or other) leaks those
-    // mutations. envBeforeRead is undefined only when maybeLoadDotEnvForConfig()
-    // throws, which happens before any config env mutations are applied.
+    // Failed reads must not publish env.vars. The snapshot stays undefined only
+    // when dotenv loading fails before config-owned environment mutation begins.
     if (envBeforeRead) {
       restoreEnvChangesIfUnchanged({
         env: deps.env,

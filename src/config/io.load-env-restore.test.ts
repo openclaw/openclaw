@@ -1,7 +1,5 @@
-// Verifies env.vars mutations are restored when config load fails for any reason.
-// Regression for: valid env.vars combined with a failing config section leaked
-// environment changes because only the INVALID_CONFIG rethrow path had cleanup.
 import { describe, expect, it } from "vitest";
+import { DuplicateAgentDirError } from "./agent-dirs.js";
 import { createConfigIO, restoreEnvChangesIfUnchanged } from "./io.js";
 import { withTempHome, writeOpenClawConfig } from "./test-helpers.js";
 
@@ -54,7 +52,7 @@ describe("restoreEnvChangesIfUnchanged", () => {
   });
 });
 
-describe("config io invalid config env restoration", () => {
+describe("loadConfig env restoration", () => {
   it("restores newly set env var after INVALID_CONFIG is thrown", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
@@ -71,7 +69,7 @@ describe("config io invalid config env restoration", () => {
       });
 
       expect(env.TEST_VAR).toBeUndefined();
-      expect(() => io.loadConfig()).toThrow();
+      expect(() => io.loadConfig()).toThrow(expect.objectContaining({ code: "INVALID_CONFIG" }));
       expect(env.TEST_VAR).toBeUndefined();
     });
   });
@@ -95,15 +93,13 @@ describe("config io invalid config env restoration", () => {
       });
 
       expect(env.PRE_EXISTING).toBe("original-value");
-      expect(() => io.loadConfig()).toThrow();
+      expect(() => io.loadConfig()).toThrow(expect.objectContaining({ code: "INVALID_CONFIG" }));
       expect(env.PRE_EXISTING).toBe("original-value");
     });
   });
 
   it("restores env changes after non-INVALID_CONFIG error (DuplicateAgentDirError)", async () => {
     await withTempHome(async (home) => {
-      // Two agents with the same explicit agentDir triggers DuplicateAgentDirError
-      // during finalization, which happens after resolveConfigForRead applies env.vars.
       await writeOpenClawConfig(home, {
         env: { vars: { DUP_DIR_TEST_VAR: "injected-value" } },
         agents: {
@@ -122,7 +118,7 @@ describe("config io invalid config env restoration", () => {
       });
 
       expect(env.DUP_DIR_TEST_VAR).toBeUndefined();
-      expect(() => io.loadConfig()).toThrow();
+      expect(() => io.loadConfig()).toThrow(DuplicateAgentDirError);
       expect(env.DUP_DIR_TEST_VAR).toBeUndefined();
     });
   });
