@@ -58,24 +58,28 @@ Use when the gateway restarts in a loop after an update (or `openclaw doctor` ke
 Older releases recorded plugin installs in `~/.openclaw/plugins/installs.json`. The shared SQLite state store is now authoritative. When the legacy file disagrees with the SQLite records (for example, it still lists plugin versions from before the update), the startup migration refuses to archive it and reports the conflict on every start. On 2026.7.1 this blocked gateway readiness and caused a restart loop; 2026.7.1-1 and later downgrade it to a non-blocking note, but the warning returns on every `openclaw doctor` run until the conflict is resolved.
 
 ```bash
+openclaw plugins registry
 openclaw plugins list
 ls -la ~/.openclaw/plugins/installs.json
 ```
 
 <Steps>
-  <Step title="Verify the SQLite side is correct">
-    Confirm every plugin named in the warning appears in `openclaw plugins list` at the version you expect (current, not pre-update). If a plugin is missing or stale there, stop: the legacy file may be your only good record. Repair the install first.
+  <Step title="Verify the authoritative record">
+    Inspect the persisted plugin registry with `openclaw plugins registry`. It reports the registry state and the current versus persisted enabled counts, and prints its own repair command (`openclaw plugins registry --refresh`) when the persisted record is stale. Then confirm every plugin named in the warning appears in `openclaw plugins list` at the version you expect (current, not pre-update). If the registry reports a stale or incomplete record, or a plugin is missing, stop and repair the install first: until the authoritative record is proven complete, the legacy file may still hold the only good copy of that metadata.
   </Step>
   <Step title="Archive the legacy file">
-    Move it aside so the migration no longer sees two sources of truth. Move, do not delete:
+    Move it aside so the migration no longer sees two sources of truth. This is a rename in place: nothing is deleted, and restoring the original filename undoes it completely.
 
     ```bash
-    mv ~/.openclaw/plugins/installs.json ~/.openclaw/plugins/installs.json.migrated-$(date +%Y%m%d)
+    mv ~/.openclaw/plugins/installs.json        ~/.openclaw/plugins/installs.json.migrated-$(date +%Y%m%d)
     ```
 
   </Step>
   <Step title="Confirm the warning is gone">
     Rerun `openclaw doctor` and `openclaw gateway status`. The conflict note should no longer appear. If you are stuck on 2026.7.1 itself, where this conflict blocks readiness entirely, update to 2026.7.1-1 or later first; those releases downgrade the conflict to a note so the gateway starts and you can do the cleanup from a running system.
+  </Step>
+  <Step title="Verify plugin state after recovery">
+    Compare the enabled counts in `openclaw plugins list` against what you saw before archiving, run `openclaw plugins doctor` for load issues, and confirm your plugin configuration and any `plugins.allow` entries are still present in the config. Manual remediation around this conflict has been reported to coincide with dropped plugin configuration and allowlist entries; catching that here beats discovering it on the next restart.
   </Step>
 </Steps>
 
