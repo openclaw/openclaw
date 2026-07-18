@@ -1187,7 +1187,7 @@ function createRawOllamaStreamFn(
           auditContext: "ollama-stream.chat",
         });
 
-        let reader: any;
+        let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
         try {
           if (!response.ok) {
             const errorText = await readResponseTextLimited(
@@ -1435,7 +1435,7 @@ function createRawOllamaStreamFn(
             message: assistantMessage,
           });
         } finally {
-          try { reader.releaseLock(); } catch {}
+          try { reader?.releaseLock(); } catch {}
           await release();
         }
       } catch (err) {
