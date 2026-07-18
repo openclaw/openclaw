@@ -350,6 +350,64 @@ class ChatQuestionTest {
 
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)
+  fun locallyExpiredMissingQuestionUsesPerIdGetFallback() =
+    runTest {
+      val json = Json { ignoreUnknownKeys = true }
+      val pending = record(expiresAtMs = 0)
+      val answered =
+        pending.copy(
+          status = "answered",
+          answers = QuestionAnswers(mapOf("meal" to QuestionAnswersAnswersValue(listOf("Tacos")))),
+        )
+      var getCalls = 0
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, _ ->
+            when (method) {
+              "question.list" -> json.encodeToString(QuestionListResult(emptyList()))
+              "question.get" -> {
+                getCalls += 1
+                json.encodeToString(QuestionGetResult(answered))
+              }
+              else -> "{}"
+            }
+          },
+        )
+
+      controller.handleGatewayEvent("question.requested", json.encodeToString(pending))
+      advanceUntilIdle()
+      assertEquals(
+        ChatQuestionStatus.Expired,
+        controller.questions.value
+          .single()
+          .status(),
+      )
+
+      controller.handleGatewayEvent("health", null)
+      advanceUntilIdle()
+
+      assertEquals(1, getCalls)
+      assertEquals(
+        listOf("Tacos"),
+        controller.questions.value
+          .single()
+          .record.answers
+          ?.answers
+          ?.get("meal")
+          ?.answers,
+      )
+      assertEquals(
+        ChatQuestionStatus.AnsweredElsewhere,
+        controller.questions.value
+          .single()
+          .status(),
+      )
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
   fun missingQuestionGetRetriesAfterOneTwoAndFourSeconds() =
     runTest {
       val json = Json { ignoreUnknownKeys = true }

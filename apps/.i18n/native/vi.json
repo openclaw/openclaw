@@ -22954,6 +22954,31 @@
       "translated": "Mở rộng kế hoạch"
     },
     {
+      "id": "native.apple.ce899320a84d4086",
+      "source": "Answered",
+      "translated": "Đã trả lời"
+    },
+    {
+      "id": "native.apple.f019b6a07d5a33d8",
+      "source": "Answered elsewhere",
+      "translated": "Đã trả lời ở nơi khác"
+    },
+    {
+      "id": "native.apple.ebdedeffad570c43",
+      "source": "Skipped",
+      "translated": "Đã bỏ qua"
+    },
+    {
+      "id": "native.apple.8dde2eaaf6b0dfa9",
+      "source": "Expired",
+      "translated": "Đã hết hạn"
+    },
+    {
+      "id": "native.apple.b34cd890366824f0",
+      "source": "Pending",
+      "translated": "Đang chờ"
+    },
+    {
       "id": "native.apple.009d113b4d9a7855",
       "source": "\\(question.header):",
       "translated": "\\(question.header):"
@@ -22979,24 +23004,24 @@
       "translated": "Đã chọn"
     },
     {
-      "id": "native.apple.14a4bf7b6b7d40dc",
-      "source": "Skip",
-      "translated": "Bỏ qua"
-    },
-    {
       "id": "native.apple.1bbbbfd1ad3842ce",
       "source": "Skipping…",
       "translated": "Đang bỏ qua…"
     },
     {
-      "id": "native.apple.e3095b651fc46b52",
-      "source": "Submit",
-      "translated": "Gửi"
+      "id": "native.apple.14a4bf7b6b7d40dc",
+      "source": "Skip",
+      "translated": "Bỏ qua"
     },
     {
       "id": "native.apple.6c1adc16e0a846e5",
       "source": "Submitting…",
       "translated": "Đang gửi…"
+    },
+    {
+      "id": "native.apple.e3095b651fc46b52",
+      "source": "Submit",
+      "translated": "Gửi"
     },
     {
       "id": "native.apple.7cd6fb01b9f5d14a",

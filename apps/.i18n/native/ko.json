@@ -22954,6 +22954,31 @@
       "translated": "계획 펼치기"
     },
     {
+      "id": "native.apple.ce899320a84d4086",
+      "source": "Answered",
+      "translated": "응답 완료"
+    },
+    {
+      "id": "native.apple.f019b6a07d5a33d8",
+      "source": "Answered elsewhere",
+      "translated": "다른 곳에서 응답 완료"
+    },
+    {
+      "id": "native.apple.ebdedeffad570c43",
+      "source": "Skipped",
+      "translated": "건너뜀"
+    },
+    {
+      "id": "native.apple.8dde2eaaf6b0dfa9",
+      "source": "Expired",
+      "translated": "만료됨"
+    },
+    {
+      "id": "native.apple.b34cd890366824f0",
+      "source": "Pending",
+      "translated": "대기 중"
+    },
+    {
       "id": "native.apple.009d113b4d9a7855",
       "source": "\\(question.header):",
       "translated": "\\(question.header):"
@@ -22979,24 +23004,24 @@
       "translated": "선택됨"
     },
     {
-      "id": "native.apple.14a4bf7b6b7d40dc",
-      "source": "Skip",
-      "translated": "건너뛰기"
-    },
-    {
       "id": "native.apple.1bbbbfd1ad3842ce",
       "source": "Skipping…",
       "translated": "건너뛰는 중…"
     },
     {
-      "id": "native.apple.e3095b651fc46b52",
-      "source": "Submit",
-      "translated": "제출"
+      "id": "native.apple.14a4bf7b6b7d40dc",
+      "source": "Skip",
+      "translated": "건너뛰기"
     },
     {
       "id": "native.apple.6c1adc16e0a846e5",
       "source": "Submitting…",
       "translated": "제출 중…"
+    },
+    {
+      "id": "native.apple.e3095b651fc46b52",
+      "source": "Submit",
+      "translated": "제출"
     },
     {
       "id": "native.apple.7cd6fb01b9f5d14a",

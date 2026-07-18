@@ -1755,7 +1755,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3074,
+      "line": 3071,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Could not stage an attachment for sending.",
       "surface": "android",
@@ -1763,7 +1763,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3107,
+      "line": 3104,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Offline queue is full ($OUTBOX_MAX_QUEUED messages); delete queued items first.",
       "surface": "android",
@@ -1771,7 +1771,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3113,
+      "line": 3110,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Attachments are too large to queue for one message; remove some and try again.",
       "surface": "android",
@@ -1779,7 +1779,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3119,
+      "line": 3116,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Offline attachment storage is full; delete queued items first.",
       "surface": "android",
@@ -1787,7 +1787,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3124,
+      "line": 3121,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Gateway health not OK; cannot send",
       "surface": "android",
@@ -1795,7 +1795,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3131,
+      "line": 3128,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Could not queue message for later delivery.",
       "surface": "android",
@@ -1803,7 +1803,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3848,
+      "line": 3845,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Chat failed",
       "surface": "android",
@@ -1811,7 +1811,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3986,
+      "line": 3983,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Event stream interrupted; try refreshing.",
       "surface": "android",
@@ -1819,7 +1819,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 4123,
+      "line": 4120,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Timed out waiting for a reply; try again or refresh.",
       "surface": "android",
@@ -1827,7 +1827,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 4333,
+      "line": 4330,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Timed out confirming the sent message; refresh to check delivery.",
       "surface": "android",
@@ -36722,8 +36722,48 @@
       "id": "native.apple.b6b3b9af4c618060"
     },
     {
+      "kind": "ui-localized-call",
+      "line": 222,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
+      "source": "Answered",
+      "surface": "apple",
+      "id": "native.apple.ce899320a84d4086"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 225,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
+      "source": "Answered elsewhere",
+      "surface": "apple",
+      "id": "native.apple.f019b6a07d5a33d8"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 227,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
+      "source": "Skipped",
+      "surface": "apple",
+      "id": "native.apple.ebdedeffad570c43"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 229,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
+      "source": "Expired",
+      "surface": "apple",
+      "id": "native.apple.8dde2eaaf6b0dfa9"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 231,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
+      "source": "Pending",
+      "surface": "apple",
+      "id": "native.apple.b34cd890366824f0"
+    },
+    {
       "kind": "ui-call",
-      "line": 329,
+      "line": 328,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
       "source": "\\(question.header):",
       "surface": "apple",
@@ -36731,7 +36771,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 342,
+      "line": 341,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
       "source": "Question summary",
       "surface": "apple",
@@ -36739,7 +36779,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 356,
+      "line": 355,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
       "source": "Other answer",
       "surface": "apple",
@@ -36747,7 +36787,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 410,
+      "line": 409,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
       "source": "Not selected",
       "surface": "apple",
@@ -36755,22 +36795,14 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 410,
+      "line": 409,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
       "source": "Selected",
       "surface": "apple",
       "id": "native.apple.bd4335213464d4be"
     },
     {
-      "kind": "conditional-branch",
-      "line": 426,
-      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
-      "source": "Skip",
-      "surface": "apple",
-      "id": "native.apple.14a4bf7b6b7d40dc"
-    },
-    {
-      "kind": "conditional-branch",
+      "kind": "ui-call",
       "line": 426,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
       "source": "Skipping…",
@@ -36778,20 +36810,28 @@
       "id": "native.apple.1bbbbfd1ad3842ce"
     },
     {
-      "kind": "conditional-branch",
-      "line": 435,
+      "kind": "ui-call",
+      "line": 429,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
-      "source": "Submit",
+      "source": "Skip",
       "surface": "apple",
-      "id": "native.apple.e3095b651fc46b52"
+      "id": "native.apple.14a4bf7b6b7d40dc"
     },
     {
-      "kind": "conditional-branch",
-      "line": 435,
+      "kind": "ui-call",
+      "line": 440,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
       "source": "Submitting…",
       "surface": "apple",
       "id": "native.apple.6c1adc16e0a846e5"
+    },
+    {
+      "kind": "ui-call",
+      "line": 443,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
+      "source": "Submit",
+      "surface": "apple",
+      "id": "native.apple.e3095b651fc46b52"
     },
     {
       "kind": "conditional-branch",

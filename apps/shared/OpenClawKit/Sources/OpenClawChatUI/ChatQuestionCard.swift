@@ -129,7 +129,7 @@ public final class OpenClawQuestionCardModel: Identifiable {
         return true
     }
 
-    public func markAnsweredLocally() {
+    public func markAnsweredLocally(answers: [String: [String]]) {
         self.wasAnsweredLocally = true
         self.isSubmitting = false
         self.isSkipping = false
@@ -142,11 +142,9 @@ public final class OpenClawQuestionCardModel: Identifiable {
             createdatms: self.record.createdatms,
             expiresatms: self.record.expiresatms,
             status: .answered,
-            answers: self.answers().map { answers in
-                QuestionAnswers(answers: answers.mapValues { values in
-                    AnyCodable(["answers": values])
-                })
-            },
+            answers: QuestionAnswers(answers: answers.mapValues { values in
+                AnyCodable(["answers": values])
+            }),
             resolvedby: self.record.resolvedby)
     }
 
@@ -221,15 +219,16 @@ public final class OpenClawQuestionCardModel: Identifiable {
     public func terminalSummaryText(for question: Question) -> String {
         switch self.status() {
         case .answered:
-            self.answerValues(questionID: question.id)?.joined(separator: ", ") ?? "Answered"
+            self.answerValues(questionID: question.id)?.joined(separator: ", ") ?? String(localized: "Answered")
         case .answeredElsewhere:
-            self.answerValues(questionID: question.id)?.joined(separator: ", ") ?? "Answered elsewhere"
+            self.answerValues(questionID: question.id)?.joined(separator: ", ")
+                ?? String(localized: "Answered elsewhere")
         case .cancelled:
-            "Skipped"
+            String(localized: "Skipped")
         case .expired:
-            "Expired"
+            String(localized: "Expired")
         case .pending, .submitting:
-            "Pending"
+            String(localized: "Pending")
         }
     }
 
@@ -423,8 +422,13 @@ public struct OpenClawQuestionCard: View {
                     Button {
                         Task { await onSkip(self.model) }
                     } label: {
-                        Text(self.model.isSkipping ? "Skipping…" : "Skip")
-                            .font(OpenClawChatTypography.body(size: 14, weight: .semibold, relativeTo: .callout))
+                        if self.model.isSkipping {
+                            Text("Skipping…")
+                                .font(OpenClawChatTypography.body(size: 14, weight: .semibold, relativeTo: .callout))
+                        } else {
+                            Text("Skip")
+                                .font(OpenClawChatTypography.body(size: 14, weight: .semibold, relativeTo: .callout))
+                        }
                     }
                     .buttonStyle(.bordered)
                     .disabled(status == .submitting)
@@ -432,8 +436,13 @@ public struct OpenClawQuestionCard: View {
                 Button {
                     Task { await self.onSubmit(self.model) }
                 } label: {
-                    Text(status == .submitting && !self.model.isSkipping ? "Submitting…" : "Submit")
-                        .font(OpenClawChatTypography.body(size: 14, weight: .semibold, relativeTo: .callout))
+                    if status == .submitting, !self.model.isSkipping {
+                        Text("Submitting…")
+                            .font(OpenClawChatTypography.body(size: 14, weight: .semibold, relativeTo: .callout))
+                    } else {
+                        Text("Submit")
+                            .font(OpenClawChatTypography.body(size: 14, weight: .semibold, relativeTo: .callout))
+                    }
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(!self.model.canSubmit || status == .submitting)
@@ -652,7 +661,7 @@ extension OpenClawChatViewModel {
         self.questionStateRevision &+= 1
         do {
             try await self.transport.resolveQuestion(id: model.id, answers: answers)
-            model.markAnsweredLocally()
+            model.markAnsweredLocally(answers: answers)
             self.questionStateRevision &+= 1
             self.syncQuestionExpirations()
             self.markTimelineChanged()

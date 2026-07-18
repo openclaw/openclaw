@@ -2203,13 +2203,10 @@ class ChatController internal constructor(
     val missingPendingRecords =
       synchronized(questionStateLock) {
         if (!questionRefreshIsCurrentLocked(refreshGeneration, stateRevision)) return true
-        val nowMs = System.currentTimeMillis()
         _questions.value
           .filter { prompt ->
             prompt.record.id !in listedIds &&
-              prompt.record.status == "pending" &&
-              prompt.terminalObservedAtMs == null &&
-              nowMs < prompt.record.expiresAtMs
+              prompt.record.status == "pending"
           }.map { it.record }
       }
     val fallbackRecords = mutableListOf<QuestionRecord>()

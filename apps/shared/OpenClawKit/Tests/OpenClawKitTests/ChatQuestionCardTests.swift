@@ -76,7 +76,7 @@ private func questionRecord(
     #expect(remote.status(at: Date(timeIntervalSince1970: 1500)) == .answeredElsewhere)
 
     let local = OpenClawQuestionCardModel(record: questionRecord())
-    local.markAnsweredLocally()
+    local.markAnsweredLocally(answers: ["meal": ["Pizza"]])
     local.apply(resolved: OpenClawQuestionResolvedEvent(id: local.id, status: .answered))
     #expect(local.status(at: Date(timeIntervalSince1970: 1500)) == .answered)
 }
@@ -117,11 +117,13 @@ private func questionRecord(
 @Test func `question card stores local answers in gateway record shape`() throws {
     let model = OpenClawQuestionCardModel(record: questionRecord())
     model.toggleOption(questionID: "meal", label: "Pizza")
-    model.markAnsweredLocally()
+    let answers = try #require(model.beginSubmission())
+    model.markAnsweredLocally(answers: answers)
 
     let data = try JSONEncoder().encode(model.record.answers)
     let json = try #require(String(data: data, encoding: .utf8))
     #expect(json.contains("\"meal\":{\"answers\":[\"Pizza\"]}"))
+    #expect(model.terminalSummaryText(for: model.record.questions[0]) == "Pizza")
 }
 
 @MainActor
