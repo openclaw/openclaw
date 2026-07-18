@@ -685,12 +685,48 @@ describe("custodian page", () => {
             running: false,
             connected: false,
             healthState: "not-running",
+            restartPending: false,
+            reconnectAttempts: 0,
+            lastStopAt: 1_700_000_000_000,
+            lastError: "connection closed during the previous run",
           },
         },
       },
     });
     await page.updateComplete;
     expect(page.querySelector(".custodian__nudge")).toBeNull();
+  });
+
+  it("reports a channel that fails before its first start", async () => {
+    const request = vi.fn().mockResolvedValue({
+      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+      reply: "Everything is healthy.",
+      action: "none",
+    });
+    const { context, emitGatewayEvent } = createContext(request);
+    const { page } = await mountPage(context, { onboarding: false });
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+
+    emitGatewayEvent({
+      event: "health",
+      payload: {
+        channelLabels: { telegram: "Telegram" },
+        channels: {
+          telegram: {
+            configured: true,
+            enabled: true,
+            running: false,
+            connected: false,
+            restartPending: false,
+            reconnectAttempts: 0,
+            healthState: "not-running",
+            lastError: "failed to initialize transport",
+          },
+        },
+      },
+    });
+    await page.updateComplete;
+    expect(page.querySelector(".custodian__nudge")?.textContent).toContain("Telegram is degraded");
   });
 
   it("shows a channel disconnect from the aggregate health row", async () => {
