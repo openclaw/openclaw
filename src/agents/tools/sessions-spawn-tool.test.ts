@@ -1189,40 +1189,19 @@ describe("sessions_spawn tool", () => {
     expect(spawnArgs).not.toHaveProperty("runTimeoutSeconds");
     expect(spawnArgs.thread).toBe(true);
     expect(spawnArgs.mode).toBe("session");
+    expect(spawnArgs.cleanup).toBe("keep");
+    expect(spawnArgs.expectsCompletionMessage).toBe(true);
     expect(spawnArgs.streamTo).toBe("parent");
     const spawnContext = mockCallArg(hoisted.spawnAcpDirectMock, 0, 1, "spawnAcpDirect");
     expect(spawnContext.agentSessionKey).toBe("agent:main:main");
     expect(spawnContext.requesterAgentIdOverride).toBe("main");
+    expect(spawnContext.currentMessagingTarget).toBe("channel:source");
+    expect(spawnContext.currentChannelId).toBe("source-native");
+    expect(spawnContext.currentMessageId).toBe("message-789");
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
-    const registration = mockCallArg(hoisted.registerSubagentRunMock, 0, 0, "registerSubagentRun");
-    expect(registration.runId).toBe("run-acp");
-    expect(registration.childSessionKey).toBe("agent:codex:acp:1");
-    expect(registration.requesterSessionKey).toBe("agent:main:main");
-    expect(registration.requesterAgentId).toBe("main");
-    expect(registration.task).toBe("investigate the failing CI run");
-    expect(registration.cleanup).toBe("keep");
-    expect(registration.spawnMode).toBe("session");
-    expect(registration.expectsCompletionMessage).toBe(true);
-    expect(hoisted.runSubagentProgressMock).toHaveBeenCalledWith(
-      {
-        phase: "started",
-        runId: "run-acp",
-        childSessionKey: "agent:codex:acp:1",
-        requester: {
-          channel: "quietchat",
-          accountId: "default",
-          to: "channel:source",
-          threadId: "456",
-          channelId: "source-native",
-          messageId: "message-789",
-        },
-      },
-      {
-        runId: "run-acp",
-        childSessionKey: "agent:codex:acp:1",
-        requesterSessionKey: "agent:main:main",
-      },
-    );
+    // Registration and progress hooks now belong to the shared backend pipeline.
+    expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
+    expect(hoisted.runSubagentProgressMock).not.toHaveBeenCalled();
   });
 
   it("passes inherited tool denies to ACP spawns", async () => {
@@ -1409,19 +1388,13 @@ describe("sessions_spawn tool", () => {
     const spawnArgs = mockCallArg(hoisted.spawnAcpDirectMock, 0, 0, "spawnAcpDirect");
     expect(spawnArgs.task).toBe("investigate");
     expect(spawnArgs.sandbox).toBe("require");
+    expect(spawnArgs.cleanup).toBe("keep");
     const spawnContext = mockCallArg(hoisted.spawnAcpDirectMock, 0, 1, "spawnAcpDirect");
     expect(spawnContext.agentSessionKey).toBe("agent:main:subagent:parent");
-    const registration = mockCallArg(hoisted.registerSubagentRunMock, 0, 0, "registerSubagentRun");
-    expect(registration.runId).toBe("run-acp");
-    expect(registration.childSessionKey).toBe("agent:codex:acp:1");
-    expect(registration.requesterSessionKey).toBe("agent:main:subagent:parent");
-    expect(registration.task).toBe("investigate");
-    expect(registration.cleanup).toBe("keep");
-    expect(registration.runTimeoutSeconds).toBe(120);
-    expect(registration.spawnMode).toBe("run");
+    expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
   });
 
-  it("suppresses completion announces for inline ACP session delivery", async () => {
+  it("forwards completion policy for inline ACP session delivery", async () => {
     registerAcpBackendForTest();
     hoisted.spawnAcpDirectMock.mockResolvedValueOnce({
       status: "accepted",
@@ -1446,14 +1419,12 @@ describe("sessions_spawn tool", () => {
       mode: "session",
     });
 
-    const registration = mockCallArg(hoisted.registerSubagentRunMock, 0, 0, "registerSubagentRun");
-    expect(registration.runId).toBe("run-acp");
-    expect(registration.childSessionKey).toBe("agent:codex:acp:1");
-    expect(registration.requesterSessionKey).toBe("agent:main:main");
-    expect(registration.task).toBe("investigate");
-    expect(registration.cleanup).toBe("keep");
-    expect(registration.spawnMode).toBe("session");
-    expect(registration.expectsCompletionMessage).toBe(false);
+    const spawnArgs = mockCallArg(hoisted.spawnAcpDirectMock, 0, 0, "spawnAcpDirect");
+    expect(spawnArgs.mode).toBe("session");
+    expect(spawnArgs.cleanup).toBe("keep");
+    expect(spawnArgs.expectsCompletionMessage).toBe(true);
+    // Inline-delivery suppression is decided after the ACP adapter binds its thread.
+    expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
   });
 
   it("rejects ACP runtime calls from sandboxed requester sessions", async () => {
@@ -1761,7 +1732,7 @@ describe("sessions_spawn tool", () => {
     expect(spawnContext.completionOwnerKey).toBe("agent:main:main");
   });
 
-  it("uses completionOwnerKey for ACP registerSubagentRun requesterSessionKey", async () => {
+  it("forwards completionOwnerKey to the ACP registration pipeline", async () => {
     registerAcpBackendForTest();
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:telegram:default:direct:456",
@@ -1777,10 +1748,9 @@ describe("sessions_spawn tool", () => {
       agentId: "codex",
     });
 
-    const registration = mockCallArg(hoisted.registerSubagentRunMock, 0, 0, "registerSubagentRun");
-    expect(registration.controllerSessionKey).toBe("agent:main:telegram:default:direct:456");
-    expect(registration.requesterSessionKey).toBe("agent:main:main");
-    expect(registration.requesterDisplayKey).toBe("agent:main:main");
+    const spawnContext = mockCallArg(hoisted.spawnAcpDirectMock, 0, 1, "spawnAcpDirect");
+    expect(spawnContext.agentSessionKey).toBe("agent:main:telegram:default:direct:456");
+    expect(spawnContext.completionOwnerKey).toBe("agent:main:main");
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
