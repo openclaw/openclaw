@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
-
-const STABLE_CLOSEOUT_TIMEOUT_MS = 120_000;
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { verifyStableMainCloseout } from "./lib/stable-release-closeout.mjs";
+
+const STABLE_CLOSEOUT_TIMEOUT_MS = 120_000;
 
 function parseArgs(argv) {
   const values = new Map();
@@ -49,7 +49,7 @@ function readJson(path) {
 function gitSha(dir) {
   return execFileSync("git", ["-C", dir, "rev-parse", "HEAD"], {
     encoding: "utf8",
-  , timeout: STABLE_CLOSEOUT_TIMEOUT_MS, killSignal: "SIGKILL"}).trim();
+  }).trim();
 }
 
 function main() {
