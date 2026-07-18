@@ -1,7 +1,9 @@
 // Covers baseline config security audit findings.
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import {
   onInternalDiagnosticEvent,
@@ -11,6 +13,8 @@ import {
 import { collectMinimalProfileOverrideFindings } from "./audit-extra.sync.js";
 import { runSecurityAudit } from "./audit.js";
 import { collectSecurityAuditFindings } from "./audit.test-support.js";
+
+const execFileAsync = promisify(execFile);
 
 function captureSecurityEvents(): {
   events: DiagnosticSecurityEvent[];
@@ -292,6 +296,45 @@ describe("security audit config basics", () => {
       await fs.rm(stateDir, { recursive: true, force: true });
     }
   });
+
+  it.runIf(process.platform !== "win32")(
+    "warns for a named-pipe mcporter registry without blocking",
+    async () => {
+      const stateDir = await fs.mkdtemp(
+        path.join(os.tmpdir(), "openclaw-audit-mcporter-named-pipe-"),
+      );
+      try {
+        const configDir = path.join(stateDir, "skills", "config");
+        await fs.mkdir(configDir, { recursive: true });
+        await execFileAsync("mkfifo", [path.join(configDir, "mcporter.json")]);
+
+        const report = await runSecurityAudit({
+          config: {
+            agents: {
+              list: [
+                {
+                  id: "asset-agent",
+                  skills: ["asset-lifecycle-tracking"],
+                  tools: { exec: { host: "gateway", security: "full", ask: "off" } },
+                },
+              ],
+            },
+          },
+          sourceConfig: {},
+          env: { OPENCLAW_STATE_DIR: stateDir },
+          stateDir,
+          includeFilesystem: false,
+          includeChannelSecurity: false,
+        });
+
+        const checkIds = report.findings.map((finding) => finding.checkId);
+        expect(checkIds).not.toContain("tools.exec.agent_skill_mcp_boundary_drift");
+        expect(checkIds).toContain("tools.exec.mcporter_registry_inspection_incomplete");
+      } finally {
+        await fs.rm(stateDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("accepts a valid symlinked global mcporter registry", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-audit-mcporter-symlink-"));

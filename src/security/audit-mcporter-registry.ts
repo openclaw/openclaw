@@ -1,4 +1,5 @@
 // Bounded read of the global MCP registry for security audit.
+import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -27,7 +28,7 @@ export async function readBoundedMcporterRegistry(
   try {
     // Open without O_NOFOLLOW so valid symlinked registries are followed,
     // while still bounding the read to avoid audit OOM on oversized targets.
-    handle = await fs.open(registryPath, "r");
+    handle = await fs.open(registryPath, constants.O_RDONLY | constants.O_NONBLOCK);
   } catch (error) {
     // ENOENT (including a dangling symlink) means no registry; anything else
     // means one exists but cannot be inspected.
