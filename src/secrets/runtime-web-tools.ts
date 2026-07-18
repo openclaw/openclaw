@@ -31,6 +31,7 @@ import {
   classifySecretOwnerDegradationState,
   warnDegradedSecretOwner,
 } from "./runtime-owner-assignments.js";
+import { digestRuntimeWebOwnerContract } from "./runtime-owner-contract.js";
 import { hasCredentialBearingObjectValue } from "./runtime-secret-scan.js";
 import type { ResolverContext, SecretDefaults } from "./runtime-shared.js";
 import { getActiveSecretsRuntimeSnapshot } from "./runtime-state.js";
@@ -761,6 +762,14 @@ export async function resolveRuntimeWebTools(params: {
       value: legacyXSearchSourceRecord.apiKey,
       path: "tools.web.x_search.apiKey",
       envVars: ["XAI_API_KEY"],
+      contractDigest: digestRuntimeWebOwnerContract({
+        scopePath: "tools.web.x_search",
+        configuredProvider: "grok",
+        toolConfig: legacyXSearchSource,
+        providers: [{ id: "grok" }],
+        providerId: "grok",
+        sourceConfig: params.sourceConfig,
+      }),
     });
     if (resolution.value) {
       legacyXSearchResolvedRecord.apiKey = resolution.value;
