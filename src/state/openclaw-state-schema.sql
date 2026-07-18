@@ -1939,7 +1939,7 @@ CREATE TABLE IF NOT EXISTS ai_safety_events (
   message TEXT NOT NULL,
   meta_json TEXT NOT NULL DEFAULT '{}',
   recorded_at_ms INTEGER NOT NULL CHECK (recorded_at_ms >= 0)
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_ai_safety_events_recorded
   ON ai_safety_events(recorded_at_ms, sequence);
