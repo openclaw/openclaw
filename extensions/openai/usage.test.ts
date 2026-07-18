@@ -39,6 +39,10 @@ describe("OpenAI provider usage", () => {
           JSON.stringify({
             data: [
               {
+                start_time: -1_000_000,
+                results: [{ amount: { value: "99" }, line_item: "Out of range" }],
+              },
+              {
                 start_time: 1e308,
                 results: [{ amount: { value: "99" }, line_item: "Invalid" }],
               },
@@ -56,6 +60,10 @@ describe("OpenAI provider usage", () => {
       return new Response(
         JSON.stringify({
           data: [
+            {
+              start_time: -1_000_000,
+              results: [{ input_tokens: 99, output_tokens: 99, num_model_requests: 99 }],
+            },
             {
               start_time: 1e308,
               results: [{ input_tokens: 99, output_tokens: 99, num_model_requests: 99 }],

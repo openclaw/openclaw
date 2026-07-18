@@ -84,6 +84,17 @@ function dateValidEpochSeconds(value: unknown): number | undefined {
   return seconds;
 }
 
+function requestedBucketStartTime(
+  value: unknown,
+  range: { startTime: number; endTime: number },
+): number | undefined {
+  const seconds = dateValidEpochSeconds(value);
+  if (seconds === undefined || seconds < range.startTime || seconds >= range.endTime) {
+    return undefined;
+  }
+  return seconds;
+}
+
 function nonNegativeInteger(value: unknown): number {
   const parsed = finiteNumber(value);
   return parsed === undefined ? 0 : Math.max(0, Math.trunc(parsed));
@@ -239,6 +250,8 @@ function addModelUsage(
 function aggregateHistory(params: {
   costs: unknown[];
   completions: unknown[];
+  startTime: number;
+  endTime: number;
   periodDays: number;
   projectId?: string;
 }): ProviderUsageSnapshot {
@@ -251,7 +264,7 @@ function aggregateHistory(params: {
 
   for (const rawBucket of params.costs) {
     const bucket = objectRecord(rawBucket);
-    const startTime = dateValidEpochSeconds(bucket?.start_time);
+    const startTime = requestedBucketStartTime(bucket?.start_time, params);
     if (startTime === undefined || !Array.isArray(bucket?.results)) {
       continue;
     }
@@ -267,7 +280,7 @@ function aggregateHistory(params: {
 
   for (const rawBucket of params.completions) {
     const bucket = objectRecord(rawBucket);
-    const startTime = dateValidEpochSeconds(bucket?.start_time);
+    const startTime = requestedBucketStartTime(bucket?.start_time, params);
     if (startTime === undefined || !Array.isArray(bucket?.results)) {
       continue;
     }
@@ -416,6 +429,8 @@ async function fetchOpenAIAdminUsage(params: {
   return aggregateHistory({
     costs: costs.data,
     completions: completions.data,
+    startTime: range.startTime,
+    endTime: range.endTime,
     periodDays,
     projectId: params.projectId,
   });
