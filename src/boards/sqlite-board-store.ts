@@ -52,8 +52,7 @@ function ensureBoardSchema(database: OpenClawAgentDatabase): void {
   if (ensuredBoardDatabases.has(database.db)) {
     return;
   }
-  // sqlite-allow-raw: this one-time DDL bootstrap precedes Kysely table access.
-  const ensure = () => database.db.exec(OPENCLAW_AGENT_BOARD_SCHEMA_SQL);
+  const ensure = () => database.db.exec(OPENCLAW_AGENT_BOARD_SCHEMA_SQL); // sqlite-allow-raw: one-time DDL bootstrap before Kysely access.
   if (database.db.isTransaction) {
     ensure();
   } else {
