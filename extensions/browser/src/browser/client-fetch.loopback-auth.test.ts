@@ -682,10 +682,9 @@ describe("fetchBrowserJson loopback auth", () => {
       "fetch",
       vi.fn(
         async () =>
-          new Response(
-            JSON.stringify({ error: `browser request timed out. ${persistentHint}` }),
-            { status: 504 },
-          ),
+          new Response(JSON.stringify({ error: `browser request timed out. ${persistentHint}` }), {
+            status: 504,
+          }),
       ),
     );
 
