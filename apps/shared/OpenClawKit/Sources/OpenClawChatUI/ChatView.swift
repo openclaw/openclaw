@@ -690,7 +690,8 @@ public struct OpenClawChatView: View {
     private var hasVisibleTransientContent: Bool {
         self.viewModel.hasBlockingRunActivity ||
             (self.displayOptions.contains(.toolActivity) && !self.viewModel.pendingToolCalls.isEmpty) ||
-            self.hasVisibleStreamingAssistantText
+            self.hasVisibleStreamingAssistantText ||
+            !self.viewModel.visibleQuestionCards.isEmpty
     }
 
     @ViewBuilder
@@ -1098,15 +1099,6 @@ extension OpenClawChatView {
         #else
         UIPasteboard.general.string = text
         #endif
-    }
-}
-
-extension OpenClawChatView {
-    private var hasVisibleTransientContent: Bool {
-        self.viewModel.hasBlockingRunActivity ||
-            !self.viewModel.pendingToolCalls.isEmpty ||
-            self.hasVisibleStreamingAssistantText ||
-            !self.viewModel.visibleQuestionCards.isEmpty
     }
 }
 
