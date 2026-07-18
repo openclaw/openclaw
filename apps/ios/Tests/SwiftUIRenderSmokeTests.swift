@@ -208,7 +208,7 @@ struct SwiftUIRenderSmokeTests {
         let root = ChatStreamingAssistantBubble(
             text: text,
             markdownVariant: .standard,
-            showsAssistantTrace: false,
+            showsReasoning: false,
             assistantName: "OpenClaw",
             assistantAvatarText: "OC",
             assistantAvatarTint: nil,
@@ -245,13 +245,15 @@ struct SwiftUIRenderSmokeTests {
                 style: .standard,
                 markdownVariant: .standard,
                 userAccent: nil,
-                showsAssistantTrace: false,
+                displayOptions: [],
                 assistantName: "OpenClaw",
                 assistantAvatarText: "OC",
                 assistantAvatarTint: nil,
                 showsAssistantAvatar: true,
                 isClean: false,
-                contextWindowTokens: 1_000_000)
+                contextWindowTokens: 1_000_000,
+                inlineWidgetResolverReady: true,
+                inlineWidgetResourceResolver: { _, _ in nil })
                 .environment(\.dynamicTypeSize, typeSize)
 
             _ = Self.host(root, size: CGSize(width: 320, height: 280))
@@ -302,6 +304,7 @@ struct SwiftUIRenderSmokeTests {
     @Test @MainActor func `onboarding activation screens build across appearance and type size`() {
         let screens: [AnyView] = [
             AnyView(OnboardingIntroStep(onContinue: {})),
+            AnyView(OnboardingPermissionsStep(onContinue: {})),
             AnyView(OnboardingWelcomeStep(
                 statusLine: "",
                 isConnecting: false,

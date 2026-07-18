@@ -1,14 +1,7 @@
 // Covers path guard helpers for platform and symlink errors.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
-import {
-  hasNodeErrorCode,
-  isNodeError,
-  isNotFoundPathError,
-  isPathInside,
-  isSymlinkOpenError,
-  normalizeWindowsPathForComparison,
-} from "./path-guards.js";
+import { isPathInside, normalizeWindowsPathForComparison } from "./path-guards.js";
 
 function setPlatform(platform: NodeJS.Platform): void {
   mockProcessPlatform(platform);
@@ -25,41 +18,6 @@ describe("normalizeWindowsPathForComparison", () => {
     ["\\\\?\\unc\\Server\\Share\\Folder", "\\\\server\\share\\folder"],
   ])("normalizes windows path %s", (input, expected) => {
     expect(normalizeWindowsPathForComparison(input)).toBe(expected);
-  });
-});
-
-describe("node path error helpers", () => {
-  it.each([
-    [{ code: "ENOENT" }, true],
-    [{ message: "nope" }, false],
-  ])("detects node-style error %j", (value, expected) => {
-    expect(isNodeError(value)).toBe(expected);
-  });
-
-  it.each([
-    [{ code: "ENOENT" }, "ENOENT", true],
-    [{ code: "ENOENT" }, "EACCES", false],
-  ])("matches node error code for %j", (value, code, expected) => {
-    expect(hasNodeErrorCode(value, code)).toBe(expected);
-  });
-
-  it.each([
-    [{ code: "ENOENT" }, true],
-    [{ code: "ENOTDIR" }, true],
-    [{ code: "EACCES" }, false],
-    [{ code: 404 }, false],
-  ])("classifies not-found path error for %j", (value, expected) => {
-    expect(isNotFoundPathError(value)).toBe(expected);
-  });
-
-  it.each([
-    [{ code: "ELOOP" }, true],
-    [{ code: "EINVAL" }, true],
-    [{ code: "ENOTSUP" }, true],
-    [{ code: "ENOENT" }, false],
-    [{ code: null }, false],
-  ])("classifies symlink-open error for %j", (value, expected) => {
-    expect(isSymlinkOpenError(value)).toBe(expected);
   });
 });
 

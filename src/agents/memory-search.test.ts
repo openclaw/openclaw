@@ -12,6 +12,11 @@ import {
   clearMemoryEmbeddingProviders,
   registerMemoryEmbeddingProvider,
 } from "../plugins/memory-embedding-providers.js";
+import {
+  SecretSurfaceUnavailableError,
+  setActiveDegradedSecretOwners,
+} from "../secrets/runtime-degraded-state.js";
+import { runtimeMemorySecretOwnerId } from "../secrets/runtime-memory-secret-owner.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { resolveMemorySearchConfig, resolveMemorySearchSyncConfig } from "./memory-search.js";
@@ -87,6 +92,7 @@ describe("memory search config", () => {
   });
 
   afterEach(() => {
+    setActiveDegradedSecretOwners([]);
     clearMemoryEmbeddingProviders();
     restoreRegisteredEmbeddingProviders(registeredEmbeddingProvidersSnapshot);
   });
@@ -188,6 +194,27 @@ describe("memory search config", () => {
     expect(resolved).toBeNull();
   });
 
+  it("throws the typed unavailable error only for the degraded agent owner", () => {
+    const cfg = asConfig({
+      agents: {
+        list: [{ id: "cold" }, { id: "healthy" }],
+      },
+    });
+    setActiveDegradedSecretOwners([
+      {
+        ownerKind: "capability",
+        ownerId: runtimeMemorySecretOwnerId("cold"),
+        state: "unavailable",
+        paths: ["agents.defaults.memorySearch.remote.apiKey"],
+        refKeys: ["env:default:MISSING_MEMORY_KEY"],
+        reason: "secret reference was not found",
+      },
+    ]);
+
+    expect(() => resolveMemorySearchConfig(cfg, "cold")).toThrow(SecretSurfaceUnavailableError);
+    expect(resolveMemorySearchConfig(cfg, "healthy")?.enabled).toBe(true);
+  });
+
   it("returns null sync config when disabled", () => {
     const cfg = asConfig({
       agents: {
@@ -205,6 +232,77 @@ describe("memory search config", () => {
     });
     const resolved = resolveMemorySearchSyncConfig(cfg, "main");
     expect(resolved).toBeNull();
+  });
+
+  it("keeps cross-conversation recall off by default", () => {
+    const resolved = resolveMemorySearchConfig(asConfig({}), "main");
+
+    expect(resolved?.rememberAcrossConversations).toBe(false);
+    expect(resolved?.experimental.sessionMemory).toBe(false);
+    expect(resolved?.sources).toEqual(["memory"]);
+  });
+
+  it("enables transcript indexing for an opted-in agent", () => {
+    const cfg = asConfig({
+      agents: {
+        list: [
+          {
+            id: "personal",
+            memorySearch: { rememberAcrossConversations: true },
+          },
+        ],
+      },
+    });
+
+    const resolved = resolveMemorySearchConfig(cfg, "personal");
+
+    expect(resolved?.rememberAcrossConversations).toBe(true);
+    expect(resolved?.experimental.sessionMemory).toBe(true);
+    expect(resolved?.sources).toEqual(["memory", "sessions"]);
+    expect(resolved?.searchSources).toEqual(["memory"]);
+  });
+
+  it("preserves explicitly configured transcript search for an opted-in agent", () => {
+    const cfg = asConfig({
+      agents: {
+        list: [
+          {
+            id: "personal",
+            memorySearch: {
+              rememberAcrossConversations: true,
+              sources: ["sessions"],
+            },
+          },
+        ],
+      },
+    });
+
+    const resolved = resolveMemorySearchConfig(cfg, "personal");
+
+    expect(resolved?.sources).toEqual(["sessions"]);
+    expect(resolved?.searchSources).toEqual(["sessions"]);
+  });
+
+  it("lets a per-agent false override a default true", () => {
+    const cfg = asConfig({
+      agents: {
+        defaults: {
+          memorySearch: { rememberAcrossConversations: true },
+        },
+        list: [
+          {
+            id: "shared",
+            memorySearch: { rememberAcrossConversations: false },
+          },
+        ],
+      },
+    });
+
+    const resolved = resolveMemorySearchConfig(cfg, "shared");
+
+    expect(resolved?.rememberAcrossConversations).toBe(false);
+    expect(resolved?.experimental.sessionMemory).toBe(false);
+    expect(resolved?.sources).toEqual(["memory"]);
   });
 
   it("defaults provider to openai when unspecified", () => {

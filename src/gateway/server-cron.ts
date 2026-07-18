@@ -24,7 +24,7 @@ import { resolveCronStoredDeliveryContext } from "../cron/delivery-context.js";
 import { resolveCronDeliveryPlan, sendCronAnnouncePayloadStrict } from "../cron/delivery.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import { resolveCronJobBoundSessionKeys } from "../cron/job-session-bindings.js";
-import { appendCronRunLog, resolveCronRunLogPruneOptions } from "../cron/run-log.js";
+import { toPublicCronJob } from "../cron/public-job.js";
 import { CronService, type CronEvent } from "../cron/service.js";
 import {
   resolveCronDeliverySessionKey,
@@ -202,10 +202,12 @@ export function buildGatewayCronService(params: {
   cfg: OpenClawConfig;
   deps: CliDeps;
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
+  env?: NodeJS.ProcessEnv;
 }): GatewayCronState {
   const cronLogger = getChildLogger({ module: "cron" });
-  const storePath = resolveCronJobsStorePath(params.cfg.cron?.store);
-  const cronEnabled = process.env.OPENCLAW_SKIP_CRON !== "1" && params.cfg.cron?.enabled !== false;
+  const env = params.env ?? process.env;
+  const storePath = resolveCronJobsStorePath(params.cfg.cron?.store, env);
+  const cronEnabled = env.OPENCLAW_SKIP_CRON !== "1" && params.cfg.cron?.enabled !== false;
 
   const findAgentEntry = (cfg: OpenClawConfig, agentId: string) =>
     Array.isArray(cfg.agents?.list)
@@ -361,7 +363,6 @@ export function buildGatewayCronService(params: {
   };
 
   const defaultAgentId = resolveDefaultAgentId(params.cfg);
-  const runLogPrune = resolveCronRunLogPruneOptions(params.cfg.cron?.runLog);
   const resolveSessionStorePath = (agentId?: string) =>
     resolveStorePath(params.cfg.session?.store, {
       agentId: agentId ?? defaultAgentId,
@@ -464,7 +465,7 @@ export function buildGatewayCronService(params: {
               agentId: job.agentId,
               script,
               state,
-              toolsAllow: job.payload.kind === "agentTurn" ? job.payload.toolsAllow : undefined,
+              toolsAllow: job.payload.toolsAllow,
               abortSignal,
             }),
         }
@@ -525,6 +526,10 @@ export function buildGatewayCronService(params: {
         reason: opts?.reason,
         agentId,
         sessionKey,
+        // Preserve ownership across this adapter so the wake does not self-block on
+        // the cron run that is awaiting it.
+        owningCronJobMarker: opts?.owningCronJobMarker,
+        owningCronLaneTaskMarker: opts?.owningCronLaneTaskMarker,
         heartbeat: resolveCronHeartbeatOverride({
           runtimeConfig,
           agentId,
@@ -727,7 +732,9 @@ export function buildGatewayCronService(params: {
       // Any job/store change can alter session automation bindings, including
       // in-place enable flips during runs; run/schedule events bump too (cheap).
       bumpSessionAutomationVersion();
-      params.broadcast("cron", evt, { dropIfSlow: true });
+      params.broadcast("cron", evt.job ? { ...evt, job: toPublicCronJob(evt.job) } : evt, {
+        dropIfSlow: true,
+      });
       // Build hook event from CronEvent. The job snapshot is carried on the
       // internal event so it's available even for "removed" actions where
       // getJob() would return undefined. `delivery` and `usage` are
@@ -790,42 +797,6 @@ export function buildGatewayCronService(params: {
           resolveCronAgent,
           webhookToken: params.cfg.cron?.webhookToken,
           globalFailureDestination: params.cfg.cron?.failureDestination,
-        });
-
-        void runWithGatewayIndependentRootWorkAdmission(async () => {
-          await appendCronRunLog({
-            storePath,
-            entry: {
-              ts: Date.now(),
-              jobId: evt.jobId,
-              action: "finished",
-              status: evt.status,
-              error: evt.error,
-              summary: evt.summary,
-              diagnostics: evt.diagnostics,
-              delivered: evt.delivered,
-              deliveryStatus: evt.deliveryStatus,
-              deliveryError: evt.deliveryError,
-              failureNotificationDelivery: evt.failureNotificationDelivery,
-              delivery: evt.delivery,
-              sessionId: evt.sessionId,
-              sessionKey: evt.sessionKey,
-              runId: evt.runId,
-              runAtMs: evt.runAtMs,
-              durationMs: evt.durationMs,
-              nextRunAtMs: evt.nextRunAtMs,
-              triggerFired: evt.triggerFired,
-              model: evt.model,
-              provider: evt.provider,
-              usage: evt.usage,
-            },
-            opts: { keepLines: runLogPrune.keepLines },
-          });
-        }).catch((err: unknown) => {
-          cronLogger.warn(
-            { err: String(err), storePath, jobId: evt.jobId },
-            "cron: run log append failed",
-          );
         });
       }
     },
@@ -891,3 +862,4 @@ export function buildGatewayCronService(params: {
     stopExitWatchers,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

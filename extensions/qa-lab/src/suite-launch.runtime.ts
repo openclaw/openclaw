@@ -1,11 +1,6 @@
 // Qa Lab plugin module implements suite launch behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
-import {
-  OPENCLAW_CRABLINE_DEFAULT_CHANNEL,
-  resolveOpenClawCrablineChannelDriverSelection,
-} from "@openclaw/crabline";
-import { renderQaMarkdownReport, type QaReportScenario } from "openclaw/plugin-sdk/qa-runtime";
 import { isRepoRootRelativeRef, toRepoRelativePath } from "./cli-paths.js";
 import {
   QA_EVIDENCE_FILENAME,
@@ -20,6 +15,7 @@ import {
   defaultQaSuiteConcurrencyForTransport,
   normalizeQaTransportId,
 } from "./qa-transport-registry.js";
+import { renderQaMarkdownReport, type QaReportScenario } from "./report.js";
 import { defaultQaModelForMode, normalizeQaProviderMode } from "./run-config.js";
 import {
   readQaBootstrapScenarioCatalog,
@@ -97,6 +93,7 @@ type QaUnifiedPartitionTask = {
 
 type QaFlowChannelGroup = {
   channel: string | undefined;
+  channelId: string | undefined;
   channelDriverSelection: QaSuiteRunParams["channelDriverSelection"];
   scenarios: QaSeedScenarioWithSource[];
 };
@@ -132,19 +129,50 @@ function resolveRequestedScenarios(params: {
   });
 }
 
-function resolveQaFlowChannelGroups(
+async function resolveQaFlowChannelGroups(
   runParams: QaSuiteRunParams | undefined,
   scenarios: readonly QaSeedScenarioWithSource[],
-): QaFlowChannelGroup[] {
+): Promise<QaFlowChannelGroup[]> {
+  if (runParams?.adapterFactories) {
+    const explicitChannel = runParams.channelId?.trim().toLowerCase();
+    if (explicitChannel) {
+      return [
+        {
+          channel: explicitChannel,
+          channelId: explicitChannel,
+          channelDriverSelection: runParams.channelDriverSelection,
+          scenarios: [...scenarios],
+        },
+      ];
+    }
+    const groups = new Map<string | undefined, QaSeedScenarioWithSource[]>();
+    for (const scenario of scenarios) {
+      const channel = normalizeQaSuiteScenarioChannel(scenario);
+      const group = groups.get(channel) ?? [];
+      group.push(scenario);
+      groups.set(channel, group);
+    }
+    return [...groups].map(([channel, groupedScenarios]) => ({
+      channel,
+      channelId: channel,
+      channelDriverSelection: runParams.channelDriverSelection,
+      scenarios: groupedScenarios,
+    }));
+  }
   if (runParams?.channelDriver !== "crabline") {
     return [
       {
-        channel: runParams?.channelDriverSelection?.channel,
+        channel: runParams?.channelId ?? runParams?.channelDriverSelection?.channel,
+        channelId: runParams?.channelId,
         channelDriverSelection: runParams?.channelDriverSelection,
         scenarios: [...scenarios],
       },
     ];
   }
+  // Package-only live lanes mount the QA harness without its dev tree. Load
+  // Crabline only for Crabline-owned runs so unrelated transports stay isolated.
+  const { OPENCLAW_CRABLINE_DEFAULT_CHANNEL, resolveOpenClawCrablineChannelDriverSelection } =
+    await import("@openclaw/crabline");
   const channels = resolveQaSuiteScenarioChannels({
     defaultChannel: OPENCLAW_CRABLINE_DEFAULT_CHANNEL,
     explicitChannel: runParams.channelDriverSelection?.channel,
@@ -155,6 +183,7 @@ function resolveQaFlowChannelGroups(
     return [
       {
         channel: singleChannel,
+        channelId: undefined,
         channelDriverSelection:
           runParams.channelDriverSelection ??
           resolveOpenClawCrablineChannelDriverSelection({ channel: singleChannel }),
@@ -166,6 +195,7 @@ function resolveQaFlowChannelGroups(
   // launch one flow partition per channel and aggregate them at this owner.
   return channels.map((channel) => ({
     channel,
+    channelId: undefined,
     channelDriverSelection: resolveOpenClawCrablineChannelDriverSelection({ channel }),
     scenarios: scenarios.filter(
       (scenario) =>
@@ -175,7 +205,9 @@ function resolveQaFlowChannelGroups(
   }));
 }
 
-function resolveSuiteExecutionPlan(params: QaSuiteRunParams | undefined): QaSuiteExecutionPlan {
+async function resolveSuiteExecutionPlan(
+  params: QaSuiteRunParams | undefined,
+): Promise<QaSuiteExecutionPlan> {
   const scenarioIds = params?.scenarioIds ?? [];
   if (scenarioIds.length === 0) {
     return { kind: "flow" };
@@ -194,10 +226,16 @@ function resolveSuiteExecutionPlan(params: QaSuiteRunParams | undefined): QaSuit
     scenarios.push(scenario);
     testFileScenariosByKind.set(scenario.execution.kind, scenarios);
   }
-  const requiresChannelPartitions =
-    resolveQaFlowChannelGroups(params, flowScenarios).filter((group) => group.scenarios.length > 0)
-      .length > 1;
-  if (testFileScenariosByKind.size === 0 && !requiresChannelPartitions) {
+  const channelGroups = (await resolveQaFlowChannelGroups(params, flowScenarios)).filter(
+    (group) => group.scenarios.length > 0,
+  );
+  const requiresFlowPartitions =
+    channelGroups.length > 1 ||
+    channelGroups.some(
+      (group) => group.channelId !== undefined && group.channelId !== params?.channelId,
+    ) ||
+    (flowScenarios.length > 1 && flowScenarios.some(scenarioRequiresIsolatedQaSuiteWorker));
+  if (testFileScenariosByKind.size === 0 && !requiresFlowPartitions) {
     return { kind: "flow" };
   }
   return {
@@ -207,7 +245,6 @@ function resolveSuiteExecutionPlan(params: QaSuiteRunParams | undefined): QaSuit
     testFileScenariosByKind,
   };
 }
-
 async function runQaTestFileSuiteFromRuntime(params: {
   runParams: QaSuiteRunParams | undefined;
   scenarios: readonly QaTestFileScenario[];
@@ -536,9 +573,8 @@ async function runUnifiedQaSuite(params: {
   const testFilePartitionTasks: QaUnifiedPartitionTask[] = [];
   const scriptPartitionTasks: QaUnifiedPartitionTask[] = [];
   if (params.plan.flowScenarios.length > 0) {
-    const channelGroups = resolveQaFlowChannelGroups(
-      params.runParams,
-      params.plan.flowScenarios,
+    const channelGroups = (
+      await resolveQaFlowChannelGroups(params.runParams, params.plan.flowScenarios)
     ).filter((group) => group.scenarios.length > 0);
     const mixedChannelRun = channelGroups.length > 1;
     const runFlowSuite = await loadQaFlowSuiteRuntime();
@@ -549,12 +585,27 @@ async function runUnifiedQaSuite(params: {
       const isolatedFlowScenarios = channelGroup.scenarios.filter(
         scenarioRequiresIsolatedQaSuiteWorker,
       );
-      const sharedFlowPartitions = partitionSharedFlowScenarios(sharedFlowScenarios, concurrency);
+      const runtimeFlowScenarios = isolatedFlowScenarios.flatMap((scenario) =>
+        scenario.execution.kind === "flow" && scenario.execution.runtime
+          ? [{ runtime: scenario.execution.runtime, scenario }]
+          : [],
+      );
+      const runtimeScenarioSet = new Set(runtimeFlowScenarios.map(({ scenario }) => scenario));
+      const ordinaryIsolatedFlowScenarios = isolatedFlowScenarios.filter(
+        (scenario) => !runtimeScenarioSet.has(scenario),
+      );
+      const usesContributedChannelDriver = Boolean(
+        channelGroup.channelId && params.runParams?.adapterFactories,
+      );
+      const sharedFlowPartitions = partitionSharedFlowScenarios(
+        sharedFlowScenarios,
+        usesContributedChannelDriver ? 1 : concurrency,
+      );
       // Channel-driver flow workers each launch a gateway plus transport harness.
       // Serializing their isolated workers keeps state-mutating smoke checks from
       // flaking under concurrent child gateways while preserving non-driver speed.
       const channelDriverFlowRequiresExclusiveWorkers = Boolean(
-        channelGroup.channelDriverSelection,
+        channelGroup.channelDriverSelection || usesContributedChannelDriver,
       );
       const isolatedFlowConcurrencyLimit = channelDriverFlowRequiresExclusiveWorkers
         ? 1
@@ -562,11 +613,11 @@ async function runUnifiedQaSuite(params: {
       const isolatedFlowConcurrency = Math.min(
         concurrency,
         isolatedFlowConcurrencyLimit,
-        isolatedFlowScenarios.length,
+        ordinaryIsolatedFlowScenarios.length,
       );
       const isolatedFlowPartitions =
-        isolatedFlowConcurrency === 1 && isolatedFlowScenarios.length > 1
-          ? isolatedFlowScenarios.map((scenario, index) => ({
+        isolatedFlowConcurrency === 1 && ordinaryIsolatedFlowScenarios.length > 1
+          ? ordinaryIsolatedFlowScenarios.map((scenario, index) => ({
               kind: `isolated-${index + 1}`,
               scenarios: [scenario],
               concurrency: 1,
@@ -574,7 +625,7 @@ async function runUnifiedQaSuite(params: {
           : [
               {
                 kind: "isolated",
-                scenarios: isolatedFlowScenarios,
+                scenarios: ordinaryIsolatedFlowScenarios,
                 concurrency: isolatedFlowConcurrency,
               },
             ];
@@ -585,6 +636,11 @@ async function runUnifiedQaSuite(params: {
           concurrency: 1,
         })),
         ...isolatedFlowPartitions,
+        ...runtimeFlowScenarios.map(({ runtime, scenario }, index) => ({
+          kind: `runtime-${runtime}-${index + 1}`,
+          scenarios: [scenario],
+          concurrency: 1,
+        })),
       ].filter((partition) => partition.scenarios.length > 0);
       for (const partition of flowPartitions) {
         const isolatedPartition =
@@ -611,7 +667,13 @@ async function runUnifiedQaSuite(params: {
               primaryModel,
               alternateModel,
               fastMode,
+              forcedRuntime:
+                partition.scenarios.length === 1 &&
+                partition.scenarios[0]?.execution.kind === "flow"
+                  ? (partition.scenarios[0].execution.runtime ?? params.runParams?.forcedRuntime)
+                  : params.runParams?.forcedRuntime,
               concurrency: partition.concurrency,
+              channelId: channelGroup.channelId,
               channelDriverSelection: channelGroup.channelDriverSelection,
               workerStartStaggerMs: isolatedPartition
                 ? (params.runParams?.workerStartStaggerMs ??
@@ -759,7 +821,7 @@ async function runUnifiedQaSuite(params: {
 
 export async function runQaSuite(...args: [QaSuiteRunParams?]): Promise<QaSuiteRuntimeResult> {
   const runParams = args[0];
-  const plan = resolveSuiteExecutionPlan(runParams);
+  const plan = await resolveSuiteExecutionPlan(runParams);
   if (plan.kind === "unified") {
     const result = await runUnifiedQaSuite({
       runParams,
@@ -783,3 +845,4 @@ export async function runQaFlowSuiteFromRuntime(
     await loadQaFlowSuiteRuntime()
   )(args[0]);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

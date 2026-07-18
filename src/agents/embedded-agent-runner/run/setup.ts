@@ -107,11 +107,15 @@ export async function resolveHookModelSelection(params: {
   attachments?: PluginHookBeforeModelResolveAttachment[];
   provider: string;
   modelId: string;
+  modelSelectionLocked?: boolean;
   hookRunner?: HookRunnerLike | null;
   hookContext: HookContext;
 }) {
   let provider = params.provider;
   let modelId = params.modelId;
+  if (params.modelSelectionLocked === true) {
+    return { provider, modelId, beforeAgentStartResult: undefined };
+  }
   let modelResolveOverride: { providerOverride?: string; modelOverride?: string } | undefined;
   let beforeAgentStartResult: PluginHookBeforeAgentStartResult | undefined;
   const hookRunner = params.hookRunner;
@@ -230,7 +234,7 @@ export function createNativeModelOwnedRuntimeModel(params: {
  * reflected in `effectiveModel.contextWindow` so auto-compaction uses the same
  * limit as the guard.
  */
-export function resolveEffectiveRuntimeModel(params: {
+function resolveEffectiveRuntimeModel(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
   contextConfigProvider?: string;

@@ -8,8 +8,8 @@ import {
 } from "../../logging/diagnostic-run-activity.js";
 import { diagnosticLogger } from "../../logging/diagnostic-runtime.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../../shared/number-coercion.js";
+import { beginReplyOperationFinalizationWork } from "./reply-run-finalization-lease.js";
 import {
-  testing,
   abortActiveReplyRuns,
   createReplyOperation,
   expireStaleReplyOperation,
@@ -28,7 +28,10 @@ import {
   resolveReplyRunPhaseForSessionId,
   waitForReplyRunEndBySessionId,
 } from "./reply-run-registry.js";
+import { testing } from "./reply-run-registry.test-support.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
+
+const REPLY_RUN_FINALIZATION_SETTLE_TIMEOUT_MS = 60_000;
 
 describe("reply run registry", () => {
   afterEach(() => {
@@ -851,6 +854,7 @@ describe("reply run registry", () => {
     operation.freezeAbort();
     operation.detachBackend(backend);
 
+    expect(operation.phase).toBe("running");
     expect(isReplyRunAbortableForSignal(upstreamAbort.signal)).toBe(false);
     expect(isReplyRunAbortableForSignal(new AbortController().signal)).toBe(true);
     expect(replyRunRegistry.abort("agent:main:delivery-finalizing")).toBe(false);
@@ -863,6 +867,170 @@ describe("reply run registry", () => {
     operation.complete();
     expect(replyRunRegistry.isActive("agent:main:delivery-finalizing")).toBe(false);
     expect(isReplyRunAbortableForSignal(upstreamAbort.signal)).toBe(false);
+  });
+
+  it("expires finalization when its owner stops making progress", async () => {
+    vi.useFakeTimers();
+    try {
+      const afterClear = vi.fn();
+      const operation = createReplyOperation({
+        sessionKey: "agent:main:hung-finalization",
+        sessionId: "session-hung-finalization",
+        resetTriggered: false,
+      });
+      operation.setPhase("running");
+      runAfterReplyOperationClear(operation, afterClear);
+
+      operation.freezeAbort();
+      await vi.advanceTimersByTimeAsync(REPLY_RUN_FINALIZATION_SETTLE_TIMEOUT_MS - 1);
+
+      expect(replyRunRegistry.get("agent:main:hung-finalization")).toBe(operation);
+      expect(operation.result).toBeNull();
+      expect(operation.abortSignal.aborted).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(replyRunRegistry.get("agent:main:hung-finalization")).toBeUndefined();
+      expect(operation.result).toEqual({ kind: "failed", code: "run_stalled" });
+      expect(operation.phase).toBe("failed");
+      expect(operation.abortSignal.aborted).toBe(true);
+      expect(afterClear).toHaveBeenCalledTimes(1);
+    } finally {
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
+  it("renews finalization from owner progress", async () => {
+    vi.useFakeTimers();
+    try {
+      const operation = createReplyOperation({
+        sessionKey: "agent:main:progressing-finalization",
+        sessionId: "session-progressing-finalization",
+        resetTriggered: false,
+      });
+      operation.setPhase("running");
+      operation.freezeAbort();
+
+      await vi.advanceTimersByTimeAsync(REPLY_RUN_FINALIZATION_SETTLE_TIMEOUT_MS - 15_000);
+      operation.recordActivity();
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      expect(replyRunRegistry.get("agent:main:progressing-finalization")).toBe(operation);
+      expect(operation.result).toBeNull();
+
+      await vi.advanceTimersByTimeAsync(REPLY_RUN_FINALIZATION_SETTLE_TIMEOUT_MS - 15_000);
+
+      expect(replyRunRegistry.get("agent:main:progressing-finalization")).toBeUndefined();
+      expect(operation.result).toEqual({ kind: "failed", code: "run_stalled" });
+    } finally {
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
+  it("preserves bounded work that starts before finalization", async () => {
+    vi.useFakeTimers();
+    try {
+      const operation = createReplyOperation({
+        sessionKey: "agent:main:pre-finalization-work",
+        sessionId: "session-pre-finalization-work",
+        resetTriggered: false,
+      });
+      operation.setPhase("running");
+      beginReplyOperationFinalizationWork(operation, REPLY_RUN_FINALIZATION_SETTLE_TIMEOUT_MS * 2);
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      operation.freezeAbort();
+      await vi.advanceTimersByTimeAsync(REPLY_RUN_FINALIZATION_SETTLE_TIMEOUT_MS);
+
+      expect(replyRunRegistry.get("agent:main:pre-finalization-work")).toBe(operation);
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(replyRunRegistry.get("agent:main:pre-finalization-work")).toBeUndefined();
+      expect(operation.result).toEqual({ kind: "failed", code: "run_stalled" });
+    } finally {
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not shorten bounded work when ordinary activity renews", async () => {
+    vi.useFakeTimers();
+    try {
+      const operation = createReplyOperation({
+        sessionKey: "agent:main:overlapping-finalization-work",
+        sessionId: "session-overlapping-finalization-work",
+        resetTriggered: false,
+      });
+      operation.setPhase("running");
+      operation.freezeAbort();
+      beginReplyOperationFinalizationWork(operation, REPLY_RUN_FINALIZATION_SETTLE_TIMEOUT_MS * 2);
+
+      await vi.advanceTimersByTimeAsync(REPLY_RUN_FINALIZATION_SETTLE_TIMEOUT_MS - 15_000);
+      operation.recordActivity();
+      await vi.advanceTimersByTimeAsync(REPLY_RUN_FINALIZATION_SETTLE_TIMEOUT_MS);
+
+      expect(replyRunRegistry.get("agent:main:overlapping-finalization-work")).toBe(operation);
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(replyRunRegistry.get("agent:main:overlapping-finalization-work")).toBeUndefined();
+      expect(operation.result).toEqual({ kind: "failed", code: "run_stalled" });
+    } finally {
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
+  it("honors a bounded extended finalization lease", async () => {
+    vi.useFakeTimers();
+    try {
+      const operation = createReplyOperation({
+        sessionKey: "agent:main:extended-finalization",
+        sessionId: "session-extended-finalization",
+        resetTriggered: false,
+      });
+      operation.setPhase("running");
+      operation.freezeAbort();
+      beginReplyOperationFinalizationWork(operation, REPLY_RUN_FINALIZATION_SETTLE_TIMEOUT_MS * 2);
+
+      await vi.advanceTimersByTimeAsync(REPLY_RUN_FINALIZATION_SETTLE_TIMEOUT_MS);
+      expect(replyRunRegistry.get("agent:main:extended-finalization")).toBe(operation);
+
+      await vi.advanceTimersByTimeAsync(REPLY_RUN_FINALIZATION_SETTLE_TIMEOUT_MS);
+      expect(replyRunRegistry.get("agent:main:extended-finalization")).toBeUndefined();
+      expect(operation.result).toEqual({ kind: "failed", code: "run_stalled" });
+    } finally {
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps late finalization cleanup from clearing a successor", async () => {
+    vi.useFakeTimers();
+    try {
+      const operation = createReplyOperation({
+        sessionKey: "agent:main:late-finalization",
+        sessionId: "session-late-finalization",
+        resetTriggered: false,
+      });
+      operation.setPhase("running");
+      operation.freezeAbort();
+      await vi.advanceTimersByTimeAsync(REPLY_RUN_FINALIZATION_SETTLE_TIMEOUT_MS);
+
+      const successor = createReplyOperation({
+        sessionKey: "agent:main:late-finalization",
+        sessionId: "session-successor",
+        resetTriggered: false,
+      });
+      operation.complete();
+
+      expect(replyRunRegistry.get("agent:main:late-finalization")).toBe(successor);
+      successor.complete();
+    } finally {
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+    }
   });
 
   it("clamps oversized wait timers instead of resolving idle waits immediately", async () => {
@@ -881,6 +1049,27 @@ describe("reply run registry", () => {
       );
 
       expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+      operation.complete();
+      await expect(waitPromise).resolves.toBe(true);
+    } finally {
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
+  it("waits for reply-run completion without a timer when requested", async () => {
+    vi.useFakeTimers();
+    try {
+      const operation = createReplyOperation({
+        sessionKey: "agent:main:unbounded",
+        sessionId: "session-unbounded",
+        resetTriggered: false,
+      });
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+      const waitPromise = waitForReplyRunEndBySessionId("session-unbounded", null);
+
+      expect(setTimeoutSpy).not.toHaveBeenCalled();
       operation.complete();
       await expect(waitPromise).resolves.toBe(true);
     } finally {
@@ -944,6 +1133,37 @@ describe("reply run registry", () => {
       taskSuggestionDeliveryMode: "gateway",
     });
     expect(queueMessage).toHaveBeenNthCalledWith(2, "internal completion");
+  });
+
+  it("queues images only through backends that preserve them", () => {
+    const queueMessage = vi.fn(async () => {});
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:main",
+      sessionId: "session-images",
+      resetTriggered: false,
+    });
+    operation.attachBackend({
+      kind: "embedded",
+      cancel: vi.fn(),
+      isStreaming: () => true,
+      queueMessage,
+    });
+    operation.setPhase("running");
+    const images = [{ type: "image" as const, data: "png", mimeType: "image/png" }];
+
+    expect(queueReplyRunMessage("session-images", "inspect", { images })).toBe(false);
+    expect(queueMessage).not.toHaveBeenCalled();
+
+    operation.attachBackend({
+      kind: "embedded",
+      cancel: vi.fn(),
+      isStreaming: () => true,
+      queueMessage,
+      supportsQueueMessageImages: true,
+    });
+
+    expect(queueReplyRunMessage("session-images", "inspect", { images })).toBe(true);
+    expect(queueMessage).toHaveBeenCalledWith("inspect", { images });
   });
 
   it("queues messages through active non-streaming backends with live stopped state", () => {
@@ -1124,3 +1344,4 @@ describe("reply run registry", () => {
     operation.complete();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

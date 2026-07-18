@@ -34,6 +34,33 @@ extension OpenClawChatViewModel {
             })
     }
 
+    /// Session mutations and their ordering use the routed gateway identity,
+    /// never a presentation alias such as `main`.
+    func sessionMutationIdentity(for key: String, listedKey: String? = nil) -> String {
+        let listedKey = listedKey ?? self.sessions.first(where: { $0.key == key })?.key ??
+            (self.matchesCurrentSessionKey(incoming: key, current: self.sessionKey)
+                ? self.currentSessionEntry()?.key
+                : nil)
+        return self.modelPatchTarget(
+            sessionKey: key,
+            canonicalSessionKey: listedKey,
+            agentID: OpenClawChatSessionKey.agentID(from: key) ?? self.activeAgentId,
+            sessionRoutingContract: nil).canonicalSessionKey
+    }
+
+    func applyingLocalUnreadOverrides(
+        to sessions: [OpenClawChatSessionEntry]) -> [OpenClawChatSessionEntry]
+    {
+        sessions.map { session in
+            var session = session
+            let identityKey = self.sessionMutationIdentity(for: session.key, listedKey: session.key)
+            if let unread = self.unreadPatchGuard.localUnreadOverride(key: identityKey) {
+                session.unread = unread
+            }
+            return session
+        }
+    }
+
     func currentModelPatchTarget() -> ModelPatchTarget {
         let session = self.currentSessionSnapshot()
         return self.modelPatchTarget(
@@ -64,7 +91,7 @@ extension OpenClawChatViewModel {
         let normalizedCandidate = candidate.lowercased()
         let targetKey: String
         let targetAgentID: String?
-        if Self.agentID(fromSessionKey: candidate) != nil || normalizedCandidate == "unknown" {
+        if OpenClawChatSessionKey.agentID(from: candidate) != nil || normalizedCandidate == "unknown" {
             targetKey = candidate
             targetAgentID = nil
         } else if normalizedCandidate == "global" {
@@ -120,7 +147,7 @@ extension OpenClawChatViewModel {
         session: OpenClawChatSessionEntry?) -> OpenClawChatModelPatchResult?
     {
         guard let session,
-              let result = self.lastSuccessfulModelPatchResultsByTarget[target]
+              let result = self.lastSuccessfulSettingsPatchResultsByTarget[target]
         else { return nil }
         let sessionModel = Self.normalizedModelIdentityComponent(session.model ?? self.sessionDefaults?.model)
         let sessionProvider = Self.normalizedProvider(session.modelProvider ?? self.sessionDefaults?.modelProvider)

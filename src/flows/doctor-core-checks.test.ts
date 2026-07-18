@@ -521,7 +521,7 @@ describe("CORE_HEALTH_CHECKS", () => {
         target: "openai/gpt-5.5",
         requirement: "Codex plugin enabled for routes that use the Codex runtime.",
         fixHint:
-          "Run `openclaw doctor --fix`: it enables plugins.entries.codex, or set the affected OpenAI models to an OpenClaw runtime policy.",
+          "Enable plugins.entries.codex and plugin loading, and remove codex from plugins.deny; or set the affected OpenAI models to an OpenClaw runtime policy.",
       }),
     ]);
     expect(findings[0]?.message).toContain("Codex plugin is disabled by config");
@@ -764,10 +764,7 @@ describe("CORE_HEALTH_CHECKS", () => {
         createDeps({
           async collectWorkspaceSuggestionNotes(): Promise<readonly string[]> {
             return [
-              [
-                "- Tip: back up the workspace in a private git repo (GitHub or GitLab).",
-                "- Keep ~/.openclaw out of git; it contains credentials and session history.",
-              ].join("\n"),
+              "- Tip: back up the agent workspace in a private git repo; keep ~/.openclaw out of git (credentials, sessions). Details: /concepts/agent-workspace#git-backup-recommended",
               "Memory system not found in workspace.",
             ];
           },
@@ -793,7 +790,8 @@ describe("CORE_HEALTH_CHECKS", () => {
       expect.objectContaining({
         checkId: "core/doctor/workspace-suggestions",
         severity: "info",
-        message: "Tip: back up the workspace in a private git repo (GitHub or GitLab).",
+        message:
+          "Tip: back up the agent workspace in a private git repo; keep ~/.openclaw out of git (credentials, sessions). Details: /concepts/agent-workspace#git-backup-recommended",
       }),
     );
     expect(findings).toContainEqual(

@@ -3,6 +3,7 @@ package ai.openclaw.app.voice
 import ai.openclaw.app.gateway.DeviceAuthEntry
 import ai.openclaw.app.gateway.DeviceAuthTokenStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
+import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeText
@@ -47,6 +48,51 @@ import java.util.concurrent.atomic.AtomicLong
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class TalkModeManagerTest {
+  @Test
+  fun phoneRealtimeRetriesWithoutLanguageWhenOlderGatewayRejectsCreateParams() =
+    runTest {
+      val requestedLanguages = mutableListOf<String?>()
+
+      val payload =
+        requestPhoneRealtimeSessionWithLanguageFallback("de") { language ->
+          requestedLanguages += language
+          if (requestedLanguages.size == 1) {
+            throw GatewayRequestRejected(
+              GatewaySession.ErrorShape(
+                code = "INVALID_REQUEST",
+                message = "invalid talk.session.create params at root",
+              ),
+            )
+          }
+          """{"relaySessionId":"relay-1"}"""
+        }
+
+      assertEquals("""{"relaySessionId":"relay-1"}""", payload)
+      assertEquals(listOf("de", null), requestedLanguages)
+    }
+
+  @Test
+  fun phoneRealtimeDoesNotRetryUnrelatedGatewayErrors() =
+    runTest {
+      var attempts = 0
+
+      val error =
+        runCatching {
+          requestPhoneRealtimeSessionWithLanguageFallback("de") {
+            attempts += 1
+            throw GatewayRequestRejected(
+              GatewaySession.ErrorShape(
+                code = "INVALID_REQUEST",
+                message = "invalid talk.session.appendAudio params",
+              ),
+            )
+          }
+        }.exceptionOrNull()
+
+      assertTrue(error is GatewayRequestRejected)
+      assertEquals(1, attempts)
+    }
+
   @Test
   fun stopTtsCancelsTrackedPlaybackJob() {
     val manager = createManager()
@@ -359,6 +405,31 @@ class TalkModeManagerTest {
       advanceUntilIdle()
 
       assertTrue(turn.await() is TimeoutCancellationException)
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun realtimePlaybackMarkAcknowledgesAfterQueuedAudioBarrier() =
+    runTest {
+      val acknowledgements = mutableListOf<Pair<String, String>>()
+      val dispatcher = StandardTestDispatcher(testScheduler)
+      val manager =
+        createManager(
+          scope = this,
+          realtimePlaybackDispatcher = dispatcher,
+          realtimeMarkAcknowledger = { sessionId, markName ->
+            acknowledgements += sessionId to markName
+          },
+        )
+      setPrivateField(manager, "realtimeSessionId", "relay-1")
+
+      manager.handleGatewayEvent(
+        "talk.event",
+        """{"relaySessionId":"relay-1","type":"mark","markName":"audio-1"}""",
+      )
+      runCurrent()
+
+      assertEquals(listOf("relay-1" to "audio-1"), acknowledgements)
     }
 
   @Test
@@ -964,6 +1035,8 @@ class TalkModeManagerTest {
     isConnected: () -> Boolean = { true },
     onStoppedByRelay: () -> Unit = {},
     realtimeCaptureDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    realtimePlaybackDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    realtimeMarkAcknowledger: (suspend (String, String) -> Unit)? = null,
   ): TalkModeManager {
     val app = RuntimeEnvironment.getApplication()
     val sessionJob = SupervisorJob()
@@ -985,6 +1058,8 @@ class TalkModeManagerTest {
       talkSpeakClient = talkSpeakClient,
       talkAudioPlayer = talkAudioPlayer ?: TalkAudioPlayer(app),
       realtimeCaptureDispatcher = realtimeCaptureDispatcher,
+      realtimePlaybackDispatcher = realtimePlaybackDispatcher,
+      realtimeMarkAcknowledger = realtimeMarkAcknowledger,
     )
   }
 

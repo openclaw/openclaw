@@ -6,6 +6,7 @@ import * as fences from "../../packages/markdown-core/src/fences.js";
 import { hasBalancedFences } from "../test-utils/chunk-test-helpers.js";
 import {
   chunkByNewline,
+  chunkByParagraph,
   chunkMarkdownText,
   chunkMarkdownTextWithMode,
   chunkText,
@@ -228,6 +229,37 @@ describe("chunkText", () => {
   runChunkCases(chunkText, [
     expectDefined(parentheticalCases[0], "parentheticalCases[0] test invariant"),
   ]);
+});
+
+describe("chunkByParagraph Unicode line/paragraph separators", () => {
+  it.each([
+    {
+      name: "treats lone U+2029 as a standalone paragraph boundary",
+      text: "paragraph one\u2029paragraph two starts here",
+      normalized: "paragraph one\n\nparagraph two starts here",
+      limit: 39,
+      expected: ["paragraph one", "paragraph two starts here"],
+    },
+    {
+      name: "treats lone U+2028 as a line break within one paragraph",
+      text: "paragraph one line\u2028still same paragraph",
+      normalized: "paragraph one line\nstill same paragraph",
+      limit: 50,
+      expected: ["paragraph one line\nstill same paragraph"],
+    },
+    {
+      name: "treats consecutive U+2028 and U+2029 as a paragraph boundary",
+      text: "paragraph one line\u2028\u2029paragraph two starts here",
+      normalized: "paragraph one line\n\nparagraph two starts here",
+      limit: 40,
+      expected: ["paragraph one line", "paragraph two starts here"],
+    },
+  ] as const)("$name", ({ text, normalized, limit, expected }) => {
+    const chunks = chunkByParagraph(text, limit);
+
+    expect(chunks).toEqual(expected);
+    expect(chunks).toEqual(chunkByParagraph(normalized, limit));
+  });
 });
 
 describe("resolveTextChunkLimit", () => {
@@ -628,16 +660,17 @@ describe("chunkMarkdownTextWithMode", () => {
 });
 
 describe("resolveChunkMode", () => {
-  // Flat chunkMode stays canonical for channels without a nested streaming
-  // schema (signal, irc, googlechat, whatsapp); nested-only channels are
-  // covered by the imessage rows below.
-  const providerCfg = { channels: { signal: { chunkMode: "newline" as const } } };
+  // All bundled channels are nested-only now; the flat chunkMode row below
+  // covers the deprecated SDK-plugin fallback that streaming.ts still reads.
+  const providerCfg = {
+    channels: { signal: { streaming: { chunkMode: "newline" as const } } },
+  };
   const accountCfg = {
     channels: {
       signal: {
-        chunkMode: "length" as const,
+        streaming: { chunkMode: "length" as const },
         accounts: {
-          primary: { chunkMode: "newline" as const },
+          primary: { streaming: { chunkMode: "newline" as const } },
         },
       },
     },
@@ -677,8 +710,8 @@ describe("resolveChunkMode", () => {
       accountId: undefined,
       expected: "length",
     },
-    // Mattermost's schema accepts both shapes; the nested streaming config
-    // wins over the flat key when both are present.
+    // Deprecated SDK fallback: nested config wins over a stale flat key, and
+    // a flat-only entry still resolves until the SDK deprecation window ends.
     {
       cfg: {
         channels: {
@@ -689,6 +722,12 @@ describe("resolveChunkMode", () => {
         },
       },
       provider: "mattermost",
+      accountId: undefined,
+      expected: "newline",
+    },
+    {
+      cfg: { channels: { "sdk-plugin": { chunkMode: "newline" as const } } },
+      provider: "sdk-plugin",
       accountId: undefined,
       expected: "newline",
     },

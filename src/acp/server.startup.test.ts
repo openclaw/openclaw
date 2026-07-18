@@ -41,7 +41,6 @@ const mockState = vi.hoisted(() => ({
   startProxy: vi.fn(async (_configForTest: unknown) => null as unknown),
   stopProxy: vi.fn(async (_handle: unknown) => {}),
   closeOpenClawStateDatabase: vi.fn(),
-  migrateEventLedger: vi.fn(async () => ({ importedSessions: 0, importedEvents: 0 })),
   gatewayStopDeferred: null as {
     resolve: () => void;
     promise: Promise<void>;
@@ -171,9 +170,13 @@ vi.mock("../infra/is-main.js", () => ({
   isMainModule: () => false,
 }));
 
-vi.mock("../logging/console.js", () => ({
-  routeLogsToStderr: () => mockState.routeLogsToStderr(),
-}));
+vi.mock("../logging/console.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logging/console.js")>();
+  return {
+    ...actual,
+    routeLogsToStderr: () => mockState.routeLogsToStderr(),
+  };
+});
 
 vi.mock("../state/openclaw-state-db.js", () => ({
   closeOpenClawStateDatabase: () => mockState.closeOpenClawStateDatabase(),
@@ -181,8 +184,6 @@ vi.mock("../state/openclaw-state-db.js", () => ({
 
 vi.mock("./event-ledger.js", () => ({
   createSqliteAcpEventLedger: vi.fn(() => ({})),
-  migrateFileAcpEventLedgerToSqlite: () => mockState.migrateEventLedger(),
-  resolveDefaultAcpEventLedgerPath: vi.fn(() => "/tmp/acp-events.json"),
 }));
 
 vi.mock("../infra/net/proxy/proxy-lifecycle.js", () => ({
@@ -325,8 +326,6 @@ describe("serveAcpGateway startup", () => {
     mockState.startProxy.mockReset();
     mockState.stopProxy.mockReset();
     mockState.closeOpenClawStateDatabase.mockReset();
-    mockState.migrateEventLedger.mockReset();
-    mockState.migrateEventLedger.mockResolvedValue({ importedSessions: 0, importedEvents: 0 });
     mockState.gatewayStopDeferred = null;
     mockState.startProxy.mockResolvedValue(null);
     mockState.stopProxy.mockResolvedValue(undefined);
@@ -339,6 +338,14 @@ describe("serveAcpGateway startup", () => {
         password: undefined,
       },
     });
+  });
+
+  it("preserves console exports for a co-sharded subsystem logger", async () => {
+    const { createSubsystemLogger } = await import("../logging/subsystem.js");
+
+    expect(() =>
+      createSubsystemLogger("test/acp-startup").isEnabled("info", "console"),
+    ).not.toThrow();
   });
 
   it("waits for gateway hello before creating AgentSideConnection", async () => {
@@ -356,14 +363,14 @@ describe("serveAcpGateway startup", () => {
     }
   });
 
-  it("subscribes the Gateway client to run-scoped tool events", async () => {
+  it("advertises approval handling and subscribes to run-scoped tool events", async () => {
     const { signalHandlers, onceSpy } = captureProcessSignalHandlers();
 
     try {
       const servePromise = serveAcpGateway({});
       await emitHelloAndWaitForAgentSideConnection();
 
-      expect(mockState.gatewayOptions[0]?.caps).toEqual(["tool-events"]);
+      expect(mockState.gatewayOptions[0]?.caps).toEqual(["exec-approvals", "tool-events"]);
 
       await stopServeWithSigint(signalHandlers, servePromise);
     } finally {
@@ -579,83 +586,6 @@ describe("serveAcpGateway startup", () => {
 
       resolveStop();
       await servePromise;
-      expect(mockState.closeOpenClawStateDatabase).toHaveBeenCalledOnce();
-    } finally {
-      onceSpy.mockRestore();
-    }
-  });
-
-  it("waits for both ledger migration and Gateway teardown before closing", async () => {
-    let resolveMigration!: () => void;
-    const migrationPromise = new Promise<{ importedSessions: number; importedEvents: number }>(
-      (resolve) => {
-        resolveMigration = () => resolve({ importedSessions: 1, importedEvents: 1 });
-      },
-    );
-    mockState.migrateEventLedger.mockImplementation(async () => await migrationPromise);
-    let resolveStop!: () => void;
-    const stopPromise = new Promise<void>((resolve) => {
-      resolveStop = resolve;
-    });
-    mockState.gatewayStopDeferred = { resolve: resolveStop, promise: stopPromise };
-    const { signalHandlers, onceSpy } = captureProcessSignalHandlers();
-
-    try {
-      const servePromise = serveAcpGateway({});
-      await vi.waitFor(() => {
-        expect(mockState.gateways).toHaveLength(1);
-      });
-      getMockGateway().emitHello();
-      await vi.waitFor(() => {
-        expect(mockState.migrateEventLedger).toHaveBeenCalledOnce();
-      });
-
-      signalHandlers.get("SIGTERM")?.();
-      await Promise.resolve();
-      expect(mockState.closeOpenClawStateDatabase).not.toHaveBeenCalled();
-
-      resolveMigration();
-      await Promise.resolve();
-      expect(mockState.closeOpenClawStateDatabase).not.toHaveBeenCalled();
-
-      resolveStop();
-      await servePromise;
-
-      expect(mockState.agentSideConnectionCtor).not.toHaveBeenCalled();
-      expect(mockState.closeOpenClawStateDatabase).toHaveBeenCalledOnce();
-    } finally {
-      onceSpy.mockRestore();
-    }
-  });
-
-  it("closes after a pending ledger migration rejects during shutdown", async () => {
-    let rejectMigration!: (err: Error) => void;
-    const migrationPromise = new Promise<{ importedSessions: number; importedEvents: number }>(
-      (_resolve, reject) => {
-        rejectMigration = reject;
-      },
-    );
-    mockState.migrateEventLedger.mockImplementation(async () => await migrationPromise);
-    const { signalHandlers, onceSpy } = captureProcessSignalHandlers();
-
-    try {
-      const servePromise = serveAcpGateway({});
-      await vi.waitFor(() => {
-        expect(mockState.gateways).toHaveLength(1);
-      });
-      getMockGateway().emitHello();
-      await vi.waitFor(() => {
-        expect(mockState.migrateEventLedger).toHaveBeenCalledOnce();
-      });
-
-      signalHandlers.get("SIGTERM")?.();
-      await Promise.resolve();
-      expect(mockState.closeOpenClawStateDatabase).not.toHaveBeenCalled();
-
-      rejectMigration(new Error("sqlite busy"));
-      await expect(servePromise).resolves.toBeUndefined();
-
-      expect(mockState.agentSideConnectionCtor).not.toHaveBeenCalled();
       expect(mockState.closeOpenClawStateDatabase).toHaveBeenCalledOnce();
     } finally {
       onceSpy.mockRestore();

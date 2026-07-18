@@ -11,23 +11,23 @@ import {
   ConnectErrorDetailCodes,
   readConnectErrorDetailCode,
 } from "../../packages/gateway-protocol/src/connect-error-details.js";
-import {
-  decorativeEmoji,
-  supportsDecorativeEmoji,
-} from "../../packages/terminal-core/src/decorative-emoji.js";
 import { stylePromptTitle } from "../../packages/terminal-core/src/prompt-style.js";
-import { theme } from "../../packages/terminal-core/src/theme.js";
 import { resolveAgentEffectiveModelPrimary, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
-  DEFAULT_AGENT_WORKSPACE_DIR,
-  ensureAgentWorkspace,
-  resolveWorkspaceAttestationPaths,
-  shouldRemoveWorkspaceAttestation,
-} from "../agents/workspace.js";
+  prepareLegacyWorkspaceStateReset,
+  removeLegacyWorkspaceStateForReset,
+} from "../agents/workspace-legacy-state.js";
+import {
+  deleteWorkspaceState,
+  prepareWorkspaceStateDeletion,
+} from "../agents/workspace-state-store.js";
+import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../agents/workspace.js";
+import { printClawBanner } from "../cli/claw-banner.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { resolveConfigPath } from "../config/paths.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
+import type { GatewayAuthMode } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolveAdvertisedControlUiLinks,
@@ -46,12 +46,24 @@ import { movePathToTrash } from "../infra/fs-safe.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveConfigDir, shortenHomeInString, shortenHomePath, sleep } from "../utils.js";
 import { VERSION } from "../version.js";
-import type { NodeManagerChoice, OnboardMode, ResetScope } from "./onboard-types.js";
+import type { OnboardMode, ResetScope } from "./onboard-types.js";
 export { randomToken } from "./random-token.js";
 
 export { detectBinary };
 export { detectBrowserOpenSupport, openUrl, resolveBrowserOpenCommand };
 export { resolveAdvertisedControlUiLinks, resolveControlUiLinks, resolveLocalControlUiProbeLinks };
+
+/** Builds the token-authenticated Control UI URL shown by onboarding surfaces. */
+export function buildOnboardingControlUiUrl(params: {
+  httpUrl: string;
+  authMode?: GatewayAuthMode;
+  token?: string;
+  suppressTokenOutput?: boolean;
+}): string {
+  return params.authMode === "token" && params.token && !params.suppressTokenOutput
+    ? `${params.httpUrl}#token=${encodeURIComponent(params.token)}`
+    : params.httpUrl;
+}
 
 /** Handles Clack cancellation by exiting through the runtime. */
 export function guardCancel<T>(value: T | symbol, runtime: RuntimeEnv, exitCode = 0): T {
@@ -169,46 +181,9 @@ export function validateGatewayPasswordInput(value: unknown): string | undefined
   return undefined;
 }
 
-// Wizard banner art, pregenerated from pixel bitmaps (two pixel rows per
-// terminal row via ▀▄█). The mascot rows and wordmark rows are separate so the
-// mascot can take the accent color; the wordmark starts on mascot row 2, which
-// keeps the claws poking above the text line. Keep row alignment when editing.
-const WIZARD_MASCOT_ART = [
-  "▄███▄     ▄███▄",
-  "▀█▄█▀     ▀█▄█▀",
-  "     ▀▄ ▄▀",
-  "    ██ █ ██",
-  "    ▀█████▀",
-  "   ▄█▀ █ ▀█▄",
-] as const;
-const WIZARD_MASCOT_WIDTH = 15;
-const WIZARD_WORDMARK_ROW_OFFSET = 2;
-
-const WIZARD_WORDMARK_ART = [
-  "█▀▀▀█ █▀▀▀█ █▀▀▀▀ █▄  █ █▀▀▀▀ █     █▀▀▀█ █   █",
-  "█   █ █▀▀▀▀ █▀▀▀  █ ▀▄█ █     █     █▀▀▀█ █▄▀▄█",
-  "▀▀▀▀▀ ▀     ▀▀▀▀▀ ▀   ▀ ▀▀▀▀▀ ▀▀▀▀▀ ▀   ▀ ▀   ▀",
-] as const;
-const WIZARD_HEADER_WIDTH = WIZARD_MASCOT_WIDTH + 3 + 47;
-
 /** Prints the onboarding banner: pixel mascot beside the OPENCLAW wordmark. */
-export function printWizardHeader(runtime: RuntimeEnv) {
-  // Narrow terminals (mobile SSH) would wrap the art mid-glyph; fall back to
-  // the plain title line the way the compact CLI banner handles tight widths.
-  const columns = process.stdout.columns ?? 80;
-  if (columns < WIZARD_HEADER_WIDTH) {
-    const icon = decorativeEmoji("🦞");
-    runtime.log(supportsDecorativeEmoji() && icon ? `${icon} OPENCLAW ${icon}\n` : "OPENCLAW\n");
-    return;
-  }
-  const lines = WIZARD_MASCOT_ART.map((mascotRow, index) => {
-    const wordmarkRow = WIZARD_WORDMARK_ART[index - WIZARD_WORDMARK_ROW_OFFSET];
-    if (!wordmarkRow) {
-      return theme.accent(mascotRow);
-    }
-    return `${theme.accent(mascotRow.padEnd(WIZARD_MASCOT_WIDTH))}   ${wordmarkRow}`;
-  });
-  runtime.log(`${lines.join("\n")}\n`);
+export async function printWizardHeader(runtime: RuntimeEnv): Promise<void> {
+  await printClawBanner(runtime);
 }
 
 /** Records wizard provenance metadata on config writes. */
@@ -276,7 +251,7 @@ export async function ensureWorkspaceAndSessions(
     skipOptionalBootstrapFiles?: OptionalBootstrapFileName[];
     agentId?: string;
   },
-) {
+): Promise<{ bootstrapPending: boolean }> {
   const ws = await ensureAgentWorkspace({
     dir: workspaceDir,
     ensureBootstrapFiles: !options?.skipBootstrap,
@@ -286,29 +261,18 @@ export async function ensureWorkspaceAndSessions(
   const sessionsDir = resolveSessionTranscriptsDirForAgent(options?.agentId);
   await fs.mkdir(sessionsDir, { recursive: true });
   runtime.log(`Sessions OK: ${shortenHomePath(sessionsDir)}`);
-}
-
-/** Returns package manager choices offered by onboarding. */
-export function resolveNodeManagerOptions(): Array<{
-  value: NodeManagerChoice;
-  label: string;
-}> {
-  return [
-    { value: "npm", label: "npm" },
-    { value: "pnpm", label: "pnpm" },
-    { value: "bun", label: "bun" },
-  ];
+  return { bootstrapPending: ws.bootstrapPending === true };
 }
 
 /** Moves a path to Trash when it exists, logging a manual-delete fallback on failure. */
-export async function moveToTrash(pathname: string, runtime: RuntimeEnv): Promise<void> {
+export async function moveToTrash(pathname: string, runtime: RuntimeEnv): Promise<boolean> {
   if (!pathname) {
-    return;
+    return false;
   }
   try {
-    await fs.access(pathname);
-  } catch {
-    return;
+    await fs.lstat(pathname);
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT";
   }
   try {
     const targetPath = path.resolve(pathname);
@@ -317,8 +281,10 @@ export async function moveToTrash(pathname: string, runtime: RuntimeEnv): Promis
       allowedRoots: await resolveMoveToTrashAllowedRoots(sourcePath),
     });
     runtime.log(`Moved to Trash: ${shortenHomePath(pathname)}`);
+    return true;
   } catch {
     runtime.log(`Failed to move to Trash (manual delete): ${shortenHomePath(pathname)}`);
+    return false;
   }
 }
 
@@ -350,13 +316,15 @@ export async function handleReset(scope: ResetScope, workspaceDir: string, runti
   await moveToTrash(path.join(resolveConfigDir(), "credentials"), runtime);
   await moveToTrash(resolveSessionTranscriptsDirForAgent(), runtime);
   if (scope === "full") {
-    await moveToTrash(workspaceDir, runtime);
-    for (const [index, attestationPath] of resolveWorkspaceAttestationPaths(
-      workspaceDir,
-    ).entries()) {
-      if (await shouldRemoveWorkspaceAttestation(attestationPath, { trustUnknown: index === 0 })) {
-        await moveToTrash(attestationPath, runtime);
+    const legacyPlan = prepareLegacyWorkspaceStateReset(workspaceDir);
+    const statePlan = prepareWorkspaceStateDeletion(workspaceDir);
+    const workspaceRemoved = await moveToTrash(workspaceDir, runtime);
+    if (workspaceRemoved) {
+      const legacyCleanup = await removeLegacyWorkspaceStateForReset(legacyPlan);
+      for (const warning of legacyCleanup.warnings) {
+        runtime.log(warning);
       }
+      deleteWorkspaceState(statePlan);
     }
   }
 }

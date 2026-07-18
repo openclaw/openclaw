@@ -2,29 +2,56 @@
  * Tests talk realtime relay event forwarding and connection cleanup.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  setActiveEmbeddedRun,
-  testing as embeddedRunTesting,
-} from "../agents/embedded-agent-runner/runs.js";
+import { setActiveEmbeddedRun } from "../agents/embedded-agent-runner/runs.js";
+import { testing as embeddedRunTesting } from "../agents/embedded-agent-runner/runs.test-support.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import type {
   RealtimeVoiceBridge,
   RealtimeVoiceBridgeCreateRequest,
 } from "../talk/provider-types.js";
 import {
+  acknowledgeTalkRealtimeRelayMark,
   cancelTalkRealtimeRelayTurn,
-  clearTalkRealtimeRelaySessionsForTest,
-  createTalkRealtimeRelaySession,
+  createTalkRealtimeRelaySession as createTalkRealtimeRelaySessionRaw,
   registerTalkRealtimeRelayAgentRun,
   sendTalkRealtimeRelayAudio,
   steerTalkRealtimeRelayAgentRun,
-  stopTalkRealtimeRelaySession,
+  stopTalkRealtimeRelaySession as stopTalkRealtimeRelaySessionRaw,
   submitTalkRealtimeRelayToolResult,
 } from "./talk-realtime-relay.js";
 
+const activeRelaySessions = new Map<string, string>();
+
+function createTalkRealtimeRelaySession(
+  params: Parameters<typeof createTalkRealtimeRelaySessionRaw>[0],
+): ReturnType<typeof createTalkRealtimeRelaySessionRaw> {
+  const session = createTalkRealtimeRelaySessionRaw(params);
+  activeRelaySessions.set(session.relaySessionId, params.connId);
+  return session;
+}
+
+function stopTalkRealtimeRelaySession(
+  params: Parameters<typeof stopTalkRealtimeRelaySessionRaw>[0],
+): void {
+  stopTalkRealtimeRelaySessionRaw(params);
+  activeRelaySessions.delete(params.relaySessionId);
+}
+
 describe("talk realtime gateway relay", () => {
   afterEach(() => {
-    clearTalkRealtimeRelaySessionsForTest();
+    for (const [relaySessionId, connId] of activeRelaySessions) {
+      try {
+        stopTalkRealtimeRelaySessionRaw({ relaySessionId, connId });
+      } catch (error) {
+        if (
+          !(error instanceof Error) ||
+          !error.message.includes("Unknown realtime relay session")
+        ) {
+          throw error;
+        }
+      }
+    }
+    activeRelaySessions.clear();
     vi.useRealTimers();
     embeddedRunTesting.resetActiveEmbeddedRuns();
   });
@@ -295,6 +322,7 @@ describe("talk realtime gateway relay", () => {
       connect: vi.fn(async () => {
         bridgeRequest?.onReady?.();
         bridgeRequest?.onAudio(Buffer.from("audio-out"));
+        bridgeRequest?.onMark?.("mark-1");
         bridgeRequest?.onTranscript?.("user", "hello", true);
         bridgeRequest?.onTranscript?.("assistant", "hi there", true);
         bridgeRequest?.onToolCall?.({
@@ -349,6 +377,7 @@ describe("talk realtime gateway relay", () => {
       tools: [],
       model: "browser-model",
       voice: "voice-a",
+      language: "de",
     });
     await Promise.resolve();
 
@@ -368,6 +397,7 @@ describe("talk realtime gateway relay", () => {
       providerConfig: { model: "provider-model" },
       audioFormat: { encoding: "pcm16", sampleRateHz: 24000, channels: 1 },
       instructions: "be brief",
+      language: "de",
       autoRespondToAudio: true,
       interruptResponseOnInputAudio: true,
     });
@@ -399,6 +429,15 @@ describe("talk realtime gateway relay", () => {
     expectRecordFields(audioPayload.talkEvent, { type: "output.audio.delta" });
     const audioEvent = events.find((entry) => entry.payload === audioPayload);
     expectRecordFields(audioEvent?.opts, { dropIfSlow: true });
+
+    const markPayload = findEventPayload(events, (payload) => payload.type === "mark");
+    expectRecordFields(markPayload, {
+      relaySessionId: session.relaySessionId,
+      type: "mark",
+      markName: "mark-1",
+    });
+    const markEvent = events.find((entry) => entry.payload === markPayload);
+    expectRecordFields(markEvent?.opts, { dropIfSlow: false });
 
     const userTranscript = findEventPayload(
       events,
@@ -471,6 +510,11 @@ describe("talk realtime gateway relay", () => {
       result: { status: "already_delivered" },
       options: { suppressResponse: true },
     });
+    acknowledgeTalkRealtimeRelayMark({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+      markName: "mark-1",
+    });
     cancelTalkRealtimeRelayTurn({
       relaySessionId: session.relaySessionId,
       connId: "conn-1",
@@ -506,6 +550,7 @@ describe("talk realtime gateway relay", () => {
       { suppressResponse: true },
     );
     expect(bridge.handleBargeIn).toHaveBeenCalledWith({ audioPlaybackActive: true });
+    expect(bridge.acknowledgeMark).toHaveBeenCalledWith("mark-1");
     expect(bridge.close).toHaveBeenCalled();
     const inputAudioPayload = findEventPayload(
       events,
@@ -1634,6 +1679,7 @@ describe("talk realtime gateway relay", () => {
     expect(broadcast).not.toHaveBeenCalledWith(
       "chat",
       expect.objectContaining({ runId: "run-1", state: "aborted" }),
+      expect.anything(),
     );
   });
 
@@ -2090,6 +2136,7 @@ describe("talk realtime gateway relay", () => {
     expect(broadcast).not.toHaveBeenCalledWith(
       "chat",
       expect.objectContaining({ runId: "run-1", state: "aborted" }),
+      expect.anything(),
     );
   });
 
@@ -2311,6 +2358,7 @@ describe("talk realtime gateway relay", () => {
       expect(broadcast).not.toHaveBeenCalledWith(
         "chat",
         expect.objectContaining({ runId: "run-1", state: "aborted" }),
+        expect.anything(),
       );
 
       void submitTalkRealtimeRelayToolResult({
@@ -3002,3 +3050,4 @@ describe("talk realtime gateway relay", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

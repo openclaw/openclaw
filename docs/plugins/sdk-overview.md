@@ -185,28 +185,121 @@ advertised node command.
 
 ### Infrastructure
 
-| Method                                          | What it registers                                            |
-| ----------------------------------------------- | ------------------------------------------------------------ |
-| `api.registerHook(events, handler, opts?)`      | Event hook                                                   |
-| `api.registerHttpRoute(params)`                 | Gateway HTTP endpoint                                        |
-| `api.registerGatewayMethod(name, handler)`      | Gateway RPC method                                           |
-| `api.registerGatewayDiscoveryService(service)`  | Local Gateway discovery advertiser                           |
-| `api.registerCli(registrar, opts?)`             | CLI subcommand                                               |
-| `api.registerNodeCliFeature(registrar, opts?)`  | Node feature CLI under `openclaw nodes`                      |
-| `api.registerService(service)`                  | Background service                                           |
-| `api.registerInteractiveHandler(registration)`  | Interactive handler                                          |
-| `api.registerAgentToolResultMiddleware(...)`    | Runtime tool-result middleware                               |
-| `api.registerMemoryPromptSupplement(builder)`   | Additive memory-adjacent prompt section                      |
-| `api.registerMemoryCorpusSupplement(adapter)`   | Additive memory search/read corpus                           |
-| `api.registerHostedMediaResolver(resolver)`     | Resolver for browser-style hosted media URLs                 |
-| `api.registerTextTransforms(transforms)`        | Plugin-owned prompt/message compatibility text rewrites      |
-| `api.registerConfigMigration(migrate)`          | Lightweight config migration run before plugin runtime loads |
-| `api.registerMigrationProvider(provider)`       | Importer for `openclaw migrate`                              |
-| `api.registerAutoEnableProbe(probe)`            | Config probe that can auto-enable this plugin                |
-| `api.registerReload(registration)`              | Restart/hot/noop config-prefix policy for reload handling    |
-| `api.registerNodeHostCommand(command)`          | Command handler exposed to paired nodes                      |
-| `api.registerNodeInvokePolicy(policy)`          | Allowlist/approval policy for node-invoked commands          |
-| `api.registerSecurityAuditCollector(collector)` | Findings collector for `openclaw security audit`             |
+| Method                                          | What it registers                                                      |
+| ----------------------------------------------- | ---------------------------------------------------------------------- |
+| `api.registerHook(events, handler, opts?)`      | Event hook                                                             |
+| `api.registerHttpRoute(params)`                 | Gateway HTTP endpoint                                                  |
+| `api.registerGatewayMethod(name, handler)`      | Gateway RPC method                                                     |
+| `api.registerGatewayDiscoveryService(service)`  | Local Gateway discovery advertiser                                     |
+| `api.registerCli(registrar, opts?)`             | CLI subcommand                                                         |
+| `api.registerNodeCliFeature(registrar, opts?)`  | Node feature CLI under `openclaw nodes`                                |
+| `api.registerService(service)`                  | Background service                                                     |
+| `api.registerInteractiveHandler(registration)`  | Interactive handler                                                    |
+| `api.registerAgentToolResultMiddleware(...)`    | Runtime tool-result middleware                                         |
+| `api.registerMemoryPromptSupplement(builder)`   | Additive memory-adjacent prompt section                                |
+| `api.registerMemoryPromptPreparation(prepare)`  | Async preparation for a memory-adjacent prompt section                 |
+| `api.registerMemoryCorpusSupplement(adapter)`   | Additive memory search/read corpus                                     |
+| `api.registerHostedMediaResolver(resolver)`     | Resolver for browser-style hosted media URLs                           |
+| `api.registerMcpServerConnectionResolver(...)`  | Per-requester MCP transport (`url`/`headers`) for a static server name |
+| `api.registerTextTransforms(transforms)`        | Plugin-owned prompt/message compatibility text rewrites                |
+| `api.registerConfigMigration(migrate)`          | Lightweight config migration run before plugin runtime loads           |
+| `api.registerMigrationProvider(provider)`       | Importer for `openclaw migrate`                                        |
+| `api.registerAutoEnableProbe(probe)`            | Config probe that can auto-enable this plugin                          |
+| `api.registerReload(registration)`              | Restart/hot/noop config-prefix policy for reload handling              |
+| `api.registerNodeHostCommand(command)`          | Command handler exposed to paired nodes                                |
+| `api.registerNodeInvokePolicy(policy)`          | Allowlist/approval policy for node-invoked commands                    |
+| `api.registerSecurityAuditCollector(collector)` | Findings collector for `openclaw security audit`                       |
+
+#### Post-ack webhook work
+
+Webhook routes that acknowledge a request before processing finishes must move
+that detached work onto its own tracked admission root:
+
+```typescript
+import { runDetachedWebhookWork } from "openclaw/plugin-sdk/webhook-request-guards";
+
+void runDetachedWebhookWork(() => processWebhookEvent(event)).catch((error) => {
+  runtime.error?.(`webhook dispatch failed: ${String(error)}`);
+});
+```
+
+Call `runDetachedWebhookWork(...)` synchronously while the HTTP request is still
+admitted. The helper reserves an independent root immediately, then starts the
+callback in the next microtask so the request handler can write its
+acknowledgement first. The returned promise adopts the callback result; callers
+still own rejection handling. This keeps post-ack queue work accepted and makes
+restart or suspension drains wait for it. Handlers that await all processing
+before returning do not need this helper.
+
+#### Requester-scoped MCP connections
+
+Keep the MCP server **identity** static (name, tool filter) in `mcp.servers` or a
+bundle manifest. Optionally register a connection resolver so each trusted
+message requester gets their own transport:
+
+```ts
+api.registerMcpServerConnectionResolver({
+  serverName: "user-email",
+  resolve: async (ctx) => {
+    // ctx.requesterSenderId is host-trusted; never invent sender identity here.
+    const token = await lookupUserToken(ctx.requesterSenderId);
+    if (!token) {
+      return null; // omit this server for the current run
+    }
+    return {
+      url: "https://mcp.example.com/email",
+      headers: { Authorization: `Bearer ${token}` },
+    };
+  },
+});
+```
+
+Contract notes:
+
+- Resolver context carries trusted host identity only (`requesterSenderId`,
+  optional `agentAccountId` / `messageChannel`). Future trusted fields (for
+  example cron/subagent user context) can be added additively.
+- One plugin owns one server name: a duplicate
+  `registerMcpServerConnectionResolver` for the same `serverName` from another
+  plugin is rejected with an error diagnostic (first registration wins), so
+  connection ownership never depends on plugin load order.
+- Tool names are derived from the full declared server set so partial resolution
+  never changes safe server names between requesters or turns. Core does not
+  verify that different requester endpoints serve identical tool schemas; a
+  resolver must point every requester at the same logical service, or tool
+  schemas (and prompt-cache stability) diverge per requester.
+- Runs without a trusted `requesterSenderId` (cron, subagent, heartbeat, public
+  gateway) never materialize requester-scoped servers. There is no shared
+  fallback connection.
+- `resolve` is bounded at 10 seconds per server; a timeout or throw omits that
+  server for the run without failing static MCP.
+- Resolved connections are revalidated at most every 5 minutes per requester:
+  rotation rebuilds the transport with fresh credentials, and a `null` result
+  revokes it (the cached runtime is disposed even mid-session). A revoked or
+  rotated credential can therefore stay in use for up to 5 minutes.
+- Resolved `headers` are never logged or persisted; core keeps only an ephemeral
+  in-memory keyed digest (process-local HMAC) to detect credential rotation, and
+  registers resolved header/URL credential values with the log/debug-capture
+  redaction registry.
+- Requester-scoped servers do not mint MCP App views: a view outlives the
+  requester-authenticated run and the gateway view boundary has no requester
+  identity, so app previews stay fail-closed for these servers. Tool results
+  are unaffected.
+- Static servers without a resolver keep the existing session-scoped lifecycle.
+- **Harness delivery rule:** requester-scoped servers never enter harness-native
+  MCP client config (Codex thread `mcp_servers`, CLI `-c mcp_servers=…`, or any
+  other session-shared MCP projection). Harnesses deliver them as run-scoped
+  tools instead:
+  - Embedded runner: session MCP runtime + bundle tools (static + scoped).
+  - Codex app-server: dynamic tools via
+    `materializeRequesterScopedMcpToolsForHarnessRun` (scoped-only; static
+    servers stay on Codex's native MCP client).
+- Scoped tool **specs** are session-stable after the first successful resolve in
+  that session, so shared-thread harnesses (Codex) do not rotate threads when
+  senders change. Before any requester resolves, no scoped specs are advertised.
+- Unauthenticated requesters on a shared-thread harness still see the advertised
+  scoped tools; calling one returns a clean not-connected tool error for that
+  requester. OpenClaw never falls back to another requester's credentials.
 
 Memory prompt supplement builders receive optional `agentId`,
 `agentSessionKey`, and `sandboxed` context. Memory corpus supplement `search`
@@ -215,6 +308,15 @@ agent-owned storage should resolve that storage for each call instead of
 capturing one global path during registration. If an agent id is required but
 missing in a multi-agent operation, fail closed rather than choosing an
 arbitrary agent.
+
+Use `registerMemoryPromptPreparation(...)` when prompt text depends on async
+plugin state. The callback runs once before each full agent prompt and receives
+the same tool, agent, session, and sandbox context as synchronous memory prompt
+builders. Validate the current storage-owner instance before loading persisted
+state, then return only lines for that run. OpenClaw freezes those lines and
+hands the immutable result to synchronous prompt assembly. Keep persistence,
+atomic replacement, and owner-removal deletion inside the owning plugin; do not
+poll or read files from a prompt builder.
 
 Telegram interactive handlers can return `{ submitText }` to route text through
 Telegram's normal inbound agent path after the handler succeeds. OpenClaw keeps
@@ -255,6 +357,30 @@ plugins can set `path` to a plugin HTTP route (see
 `icon` is a dashboard icon name hint, `group` picks the sidebar section
 (`control` or `agent`), `order` sorts among plugin tabs, and `requiredScopes`
 hides the tab from connections lacking those operator scopes:
+
+For a gateway-protected external tab, register the descriptor `path` under a
+same-plugin `auth: "gateway"` HTTP route. After authenticated bootstrap, the browser gets a
+short-lived, HttpOnly grant scoped to that plugin and route root so the
+sandboxed frame can load without copying the Gateway bearer token into its URL
+or JavaScript. The authenticated parent renews the grant while the external tab
+is active and before mounting it after navigation or browser resume. It also
+probes the grant from the same opaque sandbox before mounting, so browser
+privacy modes that block the cookie fail closed with an unavailable panel.
+The frame grant accepts only `GET` and `HEAD` and always carries
+`operator.read`; `requiredScopes` controls tab visibility but never widens the
+cookie grant. Mutations remain on explicit Gateway-authenticated parent or
+bearer surfaces. External tabs require HTTPS/Tailscale Serve or a
+browser-trusted loopback origin; plain HTTP on a LAN host shows the
+secure-context error instead of mounting a panel that cannot authenticate.
+Full third-party-cookie blocking also makes gateway-protected tabs unavailable.
+As with all native plugin surfaces, the frame remains inside the installed
+plugin trust boundary; OpenClaw does not treat installed plugins as mutually
+isolated browser security principals.
+Cookie grants use the browser's hostname boundary, not its port boundary. Do
+not cohost mutually untrusted services on the Gateway hostname, even on other
+ports.
+Tabs backed by plugin-managed auth keep their direct iframe behavior and do not
+request or require this Gateway grant.
 
 ```typescript
 api.session.controls.registerControlUiDescriptor({
@@ -451,6 +577,10 @@ AI CLI backend such as `claude-cli` or `my-cli`.
   backend-native isolation flags for ephemeral `/btw` calls. If those flags
   reliably disable native tools for an otherwise always-on CLI, declare
   `sideQuestionToolMode: "disabled"` too.
+- Use `prepareExecution` for backend-owned launch environment or temporary
+  auth/config bridges. Its `ctx.contextTokenBudget` is the effective token
+  limit selected for the run, so native-compaction backends can align their
+  own threshold without provider-specific core branches.
 - Backends that can disable all native tools for a specific run may declare
   `nativeToolMode: "selectable"`. Restricted calls pass an empty
   `ctx.toolAvailability.native` tuple plus an exact host-isolated MCP allowlist;

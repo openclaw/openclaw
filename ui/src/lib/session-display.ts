@@ -15,12 +15,6 @@ const CHANNEL_LABELS: Record<string, string> = {
 
 const KNOWN_CHANNEL_KEYS = Object.keys(CHANNEL_LABELS);
 
-/** Human channel label for group headers and name fallbacks. */
-export function channelDisplayLabel(channel: string): string {
-  const normalized = normalizeLowercaseStringOrEmpty(channel);
-  return CHANNEL_LABELS[normalized] ?? capitalize(normalized || channel);
-}
-
 /** Raw peer ids stay out of the sidebar; keep a short recognizable tail only. */
 function shortenPeerId(identifier: string): string {
   const trimmed = identifier.trim();
@@ -95,6 +89,7 @@ type SessionKeyInfo = {
 type SessionDisplayRow = {
   label?: string;
   displayName?: string;
+  derivedTitle?: string;
 } & SessionWorktreeDisplayRow;
 
 function capitalize(s: string): string {
@@ -177,6 +172,7 @@ function parseSessionKey(key: string): SessionKeyInfo {
 export function resolveSessionDisplayName(key: string, row?: SessionDisplayRow): string {
   const label = normalizeOptionalString(row?.label) ?? "";
   const displayName = normalizeOptionalString(row?.displayName) ?? "";
+  const derivedTitle = normalizeOptionalString(row?.derivedTitle) ?? "";
   const { prefix, fallbackName } = parseSessionKey(key);
 
   const applyTypedPrefix = (name: string): string => {
@@ -197,6 +193,9 @@ export function resolveSessionDisplayName(key: string, row?: SessionDisplayRow):
   const workSubtitle = row ? resolveSessionWorkSubtitle(row) : undefined;
   if (workSubtitle && row?.worktree) {
     return applyTypedPrefix(workSubtitle);
+  }
+  if (derivedTitle && derivedTitle !== key) {
+    return applyTypedPrefix(derivedTitle);
   }
   return fallbackName;
 }

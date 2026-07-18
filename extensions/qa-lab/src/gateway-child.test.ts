@@ -8,7 +8,6 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   testing,
-  buildQaForcedRuntimeEnvPatch,
   buildQaRuntimeEnv,
   resolveQaControlUiRoot,
   startQaGatewayChild,
@@ -98,34 +97,6 @@ function requireAuthProfile(
   }
   return profile;
 }
-
-describe("forced runtime environment", () => {
-  it("pins forced Codex mock runs to the managed provider endpoint", () => {
-    expect(
-      buildQaForcedRuntimeEnvPatch({
-        forcedRuntime: "codex",
-        providerMode: "mock-openai",
-        providerBaseUrl: "http://127.0.0.1:44080/v1/",
-      }),
-    ).toEqual({
-      OPENCLAW_BUILD_PRIVATE_QA: "1",
-      OPENCLAW_QA_FORCE_RUNTIME: "codex",
-      OPENCLAW_CODEX_APP_SERVER_ARGS:
-        "app-server -c openai_base_url=http://127.0.0.1:44080/v1 --listen stdio://",
-      OPENAI_API_KEY: ["qa", "mock", "openai", "key"].join("-"),
-      CODEX_API_KEY: ["qa", "mock", "openai", "key"].join("-"),
-    });
-  });
-
-  it("fails closed when a forced Codex mock run lacks its managed endpoint", () => {
-    expect(() =>
-      buildQaForcedRuntimeEnvPatch({
-        forcedRuntime: "codex",
-        providerMode: "mock-openai",
-      }),
-    ).toThrow("forced Codex mock QA requires the managed mock provider URL");
-  });
-});
 
 function requireSsrFetchCall(index = 0): SsrFetchCall {
   const call = fetchWithSsrFGuardMock.mock.calls[index];
@@ -234,6 +205,18 @@ describe("formatQaGatewayProcessBoundaryStartupFailure", () => {
     expect(message).toContain("launcher stage=mount-proc");
     expect(message).not.toContain("s".repeat(100));
     expect(message).not.toContain(prefix);
+  });
+
+  it("preserves complete Unicode code points at the retained log-tail boundary", () => {
+    const message = testing.formatQaGatewayProcessBoundaryStartupFailure(
+      new Error("launcher exited before identity"),
+      `P😀${"z".repeat(8_191)}`,
+    );
+
+    expect(message).not.toMatch(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
+    );
+    expect(Buffer.from(message, "utf8").toString("utf8")).not.toContain("�");
   });
 });
 
@@ -1258,6 +1241,22 @@ describe("buildQaRuntimeEnv", () => {
     expect([child.exitCode, child.signalCode]).not.toEqual([null, null]);
   });
 
+  it("allows loaded runners time to reap force-killed gateway process groups", () => {
+    expect(testing.resolveQaGatewayChildStopTimeouts()).toEqual({
+      gracefulTimeoutMs: 5_000,
+      forceTimeoutMs: 10_000,
+    });
+    expect(
+      testing.resolveQaGatewayChildStopTimeouts({
+        gracefulTimeoutMs: 1,
+        forceTimeoutMs: 2,
+      }),
+    ).toEqual({
+      gracefulTimeoutMs: 1,
+      forceTimeoutMs: 2,
+    });
+  });
+
   it.runIf(process.platform !== "win32")(
     "fails closed when forced gateway process-group shutdown times out",
     async () => {
@@ -1277,6 +1276,23 @@ describe("buildQaRuntimeEnv", () => {
       ).rejects.toThrow("qa gateway process tree remained alive after forced shutdown");
     },
   );
+
+  it("treats Linux process groups with only dead members as stopped", () => {
+    const stats = [
+      "123 (gateway child) Z 1 123 123 0 -1 0",
+      "124 (helper (worker)) X 1 123 123 0 -1 0",
+      "125 (unrelated) S 1 999 999 0 -1 0",
+    ];
+
+    expect(testing.classifyLinuxProcessGroupStats(123, stats)).toBe(false);
+    expect(
+      testing.classifyLinuxProcessGroupStats(123, [
+        ...stats,
+        "126 (live helper) D 1 123 123 0 -1 0",
+      ]),
+    ).toBe(true);
+    expect(testing.classifyLinuxProcessGroupStats(456, stats)).toBeNull();
+  });
 
   it("force-kills Windows gateway process trees when graceful taskkill fails", () => {
     const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
@@ -1307,10 +1323,12 @@ describe("buildQaRuntimeEnv", () => {
       expect(runTaskkill).toHaveBeenNthCalledWith(1, taskkillPath, ["/PID", "12345", "/T"], {
         stdio: "ignore",
         windowsHide: true,
+        timeout: 5_000,
       });
       expect(runTaskkill).toHaveBeenNthCalledWith(2, taskkillPath, ["/PID", "12345", "/T", "/F"], {
         stdio: "ignore",
         windowsHide: true,
+        timeout: 5_000,
       });
       expect(child.kill).not.toHaveBeenCalled();
     } finally {
@@ -2174,12 +2192,45 @@ describe("qa bundled plugin dir", () => {
       env: { OPENCLAW_QA_LIVE_PROVIDER_CONFIG_PATH: configPath },
     });
     expect(Object.keys(overrides)).toEqual(["openai"]);
-    expect(overrides["openai"]?.baseUrl).toBe("");
+    expect(overrides["openai"]).not.toHaveProperty("baseUrl");
     expect(overrides["openai"]?.models).toEqual([]);
     expect(overrides["openai"]?.apiKey).toEqual({
       source: "env",
       id: "OPENCLAW_LIVE_CODEX_API_KEY",
     });
+  });
+
+  it("omits empty base URLs without dropping provider configs that inherit auth", async () => {
+    const configPath = path.join(
+      await mkdtemp(path.join(os.tmpdir(), "qa-provider-config-")),
+      "openclaw.json",
+    );
+    cleanups.push(async () => {
+      await rm(path.dirname(configPath), { recursive: true, force: true });
+    });
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "",
+              api: "openai-responses",
+              models: [],
+            },
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    const overrides = await testing.readQaLiveProviderConfigOverrides({
+      providerIds: ["openai"],
+      env: { OPENCLAW_QA_LIVE_PROVIDER_CONFIG_PATH: configPath },
+    });
+    expect(Object.keys(overrides)).toEqual(["openai"]);
+    expect(overrides["openai"]).not.toHaveProperty("baseUrl");
+    expect(overrides["openai"]?.api).toBe("openai-responses");
   });
 
   it("does not copy OpenAI provider configs for custom OpenAI-compatible runs", async () => {
@@ -2282,3 +2333,4 @@ describe("qa bundled plugin dir", () => {
     ).resolves.toBe("2026.4.9");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

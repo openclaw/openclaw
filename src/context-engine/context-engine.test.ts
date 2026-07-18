@@ -3,29 +3,31 @@ import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { clearMemoryPluginState, registerMemoryPromptSection } from "../plugins/memory-state.js";
+import {
+  clearMemoryPluginState,
+  registerMemoryPromptPreparation,
+  registerMemoryPromptSection,
+} from "../plugins/memory-state.test-fixtures.js";
 // ---------------------------------------------------------------------------
 // We dynamically import the registry so we can get a fresh module per test
 // group when needed.  For most groups we use the shared singleton directly.
 // ---------------------------------------------------------------------------
-import { buildMemorySystemPromptAddition, delegateCompactionToRuntime } from "./delegate.js";
+import {
+  buildMemorySystemPromptAddition,
+  delegateCompactionToRuntime,
+  prepareMemorySystemPromptAddition,
+} from "./delegate.js";
 import { LegacyContextEngine } from "./legacy.js";
 import { registerLegacyContextEngine } from "./legacy.registration.js";
 import {
   registerContextEngine,
   registerContextEngineForOwner,
-  clearContextEngineRuntimeQuarantine,
-  getContextEngineFactory,
+  getContextEngineRegistration,
   listContextEngineQuarantines,
-  listContextEngineIds,
   resolveContextEngine,
   resolveContextEngineOwnerPluginId,
 } from "./registry.js";
-import type {
-  ContextEngineFactory,
-  ContextEngineFactoryContext,
-  ContextEngineRegistrationResult,
-} from "./registry.js";
+import { resetContextEngineRuntimeQuarantineForTests } from "./registry.test-support.js";
 import type {
   ContextEngine,
   ContextEngineInfo,
@@ -36,6 +38,9 @@ import type {
   BootstrapResult,
   IngestResult,
 } from "./types.js";
+
+type ContextEngineFactory = Parameters<typeof registerContextEngine>[1];
+type ContextEngineFactoryContext = Parameters<ContextEngineFactory>[0];
 
 const { compactEmbeddedAgentSessionDirectMock } = vi.hoisted(() => ({
   compactEmbeddedAgentSessionDirectMock: vi.fn(),
@@ -565,10 +570,7 @@ describe("Engine contract tests", () => {
     const factory = () => new MockContextEngine();
     registerContextEngine("mock", factory);
 
-    const resolved = getContextEngineFactory("mock");
-    expect(resolved).toBe(factory);
-
-    const engine = await resolved!({});
+    const engine = await resolveContextEngine(configWithSlot("mock"));
     expect(engine).toBeInstanceOf(MockContextEngine);
     expect(engine.info.id).toBe("mock");
   });
@@ -737,6 +739,20 @@ describe("Engine contract tests", () => {
       }),
     ).toBeUndefined();
   });
+
+  it("prepares async memory state before context-engine prompt rendering", async () => {
+    const prepare = vi.fn(async () => ["## Prepared Memory", "loaded from sqlite", ""]);
+    registerMemoryPromptPreparation("memory-wiki", prepare);
+
+    await expect(
+      prepareMemorySystemPromptAddition({
+        availableTools: new Set(["wiki_search"]),
+        agentId: "main",
+        agentSessionKey: "agent:main:main",
+      }),
+    ).resolves.toBe("## Prepared Memory\nloaded from sqlite");
+    expect(prepare).toHaveBeenCalledTimes(1);
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -748,19 +764,15 @@ describe("Registry tests", () => {
     const factory = () => new MockContextEngine();
     registerContextEngine("reg-test-2", factory);
 
-    const retrieved = getContextEngineFactory("reg-test-2");
-    expect(retrieved).toBe(factory);
+    expect(getContextEngineRegistration("reg-test-2")?.factory).toBe(factory);
   });
 
-  it("listContextEngineIds() returns all registered ids", () => {
-    // Ensure at least our test entries exist
+  it("tracks all registered ids", () => {
     registerContextEngine("reg-test-a", () => new MockContextEngine());
     registerContextEngine("reg-test-b", () => new MockContextEngine());
 
-    const ids = listContextEngineIds();
-    expect(ids).toContain("reg-test-a");
-    expect(ids).toContain("reg-test-b");
-    expect(Array.isArray(ids)).toBe(true);
+    expect(getContextEngineRegistration("reg-test-a")).toBeDefined();
+    expect(getContextEngineRegistration("reg-test-b")).toBeDefined();
   });
 
   it("registering the same id with the same owner refreshes the factory", () => {
@@ -772,15 +784,15 @@ describe("Registry tests", () => {
         allowSameOwnerRefresh: true,
       }),
     ).toEqual({ ok: true });
-    expect(getContextEngineFactory("reg-overwrite")).toBe(factory1);
+    expect(getContextEngineRegistration("reg-overwrite")?.factory).toBe(factory1);
 
     expect(
       registerContextEngineForOwner("reg-overwrite", factory2, "owner-a", {
         allowSameOwnerRefresh: true,
       }),
     ).toEqual({ ok: true });
-    expect(getContextEngineFactory("reg-overwrite")).toBe(factory2);
-    expect(getContextEngineFactory("reg-overwrite")).not.toBe(factory1);
+    expect(getContextEngineRegistration("reg-overwrite")?.factory).toBe(factory2);
+    expect(getContextEngineRegistration("reg-overwrite")?.factory).not.toBe(factory1);
   });
 
   it("rejects context engine registrations from a different owner", () => {
@@ -796,7 +808,7 @@ describe("Registry tests", () => {
       ok: false,
       existingOwner: "owner-a",
     });
-    expect(getContextEngineFactory("reg-owner-guard")).toBe(factory1);
+    expect(getContextEngineRegistration("reg-owner-guard")?.factory).toBe(factory1);
   });
 
   it("exposes the trusted plugin owner for a resolved registered engine", async () => {
@@ -823,14 +835,14 @@ describe("Registry tests", () => {
         id: string,
         factory: ContextEngineFactory,
         opts?: { owner?: string },
-      ) => ContextEngineRegistrationResult
+      ) => ReturnType<typeof registerContextEngine>
     )("public-owner-guard", () => new MockContextEngine(), { owner: "owner-a" });
 
     expect(spoofAttempt).toEqual({
       ok: false,
       existingOwner: "owner-a",
     });
-    expect(getContextEngineFactory("public-owner-guard")).toBe(ownedFactory);
+    expect(getContextEngineRegistration("public-owner-guard")?.factory).toBe(ownedFactory);
   });
 
   it("public registerContextEngine reserves the default legacy id", () => {
@@ -839,7 +851,7 @@ describe("Registry tests", () => {
         id: string,
         factory: ContextEngineFactory,
         opts?: { owner?: string },
-      ) => ContextEngineRegistrationResult
+      ) => ReturnType<typeof registerContextEngine>
     )("legacy", () => new MockContextEngine(), { owner: "core" });
 
     expect(legacyAttempt).toEqual({
@@ -856,7 +868,7 @@ describe("Registry tests", () => {
 describe("Legacy sessionKey compatibility", () => {
   beforeEach(() => {
     registerLegacyContextEngine();
-    clearContextEngineRuntimeQuarantine();
+    resetContextEngineRuntimeQuarantineForTests();
     vi.spyOn(console, "error").mockImplementation(() => {});
   });
 
@@ -1172,7 +1184,7 @@ describe("Factory context passing", () => {
 describe("Read-only plugin discovery registrations", () => {
   beforeEach(() => {
     registerLegacyContextEngine();
-    clearContextEngineRuntimeQuarantine();
+    resetContextEngineRuntimeQuarantineForTests();
     vi.spyOn(console, "warn").mockImplementation(() => {});
   });
 
@@ -1258,7 +1270,7 @@ describe("Read-only plugin discovery registrations", () => {
 describe("Invalid engine fallback", () => {
   beforeEach(() => {
     registerLegacyContextEngine();
-    clearContextEngineRuntimeQuarantine();
+    resetContextEngineRuntimeQuarantineForTests();
     vi.spyOn(console, "error").mockImplementation(() => {});
   });
 
@@ -1899,8 +1911,7 @@ describe("Initialization guard", () => {
     expect(ensureContextEnginesInitialized()).toBeUndefined();
     expect(ensureContextEnginesInitialized()).toBeUndefined();
 
-    const ids = listContextEngineIds();
-    expect(ids).toContain("legacy");
+    expect(getContextEngineRegistration("legacy")).toBeDefined();
   });
 });
 
@@ -1924,8 +1935,7 @@ describe("Bundle chunk isolation (#40096)", () => {
     const chunks = [
       {
         registerContextEngine,
-        getContextEngineFactory,
-        listContextEngineIds,
+        getContextEngineRegistration,
         resolveContextEngine,
       },
       dynamicChunk,
@@ -1946,8 +1956,7 @@ describe("Bundle chunk isolation (#40096)", () => {
     });
     chunks[0].registerContextEngine(engineId, factory);
 
-    expect(chunks[1].getContextEngineFactory(engineId)).toBe(factory);
-    expect(chunks[1].listContextEngineIds()).toContain(engineId);
+    expect(chunks[1].getContextEngineRegistration(engineId)?.factory).toBe(factory);
     const engine = await chunks[1].resolveContextEngine(configWithSlot(engineId));
     expect(engine.info.id).toBe(engineId);
 
@@ -1960,9 +1969,9 @@ describe("Bundle chunk isolation (#40096)", () => {
     );
     await Promise.all(registrationTasks);
 
-    const allIds = chunks[0].listContextEngineIds();
     for (const id of ids) {
-      expect(allIds).toContain(id);
+      expect(chunks[0].getContextEngineRegistration(id)).toBeDefined();
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
