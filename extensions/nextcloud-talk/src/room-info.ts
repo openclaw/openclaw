@@ -103,6 +103,7 @@ export async function resolveNextcloudTalkRoomKind(params: {
     });
     try {
       if (!response.ok) {
+        await response.body?.cancel().catch(() => undefined);
         cacheRoomInfo(key, {
           fetchedAt: Date.now(),
           error: `status:${response.status}`,
