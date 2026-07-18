@@ -2823,7 +2823,6 @@ export const en: TranslationMap = {
     cronFailed: "{count} cron job(s) failed",
     cronOverdue: "{count} cron job(s) overdue",
     modelAuthExpired: "Model auth expired: {providers}",
-    modelAuthExpiring: "Model auth expiring: {providers}",
     pendingApproval: "{count} pending approval",
     pendingApprovals: "{count} pending approvals",
   },

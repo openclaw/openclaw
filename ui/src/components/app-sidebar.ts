@@ -46,7 +46,9 @@ class AppSidebar extends AppSidebarSessionListElement {
 
   private readonly handleLogoVisit = (event: Event) => {
     const detail = (event as CustomEvent<LobsterLogoVisitDetail>).detail;
-    this.logoVisit = detail.phase === "out" || !detail.look ? null : detail;
+    // A lookless visit is a logo scare: the brand mark hides (the img gets
+    // the --vacated class) but no stand-in crab renders in its place.
+    this.logoVisit = detail.phase === "out" ? null : detail;
   };
 
   private renderLogoStandIn() {
