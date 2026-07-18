@@ -803,22 +803,24 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     const appendWork = new Promise<void>((resolve) => {
       releaseAppend = resolve;
     });
-    ingress.accept.mockImplementationOnce(async (activity: unknown, context?: unknown) => {
-      await appendWork;
-      void Promise.resolve(
-        ingress.options.dispatch(
-          activity,
-          {
-            abortSignal: new AbortController().signal,
-            onAdopted: vi.fn(),
-            onDeferred: vi.fn(),
-            onAdoptionFinalizing: vi.fn(),
-            onAbandoned: vi.fn(),
-          },
-          context,
-        ),
-      ).catch(() => undefined);
-    });
+    ingress.accept.mockImplementationOnce(
+      (activity: unknown, context?: unknown): Promise<void> =>
+        appendWork.then(() => {
+          void Promise.resolve(
+            ingress.options.dispatch(
+              activity,
+              {
+                abortSignal: new AbortController().signal,
+                onAdopted: vi.fn(),
+                onDeferred: vi.fn(),
+                onAdoptionFinalizing: vi.fn(),
+                onAbandoned: vi.fn(),
+              },
+              context,
+            ),
+          ).catch(() => undefined);
+        }),
+    );
 
     const responseWork = cardActionHandler({
       activity: {
