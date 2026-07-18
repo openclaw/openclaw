@@ -146,15 +146,52 @@ describe("AppSidebar agent chip", () => {
     expect(onNavigate).not.toHaveBeenCalledWith("config");
   });
 
-  it("shows offline in the chip subtitle when disconnected", async () => {
+  it("shows connection exceptions only after a sustained disconnect", async () => {
+    vi.useFakeTimers();
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
-    sidebar.connected = false;
+    const presence = () => sidebar.querySelector(".sidebar-agent-card__presence");
+    const offlinePill = () => sidebar.querySelector(".sidebar-footer-bar__status");
+    const expectQuiet = () => {
+      expect(presence()).toBeNull();
+      expect(offlinePill()).toBeNull();
+    };
+    sidebar.connected = true;
     await sidebar.updateComplete;
 
+    expectQuiet();
+    expect(
+      sidebar.querySelector(".sidebar-agent-card__main")?.getAttribute("aria-label"),
+    ).toContain("Online");
+
+    sidebar.connected = false;
+    await sidebar.updateComplete;
     expect(sidebar.querySelector(".sidebar-agent-card__subtitle")?.textContent?.trim()).toBe(
       "Offline",
     );
+    await vi.advanceTimersByTimeAsync(1_999);
+    expectQuiet();
+
+    await vi.advanceTimersByTimeAsync(1);
+    await sidebar.updateComplete;
+    const pill = offlinePill();
+    expect(pill?.textContent?.trim()).toBe("Offline");
+    expect(pill?.getAttribute("aria-live")).toBe("polite");
+    expect(pill?.getAttribute("title")).toContain("Offline");
+    expect(pill?.querySelector(".sidebar-footer-bar__status-dot")).not.toBeNull();
+    expect(presence()).not.toBeNull();
+
+    sidebar.connected = true;
+    await sidebar.updateComplete;
+    expectQuiet();
+
+    sidebar.connected = false;
+    await sidebar.updateComplete;
+    await vi.advanceTimersByTimeAsync(1_000);
+    sidebar.connected = true;
+    await sidebar.updateComplete;
+    await vi.advanceTimersByTimeAsync(2_000);
+    expectQuiet();
   });
 
   it("shows a working subtitle while the agent has an active run", async () => {

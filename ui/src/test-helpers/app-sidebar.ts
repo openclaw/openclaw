@@ -351,6 +351,7 @@ export function setupSidebarTest() {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     document.body.replaceChildren();
     if (originalLocalStorage) {
       Object.defineProperty(globalThis, "localStorage", originalLocalStorage);
