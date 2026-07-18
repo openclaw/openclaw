@@ -52,10 +52,8 @@ vi.mock("../gateway-readiness.js", () => ({
 }));
 
 // Assembled so secret scanners do not read the fixture as a real credential.
-const fakeToken = ["te", "st"].join("");
-const fakePassword = ["te", "st-password"].join("");
-const authPasswordKey = "pass" + "word";
-const gatewayPasswordJsonKey = "gateway" + "Password";
+const fakeToken = "test-token";
+const fakePassword = "test-password";
 
 const runtime = {
   error: vi.fn(),
@@ -123,7 +121,7 @@ describe("dashboardCommand --json", () => {
     expect(runtime.writeJson).toHaveBeenCalledWith(
       {
         ok: true,
-        url: ["http://127.0.0.1:18789/", "#", "token", "=test"].join(""),
+        url: `http://127.0.0.1:18789/#token=${fakeToken}`,
         httpUrl: "http://127.0.0.1:18789/",
         wsUrl: "ws://127.0.0.1:18789",
         port: 18789,
@@ -184,13 +182,13 @@ describe("dashboardCommand --json", () => {
     });
     mocks.resolveGatewayAuth.mockReturnValue({
       mode: "password",
-      [authPasswordKey]: fakePassword,
+      password: fakePassword,
     });
 
     await dashboardCommand(runtime, { json: true });
 
     expect(runtime.writeJson).toHaveBeenCalledWith(
-      expect.objectContaining({ [gatewayPasswordJsonKey]: fakePassword }),
+      expect.objectContaining({ gatewayPassword: fakePassword }),
       0,
     );
   });

@@ -256,6 +256,10 @@ fn normalize_metadata(value: &str) -> String {
         .collect()
 }
 
+fn non_empty_trimmed(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
+}
+
 fn select_auth(
     device_token: Option<&str>,
     device_token_gateway: Option<&str>,
@@ -263,21 +267,15 @@ fn select_auth(
     shared_token: Option<&str>,
     shared_password: Option<&str>,
 ) -> GatewayAuth {
-    let usable_device_token = device_token.map(str::trim).filter(|token| !token.is_empty());
     if device_token_gateway == Some(gateway) {
-        if let Some(token) = usable_device_token {
+        if let Some(token) = non_empty_trimmed(device_token) {
             return GatewayAuth::DeviceToken(token.to_string());
         }
     }
-    if let Some(password) = shared_password
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
+    if let Some(password) = non_empty_trimmed(shared_password) {
         return GatewayAuth::SharedPassword(password.to_string());
     }
-    shared_token
-        .map(str::trim)
-        .filter(|token| !token.is_empty())
+    non_empty_trimmed(shared_token)
         .map(|token| GatewayAuth::SharedToken(token.to_string()))
         .unwrap_or(GatewayAuth::None)
 }
