@@ -97,17 +97,31 @@ export function retireActiveCronTaskRunTracking(): void {
   settlingCronTaskRuns.clear();
 }
 
-export async function waitForActiveCronTaskRuns(timeoutMs: number): Promise<{
+export async function waitForActiveCronTaskRuns(
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<{
   drained: boolean;
   active: number;
 }> {
   const deadline = Date.now() + Math.max(0, Math.floor(timeoutMs));
   while (
     (activeCronTaskRunsByRunId.size > 0 || settlingCronTaskRuns.size > 0) &&
-    Date.now() < deadline
+    Date.now() < deadline &&
+    !signal?.aborted
   ) {
     await new Promise<void>((resolve) => {
-      setTimeout(resolve, DEFAULT_CRON_TASK_RUN_DRAIN_POLL_MS);
+      const timer = setTimeout(resolve, DEFAULT_CRON_TASK_RUN_DRAIN_POLL_MS);
+      if (signal) {
+        signal.addEventListener(
+          "abort",
+          () => {
+            clearTimeout(timer);
+            resolve();
+          },
+          { once: true },
+        );
+      }
     });
   }
   return {

@@ -85,3 +85,58 @@ describe("cron task cancellation tracking", () => {
     await vi.waitFor(() => expect(getSuspensionVisibleCronTaskRunCount()).toBe(0));
   });
 });
+
+describe("waitForActiveCronTaskRuns abort", () => {
+  it("resolves early when the signal is already aborted", async () => {
+    resetActiveCronTaskRunsForTests();
+    trackActiveCronTaskRunSettlement(new Promise<never>(() => {}));
+
+    const controller = new AbortController();
+    controller.abort();
+
+    const started = Date.now();
+    const result = await waitForActiveCronTaskRuns(10_000, controller.signal);
+    expect(Date.now() - started).toBeLessThan(100);
+    expect(result.drained).toBe(false);
+    expect(result.active).toBeGreaterThan(0);
+    resetActiveCronTaskRunsForTests();
+  });
+
+  it("wakes the poll when the signal is aborted mid-wait", async () => {
+    vi.useFakeTimers();
+    try {
+      resetActiveCronTaskRunsForTests();
+      trackActiveCronTaskRunSettlement(new Promise<never>(() => {}));
+
+      const controller = new AbortController();
+      const promise = waitForActiveCronTaskRuns(10_000, controller.signal);
+
+      await vi.advanceTimersByTimeAsync(80);
+      controller.abort();
+      await vi.advanceTimersByTimeAsync(0);
+
+      const result = await promise;
+      expect(result.drained).toBe(false);
+      expect(result.active).toBeGreaterThan(0);
+    } finally {
+      vi.useRealTimers();
+      resetActiveCronTaskRunsForTests();
+    }
+  });
+
+  it("honours the deadline when no signal is provided", async () => {
+    vi.useFakeTimers();
+    try {
+      resetActiveCronTaskRunsForTests();
+      trackActiveCronTaskRunSettlement(new Promise<never>(() => {}));
+
+      const promise = waitForActiveCronTaskRuns(500);
+      await vi.advanceTimersByTimeAsync(600);
+      const result = await promise;
+      expect(result.drained).toBe(false);
+    } finally {
+      vi.useRealTimers();
+      resetActiveCronTaskRunsForTests();
+    }
+  });
+});
