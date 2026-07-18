@@ -482,8 +482,6 @@ export class ReefInboxConnection {
             // Keep waiting for its real close event instead of overlapping peers.
             return;
           }
-          closeComplete = true;
-          finishAfterClose();
         }, REEF_WS_CLOSE_MS);
         socket.close();
       };

@@ -969,7 +969,18 @@ describe("ReefInboxConnection reconnect lifecycle", () => {
 
   it("force-terminates a stalled failed generation before reconnecting", async () => {
     vi.useFakeTimers();
-    const sockets = [new ControlledSocket(false), new ControlledSocket()];
+    const stalledSocket = new ControlledSocket(false);
+    const delayedTerminateSocket = {
+      addEventListener: stalledSocket.addEventListener.bind(stalledSocket),
+      close: () => stalledSocket.close(),
+      terminate: () => {
+        stalledSocket.terminateCalls++;
+      },
+    } as unknown as WebSocketLike;
+    const sockets: WebSocketLike[] = [
+      delayedTerminateSocket,
+      new ControlledSocket() as unknown as WebSocketLike,
+    ];
     let socketIndex = 0;
     const abort = new AbortController();
     const client = new ReefTransportClient(
@@ -982,20 +993,24 @@ describe("ReefInboxConnection reconnect lifecycle", () => {
     const inbox = new ReefInboxConnection(
       client,
       async () => {},
-      () => sockets[socketIndex++]! as unknown as WebSocketLike,
+      () => sockets[socketIndex++]!,
     );
 
     const running = inbox.start(abort.signal);
-    sockets[0]!.emit("message", { data: "{" });
+    stalledSocket.emit("message", { data: "{" });
 
     await vi.advanceTimersByTimeAsync(4_999);
     expect(socketIndex).toBe(1);
-    expect(sockets[0]!.terminateCalls).toBe(0);
+    expect(stalledSocket.terminateCalls).toBe(0);
 
     await vi.advanceTimersByTimeAsync(1);
-    expect(sockets[0]!.terminateCalls).toBe(1);
+    expect(stalledSocket.terminateCalls).toBe(1);
     expect(socketIndex).toBe(1);
 
+    await vi.advanceTimersByTimeAsync(250);
+    expect(socketIndex).toBe(1);
+
+    stalledSocket.emit("close");
     await vi.advanceTimersByTimeAsync(250);
     expect(socketIndex).toBe(2);
 
