@@ -328,7 +328,7 @@ describe("AppSidebar update card wiring", () => {
 });
 
 describe("AppSidebar brand actions", () => {
-  it("starts a session for the active agent and leaves the sessions header sort-only", async () => {
+  it("starts a session for the active agent from the Threads header", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const agentsList = {
       defaultId: "main",
@@ -347,12 +347,14 @@ describe("AppSidebar brand actions", () => {
     sidebar.onOpenNewSession = onOpenNewSession;
     await sidebar.updateComplete;
 
-    const button = sidebar.querySelector<HTMLButtonElement>(".sidebar-brand .sidebar-new-session");
+    // The new-session affordance moved off the brand row onto Threads.
+    expect(sidebar.querySelector(".sidebar-brand .sidebar-new-session")).toBeNull();
+    expect(sidebar.querySelector(".sidebar-recent-sessions__head--root")).toBeNull();
+    const button = sidebar.querySelector<HTMLButtonElement>(
+      '[data-session-section="ungrouped"] .sidebar-new-session',
+    );
     expect(button?.getAttribute("aria-label")).toBe("New session");
     expect(button?.disabled).toBe(false);
-    expect(
-      sidebar.querySelector(".sidebar-recent-sessions__head--root .sidebar-session-new"),
-    ).toBeNull();
 
     button?.click();
     expect(onOpenNewSession).toHaveBeenCalledExactlyOnceWith("research");
@@ -383,7 +385,7 @@ describe("AppSidebar agent chip", () => {
     sidebar.onNavigate = onNavigate;
     await sidebar.updateComplete;
 
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__switcher")?.click();
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
     await sidebar.updateComplete;
     const rows = [
       ...sidebar.querySelectorAll<HTMLElement>(
@@ -418,7 +420,7 @@ describe("AppSidebar agent chip", () => {
     sidebar.onNavigate = onNavigate;
     await sidebar.updateComplete;
 
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__switcher")?.click();
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
     await sidebar.updateComplete;
     const menu = sidebar.querySelector<HTMLElement>(".sidebar-agent-menu");
     const settingsAgent = [
@@ -509,7 +511,7 @@ describe("AppSidebar agent chip", () => {
     // the main session lives behind the identity card instead of the list.
     expect(sidebar.querySelector(".sidebar-agent-section")).toBeNull();
     expect(sidebar.querySelectorAll(".sidebar-recent-session")).toHaveLength(0);
-    expect(sidebar.querySelector(".sidebar-agent-card__switcher-unread")).not.toBeNull();
+    expect(sidebar.querySelector(".sidebar-agent-card__menu-unread")).not.toBeNull();
 
     // Mid-switch (selected agent != loaded result agent) the list renders the
     // target agent's cached rows instead of flashing empty until refresh.
@@ -520,6 +522,27 @@ describe("AppSidebar agent chip", () => {
     const rows = [...sidebar.querySelectorAll(".sidebar-recent-session")];
     expect(rows).toHaveLength(1);
     expect(rows[0]?.textContent).toContain("Research task");
+  });
+
+  it("routes Home to the main session and marks it active there", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const setSessionKey = vi.fn();
+    (gateway as { setSessionKey: (key: string) => void }).setSessionKey = setSessionKey;
+    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
+    const navigate = vi.fn();
+    sidebar.onNavigate = navigate;
+    sidebar.connected = true;
+    (sidebar as unknown as { activeRouteId: string }).activeRouteId = "chat";
+    sidebar.sessionKey = "agent:main:main";
+    await sidebar.updateComplete;
+
+    const home = sidebar.querySelector<HTMLAnchorElement>(".nav-item--home");
+    expect(home?.textContent).toContain("Home");
+    expect(home?.getAttribute("aria-current")).toBe("page");
+
+    home?.click();
+    expect(setSessionKey).toHaveBeenCalledWith("agent:main:main");
+    expect(navigate).toHaveBeenCalledWith("chat", { search: "?session=agent%3Amain%3Amain" });
   });
 
   it("treats the global key as the main session under global scope", async () => {
@@ -546,12 +569,12 @@ describe("AppSidebar agent chip", () => {
     });
     await sidebar.updateComplete;
 
-    // The advertised global main hides behind the identity card instead of
-    // leaking into Threads; ordinary sessions still list, and the card
-    // surfaces the global row's unread state.
+    // The advertised global main hides behind the Home row instead of
+    // leaking into Threads; ordinary sessions still list, and Home surfaces
+    // the global row's unread state.
     expect(sidebar.querySelector('[data-session-key="global"]')).toBeNull();
     expect(sidebar.querySelector('[data-session-key="agent:main:side-quest"]')).not.toBeNull();
-    expect(sidebar.querySelector(".sidebar-agent-card__main .session-unread-dot")).not.toBeNull();
+    expect(sidebar.querySelector(".nav-item--home .session-unread-dot")).not.toBeNull();
   });
 
   it("promotes main-session children to top-level threads, including alias parent keys", async () => {
@@ -1199,7 +1222,7 @@ describe("AppSidebar agent chip", () => {
     await sidebar.updateComplete;
 
     expect(sidebar.querySelector(".sidebar-agent-card__name")?.textContent?.trim()).toBe("Molty");
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__switcher")?.click();
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
     await sidebar.updateComplete;
 
     const menu = sidebar.querySelector(".sidebar-agent-menu");
@@ -1236,7 +1259,7 @@ describe("AppSidebar agent chip", () => {
     openExternal.mockRestore();
     await sidebar.updateComplete;
 
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__switcher")?.click();
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
     await sidebar.updateComplete;
     const reopenedMenu = sidebar.querySelector(".sidebar-agent-menu");
 
@@ -1276,7 +1299,7 @@ describe("AppSidebar agent chip", () => {
     sidebar.onNavigate = onNavigate;
     await sidebar.updateComplete;
 
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__switcher")?.click();
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
     await sidebar.updateComplete;
     const settingsRow = [
       ...sidebar.querySelectorAll<HTMLElement>(".sidebar-agent-menu wa-dropdown-item"),
@@ -1307,7 +1330,7 @@ describe("AppSidebar agent chip", () => {
     sidebar.connected = true;
     await sidebar.updateComplete;
 
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__switcher")?.click();
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
     await sidebar.updateComplete;
     expect(sidebar.querySelector(".sidebar-agent-menu__filter")).toBeNull();
     expect(
@@ -1331,7 +1354,7 @@ describe("AppSidebar agent chip", () => {
     context.agentSelection.state.selectedId = "agent-1";
     await sidebar.updateComplete;
 
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__switcher")?.click();
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
     await sidebar.updateComplete;
     const input = sidebar.querySelector<HTMLInputElement>(".sidebar-agent-menu__filter input");
     expect(input).not.toBeNull();
@@ -1382,7 +1405,7 @@ describe("AppSidebar agent chip", () => {
     sidebar.connected = true;
     await sidebar.updateComplete;
 
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__switcher")?.click();
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
     await sidebar.updateComplete;
     expect(sidebar.querySelector(".sidebar-agent-menu__filter")).not.toBeNull();
     expect(
@@ -1404,7 +1427,7 @@ describe("AppSidebar agent chip", () => {
     sidebar.pinnedAgentIds = ["deleted-agent"];
     await sidebar.updateComplete;
 
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__switcher")?.click();
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
     await sidebar.updateComplete;
     expect(
       sidebar.querySelectorAll(
@@ -1427,7 +1450,7 @@ describe("AppSidebar agent chip", () => {
     sidebar.connected = true;
     await sidebar.updateComplete;
 
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__switcher")?.click();
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
     await sidebar.updateComplete;
     const rows = [
       ...sidebar.querySelectorAll(
@@ -3945,7 +3968,7 @@ describe("AppSidebar transient menus", () => {
   it("ignores a stale agent-menu hide after opening its replacement", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
-    const trigger = sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__switcher");
+    const trigger = sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main");
     if (!trigger) {
       throw new Error("expected agent menu trigger");
     }
@@ -3979,9 +4002,9 @@ describe("AppSidebar transient menus", () => {
   it("ignores a stale More-menu hide after opening its replacement", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
-    const trigger = sidebar.querySelector<HTMLButtonElement>("button.nav-item--action");
+    const trigger = sidebar.querySelector<HTMLButtonElement>(".sidebar-nav__head-action");
     if (!trigger) {
-      throw new Error("expected More menu trigger");
+      throw new Error("expected Pages menu trigger");
     }
 
     trigger.click();

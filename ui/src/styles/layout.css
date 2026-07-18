@@ -864,8 +864,7 @@ html.openclaw-native-web-chrome .shell:not(.shell--mobile-nav) .sidebar-brand .s
   display: flex;
   align-items: center;
   gap: 4px;
-  flex: 1 1 auto;
-  justify-content: flex-end;
+  flex: 0 0 auto;
 }
 
 .sidebar-brand__icon {
@@ -2266,17 +2265,8 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
 .sidebar-agent-card {
   display: flex;
   align-items: center;
-  gap: 2px;
-  margin: 0 8px 10px;
-  padding: 4px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg, 12px);
-  background: color-mix(in srgb, var(--bg-hover) 40%, transparent);
-}
-
-.sidebar-agent-card--active {
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
-  background: color-mix(in srgb, var(--accent-subtle, var(--bg-hover)) 55%, transparent);
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .sidebar-agent-card__main {
@@ -2285,7 +2275,7 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   gap: 10px;
   flex: 1 1 auto;
   min-width: 0;
-  padding: 5px 6px;
+  padding: 4px 6px;
   border: none;
   border-radius: var(--radius-md);
   background: transparent;
@@ -2295,7 +2285,8 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
 }
 
 .sidebar-agent-card__main:hover,
-.sidebar-agent-card__main:focus-visible {
+.sidebar-agent-card__main:focus-visible,
+.sidebar-agent-card--open .sidebar-agent-card__main {
   background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
 }
 
@@ -2353,6 +2344,9 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
 }
 
 .sidebar-agent-card__name {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   overflow: hidden;
   color: var(--text-strong);
   font-size: 14px;
@@ -2360,6 +2354,22 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   line-height: 1.2;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.sidebar-agent-card__chevron {
+  display: inline-flex;
+  flex: none;
+  color: var(--muted);
+}
+
+.sidebar-agent-card__chevron svg {
+  width: 13px;
+  height: 13px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .sidebar-agent-card__subtitle {
@@ -2371,18 +2381,30 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   white-space: nowrap;
 }
 
-.sidebar-agent-card__state {
+.sidebar-agent-card__menu-unread {
   flex: none;
   margin-left: auto;
+  width: 6px;
+  height: 6px;
 }
 
-.sidebar-agent-card__switcher {
-  position: relative;
+/* "Pages" section head: zone-style label plus the pin-editor affordance. */
+.sidebar-nav__head {
+  display: flex;
+  align-items: center;
+  padding: 2px 8px 2px 12px;
+}
+
+.sidebar-nav__head .sidebar-recent-sessions__label-text {
+  flex: 1 1 auto;
+}
+
+.sidebar-nav__head-action {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
+  width: 22px;
+  height: 22px;
   flex: none;
   border: none;
   border-radius: var(--radius-md);
@@ -2394,21 +2416,15 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
     background var(--duration-fast) ease;
 }
 
-.sidebar-agent-card__switcher:hover,
-.sidebar-agent-card__switcher:focus-visible,
-.sidebar-agent-card__switcher--open {
+.sidebar-nav__head-action:hover,
+.sidebar-nav__head-action:focus-visible {
   color: var(--text);
   background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
 }
 
-.sidebar-agent-card__switcher:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--accent) 48%, transparent);
-  outline-offset: 1px;
-}
-
-.sidebar-agent-card__switcher svg {
-  width: 15px;
-  height: 15px;
+.sidebar-nav__head-action svg {
+  width: 13px;
+  height: 13px;
   stroke: currentColor;
   fill: none;
   stroke-width: 1.5px;
@@ -2416,12 +2432,10 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   stroke-linejoin: round;
 }
 
-.sidebar-agent-card__switcher-unread {
-  position: absolute;
-  top: 2px;
-  right: 2px;
-  width: 6px;
-  height: 6px;
+/* Home carries the main session's unread/running state at the row's edge. */
+.nav-item__state {
+  flex: none;
+  margin-left: auto;
 }
 
 /* Zone 5: product chrome in one slim footer bar. */

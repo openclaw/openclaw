@@ -1562,6 +1562,8 @@ export const en: TranslationMap = {
     collapse: "Collapse sidebar",
     resize: "Resize sidebar",
     more: "More",
+    home: "Home",
+    pages: "Pages",
     customize: "Edit pinned items",
     customizeReset: "Reset pinned items",
   },

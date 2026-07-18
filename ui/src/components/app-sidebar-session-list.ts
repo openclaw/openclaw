@@ -377,6 +377,39 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
                       ></span>`
                     : nothing}
                 </button>
+                ${section.id === "ungrouped"
+                  ? html`
+                      <button
+                        type="button"
+                        class="sidebar-session-group-actions sidebar-session-sort"
+                        title=${t("chat.sidebar.sortSessions")}
+                        aria-label=${t("chat.sidebar.sortSessions")}
+                        aria-haspopup="menu"
+                        aria-expanded=${String(this.sessionSortMenuPosition !== null)}
+                        @click=${(event: MouseEvent) => {
+                          event.stopPropagation();
+                          this.toggleSessionSortMenu(event.currentTarget as HTMLElement);
+                        }}
+                      >
+                        ${icons.listFilter}
+                      </button>
+                      <button
+                        type="button"
+                        class="sidebar-session-group-actions sidebar-new-session"
+                        title=${this.connected
+                          ? t("chat.runControls.newSession")
+                          : t("chat.runControls.newSessionDisconnected")}
+                        aria-label=${t("chat.runControls.newSession")}
+                        ?disabled=${!this.connected}
+                        @click=${(event: MouseEvent) => {
+                          event.stopPropagation();
+                          this.onOpenNewSession?.(this.expandedAgentId());
+                        }}
+                      >
+                        ${icons.plus}
+                      </button>
+                    `
+                  : nothing}
                 ${group
                   ? html`
                       <button
@@ -520,21 +553,6 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
             `
           : nothing}
         <div class="sidebar-recent-sessions" aria-label=${titleForRoute("sessions")}>
-          <div class="sidebar-recent-sessions__head sidebar-recent-sessions__head--root">
-            <span class="sidebar-recent-sessions__label-text">${t("sessionsView.title")}</span>
-            <button
-              type="button"
-              class="sidebar-session-sort"
-              title=${t("chat.sidebar.sortSessions")}
-              aria-label=${t("chat.sidebar.sortSessions")}
-              aria-haspopup="menu"
-              aria-expanded=${String(this.sessionSortMenuPosition !== null)}
-              @click=${(event: MouseEvent) =>
-                this.toggleSessionSortMenu(event.currentTarget as HTMLElement)}
-            >
-              ${icons.listFilter}
-            </button>
-          </div>
           ${this.renderSessionListBody(visibleSessions, {
             showDraft:
               Boolean(this.draftSessionAgentId) &&
