@@ -2040,6 +2040,11 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     runtime,
     abortSignal: opts.abortSignal,
     dispatch: async (post, payload, turnAdoptionLifecycle) => {
+      // Deferred claims settle through lifecycle callbacks, so terminal flush
+      // errors (401/403 included) abandon rather than hit the non-retryable
+      // classifier; the drain's attempt/age retry policy still dead-letters
+      // them — auth failures just spend the bounded retry budget first.
+      // Accepted tradeoff over threading a fail() channel through deferral.
       await debouncer.enqueue({ post, payload, turnAdoptionLifecycle });
       return { kind: "deferred" };
     },
