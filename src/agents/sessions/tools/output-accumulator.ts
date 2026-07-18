@@ -42,7 +42,11 @@ export class OutputAccumulator {
   private readonly maxRollingBytes: number;
   private readonly tempFilePrefix: string;
   private readonly transformDecodedText?: (text: string) => string;
+  // Strict decoder detects invalid UTF-8; the parallel fallback decoder
+  // processes every byte so no partial UTF-8 prefix is lost during a
+  // cross-chunk transition from strict to permissive decoding.
   private decoder = new TextDecoder("utf-8", { fatal: true });
+  private fallbackDecoder = new TextDecoder();
   private binaryDetected = false;
 
   private spillChunks: Buffer[] = [];
@@ -111,35 +115,32 @@ export class OutputAccumulator {
   }
 
   private decodeChunk(data: Buffer): string {
+    // Feed both decoders in parallel so the fallback decoder preserves every
+    // byte, including partial UTF-8 prefixes that the strict decoder buffers.
+    const fallbackText = this.fallbackDecoder.decode(data, { stream: true });
     try {
       return this.decoder.decode(data, { stream: true });
     } catch (e) {
       if (e instanceof TypeError && this.isEncodingError(e)) {
-        return this.fallbackDecode(data);
+        this.binaryDetected = true;
+        this.decoder = this.fallbackDecoder;
+        return fallbackText;
       }
       throw e;
     }
   }
 
   private decodeFinal(): string {
+    const fallbackText = this.fallbackDecoder.decode();
     try {
       return this.decoder.decode();
     } catch (e) {
       if (e instanceof TypeError && this.isEncodingError(e)) {
         this.binaryDetected = true;
-        return new TextDecoder().decode();
+        return fallbackText;
       }
       throw e;
     }
-  }
-
-  private fallbackDecode(data: Buffer): string {
-    // Flush any pending state from the strict decoder, then switch to a
-    // permissive fallback so the rest of the stream is not interrupted.
-    this.binaryDetected = true;
-    const flushed = new TextDecoder().decode();
-    this.decoder = new TextDecoder();
-    return flushed + this.decoder.decode(data, { stream: true });
   }
 
   private isEncodingError(error: TypeError): boolean {

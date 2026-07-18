@@ -79,4 +79,27 @@ describe("OutputAccumulator", () => {
     // The strict decoder in finish() should detect the truncated sequence
     expect(accumulator.hasBinaryData()).toBe(true);
   });
+
+  it("preserves preceding valid bytes when invalid UTF-8 spans across append chunks", () => {
+    // Partial UTF-8 prefix in first chunk (0xC3 expects continuation),
+    // invalid byte 0xFF in second chunk. The parallel fallback decoder
+    // preserves the valid "Hi" prefix and handles the transition.
+    const accumulator = new OutputAccumulator({
+      maxBytes: 128,
+      maxLines: 10,
+      tempFilePrefix: "openclaw-output-test",
+    });
+
+    accumulator.append(Buffer.from([0x48, 0x69, 0xc3])); // "Hi" + incomplete
+    expect(accumulator.hasBinaryData()).toBe(false);
+
+    // Invalid byte follows the incomplete prefix across chunks
+    accumulator.append(Buffer.from([0xff, 0x21])); // 0xFF + "!"
+    expect(accumulator.hasBinaryData()).toBe(true);
+
+    accumulator.finish();
+    const snapshot = accumulator.snapshot();
+    // "Hi" must be preserved; the parallel decoder doesn't lose buffered bytes
+    expect(snapshot.content).toContain("Hi");
+  });
 });
