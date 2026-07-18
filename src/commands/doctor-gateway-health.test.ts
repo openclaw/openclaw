@@ -120,7 +120,7 @@ describe("checkGatewayHealth", () => {
             ownerId: "discord:ops",
             state: "unavailable",
             paths: ["channels.discord.accounts.ops.token"],
-            reason: "secret reference was not found",
+            reason: "secret reference was not found (env:default:PRIVATE_REF_ID)",
           },
           {
             ownerKind: "capability",
@@ -145,7 +145,7 @@ describe("checkGatewayHealth", () => {
 
     expect(note).toHaveBeenCalledWith(
       [
-        "- cold account:discord:ops (channels.discord.accounts.ops.token): secret reference was not found",
+        "- cold account:discord:ops (channels.discord.accounts.ops.token): secret resolution failed",
         "  Retry: openclaw secrets reload",
         "- cold capability:tts (messages.tts.providers.elevenlabs.apiKey): secret provider policy denied resolution",
         "  Retry: openclaw secrets reload",
