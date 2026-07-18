@@ -8,6 +8,7 @@ import * as tar from "tar";
 import { describe, expect, it, vi } from "vitest";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { backupVerifyCommand } from "../commands/backup-verify.js";
+import { CONFIG_AUDIT_MAX_ENTRIES, CONFIG_AUDIT_SCOPE } from "../config/io.audit.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
@@ -15,7 +16,10 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { sanitizeOpenClawGlobalStateSnapshot } from "../state/openclaw-state-snapshot-sanitizer.js";
+import {
+  sanitizeOpenClawGlobalStateSnapshot,
+  sanitizeOpenClawStateLeaseRows,
+} from "../state/openclaw-state-snapshot-sanitizer.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   createBackupArchive,
@@ -26,6 +30,8 @@ import { writeTarArchiveWithRetry } from "./backup-tar-retry.js";
 import { isVolatileBackupPath } from "./backup-volatile-filter.js";
 import { createBackupVolatileStatCache } from "./backup-volatile-stat-cache.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
+import { createSqliteAuditRecordStore } from "./sqlite-audit-record-store.js";
+import { detectLegacyAuditLogs, migrateLegacyAuditLogs } from "./state-migrations.audit-logs.js";
 
 function makeResult(overrides: Partial<BackupCreateResult> = {}): BackupCreateResult {
   return {
@@ -203,6 +209,56 @@ describe("sanitizeOpenClawGlobalStateSnapshot", () => {
     const database = new sqlite.DatabaseSync(":memory:");
     try {
       expect(() => sanitizeOpenClawGlobalStateSnapshot(database)).not.toThrow();
+    } finally {
+      database.close();
+    }
+  });
+
+  it("removes leases without applying global queue or blob policy", () => {
+    const sqlite = requireNodeSqlite();
+    const database = new sqlite.DatabaseSync(":memory:");
+    try {
+      database.exec(`
+        CREATE TABLE state_leases (scope TEXT, lease_key TEXT);
+        INSERT INTO state_leases VALUES ('plugin:test', 'write');
+        CREATE TABLE delivery_queue_entries (id TEXT);
+        INSERT INTO delivery_queue_entries VALUES ('keep');
+        CREATE TABLE plugin_blob_entries (entry_key TEXT, expires_at INTEGER);
+        INSERT INTO plugin_blob_entries VALUES ('keep', 1);
+      `);
+
+      sanitizeOpenClawStateLeaseRows(database);
+
+      expect(database.prepare("SELECT COUNT(*) AS count FROM state_leases").get()).toEqual({
+        count: 0,
+      });
+      expect(
+        database.prepare("SELECT COUNT(*) AS count FROM delivery_queue_entries").get(),
+      ).toEqual({ count: 1 });
+      expect(database.prepare("SELECT COUNT(*) AS count FROM plugin_blob_entries").get()).toEqual({
+        count: 1,
+      });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("leaves diagnostic state to its backup-specific sanitizer", () => {
+    const sqlite = requireNodeSqlite();
+    const database = new sqlite.DatabaseSync(":memory:");
+    try {
+      database.exec(`
+        CREATE TABLE diagnostic_events (scope TEXT);
+        INSERT INTO diagnostic_events VALUES ('migration.legacy-audit-raw');
+        INSERT INTO diagnostic_events VALUES ('system-agent.audit');
+      `);
+
+      sanitizeOpenClawGlobalStateSnapshot(database);
+
+      expect(database.prepare("SELECT scope FROM diagnostic_events").all()).toEqual([
+        { scope: "migration.legacy-audit-raw" },
+        { scope: "system-agent.audit" },
+      ]);
     } finally {
       database.close();
     }
@@ -589,6 +645,235 @@ describe("createBackupArchive", () => {
     );
   });
 
+  it("replaces legacy audit raw archives with sanitized restorable snapshots", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-audit-raw-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const outputDir = state.path("backups");
+        const extractDir = state.path("extract");
+        const rawRelativePath = "logs/config-audit.jsonl.migrated.raw";
+        const marker = "audit-value-7f3c";
+        await fs.mkdir(outputDir, { recursive: true });
+        await fs.mkdir(extractDir, { recursive: true });
+        await state.writeText(
+          rawRelativePath,
+          `${JSON.stringify({
+            ts: "2026-07-01T00:00:00.000Z",
+            source: "config-io",
+            event: "config.write",
+            argv: ["openclaw", "config", "set", "token", marker],
+            execArgv: [],
+          })}\n`,
+        );
+        const { db } = openOpenClawStateDatabase({ env: state.env });
+        db.prepare(
+          `
+            INSERT INTO diagnostic_events (
+              scope, event_key, payload_json, created_at, sequence
+            ) VALUES ('migration.legacy-audit-raw', 'checkpoint', '{}', 1, 1)
+          `,
+        ).run();
+
+        try {
+          const result = await createBackupArchive({
+            output: outputDir,
+            includeWorkspace: false,
+            nowMs: Date.UTC(2026, 4, 9, 8, 15, 0),
+          });
+          const entries = await listArchiveEntries(result.archivePath);
+          const rawEntry = expectDefined(
+            entries.find((entry) => entry.endsWith(`/state/${rawRelativePath}`)),
+            "sanitized raw archive entry",
+          );
+          const databaseEntry = expectDefined(
+            entries.find((entry) => entry.endsWith("/state/state/openclaw.sqlite")),
+            "global state database entry",
+          );
+          expect(entries.some((entry) => entry.endsWith(".doctor-scrub-restore"))).toBe(false);
+
+          await tar.x({ file: result.archivePath, gzip: true, cwd: extractDir });
+          const archivedRaw = await fs.readFile(path.join(extractDir, rawEntry), "utf8");
+          expect(archivedRaw).not.toContain(marker);
+          expect(JSON.parse(archivedRaw.trim())).toMatchObject({
+            argv: ["openclaw", "config", "set", "token", "***"],
+          });
+          const sqlite = requireNodeSqlite();
+          const archivedDb = new sqlite.DatabaseSync(path.join(extractDir, databaseEntry), {
+            readOnly: true,
+          });
+          try {
+            expect(
+              archivedDb
+                .prepare(
+                  "SELECT COUNT(*) AS count FROM diagnostic_events WHERE scope = 'migration.legacy-audit-raw'",
+                )
+                .get(),
+            ).toEqual({ count: 0 });
+          } finally {
+            archivedDb.close();
+          }
+        } finally {
+          closeOpenClawStateDatabase();
+        }
+      },
+    );
+  });
+
+  it("omits completed blank audit append pads when dropping their checkpoints", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-completed-audit-pad-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const outputDir = state.path("backups");
+        const extractDir = state.path("extract");
+        const sourcePath = state.statePath("logs/config-audit.jsonl");
+        const rawRelativePath = "logs/config-audit.jsonl.migrated.raw";
+        await fs.mkdir(outputDir, { recursive: true });
+        await fs.mkdir(extractDir, { recursive: true });
+        await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+        await fs.writeFile(
+          sourcePath,
+          `${JSON.stringify({
+            ts: "2026-07-01T00:00:00.000Z",
+            source: "config-io",
+            event: "config.write",
+            argv: ["openclaw", "config", "set", "safe", "value"],
+            execArgv: [],
+          })}\n`,
+        );
+        await migrateLegacyAuditLogs({
+          detected: detectLegacyAuditLogs({
+            stateDir: state.stateDir,
+            doctorOnlyStateMigrations: true,
+          }),
+          stateDir: state.stateDir,
+        });
+        expect(
+          detectLegacyAuditLogs({
+            stateDir: state.stateDir,
+            doctorOnlyStateMigrations: true,
+          }).hasLegacy,
+        ).toBe(false);
+        const { db } = openOpenClawStateDatabase({ env: state.env });
+        expect(
+          db
+            .prepare(
+              "SELECT COUNT(*) AS count FROM diagnostic_events WHERE scope = 'migration.legacy-audit-raw'",
+            )
+            .get(),
+        ).toEqual({ count: 1 });
+
+        try {
+          const result = await createBackupArchive({
+            output: outputDir,
+            includeWorkspace: false,
+            nowMs: Date.UTC(2026, 4, 9, 8, 20, 0),
+          });
+          const entries = await listArchiveEntries(result.archivePath);
+          expect(entries.some((entry) => entry.endsWith(`/state/${rawRelativePath}`))).toBe(false);
+          const databaseEntry = expectDefined(
+            entries.find((entry) => entry.endsWith("/state/state/openclaw.sqlite")),
+            "global state database entry",
+          );
+          await tar.x({ file: result.archivePath, gzip: true, cwd: extractDir });
+          const sqlite = requireNodeSqlite();
+          const archivedDb = new sqlite.DatabaseSync(path.join(extractDir, databaseEntry), {
+            readOnly: true,
+          });
+          try {
+            expect(
+              archivedDb
+                .prepare(
+                  "SELECT COUNT(*) AS count FROM diagnostic_events WHERE scope = 'migration.legacy-audit-raw'",
+                )
+                .get(),
+            ).toEqual({ count: 0 });
+          } finally {
+            archivedDb.close();
+          }
+        } finally {
+          closeOpenClawStateDatabase();
+        }
+      },
+    );
+  });
+
+  it("preserves audit ordinals for identical later appends across backup restore", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-audit-ordinal-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const outputDir = state.path("backups");
+        const extractDir = state.path("extract");
+        const sourcePath = state.statePath("logs/config-audit.jsonl");
+        const rawRelativePath = "logs/config-audit.jsonl.migrated.raw";
+        const record = {
+          ts: "2026-07-01T00:00:00.000Z",
+          source: "config-io",
+          event: "config.write",
+          argv: ["openclaw", "config", "set", "safe", "same"],
+          execArgv: [],
+        };
+        await fs.mkdir(outputDir, { recursive: true });
+        await fs.mkdir(extractDir, { recursive: true });
+        await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+        await fs.writeFile(sourcePath, `${JSON.stringify(record)}\n`);
+        await migrateLegacyAuditLogs({
+          detected: detectLegacyAuditLogs({
+            stateDir: state.stateDir,
+            doctorOnlyStateMigrations: true,
+          }),
+          stateDir: state.stateDir,
+        });
+        await fs.appendFile(state.statePath(rawRelativePath), `${JSON.stringify(record)}\n`);
+
+        const result = await createBackupArchive({
+          output: outputDir,
+          includeWorkspace: false,
+          nowMs: Date.UTC(2026, 4, 9, 8, 25, 0),
+        });
+        const entries = await listArchiveEntries(result.archivePath);
+        const databaseEntry = expectDefined(
+          entries.find((entry) => entry.endsWith("/state/state/openclaw.sqlite")),
+          "global state database entry",
+        );
+        await tar.x({ file: result.archivePath, gzip: true, cwd: extractDir });
+        closeOpenClawStateDatabase();
+
+        const restoredDatabasePath = path.join(extractDir, databaseEntry);
+        const restoredStateDir = path.dirname(path.dirname(restoredDatabasePath));
+        const restoredDetection = detectLegacyAuditLogs({
+          stateDir: restoredStateDir,
+          doctorOnlyStateMigrations: true,
+        });
+        expect(restoredDetection.hasLegacy).toBe(true);
+        await migrateLegacyAuditLogs({
+          detected: restoredDetection,
+          stateDir: restoredStateDir,
+        });
+        const restoredEntries = createSqliteAuditRecordStore({
+          scope: CONFIG_AUDIT_SCOPE,
+          maxEntries: CONFIG_AUDIT_MAX_ENTRIES,
+          env: { ...process.env, OPENCLAW_STATE_DIR: restoredStateDir },
+        }).entries();
+        expect(restoredEntries).toHaveLength(2);
+        expect(new Set(restoredEntries.map((entry) => entry.key)).size).toBe(2);
+        expect(restoredEntries.map((entry) => entry.value)).toEqual([record, record]);
+        closeOpenClawStateDatabase();
+      },
+    );
+  });
+
   it("scrubs transient SQLite queue and plugin blob rows from archive snapshots", async () => {
     await withOpenClawTestState(
       {
@@ -636,6 +921,14 @@ describe("createBackupArchive", () => {
           10,
           null,
         );
+        db.prepare(
+          `
+            INSERT INTO state_leases (
+              scope, lease_key, owner, expires_at, heartbeat_at,
+              payload_json, created_at, updated_at
+            ) VALUES ('plugin:memory-core:qmd', 'embed', 'worker', 9999999999999, 10, NULL, 10, 10)
+          `,
+        ).run();
 
         try {
           const result = await createBackupArchive({
@@ -668,6 +961,9 @@ describe("createBackupArchive", () => {
                 )
                 .all(),
             ).toEqual([{ plugin_id: "durable-plugin", entry_key: "durable" }]);
+            expect(archivedDb.prepare("SELECT COUNT(*) AS count FROM state_leases").get()).toEqual({
+              count: 0,
+            });
           } finally {
             archivedDb.close();
           }
@@ -688,6 +984,9 @@ describe("createBackupArchive", () => {
             { plugin_id: "diffs", entry_key: "transient" },
             { plugin_id: "durable-plugin", entry_key: "durable" },
           ]);
+          expect(db.prepare("SELECT COUNT(*) AS count FROM state_leases").get()).toEqual({
+            count: 1,
+          });
         } finally {
           closeOpenClawStateDatabase();
         }
@@ -805,6 +1104,16 @@ describe("createBackupArchive", () => {
             .run(`keeper-${"y".repeat(16_384)}`);
           liveDb.exec("PRAGMA wal_checkpoint(TRUNCATE)");
           liveDb.prepare("DELETE FROM deleted_secrets WHERE value = ?").run(deletedSecret);
+          liveDb
+            .prepare(
+              `
+                INSERT INTO state_leases (
+                  scope, lease_key, owner, expires_at, heartbeat_at,
+                  payload_json, created_at, updated_at
+                ) VALUES ('plugin:memory-core:qmd', 'write', 'worker', 9999999999999, 1, NULL, 1, 1)
+              `,
+            )
+            .run();
         } finally {
           liveDb.close();
         }
@@ -846,8 +1155,19 @@ describe("createBackupArchive", () => {
             provider: "openai",
             key: "sk-backup",
           });
+          expect(archivedDb.prepare("SELECT COUNT(*) AS count FROM state_leases").get()).toEqual({
+            count: 0,
+          });
         } finally {
           archivedDb.close();
+        }
+        const sourceDb = new sqlite.DatabaseSync(liveDbPath, { readOnly: true });
+        try {
+          expect(sourceDb.prepare("SELECT COUNT(*) AS count FROM state_leases").get()).toEqual({
+            count: 1,
+          });
+        } finally {
+          sourceDb.close();
         }
       },
     );
@@ -953,8 +1273,13 @@ describe("createBackupArchive", () => {
           CREATE TABLE delivery_queue_entries (
             id TEXT PRIMARY KEY
           );
+          CREATE TABLE state_leases (
+            scope TEXT NOT NULL,
+            lease_key TEXT NOT NULL
+          );
           INSERT INTO backup_meta (id, last_seq) VALUES (1, 0);
           INSERT INTO delivery_queue_entries (id) VALUES ('must-stay');
+          INSERT INTO state_leases (scope, lease_key) VALUES ('plugin-owned', 'must-stay');
           PRAGMA wal_checkpoint(TRUNCATE);
           BEGIN IMMEDIATE;
           INSERT INTO backup_markers (seq, transaction_id) VALUES (1, 7), (2, 7), (3, 7);
@@ -1012,6 +1337,9 @@ describe("createBackupArchive", () => {
             expect(
               archivedDb.prepare("SELECT COUNT(*) AS count FROM delivery_queue_entries").get(),
             ).toEqual({ count: 1 });
+            expect(archivedDb.prepare("SELECT COUNT(*) AS count FROM state_leases").get()).toEqual({
+              count: 1,
+            });
           } finally {
             archivedDb.close();
           }
@@ -1427,6 +1755,106 @@ describe("createBackupArchive", () => {
           const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
           const verification = await backupVerifyCommand(runtime, { archive: result.archivePath });
           expect(verification.ok).toBe(true);
+        } finally {
+          db.close();
+        }
+      },
+    );
+  });
+
+  it("sanitizes every in-state symlink and hardlink alias of a canonical agent SQLite DB", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-agent-sqlite-alias-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const outputDir = state.path("backups");
+        const extractDir = state.path("extract");
+        const agentDir = state.statePath("agents", "main", "agent");
+        const backingDbPath = path.join(agentDir, "backing-agent.sqlite");
+        const linkedDbPath = path.join(agentDir, "openclaw-agent.sqlite");
+        const hardlinkedDbPath = state.statePath("plugins", "dedicated", "agent-alias.sqlite");
+        await fs.mkdir(agentDir, { recursive: true });
+        await fs.mkdir(path.dirname(hardlinkedDbPath), { recursive: true });
+        await fs.mkdir(outputDir, { recursive: true });
+        await fs.mkdir(extractDir, { recursive: true });
+        const sqlite = requireNodeSqlite();
+        const db = new sqlite.DatabaseSync(backingDbPath);
+        db.exec(`
+          PRAGMA journal_mode = WAL;
+          PRAGMA wal_autocheckpoint = 0;
+          CREATE TABLE schema_meta (
+            meta_key TEXT NOT NULL PRIMARY KEY,
+            role TEXT NOT NULL
+          );
+          CREATE TABLE durable_state (
+            id INTEGER PRIMARY KEY,
+            value TEXT NOT NULL
+          );
+          CREATE TABLE state_leases (
+            scope TEXT NOT NULL,
+            lease_key TEXT NOT NULL
+          );
+          INSERT INTO schema_meta (meta_key, role) VALUES ('primary', 'agent');
+          PRAGMA wal_checkpoint(TRUNCATE);
+          INSERT INTO durable_state (id, value) VALUES (1, 'committed-in-wal');
+          INSERT INTO state_leases (scope, lease_key) VALUES ('plugin:memory-core:qmd', 'write');
+        `);
+        await fs.symlink(backingDbPath, linkedDbPath);
+        await fs.link(backingDbPath, hardlinkedDbPath);
+        expect((await fs.stat(`${backingDbPath}-wal`)).size).toBeGreaterThan(0);
+        await expect(fs.stat(`${linkedDbPath}-wal`)).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(fs.stat(`${hardlinkedDbPath}-wal`)).rejects.toMatchObject({ code: "ENOENT" });
+
+        try {
+          const result = await createBackupArchive({
+            output: outputDir,
+            includeWorkspace: false,
+            nowMs: Date.UTC(2026, 4, 9, 8, 34, 40),
+          });
+          const entries = await listArchiveEntryDetails(result.archivePath);
+          const archivedDbEntries = entries.filter(
+            (entry) =>
+              entry.path.endsWith("/state/agents/main/agent/openclaw-agent.sqlite") ||
+              entry.path.endsWith("/state/agents/main/agent/backing-agent.sqlite") ||
+              entry.path.endsWith("/state/plugins/dedicated/agent-alias.sqlite"),
+          );
+          expect(archivedDbEntries).toHaveLength(3);
+          expect(archivedDbEntries.every((entry) => entry.type === "File")).toBe(true);
+
+          await tar.x({ file: result.archivePath, gzip: true, cwd: extractDir });
+          for (const archivedDbEntry of archivedDbEntries) {
+            const archivedDb = new sqlite.DatabaseSync(
+              path.join(extractDir, archivedDbEntry.path),
+              { readOnly: true },
+            );
+            try {
+              expect(
+                archivedDb.prepare("SELECT value FROM durable_state WHERE id = 1").get(),
+              ).toEqual({ value: "committed-in-wal" });
+              expect(
+                archivedDb.prepare("SELECT COUNT(*) AS count FROM state_leases").get(),
+              ).toEqual({
+                count: 0,
+              });
+            } finally {
+              archivedDb.close();
+            }
+          }
+
+          expect(db.prepare("SELECT COUNT(*) AS count FROM state_leases").get()).toEqual({
+            count: 1,
+          });
+          const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+          await expect(
+            backupVerifyCommand(runtime, { archive: result.archivePath }),
+          ).resolves.toMatchObject({ ok: true });
         } finally {
           db.close();
         }

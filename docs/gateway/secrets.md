@@ -21,7 +21,7 @@ Plaintext credentials remain agent-readable if they sit in files the agent can i
 ## Runtime model
 
 - Secrets resolve into an in-memory runtime snapshot, eagerly during activation, not lazily on request paths.
-- Startup fails fast when an effectively active SecretRef cannot be resolved.
+- Cold Gateway startup isolates unavailable SecretRefs to a known non-Gateway owner when that owner supports isolation. Today this covers model providers, the built-in TTS capability, web search and fetch providers, and webhook routes. The Gateway starts, records that owner as configured-unavailable, and emits a redacted `SECRETS_OWNER_UNAVAILABLE` warning. Gateway ingress auth, structurally invalid refs or resolved values, and refs whose runtime owner is not yet mapped still fail startup.
 - Reload is an atomic swap: full success, or keep the last-known-good snapshot.
 - Policy violations (for example an OAuth-mode auth profile combined with SecretRef input) fail activation before the runtime swap.
 - Runtime requests read only the active in-memory snapshot. Model-provider SecretRef credentials pass through auth storage and stream options as process-local sentinels until egress. Outbound delivery paths (Discord reply/thread delivery, Telegram action sends) also read that snapshot and do not re-resolve refs per send.
@@ -29,7 +29,7 @@ Plaintext credentials remain agent-readable if they sit in files the agent can i
 This keeps secret-provider outages off hot request paths.
 
 <Note>
-Target policy for the SecretRef ownership-isolation migration: failures isolate to the smallest known owner. Only unavailable Gateway ingress protection, structurally invalid config, or unknown ownership will block startup; other affected capabilities, accounts, or routes will become configured-unavailable with typed redacted diagnostics and no implicit credential fallback. Reload will retain last-known-good only for an unchanged ref and provider, while a changed unresolved ref will make that owner cold. Doctor and status will list every degraded owner. This migration is not fully implemented; the current activation rules on this page remain in effect.
+Target policy for the SecretRef ownership-isolation migration: failures isolate to the smallest known owner. Only unavailable Gateway ingress protection, structurally invalid config, or unknown ownership will block startup; other affected capabilities, accounts, or routes will become configured-unavailable with typed redacted diagnostics and no implicit credential fallback. Reload will retain last-known-good only for an unchanged ref and provider, while a changed unresolved ref will make that owner cold. Doctor and structured Gateway warnings will identify degraded owners. This migration is not fully implemented; the current activation rules on this page remain in effect.
 </Note>
 
 ## Egress-time injection (sentinels)
@@ -598,6 +598,8 @@ Activation contract:
 
 - Success swaps the snapshot atomically.
 - Startup failure aborts gateway startup.
+- During cold startup, a resolution failure for a mapped non-Gateway owner may publish the snapshot with that exact owner configured-unavailable. Requests for the owner fail with `SECRET_SURFACE_UNAVAILABLE`; model-provider owners do not fall back to environment or auth-profile credentials after an explicit ref fails.
+- Reload, restart-check, and write preflight remain strict. They keep the active last-known-good snapshot rather than publishing new degraded owners.
 - Runtime reload failure keeps the last-known-good snapshot.
 - Write-RPC preflight failure rejects the submitted config; both disk config and the active runtime snapshot stay unchanged.
 - Providing an explicit per-call channel token to an outbound helper/tool call does not trigger SecretRef activation; activation points remain startup, reload, and explicit `secrets.reload`.
@@ -615,6 +617,8 @@ Behavior:
 - Recovered: emitted once after the next successful activation.
 - Repeated failures while already degraded log warnings but do not re-emit the event.
 - Startup fail-fast never emits a degraded event, because runtime never became active.
+- Startup and reload failures emit a structured `SECRETS_DEGRADED` warning for each affected owner. The warning includes the owner kind and id, a redacted reason, `cold` or `stale` state, and the `openclaw secrets reload` retry hint. It never includes resolved values or SecretRef ids.
+- `openclaw doctor` lists owners isolated during cold startup with their affected config paths, redacted reason, and retry guidance.
 
 ## Command-path resolution
 
@@ -704,7 +708,7 @@ If you save a plan instead of applying during `configure`, apply that saved plan
 
     - Scrub matching static credentials from `auth-profiles.json` for targeted providers.
     - Scrub legacy static `api_key` entries from `auth.json`.
-    - Scrub matching known secret lines from `<config-dir>/.env`.
+    - Scrub matching known secret lines from the effective state and active-config `.env` files (deduplicated when both paths match).
 
   </Accordion>
   <Accordion title="secrets apply">

@@ -32,6 +32,8 @@ const GIT_CONFIG_SPARSE_KEY = "config\u0000--bool\u0000core.sparseCheckout";
 const GIT_SPARSE_LIST_KEY = "sparse-checkout\u0000list";
 const GIT_STATUS_PORCELAIN_KEY = "status\u0000--porcelain=v1";
 const GIT_MERGE_BASE_MAIN_HEAD_KEY = "merge-base\u0000origin/main\u0000HEAD";
+const GIT_MERGE_BASE_RELEASE_HEAD_KEY = "merge-base\u0000origin/release/2026.7.2\u0000HEAD";
+const GIT_CHECK_RELEASE_REF_KEY = "check-ref-format\u0000refs/remotes/origin/release/2026.7.2";
 const defaultGitResponses: Record<string, { status?: number; stdout?: string; stderr?: string }> = {
   [GIT_CONFIG_SPARSE_KEY]: { stdout: "false\n" },
   [GIT_SPARSE_LIST_KEY]: { status: 1 },
@@ -3490,6 +3492,103 @@ describe("scripts/crabbox-wrapper", () => {
     expect(remoteCommand).toContain("refs/heads/openclaw-changed-gate-head");
     expect(remoteCommand).toMatch(
       /&& env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1 corepack pnpm check:changed$/u,
+    );
+  });
+
+  it("uses an explicit release base for changed-gate sync and remote Git metadata", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      [
+        "run",
+        "--provider",
+        "aws",
+        "--",
+        "corepack",
+        "pnpm",
+        "check:changed",
+        "--base",
+        "origin/release/2026.7.2",
+        "--head",
+        "HEAD",
+      ],
+      {
+        env: { OPENCLAW_FAKE_GIT_BASE_SHA: "release123" },
+        gitResponses: {
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+          [GIT_CHECK_RELEASE_REF_KEY]: { stdout: "" },
+          [GIT_MERGE_BASE_RELEASE_HEAD_KEY]: { stdout: "release123\n" },
+        },
+      },
+    );
+
+    const remoteCommand = normalizeShellLineEndings(
+      parseFakeCrabboxOutput(result).args.at(-1) ?? "",
+    );
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("overlaying local HEAD as worktree changes from release123");
+    expect(remoteCommand).toContain("openclaw_changed_gate_base=release123");
+    expect(remoteCommand).toContain(
+      "openclaw_changed_gate_alias=refs/remotes/origin/release/2026.7.2",
+    );
+    expect(remoteCommand).toContain(
+      'git update-ref "$openclaw_changed_gate_alias" refs/remotes/origin/main',
+    );
+    expect(remoteCommand).toContain(
+      "corepack pnpm check:changed --base origin/release/2026.7.2 --head HEAD",
+    );
+  });
+
+  it("rejects changed-gate revision expressions that cannot be recreated remotely", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      [
+        "run",
+        "--provider",
+        "aws",
+        "--",
+        "corepack",
+        "pnpm",
+        "check:changed",
+        "--base",
+        "origin/main~1",
+      ],
+      {
+        gitResponses: {
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+        },
+      },
+    );
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      "remote changed-gate sync requires an exact origin/<branch> base; received: origin/main~1",
+    );
+  });
+
+  it("rejects compound changed gates with incompatible bases", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      [
+        "run",
+        "--provider",
+        "aws",
+        "--shell",
+        "--",
+        "pnpm check:changed --base origin/release/2026.7.2 && pnpm check:changed --base origin/hotfix",
+      ],
+      {
+        gitResponses: {
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+        },
+      },
+    );
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      "remote changed-gate sync requires one base; received: origin/release/2026.7.2, origin/hotfix",
     );
   });
 

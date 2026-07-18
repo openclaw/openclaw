@@ -1256,8 +1256,12 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
 - Gateway restart sentinel state now uses typed shared SQLite
   `gateway_restart_sentinel` rows instead of `restart-sentinel.json`; runtime
   reads sentinel kind, status, routing, message, continuation, and stats from
-  typed columns. `payload_json` is only a replay/debug copy. Runtime code clears
-  the SQLite row directly and no longer carries file cleanup plumbing.
+  typed columns. Those columns are authoritative; `payload_json` is only a
+  replay/debug shadow. Runtime read, write, and clear paths are SQLite-only.
+  One bounded state-migration module runs during startup and Doctor to import a
+  validated older post-update sentinel before normal restart recovery, verify
+  the typed row, and remove the source file. No steady-state runtime module
+  reads, writes, or cleans up the legacy file.
 - Gateway restart intent and supervisor handoff state now use typed shared
   SQLite `gateway_restart_intent` and `gateway_restart_handoff` rows instead of
   `gateway-restart-intent.json` and
@@ -1298,6 +1302,14 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   `state/openclaw.sqlite#table/auth_profile_stores/<agentDir>` instead of
   telling users to inspect or copy `auth-profiles.json`; legacy OAuth/auth JSON
   names remain documented only as doctor-import inputs.
+- MCP OAuth sessions now use versioned `mcp_oauth_stores` rows in shared
+  `state/openclaw.sqlite`. SDK-owned token, client-registration, and discovery
+  objects remain one validated JSON payload so dependency extension fields
+  survive, while every read/modify/write commits in one short Kysely
+  transaction. One shared SQLite lease serializes refresh, login, and logout;
+  embedded MCP transports no longer let the MCP SDK refresh outside that
+  lease. Doctor exclusively imports and removes retired `mcp-oauth/*.json`
+  stores with source receipts, and runtime has no file fallback.
 - Core state-path helpers no longer expose the retired `credentials/oauth.json`
   file. The legacy filename is local to the doctor auth import path.
 - Install, security, onboarding, model-auth, and SecretRef docs now describe
@@ -1330,10 +1342,10 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   per vault/run id instead of writing `.openclaw-wiki/import-runs/*.json`.
   Rollback snapshots remain explicit vault files until import-run snapshot
   archival is moved into blob storage.
-- Memory Wiki compiled digests now store SQLite plugin blob rows instead of
-  writing `.openclaw-wiki/cache/agent-digest.json` and
-  `.openclaw-wiki/cache/claims.jsonl`. The migration provider imports old cache
-  files and removes the cache directory when it becomes empty.
+- Memory Wiki compiled digests now store compressed SQLite plugin-blob rows
+  instead of writing `.openclaw-wiki/cache/agent-digest.json` and
+  `.openclaw-wiki/cache/claims.jsonl`. The cache is rebuildable, so doctor
+  deletes old cache files without importing them.
 - ClawHub skill install tracking now stores one SQLite plugin-state row per
   workspace/skill instead of writing or reading `.clawhub/lock.json` and
   `.clawhub/origin.json` sidecars at runtime. Runtime code uses tracked-install
@@ -1451,16 +1463,17 @@ create` validates the written archive by default; `--no-verify` is the
   `ensureOpenClawModelCatalog`; there is no `models.json` compatibility API in
   runtime code. The implementation writes SQLite and the embedded PI registry is
   hydrated from that stored payload without creating a `models.json` file.
-- QMD session transcript markdown export and `memory.qmd.sessions` config were
-  removed. There is no QMD transcript collection, no `qmd/sessions*` runtime
-  path, and no file-backed session memory bridge.
-- Memory-core runtime imports SQLite transcript indexing helpers from
-  `openclaw/plugin-sdk/memory-core-host-engine-session-transcripts`, not the
-  QMD SDK subpath. The QMD subpath keeps a compatibility re-export only for
-  external callers until a major SDK cleanup can remove it.
-- QMD's own `index.sqlite` is now a temp runtime materialization backed by the
-  main SQLite `plugin_blob_entries` table. Runtime no longer creates a durable
-  `~/.openclaw/agents/<agentId>/qmd` sidecar.
+- Optional `memory.qmd.sessions` export reads canonical transcript rows from
+  the per-agent database and materializes sanitized Markdown under the QMD home
+  as an explicit QMD input artifact. QMD session collections and artifact
+  identity mappings therefore remain part of the configured external-tool
+  bridge; they are not a second canonical transcript store.
+- QMD's own `index.sqlite`, YAML collection config, and model downloads remain
+  external-tool artifacts under `~/.openclaw/agents/<agentId>/qmd`; they are not
+  mirrored into `plugin_blob_entries`. OpenClaw-owned QMD coordination is
+  database-first: shared `state_leases` serialize embeds globally and per-agent
+  `state_leases` serialize collection/update/embed writers. Runtime creates no
+  QMD lock sidecars.
 - The optional `memory-lancedb` plugin no longer creates
   `~/.openclaw/memory/lancedb` as an implicit OpenClaw-managed store. It is an
   external LanceDB backend and stays disabled until the operator configures an
@@ -2030,8 +2043,10 @@ payload.
      `gateway_locks` and no longer exposes a file-lock directory seam.
    - Generic plugin SDK dedupe persistence no longer uses file locks or JSON
      files; it writes shared SQLite plugin-state rows. Done.
-   - QMD embed coordination uses a SQLite state lease instead of
-     `qmd/embed.lock`. Done.
+   - QMD coordination uses a shared SQLite lease for embeds and a per-agent
+     SQLite lease for every collection/update/embed writer. Runtime no longer
+     creates `qmd/embed.lock.lock` or `agents/<agentId>/qmd-write.lock.lock`;
+     Doctor removes only definitely stale retired sidecars. Done.
 
 7. Make workers database-aware.
    - Workers open their own SQLite connections.
@@ -2282,7 +2297,8 @@ Add a repo check that fails new runtime writes to legacy state paths:
 - `gateway-restart-intent.json`
 - `gateway-supervisor-restart-handoff.json`
 - `gateway.<hash>.lock`
-- `qmd/embed.lock`
+- `qmd/embed.lock.lock`
+- `agents/<agentId>/qmd-write.lock.lock`
 - `commands.log`
 - `config-health.json`
 - `port-guard.json`

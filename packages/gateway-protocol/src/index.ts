@@ -58,6 +58,16 @@ import {
   AgentsListParamsSchema,
   AgentsListResultSchema,
   AgentWaitParamsSchema,
+  ConversationListItemSchema,
+  ConversationListParamsSchema,
+  ConversationListResultSchema,
+  ConversationSendParamsSchema,
+  ConversationSendResultSchema,
+  ConversationTurnCancelParamsSchema,
+  ConversationTurnCancelResultSchema,
+  ConversationTurnParamsSchema,
+  ConversationTurnReplySchema,
+  ConversationTurnResultSchema,
   ChannelsStartParamsSchema,
   ChannelsStopParamsSchema,
   ChannelsLogoutParamsSchema,
@@ -177,6 +187,24 @@ import {
   ExecApprovalGetParamsSchema,
   ExecApprovalRequestParamsSchema,
   ExecApprovalResolveParamsSchema,
+  QuestionAnswersSchema,
+  QuestionGetParamsSchema,
+  QuestionGetResultSchema,
+  QuestionListParamsSchema,
+  QuestionListResultSchema,
+  QuestionOptionSchema,
+  QuestionRecordSchema,
+  QuestionRequestedEventSchema,
+  QuestionRequestParamsSchema,
+  QuestionRequestQuestionSchema,
+  QuestionRequestResultSchema,
+  QuestionResolvedEventSchema,
+  QuestionResolveParamsSchema,
+  QuestionResolveResultSchema,
+  QuestionSchema,
+  QuestionStatusSchema,
+  QuestionWaitAnswerParamsSchema,
+  QuestionWaitAnswerResultSchema,
   PluginApprovalRequestParamsSchema,
   PluginApprovalResolveParamsSchema,
   PluginCatalogEntrySchema,
@@ -187,6 +215,8 @@ import {
   PluginsInstallResultSchema,
   PluginsListParamsSchema,
   PluginsListResultSchema,
+  PluginsRefreshParamsSchema,
+  PluginsRefreshResultSchema,
   PluginsSearchParamsSchema,
   PluginsSearchResultSchema,
   PluginsSessionActionParamsSchema,
@@ -383,6 +413,7 @@ import {
   SessionsCatalogContinueResultSchema,
   SessionsCatalogListParamsSchema,
   SessionsCatalogListResultSchema,
+  SessionsCatalogHostEventSchema,
   SessionsCatalogReadParamsSchema,
   SessionsCatalogReadResultSchema,
   SessionsMessagesSubscribeParamsSchema,
@@ -459,6 +490,7 @@ import {
   WebLoginStartParamsSchema,
   WebLoginWaitParamsSchema,
   SystemAgentChatParamsSchema,
+  SystemAgentChatQuestionSchema,
   SystemAgentChatResultSchema,
   SystemAgentSetupDetectParamsSchema,
   SystemAgentSetupDetectResultSchema,
@@ -564,6 +596,13 @@ export const validateResponseFrame = lazyCompile(ResponseFrameSchema);
 export const validateEventFrame = lazyCompile(EventFrameSchema);
 export const validateMessageActionParams = lazyCompile(MessageActionParamsSchema);
 export const validateSendParams = lazyCompile(SendParamsSchema);
+export const validateConversationListParams = lazyCompile(ConversationListParamsSchema);
+export const validateConversationListResult = lazyCompile(ConversationListResultSchema);
+export const validateConversationSendParams = lazyCompile(ConversationSendParamsSchema);
+export const validateConversationSendResult = lazyCompile(ConversationSendResultSchema);
+export const validateConversationTurnCancelParams = lazyCompile(ConversationTurnCancelParamsSchema);
+export const validateConversationTurnParams = lazyCompile(ConversationTurnParamsSchema);
+export const validateConversationTurnResult = lazyCompile(ConversationTurnResultSchema);
 export const validatePollParams = lazyCompile(PollParamsSchema);
 export const validateAgentParams = lazyCompile(AgentParamsSchema);
 export const validateAuditActivityListParams = lazyCompile<AuditActivityListParams>(
@@ -634,6 +673,7 @@ export const validateSecretsResolveParams = lazyCompile(SecretsResolveParamsSche
 export const validateSecretsResolveResult = lazyCompile(SecretsResolveResultSchema);
 export const validateSessionsListParams = lazyCompile(SessionsListParamsSchema);
 export const validateSessionsCatalogListParams = lazyCompile(SessionsCatalogListParamsSchema);
+export const validateSessionsCatalogHostEvent = lazyCompile(SessionsCatalogHostEventSchema);
 export const validateSessionsCatalogReadParams = lazyCompile(SessionsCatalogReadParamsSchema);
 export const validateSessionsCatalogContinueParams = lazyCompile(
   SessionsCatalogContinueParamsSchema,
@@ -813,10 +853,24 @@ export const validateExecApprovalsSetParams = lazyCompile(ExecApprovalsSetParams
 export const validateExecApprovalGetParams = lazyCompile(ExecApprovalGetParamsSchema);
 export const validateExecApprovalRequestParams = lazyCompile(ExecApprovalRequestParamsSchema);
 export const validateExecApprovalResolveParams = lazyCompile(ExecApprovalResolveParamsSchema);
+export const validateQuestionRequestParams = lazyCompile(QuestionRequestParamsSchema);
+export const validateQuestionRequestResult = lazyCompile(QuestionRequestResultSchema);
+export const validateQuestionWaitAnswerParams = lazyCompile(QuestionWaitAnswerParamsSchema);
+export const validateQuestionWaitAnswerResult = lazyCompile(QuestionWaitAnswerResultSchema);
+export const validateQuestionResolveParams = lazyCompile(QuestionResolveParamsSchema);
+export const validateQuestionResolveResult = lazyCompile(QuestionResolveResultSchema);
+export const validateQuestionGetParams = lazyCompile(QuestionGetParamsSchema);
+export const validateQuestionGetResult = lazyCompile(QuestionGetResultSchema);
+export const validateQuestionListParams = lazyCompile(QuestionListParamsSchema);
+export const validateQuestionListResult = lazyCompile(QuestionListResultSchema);
+export const validateQuestionRequestedEvent = lazyCompile(QuestionRequestedEventSchema);
+export const validateQuestionResolvedEvent = lazyCompile(QuestionResolvedEventSchema);
 export const validatePluginApprovalRequestParams = lazyCompile(PluginApprovalRequestParamsSchema);
 export const validatePluginApprovalResolveParams = lazyCompile(PluginApprovalResolveParamsSchema);
 export const validatePluginsListParams = lazyCompile(PluginsListParamsSchema);
 export const validatePluginsListResult = lazyCompile(PluginsListResultSchema);
+export const validatePluginsRefreshParams = lazyCompile(PluginsRefreshParamsSchema);
+export const validatePluginsRefreshResult = lazyCompile(PluginsRefreshResultSchema);
 export const validatePluginsSearchParams = lazyCompile(PluginsSearchParamsSchema);
 export const validatePluginsSearchResult = lazyCompile(PluginsSearchResultSchema);
 export const validatePluginsInstallParams = lazyCompile(PluginsInstallParamsSchema);
@@ -928,6 +982,16 @@ export {
   SystemInfoResultSchema,
   StateVersionSchema,
   AgentEventSchema,
+  ConversationListItemSchema,
+  ConversationListParamsSchema,
+  ConversationListResultSchema,
+  ConversationSendParamsSchema,
+  ConversationSendResultSchema,
+  ConversationTurnCancelParamsSchema,
+  ConversationTurnCancelResultSchema,
+  ConversationTurnParamsSchema,
+  ConversationTurnReplySchema,
+  ConversationTurnResultSchema,
   MessageActionParamsSchema,
   ChatEventSchema,
   SendParamsSchema,
@@ -972,6 +1036,7 @@ export {
   SessionCatalogTranscriptItemSchema,
   SessionsCatalogListParamsSchema,
   SessionsCatalogListResultSchema,
+  SessionsCatalogHostEventSchema,
   SessionsCatalogReadParamsSchema,
   SessionsCatalogReadResultSchema,
   SessionsCatalogContinueParamsSchema,
@@ -1072,6 +1137,7 @@ export {
   ConfigSchemaLookupResultSchema,
   UpdateStatusParamsSchema,
   SystemAgentChatParamsSchema,
+  SystemAgentChatQuestionSchema,
   SystemAgentChatResultSchema,
   SystemAgentSetupDetectParamsSchema,
   SystemAgentSetupDetectResultSchema,
@@ -1157,6 +1223,8 @@ export {
   PluginsInstallResultSchema,
   PluginsListParamsSchema,
   PluginsListResultSchema,
+  PluginsRefreshParamsSchema,
+  PluginsRefreshResultSchema,
   PluginsSearchParamsSchema,
   PluginsSearchResultSchema,
   PluginsSessionActionParamsSchema,
@@ -1264,6 +1332,24 @@ export {
   ExecApprovalGetParamsSchema,
   ExecApprovalRequestParamsSchema,
   ExecApprovalResolveParamsSchema,
+  QuestionAnswersSchema,
+  QuestionGetParamsSchema,
+  QuestionGetResultSchema,
+  QuestionListParamsSchema,
+  QuestionListResultSchema,
+  QuestionOptionSchema,
+  QuestionRecordSchema,
+  QuestionRequestedEventSchema,
+  QuestionRequestParamsSchema,
+  QuestionRequestQuestionSchema,
+  QuestionRequestResultSchema,
+  QuestionResolvedEventSchema,
+  QuestionResolveParamsSchema,
+  QuestionResolveResultSchema,
+  QuestionSchema,
+  QuestionStatusSchema,
+  QuestionWaitAnswerParamsSchema,
+  QuestionWaitAnswerResultSchema,
   ChatHistoryParamsSchema,
   ChatMetadataParamsSchema,
   ChatSendParamsSchema,
@@ -1343,6 +1429,16 @@ export type {
   ErrorShape,
   StateVersion,
   AgentEvent,
+  ConversationListItem,
+  ConversationListParams,
+  ConversationListResult,
+  ConversationSendParams,
+  ConversationSendResult,
+  ConversationTurnCancelParams,
+  ConversationTurnCancelResult,
+  ConversationTurnParams,
+  ConversationTurnReply,
+  ConversationTurnResult,
   AgentIdentityParams,
   AgentIdentityResult,
   AgentWaitParams,
@@ -1365,6 +1461,7 @@ export type {
   ConfigSchemaParams,
   ConfigSchemaResponse,
   SystemAgentChatParams,
+  SystemAgentChatQuestion,
   SystemAgentChatResult,
   SystemAgentSetupDetectParams,
   SystemAgentSetupDetectResult,
@@ -1475,6 +1572,8 @@ export type {
   PluginsInstallResult,
   PluginsListParams,
   PluginsListResult,
+  PluginsRefreshParams,
+  PluginsRefreshResult,
   PluginsSearchParams,
   PluginsSearchResult,
   PluginsSessionActionParams,
@@ -1652,6 +1751,24 @@ export type {
   ExecApprovalGetParams,
   ExecApprovalRequestParams,
   ExecApprovalResolveParams,
+  Question,
+  QuestionAnswers,
+  QuestionGetParams,
+  QuestionGetResult,
+  QuestionListParams,
+  QuestionListResult,
+  QuestionOption,
+  QuestionRecord,
+  QuestionRequestedEvent,
+  QuestionRequestParams,
+  QuestionRequestQuestion,
+  QuestionRequestResult,
+  QuestionResolvedEvent,
+  QuestionResolveParams,
+  QuestionResolveResult,
+  QuestionStatus,
+  QuestionWaitAnswerParams,
+  QuestionWaitAnswerResult,
   LogsTailParams,
   LogsTailResult,
   TerminalOpenParams,

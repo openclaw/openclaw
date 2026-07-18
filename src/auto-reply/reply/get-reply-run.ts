@@ -22,6 +22,7 @@ import type { SilentReplyPromptMode } from "../../agents/system-prompt.types.js"
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { updateAmbientTranscriptWatermark } from "../../config/sessions/ambient-transcript-watermark.js";
+import { conversationIdentityFromMsgContext } from "../../config/sessions/conversation-identity.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import {
   resolveSessionFilePath,
@@ -1414,14 +1415,17 @@ export async function runPreparedReply(
   );
   // Abort-signal attachment for queued followups:
   // - room_event: always inherit (source admission fence / ambient cancel).
-  // - Gateway-owned lifecycle (chat.send): always inherit so Esc can cancel a
-  //   turn after chat.send terminalizes while still queued.
+  // - Gateway-owned lifecycle (chat.send / turnAdoptionLifecycle): always inherit
+  //   so Esc can cancel a turn after chat.send terminalizes while still queued.
   // - plain user_request without lifecycle: deliberately detach from the
   //   source/active-lane signal so a superseded parent abort does not cancel a
   //   still-valid queued user turn.
+  const hasQueuedOwnershipLifecycle = Boolean(opts?.turnAdoptionLifecycle);
   const queuedFollowupAbortSignal =
-    opts?.queuedFollowupLifecycle || inboundEventKind === "room_event"
-      ? (opts?.queuedFollowupAbortSignal ?? opts?.abortSignal)
+    hasQueuedOwnershipLifecycle || inboundEventKind === "room_event"
+      ? (opts?.queuedFollowupAbortSignal ??
+        opts?.turnAdoptionLifecycle?.abortSignal ??
+        opts?.abortSignal)
       : undefined;
   const replyRoute = resolveEffectiveReplyRoute({
     ctx: {
@@ -1462,13 +1466,47 @@ export async function runPreparedReply(
   const userTurnTranscriptText = resolvePersistedUserTurnText(transcriptBody, {
     hasMedia: userTurnMediaForPersistence.length > 0,
   });
+  const conversationIdentity = conversationIdentityFromMsgContext({ ctx: sessionCtx });
+  const conversationRef = conversationIdentity?.conversationRef;
+  const transportMessageId =
+    normalizeOptionalString(sessionCtx.MessageSidFull) ??
+    normalizeOptionalString(sessionCtx.MessageSid);
+  const transportReplyToId =
+    normalizeOptionalString(sessionCtx.ReplyToIdFull) ??
+    normalizeOptionalString(sessionCtx.ReplyToId);
+  const transportThreadId =
+    sessionCtx.MessageThreadId === undefined
+      ? undefined
+      : normalizeOptionalString(String(sessionCtx.MessageThreadId));
+  const transportChannel =
+    normalizeOptionalString(conversationIdentity?.channel) ??
+    normalizeOptionalString(sessionCtx.OriginatingChannel) ??
+    normalizeOptionalString(sessionCtx.Provider);
+  const transport =
+    conversationRef ||
+    transportMessageId ||
+    transportReplyToId ||
+    transportThreadId ||
+    transportChannel
+      ? {
+          ...(transportChannel ? { channel: transportChannel } : {}),
+          ...(conversationRef ? { conversationRef } : {}),
+          ...(transportMessageId ? { messageId: transportMessageId } : {}),
+          ...(transportReplyToId ? { replyToId: transportReplyToId } : {}),
+          ...(transportThreadId ? { threadId: transportThreadId } : {}),
+        }
+      : undefined;
   const userTurnInput =
     userTurnTranscriptText !== undefined || userTurnMediaForPersistence.length > 0
       ? {
           text: userTurnTranscriptText,
           senderIsOwner: command.senderIsOwner,
           ...(sourceTurnId ? { idempotencyKey: sourceTurnId } : {}),
-          ...(inputProvenance ? { provenance: inputProvenance } : {}),
+          ...(inputProvenance && !isHeartbeat ? { provenance: inputProvenance } : {}),
+          ...(isHeartbeat
+            ? { provenance: { kind: "internal_system" as const, sourceTool: "heartbeat" } }
+            : {}),
+          ...(transport ? { transport } : {}),
           ...(userTurnMediaForPersistence.length > 0
             ? {
                 media: userTurnMediaForPersistence,
@@ -1531,7 +1569,7 @@ export async function runPreparedReply(
     currentInboundContext,
     ...(queuedFollowupAbortSignal ? { abortSignal: queuedFollowupAbortSignal } : {}),
     deliveryCorrelations: opts?.queuedDeliveryCorrelations,
-    queuedLifecycle: opts?.queuedFollowupLifecycle,
+    turnAdoptionLifecycle: opts?.turnAdoptionLifecycle,
     onReplyAdmissionWaitChange: opts?.onReplyAdmissionWaitChange,
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
     summaryLine: baseBodyTrimmedRaw,
@@ -1559,6 +1597,7 @@ export async function runPreparedReply(
       runtimePolicySessionKey,
       messageProvider,
       clientCaps: ctx.GatewayClientCaps,
+      toolBindings: ctx.GatewayRunToolBindings,
       chatType: replyRoute.chatType,
       agentAccountId: replyRoute.accountId,
       groupId: resolveGroupSessionKey(sessionCtx)?.id ?? undefined,

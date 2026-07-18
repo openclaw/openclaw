@@ -232,16 +232,18 @@ export async function appendSqliteTranscriptEvent(
 export function appendSqliteTranscriptEventSync(
   scope: SessionTranscriptAccessScope,
   event: TranscriptEvent,
-): void {
+): boolean {
   assertNonMessageTranscriptEvent(event);
   const resolved = resolveSqliteTranscriptScope(scope);
+  let appended = false;
   runOpenClawAgentWriteTransaction((database) => {
     const fresh = readSessionEntryRow(database, resolved.sessionKey);
     if (!fresh || fresh.entry.sessionId !== resolved.sessionId) {
       return;
     }
-    appendTranscriptEventInTransaction(database, resolved, event);
+    appended = appendTranscriptEventInTransaction(database, resolved, event);
   }, toDatabaseOptions(resolved));
+  return appended;
 }
 
 /** Appends a guarded transcript turn and touches its session row in one queued write. */

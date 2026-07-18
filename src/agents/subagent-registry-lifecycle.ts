@@ -187,6 +187,7 @@ export function createSubagentRegistryLifecycleController(params: {
     accountId?: string;
     isCurrent?: () => boolean;
   }): Promise<void>;
+  emitSubagentProgressEndedForRun(entry: SubagentRunRecord): Promise<void>;
   notifyContextEngineSubagentEnded(args: {
     childSessionKey: string;
     reason: "completed" | "deleted";
@@ -208,6 +209,9 @@ export function createSubagentRegistryLifecycleController(params: {
   const terminalCompletionLocks = new Map<string, Promise<void>>();
   const terminalGenerations = new WeakMap<SubagentRunRecord, number>();
   const cleanupGenerations = new WeakMap<SubagentRunRecord, number>();
+  // Presentation is transient, so dedupe only this record's competing terminal callbacks.
+  // Persisted lifecycle truth stays limited to durable completion and delivery state.
+  const progressEndedEntries = new WeakSet<SubagentRunRecord>();
 
   const newerGenerationOwnsSession = (entry: SubagentRunRecord): boolean =>
     entry.killReconciliation?.supersededAt !== undefined ||
@@ -2180,6 +2184,14 @@ export function createSubagentRegistryLifecycleController(params: {
         parentSessionKey: entry.requesterSessionKey,
         label: entry.label,
       });
+      // The enclosing steer/session-effects guard admits only the real terminal generation.
+      if (!isProvisionalKill && !progressEndedEntries.has(entry)) {
+        progressEndedEntries.add(entry);
+        await params.emitSubagentProgressEndedForRun(entry);
+        if (!isTerminalCallbackCurrent(completeParams.runId, entry, terminalGeneration)) {
+          return;
+        }
+      }
     }
     const shouldEmitEndedHook =
       !suppressedForSteerRestart &&

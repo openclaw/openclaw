@@ -712,6 +712,7 @@ async function handleChatHistoryRequest({
   const inFlightRun = resolveInFlightRunSnapshot({
     chatAbortControllers: context.chatAbortControllers,
     chatRunBuffers: context.chatRunBuffers,
+    chatRunPlanSnapshots: context.chatRunPlanSnapshots,
     requestedSessionKey: sessionKey,
     canonicalSessionKey: resolveSessionStoreKey({ cfg, sessionKey }),
     agentId: activeRunAgentId,
@@ -1303,9 +1304,12 @@ export const chatHandlers: GatewayRequestHandlers = {
                   abortSignal: activeRunAbort.controller.signal,
                   // Keep a Gateway-owned cancel identity after this chat.send
                   // terminalizes while the prompt waits in followup/collect queue.
-                  queuedFollowupLifecycle: {
+                  turnAdoptionLifecycle: {
+                    // Gateway cancel identity only — share collect key via ownerKey.
+                    admission: "cancel-only",
                     ownerKey: queuedFollowupOwnerKey,
-                    onEnqueued: () => {
+                    onAdopted: async () => {},
+                    onDeferred: () => {
                       queuedFollowupEnqueued = registerQueuedChatTurn({
                         chatQueuedTurns: ensureChatQueuedTurns(context),
                         runId: clientRunId,
@@ -1325,7 +1329,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                         activeRunAbort.controller,
                       );
                     },
-                    onComplete: () => {
+                    onSettled: () => {
                       completeQueuedChatTurn(
                         ensureChatQueuedTurns(context),
                         clientRunId,
@@ -1707,7 +1711,9 @@ export const chatHandlers: GatewayRequestHandlers = {
       state: "final" as const,
       message,
     };
-    context.broadcast("chat", chatPayload);
+    context.broadcast("chat", chatPayload, {
+      sessionKeys: sessionKey === "global" && agentId ? [`agent:${agentId}:global`] : [sessionKey],
+    });
     sendGlobalAwareNodeChatPayload({
       context,
       sessionKey,

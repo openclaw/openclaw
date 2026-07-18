@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import type {
   ProviderAppGuidedSetupContext,
   ProviderAuthContext,
@@ -16,6 +17,7 @@ import {
   DEFAULT_LLAMA_CPP_MODEL_URI,
   LLAMA_CPP_PROVIDER_ID,
   buildLlamaCppProviderConfig,
+  meetsLlamaCppDefaultModelRamFloor,
   resolveCachedLlamaCppModelPath,
   resolveLlamaCppModelCacheDir,
   resolveLlamaCppModelSource,
@@ -25,6 +27,27 @@ import {
   importNodeLlamaCpp,
   type NodeLlamaCppModule,
 } from "./node-llama.runtime.js";
+
+const BYTES_PER_GB = 1_000_000_000;
+const BYTES_PER_MB = 1_000_000;
+
+function formatLlamaCppDownloadProgress(params: {
+  downloadedSize: number;
+  totalSize: number;
+  bytesPerSecond: number;
+}): string {
+  const downloadedSize = Math.max(0, params.downloadedSize);
+  const totalSize = Math.max(1, params.totalSize);
+  const percent = Math.min(100, Math.floor((downloadedSize / totalSize) * 100));
+  const downloadedGb = (downloadedSize / BYTES_PER_GB).toFixed(1);
+  const totalGb = (totalSize / BYTES_PER_GB).toFixed(1);
+  const rateMb = Math.max(0, Math.round(params.bytesPerSecond / BYTES_PER_MB));
+  return `Downloading Gemma 4 E4B… ${percent}% (${downloadedGb}/${totalGb} GB, ${rateMb} MB/s)`;
+}
+
+function formatRamGb(totalmemBytes: number): string {
+  return (totalmemBytes / 1024 ** 3).toFixed(1).replace(/\.0$/, "");
+}
 
 function readPrimaryModel(config: ProviderAppGuidedSetupContext["config"]): string | undefined {
   const model = config.agents?.defaults?.model;
@@ -122,35 +145,74 @@ export async function runLlamaCppSetup(ctx: ProviderAuthContext): Promise<Provid
     provider: existing,
   });
   if (!cachedPath || !(await isFile(cachedPath))) {
+    const totalmemBytes = os.totalmem();
+    if (!meetsLlamaCppDefaultModelRamFloor(totalmemBytes)) {
+      await ctx.prompter.note(
+        `This machine has ${formatRamGb(totalmemBytes)} GB RAM; the bundled local model needs 16 GB+. Use Ollama/LM Studio with a smaller model, or a cloud provider.`,
+        "Setup skipped",
+      );
+      return { profiles: [] };
+    }
     const consent = await ctx.prompter.confirm({
-      message:
-        "Download Qwen3 4B Instruct 2507 Q4_K_M (about 2.5 GB) for local llama.cpp inference?",
+      message: "Download Gemma 4 E4B IT Q4_K_M (about 5.0 GB) for local llama.cpp inference?",
       initialValue: false,
     });
     if (!consent) {
       await ctx.prompter.note("Local model download skipped.", "Setup skipped");
       return { profiles: [] };
     }
-    const progress = ctx.prompter.progress("Preparing Qwen3 4B model download…");
+    const progress = ctx.prompter.progress("Preparing Gemma 4 E4B model download…");
     try {
       const runtime = await importNodeLlamaCpp();
+      let previousDownloadedSize: number | undefined;
+      let previousProgressAtMs: number | undefined;
+      let rollingBytesPerSecond = 0;
       const downloader = await runtime.createModelDownloader({
         modelUri: DEFAULT_LLAMA_CPP_MODEL_URI,
         dirPath: cacheDir,
         fileName: DEFAULT_LLAMA_CPP_MODEL_CACHE_FILE,
         showCliProgress: false,
         onProgress: ({ downloadedSize, totalSize }) => {
+          const now = Date.now();
+          if (
+            previousDownloadedSize !== undefined &&
+            previousProgressAtMs !== undefined &&
+            downloadedSize >= previousDownloadedSize &&
+            now > previousProgressAtMs
+          ) {
+            const elapsedSeconds = (now - previousProgressAtMs) / 1000;
+            const currentBytesPerSecond =
+              (downloadedSize - previousDownloadedSize) / elapsedSeconds;
+            // Four-sample EWMA: a small rolling window without per-update allocations.
+            rollingBytesPerSecond =
+              rollingBytesPerSecond === 0
+                ? currentBytesPerSecond
+                : rollingBytesPerSecond * 0.75 + currentBytesPerSecond * 0.25;
+          }
+          previousDownloadedSize = downloadedSize;
+          previousProgressAtMs = now;
           const expectedSize = totalSize || DEFAULT_LLAMA_CPP_MODEL_SIZE_BYTES;
-          const percent = Math.min(100, Math.floor((downloadedSize / expectedSize) * 100));
-          progress.update(`Downloading Qwen3 4B model… ${percent}%`);
+          progress.update(
+            formatLlamaCppDownloadProgress({
+              downloadedSize,
+              totalSize: expectedSize,
+              bytesPerSecond: rollingBytesPerSecond,
+            }),
+          );
         },
       });
       await downloader.download({ signal: ctx.signal });
-      progress.stop("Qwen3 4B model downloaded");
+      progress.stop("Gemma 4 E4B model downloaded");
     } catch (error) {
       progress.stop("Model download failed");
       throw new Error(formatLlamaCppSetupError(error), { cause: error });
     }
   }
   return buildSetupResult(ctx.config);
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.llamaCppSetupTestApi")] = {
+    formatLlamaCppDownloadProgress,
+  };
 }
