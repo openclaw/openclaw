@@ -48,11 +48,6 @@ describe("opencode provider policy public artifact", () => {
       resolveThinkingProfile({
         provider: "opencode",
         modelId: "gpt-5.6-luna",
-        api: "openai-responses",
-        reasoning: true,
-        compat: {
-          supportedReasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
-        },
       }),
     ).toEqual({
       levels: [
