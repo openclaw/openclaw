@@ -1724,5 +1724,5 @@ function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
 
-// Temporary export for runtime proof - see PR #110419
-export { decodeWebSocketData };
+// Test-only re-export for bounded WebSocket Blob decode coverage.
+export const decodeWebSocketDataForTest = decodeWebSocketData;

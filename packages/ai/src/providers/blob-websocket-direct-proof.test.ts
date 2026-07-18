@@ -12,8 +12,8 @@
 
 import { describe, it, expect, vi } from "vitest";
 
-// Import the ACTUAL function (via temporary export)
-const { decodeWebSocketData } = await import("./openai-chatgpt-responses.js");
+// Import the actual decoder through the module's explicit test-only export.
+const { decodeWebSocketDataForTest } = await import("./openai-chatgpt-responses.js");
 
 describe("decodeWebSocketData runtime proof", () => {
   it("rejects oversized Blob-like object BEFORE arrayBuffer() call", async () => {
@@ -27,7 +27,7 @@ describe("decodeWebSocketData runtime proof", () => {
       }),
     };
 
-    await expect(decodeWebSocketData(oversizedBlobLike)).rejects.toThrow(
+    await expect(decodeWebSocketDataForTest(oversizedBlobLike)).rejects.toThrow(
       "Codex WebSocket message exceeded size limit",
     );
 
@@ -46,7 +46,7 @@ describe("decodeWebSocketData runtime proof", () => {
       arrayBuffer: vi.fn(async () => await validBlob.arrayBuffer()),
     };
 
-    const result = await decodeWebSocketData(validBlobLike);
+    const result = await decodeWebSocketDataForTest(validBlobLike);
 
     expect(result).toContain("response.created");
     expect(validBlobLike.arrayBuffer).toHaveBeenCalledTimes(1);
@@ -62,7 +62,7 @@ describe("decodeWebSocketData runtime proof", () => {
       arrayBuffer: vi.fn(async () => await oversizedBlob.arrayBuffer()),
     };
 
-    await expect(decodeWebSocketData(fakeSizeBlobLike)).rejects.toThrow(
+    await expect(decodeWebSocketDataForTest(fakeSizeBlobLike)).rejects.toThrow(
       "Codex WebSocket message exceeded size limit",
     );
 
@@ -80,7 +80,7 @@ describe("decodeWebSocketData runtime proof", () => {
     };
 
     // At exact limit, should pass both checks
-    const result = await decodeWebSocketData(boundaryBlobLike);
+    const result = await decodeWebSocketDataForTest(boundaryBlobLike);
 
     expect(result).toBeDefined();
     expect(boundaryBlobLike.arrayBuffer).toHaveBeenCalledTimes(1);
