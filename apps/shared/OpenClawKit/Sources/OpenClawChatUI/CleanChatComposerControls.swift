@@ -261,7 +261,7 @@ struct OpenClawChatMicButton: View {
 
     private var label: some View {
         let showsStop = self.isDictationPending || self.dictationControl?.isActive == true
-        Image(systemName: showsStop ? "stop.fill" : "mic")
+        return Image(systemName: showsStop ? "stop.fill" : "mic")
             .font(OpenClawChatTypography.display(size: 17, weight: .medium, relativeTo: .body))
             .foregroundStyle(showsStop ? OpenClawChatTheme.accent : .secondary)
             .frame(width: 44, height: 44)
