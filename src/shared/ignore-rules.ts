@@ -30,9 +30,16 @@ export type IgnoreMatcher = {
   ignores(pathname: string): boolean;
 };
 
-function isInLiteralSubtree(pathname: string, subtrees: Set<string>): boolean {
+function normalizeLiteralSubtreePath(pathname: string): string {
   const posixPath = toPosixPath(pathname);
   const normalized = posixPath.endsWith("/") ? posixPath.slice(0, -1) : posixPath;
+  // node-ignore defaults to case-insensitive matching. Keep terminal deny
+  // metadata aligned so alternate casing cannot bypass a failed-closed subtree.
+  return normalized.toLowerCase();
+}
+
+function isInLiteralSubtree(pathname: string, subtrees: Set<string>): boolean {
+  const normalized = normalizeLiteralSubtreePath(pathname);
   for (const subtree of subtrees) {
     if (!subtree || normalized === subtree || normalized.startsWith(`${subtree}/`)) {
       return true;
@@ -56,9 +63,7 @@ function createIgnoreMatcher(): IgnoreMatcher {
 }
 
 function addFailClosedSubtree(matcher: IgnoreMatcher, prefix: string): void {
-  matcher[IGNORE_MATCHER_STATE].excludedSubtrees.add(
-    prefix.endsWith("/") ? prefix.slice(0, -1) : prefix,
-  );
+  matcher[IGNORE_MATCHER_STATE].excludedSubtrees.add(normalizeLiteralSubtreePath(prefix));
 }
 
 function parseIgnorePatterns(

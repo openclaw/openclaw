@@ -98,6 +98,7 @@ describe("addIgnoreRules", () => {
   it("treats fail-closed subtree paths literally", () => {
     const oversized = "ignored-file\n".repeat(1_000_000); // ~13 MB, over 4 MB cap
     const unusualNames = [
+      "Private",
       "#private",
       "!private",
       "[private]",
@@ -120,6 +121,7 @@ describe("addIgnoreRules", () => {
       throw new Error("expected ignore matcher");
     }
     expect(ig.ignores("public/secret.txt")).toBe(false);
+    expect(ig.ignores("private/secret.txt")).toBe(true);
     if (process.platform !== "win32") {
       expect(ig.ignores("#private\\secret.txt")).toBe(false);
     }
