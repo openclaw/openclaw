@@ -256,6 +256,58 @@ describe("diagnostic run activity retention", () => {
     expect(getDiagnosticSessionActivitySnapshot(completed)).toEqual({});
   });
 
+  it("keeps replacement-run activity when an older run completes in the same session", async () => {
+    startDiagnosticRunActivityTracking();
+    const session = {
+      sessionId: "replacement-session",
+      sessionKey: "agent:main:replacement",
+    };
+    markDiagnosticRunProgress({ ...session, runId: "older-run", reason: "older:active" });
+    markDiagnosticRunProgress({
+      ...session,
+      runId: "replacement-run",
+      reason: "replacement:active",
+    });
+    markDiagnosticEmbeddedRunStarted(session);
+    emitTrustedDiagnosticEvent({
+      type: "model.call.started",
+      ...session,
+      runId: "replacement-run",
+      callId: "replacement-call",
+      provider: "openai",
+      model: "gpt-5.5",
+    });
+    await waitForDiagnosticEventsDrained();
+
+    emitTrustedDiagnosticEvent({
+      type: "run.completed",
+      ...session,
+      runId: "older-run",
+      durationMs: 1,
+      outcome: "completed",
+    });
+
+    expect(getDiagnosticSessionActivitySnapshot(session)).toMatchObject({
+      activeWorkKind: "model_call",
+      hasActiveEmbeddedRun: true,
+    });
+
+    emitTrustedDiagnosticEvent({
+      type: "run.completed",
+      ...session,
+      runId: "replacement-run",
+      durationMs: 1,
+      outcome: "completed",
+    });
+
+    const completedSnapshot = getDiagnosticSessionActivitySnapshot(session);
+    expect(completedSnapshot).toMatchObject({
+      activeWorkKind: undefined,
+      lastProgressReason: "run:completed",
+    });
+    expect(completedSnapshot).not.toHaveProperty("hasActiveEmbeddedRun");
+  });
+
   it("bounds completed session activity while preserving active runs", () => {
     startDiagnosticRunActivityTracking();
     const active = {

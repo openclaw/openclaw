@@ -371,6 +371,19 @@ export function setDiagnosticReplyOperationActive(params: {
   }
 }
 
+function clearRunOwnedActivityMarkers(activity: SessionActivity, runId: string): void {
+  for (const [key, tool] of activity.activeTools) {
+    if (tool.runId === runId) {
+      activity.activeTools.delete(key);
+    }
+  }
+  for (const [key, modelCall] of activity.activeModelCalls) {
+    if (modelCall.runId === runId) {
+      activity.activeModelCalls.delete(key);
+    }
+  }
+}
+
 function recordRunCompleted(
   event: Extract<DiagnosticEventPayload, { type: "run.completed" }>,
 ): void {
@@ -383,9 +396,12 @@ function recordRunCompleted(
   }
   activityByRunId.delete(event.runId);
   activity.activeRuns.delete(event.runId);
-  activity.activeTools.clear();
-  activity.activeModelCalls.clear();
-  activity.activeEmbeddedRuns.clear();
+  clearRunOwnedActivityMarkers(activity, event.runId);
+  if (activity.activeRuns.size === 0) {
+    activity.activeTools.clear();
+    activity.activeModelCalls.clear();
+    activity.activeEmbeddedRuns.clear();
+  }
   touchSessionActivity(activity, "run:completed", now);
 }
 
