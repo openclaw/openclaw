@@ -713,7 +713,7 @@ describe("session history HTTP endpoints", () => {
       });
 
       const secondPage = await fetchSessionHistory(harness.port, "agent:main:main", {
-        query: `?limit=2&cursor=${encodeURIComponent(firstBody.nextCursor ?? "")}`,
+        query: `?cursor=${encodeURIComponent(firstBody.nextCursor ?? "")}`,
       });
       expect(secondPage.status).toBe(200);
       const secondBody = (await secondPage.json()) as SessionHistoryBody;

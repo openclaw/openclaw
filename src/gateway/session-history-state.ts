@@ -303,7 +303,8 @@ export async function readSessionHistorySnapshotAsync(params: {
   target: SessionHistoryTranscriptTarget;
 }): Promise<SessionHistoryReadSnapshot> {
   const maxChars = params.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
-  if (typeof params.limit !== "number") {
+  const decodedCursor = params.cursor ? parseVisibleHistoryCursor(params.cursor) : undefined;
+  if (typeof params.limit !== "number" && !decodedCursor) {
     return await readLegacySessionHistorySnapshot({ ...params, maxChars });
   }
   // Stable releases through v2026.7.1 issued numeric history cursors. Keep
@@ -313,9 +314,12 @@ export async function readSessionHistorySnapshotAsync(params: {
     return await readLegacySessionHistorySnapshot({ ...params, maxChars });
   }
 
-  const decodedCursor = params.cursor ? parseVisibleHistoryCursor(params.cursor) : undefined;
   const scopedCursor =
     decodedCursor && cursorMatchesTarget(decodedCursor, params.target) ? decodedCursor : undefined;
+  const maxMessages =
+    typeof params.limit === "number"
+      ? resolveSessionHistoryTailReadOptions(params.limit).maxMessages
+      : Number.MAX_SAFE_INTEGER;
   let page = await readVisibleSessionMessagesAsync(params.target, {
     ...(scopedCursor
       ? {
@@ -325,13 +329,13 @@ export async function readSessionHistorySnapshotAsync(params: {
           },
         }
       : {}),
-    maxMessages: resolveSessionHistoryTailReadOptions(params.limit).maxMessages,
+    maxMessages,
   });
   let appliedCursor = scopedCursor ? params.cursor : undefined;
   let fallbackCursor = params.cursor;
   if (page.kind === "reset") {
     page = await readVisibleSessionMessagesAsync(params.target, {
-      maxMessages: resolveSessionHistoryTailReadOptions(params.limit).maxMessages,
+      maxMessages,
     });
     appliedCursor = undefined;
     fallbackCursor = undefined;
