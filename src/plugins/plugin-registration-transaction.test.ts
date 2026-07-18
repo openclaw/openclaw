@@ -10,6 +10,8 @@ import {
   snapshotPluginProcessGlobalState,
 } from "./plugin-registration-transaction.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { createPluginRecord } from "./status.test-helpers.js";
+import type { WorkerProvider } from "./types.js";
 
 describe("plugin registration transaction", () => {
   let initialProcessGlobalState: PluginProcessGlobalState;
@@ -50,6 +52,59 @@ describe("plugin registration transaction", () => {
       pluginId: "active-memory",
       capability: { promptBuilder: activePromptBuilder },
     });
+  });
+
+  it("restores current record metadata mutated before the record enters the registry", () => {
+    const registry = createEmptyPluginRegistry();
+    const record = createPluginRecord({ id: "failed-plugin" });
+    const transaction = createPluginRegistrationTransaction({ registry, currentRecord: record });
+
+    record.providerIds.push("failed-provider");
+    record.httpRoutes += 1;
+    record.error = "partial failure";
+
+    transaction.rollback();
+
+    expect(record.providerIds).toEqual([]);
+    expect(record.httpRoutes).toBe(0);
+    expect(record).not.toHaveProperty("error");
+  });
+
+  it("restores mutable registration metadata while preserving plugin-owned callbacks", () => {
+    const registry = createEmptyPluginRegistry();
+    const rawHandler = async () => undefined;
+    const workerProvider: WorkerProvider = {
+      id: "worker",
+      provision: async () => {
+        throw new Error("not called");
+      },
+      inspect: async () => ({ status: "unknown" }),
+      destroy: async () => {},
+    };
+    registry.agentToolResultMiddlewares.push({
+      pluginId: "existing-plugin",
+      handler: rawHandler,
+      rawHandler,
+      runtimes: ["openclaw"],
+      source: "test",
+    });
+    registry.workerProviders.set("worker", {
+      pluginId: "existing-plugin",
+      pluginName: "Existing",
+      provider: workerProvider,
+      source: "test",
+    });
+    const transaction = createPluginRegistrationTransaction({ registry });
+
+    registry.agentToolResultMiddlewares[0]!.runtimes.push("codex");
+    registry.workerProviders.get("worker")!.pluginName = "Mutated";
+
+    transaction.rollback();
+
+    expect(registry.agentToolResultMiddlewares[0]?.runtimes).toEqual(["openclaw"]);
+    expect(registry.agentToolResultMiddlewares[0]?.rawHandler).toBe(rawHandler);
+    expect(registry.workerProviders.get("worker")?.pluginName).toBe("Existing");
+    expect(registry.workerProviders.get("worker")?.provider).toBe(workerProvider);
   });
 
   it("keeps snapshot registry writes while restoring globals for non-activating commits", () => {
