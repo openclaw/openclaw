@@ -216,6 +216,9 @@ struct ChatViewModelSessionActionTests {
 
         #expect(groups.map(\.name) == ["Existing", "New"])
         #expect(await transport.groupPuts() == [["Existing", "New"]])
+        // Catalog-only mutations must bump the revision so sidebar group fetches
+        // keyed on it refetch instead of staying stale until reconnect.
+        #expect(viewModel.sessionGroupsRevision == 1)
     }
 
     @Test func `batch delete rejects current session while attachment owner is pinned`() async {
@@ -252,10 +255,29 @@ struct ChatViewModelSessionActionTests {
         #expect(await transport.createdAgentIDs() == ["worker"])
     }
 
-    @Test func `explicit current agent preserves parent for an unscoped current key`() async throws {
+    @Test func `ambiguous agent ownership omits the parent session`() async throws {
         let transport = SessionActionTransport()
         let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        // Roster entries must not decide the current agent: "main" is unscoped and
+        // no active agent is set, so agent selection crosses an ownership boundary.
         viewModel.sessions = [self.entry(key: "agent:worker:main")]
+        let lease = try await viewModel.newSessionRouteLease()
+
+        await viewModel.startNewSession(
+            agentID: "worker",
+            worktree: false,
+            worktreeBaseRef: nil,
+            using: lease)
+
+        #expect(await transport.createdParentKeys() == [nil])
+    }
+
+    @Test func `active agent identity preserves parent for an unscoped current key`() async throws {
+        let transport = SessionActionTransport()
+        let viewModel = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: transport,
+            activeAgentId: "worker")
         let lease = try await viewModel.newSessionRouteLease()
 
         await viewModel.startNewSession(

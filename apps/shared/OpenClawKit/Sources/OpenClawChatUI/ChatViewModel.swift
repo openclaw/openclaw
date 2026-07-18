@@ -81,6 +81,10 @@ public final class OpenClawChatViewModel {
     public var attachments: [OpenClawPendingAttachment] = []
     /// Setter is module-internal for the health/outbox extension only.
     public internal(set) var healthOK: Bool = false
+    /// Bumped after every successful group-catalog mutation so views keyed on it
+    /// refetch; catalog-only changes (e.g. creating an empty group) alter no
+    /// session rows and would otherwise stay stale until reconnect.
+    public internal(set) var sessionGroupsRevision = 0
 
     /// True when this view model owns a gateway-scoped durable text outbox.
     public var supportsOfflineTextOutbox: Bool {
@@ -1192,11 +1196,12 @@ extension OpenClawChatViewModel {
             .lowercased()
         let requestedAgentID = normalizedAgentID?.isEmpty == false ? normalizedAgentID : nil
         let requested = self.generatedNewSessionKey(agentID: requestedAgentID)
+        // Only authoritative identities decide agent ownership; scanning the roster
+        // could adopt an unrelated agent and hand sessions.create a cross-agent parent.
         let currentAgentID = (
             OpenClawChatSessionKey.agentID(from: self.sessionKey) ??
                 self.activeAgentId ??
-                OpenClawChatSessionKey.agentID(from: self.resolvedMainSessionKey) ??
-                self.sessions.lazy.compactMap { OpenClawChatSessionKey.agentID(from: $0.key) }.first)?
+                OpenClawChatSessionKey.agentID(from: self.resolvedMainSessionKey))?
             .lowercased()
         let parentSessionKey = requestedAgentID == nil || requestedAgentID == currentAgentID
             ? self.sessionKey

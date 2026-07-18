@@ -158,7 +158,8 @@ struct ChatSessionSidebar: View {
 
     private var groupRefreshID: String {
         let categories = self.viewModel.sessions.compactMap(\.category).sorted().joined(separator: "|")
-        return "\(self.viewModel.healthOK)|\(categories)|\(self.groupRefreshNonce)"
+        let revision = self.viewModel.sessionGroupsRevision
+        return "\(self.viewModel.healthOK)|\(categories)|\(revision)|\(self.groupRefreshNonce)"
     }
 
     private var deleteDialogTitle: String {

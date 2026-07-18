@@ -79,6 +79,7 @@ extension OpenClawChatViewModel {
         // lost. Accepted tradeoff until the gateway grows a revisioned groups API.
         let current = try await self.fetchSessionGroups(using: routeLease)
         let response = try await routeLease.putGroups(names: current.map(\.name) + [name])
+        self.sessionGroupsRevision += 1
         return response.groups
     }
 
@@ -91,6 +92,7 @@ extension OpenClawChatViewModel {
         let nextName = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !nextName.isEmpty else { return try await self.fetchSessionGroups(using: routeLease) }
         let response = try await routeLease.renameGroup(name: name, to: nextName)
+        self.sessionGroupsRevision += 1
         self.refreshSessions(limit: Self.sessionListFetchLimit)
         return response.groups
     }
@@ -101,6 +103,7 @@ extension OpenClawChatViewModel {
         using routeLease: OpenClawChatSessionGroupsRouteLease) async throws -> [OpenClawChatSessionGroup]
     {
         let response = try await routeLease.deleteGroup(name: name)
+        self.sessionGroupsRevision += 1
         self.refreshSessions(limit: Self.sessionListFetchLimit)
         return response.groups
     }
