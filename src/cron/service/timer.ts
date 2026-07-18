@@ -10,6 +10,7 @@ import {
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
   isRetryableHeartbeatBusySkipReason,
 } from "../../infra/heartbeat-wake.js";
+import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
 import {
   beginGatewayRootWorkAdmissionWhenOpen,
   GatewayDrainingError,
@@ -27,6 +28,7 @@ import {
   type CronActiveJobMarker,
 } from "../active-jobs.js";
 import { resolveCronDeliveryPlan, resolveFailureDestination } from "../delivery-plan.js";
+import { resolvePacedNextRunAtMs } from "../pacing.js";
 import { resolveCronExecutionRetryHint } from "../retry-hint.js";
 import {
   createCronRunDiagnosticsFromError,
@@ -42,6 +44,7 @@ import type {
   CronDeliveryTrace,
   CronFailureNotificationDelivery,
   CronJob,
+  CronNextCheckProposal,
   CronRunOutcome,
   CronRunStatus,
   CronRunTelemetry,
@@ -73,6 +76,7 @@ import {
   computeJobPreviousRunAtMs,
   computeJobNextRunAtMs,
   errorBackoffMs,
+  hasActiveCronRun,
   hasScheduledNextRunAtMs,
   isJobEnabled,
   nextWakeAtMs,
@@ -142,6 +146,7 @@ type TimedCronRunOutcome = CronRunOutcome &
     startedAt: number;
     endedAt: number;
     triggerEval?: CronTriggerEvalOutcome;
+    nextCheck?: CronNextCheckProposal;
   };
 
 type CronJobRunResult = CronRunOutcome &
@@ -150,6 +155,7 @@ type CronJobRunResult = CronRunOutcome &
     delivered?: boolean;
     startedAt: number;
     endedAt: number;
+    nextCheck?: CronNextCheckProposal;
   };
 
 export type CronTriggerEvalOutcome = {
@@ -197,6 +203,8 @@ type StartupCatchupExecution =
   | { ok: false; outcomes: TimedCronRunOutcome[]; error: unknown };
 
 type ExecuteJobCoreOptions = {
+  activeJobMarker?: CronActiveJobMarker;
+  owningCronLaneTaskMarker?: CommandLaneTaskMarker;
   onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
   onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
   onLaneWait?: (info?: { waiting?: boolean }) => void;
@@ -231,7 +239,11 @@ function cronRunAttributionFromExecution(execution?: CronAgentExecutionStarted):
 export async function executeJobCoreWithTimeout(
   state: CronServiceState,
   job: CronJob,
-  opts?: { runId?: string; activeJobMarker?: CronActiveJobMarker },
+  opts?: {
+    runId?: string;
+    activeJobMarker?: CronActiveJobMarker;
+    owningCronLaneTaskMarker?: CommandLaneTaskMarker;
+  },
 ): Promise<CronCoreRunOutcome> {
   const runAbortController = new AbortController();
   const operatorCancellationMarker = Symbol("cron-operator-cancelled");
@@ -276,6 +288,8 @@ export async function executeJobCoreWithTimeout(
         }
       };
       const corePromise = executeJobCore(state, job, runAbortController.signal, {
+        activeJobMarker: opts?.activeJobMarker,
+        owningCronLaneTaskMarker: opts?.owningCronLaneTaskMarker,
         onExecutionStarted: accumulateExecution,
         onExecutionPhase: accumulateExecution,
       });
@@ -329,6 +343,8 @@ export async function executeJobCoreWithTimeout(
       watchdog.noteLaneWait();
     };
     const corePromise = executeJobCore(state, job, runAbortController.signal, {
+      activeJobMarker: opts?.activeJobMarker,
+      owningCronLaneTaskMarker: opts?.owningCronLaneTaskMarker,
       onExecutionStarted: deferTimeoutUntilExecutionStart ? watchdog.noteRunnerStarted : undefined,
       onExecutionPhase: deferTimeoutUntilExecutionStart ? watchdog.notePhase : undefined,
       onLaneWait: deferTimeoutUntilExecutionStart ? noteLaneState : undefined,
@@ -750,6 +766,7 @@ export function applyJobResult(
   };
   job.state.queuedAtMs = undefined;
   job.state.runningAtMs = undefined;
+  job.state.pacedNextRunAtMs = undefined;
   job.state.lastRunAtMs = result.startedAt;
   job.state.lastRunStatus = result.status;
   job.state.lastStatus = result.status;
@@ -1007,6 +1024,21 @@ export function applyJobResult(
         },
         "cron: applying error backoff",
       );
+    } else if (
+      isJobEnabled(job) &&
+      result.status === "ok" &&
+      job.pacing !== undefined &&
+      result.nextCheck !== undefined
+    ) {
+      // Pacing bounds are the explicit per-job cadence contract. Do not apply
+      // normal schedule floors here; that would change the promised clamp.
+      const nextRunAtMs = resolvePacedNextRunAtMs({
+        nowMs: result.endedAt,
+        delayMs: result.nextCheck.delayMs,
+        pacing: job.pacing,
+      });
+      job.state.nextRunAtMs = nextRunAtMs;
+      job.state.pacedNextRunAtMs = nextRunAtMs;
     } else if (isJobEnabled(job)) {
       let naturalNext: number | undefined;
       try {
@@ -1179,6 +1211,7 @@ function applyOutcomeToStoredJob(
       triggerEval: result.triggerEval,
     });
     job.state.startupCatchupAtMs = undefined;
+    job.state.pacedNextRunAtMs = undefined;
     return undefined;
   }
 
@@ -1813,7 +1846,7 @@ function isRunnableJob(params: {
   if (params.skipJobIds?.has(job.id)) {
     return false;
   }
-  if (typeof job.state.queuedAtMs === "number" || typeof job.state.runningAtMs === "number") {
+  if (hasActiveCronRun(job)) {
     return false;
   }
   const lastRunStatus = resolveJobLastRunStatus(job);
@@ -2272,6 +2305,7 @@ async function runStartupCatchupCandidate(
       diagnostics: result.diagnostics,
       delivered: result.delivered,
       deliveryError: result.deliveryError,
+      nextCheck: result.nextCheck,
       sessionId: result.sessionId,
       sessionKey: result.sessionKey,
       model: result.model,
@@ -2312,8 +2346,10 @@ async function applyStartupCatchupOutcomes(
     const currentOutcomes = filterCurrentCronRunOutcomes(outcomes);
     let finalizedOutcomes: TimedCronRunOutcome[] = [];
     await locked(state, async () => {
+      // Catch-up runners can rewrite delivery targets or remove their own jobs.
+      // Reload before merging outcomes so the startup snapshot cannot overwrite them.
       await ensureLoaded(state, {
-        forceReload: state.stopped,
+        forceReload: true,
         skipRecompute: true,
       });
       if (!state.store) {
@@ -2420,6 +2456,7 @@ async function executeJobCore(
       deliveryAttempted?: boolean;
       deliveryError?: string;
       delivery?: CronDeliveryTrace;
+      nextCheck?: CronNextCheckProposal;
       triggerEval?: CronTriggerEvalOutcome;
     }
 > {
@@ -2501,7 +2538,14 @@ async function executeJobCore(
     }
   }
   if (effectiveJob.sessionTarget === "main") {
-    const result = await executeMainSessionCronJob(state, effectiveJob, abortSignal, waitWithAbort);
+    const result = await executeMainSessionCronJob(
+      state,
+      effectiveJob,
+      abortSignal,
+      waitWithAbort,
+      options?.activeJobMarker,
+      options?.owningCronLaneTaskMarker,
+    );
     return triggerEval ? { ...result, triggerEval } : result;
   }
 
@@ -2520,6 +2564,8 @@ async function executeMainSessionCronJob(
   job: CronJob,
   abortSignal: AbortSignal | undefined,
   waitWithAbort: (ms: number) => Promise<void>,
+  activeJobMarker?: CronActiveJobMarker,
+  owningCronLaneTaskMarker?: CommandLaneTaskMarker,
 ): Promise<
   CronRunOutcome &
     CronRunTelemetry & {
@@ -2572,6 +2618,8 @@ async function executeMainSessionCronJob(
         reason,
         agentId: job.agentId,
         sessionKey: cronRunSessionKey,
+        owningCronJobMarker: activeJobMarker,
+        owningCronLaneTaskMarker,
         heartbeat: { target: "last" },
       });
       if (abortSignal?.aborted) {
@@ -2585,7 +2633,8 @@ async function executeMainSessionCronJob(
         break;
       }
       if (heartbeatResult.reason === HEARTBEAT_SKIP_CRON_IN_PROGRESS) {
-        // The active cron marker blocks direct wake-now until this job returns.
+        // Only another cron run or lane pressure reaches here. Requeue instead of
+        // waiting on markers that cannot clear until both runs finish.
         state.deps.requestHeartbeat({
           source: "cron",
           intent: "immediate",
@@ -2667,6 +2716,7 @@ async function executeDetachedCronJob(
       deliveryAttempted?: boolean;
       deliveryError?: string;
       delivery?: CronDeliveryTrace;
+      nextCheck?: CronNextCheckProposal;
     }
 > {
   if (job.payload.kind === "command") {
@@ -2756,6 +2806,7 @@ async function executeDetachedCronJob(
     // successful run so the service can persist it as `lastDeliveryError` and
     // emit it on the finished event for CLI/UI/API run logs (#95419).
     deliveryError: res.deliveryError,
+    nextCheck: res.nextCheck,
     summary: res.summary,
     delivered: res.delivered,
     deliveryAttempted: res.deliveryAttempted,

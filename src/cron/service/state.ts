@@ -1,7 +1,9 @@
 /** Cron service dependency, event, state, and public result types. */
 import type { CronConfig } from "../../config/types.cron.js";
 import type { HeartbeatRunResult, HeartbeatWakeRequest } from "../../infra/heartbeat-wake.js";
+import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
+import type { CronActiveJobMarker } from "../active-jobs.js";
 import type { QuarantinedCronConfigJob } from "../store.js";
 import type {
   CronTriggerEvaluationResult,
@@ -11,6 +13,7 @@ import type {
   CronDeliveryStatus,
   CronDeliveryTrace,
   CronJob,
+  CronNextCheckProposal,
   CronJobCreate,
   CronJobPatch,
   CronRunDiagnostics,
@@ -125,6 +128,10 @@ export type CronServiceDeps = {
     reason?: string;
     agentId?: string;
     sessionKey?: string;
+    /** Exact cron run marker whose own activity must not block its awaited wake. */
+    owningCronJobMarker?: CronActiveJobMarker;
+    /** Exact command-lane task whose own slot must not block its awaited wake. */
+    owningCronLaneTaskMarker?: CommandLaneTaskMarker;
     /** Optional heartbeat config override (e.g. target: "last" for cron-triggered heartbeats). */
     heartbeat?: HeartbeatWakeRequest["heartbeat"];
   }) => Promise<HeartbeatRunResult>;
@@ -161,6 +168,7 @@ export type CronServiceDeps = {
        */
       deliveryAttempted?: boolean;
       delivery?: CronDeliveryTrace;
+      nextCheck?: CronNextCheckProposal;
     } & CronRunOutcome &
       CronRunTelemetry
   >;

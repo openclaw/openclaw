@@ -4,6 +4,8 @@ import type {
   SourceReplyDeliveryMode,
   TaskSuggestionDeliveryMode,
 } from "../auto-reply/get-reply-options.types.js";
+import { isCoreCanvasHostEnabled } from "../canvas/config.js";
+import { createShowWidgetTool } from "../canvas/widget-tool.js";
 import type { ChatType } from "../channels/chat-type.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { ConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
@@ -25,6 +27,7 @@ import {
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import type { ConversationRecallContext } from "./conversation-recall.types.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
 import {
   isToolExplicitlyAllowedByFactoryPolicy,
@@ -176,7 +179,7 @@ export function createOpenClawTools(
     senderIsOwner?: boolean;
     /** Server-owned operation-local origin for conversation-read visibility policy. */
     conversationReadOrigin?: ConversationReadInvocationOrigin;
-    /** Restrict the cron tool to self-removing this active cron job. */
+    /** Restrict cron operations to the active cron job's self-scoped surface. */
     cronSelfRemoveOnlyJobId?: string;
     /** Require explicit message targets (no implicit last-route sends). */
     requireExplicitMessageTarget?: boolean;
@@ -207,6 +210,8 @@ export function createOpenClawTools(
     authProfileStore?: AuthProfileStore;
     /** Ephemeral session UUID — regenerated on /new and /reset. */
     sessionId?: string;
+    /** Trusted runtime-only authorization for one bounded cross-conversation recall pass. */
+    conversationRecall?: ConversationRecallContext;
     /**
      * Explicit one-shot local CLI runs should not keep plugin-owned process
      * resources alive after emitting their result.
@@ -284,6 +289,8 @@ export function createOpenClawTools(
   const taskSuggestionSessionKey = normalizeOptionalString(
     options?.runSessionKey ?? options?.agentSessionKey,
   );
+  const requesterSessionKey = options?.agentSessionKey;
+  const requesterTurnRunId = options?.runId;
   const imageToolAgentDir = options?.agentDir;
   const imageTool = resolveImageToolFactoryAvailable({
     config: availabilityConfig ?? resolvedConfig,
@@ -490,6 +497,7 @@ export function createOpenClawTools(
               threadId: options?.currentThreadTs ?? options?.agentThreadId,
             },
             creatorToolAllowlist: options?.cronCreatorToolAllowlist,
+            runId: options?.runId,
             ...(options?.cronSelfRemoveOnlyJobId
               ? { selfRemoveOnlyJobId: options.cronSelfRemoveOnlyJobId }
               : {}),
@@ -519,6 +527,16 @@ export function createOpenClawTools(
         })
       : []),
     ...(messageTool && includeMessageTool ? [messageTool] : []),
+    // Discord sessions get the Discord plugin's own show_widget (Activities
+    // delivery); registering the core tool there would collide on the name.
+    ...(options?.agentChannel === "discord" || !isCoreCanvasHostEnabled(resolvedConfig)
+      ? []
+      : [
+          createShowWidgetTool({
+            sessionId: options?.sessionId,
+            agentId: sessionAgentId,
+          }),
+        ]),
     ...collectPresentOpenClawTools([heartbeatTool]),
     createTtsTool({
       agentChannel: options?.agentChannel,
@@ -575,6 +593,7 @@ export function createOpenClawTools(
           createAskUserTool({
             agentId: sessionAgentId,
             sessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+            runId: options?.runId,
           }),
         ]
       : []),
@@ -633,6 +652,7 @@ export function createOpenClawTools(
       ? [
           createSessionsSpawnTool({
             agentSessionKey: options?.agentSessionKey,
+            requesterTurnRunId: options?.runId,
             completionOwnerKey: options?.runSessionKey,
             agentChannel: options?.agentChannel,
             agentAccountId: options?.agentAccountId,
@@ -657,6 +677,13 @@ export function createOpenClawTools(
       : []),
     createSessionsYieldTool({
       sessionId: options?.sessionId,
+      onBeforeYield:
+        requesterSessionKey && requesterTurnRunId
+          ? async () => {
+              const { markRequesterTurnYielded } = await import("./subagent-registry.js");
+              markRequesterTurnYielded({ requesterSessionKey, requesterTurnRunId });
+            }
+          : undefined,
       onYield: options?.onYield,
     }),
     createSubagentsTool({

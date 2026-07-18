@@ -82,7 +82,8 @@ function isNoopReloadPlan(plan: GatewayReloadPlan): boolean {
     !plan.restartHealthMonitor &&
     !plan.reloadPlugins &&
     !plan.disposeMcpRuntimes &&
-    plan.restartChannels.size === 0
+    plan.restartChannels.size === 0 &&
+    (plan.restartChannelAccounts?.size ?? 0) === 0
   );
 }
 
@@ -174,7 +175,22 @@ export function startGatewayConfigReloader(opts: {
     nextConfig: OpenClawConfig,
     ownership: GatewayConfigReloadTransactionOwnership,
     sourceConfig: OpenClawConfig,
-  ) => Promise<() => Promise<void>>;
+  ) => Promise<{
+    rollback: () => Promise<void>;
+    /** Runs only when this exact source publication can no longer roll back. */
+    commit?: () => void;
+  }>;
+  /**
+   * Fires once per accepted candidate whose persisted content changed —
+   * regardless of writer (gateway RPC, agent/CLI config_set, doctor, hand
+   * edit) and of whether the runtime applied it. The single notification
+   * point for change listeners such as the config.changed broadcast.
+   */
+  onConfigCandidateCommitted?: (info: {
+    path: string;
+    persistedHash: string | null;
+    changedPaths: readonly string[];
+  }) => void;
   onNoopConfigCommit: (
     plan: GatewayReloadPlan,
     nextConfig: OpenClawConfig,
@@ -440,6 +456,17 @@ export function startGatewayConfigReloader(opts: {
       // a baseline-only candidate, which can discard prepared lifecycle state.
       await appliedRevision.flush(currentConfig);
       assertCurrent();
+      // Persisted content changed even when the runtime skipped applying it
+      // (writer intent, reload mode off): change listeners still refresh.
+      const notifyCommitted = () => {
+        if (changedPaths.length > 0) {
+          opts.onConfigCandidateCommitted?.({
+            path: opts.watchPath,
+            persistedHash: persistedHash ?? null,
+            changedPaths,
+          });
+        }
+      };
       let rollbackAcceptedSource: (() => Promise<void>) | undefined;
       try {
         const acceptedSourceRollback = await opts.onConfigAccepted?.(
@@ -466,6 +493,7 @@ export function startGatewayConfigReloader(opts: {
           lastSourceOnlyRuntimeRefresh = ownership.runtimeRefresh;
           lastSourceOnlyRuntimeConfig = nextConfig;
           lastSourceOnlySourceConfig = nextSourceConfig;
+          notifyCommitted();
           return;
         }
         // Runtime owners publish env at their commit edge. Keep this idempotent
@@ -494,18 +522,30 @@ export function startGatewayConfigReloader(opts: {
         await rollbackAcceptedSource?.();
         throw error;
       }
+      notifyCommitted();
     };
     if (changedPaths.length === 0) {
+      let publishedSource: { rollback: () => Promise<void>; commit?: () => void } | undefined;
       let publishedSourceRollback: (() => Promise<void>) | undefined;
+      let publishedSourceRolledBack = false;
       const publishSource = opts.onEffectiveConfigUnchanged
-        ? async () =>
-            (publishedSourceRollback ??= await opts.onEffectiveConfigUnchanged!(
+        ? async () => {
+            publishedSource ??= await opts.onEffectiveConfigUnchanged!(
               nextConfig,
               ownership,
               nextSourceConfig,
-            ))
+            );
+            publishedSourceRollback ??= async () => {
+              publishedSourceRolledBack = true;
+              await publishedSource?.rollback();
+            };
+            return publishedSourceRollback;
+          }
         : undefined;
       await commitReloadBaseline(publishSource ? { publishSource } : {});
+      if (!publishedSourceRolledBack) {
+        publishedSource?.commit?.();
+      }
       opts.onConfigRevisionApplied?.(nextConfigRevisionHash);
       return;
     }
@@ -530,6 +570,7 @@ export function startGatewayConfigReloader(opts: {
     const plan = buildGatewayReloadPlan(changedPaths, {
       noopPaths: pluginInstallTimestampNoopPaths,
       forceChangedPaths: pluginInstallWholeRecordPaths,
+      candidateConfig: nextConfig,
     });
     if (nextSettings.mode === "off") {
       opts.log.info("config reload disabled (gateway.reload.mode=off)");

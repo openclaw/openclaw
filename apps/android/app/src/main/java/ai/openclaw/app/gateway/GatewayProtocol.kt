@@ -74,6 +74,51 @@ data class GatewayNodeInvokeRequest(
 )
 
 @Serializable
+data class QuestionOption(
+  val label: String,
+  val description: String? = null,
+)
+
+@Serializable
+data class Question(
+  val id: String,
+  val header: String,
+  val question: String,
+  val options: List<QuestionOption>,
+  val multiSelect: Boolean? = null,
+  val isOther: Boolean? = null,
+  val isSecret: Boolean? = null,
+)
+
+@Serializable
+data class QuestionAnswers(
+  val answers: Map<String, QuestionAnswersAnswersValue>,
+)
+
+@Serializable
+data class QuestionRecord(
+  val id: String,
+  val questions: List<Question>,
+  val agentId: String? = null,
+  val sessionKey: String? = null,
+  val createdAtMs: Long,
+  val expiresAtMs: Long,
+  val status: String,
+  val answers: QuestionAnswers? = null,
+  val resolvedBy: String? = null,
+)
+
+@Serializable
+data class QuestionGetResult(
+  val question: QuestionRecord,
+)
+
+@Serializable
+data class QuestionListResult(
+  val questions: List<QuestionRecord>,
+)
+
+@Serializable
 data class GatewayEventFrameStateVersion(
   val presence: Long,
   val health: Long,
@@ -83,6 +128,11 @@ data class GatewayEventFrameStateVersion(
 data class GatewayNodeInvokeResultParamsError(
   val code: String? = null,
   val message: String? = null,
+)
+
+@Serializable
+data class QuestionAnswersAnswersValue(
+  val answers: List<String>,
 )
 
 enum class GatewayMethod(
@@ -258,6 +308,10 @@ enum class GatewayMethod(
   SessionsCompactionGet("sessions.compaction.get"),
   SessionsCompactionBranch("sessions.compaction.branch"),
   SessionsCompactionRestore("sessions.compaction.restore"),
+  SessionsBranchesList("sessions.branches.list"),
+  SessionsBranchesSwitch("sessions.branches.switch"),
+  SessionsRewind("sessions.rewind"),
+  SessionsFork("sessions.fork"),
   SessionsCreate("sessions.create"),
   SessionsSend("sessions.send"),
   SessionsAbort("sessions.abort"),
