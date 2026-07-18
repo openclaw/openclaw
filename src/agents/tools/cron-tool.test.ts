@@ -701,6 +701,14 @@ describe("cron tool", () => {
     expect(tool.description).toContain("trigger.state");
     expect(tool.description).toContain("fire:false saves state only; no payload/history");
     expect(tool.description).toContain("fired state saves only after payload success");
+    expect(tool.description).toContain("every actionable state, including failures/timeouts");
+    expect(tool.description).toContain("success-only watchers go silent when broken");
+    expect(tool.description).toContain(
+      "Dedupe by comparing trigger.state and returning new state, never memory",
+    );
+    expect(tool.description).toContain("scripts read-only; actions belong in payload");
+    expect(tool.description).toContain("message must be self-contained");
+    expect(tool.description).toContain("the fired run's entire context");
     expect(tool.description).toContain('Silent watcher: top-level delivery.mode="none"');
     expect(tool.description).toContain("missing route may fail");
     expect(tool.description).toContain("once:true disables after first successful fire");

@@ -713,7 +713,7 @@
 
 .btn.primary {
   border-color: var(--accent);
-  background: var(--accent);
+  background: var(--primary);
   color: var(--primary-foreground);
   box-shadow: 0 1px 3px var(--accent-subtle);
 }
@@ -722,6 +722,10 @@
   background: var(--accent-hover);
   border-color: var(--accent-hover);
   box-shadow: 0 2px 12px var(--accent-glow);
+}
+
+:root[data-theme="dark"] .btn.primary:hover {
+  background: var(--primary-hover);
 }
 
 /* Keyboard shortcut badge (shadcn style) */

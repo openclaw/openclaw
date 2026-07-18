@@ -201,7 +201,11 @@ export async function writeConfigFileFromContext(
     deps.homedir(),
   ) as OpenClawConfig;
   const outputConfig = applyUnsetPathsForWrite(tildeRestoredOutputConfig, unsetPaths);
-  const stampedOutputConfig = stampConfigVersion(outputConfig, options.lastTouchedVersionOverride);
+  const stampedOutputConfig = stampConfigVersion(
+    outputConfig,
+    options.lastTouchedVersionOverride,
+    snapshot.exists ? snapshot.parsed : null,
+  );
   const json = JSON.stringify(stampedOutputConfig, null, 2).trimEnd().concat("\n");
   const nextHash = hashConfigRaw(json);
   const previousHash = resolveConfigSnapshotHash(snapshot);

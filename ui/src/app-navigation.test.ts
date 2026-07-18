@@ -106,6 +106,7 @@ describe("navigationIconForRoute", () => {
       automation: "terminal",
       mcp: "wrench",
       infrastructure: "globe",
+      labs: "spark",
       about: "fileText",
       "ai-agents": "brain",
       "model-setup": "spark",
@@ -164,6 +165,7 @@ describe("titleForRoute", () => {
       automation: "Automation",
       mcp: "MCP",
       infrastructure: "Infrastructure",
+      labs: "Labs",
       about: "About",
       "ai-agents": "Agent Defaults",
       "model-setup": "Model Setup",
@@ -208,6 +210,7 @@ describe("subtitleForRoute", () => {
       automation: "Commands, hooks, cron, and plugins.",
       mcp: "MCP servers, auth, tools, and diagnostics.",
       infrastructure: "Gateway, web, browser, and media settings.",
+      labs: "Experimental agent and tool capabilities.",
       about: "Control UI and connected Gateway build identity.",
       "ai-agents": "Global agent defaults: models, skills, tools, memory, session.",
       "model-setup": "Connect a verified AI model",
@@ -232,6 +235,7 @@ describe("pathForRoute", () => {
     expect(pathForRoute("logs")).toBe("/logs");
     expect(pathForRoute("plugins")).toBe("/settings/plugins");
     expect(pathForRoute("approvals")).toBe("/settings/approvals");
+    expect(pathForRoute("labs")).toBe("/settings/labs");
   });
 
   it("prepends base path", () => {
@@ -269,6 +273,8 @@ describe("routeIdFromPath", () => {
     expect(routeIdFromPath("/settings/plugins")).toBe("plugins");
     expect(routeIdFromPath("/plugins")).toBeNull();
     expect(routeIdFromPath("/settings/about")).toBe("about");
+    expect(routeIdFromPath("/settings/labs")).toBe("labs");
+    expect(routeIdFromPath("/labs")).toBeNull();
     expect(routeIdFromPath("/about")).toBeNull();
   });
 
@@ -395,6 +401,7 @@ describe("SIDEBAR_NAV_ROUTES", () => {
       "nodes",
       "agents",
       "ai-agents",
+      "labs",
       "model-providers",
       "mcp",
       "automation",

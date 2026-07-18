@@ -1318,14 +1318,16 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
         .toEqual(["Pinned only"]);
       await expect.poll(() => chatsGroup.locator(".sidebar-recent-session").count()).toBe(0);
       await expect.poll(() => page.locator(".sidebar-recent-session--active").count()).toBe(1);
-      await pinnedEntry.locator(".sidebar-recent-session").dragTo(chatsGroup);
+      // The empty Threads section only materializes once the drag is in
+      // flight, so target the whole sessions surface (its drop handler unpins).
+      await pinnedEntry
+        .locator(".sidebar-recent-session")
+        .dragTo(page.locator(".sidebar-sessions"));
       const unpinPatch = await waitForPatch(
         gateway,
-        (params) =>
-          params.key === "agent:main:pinned" && params.category === null && params.pinned === false,
+        (params) => params.key === "agent:main:pinned" && params.pinned === false,
       );
       expect(requireRecord(unpinPatch.params)).toMatchObject({
-        category: null,
         key: "agent:main:pinned",
         pinned: false,
       });
@@ -1484,7 +1486,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
 
       // Names and subtitles never show raw node ids or raw agent keys.
       const names = await trimmedTextContents(page.locator(".sidebar-recent-session__name"));
-      expect(names).toContain("New session");
+      expect(names).toContain("New thread");
       expect(names).toContain("clawdbot ⎇ wt-1 · …0357");
       expect(names).toContain("node-mcp-debug-…8b2e");
       const subtitles = await trimmedTextContents(

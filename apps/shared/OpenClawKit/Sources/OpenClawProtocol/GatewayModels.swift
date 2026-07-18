@@ -26,6 +26,7 @@ public enum ErrorCode: String, Codable, Sendable {
     case notPaired = "NOT_PAIRED"
     case agentTimeout = "AGENT_TIMEOUT"
     case invalidRequest = "INVALID_REQUEST"
+    case forbidden = "FORBIDDEN"
     case approvalNotFound = "APPROVAL_NOT_FOUND"
     case unavailable = "UNAVAILABLE"
 }
@@ -570,6 +571,28 @@ public struct ErrorShape: Codable, Sendable {
         case details
         case retryable
         case retryafterms = "retryAfterMs"
+    }
+}
+
+public struct GatewayErrorDetails: Codable, Sendable {
+    public let code: String
+    public let missingscope: String
+    public let requiredscopes: [String]
+
+    public init(
+        code: String,
+        missingscope: String,
+        requiredscopes: [String])
+    {
+        self.code = code
+        self.missingscope = missingscope
+        self.requiredscopes = requiredscopes
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case code
+        case missingscope = "missingScope"
+        case requiredscopes = "requiredScopes"
     }
 }
 
