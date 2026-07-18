@@ -687,11 +687,11 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
             lifecycle.onAdoptionFinalizing();
           }
         },
-        onAbandoned: () => {
+        onAbandoned: async () => {
           handedOff = true;
-          for (const lifecycle of lifecycles) {
-            lifecycle.onAbandoned();
-          }
+          await Promise.all(
+            lifecycles.map((lifecycle) => Promise.resolve(lifecycle.onAbandoned())),
+          );
         },
       },
       // Terminal no-dispatch (gated, whitespace-only, deliberate skip) must
@@ -800,14 +800,16 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       }
       // Keep the current keyed debounce task reserved through backoff so a
       // newer same-conversation flush cannot overtake this failed batch.
-      const retryTask = retrySignalInboundFlush(entries, err).catch((terminalError: unknown) => {
-        // Exhausted retries: release the drain claims so queue retry policy
-        // owns redelivery instead of the stall watchdog dead-lettering them.
-        for (const entry of entries) {
-          entry.turnAdoptionLifecycle?.onAbandoned();
-        }
-        throw terminalError;
-      });
+      const retryTask = retrySignalInboundFlush(entries, err).catch(
+        async (terminalError: unknown) => {
+          // Exhausted retries: release the drain claims so queue retry policy
+          // owns redelivery instead of the stall watchdog dead-lettering them.
+          await Promise.all(
+            entries.map((entry) => Promise.resolve(entry.turnAdoptionLifecycle?.onAbandoned())),
+          );
+          throw terminalError;
+        },
+      );
       deps.runTrackedTask?.(() => retryTask.catch(() => undefined));
       await retryTask;
     }
