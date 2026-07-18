@@ -6,6 +6,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer, type RawData } from "ws";
 import { CodexAppServerClient } from "./client.js";
+import { createWebSocketTransport } from "./transport-websocket.js";
 
 describe("Codex app-server websocket transport", () => {
   const clients: CodexAppServerClient[] = [];
@@ -73,6 +74,43 @@ describe("Codex app-server websocket transport", () => {
     await expect(client.initialize()).resolves.toBeUndefined();
     await expect(client.request("model/list", {})).resolves.toEqual({ data: [] });
     expect(authHeaders).toEqual(["Bearer secret"]);
+  });
+
+  it("preserves UTF-8 JSON-RPC bytes split across writable chunks", async () => {
+    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+    servers.push(server);
+    let resolveConnection: (() => void) | undefined;
+    const connected = new Promise<void>((resolve) => {
+      resolveConnection = resolve;
+    });
+    let resolveMessage: ((message: string) => void) | undefined;
+    const message = new Promise<string>((resolve) => {
+      resolveMessage = resolve;
+    });
+    server.once("connection", (socket) => {
+      socket.once("message", (data) => resolveMessage?.(data.toString()));
+      resolveConnection?.();
+    });
+    await new Promise<void>((resolve) => server.once("listening", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected websocket test server port");
+    }
+    const transport = createWebSocketTransport({
+      transport: "websocket",
+      command: "codex",
+      args: [],
+      url: `ws://127.0.0.1:${address.port}`,
+      headers: {},
+    });
+    await connected;
+    const frame = Buffer.from('{"jsonrpc":"2.0","method":"😀"}\n');
+    const emojiStart = frame.indexOf(Buffer.from("😀"));
+    transport.stdin.write(frame.subarray(0, emojiStart + 2));
+    transport.stdin.write(frame.subarray(emojiStart + 2));
+    await expect(message).resolves.toBe('{"jsonrpc":"2.0","method":"😀"}');
+    transport.kill?.();
+    transport.stdin.destroy?.();
   });
 
   it("can speak JSON-RPC over the canonical unix control socket", async () => {
