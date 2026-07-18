@@ -619,4 +619,77 @@ describe("transformTransportMessages synthetic tool-result policy", () => {
     );
     expect(bedrockCanonical.map((msg) => msg.role)).toEqual(["assistant", "toolResult", "user"]);
   });
+
+  it("pairs results with repeated provider tool-call ids in order", () => {
+    let counter = 0;
+    const messages: Context["messages"] = [
+      assistantToolCall("call_1"),
+      assistantToolCall("call_1"),
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: "first output",
+        timestamp: Date.now(),
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: "second output",
+        timestamp: Date.now(),
+      },
+    ] as Context["messages"];
+
+    const result = transformTransportMessages(
+      messages,
+      makeModel("anthropic-messages", "anthropic", "claude-opus-4-6"),
+      (id) => `n${++counter}_${id}`,
+    );
+
+    expect(result.map((msg) => msg.role)).toEqual([
+      "assistant",
+      "toolResult",
+      "assistant",
+      "toolResult",
+    ]);
+    expect(toolResultSummaries([result[1], result[3]] as Context["messages"])).toEqual([
+      { role: "toolResult", toolCallId: "n1_call_1", content: "first output" },
+      { role: "toolResult", toolCallId: "n2_call_1", content: "second output" },
+    ]);
+  });
+
+  it("keeps pairing a displaced result with the call it follows", () => {
+    let counter = 0;
+    const messages: Context["messages"] = [
+      assistantToolCall("call_1"),
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: "first output",
+        timestamp: Date.now(),
+      },
+      { role: "user", content: "continue", timestamp: Date.now() },
+      assistantToolCall("call_1"),
+      { role: "user", content: "again", timestamp: Date.now() },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: "displaced output",
+        timestamp: Date.now(),
+      },
+    ] as Context["messages"];
+
+    const result = transformTransportMessages(
+      messages,
+      makeModel("anthropic-messages", "anthropic", "claude-opus-4-6"),
+      (id) => `n${++counter}_${id}`,
+    );
+
+    const displaced = requireToolResultMessage(result[4]);
+    expect(displaced.toolCallId).toBe("n2_call_1");
+    expect(displaced.content).toBe("displaced output");
+  });
 });

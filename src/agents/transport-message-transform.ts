@@ -75,13 +75,24 @@ export function transformTransportMessages(
   const syntheticToolResultText = CODEX_STYLE_ABORTED_OUTPUT_APIS.has(model.api)
     ? "aborted"
     : "No result provided";
-  const toolCallIdMap = new Map<string, string>();
+  // A provider id can repeat across turns, so each rewrite is queued and consumed in
+  // order. Keying by id alone would bind every result to the most recent call and leave
+  // the earlier one to be filled with a synthesized result.
+  const toolCallIdRewrites = new Map<string, string[]>();
+  const lastToolCallIdRewrite = new Map<string, string>();
   const transformed = messages.map((msg) => {
     if (msg.role === "user") {
       return msg;
     }
     if (msg.role === "toolResult") {
-      const normalizedId = toolCallIdMap.get(msg.toolCallId);
+      // Consume one rewrite per result so repeated ids pair in order, falling back to the
+      // most recent rewrite when a call carries more results than it has occurrences.
+      const normalizedId =
+        toolCallIdRewrites.get(msg.toolCallId)?.shift() ??
+        lastToolCallIdRewrite.get(msg.toolCallId);
+      if (normalizedId !== undefined) {
+        lastToolCallIdRewrite.set(msg.toolCallId, normalizedId);
+      }
       return normalizedId && normalizedId !== msg.toolCallId
         ? { ...msg, toolCallId: normalizedId }
         : msg;
@@ -156,7 +167,12 @@ export function transformTransportMessages(
       ) {
         const normalizedId = normalizeToolCallId(block.id, model, msg);
         if (normalizedId !== block.id) {
-          toolCallIdMap.set(block.id, normalizedId);
+          const pending = toolCallIdRewrites.get(block.id);
+          if (pending) {
+            pending.push(normalizedId);
+          } else {
+            toolCallIdRewrites.set(block.id, [normalizedId]);
+          }
           normalizedToolCall = { ...normalizedToolCall, id: normalizedId };
         }
       }
