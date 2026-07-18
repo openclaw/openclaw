@@ -26,6 +26,7 @@ use tokio_tungstenite::{
 use uuid::Uuid;
 
 const GATEWAY_STATE_EVENT: &str = "quickchat:gateway-state";
+const CHAT_EVENT: &str = "quickchat:chat-event";
 const GATEWAY_DEVICE_IDENTITY_FILE: &str = "quickchat-gateway-device.json";
 const AGENTS_CACHE_TTL: Duration = Duration::from_secs(60);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -35,6 +36,8 @@ const COMMAND_TIMEOUT: Duration = Duration::from_secs(35);
 const DRIVER_TICK: Duration = Duration::from_secs(1);
 const MAX_RECONNECT_DELAY: Duration = Duration::from_secs(30);
 const PAIRING_REQUIRED_DETAIL_CODE: &str = "PAIRING_REQUIRED";
+const AUTH_TOKEN_MISSING_DETAIL_CODE: &str = "AUTH_TOKEN_MISSING";
+const AUTH_PASSWORD_MISSING_DETAIL_CODE: &str = "AUTH_PASSWORD_MISSING";
 const AUTH_DEVICE_TOKEN_MISMATCH_DETAIL_CODE: &str = "AUTH_DEVICE_TOKEN_MISMATCH";
 const TLS_PIN_MISMATCH_ERROR: &str = "Gateway TLS certificate fingerprint mismatch";
 
@@ -212,6 +215,7 @@ struct ChatSendParams {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ChatSendAck {
+    run_id: String,
     status: String,
     #[serde(default)]
     error: Option<Value>,
@@ -219,10 +223,19 @@ struct ChatSendAck {
     message: Option<String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct ChatRoutingTarget {
-    session_key: String,
-    agent_id: Option<String>,
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ChatRoutingTarget {
+    pub(crate) session_key: String,
+    pub(crate) agent_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ChatSendResult {
+    #[serde(flatten)]
+    pub(crate) target: ChatRoutingTarget,
+    pub(crate) run_id: String,
 }
 
 enum GatewayRequest {
@@ -243,63 +256,13 @@ enum DriverCommand {
     Reconfigure,
 }
 
-struct RequestFailure {
-    message: String,
-    disconnect: bool,
-    detail_code: Option<String>,
-    pairing_required: bool,
-    tls_failure: bool,
-}
-
-impl RequestFailure {
-    fn transport(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-            disconnect: true,
-            detail_code: None,
-            pairing_required: false,
-            tls_failure: false,
-        }
-    }
-
-    fn tls(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-            disconnect: true,
-            detail_code: None,
-            pairing_required: false,
-            tls_failure: true,
-        }
-    }
-
-    fn method_with_detail(message: impl Into<String>, detail_code: Option<String>) -> Self {
-        Self {
-            message: message.into(),
-            disconnect: false,
-            detail_code,
-            pairing_required: false,
-            tls_failure: false,
-        }
-    }
-
-    fn classify_connect(mut self, auth: &GatewayAuth) -> Self {
-        let pairing_required = self.detail_code.as_deref() == Some(PAIRING_REQUIRED_DETAIL_CODE);
-        let missing_bootstrap_auth = auth.is_none()
-            && self
-                .detail_code
-                .as_deref()
-                .is_some_and(|code| code.starts_with("AUTH_"));
-        self.pairing_required = pairing_required || missing_bootstrap_auth;
-        self
-    }
-}
-
-#[derive(Clone, Copy, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum GatewayConnectionState {
     Down = 0,
     Up = 1,
     PairingRequired = 2,
-    TlsFailure = 3,
+    CredentialRequired = 3,
+    TlsFailure = 4,
 }
 
 impl GatewayConnectionState {
@@ -307,7 +270,8 @@ impl GatewayConnectionState {
         match value {
             1 => Self::Up,
             2 => Self::PairingRequired,
-            3 => Self::TlsFailure,
+            3 => Self::CredentialRequired,
+            4 => Self::TlsFailure,
             _ => Self::Down,
         }
     }
@@ -317,8 +281,79 @@ impl GatewayConnectionState {
             Self::Down => "down",
             Self::Up => "up",
             Self::PairingRequired => "pairing-required",
+            Self::CredentialRequired => "credential-required",
             Self::TlsFailure => "tls-failure",
         }
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct ConnectErrorDetails {
+    code: Option<String>,
+    device_id: Option<String>,
+    remediation_hint: Option<String>,
+    retryable: Option<bool>,
+    pause_reconnect: Option<bool>,
+}
+
+impl ConnectErrorDetails {
+    fn from_value(value: Option<&Value>) -> Self {
+        let Some(value) = value else {
+            return Self::default();
+        };
+        Self {
+            code: connect_detail_text(value.get("code"), 80),
+            device_id: connect_detail_text(value.get("deviceId"), 128),
+            remediation_hint: connect_detail_text(value.get("remediationHint"), 240),
+            retryable: value.get("retryable").and_then(Value::as_bool),
+            pause_reconnect: value.get("pauseReconnect").and_then(Value::as_bool),
+        }
+    }
+}
+
+struct RequestFailure {
+    message: String,
+    disconnect: bool,
+    connect_details: ConnectErrorDetails,
+    connect_state: Option<GatewayConnectionState>,
+    tls_failure: bool,
+}
+
+impl RequestFailure {
+    fn transport(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            disconnect: true,
+            connect_details: ConnectErrorDetails::default(),
+            connect_state: None,
+            tls_failure: false,
+        }
+    }
+
+    fn tls(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            disconnect: true,
+            connect_details: ConnectErrorDetails::default(),
+            connect_state: None,
+            tls_failure: true,
+        }
+    }
+
+    fn method_with_details(message: impl Into<String>, details: Option<&Value>) -> Self {
+        Self {
+            message: message.into(),
+            disconnect: false,
+            connect_details: ConnectErrorDetails::from_value(details),
+            connect_state: None,
+            tls_failure: false,
+        }
+    }
+
+    fn classify_connect(mut self, auth: &GatewayAuth) -> Self {
+        self.connect_state =
+            classify_connect_failure(self.connect_details.code.as_deref(), !auth.is_none());
+        self
     }
 }
 
@@ -328,7 +363,9 @@ struct GatewayClientInner {
     commands: Mutex<Option<mpsc::Sender<DriverCommand>>>,
     agents_cache: Mutex<Option<CachedAgents>>,
     identity: Mutex<Option<GatewayDeviceIdentityStore>>,
+    connection_notice: Mutex<Option<String>>,
     connection_state: AtomicU64,
+    reconnect_paused: AtomicBool,
     running: AtomicBool,
 }
 
@@ -346,7 +383,9 @@ impl GatewayClient {
                 commands: Mutex::new(None),
                 agents_cache: Mutex::new(None),
                 identity: Mutex::new(None),
+                connection_notice: Mutex::new(None),
                 connection_state: AtomicU64::new(GatewayConnectionState::Down as u64),
+                reconnect_paused: AtomicBool::new(false),
                 running: AtomicBool::new(false),
             }),
         }
@@ -364,7 +403,8 @@ impl GatewayClient {
             .lock()
             .expect("gateway agents cache mutex poisoned") = None;
         self.inner.config_generation.fetch_add(1, Ordering::SeqCst);
-        self.set_connection_state(app, GatewayConnectionState::Down);
+        self.inner.reconnect_paused.store(false, Ordering::SeqCst);
+        self.set_connection_state(app, GatewayConnectionState::Down, None);
         if let Some(commands) = self
             .inner
             .commands
@@ -388,7 +428,8 @@ impl GatewayClient {
             .lock()
             .expect("gateway agents cache mutex poisoned") = None;
         self.inner.config_generation.fetch_add(1, Ordering::SeqCst);
-        self.set_connection_state(app, GatewayConnectionState::Down);
+        self.inner.reconnect_paused.store(false, Ordering::SeqCst);
+        self.set_connection_state(app, GatewayConnectionState::Down, None);
         if let Some(commands) = self
             .inner
             .commands
@@ -417,10 +458,16 @@ impl GatewayClient {
     }
 
     pub fn emit_current_state(&self, window: &WebviewWindow) -> Result<(), String> {
+        let notice = self
+            .inner
+            .connection_notice
+            .lock()
+            .map_err(|_| "Gateway connection notice is unavailable.".to_string())?
+            .clone();
         window
             .emit(
                 GATEWAY_STATE_EVENT,
-                GatewayStateEvent::new(self.connection_state()),
+                GatewayStateEvent::new(self.connection_state(), notice),
             )
             .map_err(|error| format!("Could not report Gateway connectivity: {error}"))
     }
@@ -456,12 +503,12 @@ impl GatewayClient {
         scope: &str,
         main_key: &str,
         idempotency_key: &str,
-    ) -> Result<(), String> {
+    ) -> Result<ChatSendResult, String> {
         let target = routing_target(scope, selected_agent_id, main_key);
         let response = self
             .request(GatewayRequest::ChatSend(ChatSendParams {
-                session_key: target.session_key,
-                agent_id: target.agent_id,
+                session_key: target.session_key.clone(),
+                agent_id: target.agent_id.clone(),
                 message,
                 idempotency_key: idempotency_key.to_string(),
             }))
@@ -469,7 +516,26 @@ impl GatewayClient {
         let GatewayResponse::ChatSend(ack) = response else {
             return Err("Gateway returned the wrong response for chat.send.".to_string());
         };
-        classify_chat_ack(&ack)
+        classify_chat_ack(&ack)?;
+        Ok(ChatSendResult {
+            target,
+            run_id: ack.run_id,
+        })
+    }
+
+    pub fn resume_reconnect(&self) {
+        if !self.inner.reconnect_paused.load(Ordering::SeqCst) {
+            return;
+        }
+        if let Some(commands) = self
+            .inner
+            .commands
+            .lock()
+            .expect("gateway command mutex poisoned")
+            .as_ref()
+        {
+            let _ = commands.try_send(DriverCommand::Reconfigure);
+        }
     }
 
     async fn request(&self, request: GatewayRequest) -> Result<GatewayResponse, String> {
@@ -498,7 +564,8 @@ impl GatewayClient {
         let mut reconnect_attempt = 0_u32;
         loop {
             if app.get_webview_window(QUICKCHAT_LABEL).is_none() {
-                self.set_connection_state(&app, GatewayConnectionState::Down);
+                self.inner.reconnect_paused.store(false, Ordering::SeqCst);
+                self.set_connection_state(&app, GatewayConnectionState::Down, None);
                 tokio::time::sleep(DRIVER_TICK).await;
                 reconnect_attempt = 0;
                 continue;
@@ -510,7 +577,8 @@ impl GatewayClient {
                 .expect("gateway config mutex poisoned")
                 .clone();
             let Some(config) = config else {
-                self.set_connection_state(&app, GatewayConnectionState::Down);
+                self.inner.reconnect_paused.store(false, Ordering::SeqCst);
+                self.set_connection_state(&app, GatewayConnectionState::Down, None);
                 tokio::time::sleep(DRIVER_TICK).await;
                 continue;
             };
@@ -522,12 +590,45 @@ impl GatewayClient {
                 .connect_and_serve(&app, &config, generation, &mut receiver)
                 .await;
             let reached_hello = self.is_connected();
-            let disconnected_state = match connection_result.as_ref() {
-                Err(failure) if failure.pairing_required => GatewayConnectionState::PairingRequired,
-                Err(failure) if failure.tls_failure => GatewayConnectionState::TlsFailure,
-                _ => GatewayConnectionState::Down,
-            };
-            self.set_connection_state(&app, disconnected_state);
+            let failure = connection_result.as_ref().err();
+            let disconnected_state = failure
+                .and_then(|failure| failure.connect_state)
+                .or_else(|| {
+                    failure
+                        .is_some_and(|failure| failure.tls_failure)
+                        .then_some(GatewayConnectionState::TlsFailure)
+                })
+                .unwrap_or(GatewayConnectionState::Down);
+            let pause_reconnect = failure
+                .map(|failure| should_pause_reconnect(&failure.connect_details))
+                .unwrap_or(false);
+            let notice = failure.and_then(|failure| {
+                connection_notice(
+                    disconnected_state,
+                    &failure.connect_details,
+                    pause_reconnect,
+                )
+            });
+            self.inner
+                .reconnect_paused
+                .store(pause_reconnect, Ordering::SeqCst);
+            self.set_connection_state(&app, disconnected_state, notice);
+            if pause_reconnect {
+                // Server retry policy is authoritative: explicit pauseReconnect or retryable=false
+                // waits for a fresh user summon instead of burning the capped backoff loop.
+                loop {
+                    let Some(command) = receiver.recv().await else {
+                        return;
+                    };
+                    match command {
+                        DriverCommand::Reconfigure => break,
+                        command => reject_disconnected_command(command),
+                    }
+                }
+                self.inner.reconnect_paused.store(false, Ordering::SeqCst);
+                reconnect_attempt = 0;
+                continue;
+            }
             reconnect_attempt = if reached_hello {
                 1
             } else {
@@ -566,7 +667,7 @@ impl GatewayClient {
         let signed_at_ms = unix_time_ms().map_err(RequestFailure::transport)?;
         let params = connect_params(&identity, &auth, &nonce, signed_at_ms)
             .map_err(RequestFailure::transport)?;
-        let hello = match request_on_socket(&mut socket, "connect", params).await {
+        let hello = match request_on_socket(app, &mut socket, "connect", params).await {
             Ok(hello) => hello,
             Err(failure) => {
                 let failure = failure.classify_connect(&auth);
@@ -582,12 +683,12 @@ impl GatewayClient {
             self.persist_device_token(&config.ws_url, device_token)?;
         }
 
-        let agents = request_agents_list(&mut socket).await?;
+        let agents = request_agents_list(app, &mut socket).await?;
         if self.inner.config_generation.load(Ordering::SeqCst) != generation {
             return Ok(());
         }
         self.cache_agents(agents);
-        self.set_connection_state(app, GatewayConnectionState::Up);
+        self.set_connection_state(app, GatewayConnectionState::Up, None);
         let mut last_gateway_activity = Instant::now();
 
         loop {
@@ -604,7 +705,7 @@ impl GatewayClient {
                     match command {
                         DriverCommand::Reconfigure => return Ok(()),
                         DriverCommand::Request { request, reply } => {
-                            let result = perform_request(&mut socket, request).await;
+                            let result = perform_request(app, &mut socket, request).await;
                             last_gateway_activity = Instant::now();
                             match result {
                                 Ok(response) => {
@@ -623,7 +724,7 @@ impl GatewayClient {
                     }
                 }
                 incoming = socket.next() => {
-                    handle_idle_message(&mut socket, incoming).await?;
+                    handle_idle_message(app, &mut socket, incoming).await?;
                     last_gateway_activity = Instant::now();
                 }
                 _ = tokio::time::sleep(DRIVER_TICK) => {
@@ -719,7 +820,12 @@ impl GatewayClient {
         GatewayConnectionState::from_u64(self.inner.connection_state.load(Ordering::SeqCst))
     }
 
-    fn set_connection_state(&self, app: &AppHandle, state: GatewayConnectionState) {
+    fn set_connection_state(
+        &self,
+        app: &AppHandle,
+        state: GatewayConnectionState,
+        notice: Option<String>,
+    ) {
         if state != GatewayConnectionState::Up {
             *self
                 .inner
@@ -727,18 +833,31 @@ impl GatewayClient {
                 .lock()
                 .expect("gateway agents cache mutex poisoned") = None;
         }
-        if self
+        let notice_changed = {
+            let mut current = self
+                .inner
+                .connection_notice
+                .lock()
+                .expect("gateway connection notice mutex poisoned");
+            if *current == notice {
+                false
+            } else {
+                *current = notice.clone();
+                true
+            }
+        };
+        let state_changed = self
             .inner
             .connection_state
             .swap(state as u64, Ordering::SeqCst)
-            == state as u64
-        {
+            != state as u64;
+        if !state_changed && !notice_changed {
             return;
         }
         let _ = app.emit_to(
             QUICKCHAT_LABEL,
             GATEWAY_STATE_EVENT,
-            GatewayStateEvent::new(state),
+            GatewayStateEvent::new(state, notice),
         );
     }
 }
@@ -746,12 +865,15 @@ impl GatewayClient {
 #[derive(Clone, Serialize)]
 struct GatewayStateEvent {
     state: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    notice: Option<String>,
 }
 
 impl GatewayStateEvent {
-    fn new(state: GatewayConnectionState) -> Self {
+    fn new(state: GatewayConnectionState, notice: Option<String>) -> Self {
         Self {
             state: state.event_name(),
+            notice,
         }
     }
 }
@@ -777,6 +899,75 @@ fn routing_target(scope: &str, selected_agent_id: &str, main_key: &str) -> ChatR
     }
 }
 
+fn connect_detail_text(value: Option<&Value>, max_chars: usize) -> Option<String> {
+    let normalized = value
+        .and_then(Value::as_str)?
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if normalized.is_empty() {
+        return None;
+    }
+    Some(normalized.chars().take(max_chars).collect())
+}
+
+fn classify_connect_failure(
+    detail_code: Option<&str>,
+    has_local_credential: bool,
+) -> Option<GatewayConnectionState> {
+    if detail_code == Some(PAIRING_REQUIRED_DETAIL_CODE) {
+        return Some(GatewayConnectionState::PairingRequired);
+    }
+    let credential_required = !has_local_credential
+        && detail_code.is_some_and(|code| {
+            code == AUTH_TOKEN_MISSING_DETAIL_CODE
+                || code == AUTH_PASSWORD_MISSING_DETAIL_CODE
+                || (code.starts_with("AUTH_") && code.ends_with("_MISMATCH"))
+        });
+    credential_required.then_some(GatewayConnectionState::CredentialRequired)
+}
+
+fn should_pause_reconnect(details: &ConnectErrorDetails) -> bool {
+    details.pause_reconnect == Some(true) || details.retryable == Some(false)
+}
+
+fn short_device_id(device_id: &str) -> Option<String> {
+    let short = device_id
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .take(8)
+        .collect::<String>();
+    (!short.is_empty()).then_some(short)
+}
+
+fn connection_notice(
+    state: GatewayConnectionState,
+    details: &ConnectErrorDetails,
+    reconnect_paused: bool,
+) -> Option<String> {
+    let fallback = match state {
+        GatewayConnectionState::PairingRequired => "Approve this device in the dashboard (Nodes)",
+        GatewayConnectionState::CredentialRequired => {
+            "Gateway requires a credential — open the dashboard on the gateway host"
+        }
+        _ if reconnect_paused => "Gateway connection paused — reopen Quick Chat to retry",
+        _ => return None,
+    };
+    // The Gateway owns recovery semantics and can give more precise operator guidance than this
+    // client. Keep only its bounded plain-text hint, then add the safe pairing identifier.
+    let mut notice = details
+        .remediation_hint
+        .clone()
+        .unwrap_or_else(|| fallback.to_string());
+    if state == GatewayConnectionState::PairingRequired {
+        if let Some(device_id) = details.device_id.as_deref().and_then(short_device_id) {
+            notice.push_str(" · Device ");
+            notice.push_str(&device_id);
+        }
+    }
+    Some(notice)
+}
+
 fn reconnect_backoff(attempt: u32) -> Duration {
     let shift = attempt.saturating_sub(1).min(5);
     Duration::from_secs((1_u64 << shift).min(MAX_RECONNECT_DELAY.as_secs()))
@@ -784,7 +975,7 @@ fn reconnect_backoff(attempt: u32) -> Duration {
 
 fn should_clear_stored_device_token(failure: &RequestFailure, auth: &GatewayAuth) -> bool {
     matches!(auth, GatewayAuth::DeviceToken(_))
-        && failure.detail_code.as_deref() == Some(AUTH_DEVICE_TOKEN_MISMATCH_DETAIL_CODE)
+        && failure.connect_details.code.as_deref() == Some(AUTH_DEVICE_TOKEN_MISMATCH_DETAIL_CODE)
 }
 
 fn connect_params(
@@ -849,6 +1040,7 @@ async fn wait_for_connect_challenge(socket: &mut GatewaySocket) -> Result<String
 }
 
 async fn request_on_socket(
+    app: &AppHandle,
     socket: &mut GatewaySocket,
     method: &str,
     params: Value,
@@ -865,10 +1057,10 @@ async fn request_on_socket(
     tokio::time::timeout(REQUEST_TIMEOUT, async {
         loop {
             let value = next_json(socket).await?;
+            dispatch_chat_event(app, &value);
             if value.get("type").and_then(Value::as_str) != Some("res")
                 || value.get("id").and_then(Value::as_str) != Some(id.as_str())
             {
-                // Streamed chat events are a deliberate follow-up; this client only consumes RPC acks.
                 continue;
             }
             if value.get("ok").and_then(Value::as_bool) == Some(true) {
@@ -879,13 +1071,11 @@ async fn request_on_socket(
                 .and_then(|error| error.get("message"))
                 .and_then(Value::as_str)
                 .unwrap_or("Gateway request failed.");
-            let detail_code = value
+            let details = value
                 .get("error")
                 .and_then(|error| error.get("details"))
-                .and_then(|details| details.get("code"))
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned);
-            return Err(RequestFailure::method_with_detail(message, detail_code));
+                .filter(|details| details.is_object());
+            return Err(RequestFailure::method_with_details(message, details));
         }
     })
     .await
@@ -893,18 +1083,19 @@ async fn request_on_socket(
 }
 
 async fn perform_request(
+    app: &AppHandle,
     socket: &mut GatewaySocket,
     request: GatewayRequest,
 ) -> Result<GatewayResponse, RequestFailure> {
     match request {
-        GatewayRequest::AgentsList => request_agents_list(socket)
+        GatewayRequest::AgentsList => request_agents_list(app, socket)
             .await
             .map(GatewayResponse::AgentsList),
         GatewayRequest::ChatSend(params) => {
             let params = serde_json::to_value(params).map_err(|error| {
                 RequestFailure::transport(format!("Could not encode chat.send: {error}"))
             })?;
-            let payload = request_on_socket(socket, "chat.send", params).await?;
+            let payload = request_on_socket(app, socket, "chat.send", params).await?;
             serde_json::from_value(payload)
                 .map(GatewayResponse::ChatSend)
                 .map_err(|error| {
@@ -915,9 +1106,10 @@ async fn perform_request(
 }
 
 async fn request_agents_list(
+    app: &AppHandle,
     socket: &mut GatewaySocket,
 ) -> Result<AgentsListResult, RequestFailure> {
-    let payload = request_on_socket(socket, "agents.list", json!({})).await?;
+    let payload = request_on_socket(app, socket, "agents.list", json!({})).await?;
     serde_json::from_value(payload).map_err(|error| {
         RequestFailure::transport(format!("Invalid agents.list response: {error}"))
     })
@@ -1089,6 +1281,7 @@ async fn next_json(socket: &mut GatewaySocket) -> Result<Value, RequestFailure> 
 }
 
 async fn handle_idle_message(
+    app: &AppHandle,
     socket: &mut GatewaySocket,
     incoming: Option<Result<Message, tokio_tungstenite::tungstenite::Error>>,
 ) -> Result<(), RequestFailure> {
@@ -1098,11 +1291,29 @@ async fn handle_idle_message(
             RequestFailure::transport(format!("Gateway connection failed: {error}"))
         })?;
     match message {
+        Message::Text(text) => {
+            if let Ok(value) = serde_json::from_str::<Value>(text.as_ref()) {
+                dispatch_chat_event(app, &value);
+            }
+            Ok(())
+        }
         Message::Ping(payload) => socket.send(Message::Pong(payload)).await.map_err(|error| {
             RequestFailure::transport(format!("Could not answer Gateway ping: {error}"))
         }),
         Message::Close(_) => Err(RequestFailure::transport("Gateway connection closed.")),
         _ => Ok(()),
+    }
+}
+
+fn dispatch_chat_event(app: &AppHandle, frame: &Value) {
+    if frame.get("type").and_then(Value::as_str) != Some("event")
+        || frame.get("event").and_then(Value::as_str) != Some("chat")
+    {
+        return;
+    }
+    if let Some(payload) = frame.get("payload") {
+        // Payload stays raw so the WebView can mirror Gateway delta assembly without native drift.
+        let _ = app.emit_to(QUICKCHAT_LABEL, CHAT_EVENT, payload.clone());
     }
 }
 
@@ -1132,6 +1343,11 @@ mod tests {
                 session_key: "agent:work:main".to_string(),
                 agent_id: None,
             }
+        );
+        assert_eq!(
+            serde_json::to_value(routing_target("global", "work", "main"))
+                .expect("serialized routing target"),
+            json!({ "sessionKey": "global", "agentId": "work" })
         );
     }
 
@@ -1169,6 +1385,7 @@ mod tests {
     fn chat_ack_acceptance_is_explicit() {
         for status in ["ok", "started", "in_flight"] {
             assert!(classify_chat_ack(&ChatSendAck {
+                run_id: "run-1".to_string(),
                 status: status.to_string(),
                 error: None,
                 message: None,
@@ -1177,6 +1394,7 @@ mod tests {
         }
         for status in ["error", "timeout", "queued"] {
             assert!(classify_chat_ack(&ChatSendAck {
+                run_id: "run-1".to_string(),
                 status: status.to_string(),
                 error: Some(json!({ "message": "not accepted" })),
                 message: None,
@@ -1291,31 +1509,120 @@ mod tests {
     }
 
     #[test]
-    fn pairing_failures_map_to_the_pairing_strip_state() {
-        let pending = RequestFailure::method_with_detail(
-            "pairing required",
-            Some(PAIRING_REQUIRED_DETAIL_CODE.to_string()),
-        )
-        .classify_connect(&GatewayAuth::SharedToken("bootstrap".to_string()));
-        assert!(pending.pairing_required);
+    fn connect_classification_separates_pairing_and_missing_credentials() {
+        assert_eq!(
+            classify_connect_failure(Some(PAIRING_REQUIRED_DETAIL_CODE), true),
+            Some(GatewayConnectionState::PairingRequired)
+        );
+        assert_eq!(
+            classify_connect_failure(Some(AUTH_TOKEN_MISSING_DETAIL_CODE), false),
+            Some(GatewayConnectionState::CredentialRequired)
+        );
+        assert_eq!(
+            classify_connect_failure(Some("AUTH_TOKEN_MISMATCH"), false),
+            Some(GatewayConnectionState::CredentialRequired)
+        );
+        assert_eq!(
+            classify_connect_failure(Some("AUTH_TOKEN_MISMATCH"), true),
+            None
+        );
+        assert_eq!(
+            GatewayConnectionState::CredentialRequired.event_name(),
+            "credential-required"
+        );
 
-        let missing_bootstrap = RequestFailure::method_with_detail(
-            "token missing",
-            Some("AUTH_TOKEN_MISSING".to_string()),
-        )
-        .classify_connect(&GatewayAuth::None);
-        assert!(missing_bootstrap.pairing_required);
+        let pairing_details = json!({ "code": PAIRING_REQUIRED_DETAIL_CODE });
+        let pending =
+            RequestFailure::method_with_details("pairing required", Some(&pairing_details))
+                .classify_connect(&GatewayAuth::SharedToken("bootstrap".to_string()));
+        assert_eq!(
+            pending.connect_state,
+            Some(GatewayConnectionState::PairingRequired)
+        );
 
-        let stale_device_auth = RequestFailure::method_with_detail(
+        let missing_details = json!({ "code": AUTH_TOKEN_MISSING_DETAIL_CODE });
+        let missing_auth_failure =
+            RequestFailure::method_with_details("token missing", Some(&missing_details))
+                .classify_connect(&GatewayAuth::None);
+        assert_eq!(
+            missing_auth_failure.connect_state,
+            Some(GatewayConnectionState::CredentialRequired)
+        );
+
+        let mismatch_details = json!({ "code": "AUTH_TOKEN_MISMATCH" });
+        let mismatch_without_auth =
+            RequestFailure::method_with_details("token mismatch", Some(&mismatch_details))
+                .classify_connect(&GatewayAuth::None);
+        assert_eq!(
+            mismatch_without_auth.connect_state,
+            Some(GatewayConnectionState::CredentialRequired)
+        );
+        let mismatch_with_auth =
+            RequestFailure::method_with_details("token mismatch", Some(&mismatch_details))
+                .classify_connect(&GatewayAuth::SharedToken("configured".to_string()));
+        assert_eq!(mismatch_with_auth.connect_state, None);
+
+        let stale_device_details = json!({ "code": AUTH_DEVICE_TOKEN_MISMATCH_DETAIL_CODE });
+        let stale_device_auth = RequestFailure::method_with_details(
             "device token mismatch",
-            Some(AUTH_DEVICE_TOKEN_MISMATCH_DETAIL_CODE.to_string()),
+            Some(&stale_device_details),
         )
         .classify_connect(&GatewayAuth::DeviceToken("stale".to_string()));
-        assert!(!stale_device_auth.pairing_required);
+        assert_eq!(stale_device_auth.connect_state, None);
         assert!(should_clear_stored_device_token(
             &stale_device_auth,
             &GatewayAuth::DeviceToken("stale".to_string())
         ));
+    }
+
+    #[test]
+    fn reconnect_pause_requires_explicit_server_policy() {
+        let pause_details = json!({ "pauseReconnect": true });
+        let paused = RequestFailure::method_with_details("pause", Some(&pause_details));
+        assert!(should_pause_reconnect(&paused.connect_details));
+
+        let terminal_details = json!({ "retryable": false });
+        let terminal = RequestFailure::method_with_details("terminal", Some(&terminal_details));
+        assert!(should_pause_reconnect(&terminal.connect_details));
+
+        let retry_details = json!({ "retryable": true, "pauseReconnect": false });
+        let retry = RequestFailure::method_with_details("retry", Some(&retry_details));
+        assert!(!should_pause_reconnect(&retry.connect_details));
+        assert!(!should_pause_reconnect(
+            &RequestFailure::transport("transport").connect_details
+        ));
+    }
+
+    #[test]
+    fn connection_notices_prefer_server_guidance_and_shorten_device_ids() {
+        let details = ConnectErrorDetails::from_value(Some(&json!({
+            "remediationHint": "Use the Nodes approval queue.",
+            "deviceId": "abcdef1234567890"
+        })));
+        assert_eq!(
+            connection_notice(GatewayConnectionState::PairingRequired, &details, true).as_deref(),
+            Some("Use the Nodes approval queue. · Device abcdef12")
+        );
+        assert_eq!(
+            connection_notice(
+                GatewayConnectionState::CredentialRequired,
+                &ConnectErrorDetails::default(),
+                true,
+            )
+            .as_deref(),
+            Some("Gateway requires a credential — open the dashboard on the gateway host")
+        );
+        assert_eq!(
+            connection_notice(
+                GatewayConnectionState::Down,
+                &ConnectErrorDetails::from_value(Some(&json!({
+                    "remediationHint": "Replace the configured credential."
+                }))),
+                true,
+            )
+            .as_deref(),
+            Some("Replace the configured credential.")
+        );
     }
 
     #[test]
@@ -1342,6 +1649,18 @@ mod tests {
                     "idempotencyKey": "idempotency-1"
                 }
             })
+        );
+    }
+
+    #[test]
+    fn chat_send_result_flattens_route_and_ack_run_id() {
+        let result = ChatSendResult {
+            target: routing_target("global", "work", "main"),
+            run_id: "run-1".to_string(),
+        };
+        assert_eq!(
+            serde_json::to_value(result).expect("serialized chat send result"),
+            json!({ "sessionKey": "global", "agentId": "work", "runId": "run-1" })
         );
     }
 }
