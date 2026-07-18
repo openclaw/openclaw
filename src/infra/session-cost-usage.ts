@@ -2119,6 +2119,13 @@ export async function loadSessionLogs(params: {
     if (!Number.isFinite(params.limit) || params.limit <= 0) {
       return [];
     }
+    // Fractional positive limits must be rejected up front: the unbounded
+    // path below calls `slice(-limit)`, and `slice(-0.5)` returns the
+    // entire array in JavaScript, which would bypass the cap and surface
+    // every log line for the session. The schema contract is integer >= 1.
+    if (!Number.isInteger(params.limit)) {
+      return [];
+    }
   }
   const limit = params.limit ?? 50;
   const boundedLimit = Number.isInteger(limit);

@@ -2877,6 +2877,11 @@ example
     await expect(
       loadSessionLogs({ sessionFile, limit: Number.POSITIVE_INFINITY }),
     ).resolves.toEqual([]);
+    // Fractional positive limits must not fall through to `slice(-limit)`:
+    // `slice(-0.5)` returns the entire array in JavaScript, which would
+    // bypass the cap and surface every log line for the session.
+    await expect(loadSessionLogs({ sessionFile, limit: 0.5 })).resolves.toEqual([]);
+    await expect(loadSessionLogs({ sessionFile, limit: 1.5 })).resolves.toEqual([]);
   });
 
   it("keeps the latest logs when transcript timestamps are out of order", async () => {
