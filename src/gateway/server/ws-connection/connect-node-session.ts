@@ -86,7 +86,6 @@ export async function prepareGatewayNodeConnect(
   const nodeId = connectParams.device?.id ?? connectParams.client.id;
   const nodePairingSnapshot = await beginNodePairingConnect(nodeId);
   const pairedNode = nodePairingSnapshot.pairedNode;
-  state.nodeLastConnectedAtMs = pairedNode?.lastConnectedAtMs;
   pendingNodePairingCleanup.value = nodePairingSnapshot.cleanupClaim;
   // Re-read the device record: how device pairing was approved decides
   // whether the first capability surface may be marked silent.

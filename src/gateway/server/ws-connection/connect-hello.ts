@@ -9,8 +9,8 @@ import {
   restoreDeviceBootstrapToken,
 } from "../../../infra/device-bootstrap.js";
 import {
+  claimPairedNodeConnection,
   finalizeNodePairingCleanupClaim,
-  updatePairedNodeMetadata,
 } from "../../../infra/node-pairing.js";
 import { resolveRuntimeServiceVersion } from "../../../version.js";
 import { listControlUiPluginTabs } from "../../control-ui-plugin-tabs.js";
@@ -50,7 +50,6 @@ export async function sendGatewayHello(
     sendFrame,
     pendingNodePairingCleanup,
     releasePendingNodePairingCleanup,
-    runDetachedConnectWork,
   } = context;
   const {
     resolvedAuth,
@@ -189,29 +188,24 @@ export async function sendGatewayHello(
     const requestContext = buildRequestContext();
     const nodeId = connectParams.device?.id ?? connectParams.client.id;
     const nodeSession = requestContext.nodeRegistry.get(nodeId);
-    // Only a current session that received hello-ok counts as connected;
-    // failed or replaced handshakes must not alert or consume cooldown.
+    // Claim by the authenticated node id only. A replacement may register while
+    // persistence waits; the router transfers the pending alert by node identity.
     if (nodeSession?.connId === connId) {
-      scheduleNodeConnectionNotification(requestContext.nodeRegistry, nodeSession, {
-        previousConnectionAtMs: state.nodeLastConnectedAtMs,
-      });
-      const instanceIdRaw = connectParams.client.instanceId;
-      const instanceIdLocal = typeof instanceIdRaw === "string" ? instanceIdRaw.trim() : "";
-      const nodeIdsForPairing = new Set<string>([nodeSession.nodeId]);
-      if (instanceIdLocal) {
-        nodeIdsForPairing.add(instanceIdLocal);
-      }
-      for (const pairingNodeId of nodeIdsForPairing) {
-        runDetachedConnectWork(
-          async () => {
-            await updatePairedNodeMetadata(pairingNodeId, {
-              lastConnectedAtMs: nodeSession.connectedAtMs,
-            });
-          },
-          (err) =>
-            logGateway.warn(
-              `failed to record last connect for ${pairingNodeId}: ${formatForLog(err)}`,
-            ),
+      try {
+        const claim = await claimPairedNodeConnection(
+          nodeSession.nodeId,
+          nodeSession.connectedAtMs,
+        );
+        if (!claim.recorded) {
+          logGateway.warn(`failed to record last connect for ${nodeSession.nodeId}: not paired`);
+        } else {
+          scheduleNodeConnectionNotification(requestContext.nodeRegistry, nodeSession, {
+            isFirstConnection: claim.firstConnection,
+          });
+        }
+      } catch (err) {
+        logGateway.warn(
+          `failed to record last connect for ${nodeSession.nodeId}: ${formatForLog(err)}`,
         );
       }
     }

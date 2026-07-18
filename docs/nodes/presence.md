@@ -105,9 +105,9 @@ freshest activity.
   in pairing metadata, so a Gateway restart does not replay alerts for every
   previously connected node.
 
-Alerts are bound to exact node connections. A disconnected or replaced source
-session cannot complete an old scheduled alert, and a replacement destination
-connection can still participate in fallback delivery.
+Alerts are bound to the authenticated node identity. A replacement session for
+the same node takes over its pending first-connection alert; if that node is no
+longer connected when delivery runs, the alert is canceled.
 
 ## Troubleshooting
 
