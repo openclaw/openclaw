@@ -259,8 +259,7 @@ docked inline Settings pane for the custodian (needs shared conversation-view
 extraction); event-reactive commentary and channel summon/agent-down recovery
 (phase 6 PR2); Linux/Windows browser handoff; automatic `localModelLean` for
 weak models; whether existing users' saved sidebar pins should adopt the
-OpenClaw entry; an explicit refresh command that clears the stored
-app-recommendations acceptance.
+OpenClaw entry.
 
 ## Testing and landing playbook (hard-won; read before phases 4-6)
 
