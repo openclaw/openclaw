@@ -3,7 +3,7 @@
  */
 import { describe, expect, it } from "vitest";
 import {
-  collectGatewayProcessMemoryUsageMb,
+  collectGatewayProcessUsageMetrics,
   createGatewayRestartTraceHandoffEnv,
 } from "./restart-trace.js";
 
@@ -24,9 +24,10 @@ describe("gateway restart trace handoff", () => {
   });
 
   it("includes restart resource counts with ready memory metrics", () => {
-    const metrics = Object.fromEntries(collectGatewayProcessMemoryUsageMb());
+    const metrics = Object.fromEntries(collectGatewayProcessUsageMetrics());
 
     expect(metrics.rssMb).toEqual(expect.any(Number));
+    expect(metrics.cpuMs).toEqual(expect.any(Number));
     expect(metrics.activeTimersCount).toEqual(expect.any(Number));
     expect(metrics.processSigusr1ListenersCount).toEqual(expect.any(Number));
     expect(metrics.processSigtermListenersCount).toEqual(expect.any(Number));
@@ -36,7 +37,7 @@ describe("gateway restart trace handoff", () => {
   it("counts active timer resources", () => {
     const timer = setTimeout(() => {}, 10_000);
     try {
-      const metrics = Object.fromEntries(collectGatewayProcessMemoryUsageMb());
+      const metrics = Object.fromEntries(collectGatewayProcessUsageMetrics());
 
       expect(metrics.activeTimersCount).toBeGreaterThanOrEqual(1);
     } finally {

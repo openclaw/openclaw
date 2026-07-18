@@ -2,6 +2,7 @@
 import { spawnSync } from "node:child_process";
 import { request } from "node:http";
 import { createServer } from "node:net";
+import path from "node:path";
 import { expectDefined } from "../../packages/normalization-core/src/expect.js";
 
 export async function getFreePort(): Promise<number> {
@@ -57,8 +58,11 @@ function classifyProbeErrorKind(error: unknown): string {
 }
 
 export function readProcessRssMb(pid: number | undefined): number | null {
-  if (!pid || process.platform === "win32") {
+  if (!pid || !Number.isInteger(pid) || pid <= 0) {
     return null;
+  }
+  if (process.platform === "win32") {
+    return readWin32ProcessWorkingSetMb(pid);
   }
   const result = spawnSync("ps", ["-o", "rss=", "-p", String(pid)], {
     encoding: "utf8",
@@ -171,4 +175,48 @@ function parsePsCpuTimeMs(raw: string): number | null {
     );
   }
   return null;
+}
+
+// Windows has no fast `ps` equivalent (wmic is removed on recent builds), so per-process RSS comes from
+// a CIM Win32_Process query. Callers keep this to a single sample per run, never a hot poll.
+const WIN32_PROCESS_QUERY_TIMEOUT_MS = 10_000;
+
+function readWin32ProcessWorkingSetMb(pid: number): number | null {
+  const raw = runWin32ProcessQuery(
+    `Get-CimInstance Win32_Process -Filter "ProcessId=${pid}" | Select-Object -ExpandProperty WorkingSetSize`,
+  );
+  if (raw === null) {
+    return null;
+  }
+  const bytes = Number(raw.trim());
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return null;
+  }
+  return bytes / (1024 * 1024);
+}
+
+function runWin32ProcessQuery(script: string): string | null {
+  const result = spawnSync(
+    resolvePowershellPath(),
+    ["-NoProfile", "-NonInteractive", "-Command", script],
+    {
+      encoding: "utf8",
+      maxBuffer: 16 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: WIN32_PROCESS_QUERY_TIMEOUT_MS,
+      windowsHide: true,
+    },
+  );
+  if (result.status !== 0 || typeof result.stdout !== "string") {
+    return null;
+  }
+  const trimmed = result.stdout.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function resolvePowershellPath(): string {
+  const systemRoot = process.env.SystemRoot ?? process.env.windir;
+  return systemRoot
+    ? path.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+    : "powershell.exe";
 }

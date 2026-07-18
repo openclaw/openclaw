@@ -12,7 +12,6 @@ import {
   getFreePort,
   parseProcessRssKb,
   readProcessRssMb,
-  readProcessTreeCpuMs,
   requestProbeStatus,
 } from "./lib/gateway-bench-probes.ts";
 import { selectSlowStartupTraceDurations } from "./lib/gateway-startup-trace-ranking.js";
@@ -798,16 +797,20 @@ async function runGatewaySample(options: {
     detached: process.platform !== "win32",
     env,
   });
-  const cpuStartMs = readProcessTreeCpuMs(child.pid);
+  const isWindows = process.platform === "win32";
   const sampleRss = () => {
     const rssMb = readProcessRssMb(child.pid);
     if (rssMb != null) {
       maxRssMb = maxRssMb == null ? rssMb : Math.max(maxRssMb, rssMb);
     }
   };
-  sampleRss();
-  const rssTimer = setInterval(sampleRss, 100);
-  rssTimer.unref?.();
+  // Reading RSS on Windows spawns a CIM query, so sample once at ready (below) instead of hot-polling;
+  // Unix `ps` is cheap enough to poll for the startup peak.
+  const rssTimer = isWindows ? null : setInterval(sampleRss, 100);
+  if (!isWindows) {
+    sampleRss();
+  }
+  rssTimer?.unref?.();
   const childExitPromise = new Promise<{ exitCode: number | null; signal: string | null }>(
     (resolve) => {
       child.once("exit", (exitCode, signal) => {
@@ -859,15 +862,21 @@ async function runGatewaySample(options: {
     }),
   ]);
   const readyAt = performance.now();
-  const cpuEndMs = readProcessTreeCpuMs(child.pid);
-  const cpuMs = cpuStartMs == null || cpuEndMs == null ? null : Math.max(0, cpuEndMs - cpuStartMs);
-  const cpuCoreRatio = cpuMs == null ? null : cpuMs / Math.max(1, readyAt - startAt);
+  // Sample RSS while the gateway is still alive; on Windows this is the primary (non-polled) sample.
+  sampleRss();
   const exit = await stopChild(child);
-  clearInterval(rssTimer);
+  if (rssTimer) {
+    clearInterval(rssTimer);
+  }
   sampleRss();
   // stopChild is the bounded teardown wait; the raw exit promise may never settle.
   void childExitPromise.catch(() => null);
   rmSync(root, { force: true, maxRetries: 3, recursive: true, retryDelay: 100 });
+  // The gateway emits its own CPU total (process.cpuUsage) in the memory.ready startup trace, so read a
+  // ready-anchored value here with no external process query. The value is fixed at the ready boundary,
+  // so reading it after teardown drains stdout cannot let post-ready work inflate the reported CPU.
+  const cpuMs = startupTrace["memory.ready.cpuMs"] ?? null;
+  const cpuCoreRatio = cpuMs == null ? null : cpuMs / Math.max(1, readyAt - startAt);
 
   return {
     cpuCoreRatio,

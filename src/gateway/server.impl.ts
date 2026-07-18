@@ -109,7 +109,7 @@ import {
   pluginConfigTargetsChanged,
 } from "./plugin-channel-reload-targets.js";
 import {
-  collectGatewayProcessMemoryUsageMb,
+  collectGatewayProcessUsageMetrics,
   finishGatewayRestartTrace,
   recordGatewayRestartTraceDetail,
   recordGatewayRestartTraceSpan,
@@ -2174,12 +2174,12 @@ export async function startGatewayServer(
           }),
       ),
     ));
-    startupTrace.detail("memory.ready", collectGatewayProcessMemoryUsageMb());
+    startupTrace.detail("memory.ready", collectGatewayProcessUsageMetrics());
     startupTrace.mark("ready");
     if (sidecarStartup === "defer") {
       log.info("gateway ready");
     }
-    finishGatewayRestartTrace("restart.ready", collectGatewayProcessMemoryUsageMb());
+    finishGatewayRestartTrace("restart.ready", collectGatewayProcessUsageMetrics());
     postAttachRuntimeReturned = true;
     activateScheduledServicesWhenReady();
 
@@ -2312,7 +2312,7 @@ export async function startGatewayServer(
         logCron,
         log,
         recordPostReadyMemory: () => {
-          startupTrace.detail("memory.post-ready", collectGatewayProcessMemoryUsageMb());
+          startupTrace.detail("memory.post-ready", collectGatewayProcessUsageMetrics());
         },
       });
       // The loop closes the previous server before this generation starts, so retired
@@ -2332,7 +2332,7 @@ export async function startGatewayServer(
         errorMessage: "retained npm generation cleanup failed",
       });
     } else {
-      startupTrace.detail("memory.post-ready", collectGatewayProcessMemoryUsageMb());
+      startupTrace.detail("memory.post-ready", collectGatewayProcessUsageMetrics());
     }
   } catch (err) {
     await closeOnStartupFailure();

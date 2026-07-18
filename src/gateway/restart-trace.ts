@@ -196,16 +196,23 @@ export function recordGatewayRestartTraceDetail(name: string, metrics: RestartTr
   emitRestartTraceDetail(name, metrics);
 }
 
-/** Collects process memory/resource metrics for restart trace diagnostics. */
-export function collectGatewayProcessMemoryUsageMb(): ReadonlyArray<readonly [string, number]> {
+/** Collects process CPU/memory/resource metrics for restart and startup trace diagnostics. */
+export function collectGatewayProcessUsageMetrics(): ReadonlyArray<readonly [string, number]> {
   const usage = process.memoryUsage();
   const toMb = (bytes: number) => bytes / 1024 / 1024;
+  // process.cpuUsage() reports cumulative user+system CPU for this process and all its threads
+  // (including worker threads) in microseconds. Emitted at the ready boundary, it gives the gateway
+  // startup benchmark an exact, ready-anchored CPU total with no external process query. The gateway
+  // is a single OS process during startup (plugins load in-process; supervisors spawn post-ready), so
+  // this matches a process-tree sum; child-process CPU, if any were spawned before ready, is excluded.
+  const cpu = process.cpuUsage();
   const metrics: Array<readonly [string, number]> = [
     ["rssMb", toMb(usage.rss)],
     ["heapTotalMb", toMb(usage.heapTotal)],
     ["heapUsedMb", toMb(usage.heapUsed)],
     ["externalMb", toMb(usage.external)],
     ["arrayBuffersMb", toMb(usage.arrayBuffers)],
+    ["cpuMs", (cpu.user + cpu.system) / 1000],
   ];
   const resources = collectGatewayProcessResourceCounts();
   if (resources) {

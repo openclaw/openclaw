@@ -22,7 +22,7 @@ import {
 } from "./chat-abort.js";
 import { abortQueuedChatTurns, type QueuedChatTurnMap } from "./chat-queued-turns.js";
 import {
-  collectGatewayProcessMemoryUsageMb,
+  collectGatewayProcessUsageMetrics,
   measureGatewayRestartTrace,
   recordGatewayRestartTrace,
 } from "./restart-trace.js";
@@ -1046,7 +1046,7 @@ export function createGatewayCloseHandler(
     recordGatewayRestartTrace("restart.close.total", durationMs, [
       ["reason", reason],
       ["restartExpectedMs", restartExpectedMs ?? "none"],
-      ...collectGatewayProcessMemoryUsageMb(),
+      ...collectGatewayProcessUsageMetrics(),
     ]);
     return { durationMs, warnings };
   };
