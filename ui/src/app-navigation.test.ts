@@ -414,7 +414,6 @@ describe("SIDEBAR_NAV_ROUTES", () => {
       "advanced",
       "debug",
       "logs",
-      "activity",
       "safety",
       "about",
     ]);

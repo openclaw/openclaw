@@ -183,7 +183,7 @@ export const SETTINGS_NAVIGATION_GROUPS = [
   },
   {
     labelKey: "nav.settingsGroupSystem",
-    routes: ["infrastructure", "advanced", "debug", "logs", "activity", "safety", "about"],
+    routes: ["infrastructure", "advanced", "debug", "logs", "safety", "about"],
   },
 ] as const satisfies readonly SettingsNavigationGroup[];
 

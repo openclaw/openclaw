@@ -1,11 +1,13 @@
 // Durable AI safety taxonomy history in the shared OpenClaw state database.
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   onAISafetyDiagnosticEvent,
   type DiagnosticAISafetyEventPayload,
 } from "./diagnostic-ai-safety-events.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 
 /** Severity levels aligned with the AI safety taxonomy. */
 export type SafetyEventSeverity = "info" | "low" | "medium" | "high" | "critical";
@@ -48,10 +50,12 @@ type MetricBucket = {
 
 const EVENT_RETENTION_CAPACITY = 10_000;
 
+type SafetyEventDatabase = Pick<OpenClawStateKyselyDatabase, "ai_safety_events">;
+
 type SafetyEventRow = {
   sequence: number | bigint;
   event_type: string;
-  severity: SafetyEventSeverity;
+  severity: string;
   session_id: string | null;
   agent_id: string | null;
   channel: string | null;
@@ -72,7 +76,7 @@ function inflateSafetyEvent(row: SafetyEventRow): SafetyEventRecord {
   }
   return {
     type: row.event_type,
-    severity: row.severity,
+    severity: row.severity as SafetyEventSeverity,
     ...(row.session_id ? { sessionId: row.session_id } : {}),
     ...(row.agent_id ? { agentId: row.agent_id } : {}),
     ...(row.channel ? { channel: row.channel } : {}),
@@ -89,33 +93,36 @@ class SafetyEventStore {
   appendSafetyEvent(event: DiagnosticAiSafetyEvent): void {
     const recordedAt = Date.now();
     const database = openOpenClawStateDatabase().db;
-    const result = database
-      .prepare(
-        `INSERT INTO ai_safety_events (
-           event_type, severity, session_id, agent_id, channel, message, meta_json, recorded_at_ms
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        event.type,
-        event.severity,
-        event.sessionId ?? null,
-        event.agentId ?? null,
-        event.channel ?? null,
-        event.message,
-        JSON.stringify(event.meta ?? {}),
-        recordedAt,
+    const kysely = getNodeSqliteKysely<SafetyEventDatabase>(database);
+    const inserted = executeSqliteQuerySync(
+      database,
+      kysely
+        .insertInto("ai_safety_events")
+        .values({
+          event_type: event.type,
+          severity: event.severity,
+          session_id: event.sessionId ?? null,
+          agent_id: event.agentId ?? null,
+          channel: event.channel ?? null,
+          message: event.message,
+          meta_json: JSON.stringify(event.meta ?? {}),
+          recorded_at_ms: recordedAt,
+        })
+        .returning("sequence"),
+    ).rows[0];
+    if (!inserted) {
+      throw new Error("AI safety event insert did not return a sequence");
+    }
+    const retentionThreshold = inserted.sequence - EVENT_RETENTION_CAPACITY;
+    if (retentionThreshold > 0) {
+      executeSqliteQuerySync(
+        database,
+        kysely.deleteFrom("ai_safety_events").where("sequence", "<=", retentionThreshold),
       );
-    database
-      .prepare(
-        `DELETE FROM ai_safety_events
-         WHERE sequence <= (
-           SELECT COALESCE(MAX(sequence), 0) - ? FROM ai_safety_events
-         )`,
-      )
-      .run(EVENT_RETENTION_CAPACITY);
+    }
     const record: SafetyEventRecord = {
       ...event,
-      sequence: Number(result.lastInsertRowid),
+      sequence: inserted.sequence,
       recordedAt,
     };
     notifyListeners(this.changeListeners, record);
@@ -143,37 +150,28 @@ class SafetyEventStore {
       return { events: [] };
     }
 
-    const clauses = ["sequence > ?"];
-    const values: Array<string | number> = [afterSequence];
+    const database = openOpenClawStateDatabase().db;
+    const kysely = getNodeSqliteKysely<SafetyEventDatabase>(database);
+    let query = kysely
+      .selectFrom("ai_safety_events")
+      .selectAll()
+      .where("sequence", ">", afterSequence)
+      .orderBy("sequence", "asc");
     if (opts.eventType) {
-      clauses.push("event_type = ?");
-      values.push(opts.eventType);
+      query = query.where("event_type", "=", opts.eventType);
     }
     if (opts.severity) {
-      clauses.push("severity = ?");
-      values.push(opts.severity);
+      query = query.where("severity", "=", opts.severity);
     }
     if (opts.sessionId) {
-      clauses.push("session_id = ?");
-      values.push(opts.sessionId);
+      query = query.where("session_id", "=", opts.sessionId);
     }
     if (opts.channel) {
-      clauses.push("channel = ?");
-      values.push(opts.channel);
+      query = query.where("channel", "=", opts.channel);
     }
-    values.push(limit + 1);
-    const results = (
-      openOpenClawStateDatabase()
-        .db.prepare(
-          `SELECT sequence, event_type, severity, session_id, agent_id, channel,
-                  message, meta_json, recorded_at_ms
-             FROM ai_safety_events
-            WHERE ${clauses.join(" AND ")}
-            ORDER BY sequence ASC
-            LIMIT ?`,
-        )
-        .all(...values) as SafetyEventRow[]
-    ).map(inflateSafetyEvent);
+    const results = executeSqliteQuerySync(database, query.limit(limit + 1)).rows.map(
+      inflateSafetyEvent,
+    );
 
     const hasMore = results.length > limit;
     const page = hasMore ? results.slice(0, limit) : results;
@@ -200,15 +198,17 @@ class SafetyEventStore {
       byType: {},
     }));
 
-    const entries = openOpenClawStateDatabase()
-      .db.prepare(
-        `SELECT sequence, event_type, severity, session_id, agent_id, channel,
-                message, meta_json, recorded_at_ms
-           FROM ai_safety_events
-          WHERE recorded_at_ms >= ? AND recorded_at_ms < ?
-          ORDER BY sequence ASC`,
-      )
-      .all(fromMs, toMs) as SafetyEventRow[];
+    const database = openOpenClawStateDatabase().db;
+    const kysely = getNodeSqliteKysely<SafetyEventDatabase>(database);
+    const entries = executeSqliteQuerySync(
+      database,
+      kysely
+        .selectFrom("ai_safety_events")
+        .selectAll()
+        .where("recorded_at_ms", ">=", fromMs)
+        .where("recorded_at_ms", "<", toMs)
+        .orderBy("sequence", "asc"),
+    ).rows;
     for (const row of entries) {
       const entry = inflateSafetyEvent(row);
       const bucketIndex = Math.floor((entry.recordedAt - fromMs) / bucketMs);
