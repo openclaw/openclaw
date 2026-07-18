@@ -7855,7 +7855,7 @@ struct ChatViewModelTests {
 
     @Test func `decodes authoritative model patch thinking state`() throws {
         let data = Data(
-            #"{"entry":{"thinkingLevel":"max"},"resolved":{"modelProvider":"openai","model":"gpt-5.6-luna","thinkingLevel":"max","thinkingLevels":[{"id":"off","label":"off"},{"id":"max","label":"max"}]}}"#
+            #"{"entry":{"thinkingLevel":"max"},"resolved":{"modelProvider":"openai","model":"gpt-5.6-luna","thinkingLevel":"max","thinkingLevels":[{"id":"off","label":"off"},{"id":"max","label":"max"}],"effectiveFastMode":false}}"#
                 .utf8)
 
         let result = try JSONDecoder().decode(OpenClawChatModelPatchResult.self, from: data)
@@ -7864,6 +7864,7 @@ struct ChatViewModelTests {
         #expect(result.model == "gpt-5.6-luna")
         #expect(result.thinkingLevel == "max")
         #expect(result.thinkingLevels?.map(\.id) == ["off", "max"])
+        #expect(result.effectiveFastMode == .off)
     }
 
     @Test func `model patch decoder falls back to entry when resolved is absent`() throws {
@@ -8953,11 +8954,11 @@ struct ChatViewModelTests {
 
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
 
-        #expect(await MainActor.run { vm.verboseLevel } == "off")
+        #expect(await MainActor.run { vm.verboseLevel } == OpenClawChatViewModel.inheritedThinkingSelectionID)
         #expect(await MainActor.run { vm.sessions.first?.verboseLevel } == nil)
     }
 
-    @Test func `fast and verbosity patches roll back after gateway rejection`() async throws {
+    @Test func `fast and verbosity rejection restores inherited overrides`() async throws {
         let (_, vm) = await makeViewModel(
             historyResponses: [historyPayload(sessionId: "sess-main")],
             sessionsResponses: [
@@ -8965,8 +8966,8 @@ struct ChatViewModelTests {
                     key: "main",
                     updatedAt: 1,
                     model: nil,
-                    verboseLevel: "on",
-                    fastMode: .on,
+                    verboseLevel: nil,
+                    fastMode: nil,
                     effectiveFastMode: .on)),
             ],
             sessionSettingsPatchHook: { _ in
@@ -8977,14 +8978,80 @@ struct ChatViewModelTests {
             })
 
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
-        await MainActor.run { vm.setFastModeEnabled(false) }
+        await MainActor.run { vm.selectFastMode("off") }
         await vm.waitForPendingSessionSettings(in: "main")
         #expect(await MainActor.run { vm.fastModeEnabled })
+        #expect(await MainActor.run { vm.fastModeSelectionID } == OpenClawChatViewModel.inheritedThinkingSelectionID)
+        #expect(await MainActor.run { vm.sessions.first?.fastMode } == nil)
+        #expect(await MainActor.run { vm.sessions.first?.effectiveFastMode } == .on)
 
         await MainActor.run { vm.selectVerboseLevel("full") }
         await vm.waitForPendingSessionSettings(in: "main")
-        #expect(await MainActor.run { vm.verboseLevel } == "on")
-        #expect(await MainActor.run { vm.sessions.first?.verboseLevel } == "on")
+        #expect(await MainActor.run { vm.verboseLevel } == OpenClawChatViewModel.inheritedThinkingSelectionID)
+        #expect(await MainActor.run { vm.sessions.first?.verboseLevel } == nil)
+    }
+
+    @Test func `fast and verbosity default selections clear overrides`() async throws {
+        let (_, vm) = await makeViewModel(
+            historyResponses: [historyPayload(sessionId: "sess-main")],
+            sessionsResponses: [
+                sessionsResponse(sessionEntry(
+                    key: "main",
+                    updatedAt: 1,
+                    model: nil,
+                    verboseLevel: "full",
+                    fastMode: .on,
+                    effectiveFastMode: .on)),
+            ],
+            sessionSettingsPatchHook: { patch in
+                if patch.fastMode != nil {
+                    #expect(patch.fastMode == .some(nil))
+                    return OpenClawChatModelPatchResult(
+                        modelProvider: nil,
+                        model: nil,
+                        thinkingLevel: nil,
+                        fastMode: .off)
+                }
+                #expect(patch.verboseLevel == .some(nil))
+                return OpenClawChatModelPatchResult(
+                    modelProvider: nil,
+                    model: nil,
+                    thinkingLevel: nil)
+            })
+
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+        await MainActor.run {
+            vm.selectFastMode(OpenClawChatViewModel.inheritedThinkingSelectionID)
+        }
+        await vm.waitForPendingSessionSettings(in: "main")
+        #expect(await MainActor.run { vm.sessions.first?.fastMode } == nil)
+        #expect(await MainActor.run { vm.sessions.first?.effectiveFastMode } == .off)
+        #expect(await MainActor.run { vm.fastModeSelectionID } == OpenClawChatViewModel.inheritedThinkingSelectionID)
+
+        await MainActor.run {
+            vm.selectVerboseLevel(OpenClawChatViewModel.inheritedThinkingSelectionID)
+        }
+        await vm.waitForPendingSessionSettings(in: "main")
+        #expect(await MainActor.run { vm.sessions.first?.verboseLevel } == nil)
+        #expect(await MainActor.run { vm.verboseLevel } == OpenClawChatViewModel.inheritedThinkingSelectionID)
+    }
+
+    @Test func `legacy automatic fast override displays its effective state`() async throws {
+        let (_, vm) = await makeViewModel(
+            historyResponses: [historyPayload(sessionId: "sess-main")],
+            sessionsResponses: [
+                sessionsResponse(sessionEntry(
+                    key: "main",
+                    updatedAt: 1,
+                    model: nil,
+                    fastMode: .automatic,
+                    effectiveFastMode: .off)),
+            ])
+
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+
+        #expect(await MainActor.run { vm.fastModeSelectionID } == "off")
+        #expect(await !(MainActor.run { vm.fastModeEnabled }))
     }
 
     @Test func `stale fast rollback cannot mutate replacement agent target`() async throws {
@@ -9017,7 +9084,7 @@ struct ChatViewModelTests {
             })
 
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-alpha")
-        await MainActor.run { vm.setFastModeEnabled(false) }
+        await MainActor.run { vm.selectFastMode("off") }
         await patchStarted.wait()
         await MainActor.run { vm.syncActiveAgentId("beta") }
         try await waitUntil("Beta target bootstraps") {
@@ -9123,7 +9190,7 @@ struct ChatViewModelTests {
         try await waitUntil("other session loads") {
             await MainActor.run { vm.sessionKey == "other" && vm.sessionId == "sess-other" }
         }
-        #expect(await MainActor.run { vm.verboseLevel } == "off")
+        #expect(await MainActor.run { vm.verboseLevel } == OpenClawChatViewModel.inheritedThinkingSelectionID)
         await MainActor.run { vm.selectVerboseLevel("full") }
         await vm.waitForPendingSessionSettings(in: "other")
         await firstPatchGate.open()

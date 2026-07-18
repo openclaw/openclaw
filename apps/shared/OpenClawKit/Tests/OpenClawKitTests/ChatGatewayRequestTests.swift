@@ -95,20 +95,20 @@ struct ChatGatewayRequestTests {
     }
 
     @Test func `settings patch request encodes fast values and explicit resets`() {
-        let enabled = OpenClawChatGatewayRequests.patchSessionSettings(
+        let reset = OpenClawChatGatewayRequests.patchSessionSettings(
             sessionKey: "main",
             agentID: nil,
             thinkingLevel: .some(nil),
-            fastMode: .some(.on),
+            fastMode: .some(nil),
             verboseLevel: .some(nil))
         let automatic = OpenClawChatGatewayRequests.patchSessionSettings(
             sessionKey: "main",
             agentID: nil,
             fastMode: .some(.automatic))
 
-        #expect(enabled.params["thinkingLevel"]?.value is NSNull)
-        #expect(enabled.params["fastMode"]?.value as? Bool == true)
-        #expect(enabled.params["verboseLevel"]?.value is NSNull)
+        #expect(reset.params["thinkingLevel"]?.value is NSNull)
+        #expect(reset.params["fastMode"]?.value is NSNull)
+        #expect(reset.params["verboseLevel"]?.value is NSNull)
         #expect(automatic.params["fastMode"]?.value as? String == "auto")
     }
 

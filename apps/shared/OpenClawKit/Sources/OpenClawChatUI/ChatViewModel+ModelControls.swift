@@ -2,6 +2,7 @@ import Foundation
 
 extension OpenClawChatViewModel {
     public static let verboseLevelOptions = ["off", "on", "full"]
+    public static let fastModeSelectionIDs = ["on", "off"]
 
     public var thinkingSelectionID: String {
         self.thinkingOverrideIsInherited ? Self.inheritedThinkingSelectionID : self.thinkingLevel
@@ -16,9 +17,17 @@ extension OpenClawChatViewModel {
 
     public var verboseLevel: String {
         if self.hasAppliedLiveSessions {
-            return Self.normalizedVerboseLevel(self.currentSessionEntry()?.verboseLevel) ?? "off"
+            return Self.normalizedVerboseLevel(self.currentSessionEntry()?.verboseLevel)
+                ?? Self.inheritedThinkingSelectionID
         }
         return self.preferredVerboseLevel
+    }
+
+    public var fastModeSelectionID: String {
+        guard let session = self.currentSessionEntry(), session.fastMode != nil else {
+            return Self.inheritedThinkingSelectionID
+        }
+        return (session.effectiveFastMode ?? session.fastMode)?.isEnabled == true ? "on" : "off"
     }
 
     public var fastModeEnabled: Bool {
@@ -42,11 +51,14 @@ extension OpenClawChatViewModel {
     }
 
     func performSelectVerboseLevel(_ level: String) {
-        guard let next = Self.normalizedVerboseLevel(level) else { return }
+        let clearsOverride = level == Self.inheritedThinkingSelectionID
+        let next = clearsOverride ? nil : Self.normalizedVerboseLevel(level)
+        guard clearsOverride || next != nil else { return }
         let target = self.currentModelPatchTarget()
         let sessionKey = self.sessionKey
         let baselineSessionLevel = self.currentSessionEntry()?.verboseLevel
-        guard next != self.verboseLevel || baselineSessionLevel == nil else { return }
+        guard clearsOverride ? baselineSessionLevel != nil : Self.normalizedVerboseLevel(baselineSessionLevel) != next
+        else { return }
 
         if self.acceptedVerboseLevelsByTarget[target] == nil {
             self.acceptedVerboseLevelsByTarget[target] = baselineSessionLevel.map(VerboseLevelState.value)
@@ -54,10 +66,14 @@ extension OpenClawChatViewModel {
         }
 
         self.updateCurrentSessionVerboseLevel(next, sessionKey: sessionKey)
-        self.nextVerboseSelectionRequestID &+= 1
-        let verboseRequestID = self.nextVerboseSelectionRequestID
-        self.verbosePreferenceRequests[verboseRequestID] = .pending(next)
-        self.reconcileVerbosePreferenceRequests()
+        var verboseRequestID: UInt64?
+        if let next {
+            self.nextVerboseSelectionRequestID &+= 1
+            let requestID = self.nextVerboseSelectionRequestID
+            self.verbosePreferenceRequests[requestID] = .pending(next)
+            self.reconcileVerbosePreferenceRequests()
+            verboseRequestID = requestID
+        }
         let requestID = self.reserveSessionSettingsRequest(for: target)
         self.enqueueSessionSettingsPatch(requestID: requestID, target: target) { [weak self] routeLease in
             guard let self else { return }
@@ -67,15 +83,18 @@ extension OpenClawChatViewModel {
                     sessionKey: target.canonicalSessionKey,
                     agentID: target.agentID,
                     patch: OpenClawChatSessionSettingsPatch(verboseLevel: .some(next)))
-                let accepted = Self.normalizedVerboseLevel(result?.verboseLevel) ?? next
-                self.acceptedVerboseLevelsByTarget[target] = .value(accepted)
+                let accepted = clearsOverride ? nil : (Self.normalizedVerboseLevel(result?.verboseLevel) ?? next)
+                self.acceptedVerboseLevelsByTarget[target] = accepted.map(VerboseLevelState.value)
+                    ?? VerboseLevelState.none
                 self.recordModelControlPatchSuccess(
                     result: result,
                     requestID: requestID,
                     target: target,
-                    verboseLevel: accepted)
-                self.verbosePreferenceRequests[verboseRequestID] = .succeeded(accepted)
-                self.reconcileVerbosePreferenceRequests()
+                    verboseLevelOverride: .some(accepted))
+                if let verboseRequestID, let accepted {
+                    self.verbosePreferenceRequests[verboseRequestID] = .succeeded(accepted)
+                    self.reconcileVerbosePreferenceRequests()
+                }
                 if let state = self.modelControlState(for: target, originalSessionKey: sessionKey) {
                     self.updateCurrentSessionVerboseLevel(
                         accepted,
@@ -83,8 +102,10 @@ extension OpenClawChatViewModel {
                         exactMatchOnly: state.exactMatchOnly)
                 }
             } catch {
-                self.verbosePreferenceRequests[verboseRequestID] = .failed
-                self.reconcileVerbosePreferenceRequests()
+                if let verboseRequestID {
+                    self.verbosePreferenceRequests[verboseRequestID] = .failed
+                    self.reconcileVerbosePreferenceRequests()
+                }
                 if let state = self.modelControlState(for: target, originalSessionKey: sessionKey) {
                     self.updateCurrentSessionVerboseLevel(
                         self.acceptedVerboseLevelsByTarget[target]?.level,
@@ -114,15 +135,30 @@ extension OpenClawChatViewModel {
         self.verbosePreferenceRequests.removeAll()
     }
 
-    func performSetFastModeEnabled(_ enabled: Bool) {
-        guard enabled != self.fastModeEnabled else { return }
+    func performSelectFastMode(_ selectionID: String) {
+        let next: OpenClawChatFastMode?
+        switch selectionID {
+        case Self.inheritedThinkingSelectionID: next = nil
+        case "on": next = .on
+        case "off": next = .off
+        default: return
+        }
         let target = self.currentModelPatchTarget()
         let sessionKey = self.sessionKey
         let baselineFastMode = self.currentSessionEntry()?.fastMode
         let baselineEffectiveFastMode = self.currentSessionEntry()?.effectiveFastMode
-        let next: OpenClawChatFastMode = enabled ? .on : .off
+        guard baselineFastMode != next else { return }
 
-        self.updateCurrentSessionFastMode(next, effective: next, sessionKey: sessionKey)
+        if self.acceptedFastModesByTarget[target] == nil {
+            self.acceptedFastModesByTarget[target] = FastModeState(
+                override: baselineFastMode,
+                effective: baselineEffectiveFastMode)
+        }
+
+        self.updateCurrentSessionFastMode(
+            next,
+            effective: next ?? baselineEffectiveFastMode,
+            sessionKey: sessionKey)
         let requestID = self.reserveSessionSettingsRequest(for: target)
         self.enqueueSessionSettingsPatch(requestID: requestID, target: target) { [weak self] routeLease in
             guard let self else { return }
@@ -132,24 +168,33 @@ extension OpenClawChatViewModel {
                     sessionKey: target.canonicalSessionKey,
                     agentID: target.agentID,
                     patch: OpenClawChatSessionSettingsPatch(fastMode: .some(next)))
-                let accepted = result?.fastMode ?? next
+                let acceptedOverride = next == nil ? nil : (result?.fastMode ?? next)
+                let acceptedEffective = result?.effectiveFastMode
+                    ?? result?.fastMode
+                    ?? acceptedOverride
+                    ?? baselineEffectiveFastMode
+                self.acceptedFastModesByTarget[target] = FastModeState(
+                    override: acceptedOverride,
+                    effective: acceptedEffective)
                 self.recordModelControlPatchSuccess(
                     result: result,
                     requestID: requestID,
                     target: target,
-                    fastMode: accepted)
+                    fastModeOverride: .some(acceptedOverride),
+                    effectiveFastMode: acceptedEffective)
                 if let state = self.modelControlState(for: target, originalSessionKey: sessionKey) {
                     self.updateCurrentSessionFastMode(
-                        accepted,
-                        effective: accepted,
+                        acceptedOverride,
+                        effective: acceptedEffective,
                         sessionKey: state.key,
                         exactMatchOnly: state.exactMatchOnly)
                 }
             } catch {
                 if let state = self.modelControlState(for: target, originalSessionKey: sessionKey) {
+                    let accepted = self.acceptedFastModesByTarget[target]
                     self.updateCurrentSessionFastMode(
-                        baselineFastMode,
-                        effective: baselineEffectiveFastMode,
+                        accepted?.override,
+                        effective: accepted?.effective,
                         sessionKey: state.key,
                         exactMatchOnly: state.exactMatchOnly)
                 }
@@ -157,11 +202,32 @@ extension OpenClawChatViewModel {
         }
     }
 
-    func applyModelControlPatchResult(_ result: OpenClawChatModelPatchResult, sessionKey: String) {
-        if let fastMode = result.fastMode {
-            self.updateCurrentSessionFastMode(fastMode, effective: fastMode, sessionKey: sessionKey)
+    func applyModelControlPatchResult(
+        _ result: OpenClawChatModelPatchResult,
+        sessionKey: String,
+        fastOverrideCleared: Bool = false,
+        verboseOverrideCleared: Bool = false)
+    {
+        let session = self.currentSessionEntry()
+        if fastOverrideCleared {
+            self.updateCurrentSessionFastMode(
+                nil,
+                effective: result.effectiveFastMode ?? result.fastMode ?? session?.effectiveFastMode,
+                sessionKey: sessionKey)
+        } else if let fastMode = result.fastMode {
+            self.updateCurrentSessionFastMode(
+                fastMode,
+                effective: result.effectiveFastMode ?? fastMode,
+                sessionKey: sessionKey)
+        } else if let effectiveFastMode = result.effectiveFastMode {
+            self.updateCurrentSessionFastMode(
+                session?.fastMode,
+                effective: effectiveFastMode,
+                sessionKey: sessionKey)
         }
-        if let verboseLevel = Self.normalizedVerboseLevel(result.verboseLevel) {
+        if verboseOverrideCleared {
+            self.updateCurrentSessionVerboseLevel(nil, sessionKey: sessionKey)
+        } else if let verboseLevel = Self.normalizedVerboseLevel(result.verboseLevel) {
             self.updateCurrentSessionVerboseLevel(verboseLevel, sessionKey: sessionKey)
         }
     }
@@ -170,10 +236,27 @@ extension OpenClawChatViewModel {
         result: OpenClawChatModelPatchResult?,
         requestID: UInt64,
         target: ModelPatchTarget,
-        fastMode: OpenClawChatFastMode? = nil,
-        verboseLevel: String? = nil)
+        fastModeOverride: OpenClawChatFastMode?? = nil,
+        effectiveFastMode: OpenClawChatFastMode? = nil,
+        verboseLevelOverride: String?? = nil)
     {
         let previous = self.lastSuccessfulSettingsPatchResultsByTarget[target]
+        let recordedFastMode: OpenClawChatFastMode? = if let fastModeOverride {
+            fastModeOverride
+        } else {
+            result?.fastMode ?? previous?.fastMode
+        }
+        let recordedVerboseLevel: String? = if let verboseLevelOverride {
+            verboseLevelOverride
+        } else {
+            result?.verboseLevel ?? previous?.verboseLevel
+        }
+        if let fastModeOverride {
+            self.lastSuccessfulFastOverrideClearedByTarget[target] = fastModeOverride == nil
+        }
+        if let verboseLevelOverride {
+            self.lastSuccessfulVerboseOverrideClearedByTarget[target] = verboseLevelOverride == nil
+        }
         self.lastSuccessfulSettingsPatchRequestIDsByTarget[target] = requestID
         self.lastSuccessfulSettingsPatchResultsByTarget[target] = OpenClawChatModelPatchResult(
             key: result?.key ?? previous?.key ?? target.canonicalSessionKey,
@@ -181,8 +264,9 @@ extension OpenClawChatViewModel {
             model: result?.model ?? previous?.model,
             thinkingLevel: result?.thinkingLevel ?? previous?.thinkingLevel,
             thinkingLevels: result?.thinkingLevels ?? previous?.thinkingLevels,
-            fastMode: result?.fastMode ?? fastMode ?? previous?.fastMode,
-            verboseLevel: result?.verboseLevel ?? verboseLevel ?? previous?.verboseLevel)
+            fastMode: recordedFastMode,
+            effectiveFastMode: result?.effectiveFastMode ?? effectiveFastMode ?? previous?.effectiveFastMode,
+            verboseLevel: recordedVerboseLevel)
     }
 
     private func modelControlState(for target: ModelPatchTarget, originalSessionKey: String)

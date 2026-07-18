@@ -255,6 +255,8 @@ public struct OpenClawChatWindowShell: View {
             get: { self.viewModel.verboseLevel },
             set: { self.viewModel.selectVerboseLevel($0) }))
         {
+            Text(String(localized: "Default (inherited)"))
+                .tag(OpenClawChatViewModel.inheritedThinkingSelectionID)
             Text(String(localized: "Off")).tag("off")
             Text(String(localized: "On")).tag("on")
             Text(String(localized: "Full")).tag("full")
@@ -268,13 +270,18 @@ public struct OpenClawChatWindowShell: View {
     }
 
     private var fastModeToggle: some View {
-        Toggle(isOn: Binding(
-            get: { self.viewModel.fastModeEnabled },
-            set: { self.viewModel.setFastModeEnabled($0) }))
+        Picker(selection: Binding(
+            get: { self.viewModel.fastModeSelectionID },
+            set: { self.viewModel.selectFastMode($0) }))
         {
+            Text(String(localized: "Default (inherited)"))
+                .tag(OpenClawChatViewModel.inheritedThinkingSelectionID)
+            Text(String(localized: "On")).tag("on")
+            Text(String(localized: "Off")).tag("off")
+        } label: {
             Label(String(localized: "Fast"), systemImage: "bolt.fill")
         }
-        .toggleStyle(.button)
+        .pickerStyle(.menu)
         .help(String(localized: "Fast responses"))
         .disabled(self.viewModel.isUpdatingSessionSettings)
     }

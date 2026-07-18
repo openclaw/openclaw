@@ -254,7 +254,10 @@ public final class OpenClawChatViewModel {
     var confirmedVerboseLevel: String
     var verbosePreferenceRequests: [UInt64: VerbosePreferenceRequest] = [:]
     var acceptedVerboseLevelsByTarget: [ModelPatchTarget: VerboseLevelState] = [:]
+    var acceptedFastModesByTarget: [ModelPatchTarget: FastModeState] = [:]
     var lastSuccessfulThinkingOverrideClearedByTarget: [ModelPatchTarget: Bool] = [:]
+    var lastSuccessfulFastOverrideClearedByTarget: [ModelPatchTarget: Bool] = [:]
+    var lastSuccessfulVerboseOverrideClearedByTarget: [ModelPatchTarget: Bool] = [:]
     var acceptedSettingsPatchResultsByTarget: [ModelPatchTarget: OpenClawChatModelPatchResult] = [:]
     var acceptedThinkingLevelsByTarget: [ModelPatchTarget: String] = [:]
     var acceptedPreferredThinkingLevelsByTarget: [ModelPatchTarget: String] = [:]
@@ -300,6 +303,11 @@ public final class OpenClawChatViewModel {
             if case let .value(level) = self { return level }
             return nil
         }
+    }
+
+    struct FastModeState {
+        let override: OpenClawChatFastMode?
+        let effective: OpenClawChatFastMode?
     }
 
     private struct ModelSelectionRequest {
@@ -621,8 +629,12 @@ public final class OpenClawChatViewModel {
         performSelectVerboseLevel(level)
     }
 
+    public func selectFastMode(_ selectionID: String) {
+        performSelectFastMode(selectionID)
+    }
+
     public func setFastModeEnabled(_ enabled: Bool) {
-        performSetFastModeEnabled(enabled)
+        performSelectFastMode(enabled ? "on" : "off")
     }
 
     public func selectModel(_ selectionID: String) {
@@ -1067,7 +1079,11 @@ extension OpenClawChatViewModel {
             self.updateCurrentSessionThinkingLevel(nil, sessionKey: resultKey)
         }
         if let patchResult {
-            self.applyModelControlPatchResult(patchResult, sessionKey: resultKey)
+            self.applyModelControlPatchResult(
+                patchResult,
+                sessionKey: resultKey,
+                fastOverrideCleared: self.lastSuccessfulFastOverrideClearedByTarget[target] == true,
+                verboseOverrideCleared: self.lastSuccessfulVerboseOverrideClearedByTarget[target] == true)
         }
     }
 
@@ -1401,6 +1417,7 @@ extension OpenClawChatViewModel {
             self.acceptedExplicitThinkingPreferencesByTarget.removeValue(forKey: target)
             self.acceptedThinkingOverrideClearedByTarget.removeValue(forKey: target)
             self.acceptedVerboseLevelsByTarget.removeValue(forKey: target)
+            self.acceptedFastModesByTarget.removeValue(forKey: target)
             self.latestThinkingSelectionRequestIDsByTarget.removeValue(forKey: target)
             let waiters = self.settingsPatchWaitersByTarget.removeValue(forKey: target) ?? []
             for waiter in waiters {
@@ -1621,6 +1638,7 @@ extension OpenClawChatViewModel {
                 thinkingLevel: patchResult.thinkingLevel ?? previous?.thinkingLevel,
                 thinkingLevels: patchResult.thinkingLevels ?? previous?.thinkingLevels,
                 fastMode: patchResult.fastMode ?? previous?.fastMode,
+                effectiveFastMode: patchResult.effectiveFastMode ?? previous?.effectiveFastMode,
                 verboseLevel: patchResult.verboseLevel ?? previous?.verboseLevel)
         }
         self.completedModelPatchTargets.insert(target)

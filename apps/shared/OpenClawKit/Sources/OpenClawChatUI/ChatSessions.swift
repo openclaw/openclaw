@@ -114,6 +114,7 @@ public struct OpenClawChatModelPatchResult: Decodable, Sendable, Equatable {
     public let thinkingLevel: String?
     public let thinkingLevels: [OpenClawChatThinkingLevelOption]?
     public let fastMode: OpenClawChatFastMode?
+    public let effectiveFastMode: OpenClawChatFastMode?
     public let verboseLevel: String?
 
     public init(
@@ -123,6 +124,7 @@ public struct OpenClawChatModelPatchResult: Decodable, Sendable, Equatable {
         thinkingLevel: String?,
         thinkingLevels: [OpenClawChatThinkingLevelOption]? = nil,
         fastMode: OpenClawChatFastMode? = nil,
+        effectiveFastMode: OpenClawChatFastMode? = nil,
         verboseLevel: String? = nil)
     {
         self.key = key
@@ -131,6 +133,7 @@ public struct OpenClawChatModelPatchResult: Decodable, Sendable, Equatable {
         self.thinkingLevel = thinkingLevel
         self.thinkingLevels = thinkingLevels
         self.fastMode = fastMode
+        self.effectiveFastMode = effectiveFastMode
         self.verboseLevel = verboseLevel
     }
 
@@ -147,6 +150,7 @@ public struct OpenClawChatModelPatchResult: Decodable, Sendable, Equatable {
         case modelOverride
         case thinkingLevel
         case fastMode
+        case effectiveFastMode
         case verboseLevel
     }
 
@@ -156,6 +160,7 @@ public struct OpenClawChatModelPatchResult: Decodable, Sendable, Equatable {
         case thinkingLevel
         case thinkingLevels
         case fastMode
+        case effectiveFastMode
         case verboseLevel
     }
 
@@ -169,6 +174,9 @@ public struct OpenClawChatModelPatchResult: Decodable, Sendable, Equatable {
             ?? entry.decodeIfPresent(String.self, forKey: .modelOverride)
         let entryThinkingLevel = try entry.decodeIfPresent(String.self, forKey: .thinkingLevel)
         let entryFastMode = try entry.decodeIfPresent(OpenClawChatFastMode.self, forKey: .fastMode)
+        let entryEffectiveFastMode = try entry.decodeIfPresent(
+            OpenClawChatFastMode.self,
+            forKey: .effectiveFastMode)
         let entryVerboseLevel = try entry.decodeIfPresent(String.self, forKey: .verboseLevel)
         if container.contains(.resolved) {
             let resolved = try container.nestedContainer(keyedBy: ResolvedKeys.self, forKey: .resolved)
@@ -183,6 +191,9 @@ public struct OpenClawChatModelPatchResult: Decodable, Sendable, Equatable {
                 forKey: .thinkingLevels)
             self.fastMode = try resolved.decodeIfPresent(OpenClawChatFastMode.self, forKey: .fastMode)
                 ?? entryFastMode
+            self.effectiveFastMode = try resolved.decodeIfPresent(
+                OpenClawChatFastMode.self,
+                forKey: .effectiveFastMode) ?? entryEffectiveFastMode
             self.verboseLevel = try resolved.decodeIfPresent(String.self, forKey: .verboseLevel)
                 ?? entryVerboseLevel
         } else {
@@ -191,6 +202,7 @@ public struct OpenClawChatModelPatchResult: Decodable, Sendable, Equatable {
             self.thinkingLevel = entryThinkingLevel
             self.thinkingLevels = nil
             self.fastMode = entryFastMode
+            self.effectiveFastMode = entryEffectiveFastMode
             self.verboseLevel = entryVerboseLevel
         }
     }

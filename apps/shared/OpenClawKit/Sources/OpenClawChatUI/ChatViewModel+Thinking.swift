@@ -78,6 +78,7 @@ extension OpenClawChatViewModel {
                     thinkingLevel: acceptedLevel,
                     thinkingLevels: patchResult?.thinkingLevels ?? previousResult?.thinkingLevels,
                     fastMode: patchResult?.fastMode ?? previousResult?.fastMode,
+                    effectiveFastMode: patchResult?.effectiveFastMode ?? previousResult?.effectiveFastMode,
                     verboseLevel: patchResult?.verboseLevel ?? previousResult?.verboseLevel)
                 // Older queued successes remain rollback truth, but never replace
                 // a newer optimistic selection in the session row or picker.
