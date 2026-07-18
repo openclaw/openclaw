@@ -1163,6 +1163,30 @@ describe("openai image generation provider", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  it("does not whole-body read bodyless Codex OAuth image responses", async () => {
+    mockCodexAuthOnly();
+    const release = vi.fn(async () => {});
+    const text = vi.fn(async () => "data: " + "x".repeat(64 * 1024 * 1024 + 1));
+    postJsonRequestMock.mockResolvedValue({
+      response: { body: null, text },
+      release,
+    });
+
+    const provider = buildOpenAIImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "openai",
+        model: "gpt-image-2",
+        prompt: "Draw a bodyless Codex lighthouse",
+        cfg: {},
+        authStore: createCodexOAuthAuthStore(),
+      }),
+    ).rejects.toThrow("OpenAI Codex image generation response malformed");
+
+    expect(text).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
   it("does not treat Codex API key profiles as configured Codex OAuth image auth", async () => {
     mockGeneratedPngResponse();
     resolveApiKeyForProviderMock.mockImplementation(async (params?: { provider?: string }) => {
