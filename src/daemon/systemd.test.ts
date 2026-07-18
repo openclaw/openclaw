@@ -2187,6 +2187,28 @@ describe("systemd service control", () => {
     expect(write).toHaveBeenCalledTimes(1);
     expect(requireFirstWrite(write)).toContain("Stopped systemd service");
     expect(onMutation).toHaveBeenCalledWith({ mode: "systemctl-stop" });
+    expect(onMutation.mock.invocationCallOrder[0]).toBeLessThan(write.mock.invocationCallOrder[0]);
+  });
+
+  it("audits a successful stop before a later output failure", async () => {
+    execFileMock
+      .mockImplementationOnce((_cmd, _args, _opts, cb) => cb(null, "", ""))
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "stop", GATEWAY_SERVICE);
+        cb(null, "", "");
+      });
+    const onMutation = vi.fn();
+    const stdout = {
+      write: vi.fn(() => {
+        throw new Error("output failed");
+      }),
+    } as unknown as NodeJS.WritableStream;
+
+    await expect(stopSystemdService({ stdout, env: {}, onMutation })).rejects.toThrow(
+      "output failed",
+    );
+
+    expect(onMutation).toHaveBeenCalledWith({ mode: "systemctl-stop" });
   });
 
   it("allows stop when systemd status is degraded but available", async () => {

@@ -109,8 +109,14 @@ function killPortWithFuser(
   signal: "SIGTERM" | "SIGKILL",
   beforeSignal?: BeforePortSignal,
 ): PortProcess[] {
+  if (beforeSignal) {
+    const listeners = listPortListenersWithFuser(port);
+    // fuser's resource-targeted -k can select a different PID at exec time.
+    // A guard therefore freezes concrete victims before signaling directly.
+    killPids(port, listeners, signal, beforeSignal);
+    return listeners;
+  }
   const args = ["-k", `-${FUSER_SIGNALS[signal]}`, `${port}/tcp`];
-  beforeSignal?.({ port, signal });
   try {
     const stdout = execFileSync("fuser", args, {
       encoding: "utf-8",
@@ -139,6 +145,41 @@ function killPortWithFuser(
     }
     if (code === "EACCES" || code === "EPERM") {
       throw withErrnoCode("fuser permission denied while forcing gateway port", code, err);
+    }
+    throw err instanceof Error ? err : new Error(String(err));
+  }
+}
+
+function listPortListenersWithFuser(port: number): PortProcess[] {
+  try {
+    const stdout = execFileSync("fuser", [`${port}/tcp`], {
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: PORT_TOOL_TIMEOUT_MS,
+      killSignal: "SIGKILL",
+    });
+    return parseFuserPidList(stdout).map((pid) => ({ pid }));
+  } catch (err: unknown) {
+    const execErr = err as ExecFileError;
+    const stdout = readExecOutput(execErr.stdout);
+    const stderr = readExecOutput(execErr.stderr);
+    const parsed = parseFuserPidList([stdout, stderr].filter(Boolean).join("\n"));
+    if (execErr.status === 1) {
+      return parsed.map((pid) => ({ pid }));
+    }
+    if (execErr.code === "ENOENT") {
+      throw withErrnoCode(
+        "fuser not found; required for --force when lsof is unavailable",
+        "ENOENT",
+        err,
+      );
+    }
+    if (execErr.code === "EACCES" || execErr.code === "EPERM") {
+      throw withErrnoCode(
+        "fuser permission denied while inspecting gateway port",
+        execErr.code,
+        err,
+      );
     }
     throw err instanceof Error ? err : new Error(String(err));
   }

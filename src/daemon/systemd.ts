@@ -1342,6 +1342,7 @@ async function runSystemdServiceAction(params: {
   env?: GatewayServiceEnv;
   action: "stop" | "restart";
   label: string;
+  onMutation?: () => void;
 }) {
   const env = params.env ?? process.env;
   const installed = await findInstalledSystemdGatewayScope(env);
@@ -1363,6 +1364,7 @@ async function runSystemdServiceAction(params: {
     if (res.code !== 0) {
       throw new Error(`systemctl ${params.action} failed: ${res.stderr || res.stdout}`.trim());
     }
+    params.onMutation?.();
     params.stdout.write(`${formatLine(params.label, unitName)}\n`);
     return;
   }
@@ -1376,6 +1378,7 @@ async function runSystemdServiceAction(params: {
   if (res.code !== 0) {
     throw new Error(`systemctl ${params.action} failed: ${res.stderr || res.stdout}`.trim());
   }
+  params.onMutation?.();
   params.stdout.write(`${formatLine(params.label, unitName)}\n`);
 }
 
@@ -1389,8 +1392,8 @@ export async function stopSystemdService({
     env,
     action: "stop",
     label: "Stopped systemd service",
+    onMutation: () => onMutation?.({ mode: "systemctl-stop" }),
   });
-  onMutation?.({ mode: "systemctl-stop" });
 }
 
 export async function restartSystemdService({
@@ -1403,8 +1406,8 @@ export async function restartSystemdService({
     env,
     action: "restart",
     label: "Restarted systemd service",
+    onMutation: () => onMutation?.({ mode: "systemctl-restart" }),
   });
-  onMutation?.({ mode: "systemctl-restart" });
   return { outcome: "completed" };
 }
 

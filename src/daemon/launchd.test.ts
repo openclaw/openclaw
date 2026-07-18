@@ -1674,6 +1674,7 @@ describe("launchd install", () => {
       OPENCLAW_GATEWAY_PORT: "19004",
     };
     const stdout = new PassThrough();
+    const onMutation = vi.fn();
     let output = "";
     stdout.on("data", (chunk: Buffer) => {
       output += chunk.toString();
@@ -1687,10 +1688,11 @@ describe("launchd install", () => {
     probePortUsage.mockResolvedValue("busy");
     formatPortDiagnostics.mockReturnValue(["Port 19004 is held by pid 4242."]);
 
-    await expect(runStopLaunchAgentWithFakeTimers({ env, stdout })).rejects.toThrow(
+    await expect(runStopLaunchAgentWithFakeTimers({ env, stdout, onMutation })).rejects.toThrow(
       "gateway port 19004 is still busy after LaunchAgent stop\nPort 19004 is held by pid 4242.",
     );
 
+    expect(onMutation).toHaveBeenCalledWith({ mode: "bootout" });
     expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(19004);
     expect(inspectPortUsage).toHaveBeenCalledWith(19004);
     expect(output).not.toContain("Stopped LaunchAgent");
@@ -1819,6 +1821,7 @@ describe("launchd install", () => {
       OPENCLAW_GATEWAY_PORT: "19008",
     };
     const stdout = new PassThrough();
+    const onMutation = vi.fn();
     let output = "";
     state.disableError = "Operation not permitted";
     stdout.on("data", (chunk: Buffer) => {
@@ -1833,10 +1836,13 @@ describe("launchd install", () => {
     probePortUsage.mockResolvedValue("busy");
     formatPortDiagnostics.mockReturnValue(["Port 19008 is held by pid 4242."]);
 
-    await expect(runStopLaunchAgentWithFakeTimers({ env, stdout, disable: true })).rejects.toThrow(
+    await expect(
+      runStopLaunchAgentWithFakeTimers({ env, stdout, disable: true, onMutation }),
+    ).rejects.toThrow(
       "gateway port 19008 is still busy after LaunchAgent stop\nPort 19008 is held by pid 4242.",
     );
 
+    expect(onMutation).toHaveBeenCalledWith({ mode: "disable-bootout" });
     expect(launchctlCommandNames()).toContain("bootout");
     expect(output).toContain("used bootout fallback");
     expect(output).not.toContain("Stopped LaunchAgent");
@@ -1920,6 +1926,21 @@ describe("launchd install", () => {
     ).rejects.toThrow(
       "launchctl print could not confirm stop; used bootout fallback and left service unloaded: launchctl print permission denied; launchctl bootout failed: launchctl bootout permission denied",
     );
+  });
+
+  it("audits disable when stop and its bootout fallback both fail", async () => {
+    const env = createDefaultLaunchdEnv();
+    const onMutation = vi.fn();
+    state.stopError = "stop failed";
+    state.bootoutError = "bootout failed";
+
+    await expect(
+      stopLaunchAgent({ env, stdout: new PassThrough(), disable: true, onMutation }),
+    ).rejects.toThrow("launchctl stop failed; used bootout fallback");
+
+    expect(onMutation).toHaveBeenCalledWith({ mode: "disable" });
+    expect(onMutation).not.toHaveBeenCalledWith({ mode: "disable-stop" });
+    expect(onMutation).not.toHaveBeenCalledWith({ mode: "disable-bootout" });
   });
 
   it("throws when default bootout fails", async () => {

@@ -885,6 +885,7 @@ async function bootoutLaunchAgentOrThrow(params: {
   serviceTarget: string;
   warning: string;
   stdout: NodeJS.WritableStream;
+  onMutation?: () => void;
 }): Promise<void> {
   const bootout = await execLaunchctl(["bootout", params.serviceTarget]);
   if (bootout.code !== 0 && !isLaunchctlNotLoaded(bootout)) {
@@ -892,6 +893,7 @@ async function bootoutLaunchAgentOrThrow(params: {
       `${params.warning}; launchctl bootout failed: ${formatLaunchctlResultDetail(bootout)}`,
     );
   }
+  params.onMutation?.();
   params.stdout.write(`${formatLine("Warning", params.warning)}\n`);
 }
 
@@ -1001,9 +1003,9 @@ export async function stopLaunchAgent({
     if (bootout.code !== 0 && !isLaunchctlNotLoaded(bootout)) {
       throw new Error(`launchctl bootout failed: ${formatLaunchctlResultDetail(bootout)}`);
     }
+    onMutation?.({ mode: "bootout" });
     await assertGatewayPortReleasedAfterStop(serviceEnv);
     stdout.write(`${formatLine("Stopped LaunchAgent", serviceTarget)}\n`);
-    onMutation?.({ mode: "bootout" });
     return;
   }
 
@@ -1015,12 +1017,13 @@ export async function stopLaunchAgent({
       serviceTarget,
       stdout,
       warning: `launchctl disable failed; used bootout fallback and left service unloaded: ${formatLaunchctlResultDetail(disableResult)}`,
+      onMutation: () => onMutation?.({ mode: "disable-bootout" }),
     });
     await assertGatewayPortReleasedAfterStop(serviceEnv);
     stdout.write(`${formatLine("Stopped LaunchAgent (degraded)", serviceTarget)}\n`);
-    onMutation?.({ mode: "disable-bootout" });
     return;
   }
+  onMutation?.({ mode: "disable" });
 
   // `launchctl stop` targets the plain label (not the fully-qualified service target).
   const stop = await execLaunchctl(["stop", label]);
@@ -1029,12 +1032,14 @@ export async function stopLaunchAgent({
       serviceTarget,
       stdout,
       warning: `launchctl stop failed; used bootout fallback and left service unloaded: ${formatLaunchctlResultDetail(stop)}`,
+      onMutation: () => onMutation?.({ mode: "disable-bootout" }),
     });
     await assertGatewayPortReleasedAfterStop(serviceEnv);
     stdout.write(`${formatLine("Stopped LaunchAgent (degraded)", serviceTarget)}\n`);
-    onMutation?.({ mode: "disable-bootout" });
     return;
   }
+
+  onMutation?.({ mode: "disable-stop" });
 
   const stopState = await waitForLaunchAgentStopped(serviceTarget);
   if (stopState.state !== "stopped" && stopState.state !== "not-loaded") {
@@ -1042,16 +1047,19 @@ export async function stopLaunchAgent({
       stopState.state === "unknown"
         ? `launchctl print could not confirm stop; used bootout fallback and left service unloaded: ${stopState.detail ?? "unknown error"}`
         : "launchctl stop did not fully stop the service; used bootout fallback and left service unloaded";
-    await bootoutLaunchAgentOrThrow({ serviceTarget, stdout, warning });
+    await bootoutLaunchAgentOrThrow({
+      serviceTarget,
+      stdout,
+      warning,
+      onMutation: () => onMutation?.({ mode: "disable-bootout" }),
+    });
     await assertGatewayPortReleasedAfterStop(serviceEnv);
     stdout.write(`${formatLine("Stopped LaunchAgent (degraded)", serviceTarget)}\n`);
-    onMutation?.({ mode: "disable-bootout" });
     return;
   }
 
   await assertGatewayPortReleasedAfterStop(serviceEnv);
   stdout.write(`${formatLine("Stopped LaunchAgent", serviceTarget)}\n`);
-  onMutation?.({ mode: "disable-stop" });
 }
 
 async function writeLaunchAgentPlist({

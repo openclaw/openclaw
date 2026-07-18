@@ -353,6 +353,22 @@ describe("Scheduled Task stop/restart cleanup", () => {
     });
   });
 
+  it("audits a successful task stop before a later output failure", async () => {
+    await withPreparedGatewayTask(async ({ env }) => {
+      pushSuccessfulSchtasksResponses(3);
+      const onMutation = vi.fn();
+      const stdout = {
+        write: vi.fn(() => {
+          throw new Error("output failed");
+        }),
+      } as unknown as NodeJS.WritableStream;
+
+      await expect(stopScheduledTask({ env, stdout, onMutation })).rejects.toThrow("output failed");
+
+      expect(onMutation).toHaveBeenCalledWith({ mode: "schtasks-stop" });
+    });
+  });
+
   it("force-kills remaining busy port listeners when the first stop pass does not free the port", async () => {
     await withPreparedGatewayTask(async ({ env, stdout }) => {
       pushSuccessfulSchtasksResponses(3);
@@ -478,6 +494,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
 
   it("throws when /Run fails during restart", async () => {
     await withPreparedGatewayTask(async ({ env, stdout }) => {
+      const onMutation = vi.fn();
       schtasksResponses.push(
         { ...SUCCESS_RESPONSE },
         { ...SUCCESS_RESPONSE },
@@ -485,9 +502,11 @@ describe("Scheduled Task stop/restart cleanup", () => {
         { code: 1, stdout: "", stderr: "ERROR: Access is denied." },
       );
 
-      await expect(restartScheduledTask({ env, stdout })).rejects.toThrow(
+      await expect(restartScheduledTask({ env, stdout, onMutation })).rejects.toThrow(
         "schtasks run failed: ERROR: Access is denied.",
       );
+      expect(onMutation).toHaveBeenCalledWith({ mode: "schtasks-end" });
+      expect(onMutation).not.toHaveBeenCalledWith({ mode: "schtasks-restart" });
       expect(schtasksCalls.at(-1)).toEqual(["/Run", "/TN", "OpenClaw Gateway"]);
     });
   });
