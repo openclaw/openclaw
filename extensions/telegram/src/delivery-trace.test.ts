@@ -40,6 +40,11 @@ type BufferedDispatcherParams = Parameters<
 type BufferedDispatcherResult = Awaited<
   ReturnType<PluginRuntime["channel"]["reply"]["dispatchReplyWithBufferedBlockDispatcher"]>
 >;
+type CapturedDispatch = {
+  dispatcherOptions?: BufferedDispatcherParams["dispatcherOptions"];
+  replyOptions?: BufferedDispatcherParams["replyOptions"];
+  resolveDispatch?: (result: BufferedDispatcherResult) => void;
+};
 
 const TRACE_CHAT_ID = 4242;
 // The scripted preview-delete dwell (MIN_PREVIEW_DWELL_MS = 4s) plus margin, so
@@ -138,7 +143,23 @@ function createRecordingTelegramApi(state: TelegramTraceWireState): Bot["api"] {
   return api as unknown as Bot["api"];
 }
 
-function createTraceTelegramDeps(): TelegramBotDeps {
+function createTraceTelegramDeps(captured: CapturedDispatch): TelegramBotDeps {
+  const coreRuntime = createPluginRuntimeMock({
+    channel: {
+      reply: {
+        dispatchReplyWithBufferedBlockDispatcher: (params) => {
+          captured.dispatcherOptions = params.dispatcherOptions;
+          captured.replyOptions = params.replyOptions;
+          return new Promise((resolve) => {
+            captured.resolveDispatch = resolve;
+          });
+        },
+      },
+    },
+  });
+  vi.spyOn(channelInbound, "runChannelInboundEvent").mockImplementation((params) =>
+    coreRuntime.channel.inbound.run(params),
+  );
   return {
     getRuntimeConfig: (() => ({
       config: baseTelegramMessageContextConfig,
@@ -204,27 +225,7 @@ async function setupTelegramTrace(recorder: WireRecorder) {
   if (!context) {
     throw new Error("trace context was not built");
   }
-  const captured: {
-    dispatcherOptions?: BufferedDispatcherParams["dispatcherOptions"];
-    replyOptions?: BufferedDispatcherParams["replyOptions"];
-    resolveDispatch?: (result: BufferedDispatcherResult) => void;
-  } = {};
-  const coreRuntime = createPluginRuntimeMock({
-    channel: {
-      reply: {
-        dispatchReplyWithBufferedBlockDispatcher: (params) => {
-          captured.dispatcherOptions = params.dispatcherOptions;
-          captured.replyOptions = params.replyOptions;
-          return new Promise((resolve) => {
-            captured.resolveDispatch = resolve;
-          });
-        },
-      },
-    },
-  });
-  vi.spyOn(channelInbound, "runChannelInboundEvent").mockImplementation((params) =>
-    coreRuntime.channel.inbound.run(params),
-  );
+  const captured: CapturedDispatch = {};
   const dispatchDone = dispatchTelegramMessage({
     context,
     bot: { api } as unknown as Bot,
@@ -236,8 +237,8 @@ async function setupTelegramTrace(recorder: WireRecorder) {
     streamMode: "partial",
     textLimit: TELEGRAM_TEXT_CHUNK_LIMIT,
     telegramCfg: {},
-    telegramDeps: createTraceTelegramDeps(),
-    opts: { token: "test-token" },
+    telegramDeps: createTraceTelegramDeps(captured),
+    opts: { token: "trace-token" },
   });
   // Swallow here only to avoid an unhandled rejection warning racing the idle
   // step; the idle handler awaits dispatchDone and surfaces real failures.
