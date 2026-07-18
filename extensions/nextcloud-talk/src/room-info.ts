@@ -7,6 +7,7 @@ import { ssrfPolicyFromPrivateNetworkOptIn } from "openclaw/plugin-sdk/ssrf-runt
 import { fetchWithSsrFGuard, type RuntimeEnv } from "../runtime-api.js";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
 import { resolveNextcloudTalkApiCredentials } from "./api-credentials.js";
+import { releaseNextcloudTalkGuardedResponse } from "./guarded-response.js";
 
 const ROOM_CACHE_TTL_MS = 5 * 60 * 1000;
 const ROOM_CACHE_ERROR_TTL_MS = 30 * 1000;
@@ -103,7 +104,6 @@ export async function resolveNextcloudTalkRoomKind(params: {
     });
     try {
       if (!response.ok) {
-        await response.body?.cancel().catch(() => undefined);
         cacheRoomInfo(key, {
           fetchedAt: Date.now(),
           error: `status:${response.status}`,
@@ -122,7 +122,7 @@ export async function resolveNextcloudTalkRoomKind(params: {
       cacheRoomInfo(key, { fetchedAt: Date.now(), kind });
       return kind;
     } finally {
-      await release();
+      await releaseNextcloudTalkGuardedResponse({ response, release });
     }
   } catch (err) {
     cacheRoomInfo(key, {
