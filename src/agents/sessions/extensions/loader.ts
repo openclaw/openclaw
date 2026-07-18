@@ -481,8 +481,20 @@ function isJavaScriptExtensionPath(extensionPath: string): boolean {
   }
 }
 
+// Cap extension source reads at 10 MiB — extension source files scanned for
+// import patterns should not exhaust memory from a large bundled file.
+const MAX_EXTENSION_SOURCE_BYTES = 10 * 1024 * 1024;
+
 function extensionSourceNeedsJitiAliasResolution(extensionPath: string): boolean {
   try {
+    const stats = fs.statSync(extensionPath);
+    if (!stats.isFile()) {
+      return true;
+    }
+    if (stats.size > MAX_EXTENSION_SOURCE_BYTES) {
+      // File is too large to read safely — assume jiti alias resolution is needed.
+      return true;
+    }
     const source = fs.readFileSync(extensionPath, "utf8");
     return (
       EXTENSION_LOADER_ALIAS_IMPORT_PATTERN.test(source) ||

@@ -322,4 +322,32 @@ export default async function extension(api) {
     expect(jitiCalls.options).toHaveLength(1);
     expect(jitiCalls.imports).toEqual([extensionPath]);
   });
+
+  it("falls back to jiti for oversized extension source files", async () => {
+    // This test verifies the contract: when extensionSourceNeedsJitiAliasResolution
+    // encounters a file exceeding MAX_EXTENSION_SOURCE_BYTES (10 MiB), it returns true
+    // (jiti needed) instead of trying to read the source. The function already returns
+    // true on any error, so the stat pre-check integrates naturally.
+    const { loadExtensions } = await import("./loader.js");
+    const dir = await mkdtemp(join(tmpdir(), "openclaw-extension-js-"));
+    tempDirs.push(dir);
+    const extensionPath = join(dir, "extension.js");
+
+    // Write a compiled .js file exceeding the 10 MiB source-scan cap.
+    // The file contains no alias imports — normally it would bypass jiti.
+    // When oversized, the source scan is skipped and jiti is used as a fallback.
+    const largeSource = Buffer.alloc(11 * 1024 * 1024);
+    Buffer.from(
+      'export default async function extension(api){api.registerCommand("cmd",{description:"p",handler(){}});}',
+      "utf8",
+    ).copy(largeSource, 0);
+    await writeFile(extensionPath, largeSource);
+
+    const result = await loadExtensions([extensionPath], dir);
+
+    expect(result.errors).toEqual([]);
+    expect(result.extensions).toHaveLength(1);
+    // jiti should have been used since the oversized file can't be scanned.
+    expect(jitiCalls.imports).toEqual([extensionPath]);
+  });
 });
