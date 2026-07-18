@@ -340,11 +340,7 @@ export function streamProxy(
         throw new Error(errorMessage);
       }
 
-      if (!response.body) {
-        throw new Error("Proxy returned an empty response body");
-      }
-
-      reader = response.body.getReader();
+      reader = response.body!.getReader();
       const sseReader = createSseByteGuard(reader, {
         maxBytes: PROXY_SSE_STREAM_MAX_BYTES,
         onOverflow: ({ maxBytes }) => new Error(`Proxy SSE stream exceeded ${maxBytes} bytes`),

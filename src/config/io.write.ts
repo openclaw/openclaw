@@ -25,7 +25,7 @@ import {
   resolveGatewayMode,
   restoreAuthoredTildePathsForWrite,
 } from "./io.read-helpers.js";
-import { loggedConfigWarningFingerprints } from "./io.state.js";
+import { loggedConfigWarningFingerprints, setBoundedConfigIoWarningEntry } from "./io.state.js";
 import type {
   ConfigWriteOptions,
   InternalConfigWriteResult,
@@ -294,7 +294,6 @@ export async function writeConfigFileFromContext(
     nextStat?: fs.Stats | null,
   ) => {
     await appendConfigAuditRecord({
-      fs: deps.fs,
       env: deps.env,
       homedir: deps.homedir,
       record: finalizeConfigWriteAuditRecord({
@@ -412,7 +411,11 @@ export async function writeConfigFileFromContext(
               if (previousWarningFingerprint === undefined) {
                 loggedConfigWarningFingerprints.delete(configPath);
               } else {
-                loggedConfigWarningFingerprints.set(configPath, previousWarningFingerprint);
+                setBoundedConfigIoWarningEntry(
+                  loggedConfigWarningFingerprints,
+                  configPath,
+                  previousWarningFingerprint,
+                );
               }
             },
           }

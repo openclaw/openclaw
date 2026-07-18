@@ -1,7 +1,9 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/channel-plugin-common";
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerDiscordActivities } from "./register.js";
 import { getDiscordActivitiesRuntime, setDiscordActivitiesRuntime } from "./runtime.js";
+import { openDiscordActivityStores } from "./store.js";
 import { createMemoryKeyedStore } from "./test-helpers.test-support.js";
 
 afterEach(() => {
@@ -11,8 +13,9 @@ afterEach(() => {
 
 function createApi(config: Record<string, unknown>) {
   const routes: unknown[] = [];
-  const tools: unknown[] = [];
+  const tools: Array<{ tool: unknown; opts?: { name?: string } }> = [];
   const warn = vi.fn();
+  const resolvePath = vi.fn((input: string) => `/plugin-root/${input}`);
   const api = {
     config,
     logger: { warn },
@@ -21,12 +24,25 @@ function createApi(config: Record<string, unknown>) {
       config: { current: () => config },
     },
     registerHttpRoute: vi.fn((route) => routes.push(route)),
-    registerTool: vi.fn((tool) => tools.push(tool)),
+    registerTool: vi.fn((tool, opts) => tools.push({ tool, opts })),
+    resolvePath,
   } as unknown as OpenClawPluginApi;
-  return { api, routes, tools, warn };
+  return { api, routes, tools, warn, resolvePath };
 }
 
 describe("Discord Activities registration", () => {
+  it("requires atomic plugin state updates", () => {
+    const openKeyedStore = <T>() => {
+      const store: PluginStateKeyedStore<T> = createMemoryKeyedStore<T>();
+      store.update = undefined;
+      return store;
+    };
+
+    expect(() => openDiscordActivityStores(openKeyedStore)).toThrow(
+      "Discord Activities require atomic plugin state updates",
+    );
+  });
+
   it("registers no route, tool, or runtime when unconfigured", () => {
     const test = createApi({ channels: { discord: { token: "test" } } });
     registerDiscordActivities(test.api);
@@ -62,7 +78,7 @@ describe("Discord Activities registration", () => {
     expect(getDiscordActivitiesRuntime()).toBeUndefined();
   });
 
-  it("registers the public plugin route and Discord-only tool factory when configured", () => {
+  it("registers the public route and both Discord-only widget tool factories", () => {
     const test = createApi({
       channels: {
         discord: {
@@ -78,9 +94,12 @@ describe("Discord Activities registration", () => {
       auth: "plugin",
       match: "prefix",
     });
-    expect(test.tools).toHaveLength(1);
-    const factory = test.tools[0] as (context: { messageChannel?: string }) => unknown;
-    expect(factory({ messageChannel: "slack" })).toBeNull();
-    expect(factory({ messageChannel: "discord" })).not.toBeNull();
+    expect(test.resolvePath).toHaveBeenCalledWith("assets/embedded-app-sdk.mjs");
+    expect(test.tools.map(({ opts }) => opts?.name)).toEqual(["show_widget", "discord_widget"]);
+    for (const { tool } of test.tools) {
+      const factory = tool as (context: { messageChannel?: string }) => unknown;
+      expect(factory({ messageChannel: "slack" })).toBeNull();
+      expect(factory({ messageChannel: "discord" })).not.toBeNull();
+    }
   });
 });

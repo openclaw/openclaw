@@ -4,12 +4,14 @@ import { coerceSecretRef, type SecretRef } from "../config/types.secrets.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { secretRefKey } from "./ref-contract.js";
 import type { SecretRefResolveCache } from "./resolve-types.js";
+import type { SecretAssignmentDisposition, SecretOwnerKind } from "./runtime-degraded-state.js";
 import { assertExpectedResolvedSecretValue } from "./secret-value.js";
 import { isRecord } from "./shared.js";
 
 export type SecretResolverWarningCode =
   | "SECRETS_REF_OVERRIDES_PLAINTEXT"
   | "SECRETS_REF_IGNORED_INACTIVE_SURFACE"
+  | "SECRETS_OWNER_UNAVAILABLE"
   | "WEB_SEARCH_PROVIDER_INVALID_AUTODETECT"
   | "WEB_SEARCH_AUTODETECT_SELECTED"
   | "WEB_SEARCH_KEY_UNRESOLVED_FALLBACK_USED"
@@ -29,8 +31,44 @@ export type SecretAssignment = {
   ref: SecretRef;
   path: string;
   expected: "string" | "string-or-object";
+  ownerKind: SecretOwnerKind;
+  ownerId: string;
+  requiredForGateway: boolean;
+  disposition: SecretAssignmentDisposition;
   apply: (value: unknown) => void;
 };
+
+type SecretAssignmentValidationFailure = Pick<
+  SecretAssignment,
+  "ownerKind" | "ownerId" | "expected"
+> & {
+  refKey: string;
+};
+
+class SecretAssignmentValidationError extends Error {
+  readonly failures: SecretAssignmentValidationFailure[];
+
+  constructor(params: { failures: SecretAssignmentValidationFailure[]; error: Error }) {
+    super(params.error.message, { cause: params.error });
+    this.name = "SecretAssignmentValidationError";
+    this.failures = params.failures.map((failure) => ({ ...failure }));
+  }
+}
+
+/** Returns every assignment whose resolved value failed its target shape contract. */
+export function getSecretAssignmentValidationFailures(
+  error: unknown,
+): SecretAssignmentValidationFailure[] {
+  if (!(error instanceof SecretAssignmentValidationError)) {
+    return [];
+  }
+  return error.failures.map((failure) => ({ ...failure }));
+}
+
+export type SecretAssignmentOwner = Pick<
+  SecretAssignment,
+  "ownerKind" | "ownerId" | "requiredForGateway" | "disposition"
+>;
 
 export type ResolverContext = {
   sourceConfig: OpenClawConfig;
@@ -43,7 +81,6 @@ export type ResolverContext = {
 };
 
 export type SecretDefaults = NonNullable<OpenClawConfig["secrets"]>["defaults"];
-export type { SecretRefResolveCache } from "./resolve-types.js";
 
 /**
  * Creates the mutable collection context used while preparing a secrets runtime snapshot.
@@ -112,6 +149,22 @@ export function collectSecretInputAssignment(params: {
   context: ResolverContext;
   active?: boolean;
   inactiveReason?: string;
+  owner?: SecretAssignmentOwner;
+  apply: (value: unknown) => void;
+}): void {
+  collectRuntimeSecretInputAssignment(params);
+}
+
+/** Internal owner-aware variant used while migrating runtime surfaces to isolation. */
+export function collectRuntimeSecretInputAssignment(params: {
+  value: unknown;
+  path: string;
+  expected: SecretAssignment["expected"];
+  defaults: SecretDefaults | undefined;
+  context: ResolverContext;
+  active?: boolean;
+  inactiveReason?: string;
+  owner?: SecretAssignmentOwner;
   apply: (value: unknown) => void;
 }): void {
   const ref = coerceSecretRef(params.value, params.defaults);
@@ -130,6 +183,10 @@ export function collectSecretInputAssignment(params: {
     ref,
     path: params.path,
     expected: params.expected,
+    ownerKind: params.owner?.ownerKind ?? "unknown",
+    ownerId: params.owner?.ownerId ?? params.path,
+    requiredForGateway: params.owner?.requiredForGateway ?? false,
+    disposition: params.owner?.disposition ?? "isolate",
     apply: params.apply,
   });
 }
@@ -141,21 +198,41 @@ export function applyResolvedAssignments(params: {
   assignments: SecretAssignment[];
   resolved: Map<string, unknown>;
 }): void {
+  const values: unknown[] = [];
+  const failures: SecretAssignmentValidationFailure[] = [];
+  let firstValidationError: Error | undefined;
   for (const assignment of params.assignments) {
     const key = secretRefKey(assignment.ref);
     if (!params.resolved.has(key)) {
       throw new Error(`Secret reference "${key}" resolved to no value.`);
     }
     const value = params.resolved.get(key);
-    assertExpectedResolvedSecretValue({
-      value,
-      expected: assignment.expected,
-      errorMessage:
-        assignment.expected === "string"
-          ? `${assignment.path} resolved to a non-string or empty value.`
-          : `${assignment.path} resolved to an unsupported value type.`,
-    });
-    assignment.apply(value);
+    try {
+      assertExpectedResolvedSecretValue({
+        value,
+        expected: assignment.expected,
+        errorMessage:
+          assignment.expected === "string"
+            ? `${assignment.path} resolved to a non-string or empty value.`
+            : `${assignment.path} resolved to an unsupported value type.`,
+      });
+    } catch (error) {
+      const validationError = error instanceof Error ? error : new Error(String(error));
+      firstValidationError ??= validationError;
+      failures.push({
+        ownerKind: assignment.ownerKind,
+        ownerId: assignment.ownerId,
+        expected: assignment.expected,
+        refKey: key,
+      });
+    }
+    values.push(value);
+  }
+  if (firstValidationError) {
+    throw new SecretAssignmentValidationError({ error: firstValidationError, failures });
+  }
+  for (const [index, assignment] of params.assignments.entries()) {
+    assignment.apply(values[index]);
   }
 }
 

@@ -115,6 +115,10 @@ export const discordChannelConfigUiHints = {
     label: "Discord Thread Spawn Context",
     help: 'Default native subagent context for thread-bound spawns. "fork" starts from the requester transcript; "isolated" starts clean. Default: "fork".',
   },
+  subagentProgress: {
+    label: "Discord Subagent Progress",
+    help: "Show active subagent count reactions and typing on the source message. Default: false.",
+  },
   "ui.components.accentColor": {
     label: "Discord Component Accent Color",
     help: "Accent color for Discord component containers (hex). Set per account via channels.discord.accounts.<id>.ui.components.accentColor.",
@@ -205,11 +209,11 @@ export const discordChannelConfigUiHints = {
   },
   "voice.realtime.requireWakeName": {
     label: "Discord Realtime Require Wake Name",
-    help: "Require a configured wake name before OpenAI agent-proxy Discord realtime voice responds. If wakeNames is unset, the routed agent name is used, falling back to the agent id.",
+    help: "Control OpenAI agent-proxy wake-name gating. Unset listens naturally with one human and requires a wake name with two or more; true always requires one and false never does.",
   },
   "voice.realtime.wakeNames": {
     label: "Discord Realtime Wake Names",
-    help: "One- or two-word activation names that allow OpenAI agent-proxy Discord realtime voice to respond when requireWakeName is enabled.",
+    help: "One- or two-word activation names used whenever OpenAI agent-proxy Discord realtime voice has an active wake-name gate.",
   },
   "voice.realtime.bootstrapContextFiles": {
     label: "Discord Realtime Bootstrap Context Files",

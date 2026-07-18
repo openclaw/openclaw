@@ -1,5 +1,7 @@
 // Runtime proxy tests cover SSE parsing, terminal error handling, and request
 // payload scrubbing before proxying model streams.
+import { once } from "node:events";
+import http from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Context, Model, Usage } from "../../llm/types.js";
 import { streamProxy } from "./proxy.js";
@@ -95,12 +97,17 @@ async function resultWithinMs(
   stream: { result(): Promise<unknown> },
   timeoutMs = 25,
 ): Promise<unknown> {
-  return await Promise.race([
-    stream.result(),
-    new Promise<symbol>((resolve) => {
-      setTimeout(() => resolve(unresolved), timeoutMs);
-    }),
-  ]);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      stream.result(),
+      new Promise<symbol>((resolve) => {
+        timer = setTimeout(() => resolve(unresolved), timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function settledResult(stream: { result(): Promise<unknown> }): Promise<unknown> {
@@ -598,33 +605,82 @@ describe("streamProxy", () => {
       errorMessage: "Proxy stream ended before terminal event",
     });
   });
+});
 
-  it("emits a business-level error when the proxy returns a null response body", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(
-        async () =>
-          ({
-            ok: true,
-            status: 200,
-            body: null,
-          }) as Response,
-      ),
-    );
+describe("streamProxy loopback /api/stream", () => {
+  let server: http.Server | undefined;
+  const dripIntervals = new Set<ReturnType<typeof setInterval>>();
 
+  afterEach(async () => {
+    for (const interval of dripIntervals) {
+      clearInterval(interval);
+    }
+    dripIntervals.clear();
+    if (!server) {
+      return;
+    }
+    const closed = once(server, "close");
+    server.close();
+    server.closeAllConnections();
+    await closed;
+    server = undefined;
+  });
+
+  async function listenDripProxy(): Promise<number> {
+    server = http.createServer((req, res) => {
+      res.on("error", () => {});
+      if (req.method !== "POST" || req.url !== "/api/stream") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Transfer-Encoding": "chunked",
+      });
+      // Keepalive-style drip resets chunk-idle; outer abort must win.
+      const drip = () => {
+        if (res.writableEnded || res.destroyed) {
+          return;
+        }
+        res.write(`data: ${JSON.stringify({ type: "start" })}\n\n`);
+      };
+      const interval = setInterval(drip, 20);
+      dripIntervals.add(interval);
+      res.once("close", () => {
+        clearInterval(interval);
+        dripIntervals.delete(interval);
+      });
+      drip();
+    });
+    server.on("clientError", (_err, socket) => socket.destroy());
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected loopback server address");
+    }
+    return address.port;
+  }
+
+  it("cancels a dripping native SSE body when the outer abort signal fires", async () => {
+    const port = await listenDripProxy();
+    const controller = new AbortController();
     const stream = streamProxy(model, context, {
       authToken: "token",
-      proxyUrl: "https://proxy.example",
+      proxyUrl: `http://127.0.0.1:${port}`,
+      // Idle well above drip cadence so only the outer abort can terminate.
+      timeoutMs: 10_000,
+      signal: controller.signal,
     });
-    const events = [];
-    for await (const event of stream) {
-      events.push(event);
-    }
 
-    expect(events.at(-1)?.type).toBe("error");
-    await expect(stream.result()).resolves.toMatchObject({
-      stopReason: "error",
-      errorMessage: "Proxy returned an empty response body",
+    const firstEvent = await stream[Symbol.asyncIterator]().next();
+    expect(firstEvent).toMatchObject({ done: false, value: { type: "start" } });
+    controller.abort();
+
+    expect(await resultWithinMs(stream, 1_500)).toMatchObject({
+      stopReason: "aborted",
+      errorMessage: "Request aborted by user",
     });
   });
 });

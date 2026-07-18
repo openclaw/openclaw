@@ -462,4 +462,30 @@ describe("cron edit command", () => {
     expect(help).toContain("--clear-thread-id");
     expect(help).toContain("--clear-account");
   });
+
+  it.each([
+    ["--channel", "telegram"],
+    ["--to", "+1234567890"],
+    ["--account", "coordinator"],
+    ["--thread-id", "42"],
+  ])("rejects explicit chat delivery %s on main systemEvent cron edit", async (flag, value) => {
+    const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    const exitSpy = vi.spyOn(defaultRuntime, "exit").mockImplementation((() => undefined) as never);
+    const program = createCronProgram();
+
+    await program.parseAsync(
+      ["edit", "job-1", "--session", "main", "--system-event", "wakeup", flag, value],
+      { from: "user" },
+    );
+
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "--channel, --to, --account, and --thread-id require a non-main agentTurn or command job with delivery.",
+      ),
+    );
+    expect(callGatewayFromCli).not.toHaveBeenCalled();
+
+    errorSpy.mockRestore();
+    exitSpy.mockRestore();
+  });
 });
