@@ -423,6 +423,14 @@ function createManagedRestartSequenceHarness(
     },
   } as OpenClawConfig;
   setRuntimeConfigSnapshot(initialConfig, initialConfig);
+  activateSecretsRuntimeSnapshot({
+    sourceConfig: initialConfig,
+    config: initialConfig,
+    authStores: [],
+    authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
+    warnings: [],
+    webTools: createEmptyRuntimeWebToolsMetadata(),
+  });
   const deferredConfig = {
     gateway: {
       port: 18790,
@@ -893,7 +901,7 @@ describe("managed reload transaction ownership", () => {
     async (kind) => {
       const result = await runManagedOwnershipScenario({ kind, queueRevert: true });
 
-      expect(result.activateRuntimeSecrets).toHaveBeenCalledTimes(2);
+      expect(result.activateRuntimeSecrets).toHaveBeenCalledOnce();
       expect(result.commitTerminalConfig).not.toHaveBeenCalled();
       expect(result.acceptTerminalConfig).toHaveBeenCalledOnce();
       expect(result.prepareTerminalConfig).toHaveBeenCalledOnce();

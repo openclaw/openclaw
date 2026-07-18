@@ -1,7 +1,7 @@
 /** Internal provenance for assignments collected outside openclaw.json. */
 import type { SecretAssignment } from "./runtime-shared.js";
 
-export type SecretAssignmentSource = "auth-store" | "config";
+type SecretAssignmentSource = "auth-store" | "config";
 
 const assignmentSources = new WeakMap<SecretAssignment, SecretAssignmentSource>();
 

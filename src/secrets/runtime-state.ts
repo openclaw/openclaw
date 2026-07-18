@@ -18,7 +18,6 @@ import type {
 } from "../agents/auth-profiles/types.js";
 import {
   clearRuntimeConfigSnapshot,
-  setRuntimeConfigSourceSnapshotIfCurrent,
   setRuntimeConfigSnapshot,
   setRuntimeConfigSnapshotRefreshHandler,
   type RuntimeConfigSnapshotRefreshHandler,
@@ -1009,38 +1008,6 @@ export function getActiveSecretsRuntimeSnapshot(): PreparedSecretsRuntimeSnapsho
 /** Stable token for compare-and-activate ownership across cloned snapshot reads. */
 export function getActiveSecretsRuntimeSnapshotRevision(): number {
   return activeSnapshotRevision;
-}
-
-/** Advance canonical source ownership without replacing resolved runtime or auth bytes. */
-export function setSecretsRuntimeSourceSnapshotIfCurrent(params: {
-  expectedSecretsRevision: number;
-  expectedRuntimeConfigRevision: number;
-  runtimeSourceConfig: OpenClawConfig;
-  secretsSourceConfig: OpenClawConfig;
-}): boolean {
-  if (activeSnapshotRevision !== params.expectedSecretsRevision) {
-    return false;
-  }
-  const nextRuntimeSourceConfig = structuredClone(params.runtimeSourceConfig);
-  const nextSecretsSourceConfig = structuredClone(params.secretsSourceConfig);
-  const currentAuthStores = structuredClone(listRuntimeAuthProfileStoreSnapshots());
-  const nextAuthMutations = captureAuthStoreMutationLineage(currentAuthStores, currentAuthStores);
-  if (
-    !setRuntimeConfigSourceSnapshotIfCurrent({
-      expectedRevision: params.expectedRuntimeConfigRevision,
-      sourceConfig: nextRuntimeSourceConfig,
-    })
-  ) {
-    return false;
-  }
-  if (activeSnapshot) {
-    activeSnapshot.sourceConfig = nextSecretsSourceConfig;
-    activeSnapshotRevision += 1;
-    activeSnapshotLineageStartRevision = activeSnapshotRevision;
-    activeSnapshotLineageAuthStores = currentAuthStores;
-    activeSnapshotLineageAuthMutations = nextAuthMutations;
-  }
-  return true;
 }
 
 // Hot-path readers only need the config pair for availability decisions.
