@@ -872,7 +872,7 @@ function resolveDefaultTestDeviceIdentityPath(params: {
     ),
   );
   const suiteRoot = process.env.OPENCLAW_STATE_DIR ?? process.env.HOME ?? os.tmpdir();
-  return path.join(suiteRoot, "test-device-identities", `${safe}.json`);
+  return path.join(suiteRoot, "test-device-identities", `${safe}.sqlite`);
 }
 
 export async function readConnectChallengeNonce(
@@ -1095,7 +1095,7 @@ export async function connectReq(
         deviceFamily: client.deviceFamily,
         role,
       });
-    const identity = loadOrCreateDeviceIdentity(identityPath);
+    const identity = loadOrCreateDeviceIdentity({ path: identityPath });
     const signedAtMs = Date.now();
     const payload = buildDeviceAuthPayloadV3({
       deviceId: identity.deviceId,

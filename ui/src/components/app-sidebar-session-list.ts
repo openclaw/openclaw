@@ -25,6 +25,7 @@ import {
   type SidebarRecentSession,
 } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
+import { resolveSessionIcon } from "./session-icon-registry.ts";
 import { renderSessionRowBadges } from "./session-row-badges.ts";
 import "./elapsed-time.ts";
 
@@ -88,10 +89,19 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
         ? session.subtitle
         : undefined;
     const meta = display?.meta ?? session.meta;
+    const rowMeta = session.pinned ? "" : meta;
     const hasTrail = session.isChild && (session.runtimeMs != null || session.startedAt != null);
     const metaId = hasTrail ? sidebarSessionMetaId(session.key) : undefined;
     const menuSession = display ? { ...session, meta } : session;
-    const title = display?.title ?? [label, meta].filter(Boolean).join(" · ");
+    const title = display?.title ?? [label, rowMeta].filter(Boolean).join(" · ");
+    // Pinned rows reposition the state badge into the nav-item slot; render
+    // every state renderSessionState knows (spinner, unread, child terminal
+    // badges) so pinning a subagent session cannot hide its outcome.
+    const sessionState = this.renderSessionState(session);
+    const pinnedState =
+      session.pinned && sessionState !== nothing
+        ? html`<span class="nav-item__state">${sessionState}</span>`
+        : nothing;
     const rowClass = [
       "sidebar-recent-session",
       "session-row-host",
@@ -116,12 +126,13 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
               if (event.dataTransfer) {
                 writeSessionDragData(event.dataTransfer, session.key);
                 this.draggingSessionKey = session.key;
+                this.draggingSidebarEntry = session.pinned ? `session:${session.key}` : null;
               }
             }}
         @dragend=${session.isChild
           ? nothing
           : () => {
-              this.draggingSessionKey = null;
+              this.finishSidebarEntryDrag();
               this.sessionDropTarget = null;
             }}
         @contextmenu=${session.isChild
@@ -142,6 +153,11 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
           aria-describedby=${metaId ?? nothing}
           @click=${(event: MouseEvent) => this.handleSessionRowClick(event, session)}
         >
+          ${session.pinned
+            ? html`<span class="sidebar-pinned-session__icon" aria-hidden="true"
+                >${resolveSessionIcon(session.icon)}</span
+              >`
+            : nothing}
           <span class="sidebar-recent-session__text">
             <span class="sidebar-recent-session__name hover-marquee">${label}</span>
             ${subtitle
@@ -157,8 +173,8 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
                 >${icons.barChart}</span
               >`
             : nothing}
-          ${this.renderSessionState(session)}
-          ${session.isChild ? nothing : renderSessionRowBadges(session)}
+          ${session.pinned ? nothing : sessionState}
+          ${session.isChild ? nothing : renderSessionRowBadges(session)} ${pinnedState}
         </a>
         ${session.childSessionKeys.length > 0
           ? html`<button
@@ -297,6 +313,10 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
           </div>`
         : nothing}
     </div>`;
+  }
+
+  protected renderPinnedSidebarSession(session: SidebarRecentSession): TemplateResult {
+    return this.renderSessionTree(session);
   }
 
   private renderSessionSection(
@@ -573,7 +593,14 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
     const visibleSessions = this.selectedAgentSessionRows(navigationState);
     const expandedAgentId = this.expandedAgentId();
     return html`
-      <section class="sidebar-sessions">
+      <section
+        class="sidebar-sessions ${this.sessionListRemovalDrop
+          ? "sidebar-sessions--removal-drop"
+          : ""}"
+        @dragover=${(event: DragEvent) => this.handleSessionListDragOver(event)}
+        @dragleave=${(event: DragEvent) => this.handleSessionListDragLeave(event)}
+        @drop=${(event: DragEvent) => this.handleSessionListDrop(event)}
+      >
         ${this.sessionMutationError
           ? html`
               <div
