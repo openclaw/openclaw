@@ -3,6 +3,44 @@ import { spawnSync } from "node:child_process";
 import { parseFlagArgs, stringFlag, intFlag } from "./lib/arg-utils.mjs";
 
 const CLI_STARTUP_BENCH_FIXTURE_PATH = "test/fixtures/cli-startup-bench.json";
+const DEFAULT_BENCHMARK_TIMEOUT_KILL_GRACE_MS = 1_000;
+const DEFAULT_BENCHMARK_PROCESS_CLEANUP_GRACE_MS = 5_000;
+// A timed-out sample can spend one grace before SIGKILL and another reaping its process group.
+// Keep these preset counts aligned with COMMAND_CASES or a valid fixture run can be cut short.
+const BENCHMARK_TIMEOUT_CLEANUP_WINDOWS = 2;
+const BENCHMARK_CASE_COUNTS = {
+  startup: 6,
+  real: 14,
+  all: 43,
+};
+
+function resolveTestDurationMs(envName, fallback) {
+  const raw = process.env.VITEST ? process.env[envName] : undefined;
+  if (!raw || !/^\d+$/u.test(raw)) {
+    return fallback;
+  }
+  const parsed = Number(raw);
+  return Number.isSafeInteger(parsed) ? parsed : fallback;
+}
+
+function resolveBenchmarkProcessTimeoutMs(opts) {
+  const caseCount = BENCHMARK_CASE_COUNTS[opts.preset] ?? BENCHMARK_CASE_COUNTS.all;
+  const timeoutKillGraceMs = resolveTestDurationMs(
+    "OPENCLAW_TEST_CLI_STARTUP_TIMEOUT_KILL_GRACE_MS",
+    DEFAULT_BENCHMARK_TIMEOUT_KILL_GRACE_MS,
+  );
+  const processCleanupGraceMs = resolveTestDurationMs(
+    "OPENCLAW_TEST_CLI_STARTUP_BENCH_PROCESS_CLEANUP_GRACE_MS",
+    DEFAULT_BENCHMARK_PROCESS_CLEANUP_GRACE_MS,
+  );
+  const totalRuns = opts.runs + opts.warmup;
+  const perRunBudgetMs = opts.timeoutMs + BENCHMARK_TIMEOUT_CLEANUP_WINDOWS * timeoutKillGraceMs;
+  const totalTimeoutMs = caseCount * totalRuns * perRunBudgetMs + processCleanupGraceMs;
+  if (!Number.isSafeInteger(totalTimeoutMs)) {
+    throw new Error("CLI startup benchmark total timeout exceeds the safe integer range");
+  }
+  return totalTimeoutMs;
+}
 
 if (process.argv.slice(2).includes("--help")) {
   console.log(
@@ -69,6 +107,8 @@ const run = spawnSync(process.execPath, args, {
   cwd: process.cwd(),
   stdio: "inherit",
   env: process.env,
+  timeout: resolveBenchmarkProcessTimeoutMs(opts),
+  killSignal: "SIGKILL",
 });
 
 if (run.status !== 0) {
