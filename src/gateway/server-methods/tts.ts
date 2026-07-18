@@ -16,7 +16,6 @@ import {
   listSpeechProviders,
 } from "../../tts/provider-registry.js";
 import {
-  getResolvedSpeechProviderConfig,
   getTtsPersona,
   getTtsProvider,
   isTtsEnabled,
@@ -35,7 +34,6 @@ import {
 } from "../../tts/tts.js";
 import { formatForLog } from "../ws-log.js";
 import { inferSpeechMimeType } from "./speech-mime.js";
-import { configuredOrFalse } from "./talk-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 /** Gateway request handlers for TTS status, preference mutation, and synthesis. */
@@ -56,13 +54,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
       const providerStates = listSpeechProviders(cfg).map((candidate) => ({
         id: candidate.id,
         label: candidate.label,
-        configured: configuredOrFalse(() =>
-          candidate.isConfigured({
-            cfg,
-            providerConfig: getResolvedSpeechProviderConfig(config, candidate.id, cfg),
-            timeoutMs: config.timeoutMs,
-          }),
-        ),
+        configured: isTtsProviderConfigured(config, candidate.id, cfg),
       }));
       respond(true, {
         enabled: isTtsEnabled(config, prefsPath),
@@ -323,11 +315,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
         providers: listSpeechProviders(cfg).map((provider) => ({
           id: provider.id,
           name: provider.label,
-          configured: provider.isConfigured({
-            cfg,
-            providerConfig: getResolvedSpeechProviderConfig(config, provider.id, cfg),
-            timeoutMs: config.timeoutMs,
-          }),
+          configured: isTtsProviderConfigured(config, provider.id, cfg),
           models: [...(provider.models ?? [])],
           voices: [...(provider.voices ?? [])],
         })),
