@@ -294,5 +294,4 @@ describe("AppSidebar agent chip", () => {
     expect(setAgent).toHaveBeenCalledWith("research");
     expect(context.agentSelection.state.selectedId).toBe("research");
   });
-
 });
