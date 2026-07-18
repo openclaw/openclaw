@@ -6,6 +6,9 @@ import {
 import { hasEffectivePairedDeviceRole, type PairedDevice } from "../../../infra/device-pairing.js";
 import {
   BOOTSTRAP_HANDOFF_OPERATOR_SCOPES,
+  deviceBootstrapProfilesEqual,
+  isMobilePairingSetupBootstrapProfile,
+  PAIRING_SETUP_BOOTSTRAP_PROFILE,
   resolveBootstrapProfileScopesForRole,
   type DeviceBootstrapProfile,
 } from "../../../shared/device-bootstrap-profile.js";
@@ -23,18 +26,35 @@ export function resolvePairedAccessScopes(
   return normalizeSortedUniqueTrimmedStringList(scopes);
 }
 
-export function isSetupCodeMobileBootstrapClient(client: {
-  id?: string;
-  platform?: string;
-  deviceFamily?: string;
+export function isSetupCodeBootstrapProfileAllowedForClient(params: {
+  client: { id?: string; platform?: string; deviceFamily?: string };
+  profile: DeviceBootstrapProfile;
 }): boolean {
+  const { client, profile } = params;
   const platform = normalizeDeviceMetadataForAuth(client.platform);
   const deviceFamily = normalizeDeviceMetadataForAuth(client.deviceFamily);
   if (client.id === GATEWAY_CLIENT_IDS.ANDROID_APP) {
-    return /^android(?:\s|$)/u.test(platform) && deviceFamily === "android";
+    return (
+      isMobilePairingSetupBootstrapProfile(profile) &&
+      /^android(?:\s|$)/u.test(platform) &&
+      deviceFamily === "android"
+    );
   }
   if (client.id === GATEWAY_CLIENT_IDS.IOS_APP) {
-    return /^(?:ios|ipados)(?:\s|$)/u.test(platform) && /^(?:iphone|ipad|ios)$/u.test(deviceFamily);
+    return (
+      isMobilePairingSetupBootstrapProfile(profile) &&
+      /^(?:ios|ipados)(?:\s|$)/u.test(platform) &&
+      /^(?:iphone|ipad|ios)$/u.test(deviceFamily)
+    );
+  }
+  if (client.id === GATEWAY_CLIENT_IDS.EVEN_G2_NODE) {
+    // Even Hub is a node companion, not a full mobile operator surface. Keep
+    // its setup-code handoff on the bounded profile even when mobile uses full access.
+    return (
+      deviceBootstrapProfilesEqual(profile, PAIRING_SETUP_BOOTSTRAP_PROFILE) &&
+      platform === "even-hub" &&
+      deviceFamily === "glasses"
+    );
   }
   return false;
 }
@@ -64,7 +84,7 @@ export function isControlUiOperatorBootstrapProfile(params: {
   });
 }
 
-export function isMobileNodeBootstrapConnect(params: {
+export function isSetupCodeNodeBootstrapConnect(params: {
   role: string;
   scopes: readonly string[];
   isControlUi: boolean;

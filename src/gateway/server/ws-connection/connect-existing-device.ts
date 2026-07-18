@@ -5,15 +5,12 @@ import {
   listEffectivePairedDeviceRoles,
   updatePairedDeviceMetadata,
 } from "../../../infra/device-pairing.js";
-import {
-  isMobilePairingSetupBootstrapProfile,
-  resolveBootstrapProfileScopesForRole,
-} from "../../../shared/device-bootstrap-profile.js";
+import { resolveBootstrapProfileScopesForRole } from "../../../shared/device-bootstrap-profile.js";
 import type { DeviceBootstrapProfile } from "../../../shared/device-bootstrap-profile.js";
 import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
 import {
-  isMobileNodeBootstrapConnect,
-  isSetupCodeMobileBootstrapClient,
+  isSetupCodeBootstrapProfileAllowedForClient,
+  isSetupCodeNodeBootstrapConnect,
   pairedDeviceAllowsBootstrapOperator,
   resolvePairedAccessScopes,
   resolvePinnedClientMetadata,
@@ -126,7 +123,7 @@ export async function authorizeExistingGatewayDevice(params: {
   const retryBootstrapHandoffProfile =
     authMethod === "bootstrap-token" &&
     bootstrapTokenCandidate &&
-    isMobileNodeBootstrapConnect({
+    isSetupCodeNodeBootstrapConnect({
       role,
       scopes,
       isControlUi,
@@ -148,8 +145,10 @@ export async function authorizeExistingGatewayDevice(params: {
       retryBootstrapHandoffProfile.purpose,
     );
     if (
-      isMobilePairingSetupBootstrapProfile(retryBootstrapHandoffProfile) &&
-      isSetupCodeMobileBootstrapClient(connectParams.client)
+      isSetupCodeBootstrapProfileAllowedForClient({
+        client: connectParams.client,
+        profile: retryBootstrapHandoffProfile,
+      })
     ) {
       const pairedAllowsHandoff =
         pairedRoles.includes("operator") &&
@@ -173,7 +172,7 @@ export async function authorizeExistingGatewayDevice(params: {
         })
       ) {
         // The setup code is the owner-approved upgrade artifact. Reuse the
-        // same handoff after retrying or promoting an existing mobile pairing.
+        // same handoff after retrying or promoting an existing native pairing.
         handoffBootstrapProfile = retryBootstrapHandoffProfile;
       }
     }

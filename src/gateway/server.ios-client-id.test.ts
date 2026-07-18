@@ -31,6 +31,7 @@ describe("connect params client id validation", () => {
     GATEWAY_CLIENT_IDS.IOS_APP,
     GATEWAY_CLIENT_IDS.WATCHOS_APP,
     GATEWAY_CLIENT_IDS.ANDROID_APP,
+    GATEWAY_CLIENT_IDS.EVEN_G2_NODE,
   ])("accepts %s as a valid gateway client id", (clientId) => {
     const ok = validateConnectParams(makeConnectParams(clientId));
     expect(ok).toBe(true);

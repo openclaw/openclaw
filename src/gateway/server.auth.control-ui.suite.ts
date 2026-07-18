@@ -107,8 +107,9 @@ export function registerControlUiAndPairingSuite(): void {
       id: string;
       version: string;
       platform: string;
-      mode: "node";
+      mode: "node" | "ui";
       deviceFamily: string;
+      modelIdentifier?: string;
     };
     limited?: boolean;
   }) => {
@@ -1322,8 +1323,21 @@ export function registerControlUiAndPairingSuite(): void {
 
   test.each([
     {
+      name: "Even Hub glasses",
+      identityPrefix: "openclaw-bootstrap-even-hub-glasses-node-",
+      limited: true,
+      client: {
+        id: "openclaw-even-g2-node",
+        version: "2026.6.2",
+        platform: "even-hub",
+        mode: "node" as const,
+        deviceFamily: "glasses",
+      },
+    },
+    {
       name: "Android",
       identityPrefix: "openclaw-bootstrap-android-node-",
+      limited: false,
       client: {
         id: "openclaw-android",
         version: "2026.6.2",
@@ -1335,6 +1349,7 @@ export function registerControlUiAndPairingSuite(): void {
     {
       name: "iPadOS",
       identityPrefix: "openclaw-bootstrap-ipados-node-",
+      limited: false,
       client: {
         id: "openclaw-ios",
         version: "2026.6.2",
@@ -1344,12 +1359,13 @@ export function registerControlUiAndPairingSuite(): void {
       },
     },
   ])(
-    "qr setup code auto-approves $name clients when mobile metadata matches",
-    async ({ client, identityPrefix }) => {
+    "qr setup code auto-approves $name clients when native metadata matches",
+    async ({ client, identityPrefix, limited }) => {
       const { getPairedDevice, listDevicePairing } = await import("../infra/device-pairing.js");
       const { identity, initial } = await connectSetupCodeBootstrapNode({
         identityPrefix,
         client,
+        limited,
       });
       expect(initial.ok).toBe(true);
       const approvedPayload = initial.payload as
@@ -1371,14 +1387,14 @@ export function registerControlUiAndPairingSuite(): void {
         (entry) => entry.role === "operator",
       );
       expect(operatorHandoff?.deviceToken).toBeTruthy();
-      expect(operatorHandoff?.scopes).toEqual([
-        "operator.admin",
+      const expectedOperatorScopes = [
+        ...(limited ? [] : ["operator.admin"]),
         "operator.approvals",
         "operator.read",
         "operator.talk.secrets",
         "operator.write",
-      ]);
-      expect(operatorHandoff?.scopes).toContain("operator.admin");
+      ];
+      expect(operatorHandoff?.scopes).toEqual(expectedOperatorScopes);
 
       const pendingAfterInitial = await listDevicePairing();
       expect(
@@ -1386,13 +1402,7 @@ export function registerControlUiAndPairingSuite(): void {
       ).toEqual([]);
       const paired = await getPairedDevice(identity.deviceId);
       expect(paired?.roles).toEqual(["node", "operator"]);
-      expect(paired?.approvedScopes).toEqual([
-        "operator.admin",
-        "operator.approvals",
-        "operator.read",
-        "operator.talk.secrets",
-        "operator.write",
-      ]);
+      expect(paired?.approvedScopes).toEqual(expectedOperatorScopes);
     },
   );
 
@@ -1488,8 +1498,8 @@ export function registerControlUiAndPairingSuite(): void {
 
   test.each([
     {
-      name: "mobile client id with mismatched platform metadata",
-      identityPrefix: "openclaw-bootstrap-mobile-spoof-",
+      name: "native client id with mismatched platform metadata",
+      identityPrefix: "openclaw-bootstrap-native-spoof-",
       client: {
         id: "openclaw-android",
         version: "2026.6.2",
@@ -1499,7 +1509,7 @@ export function registerControlUiAndPairingSuite(): void {
       },
     },
     {
-      name: "valid non-mobile client id with mobile metadata",
+      name: "valid non-native client id with native metadata",
       identityPrefix: "openclaw-bootstrap-node-host-spoof-",
       client: {
         id: "node-host",
@@ -1507,6 +1517,51 @@ export function registerControlUiAndPairingSuite(): void {
         platform: "Android 16",
         mode: "node" as const,
         deviceFamily: "Android",
+      },
+    },
+    {
+      name: "Even G2 node id with a full mobile profile",
+      identityPrefix: "openclaw-bootstrap-even-hub-full-profile-",
+      client: {
+        id: "openclaw-even-g2-node",
+        version: "2026.6.2",
+        platform: "even-hub",
+        mode: "node" as const,
+        deviceFamily: "glasses",
+      },
+    },
+    {
+      name: "Even G2 node role with UI client mode",
+      identityPrefix: "openclaw-bootstrap-even-hub-ui-mode-",
+      client: {
+        id: "openclaw-even-g2-node",
+        version: "2026.6.2",
+        platform: "even-hub",
+        mode: "ui" as const,
+        deviceFamily: "glasses",
+      },
+    },
+    {
+      name: "Even G2 node id with mismatched runtime metadata",
+      identityPrefix: "openclaw-bootstrap-even-hub-spoof-",
+      client: {
+        id: "openclaw-even-g2-node",
+        version: "2026.6.2",
+        platform: "even-hub",
+        mode: "node" as const,
+        deviceFamily: "watch",
+        modelIdentifier: "Even G2",
+      },
+    },
+    {
+      name: "Even G2 node id with legacy platform metadata",
+      identityPrefix: "openclaw-bootstrap-even-hub-legacy-platform-",
+      client: {
+        id: "openclaw-even-g2-node",
+        version: "2026.6.2",
+        platform: "even-g2",
+        mode: "node" as const,
+        deviceFamily: "glasses",
       },
     },
   ])(

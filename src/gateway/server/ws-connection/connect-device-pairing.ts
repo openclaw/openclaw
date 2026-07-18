@@ -21,7 +21,6 @@ import {
   requestDevicePairing,
 } from "../../../infra/device-pairing.js";
 import {
-  isMobilePairingSetupBootstrapProfile,
   resolveBootstrapProfileScopesForRole,
   resolveBootstrapProfileScopesForRoles,
 } from "../../../shared/device-bootstrap-profile.js";
@@ -33,8 +32,8 @@ import { normalizeChromeExtensionOrigin } from "../../origin-check.js";
 import { truncateCloseReason } from "../close-reason.js";
 import {
   isControlUiOperatorBootstrapProfile,
-  isMobileNodeBootstrapConnect,
-  isSetupCodeMobileBootstrapClient,
+  isSetupCodeBootstrapProfileAllowedForClient,
+  isSetupCodeNodeBootstrapConnect,
   pairedDeviceAllowsBootstrapProfile,
   resolvePairedAccessScopes,
 } from "./connect-device-metadata.js";
@@ -172,7 +171,7 @@ export async function authorizeGatewayConnectDevice(
         reportedClientIp,
         autoApproveCidrs: configSnapshot.gateway?.nodes?.pairing?.autoApproveCidrs,
       });
-      const isSetupCodeMobileNodeConnect = isMobileNodeBootstrapConnect({
+      const isSetupCodeNodeConnect = isSetupCodeNodeBootstrapConnect({
         role,
         scopes,
         isControlUi,
@@ -183,10 +182,8 @@ export async function authorizeGatewayConnectDevice(
       const allowBoundBootstrapProfileLookup =
         (reason === "not-paired" &&
           !existingPairedDevice &&
-          (isSetupCodeMobileNodeConnect || (isControlUi && role === "operator"))) ||
-        (reason === "scope-upgrade" &&
-          Boolean(existingPairedDevice) &&
-          isSetupCodeMobileNodeConnect);
+          (isSetupCodeNodeConnect || (isControlUi && role === "operator"))) ||
+        (reason === "scope-upgrade" && Boolean(existingPairedDevice) && isSetupCodeNodeConnect);
       const boundBootstrapProfile =
         authMethod === "bootstrap-token" &&
         bootstrapTokenCandidate &&
@@ -197,12 +194,14 @@ export async function authorizeGatewayConnectDevice(
               publicKey: devicePublicKey,
             })
           : null;
-      const allowSetupCodeMobileBootstrapPairing =
+      const allowSetupCodeBootstrapPairing =
         boundBootstrapProfile !== null &&
-        isMobilePairingSetupBootstrapProfile(boundBootstrapProfile) &&
-        isSetupCodeMobileNodeConnect &&
-        isSetupCodeMobileBootstrapClient(connectParams.client);
-      const setupCodeMobileBootstrapProfile = allowSetupCodeMobileBootstrapPairing
+        isSetupCodeNodeConnect &&
+        isSetupCodeBootstrapProfileAllowedForClient({
+          client: connectParams.client,
+          profile: boundBootstrapProfile,
+        });
+      const setupCodeBootstrapProfile = allowSetupCodeBootstrapPairing
         ? boundBootstrapProfile
         : null;
       const allowControlUiOperatorBootstrapPairing = isControlUiOperatorBootstrapProfile({
@@ -212,21 +211,18 @@ export async function authorizeGatewayConnectDevice(
       const controlUiOperatorBootstrapProfile = allowControlUiOperatorBootstrapPairing
         ? boundBootstrapProfile
         : null;
-      // This is the native QR/setup-code onboarding seam. Mobile clients
-      // must prove their canonical client id and platform/family metadata
-      // agree before the Gateway can skip owner approval and hand off the
-      // selected operator profile below. Full mobile setup includes admin;
-      // limited setup retains the previous bounded operator scope set.
-      const bootstrapPairingRoles = setupCodeMobileBootstrapProfile
-        ? uniqueStrings([role, ...setupCodeMobileBootstrapProfile.roles])
+      // Native setup clients must prove that their canonical id, metadata, and
+      // profile agree. Mobile may use full access; Even Hub stays bounded.
+      const bootstrapPairingRoles = setupCodeBootstrapProfile
+        ? uniqueStrings([role, ...setupCodeBootstrapProfile.roles])
         : controlUiOperatorBootstrapProfile
           ? ["operator"]
           : undefined;
-      const bootstrapPairingScopes = setupCodeMobileBootstrapProfile
+      const bootstrapPairingScopes = setupCodeBootstrapProfile
         ? resolveBootstrapProfileScopesForRoles(
             bootstrapPairingRoles ?? [],
-            setupCodeMobileBootstrapProfile.scopes,
-            setupCodeMobileBootstrapProfile.purpose,
+            setupCodeBootstrapProfile.scopes,
+            setupCodeBootstrapProfile.purpose,
           )
         : controlUiOperatorBootstrapProfile
           ? resolveBootstrapProfileScopesForRole(
@@ -236,7 +232,7 @@ export async function authorizeGatewayConnectDevice(
             )
           : undefined;
       const bootstrapApprovalProfile =
-        setupCodeMobileBootstrapProfile ?? controlUiOperatorBootstrapProfile;
+        setupCodeBootstrapProfile ?? controlUiOperatorBootstrapProfile;
       const pairing = await requestDevicePairing({
         deviceId: device.id,
         publicKey: devicePublicKey,
@@ -248,11 +244,11 @@ export async function authorizeGatewayConnectDevice(
             }
           : {}),
         silent:
-          reason === "scope-upgrade" && !allowSetupCodeMobileBootstrapPairing
+          reason === "scope-upgrade" && !allowSetupCodeBootstrapPairing
             ? false
             : allowSilentLocalPairing ||
               allowSilentTrustedCidrsNodePairing ||
-              allowSetupCodeMobileBootstrapPairing ||
+              allowSetupCodeBootstrapPairing ||
               allowControlUiOperatorBootstrapPairing,
       });
       const requestContext = buildRequestContext();
@@ -319,7 +315,7 @@ export async function authorizeGatewayConnectDevice(
             },
             { dropIfSlow: true },
           );
-          if (!(allowSetupCodeMobileBootstrapPairing && boundBootstrapProfile)) {
+          if (!(allowSetupCodeBootstrapPairing && boundBootstrapProfile)) {
             // Best-effort retirement of stale silent siblings; a prune
             // failure must never fail the fresh device's handshake.
             try {

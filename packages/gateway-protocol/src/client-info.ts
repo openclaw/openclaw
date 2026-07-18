@@ -25,6 +25,7 @@ export const GATEWAY_CLIENT_IDS = {
   IOS_APP: "openclaw-ios",
   WATCHOS_APP: "openclaw-watchos",
   ANDROID_APP: "openclaw-android",
+  EVEN_G2_NODE: "openclaw-even-g2-node",
   NODE_HOST: "node-host",
   WORKER: "openclaw-worker",
   TEST: "test",
