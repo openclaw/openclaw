@@ -30,6 +30,7 @@ import {
   isExpectedYieldedAgentTimeout,
   isRetryableCodexHarnessLiveError,
   isStrictExpectedCodexModelsCommandText,
+  requireSuccessfulNativeCommandExecution,
   shouldUseCodexHarnessSubagentOnlyFastPath,
 } from "./gateway-codex-harness.live-helpers.js";
 import {
@@ -857,7 +858,8 @@ async function verifyCodexCompactionStress(params: {
   let reportedCompactions = 0;
   for (let turn = 1; turn <= CODEX_HARNESS_COMPACTION_STRESS_TURNS; turn += 1) {
     const acknowledgement = `CODEX-LARGE-OUTPUT-${turn}-OK`;
-    const largeOutputCommand = `node -e 'for(let i=0;i<${outputLines};i++){console.log(i.toString(36).padStart(8,"0")+"-"+((i*2654435761)>>>0).toString(16).padStart(8,"0")+"-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789")}'`;
+    const commandMarker = `OPENCLAW-CODEX-LARGE-OUTPUT-${turn}-${randomBytes(6).toString("hex").toUpperCase()}`;
+    const largeOutputCommand = `node -e 'console.log("${commandMarker}");for(let i=0;i<${outputLines};i++){console.log(i.toString(36).padStart(8,"0")+"-"+((i*2654435761)>>>0).toString(16).padStart(8,"0")+"-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789")}'`;
     const { text, events, compactionCount } = await requestAgentTextWithEvents({
       client: params.client,
       eventPrefixes: ["codex_app_server.", "compaction", "tool"],
@@ -880,45 +882,10 @@ async function verifyCodexCompactionStress(params: {
     ).length;
     completedCompactions += turnCompletedCompactions;
     reportedCompactions += compactionCount;
-    const commandStartIndex = events.findIndex((event) => {
-      if (
-        event.stream !== "tool" ||
-        event.data?.phase !== "start" ||
-        event.data?.name !== "bash" ||
-        !event.data?.args ||
-        typeof event.data.args !== "object"
-      ) {
-        return false;
-      }
-      const command = (event.data.args as { command?: unknown }).command;
-      // Codex may preserve the command text or wrap it in a login shell.
-      return (
-        typeof command === "string" &&
-        command.includes("node -e") &&
-        command.includes(`i<${outputLines}`) &&
-        command.includes("2654435761") &&
-        command.includes("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789")
-      );
+    const { resultIndex: commandResultIndex } = requireSuccessfulNativeCommandExecution(events, {
+      commandMarker,
+      expectedCommand: largeOutputCommand,
     });
-    const commandItemId = events[commandStartIndex]?.data?.itemId;
-    const commandResultIndex = events.findIndex((event, index) => {
-      const result = event.data?.result;
-      return (
-        index > commandStartIndex &&
-        event.stream === "tool" &&
-        event.data?.phase === "result" &&
-        event.data?.itemId === commandItemId &&
-        event.data?.status === "completed" &&
-        event.data?.isError === false &&
-        result !== null &&
-        typeof result === "object" &&
-        (result as { exitCode?: unknown }).exitCode === 0
-      );
-    });
-    expect(
-      commandResultIndex,
-      `large-output turn did not successfully complete the exact native command; events=${JSON.stringify(events)}`,
-    ).toBeGreaterThan(commandStartIndex);
 
     const history: { messages?: unknown[] } = await params.client.request("chat.history", {
       sessionKey: params.sessionKey,

@@ -1,3 +1,6 @@
+import { extractShellWrapperInlineCommand } from "../infra/shell-wrapper-resolution.js";
+import { splitShellArgs } from "../utils/shell-argv.js";
+
 /**
  * Text matchers shared by live Codex harness tests.
  *
@@ -103,6 +106,91 @@ export function shouldUseCodexHarnessSubagentOnlyFastPath(params: {
     !params.resumeStress &&
     !params.explicitOptOut
   );
+}
+
+type CodexHarnessToolEventData = {
+  args?: unknown;
+  isError?: unknown;
+  itemId?: unknown;
+  name?: unknown;
+  phase?: unknown;
+  result?: unknown;
+  status?: unknown;
+};
+
+function readCodexHarnessToolEventData(event: unknown): CodexHarnessToolEventData | undefined {
+  if (!event || typeof event !== "object" || (event as { stream?: unknown }).stream !== "tool") {
+    return undefined;
+  }
+  const data = (event as { data?: unknown }).data;
+  return data && typeof data === "object" ? (data as CodexHarnessToolEventData) : undefined;
+}
+
+function shellArgvMatches(actual: readonly string[], expected: readonly string[]): boolean {
+  return actual.length === expected.length && actual.every((arg, index) => arg === expected[index]);
+}
+
+function isExpectedNativeCommand(command: string, expectedCommand: string): boolean {
+  const commandArgv = splitShellArgs(command);
+  const expectedArgv = splitShellArgs(expectedCommand);
+  if (!commandArgv || !expectedArgv) {
+    return false;
+  }
+  if (shellArgvMatches(commandArgv, expectedArgv)) {
+    return true;
+  }
+  const wrappedCommand = extractShellWrapperInlineCommand(commandArgv);
+  const wrappedArgv = wrappedCommand ? splitShellArgs(wrappedCommand) : null;
+  return wrappedArgv ? shellArgvMatches(wrappedArgv, expectedArgv) : false;
+}
+
+/** Requires one successful native bash execution carrying the per-turn command marker. */
+export function requireSuccessfulNativeCommandExecution(
+  events: readonly unknown[],
+  params: { commandMarker: string; expectedCommand: string },
+): { itemId: string; resultIndex: number; startIndex: number } {
+  const startIndex = events.findIndex((event) => {
+    const data = readCodexHarnessToolEventData(event);
+    if (data?.phase !== "start" || data.name !== "bash" || !data.args) {
+      return false;
+    }
+    const command = (data.args as { command?: unknown }).command;
+    return (
+      typeof command === "string" &&
+      command.includes(params.commandMarker) &&
+      isExpectedNativeCommand(command, params.expectedCommand)
+    );
+  });
+  if (startIndex < 0) {
+    throw new Error(`missing native bash command start for marker ${params.commandMarker}`);
+  }
+
+  const itemId = readCodexHarnessToolEventData(events[startIndex])?.itemId;
+  if (typeof itemId !== "string" || itemId.length === 0) {
+    throw new Error(`native bash command start for marker ${params.commandMarker} has no itemId`);
+  }
+
+  const resultIndex = events.findIndex((event, index) => {
+    const data = readCodexHarnessToolEventData(event);
+    const result = data?.result;
+    return (
+      index > startIndex &&
+      data?.phase === "result" &&
+      data.itemId === itemId &&
+      data.status === "completed" &&
+      data.isError === false &&
+      result !== null &&
+      typeof result === "object" &&
+      (result as { exitCode?: unknown }).exitCode === 0
+    );
+  });
+  if (resultIndex < 0) {
+    throw new Error(
+      `native bash command ${itemId} for marker ${params.commandMarker} has no successful result`,
+    );
+  }
+
+  return { itemId, resultIndex, startIndex };
 }
 
 const HEALTHY_CODEX_MODELS_COMMAND_TEXT = [

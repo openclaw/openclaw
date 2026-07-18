@@ -10,11 +10,14 @@ import {
   isExpectedYieldedAgentTimeout,
   isRetryableCodexHarnessLiveError,
   isStrictExpectedCodexModelsCommandText,
+  requireSuccessfulNativeCommandExecution,
   shouldUseCodexHarnessSubagentOnlyFastPath,
 } from "./gateway-codex-harness.live-helpers.js";
 
 const includesExpectedCodexModelsCommandText = (text: string) =>
   EXPECTED_CODEX_MODELS_COMMAND_TEXT.some((expectedText) => text.includes(expectedText));
+
+const shellSingleQuote = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`;
 
 function expectExpectedCodexModelsCommandText(text: string): void {
   expect(includesExpectedCodexModelsCommandText(text)).toBe(true);
@@ -65,6 +68,136 @@ describe("gateway codex harness live helpers", () => {
     const error = new Error("subagent child did not emit lifecycle event");
 
     expect(isRetryableCodexHarnessLiveError(error)).toBe(false);
+  });
+
+  it("matches a successful wrapped native command by its per-turn marker", () => {
+    const expectedCommand = `node -e 'console.log("OPENCLAW-LARGE-OUTPUT-ABC")'`;
+    const wrappedCommand = `node -e "console.log(\\"OPENCLAW-LARGE-OUTPUT-ABC\\")"`;
+    const events = [
+      {
+        stream: "tool",
+        data: {
+          phase: "start",
+          name: "bash",
+          itemId: "item-1",
+          args: { command: `/bin/bash -lc ${shellSingleQuote(wrappedCommand)}` },
+        },
+      },
+      {
+        stream: "tool",
+        data: {
+          phase: "result",
+          itemId: "item-1",
+          status: "completed",
+          isError: false,
+          result: { exitCode: 0 },
+        },
+      },
+    ];
+
+    expect(
+      requireSuccessfulNativeCommandExecution(events, {
+        commandMarker: "OPENCLAW-LARGE-OUTPUT-ABC",
+        expectedCommand,
+      }),
+    ).toEqual({ itemId: "item-1", resultIndex: 1, startIndex: 0 });
+  });
+
+  it("rejects a successful command that only echoes the expected command", () => {
+    const expectedCommand = `node -e 'console.log("OPENCLAW-LARGE-OUTPUT-ABC")'`;
+    expect(() =>
+      requireSuccessfulNativeCommandExecution(
+        [
+          {
+            stream: "tool",
+            data: {
+              phase: "start",
+              name: "bash",
+              itemId: "item-echo",
+              args: { command: `echo ${shellSingleQuote(expectedCommand)}` },
+            },
+          },
+          {
+            stream: "tool",
+            data: {
+              phase: "result",
+              itemId: "item-echo",
+              status: "completed",
+              isError: false,
+              result: { exitCode: 0 },
+            },
+          },
+        ],
+        {
+          commandMarker: "OPENCLAW-LARGE-OUTPUT-ABC",
+          expectedCommand,
+        },
+      ),
+    ).toThrow("missing native bash command start for marker OPENCLAW-LARGE-OUTPUT-ABC");
+  });
+
+  it("reports a missing native command start explicitly", () => {
+    expect(() =>
+      requireSuccessfulNativeCommandExecution([], {
+        commandMarker: "OPENCLAW-MISSING",
+        expectedCommand: "node -e OPENCLAW-MISSING",
+      }),
+    ).toThrow("missing native bash command start for marker OPENCLAW-MISSING");
+  });
+
+  it("reports a missing native command item id explicitly", () => {
+    expect(() =>
+      requireSuccessfulNativeCommandExecution(
+        [
+          {
+            stream: "tool",
+            data: {
+              phase: "start",
+              name: "bash",
+              args: { command: "node -e OPENCLAW-NO-ITEM" },
+            },
+          },
+        ],
+        {
+          commandMarker: "OPENCLAW-NO-ITEM",
+          expectedCommand: "node -e OPENCLAW-NO-ITEM",
+        },
+      ),
+    ).toThrow("native bash command start for marker OPENCLAW-NO-ITEM has no itemId");
+  });
+
+  it("reports a missing successful native command result explicitly", () => {
+    expect(() =>
+      requireSuccessfulNativeCommandExecution(
+        [
+          {
+            stream: "tool",
+            data: {
+              phase: "start",
+              name: "bash",
+              itemId: "item-failed",
+              args: { command: "node -e OPENCLAW-FAILED" },
+            },
+          },
+          {
+            stream: "tool",
+            data: {
+              phase: "result",
+              itemId: "item-failed",
+              status: "completed",
+              isError: true,
+              result: { exitCode: 1 },
+            },
+          },
+        ],
+        {
+          commandMarker: "OPENCLAW-FAILED",
+          expectedCommand: "node -e OPENCLAW-FAILED",
+        },
+      ),
+    ).toThrow(
+      "native bash command item-failed for marker OPENCLAW-FAILED has no successful result",
+    );
   });
 
   it("accepts only paused yielded agent timeouts for native subagent delivery", () => {
