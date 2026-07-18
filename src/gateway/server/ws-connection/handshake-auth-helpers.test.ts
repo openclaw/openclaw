@@ -7,6 +7,7 @@ import {
 import type { ConnectParams } from "../../../../packages/gateway-protocol/src/schema.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import {
+  isNativeAppUiClient,
   resolveHandshakeBrowserSecurityContext,
   resolvePairingLocality,
   resolveUnauthorizedHandshakeContext,
@@ -67,6 +68,13 @@ const CLI_CONNECT_PARAMS = {
   client: {
     id: GATEWAY_CLIENT_IDS.CLI,
     mode: GATEWAY_CLIENT_MODES.CLI,
+  },
+} as ConnectParams;
+
+const LINUX_NATIVE_CONNECT_PARAMS = {
+  client: {
+    id: GATEWAY_CLIENT_IDS.LINUX_APP,
+    mode: GATEWAY_CLIENT_MODES.UI,
   },
 } as ConnectParams;
 
@@ -144,6 +152,51 @@ function preserveLocalCliSharedAuthScopes(overrides: Partial<LocalCliSharedAuthS
 }
 
 describe("handshake auth helpers", () => {
+  it("auto-approves local openclaw-linux pairing and keeps remote pairing explicit", () => {
+    expect(isNativeAppUiClient(LINUX_NATIVE_CONNECT_PARAMS.client)).toBe(true);
+    const locality = resolvePairingLocality({
+      connectParams: LINUX_NATIVE_CONNECT_PARAMS,
+      isLocalClient: true,
+      requestHost: "127.0.0.1:18789",
+      remoteAddress: "127.0.0.1",
+      hasProxyHeaders: false,
+      hasBrowserOriginHeader: false,
+      sharedAuthOk: true,
+      authMethod: "token",
+    });
+    expect(locality).toBe("direct_local");
+    expect(
+      shouldAllowSilentLocalPairing({
+        locality,
+        hasBrowserOriginHeader: false,
+        isControlUi: false,
+        isWebchat: false,
+        isNativeAppUi: true,
+        reason: "not-paired",
+      }),
+    ).toBe(true);
+    expect(
+      shouldAllowSilentLocalPairing({
+        locality,
+        hasBrowserOriginHeader: false,
+        isControlUi: false,
+        isWebchat: false,
+        isNativeAppUi: true,
+        reason: "metadata-upgrade",
+      }),
+    ).toBe(true);
+    expect(
+      shouldAllowSilentLocalPairing({
+        locality: "remote",
+        hasBrowserOriginHeader: false,
+        isControlUi: false,
+        isWebchat: false,
+        isNativeAppUi: true,
+        reason: "not-paired",
+      }),
+    ).toBe(false);
+  });
+
   it("isolates browser-origin loopback clients in the browser limiter", () => {
     const rateLimiter = createRateLimiter();
     const browserRateLimiter = createRateLimiter();
