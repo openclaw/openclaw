@@ -4,6 +4,14 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import {
+  createReplyOperation,
+  replyRunRegistry,
+} from "../../auto-reply/reply/reply-run-registry.js";
+import {
+  abortChatRunsForSessionKeyWithPartials,
+  createChatAbortOps,
+} from "./chat-abort-runtime.js";
+import {
   createActiveRun,
   createChatAbortContext,
   invokeChatAbortHandler,
@@ -287,6 +295,110 @@ describe("chat.abort authorization", () => {
     expect(context.dedupe.get("agent:run-telegram-pending")?.payload).toMatchObject({
       status: "accepted",
     });
+  });
+
+  it("does not abort a reply run registered under an unrelated session alias", async () => {
+    const sessionKey = "agent:main:openclaw-weixin:direct:o9cq802hhmfc@im.wechat";
+    const broadAlias = "agent:main";
+    const exactOperation = createReplyOperation({
+      sessionKey,
+      sessionId: "main-session",
+      resetTriggered: false,
+    });
+    const aliasOperation = createReplyOperation({
+      sessionKey: broadAlias,
+      sessionId: "unrelated-session",
+      resetTriggered: false,
+    });
+    try {
+      const context = createChatAbortContext();
+      const result = await abortChatRunsForSessionKeyWithPartials({
+        context,
+        ops: createChatAbortOps(context as never),
+        sessionKey,
+        sessionKeyAliases: [broadAlias],
+        sessionId: "main-session",
+        defaultAgentId: "main",
+        abortOrigin: "rpc",
+        requester: { isAdmin: true },
+      });
+
+      expect(result).toEqual({
+        aborted: true,
+        runIds: [`reply:${sessionKey}`],
+        unauthorized: false,
+      });
+      expect(exactOperation.abortSignal.aborted).toBe(true);
+      expect(aliasOperation.abortSignal.aborted).toBe(false);
+      expect(replyRunRegistry.get(broadAlias)).toBe(aliasOperation);
+    } finally {
+      exactOperation.complete();
+      aliasOperation.complete();
+    }
+  });
+
+  it("aborts a matching reply run that is registered under a canonical alias", async () => {
+    const requestedKey = "agent:work:main";
+    const canonicalKey = "global";
+    const operation = createReplyOperation({
+      sessionKey: canonicalKey,
+      sessionId: "main-session",
+      resetTriggered: false,
+    });
+    try {
+      const context = createChatAbortContext();
+      const result = await abortChatRunsForSessionKeyWithPartials({
+        context,
+        ops: createChatAbortOps(context as never),
+        sessionKey: requestedKey,
+        sessionKeyAliases: [canonicalKey],
+        replyRunExplicitSessionKey: requestedKey,
+        sessionId: "main-session",
+        defaultAgentId: "main",
+        abortOrigin: "rpc",
+        requester: { isAdmin: true },
+      });
+
+      expect(result.runIds).toEqual([`reply:${canonicalKey}`]);
+      expect(operation.abortSignal.aborted).toBe(true);
+    } finally {
+      operation.complete();
+    }
+  });
+
+  it("uses only the raw requested reply key when the session id is unavailable", async () => {
+    const requestedKey = "agent:work:main";
+    const canonicalKey = "global";
+    const requestedOperation = createReplyOperation({
+      sessionKey: requestedKey,
+      sessionId: "requested-session",
+      resetTriggered: false,
+    });
+    const canonicalOperation = createReplyOperation({
+      sessionKey: canonicalKey,
+      sessionId: "unrelated-session",
+      resetTriggered: false,
+    });
+    try {
+      const context = createChatAbortContext();
+      const result = await abortChatRunsForSessionKeyWithPartials({
+        context,
+        ops: createChatAbortOps(context as never),
+        sessionKey: canonicalKey,
+        sessionKeyAliases: [requestedKey],
+        replyRunExplicitSessionKey: requestedKey,
+        defaultAgentId: "main",
+        abortOrigin: "rpc",
+        requester: { isAdmin: true },
+      });
+
+      expect(result.runIds).toEqual([`reply:${requestedKey}`]);
+      expect(requestedOperation.abortSignal.aborted).toBe(true);
+      expect(canonicalOperation.abortSignal.aborted).toBe(false);
+    } finally {
+      requestedOperation.complete();
+      canonicalOperation.complete();
+    }
   });
 
   it("aborts hidden channel runs whose session key omits direct or group markers", async () => {

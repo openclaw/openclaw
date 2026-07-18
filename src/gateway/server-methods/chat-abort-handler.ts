@@ -117,6 +117,7 @@ export async function handleChatAbortRequest({
       ops,
       sessionKey: canonicalAbortSessionKey,
       sessionKeyAliases: canonicalAbortSessionKey === rawSessionKey ? undefined : [rawSessionKey],
+      replyRunExplicitSessionKey: rawSessionKey,
       agentId: abortAgentId,
       sessionId: abortSessionEntry?.sessionId,
       defaultAgentId,

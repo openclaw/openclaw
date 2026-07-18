@@ -1288,10 +1288,10 @@ class ChatPane extends OpenClawLightDomElement {
     }
   }
 
-  private async continueCatalogSession(key: CatalogSessionKey) {
+  private async continueCatalogSession(key: CatalogSessionKey, messageOverride?: string) {
     const state = this.state;
     const client = state?.client;
-    const draft = state?.chatMessage.trim();
+    const draft = (messageOverride ?? state?.chatMessage)?.trim();
     if (!state || !client || !draft || !this.catalogSession?.canContinue) {
       return;
     }
@@ -1306,7 +1306,7 @@ class ChatPane extends OpenClawLightDomElement {
       this.onPaneSessionChange?.(this.paneId, result.sessionKey);
       this.switchPaneSession(result.sessionKey);
       state.handleChatDraftChange(draft);
-      await state.handleSendChat();
+      await state.handleSendChat(messageOverride);
     } catch (error) {
       state.lastError = error instanceof Error ? error.message : String(error);
       state.chatSending = false;
@@ -2524,10 +2524,15 @@ class ChatPane extends OpenClawLightDomElement {
         state.chatAttachments = next;
         state.requestUpdate?.();
       },
-      onSend: (messageOverride) =>
-        catalogKey
-          ? void this.continueCatalogSession(catalogKey)
-          : void state.handleSendChat(messageOverride),
+      onSend: (messageOverride) => {
+        if (catalogKey) {
+          // Catalog rows are read-only snapshots and cannot own active runs.
+          // Continue first; the restored draft then reaches normal command handling.
+          void this.continueCatalogSession(catalogKey, messageOverride);
+          return;
+        }
+        void state.handleSendChat(messageOverride);
+      },
       onCompact: () => void state.handleSendChat("/compact"),
       onOpenSessionCheckpoints: () => {
         const search = new URLSearchParams({ session: state.sessionKey });

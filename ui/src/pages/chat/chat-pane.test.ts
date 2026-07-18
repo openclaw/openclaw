@@ -64,6 +64,7 @@ type TestChatPane = HTMLElement & {
   hasOlderMessages: () => boolean;
   loadingOlder: boolean;
   catalogCursor: string | undefined;
+  continueCatalogSession: (key: CatalogSessionKey, messageOverride?: string) => Promise<void>;
   olderCursorsSeen: Set<string>;
   olderOffsetsSeen: Set<number>;
   headerEditing: boolean;
@@ -91,6 +92,7 @@ type TestChatPane = HTMLElement & {
     agentWorkspace: undefined,
     workspaceGit: boolean,
   ) => TemplateResult;
+  switchPaneSession: (sessionKey: string) => void;
 };
 
 const suggestion: TaskSuggestion = {
@@ -685,6 +687,37 @@ describe("chat pane session creation lifecycle", () => {
 });
 
 describe("chat pane catalog session lifecycle", () => {
+  it("forwards an exact stop command through catalog continuation", async () => {
+    const key = {
+      catalogId: "codex",
+      hostId: "gateway:local",
+      threadId: "thread-101",
+    } satisfies CatalogSessionKey;
+    const request = vi.fn().mockResolvedValue({ sessionKey: "agent:main:continued" });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const handleChatDraftChange = vi.fn();
+    const handleSendChat = vi.fn().mockResolvedValue(undefined);
+    state.chatMessage = "/stop";
+    state.handleChatDraftChange = handleChatDraftChange;
+    state.handleSendChat = handleSendChat;
+    pane.catalogSession = {
+      threadId: key.threadId,
+      status: "idle",
+      archived: false,
+      canContinue: true,
+      canArchive: true,
+    };
+    pane.switchPaneSession = vi.fn();
+
+    await pane.continueCatalogSession(key, "/stop");
+
+    expect(request).toHaveBeenCalledWith("sessions.catalog.continue", key);
+    expect(pane.switchPaneSession).toHaveBeenCalledWith("agent:main:continued");
+    expect(handleChatDraftChange).toHaveBeenCalledWith("/stop");
+    expect(handleSendChat).toHaveBeenCalledWith("/stop");
+  });
+
   it("shows the eligible catalog terminal action and dispatches its typed reference", () => {
     const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });

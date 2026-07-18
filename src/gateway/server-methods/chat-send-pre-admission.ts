@@ -84,6 +84,7 @@ export async function runChatSendPreAdmission(params: {
       ops: createChatAbortOps(context),
       sessionKey: rawSessionKey,
       sessionKeyAliases: sessionKey === rawSessionKey ? undefined : [sessionKey],
+      replyRunExplicitSessionKey: rawSessionKey,
       agentId: stopAgentId,
       sessionId: entry?.sessionId,
       persistSessionKey: sessionKey,

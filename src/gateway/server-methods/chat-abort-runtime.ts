@@ -178,6 +178,7 @@ export async function abortChatRunsForSessionKeyWithPartials(params: {
   ops: ChatAbortOps;
   sessionKey: string;
   sessionKeyAliases?: string[];
+  replyRunExplicitSessionKey?: string;
   agentId?: string;
   sessionId?: string;
   persistSessionKey?: string;
@@ -235,7 +236,19 @@ export async function abortChatRunsForSessionKeyWithPartials(params: {
     });
   const abortedReplyRunKeys: string[] = [];
   if (params.requester.isAdmin) {
+    const explicitReplyRunSessionKey = params.replyRunExplicitSessionKey ?? params.sessionKey;
     for (const sessionKey of sessionKeys) {
+      const operation = replyRunRegistry.get(sessionKey);
+      // Aliases are match hints, not authority to stop another reply lane. When
+      // the persisted session is known, require every candidate to own that ID.
+      if (
+        !operation ||
+        (params.sessionId
+          ? !operation.hasOwnedSessionId(params.sessionId)
+          : sessionKey !== explicitReplyRunSessionKey)
+      ) {
+        continue;
+      }
       if (replyRunRegistry.abort(sessionKey)) {
         abortedReplyRunKeys.push(sessionKey);
       }
