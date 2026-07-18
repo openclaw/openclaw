@@ -115,6 +115,34 @@ struct ChatGatewayRequestTests {
         #expect(create.params["worktree"]?.value as? Bool == true)
     }
 
+    @Test func `rename clear archive and fork use session mutation contracts`() {
+        let rename = OpenClawChatGatewayRequests.patchSession(
+            sessionKey: "agent:main:child",
+            agentID: nil,
+            label: .some(nil),
+            category: nil,
+            pinned: nil,
+            archived: nil,
+            unread: nil)
+        let archive = OpenClawChatGatewayRequests.patchSession(
+            sessionKey: "agent:main:child",
+            agentID: nil,
+            label: nil,
+            category: nil,
+            pinned: nil,
+            archived: true,
+            unread: nil)
+        let fork = OpenClawChatGatewayRequests.forkSession(
+            parentSessionKey: "agent:main:child",
+            agentID: nil)
+
+        #expect(rename.params["label"]?.value is NSNull)
+        #expect(archive.params["archived"]?.value as? Bool == true)
+        #expect(fork.method == "sessions.create")
+        #expect(fork.params["parentSessionKey"]?.value as? String == "agent:main:child")
+        #expect(fork.params["fork"]?.value as? Bool == true)
+    }
+
     @Test func `commands request selects session agent before fallback`() {
         let scoped = OpenClawChatGatewayRequests.commandsList(
             sessionKey: "agent:reviewer:main",

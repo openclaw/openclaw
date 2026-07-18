@@ -113,6 +113,11 @@ type AgentRuntimeMessagePresentationAction =
       decision: "allow-once" | "allow-always" | "deny";
     }
   | {
+      type: "question";
+      questionId: string;
+      optionValue: string;
+    }
+  | {
       type: "url";
       url: string;
     }
@@ -264,6 +269,7 @@ type AgentRuntimeReplyPayload = {
   trustedLocalMedia?: boolean;
   sensitiveMedia?: boolean;
   presentation?: AgentRuntimeMessagePresentation;
+  presentationTextMode?: "fallback";
   delivery?: AgentRuntimeReplyPayloadDelivery;
   /**
    * @deprecated Use presentation.

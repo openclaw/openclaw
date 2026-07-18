@@ -428,6 +428,7 @@ export async function beginSessionWorkAdmission(params: {
           return createSessionWorkAdmissionHandoff(admission, lease);
         },
         release,
+        released: admission.released,
         run: async <T>(run: () => Promise<T>) => {
           const current = new Set(CURRENT_SESSION_WORK_ADMISSIONS.getStore());
           current.add(admission);

@@ -125,6 +125,35 @@ public struct OpenClawChatSessionSettingsRouteLease: Sendable {
     }
 }
 
+/// One physical gateway connection captured before a session mutation waits
+/// behind an earlier mutation for the same session.
+public struct OpenClawChatSessionMutationRouteLease: Sendable {
+    public typealias PatchSession = @Sendable (
+        _ key: String,
+        _ label: String??,
+        _ category: String??,
+        _ pinned: Bool?,
+        _ archived: Bool?,
+        _ unread: Bool?) async throws -> Void
+
+    private let patchSessionImpl: PatchSession
+
+    public init(patchSession: @escaping PatchSession) {
+        self.patchSessionImpl = patchSession
+    }
+
+    public func patchSession(
+        key: String,
+        label: String??,
+        category: String??,
+        pinned: Bool?,
+        archived: Bool?,
+        unread: Bool?) async throws
+    {
+        try await self.patchSessionImpl(key, label, category, pinned, archived, unread)
+    }
+}
+
 /// The transport rejected a send before it reached its request channel. This
 /// is the only failure class safe for automatic outbox retry.
 public enum OpenClawChatTransportSendError: Error, Sendable {
@@ -236,6 +265,7 @@ public protocol OpenClawChatTransport: Sendable {
         worktree: Bool?) async throws -> OpenClawChatCreateSessionResponse
 
     func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload
+    func requestFullMessage(sessionKey: String, messageID: String) async throws -> OpenClawChatMessage?
     func listModels() async throws -> [OpenClawChatModelChoice]
     var supportsSlashCommandCatalog: Bool { get }
     func listCommands(sessionKey: String) async throws -> [OpenClawChatCommandChoice]
@@ -271,6 +301,7 @@ public protocol OpenClawChatTransport: Sendable {
         pinned: Bool?,
         archived: Bool?,
         unread: Bool?) async throws
+    func acquireSessionMutationRouteLease() async -> OpenClawChatSessionMutationRouteLease?
     func deleteSession(key: String) async throws
     func forkSession(parentKey: String) async throws -> String
     func setSessionModel(sessionKey: String, model: String?) async throws
@@ -301,6 +332,10 @@ public protocol OpenClawChatTransport: Sendable {
 }
 
 extension OpenClawChatTransport {
+    public func requestFullMessage(sessionKey _: String, messageID _: String) async throws -> OpenClawChatMessage? {
+        nil
+    }
+
     public func resolveInlineWidgetResource(
         path: String,
         replacing failedResource: OpenClawChatWidgetResource?) async -> OpenClawChatWidgetResource?
@@ -340,6 +375,19 @@ extension OpenClawChatTransport {
                 sessionKey: sessionKey,
                 agentID: agentID,
                 patch: patch)
+        }
+    }
+
+    public func acquireSessionMutationRouteLease() async -> OpenClawChatSessionMutationRouteLease? {
+        let transport = self
+        return OpenClawChatSessionMutationRouteLease { key, label, category, pinned, archived, unread in
+            try await transport.patchSession(
+                key: key,
+                label: label,
+                category: category,
+                pinned: pinned,
+                archived: archived,
+                unread: unread)
         }
     }
 

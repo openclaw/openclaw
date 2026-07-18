@@ -17,6 +17,7 @@ import type {
   SupplementalContextFacts,
 } from "../../auto-reply/templating.js";
 import type { GroupKeyResolution } from "../../config/sessions/types.js";
+import type { DmScope } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   DeliverOutboundPayloadsParams,
@@ -85,6 +86,7 @@ export type ConversationFacts = {
 /** Session routing facts derived before dispatch. */
 export type RouteFacts = {
   agentId: string;
+  dmScope?: DmScope;
   accountId?: string;
   routeSessionKey: string;
   dispatchSessionKey?: string;
@@ -308,6 +310,7 @@ export type PreparedChannelTurn<TDispatchResult = DispatchFromConfigResult> = {
 
 type ChannelTurnRoute = {
   agentId: string;
+  dmScope?: DmScope;
   sessionKey: string;
 };
 

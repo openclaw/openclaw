@@ -162,10 +162,10 @@ CREATE TABLE IF NOT EXISTS session_state_heads (
   PRIMARY KEY (session_key, agent_id)
 ) STRICT;
 
--- Watcher identity is the bare session key, matching the process-local system-event
--- queue it feeds. Producers only create rows for agent-qualified watcher keys;
--- bare keys (session.scope="global") are ambiguous across agents and are excluded
--- from the notice protocol until watcher identity is agent-scoped end-to-end.
+-- Notifiable watcher identity is the bare session key, matching the process-local
+-- system-event queue it feeds. Ambient group watches also own non-notifiable marker
+-- rows. Other bare keys (session.scope="global") are ambiguous across agents and
+-- excluded until watcher identity is agent-scoped end-to-end.
 CREATE TABLE IF NOT EXISTS session_watch_cursors (
   watcher_session_key TEXT NOT NULL,
   target_session_key TEXT NOT NULL,
@@ -385,6 +385,7 @@ CREATE TABLE IF NOT EXISTS device_pairing_pending (
   device_family TEXT,
   client_id TEXT,
   client_mode TEXT,
+  browser_origin TEXT,
   role TEXT,
   roles_json TEXT,
   scopes_json TEXT,
@@ -407,6 +408,7 @@ CREATE TABLE IF NOT EXISTS device_pairing_paired (
   device_family TEXT,
   client_id TEXT,
   client_mode TEXT,
+  browser_origin TEXT,
   role TEXT,
   roles_json TEXT,
   scopes_json TEXT,
@@ -484,6 +486,15 @@ CREATE TABLE IF NOT EXISTS macos_port_guardian_records (
 
 CREATE INDEX IF NOT EXISTS idx_macos_port_guardian_records_port
   ON macos_port_guardian_records(port, timestamp DESC);
+
+CREATE TABLE IF NOT EXISTS onboarding_recommendations (
+  config_key TEXT NOT NULL PRIMARY KEY,
+  inventory_hash TEXT NOT NULL,
+  matches_json TEXT NOT NULL,
+  offered_at_ms INTEGER NOT NULL,
+  accepted_at_ms INTEGER,
+  updated_at_ms INTEGER NOT NULL
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS workspace_setup_state (
   workspace_key TEXT NOT NULL PRIMARY KEY,
@@ -940,6 +951,16 @@ CREATE TABLE IF NOT EXISTS agent_databases (
   last_seen_at INTEGER NOT NULL,
   size_bytes INTEGER,
   PRIMARY KEY (agent_id, path)
+) STRICT;
+
+-- Additive derived cache: older builds safely ignore this table.
+-- Keep state schema v3 so verification never makes downgrades refuse startup.
+CREATE TABLE IF NOT EXISTS database_verifications (
+  path TEXT NOT NULL PRIMARY KEY,
+  kind TEXT NOT NULL,
+  verified_at INTEGER NOT NULL,
+  result TEXT NOT NULL,
+  error TEXT
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS plugin_state_entries (

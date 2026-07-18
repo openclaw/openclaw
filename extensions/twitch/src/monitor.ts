@@ -100,6 +100,7 @@ async function processTwitchMessage(params: {
           },
           route: {
             agentId: route.agentId,
+            dmScope: route.dmScope,
             accountId: route.accountId,
             routeSessionKey: route.sessionKey,
           },
@@ -122,7 +123,7 @@ async function processTwitchMessage(params: {
           cfg,
           channel: "twitch",
           accountId,
-          route: { agentId: route.agentId, sessionKey: route.sessionKey },
+          route: { agentId: route.agentId, dmScope: route.dmScope, sessionKey: route.sessionKey },
           ctxPayload,
           delivery: {
             durable: () => ({
