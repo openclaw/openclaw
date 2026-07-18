@@ -453,7 +453,7 @@ describe("sendMessageIMessage receipts", () => {
     );
   });
 
-  it("uses the dedicated send timeout (covers macOS 26 stalls), not the 10s probe default", async () => {
+  it("keeps the outer send timeout beyond imsg bridge fallback and verification", async () => {
     const client = createClient({ guid: "p:0/imsg-1" });
 
     await sendMessageIMessage("chat_id:42", "hello", {
@@ -462,7 +462,7 @@ describe("sendMessageIMessage receipts", () => {
     });
 
     expect(getClientMocks(client).request).toHaveBeenCalledWith("send", expect.any(Object), {
-      timeoutMs: 150_000,
+      timeoutMs: 180_000,
     });
   });
 
