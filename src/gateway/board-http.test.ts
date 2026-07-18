@@ -47,19 +47,28 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await new Promise<void>((resolve, reject) =>
-    server.close((error) => (error ? reject(error) : resolve())),
-  );
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
 });
 
-function request(name: string, init?: RequestInit) {
+function request(name: string, init: { method?: string; headers?: Record<string, string> } = {}) {
+  const headers = new Headers({
+    Authorization: "Bearer test-token",
+    "x-openclaw-scopes": "operator.read",
+  });
+  for (const [key, value] of Object.entries(init.headers ?? {})) {
+    headers.set(key, value);
+  }
   return fetch(`${baseUrl}/__openclaw__/board/agent%3Amain%3Amain/${name}/index.html`, {
-    headers: {
-      Authorization: "Bearer test-token",
-      "x-openclaw-scopes": "operator.read",
-      ...init?.headers,
-    },
     ...init,
+    headers,
   });
 }
 
