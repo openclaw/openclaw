@@ -13,6 +13,25 @@ function throwAbortError(): never {
   throw createAbortError("Aborted");
 }
 
+function rejectOnAbort(signal: AbortSignal): { promise: Promise<never>; dispose: () => void } {
+  let onAbort: (() => void) | undefined;
+  const promise = new Promise<never>((_, reject) => {
+    onAbort = () => reject(createAbortError("Aborted"));
+    signal.addEventListener("abort", onAbort, { once: true });
+    if (signal.aborted) {
+      onAbort();
+    }
+  });
+  return {
+    promise,
+    dispose: () => {
+      if (onAbort) {
+        signal.removeEventListener("abort", onAbort);
+      }
+    },
+  };
+}
+
 /** Wrap a tool so every execute call observes the supplied run abort signal. */
 export function wrapToolWithAbortSignal(
   tool: AnyAgentTool,
@@ -32,7 +51,17 @@ export function wrapToolWithAbortSignal(
       if (combinedSignal.aborted) {
         throwAbortError();
       }
-      return await execute(toolCallId, params, combinedSignal, onUpdate);
+      const aborted = rejectOnAbort(combinedSignal);
+      try {
+        // Tool cancellation is cooperative, so the handler may settle after
+        // the caller exits. The race keeps the run responsive and observes late rejection.
+        return await Promise.race([
+          execute(toolCallId, params, combinedSignal, onUpdate),
+          aborted.promise,
+        ]);
+      } finally {
+        aborted.dispose();
+      }
     },
   };
   copyPluginToolMeta(tool, wrappedTool);

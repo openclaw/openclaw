@@ -38,6 +38,7 @@ import {
   buildAuthProfileFailoverFailureText,
   buildExternalRunFailureReply,
   buildRateLimitCooldownMessage,
+  buildStalledRunReplyPayload,
   hasBillingAttemptSummary,
   isNonDirectConversationContext,
   isPureTransientRateLimitSummary,
@@ -48,10 +49,12 @@ import {
 } from "./agent-runner-failure-reply.js";
 import type { AgentFallbackCycleState } from "./agent-runner-fallback-cycle.js";
 import type { AgentTurnTimingTracker } from "./agent-runner-turn-timing.js";
+import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { classifyProviderRequestError } from "./provider-request-error-classifier.js";
 import {
   buildRestartLifecycleReplyText,
   isReplyOperationRestartAbort,
+  isReplyOperationStalled,
   isReplyOperationUserAbort,
   resolveRestartLifecycleError,
 } from "./reply-operation-abort.js";
@@ -229,6 +232,13 @@ export async function handleAgentExecutionError(params: {
     isTransientHttpError(message) ||
     (isFailoverError(err) && (err.reason === "timeout" || err.reason === "server_error"));
 
+  // Stale recovery records run_stalled before aborting this operation.
+  // Handle it before the broad user-abort predicate so the interruption remains visible.
+  if (isReplyOperationStalled(turn.replyOperation)) {
+    takePendingLifecycleTerminal()?.emit("error", err);
+    await drainPendingToolTasks({ tasks: turn.pendingToolTasks, onTimeout: logVerbose });
+    return { kind: "final", payload: buildStalledRunReplyPayload(turn.isHeartbeat) };
+  }
   const replyOperationAbortAction = resolveReplyOperationAbortAction(err);
   if (replyOperationAbortAction) {
     return replyOperationAbortAction;
