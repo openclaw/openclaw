@@ -11,6 +11,7 @@ import {
 } from "../../packages/markdown-core/src/frontmatter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readRootJsonObjectSync } from "../infra/json-files.js";
+import { readRegularFileSync } from "../infra/regular-file.js";
 import { isPathInsideWithRealpath } from "../security/scan-paths.js";
 import { parseFrontmatterBool } from "../shared/frontmatter.js";
 import {
@@ -32,6 +33,8 @@ type ClaudeBundleCommandSpec = {
   promptTemplate: string;
   sourceFilePath: string;
 };
+
+const BUNDLE_COMMAND_MAX_BYTES = 1 * 1024 * 1024;
 
 function readClaudeBundleManifest(rootDir: string): Record<string, unknown> {
   const result = readRootJsonObjectSync({
@@ -103,7 +106,7 @@ function loadBundleCommandsFromRoot(params: {
   for (const filePath of listMarkdownFilesRecursive(params.commandRoot)) {
     let raw: string;
     try {
-      raw = fs.readFileSync(filePath, "utf-8");
+      raw = readRegularFileSync({ filePath, maxBytes: BUNDLE_COMMAND_MAX_BYTES });
     } catch {
       continue;
     }
