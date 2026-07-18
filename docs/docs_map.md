@@ -1489,6 +1489,18 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: macOS: launchctl env overrides
   - H2: Related
 
+## cli/durable.md
+
+- Route: /cli/durable
+- Headings:
+  - H2: Usage
+  - H2: Commands
+  - H2: Enablement And Storage
+  - H2: Environment Variables
+  - H2: Retention And Privacy
+  - H2: Durable Wake Queue And Attention Obligations
+  - H2: Related
+
 ## cli/flows.md
 
 - Route: /cli/flows
@@ -3612,7 +3624,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Node helper methods
   - H2: Audit ledger RPC
   - H2: Task ledger RPCs
-  - H2: Operator helper methods
+  - H3: Durable coordination RPCs
+  - H3: Operator helper methods
   - H3: models.list views
   - H2: Exec approvals
   - H2: Agent delivery fallback
@@ -8766,6 +8779,41 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Implementation Plan
   - H2: Acceptance Tests
   - H2: Open Questions
+
+## specs/durable-core-beta3-architecture.md
+
+- Route: /specs/durable-core-beta3-architecture
+- Headings:
+  - H1: Durable Core Beta 3 Architecture
+  - H2: General Durable Runtime RFC
+  - H2: What Problem This Solves
+  - H2: Why Beta 3 Needs This Foundation
+  - H2: Implementation Position
+  - H2: Durable Core Boundary
+  - H2: Beta 3 User Promise
+  - H2: Core Invariants
+  - H2: Durable Wake And Attention Obligations
+  - H2: Non Goals
+  - H2: Related
+
+## specs/durable-core-beta3-test-plan.md
+
+- Route: /specs/durable-core-beta3-test-plan
+- Headings:
+  - H1: Durable Core Beta 3 Test Plan
+  - H2: Scope
+  - H2: Root-Cause Coverage
+  - H2: Proof Hygiene
+  - H2: Docs-Only Gate
+  - H2: Proof Matrix
+  - H2: Required Scenarios
+  - H3: Disabled Paths Never Mutate
+  - H3: Runtime Opt-In Without Worker Mutation
+  - H3: Wake And Owner Attention
+  - H3: Restart And Side-Effect Uncertainty
+  - H3: Privacy, Retention, And Compaction
+  - H2: Live Proof Policy
+  - H2: Related
 
 ## start/bootstrapping.md
 

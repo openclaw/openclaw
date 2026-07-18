@@ -279,6 +279,9 @@ export function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedU
     content,
     timestamp: params.timestamp ?? Date.now(),
     ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
+    ...(params.contextRefs && params.contextRefs.length > 0
+      ? { contextRefs: params.contextRefs }
+      : {}),
     ...mediaFields,
     ...(Object.keys(openClawMeta).length > 0 ? { __openclaw: openClawMeta } : {}),
   } as PersistedUserTurnMessage;

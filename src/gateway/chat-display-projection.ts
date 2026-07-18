@@ -456,6 +456,42 @@ function sanitizeUsage(raw: unknown): Record<string, number> | undefined {
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
+function sanitizeContextRefs(raw: unknown): Array<Record<string, unknown>> | undefined {
+  if (!Array.isArray(raw)) {
+    return undefined;
+  }
+  const refs: Array<Record<string, unknown>> = [];
+  for (const item of raw.slice(0, 16)) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      continue;
+    }
+    const record = item as Record<string, unknown>;
+    const type = normalizeOptionalString(record.type);
+    const id = normalizeOptionalString(record.id);
+    if (!type || !id || type.length > 80 || id.length > 240) {
+      continue;
+    }
+    const label = normalizeOptionalString(record.label);
+    const source = normalizeOptionalString(record.source);
+    const url = normalizeOptionalString(record.url);
+    const next: Record<string, unknown> = {
+      type,
+      id,
+      ...(label && label.length <= 240 ? { label } : {}),
+      ...(source && source.length <= 120 ? { source } : {}),
+      ...(url && url.length <= 2000 ? { url } : {}),
+    };
+    if (record.metadata && typeof record.metadata === "object" && !Array.isArray(record.metadata)) {
+      const encoded = JSON.stringify(record.metadata);
+      if (Buffer.byteLength(encoded, "utf8") <= 8192) {
+        next.metadata = JSON.parse(encoded) as Record<string, unknown>;
+      }
+    }
+    refs.push(next);
+  }
+  return refs.length > 0 ? refs : undefined;
+}
+
 function sanitizeChatHistoryMessage(
   message: unknown,
   maxChars: number = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
@@ -557,6 +593,16 @@ function sanitizeChatHistoryMessage(
       entry.text = res.text;
       changed ||= stripped.changed || res.truncated;
     }
+  }
+
+  if ("contextRefs" in entry) {
+    const refs = sanitizeContextRefs(entry.contextRefs);
+    if (refs) {
+      entry.contextRefs = refs;
+    } else {
+      delete entry.contextRefs;
+    }
+    changed = true;
   }
 
   return { message: changed ? entry : message, changed };

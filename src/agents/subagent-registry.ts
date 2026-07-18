@@ -717,6 +717,25 @@ const {
   startSubagentAnnounceCleanupFlow,
 } = subagentLifecycleController;
 
+function hasTerminalOutcomePendingDelivery(entry: SubagentRunRecord): boolean {
+  if (entry.expectsCompletionMessage === false) {
+    return false;
+  }
+  if (typeof entry.endedAt !== "number" || entry.outcome === undefined) {
+    return false;
+  }
+  if (typeof entry.cleanupCompletedAt === "number") {
+    return false;
+  }
+  const status = entry.delivery?.status;
+  return (
+    status !== "delivered" &&
+    status !== "failed" &&
+    status !== "discarded" &&
+    !isDeliverySuspended(entry)
+  );
+}
+
 function resumeSubagentRun(runId: string) {
   if (!runId || resumedRuns.has(runId)) {
     return;
@@ -787,7 +806,7 @@ function resumeSubagentRun(runId: string) {
       return;
     }
     const orphanReason = resolveSubagentRunOrphanReason({ entry });
-    if (orphanReason) {
+    if (orphanReason && !hasTerminalOutcomePendingDelivery(entry)) {
       if (
         reconcileOrphanedRun({
           runId,
@@ -800,7 +819,9 @@ function resumeSubagentRun(runId: string) {
       ) {
         persistSubagentRuns();
       }
-      return;
+      if (subagentRuns.get(runId) !== entry || entry.cleanupCompletedAt) {
+        return;
+      }
     }
     if (suppressAnnounceForSteerRestart(entry)) {
       resumedRuns.add(runId);
@@ -1061,6 +1082,11 @@ async function sweepSubagentRuns() {
               })
             ) {
               mutated = true;
+            }
+            const current = subagentRuns.get(runId);
+            if (current && typeof current.endedAt === "number" && !current.cleanupCompletedAt) {
+              resumedRuns.delete(runId);
+              resumeSubagentRun(runId);
             }
             continue;
           }

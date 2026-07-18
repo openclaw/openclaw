@@ -169,7 +169,7 @@ export type EmbeddedAgentRunMeta = {
   timeoutPhase?: AgentRunTimeoutPhase;
   providerStarted?: boolean;
   agentHarnessResultClassification?: "empty" | "reasoning-only" | "planning-only";
-  terminalReplyKind?: "silent-empty";
+  terminalReplyKind?: "silent-empty" | "yield-progress";
   yielded?: boolean;
   error?: {
     kind:
@@ -213,6 +213,7 @@ export type EmbeddedAgentRunResult = {
     isReasoning?: boolean;
     /** Marks pre-tool commentary (💬) — a display lane, suppressed unless the channel opts in. */
     isCommentary?: boolean;
+    isStatusNotice?: boolean;
     audioAsVoice?: boolean;
     trustedLocalMedia?: boolean;
     channelData?: Record<string, unknown>;

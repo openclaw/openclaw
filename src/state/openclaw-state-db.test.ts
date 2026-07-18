@@ -18,6 +18,7 @@ import { loadTaskRegistryStateFromSqlite } from "../tasks/task-registry.store.sq
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
+  closeOpenClawStateDatabaseForPath,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -30,7 +31,12 @@ import {
 
 type StateDbTestDatabase = Pick<
   OpenClawStateKyselyDatabase,
-  "diagnostic_events" | "schema_meta" | "skill_curator_state" | "skill_lifecycle" | "skill_usage"
+  | "diagnostic_events"
+  | "durable_runtime_runs"
+  | "schema_meta"
+  | "skill_curator_state"
+  | "skill_lifecycle"
+  | "skill_usage"
 >;
 
 const stateDbTempDirs: string[] = [];
@@ -91,6 +97,78 @@ describe("openclaw state database", () => {
       createSqliteSchemaShapeFromSql(new URL("./openclaw-state-schema.sql", import.meta.url)),
     );
     expect(database.path).toBe(path.join(stateDir, "state", "openclaw.sqlite"));
+  });
+
+  it("creates durable runtime tables and indexes as shared state schema", () => {
+    const stateDir = createTempStateDir();
+    const database = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+
+    const tables = database.db
+      .prepare(
+        `SELECT name
+           FROM sqlite_master
+          WHERE type = 'table'
+            AND name LIKE 'durable_%'
+          ORDER BY name`,
+      )
+      .all() as Array<{ name: string }>;
+    expect(tables.map((row) => row.name)).toEqual([
+      "durable_runtime_continuation_cleanup",
+      "durable_runtime_dedupe_ledger",
+      "durable_runtime_events",
+      "durable_runtime_links",
+      "durable_runtime_parent_wakes",
+      "durable_runtime_refs",
+      "durable_runtime_runs",
+      "durable_runtime_signals",
+      "durable_runtime_steps",
+      "durable_runtime_timers",
+      "durable_runtime_uncertainty_facts",
+      "durable_runtime_wake_delivery_attempts",
+    ]);
+    const indexes = database.db
+      .prepare(
+        `SELECT name
+           FROM sqlite_master
+          WHERE type = 'index'
+            AND name LIKE 'idx_durable_runtime_%'
+          ORDER BY name`,
+      )
+      .all() as Array<{ name: string }>;
+    expect(indexes.map((row) => row.name)).toEqual([
+      "idx_durable_runtime_cleanup_dedupe",
+      "idx_durable_runtime_cleanup_run",
+      "idx_durable_runtime_cleanup_target",
+      "idx_durable_runtime_dedupe_ledger_status",
+      "idx_durable_runtime_events_type",
+      "idx_durable_runtime_links_child",
+      "idx_durable_runtime_parent_wakes_dedupe",
+      "idx_durable_runtime_parent_wakes_owner",
+      "idx_durable_runtime_parent_wakes_parent_run",
+      "idx_durable_runtime_parent_wakes_parent_session",
+      "idx_durable_runtime_parent_wakes_report_route",
+      "idx_durable_runtime_parent_wakes_status",
+      "idx_durable_runtime_parent_wakes_target",
+      "idx_durable_runtime_refs_run",
+      "idx_durable_runtime_runs_idempotency",
+      "idx_durable_runtime_runs_report_route",
+      "idx_durable_runtime_runs_status",
+      "idx_durable_runtime_runs_work_unit",
+      "idx_durable_runtime_signals_idempotency",
+      "idx_durable_runtime_signals_pending",
+      "idx_durable_runtime_steps_idempotency",
+      "idx_durable_runtime_steps_status",
+      "idx_durable_runtime_timers_due",
+      "idx_durable_runtime_uncertainty_dedupe",
+      "idx_durable_runtime_uncertainty_source",
+      "idx_durable_runtime_uncertainty_status",
+      "idx_durable_runtime_wake_delivery_attempts_claim",
+      "idx_durable_runtime_wake_delivery_attempts_route",
+      "idx_durable_runtime_wake_delivery_attempts_status",
+      "idx_durable_runtime_wake_delivery_attempts_wake",
+    ]);
   });
 
   it("creates the bounded skill curator tables", () => {
@@ -859,6 +937,53 @@ describe("openclaw state database", () => {
     ).toThrow(/newer schema version 2/);
   });
 
+  it("preserves existing rows when shared state adds durable runtime schema", () => {
+    const stateDir = createTempStateDir();
+    const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+    fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+    const { DatabaseSync } = requireNodeSqlite();
+    const db = new DatabaseSync(databasePath);
+    db.exec(`
+      CREATE TABLE diagnostic_events (
+        scope TEXT NOT NULL,
+        event_key TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (scope, event_key)
+      );
+    `);
+    db.prepare(
+      `INSERT INTO diagnostic_events (scope, event_key, payload_json, created_at)
+       VALUES (?, ?, ?, ?)`,
+    ).run("state", "startup", '{"ok":true}', 123);
+    db.close();
+
+    const database = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+
+    expect(
+      database.db
+        .prepare(
+          `SELECT scope, event_key, payload_json, created_at
+             FROM diagnostic_events
+            WHERE scope = ?
+              AND event_key = ?`,
+        )
+        .get("state", "startup"),
+    ).toEqual({
+      scope: "state",
+      event_key: "startup",
+      payload_json: '{"ok":true}',
+      created_at: 123,
+    });
+    expect(
+      database.db
+        .prepare("SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = ?")
+        .get("durable_runtime_runs"),
+    ).toEqual({ ok: 1 });
+  });
+
   it("does not chmod shared parent directories for explicit database paths", () => {
     const databasePath = path.join(
       os.tmpdir(),
@@ -959,6 +1084,103 @@ describe("openclaw state database", () => {
     expect(result.secondFileExists).toBe(true);
     expect(result.firstRows).toEqual([{ event_key: "first" }]);
     expect(result.secondRows).toEqual([{ event_key: "second" }]);
+  });
+
+  it("does not count ordinary cached lookups as durable state handle leases", () => {
+    const databasePath = path.join(createTempStateDir(), "state", "cached-lookup.sqlite");
+    const first = openOpenClawStateDatabase({ path: databasePath });
+    const second = openOpenClawStateDatabase({ path: databasePath });
+
+    expect(second).toBe(first);
+
+    closeOpenClawStateDatabaseForPath({ path: databasePath });
+
+    expect(first.db.isOpen).toBe(false);
+
+    const reopened = openOpenClawStateDatabase({ path: databasePath });
+    expect(reopened).not.toBe(first);
+    expect(reopened.db.isOpen).toBe(true);
+  });
+
+  it("persists durable writes across explicit close and reopen", () => {
+    const databasePath = path.join(createTempStateDir(), "state", "durable-reopen.sqlite");
+    const options = { path: databasePath };
+
+    runOpenClawStateWriteTransaction((database) => {
+      const stateDb = getNodeSqliteKysely<StateDbTestDatabase>(database.db);
+      executeSqliteQuerySync(
+        database.db,
+        stateDb.insertInto("durable_runtime_runs").values({
+          runtime_run_id: "durable-reopen-run",
+          operation_kind: "test",
+          status: "queued",
+          recovery_state: "not_started",
+          metadata_json: "{}",
+          created_at: 10,
+          updated_at: 10,
+        }),
+      );
+    }, options);
+
+    const written = openOpenClawStateDatabase(options);
+    expect(written.db.isOpen).toBe(true);
+
+    closeOpenClawStateDatabaseForPath(options);
+
+    expect(written.db.isOpen).toBe(false);
+
+    const reopened = openOpenClawStateDatabase(options);
+    const stateDb = getNodeSqliteKysely<StateDbTestDatabase>(reopened.db);
+    expect(
+      executeSqliteQuerySync(
+        reopened.db,
+        stateDb
+          .selectFrom("durable_runtime_runs")
+          .select(["runtime_run_id", "status"])
+          .where("runtime_run_id", "=", "durable-reopen-run"),
+      ).rows,
+    ).toEqual([{ runtime_run_id: "durable-reopen-run", status: "queued" }]);
+  });
+
+  it("defers close requests until the explicit durable write lease is released", () => {
+    const databasePath = path.join(createTempStateDir(), "state", "durable-lease.sqlite");
+    const options = { path: databasePath };
+    let leasedDatabase: ReturnType<typeof openOpenClawStateDatabase> | undefined;
+
+    runOpenClawStateWriteTransaction((database) => {
+      leasedDatabase = database;
+      const stateDb = getNodeSqliteKysely<StateDbTestDatabase>(database.db);
+      executeSqliteQuerySync(
+        database.db,
+        stateDb.insertInto("durable_runtime_runs").values({
+          runtime_run_id: "durable-lease-run",
+          operation_kind: "test",
+          status: "queued",
+          recovery_state: "not_started",
+          metadata_json: "{}",
+          created_at: 20,
+          updated_at: 20,
+        }),
+      );
+
+      closeOpenClawStateDatabaseForPath(options);
+
+      expect(database.db.isOpen).toBe(true);
+    }, options);
+
+    expect(leasedDatabase?.db.isOpen).toBe(false);
+
+    const reopened = openOpenClawStateDatabase(options);
+    const stateDb = getNodeSqliteKysely<StateDbTestDatabase>(reopened.db);
+    expect(
+      executeSqliteQuerySync(
+        reopened.db,
+        stateDb
+          .selectFrom("durable_runtime_runs")
+          .select(["runtime_run_id", "status"])
+          .where("runtime_run_id", "=", "durable-lease-run"),
+      ).rows,
+    ).toEqual([{ runtime_run_id: "durable-lease-run", status: "queued" }]);
   });
 
   it("uses savepoints for nested write transaction rollback", () => {
