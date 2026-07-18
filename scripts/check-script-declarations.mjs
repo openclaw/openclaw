@@ -235,6 +235,8 @@ function resolveReexport(importerPath, specifier, fsImpl) {
   const declarationCandidates = [];
   if (specifier.endsWith(".mjs")) {
     declarationCandidates.push(`${base.slice(0, -".mjs".length)}.d.mts`);
+  } else if (specifier.endsWith(".cjs")) {
+    declarationCandidates.push(`${base.slice(0, -".cjs".length)}.d.cts`);
   } else if (specifier.endsWith(".js")) {
     declarationCandidates.push(`${base.slice(0, -".js".length)}.d.ts`);
   }
@@ -261,6 +263,14 @@ function createNamespaceOrigin(moduleId) {
 
 function isExternalModuleSpecifier(specifier) {
   return !specifier.startsWith(".") && !path.isAbsolute(specifier);
+}
+
+function canUseOpaqueModuleBinding(target, importedName) {
+  return (
+    target.endsWith(".cjs") ||
+    target.endsWith(".node") ||
+    (target.endsWith(".json") && importedName === "default")
+  );
 }
 
 function createOpaqueExternalOrigin(importerPath, specifier, kind, name = null) {
@@ -317,7 +327,22 @@ function resolveLocalBindingOrigins(binding, importerPath, fsImpl, state, issues
       reason: "ambiguous exported import",
     });
   }
-  return targetResult.exports.get(binding.importedName) ?? null;
+  const origins = targetResult.exports.get(binding.importedName);
+  if (origins) {
+    return origins;
+  }
+  if (
+    !/\.d\.[cm]?ts$/u.test(importerPath) &&
+    canUseOpaqueModuleBinding(target, binding.importedName)
+  ) {
+    return new Set([createBindingOrigin(target, binding.importedName)]);
+  }
+  issues.push({
+    filePath: importerPath,
+    specifier: `${binding.specifier}:${binding.importedName}`,
+    reason: "unresolved imported value",
+  });
+  return null;
 }
 
 function collectValueExports(filePath, fsImpl, state) {
@@ -425,8 +450,14 @@ function collectValueExports(filePath, fsImpl, state) {
                   reason: "unresolved named re-export",
                 });
               }
-            } else if (!isDeclaration) {
+            } else if (!isDeclaration && canUseOpaqueModuleBinding(target, sourceName)) {
               explicitExports.set(exportedName, new Set([createBindingOrigin(target, sourceName)]));
+            } else {
+              issues.push({
+                filePath: normalizedFilePath,
+                specifier: `${specifier.text}:${sourceName}`,
+                reason: "unresolved named re-export",
+              });
             }
           } else {
             const origins = resolveLocalBindingOrigins(

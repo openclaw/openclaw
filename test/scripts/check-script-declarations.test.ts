@@ -401,6 +401,103 @@ describe("script declaration contracts", () => {
     ).toEqual({ checked: 1, issues: [] });
   });
 
+  it("retains runtime exports imported from opaque local modules", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-script-declarations-"));
+    tempDirs.push(root);
+    fs.mkdirSync(path.join(root, "scripts"), { recursive: true });
+    fs.writeFileSync(path.join(root, "scripts", "config.json"), '{"enabled":true}\n');
+    fs.writeFileSync(
+      path.join(root, "scripts", "config.mjs"),
+      'import config from "./config.json" with { type: "json" };\nexport { config };\n',
+    );
+    fs.writeFileSync(
+      path.join(root, "scripts", "config.d.mts"),
+      "export declare const config: { enabled: boolean };\n",
+    );
+
+    expect(
+      verifyScriptDeclarationContracts({
+        root,
+        files: ["scripts/config.d.mts", "scripts/config.json", "scripts/config.mjs"],
+      }),
+    ).toEqual({ checked: 1, issues: [] });
+  });
+
+  it("fails closed on missing exports from analyzable local modules", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-script-declarations-"));
+    tempDirs.push(root);
+    fs.mkdirSync(path.join(root, "scripts"), { recursive: true });
+    fs.writeFileSync(path.join(root, "scripts", "origin.mjs"), "export const value = 1;\n");
+    fs.writeFileSync(
+      path.join(root, "scripts", "barrel.mjs"),
+      'import { typo } from "./origin.mjs";\nexport { typo };\n',
+    );
+    fs.writeFileSync(path.join(root, "scripts", "barrel.d.mts"), "export const typo: 1;\n");
+
+    expect(
+      verifyScriptDeclarationContracts({
+        root,
+        files: ["scripts/barrel.d.mts", "scripts/barrel.mjs", "scripts/origin.mjs"],
+      }),
+    ).toEqual({
+      checked: 1,
+      issues: ['scripts/barrel.mjs: unresolved imported value "./origin.mjs:typo"'],
+    });
+  });
+
+  it("fails closed on named JSON imports", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-script-declarations-"));
+    tempDirs.push(root);
+    fs.mkdirSync(path.join(root, "scripts"), { recursive: true });
+    fs.writeFileSync(path.join(root, "scripts", "config.json"), '{"enabled":true}\n');
+    fs.writeFileSync(
+      path.join(root, "scripts", "config.mjs"),
+      'import { enabled } from "./config.json" with { type: "json" };\nexport { enabled };\n',
+    );
+    fs.writeFileSync(
+      path.join(root, "scripts", "config.d.mts"),
+      "export declare const enabled: boolean;\n",
+    );
+
+    expect(
+      verifyScriptDeclarationContracts({
+        root,
+        files: ["scripts/config.d.mts", "scripts/config.json", "scripts/config.mjs"],
+      }),
+    ).toEqual({
+      checked: 1,
+      issues: ['scripts/config.mjs: unresolved imported value "./config.json:enabled"'],
+    });
+  });
+
+  it("resolves CommonJS imports to adjacent declaration sidecars", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-script-declarations-"));
+    tempDirs.push(root);
+    fs.mkdirSync(path.join(root, "scripts"), { recursive: true });
+    fs.writeFileSync(path.join(root, "scripts", "helper.cjs"), "exports.value = 1;\n");
+    fs.writeFileSync(path.join(root, "scripts", "helper.d.cts"), "export const value: 1;\n");
+    fs.writeFileSync(
+      path.join(root, "scripts", "barrel.mjs"),
+      'export { value } from "./helper.cjs";\n',
+    );
+    fs.writeFileSync(
+      path.join(root, "scripts", "barrel.d.mts"),
+      'export { value } from "./helper.cjs";\n',
+    );
+
+    expect(
+      verifyScriptDeclarationContracts({
+        root,
+        files: [
+          "scripts/barrel.d.mts",
+          "scripts/barrel.mjs",
+          "scripts/helper.cjs",
+          "scripts/helper.d.cts",
+        ],
+      }),
+    ).toEqual({ checked: 1, issues: [] });
+  });
+
   it("distinguishes namespace objects from named external bindings", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-script-declarations-"));
     tempDirs.push(root);
