@@ -1840,7 +1840,7 @@ function isRunnableJob(params: {
     const alreadyCompletedDueCronSlot =
       params.allowCronMissedRunByLastRun &&
       job.schedule.kind === "cron" &&
-      lastRunStatus === "ok" &&
+      (lastRunStatus === "ok" || lastRunStatus === "skipped") &&
       typeof lastRunAtMs === "number" &&
       Number.isFinite(lastRunAtMs) &&
       lastRunAtMs >= next;

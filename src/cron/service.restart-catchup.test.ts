@@ -270,59 +270,64 @@ describe("CronService restart catch-up", () => {
     }
   });
 
-  it("does not defer an isolated cron agent-turn whose persisted due slot already succeeded", async () => {
-    const store = await makeStorePath();
-    const startNow = Date.parse("2025-12-13T11:00:00.000Z");
-    const dueAt = Date.parse("2025-12-13T09:10:00.000Z");
-    const completedAt = Date.parse("2025-12-13T09:10:30.000Z");
-    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
-    const enqueueSystemEvent = vi.fn();
-    const requestHeartbeat = vi.fn();
+  it.each(["ok", "skipped"] as const)(
+    "does not defer an isolated cron agent-turn whose persisted due slot finished as %s",
+    async (lastRunStatus) => {
+      const store = await makeStorePath();
+      const startNow = Date.parse("2025-12-13T11:00:00.000Z");
+      const dueAt = Date.parse("2025-12-13T09:10:00.000Z");
+      const completedAt = Date.parse("2025-12-13T09:10:30.000Z");
+      const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+      const enqueueSystemEvent = vi.fn();
+      const requestHeartbeat = vi.fn();
 
-    await writeStoreJobs(store.storePath, [
-      {
-        id: "startup-isolated-agent-already-ok",
-        name: "startup isolated agent already ok",
-        enabled: true,
-        createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
-        updatedAtMs: completedAt,
-        schedule: { kind: "cron", expr: "10 9 * * *", tz: "UTC" },
-        sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "agentTurn", message: "daily reminder" },
-        state: {
-          nextRunAtMs: dueAt,
-          lastRunAtMs: completedAt,
-          lastRunStatus: "ok",
+      await writeStoreJobs(store.storePath, [
+        {
+          id: `startup-isolated-agent-already-${lastRunStatus}`,
+          name: `startup isolated agent already ${lastRunStatus}`,
+          enabled: true,
+          createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
+          updatedAtMs: completedAt,
+          schedule: { kind: "cron", expr: "10 9 * * *", tz: "UTC" },
+          sessionTarget: "isolated",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "agentTurn", message: "daily reminder" },
+          state: {
+            nextRunAtMs: dueAt,
+            lastRunAtMs: completedAt,
+            lastRunStatus,
+          },
         },
-      },
-    ]);
+      ]);
 
-    const cron = createRestartCronService({
-      storePath: store.storePath,
-      enqueueSystemEvent,
-      requestHeartbeat,
-      runIsolatedAgentJob,
-      nowMs: () => startNow,
-      startupDeferredMissedAgentJobDelayMs: 120_000,
-    });
+      const cron = createRestartCronService({
+        storePath: store.storePath,
+        enqueueSystemEvent,
+        requestHeartbeat,
+        runIsolatedAgentJob,
+        nowMs: () => startNow,
+        startupDeferredMissedAgentJobDelayMs: 120_000,
+      });
 
-    try {
-      await cron.start();
+      try {
+        await cron.start();
 
-      expect(runIsolatedAgentJob).not.toHaveBeenCalled();
-      expect(enqueueSystemEvent).not.toHaveBeenCalled();
-      expect(requestHeartbeat).not.toHaveBeenCalled();
+        expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+        expect(enqueueSystemEvent).not.toHaveBeenCalled();
+        expect(requestHeartbeat).not.toHaveBeenCalled();
 
-      const listedJobs = await cron.list({ includeDisabled: true });
-      const updated = listedJobs.find((job) => job.id === "startup-isolated-agent-already-ok");
-      expect(updated?.state.lastRunStatus).toBe("ok");
-      expect(updated?.state.nextRunAtMs).toBe(Date.parse("2025-12-14T09:10:00.000Z"));
-    } finally {
-      cron.stop();
-      await store.cleanup();
-    }
-  });
+        const listedJobs = await cron.list({ includeDisabled: true });
+        const updated = listedJobs.find(
+          (job) => job.id === `startup-isolated-agent-already-${lastRunStatus}`,
+        );
+        expect(updated?.state.lastRunStatus).toBe(lastRunStatus);
+        expect(updated?.state.nextRunAtMs).toBe(Date.parse("2025-12-14T09:10:00.000Z"));
+      } finally {
+        cron.stop();
+        await store.cleanup();
+      }
+    },
+  );
 
   it("replays a newer missed cron slot behind a completed persisted slot", async () => {
     vi.setSystemTime(new Date("2025-12-13T04:10:00.000Z"));
