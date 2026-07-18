@@ -1,6 +1,6 @@
 // Refreshes the checked-in CLI startup benchmark fixture.
 import { spawn } from "node:child_process";
-import { renameSync, rmSync } from "node:fs";
+import { chmodSync, lstatSync, readlinkSync, renameSync, rmSync } from "node:fs";
 import path from "node:path";
 import { parseFlagArgs, stringFlag, intFlag } from "./lib/arg-utils.mjs";
 import { signalExitCode, terminateManagedChild } from "./lib/managed-child-process.mjs";
@@ -51,6 +51,40 @@ function resolveBenchmarkProcessTimeoutMs(opts) {
 function resolveTemporaryOutputPath(outputPath) {
   const parsed = path.parse(outputPath);
   return path.join(parsed.dir, `.${parsed.base}.tmp-${process.pid}`);
+}
+
+// Direct benchmark writes followed output symlinks and retained target permissions.
+// Resolve that same destination before staging so atomic promotion preserves both.
+function resolveOutputDestination(outputPath) {
+  let destinationPath = outputPath;
+  const visitedPaths = new Set();
+
+  while (true) {
+    const absolutePath = path.resolve(destinationPath);
+    if (visitedPaths.has(absolutePath)) {
+      throw new Error(`CLI startup benchmark output symlink cycle detected at ${destinationPath}`);
+    }
+    visitedPaths.add(absolutePath);
+
+    let stats;
+    try {
+      stats = lstatSync(destinationPath);
+    } catch (error) {
+      if (error?.code === "ENOENT") {
+        return { path: destinationPath };
+      }
+      throw error;
+    }
+
+    if (!stats.isSymbolicLink()) {
+      return { mode: stats.mode & 0o777, path: destinationPath };
+    }
+
+    const targetPath = readlinkSync(destinationPath);
+    destinationPath = path.isAbsolute(targetPath)
+      ? targetPath
+      : path.resolve(path.dirname(destinationPath), targetPath);
+  }
 }
 
 async function runBenchmarkDriver(args, opts) {
@@ -229,6 +263,8 @@ const opts = parseFlagArgs(
   ],
 );
 
+const outputDestination = resolveOutputDestination(opts.out);
+const temporaryOutputPath = resolveTemporaryOutputPath(outputDestination.path);
 const args = [
   "--import",
   "tsx",
@@ -244,10 +280,9 @@ const args = [
   "--timeout-ms",
   String(opts.timeoutMs),
   "--output",
-  resolveTemporaryOutputPath(opts.out),
+  temporaryOutputPath,
 ];
 
-const temporaryOutputPath = args.at(-1);
 // Publish only a completed report; a timed-out driver may have already written
 // its output before stalling in reporting or final cleanup.
 rmSync(temporaryOutputPath, { force: true });
@@ -261,7 +296,10 @@ try {
         ? signalExitCode(run.receivedSignal)
         : (run.status ?? 1);
   } else {
-    renameSync(temporaryOutputPath, opts.out);
+    if (outputDestination.mode !== undefined) {
+      chmodSync(temporaryOutputPath, outputDestination.mode);
+    }
+    renameSync(temporaryOutputPath, outputDestination.path);
     console.log(`[test-update-cli-startup-bench] wrote fixture to ${opts.out}`);
   }
 } finally {

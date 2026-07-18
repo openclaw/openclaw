@@ -1,6 +1,18 @@
 // Test Update Cli Startup Bench tests cover fixture updater subprocess deadlines.
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readlinkSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -43,6 +55,34 @@ function countBenchmarkCases(preset: "startup" | "real" | "all"): number {
   return preset === "all" ? cases.length : cases.filter((entry) => entry.includes(preset)).length;
 }
 
+function mockSuccessfulBenchmarkRun(contents = "replacement\n") {
+  spawnMock.mockImplementation((_command, args: string[]) => {
+    const child = Object.assign(new EventEmitter(), { pid: 123_456, kill: vi.fn() });
+    const outputIndex = args.indexOf("--output");
+    writeFileSync(args[outputIndex + 1] ?? "", contents, "utf8");
+    queueMicrotask(() => child.emit("close", 0, null));
+    return child;
+  });
+  vi.spyOn(console, "log").mockImplementation(() => undefined);
+}
+
+function setSuccessfulUpdateArgv(outputPath: string) {
+  process.argv = [
+    process.execPath,
+    UPDATE_SCRIPT_PATH,
+    "--out",
+    outputPath,
+    "--preset",
+    "startup",
+    "--runs",
+    "1",
+    "--warmup",
+    "0",
+    "--timeout-ms",
+    "100",
+  ];
+}
+
 afterEach(() => {
   process.argv = [...originalArgv];
   process.exitCode = originalExitCode;
@@ -72,14 +112,7 @@ describe("test-update-cli-startup-bench", () => {
   it("gives the benchmark driver a hard total deadline beyond all internal run budgets", async () => {
     delete process.env.OPENCLAW_TEST_CLI_STARTUP_TIMEOUT_KILL_GRACE_MS;
     delete process.env.OPENCLAW_TEST_CLI_STARTUP_BENCH_PROCESS_CLEANUP_GRACE_MS;
-    spawnMock.mockImplementation((_command, args: string[]) => {
-      const child = Object.assign(new EventEmitter(), { pid: 123_456, kill: vi.fn() });
-      const outputIndex = args.indexOf("--output");
-      writeFileSync(args[outputIndex + 1] ?? "", "{}\n", "utf8");
-      queueMicrotask(() => child.emit("close", 0, null));
-      return child;
-    });
-    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    mockSuccessfulBenchmarkRun("{}\n");
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const fixtureRoot = mkdtempSync(path.join(process.cwd(), ".tmp-cli-startup-budget-"));
 
@@ -296,6 +329,83 @@ describe("test-update-cli-startup-bench", () => {
       expect(result.error).toBeUndefined();
       expect(result.status).toBe(1);
       expect(readFileSync(outputPath, "utf8")).toBe(existingFixture);
+    } finally {
+      rmSync(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "updates a symlink target without replacing the link and preserves its mode",
+    async () => {
+      const fixtureRoot = mkdtempSync(path.join(process.cwd(), ".tmp-cli-startup-symlink-"));
+      const targetRoot = path.join(fixtureRoot, "targets");
+      const outputPath = path.join(fixtureRoot, "cli-startup-bench.json");
+      const intermediateLinkPath = path.join(targetRoot, "fixture-link.json");
+      const targetPath = path.join(targetRoot, "fixture.json");
+      mkdirSync(targetRoot, { recursive: true });
+      writeFileSync(targetPath, "existing\n", "utf8");
+      chmodSync(targetPath, 0o600);
+      symlinkSync(path.basename(targetPath), intermediateLinkPath);
+      symlinkSync(path.relative(fixtureRoot, intermediateLinkPath), outputPath);
+      const outputLinkTarget = readlinkSync(outputPath);
+      const intermediateLinkTarget = readlinkSync(intermediateLinkPath);
+      mockSuccessfulBenchmarkRun();
+      setSuccessfulUpdateArgv(outputPath);
+
+      try {
+        await import(pathToFileURL(UPDATE_SCRIPT_PATH).href);
+
+        expect(lstatSync(outputPath).isSymbolicLink()).toBe(true);
+        expect(readlinkSync(outputPath)).toBe(outputLinkTarget);
+        expect(lstatSync(intermediateLinkPath).isSymbolicLink()).toBe(true);
+        expect(readlinkSync(intermediateLinkPath)).toBe(intermediateLinkTarget);
+        expect(readFileSync(targetPath, "utf8")).toBe("replacement\n");
+        expect(statSync(targetPath).mode & 0o777).toBe(0o600);
+      } finally {
+        rmSync(fixtureRoot, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "creates the final target of a dangling relative symlink chain",
+    async () => {
+      const fixtureRoot = mkdtempSync(path.join(process.cwd(), ".tmp-cli-startup-dangling-"));
+      const targetRoot = path.join(fixtureRoot, "targets");
+      const outputPath = path.join(fixtureRoot, "cli-startup-bench.json");
+      const intermediateLinkPath = path.join(targetRoot, "fixture-link.json");
+      const targetPath = path.join(targetRoot, "fixture.json");
+      mkdirSync(targetRoot, { recursive: true });
+      symlinkSync(path.basename(targetPath), intermediateLinkPath);
+      symlinkSync(path.relative(fixtureRoot, intermediateLinkPath), outputPath);
+      mockSuccessfulBenchmarkRun();
+      setSuccessfulUpdateArgv(outputPath);
+
+      try {
+        await import(pathToFileURL(UPDATE_SCRIPT_PATH).href);
+
+        expect(lstatSync(outputPath).isSymbolicLink()).toBe(true);
+        expect(lstatSync(intermediateLinkPath).isSymbolicLink()).toBe(true);
+        expect(readFileSync(targetPath, "utf8")).toBe("replacement\n");
+      } finally {
+        rmSync(fixtureRoot, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")("rejects an output symlink cycle", async () => {
+    const fixtureRoot = mkdtempSync(path.join(process.cwd(), ".tmp-cli-startup-cycle-"));
+    const outputPath = path.join(fixtureRoot, "cli-startup-bench.json");
+    const secondLinkPath = path.join(fixtureRoot, "second-link.json");
+    symlinkSync(path.basename(secondLinkPath), outputPath);
+    symlinkSync(path.basename(outputPath), secondLinkPath);
+    process.argv = [process.execPath, UPDATE_SCRIPT_PATH, "--out", outputPath];
+
+    try {
+      await expect(import(pathToFileURL(UPDATE_SCRIPT_PATH).href)).rejects.toThrow(
+        "CLI startup benchmark output symlink cycle detected",
+      );
+      expect(spawnMock).not.toHaveBeenCalled();
     } finally {
       rmSync(fixtureRoot, { recursive: true, force: true });
     }
