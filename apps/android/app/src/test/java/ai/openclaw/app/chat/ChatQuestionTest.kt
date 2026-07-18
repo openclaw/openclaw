@@ -853,6 +853,73 @@ class ChatQuestionTest {
       )
     }
 
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun successfulAnswerOverridesUnavailableRecoveryRace() =
+    runTest {
+      val json = Json { ignoreUnknownKeys = true }
+      val pending = record(expiresAtMs = Long.MAX_VALUE)
+      val resolveStarted = CompletableDeferred<Unit>()
+      val releaseResolve = CompletableDeferred<Unit>()
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, _ ->
+            when (method) {
+              "question.list" ->
+                json.encodeToString(
+                  QuestionListResult(if (resolveStarted.isCompleted) emptyList() else listOf(pending)),
+                )
+              "question.get" ->
+                throw GatewayRequestRejected(
+                  GatewaySession.ErrorShape(
+                    code = "INVALID_REQUEST",
+                    message = "question not found",
+                    details =
+                      GatewayConnectErrorDetails(
+                        code = null,
+                        reason = "QUESTION_NOT_FOUND",
+                        canRetryWithDeviceToken = false,
+                        recommendedNextStep = null,
+                      ),
+                  ),
+                )
+              "question.resolve" -> {
+                resolveStarted.complete(Unit)
+                releaseResolve.await()
+                "{}"
+              }
+              else -> "{}"
+            }
+          },
+        )
+
+      controller.handleGatewayEvent("question.requested", json.encodeToString(pending))
+      runCurrent()
+      controller.resolveQuestion(pending.id, mapOf("meal" to listOf("Pizza")))
+      runCurrent()
+      resolveStarted.await()
+      controller.handleGatewayEvent("health", null)
+      runCurrent()
+      assertEquals(
+        ChatQuestionStatus.Unavailable,
+        controller.questions.value
+          .single()
+          .status(),
+      )
+
+      releaseResolve.complete(Unit)
+      advanceUntilIdle()
+
+      assertEquals(
+        ChatQuestionStatus.Answered,
+        controller.questions.value
+          .single()
+          .status(),
+      )
+    }
+
   private fun record(
     id: String = "ask_123",
     status: String = "pending",

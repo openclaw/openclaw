@@ -2167,6 +2167,7 @@ class ChatController internal constructor(
                   ),
                 submitting = false,
                 answeredLocally = !cancel,
+                recoveryUnavailable = false,
                 terminalObservedAtMs = prompt.terminalObservedAtMs ?: System.currentTimeMillis(),
               )
             } else {

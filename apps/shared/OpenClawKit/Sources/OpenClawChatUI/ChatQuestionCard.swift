@@ -155,6 +155,7 @@ public final class OpenClawQuestionCardModel: Identifiable {
         self.isSubmitting = false
         self.isSkipping = false
         self.isLocallyExpired = false
+        self.isRecoveryUnavailable = false
         self.record = QuestionRecord(
             id: self.record.id,
             questions: self.record.questions,
@@ -173,6 +174,7 @@ public final class OpenClawQuestionCardModel: Identifiable {
         self.isSubmitting = false
         self.isSkipping = false
         self.isLocallyExpired = false
+        self.isRecoveryUnavailable = false
         self.record = QuestionRecord(
             id: self.record.id,
             questions: self.record.questions,

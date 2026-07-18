@@ -1755,7 +1755,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3138,
+      "line": 3139,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Could not stage an attachment for sending.",
       "surface": "android",
@@ -1763,7 +1763,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3171,
+      "line": 3172,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Offline queue is full ($OUTBOX_MAX_QUEUED messages); delete queued items first.",
       "surface": "android",
@@ -1771,7 +1771,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3177,
+      "line": 3178,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Attachments are too large to queue for one message; remove some and try again.",
       "surface": "android",
@@ -1779,7 +1779,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3183,
+      "line": 3184,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Offline attachment storage is full; delete queued items first.",
       "surface": "android",
@@ -1787,7 +1787,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3188,
+      "line": 3189,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Gateway health not OK; cannot send",
       "surface": "android",
@@ -1795,7 +1795,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3195,
+      "line": 3196,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Could not queue message for later delivery.",
       "surface": "android",
@@ -1803,7 +1803,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3912,
+      "line": 3913,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Chat failed",
       "surface": "android",
@@ -1811,7 +1811,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 4050,
+      "line": 4051,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Event stream interrupted; try refreshing.",
       "surface": "android",
@@ -1819,7 +1819,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 4187,
+      "line": 4188,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Timed out waiting for a reply; try again or refresh.",
       "surface": "android",
@@ -1827,7 +1827,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 4397,
+      "line": 4398,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Timed out confirming the sent message; refresh to check delivery.",
       "surface": "android",
@@ -36747,7 +36747,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 254,
+      "line": 256,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
       "source": "Answered",
       "surface": "apple",
@@ -36755,7 +36755,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 257,
+      "line": 259,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
       "source": "Answered elsewhere",
       "surface": "apple",
@@ -36763,7 +36763,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 259,
+      "line": 261,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
       "source": "Skipped",
       "surface": "apple",
@@ -36771,7 +36771,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 261,
+      "line": 263,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
       "source": "Expired",
       "surface": "apple",
@@ -36779,7 +36779,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 263,
+      "line": 265,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
       "source": "Unavailable",
       "surface": "apple",
@@ -36787,7 +36787,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 265,
+      "line": 267,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
       "source": "Pending",
       "surface": "apple",
@@ -36795,7 +36795,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 372,
+      "line": 374,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
       "source": "Question summary",
       "surface": "apple",
@@ -36803,7 +36803,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 386,
+      "line": 388,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
       "source": "Other answer",
       "surface": "apple",
@@ -36811,7 +36811,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 444,
+      "line": 446,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
       "source": "Not selected",
       "surface": "apple",
@@ -36819,7 +36819,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 444,
+      "line": 446,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
       "source": "Selected",
       "surface": "apple",
@@ -36827,7 +36827,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 461,
+      "line": 463,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
       "source": "Skipping…",
       "surface": "apple",
@@ -36835,7 +36835,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 464,
+      "line": 466,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
       "source": "Skip",
       "surface": "apple",
@@ -36843,7 +36843,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 475,
+      "line": 477,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
       "source": "Submitting…",
       "surface": "apple",
@@ -36851,7 +36851,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 478,
+      "line": 480,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
       "source": "Submit",
       "surface": "apple",
