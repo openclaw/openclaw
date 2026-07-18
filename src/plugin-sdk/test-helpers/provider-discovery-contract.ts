@@ -720,7 +720,7 @@ export function describeMinimaxProviderDiscoveryContract(
       const provider = expectProviderFields(result, {
         baseUrl: "https://api.minimax.io/anthropic",
         api: "anthropic-messages",
-        authHeader: true,
+        authHeader: false,
         apiKey: "minimax-key",
       });
       const ids = providerModelIds(provider);

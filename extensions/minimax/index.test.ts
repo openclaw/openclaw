@@ -220,7 +220,7 @@ describe("minimax provider hooks", () => {
 
     const provider = catalog && "provider" in catalog ? catalog.provider : undefined;
     expect(provider?.api).toBe("anthropic-messages");
-    expect(provider?.authHeader).toBe(true);
+    expect(provider?.authHeader).toBe(false);
     expect(provider?.baseUrl).toBe("https://api.minimax.io/anthropic");
     const model = provider?.models.find((entry: { id?: string }) => entry.id === "MiniMax-M3");
     expect(model?.id).toBe("MiniMax-M3");

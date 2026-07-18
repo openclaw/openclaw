@@ -14,7 +14,7 @@ describe("minimax onboard", () => {
     expect(cfg.models?.providers?.minimax).toEqual({
       baseUrl: "https://api.minimax.io/anthropic",
       api: "anthropic-messages",
-      authHeader: true,
+      authHeader: false,
       models: [buildMinimaxApiModelDefinition("MiniMax-M3")],
     });
     expect(cfg.agents?.defaults?.models?.["minimax/MiniMax-M3"]).toEqual({
@@ -73,7 +73,7 @@ describe("minimax onboard", () => {
       baseUrl: "https://api.minimax.io/anthropic",
       legacyApi: "openai-completions",
     });
-    expect(provider?.authHeader).toBe(true);
+    expect(provider?.authHeader).toBe(false);
     expect(provider?.models.map((m) => m.id)).toEqual(["old-model", "MiniMax-M3"]);
   });
 

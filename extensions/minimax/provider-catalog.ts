@@ -76,7 +76,7 @@ export function buildMinimaxProvider(env?: NodeJS.ProcessEnv): ModelProviderConf
   return {
     baseUrl: resolveMinimaxCatalogBaseUrl(env),
     api: "anthropic-messages",
-    authHeader: true,
+    authHeader: false,
     models: buildMinimaxCatalog(),
   };
 }

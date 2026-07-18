@@ -49,7 +49,7 @@ function applyMinimaxApiProviderConfigWithBaseUrl(
     ...existingProviderRest,
     baseUrl: params.baseUrl,
     api: "anthropic-messages",
-    authHeader: true,
+    authHeader: false,
     ...(preservedApiKey ? { apiKey: preservedApiKey } : {}),
     models: mergedModels.length > 0 ? mergedModels : [apiModel],
   };
