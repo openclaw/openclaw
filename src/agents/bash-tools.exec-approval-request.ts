@@ -140,7 +140,7 @@ export type ExecApprovalRegistration = {
   finalDecision?: string | null;
 };
 
-export class ExecApprovalRunAbortedError extends Error {
+class ExecApprovalRunAbortedError extends Error {
   constructor() {
     super("Exec approval cancelled because its run was aborted");
     this.name = "ExecApprovalRunAbortedError";
