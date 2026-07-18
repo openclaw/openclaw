@@ -8,13 +8,18 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { appendTranscriptEvent, persistSessionTranscriptTurn } from "./session-accessor.js";
+import {
+  appendTranscriptEvent,
+  persistSessionTranscriptTurn,
+  replaceTranscriptEvents,
+} from "./session-accessor.js";
 import {
   readRecentSessionTranscriptMessageEvents,
   readSessionTranscriptMessageAnchorPage,
   readSessionTranscriptMessageEventById,
   readSessionTranscriptMessageEventCount,
   readSessionTranscriptMessageEventPage,
+  readSessionTranscriptVisibleMessagePage,
   SessionTranscriptProjectionUnavailableError,
 } from "./session-accessor.sqlite-active-events.js";
 import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
@@ -375,6 +380,107 @@ describe("SQLite active transcript event projection", () => {
     } finally {
       writer.close();
     }
+  });
+
+  it("pages older active messages across appends and resets after replacement", async () => {
+    await persistSessionTranscriptTurn(scope, {
+      messages: ["one", "two", "three", "four"].map((content, index) => ({
+        eventId: `message-${String(index + 1)}`,
+        parentId: index === 0 ? null : `message-${String(index)}`,
+        message: { role: "assistant", content },
+      })),
+      touchSessionEntry: false,
+    });
+
+    const tail = readSessionTranscriptVisibleMessagePage(scope, { maxMessages: 2 });
+    expect(tail).toMatchObject({
+      kind: "page",
+      events: [
+        { eventSeq: 3, seq: 3 },
+        { eventSeq: 4, seq: 4 },
+      ],
+      hasMore: true,
+      totalMessages: 4,
+    });
+    if (tail.kind !== "page") {
+      throw new Error("expected visible tail page");
+    }
+
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          eventId: "message-5",
+          parentId: "message-4",
+          message: { role: "assistant", content: "five" },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+    const older = readSessionTranscriptVisibleMessagePage(scope, {
+      before: { eventSeq: tail.events[0]!.eventSeq, generation: tail.generation },
+      maxMessages: 2,
+    });
+    expect(older).toMatchObject({
+      kind: "page",
+      events: [
+        { eventSeq: 1, seq: 1 },
+        { eventSeq: 2, seq: 2 },
+      ],
+      generation: tail.generation,
+      hasMore: false,
+      totalMessages: 5,
+    });
+
+    await replaceTranscriptEvents(scope, [
+      {
+        id: "replacement",
+        message: { role: "assistant", content: "replacement" },
+        type: "message",
+      },
+    ]);
+    expect(
+      readSessionTranscriptVisibleMessagePage(scope, {
+        before: { eventSeq: tail.events[0]!.eventSeq, generation: tail.generation },
+        maxMessages: 2,
+      }),
+    ).toMatchObject({ kind: "reset", reason: "generation_mismatch" });
+  });
+
+  it("resets a visible page when a branch change removes its active anchor", async () => {
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        { eventId: "root", parentId: null, message: { role: "user", content: "root" } },
+        {
+          eventId: "old-leaf",
+          parentId: "root",
+          message: { role: "assistant", content: "old" },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+    const page = readSessionTranscriptVisibleMessagePage(scope, { maxMessages: 1 });
+    if (page.kind !== "page") {
+      throw new Error("expected visible page");
+    }
+
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          eventId: "new-leaf",
+          parentId: "root",
+          message: { role: "assistant", content: "new" },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+    await waitForSessionTranscriptIndexReconcile({ agentId: scope.agentId, env: scope.env });
+
+    expect(
+      readSessionTranscriptVisibleMessagePage(scope, {
+        before: { eventSeq: page.events[0]!.eventSeq, generation: page.generation },
+        maxMessages: 1,
+      }),
+    ).toMatchObject({ kind: "reset", reason: "anchor_missing" });
   });
 
   it("awaits queued completion work after the preparation worker exits", async () => {

@@ -1,11 +1,13 @@
 // Gateway session-history projection state.
 // Tracks transcript sequence windows for paginated chat-history SSE updates.
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
+import { normalizeAgentId } from "../routing/session-key.js";
 import {
   DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
   projectChatDisplayMessages,
   projectChatDisplayMessagesWithState,
 } from "./chat-display-projection.js";
+import { readVisibleSessionMessagesAsync } from "./session-history-visible-reader.js";
 import { resolveTranscriptPathForComparison } from "./session-transcript-path.js";
 import {
   attachOpenClawTranscriptMeta,
@@ -39,13 +41,18 @@ type SessionHistorySnapshot = {
   turnBoundaryPending: boolean;
 };
 
+export type SessionHistoryReadSnapshot = SessionHistorySnapshot & {
+  appliedCursor?: string;
+  transcriptPath?: string;
+};
+
 type InlineSessionHistoryAppend = {
   message?: SessionHistoryMessage;
   messageSeq?: number;
   shouldRefresh?: boolean;
 };
 
-type SessionHistoryTranscriptTarget = {
+export type SessionHistoryTranscriptTarget = {
   agentId?: string;
   sessionEntry?: { sessionFile?: string; sessionId?: string };
   sessionId: string;
@@ -59,6 +66,61 @@ type SessionHistoryRawSnapshot = {
   totalRawMessages?: number;
   transcriptPath?: string;
 };
+
+const VISIBLE_HISTORY_CURSOR_VERSION = 1;
+const MAX_VISIBLE_HISTORY_CURSOR_LENGTH = 4_096;
+
+type VisibleHistoryCursor = {
+  agentId: string;
+  anchorEventSeq: number;
+  direction: "older";
+  generation: string;
+  sessionId: string;
+  sessionKey: string;
+  version: typeof VISIBLE_HISTORY_CURSOR_VERSION;
+};
+
+function encodeVisibleHistoryCursor(cursor: VisibleHistoryCursor): string {
+  return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
+}
+
+function parseVisibleHistoryCursor(value: string): VisibleHistoryCursor | undefined {
+  if (value.length > MAX_VISIBLE_HISTORY_CURSOR_LENGTH) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(
+      Buffer.from(value, "base64url").toString("utf8"),
+    ) as Partial<VisibleHistoryCursor>;
+    if (
+      parsed.version !== VISIBLE_HISTORY_CURSOR_VERSION ||
+      parsed.direction !== "older" ||
+      typeof parsed.agentId !== "string" ||
+      typeof parsed.sessionId !== "string" ||
+      typeof parsed.sessionKey !== "string" ||
+      typeof parsed.generation !== "string" ||
+      parsed.generation.length === 0 ||
+      !Number.isSafeInteger(parsed.anchorEventSeq) ||
+      (parsed.anchorEventSeq ?? -1) < 0
+    ) {
+      return undefined;
+    }
+    return parsed as VisibleHistoryCursor;
+  } catch {
+    return undefined;
+  }
+}
+
+function cursorMatchesTarget(
+  cursor: VisibleHistoryCursor,
+  target: SessionHistoryTranscriptTarget,
+): boolean {
+  return (
+    cursor.agentId === normalizeAgentId(target.agentId) &&
+    cursor.sessionId === target.sessionId &&
+    cursor.sessionKey === target.sessionKey
+  );
+}
 
 function readMessageIdempotencyKey(message: unknown): string | undefined {
   if (!message || typeof message !== "object" || Array.isArray(message)) {
@@ -189,12 +251,131 @@ export function buildSessionHistorySnapshot(params: {
   };
 }
 
+async function readLegacySessionHistorySnapshot(params: {
+  cursor?: string;
+  limit?: number;
+  maxChars: number;
+  target: SessionHistoryTranscriptTarget;
+}): Promise<SessionHistoryReadSnapshot> {
+  const boundedSnapshot =
+    params.cursor === undefined && typeof params.limit === "number"
+      ? await readRecentSessionMessagesWithStatsAsync(params.target, {
+          ...resolveSessionHistoryTailReadOptions(params.limit),
+          allowResetArchiveFallback: true,
+        })
+      : undefined;
+  const fullSnapshot =
+    boundedSnapshot === undefined
+      ? await readSessionMessagesWithSourceAsync(params.target, {
+          mode: "full",
+          reason: "session history cursor pagination",
+          allowResetArchiveFallback: true,
+        })
+      : undefined;
+  return {
+    ...buildSessionHistorySnapshot({
+      rawMessages: boundedSnapshot?.messages ?? fullSnapshot?.messages ?? [],
+      maxChars: params.maxChars,
+      limit: params.limit,
+      cursor: params.cursor,
+      rawTranscriptSeq: boundedSnapshot?.totalMessages,
+      totalRawMessages: boundedSnapshot?.totalMessages,
+    }),
+    ...(params.cursor ? { appliedCursor: params.cursor } : {}),
+    transcriptPath: boundedSnapshot?.transcriptPath ?? fullSnapshot?.transcriptPath,
+  };
+}
+
+/** Reads the shared JSON/SSE visible-history snapshot without materializing cursor pages. */
+export async function readSessionHistorySnapshotAsync(params: {
+  cursor?: string;
+  limit?: number;
+  maxChars?: number;
+  target: SessionHistoryTranscriptTarget;
+}): Promise<SessionHistoryReadSnapshot> {
+  const maxChars = params.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
+  if (typeof params.limit !== "number") {
+    return await readLegacySessionHistorySnapshot({ ...params, maxChars });
+  }
+  // Stable releases through v2026.7.1 issued numeric history cursors. Keep
+  // those requests on their shipped reader for one supported upgrade window;
+  // cursor-less SQLite pages issue only opaque v1 cursors.
+  if (params.cursor && resolveCursorSeq(params.cursor) !== undefined) {
+    return await readLegacySessionHistorySnapshot({ ...params, maxChars });
+  }
+
+  const decodedCursor = params.cursor ? parseVisibleHistoryCursor(params.cursor) : undefined;
+  const scopedCursor =
+    decodedCursor && cursorMatchesTarget(decodedCursor, params.target) ? decodedCursor : undefined;
+  let page = await readVisibleSessionMessagesAsync(params.target, {
+    ...(scopedCursor
+      ? {
+          before: {
+            eventSeq: scopedCursor.anchorEventSeq,
+            generation: scopedCursor.generation,
+          },
+        }
+      : {}),
+    maxMessages: resolveSessionHistoryTailReadOptions(params.limit).maxMessages,
+  });
+  let appliedCursor = scopedCursor ? params.cursor : undefined;
+  let fallbackCursor = params.cursor;
+  if (page.kind === "reset") {
+    page = await readVisibleSessionMessagesAsync(params.target, {
+      maxMessages: resolveSessionHistoryTailReadOptions(params.limit).maxMessages,
+    });
+    appliedCursor = undefined;
+    fallbackCursor = undefined;
+  }
+  if (page.kind !== "page") {
+    return await readLegacySessionHistorySnapshot({
+      ...params,
+      cursor: fallbackCursor,
+      maxChars,
+    });
+  }
+
+  const snapshot = buildSessionHistorySnapshot({
+    rawMessages: page.messages,
+    maxChars,
+    limit: params.limit,
+    rawTranscriptSeq: page.totalMessages,
+  });
+  const hasMore = snapshot.history.hasMore || page.hasMore;
+  const firstVisibleSeq = resolveMessageSeq(snapshot.history.messages[0]);
+  const anchor =
+    page.anchors.find((candidate) => candidate.seq === firstVisibleSeq) ?? page.anchors[0];
+  const nextCursor =
+    hasMore && anchor
+      ? encodeVisibleHistoryCursor({
+          agentId: normalizeAgentId(params.target.agentId),
+          anchorEventSeq: anchor.eventSeq,
+          direction: "older",
+          generation: page.generation,
+          sessionId: params.target.sessionId,
+          sessionKey: params.target.sessionKey,
+          version: VISIBLE_HISTORY_CURSOR_VERSION,
+        })
+      : undefined;
+  snapshot.history.hasMore = hasMore;
+  if (nextCursor) {
+    snapshot.history.nextCursor = nextCursor;
+  } else {
+    delete snapshot.history.nextCursor;
+  }
+  return {
+    ...snapshot,
+    ...(appliedCursor ? { appliedCursor } : {}),
+    transcriptPath: page.transcriptPath,
+  };
+}
+
 /** Tracks session-history SSE state and decides when inline appends are still valid. */
 export class SessionHistorySseState {
   private readonly target: SessionHistoryTranscriptTarget;
   private readonly maxChars: number;
   private readonly limit: number | undefined;
-  private readonly cursor: string | undefined;
+  private cursor: string | undefined;
   private sentHistory: PaginatedSessionHistory;
   private rawTranscriptSeq: number;
   private turnBoundaryPending: boolean;
@@ -220,6 +401,28 @@ export class SessionHistorySseState {
       totalRawMessages: params.totalRawMessages,
       transcriptPath: params.transcriptPath,
     });
+  }
+
+  /** Initializes SSE state from the shared production history read. */
+  static fromReadSnapshot(params: {
+    limit?: number;
+    maxChars?: number;
+    snapshot: SessionHistoryReadSnapshot;
+    target: SessionHistoryTranscriptTarget;
+  }): SessionHistorySseState {
+    const state = new SessionHistorySseState({
+      target: params.target,
+      maxChars: params.maxChars,
+      limit: params.limit,
+      cursor: params.snapshot.appliedCursor,
+      initialRawMessages: [],
+      transcriptPath: params.snapshot.transcriptPath,
+    });
+    state.sentHistory = params.snapshot.history;
+    state.rawTranscriptSeq = params.snapshot.rawTranscriptSeq;
+    state.turnBoundaryPending = params.snapshot.turnBoundaryPending;
+    state.cursor = params.snapshot.appliedCursor;
+    return state;
   }
 
   private constructor(params: {
@@ -364,11 +567,16 @@ export class SessionHistorySseState {
   }
 
   async refreshAsync(): Promise<PaginatedSessionHistory> {
-    const rawSnapshot = await this.readRawSnapshotAsync();
-    const snapshot = this.buildSnapshot(rawSnapshot);
+    const snapshot = await readSessionHistorySnapshotAsync({
+      target: this.target,
+      maxChars: this.maxChars,
+      limit: this.limit,
+      cursor: this.cursor,
+    });
     this.rawTranscriptSeq = snapshot.rawTranscriptSeq;
     this.turnBoundaryPending = snapshot.turnBoundaryPending;
-    this.transcriptPath = normalizeTranscriptPathForComparison(rawSnapshot.transcriptPath);
+    this.transcriptPath = normalizeTranscriptPathForComparison(snapshot.transcriptPath);
+    this.cursor = snapshot.appliedCursor;
     this.sentHistory = snapshot.history;
     return snapshot.history;
   }
@@ -386,48 +594,6 @@ export class SessionHistorySseState {
         ? { totalRawMessages: rawSnapshot.totalRawMessages }
         : {}),
     });
-  }
-
-  private async readRawSnapshotAsync(): Promise<SessionHistoryRawSnapshot> {
-    if (this.cursor === undefined && typeof this.limit === "number") {
-      const snapshot = await readRecentSessionMessagesWithStatsAsync(
-        {
-          agentId: this.target.agentId,
-          sessionEntry: this.target.sessionEntry,
-          sessionId: this.target.sessionId,
-          sessionKey: this.target.sessionKey,
-          storePath: this.target.storePath,
-        },
-        {
-          ...resolveSessionHistoryTailReadOptions(this.limit),
-          allowResetArchiveFallback: true,
-        },
-      );
-      return {
-        rawMessages: snapshot.messages,
-        rawTranscriptSeq: snapshot.totalMessages,
-        totalRawMessages: snapshot.totalMessages,
-        transcriptPath: snapshot.transcriptPath,
-      };
-    }
-    const snapshot = await readSessionMessagesWithSourceAsync(
-      {
-        agentId: this.target.agentId,
-        sessionEntry: this.target.sessionEntry,
-        sessionId: this.target.sessionId,
-        sessionKey: this.target.sessionKey,
-        storePath: this.target.storePath,
-      },
-      {
-        mode: "full",
-        reason: "session history cursor pagination",
-        allowResetArchiveFallback: true,
-      },
-    );
-    return {
-      rawMessages: snapshot.messages,
-      transcriptPath: snapshot.transcriptPath,
-    };
   }
 }
 
