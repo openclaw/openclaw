@@ -204,9 +204,13 @@ describe("secrets runtime provider and media surfaces", () => {
         getActiveSecretsRuntimeSnapshot,
         refreshActiveProviderAuthRuntimeSnapshot,
       } = await import("./runtime.js");
-      const { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
+      const { getRuntimeConfigSourceSnapshot, getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
         await import("../config/runtime-snapshot.js");
       activateSecretsRuntimeSnapshot(initial);
+      const runtimeSourceConfig: OpenClawConfig = {
+        ...initial.sourceConfig,
+        logging: { level: "debug" },
+      };
       setRuntimeConfigSnapshot(
         {
           ...initial.config,
@@ -220,7 +224,7 @@ describe("secrets runtime provider and media surfaces", () => {
             pricing: { enabled: true },
           },
         },
-        initial.sourceConfig,
+        runtimeSourceConfig,
       );
 
       await writeSecrets(undefined, "model-new");
@@ -235,6 +239,7 @@ describe("secrets runtime provider and media surfaces", () => {
       expect(active?.config.models?.pricing?.enabled).toBe(true);
       expect(active?.config.models?.providers?.openai?.apiKey).toBe("model-new");
       expect(getRuntimeConfigSnapshot()).toEqual(active?.config);
+      expect(getRuntimeConfigSourceSnapshot()).toEqual(runtimeSourceConfig);
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }

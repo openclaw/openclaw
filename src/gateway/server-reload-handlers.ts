@@ -1988,7 +1988,6 @@ export function startManagedGatewayConfigReloader(
         const sourceOnlySnapshot = {
           ...previousSecretsSnapshot,
           sourceConfig: nextSecretsSourceConfig,
-          warnings: [],
         };
         if (!isDeepStrictEqual(sourceOnlySnapshot.config, nextConfig)) {
           throw new GatewayConfigReloadSupersededError();

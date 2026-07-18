@@ -69,6 +69,18 @@ type RuntimeSecretsActivationParams = {
   deferStatePublication?: boolean;
 };
 
+type DeferredSecretsStateTransition =
+  | {
+      kind: "degraded";
+      activationRevision: number;
+      reason: RuntimeSecretsActivationParams["reason"];
+    }
+  | {
+      kind: "recovered";
+      activationRevision: number;
+      degradationGeneration: number;
+    };
+
 /** Gateway startup hook that prepares secrets and optionally activates the prepared snapshot. */
 export type ActivateRuntimeSecrets = ((
   config: OpenClawConfig,
@@ -157,11 +169,7 @@ export function createRuntimeSecretsActivator(params: {
   let activeDegradationGeneration: number | null = null;
   let activeDegradationConfig: OpenClawConfig | null = null;
   let activeDegradationSupportsSourceOnlyRecovery = false;
-  const deferredDegradationReasons = new WeakMap<
-    object,
-    RuntimeSecretsActivationParams["reason"]
-  >();
-  const deferredRecoveryGenerations = new WeakMap<object, number>();
+  const deferredStateTransitions = new WeakMap<object, DeferredSecretsStateTransition>();
   let secretsActivationTail: Promise<void> = Promise.resolve();
   const loadSecretsRuntime = createLazyPromise(() => import("../secrets/runtime.js"), {
     cacheRejections: true,
@@ -265,14 +273,22 @@ export function createRuntimeSecretsActivator(params: {
     }
     if (activationParams.activate && (prepared.degradedOwners?.length ?? 0) > 0) {
       if (activationParams.deferStatePublication === true) {
-        deferredDegradationReasons.set(prepared, activationParams.reason);
+        deferredStateTransitions.set(prepared, {
+          kind: "degraded",
+          activationRevision: getActiveSecretsRuntimeSnapshotRevision(),
+          reason: activationParams.reason,
+        });
       } else {
         publishDegradation(prepared, activationParams.reason);
       }
     } else if (activationParams.activate && secretsDegraded) {
       if (activationParams.deferStatePublication === true) {
         if (activeDegradationGeneration !== null) {
-          deferredRecoveryGenerations.set(prepared, activeDegradationGeneration);
+          deferredStateTransitions.set(prepared, {
+            kind: "recovered",
+            activationRevision: getActiveSecretsRuntimeSnapshotRevision(),
+            degradationGeneration: activeDegradationGeneration,
+          });
         }
       } else {
         publishRecovery(prepared.config);
@@ -507,21 +523,25 @@ export function createRuntimeSecretsActivator(params: {
   });
 
   runtimeSecretsStatePublishers.set(activateRuntimeSecrets, (snapshot, options) => {
-    const deferredDegradationReason = deferredDegradationReasons.get(snapshot);
-    deferredDegradationReasons.delete(snapshot);
-    if (deferredDegradationReason !== undefined) {
-      publishDegradation(snapshot, deferredDegradationReason);
+    const transition = deferredStateTransitions.get(snapshot);
+    deferredStateTransitions.delete(snapshot);
+    if (
+      !transition ||
+      transition.activationRevision !== getActiveSecretsRuntimeSnapshotRevision()
+    ) {
       return;
     }
-    const expectedGeneration = deferredRecoveryGenerations.get(snapshot);
-    deferredRecoveryGenerations.delete(snapshot);
+    if (transition.kind === "degraded") {
+      publishDegradation(snapshot, transition.reason);
+      return;
+    }
     const sourceOnlyContractRecovered =
       options?.sourceOnly !== true ||
       (activeDegradationSupportsSourceOnlyRecovery &&
         activeDegradationConfig !== null &&
         !hasSameSecretReloadContract(activeDegradationConfig, snapshot.sourceConfig));
-    if (expectedGeneration !== undefined && sourceOnlyContractRecovered) {
-      publishRecovery(snapshot.config, expectedGeneration);
+    if (sourceOnlyContractRecovered) {
+      publishRecovery(snapshot.config, transition.degradationGeneration);
     }
   });
 

@@ -155,6 +155,13 @@ describe("secrets runtime snapshot auth refresh failure", () => {
           reason: "secret reference could not be resolved",
         },
       ];
+      prepared.warnings = [
+        {
+          code: "SECRETS_OWNER_UNAVAILABLE",
+          path: "channels.discord.accounts.ops.token",
+          message: "Discord account ops remains unavailable.",
+        },
+      ];
       activateSecretsRuntimeSnapshot(prepared);
 
       activeRef = secondRef;
@@ -182,6 +189,11 @@ describe("secrets runtime snapshot auth refresh failure", () => {
       expect(
         listActiveDegradedSecretOwners().filter((owner) => owner.ownerId === "discord:ops"),
       ).toHaveLength(1);
+      expect(expectActiveSecretsRuntimeSnapshot().warnings).toContainEqual({
+        code: "SECRETS_OWNER_UNAVAILABLE",
+        path: "channels.discord.accounts.ops.token",
+        message: "Discord account ops remains unavailable.",
+      });
       const profile = expectActiveSecretsRuntimeSnapshot().authStores.find(
         (entry) => entry.agentDir === agentDir,
       )?.store.profiles["openai:default"];

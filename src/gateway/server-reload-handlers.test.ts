@@ -4023,6 +4023,11 @@ describe("gateway Gmail hot reload handlers", () => {
     };
     const initialSourceConfig = sourceConfig(firstRef);
     const nextSourceConfig = sourceConfig(secondRef);
+    const activeWarning = {
+      code: "SECRETS_OWNER_UNAVAILABLE" as const,
+      path: "messages.tts.providers.elevenlabs.apiKey",
+      message: "Text-to-speech remains unavailable.",
+    };
     activateSecretsRuntimeSnapshot({
       sourceConfig: initialSourceConfig,
       config: runtimeConfig,
@@ -4043,7 +4048,7 @@ describe("gateway Gmail hot reload handlers", () => {
         },
       ],
       authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-      warnings: [],
+      warnings: [activeWarning],
       degradedOwners: [
         {
           ownerKind: "capability",
@@ -4205,6 +4210,7 @@ describe("gateway Gmail hot reload handlers", () => {
 
       expect(activateRuntimeSecrets).not.toHaveBeenCalled();
       expect(getActiveSecretsRuntimeSnapshot()?.sourceConfig).toEqual(unrelatedSourceConfig);
+      expect(getActiveSecretsRuntimeSnapshot()?.warnings).toEqual([activeWarning]);
       expect(getActiveSecretsRuntimeSnapshot()?.secretOwners).toEqual([
         {
           ownerKind: "capability",

@@ -543,6 +543,10 @@ describe("gateway startup config secret preflight", () => {
     expect(emitStateEvent).not.toHaveBeenCalled();
     expect(logSecrets.warn).not.toHaveBeenCalled();
 
+    publishRuntimeSecretsStateTransition(activateRuntimeSecrets, rolledBackCandidate);
+    expect(emitStateEvent).not.toHaveBeenCalled();
+    expect(logSecrets.warn).not.toHaveBeenCalled();
+
     publishRuntimeSecretsStateTransition(activateRuntimeSecrets, committedCandidate);
     expect(emitStateEvent).toHaveBeenCalledOnce();
     expect(emitStateEvent).toHaveBeenCalledWith(

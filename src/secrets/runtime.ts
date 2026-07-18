@@ -10,6 +10,7 @@ import {
 import { getRuntimeAuthProfileStoreCredentialsRevision } from "../agents/auth-profiles/runtime-snapshots.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import {
+  getRuntimeConfigSourceSnapshot,
   getRuntimeConfigSnapshot,
   type RuntimeConfigSnapshotRefreshParams,
 } from "../config/runtime-snapshot.js";
@@ -32,7 +33,7 @@ import {
   activateProviderAuthRuntimeSnapshot,
   clearProviderAuthRuntimeSnapshotActivation,
 } from "./runtime-provider-auth-activation.js";
-import { selectProviderAuthRuntimeWarnings } from "./runtime-provider-auth-warnings.js";
+import { mergeProviderAuthRuntimeWarnings } from "./runtime-provider-auth-warnings.js";
 import {
   activateSecretsRuntimeSnapshotState,
   activateSecretsRuntimeSnapshotStateIfCurrent,
@@ -596,7 +597,8 @@ export async function refreshActiveProviderAuthRuntimeSnapshot(): Promise<boolea
       return false;
     }
     const runtimeConfig = getRuntimeConfigSnapshot();
-    if (!runtimeConfig) {
+    const runtimeSourceConfig = getRuntimeConfigSourceSnapshot();
+    if (!runtimeConfig || !runtimeSourceConfig) {
       return false;
     }
     const config = { ...runtimeConfig };
@@ -614,7 +616,10 @@ export async function refreshActiveProviderAuthRuntimeSnapshot(): Promise<boolea
       config,
       authStores: candidate.snapshot.authStores,
       authStoreCredentialsRevision: candidate.snapshot.authStoreCredentialsRevision,
-      warnings: selectProviderAuthRuntimeWarnings(candidate.snapshot.warnings),
+      warnings: mergeProviderAuthRuntimeWarnings(
+        activeSnapshot.warnings,
+        candidate.snapshot.warnings,
+      ),
       degradedOwners: mergeProviderAuthDegradedOwners(activeSnapshot, candidate.snapshot),
       secretOwners: mergeProviderAuthSecretOwners(activeSnapshot, candidate.snapshot),
     };
@@ -623,6 +628,7 @@ export async function refreshActiveProviderAuthRuntimeSnapshot(): Promise<boolea
     const activateSnapshotIfCurrent = () =>
       activateSecretsRuntimeSnapshotIfCurrent(refreshedSnapshot, candidate.expectedRevision, {
         preserveActivationLineage: true,
+        runtimeSourceConfig,
       });
     const activated = await activateProviderAuthRuntimeSnapshot({
       snapshot: refreshedSnapshot,
