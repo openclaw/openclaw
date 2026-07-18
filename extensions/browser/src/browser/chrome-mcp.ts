@@ -23,15 +23,28 @@ import {
   readStringValue,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { asRecord } from "../record-shared.js";
 import { createBoundedUtf8Tail, decodeBoundedUtf8Tail } from "./bounded-utf8-tail.js";
-import { redactCdpErrorText, redactCdpUrl } from "./cdp.helpers.js";
+import {
+  appendCdpPath,
+  fetchJson,
+  normalizeCdpHttpBaseForJsonEndpoints,
+  redactCdpErrorText,
+  redactCdpUrl,
+  resolveCdpTabOwnership,
+} from "./cdp.helpers.js";
+import type { CdpActionTimeouts } from "./cdp.js";
 import type { ChromeMcpSnapshotNode } from "./chrome-mcp.snapshot.js";
-import type { BrowserTab } from "./client.types.js";
-import { BrowserProfileUnavailableError, BrowserTabNotFoundError } from "./errors.js";
+import type { BrowserOpenResult, BrowserTab, BrowserTabOwnership } from "./client.types.js";
+import {
+  BrowserCdpEndpointBlockedError,
+  BrowserProfileUnavailableError,
+  BrowserTabNotFoundError,
+} from "./errors.js";
 
 const log = createSubsystemLogger("browser").child("chrome-mcp");
 
@@ -68,6 +81,11 @@ type ChromeMcpRoutingState = {
 export type ChromeMcpOperationOptions = {
   timeoutMs?: number;
   signal?: AbortSignal;
+};
+
+type ChromeMcpOpenOptions = ChromeMcpOperationOptions & {
+  cdpPolicy?: SsrFPolicy;
+  cdpTimeouts?: CdpActionTimeouts;
 };
 
 type ChromeMcpTargetOperation = ChromeMcpOperationOptions & {
@@ -2031,24 +2049,86 @@ export async function countChromeMcpTabs(
   return (await readChromeMcpTabs(profileName, profileOptions, options)).length;
 }
 
+async function captureChromeMcpTabOwnership(params: {
+  profileName: string;
+  browserUrl: string | undefined;
+  markerUrl: string | undefined;
+  options: ChromeMcpOpenOptions;
+}): Promise<BrowserTabOwnership> {
+  if (!params.browserUrl || !params.markerUrl) {
+    return { status: "non-durable", reason: "explicit-cdp-url-required" };
+  }
+  let targets: Array<{ id?: unknown; url?: unknown; type?: unknown }>;
+  try {
+    const cdpHttpBase = normalizeCdpHttpBaseForJsonEndpoints(params.browserUrl);
+    const rawTargets = await fetchJson<unknown>(
+      appendCdpPath(cdpHttpBase, "/json/list"),
+      params.options.cdpTimeouts?.httpTimeoutMs,
+      { signal: params.options.signal },
+      params.options.cdpPolicy,
+    );
+    if (!Array.isArray(rawTargets)) {
+      throw new Error("CDP target list response was not an array");
+    }
+    if (rawTargets.some((target) => !target || typeof target !== "object")) {
+      throw new Error("CDP target list response contained a malformed entry");
+    }
+    targets = rawTargets as Array<{ id?: unknown; url?: unknown; type?: unknown }>;
+  } catch (error) {
+    if (params.options.signal?.aborted) {
+      throw params.options.signal.reason ?? error;
+    }
+    if (error instanceof BrowserCdpEndpointBlockedError) {
+      throw error;
+    }
+    return { status: "non-durable", reason: "target-marker-lookup-failed" };
+  }
+  const matches = targets.filter(
+    (target) =>
+      target.url === params.markerUrl &&
+      typeof target.id === "string" &&
+      target.id.trim() &&
+      (target.type === undefined || target.type === "page"),
+  );
+  if (matches.length !== 1) {
+    return { status: "non-durable", reason: "target-marker-not-unique" };
+  }
+  const nativeTargetId = matches[0]?.id;
+  if (typeof nativeTargetId !== "string") {
+    return { status: "non-durable", reason: "target-marker-not-unique" };
+  }
+  return await resolveCdpTabOwnership({
+    profileName: params.profileName,
+    cdpUrl: params.browserUrl,
+    nativeTargetId: nativeTargetId.trim(),
+    timeoutMs: params.options.cdpTimeouts?.httpTimeoutMs,
+    signal: params.options.signal,
+    ssrfPolicy: params.options.cdpPolicy,
+  });
+}
+
 /** Open a new Chrome MCP tab and navigate it to the requested URL. */
 export async function openChromeMcpTab(
   profileName: string,
   url: string,
   profileOptions?: string | ChromeMcpProfileOptions,
-  options: ChromeMcpOperationOptions = {},
-): Promise<BrowserTab> {
+  options: ChromeMcpOpenOptions = {},
+): Promise<BrowserOpenResult> {
   const targetUrl = url.trim() || "about:blank";
   return await withChromeMcpLease(
     profileName,
     profileOptions,
     options,
     async (lease, normalizedProfileOptions) => {
+      const markerUrl = normalizedProfileOptions.browserUrl
+        ? `about:blank#openclaw-${randomUUID()}`
+        : undefined;
+      const initialUrl = markerUrl ?? "about:blank";
       const result = await callTool(
         profileName,
         normalizedProfileOptions,
         "new_page",
-        { url: "about:blank", timeout: CHROME_MCP_NEW_PAGE_TIMEOUT_MS },
+        { url: initialUrl, timeout: CHROME_MCP_NEW_PAGE_TIMEOUT_MS },
         options,
         lease,
       );
@@ -2061,12 +2141,19 @@ export async function openChromeMcpTab(
       if (!created) {
         throw new Error("Chrome MCP did not return the created page.");
       }
-      if (targetUrl === "about:blank") {
+      const ownership = await captureChromeMcpTabOwnership({
+        profileName,
+        browserUrl: normalizedProfileOptions.browserUrl,
+        markerUrl,
+        options,
+      });
+      if (targetUrl === initialUrl) {
         return {
           targetId: created.targetId,
           title: "",
           url: created.page.url ?? targetUrl,
           type: "page",
+          ownership,
         };
       }
       const navigateCallTimeoutMs = resolveChromeMcpNavigateCallTimeoutMs(
@@ -2100,6 +2187,7 @@ export async function openChromeMcpTab(
         title: "",
         url: finalPage.page.url ?? targetUrl,
         type: "page",
+        ownership,
       };
     },
   );

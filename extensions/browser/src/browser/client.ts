@@ -11,6 +11,7 @@ import {
 import { buildProfileQuery, withBaseUrl } from "./client-actions-url.js";
 import { fetchBrowserJson } from "./client-fetch.js";
 import type {
+  BrowserOpenResult,
   BrowserStatus,
   BrowserTab,
   BrowserTransport,
@@ -341,13 +342,16 @@ export async function browserOpenTab(
   baseUrl: string | undefined,
   url: string,
   opts?: { profile?: string; label?: string; timeoutMs?: number },
-): Promise<BrowserTab> {
-  return await fetchBrowserJson<BrowserTab>(withProfilePath(baseUrl, "/tabs/open", opts?.profile), {
-    method: "POST",
-    headers: JSON_HEADERS,
-    body: JSON.stringify({ url, ...(opts?.label ? { label: opts.label } : {}) }),
-    timeoutMs: resolveBrowserClientTimeoutMs(opts, 15000),
-  });
+): Promise<BrowserOpenResult> {
+  return await fetchBrowserJson<BrowserOpenResult>(
+    withProfilePath(baseUrl, "/tabs/open", opts?.profile),
+    {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ url, ...(opts?.label ? { label: opts.label } : {}) }),
+      timeoutMs: resolveBrowserClientTimeoutMs(opts, 15000),
+    },
+  );
 }
 
 /** Focus an existing browser tab. */

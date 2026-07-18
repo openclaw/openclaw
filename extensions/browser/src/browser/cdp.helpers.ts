@@ -4,6 +4,7 @@
  * Handles CDP URL normalization, SSRF-guarded HTTP discovery, credential
  * redaction/headers, and request/response correlation over WebSocket.
  */
+import { createHash } from "node:crypto";
 import { parseBrowserHttpUrl, redactCdpUrl } from "openclaw/plugin-sdk/browser-config";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
@@ -24,6 +25,7 @@ import {
   withNoProxyForCdpUrl,
 } from "./cdp-proxy-bypass.js";
 import { CDP_HTTP_REQUEST_TIMEOUT_MS, CDP_WS_HANDSHAKE_TIMEOUT_MS } from "./cdp-timeouts.js";
+import type { BrowserTabOwnership } from "./client.types.js";
 import { BrowserCdpEndpointBlockedError } from "./errors.js";
 import { resolveBrowserRateLimitMessage } from "./rate-limit-message.js";
 import { withExactHostnamePolicy } from "./ssrf-policy-helpers.js";
@@ -251,6 +253,162 @@ export function normalizeCdpHttpBaseForJsonEndpoints(cdpUrl: string): string {
   }
 }
 
+function fingerprintCdpIdentity(value: string): string {
+  return `sha256:${createHash("sha256").update(value).digest("hex")}`;
+}
+
+function canonicalCdpAuthority(url: URL, protocol: "http:" | "https:" | "ws:" | "wss:"): string {
+  const hostname = url.hostname.toLowerCase().replace(/\.$/, "");
+  const port = url.port || (protocol === "https:" || protocol === "wss:" ? "443" : "80");
+  return `${protocol}//${hostname}:${port}`;
+}
+
+function canonicalCdpProfileIdentity(url: string): string {
+  const parsed = new URL(url);
+  const protocol =
+    parsed.protocol === "ws:" ? "http:" : parsed.protocol === "wss:" ? "https:" : parsed.protocol;
+  if (protocol !== "http:" && protocol !== "https:") {
+    throw new Error("CDP profile identity requires an HTTP(S) or WebSocket endpoint");
+  }
+  const standardBrowserPath = /^\/devtools\/browser\/[A-Za-z0-9._-]+$/.test(parsed.pathname);
+  const hasTokenShapedSegment =
+    !standardBrowserPath && parsed.pathname.split("/").some((segment) => segment.length >= 24);
+  if (hasTokenShapedSegment) {
+    throw new Error("CDP profile endpoint path may contain credentials");
+  }
+  return canonicalCdpAuthority(parsed, protocol);
+}
+
+function canonicalBrowserWebSocketIdentity(url: string): string {
+  const parsed = new URL(url);
+  if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
+    throw new Error("Browser websocket identity requires a WebSocket endpoint");
+  }
+  const pathMatch = parsed.pathname.match(/^\/devtools\/browser\/([A-Za-z0-9._-]+)$/);
+  if (!pathMatch?.[1]) {
+    // Provider path prefixes can contain bearer material. Only Chrome's
+    // standard browser path is safe to persist as an opaque fingerprint input.
+    throw new Error("Browser websocket identity path is not credential-free");
+  }
+  return `${canonicalCdpAuthority(parsed, parsed.protocol)}/devtools/browser/${pathMatch[1]}`;
+}
+
+/** Build restart-stable hashes without retaining endpoint credentials. */
+export function createCdpOwnershipFingerprints(params: {
+  profileName: string;
+  cdpUrl: string;
+  browserWebSocketUrl: string;
+}): {
+  profileFingerprint: string;
+  browserInstanceFingerprint: string;
+} {
+  return {
+    profileFingerprint: fingerprintCdpIdentity(
+      JSON.stringify([params.profileName, canonicalCdpProfileIdentity(params.cdpUrl)]),
+    ),
+    browserInstanceFingerprint: fingerprintCdpIdentity(
+      canonicalBrowserWebSocketIdentity(params.browserWebSocketUrl),
+    ),
+  };
+}
+
+/** Resolve durable ownership for a native target from the browser-level CDP identity. */
+export async function resolveCdpTabOwnership(params: {
+  profileName: string;
+  cdpUrl: string;
+  nativeTargetId: string;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  ssrfPolicy?: SsrFPolicy;
+}): Promise<BrowserTabOwnership> {
+  params.signal?.throwIfAborted();
+  const cdpHttpBase = normalizeCdpHttpBaseForJsonEndpoints(params.cdpUrl);
+  let version: { webSocketDebuggerUrl?: unknown };
+  try {
+    version = await fetchJson<{ webSocketDebuggerUrl?: unknown }>(
+      appendCdpPath(cdpHttpBase, "/json/version"),
+      params.timeoutMs,
+      { signal: params.signal },
+      params.ssrfPolicy,
+    );
+  } catch (error) {
+    if (params.signal?.aborted) {
+      throw params.signal.reason ?? error;
+    }
+    if (error instanceof BrowserCdpEndpointBlockedError) {
+      throw error;
+    }
+    return { status: "non-durable", reason: "browser-identity-lookup-failed" };
+  }
+  params.signal?.throwIfAborted();
+  const browserWebSocketUrl =
+    typeof version.webSocketDebuggerUrl === "string" ? version.webSocketDebuggerUrl.trim() : "";
+  if (!browserWebSocketUrl) {
+    return { status: "non-durable", reason: "browser-identity-unavailable" };
+  }
+  try {
+    await assertCdpEndpointAllowed(browserWebSocketUrl, params.ssrfPolicy, {
+      source: "discovered",
+      configuredUrl: params.cdpUrl,
+    });
+    return {
+      status: "durable",
+      nativeTargetId: params.nativeTargetId,
+      ...createCdpOwnershipFingerprints({
+        profileName: params.profileName,
+        cdpUrl: params.cdpUrl,
+        browserWebSocketUrl,
+      }),
+    };
+  } catch (error) {
+    if (error instanceof BrowserCdpEndpointBlockedError) {
+      throw error;
+    }
+    return { status: "non-durable", reason: "browser-identity-unavailable" };
+  }
+}
+
+/** Close a native target directly on a configured browser-level CDP endpoint. */
+export async function closeCdpTargetById(params: {
+  cdpUrl: string;
+  targetId: string;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  ssrfPolicy?: SsrFPolicy;
+}): Promise<void> {
+  params.signal?.throwIfAborted();
+  const cdpHttpBase = normalizeCdpHttpBaseForJsonEndpoints(params.cdpUrl);
+  const version = await fetchJson<{ webSocketDebuggerUrl?: unknown }>(
+    appendCdpPath(cdpHttpBase, "/json/version"),
+    params.timeoutMs,
+    { signal: params.signal },
+    params.ssrfPolicy,
+  );
+  const browserWebSocketUrl =
+    typeof version.webSocketDebuggerUrl === "string" ? version.webSocketDebuggerUrl.trim() : "";
+  if (!browserWebSocketUrl) {
+    throw new Error("CDP /json/version missing webSocketDebuggerUrl");
+  }
+  await assertCdpEndpointAllowed(browserWebSocketUrl, params.ssrfPolicy, {
+    source: "discovered",
+    configuredUrl: params.cdpUrl,
+  });
+  params.signal?.throwIfAborted();
+  await withCdpSocket(
+    browserWebSocketUrl,
+    async (send) => {
+      params.signal?.throwIfAborted();
+      await send("Target.closeTarget", { targetId: params.targetId });
+    },
+    {
+      commandTimeoutMs: params.timeoutMs,
+      handshakeTimeoutMs: params.timeoutMs,
+      handshakeRetries: 0,
+    },
+  );
+  params.signal?.throwIfAborted();
+}
+
 type CdpFetchResult = {
   response: Response;
   release: () => Promise<void>;
@@ -372,6 +530,7 @@ export async function fetchCdpChecked(
 ): Promise<CdpFetchResult> {
   const ctrl = new AbortController();
   const t = setTimeout(ctrl.abort.bind(ctrl), normalizeBrowserTimerDelayMs(timeoutMs));
+  const signal = init?.signal ? AbortSignal.any([ctrl.signal, init.signal]) : ctrl.signal;
   let guardedRelease: (() => Promise<void>) | undefined;
   let released = false;
   const release = async () => {
@@ -396,7 +555,7 @@ export async function fetchCdpChecked(
         const guarded = await fetchWithSsrFGuard({
           url: fetchUrl,
           init: { ...init, headers },
-          signal: ctrl.signal,
+          signal,
           policy,
           auditContext: "browser-cdp",
         });

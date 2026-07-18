@@ -120,6 +120,198 @@ describe("session tab registry", () => {
     });
   });
 
+  it("does not close unknown user tabs without a tracking record", async () => {
+    const closeTab = vi.fn(async () => {});
+
+    await expect(
+      closeTrackedBrowserTabsForSessions({
+        sessionKeys: ["agent:main:main"],
+        closeTab,
+      }),
+    ).resolves.toBe(0);
+
+    expect(closeTab).not.toHaveBeenCalled();
+  });
+
+  it("touches one non-durable tab through any same-process open alias", async () => {
+    trackSessionBrowserTab({
+      sessionKey: "agent:main:main",
+      targetId: "RAW-A",
+      profile: "openclaw",
+      ownership: {
+        status: "non-durable",
+        reason: "browser-identity-lookup-failed",
+      },
+      aliases: ["RAW-A", "t1", "docs", "docs"],
+      now: 1_000,
+    });
+
+    touchSessionBrowserTab({
+      sessionKey: "agent:main:main",
+      targetId: "docs",
+      profile: "openclaw",
+      now: 9_000,
+    });
+    const closeTab = vi.fn(async () => {});
+    await expect(
+      sweepTrackedBrowserTabs({
+        now: 10_000,
+        idleMs: 5_000,
+        closeTab,
+      }),
+    ).resolves.toBe(0);
+    await expect(
+      closeTrackedBrowserTabsForSessions({
+        sessionKeys: ["agent:main:main"],
+        closeTab,
+      }),
+    ).resolves.toBe(1);
+    expect(closeTab).toHaveBeenCalledOnce();
+    expect(closeTab).toHaveBeenCalledWith({
+      targetId: "RAW-A",
+      profile: "openclaw",
+    });
+  });
+
+  it("untracks a non-durable tab and all aliases through one alias", async () => {
+    trackSessionBrowserTab({
+      sessionKey: "agent:main:main",
+      targetId: "RAW-A",
+      profile: "openclaw",
+      ownership: {
+        status: "non-durable",
+        reason: "browser-identity-lookup-failed",
+      },
+      aliases: ["RAW-A", "t1", "docs"],
+    });
+
+    untrackSessionBrowserTab({
+      sessionKey: "agent:main:main",
+      targetId: "t1",
+      profile: "openclaw",
+    });
+    const closeTab = vi.fn(async () => {});
+    await expect(
+      closeTrackedBrowserTabsForSessions({
+        sessionKeys: ["agent:main:main"],
+        closeTab,
+      }),
+    ).resolves.toBe(0);
+    expect(closeTab).not.toHaveBeenCalled();
+  });
+
+  it("waits for an in-flight volatile sweep before lifecycle cleanup rechecks state", async () => {
+    trackSessionBrowserTab({
+      sessionKey: "agent:main:main",
+      targetId: "RAW-A",
+      profile: "openclaw",
+      ownership: {
+        status: "non-durable",
+        reason: "browser-identity-lookup-failed",
+      },
+      aliases: ["RAW-A", "docs"],
+      now: 1_000,
+    });
+    let releaseSweepClose: (() => void) | undefined;
+    let markSweepCloseStarted: (() => void) | undefined;
+    const sweepCloseStarted = new Promise<void>((resolve) => {
+      markSweepCloseStarted = resolve;
+    });
+    const sweepCloseGate = new Promise<void>((resolve) => {
+      releaseSweepClose = resolve;
+    });
+    const closeTab = vi.fn(async () => {
+      markSweepCloseStarted?.();
+      await sweepCloseGate;
+    });
+    const sweep = sweepTrackedBrowserTabs({
+      now: 10_000,
+      idleMs: 1,
+      closeTab,
+    });
+    await sweepCloseStarted;
+
+    let lifecycleSettled = false;
+    const lifecycle = closeTrackedBrowserTabsForSessions({
+      sessionKeys: ["agent:main:main"],
+      closeTab,
+    }).finally(() => {
+      lifecycleSettled = true;
+    });
+    for (let index = 0; index < 20; index += 1) {
+      await Promise.resolve();
+    }
+    const settledBeforeSweep = lifecycleSettled;
+    touchSessionBrowserTab({
+      sessionKey: "agent:main:main",
+      targetId: "docs",
+      profile: "openclaw",
+      now: 11_000,
+    });
+    releaseSweepClose?.();
+
+    await expect(Promise.all([sweep, lifecycle])).resolves.toEqual([1, 0]);
+    expect(settledBeforeSweep).toBe(false);
+    expect(closeTab).toHaveBeenCalledOnce();
+  });
+
+  it("retries volatile lifecycle cleanup when the waited sweep leaves the tab tracked", async () => {
+    trackSessionBrowserTab({
+      sessionKey: "agent:main:main",
+      targetId: "RAW-A",
+      profile: "openclaw",
+      ownership: {
+        status: "non-durable",
+        reason: "browser-identity-lookup-failed",
+      },
+      aliases: ["RAW-A", "docs"],
+      now: 1_000,
+    });
+    let releaseSweepClose: (() => void) | undefined;
+    let markSweepCloseStarted: (() => void) | undefined;
+    const sweepCloseStarted = new Promise<void>((resolve) => {
+      markSweepCloseStarted = resolve;
+    });
+    const sweepCloseGate = new Promise<void>((resolve) => {
+      releaseSweepClose = resolve;
+    });
+    let closeAttempts = 0;
+    const closeTab = vi.fn(async () => {
+      closeAttempts += 1;
+      if (closeAttempts === 1) {
+        markSweepCloseStarted?.();
+        await sweepCloseGate;
+        throw new Error("sweep close failed");
+      }
+    });
+    const sweep = sweepTrackedBrowserTabs({
+      now: 10_000,
+      idleMs: 1,
+      closeTab,
+    });
+    await sweepCloseStarted;
+    const lifecycle = closeTrackedBrowserTabsForSessions({
+      sessionKeys: ["agent:main:main"],
+      closeTab,
+    });
+    touchSessionBrowserTab({
+      sessionKey: "agent:main:main",
+      targetId: "docs",
+      profile: "openclaw",
+      now: 11_000,
+    });
+    releaseSweepClose?.();
+
+    await expect(Promise.all([sweep, lifecycle])).resolves.toEqual([0, 1]);
+    expect(closeTab).toHaveBeenCalledTimes(2);
+    await expect(
+      closeTrackedBrowserTabsForSessions({
+        sessionKeys: ["agent:main:main"],
+        closeTab,
+      }),
+    ).resolves.toBe(0);
+  });
+
   it("deduplicates tabs and ignores expected close errors", async () => {
     trackSessionBrowserTab({
       sessionKey: "agent:main:main",

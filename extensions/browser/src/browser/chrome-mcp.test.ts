@@ -1594,6 +1594,10 @@ describe("chrome MCP page parsing", () => {
       title: "",
       url: "https://example.com/",
       type: "page",
+      ownership: {
+        status: "non-durable",
+        reason: "explicit-cdp-url-required",
+      },
     });
     const calls = (session.client.callTool as unknown as ToolCallMock).mock.calls;
     expect(calls.map(([call]) => call.name)).toEqual(["new_page", "navigate_page", "list_pages"]);
@@ -1612,6 +1616,10 @@ describe("chrome MCP page parsing", () => {
       title: "",
       url: "about:blank",
       type: "page",
+      ownership: {
+        status: "non-durable",
+        reason: "explicit-cdp-url-required",
+      },
     });
     expect(session.client["callTool"]).toHaveBeenCalledWith({
       name: "new_page",

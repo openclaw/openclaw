@@ -253,7 +253,8 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
           ...browserNavigationPolicyForProfile(ctx, profileCtx),
         });
         await profileCtx.ensureBrowserAvailable({ signal });
-        return await profileCtx.openTab(url, { label });
+        const opened = await profileCtx.openTab(url, { label });
+        return { ...opened, resolvedProfile: profileCtx.profile.name };
       },
     });
     if (result) {
