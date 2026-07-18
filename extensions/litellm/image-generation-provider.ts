@@ -63,9 +63,8 @@ function isAutoAllowedLitellmHostname(hostname: string): boolean {
   ) {
     return true;
   }
-  // Only literal IPv4 loopback addresses qualify — DNS hostnames like
-  // 127.evil.com must not auto-bypass the allowPrivateNetwork opt-in.
-  if (lowered === "127.0.0.1" || (isIP(lowered) === 4 && lowered.startsWith("127."))) {
+  // Only IPv4 literals may use the 127/8 loopback exemption.
+  if (isIP(lowered) === 4 && lowered.startsWith("127.")) {
     return true;
   }
   if (lowered === "::1" || lowered === "0:0:0:0:0:0:0:1") {
