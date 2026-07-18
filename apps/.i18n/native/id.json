@@ -7704,11 +7704,6 @@
       "translated": "OpenClaw"
     },
     {
-      "id": "native.android.e695e7b72d13e9e5",
-      "source": "Attachment",
-      "translated": "Lampiran"
-    },
-    {
       "id": "native.android.5aafbef3744d86f3",
       "source": "Preparing audio…",
       "translated": "Menyiapkan audio…"
@@ -7812,6 +7807,11 @@
       "id": "native.android.623e434c83e3c020",
       "source": "Attach image",
       "translated": "Lampirkan gambar"
+    },
+    {
+      "id": "native.android.e695e7b72d13e9e5",
+      "source": "Attachment",
+      "translated": "Lampiran"
     },
     {
       "id": "native.android.f1d69eb66c5dfa39",
