@@ -122,6 +122,39 @@ type GuardedFetchPresetOptions = Omit<
 
 const DEFAULT_MAX_REDIRECTS = 3;
 const OPENCLAW_DEBUG_PROXY_ENABLED = "OPENCLAW_DEBUG_PROXY_ENABLED";
+// Match dispatcher close bound so redirect cleanup cannot hang forever when a
+// custom or faulty stream returns a never-settling cancel() promise.
+const REDIRECT_BODY_CANCEL_TIMEOUT_MS = 100;
+
+/**
+ * Start canceling a redirect response body, but never block redirect rejection
+ * or hop handling on a cancel() that never settles. Errors are non-fatal: the
+ * caller still runs release/closeDispatcher for connection cleanup.
+ */
+async function cancelRedirectResponseBody(
+  body: ReadableStream<Uint8Array> | null | undefined,
+): Promise<void> {
+  if (!body) {
+    return;
+  }
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      Promise.resolve(body.cancel()).catch(() => undefined),
+      new Promise<void>((resolve) => {
+        timeout = setTimeout(() => {
+          timeout = undefined;
+          resolve();
+        }, REDIRECT_BODY_CANCEL_TIMEOUT_MS);
+        timeout.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
 
 async function runAbortablePreflight<T>(run: () => Promise<T>, signal?: AbortSignal): Promise<T> {
   if (!signal) {
@@ -663,6 +696,9 @@ async function fetchWithSsrFGuardInternal(
       });
 
       if (isRedirectStatus(response.status)) {
+        // Cancel before validating the hop so rejected redirects release the
+        // body promptly; bound so never-settling cancel cannot stall release.
+        await cancelRedirectResponseBody(response.body);
         const location = response.headers.get("location");
         if (!location) {
           await release(dispatcher);
@@ -698,7 +734,6 @@ async function fetchWithSsrFGuardInternal(
           throw new Error("Redirect loop detected");
         }
         visited.add(nextVisitKey);
-        void response.body?.cancel();
         await closeDispatcher(dispatcher);
         currentUrl = nextUrl;
         continue;

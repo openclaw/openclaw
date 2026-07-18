@@ -1391,6 +1391,95 @@ describe("fetchWithSsrFGuard hardening", () => {
     });
   });
 
+  it.each([
+    {
+      name: "missing location header",
+      location: undefined,
+      expectedError: /missing location header/i,
+    },
+    {
+      name: "invalid location header",
+      location: "http://[invalid",
+      expectedError: /invalid url/i,
+    },
+  ])("cancels rejected redirect bodies for $name", async ({ location, expectedError }) => {
+    const response = new Response("redirect body", {
+      status: 302,
+      ...(location ? { headers: { location } } : {}),
+    });
+    const cancel = vi.spyOn(response.body!, "cancel");
+
+    await expectRedirectFailure({
+      url: "https://public.example/start",
+      responses: [response],
+      expectedError,
+      lookupFn: createPublicLookup(),
+    });
+
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    {
+      name: "redirect loop",
+      firstLocation: "https://public.example/next",
+      secondLocation: "https://public.example/next",
+      expectedError: /redirect loop/i,
+      maxRedirects: undefined,
+    },
+    {
+      name: "redirect limit",
+      firstLocation: "https://public.example/one",
+      secondLocation: "https://public.example/two",
+      expectedError: /too many redirects/i,
+      maxRedirects: 1,
+    },
+  ])(
+    "cancels every redirect body when rejecting a $name",
+    async ({ firstLocation, secondLocation, expectedError, maxRedirects }) => {
+      const firstResponse = new Response("first redirect body", {
+        status: 302,
+        headers: { location: firstLocation },
+      });
+      const secondResponse = new Response("second redirect body", {
+        status: 302,
+        headers: { location: secondLocation },
+      });
+      const firstCancel = vi.spyOn(firstResponse.body!, "cancel");
+      const secondCancel = vi.spyOn(secondResponse.body!, "cancel");
+
+      await expectRedirectFailure({
+        url: "https://public.example/start",
+        responses: [firstResponse, secondResponse],
+        expectedError,
+        lookupFn: createPublicLookup(),
+        maxRedirects,
+      });
+
+      expect(firstCancel).toHaveBeenCalledOnce();
+      expect(secondCancel).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("does not stall when redirect body cancel never settles", async () => {
+    const response = new Response("redirect body", { status: 302 });
+    const cancel = vi
+      .spyOn(response.body!, "cancel")
+      .mockImplementation(() => new Promise<void>(() => {}));
+    const startedAt = Date.now();
+
+    await expectRedirectFailure({
+      url: "https://public.example/start",
+      responses: [response],
+      expectedError: /missing location header/i,
+      lookupFn: createPublicLookup(),
+    });
+
+    expect(cancel).toHaveBeenCalledOnce();
+    // Bound is 100ms; allow generous headroom without masking a hang.
+    expect(Date.now() - startedAt).toBeLessThan(1_000);
+  });
+
   it("rejects redirect loops that return to the original URL", async () => {
     await expectRedirectFailure({
       url: "https://public.example/start",

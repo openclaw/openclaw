@@ -16,7 +16,7 @@ function redirectResponse(location: string): Response {
     ok: false,
     status: 302,
     headers: makeFetchHeaders({ location }),
-    body: { cancel: vi.fn() },
+    body: { cancel: vi.fn().mockResolvedValue(undefined) },
   } as unknown as Response;
 }
 
