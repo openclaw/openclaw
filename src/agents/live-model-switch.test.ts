@@ -576,6 +576,30 @@ describe("live model switch", () => {
       expect(sessionEntry).toEqual({ providerOverride: "openai", modelOverride: "gpt-5.5" });
     });
 
+    it("resolves the owning agent's default when the caller has no agent id", async () => {
+      // Without an explicit agentId the session key still identifies the
+      // owning agent; /model default must consolidate against that agent's
+      // configured default, not library-wide constants.
+      const sessionEntry = {
+        liveModelSwitchPending: true,
+        modelProvider: "anthropic",
+        model: "claude-opus-4-6",
+      };
+      state.loadSessionStoreMock.mockReturnValue({ main: sessionEntry });
+
+      const { consolidateLiveModelSwitchAfterRun } = await loadModule();
+
+      await consolidateLiveModelSwitchAfterRun({
+        cfg: consolidateParams.cfg,
+        sessionKey: "main",
+        providerUsed: "anthropic",
+        modelUsed: "claude-opus-4-6",
+      });
+
+      expect(state.resolveDefaultModelForAgentMock).toHaveBeenCalled();
+      expect(sessionEntry).not.toHaveProperty("liveModelSwitchPending");
+    });
+
     it("clears a pending default switch once the agent default actually ran", async () => {
       // /model default clears the override and leaves only runtime fields; the
       // selection then resolves to the agent default, which just ran.

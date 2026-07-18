@@ -7,6 +7,7 @@ import { resolveStorePath } from "../config/sessions/paths.js";
 import { loadSessionEntry, patchSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveSessionAgentId } from "./agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import {
   normalizeStoredOverrideModel,
@@ -262,6 +263,15 @@ export async function consolidateLiveModelSwitchAfterRun(params: {
   if (!storePath) {
     return;
   }
+  // Selection resolution needs the owning agent's configured default model;
+  // derive the agent from the session key when the caller has none, so a
+  // completed /model default still consolidates when config overrides the
+  // library-wide defaults.
+  const agentId = resolveSessionAgentId({
+    sessionKey,
+    config: cfg,
+    agentId: params.agentId,
+  });
   await patchSessionEntry(
     { storePath, sessionKey },
     (entry) => {
@@ -271,7 +281,7 @@ export async function consolidateLiveModelSwitchAfterRun(params: {
       const persisted = resolveSelectionFromSessionEntry({
         cfg,
         entry,
-        agentId: params.agentId,
+        agentId,
         defaultProvider: DEFAULT_PROVIDER,
         defaultModel: DEFAULT_MODEL,
       });
