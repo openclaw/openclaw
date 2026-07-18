@@ -12,6 +12,7 @@ import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import type { Skill } from "../../skills/loading/skill-contract.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { TtsAutoMode } from "../types.tts.js";
+import type { MainRestartRecoveryState } from "./main-session-recovery.types.js";
 import type { SessionRestartRecoveryState } from "./restart-recovery-types.js";
 import type { SessionEntryProvenance } from "./session-entry-provenance.js";
 import { rewriteSessionFileForNewSessionId } from "./session-file-rotation.js";
@@ -294,6 +295,8 @@ export type SessionEntry = SessionRestartRecoveryState &
     inheritedToolAllow?: string[];
     /** Parent's resolved sender policy carried to a spawned child session. */
     inheritedSenderPolicy?: unknown;
+    /** Durable guard state for automatic main session restart recovery cycle. */
+    mainRestartRecovery?: MainRestartRecoveryState;
     systemSent?: boolean;
     abortedLastRun?: boolean;
     /** Interrupted run generations whose late lifecycle events must be ignored. */
