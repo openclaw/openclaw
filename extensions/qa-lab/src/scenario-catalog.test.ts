@@ -945,7 +945,9 @@ describe("qa scenario catalog", () => {
   });
 
   it("keeps the Control UI transcript role boundary in the mock lane", () => {
-    const scenario = readQaScenarioById("control-ui-assistant-transcript-role-boundary");
+    const scenario = requireFlowScenario(
+      readQaScenarioById("control-ui-assistant-transcript-role-boundary"),
+    );
 
     expect(scenario.execution.providerMode).toBe("mock-openai");
   });
