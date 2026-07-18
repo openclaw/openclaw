@@ -104,7 +104,6 @@ describe("root memory repair", () => {
     });
 
     const migration = await migrateLegacyRootMemoryFile(tmpDir);
-
     expect(migration.changed).toBe(true);
     const canonical = await fs.readFile(canonicalPath, "utf8");
     expect(canonical).toContain("# Legacy");
@@ -208,6 +207,18 @@ describe("root memory repair", () => {
   it("treats an oversized AGENTS.md as missing memory guidance", async () => {
     await fs.writeFile(path.join(tmpDir, "AGENTS.md"), "x".repeat(2 * 1024 * 1024), "utf8");
 
+    await expect(shouldSuggestMemorySystem(tmpDir)).resolves.toBe(true);
+  });
+
+  it("follows a symlinked AGENTS.md while keeping its target bounded", async () => {
+    const agentsTarget = path.join(tmpDir, "agents-target.md");
+    const agentsPath = path.join(tmpDir, "AGENTS.md");
+    await fs.writeFile(agentsTarget, "Use MEMORY.md for durable memory.\n", "utf8");
+    await fs.symlink(agentsTarget, agentsPath);
+
+    await expect(shouldSuggestMemorySystem(tmpDir)).resolves.toBe(false);
+
+    await fs.writeFile(agentsTarget, "MEMORY.md\n".repeat(200_000), "utf8");
     await expect(shouldSuggestMemorySystem(tmpDir)).resolves.toBe(true);
   });
 
@@ -315,10 +326,6 @@ describe("root memory repair", () => {
       rename.mockRestore();
       await fs.rename(sourcePath, targetPath);
     });
-    vi.spyOn(fs, "link").mockRejectedValueOnce(
-      Object.assign(new Error("hard links unavailable"), { code: "EPERM" }),
-    );
-
     await maybeRepairWorkspaceMemoryHealth({ cfg, prompter });
 
     const repairLines = String(firstNoteCall()?.[0] ?? "").split("\n");

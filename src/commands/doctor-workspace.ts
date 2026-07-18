@@ -49,8 +49,11 @@ export async function shouldSuggestMemorySystem(workspaceDir: string): Promise<b
 
   const agentsPath = path.join(workspaceDir, DEFAULT_AGENTS_FILENAME);
   try {
+    // Workspace instruction files may intentionally be symlinked. Resolve the
+    // final target first, then keep the descriptor-backed read bounded.
+    const resolvedAgentsPath = await fs.promises.realpath(agentsPath);
     const { buffer } = await readRegularFile({
-      filePath: agentsPath,
+      filePath: resolvedAgentsPath,
       maxBytes: AGENTS_MD_MAX_BYTES,
     });
     if (
