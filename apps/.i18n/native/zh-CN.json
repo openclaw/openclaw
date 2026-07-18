@@ -23739,19 +23739,24 @@
       "translated": "路由更改后已排队"
     },
     {
+      "id": "native.apple.787047d0da6b8b9f",
+      "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
+      "translated": "请移除附件或等待发送完成后，再开始新聊天。"
+    },
+    {
       "id": "native.apple.980f552bb0f96c0f",
       "source": "Gateway changed before the session operation started.",
       "translated": "Gateway 在会话操作开始前已更改。"
     },
     {
-      "id": "native.apple.710c7bd117a7cc12",
-      "source": "Remove attachments or wait for delivery to resolve before switching chats.",
-      "translated": "请移除附件或等待发送完成后再切换聊天。"
-    },
-    {
       "id": "native.apple.d93e6fe16ec1b0e5",
       "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
       "translated": "请移除附件或等待发送完成后再开始新聊天。"
+    },
+    {
+      "id": "native.apple.710c7bd117a7cc12",
+      "source": "Remove attachments or wait for delivery to resolve before switching chats.",
+      "translated": "请移除附件或等待发送完成后再切换聊天。"
     },
     {
       "id": "native.apple.87ba543b42696b92",

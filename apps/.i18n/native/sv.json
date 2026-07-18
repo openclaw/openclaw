@@ -23739,19 +23739,24 @@
       "translated": "köad efter ruttändring"
     },
     {
+      "id": "native.apple.787047d0da6b8b9f",
+      "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
+      "translated": "Ta bort bilagor eller vänta tills leveransen är klar innan du startar en ny chatt."
+    },
+    {
       "id": "native.apple.980f552bb0f96c0f",
       "source": "Gateway changed before the session operation started.",
       "translated": "Gateway ändrades innan sessionsåtgärden startade."
     },
     {
-      "id": "native.apple.710c7bd117a7cc12",
-      "source": "Remove attachments or wait for delivery to resolve before switching chats.",
-      "translated": "Ta bort bilagor eller vänta på att leveransen slutförs innan du byter chatt."
-    },
-    {
       "id": "native.apple.d93e6fe16ec1b0e5",
       "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
       "translated": "Ta bort bilagor eller vänta på att leveransen slutförs innan du startar en ny chatt."
+    },
+    {
+      "id": "native.apple.710c7bd117a7cc12",
+      "source": "Remove attachments or wait for delivery to resolve before switching chats.",
+      "translated": "Ta bort bilagor eller vänta på att leveransen slutförs innan du byter chatt."
     },
     {
       "id": "native.apple.87ba543b42696b92",

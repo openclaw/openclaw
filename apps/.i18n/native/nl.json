@@ -23739,19 +23739,24 @@
       "translated": "in wachtrij na routewijziging"
     },
     {
+      "id": "native.apple.787047d0da6b8b9f",
+      "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
+      "translated": "Verwijder bijlagen of wacht tot de bezorging is afgerond voordat je een nieuwe chat start."
+    },
+    {
       "id": "native.apple.980f552bb0f96c0f",
       "source": "Gateway changed before the session operation started.",
       "translated": "De Gateway is gewijzigd voordat de sessiebewerking is gestart."
     },
     {
-      "id": "native.apple.710c7bd117a7cc12",
-      "source": "Remove attachments or wait for delivery to resolve before switching chats.",
-      "translated": "Verwijder bijlagen of wacht tot de bezorging is voltooid voordat je van chat wisselt."
-    },
-    {
       "id": "native.apple.d93e6fe16ec1b0e5",
       "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
       "translated": "Verwijder bijlagen of wacht tot de bezorging is voltooid voordat je een nieuwe chat start."
+    },
+    {
+      "id": "native.apple.710c7bd117a7cc12",
+      "source": "Remove attachments or wait for delivery to resolve before switching chats.",
+      "translated": "Verwijder bijlagen of wacht tot de bezorging is voltooid voordat je van chat wisselt."
     },
     {
       "id": "native.apple.87ba543b42696b92",

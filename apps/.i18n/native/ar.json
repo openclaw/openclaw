@@ -23739,19 +23739,24 @@
       "translated": "تمت الإضافة إلى قائمة الانتظار بعد تغيير المسار"
     },
     {
+      "id": "native.apple.787047d0da6b8b9f",
+      "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
+      "translated": "أزل المرفقات أو انتظر حتى يكتمل التسليم قبل بدء محادثة جديدة."
+    },
+    {
       "id": "native.apple.980f552bb0f96c0f",
       "source": "Gateway changed before the session operation started.",
       "translated": "تغيّر Gateway قبل بدء عملية الجلسة."
     },
     {
-      "id": "native.apple.710c7bd117a7cc12",
-      "source": "Remove attachments or wait for delivery to resolve before switching chats.",
-      "translated": "أزِل المرفقات أو انتظر اكتمال التسليم قبل تبديل المحادثات."
-    },
-    {
       "id": "native.apple.d93e6fe16ec1b0e5",
       "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
       "translated": "أزِل المرفقات أو انتظر اكتمال التسليم قبل بدء محادثة جديدة."
+    },
+    {
+      "id": "native.apple.710c7bd117a7cc12",
+      "source": "Remove attachments or wait for delivery to resolve before switching chats.",
+      "translated": "أزِل المرفقات أو انتظر اكتمال التسليم قبل تبديل المحادثات."
     },
     {
       "id": "native.apple.87ba543b42696b92",

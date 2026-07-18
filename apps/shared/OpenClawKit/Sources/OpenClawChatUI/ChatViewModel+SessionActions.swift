@@ -11,6 +11,89 @@ extension OpenClawChatViewModel {
         Task { await self.fetchSessions(limit: limit, sessionSnapshot: context) }
     }
 
+    /// Returns true only when a session switch happened (create or reset
+    /// fallback); callers keep UI like the new-session popover open on failure.
+    @discardableResult
+    func performStartNewSession(
+        agentID: String? = nil,
+        worktree: Bool,
+        worktreeBaseRef: String? = nil,
+        routeLease: OpenClawChatNewSessionRouteLease? = nil) async -> Bool
+    {
+        guard !self.blocksAttachmentOwnerChange else {
+            self.errorText = String(
+                localized: "Remove attachments or wait for delivery to resolve before starting a new chat.")
+            return false
+        }
+        let normalizedAgentID = agentID?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let requestedAgentID = normalizedAgentID?.isEmpty == false ? normalizedAgentID : nil
+        let requested = self.generatedNewSessionKey(agentID: requestedAgentID)
+        // Only authoritative identities decide agent ownership; scanning the roster
+        // could adopt an unrelated agent and hand sessions.create a cross-agent parent.
+        let currentAgentID = (
+            OpenClawChatSessionKey.agentID(from: self.sessionKey) ??
+                self.activeAgentId ??
+                OpenClawChatSessionKey.agentID(from: self.resolvedMainSessionKey))?
+            .lowercased()
+        let parentSessionKey = requestedAgentID == nil || requestedAgentID == currentAgentID
+            ? self.sessionKey
+            : nil
+        let next: String
+        do {
+            let created = if let routeLease {
+                try await routeLease.createSession(
+                    key: requested,
+                    label: nil,
+                    agentID: requestedAgentID,
+                    parentSessionKey: parentSessionKey,
+                    worktree: worktree ? true : nil,
+                    worktreeBaseRef: worktree ? worktreeBaseRef : nil)
+            } else {
+                try await self.transport.createSession(
+                    key: requested,
+                    label: nil,
+                    agentID: requestedAgentID,
+                    parentSessionKey: parentSessionKey,
+                    worktree: worktree ? true : nil,
+                    worktreeBaseRef: worktree ? worktreeBaseRef : nil)
+            }
+            let createdKey = created.key.trimmingCharacters(in: .whitespacesAndNewlines)
+            next = createdKey.isEmpty ? requested : createdKey
+        } catch {
+            if Self.isUnsupportedCreateSessionError(error) {
+                // Reset only mimics a plain new chat; agent/worktree selections were
+                // not honored, so advanced requests surface the error instead of
+                // silently resetting the current session.
+                guard requestedAgentID == nil, !worktree else {
+                    chatUILogger.error("sessions.create unsupported; advanced options not honored")
+                    self.errorText = error.localizedDescription
+                    return false
+                }
+                chatUILogger.info("sessions.create unsupported; falling back to sessions.reset")
+                await self.performReset()
+                return true
+            }
+            chatUILogger.error("sessions.create failed \(error.localizedDescription, privacy: .public)")
+            self.errorText = error.localizedDescription
+            return false
+        }
+        guard !self.blocksAttachmentOwnerChange else {
+            self.errorText = String(
+                localized: "Remove attachments or wait for delivery to resolve before starting a new chat.")
+            return false
+        }
+        self.adoptCreatedSession(next)
+        return true
+    }
+
+    static func isUnsupportedCreateSessionError(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        return nsError.domain == "OpenClawChatTransport"
+            && nsError.localizedDescription == "sessions.create not supported by this transport"
+    }
+
     @discardableResult
     public func startNewSession(
         agentID: String? = nil,

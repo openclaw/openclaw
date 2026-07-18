@@ -23739,19 +23739,24 @@
       "translated": "경로 변경 후 대기열에 추가됨"
     },
     {
+      "id": "native.apple.787047d0da6b8b9f",
+      "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
+      "translated": "새 채팅을 시작하기 전에 첨부 파일을 제거하거나 전송이 완료될 때까지 기다리세요."
+    },
+    {
       "id": "native.apple.980f552bb0f96c0f",
       "source": "Gateway changed before the session operation started.",
       "translated": "세션 작업이 시작되기 전에 Gateway가 변경되었습니다."
     },
     {
-      "id": "native.apple.710c7bd117a7cc12",
-      "source": "Remove attachments or wait for delivery to resolve before switching chats.",
-      "translated": "채팅을 전환하기 전에 첨부 파일을 제거하거나 전송이 완료될 때까지 기다리세요."
-    },
-    {
       "id": "native.apple.d93e6fe16ec1b0e5",
       "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
       "translated": "새 채팅을 시작하기 전에 첨부 파일을 제거하거나 전송이 완료될 때까지 기다리세요."
+    },
+    {
+      "id": "native.apple.710c7bd117a7cc12",
+      "source": "Remove attachments or wait for delivery to resolve before switching chats.",
+      "translated": "채팅을 전환하기 전에 첨부 파일을 제거하거나 전송이 완료될 때까지 기다리세요."
     },
     {
       "id": "native.apple.87ba543b42696b92",

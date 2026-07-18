@@ -6962,6 +6962,142 @@
     },
     {
       "locale": "ar",
+      "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
+      "translations": [
+        "أزل المرفقات أو انتظر حتى يكتمل التسليم قبل بدء محادثة جديدة.",
+        "أزِل المرفقات أو انتظر اكتمال التسليم قبل بدء محادثة جديدة."
+      ]
+    },
+    {
+      "locale": "de",
+      "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
+      "translations": [
+        "Entferne Anhänge oder warte, bis die Zustellung abgeschlossen ist, bevor du einen neuen Chat startest.",
+        "Entfernen Sie Anhänge oder warten Sie auf die Zustellung, bevor Sie einen neuen Chat starten."
+      ]
+    },
+    {
+      "locale": "es",
+      "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
+      "translations": [
+        "Elimina los adjuntos o espera a que se complete la entrega antes de iniciar un nuevo chat.",
+        "Elimina los archivos adjuntos o espera a que se complete la entrega antes de iniciar un nuevo chat."
+      ]
+    },
+    {
+      "locale": "fa",
+      "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
+      "translations": [
+        "پیش از شروع گفتگوی جدید، پیوست‌ها را حذف کنید یا منتظر تکمیل ارسال بمانید.",
+        "پیش از شروع گفت‌وگوی جدید، پیوست‌ها را حذف کنید یا منتظر بمانید تا ارسال آن‌ها تکمیل شود."
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
+      "translations": [
+        "Supprimez les pièces jointes ou attendez la fin de leur envoi avant de démarrer une nouvelle discussion.",
+        "Supprimez les pièces jointes ou attendez la livraison avant de démarrer une nouvelle conversation."
+      ]
+    },
+    {
+      "locale": "hi",
+      "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
+      "translations": [
+        "नई चैट शुरू करने से पहले अटैचमेंट हटाएँ या डिलीवरी पूरी होने की प्रतीक्षा करें।",
+        "नई चैट शुरू करने से पहले अटैचमेंट हटाएं या डिलीवरी पूरी होने की प्रतीक्षा करें।"
+      ]
+    },
+    {
+      "locale": "id",
+      "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
+      "translations": [
+        "Hapus lampiran atau tunggu hingga pengiriman selesai sebelum memulai obrolan baru.",
+        "Hapus lampiran atau tunggu pengiriman selesai sebelum memulai obrolan baru."
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
+      "translations": [
+        "新しいチャットを開始する前に、添付ファイルを削除するか、配信が完了するまでお待ちください。",
+        "新しいチャットを開始する前に、添付ファイルを削除するか送信が完了するのを待ってください。"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
+      "translations": [
+        "Verwijder bijlagen of wacht tot de bezorging is afgerond voordat je een nieuwe chat start.",
+        "Verwijder bijlagen of wacht tot de bezorging is voltooid voordat je een nieuwe chat start."
+      ]
+    },
+    {
+      "locale": "pt-BR",
+      "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
+      "translations": [
+        "Remova os anexos ou aguarde a conclusão da entrega antes de iniciar uma nova conversa.",
+        "Remova os anexos ou aguarde a entrega ser concluída antes de iniciar uma nova conversa."
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
+      "translations": [
+        "Удалите вложения или дождитесь доставки, прежде чем начинать новый чат.",
+        "Удалите вложения или дождитесь завершения доставки, прежде чем начинать новый чат."
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
+      "translations": [
+        "Ta bort bilagor eller vänta på att leveransen slutförs innan du startar en ny chatt.",
+        "Ta bort bilagor eller vänta tills leveransen är klar innan du startar en ny chatt."
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
+      "translations": [
+        "นำไฟล์แนบออกหรือรอให้การส่งเสร็จสิ้นก่อนเริ่มแชตใหม่",
+        "ลบไฟล์แนบหรือรอให้การส่งเสร็จสิ้นก่อนเริ่มแชทใหม่"
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
+      "translations": [
+        "Видаліть вкладення або дочекайтеся завершення доставки, перш ніж починати новий чат.",
+        "Видаліть вкладення або зачекайте на завершення доставлення, перш ніж починати новий чат."
+      ]
+    },
+    {
+      "locale": "vi",
+      "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
+      "translations": [
+        "Gỡ tệp đính kèm hoặc chờ gửi xong trước khi bắt đầu cuộc trò chuyện mới.",
+        "Xóa tệp đính kèm hoặc chờ quá trình gửi hoàn tất trước khi bắt đầu cuộc trò chuyện mới."
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
+      "translations": [
+        "请移除附件或等待发送完成后再开始新聊天。",
+        "请移除附件或等待发送完成后，再开始新聊天。"
+      ]
+    },
+    {
+      "locale": "zh-TW",
+      "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
+      "translations": [
+        "請先移除附件或等待傳送完成，再開始新的聊天。",
+        "請移除附件，或等待傳送問題解決後再開始新的聊天。"
+      ]
+    },
+    {
+      "locale": "ar",
       "source": "Rename",
       "translations": [
         "إعادة التسمية",

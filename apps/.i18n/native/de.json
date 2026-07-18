@@ -23739,19 +23739,24 @@
       "translated": "nach Routenänderung in Warteschlange"
     },
     {
+      "id": "native.apple.787047d0da6b8b9f",
+      "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
+      "translated": "Entferne Anhänge oder warte, bis die Zustellung abgeschlossen ist, bevor du einen neuen Chat startest."
+    },
+    {
       "id": "native.apple.980f552bb0f96c0f",
       "source": "Gateway changed before the session operation started.",
       "translated": "Das Gateway wurde geändert, bevor der Sitzungsvorgang gestartet wurde."
     },
     {
-      "id": "native.apple.710c7bd117a7cc12",
-      "source": "Remove attachments or wait for delivery to resolve before switching chats.",
-      "translated": "Entfernen Sie Anhänge oder warten Sie auf die Zustellung, bevor Sie den Chat wechseln."
-    },
-    {
       "id": "native.apple.d93e6fe16ec1b0e5",
       "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
       "translated": "Entfernen Sie Anhänge oder warten Sie auf die Zustellung, bevor Sie einen neuen Chat starten."
+    },
+    {
+      "id": "native.apple.710c7bd117a7cc12",
+      "source": "Remove attachments or wait for delivery to resolve before switching chats.",
+      "translated": "Entfernen Sie Anhänge oder warten Sie auf die Zustellung, bevor Sie den Chat wechseln."
     },
     {
       "id": "native.apple.87ba543b42696b92",
