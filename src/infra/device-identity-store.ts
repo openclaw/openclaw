@@ -309,7 +309,6 @@ export function repairInvalidStoredDeviceIdentity(
             .deleteFrom("device_identities")
             .where("identity_key", "=", resolved.identityKey),
         );
-        repaired = true;
       }
 
       // An absent row after an invalid-row detection still means identity continuity was lost.

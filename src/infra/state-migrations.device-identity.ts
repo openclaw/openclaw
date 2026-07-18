@@ -9,10 +9,6 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import {
-  DeviceIdentityStorageError,
-  generateStoredDeviceIdentity,
-  readStoredDeviceIdentityReadOnly,
-  repairInvalidStoredDeviceIdentity,
   validateStoredDeviceIdentity,
   type DeviceIdentity,
   type StoredDeviceIdentity,
@@ -31,11 +27,13 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import {
+  hasLegacyDeviceIdentityPath,
+  repairInvalidCanonicalIdentity,
+} from "./state-migrations.device-identity-repair.js";
 import type { LegacyDeviceIdentityDetection } from "./state-migrations.device-identity.types.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
 
-const LEGACY_IDENTITY_RELATIVE_PATH = path.join("identity", "device.json");
-const DOCTOR_CLAIM_SUFFIX = ".doctor-importing";
 const IDENTITY_KEY = "primary";
 const MIGRATION_KIND = "legacy-device-identity-json";
 const MIGRATION_LOCK_TIMEOUT_MS = 250;
@@ -163,64 +161,7 @@ type MigrationReceipt = {
   removedSource: boolean;
 };
 
-function pathMayExist(filePath: string): boolean {
-  try {
-    fs.lstatSync(filePath);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code !== "ENOENT";
-  }
-}
-
-/** Detect the exact retired primary identity paths only during explicit Doctor repair. */
-export function detectLegacyDeviceIdentity(params: {
-  stateDir: string;
-  env?: NodeJS.ProcessEnv;
-  doctorOnlyStateMigrations?: boolean;
-}): LegacyDeviceIdentityDetection {
-  const sourcePath = path.join(params.stateDir, LEGACY_IDENTITY_RELATIVE_PATH);
-  const claimPath = `${sourcePath}${DOCTOR_CLAIM_SUFFIX}`;
-  const doctorAuthorized = params.doctorOnlyStateMigrations === true;
-  let hasInvalidCanonical = false;
-  if (doctorAuthorized) {
-    try {
-      readStoredDeviceIdentityReadOnly({
-        env: { ...(params.env ?? process.env), OPENCLAW_STATE_DIR: params.stateDir },
-        identityKey: IDENTITY_KEY,
-      });
-    } catch (error) {
-      hasInvalidCanonical = error instanceof DeviceIdentityStorageError;
-    }
-  }
-  return {
-    sourcePath,
-    claimPath,
-    hasLegacy: doctorAuthorized && (pathMayExist(sourcePath) || pathMayExist(claimPath)),
-    hasInvalidCanonical,
-  };
-}
-
-function repairInvalidCanonicalIdentity(env: NodeJS.ProcessEnv): MigrationMessages {
-  try {
-    const result = repairInvalidStoredDeviceIdentity(generateStoredDeviceIdentity(), {
-      env,
-      identityKey: IDENTITY_KEY,
-    });
-    if (!result.repaired) {
-      return { changes: [], warnings: [] };
-    }
-    return {
-      changes: ["Replaced invalid primary device identity in SQLite."],
-      warnings: [],
-      notices: ["The repaired device has a new identity and must be approved again."],
-    };
-  } catch (error) {
-    return {
-      changes: [],
-      warnings: [`Failed repairing invalid SQLite device identity: ${formatErrorMessage(error)}`],
-    };
-  }
-}
+export { detectLegacyDeviceIdentity } from "./state-migrations.device-identity-repair.js";
 
 function relativeLegacyPath(stateDir: string, filePath: string): string {
   const relativePath = path.relative(path.resolve(stateDir), path.resolve(filePath));
@@ -766,8 +707,7 @@ export async function migrateLegacyDeviceIdentity(params: {
   let releaseError: unknown;
   try {
     try {
-      const hasLegacyNow =
-        pathMayExist(params.detected.sourcePath) || pathMayExist(params.detected.claimPath);
+      const hasLegacyNow = hasLegacyDeviceIdentityPath(params.detected);
       if (hasLegacyNow) {
         const stateRoot = await root(params.stateDir, {
           hardlinks: "reject",
