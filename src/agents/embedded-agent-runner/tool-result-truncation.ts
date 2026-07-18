@@ -450,9 +450,9 @@ function isToolResultTextBlock(
 }
 
 type ToolResultSpillDetails = {
-  path: string;
-  truncated: boolean;
-  chars?: number;
+  fullOutputPath: string;
+  spillTruncated: boolean;
+  spilledChars?: number;
 };
 
 function getToolResultSpillDetails(message: AgentMessage): ToolResultSpillDetails | undefined {
@@ -460,25 +460,17 @@ function getToolResultSpillDetails(message: AgentMessage): ToolResultSpillDetail
   if (!details || typeof details !== "object" || Array.isArray(details)) {
     return undefined;
   }
-  const nested = (details as { spill?: unknown }).spill;
-  const nestedSpill =
-    nested && typeof nested === "object" && !Array.isArray(nested)
-      ? (nested as Record<string, unknown>)
-      : undefined;
-  // web_fetch owns the nested contract. Exec tools still own the flat spill fields.
-  const path = nestedSpill?.path ?? (details as { fullOutputPath?: unknown }).fullOutputPath;
-  if (typeof path !== "string" || path.length === 0) {
+  const fullOutputPath = (details as { fullOutputPath?: unknown }).fullOutputPath;
+  if (typeof fullOutputPath !== "string" || fullOutputPath.length === 0) {
     return undefined;
   }
-  const truncated =
-    nestedSpill?.truncated === true ||
-    (details as { spillTruncated?: unknown }).spillTruncated === true;
-  const chars = nestedSpill?.chars ?? (details as { spilledChars?: unknown }).spilledChars;
+  const spillTruncated = (details as { spillTruncated?: unknown }).spillTruncated === true;
+  const spilledChars = (details as { spilledChars?: unknown }).spilledChars;
   return {
-    path,
-    truncated,
-    ...(typeof chars === "number" && Number.isFinite(chars)
-      ? { chars: Math.max(0, Math.floor(chars)) }
+    fullOutputPath,
+    spillTruncated,
+    ...(typeof spilledChars === "number" && Number.isFinite(spilledChars)
+      ? { spilledChars: Math.max(0, Math.floor(spilledChars)) }
       : {}),
   };
 }
@@ -516,30 +508,31 @@ function resolveAggregateElisionMarkers(
   }
   // Details alone are not model-visible. Only preserve paths that already
   // appeared in the original footer, so elision discloses nothing new.
-  if (!toolResultTextContainsFullOutputFooter(message, spill.path)) {
+  if (!toolResultTextContainsFullOutputFooter(message, spill.fullOutputPath)) {
     return undefined;
   }
   // Aggregate elision is a rare recovery path, not a request hot path; one
   // existence check avoids pointing the model at already-deleted spill files.
-  if (!existsSync(spill.path)) {
+  if (!existsSync(spill.fullOutputPath)) {
     return undefined;
   }
   // The path was already disclosed in the original tool footer; preserving it
   // here adds no new disclosure and only keeps recovery possible.
-  if (spill.truncated) {
-    const count = spill.chars === undefined ? "capped content" : `first ${spill.chars} chars`;
+  if (spill.spillTruncated) {
+    const count =
+      spill.spilledChars === undefined ? "capped content" : `first ${spill.spilledChars} chars`;
     return {
-      full: `[tool result elided: partial output preserved at ${spill.path} (${count}); read it if the output is needed]`,
-      compact: `[partial: ${spill.path}]`,
+      full: `[tool result elided: partial output preserved at ${spill.fullOutputPath} (${count}); read it if the output is needed]`,
+      compact: `[partial: ${spill.fullOutputPath}]`,
       truncationSuffix: (truncatedChars) =>
-        `[... ${Math.max(1, Math.floor(truncatedChars))} chars truncated; partial output at ${spill.path}]`,
+        `[... ${Math.max(1, Math.floor(truncatedChars))} chars truncated; partial output at ${spill.fullOutputPath}]`,
     };
   }
   return {
-    full: `[tool result elided: full output preserved at ${spill.path}; read it if the output is needed]`,
-    compact: `[read ${spill.path}]`,
+    full: `[tool result elided: full output preserved at ${spill.fullOutputPath}; read it if the output is needed]`,
+    compact: `[read ${spill.fullOutputPath}]`,
     truncationSuffix: (truncatedChars) =>
-      `[... ${Math.max(1, Math.floor(truncatedChars))} chars truncated; full output at ${spill.path}]`,
+      `[... ${Math.max(1, Math.floor(truncatedChars))} chars truncated; full output at ${spill.fullOutputPath}]`,
   };
 }
 
@@ -935,6 +928,7 @@ function buildAggregateToolResultReplacements(params: {
   }
 
   if (remainingReduction > 0) {
+    let hasClaimedElisionReserve = false;
     for (const candidate of recoveryCandidates) {
       if (remainingReduction <= 0) {
         break;
@@ -944,8 +938,22 @@ function buildAggregateToolResultReplacements(params: {
       );
       const baseMessage = existingReplacement?.message ?? candidate.message;
       const baseTextLength = getToolResultTextLength(baseMessage);
-      const targetTextChars = Math.max(0, baseTextLength - remainingReduction);
+      let targetTextChars = Math.max(0, baseTextLength - remainingReduction);
       const spillMarkers = resolveAggregateElisionMarkers(candidate.spillSourceMessage);
+      // Shared aggregate-cap accounting: when the aggregate budget is
+      // exhausted and no spill markers exist, only the first eligible
+      // result claims 1 char from the shared elision reserve. Subsequent
+      // results get 0 — the reserve is a single shared pool, not per-result.
+      // A zero aggregate budget must still emit zero text.
+      if (
+        targetTextChars <= 0 &&
+        !spillMarkers &&
+        !hasClaimedElisionReserve &&
+        params.aggregateBudgetChars > 0
+      ) {
+        targetTextChars = 1;
+        hasClaimedElisionReserve = true;
+      }
       const emptyMessage = clearToolResultText(candidate.message, targetTextChars, spillMarkers);
       const actualReduction = Math.max(0, baseTextLength - getToolResultTextLength(emptyMessage));
       if (actualReduction <= 0 && !spillMarkers) {
