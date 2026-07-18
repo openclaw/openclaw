@@ -16,19 +16,14 @@ const IGNORE_MATCHER_MAX_PATTERN_CHARS = IGNORE_FILE_MAX_BYTES;
 const OVERSIZED_IGNORE_FILE = Symbol("oversizedIgnoreFile");
 const COMPLEX_IGNORE_FILE = Symbol("complexIgnoreFile");
 
-type IgnoreRuleMatcher = ReturnType<typeof ignore>;
+export type IgnoreMatcher = ReturnType<typeof ignore>;
+
 type IgnoreMatcherState = {
-  rules: IgnoreRuleMatcher;
   excludedSubtrees: Set<string>;
   patternCount: number;
   patternChars: number;
 };
-const IGNORE_MATCHER_STATE: unique symbol = Symbol("ignoreMatcherState");
-
-export type IgnoreMatcher = {
-  readonly [IGNORE_MATCHER_STATE]: IgnoreMatcherState;
-  ignores(pathname: string): boolean;
-};
+const ignoreMatcherStates = new WeakMap<IgnoreMatcher, IgnoreMatcherState>();
 
 function normalizeLiteralSubtreePath(pathname: string): string {
   const posixPath = toPosixPath(pathname);
@@ -48,22 +43,101 @@ function isInLiteralSubtree(pathname: string, subtrees: Set<string>): boolean {
   return false;
 }
 
-function createIgnoreMatcher(): IgnoreMatcher {
+function getIgnoreMatcherState(matcher: IgnoreMatcher): IgnoreMatcherState {
+  const existing = ignoreMatcherStates.get(matcher);
+  if (existing) {
+    return existing;
+  }
   const state: IgnoreMatcherState = {
-    rules: ignore(),
     excludedSubtrees: new Set<string>(),
     patternCount: 0,
     patternChars: 0,
   };
-  return {
-    [IGNORE_MATCHER_STATE]: state,
-    ignores: (pathname) =>
-      isInLiteralSubtree(pathname, state.excludedSubtrees) || state.rules.ignores(pathname),
-  };
+  ignoreMatcherStates.set(matcher, state);
+
+  const originalIgnores = matcher.ignores.bind(matcher);
+  const originalTest = matcher.test.bind(matcher);
+  const originalCheckIgnore = matcher.checkIgnore.bind(matcher);
+  matcher.ignores = ((pathname: string) => {
+    const ignored = originalIgnores(pathname);
+    return isInLiteralSubtree(pathname, state.excludedSubtrees) || ignored;
+  }) as IgnoreMatcher["ignores"];
+  matcher.test = ((pathname: string) => {
+    const result = originalTest(pathname);
+    return isInLiteralSubtree(pathname, state.excludedSubtrees)
+      ? { ignored: true, unignored: false }
+      : result;
+  }) as IgnoreMatcher["test"];
+  matcher.checkIgnore = ((pathname: string) => {
+    const result = originalCheckIgnore(pathname);
+    return isInLiteralSubtree(pathname, state.excludedSubtrees)
+      ? { ignored: true, unignored: false }
+      : result;
+  }) as IgnoreMatcher["checkIgnore"];
+  matcher.createFilter = (() => (pathname: string) =>
+    !matcher.ignores(pathname)) as IgnoreMatcher["createFilter"];
+  matcher.filter = ((pathnames: readonly string[]) =>
+    pathnames.filter(matcher.createFilter())) as IgnoreMatcher["filter"];
+
+  return state;
 }
 
+function inheritIgnoreMatcherState(
+  receiver: IgnoreMatcher,
+  pattern: Parameters<IgnoreMatcher["add"]>[0],
+): void {
+  const candidates = Array.isArray(pattern) ? pattern : [pattern];
+  for (const candidate of candidates) {
+    if (typeof candidate !== "object" || candidate === null || candidate === receiver) {
+      continue;
+    }
+    const inherited = ignoreMatcherStates.get(candidate as IgnoreMatcher);
+    if (!inherited) {
+      continue;
+    }
+    const state = getIgnoreMatcherState(receiver);
+    for (const subtree of inherited.excludedSubtrees) {
+      state.excludedSubtrees.add(subtree);
+    }
+    state.patternCount = Math.min(
+      IGNORE_MATCHER_MAX_PATTERNS,
+      state.patternCount + inherited.patternCount,
+    );
+    state.patternChars = Math.min(
+      IGNORE_MATCHER_MAX_PATTERN_CHARS,
+      state.patternChars + inherited.patternChars,
+    );
+  }
+}
+
+const IGNORE_ADD_STATE_PATCHED = Symbol("ignoreAddStatePatched");
+
+function installIgnoreAddStatePropagation(): void {
+  const prototype = Object.getPrototypeOf(ignore()) as IgnoreMatcher & {
+    [IGNORE_ADD_STATE_PATCHED]?: boolean;
+  };
+  if (prototype[IGNORE_ADD_STATE_PATCHED]) {
+    return;
+  }
+  const originalAdd = prototype.add;
+  // node-ignore implements supported matcher composition in Ignore.add().
+  // Preserve terminal deny metadata there so plain ignore().add(source)
+  // cannot silently reopen a subtree that OpenClaw failed closed.
+  prototype.add = function (
+    this: IgnoreMatcher,
+    pattern: Parameters<IgnoreMatcher["add"]>[0],
+  ): IgnoreMatcher {
+    const result = originalAdd.call(this, pattern);
+    inheritIgnoreMatcherState(this, pattern);
+    return result;
+  } as IgnoreMatcher["add"];
+  Object.defineProperty(prototype, IGNORE_ADD_STATE_PATCHED, { value: true });
+}
+
+installIgnoreAddStatePropagation();
+
 function addFailClosedSubtree(matcher: IgnoreMatcher, prefix: string): void {
-  matcher[IGNORE_MATCHER_STATE].excludedSubtrees.add(normalizeLiteralSubtreePath(prefix));
+  getIgnoreMatcherState(matcher).excludedSubtrees.add(normalizeLiteralSubtreePath(prefix));
 }
 
 function parseIgnorePatterns(
@@ -104,8 +178,9 @@ export const toPosixPath = (pathValue: string) => pathValue.split(sep).join("/")
 export function addIgnoreRules(
   dir: string,
   rootDir: string,
-  ig: IgnoreMatcher = createIgnoreMatcher(),
+  ig: IgnoreMatcher = ignore(),
 ): IgnoreMatcher {
+  const state = getIgnoreMatcherState(ig);
   const relativeDir = relative(rootDir, dir);
   const prefix = relativeDir ? `${toPosixPath(relativeDir)}/` : "";
 
@@ -127,7 +202,6 @@ export function addIgnoreRules(
     if (content === null) {
       continue;
     }
-    const state = ig[IGNORE_MATCHER_STATE];
     const parsed = parseIgnorePatterns(content, prefix, {
       patterns: IGNORE_MATCHER_MAX_PATTERNS - state.patternCount,
       chars: IGNORE_MATCHER_MAX_PATTERN_CHARS - state.patternChars,
@@ -137,7 +211,7 @@ export function addIgnoreRules(
       break;
     }
     if (parsed.patterns.length > 0) {
-      state.rules.add(parsed.patterns);
+      ig.add(parsed.patterns);
       state.patternCount += parsed.patterns.length;
       state.patternChars += parsed.chars;
     }

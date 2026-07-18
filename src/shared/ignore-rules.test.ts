@@ -2,8 +2,13 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import ignore from "ignore";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { addIgnoreRules } from "./ignore-rules.js";
+
+function oversizedIgnoreFileContent(): string {
+  return `#${"x".repeat(4 * 1024 * 1024)}`;
+}
 
 describe("addIgnoreRules", () => {
   let tempDir: string;
@@ -27,21 +32,21 @@ describe("addIgnoreRules", () => {
   });
 
   it("parses a large ignore file under the byte cap", () => {
-    const huge = "ignored-file\n".repeat(200_000); // ~2.4 MB, under 4 MB cap
+    const huge = `#${"x".repeat(2 * 1024 * 1024)}\nignored-file\n`;
     fs.writeFileSync(path.join(tempDir, ".gitignore"), huge, "utf-8");
 
     const ig = addIgnoreRules(tempDir, tempDir);
 
     expect(ig.ignores("ignored-file")).toBe(true);
+    expect(ig.ignores("unrelated-file")).toBe(false);
   });
 
   it("fails closed and excludes the subtree when an ignore file exceeds the byte cap", () => {
-    const oversized = "ignored-file\n".repeat(1_000_000); // ~13 MB, over 4 MB cap
-    fs.writeFileSync(path.join(tempDir, ".gitignore"), oversized, "utf-8");
+    fs.writeFileSync(path.join(tempDir, ".gitignore"), oversizedIgnoreFileContent(), "utf-8");
 
     const ig = addIgnoreRules(tempDir, tempDir);
 
-    expect(ig.ignores("ignored-file")).toBe(true);
+    expect(ig.ignores("unrelated-file")).toBe(true);
   });
 
   it("fails closed before an under-cap file can amplify into too many rules", () => {
@@ -83,8 +88,7 @@ describe("addIgnoreRules", () => {
   });
 
   it("keeps the subtree excluded when a later ignore file negates it", () => {
-    const oversized = "ignored-file\n".repeat(1_000_000); // ~13 MB, over 4 MB cap
-    fs.writeFileSync(path.join(tempDir, ".gitignore"), oversized, "utf-8");
+    fs.writeFileSync(path.join(tempDir, ".gitignore"), oversizedIgnoreFileContent(), "utf-8");
     // A later .ignore could reopen the subtree if the oversized-file exclusion
     // were not terminal for this directory.
     fs.writeFileSync(path.join(tempDir, ".ignore"), "!ignored-file\n!secret.txt\n", "utf-8");
@@ -96,7 +100,7 @@ describe("addIgnoreRules", () => {
   });
 
   it("treats fail-closed subtree paths literally", () => {
-    const oversized = "ignored-file\n".repeat(1_000_000); // ~13 MB, over 4 MB cap
+    const oversized = oversizedIgnoreFileContent();
     const unusualNames = [
       "Private",
       "#private",
@@ -130,11 +134,7 @@ describe("addIgnoreRules", () => {
   it("keeps fail-closed metadata when the matcher is extended", () => {
     const nestedDir = path.join(tempDir, "locked");
     fs.mkdirSync(nestedDir);
-    fs.writeFileSync(
-      path.join(nestedDir, ".gitignore"),
-      "ignored-file\n".repeat(1_000_000),
-      "utf-8",
-    );
+    fs.writeFileSync(path.join(nestedDir, ".gitignore"), oversizedIgnoreFileContent(), "utf-8");
     const ig = addIgnoreRules(nestedDir, tempDir);
 
     fs.writeFileSync(path.join(tempDir, ".gitignore"), "!locked/\n!locked/secret.txt\n", "utf-8");
@@ -142,6 +142,26 @@ describe("addIgnoreRules", () => {
 
     expect(ig.ignores("locked")).toBe(true);
     expect(ig.ignores("locked/secret.txt")).toBe(true);
+
+    const inherited = ignore().add(ig);
+    inherited.add("!locked/\n!locked/secret.txt");
+    expect(inherited.ignores("locked")).toBe(true);
+    expect(inherited.ignores("locked/secret.txt")).toBe(true);
+  });
+
+  it("preserves the configured ignore matcher surface", () => {
+    fs.writeFileSync(path.join(tempDir, ".gitignore"), "from-file\n", "utf-8");
+    const configured = ignore().add("preconfigured");
+
+    const ig = addIgnoreRules(tempDir, tempDir, configured);
+
+    expect(ig).toBe(configured);
+    expect(ig.ignores("preconfigured")).toBe(true);
+    expect(ig.test("from-file").ignored).toBe(true);
+    expect(ig.filter(["from-file", "visible"])).toEqual(["visible"]);
+    expect(["from-file", "visible"].filter(ig.createFilter())).toEqual(["visible"]);
+    ig.add("added-later");
+    expect(ig.ignores("added-later")).toBe(true);
   });
 
   it("follows a symlinked .gitignore to a regular file", () => {
