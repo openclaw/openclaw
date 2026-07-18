@@ -173,9 +173,14 @@ while :; do
     status=$?
   fi
   if launchctl print "$service_target" >/dev/null 2>&1; then
-    launchctl kickstart -k "$service_target"
-    status=$?
-    break
+    if launchctl kickstart -k "$service_target"; then
+      status=0
+      break
+    else
+      # The pending bootout can finish between print and kickstart. Keep
+      # retrying bootstrap if that check-then-act race deregisters the label.
+      status=$?
+    fi
   fi
   bootstrap_retry_count=$((bootstrap_retry_count - 1))
   if [ "$bootstrap_retry_count" -le 0 ]; then

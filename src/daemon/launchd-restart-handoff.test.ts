@@ -191,7 +191,7 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     expect(args[1]).toContain('bootstrap_retry_count="15"');
     expect(args[1]).toContain('if launchctl bootstrap "$domain" "$plist_path"; then');
     expect(args[1]).toContain(
-      'if launchctl print "$service_target" >/dev/null 2>&1; then\n    launchctl kickstart -k "$service_target"',
+      'if launchctl print "$service_target" >/dev/null 2>&1; then\n    if launchctl kickstart -k "$service_target"; then',
     );
     expect(args[1]).toContain("bootstrap_retry_count=$((bootstrap_retry_count - 1))");
   });
@@ -215,6 +215,38 @@ esac`);
     expect(result.exitCode).toBe(0);
     expect(result.calls.filter((call) => call.startsWith("print "))).toHaveLength(21);
     expect(result.calls.filter((call) => call.startsWith("bootstrap "))).toHaveLength(1);
+    expect(result.log).toContain("restart done");
+    expect(result.log).not.toContain("restart failed");
+  });
+
+  it("retries bootstrap when the label disappears between print and kickstart", async () => {
+    const result = await executeReloadHandoff(`
+case "$1" in
+  print)
+    count_file="$LAUNCHCTL_STUB_DIR/print-count"
+    count=0
+    [ -f "$count_file" ] && count=$(sed -n '1p' "$count_file")
+    count=$((count + 1))
+    printf '%s\n' "$count" > "$count_file"
+    [ "$count" -eq 2 ] && exit 0
+    exit 113
+    ;;
+  bootstrap)
+    count_file="$LAUNCHCTL_STUB_DIR/bootstrap-count"
+    count=0
+    [ -f "$count_file" ] && count=$(sed -n '1p' "$count_file")
+    count=$((count + 1))
+    printf '%s\n' "$count" > "$count_file"
+    [ "$count" -eq 1 ] && exit 5
+    exit 0
+    ;;
+  kickstart) exit 113 ;;
+  *) exit 0 ;;
+esac`);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.calls.filter((call) => call.startsWith("bootstrap "))).toHaveLength(2);
+    expect(result.calls.filter((call) => call.startsWith("kickstart "))).toHaveLength(1);
     expect(result.log).toContain("restart done");
     expect(result.log).not.toContain("restart failed");
   });
