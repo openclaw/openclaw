@@ -145,18 +145,15 @@ export function hasActiveCronJobs() {
 }
 
 /**
- * Returns whether any cron run other than `jobId` is active. A job's own marker must
- * not block its own synchronous wake, but every other job's marker still must: cron
- * runs concurrently (cron.maxConcurrentRuns), so discounting all markers would let one
- * job's wake execute while an unrelated job is mid-run.
+ * Ignore only the caller's own marker. Unrelated runs must still block its wake,
+ * because cron jobs may execute concurrently.
  */
-export function hasActiveCronJobsExcept(jobId: string) {
-  if (!jobId) {
-    return hasActiveCronJobs();
-  }
+export function hasActiveCronJobsExceptMarker(markerToIgnore: CronActiveJobMarker) {
   const state = getCronActiveJobState();
   for (const marker of state.activeJobs.values()) {
-    if (marker.jobId !== jobId && isMarkerActiveInGeneration(marker, state.generation)) {
+    const isIgnoredMarker =
+      marker.jobId === markerToIgnore.jobId && marker.token === markerToIgnore.token;
+    if (!isIgnoredMarker && isMarkerActiveInGeneration(marker, state.generation)) {
       return true;
     }
   }

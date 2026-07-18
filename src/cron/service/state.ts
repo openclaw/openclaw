@@ -2,6 +2,7 @@
 import type { CronConfig } from "../../config/types.cron.js";
 import type { HeartbeatRunResult, HeartbeatWakeRequest } from "../../infra/heartbeat-wake.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
+import type { CronActiveJobMarker } from "../active-jobs.js";
 import type { QuarantinedCronConfigJob } from "../store.js";
 import type {
   CronTriggerEvaluationResult,
@@ -125,8 +126,8 @@ export type CronServiceDeps = {
     reason?: string;
     agentId?: string;
     sessionKey?: string;
-    /** Cron job id whose own active marker must not block its awaited wake. */
-    owningCronJobId?: string;
+    /** Exact cron run marker whose own activity must not block its awaited wake. */
+    owningCronJobMarker?: CronActiveJobMarker;
     /** Optional heartbeat config override (e.g. target: "last" for cron-triggered heartbeats). */
     heartbeat?: HeartbeatWakeRequest["heartbeat"];
   }) => Promise<HeartbeatRunResult>;

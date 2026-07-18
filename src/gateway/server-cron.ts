@@ -526,10 +526,9 @@ export function buildGatewayCronService(params: {
         reason: opts?.reason,
         agentId,
         sessionKey,
-        // Must forward: without it the owning job's wake self-blocks on its own active
-        // marker and cron falls back to an unconfirmed async wake (#105257). The field is
-        // optional, so dropping it here fails silently rather than at build time.
-        owningCronJobId: opts?.owningCronJobId,
+        // Preserve ownership across this adapter so the wake does not self-block on
+        // the cron run that is awaiting it.
+        owningCronJobMarker: opts?.owningCronJobMarker,
         heartbeat: resolveCronHeartbeatOverride({
           runtimeConfig,
           agentId,

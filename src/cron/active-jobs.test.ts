@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   clearCronJobActive,
   hasActiveCronJobs,
-  hasActiveCronJobsExcept,
+  hasActiveCronJobsExceptMarker,
   markCronJobActive,
   resetCronActiveJobs,
 } from "./active-jobs.js";
@@ -12,34 +12,36 @@ afterEach(() => {
   resetCronActiveJobs();
 });
 
-describe("hasActiveCronJobsExcept", () => {
+describe("hasActiveCronJobsExceptMarker", () => {
   it("discounts only the named job's own marker", () => {
-    markCronJobActive("nightly-report");
+    const marker = markCronJobActive("nightly-report");
 
     expect(hasActiveCronJobs()).toBe(true);
-    expect(hasActiveCronJobsExcept("nightly-report")).toBe(false);
+    expect(hasActiveCronJobsExceptMarker(marker!)).toBe(false);
   });
 
   it("still reports busy while an unrelated job is active", () => {
-    markCronJobActive("nightly-report");
+    const marker = markCronJobActive("nightly-report");
     markCronJobActive("different-job");
 
     // The owning job must not be waved through while another run holds a marker:
     // cron executes jobs concurrently (cron.maxConcurrentRuns).
-    expect(hasActiveCronJobsExcept("nightly-report")).toBe(true);
+    expect(hasActiveCronJobsExceptMarker(marker!)).toBe(true);
   });
 
   it("reports idle once the unrelated job clears", () => {
-    markCronJobActive("nightly-report");
+    const marker = markCronJobActive("nightly-report");
     const otherMarker = markCronJobActive("different-job");
     clearCronJobActive("different-job", otherMarker);
 
-    expect(hasActiveCronJobsExcept("nightly-report")).toBe(false);
+    expect(hasActiveCronJobsExceptMarker(marker!)).toBe(false);
   });
 
-  it("falls back to the plain busy check when no job id is given", () => {
-    markCronJobActive("nightly-report");
+  it("does not discount a replacement marker with the same job id", () => {
+    const staleMarker = markCronJobActive("nightly-report");
+    const replacementMarker = markCronJobActive("nightly-report");
 
-    expect(hasActiveCronJobsExcept("")).toBe(true);
+    expect(hasActiveCronJobsExceptMarker(staleMarker!)).toBe(true);
+    expect(hasActiveCronJobsExceptMarker(replacementMarker!)).toBe(false);
   });
 });

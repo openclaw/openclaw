@@ -88,7 +88,12 @@ import {
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { hasActiveCronJobs, hasActiveCronJobsExcept } from "../cron/active-jobs.js";
+import {
+  hasActiveCronJobs,
+  hasActiveCronJobsExceptMarker,
+  isCronActiveJobMarkerCurrent,
+  type CronActiveJobMarker,
+} from "../cron/active-jobs.js";
 import { resolveCronSession } from "../cron/isolated-agent/session.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getActivePluginChannelRegistry } from "../plugins/runtime.js";
@@ -1297,8 +1302,8 @@ export async function runHeartbeatOnce(opts: {
   intent?: HeartbeatWakeIntent;
   reason?: string;
   runScope?: HeartbeatRunScope;
-  /** Cron job id whose own active marker must not block this wake (see the guard below). */
-  owningCronJobId?: string;
+  /** Exact cron run marker whose own activity must not block this wake. */
+  owningCronJobMarker?: CronActiveJobMarker;
   deps?: HeartbeatDeps;
 }): Promise<HeartbeatRunResult> {
   const cfg = opts.cfg ?? getRuntimeConfig();
@@ -1339,13 +1344,19 @@ export async function runHeartbeatOnce(opts: {
     return { status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT };
   }
 
-  // A cron job's own active marker must not block the synchronous wake it is awaiting:
-  // that self-block forces cron onto its async fallback, which reports success before the
-  // queued event is delivered (#105257). Only the caller's own marker is discounted --
-  // every other job's marker still blocks, since cron runs jobs concurrently.
-  const owningCronJobId = normalizeOptionalString(opts.owningCronJobId);
-  const cronBusy = owningCronJobId ? hasActiveCronJobsExcept(owningCronJobId) : hasActiveCronJobs();
-  if (cronBusy || hasQueuedWorkInLanes(HEARTBEAT_ALWAYS_BUSY_LANES, getSize)) {
+  // An exact current owner may ignore itself and queued cron work that cannot advance
+  // until this run finishes. Unrelated active runs remain visible through their markers.
+  const owningCronJobMarker = opts.owningCronJobMarker;
+  const ownsActiveCronRun = owningCronJobMarker
+    ? isCronActiveJobMarkerCurrent(owningCronJobMarker)
+    : false;
+  const cronBusy =
+    ownsActiveCronRun && owningCronJobMarker
+      ? hasActiveCronJobsExceptMarker(owningCronJobMarker)
+      : hasActiveCronJobs();
+  const cronLaneBusy =
+    !ownsActiveCronRun && hasQueuedWorkInLanes(HEARTBEAT_ALWAYS_BUSY_LANES, getSize);
+  if (cronBusy || cronLaneBusy) {
     emitHeartbeatEvent({
       status: "skipped",
       reason: HEARTBEAT_SKIP_CRON_IN_PROGRESS,

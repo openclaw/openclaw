@@ -197,6 +197,7 @@ type StartupCatchupExecution =
   | { ok: false; outcomes: TimedCronRunOutcome[]; error: unknown };
 
 type ExecuteJobCoreOptions = {
+  activeJobMarker?: CronActiveJobMarker;
   onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
   onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
   onLaneWait?: (info?: { waiting?: boolean }) => void;
@@ -276,6 +277,7 @@ export async function executeJobCoreWithTimeout(
         }
       };
       const corePromise = executeJobCore(state, job, runAbortController.signal, {
+        activeJobMarker: opts?.activeJobMarker,
         onExecutionStarted: accumulateExecution,
         onExecutionPhase: accumulateExecution,
       });
@@ -329,6 +331,7 @@ export async function executeJobCoreWithTimeout(
       watchdog.noteLaneWait();
     };
     const corePromise = executeJobCore(state, job, runAbortController.signal, {
+      activeJobMarker: opts?.activeJobMarker,
       onExecutionStarted: deferTimeoutUntilExecutionStart ? watchdog.noteRunnerStarted : undefined,
       onExecutionPhase: deferTimeoutUntilExecutionStart ? watchdog.notePhase : undefined,
       onLaneWait: deferTimeoutUntilExecutionStart ? noteLaneState : undefined,
@@ -2501,7 +2504,13 @@ async function executeJobCore(
     }
   }
   if (effectiveJob.sessionTarget === "main") {
-    const result = await executeMainSessionCronJob(state, effectiveJob, abortSignal, waitWithAbort);
+    const result = await executeMainSessionCronJob(
+      state,
+      effectiveJob,
+      abortSignal,
+      waitWithAbort,
+      options?.activeJobMarker,
+    );
     return triggerEval ? { ...result, triggerEval } : result;
   }
 
@@ -2520,6 +2529,7 @@ async function executeMainSessionCronJob(
   job: CronJob,
   abortSignal: AbortSignal | undefined,
   waitWithAbort: (ms: number) => Promise<void>,
+  activeJobMarker?: CronActiveJobMarker,
 ): Promise<
   CronRunOutcome &
     CronRunTelemetry & {
@@ -2572,7 +2582,7 @@ async function executeMainSessionCronJob(
         reason,
         agentId: job.agentId,
         sessionKey: cronRunSessionKey,
-        owningCronJobId: job.id,
+        owningCronJobMarker: activeJobMarker,
         heartbeat: { target: "last" },
       });
       if (abortSignal?.aborted) {
@@ -2586,11 +2596,8 @@ async function executeMainSessionCronJob(
         break;
       }
       if (heartbeatResult.reason === HEARTBEAT_SKIP_CRON_IN_PROGRESS) {
-        // Reached only when something OTHER than this job is busy: a concurrent cron
-        // run's marker, or cron-lane pressure. The owning job's own marker no longer
-        // lands here (#105257). Hand off to the targeted async requeue instead of
-        // waiting in place -- two concurrent jobs would otherwise deadlock on each
-        // other's markers, which are not cleared until finalization.
+        // Only another cron run or lane pressure reaches here. Requeue instead of
+        // waiting on markers that cannot clear until both runs finish.
         state.deps.requestHeartbeat({
           source: "cron",
           intent: "immediate",

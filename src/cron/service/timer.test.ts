@@ -129,7 +129,7 @@ describe("cron service timer seam coverage", () => {
       reason: "cron:main-heartbeat-job",
       agentId: undefined,
       sessionKey: cronRunSessionKey,
-      owningCronJobId: "main-heartbeat-job",
+      owningCronJobMarker: undefined,
       heartbeat: { target: "last" },
     });
   });
