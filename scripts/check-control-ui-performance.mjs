@@ -13,11 +13,9 @@ export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze({
   startupJsRequests: 18,
   startupCssRequests: 1,
   startupJsGzipBytes: 310 * KIB,
-  // Identical input can move by a few bytes across zlib builds. Keep 1 KiB of
-  // headroom so the budget measures bundle growth instead of compressor drift.
-  startupCssGzipBytes: 43 * KIB,
+  startupCssGzipBytes: 38 * KIB,
   largestJsGzipBytes: 215 * KIB,
-  largestCssGzipBytes: 43 * KIB,
+  largestCssGzipBytes: 42 * KIB,
 });
 
 function controlUiAssetPathFromUrl(value) {
