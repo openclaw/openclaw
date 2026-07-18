@@ -7,9 +7,9 @@ read_when:
   - You want one place to find the currently documented experimental flags
 ---
 
-Experimental features are opt-in preview surfaces behind explicit flags. They need more real-world mileage before they get a stable default or a long-lived contract.
+Experimental features are preview surfaces behind explicit flags. They need more real-world mileage before they get a stable default or a long-lived contract.
 
-- Off by default unless a doc tells you to enable one.
+- Off by default unless a doc describes a narrow automatic setup rule.
 - Shape and behavior can change faster than stable config.
 - Prefer a stable path when one already exists.
 - Roll out broadly only after testing in a smaller environment first.
@@ -26,6 +26,8 @@ Experimental features are opt-in preview surfaces behind explicit flags. They ne
 ## Local model lean mode
 
 `agents.defaults.experimental.localModelLean: true` drops heavyweight optional tools from the agent's direct surface every turn: `browser`, `cron`, `message`, `image_generate`, `music_generate`, `video_generate`, `tts`, and `pdf`. Explicitly allowed or delivery-required tools remain available, though Tool Search may catalog them instead of exposing them directly. Lean mode also defaults plugin/MCP/client catalogs to structured Tool Search (`tool_search`, `tool_describe`, `tool_call`) when `tools.toolSearch` is not already set. Use `agents.list[].experimental.localModelLean` to scope this to one agent.
+
+During onboarding, a verified `ollama` or `lmstudio` inference route automatically sets `agents.defaults.experimental.localModelLean: true` when that value is absent. OpenClaw records that the setting came from onboarding, so a later verified non-local route lifts only the automatic setting. An explicitly configured `true` or `false` is preserved. Other self-hosted and OpenAI-compatible providers are not inferred from model names or URLs.
 
 If you already tune Tool Search globally, OpenClaw leaves that config alone. Set `tools.toolSearch: false` to opt out of the lean-mode Tool Search default.
 

@@ -148,6 +148,12 @@ export type CodexThreadResumeParams = JsonObject & {
   serviceTier?: CodexServiceTier | null;
   config?: JsonObject;
   developerInstructions?: string;
+  excludeTurns?: boolean;
+  initialTurnsPage?: {
+    limit?: number | null;
+    sortDirection?: "asc" | "desc" | null;
+    itemsView?: "notLoaded" | "summary" | "full" | null;
+  } | null;
 };
 
 export type CodexThreadStartResponse = {
@@ -237,6 +243,10 @@ export type CodexThreadTurnsListResponse = {
   backwardsCursor?: string | null;
 };
 
+type CodexInitialTurnsPage = Omit<CodexThreadTurnsListResponse, "data"> & {
+  data: Pick<CodexTurn, "id" | "status">[];
+};
+
 type CodexThreadSetNameParams = JsonObject & {
   threadId: string;
   name: string;
@@ -254,7 +264,40 @@ export type CodexThreadResumeResponse = {
   thread: CodexThread;
   model: string;
   modelProvider?: string | null;
+  initialTurnsPage?: CodexInitialTurnsPage | null;
 };
+
+type CodexThreadGoalStatus =
+  | "active"
+  | "paused"
+  | "blocked"
+  | "usageLimited"
+  | "budgetLimited"
+  | "complete";
+
+type CodexThreadGoal = {
+  threadId: string;
+  objective: string;
+  status: CodexThreadGoalStatus;
+  tokenBudget: number | null;
+  tokensUsed: number;
+  timeUsedSeconds: number;
+  createdAt: number;
+  updatedAt: number;
+};
+
+type CodexThreadGoalSetParams = JsonObject & {
+  threadId: string;
+  objective?: string;
+  status?: CodexThreadGoalStatus;
+  tokenBudget?: number | null;
+};
+
+type CodexThreadGoalGetParams = JsonObject & { threadId: string };
+type CodexThreadGoalClearParams = JsonObject & { threadId: string };
+type CodexThreadGoalSetResponse = { goal: CodexThreadGoal };
+type CodexThreadGoalGetResponse = { goal: CodexThreadGoal | null };
+type CodexThreadGoalClearResponse = { cleared: boolean };
 
 type CodexThreadInjectItemsParams = JsonObject & {
   threadId: string;
@@ -702,6 +745,9 @@ type CodexAppServerRequestParamsOverride = {
   "thread/start": CodexThreadStartParams;
   "thread/unarchive": CodexThreadArchiveParams;
   "thread/unsubscribe": CodexThreadUnsubscribeParams;
+  "thread/goal/set": CodexThreadGoalSetParams;
+  "thread/goal/get": CodexThreadGoalGetParams;
+  "thread/goal/clear": CodexThreadGoalClearParams;
   "turn/interrupt": CodexTurnInterruptParams;
 };
 
@@ -739,6 +785,9 @@ type CodexAppServerRequestResultMap = {
   "thread/start": CodexThreadStartResponse;
   "thread/unarchive": CodexThreadUnarchiveResponse;
   "thread/unsubscribe": JsonValue;
+  "thread/goal/set": CodexThreadGoalSetResponse;
+  "thread/goal/get": CodexThreadGoalGetResponse;
+  "thread/goal/clear": CodexThreadGoalClearResponse;
   "turn/interrupt": JsonValue;
   "turn/start": CodexTurnStartResponse;
   "turn/steer": JsonValue;

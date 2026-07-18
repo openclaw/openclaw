@@ -619,6 +619,7 @@ describe("validateTalkSession", () => {
         provider: "openai",
         model: "gpt-realtime-2",
         voice: "alloy",
+        language: "de",
         mode: "realtime",
         transport: "managed-room",
         brain: "agent-consult",
@@ -668,6 +669,7 @@ describe("validateTalkSession", () => {
     expect(formatValidationErrors(validateTalkSessionCreateParams.errors)).toContain(
       "unexpected property 'instructionsOverride'",
     );
+    expect(validateTalkSessionCreateParams({ mode: "realtime", language: "de-DE" })).toBe(false);
   });
 
   it("accepts managed-room join, turn lifecycle params, and results", () => {

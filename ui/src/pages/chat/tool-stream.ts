@@ -720,6 +720,23 @@ function parsePlanSteps(value: unknown): PlanStatus["steps"] {
   return steps;
 }
 
+export function normalizePlanSnapshot(
+  snapshot: { steps?: unknown; explanation?: unknown },
+  runIdValue?: unknown,
+): PlanStatus | null {
+  const steps = parsePlanSteps(snapshot.steps);
+  if (steps.length === 0) {
+    return null;
+  }
+  const explanation = toTrimmedString(snapshot.explanation);
+  const runId = toTrimmedString(runIdValue);
+  return {
+    ...(runId ? { runId } : {}),
+    ...(explanation ? { explanation } : {}),
+    steps,
+  };
+}
+
 function handlePlanEvent(host: PlanHost, payload: AgentEventPayload) {
   // Plan snapshots are run-owned: a stale or spawned-run event in the same
   // session must not overwrite (or clear) the active run's checklist. Mirrors
@@ -731,17 +748,7 @@ function handlePlanEvent(host: PlanHost, payload: AgentEventPayload) {
   if (data.phase !== "update") {
     return;
   }
-  const steps = parsePlanSteps(data.steps);
-  const explanation = toTrimmedString(data.explanation);
-  const runId = toTrimmedString(payload.runId);
-  host.planStatus =
-    steps.length > 0
-      ? {
-          ...(runId ? { runId } : {}),
-          ...(explanation ? { explanation } : {}),
-          steps,
-        }
-      : null;
+  host.planStatus = normalizePlanSnapshot(data, payload.runId);
   host.requestUpdate?.();
 }
 

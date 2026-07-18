@@ -40,6 +40,7 @@ import type { ToolDefinition } from "./sessions/index.js";
 import {
   addClientToolsToToolCatalog,
   applyToolCatalogCompaction,
+  compactToolSearchCatalogEntry,
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
   TOOL_SEARCH_CODE_MODE_TOOL_NAME,
@@ -67,6 +68,7 @@ const DEFAULT_SNAPSHOT_TTL_SECONDS = 900;
 const DEFAULT_SEARCH_LIMIT = 8;
 const DEFAULT_MAX_SEARCH_LIMIT = 50;
 const MAX_ACTIVE_CODE_MODE_RUNS = 64;
+const MAX_CODE_MODE_CATALOG_INDEX_CHARS = 8_000;
 
 type CodeModeLanguage = "javascript" | "typescript";
 
@@ -1269,6 +1271,62 @@ function telemetry(runtime: ToolSearchRuntime) {
   };
 }
 
+function renderCodeModeCatalogIndex(lines: readonly string[], total: number): string {
+  const omitted = total - lines.length;
+  const footer =
+    omitted > 0
+      ? `${omitted} additional OpenClaw/plugin tools omitted from this prompt index. Use ALL_TOOLS or tools.search inside exec to find them.`
+      : "Use these exact ids with tools.callValue; use ALL_TOOLS or tools.search inside exec when lookup is ambiguous.";
+  return [
+    "OpenClaw/plugin tool quick index (exact ids plus compact input and declared output hints; descriptions are intentionally deferred):",
+    "Each line is `id input -> output`; `-> ?` means the output shape is unknown.",
+    "OUTPUT DECLARED RULE: use the named fields in the first exec; keep dependent reads, checks, and follow-up calls in that exec instead of returning a raw value only to inspect an already-declared shape.",
+    "OUTPUT UNKNOWN RULE: when the needed tool is `-> ?`, including a final dependent call after declared-output calls, return that tool's raw value unchanged. Do not wrap it in the requested answer shape or read guessed fields; filter or map only in a later exec after observing its shape.",
+    ...lines,
+    "",
+    footer,
+  ].join("\n");
+}
+
+function formatCodeModeCatalogIndex(catalog: readonly ToolSearchCatalogEntry[]): string {
+  const lines = catalog
+    .filter((entry) => entry.source === "openclaw")
+    .map((entry) => compactToolSearchCatalogEntry(entry))
+    // Declared-output entries sort first so byte truncation drops `-> ?`
+    // lines, which stay fully discoverable through ALL_TOOLS, before it drops
+    // contracts the model can one-pass on. Deterministic within each tier.
+    .toSorted((a, b) => (a.output ? 0 : 1) - (b.output ? 0 : 1) || a.id.localeCompare(b.id))
+    .map(
+      (entry) =>
+        `- ${JSON.stringify(entry.id)} ${entry.input ?? "unknown"} -> ${entry.output ?? "?"}`,
+    );
+  if (lines.length === 0) {
+    return "";
+  }
+  const fullIndex = renderCodeModeCatalogIndex(lines, lines.length);
+  if (fullIndex.length <= MAX_CODE_MODE_CATALOG_INDEX_CHARS) {
+    return fullIndex;
+  }
+
+  // Greedily pack lines in the deterministic sorted order, skipping any single
+  // line too large to fit rather than dropping the whole tail after it. A prefix
+  // cut let one oversized entry — a pathological plugin id or input hint — blank
+  // the entire index; skipping it keeps every other declared contract visible
+  // and fits more of them when the declared tier alone overflows. Skipped
+  // entries stay discoverable through ALL_TOOLS, and the stable input order
+  // keeps prompt bytes deterministic for provider caches.
+  const included: string[] = [];
+  for (const line of lines) {
+    if (
+      renderCodeModeCatalogIndex([...included, line], lines.length).length <=
+      MAX_CODE_MODE_CATALOG_INDEX_CHARS
+    ) {
+      included.push(line);
+    }
+  }
+  return renderCodeModeCatalogIndex(included, lines.length);
+}
+
 function createCodeModeExecDescription(
   ctx: CodeModeToolContext,
   catalog?: readonly ToolSearchCatalogEntry[],
@@ -1288,12 +1346,14 @@ function createCodeModeExecDescription(
     !catalogKnown || namespacePrompt
       ? " Registered plugin namespaces are available as direct globals and through `namespaces` when their required tools are visible in the run catalog."
       : "";
+  const catalogIndex = catalog ? formatCodeModeCatalogIndex(catalog) : "";
   return (
-    "Run JavaScript or TypeScript in OpenClaw code mode. Use `return` to pass the final value back to the agent; awaited calls without a returned value complete as `null`. Prefer one exec invocation for a complete dependent workflow: select tools, call them, and process their results in the same program. Await prerequisites before later calls; parallelize only independent work. `ALL_TOOLS` is the complete compact catalog with exact ids and input hints. Select from it directly when practical, use `tools.search(query: string, options?)` when lookup is ambiguous, and use `tools.describe(id: string)` only when the compact input hint is insufficient. Never invent or transform a tool id. `tools.callValue(id: string, args?)` executes a tool and returns its JSON value directly; `tools.call(id: string, args?)` preserves the raw `{ tool, result }` envelope. Example: `const hit = ALL_TOOLS.find((entry) => entry.description.includes('weather')) ?? (await tools.search('weather'))[0]; return await tools.callValue(hit.id, {});`. Node.js modules and `require`/`import` are NOT available; for any shell, file, network, or external action, use enabled catalog tools allowed by policy from inside your code." +
+    "Run JavaScript or TypeScript in OpenClaw code mode. Use `return` to pass the final value back to the agent; awaited calls without a returned value complete as `null`. Quick-index arrows show trusted declared output hints; `-> ?` means never guess result field names. When the needed tool has an unknown output, including a final dependent call after declared-output calls, the first exec must return the raw tool value unchanged with `return await tools.callValue(id, args);`; do not wrap it in the requested answer shape or read guessed fields; filter or map it only in a later exec after observing its shape. When the arrow declares the fields you need, select, call, and process them in the first exec; do not spend another exec inspecting that declared shape. Within that exec, perform dependent reads, checks, and follow-up calls in order; nested calls still enforce normal tool policy and approvals. Parallelize only independent work. `ALL_TOOLS` is the complete compact catalog with exact ids, input hints, and declared output hints. Select from it directly when practical, use `tools.search(query: string, options?)` when lookup is ambiguous, and use `tools.describe(id: string)` only when the compact input hint is insufficient. Never invent or transform a tool id. `tools.callValue(id: string, args?)` executes a tool and returns its JSON value directly; `tools.call(id: string, args?)` preserves the raw `{ tool, result }` envelope. Example: `const hit = ALL_TOOLS.find((entry) => entry.description.includes('weather')) ?? (await tools.search('weather'))[0]; return await tools.callValue(hit.id, {});`. Node.js modules and `require`/`import` are NOT available; for any shell, file, network, or external action, use enabled catalog tools allowed by policy from inside your code." +
     mcpGuidance +
     namespaceGuidance +
     ' The `language` field accepts only "javascript" or "typescript"; do not pass "bash", "shell", or other values.' +
-    (namespacePrompt ? `\n\n${namespacePrompt}` : "")
+    (namespacePrompt ? `\n\n${namespacePrompt}` : "") +
+    (catalogIndex ? `\n\n${catalogIndex}` : "")
   );
 }
 

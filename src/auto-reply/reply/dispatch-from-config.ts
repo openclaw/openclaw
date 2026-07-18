@@ -22,12 +22,15 @@ import {
   resolveInheritedToolPolicyForSession,
   resolveSubagentToolPolicyForSession,
 } from "../../agents/agent-tools.policy.js";
+import { resolveAgentIdentity } from "../../agents/identity.js";
+import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
 import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
 } from "../../agents/subagent-capabilities.js";
 import { isToolAllowedByPolicies } from "../../agents/tool-policy-match.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../../agents/tool-policy.js";
+import { isAskUserPromptActive } from "../../agents/tools/ask-user-tool.js";
 import {
   resolveConversationBindingRecord,
   touchConversationBindingRecord,
@@ -100,6 +103,7 @@ import {
   takeCommandSessionMetadataChanges,
   type CommandSessionMetadataChange,
 } from "./command-session-metadata.js";
+import { capturePendingConversationTurnReply } from "./conversation-turn-capture.js";
 import {
   DispatchReplyOperationAbortedError,
   isDispatchReplyOperationAbortedError,
@@ -172,6 +176,7 @@ import {
   resolveReplyToMode,
 } from "./reply-threading.js";
 import { isReplyProfilerEnabled } from "./reply-timing-tracker.js";
+import { extractShortModelName, type ResponsePrefixContext } from "./response-prefix-template.js";
 import { isDuplicateRestartRecoverySource } from "./restart-recovery-claim.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { resolveReplyRoutingDecision } from "./routing-policy.js";
@@ -700,7 +705,12 @@ async function dispatchReplyFromConfigInner(
 
   const routeReplyToOriginating = async (
     payload: ReplyPayload,
-    options?: { abortSignal?: AbortSignal; mirror?: boolean; kind?: ReplyDispatchKind },
+    options?: {
+      abortSignal?: AbortSignal;
+      mirror?: boolean;
+      kind?: ReplyDispatchKind;
+      responsePrefixContext?: ResponsePrefixContext;
+    },
   ) => {
     if (!shouldRouteToOriginating || !routeReplyChannel || !routeReplyTo || !routeReplyRuntime) {
       return null;
@@ -734,6 +744,7 @@ async function dispatchReplyFromConfigInner(
       groupId,
       replyKind: options?.kind ?? "final",
       runId: params.replyOptions?.runId,
+      responsePrefixContext: options?.responsePrefixContext,
     });
   };
 
@@ -1092,7 +1103,17 @@ async function dispatchReplyFromConfigInner(
     }
   };
   markProcessing();
-
+  if (await capturePendingConversationTurnReply({ cfg, ctx })) {
+    emitMessageReceivedHooks();
+    commitInboundDedupeIfClaimed();
+    recordProcessed("completed", { reason: "conversation-turn-reply" });
+    markIdle("message_completed");
+    return attachSourceReplyDeliveryMode({
+      queuedFinal: false,
+      counts: dispatcher.getQueuedCounts(),
+      observedReplyDelivery: true,
+    });
+  }
   try {
     const abortRuntime = params.fastAbortResolver ? null : await loadAbortRuntime();
     const fastAbortResolver = params.fastAbortResolver ?? abortRuntime?.tryFastAbortFromMessage;
@@ -1110,10 +1131,24 @@ async function dispatchReplyFromConfigInner(
       let queuedFinal = false;
       let routedFinalCount = 0;
       if (!suppressDelivery) {
+        const selectedModel = resolveSessionModelRef(cfg, sessionStoreEntry.entry, sessionAgentId);
+        const modelSelection = {
+          ...selectedModel,
+          thinkLevel: sessionStoreEntry.entry?.thinkingLevel,
+        };
+        const responsePrefixContext = {
+          identityName: normalizeOptionalString(resolveAgentIdentity(cfg, sessionAgentId)?.name),
+          provider: selectedModel.provider,
+          model: extractShortModelName(selectedModel.model),
+          modelFull: `${selectedModel.provider}/${selectedModel.model}`,
+          thinkingLevel: modelSelection.thinkLevel ?? "off",
+        };
         const payload = {
           text: formatAbortReplyTextResolver(fastAbort.stoppedSubagents, fastAbort.rejectionReason),
         } satisfies ReplyPayload;
-        const result = await routeReplyToOriginating(payload);
+        // Routed delivery owns its destination-scoped prefix. Direct dispatchers already own
+        // their prefix, so seed that live context only when no cross-channel route is used.
+        const result = await routeReplyToOriginating(payload, { responsePrefixContext });
         if (result) {
           queuedFinal = result.ok;
           if (isRoutedReplyDelivered(result)) {
@@ -1126,6 +1161,7 @@ async function dispatchReplyFromConfigInner(
           }
         } else {
           markInboundDedupeReplayUnsafe();
+          params.replyOptions?.onModelSelected?.(modelSelection);
           queuedFinal = dispatcher.sendFinalReply(payload);
         }
       } else {
@@ -1360,12 +1396,24 @@ async function dispatchReplyFromConfigInner(
           : undefined;
       return execApproval && typeof execApproval === "object" && !Array.isArray(execApproval);
     };
+    const hasAskUserPayload = (payload: ReplyPayload) => {
+      const askUser = payload.channelData?.askUser;
+      return askUser && typeof askUser === "object" && !Array.isArray(askUser);
+    };
+    const isInactiveAskUserPayload = (payload: ReplyPayload) => {
+      const askUser = payload.channelData?.askUser;
+      if (!askUser || typeof askUser !== "object" || Array.isArray(askUser)) {
+        return false;
+      }
+      const questionId = (askUser as { questionId?: unknown }).questionId;
+      return typeof questionId === "string" && !isAskUserPromptActive(questionId);
+    };
     const shouldSuppressLateTextOnlyToolProgress = (payload: ReplyPayload) => {
       if (!finalReplyDeliveryStarted) {
         return false;
       }
       const reply = resolveSendableOutboundReplyParts(payload);
-      return !reply.hasMedia && !hasExecApprovalPayload(payload);
+      return !reply.hasMedia && !hasExecApprovalPayload(payload) && !hasAskUserPayload(payload);
     };
     // Durable inter-tool commentary lane: with verbose progress on, preamble
     // items become standalone progress messages like tool summaries. The latest
@@ -1857,6 +1905,9 @@ async function dispatchReplyFromConfigInner(
       if (execApproval && typeof execApproval === "object" && !Array.isArray(execApproval)) {
         return payload;
       }
+      if (hasAskUserPayload(payload)) {
+        return payload;
+      }
       if (isFastModeAutoProgressPayload(payload)) {
         return payload;
       }
@@ -2200,10 +2251,16 @@ async function dispatchReplyFromConfigInner(
                       if (isDispatchOperationAborted()) {
                         return;
                       }
+                      if (isInactiveAskUserPayload(payload)) {
+                        return;
+                      }
                       await waitForPendingDirectBlockReplyDelivery(
                         getDispatchAbortOperation()?.abortSignal,
                       );
                       if (isDispatchOperationAborted()) {
+                        return;
+                      }
+                      if (isInactiveAskUserPayload(payload)) {
                         return;
                       }
                       markInboundDedupeReplayUnsafe();
@@ -2275,6 +2332,9 @@ async function dispatchReplyFromConfigInner(
                         return;
                       }
                       if (isDispatchOperationAborted()) {
+                        return;
+                      }
+                      if (isInactiveAskUserPayload(deliveryPayload)) {
                         return;
                       }
                       if (

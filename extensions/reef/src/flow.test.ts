@@ -9,7 +9,7 @@ import {
   verifyReceipt,
   type Verdict,
 } from "../protocol/index.js";
-import { ReefMessageFlow } from "./flow.js";
+import { createConfiguredGuard, ReefMessageFlow } from "./flow.js";
 import {
   allow,
   config,
@@ -26,7 +26,37 @@ import type { ReefTransportClient } from "./transport.js";
 import type { InboxEntry } from "./types.js";
 
 beforeEach(resetFlowStoresForTests);
-afterEach(resetFlowStoresForTests);
+afterEach(() => {
+  vi.unstubAllEnvs();
+  resetFlowStoresForTests();
+});
+
+describe("createConfiguredGuard", () => {
+  it("rejects a whitespace-only guard credential", () => {
+    vi.stubEnv("REEF_TEST_KEY", "   ");
+
+    expect(() => createConfiguredGuard(config())).toThrow(
+      "Reef guard credential environment variable REEF_TEST_KEY is unset",
+    );
+  });
+
+  it("trims a configured guard credential before requests", async () => {
+    vi.stubEnv("REEF_TEST_KEY", "  guard-key  ");
+    const fetcher = vi.fn<typeof fetch>(async () => new Response("", { status: 401 }));
+    const classifier = createConfiguredGuard(config(), fetcher);
+
+    await classifier.classify({
+      direction: "outbound",
+      source: "alice#1",
+      destination: "bob#1",
+      text: "hello",
+      policyVersion: "v1",
+    });
+
+    const init = fetcher.mock.calls[0]?.[1];
+    expect(new Headers(init?.headers).get("authorization")).toBe("Bearer guard-key");
+  });
+});
 
 describe("ReefMessageFlow inbound", () => {
   it("delivers and persists before ack, then acks duplicate redelivery without delivering twice", async () => {
@@ -250,6 +280,46 @@ describe("ReefMessageFlow outbound", () => {
     ).resolves.toEqual({ text: "hello", thread: "01JZ0000000000000000000199" });
   });
 
+  it("uses a message id reserved before delivery", async () => {
+    const alice = reefKeys();
+    const bob = generateIdentity();
+    const cfg = config();
+    cfg.handle = "alice";
+    const trusted = trust({ bob: peerTrust(bob) });
+    const relay = transport();
+    const stores = flowStores();
+    const flow = new ReefMessageFlow({
+      config: cfg,
+      trust: trusted.store,
+      keys: alice,
+      transport: relay as unknown as ReefTransportClient,
+      guard: guard(allow),
+      audit: new MemoryAuditStore(new Uint8Array(32).fill(7)),
+      replay: new MemoryReplayStore(),
+      ...stores,
+      onIngress: async () => {},
+      onOwnerNotice: async () => {},
+    });
+    const reservedId = "01JZ0000000000000000000201";
+    const order: string[] = [];
+    relay.sendEnvelope.mockImplementationOnce(async (_peer, sentEnvelope) => {
+      order.push("relay");
+      return { id: sentEnvelope.id, status: "queued" };
+    });
+
+    await expect(
+      flow.send("bob", "hello", {
+        messageId: reservedId,
+        onPlatformSendDispatch: async () => {
+          order.push("dispatch");
+        },
+      }),
+    ).resolves.toBe(reservedId);
+    expect(order).toEqual(["dispatch", "relay"]);
+    const sent = relay.sendEnvelope.mock.calls[0]![1] as Parameters<typeof open>[0]["envelope"];
+    expect(sent.id).toBe(reservedId);
+  });
+
   it("persists a proposal-bound owner review request and does not send or auto-approve", async () => {
     const alice = reefKeys();
     const bob = generateIdentity();
@@ -334,11 +404,19 @@ describe("ReefMessageFlow outbound", () => {
       onIngress: async () => {},
       onOwnerNotice: async () => {},
     });
+    const onPlatformSendDispatch = vi.fn(async () => undefined);
 
     await expect(flow.send("bob", "ordinary text")).rejects.toMatchObject({
       stage: "guard",
       message: expect.stringContaining("Do not retry or rephrase it automatically"),
     });
+    await expect(
+      flow.send("bob", "ordinary text", { onPlatformSendDispatch }),
+    ).rejects.toMatchObject({
+      stage: "guard",
+      message: expect.stringContaining("Do not retry or rephrase it automatically"),
+    });
+    expect(onPlatformSendDispatch).not.toHaveBeenCalled();
     expect(relay.sendEnvelope).not.toHaveBeenCalled();
   });
 });

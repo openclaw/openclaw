@@ -9,6 +9,7 @@ import { asConfig, setupSecretsRuntimeSnapshotTestHooks } from "./runtime.test-s
 
 const EMPTY_LOADABLE_PLUGIN_ORIGINS = new Map();
 const BUNDLED_CODEX_PLUGIN_ORIGINS = new Map([["codex", "bundled" as const]]);
+const BUNDLED_WEBHOOKS_PLUGIN_ORIGINS = new Map([["webhooks", "bundled" as const]]);
 const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -41,6 +42,116 @@ function expectWarning(
 }
 
 describe("secrets runtime snapshot", () => {
+  it("isolates only the skill whose API key cannot resolve", async () => {
+    const missingRef = {
+      source: "env",
+      provider: "default",
+      id: "MISSING_SKILL_KEY",
+    } as const;
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        skills: {
+          entries: {
+            cold: { apiKey: missingRef },
+            healthy: {
+              apiKey: { source: "env", provider: "default", id: "HEALTHY_SKILL_KEY" },
+            },
+          },
+        },
+      }),
+      env: { HEALTHY_SKILL_KEY: "healthy" },
+      includeAuthStoreRefs: false,
+      allowUnavailableSecretOwners: true,
+      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+    });
+
+    expect(snapshot.config.skills?.entries?.cold?.apiKey).toEqual(missingRef);
+    expect(snapshot.config.skills?.entries?.healthy?.apiKey).toBe("healthy");
+    expect(snapshot.degradedOwners).toMatchObject([
+      {
+        ownerKind: "capability",
+        ownerId: "skill:cold",
+        state: "unavailable",
+        paths: ["skills.entries.cold.apiKey"],
+      },
+    ]);
+    expectWarning(snapshot, {
+      code: "SECRETS_OWNER_UNAVAILABLE",
+      path: "skills.entries.cold.apiKey",
+    });
+  });
+
+  it("isolates one webhooks route while resolving its sibling snapshot", async () => {
+    const missingRef = {
+      source: "env",
+      provider: "default",
+      id: "MISSING_WEBHOOK_SECRET",
+    } as const;
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        plugins: {
+          entries: {
+            webhooks: {
+              enabled: true,
+              config: {
+                routes: {
+                  healthy: {
+                    sessionKey: "agent:main:main",
+                    secret: {
+                      source: "env",
+                      provider: "default",
+                      id: "HEALTHY_WEBHOOK_SECRET",
+                    },
+                  },
+                  cold: {
+                    sessionKey: "agent:main:main",
+                    secret: missingRef,
+                  },
+                  inlineCold: {
+                    sessionKey: "agent:main:main",
+                    secret: "${MISSING_INLINE_WEBHOOK_SECRET}",
+                  },
+                },
+              },
+            },
+          },
+        },
+      }),
+      env: { HEALTHY_WEBHOOK_SECRET: "healthy-secret" },
+      includeAuthStoreRefs: false,
+      allowUnavailableSecretOwners: true,
+      loadablePluginOrigins: BUNDLED_WEBHOOKS_PLUGIN_ORIGINS,
+    });
+
+    const routes = snapshot.config.plugins?.entries?.webhooks?.config?.routes as Record<
+      string,
+      { secret?: unknown }
+    >;
+    expect(routes.healthy?.secret).toBe("healthy-secret");
+    expect(routes.cold?.secret).toEqual(missingRef);
+    expect(routes.inlineCold?.secret).toEqual({
+      source: "env",
+      provider: "default",
+      id: "MISSING_INLINE_WEBHOOK_SECRET",
+    });
+    expect(snapshot.degradedOwners).toMatchObject([
+      {
+        ownerKind: "route",
+        ownerId: "plugins.entries.webhooks.config.routes.cold.secret",
+        state: "unavailable",
+        paths: ["plugins.entries.webhooks.config.routes.cold.secret"],
+        reason: "secret reference was not found",
+      },
+      {
+        ownerKind: "route",
+        ownerId: "plugins.entries.webhooks.config.routes.inlineCold.secret",
+        state: "unavailable",
+        paths: ["plugins.entries.webhooks.config.routes.inlineCold.secret"],
+        reason: "secret reference was not found",
+      },
+    ]);
+  });
+
   it("registers every resolved value for exact redaction", async () => {
     const secret = "runtime-registration-secret";
     await prepareSecretsRuntimeSnapshot({
@@ -112,6 +223,154 @@ describe("secrets runtime snapshot", () => {
     expect(ssh?.identityData).toBe("PRIVATE KEY");
     expect(ssh?.certificateData).toBe("SSH CERT");
     expect(ssh?.knownHostsData).toBe("example.com ssh-ed25519 AAAATEST");
+  });
+
+  it("keeps SSH lifecycle secrets materialized after the agent sandbox is disabled", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "off",
+              backend: "ssh",
+              ssh: { target: "peter@example.com:22" },
+            },
+          },
+          list: [
+            {
+              id: "worker",
+              enabled: false,
+              sandbox: {
+                ssh: {
+                  identityData: {
+                    source: "env",
+                    provider: "default",
+                    id: "DISABLED_WORKER_SSH_IDENTITY",
+                  },
+                },
+              },
+            },
+          ],
+        },
+      }),
+      env: { DISABLED_WORKER_SSH_IDENTITY: "DISABLED WORKER PRIVATE KEY" },
+      includeAuthStoreRefs: false,
+      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+    });
+
+    expect(snapshot.config.agents?.list?.[0]?.sandbox?.ssh?.identityData).toBe(
+      "DISABLED WORKER PRIVATE KEY",
+    );
+  });
+
+  it("keeps default SSH lifecycle secrets materialized when every listed agent overrides them", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "off",
+              backend: "ssh",
+              ssh: {
+                target: "peter@example.com:22",
+                identityData: {
+                  source: "env",
+                  provider: "default",
+                  id: "DEFAULT_SSH_IDENTITY",
+                },
+              },
+            },
+          },
+          list: [
+            {
+              id: "worker",
+              sandbox: {
+                ssh: {
+                  identityData: {
+                    source: "env",
+                    provider: "default",
+                    id: "WORKER_SSH_IDENTITY",
+                  },
+                },
+              },
+            },
+          ],
+        },
+      }),
+      env: {
+        DEFAULT_SSH_IDENTITY: "DEFAULT PRIVATE KEY",
+        WORKER_SSH_IDENTITY: "WORKER PRIVATE KEY",
+      },
+      includeAuthStoreRefs: false,
+      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+    });
+
+    expect(snapshot.config.agents?.defaults?.sandbox?.ssh?.identityData).toBe(
+      "DEFAULT PRIVATE KEY",
+    );
+    expect(snapshot.config.agents?.list?.[0]?.sandbox?.ssh?.identityData).toBe(
+      "WORKER PRIVATE KEY",
+    );
+  });
+
+  it("isolates only the agent whose inherited sandbox SSH SecretRef is unavailable", async () => {
+    const missingRef = {
+      source: "env",
+      provider: "default",
+      id: "MISSING_COLD_SSH_IDENTITY",
+    } as const;
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "all",
+              backend: "ssh",
+              ssh: {
+                target: "sandbox@example.com:22",
+                identityData: missingRef,
+              },
+            },
+          },
+          list: [
+            { id: "cold" },
+            {
+              id: "healthy",
+              sandbox: {
+                ssh: {
+                  identityData: {
+                    source: "env",
+                    provider: "default",
+                    id: "HEALTHY_SSH_IDENTITY",
+                  },
+                },
+              },
+            },
+          ],
+        },
+      }),
+      env: { HEALTHY_SSH_IDENTITY: "HEALTHY PRIVATE KEY" },
+      includeAuthStoreRefs: false,
+      allowUnavailableSecretOwners: true,
+      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+    });
+
+    expect(snapshot.config.agents?.defaults?.sandbox?.ssh?.identityData).toEqual(missingRef);
+    expect(snapshot.config.agents?.list?.[1]?.sandbox?.ssh?.identityData).toBe(
+      "HEALTHY PRIVATE KEY",
+    );
+    expect(snapshot.degradedOwners).toMatchObject([
+      {
+        ownerKind: "capability",
+        ownerId: "agent-sandbox:cold",
+        state: "unavailable",
+        paths: ["agents.defaults.sandbox.ssh.identityData"],
+      },
+    ]);
+    expectWarning(snapshot, {
+      code: "SECRETS_OWNER_UNAVAILABLE",
+      path: "agents.defaults.sandbox.ssh.identityData",
+    });
   });
 
   it("treats sandbox ssh secret refs as inactive when ssh backend is not selected", async () => {
@@ -605,20 +864,27 @@ describe("secrets runtime snapshot", () => {
     ]);
   });
 
-  it("refuses cold-start isolation when an assignment owner is unknown", async () => {
-    await expect(
-      prepareSecretsRuntimeSnapshot({
-        config: asConfig({
-          cron: {
-            webhookToken: { source: "env", provider: "default", id: "MISSING_WEBHOOK_TOKEN" },
-          },
-        }),
-        env: {},
-        includeAuthStoreRefs: false,
-        allowUnavailableSecretOwners: true,
-        loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+  it("isolates cron webhook delivery when its token cannot resolve", async () => {
+    const ref = { source: "env", provider: "default", id: "MISSING_WEBHOOK_TOKEN" } as const;
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        cron: { webhookToken: ref },
       }),
-    ).rejects.toThrow('Environment variable "MISSING_WEBHOOK_TOKEN" is missing or empty.');
+      env: {},
+      includeAuthStoreRefs: false,
+      allowUnavailableSecretOwners: true,
+      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+    });
+
+    expect(snapshot.config.cron?.webhookToken).toEqual(ref);
+    expect(snapshot.degradedOwners).toMatchObject([
+      {
+        ownerKind: "capability",
+        ownerId: "cron-webhook",
+        state: "unavailable",
+        paths: ["cron.webhookToken"],
+      },
+    ]);
   });
 
   it("fails when an active exec ref id contains traversal segments", async () => {

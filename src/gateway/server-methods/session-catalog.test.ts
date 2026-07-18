@@ -23,6 +23,7 @@ vi.mock("../../plugins/runtime.js", () => ({
 }));
 
 vi.mock("../../sessions/session-state-events.js", () => ({
+  listAmbientGroupWatchTargets: () => new Set<string>(),
   recordSessionStateEvent: hoisted.recordSessionStateEvent,
 }));
 
@@ -53,14 +54,15 @@ async function call(
   method: keyof typeof sessionCatalogHandlers,
   params: unknown,
   config: Record<string, unknown> = {},
-  client?: { connect?: { scopes?: string[] } },
+  client?: { connect?: { scopes?: string[] }; connId?: string },
+  contextOverrides: Record<string, unknown> = {},
 ) {
   const respond = vi.fn();
   await sessionCatalogHandlers[method]?.({
     params,
     respond,
     client,
-    context: { getRuntimeConfig: () => config },
+    context: { getRuntimeConfig: () => config, ...contextOverrides },
   } as never);
   return respond;
 }
@@ -95,6 +97,50 @@ describe("session catalog Gateway methods", () => {
         }),
         expect.objectContaining({ id: "zeta", hosts: [] }),
       ],
+    });
+  });
+
+  it("streams completed hosts to only the requesting connection", async () => {
+    const broadcastToConnIds = vi.fn();
+    const host = {
+      hostId: "node:fast",
+      label: "Fast node",
+      kind: "node" as const,
+      connected: true,
+      nodeId: "fast",
+      sessions: [],
+    };
+    hoisted.activeRegistry.sessionCatalogs = [
+      {
+        provider: provider("codex", {
+          list: vi.fn(async ({ onHost }) => {
+            onHost?.(host);
+            return [host];
+          }),
+        }),
+      },
+    ];
+
+    const respond = await call(
+      "sessions.catalog.list",
+      { progressId: "progress-1" },
+      {},
+      { connId: "requester", connect: {} },
+      { broadcastToConnIds },
+    );
+
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "sessions.catalog.host",
+      {
+        progressId: "progress-1",
+        agentId: "main",
+        catalog: expect.objectContaining({ id: "codex", hosts: [host] }),
+      },
+      new Set(["requester"]),
+      { dropIfSlow: true },
+    );
+    expect(respond).toHaveBeenCalledWith(true, {
+      catalogs: [expect.objectContaining({ id: "codex", hosts: [host] })],
     });
   });
 

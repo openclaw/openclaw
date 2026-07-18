@@ -354,15 +354,33 @@ describe("applySystemAgentModelSelection", () => {
 
 describe("detectSetupInference", () => {
   it("preserves the shared inference candidate order", async () => {
-    const resolveManifestProviderAuthChoices = vi.fn(() => []);
+    const resolveManifestProviderAuthChoices = vi.fn(() => [
+      {
+        pluginId: "anthropic",
+        providerId: "anthropic",
+        methodId: "cli",
+        choiceId: "anthropic-cli",
+        choiceLabel: "Anthropic Claude CLI",
+        deprecatedChoiceIds: ["claude-cli"],
+        icon: "https://cdn.example.com/claude.svg",
+        website: "https://claude.example.com/download",
+      },
+    ]);
     const detection = await detectSetupInference({
       resolveManifestProviderAuthChoices,
+      enablePluginInConfig: ((config: OpenClawConfig) => ({ enabled: true, config })) as never,
       probeLocalCommand: vi.fn(async (command) => ({ command, found: false })),
     });
     expect(detection.candidates).toHaveLength(2);
-    expect(detection.candidates[0]).toMatchObject({ kind: "claude-cli", recommended: false });
+    expect(detection.candidates[0]).toMatchObject({
+      kind: "claude-cli",
+      recommended: false,
+      icon: "https://cdn.example.com/claude.svg",
+      website: "https://claude.example.com/download",
+    });
     expect(detection.candidates[1]).toMatchObject({ kind: "codex-cli", recommended: false });
     expect(detection.setupComplete).toBe(false);
+    expect(detection.recommendedInstalls).toHaveLength(9);
     expect(detection.workspace.length).toBeGreaterThan(0);
     expect(resolveManifestProviderAuthChoices).toHaveBeenCalledWith(
       expect.objectContaining({ includeWorkspacePlugins: false }),
@@ -418,6 +436,8 @@ describe("detectSetupInference", () => {
           choiceId: "local-model",
           choiceLabel: "Local Server",
           appGuidedDiscovery: true,
+          icon: "https://cdn.example.com/local.svg",
+          website: "https://local.example.com/download",
         },
       ],
       enablePluginInConfig: ((config: OpenClawConfig) => ({ enabled: true, config })) as never,
@@ -433,6 +453,8 @@ describe("detectSetupInference", () => {
         modelRef: "local/qwen-tool",
         recommended: false,
         credentials: true,
+        icon: "https://cdn.example.com/local.svg",
+        website: "https://local.example.com/download",
       },
     ]);
     expect(detection.unavailableCandidates).toEqual([
@@ -485,6 +507,8 @@ describe("detectSetupInference", () => {
         choiceId: "zeta-api-key",
         choiceLabel: "Zeta API key",
         choiceHint: "Direct key",
+        icon: "https://cdn.example.com/zeta.svg",
+        website: "https://zeta.example.com/keys",
         optionKey: "zetaApiKey",
         cliOption: "--zeta-api-key <key>",
         appGuidedSecret: true,
@@ -522,6 +546,8 @@ describe("detectSetupInference", () => {
         id: "zeta-api-key",
         label: "Zeta API key",
         hint: "Direct key",
+        icon: "https://cdn.example.com/zeta.svg",
+        website: "https://zeta.example.com/keys",
       },
     ]);
   });
@@ -557,6 +583,8 @@ describe("detectSetupInference", () => {
         choiceId: "openai",
         choiceLabel: "ChatGPT Login",
         choiceHint: "Browser sign-in",
+        icon: "https://cdn.example.com/openai.svg",
+        website: "https://openai.example.com/login",
         groupLabel: "OpenAI",
         onboardingFeatured: true,
         appGuidedAuth: "oauth",
@@ -597,6 +625,8 @@ describe("detectSetupInference", () => {
         label: "ChatGPT Login",
         hint: "Browser sign-in",
         groupLabel: "OpenAI",
+        icon: "https://cdn.example.com/openai.svg",
+        website: "https://openai.example.com/login",
         kind: "oauth",
         featured: true,
       },
@@ -1186,7 +1216,22 @@ describe("activateSetupInference", () => {
     expect(persistedConfig.gateway).toBeUndefined();
   });
 
-  it("rechecks the exact provider model and activates it without storing credentials", async () => {
+  it.each([
+    {
+      name: "auto-enables the lean surface for a verified local model",
+      initialConfig: {} satisfies OpenClawConfig,
+      expectedLean: true,
+      expectedAnnouncement: true,
+    },
+    {
+      name: "preserves an explicit localModelLean=false",
+      initialConfig: {
+        agents: { defaults: { experimental: { localModelLean: false } } },
+      } satisfies OpenClawConfig,
+      expectedLean: false,
+      expectedAnnouncement: false,
+    },
+  ])("$name", async ({ initialConfig, expectedLean, expectedAnnouncement }) => {
     const modelRef = "lmstudio/qwen-local";
     const detect = vi.fn(async () => ({ modelRef, detail: "qwen-local at localhost" }));
     const prepare = vi.fn(async () => ({
@@ -1229,7 +1274,7 @@ describe("activateSetupInference", () => {
         },
       ],
     };
-    const configHarness = createConfigTransformHarness();
+    const configHarness = createConfigTransformHarness(initialConfig);
     const updateAuthStore = vi.fn();
 
     const result = await activateSetupInference({
@@ -1238,6 +1283,15 @@ describe("activateSetupInference", () => {
       surface: "gateway",
       runtime,
       deps: {
+        readConfigFileSnapshot: vi.fn(async () => ({
+          exists: true,
+          valid: true,
+          path: "/tmp/openclaw.json",
+          issues: [],
+          config: initialConfig,
+          sourceConfig: initialConfig,
+          runtimeConfig: initialConfig,
+        })) as never,
         resolveManifestProviderAuthChoice: () => ({
           pluginId: "lmstudio",
           providerId: "lmstudio",
@@ -1255,11 +1309,23 @@ describe("activateSetupInference", () => {
     });
 
     expect(result).toMatchObject({ ok: true, modelRef });
+    if (!result.ok) {
+      throw new Error(result.error);
+    }
+    expect(result.lines).toEqual([
+      `Inference verified: ${modelRef}`,
+      ...(expectedAnnouncement
+        ? [
+            "This model is small, so I set up the lean surface — switching to a bigger model later lifts it.",
+          ]
+        : []),
+    ]);
     expect(detect).not.toHaveBeenCalled();
     expect(prepare).toHaveBeenCalledOnce();
     expect(updateAuthStore).not.toHaveBeenCalled();
     expect(configHarness.current()).toMatchObject({
-      agents: { defaults: { model: modelRef } },
+      ...(expectedAnnouncement ? { wizard: { localModelLeanAutoModel: modelRef } } : {}),
+      agents: { defaults: { model: modelRef, experimental: { localModelLean: expectedLean } } },
       models: {
         providers: {
           lmstudio: {
@@ -1452,8 +1518,15 @@ describe("activateSetupInference", () => {
     expect(configHarness.current()).toEqual(concurrentConfig);
   });
 
-  it("preserves authored provider rows instead of runtime-materialized metadata", async () => {
+  it("preserves authored provider rows and lifts an onboarding-owned lean setting", async () => {
     const sourceConfig = {
+      wizard: { localModelLeanAutoModel: "lmstudio/qwen-local" },
+      agents: {
+        defaults: {
+          model: "lmstudio/qwen-local",
+          experimental: { localModelLean: true },
+        },
+      },
       models: {
         providers: {
           openai: {
@@ -1509,6 +1582,8 @@ describe("activateSetupInference", () => {
     expect(configHarness.current().models?.providers?.openai?.models).toEqual(
       sourceConfig.models.providers.openai.models,
     );
+    expect(configHarness.current().agents?.defaults?.experimental?.localModelLean).toBeUndefined();
+    expect(configHarness.current().wizard?.localModelLeanAutoModel).toBeUndefined();
   });
 
   it("rejects an existing route that changes after its live probe", async () => {

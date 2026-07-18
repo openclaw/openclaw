@@ -7,6 +7,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { applyCliProfileEnv } from "./profile.js";
 import { createCliRuntimeCapture, mockRuntimeModule } from "./test-runtime-capture.js";
 
 /**
@@ -355,7 +356,7 @@ function parseLastLogPayload(): unknown {
 }
 
 async function runValidateJsonAndGetPayload() {
-  await expect(runConfigCommand(["config", "validate", "--json"])).rejects.toThrow("__exit__:1");
+  await expect(runConfigCommand(["config", "validate", "--json"])).rejects.toThrow(ExitError);
   const raw = firstMockArg(mockLog);
   expect(typeof raw).toBe("string");
   return JSON.parse(String(raw)) as {
@@ -420,20 +421,25 @@ function requireResolveSecretRefCall(index: number): [unknown, unknown] {
 }
 
 let registerConfigCli: typeof import("./config-cli.js").registerConfigCli;
+let parseConfigSetPath: typeof import("./config-cli.js").parseConfigSetPath;
 let sharedProgram: Command;
 
 async function runConfigCommand(args: string[]) {
   await sharedProgram.parseAsync(args, { from: "user" });
 }
 
+let ExitError: new (code: number, message?: string) => Error;
+
 describe("config cli", () => {
   beforeAll(async () => {
-    ({ registerConfigCli } = await import("./config-cli.js"));
+    ({ parseConfigSetPath, registerConfigCli } = await import("./config-cli.js"));
     const { resolveConfigSecretTargetByPath } = await import("../secrets/target-registry.js");
     resolveConfigSecretTargetByPath(["channels", "googlechat", "serviceAccount"]);
     sharedProgram = new Command();
     sharedProgram.exitOverride();
     registerConfigCli(sharedProgram);
+    const actual = await vi.importActual<typeof import("../runtime.js")>("../runtime.js");
+    ExitError = actual.ExitError;
   });
 
   beforeEach(() => {
@@ -472,7 +478,7 @@ describe("config cli", () => {
     });
     mockExit.mockImplementation((code: number) => {
       const errorMessages = mockError.mock.calls.map((call) => call.join(" ")).join("; ");
-      throw new Error(`__exit__:${code} - ${errorMessages}`);
+      throw new ExitError(code, errorMessages || undefined);
     });
     mockResolveSecretRefValue.mockResolvedValue("resolved-secret");
   });
@@ -754,7 +760,7 @@ describe("config cli", () => {
           "--strict-json",
           "--dry-run",
         ]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expectErrorIncludes("openclaw plugins install <spec>");
@@ -770,7 +776,7 @@ describe("config cli", () => {
           "BOGUS-NOT-A-VERSION",
           "--dry-run",
         ]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expectErrorIncludes("meta.lastTouchedVersion");
@@ -786,7 +792,7 @@ describe("config cli", () => {
           "1999-01-01T00:00:00.000Z",
           "--dry-run",
         ]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expectErrorIncludes("meta.lastTouchedAt");
@@ -795,7 +801,7 @@ describe("config cli", () => {
 
     it("rejects auto-managed meta paths via config unset (#80849)", async () => {
       await expect(runConfigCommand(["config", "unset", "meta.lastTouchedAt"])).rejects.toThrow(
-        "__exit__:1",
+        ExitError,
       );
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
@@ -814,7 +820,7 @@ describe("config cli", () => {
           "--merge",
           "--dry-run",
         ]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expectErrorIncludes("meta.lastTouchedVersion");
@@ -832,7 +838,7 @@ describe("config cli", () => {
           "--replace",
           "--dry-run",
         ]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expectErrorIncludes("meta.lastTouchedAt");
@@ -840,7 +846,7 @@ describe("config cli", () => {
     });
 
     it("rejects config unset meta because deleting the parent removes auto-managed children (#80849)", async () => {
-      await expect(runConfigCommand(["config", "unset", "meta"])).rejects.toThrow("__exit__:1");
+      await expect(runConfigCommand(["config", "unset", "meta"])).rejects.toThrow(ExitError);
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expectErrorIncludes("meta.lastTouchedVersion");
@@ -892,7 +898,7 @@ describe("config cli", () => {
           '{"openai/gpt-5.4":{}}',
           "--strict-json",
         ]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expectErrorIncludes("Refusing to replace agents.defaults.models");
@@ -1073,6 +1079,21 @@ describe("config cli", () => {
 
       expect(mockLog).toHaveBeenCalledWith("60");
     });
+
+    it("outputs JSON error to stdout when path is not found and --json is set", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: { port: 18789 },
+      };
+      setSnapshot(resolved, resolved);
+
+      await expect(
+        runConfigCommand(["config", "get", "nonexistent.path", "--json"]),
+      ).rejects.toThrow(ExitError);
+
+      expect(mockError).not.toHaveBeenCalled();
+      const payload = parseLastLogPayload() as { error: string };
+      expect(payload.error).toBe("Config path not found: nonexistent.path");
+    });
   });
 
   describe("config validate", () => {
@@ -1132,7 +1153,7 @@ describe("config cli", () => {
         }),
       );
 
-      await expect(runConfigCommand(["config", "validate"])).rejects.toThrow("__exit__:1");
+      await expect(runConfigCommand(["config", "validate"])).rejects.toThrow(ExitError);
 
       expectErrorIncludes("config is invalid");
       expectErrorIncludes("agents.defaults.suppressToolErrorWarnings");
@@ -1158,7 +1179,7 @@ describe("config cli", () => {
         }),
       );
 
-      await expect(runConfigCommand(["config", "validate"])).rejects.toThrow("__exit__:1");
+      await expect(runConfigCommand(["config", "validate"])).rejects.toThrow(ExitError);
 
       expectErrorIncludes("plugin not found: source-only-pack");
       expectErrorIncludes("This is a plugin packaging issue, not a local config problem.");
@@ -1203,7 +1224,7 @@ describe("config cli", () => {
         }),
       );
 
-      await expect(runConfigCommand(["config", "validate"])).rejects.toThrow("__exit__:1");
+      await expect(runConfigCommand(["config", "validate"])).rejects.toThrow(ExitError);
 
       expectErrorIncludes(
         'openclaw.json:7 — agents.list[3].tools.profile: Invalid input (allowed: "minimal", "coding", "messaging", "full"), got: "none"',
@@ -1267,7 +1288,7 @@ describe("config cli", () => {
         legacyIssues: [],
       });
 
-      await expect(runConfigCommand(["config", "validate"])).rejects.toThrow("__exit__:1");
+      await expect(runConfigCommand(["config", "validate"])).rejects.toThrow(ExitError);
       expectErrorIncludes("Config file not found:");
       expect(mockLog).not.toHaveBeenCalled();
     });
@@ -1363,7 +1384,7 @@ describe("config cli", () => {
     it("throws when strict parsing is enabled via --strict-json", async () => {
       await expect(
         runConfigCommand(["config", "set", "gateway.auth.mode", "{bad", "--strict-json"]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
@@ -1374,7 +1395,7 @@ describe("config cli", () => {
     it("keeps --json as a strict parsing alias", async () => {
       await expect(
         runConfigCommand(["config", "set", "gateway.auth.mode", "{bad", "--json"]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
@@ -1383,7 +1404,7 @@ describe("config cli", () => {
     it("rejects JSON5-only object syntax when strict parsing is enabled", async () => {
       await expect(
         runConfigCommand(["config", "set", "gateway.auth", "{mode:'token'}", "--strict-json"]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
@@ -1560,7 +1581,7 @@ describe("config cli", () => {
           "--ref-id",
           "HOOK_TOKEN",
         ]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expectErrorIncludes("Config policy validation failed: unsupported SecretRef usage");
@@ -1581,7 +1602,7 @@ describe("config cli", () => {
           '{"token":{"source":"env","provider":"default","id":"HOOK_TOKEN"}}',
           "--strict-json",
         ]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expectErrorIncludes("Config policy validation failed: unsupported SecretRef usage");
@@ -1686,7 +1707,7 @@ describe("config cli", () => {
           "--strict-json",
           "--dry-run",
         ]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expectErrorIncludes("Dry run failed: config schema validation failed.");
@@ -1741,7 +1762,7 @@ describe("config cli", () => {
           "--strict-json",
           "--dry-run",
         ]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expectErrorIncludes("Dry run failed: config schema validation failed.");
@@ -1762,7 +1783,7 @@ describe("config cli", () => {
           '[{"path":"hooks.token","ref":{"source":"env","provider":"default","id":"HOOK_TOKEN"}},{"path":"commands.ownerDisplaySecret","ref":{"source":"env","provider":"default","id":"OWNER_DISPLAY_SECRET"}}]',
           "--dry-run",
         ]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expectErrorIncludes("hooks.token");
@@ -1785,7 +1806,7 @@ describe("config cli", () => {
           "--dry-run",
           "--json",
         ]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       const payload = parseLastLogPayload() as {
@@ -1921,7 +1942,7 @@ describe("config cli", () => {
       );
       await expect(
         runConfigCommand(["config", "set", "--batch-file", nonexistentBatchPath, "--allow-exec"]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expect(mockResolveSecretRefValue).not.toHaveBeenCalled();
@@ -1950,7 +1971,7 @@ describe("config cli", () => {
           "openai",
           "--dry-run",
         ]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       expect(mockResolveSecretRefValue).not.toHaveBeenCalled();
       expectErrorIncludes('Secret provider "runner" is not configured');
@@ -1982,7 +2003,7 @@ describe("config cli", () => {
           "openai",
           "--dry-run",
         ]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       expect(mockResolveSecretRefValue).not.toHaveBeenCalled();
       expectErrorIncludes('Secret provider "runner" has source "env" but ref requests "exec".');
@@ -2036,7 +2057,7 @@ describe("config cli", () => {
           "--provider-source",
           "env",
         ]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       expectErrorIncludes("config set mode error: choose exactly one mode");
     });
@@ -2055,7 +2076,7 @@ describe("config cli", () => {
           "--ref-id",
           "DISCORD_BOT_TOKEN",
         ]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       expectErrorIncludes(
         "config set mode error: batch mode (--batch-json/--batch-file) cannot be combined",
@@ -2141,7 +2162,7 @@ describe("config cli", () => {
       fs.writeFileSync(pathname, '{"path":"gateway.auth.mode","value":"token"}', "utf8");
       try {
         await expect(runConfigCommand(["config", "set", "--batch-file", pathname])).rejects.toThrow(
-          "__exit__:1",
+          ExitError,
         );
       } finally {
         fs.rmSync(pathname, { force: true });
@@ -2394,6 +2415,15 @@ describe("config cli", () => {
       expect(payload.configPath).not.toContain("~");
     });
 
+    it("rejects --file when the file does not exist", async () => {
+      await expect(
+        runConfigCommand(["config", "patch", "--file", "/nonexistent/path/patch.json5"]),
+      ).rejects.toThrow(ExitError);
+
+      expectErrorIncludes("--file not found: /nonexistent/path/patch.json5");
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+    });
+
     it("dry-runs pluginIntegration provider patches against manifest integration metadata", async () => {
       const pluginId = "secret-provider-proof";
       const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-plugin-provider-"));
@@ -2476,7 +2506,7 @@ describe("config cli", () => {
               "--allow-exec",
               "--json",
             ]),
-          ).rejects.toThrow("__exit__:1");
+          ).rejects.toThrow(ExitError);
         } finally {
           fs.rmSync(invalidPatch, { force: true });
         }
@@ -2560,7 +2590,7 @@ describe("config cli", () => {
       try {
         await expect(
           runConfigCommand(["config", "patch", "--file", patch, "--dry-run", "--json"]),
-        ).rejects.toThrow("__exit__:1");
+        ).rejects.toThrow(ExitError);
       } finally {
         fs.rmSync(patch, { force: true });
       }
@@ -2601,7 +2631,7 @@ describe("config cli", () => {
       try {
         await expect(
           runConfigCommand(["config", "patch", "--file", pathname, "--dry-run"]),
-        ).rejects.toThrow("__exit__:1");
+        ).rejects.toThrow(ExitError);
       } finally {
         fs.rmSync(pathname, { force: true });
       }
@@ -2660,7 +2690,7 @@ describe("config cli", () => {
             "channels.slack",
             "--dry-run",
           ]),
-        ).rejects.toThrow("__exit__:1");
+        ).rejects.toThrow(ExitError);
       } finally {
         fs.rmSync(pathname, { force: true });
       }
@@ -2672,7 +2702,7 @@ describe("config cli", () => {
 
     it("rejects config patch --json without dry-run", async () => {
       await expect(runConfigCommand(["config", "patch", "--stdin", "--json"])).rejects.toThrow(
-        "__exit__:1",
+        ExitError,
       );
       expectErrorIncludes("config patch mode error: --json requires --dry-run.");
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
@@ -2775,7 +2805,7 @@ describe("config cli", () => {
             "--replace-path",
             "channels.discord.guilds",
           ]),
-        ).rejects.toThrow("__exit__:1");
+        ).rejects.toThrow(ExitError);
       } finally {
         fs.rmSync(pathname, { force: true });
       }
@@ -2794,7 +2824,7 @@ describe("config cli", () => {
           "--batch-json",
           '[{"path":"channels.discord.token","value":"x","ref":{"source":"env","provider":"default","id":"DISCORD_BOT_TOKEN"}}]',
         ]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       expectErrorIncludes("must include exactly one of: value, ref, provider");
     });
@@ -2824,7 +2854,7 @@ describe("config cli", () => {
           "DISCORD_BOT_TOKEN",
           "--dry-run",
         ]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       expectErrorIncludes("Dry run failed: 1 SecretRef assignment(s) could not be resolved.");
     });
@@ -2940,7 +2970,7 @@ describe("config cli", () => {
           "--dry-run",
           "--json",
         ]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       const payload = parseLastLogPayload() as {
         ok: boolean;
@@ -2973,7 +3003,7 @@ describe("config cli", () => {
           "--dry-run",
           "--json",
         ]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       const payload = parseLastLogPayload() as {
         ok: boolean;
@@ -3012,7 +3042,7 @@ describe("config cli", () => {
           "--dry-run",
           "--json",
         ]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       const payload = parseLastLogPayload() as {
         ok: boolean;
@@ -3061,7 +3091,7 @@ describe("config cli", () => {
           "env",
           "--dry-run",
         ]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       expectErrorIncludes("Dry run failed: 1 SecretRef assignment(s) could not be resolved.");
       expectErrorIncludes("provider mismatch");
@@ -3102,7 +3132,7 @@ describe("config cli", () => {
           "--strict-json",
           "--dry-run",
         ]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       const [secretRef, resolveOptions] = requireResolveSecretRefCall(0);
       const secretRefRecord = requireRecord(secretRef, "existing SecretRef");
@@ -3209,22 +3239,46 @@ describe("config cli", () => {
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
     });
 
-    it("rejects a whitespace-only segment after a bracket before a dot", async () => {
-      await expect(runConfigCommand(["config", "get", "agents.list[0] .id"])).rejects.toThrow(
-        "Invalid path (empty segment): agents.list[0] .id",
+    it.each([
+      "agents.list[0]id",
+      "agents.list[0] id",
+      "agents.list[0]\\id",
+      "agents.list[0] .id",
+      "agents.list[0] [1]",
+    ])("rejects malformed post-bracket path %s", (configPath) => {
+      expect(() => parseConfigSetPath(configPath)).toThrow(
+        `Invalid path (missing separator after bracket): ${configPath}`,
+      );
+    });
+
+    it.each([
+      ["get", ["config", "get", "agents.list[0]id"]],
+      ["set", ["config", "set", "agents.list[0]id", '"renamed"']],
+      ["unset", ["config", "unset", "agents.list[0]id"]],
+      [
+        "batch set",
+        [
+          "config",
+          "set",
+          "--batch-json",
+          JSON.stringify([{ path: "agents.list[0]id", value: "renamed" }]),
+        ],
+      ],
+    ])("rejects malformed bracket paths for config %s", async (_command, args) => {
+      await expect(runConfigCommand(args)).rejects.toThrow(
+        "Invalid path (missing separator after bracket): agents.list[0]id",
       );
 
       expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
     });
 
-    it("rejects a whitespace-only segment after a bracket before another bracket", async () => {
-      await expect(runConfigCommand(["config", "get", "agents.list[0] [1]"])).rejects.toThrow(
-        "Invalid path (empty segment): agents.list[0] [1]",
-      );
-
-      expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
-      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+    it.each([
+      ["agents.list[0].id", ["agents", "list", "0", "id"]],
+      ["agents.list[0][1]", ["agents", "list", "0", "1"]],
+      ["[0]", ["0"]],
+    ])("preserves valid bracket path %s", (configPath, expected) => {
+      expect(parseConfigSetPath(configPath)).toEqual(expected);
     });
 
     it("preserves valid bracket path forms", async () => {
@@ -3408,7 +3462,7 @@ describe("config cli", () => {
 
       await expect(
         runConfigCommand(["config", "unset", "tools.alsoAllow", "--dry-run", "--json"]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expect(mockError).not.toHaveBeenCalled();
@@ -3461,7 +3515,7 @@ describe("config cli", () => {
       mockLog.mockClear();
       setSnapshot(resolved, runtimeMerged);
 
-      await expect(runConfigCommand(["config", "unset", aliasPath])).rejects.toThrow("__exit__:1");
+      await expect(runConfigCommand(["config", "unset", aliasPath])).rejects.toThrow(ExitError);
 
       expectErrorIncludes(`Config path not found in authored config: ${aliasPath}.`);
       expectErrorIncludes("It only exists after runtime defaults are applied");
@@ -3473,7 +3527,7 @@ describe("config cli", () => {
       setSnapshot(resolved, runtimeMerged);
       await expect(
         runConfigCommand(["config", "unset", aliasPath, "--dry-run", "--json"]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       expect(parseLastLogPayload()).toMatchObject({
         ok: false,
@@ -3516,7 +3570,7 @@ describe("config cli", () => {
 
       await expect(
         runConfigCommand(["config", "unset", "secrets.providers", "--dry-run"]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       const [secretRef] = requireResolveSecretRefCall(0);
@@ -3567,7 +3621,7 @@ describe("config cli", () => {
     it("rejects config unset --json without --dry-run", async () => {
       await expect(
         runConfigCommand(["config", "unset", "tools.alsoAllow", "--json"]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expectErrorIncludes("--json can only be used with --dry-run.");
@@ -3576,7 +3630,7 @@ describe("config cli", () => {
     it("rejects config unset --allow-exec without --dry-run", async () => {
       await expect(
         runConfigCommand(["config", "unset", "tools.alsoAllow", "--allow-exec"]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expectErrorIncludes("--allow-exec can only be used with --dry-run.");
@@ -3869,36 +3923,39 @@ describe("config cli", () => {
   });
 
   describe("config file", () => {
-    it("prints the active config file path", async () => {
-      const resolved: OpenClawConfig = { gateway: { port: 18789 } };
-      setSnapshot(resolved, resolved);
-
-      await runConfigCommand(["config", "file"]);
-
-      expect(mockLog).toHaveBeenCalledWith("/tmp/openclaw.json");
-      expect(mockWriteConfigFile).not.toHaveBeenCalled();
-    });
-
-    it("prints a resolved config file path under OPENCLAW_HOME", async () => {
-      const home = path.join(os.tmpdir(), "openclaw-home-token-config-file");
-      const configPath = path.join(home, ".openclaw", "openclaw.json");
-      const resolved: OpenClawConfig = { gateway: { port: 18789 } };
-      const snapshot = buildSnapshot({ resolved, config: resolved });
-      snapshot.path = configPath;
-      mockReadConfigFileSnapshot.mockResolvedValueOnce(snapshot);
+    it("resolves the active path without initializing state", async () => {
+      const home = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-file-"));
+      const profile = "configfile-probe";
+      const stateDir = path.join(home, `.openclaw-${profile}`);
+      const configPath = path.join(stateDir, "openclaw.json");
       vi.stubEnv("OPENCLAW_HOME", home);
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", "");
+      vi.stubEnv("OPENCLAW_PROFILE", "");
+      vi.stubEnv("OPENCLAW_STATE_DIR", "");
+      vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+      applyCliProfileEnv({ profile });
+      mockReadConfigFileSnapshot.mockImplementationOnce(async () => {
+        fs.mkdirSync(path.join(stateDir, "state"), { recursive: true });
+        fs.writeFileSync(path.join(stateDir, "state", "openclaw.sqlite"), "initialized");
+        const snapshot = buildSnapshot({ resolved: {}, config: {} });
+        snapshot.path = configPath;
+        return snapshot;
+      });
 
       try {
         await runConfigCommand(["config", "file"]);
+        const output = String(lastMockArg(mockLog));
+        expect(output).toBe(configPath);
+        expect(path.isAbsolute(output)).toBe(true);
+        expect(output).not.toContain("$OPENCLAW_HOME");
+        expect(output).not.toContain("~");
+        expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
+        expect(fs.existsSync(stateDir)).toBe(false);
+        expect(fs.existsSync(path.join(stateDir, "state", "openclaw.sqlite"))).toBe(false);
       } finally {
         vi.unstubAllEnvs();
+        fs.rmSync(home, { recursive: true, force: true });
       }
-
-      const output = String(lastMockArg(mockLog));
-      expect(output).toBe(configPath);
-      expect(path.isAbsolute(output)).toBe(true);
-      expect(output).not.toContain("$OPENCLAW_HOME");
-      expect(output).not.toContain("~");
     });
   });
 });

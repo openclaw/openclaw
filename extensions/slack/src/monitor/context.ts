@@ -155,16 +155,6 @@ export type SlackMonitorContext = {
   removeAckAfterReply: boolean;
 
   logger: ReturnType<typeof getChildLogger>;
-  markMessageSeen: (
-    channelId: string | undefined,
-    ts?: string,
-    eventScope?: SlackEventScope,
-  ) => boolean;
-  releaseSeenMessage: (
-    channelId: string | undefined,
-    ts?: string,
-    eventScope?: SlackEventScope,
-  ) => void;
   shouldDropMismatchedSlackEvent: (body: unknown) => boolean;
   resolveSlackSystemEventSessionKey: (params: {
     channelId?: string | null;
@@ -266,7 +256,6 @@ export function createSlackMonitorContext(params: {
 
   const channelCache = new Map<string, SlackChannelCacheEntry>();
   const userCache = new Map<string, { name?: string }>();
-  const seenMessages = createDedupeCache({ ttlMs: 60_000, maxSize: 500 });
   // Rate-limit active denials while retaining periodic evidence; bound keys against config churn.
   const channelDenialWarnings = createDedupeCache({
     ttlMs: SLACK_CHANNEL_DENIAL_WARNING_TTL_MS,
@@ -327,28 +316,6 @@ export function createSlackMonitorContext(params: {
   ): SlackMessageEvent["channel_type"] | undefined => {
     const id = normalizeOptionalString(channelId);
     return id ? readLruMapEntry(channelCache, scopedKey(id, eventScope))?.info.type : undefined;
-  };
-
-  const markMessageSeen = (
-    channelId: string | undefined,
-    ts?: string,
-    eventScope?: SlackEventScope,
-  ) => {
-    if (!channelId || !ts) {
-      return false;
-    }
-    return seenMessages.check(scopedKey(`${channelId}:${ts}`, eventScope));
-  };
-
-  const releaseSeenMessage = (
-    channelId: string | undefined,
-    ts?: string,
-    eventScope?: SlackEventScope,
-  ) => {
-    if (!channelId || !ts) {
-      return;
-    }
-    seenMessages.delete(scopedKey(`${channelId}:${ts}`, eventScope));
   };
 
   const assistantContextKey = (channelId: string, threadTs: string, eventScope?: SlackEventScope) =>
@@ -771,8 +738,6 @@ export function createSlackMonitorContext(params: {
     mediaMaxBytes: params.mediaMaxBytes,
     removeAckAfterReply: params.removeAckAfterReply,
     logger,
-    markMessageSeen,
-    releaseSeenMessage,
     shouldDropMismatchedSlackEvent,
     resolveSlackSystemEventSessionKey,
     isChannelAllowed,
@@ -786,4 +751,3 @@ export function createSlackMonitorContext(params: {
     setSlackAssistantSuggestedPrompts,
   };
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -22,6 +22,7 @@ import type { SilentReplyPromptMode } from "../../agents/system-prompt.types.js"
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { updateAmbientTranscriptWatermark } from "../../config/sessions/ambient-transcript-watermark.js";
+import { conversationIdentityFromMsgContext } from "../../config/sessions/conversation-identity.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import {
   resolveSessionFilePath,
@@ -1465,6 +1466,36 @@ export async function runPreparedReply(
   const userTurnTranscriptText = resolvePersistedUserTurnText(transcriptBody, {
     hasMedia: userTurnMediaForPersistence.length > 0,
   });
+  const conversationIdentity = conversationIdentityFromMsgContext({ ctx: sessionCtx });
+  const conversationRef = conversationIdentity?.conversationRef;
+  const transportMessageId =
+    normalizeOptionalString(sessionCtx.MessageSidFull) ??
+    normalizeOptionalString(sessionCtx.MessageSid);
+  const transportReplyToId =
+    normalizeOptionalString(sessionCtx.ReplyToIdFull) ??
+    normalizeOptionalString(sessionCtx.ReplyToId);
+  const transportThreadId =
+    sessionCtx.MessageThreadId === undefined
+      ? undefined
+      : normalizeOptionalString(String(sessionCtx.MessageThreadId));
+  const transportChannel =
+    normalizeOptionalString(conversationIdentity?.channel) ??
+    normalizeOptionalString(sessionCtx.OriginatingChannel) ??
+    normalizeOptionalString(sessionCtx.Provider);
+  const transport =
+    conversationRef ||
+    transportMessageId ||
+    transportReplyToId ||
+    transportThreadId ||
+    transportChannel
+      ? {
+          ...(transportChannel ? { channel: transportChannel } : {}),
+          ...(conversationRef ? { conversationRef } : {}),
+          ...(transportMessageId ? { messageId: transportMessageId } : {}),
+          ...(transportReplyToId ? { replyToId: transportReplyToId } : {}),
+          ...(transportThreadId ? { threadId: transportThreadId } : {}),
+        }
+      : undefined;
   const userTurnInput =
     userTurnTranscriptText !== undefined || userTurnMediaForPersistence.length > 0
       ? {
@@ -1475,6 +1506,7 @@ export async function runPreparedReply(
           ...(isHeartbeat
             ? { provenance: { kind: "internal_system" as const, sourceTool: "heartbeat" } }
             : {}),
+          ...(transport ? { transport } : {}),
           ...(userTurnMediaForPersistence.length > 0
             ? {
                 media: userTurnMediaForPersistence,
@@ -1565,6 +1597,7 @@ export async function runPreparedReply(
       runtimePolicySessionKey,
       messageProvider,
       clientCaps: ctx.GatewayClientCaps,
+      toolBindings: ctx.GatewayRunToolBindings,
       chatType: replyRoute.chatType,
       agentAccountId: replyRoute.accountId,
       groupId: resolveGroupSessionKey(sessionCtx)?.id ?? undefined,

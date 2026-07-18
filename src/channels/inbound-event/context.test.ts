@@ -128,6 +128,7 @@ describe("buildChannelInboundEventContext", () => {
       },
       route: {
         agentId: "main",
+        dmScope: "main",
         accountId: "acct",
         routeSessionKey: "agent:main:test:group:room-1",
         parentSessionKey: "agent:main:test:group",
@@ -195,6 +196,8 @@ describe("buildChannelInboundEventContext", () => {
       },
     });
 
+    expect(ctx.InboundAccessAuthorized).toBe(true);
+
     const expectedFields = {
       Body: "[User One] hello",
       InboundEventKind: "user_request",
@@ -206,6 +209,7 @@ describe("buildChannelInboundEventContext", () => {
       To: "test:room:room-1",
       SessionKey: "agent:main:test:group:room-1",
       AgentId: "main",
+      DmScope: "main",
       AccountId: "acct",
       ParentSessionKey: "agent:main:test:group",
       ModelParentSessionKey: "agent:main:test:model",

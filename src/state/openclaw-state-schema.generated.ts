@@ -15,6 +15,13 @@ CREATE TABLE IF NOT EXISTS auth_profile_state (
   updated_at INTEGER NOT NULL
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS mcp_oauth_stores (
+  store_key TEXT NOT NULL PRIMARY KEY,
+  format_version INTEGER NOT NULL CHECK (format_version = 1),
+  store_json TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS diagnostic_events (
   scope TEXT NOT NULL,
   event_key TEXT NOT NULL,
@@ -160,16 +167,18 @@ CREATE TABLE IF NOT EXISTS session_state_heads (
   PRIMARY KEY (session_key, agent_id)
 ) STRICT;
 
--- Watcher identity is the bare session key, matching the process-local system-event
--- queue it feeds. Producers only create rows for agent-qualified watcher keys;
--- bare keys (session.scope="global") are ambiguous across agents and are excluded
--- from the notice protocol until watcher identity is agent-scoped end-to-end.
+-- Notifiable watcher identity is the bare session key, matching the process-local
+-- system-event queue it feeds. Provenance distinguishes explicit immediate-wake
+-- watches from ambient queue-only group watches. Other bare keys
+-- (session.scope="global") are ambiguous across agents and excluded until watcher
+-- identity is agent-scoped end-to-end.
 CREATE TABLE IF NOT EXISTS session_watch_cursors (
   watcher_session_key TEXT NOT NULL,
   target_session_key TEXT NOT NULL,
   last_seen_sequence INTEGER NOT NULL DEFAULT 0,
   notified_sequence INTEGER NOT NULL DEFAULT 0,
   material_sequence INTEGER NOT NULL DEFAULT 0,
+  provenance TEXT NOT NULL DEFAULT 'explicit' CHECK (provenance IN ('explicit', 'ambient-group')),
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (watcher_session_key, target_session_key)
 ) STRICT;
@@ -383,6 +392,7 @@ CREATE TABLE IF NOT EXISTS device_pairing_pending (
   device_family TEXT,
   client_id TEXT,
   client_mode TEXT,
+  browser_origin TEXT,
   role TEXT,
   roles_json TEXT,
   scopes_json TEXT,
@@ -405,6 +415,7 @@ CREATE TABLE IF NOT EXISTS device_pairing_paired (
   device_family TEXT,
   client_id TEXT,
   client_mode TEXT,
+  browser_origin TEXT,
   role TEXT,
   roles_json TEXT,
   scopes_json TEXT,
@@ -482,6 +493,15 @@ CREATE TABLE IF NOT EXISTS macos_port_guardian_records (
 
 CREATE INDEX IF NOT EXISTS idx_macos_port_guardian_records_port
   ON macos_port_guardian_records(port, timestamp DESC);
+
+CREATE TABLE IF NOT EXISTS onboarding_recommendations (
+  config_key TEXT NOT NULL PRIMARY KEY,
+  inventory_hash TEXT NOT NULL,
+  matches_json TEXT NOT NULL,
+  offered_at_ms INTEGER NOT NULL,
+  accepted_at_ms INTEGER,
+  updated_at_ms INTEGER NOT NULL
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS workspace_setup_state (
   workspace_key TEXT NOT NULL PRIMARY KEY,
@@ -686,6 +706,7 @@ CREATE TABLE IF NOT EXISTS node_host_config (
   gateway_tls INTEGER,
   gateway_tls_fingerprint TEXT,
   gateway_context_path TEXT,
+  installed_apps_sharing INTEGER NOT NULL DEFAULT 0,
   updated_at_ms INTEGER NOT NULL
 ) STRICT;
 

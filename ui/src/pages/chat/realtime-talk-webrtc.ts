@@ -14,6 +14,10 @@ import {
   type RealtimeTalkTransport,
   type RealtimeTalkTransportContext,
 } from "./realtime-talk-shared.ts";
+import {
+  captureRealtimeTalkVideoFrame,
+  type RealtimeTalkVideoFrame,
+} from "./realtime-talk-video.ts";
 
 type RealtimeServerEvent = {
   type?: string;
@@ -146,7 +150,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
         return;
       }
       if (this.peer?.connectionState === "failed" || this.peer?.connectionState === "closed") {
-        this.ctx.callbacks.onStatus?.("error", "Realtime connection closed");
+        this.failConnection("Realtime connection closed");
       }
     });
 
@@ -306,6 +310,15 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
     this.responseActive = false;
     this.responseCreateInFlight = false;
     this.responseCreatePending = false;
+  }
+
+  private failConnection(detail: string): void {
+    if (this.closed) {
+      return;
+    }
+    this.ctx.callbacks.onStatus?.("error", detail);
+    // A terminal peer failure still owns live browser media until stop() releases it.
+    this.stop();
   }
 
   private send(event: unknown): void {
@@ -514,18 +527,12 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
       payload: { name: REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME },
     });
     try {
-      const imageUrl = await captureRealtimeTalkVideoFrame(
+      const frame = await captureRealtimeTalkVideoFrame(
         this.captureVideo,
         realtimeTalkDataChannelMaxMessageSize(this.peer),
+        realtimeTalkImageEvent,
       );
-      this.send({
-        type: "conversation.item.create",
-        item: {
-          type: "message",
-          role: "user",
-          content: [{ type: "input_image", image_url: imageUrl }],
-        },
-      });
+      this.send(realtimeTalkImageEvent(frame));
       this.submitToolResult(callId, { ok: true, frameAttached: true });
       this.emitTalkEvent({
         type: "tool.result",
@@ -615,7 +622,6 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
 }
 
 const REALTIME_TALK_DEFAULT_MAX_MESSAGE_SIZE = 64 * 1024;
-const REALTIME_TALK_FRAME_MAX_ATTEMPTS = 8;
 
 function realtimeTalkDataChannelMaxMessageSize(peer: RTCPeerConnection | null): number {
   const negotiated = peer?.sctp?.maxMessageSize;
@@ -624,83 +630,13 @@ function realtimeTalkDataChannelMaxMessageSize(peer: RTCPeerConnection | null): 
     : REALTIME_TALK_DEFAULT_MAX_MESSAGE_SIZE;
 }
 
-function realtimeTalkImageEvent(imageUrl: string): unknown {
+function realtimeTalkImageEvent(frame: RealtimeTalkVideoFrame): unknown {
   return {
     type: "conversation.item.create",
     item: {
       type: "message",
       role: "user",
-      content: [{ type: "input_image", image_url: imageUrl }],
+      content: [{ type: "input_image", image_url: `data:${frame.mimeType};base64,${frame.data}` }],
     },
   };
-}
-
-async function captureRealtimeTalkVideoFrame(
-  video: HTMLVideoElement | null,
-  maxMessageSize: number,
-): Promise<string> {
-  if (!video?.srcObject) {
-    throw new Error("Camera preview is unavailable");
-  }
-  if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
-    await waitForRealtimeTalkVideoData(video);
-  }
-  if (
-    video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA ||
-    !video.videoWidth ||
-    !video.videoHeight
-  ) {
-    throw new Error("Camera frame has no image data");
-  }
-  let scale = Math.min(1, 1280 / video.videoWidth, 720 / video.videoHeight);
-  const canvas = document.createElement("canvas");
-  const context = canvas.getContext("2d");
-  if (!context) {
-    throw new Error("Camera frame capture is unavailable");
-  }
-  let quality = 0.8;
-  for (let attempt = 0; attempt < REALTIME_TALK_FRAME_MAX_ATTEMPTS; attempt += 1) {
-    canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
-    canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
-    context.drawImage(video, 0, 0, canvas.width, canvas.height);
-    const imageUrl = canvas.toDataURL("image/jpeg", quality);
-    const eventBytes = new TextEncoder().encode(
-      JSON.stringify(realtimeTalkImageEvent(imageUrl)),
-    ).length;
-    if (eventBytes <= maxMessageSize) {
-      return imageUrl;
-    }
-    const reduction = Math.min(0.75, Math.sqrt(maxMessageSize / eventBytes) * 0.9);
-    scale *= reduction;
-    quality = Math.max(0.4, quality - 0.1);
-  }
-  throw new Error("Camera frame is too large for the Realtime connection");
-}
-
-function waitForRealtimeTalkVideoData(video: HTMLVideoElement): Promise<void> {
-  return new Promise((resolve, reject) => {
-    let timeout: ReturnType<typeof globalThis.setTimeout> | undefined;
-    const finish = (error?: Error) => {
-      if (timeout === undefined) {
-        return;
-      }
-      globalThis.clearTimeout(timeout);
-      timeout = undefined;
-      video.removeEventListener("loadeddata", onData);
-      if (error) {
-        reject(error);
-      } else {
-        resolve();
-      }
-    };
-    const onData = () => finish();
-    timeout = globalThis.setTimeout(
-      () => finish(new Error("Camera preview did not become ready")),
-      5_000,
-    );
-    video.addEventListener("loadeddata", onData);
-    if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
-      finish();
-    }
-  });
 }

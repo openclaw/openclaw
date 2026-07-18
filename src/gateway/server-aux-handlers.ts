@@ -45,6 +45,7 @@ import {
   closeOrphanedOperatorApprovals,
   pruneTerminalOperatorApprovals,
 } from "./operator-approval-store.js";
+import { QuestionManager } from "./question-manager.js";
 import type { ChannelAutostartSuppression } from "./server-channels.js";
 import {
   captureSharedGatewaySessionGenerationOwnership,
@@ -154,6 +155,14 @@ export function createGatewayAuxHandlers(params: {
           forwarder: execApprovalForwarder,
           iosPushDelivery: execApprovalIosPushDelivery,
         }),
+      ),
+    { cacheRejections: true },
+  );
+  const questionManager = new QuestionManager();
+  const loadQuestionHandlers = createLazyPromise(
+    () =>
+      import("./server-methods/question.js").then(({ createQuestionHandlers }) =>
+        createQuestionHandlers(questionManager),
       ),
     { cacheRejections: true },
   );
@@ -352,8 +361,15 @@ export function createGatewayAuxHandlers(params: {
                     expectedGeneration: nextSharedGatewaySessionGeneration,
                   });
                 }
-                if (plan.restartChannels.size > 0) {
-                  const restartChannels = [...plan.restartChannels];
+                // Account-scoped changes restart their whole channel here:
+                // secrets.reload has no per-account restart path, and a missed
+                // restart would leave rotated credentials unapplied.
+                const channelsToRestart = new Set<ChannelKind>([
+                  ...plan.restartChannels,
+                  ...(plan.restartChannelAccounts?.keys() ?? []),
+                ]);
+                if (channelsToRestart.size > 0) {
+                  const restartChannels = [...channelsToRestart];
                   if (
                     isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
                     isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS)
@@ -514,6 +530,7 @@ export function createGatewayAuxHandlers(params: {
     pluginApprovalIosPushDelivery,
     pluginApprovalManager,
     systemAgentApprovalManager,
+    questionManager,
     extraHandlers: {
       "exec.approval.get": createLazyHandler("exec.approval.get", loadExecApprovalHandlers),
       "exec.approval.list": createLazyHandler("exec.approval.list", loadExecApprovalHandlers),
@@ -539,6 +556,11 @@ export function createGatewayAuxHandlers(params: {
       "approval.get": createLazyHandler("approval.get", loadApprovalHandlers),
       "approval.history": createLazyHandler("approval.history", loadApprovalHandlers),
       "approval.resolve": createLazyHandler("approval.resolve", loadApprovalHandlers),
+      "question.request": createLazyHandler("question.request", loadQuestionHandlers),
+      "question.waitAnswer": createLazyHandler("question.waitAnswer", loadQuestionHandlers),
+      "question.resolve": createLazyHandler("question.resolve", loadQuestionHandlers),
+      "question.get": createLazyHandler("question.get", loadQuestionHandlers),
+      "question.list": createLazyHandler("question.list", loadQuestionHandlers),
       "secrets.reload": createLazyHandler("secrets.reload", loadSecretsHandlers),
       "secrets.resolve": createLazyHandler("secrets.resolve", loadSecretsHandlers),
     },

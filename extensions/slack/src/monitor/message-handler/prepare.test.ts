@@ -116,6 +116,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
   const defaultAccount: ResolvedSlackAccount = {
     accountId: "default",
     enabled: true,
+    identity: "bot",
     botTokenSource: "config",
     appTokenSource: "config",
     userTokenSource: "none",
@@ -656,6 +657,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     return {
       accountId: "default",
       enabled: true,
+      identity: "bot",
       botTokenSource: "config",
       appTokenSource: "config",
       userTokenSource: "none",
@@ -4320,8 +4322,6 @@ describe("prepareSlackMessage sender prefix", () => {
       mediaMaxBytes: 1000,
       removeAckAfterReply: false,
       logger: { info: vi.fn(), warn: vi.fn() },
-      markMessageSeen: () => false,
-      releaseSeenMessage: () => {},
       shouldDropMismatchedSlackEvent: () => false,
       resolveSlackSystemEventSessionKey: () => "agent:main:slack:channel:c1",
       isChannelAllowed: () => true,

@@ -128,6 +128,7 @@ export type FollowupRun = {
     runtimePolicySessionKey?: string;
     messageProvider?: string;
     clientCaps?: string[];
+    toolBindings?: Readonly<Record<string, unknown>>;
     chatType?: ChatType;
     agentAccountId?: string;
     groupId?: string;
@@ -274,7 +275,8 @@ export function completeFollowupRunLifecycle(run: FollowupLifecycleRun): void {
       return;
     }
     completedTurnAdoptionLifecycleCallbacks.add(lifecycle);
-    // onSettled must run even when onAbandoned throws (gateway/plugin cleanup).
+    // Async onAbandoned work must contain its own rejections; core guarantees a
+    // non-rejecting promise. onSettled must still run after a synchronous throw.
     try {
       if (!admittedTurnAdoptionLifecycles.has(lifecycle)) {
         lifecycle.onAbandoned?.();
