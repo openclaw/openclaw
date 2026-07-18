@@ -2434,6 +2434,8 @@ class NodeRuntime private constructor(
     answers: Map<String, List<String>>,
   ) = chat.resolveQuestion(id, answers)
 
+  fun skipChatQuestion(id: String) = chat.skipQuestion(id)
+
   private fun applyScreenshotFixture() {
     check(BuildConfig.DEBUG) { "Android screenshot fixtures require a debug build" }
     _serverName.value = "OpenClaw Gateway"

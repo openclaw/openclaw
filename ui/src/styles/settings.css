@@ -543,7 +543,7 @@ select.settings-select:focus-visible {
 /* ── Web Awesome select ── */
 
 wa-select.settings-select {
-  --wa-form-control-activated-color: var(--accent);
+  --wa-form-control-activated-color: var(--primary);
 }
 
 wa-select.settings-select::part(combobox) {
@@ -600,7 +600,7 @@ wa-select.settings-select wa-option:focus-visible {
 }
 
 wa-select.settings-select wa-option:state(current) {
-  color: var(--accent-foreground);
+  color: var(--primary-foreground);
 }
 
 /* Forced colors suppresses the box-shadow ring and accent fill that stand in
