@@ -29,6 +29,7 @@ internal data class WearUiState(
   val agents: List<WearAgent> = emptyList(),
   val activeAgentId: String? = null,
   val selectedModelRef: String? = null,
+  val models: List<WearModel> = emptyList(),
   val proxyCapabilities: Set<WearProxyCapability> = emptySet(),
   val sessions: List<WearSession> = emptyList(),
   val selectedSession: WearSession? = null,
@@ -54,6 +55,7 @@ internal fun WearUiState.resetForPhoneChange(): WearUiState =
     agents = emptyList(),
     activeAgentId = null,
     selectedModelRef = null,
+    models = emptyList(),
     proxyCapabilities = emptySet(),
     sessions = emptyList(),
     selectedSession = null,
@@ -66,6 +68,30 @@ internal fun WearUiState.resetForPhoneChange(): WearUiState =
     realtimePlaybackFailed = false,
     talkBusy = false,
     controlBusy = false,
+    error = null,
+  )
+
+internal fun WearUiState.switchAgentContext(agentId: String): WearUiState =
+  copy(
+    activeAgentId = agentId,
+    sessions = emptyList(),
+    selectedSession = null,
+    messages = emptyList(),
+    streamText = null,
+    activeRunId = null,
+    selectedModelRef = null,
+    models = emptyList(),
+  )
+
+internal fun WearUiState.switchSessionContext(session: WearSession): WearUiState =
+  copy(
+    selectedSession = session,
+    messages = emptyList(),
+    streamText = null,
+    activeRunId = null,
+    selectedModelRef = session.modelRef,
+    realtimeTalk = WearRealtimeTalkSnapshot(),
+    talkBusy = false,
     error = null,
   )
 
@@ -134,19 +160,19 @@ internal class WearViewModel(
   }
 
   fun openSession(session: WearSession) {
-    endRealtimeTalkForNavigation()
-    mutableState.update {
-      it.copy(
-        selectedSession = session,
-        messages = emptyList(),
-        streamText = null,
-        activeRunId = null,
-        selectedModelRef = null,
-        realtimeTalk = WearRealtimeTalkSnapshot(),
-        talkBusy = false,
-        error = null,
-      )
+    val current = mutableState.value
+    if (
+      current.controlBusy ||
+      current.talkBusy ||
+      current.realtimeTalk.active ||
+      current.realtimeCapturing ||
+      current.realtimePlaying ||
+      current.selectedSession?.key == session.key
+    ) {
+      return
     }
+    endRealtimeTalkForNavigation()
+    mutableState.update { it.switchSessionContext(session) }
     loadHistory(session)
   }
 
@@ -285,18 +311,56 @@ internal class WearViewModel(
       mutableState.update { it.copy(controlBusy = true, error = null) }
       try {
         repository.selectAgent(agentId, phoneNodeId, current.proxyCapabilities)
-        mutableState.update {
-          it.copy(
-            activeAgentId = agentId,
-            sessions = emptyList(),
-            selectedSession = null,
-            messages = emptyList(),
-            streamText = null,
-            activeRunId = null,
-            selectedModelRef = null,
+        mutableState.update { it.switchAgentContext(agentId) }
+        refresh()
+      } catch (err: CancellationException) {
+        throw err
+      } catch (err: Throwable) {
+        recordFailure(err, loading = false)
+      } finally {
+        mutableState.update { it.copy(controlBusy = false) }
+      }
+    }
+  }
+
+  fun selectModel(modelRef: String) {
+    val current = mutableState.value
+    val phoneNodeId = current.phoneNodeId ?: return
+    val session = current.selectedSession ?: return
+    if (
+      current.controlBusy ||
+      current.talkBusy ||
+      current.realtimeTalk.active ||
+      current.realtimeCapturing ||
+      current.realtimePlaying ||
+      current.selectedModelRef == modelRef ||
+      current.models.none { model -> model.ref == modelRef } ||
+      WearProxyCapability.ModelControls !in current.proxyCapabilities
+    ) {
+      return
+    }
+    viewModelScope.launch {
+      mutableState.update { it.copy(controlBusy = true, error = null) }
+      try {
+        val acceptedModelRef =
+          repository.selectModel(
+            sessionKey = session.key,
+            modelRef = modelRef,
+            phoneNodeId = phoneNodeId,
+            capabilities = current.proxyCapabilities,
+          )
+        mutableState.update { state ->
+          val currentSession = state.selectedSession?.takeIf { it.key == session.key } ?: return@update state
+          val selectedSession = currentSession.copy(modelRef = acceptedModelRef)
+          state.copy(
+            selectedModelRef = acceptedModelRef,
+            selectedSession = selectedSession,
+            sessions =
+              state.sessions.map { item ->
+                if (item.key == selectedSession.key) selectedSession else item
+              },
           )
         }
-        refresh()
       } catch (err: CancellationException) {
         throw err
       } catch (err: Throwable) {
@@ -388,6 +452,17 @@ internal class WearViewModel(
                 phoneNodeId = status.phoneNodeId,
               )
             }
+          val modelList =
+            if (status.connected && WearProxyCapability.ModelControls in status.capabilities) {
+              repository.models(status.phoneNodeId, status.capabilities)
+            } else {
+              WearModelList(
+                models = emptyList(),
+                eventStreamId = sessionList.eventStreamId,
+                eventSequence = sessionList.eventSequence,
+                phoneNodeId = sessionList.phoneNodeId,
+              )
+            }
           if (mutableState.value.selectedSession?.key != previousSession?.key) return@launch
           val activeSessionKey =
             coherentWearActiveSessionKey(
@@ -424,9 +499,9 @@ internal class WearViewModel(
           val selectionChanged = selectedSession?.key != previousSession?.key
           val pendingEvents =
             finishSequenceSnapshot(
-              streamId = sessionList.eventStreamId,
-              sequence = sessionList.eventSequence,
-              sourceNodeId = sessionList.phoneNodeId,
+              streamId = modelList.eventStreamId,
+              sequence = modelList.eventSequence,
+              sourceNodeId = modelList.phoneNodeId,
             )
           loadJob = null
           mutableState.update {
@@ -440,7 +515,10 @@ internal class WearViewModel(
                 sessionList.activeAgentId
                   ?: status.activeAgentId
                   ?: agentList.agents.firstOrNull(WearAgent::selected)?.id,
-              selectedModelRef = wearSelectedModelRef(selectedSession?.key, activeSessionKey, status.selectedModelRef),
+              selectedModelRef =
+                selectedSession?.modelRef
+                  ?: wearSelectedModelRef(selectedSession?.key, activeSessionKey, status.selectedModelRef),
+              models = modelList.models,
               proxyCapabilities = status.capabilities,
               sessions = projectedSessions,
               selectedSession = selectedSession,
@@ -470,6 +548,7 @@ internal class WearViewModel(
               agents = emptyList(),
               activeAgentId = null,
               selectedModelRef = null,
+              models = emptyList(),
               proxyCapabilities = emptySet(),
               sessions = emptyList(),
               selectedSession = null,
@@ -511,7 +590,20 @@ internal class WearViewModel(
             it.copy(
               loading = false,
               connected = true,
-              selectedSession = session.copy(phoneNodeId = transcript.phoneNodeId),
+              selectedSession =
+                session.copy(
+                  phoneNodeId = transcript.phoneNodeId,
+                  modelRef = transcript.selectedModelRef ?: session.modelRef,
+                ),
+              selectedModelRef = transcript.selectedModelRef ?: session.modelRef,
+              sessions =
+                it.sessions.map { item ->
+                  if (item.key == session.key) {
+                    item.copy(modelRef = transcript.selectedModelRef ?: item.modelRef)
+                  } else {
+                    item
+                  }
+                },
               messages =
                 observedMessage?.let { message ->
                   mergeObservedMessageIntoSnapshot(transcript.messages, message)

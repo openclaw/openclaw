@@ -32,6 +32,11 @@ internal data class WearProxyAgent(
   val emoji: String?,
 )
 
+internal data class WearProxyModel(
+  val ref: String,
+  val name: String,
+)
+
 internal class WearProxyController(
   private val requestGateway: suspend (method: String, params: JsonObject) -> JsonElement,
   private val isGatewayConnected: () -> Boolean,
@@ -41,6 +46,8 @@ internal class WearProxyController(
   private val selectedModelRef: () -> String? = { null },
   private val agents: () -> List<WearProxyAgent> = { emptyList() },
   private val selectGatewayAgent: suspend (agentId: String) -> Boolean = { false },
+  private val models: () -> List<WearProxyModel> = { emptyList() },
+  private val selectSessionModel: suspend (sessionKey: String, modelRef: String) -> Boolean = { _, _ -> false },
   private val connectGateway: suspend () -> Unit = {},
   private val disconnectGateway: suspend () -> Unit = {},
   private val startRealtimeTalk:
@@ -58,6 +65,8 @@ internal class WearProxyController(
           WearRpcMethod.SessionsList -> listSessions(request.params)
           WearRpcMethod.AgentsList -> listAgents(request.params)
           WearRpcMethod.AgentsSelect -> selectAgent(request.params)
+          WearRpcMethod.ModelsList -> listModels(request.params)
+          WearRpcMethod.ModelsSelect -> selectModel(request.params)
           WearRpcMethod.GatewayConnect -> gatewayConnect(request.params)
           WearRpcMethod.GatewayDisconnect -> gatewayDisconnect(request.params)
           WearRpcMethod.ChatHistory -> chatHistory(request.params)
@@ -174,6 +183,60 @@ internal class WearProxyController(
       throw WearProxyGatewayException("not_found", "Agent is no longer available")
     }
     return buildJsonObject { put("activeAgentId", agentId) }
+  }
+
+  private fun listModels(params: JsonObject): JsonObject {
+    params.requireOnly()
+    val selected = selectedModelRef()
+    val availableModels =
+      models().mapNotNull { model ->
+        model.ref
+          .trim()
+          .takeIf(String::isNotEmpty)
+          ?.let { ref -> ref to model }
+      }
+    val boundedModels = availableModels.take(MAX_MODEL_COUNT).toMutableList()
+    availableModels
+      .firstOrNull { (ref) -> ref == selected }
+      ?.takeIf { selectedModel -> boundedModels.none { (ref) -> ref == selectedModel.first } }
+      ?.let { selectedModel ->
+        if (boundedModels.size == MAX_MODEL_COUNT) {
+          boundedModels[boundedModels.lastIndex] = selectedModel
+        } else {
+          boundedModels += selectedModel
+        }
+      }
+    return buildJsonObject {
+      put(
+        "models",
+        buildJsonArray {
+          boundedModels.forEach { (ref, model) ->
+            add(
+              buildJsonObject {
+                put("ref", ref.takeCodePoints(MAX_MODEL_REF_CHARS))
+                put("name", model.name.takeCodePoints(MAX_MODEL_NAME_CHARS))
+              },
+            )
+          }
+        },
+      )
+    }
+  }
+
+  private suspend fun selectModel(params: JsonObject): JsonObject {
+    params.requireOnly("sessionKey", "modelRef")
+    val sessionKey = params.stringParam("sessionKey", MAX_SESSION_KEY_CHARS)
+    val modelRef = params.stringParam("modelRef", MAX_MODEL_REF_CHARS)
+    if (models().none { model -> model.ref == modelRef }) {
+      throw WearProxyGatewayException("not_found", "Model is no longer available")
+    }
+    if (!selectSessionModel(sessionKey, modelRef)) {
+      throw WearProxyGatewayException("action_rejected", "Model could not be changed")
+    }
+    return buildJsonObject {
+      put("sessionKey", sessionKey)
+      put("selectedModelRef", modelRef)
+    }
   }
 
   private suspend fun gatewayConnect(params: JsonObject): JsonObject {
@@ -315,7 +378,9 @@ internal class WearProxyController(
     const val MAX_AGENT_ID_CHARS = 200
     const val MAX_AGENT_NAME_CHARS = 200
     const val MAX_AGENT_EMOJI_CHARS = 32
+    const val MAX_MODEL_COUNT = 50
     const val MAX_MODEL_REF_CHARS = 200
+    const val MAX_MODEL_NAME_CHARS = 200
     const val MAX_SESSION_LABEL_CHARS = 200
     const val MAX_EVENT_TEXT_CHARS = 2_000
     const val MAX_ERROR_CODE_CHARS = 64
@@ -367,6 +432,8 @@ private fun projectHistory(source: JsonObject): JsonObject =
     copyLong(source, "nextOffset")
     copyLong(source, "totalMessages")
     copyBoolean(source, "hasMore")
+    ((source["sessionInfo"] as? JsonObject)?.providerQualifiedModelRef() ?: source.providerQualifiedModelRef())
+      ?.let { put("selectedModelRef", it.takeCodePoints(MAX_PROJECTED_MODEL_REF_CHARS)) }
     val inFlight = source["inFlightRun"] as? JsonObject
     if (inFlight != null) {
       put(
@@ -395,6 +462,7 @@ private fun projectSession(
     copyBoolean(source, "pinned")
     copyBoolean(source, "unread")
     copyBoolean(source, "hasActiveRun")
+    source.providerQualifiedModelRef()?.let { put("modelRef", it.takeCodePoints(MAX_PROJECTED_MODEL_REF_CHARS)) }
   }
 }
 
@@ -509,6 +577,12 @@ private fun JsonElement?.asArrayOrNull(): JsonArray? = this as? JsonArray
 
 private fun JsonObject.stringOrNull(name: String): String? = (this[name] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
 
+private fun JsonObject.providerQualifiedModelRef(): String? {
+  val model = stringOrNull("model")?.trim()?.takeIf(String::isNotEmpty) ?: return null
+  val provider = stringOrNull("modelProvider")?.trim()?.takeIf(String::isNotEmpty) ?: return model
+  return if (model.startsWith("$provider/")) model else "$provider/$model"
+}
+
 private fun JsonElement?.booleanPrimitiveOrNull(): Boolean? = (this as? JsonPrimitive)?.takeUnless { it.isString }?.booleanOrNull
 
 private fun JsonElement?.longPrimitiveOrNull(): Long? = (this as? JsonPrimitive)?.takeUnless { it.isString }?.longOrNull
@@ -565,6 +639,7 @@ private fun String.takeUtf8Bytes(maxBytes: Int): String {
 
 private const val MAX_SESSION_KEY_CHARS = 512
 private const val MAX_PROJECTED_AGENT_ID_CHARS = 200
+private const val MAX_PROJECTED_MODEL_REF_CHARS = 200
 private const val MAX_RUN_ID_CHARS = 128
 private const val MAX_IDEMPOTENCY_KEY_CHARS = 128
 private const val MAX_SESSION_LABEL_CHARS = 200
