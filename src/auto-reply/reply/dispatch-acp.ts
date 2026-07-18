@@ -778,6 +778,11 @@ export async function tryDispatchAcpReply(params: {
 
     await projector.flush(true);
     if (params.abortSignal?.aborted) {
+      // A cancelled runtime can return normally after the projector has already
+      // delivered partial output. Keep the bound transcript aligned with it.
+      await persistTranscript(
+        delivery.getAccumulatedFinalText() || delivery.getAccumulatedBlockText(),
+      );
       const counts = params.dispatcher.getQueuedCounts();
       delivery.applyRoutedCounts(counts);
       params.recordProcessed("completed", { reason: "acp_aborted" });

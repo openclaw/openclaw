@@ -821,9 +821,10 @@ describe("tryDispatchAcpReply", () => {
     expect(auditMocks.emitAcpLifecycleError).not.toHaveBeenCalled();
   });
 
-  it("records cancellation only after ACP output flushing", async () => {
+  it("flushes and persists ACP output before recording cancellation", async () => {
     setReadyAcpResolution();
     const abortController = new AbortController();
+    const { dispatcher } = createDispatcher();
     managerMocks.runTurn.mockImplementationOnce(
       async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
         await onEvent({ type: "text_delta", text: "partial", tag: "agent_message_chunk" });
@@ -835,8 +836,18 @@ describe("tryDispatchAcpReply", () => {
     await runDispatch({
       bodyForAgent: "cancel this turn",
       abortSignal: abortController.signal,
+      dispatcher,
     });
 
+    expect(dispatcherCall(dispatcher.sendFinalReply).text).toBe("partial");
+    expect(transcriptMocks.persistAcpDispatchTranscript).toHaveBeenCalledTimes(1);
+    const transcript = requireRecord(
+      mockArg(transcriptMocks.persistAcpDispatchTranscript, 0, 0, "transcript call"),
+      "transcript call",
+    );
+    expect(transcript.sessionKey).toBe(sessionKey);
+    expect(transcript.promptText).toBe("cancel this turn");
+    expect(transcript.finalText).toBe("partial");
     expect(auditMocks.emitAcpLifecycleEnd).toHaveBeenCalledWith(
       expect.objectContaining({
         abortSignal: abortController.signal,
