@@ -119,7 +119,7 @@ function selectReusableTab<
   url: string;
 }) {
   const matches = params.tabs.filter((tab) =>
-    params.adapter.urls.isSameMeeting(tab.url, params.url),
+    params.adapter.urls.isRecoverableTab(tab, params.url),
   );
   const accountHint = params.adapter.urls.accountHint(params.url);
   const tab = matches.find(

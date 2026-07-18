@@ -83,7 +83,11 @@ export type MeetingSessionRuntimeOptions<
     options?: { force?: boolean; readOnly?: boolean },
   ): Promise<void>;
   refreshStatus(session: TSession): Promise<void>;
-  refreshReusableSession(session: TSession): Promise<void>;
+  refreshReusableSession(
+    session: TSession,
+    request: TRequest,
+    resolved: MeetingResolvedJoin<TTransport, TMode>,
+  ): Promise<{ keepBrowserTab: boolean } | void>;
   ensureRealtimeBridge(
     session: TSession,
   ): Promise<MeetingSessionRuntimeHandles<THealth> | undefined>;
@@ -411,8 +415,13 @@ export class MeetingSessionRuntime<
     }
     let reusable = activeSessions.find((session) => this.isReusableSession(session, resolved));
     if (reusable) {
-      await this.options.refreshReusableSession(reusable);
+      const refreshResult = await this.options.refreshReusableSession(reusable, request, resolved);
       if (reusable.state !== "active") {
+        // The refresh hook runs inside the join lock, so it marks stale sessions
+        // ended and lets this owner perform cleanup without recursive lock entry.
+        await this.#leaveSession(reusable, {
+          keepBrowserTab: refreshResult?.keepBrowserTab ?? true,
+        });
         reusable = undefined;
       }
     }

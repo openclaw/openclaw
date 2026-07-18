@@ -1306,6 +1306,7 @@
                   "plugins/logbook",
                   "plugins/google-meet",
                   "plugins/teams-meetings",
+                  "plugins/zoom-meetings",
                   "plugins/workboard",
                   "plugins/webhooks",
                   "plugins/admin-http-rpc",

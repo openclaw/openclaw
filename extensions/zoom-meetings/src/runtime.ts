@@ -7,56 +7,57 @@ import {
 } from "openclaw/plugin-sdk/meeting-runtime";
 import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
-import type { TeamsMeetingsConfig, TeamsMeetingsMode, TeamsMeetingsTransport } from "./config.js";
+import type { ZoomMeetingsConfig, ZoomMeetingsMode, ZoomMeetingsTransport } from "./config.js";
 import {
-  testTeamsMeetingListening,
-  testTeamsMeetingSpeech,
-  type TeamsMeetingsProbeContext,
+  testZoomMeetingListening,
+  testZoomMeetingSpeech,
+  type ZoomMeetingsProbeContext,
 } from "./runtime-probes.js";
-import { createTeamsMeetingsSession } from "./runtime-session.js";
-import { getTeamsMeetingsSetupStatus } from "./runtime-setup.js";
+import { createZoomMeetingsSession } from "./runtime-session.js";
+import { getZoomMeetingsSetupStatus } from "./runtime-setup.js";
 import {
-  launchTeamsMeetingInChrome,
-  launchTeamsMeetingOnNode,
-  leaveTeamsMeetingInBrowser,
-  readTeamsMeetingTranscript,
-  recoverCurrentTeamsMeetingTab,
+  launchZoomMeetingInChrome,
+  launchZoomMeetingOnNode,
+  leaveZoomMeetingInBrowser,
+  readZoomMeetingTranscript,
+  recoverCurrentZoomMeetingTab,
 } from "./transports/chrome.js";
-import {
-  TEAMS_MEETINGS_PLATFORM_ADAPTER,
-  isTeamsMeetingsRealtimeRouteReady,
-  isTeamsMeetingsTalkBackMode,
-} from "./transports/teams-meetings-platform-adapter.js";
 import type {
-  TeamsMeetingsBrowserTab,
-  TeamsMeetingsChromeHealth,
-  TeamsMeetingsJoinRequest,
-  TeamsMeetingsJoinResult,
-  TeamsMeetingsSession,
+  ZoomMeetingsBrowserTab,
+  ZoomMeetingsChromeHealth,
+  ZoomMeetingsJoinRequest,
+  ZoomMeetingsJoinResult,
+  ZoomMeetingsSession,
 } from "./transports/types.js";
+import {
+  ZOOM_MEETINGS_PLATFORM_ADAPTER,
+  isZoomMeetingsRealtimeRouteReady,
+  isZoomMeetingsTalkBackMode,
+} from "./transports/zoom-meetings-platform-adapter.js";
+import { hasSameZoomMeetingJoinCredential } from "./transports/zoom-meetings-urls.js";
 
-type ManualActionReason = NonNullable<TeamsMeetingsChromeHealth["manualActionReason"]>;
-type SpeechBlockedReason = NonNullable<TeamsMeetingsChromeHealth["speechBlockedReason"]>;
+type ManualActionReason = NonNullable<ZoomMeetingsChromeHealth["manualActionReason"]>;
+type SpeechBlockedReason = NonNullable<ZoomMeetingsChromeHealth["speechBlockedReason"]>;
 type SessionRuntime = MeetingSessionRuntime<
-  TeamsMeetingsSession,
-  TeamsMeetingsJoinRequest,
-  TeamsMeetingsTransport,
-  TeamsMeetingsMode,
-  TeamsMeetingsChromeHealth,
-  TeamsMeetingsBrowserTab,
+  ZoomMeetingsSession,
+  ZoomMeetingsJoinRequest,
+  ZoomMeetingsTransport,
+  ZoomMeetingsMode,
+  ZoomMeetingsChromeHealth,
+  ZoomMeetingsBrowserTab,
   ManualActionReason,
   SpeechBlockedReason
 >;
 type JoinContext = MeetingSessionRuntimeJoinContext<
-  TeamsMeetingsSession,
-  TeamsMeetingsTransport,
-  TeamsMeetingsMode,
-  TeamsMeetingsChromeHealth,
-  TeamsMeetingsBrowserTab
+  ZoomMeetingsSession,
+  ZoomMeetingsTransport,
+  ZoomMeetingsMode,
+  ZoomMeetingsChromeHealth,
+  ZoomMeetingsBrowserTab
 >;
 type LaunchResult =
-  | Awaited<ReturnType<typeof launchTeamsMeetingInChrome>>
-  | Awaited<ReturnType<typeof launchTeamsMeetingOnNode>>;
+  | Awaited<ReturnType<typeof launchZoomMeetingInChrome>>
+  | Awaited<ReturnType<typeof launchZoomMeetingOnNode>>;
 type AudioBridge = NonNullable<LaunchResult["audioBridge"]>;
 
 function nowIso(): string {
@@ -64,29 +65,37 @@ function nowIso(): string {
 }
 
 function resolveTransport(
-  request: TeamsMeetingsJoinRequest,
-  config: TeamsMeetingsConfig,
-): TeamsMeetingsTransport {
+  request: ZoomMeetingsJoinRequest,
+  config: ZoomMeetingsConfig,
+): ZoomMeetingsTransport {
   return request.transport ?? (config.chromeNode.node ? "chrome-node" : "chrome");
 }
 
-function withSessionAgentConfig(config: TeamsMeetingsConfig, agentId: string): TeamsMeetingsConfig {
-  return config.realtime.agentId === agentId
+function withSessionAgentConfig(config: ZoomMeetingsConfig, agentId: string): ZoomMeetingsConfig {
+  const consultAgentId = config.realtime.agentId ?? agentId;
+  return config.realtime.agentId === consultAgentId
     ? config
-    : { ...config, realtime: { ...config.realtime, agentId } };
+    : { ...config, realtime: { ...config.realtime, agentId: consultAgentId } };
 }
 
-function noteSession(session: TeamsMeetingsSession, note: string): void {
+function noteSession(session: ZoomMeetingsSession, note: string): void {
   session.notes = [...session.notes.filter((item) => item !== note), note];
 }
 
-export class TeamsMeetingsRuntime {
+function isAwaitingAdmission(session: ZoomMeetingsSession): boolean {
+  return (
+    session.chrome?.health?.lobbyWaiting === true ||
+    session.chrome?.health?.manualActionReason === "zoom-admission-required"
+  );
+}
+
+export class ZoomMeetingsRuntime {
   readonly #sessions: SessionRuntime;
   readonly #requesterSessionKeys = new Map<string, string>();
 
   constructor(
     private readonly params: {
-      config: TeamsMeetingsConfig;
+      config: ZoomMeetingsConfig;
       fullConfig: OpenClawConfig;
       runtime: PluginRuntime;
       logger: RuntimeLogger;
@@ -94,7 +103,7 @@ export class TeamsMeetingsRuntime {
   ) {
     this.#sessions = new MeetingSessionRuntime({
       logger: params.logger,
-      logScope: TEAMS_MEETINGS_PLATFORM_ADAPTER.logScope,
+      logScope: ZOOM_MEETINGS_PLATFORM_ADAPTER.logScope,
       formatError: formatErrorMessage,
       reuseExistingBrowserTab: params.config.chrome.reuseExistingTab,
       waitForInCallMs: params.config.chrome.waitForInCallMs,
@@ -103,38 +112,37 @@ export class TeamsMeetingsRuntime {
       transientSpeechBlockedReasons: new Set<SpeechBlockedReason>([
         "not-in-call",
         "browser-unverified",
-        "teams-microphone-muted",
+        "zoom-microphone-muted",
       ]),
       messages: {
         previousBrowserLeaveFailed:
-          "Could not leave the previous Teams meeting tab before reassignment.",
+          "Could not leave the previous Zoom meeting tab before reassignment.",
         reassignedSessionNote:
-          "Ended before the same Teams meeting tab was reassigned to another agent.",
-        reusedSessionNote: "Reused existing active Microsoft Teams meeting session.",
+          "Ended before the same Zoom meeting tab was reassigned to another agent.",
+        reusedSessionNote: "Reused existing active Zoom meeting session.",
         replacementBrowserLeaveFailed:
-          "Could not leave the previous Teams meeting tab before reassignment.",
-        speechBlockedFallback: "Realtime speech blocked until Microsoft Teams is ready.",
+          "Could not leave the previous Zoom meeting tab before reassignment.",
+        speechBlockedFallback: "Realtime speech blocked until Zoom is ready.",
         speech: {
           audioBridgeUnavailable: "Realtime speech requires an active Chrome audio bridge.",
-          browserUnverified: "Microsoft Teams browser state has not been verified yet.",
-          manualActionFallback:
-            "Resolve the Microsoft Teams browser prompt before asking OpenClaw to speak.",
-          microphoneMuted: "Turn on the OpenClaw Teams microphone before asking OpenClaw to speak.",
-          microphoneMutedReason: "teams-microphone-muted",
-          notInCall: "Microsoft Teams has not reported that the browser guest is in the call.",
+          browserUnverified: "Zoom browser state has not been verified yet.",
+          manualActionFallback: "Resolve the Zoom browser prompt before asking OpenClaw to speak.",
+          microphoneMuted: "Turn on the OpenClaw Zoom microphone before asking OpenClaw to speak.",
+          microphoneMutedReason: "zoom-microphone-muted",
+          notInCall: "Zoom has not reported that the browser guest is in the call.",
           notInCallReason: "not-in-call",
           browserUnverifiedReason: "browser-unverified",
           audioBridgeUnavailableReason: "audio-bridge-unavailable",
         },
       },
       resolveJoin: (request) => ({
-        url: TEAMS_MEETINGS_PLATFORM_ADAPTER.urls.validateAndNormalize(request.url),
+        url: ZOOM_MEETINGS_PLATFORM_ADAPTER.urls.validateAndNormalize(request.url),
         transport: resolveTransport(request, params.config),
         mode: request.mode ?? params.config.defaultMode,
-        agentId: normalizeAgentId(request.agentId ?? params.config.realtime.agentId),
+        agentId: normalizeAgentId(request.agentId),
       }),
       createSession: ({ request, resolved, createdAt }) => {
-        const session = createTeamsMeetingsSession({ config: params.config, resolved, createdAt });
+        const session = createZoomMeetingsSession({ config: params.config, resolved, createdAt });
         if (request.requesterSessionKey) {
           this.#requesterSessionKeys.set(session.id, request.requesterSessionKey);
         }
@@ -143,12 +151,12 @@ export class TeamsMeetingsRuntime {
       resolveSpeechInstructions: (request) =>
         request.message ?? params.config.realtime.introMessage,
       isBrowserTransport: () => true,
-      isTalkBackMode: isTeamsMeetingsTalkBackMode,
+      isTalkBackMode: isZoomMeetingsTalkBackMode,
       isTranscribeMode: (mode) => mode === "transcribe",
       sameMeetingUrl: (left, right) =>
-        TEAMS_MEETINGS_PLATFORM_ADAPTER.urls.isSameMeeting(left, right),
+        ZOOM_MEETINGS_PLATFORM_ADAPTER.urls.isSameMeeting(left, right),
       normalizeMeetingUrlForReuse: (url) =>
-        TEAMS_MEETINGS_PLATFORM_ADAPTER.urls.normalizeForReuse(url),
+        ZOOM_MEETINGS_PLATFORM_ADAPTER.urls.normalizeForReuse(url),
       getBrowser: (session) =>
         session.chrome
           ? {
@@ -156,7 +164,9 @@ export class TeamsMeetingsRuntime {
               nodeId: session.chrome.nodeId,
               tab: session.chrome.browserTab,
               health: session.chrome.health,
-              hasAudioBridge: Boolean(session.chrome.audioBridge),
+              hasAudioBridge: Boolean(
+                session.chrome.audioBridge && session.chrome.health?.bridgeClosed !== true,
+              ),
             }
           : undefined,
       setBrowserTab: (session, tab) => {
@@ -174,9 +184,53 @@ export class TeamsMeetingsRuntime {
       releaseBrowserTab: async (session) => await this.#releaseBrowserTab(session),
       refreshBrowserHealth: async (session, options) =>
         await this.#refreshBrowserHealth(session, options),
-      refreshStatus: async (session) =>
-        await this.#sessions.refreshBrowserHealth(session, { force: true, readOnly: true }),
-      refreshReusableSession: async (_session, _request, _resolved) => {},
+      refreshStatus: async (session) => {
+        await this.#sessions.refreshBrowserHealth(session, {
+          force: true,
+          readOnly: !isAwaitingAdmission(session),
+        });
+        const confirmedTabMissing = session.chrome?.health?.status === "browser-tab-missing";
+        if (session.state === "active" && confirmedTabMissing) {
+          session.browserLeft = true;
+          await this.#sessions.leave(session.id, { keepBrowserTab: true });
+          this.#requesterSessionKeys.delete(session.id);
+        } else if (session.state === "active" && session.chrome?.health?.meetingEnded === true) {
+          await this.leave(session.id);
+        }
+      },
+      refreshReusableSession: async (session, request) => {
+        await this.#sessions.refreshBrowserHealth(session, {
+          force: true,
+          readOnly: false,
+        });
+        const browser = session.chrome;
+        const health = browser?.health;
+        const staleSession =
+          !browser?.browserTab ||
+          health?.meetingEnded === true ||
+          health?.manualActionReason === "zoom-session-conflict" ||
+          health?.manualActionReason === "browser-control-unavailable" ||
+          health?.bridgeClosed === true;
+        const replacePendingJoin =
+          health?.inCall !== true &&
+          health?.manualActionReason === "zoom-passcode-required" &&
+          !hasSameZoomMeetingJoinCredential(session.url, request.url);
+        if (staleSession || replacePendingJoin) {
+          session.state = "ended";
+          session.updatedAt = nowIso();
+          noteSession(
+            session,
+            replacePendingJoin
+              ? "Ended pending Zoom session after receiving a corrected meeting credential."
+              : "Ended stale Zoom session before opening a replacement.",
+          );
+          this.#requesterSessionKeys.delete(session.id);
+          return {
+            keepBrowserTab:
+              !replacePendingJoin && health?.meetingEnded !== true && health?.bridgeClosed !== true,
+          };
+        }
+      },
       ensureRealtimeBridge: async (session) => await this.#ensureRealtimeBridge(session),
       captureTranscript: async (session, options) =>
         await this.#captureTranscript(session, options),
@@ -184,7 +238,7 @@ export class TeamsMeetingsRuntime {
     });
   }
 
-  list(): TeamsMeetingsSession[] {
+  list(): ZoomMeetingsSession[] {
     return this.#sessions.list();
   }
 
@@ -192,9 +246,11 @@ export class TeamsMeetingsRuntime {
     return this.list().some((session) => session.id === sessionId && session.agentId === agentId);
   }
 
-  async join(request: TeamsMeetingsJoinRequest): Promise<TeamsMeetingsJoinResult> {
+  async join(request: ZoomMeetingsJoinRequest): Promise<ZoomMeetingsJoinResult> {
     try {
-      return await this.#sessions.join(request);
+      const url = ZOOM_MEETINGS_PLATFORM_ADAPTER.urls.validateAndNormalize(request.url);
+      const agentId = normalizeAgentId(request.agentId);
+      return await this.#sessions.join({ ...request, agentId, url });
     } catch (error) {
       const activeIds = new Set(this.list().map((session) => session.id));
       for (const sessionId of this.#requesterSessionKeys.keys()) {
@@ -237,8 +293,8 @@ export class TeamsMeetingsRuntime {
     return await this.#sessions.speak(sessionId, instructions);
   }
 
-  async setupStatus(options?: { mode?: TeamsMeetingsMode; transport?: TeamsMeetingsTransport }) {
-    return await getTeamsMeetingsSetupStatus({
+  async setupStatus(options?: { mode?: ZoomMeetingsMode; transport?: ZoomMeetingsTransport }) {
+    return await getZoomMeetingsSetupStatus({
       config: this.params.config,
       fullConfig: this.params.fullConfig,
       runtime: this.params.runtime,
@@ -246,19 +302,18 @@ export class TeamsMeetingsRuntime {
     });
   }
 
-  async testSpeech(request: TeamsMeetingsJoinRequest) {
-    return await testTeamsMeetingSpeech(this.#probeContext(), request);
+  async testSpeech(request: ZoomMeetingsJoinRequest) {
+    return await testZoomMeetingSpeech(this.#probeContext(), request);
   }
 
-  async testListen(request: TeamsMeetingsJoinRequest) {
-    return await testTeamsMeetingListening(this.#probeContext(), request);
+  async testListen(request: ZoomMeetingsJoinRequest) {
+    return await testZoomMeetingListening(this.#probeContext(), request);
   }
 
-  #probeContext(): TeamsMeetingsProbeContext {
+  #probeContext(): ZoomMeetingsProbeContext {
     return {
       config: this.params.config,
-      resolveAgentId: (request) =>
-        normalizeAgentId(request.agentId ?? this.params.config.realtime.agentId),
+      resolveAgentId: (request) => normalizeAgentId(request.agentId),
       list: () => this.list(),
       join: async (request) => await this.join(request),
       isReusable: (session, resolved) => this.#sessions.isReusableSession(session, resolved),
@@ -270,14 +325,14 @@ export class TeamsMeetingsRuntime {
   }
 
   async #joinTransport(
-    request: TeamsMeetingsJoinRequest,
-    session: TeamsMeetingsSession,
+    request: ZoomMeetingsJoinRequest,
+    session: ZoomMeetingsSession,
     context: JoinContext,
   ): Promise<{ delegatedSpoken?: boolean }> {
     const config = withSessionAgentConfig(this.params.config, session.agentId);
     const result: LaunchResult =
       session.transport === "chrome-node"
-        ? await launchTeamsMeetingOnNode({
+        ? await launchZoomMeetingOnNode({
             runtime: this.params.runtime,
             config,
             fullConfig: this.params.fullConfig,
@@ -287,7 +342,7 @@ export class TeamsMeetingsRuntime {
             url: session.url,
             logger: this.params.logger,
           })
-        : await launchTeamsMeetingInChrome({
+        : await launchZoomMeetingInChrome({
             runtime: this.params.runtime,
             config,
             fullConfig: this.params.fullConfig,
@@ -313,6 +368,9 @@ export class TeamsMeetingsRuntime {
       browserTab: tab,
       health: result.browser,
     };
+    if (result.browser?.meetingEnded === true) {
+      throw new Error("The Zoom meeting has already ended.");
+    }
     const handles = this.#attachAudioBridge(session, result.audioBridge);
     if (handles) {
       context.attachRuntimeHandles(session, handles);
@@ -320,20 +378,20 @@ export class TeamsMeetingsRuntime {
     session.notes.push(
       result.audioBridge
         ? session.transport === "chrome-node"
-          ? "Teams guest joined in Chrome on the selected node with realtime audio through the node bridge."
-          : "Teams guest joined in local Chrome with realtime audio through BlackHole 2ch and SoX."
+          ? "Zoom guest joined in Chrome on the selected node with realtime audio through the node bridge."
+          : "Zoom guest joined in local Chrome with realtime audio through BlackHole 2ch and SoX."
         : session.mode === "transcribe"
-          ? "Teams guest joined observe-only with live-caption transcript capture."
-          : "Teams guest join is waiting for the browser to become ready before starting realtime audio.",
+          ? "Zoom guest joined observe-only with live-caption transcript capture."
+          : "Zoom guest join is waiting for the browser to become ready before starting realtime audio.",
     );
     this.#sessions.refreshSpeechReadiness(session);
     return {};
   }
 
   #attachAudioBridge(
-    session: TeamsMeetingsSession,
+    session: ZoomMeetingsSession,
     audioBridge: AudioBridge | undefined,
-  ): MeetingSessionRuntimeHandles<TeamsMeetingsChromeHealth> | undefined {
+  ): MeetingSessionRuntimeHandles<ZoomMeetingsChromeHealth> | undefined {
     if (!session.chrome || !audioBridge) {
       return undefined;
     }
@@ -341,6 +399,7 @@ export class TeamsMeetingsRuntime {
       type: audioBridge.type,
       provider: audioBridge.providerId,
     };
+    session.chrome.health = { ...session.chrome.health, bridgeClosed: false };
     return {
       stop: audioBridge.stop,
       speak: audioBridge.speak,
@@ -349,16 +408,20 @@ export class TeamsMeetingsRuntime {
   }
 
   async #ensureRealtimeBridge(
-    session: TeamsMeetingsSession,
-  ): Promise<MeetingSessionRuntimeHandles<TeamsMeetingsChromeHealth> | undefined> {
+    session: ZoomMeetingsSession,
+  ): Promise<MeetingSessionRuntimeHandles<ZoomMeetingsChromeHealth> | undefined> {
+    const bridgeClosed = session.chrome?.health?.bridgeClosed === true;
     if (
-      !isTeamsMeetingsTalkBackMode(session.mode) ||
+      !isZoomMeetingsTalkBackMode(session.mode) ||
       session.state !== "active" ||
       !session.chrome ||
-      session.chrome.audioBridge ||
-      !isTeamsMeetingsRealtimeRouteReady(session.mode, session.chrome.health)
+      (session.chrome.audioBridge && !bridgeClosed) ||
+      !isZoomMeetingsRealtimeRouteReady(session.mode, session.chrome.health)
     ) {
       return undefined;
+    }
+    if (bridgeClosed) {
+      session.chrome.audioBridge = undefined;
     }
     const config = withSessionAgentConfig(this.params.config, session.agentId);
     const recoveryConfig = {
@@ -368,7 +431,7 @@ export class TeamsMeetingsRuntime {
     };
     const result =
       session.transport === "chrome-node"
-        ? await launchTeamsMeetingOnNode({
+        ? await launchZoomMeetingOnNode({
             runtime: this.params.runtime,
             config: recoveryConfig,
             fullConfig: this.params.fullConfig,
@@ -379,7 +442,7 @@ export class TeamsMeetingsRuntime {
             url: session.url,
             logger: this.params.logger,
           })
-        : await launchTeamsMeetingInChrome({
+        : await launchZoomMeetingInChrome({
             runtime: this.params.runtime,
             config: recoveryConfig,
             fullConfig: this.params.fullConfig,
@@ -408,11 +471,11 @@ export class TeamsMeetingsRuntime {
   }
 
   async #refreshBrowserHealth(
-    session: TeamsMeetingsSession,
+    session: ZoomMeetingsSession,
     options: { readOnly?: boolean; timeoutMs?: number } = {},
   ): Promise<void> {
     try {
-      const result = await recoverCurrentTeamsMeetingTab({
+      const result = await recoverCurrentZoomMeetingTab({
         runtime: this.params.runtime,
         config: this.params.config,
         meetingSessionId: session.id,
@@ -438,15 +501,53 @@ export class TeamsMeetingsRuntime {
           session.chrome.health = { ...session.chrome.health, ...result.browser };
         }
         session.updatedAt = nowIso();
+      } else if (session.chrome) {
+        session.chrome.browserTab = undefined;
+        session.browserLeft = true;
+        session.chrome.health = {
+          ...session.chrome.health,
+          inCall: false,
+          micMuted: undefined,
+          captioning: false,
+          audioInputRouted: false,
+          audioOutputRouted: false,
+          manualActionRequired: true,
+          manualActionReason: "browser-control-unavailable",
+          manualActionMessage: result.message,
+          status: "browser-tab-missing",
+          notes: [
+            ...(session.chrome.health?.notes ?? []).filter((note) => note !== result.message),
+            result.message,
+          ],
+        };
+        session.updatedAt = nowIso();
       }
     } catch (error) {
-      this.params.logger.debug?.(
-        `${TEAMS_MEETINGS_PLATFORM_ADAPTER.logScope} browser readiness refresh ignored: ${formatErrorMessage(error)}`,
-      );
+      const message = `Zoom browser readiness refresh failed: ${formatErrorMessage(error)}`;
+      this.params.logger.debug?.(`${ZOOM_MEETINGS_PLATFORM_ADAPTER.logScope} ${message}`);
+      if (session.chrome) {
+        session.chrome.health = {
+          ...session.chrome.health,
+          inCall: false,
+          micMuted: undefined,
+          captioning: false,
+          audioInputRouted: false,
+          audioOutputRouted: false,
+          manualActionRequired: true,
+          manualActionReason: "browser-control-unavailable",
+          manualActionMessage: message,
+          status: "browser-control",
+          notes: [
+            ...(session.chrome.health?.notes ?? []).filter((note) => note !== message),
+            message,
+          ],
+        };
+        session.updatedAt = nowIso();
+      }
     }
   }
 
-  async #captureTranscript(session: TeamsMeetingsSession, options: { finalize?: boolean } = {}) {
+  async #captureTranscript(session: ZoomMeetingsSession, options: { finalize?: boolean } = {}) {
     // Recovery permits caption setup but atomically refuses a different live
     // session owner, so stale sessions read their archived page buffer instead.
     await this.#sessions.refreshCaptionHealth(session);
@@ -454,7 +555,7 @@ export class TeamsMeetingsRuntime {
     if (!tab) {
       return undefined;
     }
-    return await readTeamsMeetingTranscript({
+    return await readZoomMeetingTranscript({
       runtime: this.params.runtime,
       config: this.params.config,
       finalize: options.finalize,
@@ -465,12 +566,12 @@ export class TeamsMeetingsRuntime {
     });
   }
 
-  async #releaseBrowserTab(session: TeamsMeetingsSession): Promise<boolean | undefined> {
+  async #releaseBrowserTab(session: ZoomMeetingsSession): Promise<boolean | undefined> {
     const tab = session.chrome?.browserTab;
     if (!tab) {
       noteSession(
         session,
-        "No tracked Teams meeting tab; leave the browser meeting manually if it is still active.",
+        "No tracked Zoom meeting tab; leave the browser meeting manually if it is still active.",
       );
       session.browserLeft = false;
       return false;
@@ -483,11 +584,11 @@ export class TeamsMeetingsRuntime {
         other.chrome?.nodeId === session.chrome?.nodeId,
     );
     if (shared) {
-      noteSession(session, "Kept the shared Teams meeting tab open for another active session.");
+      noteSession(session, "Kept the shared Zoom meeting tab open for another active session.");
       return undefined;
     }
     try {
-      const result = await leaveTeamsMeetingInBrowser({
+      const result = await leaveZoomMeetingInBrowser({
         runtime: this.params.runtime,
         config: this.params.config,
         meetingSessionId: session.id,
@@ -499,6 +600,8 @@ export class TeamsMeetingsRuntime {
       if (result.left && session.chrome) {
         session.chrome.browserTab = undefined;
         if (session.chrome.health) {
+          // MeetingSessionRuntime owns the canonical in-call/manual reset after this
+          // release reports success; this plugin clears only Zoom-specific health.
           session.chrome.health = {
             ...session.chrome.health,
             captioning: false,
@@ -516,7 +619,7 @@ export class TeamsMeetingsRuntime {
     } catch (error) {
       noteSession(
         session,
-        `Browser control could not leave the Teams meeting tab: ${formatErrorMessage(error)}`,
+        `Browser control could not leave the Zoom meeting tab: ${formatErrorMessage(error)}`,
       );
       session.browserLeft = false;
       return false;
