@@ -143,6 +143,26 @@ describe("groq provider compat", () => {
     });
     expect(alternateAlias[1]).toEqual({ max_completion_tokens: 1_024 });
 
+    payloadHookCalls = 0;
+    const parallelToolAliasCollision = await capturePayloads(
+      undefined,
+      matchingError,
+      32_768,
+      (payload) => {
+        const record = payload as Record<string, unknown>;
+        payloadHookCalls += 1;
+        return payloadHookCalls === 1
+          ? payload
+          : {
+              ...record,
+              parallel_tool_calls: true,
+              parallelToolCalls: false,
+            };
+      },
+    );
+    expect(payloadHookCalls).toBe(2);
+    expect(parallelToolAliasCollision[1]).toEqual({ max_completion_tokens: 1_024 });
+
     for (const unrelatedMessage of [
       "401 Unauthorized",
       "400 malformed request",

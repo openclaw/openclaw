@@ -63,6 +63,8 @@ function wrapGroqOversizedRequestRecovery(
         const record = finalPayload as Record<string, unknown>;
         delete record.tools;
         delete record.tool_choice;
+        delete record.parallel_tool_calls;
+        delete record.parallelToolCalls;
         delete record.max_tokens;
         delete record.max_completion_tokens;
         record.max_completion_tokens = GROQ_FALLBACK_MAX_TOKENS;
