@@ -22964,11 +22964,6 @@
       "translated": "Ajan avatarı"
     },
     {
-      "id": "native.apple.8509385953c19619",
-      "source": "\\(display.emoji) \\(display.title)",
-      "translated": "\\(display.emoji) \\(display.title)"
-    },
-    {
       "id": "native.apple.6426e369511b043c",
       "source": "Message usage",
       "translated": "Mesaj kullanımı"
@@ -22977,16 +22972,6 @@
       "id": "native.apple.3c8c3679fd99c074",
       "source": "Voice note",
       "translated": "Voice note"
-    },
-    {
-      "id": "native.apple.aff6385b0a8dd0ac",
-      "source": "Show full output",
-      "translated": "Tam çıktıyı göster"
-    },
-    {
-      "id": "native.apple.b9c78020ae8be34a",
-      "source": "Show less",
-      "translated": "Daha az göster"
     },
     {
       "id": "native.apple.e9914cfc93a514cb",
@@ -23012,11 +22997,6 @@
       "id": "native.apple.142c01bf6b97e380",
       "source": "Speaking, tap to stop",
       "translated": "Konuşuyor, durdurmak için dokunun"
-    },
-    {
-      "id": "native.apple.6b18ea1d85b5d3a2",
-      "source": "Running tools…",
-      "translated": "Araçlar çalıştırılıyor…"
     },
     {
       "id": "native.apple.51ef5e41f9124819",
@@ -23662,6 +23642,31 @@
       "id": "native.apple.e7beeef6043ffd2a",
       "source": "System Default",
       "translated": "Sistem Varsayılanı"
+    },
+    {
+      "id": "native.apple.f390b84397c0d240",
+      "source": "Running",
+      "translated": "Çalışıyor"
+    },
+    {
+      "id": "native.apple.e2e7faa7c9c5c61f",
+      "source": "Collapse tool result",
+      "translated": "Araç sonucunu daralt"
+    },
+    {
+      "id": "native.apple.4e7850fe95fcd898",
+      "source": "Expand tool result",
+      "translated": "Araç sonucunu genişlet"
+    },
+    {
+      "id": "native.apple.d65ae0776d6b86ce",
+      "source": "Show less",
+      "translated": "Daha az göster"
+    },
+    {
+      "id": "native.apple.065f4da5ddaf14a1",
+      "source": "Show all %lld lines",
+      "translated": "%lld satırın tümünü göster"
     },
     {
       "id": "native.apple.c4e808a2ec8d49f5",
