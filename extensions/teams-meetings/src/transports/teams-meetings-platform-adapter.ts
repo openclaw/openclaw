@@ -21,11 +21,9 @@ import type { TeamsMeetingsChromeHealth, TeamsMeetingsTranscriptSnapshot } from 
 
 function teamsMeetingOrigin(meetingUrl: string): string | undefined {
   try {
-    const parsed = new URL(meetingUrl);
-    const hostname = parsed.hostname.toLowerCase();
-    return parsed.protocol === "https:" &&
-      (hostname === "teams.microsoft.com" || hostname === "teams.live.com")
-      ? parsed.origin
+    const origin = new URL(meetingUrl).origin;
+    return origin === "https://teams.microsoft.com" || origin === "https://teams.live.com"
+      ? origin
       : undefined;
   } catch {
     return undefined;

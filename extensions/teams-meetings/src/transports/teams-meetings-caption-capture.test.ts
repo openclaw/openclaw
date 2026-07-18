@@ -995,6 +995,18 @@ describe("Microsoft Teams meeting captions and permissions", () => {
       }),
     ).toBeUndefined();
     expect(
+      TEAMS_MEETINGS_PLATFORM_ADAPTER.browser.permissions({
+        allowMicrophone: true,
+        meetingUrl: "https://teams.microsoft.com:8443/l/meetup-join/test",
+      }),
+    ).toBeUndefined();
+    expect(
+      TEAMS_MEETINGS_PLATFORM_ADAPTER.browser.permissions({
+        allowMicrophone: true,
+        meetingUrl: "https://teams.live.com:444/meet/123",
+      }),
+    ).toBeUndefined();
+    expect(
       TEAMS_MEETINGS_PLATFORM_ADAPTER.browser.permissionNotes({ allowMicrophone: true }),
     ).toContain("Granted Teams microphone permission through browser control.");
   });

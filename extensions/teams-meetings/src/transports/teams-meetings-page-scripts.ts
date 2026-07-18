@@ -204,9 +204,6 @@ export function teamsMeetingLeaveScript(params: {
   const currentIdentity = meetingIdentity(location.href);
   const state = window.__openclawTeamsMeeting;
   const enforceSessionOwnership = Boolean(expectedSessionId);
-  if (!enforceSessionOwnership && state?.sessionId) {
-    return JSON.stringify({ departed: false, sessionConflict: true, sessionMatched: false, urlMatched: true });
-  }
   if (enforceSessionOwnership && state?.sessionId && state.sessionId !== expectedSessionId) {
     return JSON.stringify({ departed: false, sessionConflict: true, sessionMatched: false, urlMatched: true });
   }

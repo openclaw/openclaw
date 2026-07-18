@@ -277,6 +277,7 @@ export async function openMeetingWithBrowser<
       if (
         !shouldRetry &&
         browser?.inCall === true &&
+        browser.manualActionRequired !== true &&
         (!allowMicrophone || browser.micMuted !== true)
       ) {
         return { launched: true, browser, tab: tabIdentity };

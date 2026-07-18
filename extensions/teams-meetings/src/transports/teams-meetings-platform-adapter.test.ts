@@ -432,7 +432,7 @@ describe("Microsoft Teams meeting platform adapter", () => {
     expect(leave.clicks).toBe(0);
   });
 
-  it("does not let an ID-less leave mutate a page-owned session", () => {
+  it("keeps the required ID-less leave callback functional for a matching meeting", () => {
     const leave = control({ label: "Leave" });
     const { result } = runLeaveScript({
       leave,
@@ -443,13 +443,8 @@ describe("Microsoft Teams meeting platform adapter", () => {
       },
     });
 
-    expect(result).toEqual({
-      departed: false,
-      sessionConflict: true,
-      sessionMatched: false,
-      urlMatched: true,
-    });
-    expect(leave.clicks).toBe(0);
+    expect(result).toEqual({ departed: false, leaveAction: "leave", urlMatched: true });
+    expect(leave.clicks).toBe(1);
   });
 
   it("accepts post-call proof after an initiated leave replaces the document", () => {
