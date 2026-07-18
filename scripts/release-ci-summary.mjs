@@ -95,13 +95,14 @@ const RERUN_GROUP_CHILD_KEYS = new Map([
 
 export function runReleaseCiGh(args, params = {}) {
   const execFileSyncImpl = params.execFileSyncImpl ?? execFileSync;
+  const timeoutMs = params.timeoutMs ?? GH_COMMAND_TIMEOUT_MS;
   return execFileSyncImpl(resolvePlainGhBin(), args, {
     encoding: "utf8",
     env: plainGhEnv(),
     killSignal: "SIGKILL",
     maxBuffer: 64 * 1024 * 1024,
     stdio: ["ignore", "pipe", "pipe"],
-    timeout: GH_COMMAND_TIMEOUT_MS,
+    timeout: timeoutMs,
   });
 }
 

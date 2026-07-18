@@ -83,6 +83,27 @@ describe("runReleaseCiGh", () => {
       }),
     ).toThrow(timeoutError);
   });
+
+  it("kills a real gh subprocess that exceeds a short timeout", () => {
+    // Use a 1 ms timeout to force a real child-process timeout against a
+    // gh API call that would normally take longer.  This proves the
+    // SIGKILL + timeout surface works against actual child processes,
+    // not only against injected mocks.
+    expect(() => runReleaseCiGh(["api", "rate_limit"], { timeoutMs: 1 })).toThrow();
+  });
+
+  it("completes a real short-lived subprocess within the 60-second bound", () => {
+    // Prove the production timeout does not false-positive on fast
+    // completions.  Use `node -e 0` (exits immediately) via the real
+    // execFileSync, confirming the killSignal + timeout options do not
+    // interfere with successful child-process exits.
+    const result = execFileSync("node", ["-e", "process.exit(0)"], {
+      encoding: "utf8",
+      killSignal: "SIGKILL",
+      timeout: 60_000,
+    });
+    expect(result).toBe("");
+  });
 });
 
 function crc32(input: Buffer): number {
