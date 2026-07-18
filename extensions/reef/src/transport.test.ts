@@ -337,8 +337,11 @@ const INBOX_WEBSOCKET_MAX_PAYLOAD_BYTES = 64 * 1024;
 
 class ControlledSocket {
   closeCalls = 0;
+  terminateCalls = 0;
   private readonly listeners = new Map<string, Array<(event: unknown) => void>>();
   private closed = false;
+
+  constructor(private readonly closeImmediately = true) {}
 
   addEventListener(type: string, listener: (event: unknown) => void): void {
     const listeners = this.listeners.get(type) ?? [];
@@ -348,6 +351,15 @@ class ControlledSocket {
 
   close(): void {
     this.closeCalls++;
+    if (this.closed || !this.closeImmediately) {
+      return;
+    }
+    this.closed = true;
+    this.emit("close");
+  }
+
+  terminate(): void {
+    this.terminateCalls++;
     if (this.closed) {
       return;
     }
@@ -922,6 +934,7 @@ describe("ReefInboxConnection reconnect lifecycle", () => {
     const abort = new AbortController();
     const initialListenerCount = getEventListeners(abort.signal, "abort").length;
     const sockets = [new ControlledSocket(), new ControlledSocket()];
+    const errors: string[] = [];
     let socketIndex = 0;
     const webSocketFactory = vi.fn(() => sockets[socketIndex++]!);
     const client = new ReefTransportClient(
@@ -931,7 +944,9 @@ describe("ReefInboxConnection reconnect lifecycle", () => {
       async () => Response.json({ entries: [], cursor: 0 }),
       () => ts,
     );
-    const inbox = new ReefInboxConnection(client, async () => {}, webSocketFactory);
+    const inbox = new ReefInboxConnection(client, async () => {}, webSocketFactory, {
+      onError: (error) => errors.push(error.message),
+    });
 
     const running = inbox.start(abort.signal);
     await vi.waitFor(() => expect(webSocketFactory).toHaveBeenCalledTimes(1));
@@ -940,6 +955,8 @@ describe("ReefInboxConnection reconnect lifecycle", () => {
     sockets[0]!.emit("message", { data: "{" });
     await vi.waitFor(() => expect(webSocketFactory).toHaveBeenCalledTimes(2));
     expect(sockets[0]!.closeCalls).toBe(1);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).not.toContain("socket closed unexpectedly");
     expect(getEventListeners(abort.signal, "abort")).toHaveLength(initialListenerCount + 1);
 
     abort.abort();
@@ -948,6 +965,42 @@ describe("ReefInboxConnection reconnect lifecycle", () => {
     expect(sockets[0]!.closeCalls).toBe(1);
     expect(sockets[1]!.closeCalls).toBe(1);
     expect(getEventListeners(abort.signal, "abort")).toHaveLength(initialListenerCount);
+  });
+
+  it("force-terminates a stalled failed generation before reconnecting", async () => {
+    vi.useFakeTimers();
+    const sockets = [new ControlledSocket(false), new ControlledSocket()];
+    let socketIndex = 0;
+    const abort = new AbortController();
+    const client = new ReefTransportClient(
+      "https://relay.example",
+      "alice",
+      keys,
+      async () => Response.json({ entries: [], cursor: 0 }),
+      () => ts,
+    );
+    const inbox = new ReefInboxConnection(
+      client,
+      async () => {},
+      () => sockets[socketIndex++]!,
+    );
+
+    const running = inbox.start(abort.signal);
+    sockets[0]!.emit("message", { data: "{" });
+
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(socketIndex).toBe(1);
+    expect(sockets[0]!.terminateCalls).toBe(0);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(sockets[0]!.terminateCalls).toBe(1);
+    expect(socketIndex).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(250);
+    expect(socketIndex).toBe(2);
+
+    abort.abort();
+    await running;
   });
 });
 

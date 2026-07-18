@@ -25,6 +25,9 @@ const REEF_WS_HANDSHAKE_MS = 30_000;
 // Cover headers and body consumption. A relay that accepts the request but
 // stops producing bytes must not pin inbox recovery forever.
 const REEF_RELAY_REQUEST_TIMEOUT_MS = 15_000;
+// A failed generation must finish closing before its replacement starts. Bound
+// the close handshake so an unresponsive peer cannot stall reconnect forever.
+const REEF_WS_CLOSE_MS = 5_000;
 
 export class ReefRelayError extends Error {
   constructor(
@@ -244,6 +247,7 @@ export interface WebSocketLike {
     listener: (event: { error?: unknown; message?: string }) => void,
   ): void;
   close(): void;
+  terminate?(): void;
 }
 
 interface ReefInboxConnectionOptions {
@@ -405,28 +409,21 @@ export class ReefInboxConnection {
       // overwrite the lifecycle state of its replacement (or of a stopped channel).
       let finished = false;
       let disconnected = false;
-      let aborting = false;
+      let closing = false;
+      let closeComplete = false;
+      let processingComplete = true;
+      let terminalError: Error | undefined;
+      let closeTimer: ReturnType<typeof setTimeout> | undefined;
       let opened = false;
       let catchUpPending = false;
       let pumpScheduled = false;
       const bufferedEntries: InboxEntry[] = [];
-      const abortListener = () => {
-        if (finished) {
-          return;
-        }
-        aborting = true;
-        markDisconnected();
-        socket.close();
-        // Older socket work can still own the shared serial tail. Waiting here
-        // prevents a replacement channel from dispatching the same cursor range.
-        void this.processing.then(
-          () => finish(),
-          () => finish(),
-        );
-      };
       const finish = (error?: Error) => {
         if (finished) {
           return;
+        }
+        if (closeTimer) {
+          clearTimeout(closeTimer);
         }
         finished = true;
         signal?.removeEventListener("abort", abortListener);
@@ -445,21 +442,43 @@ export class ReefInboxConnection {
         workAbort.abort();
         this.options.onState?.("disconnected");
       };
-      const disconnect = (error?: Error) => {
-        if (finished) {
+      const finishAfterClose = () => {
+        if (!closeComplete || !processingComplete) {
           return;
         }
-        markDisconnected();
-        // An abort waits for the class-wide serial tail. A close event emitted
-        // synchronously by socket.close() must not finish this invocation early.
-        if (aborting) {
-          return;
-        }
-        finish(error);
-        if (error) {
-          socket.close();
-        }
+        finish(terminalError);
       };
+      const closeAndFinish = (error?: Error, waitForProcessing = false) => {
+        if (finished || closing) {
+          return;
+        }
+        closing = true;
+        terminalError ??= error;
+        markDisconnected();
+        signal?.removeEventListener("abort", abortListener);
+        processingComplete = !waitForProcessing;
+        if (waitForProcessing) {
+          void this.processing.then(
+            () => {
+              processingComplete = true;
+              finishAfterClose();
+            },
+            () => {
+              processingComplete = true;
+              finishAfterClose();
+            },
+          );
+        }
+        // Do not let a stale generation observe a later channel abort while
+        // its asynchronous WebSocket close handshake is still in flight.
+        closeTimer = setTimeout(() => {
+          socket.terminate?.();
+          closeComplete = true;
+          finishAfterClose();
+        }, REEF_WS_CLOSE_MS);
+        socket.close();
+      };
+      const abortListener = () => closeAndFinish(undefined, true);
       const pump = () => {
         if (
           disconnected ||
@@ -498,7 +517,7 @@ export class ReefInboxConnection {
           (error: unknown) => {
             pumpScheduled = false;
             if (!disconnected) {
-              disconnect(asError(error));
+              closeAndFinish(asError(error));
             }
           },
         );
@@ -520,7 +539,7 @@ export class ReefInboxConnection {
             return;
           }
           if (bufferedEntries.length >= REEF_INBOX_LIVE_BUFFER_MAX_ENTRIES) {
-            disconnect(
+            closeAndFinish(
               new Error("Reef inbox live buffer overflow; reconnecting for REST recovery"),
             );
             return;
@@ -528,19 +547,25 @@ export class ReefInboxConnection {
           bufferedEntries.push(frame.entry);
           pump();
         } catch (error) {
-          disconnect(asError(error));
+          closeAndFinish(asError(error));
         }
       });
       // Socket state is independent of a slow REST pull or entry handler. Mark
       // it disconnected now; the shared serial tail preserves ordered recovery.
       socket.addEventListener("close", (event) => {
-        if (aborting || finished) {
+        if (finished) {
           return;
         }
-        disconnect(reefInboxCloseError(event));
+        markDisconnected();
+        if (closing) {
+          closeComplete = true;
+          finishAfterClose();
+          return;
+        }
+        finish(reefInboxCloseError(event));
       });
       socket.addEventListener("error", (event) =>
-        disconnect(new Error(event.message?.trim() || "reef inbox socket error")),
+        closeAndFinish(new Error(event.message?.trim() || "reef inbox socket error")),
       );
       if (signal?.aborted) {
         abortListener();
