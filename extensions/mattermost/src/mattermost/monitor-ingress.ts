@@ -76,7 +76,11 @@ export function buildMattermostFlushIngressLifecycle(
       },
       onAbandoned: async () => {
         handedOff = true;
-        await Promise.all(lifecycles.map((lifecycle) => lifecycle.onAbandoned()));
+        await Promise.all(
+          lifecycles.map(async (lifecycle) => {
+            await lifecycle.onAbandoned();
+          }),
+        );
       },
     },
     // Gated/no-dispatch turns are terminal and must not leave source claims deferred.
@@ -337,7 +341,9 @@ export function createMattermostIngressMonitor(options: {
     let lastError: unknown;
     for (const delayMs of [0, 100, 300]) {
       if (delayMs > 0) {
-        await new Promise((resolve) => setTimeout(resolve, delayMs));
+        await new Promise((resolve) => {
+          setTimeout(resolve, delayMs);
+        });
       }
       try {
         await getQueue().enqueue(
