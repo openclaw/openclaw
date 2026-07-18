@@ -23,6 +23,8 @@ const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional
 const WhatsAppGroupEntrySchema = z
   .object({
     requireMention: z.boolean().optional(),
+    listenAfterMentionMs: z.number().int().nonnegative().optional(),
+    listenAfterMentionMaxMs: z.number().int().nonnegative().optional(),
     tools: ToolPolicySchema,
     toolsBySender: ToolPolicyBySenderSchema,
     systemPrompt: z.string().optional(),
