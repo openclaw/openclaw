@@ -229,8 +229,7 @@ html.openclaw-native-web-chrome .shell:not(.shell--mobile-nav) .sidebar-brand .s
 }
 
 .shell--settings .content-header,
-.shell--settings .settings-workspace,
-.shell--settings .config-view-toggle-row {
+.shell--settings .settings-workspace {
   width: 100%;
   max-width: 1120px;
   margin-inline: auto;
@@ -1505,6 +1504,22 @@ html.openclaw-native-macos
   font-size: 11px;
 }
 
+.sidebar-session-tree__show-more {
+  min-height: 28px;
+  padding: 6px 8px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+  text-align: left;
+}
+
+.sidebar-session-tree__show-more:hover,
+.sidebar-session-tree__show-more:focus-visible {
+  color: var(--text);
+}
+
 .sidebar-recent-sessions__group[data-session-section^="catalog:"] > .sidebar-recent-sessions__list {
   gap: 8px;
 }
@@ -1650,6 +1665,30 @@ html.openclaw-native-macos
   color: var(--text);
 }
 
+.sidebar-view-archived {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: -2px 10px 2px;
+  padding: 5px 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  text-align: left;
+}
+
+.sidebar-view-archived:hover,
+.sidebar-view-archived:focus-visible {
+  color: var(--text);
+}
+
+.sidebar-view-archived svg {
+  width: 12px;
+  height: 12px;
+  stroke: currentColor;
+}
+
 .sidebar-recent-session--dragging {
   opacity: 0.45;
 }
@@ -1712,11 +1751,35 @@ html.openclaw-native-macos
   width: 31px;
   height: 30px;
   flex: 0 0 31px;
-  padding: 0 1px 0 5px;
+  padding: 0 3px;
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
+}
+
+/* Expanded parents already show their children below, so the collapse control
+   is quiet until row hover; collapsed toggles stay visible because the count
+   and status tint are the only signal that hidden children exist. */
+.sidebar-child-session-toggle[aria-expanded="true"] {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--duration-fast) ease;
+}
+
+.session-row-host:hover .sidebar-child-session-toggle[aria-expanded="true"],
+.session-row-host:focus-within .sidebar-child-session-toggle[aria-expanded="true"] {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Touch has no hover: keep the collapse control usable, matching the
+   session-action touch override in components.css. */
+@media (hover: none), (pointer: coarse) {
+  .sidebar-child-session-toggle[aria-expanded="true"] {
+    opacity: 1;
+    pointer-events: auto;
+  }
 }
 
 .sidebar-child-session-toggle:hover,
@@ -1750,10 +1813,6 @@ html.openclaw-native-macos
   font-size: 9px;
   font-variant-numeric: tabular-nums;
   line-height: 1;
-}
-
-.sidebar-child-session-toggle + .sidebar-recent-session__link {
-  padding-left: 0;
 }
 
 .sidebar-recent-session__link:hover {
@@ -2158,6 +2217,12 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   letter-spacing: 0.04em;
 }
 
+.session-menu__info {
+  padding: 4px 8px 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .session-menu__separator {
   margin: 6px 4px;
   border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
@@ -2313,7 +2378,6 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   object-fit: cover;
 }
 
-/* Presence fuses connection state into the identity: no separate online dot. */
 .sidebar-agent-card__presence {
   position: absolute;
   right: -1px;
@@ -2322,13 +2386,6 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   height: 10px;
   border-radius: var(--radius-full);
   border: 2px solid var(--sidebar-bg);
-}
-
-.sidebar-agent-card__presence.sidebar-connection-status--online {
-  background: var(--ok);
-}
-
-.sidebar-agent-card__presence.sidebar-connection-status--offline {
   background: var(--danger);
 }
 
@@ -2459,17 +2516,23 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
 }
 
 .sidebar-footer-bar__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   flex: none;
-  width: 8px;
-  height: 8px;
+  padding: 3px 7px;
   border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  color: var(--danger);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
 }
 
-.sidebar-footer-bar__status.sidebar-connection-status--online {
-  background: var(--ok);
-}
-
-.sidebar-footer-bar__status.sidebar-connection-status--offline {
+.sidebar-footer-bar__status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
   background: var(--danger);
 }
 

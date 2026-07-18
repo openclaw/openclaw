@@ -27,11 +27,12 @@ CREATE TABLE IF NOT EXISTS diagnostic_events (
   event_key TEXT NOT NULL,
   payload_json TEXT NOT NULL,
   created_at INTEGER NOT NULL,
+  sequence INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (scope, event_key)
 ) STRICT;
 
-CREATE INDEX IF NOT EXISTS idx_diagnostic_events_scope_created
-  ON diagnostic_events(scope, created_at, event_key);
+CREATE INDEX IF NOT EXISTS idx_diagnostic_events_scope_sequence
+  ON diagnostic_events(scope, sequence, event_key);
 
 CREATE TABLE IF NOT EXISTS skill_usage (
   skill_file TEXT NOT NULL PRIMARY KEY,
@@ -958,16 +959,6 @@ CREATE TABLE IF NOT EXISTS agent_databases (
   last_seen_at INTEGER NOT NULL,
   size_bytes INTEGER,
   PRIMARY KEY (agent_id, path)
-) STRICT;
-
--- Additive derived cache: older builds safely ignore this table.
--- Keep state schema v3 so verification never makes downgrades refuse startup.
-CREATE TABLE IF NOT EXISTS database_verifications (
-  path TEXT NOT NULL PRIMARY KEY,
-  kind TEXT NOT NULL,
-  verified_at INTEGER NOT NULL,
-  result TEXT NOT NULL,
-  error TEXT
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS plugin_state_entries (

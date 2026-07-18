@@ -131,6 +131,35 @@ describe("changedServerUiPrefs", () => {
     expect(changedServerUiPrefs(previous, next)).toEqual({ themeMode: "dark" });
     expect(changedServerUiPrefs(previous, { ...previous })).toBeNull();
   });
+
+  it("syncs chat behavior prefs and pushes clearable resets as null", () => {
+    const previous = loadSettings();
+    const withOverrides = {
+      ...previous,
+      chatPersistCommentary: true,
+      chatFollowUpMode: "queue" as const,
+    };
+    expect(changedServerUiPrefs(previous, withOverrides)).toEqual({
+      chatPersistCommentary: true,
+      chatFollowUpMode: "queue",
+    });
+
+    // Clearing the follow-up override must propagate as an explicit removal.
+    expect(
+      changedServerUiPrefs(withOverrides, { ...withOverrides, chatFollowUpMode: undefined }),
+    ).toEqual({ chatFollowUpMode: null });
+  });
+});
+
+describe("clearable pref removal from the server", () => {
+  it("clears the local follow-up override when the server removes it", () => {
+    const onApplied = vi.fn();
+    applyServerUiPrefs(configWithPrefs({ chatFollowUpMode: "queue" }), { onApplied });
+    expect(loadSettings().chatFollowUpMode).toBe("queue");
+
+    expect(applyServerUiPrefs(configWithPrefs({}), { onApplied })).toBe(true);
+    expect(loadSettings().chatFollowUpMode).toBeUndefined();
+  });
 });
 
 describe("pushServerUiPrefs", () => {

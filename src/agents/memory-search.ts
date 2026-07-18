@@ -15,6 +15,7 @@ import {
 } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig, MemorySearchConfig } from "../config/config.js";
 import type { SecretInput } from "../config/types.secrets.js";
+import { resolveRememberAcrossConversations } from "../memory-host-sdk/host/config-utils.js";
 import {
   isMemoryMultimodalEnabled,
   normalizeMemoryMultimodalSettings,
@@ -30,7 +31,11 @@ import { resolveAgentConfig } from "./agent-scope.js";
 
 export type ResolvedMemorySearchConfig = {
   enabled: boolean;
+  rememberAcrossConversations: boolean;
+  /** Sources indexed by the manager. */
   sources: Array<"memory" | "sessions">;
+  /** Sources searched when memory_search omits an explicit corpus. */
+  searchSources: Array<"memory" | "sessions">;
   extraPaths: string[];
   multimodal: MemoryMultimodalSettings;
   provider: string;
@@ -220,8 +225,10 @@ function mergeConfig(
   agentId: string,
 ): ResolvedMemorySearchConfig {
   const enabled = overrides?.enabled ?? defaults?.enabled ?? true;
-  const sessionMemory =
+  const rememberAcrossConversations = resolveRememberAcrossConversations(cfg, agentId);
+  const configuredSessionMemory =
     overrides?.experimental?.sessionMemory ?? defaults?.experimental?.sessionMemory ?? false;
+  const sessionMemory = rememberAcrossConversations || configuredSessionMemory;
   const rawProvider = overrides?.provider ?? defaults?.provider;
   const provider =
     rawProvider?.trim() === "auto"
@@ -288,7 +295,16 @@ function mergeConfig(
     modelCacheDir: overrides?.local?.modelCacheDir ?? defaults?.local?.modelCacheDir,
     contextSize: overrides?.local?.contextSize ?? defaults?.local?.contextSize,
   };
-  const sources = normalizeSources(overrides?.sources ?? defaults?.sources, sessionMemory);
+  const configuredSources = overrides?.sources ?? defaults?.sources;
+  const searchSources = normalizeSources(
+    configuredSources,
+    configuredSessionMemory ||
+      (rememberAcrossConversations && configuredSources?.includes("sessions") === true),
+  );
+  const sources = normalizeSources(
+    rememberAcrossConversations ? [...searchSources, "sessions"] : configuredSources,
+    sessionMemory,
+  );
   const rawPaths = normalizeStringEntries([
     ...(defaults?.extraPaths ?? []),
     ...(overrides?.extraPaths ?? []),
@@ -386,7 +402,9 @@ function mergeConfig(
   const postCompactionForce = sync.sessions.postCompactionForce;
   return {
     enabled,
+    rememberAcrossConversations,
     sources,
+    searchSources,
     extraPaths,
     multimodal,
     provider,

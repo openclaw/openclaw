@@ -53,6 +53,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
   @state() protected selectedSessionKeys: ReadonlySet<string> = new Set();
   @state() protected expandedChildSessionKeys: ReadonlySet<string> = new Set();
   @state() protected collapsedActiveChildSessionKeys: ReadonlySet<string> = new Set();
+  @state() protected fullyShownChildSessionKeys: ReadonlySet<string> = new Set();
   @state() protected sessionSortMode: SidebarSessionSortMode = "created";
   @state() protected sessionsGrouping: SidebarSessionsGrouping =
     loadStoredSidebarSessionsGrouping();
@@ -162,7 +163,9 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
       }
       return {
         key: row.key,
-        label: resolveSessionDisplayName(row.key, row),
+        label: resolveSessionDisplayName(row.key, row, {
+          includeSubagentPrefix: !isChild,
+        }),
         meta: formatSidebarTimestamp(row.updatedAt),
         subtitle: resolveSessionWorkSubtitle(row),
         href: `${pathForRoute("chat", context?.basePath ?? "")}${searchForSession(row.key)}`,
@@ -618,8 +621,10 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
   protected toggleSessionChildren(session: SidebarRecentSession) {
     const next = new Set(this.expandedChildSessionKeys);
     const collapsedActive = new Set(this.collapsedActiveChildSessionKeys);
+    const fullyShown = new Set(this.fullyShownChildSessionKeys);
     if (this.isSessionChildrenExpanded(session)) {
       next.delete(session.key);
+      fullyShown.delete(session.key);
       if (session.containsActiveDescendant) {
         collapsedActive.add(session.key);
       }
@@ -643,6 +648,11 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
     }
     this.expandedChildSessionKeys = next;
     this.collapsedActiveChildSessionKeys = collapsedActive;
+    this.fullyShownChildSessionKeys = fullyShown;
+  }
+
+  protected showAllSessionChildren(sessionKey: string) {
+    this.fullyShownChildSessionKeys = new Set(this.fullyShownChildSessionKeys).add(sessionKey);
   }
 
   private projectSessionTree(

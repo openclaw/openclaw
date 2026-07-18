@@ -550,6 +550,17 @@ function buildConfigMocks() {
     gateway: { port: 18789, bind: "127.0.0.1" },
     agents: { defaults: { thinkingDefault: "medium" } },
     models: { mode: "merge" },
+    mcp: {
+      servers: {
+        context7: { url: "https://mcp.context7.com/mcp", transport: "streamable-http" },
+        github: {
+          url: "https://api.githubcopilot.com/mcp/",
+          transport: "streamable-http",
+          auth: "oauth",
+        },
+        "local-tools": { command: "npx", args: ["some-mcp-server", "--stdio"], enabled: false },
+      },
+    },
   };
   const schema = {
     type: "object",
@@ -984,9 +995,12 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
       hasActiveRun: true,
       status: "running",
       childSessions: ["agent:main:subagent:tax-receipts"],
+      pinned: true,
     }),
     mainChildRow,
-    sessionRow("agent:main:home-server", "Home server migration", baseTime - 240_000),
+    sessionRow("agent:main:home-server", "Home server migration", baseTime - 240_000, {
+      pinned: true,
+    }),
     sessionRow("agent:main:whatsapp:group:family", "Family", baseTime - 90_000, {
       kind: "group",
       channel: "whatsapp",
@@ -1009,6 +1023,23 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
       keyPrefix: "main:history",
       labelPrefix: "Long running session",
     }),
+  ];
+  const archivedSessions = [
+    sessionRow("agent:main:archived-launch-notes", "Archived launch notes", baseTime - 86_400_000, {
+      archived: true,
+      totalTokens: 42_000,
+    }),
+    sessionRow(
+      "agent:main:discord:channel:archived-lounge",
+      "#archived-lounge",
+      baseTime - 172_800_000,
+      {
+        archived: true,
+        channel: "discord",
+        kind: "group",
+        totalTokens: 18_000,
+      },
+    ),
   ];
   const telegramSessions = buildSessionRows({
     baseTime: baseTime - 30_000,
@@ -1043,6 +1074,7 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
       // (raw persists, hash advances) because config.get ships a raw fixture.
       "config.get": configMocks.get,
       "config.schema": configMocks.schema,
+      "sessions.patch": { ok: true },
       "sessions.diff": buildSessionDiffMock(),
       "plugins.list": buildPluginCatalogMock(),
       "channels.status": buildChannelsStatusMock(baseTime),
@@ -1352,11 +1384,12 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
             ...searchPrefixes("claude-sonnet-4-6"),
             ...searchPrefixes("anthropic"),
           ]),
-          ...buildSessionListCases(sessions),
+          ...buildSessionListCases([...sessions, ...archivedSessions]),
         ],
       },
     },
     models: modelProviders.models,
+    sessionArchiveFiltering: true,
     sessionKey: "agent:main:main",
   };
 }
