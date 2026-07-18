@@ -1,11 +1,13 @@
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { ensureCustomElementDefined } from "../../../app/lazy-custom-element.ts";
+import { icons } from "../../../components/icons.ts";
 import {
   dispatchWidgetPrompt,
   WIDGET_PROMPT_EVENT,
   type WidgetPromptEventDetail,
 } from "../../../components/mcp-app-security.ts";
+import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
 import type { ToolPreview } from "../../../lib/chat/tool-cards.ts";
 import {
@@ -14,7 +16,9 @@ import {
   resolveEmbedSandbox,
   type EmbedSandboxMode,
 } from "../../../lib/chat/tool-display.ts";
+import { showToast } from "../../../lib/toast.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
+import { exportWidget } from "./widget-export.ts";
 import { installWidgetThemeObserver, postWidgetTheme } from "./widget-theme.ts";
 
 export { WIDGET_PROMPT_EVENT };
@@ -284,6 +288,63 @@ function renderWidgetContent(
   return nothing;
 }
 
+function handleWidgetExportAction(
+  event: CustomEvent<{ item: { value?: string } }>,
+  title: string | undefined,
+) {
+  const value = event.detail.item.value;
+  if (value !== "copy" && value !== "download") {
+    return;
+  }
+  const dropdown = event.currentTarget;
+  const frame =
+    dropdown instanceof HTMLElement
+      ? dropdown
+          .closest(".chat-tool-card__preview")
+          ?.querySelector<HTMLIFrameElement>(".chat-tool-card__preview-frame")
+      : null;
+  if (!frame) {
+    showToast({ message: t("chat.toolCards.widgetExportFailed") });
+    return;
+  }
+  void exportWidget(value, frame, title)
+    .then((result) => {
+      if (result === "rerender-required") {
+        showToast({ message: t("chat.toolCards.widgetExportRerender") });
+      }
+    })
+    .catch(() => {
+      showToast({ message: t("chat.toolCards.widgetExportFailed") });
+    });
+}
+
+function renderWidgetActions(preview: ToolPreview) {
+  if (preview.mcpApp || !isInternalCanvasEntryUrl(preview.url)) {
+    return nothing;
+  }
+  return html`
+    <wa-dropdown
+      class="chat-tool-card__widget-actions"
+      placement="bottom-end"
+      aria-label=${t("chat.toolCards.widgetActions")}
+      @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) =>
+        handleWidgetExportAction(event, preview.title)}
+    >
+      <button
+        slot="trigger"
+        type="button"
+        class="btn btn--ghost btn--icon chat-tool-card__widget-actions-trigger"
+        aria-label=${t("chat.toolCards.widgetActions")}
+        title=${t("chat.toolCards.widgetActions")}
+      >
+        ${icons.moreHorizontal}
+      </button>
+      <wa-dropdown-item value="copy">${t("chat.toolCards.copyToClipboard")}</wa-dropdown-item>
+      <wa-dropdown-item value="download">${t("chat.toolCards.downloadFile")}</wa-dropdown-item>
+    </wa-dropdown>
+  `;
+}
+
 function renderWidgetCard(
   preview: ToolPreview | undefined,
   surface: "chat_tool" | "chat_message" | "sidebar",
@@ -304,13 +365,11 @@ function renderWidgetCard(
   }
   const label = preview.title?.trim() || t("chat.toolCards.canvas");
   const contentKind = preview.mcpApp ? "mcp-app" : "canvas-html";
-  // Keep the reserved action hook hidden until populated so it adds no layout
-  // or accessibility chrome to today's widget card.
   return html`
     <div class="chat-tool-card__preview" data-kind="canvas" data-surface=${surface}>
       <div class="chat-tool-card__preview-header">
         <span class="chat-tool-card__preview-label">${label}</span>
-        <div data-widget-actions hidden></div>
+        ${renderWidgetActions(preview)}
       </div>
       <div class="chat-tool-card__preview-panel" data-side="canvas">
         ${renderWidgetContent(contentKind, preview, options)}
