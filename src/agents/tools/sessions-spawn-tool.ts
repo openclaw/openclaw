@@ -11,8 +11,8 @@ import {
 } from "../../channels/thread-bindings-policy.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { callGateway } from "../../gateway/call.js";
 import { resolveSnakeCaseParamKey } from "../../param-key.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
@@ -45,6 +45,14 @@ import {
   readStringParam,
   ToolInputError,
 } from "./common.js";
+import {
+  cleanupUntrackedAcpSession,
+  maybeSpawnVisibleSession,
+  resolveTrackedSpawnMode,
+  summarizeSessionsSpawnError,
+  type VisibleSessionsSpawnDeps,
+  VISIBLE_SESSIONS_SPAWN_SCHEMA,
+} from "./sessions-spawn-visible.js";
 
 const SESSIONS_SPAWN_RUNTIMES = ["subagent", "acp"] as const;
 const SESSIONS_SPAWN_SANDBOX_MODES = ["inherit", "require"] as const;
@@ -75,16 +83,6 @@ async function loadAcpSpawnModule(): Promise<AcpSpawnModule> {
   return await acpSpawnModuleLoader.load();
 }
 
-function summarizeError(err: unknown): string {
-  if (err instanceof Error) {
-    return err.message;
-  }
-  if (typeof err === "string") {
-    return err;
-  }
-  return "error";
-}
-
 function addRoleToFailureResult<T extends { status: string }>(
   result: T,
   role: string | undefined,
@@ -93,36 +91,6 @@ function addRoleToFailureResult<T extends { status: string }>(
     return result;
   }
   return { ...result, role };
-}
-
-function resolveTrackedSpawnMode(params: {
-  requestedMode?: "run" | "session";
-  threadRequested: boolean;
-}): "run" | "session" {
-  if (params.requestedMode === "run" || params.requestedMode === "session") {
-    return params.requestedMode;
-  }
-  return params.threadRequested ? "session" : "run";
-}
-
-async function cleanupUntrackedAcpSession(sessionKey: string): Promise<void> {
-  const key = sessionKey.trim();
-  if (!key) {
-    return;
-  }
-  try {
-    await callGateway({
-      method: "sessions.delete",
-      params: {
-        key,
-        deleteTranscript: true,
-        emitLifecycleHooks: false,
-      },
-      timeoutMs: 10_000,
-    });
-  } catch {
-    // Best-effort cleanup only.
-  }
 }
 
 type SessionsSpawnThreadAvailability = {
@@ -200,6 +168,7 @@ function createSessionsSpawnToolSchema(params: {
         description: "Light bootstrap; subagent only.",
       }),
     ),
+    ...VISIBLE_SESSIONS_SPAWN_SCHEMA,
 
     // Inline attachments (snapshot-by-value).
     attachments: Type.Optional(
@@ -249,17 +218,23 @@ function resolveAcpUnavailableMessage(opts?: { sandboxed?: boolean; config?: Ope
 export function createSessionsSpawnTool(
   opts?: {
     agentSessionKey?: string;
+    requesterTurnRunId?: string;
     /** Separate key used only for completion routing (registerSubagentRun requesterSessionKey). */
     completionOwnerKey?: string;
     agentChannel?: GatewayMessageChannel;
     agentAccountId?: string;
     agentTo?: string;
     agentThreadId?: string | number;
+    currentMessagingTarget?: string;
+    currentChannelId?: string;
+    currentThreadTs?: string;
+    currentMessageId?: string | number;
     sandboxed?: boolean;
     config?: OpenClawConfig;
     /** Explicit agent ID override for cron/hook sessions where session key parsing may not work. */
     requesterAgentIdOverride?: string;
-  } & SpawnedToolContext,
+  } & VisibleSessionsSpawnDeps &
+    SpawnedToolContext,
 ): AnyAgentTool {
   const acpAvailable = isAcpRuntimeSpawnAvailable({
     config: opts?.config,
@@ -321,6 +296,21 @@ export function createSessionsSpawnTool(
       const streamTo = runtime === "acp" && params.streamTo === "parent" ? "parent" : undefined;
       const lightContext = params.lightContext === true;
       const roleContext = requestedAgentId ? { role: requestedAgentId } : {};
+      const visibleResult = await maybeSpawnVisibleSession({
+        raw: params,
+        task,
+        taskName,
+        label,
+        runtime,
+        requestedAgentId,
+        sandbox,
+        options: opts,
+      });
+      if (visibleResult) {
+        return jsonResult(
+          addRoleToFailureResult(visibleResult as { status: string }, requestedAgentId),
+        );
+      }
       if (runtime === "acp" && !acpAvailable) {
         return jsonResult({
           status: "error",
@@ -431,16 +421,26 @@ export function createSessionsSpawnTool(
             to: opts?.agentTo,
             threadId: opts?.agentThreadId,
           });
+          const progressOrigin = {
+            channel: requesterOrigin?.channel,
+            accountId: requesterOrigin?.accountId,
+            to: opts?.currentMessagingTarget ?? opts?.currentChannelId ?? requesterOrigin?.to,
+            threadId: requesterOrigin?.threadId,
+            channelId: opts?.currentChannelId,
+            messageId: opts?.currentMessageId,
+          };
           const shouldExpectCompletionMessage = result.inlineDelivery
             ? false
             : expectsCompletionMessage;
           try {
             registerSubagentRun({
               runId: childRunId,
+              requesterTurnRunId: opts?.requesterTurnRunId,
               childSessionKey,
               controllerSessionKey: ownership.controllerSessionKey,
               requesterSessionKey: ownership.completionRequesterSessionKey,
               requesterOrigin,
+              progressOrigin,
               requesterDisplayKey: ownership.completionRequesterDisplayKey,
               task,
               taskName,
@@ -451,13 +451,33 @@ export function createSessionsSpawnTool(
               expectsCompletionMessage: shouldExpectCompletionMessage,
               spawnMode: trackedSpawnMode,
             });
+            try {
+              const hookRunner = getGlobalHookRunner();
+              if (hookRunner?.hasHooks("subagent_progress")) {
+                await hookRunner.runSubagentProgress(
+                  {
+                    phase: "started",
+                    runId: childRunId,
+                    childSessionKey,
+                    requester: progressOrigin,
+                  },
+                  {
+                    runId: childRunId,
+                    childSessionKey,
+                    requesterSessionKey: ownership.completionRequesterSessionKey,
+                  },
+                );
+              }
+            } catch {
+              // ACP already started; presentation hooks are best-effort only.
+            }
           } catch (err) {
             // Best-effort only: the ACP turn was already started above, so deleting the
             // child session record here does not guarantee the in-flight run was aborted.
             await cleanupUntrackedAcpSession(childSessionKey);
             return jsonResult({
               status: "error",
-              error: `Failed to register ACP run: ${summarizeError(err)}. Cleanup was attempted, but the already-started ACP run may still finish in the background.`,
+              error: `Failed to register ACP run: ${summarizeSessionsSpawnError(err)}. Cleanup was attempted, but the already-started ACP run may still finish in the background.`,
               childSessionKey,
               runId: childRunId,
               ...roleContext,
@@ -491,11 +511,15 @@ export function createSessionsSpawnTool(
         },
         {
           agentSessionKey: opts?.agentSessionKey,
+          requesterTurnRunId: opts?.requesterTurnRunId,
           completionOwnerKey: opts?.completionOwnerKey,
           agentChannel: opts?.agentChannel,
           agentAccountId: opts?.agentAccountId,
           agentTo: opts?.agentTo,
           agentThreadId: opts?.agentThreadId,
+          currentMessagingTarget: opts?.currentMessagingTarget ?? opts?.currentChannelId,
+          currentChannelId: opts?.currentChannelId,
+          currentMessageId: opts?.currentMessageId,
           agentGroupId: opts?.agentGroupId,
           agentGroupChannel: opts?.agentGroupChannel,
           agentGroupSpace: opts?.agentGroupSpace,

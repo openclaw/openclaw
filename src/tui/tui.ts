@@ -1,5 +1,5 @@
 // Runs the interactive TUI loop and coordinates backend, input, and rendering.
-import { execFileSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,6 +23,7 @@ import { registerUncaughtExceptionHandler } from "../infra/unhandled-rejections.
 import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
 import { setConsoleSubsystemFilter } from "../logging/console.js";
 import { loggingState } from "../logging/state.js";
+import { runCommandWithTimeout } from "../process/exec.js";
 import {
   buildWindowsCmdExeCommandLine,
   isWindowsBatchCommand,
@@ -34,7 +35,7 @@ import {
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
-import { getSlashCommands } from "./commands.js";
+import { getSlashCommands, shouldSubmitExactArgumentCompletion } from "./commands.js";
 import { ChatLog } from "./components/chat-log.js";
 import { CustomEditor } from "./components/custom-editor.js";
 import { resolveLocalRunShutdownGraceMs } from "./local-run-shutdown.js";
@@ -45,6 +46,7 @@ import { createCommandHandlers } from "./tui-command-handlers.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
 import {
   formatGoalFooter,
+  formatModelFooter,
   formatRemoteConnectionHostFooter,
   sanitizeRenderableText,
   formatTokens,
@@ -101,6 +103,7 @@ const OPENCLAW_DIST_ENTRY_MJS_PATH = fileURLToPath(
 );
 
 const OPENAI_CODEX_PROVIDER = "openai";
+const CODEX_CLI_LOOKUP_TIMEOUT_MS = 5_000;
 
 type RunTuiOptions = TuiOptions & {
   backend?: TuiBackend;
@@ -116,13 +119,20 @@ type RunTuiOptions = TuiOptions & {
 };
 
 /** Resolve the absolute path to the `codex` CLI binary, or `null` if not installed. */
-export function resolveCodexCliBin(): string | null {
+export async function resolveCodexCliBin(): Promise<string | null> {
+  const lookupCommand =
+    process.platform === "win32" ? getWindowsSystem32ExePath("where.exe") : "which";
   try {
-    const lookupCmd =
-      process.platform === "win32" ? getWindowsSystem32ExePath("where.exe") : "which";
-    // `where` on Windows can return multiple lines; take the first match.
-    const raw = execFileSync(lookupCmd, ["codex"], { encoding: "utf8" }).trim();
-    return raw.split(/\r?\n/)[0] || null;
+    const result = await runCommandWithTimeout([lookupCommand, "codex"], {
+      killSignal: "SIGKILL",
+      maxOutputBytes: 64 * 1024,
+      timeoutMs: CODEX_CLI_LOOKUP_TIMEOUT_MS,
+    });
+    if (result.code !== 0 || result.termination !== "exit") {
+      return null;
+    }
+    // `where` on Windows can return multiple matches; use PATH order.
+    return result.stdout.trim().split(/\r?\n/)[0]?.trim() || null;
   } catch {
     return null;
   }
@@ -804,19 +814,19 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
 
   const applyAutocompleteProvider = () => {
     const dynamicKey = resolveDynamicSlashCommandsKey();
+    const slashCommands = getSlashCommands({
+      cfg: config,
+      local: isLocalMode,
+      provider: sessionInfo.modelProvider,
+      model: sessionInfo.model,
+      agentRuntime: sessionInfo.agentRuntime?.id,
+      thinkingLevels: sessionInfo.thinkingLevels,
+      dynamicCommands: dynamicSlashCommandsKey === dynamicKey ? dynamicSlashCommands : [],
+    });
+    editor.shouldSubmitAutocomplete = (text) =>
+      shouldSubmitExactArgumentCompletion(text, slashCommands);
     editor.setAutocompleteProvider(
-      new CombinedAutocompleteProvider(
-        getSlashCommands({
-          cfg: config,
-          local: isLocalMode,
-          provider: sessionInfo.modelProvider,
-          model: sessionInfo.model,
-          agentRuntime: sessionInfo.agentRuntime?.id,
-          thinkingLevels: sessionInfo.thinkingLevels,
-          dynamicCommands: dynamicSlashCommandsKey === dynamicKey ? dynamicSlashCommands : [],
-        }),
-        resolveUsableCwd(),
-      ),
+      new CombinedAutocompleteProvider(slashCommands, resolveUsableCwd()),
     );
   };
 
@@ -1182,45 +1192,44 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
 
   const runAuthFlow = isLocalMode
     ? async (params: { provider?: string }) =>
-        await withTuiSuspended(
-          async () =>
-            await new Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }>(
-              (resolve, reject) => {
-                const provider = params.provider?.trim() || undefined;
+        await withTuiSuspended(async () => {
+          const provider = params.provider?.trim() || undefined;
 
-                // Codex owns its auth store; delegate when the CLI is available.
-                const codexBin =
-                  provider === OPENAI_CODEX_PROVIDER ||
-                  (!provider && sessionInfo.modelProvider === OPENAI_CODEX_PROVIDER)
-                    ? resolveCodexCliBin()
-                    : null;
+          // Codex owns its auth store; delegate when the CLI is available.
+          const codexBin =
+            provider === OPENAI_CODEX_PROVIDER ||
+            (!provider && sessionInfo.modelProvider === OPENAI_CODEX_PROVIDER)
+              ? await resolveCodexCliBin()
+              : null;
 
-                let command: string;
-                let args: string[];
-                if (codexBin) {
-                  command = codexBin;
-                  args = ["login"];
-                } else {
-                  ({ command, args } = resolveLocalAuthCliInvocation());
-                  if (provider) {
-                    args.push("--provider", provider);
-                  }
+          return await new Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }>(
+            (resolve, reject) => {
+              let command: string;
+              let args: string[];
+              if (codexBin) {
+                command = codexBin;
+                args = ["login"];
+              } else {
+                ({ command, args } = resolveLocalAuthCliInvocation());
+                if (provider) {
+                  args.push("--provider", provider);
                 }
+              }
 
-                const invocation = resolveLocalAuthSpawnInvocation({ command, args });
-                const child = spawn(invocation.command, invocation.args, {
-                  cwd: resolveLocalAuthSpawnCwd({ args, defaultCwd: resolveUsableCwd() }),
-                  env: process.env,
-                  stdio: "inherit",
-                  ...invocation.options,
-                });
-                child.once("error", reject);
-                child.once("exit", (exitCode, signal) => {
-                  resolve({ exitCode, signal });
-                });
-              },
-            ),
-        )
+              const invocation = resolveLocalAuthSpawnInvocation({ command, args });
+              const child = spawn(invocation.command, invocation.args, {
+                cwd: resolveLocalAuthSpawnCwd({ args, defaultCwd: resolveUsableCwd() }),
+                env: process.env,
+                stdio: "inherit",
+                ...invocation.options,
+              });
+              child.once("error", reject);
+              child.once("exit", (exitCode, signal) => {
+                resolve({ exitCode, signal });
+              });
+            },
+          );
+        })
     : undefined;
 
   const updateFooter = () => {
@@ -1229,13 +1238,8 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       ? `${sessionKeyLabel} (${sessionInfo.displayName})`
       : sessionKeyLabel;
     const agentLabel = formatAgentLabel(currentAgentId);
-    const modelLabel = sessionInfo.model
-      ? sessionInfo.modelProvider
-        ? `${sessionInfo.modelProvider}/${sessionInfo.model}`
-        : sessionInfo.model
-      : "unknown";
+    const modelLabel = formatModelFooter(sessionInfo);
     const tokens = formatTokens(sessionInfo.totalTokens ?? null, sessionInfo.contextTokens ?? null);
-    const think = sessionInfo.thinkingLevel ?? "off";
     const fastLabel =
       sessionInfo.fastMode === "auto" ? "fast:auto" : sessionInfo.fastMode === true ? "fast" : null;
     const verbose = sessionInfo.verboseLevel ?? "off";
@@ -1249,7 +1253,6 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       `session ${sessionLabel}`,
       modelLabel,
       formatGoalFooter(sessionInfo.goal),
-      think !== "off" ? `think ${think}` : null,
       fastLabel,
       verbose !== "off" ? `verbose ${verbose}` : null,
       reasoningLabel,
@@ -1368,7 +1371,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     exitRequested = true;
     exitResult = {
       exitReason: result?.exitReason ?? "exit",
-      ...(result?.crestodianMessage ? { crestodianMessage: result.crestodianMessage } : {}),
+      ...(result?.systemAgentMessage ? { systemAgentMessage: result.systemAgentMessage } : {}),
     };
     pluginApprovals?.dispose();
     taskSuggestions?.dispose();

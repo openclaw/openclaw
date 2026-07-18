@@ -64,82 +64,6 @@ export const terminalPanelStyles = css`
     background: var(--bg, #0e1015);
     min-height: 36px;
   }
-  .tp-tabs {
-    --track-width: 0;
-    display: block;
-    overflow-x: auto;
-    scrollbar-width: none;
-  }
-  .tp-tabs::part(nav) {
-    display: flex;
-    align-items: stretch;
-    gap: 1px;
-  }
-  .tp-tabs::part(body) {
-    display: none;
-  }
-  .tp-tabs::-webkit-scrollbar {
-    display: none;
-  }
-  .tp-tab::part(base) {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    padding: 0 10px;
-    height: 36px;
-    color: var(--muted, #8a919e);
-    white-space: nowrap;
-    font-size: 12.5px;
-    border-bottom: 2px solid transparent;
-    transition:
-      color 0.12s ease,
-      background 0.12s ease;
-  }
-  .tp-tab:hover::part(base) {
-    color: var(--text, #d7dae0);
-    background: color-mix(in srgb, var(--text, #d7dae0) 6%, transparent);
-  }
-  .tp-tab[active]::part(base) {
-    color: var(--text, #d7dae0);
-    border-bottom-color: var(--accent, #ff5c5c);
-  }
-  .tp-tab.is-exited::part(base) {
-    opacity: 0.55;
-  }
-  .tp-tab__icon {
-    display: inline-flex;
-    color: var(--accent, #4ec9a8);
-  }
-  .tp-tab.is-exited .tp-tab__icon {
-    color: var(--muted, #8a919e);
-  }
-  .tp-tab__label {
-    font-variant-numeric: tabular-nums;
-  }
-  .tp-tab__status {
-    font-size: 11px;
-    color: var(--muted, #8a919e);
-  }
-  .tp-tab__close {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 16px;
-    height: 16px;
-    opacity: 0;
-    border: none;
-    background: transparent;
-    color: inherit;
-    border-radius: 4px;
-    padding: 0;
-  }
-  .tp-tab:hover + .tp-tab__close,
-  .tp-tab[active] + .tp-tab__close,
-  .tp-tab__close:hover,
-  .tp-tab__close:focus-visible {
-    opacity: 0.7;
-  }
-  .tp-new,
   .tp-icon {
     display: inline-flex;
     align-items: center;
@@ -152,11 +76,6 @@ export const terminalPanelStyles = css`
     border-radius: 6px;
     padding: 0;
   }
-  .tp-new {
-    align-self: center;
-  }
-  .tp-tab__close:hover,
-  .tp-new:hover,
   .tp-icon:hover {
     background: color-mix(in srgb, var(--text, #d7dae0) 12%, transparent);
     color: var(--text, #d7dae0);
@@ -264,8 +183,30 @@ export const terminalPanelStyles = css`
   .tp-host {
     position: absolute;
     inset: 0;
+    z-index: 0;
     padding: 6px 8px;
     caret-color: transparent;
+  }
+  .tp-connecting {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    color: var(--muted, #8a919e);
+    background: color-mix(in srgb, var(--bg, #0e1015) 88%, transparent);
+    font-size: 12px;
+    pointer-events: none;
+  }
+  .tp-connecting__spinner {
+    width: 16px;
+    height: 16px;
+    border: 2px solid color-mix(in srgb, var(--accent, #ff5c5c) 24%, transparent);
+    border-top-color: var(--accent, #ff5c5c);
+    border-radius: 50%;
+    animation: tp-spin 0.8s linear infinite;
   }
   .tp-empty,
   .tp-error {
@@ -275,5 +216,15 @@ export const terminalPanelStyles = css`
   }
   .tp-error {
     color: var(--danger, #ff6b6b);
+  }
+  @keyframes tp-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .tp-connecting__spinner {
+      animation: none;
+    }
   }
 `;

@@ -168,12 +168,16 @@ type SpawnSubagentParams = {
 
 type SpawnSubagentContext = {
   agentSessionKey?: string;
+  requesterTurnRunId?: string;
   /** Separate key used only for completion routing, not sandbox policy. */
   completionOwnerKey?: string;
   agentChannel?: string;
   agentAccountId?: string;
   agentTo?: string;
   agentThreadId?: string | number;
+  currentMessagingTarget?: string;
+  currentChannelId?: string;
+  currentMessageId?: string | number;
   agentGroupId?: string | null;
   agentGroupChannel?: string | null;
   agentGroupSpace?: string | null;
@@ -1622,13 +1626,23 @@ export async function spawnSubagentDirect(
     };
   }
 
+  const progressOrigin = {
+    channel: requesterOrigin?.channel,
+    accountId: requesterOrigin?.accountId,
+    to: ctx.currentMessagingTarget ?? requesterOrigin?.to,
+    threadId: requesterOrigin?.threadId,
+    channelId: ctx.currentChannelId,
+    messageId: ctx.currentMessageId,
+  };
   try {
     registerSubagentRun({
       runId: childRunId,
+      requesterTurnRunId: ctx.requesterTurnRunId,
       childSessionKey,
       controllerSessionKey: ownership.controllerSessionKey,
       requesterSessionKey: ownership.completionRequesterSessionKey,
       requesterOrigin,
+      progressOrigin,
       requesterDisplayKey: ownership.completionRequesterDisplayKey,
       task,
       taskName,
@@ -1674,6 +1688,26 @@ export async function spawnSubagentDirect(
       childSessionKey,
       runId: childRunId,
     };
+  }
+
+  if (hookRunner?.hasHooks("subagent_progress")) {
+    try {
+      await hookRunner.runSubagentProgress(
+        {
+          phase: "started",
+          runId: childRunId,
+          childSessionKey,
+          requester: progressOrigin,
+        },
+        {
+          runId: childRunId,
+          childSessionKey,
+          requesterSessionKey: requesterInternalKey,
+        },
+      );
+    } catch {
+      // Progress presentation is best-effort and must not reject an accepted spawn.
+    }
   }
 
   if (hookRunner?.hasHooks("subagent_spawned")) {
@@ -1732,7 +1766,7 @@ export async function spawnSubagentDirect(
   };
 }
 
-export const testing = {
+const testing = {
   setDepsForTest(overrides?: Partial<SubagentSpawnDeps>) {
     subagentSpawnDeps = overrides
       ? {
@@ -1742,4 +1776,8 @@ export const testing = {
       : defaultSubagentSpawnDeps;
   },
 };
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.subagentSpawnTestApi")] =
+    testing;
+}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

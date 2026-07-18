@@ -16,9 +16,9 @@ import type { SessionAcpMeta } from "../config/sessions/types.js";
 import { enqueueSystemEvent, peekSystemEvents } from "../infra/system-events.js";
 import {
   beginSessionWorkAdmission,
-  runExclusiveSessionLifecycle,
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
+import { runExclusiveSessionLifecycle } from "../sessions/session-lifecycle-admission.test-support.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { embeddedRunMock, testState, writeSessionStore } from "./test-helpers.js";
 import {
@@ -166,6 +166,20 @@ test("sessions.reset aborts active runs and clears queues", async () => {
   expect(peekSystemEvents("main")).toStrictEqual([]);
   expect(peekSystemEvents("agent:main:main")).toStrictEqual([]);
   expect(peekSystemEvents("sess-main")).toStrictEqual([]);
+  expect(bundleMcpRuntimeMocks.retireSessionMcpRuntime).toHaveBeenNthCalledWith(1, {
+    sessionId: "sess-main",
+    reason: "gateway-session-cleanup",
+    preserveActiveLeases: true,
+    retainAcrossReuse: true,
+    onError: expect.any(Function),
+  });
+  expect(bundleMcpRuntimeMocks.retireSessionMcpRuntime).toHaveBeenNthCalledWith(2, {
+    sessionId: "sess-main",
+    reason: "gateway-session-cleanup",
+    preserveActiveLeases: true,
+    retainAcrossReuse: false,
+    onError: expect.any(Function),
+  });
   expect(bundleMcpRuntimeMocks.disposeSessionMcpRuntime).toHaveBeenCalledWith("sess-main");
   expect(waitCallCountAtSnapshotClear).toEqual([1]);
   expect(browserSessionTabMocks.closeTrackedBrowserTabsForSessions).toHaveBeenCalledTimes(1);
@@ -191,6 +205,122 @@ test("sessions.reset aborts active runs and clears queues", async () => {
   expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledWith({
     targetSessionKey: "agent:main:main",
     reason: "session-reset",
+  });
+});
+
+test("sessions.reset watches reply-backed MCP retirement after an active-run timeout", async () => {
+  await seedActiveMainSession();
+  embeddedRunMock.waitResults.set("sess-main", false);
+  const waitCallCountsAtRetirement: number[] = [];
+  bundleMcpRuntimeMocks.retireSessionMcpRuntime.mockImplementation(async () => {
+    waitCallCountsAtRetirement.push(embeddedRunMock.waitCalls.length);
+    return true;
+  });
+
+  const reset = await resetMainSession();
+
+  expect(reset.ok).toBe(false);
+  expect(reset.error?.code).toBe("UNAVAILABLE");
+  expect(bundleMcpRuntimeMocks.retireSessionMcpRuntime).toHaveBeenCalledWith({
+    sessionId: "sess-main",
+    reason: "gateway-session-cleanup",
+    preserveActiveLeases: true,
+    retainAcrossReuse: true,
+    onError: expect.any(Function),
+  });
+  expect(bundleMcpRuntimeMocks.retireSessionMcpRuntime).toHaveBeenCalledTimes(2);
+  expect(waitCallCountsAtRetirement).toEqual([0, 1]);
+  expect(browserSessionTabMocks.closeTrackedBrowserTabsForSessions).not.toHaveBeenCalled();
+  expect(embeddedRunMock.endWaitCalls).toEqual(["sess-main"]);
+
+  const retry = await resetMainSession();
+  expect(retry.ok).toBe(false);
+  expect(embeddedRunMock.endWaitCalls).toEqual(["sess-main"]);
+  expect(bundleMcpRuntimeMocks.retireSessionMcpRuntime).toHaveBeenCalledTimes(4);
+  expect(waitCallCountsAtRetirement).toEqual([0, 1, 1, 2]);
+
+  embeddedRunMock.endWaiters.get("sess-main")?.(true);
+  await vi.waitFor(() => {
+    expect(bundleMcpRuntimeMocks.retireSessionMcpRuntime).toHaveBeenCalledTimes(5);
+  });
+  expect(bundleMcpRuntimeMocks.retireSessionMcpRuntime).toHaveBeenLastCalledWith({
+    sessionId: "sess-main",
+    reason: "gateway-session-cleanup",
+    preserveActiveLeases: true,
+    retainAcrossReuse: false,
+    onError: expect.any(Function),
+  });
+});
+
+test("sessions.reset keeps watching a replacement registered after waiter settlement", async () => {
+  await seedActiveMainSession();
+  embeddedRunMock.waitResults.set("sess-main", false);
+
+  const reset = await resetMainSession();
+  expect(reset.ok).toBe(false);
+
+  embeddedRunMock.endWaiters.get("sess-main")?.(true);
+  embeddedRunMock.activeIds.add("sess-main");
+  const retry = await resetMainSession();
+  expect(retry.ok).toBe(false);
+  await vi.waitFor(() => {
+    expect(embeddedRunMock.endWaitCalls).toEqual(["sess-main", "sess-main"]);
+  });
+
+  embeddedRunMock.activeIds.delete("sess-main");
+  embeddedRunMock.endWaiters.get("sess-main")?.(true);
+  await vi.waitFor(() => {
+    expect(bundleMcpRuntimeMocks.retireSessionMcpRuntime).toHaveBeenLastCalledWith({
+      sessionId: "sess-main",
+      reason: "gateway-session-cleanup",
+      preserveActiveLeases: true,
+      retainAcrossReuse: false,
+      onError: expect.any(Function),
+    });
+  });
+});
+
+test("sessions.reset installs a new watcher while prior MCP retirement is still disposing", async () => {
+  await seedActiveMainSession();
+  embeddedRunMock.waitResults.set("sess-main", false);
+  let releaseFirstRetirement = () => {};
+  const firstRetirementReleased = new Promise<void>((resolve) => {
+    releaseFirstRetirement = resolve;
+  });
+  let markFirstRetirementStarted = () => {};
+  const firstRetirementStarted = new Promise<void>((resolve) => {
+    markFirstRetirementStarted = resolve;
+  });
+  let heldFirstRetirement = false;
+  bundleMcpRuntimeMocks.retireSessionMcpRuntime.mockImplementation(async (params) => {
+    if (params.retainAcrossReuse === false && !heldFirstRetirement) {
+      heldFirstRetirement = true;
+      markFirstRetirementStarted();
+      await firstRetirementReleased;
+    }
+    return true;
+  });
+
+  const reset = await resetMainSession();
+  expect(reset.ok).toBe(false);
+  embeddedRunMock.endWaiters.get("sess-main")?.(true);
+  await firstRetirementStarted;
+
+  embeddedRunMock.activeIds.add("sess-main");
+  const retry = await resetMainSession();
+  expect(retry.ok).toBe(false);
+  await vi.waitFor(() => {
+    expect(embeddedRunMock.endWaitCalls).toEqual(["sess-main", "sess-main"]);
+  });
+
+  embeddedRunMock.activeIds.delete("sess-main");
+  embeddedRunMock.endWaiters.get("sess-main")?.(true);
+  releaseFirstRetirement();
+  await vi.waitFor(() => {
+    const completedRetirements = bundleMcpRuntimeMocks.retireSessionMcpRuntime.mock.calls.filter(
+      ([params]) => params.retainAcrossReuse === false,
+    );
+    expect(completedRetirements).toHaveLength(2);
   });
 });
 
@@ -910,17 +1040,22 @@ test("sessions.reset preserves explicit responseUsage preference across session 
   await writeSingleLineSession(dir, "sess-main", "hello");
   await writeSessionStore({
     entries: {
-      main: sessionStoreEntry("sess-main", { responseUsage: "tokens", pinnedAt: 123 }),
+      main: sessionStoreEntry("sess-main", {
+        responseUsage: "tokens",
+        pinnedAt: 123,
+        icon: "name:spark",
+      }),
     },
   });
 
   const reset = await directSessionReq<{
     ok: true;
     key: string;
-    entry: { sessionId: string; responseUsage?: string; pinnedAt?: number };
+    entry: { sessionId: string; responseUsage?: string; pinnedAt?: number; icon?: string };
   }>("sessions.reset", { key: "main" });
 
   expect(reset.ok).toBe(true);
   expect(reset.payload?.entry.responseUsage).toBe("tokens");
   expect(reset.payload?.entry.pinnedAt).toBe(123);
+  expect(reset.payload?.entry.icon).toBe("name:spark");
 });

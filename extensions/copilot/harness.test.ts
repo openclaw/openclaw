@@ -12,11 +12,12 @@ import {
 } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CopilotClientPool } from "./harness.js";
 import { createCopilotAgentHarness, type CopilotSessionBinding } from "./harness.js";
 import type { resolvePoolAcquire } from "./src/attempt.js";
-import { COPILOT_BYOK_PROVIDER_ERROR } from "./src/provider-bridge.js";
-import type { PoolKey } from "./src/runtime.js";
+import type { CopilotClientPool, PoolKey } from "./src/runtime.js";
+
+const COPILOT_BYOK_PROVIDER_ERROR =
+  "[copilot-attempt] BYOK requires an OpenAI-compatible or Anthropic model api and a non-empty baseUrl";
 
 const mocks = vi.hoisted(() => ({
   runCopilotAttempt: vi.fn(),
@@ -159,6 +160,8 @@ describe("createCopilotAgentHarness", () => {
 
   it("supports returns false in auto runtime even for github provider", () => {
     const harness = createCopilotAgentHarness();
+
+    expect(harness.autoSelection?.providerIds).toEqual([]);
 
     expect(
       harness.supports({

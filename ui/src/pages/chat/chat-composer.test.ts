@@ -2,10 +2,19 @@
 
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { renderChatComposer, resetChatComposerState } from "./components/chat-composer.ts";
 
-vi.mock("../../components/icons.ts", () => ({ icons: {} }));
+vi.mock("../../components/icons.ts", async () => {
+  const { html: litHtml } = await import("lit");
+  return {
+    icons: {
+      camera: litHtml`<svg data-icon="camera"></svg>`,
+      cameraOff: litHtml`<svg data-icon="camera-off"></svg>`,
+    },
+  };
+});
 
 type ComposerProps = Parameters<typeof renderChatComposer>[0];
 
@@ -39,6 +48,32 @@ function renderComposer(overrides: Partial<ComposerProps> = {}) {
   return { container, props: composerProps };
 }
 
+function questionPrompt(id: string, question: string): QuestionPrompt {
+  return {
+    id,
+    questions: [
+      {
+        id: "choice",
+        header: "Choice",
+        question,
+        options: [{ label: "Yes" }, { label: "No" }],
+        isOther: false,
+      },
+    ],
+    sessionKey: "queue-test",
+    createdAtMs: 1_000,
+    expiresAtMs: Date.now() + 60_000,
+    status: "pending",
+    answeredElsewhere: false,
+    localResolutionConfirmed: false,
+    locallyExpired: false,
+    submitting: false,
+    error: null,
+    drafts: new Map(),
+    revision: 1,
+  };
+}
+
 function button(container: Element, label: string): HTMLButtonElement {
   const result = container.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
   if (!result) {
@@ -54,11 +89,27 @@ afterEach(async () => {
 });
 
 describe("renderChatComposer controls", () => {
+  it("renders and invokes an action beside the disabled reason", () => {
+    const onDisabledAction = vi.fn();
+    const { container } = renderComposer({
+      canSend: false,
+      disabledReason: "This session is archived.",
+      disabledActionLabel: "Restore",
+      onDisabledAction,
+    });
+
+    const reason = container.querySelector(".agent-chat__disabled-reason");
+    expect(reason?.textContent).toContain("This session is archived.");
+    reason?.querySelector<HTMLButtonElement>("button")?.click();
+    expect(onDisabledAction).toHaveBeenCalledOnce();
+  });
+
   it("switches the primary action between voice, send, queue, and stop", () => {
     const onToggleRealtimeTalk = vi.fn();
     let view = renderComposer({ onToggleRealtimeTalk });
     button(view.container, t("chat.composer.startVoiceInput")).click();
     expect(onToggleRealtimeTalk).toHaveBeenCalledOnce();
+    expect(view.container.querySelector('[aria-label="Start video talk"]')).toBeNull();
 
     const onSend = vi.fn();
     view = renderComposer({ draft: "Send this", onSend });
@@ -67,9 +118,72 @@ describe("renderChatComposer controls", () => {
 
     const onAbort = vi.fn();
     view = renderComposer({ canAbort: true, onAbort, draft: "Follow up" });
-    expect(button(view.container, t("chat.runControls.queueMessage")).disabled).toBe(false);
+    expect(button(view.container, t("chat.runControls.sendMessage")).disabled).toBe(false);
     button(view.container, t("chat.runControls.stopGenerating")).click();
     expect(onAbort).toHaveBeenCalledOnce();
+
+    view = renderComposer({
+      canAbort: true,
+      draft: "Steer this run",
+      followUpMode: "steer",
+      onAbort,
+    });
+    expect(button(view.container, t("chat.followUpModeSteer")).disabled).toBe(false);
+
+    view = renderComposer({
+      canAbort: true,
+      draft: "Follow up later",
+      followUpMode: "queue",
+      onAbort,
+    });
+    expect(button(view.container, t("chat.runControls.queueMessage")).disabled).toBe(false);
+
+    view = renderComposer({
+      canAbort: true,
+      draft: "Replace the current run",
+      followUpMode: "interrupt",
+      onAbort,
+    });
+    expect(button(view.container, t("chat.runControls.sendMessage")).disabled).toBe(false);
+  });
+
+  it("offers camera only inside a video-capable active talk session", () => {
+    const onToggleRealtimeCamera = vi.fn();
+    const { container } = renderComposer({
+      onToggleRealtimeTalk: vi.fn(),
+      onToggleRealtimeCamera,
+      realtimeTalkActive: true,
+      realtimeTalkStatus: "listening",
+      realtimeTalkVideoCapable: true,
+    });
+
+    button(container, t("chat.composer.turnCameraOn")).click();
+    expect(onToggleRealtimeCamera).toHaveBeenCalledOnce();
+    expect(container.querySelector('[aria-label="Start video talk"]')).toBeNull();
+
+    const failed = renderComposer({
+      onToggleRealtimeTalk: vi.fn(),
+      onToggleRealtimeCamera,
+      realtimeTalkActive: true,
+      realtimeTalkStatus: "error",
+      realtimeTalkVideoCapable: true,
+    });
+    expect(button(failed.container, t("chat.composer.turnCameraOn")).disabled).toBe(true);
+  });
+
+  it("renders the camera-off glyph while the talk camera is enabled", () => {
+    const { container } = renderComposer({
+      onToggleRealtimeTalk: vi.fn(),
+      onToggleRealtimeCamera: vi.fn(),
+      realtimeTalkActive: true,
+      realtimeTalkStatus: "listening",
+      realtimeTalkVideoCapable: true,
+      realtimeTalkVideoStream: {} as MediaStream,
+    });
+
+    const cameraToggle = button(container, t("chat.composer.turnCameraOff"));
+    expect(cameraToggle.querySelector('[data-icon="camera-off"]')).not.toBeNull();
+    expect(cameraToggle.querySelector('[data-icon="camera"]')).toBeNull();
   });
 
   it("sends attachment-only drafts instead of starting voice", () => {
@@ -199,6 +313,114 @@ describe("renderChatComposer controls", () => {
 });
 
 describe("renderChatComposer status", () => {
+  it("swaps the expanded question with the composer and restores its draft and focus", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const prompt = questionPrompt("question-swap", "Choose a release target");
+    const composerProps = props({
+      paneId: "question-swap-pane",
+      sessionKey: "queue-test",
+      draft: "Keep this draft",
+      gatewayQuestionPrompts: [],
+      composerControls: html`<button type="button">Model</button>`,
+      onRequestUpdate: vi.fn(),
+    });
+    composerProps.onDraftChange = (next) => {
+      composerProps.draft = next;
+    };
+    const draw = () => render(renderChatComposer(composerProps), container);
+
+    draw();
+    const initialTextarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
+    initialTextarea.focus();
+    expect(document.activeElement).toBe(initialTextarea);
+    initialTextarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    initialTextarea.value = "Keep this draft while composing";
+    initialTextarea.dispatchEvent(
+      new InputEvent("input", { bubbles: true, inputType: "insertCompositionText" }),
+    );
+
+    composerProps.gatewayQuestionPrompts = [prompt];
+    draw();
+    let panel = container.querySelector("openclaw-chat-question-panel") as HTMLElement & {
+      updateComplete: Promise<unknown>;
+    };
+    await panel.updateComplete;
+    expect(container.querySelector(".agent-chat__input")).toBeNull();
+    expect(container.querySelector(".agent-chat__composer-footer")).toBeNull();
+    expect(document.activeElement).toBe(panel.querySelector(".chat-question-panel"));
+    expect(composerProps.draft).toBe("Keep this draft while composing");
+
+    composerProps.draft = "Host updated this draft while the question was open";
+
+    panel.querySelector<HTMLButtonElement>(".chat-question-panel__collapse")?.click();
+    draw();
+    await Promise.resolve();
+    let textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
+    expect(textarea.value).toBe("Host updated this draft while the question was open");
+    expect(document.activeElement).toBe(textarea);
+
+    panel = container.querySelector("openclaw-chat-question-panel") as typeof panel;
+    panel.querySelector<HTMLButtonElement>(".chat-question-panel__collapsed-button")?.click();
+    draw();
+    await panel.updateComplete;
+    expect(container.querySelector(".agent-chat__input")).toBeNull();
+    expect(document.activeElement).toBe(panel.querySelector(".chat-question-panel"));
+
+    prompt.status = "answered";
+    draw();
+    await Promise.resolve();
+    textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
+    expect(textarea.value).toBe("Host updated this draft while the question was open");
+    expect(document.activeElement).toBe(textarea);
+    expect(container.querySelector("openclaw-chat-question-panel")).toBeNull();
+
+    container.remove();
+  });
+
+  it("keeps every concurrent gateway question reachable", async () => {
+    const container = document.createElement("div");
+    const onRequestUpdate = vi.fn();
+    const composerProps = props({
+      sessionKey: "queue-test",
+      gatewayQuestionPrompts: [
+        questionPrompt("question-1", "First prompt"),
+        questionPrompt("question-2", "Second prompt"),
+      ],
+      onRequestUpdate,
+    });
+
+    render(renderChatComposer(composerProps), container);
+    let panel = container.querySelector("openclaw-chat-question-panel") as HTMLElement & {
+      props: {
+        model: { questions: Array<{ question: string }>; requestPosition?: unknown };
+        onNextRequest?: () => void;
+      };
+    };
+    expect(panel.props.model.questions[0]?.question).toBe("First prompt");
+    expect(panel.props.model.requestPosition).toEqual({ current: 1, total: 2 });
+
+    panel.props.onNextRequest?.();
+    expect(onRequestUpdate).toHaveBeenCalledOnce();
+    render(renderChatComposer(composerProps), container);
+    panel = container.querySelector("openclaw-chat-question-panel") as typeof panel;
+    expect(panel.props.model.questions[0]?.question).toBe("Second prompt");
+    expect(panel.props.model.requestPosition).toEqual({ current: 2, total: 2 });
+  });
+
+  it("keeps unscoped and other-session gateway questions out of the composer", () => {
+    const unscopedPrompt = questionPrompt("question-1", "Unscoped prompt");
+    unscopedPrompt.sessionKey = undefined;
+    const otherSessionPrompt = questionPrompt("question-2", "Other prompt");
+    otherSessionPrompt.sessionKey = "agent:other:main";
+
+    const view = renderComposer({
+      sessionKey: "queue-test",
+      gatewayQuestionPrompts: [unscopedPrompt, otherSessionPrompt],
+    });
+
+    expect(view.container.querySelector("openclaw-chat-question-panel")).toBeNull();
+  });
   it("renders only a fresh interrupted run as visible status chrome", () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
     let view = renderComposer({
@@ -246,6 +468,40 @@ describe("renderChatComposer status", () => {
     );
   });
 
+  it("renders an expandable live plan checklist and hides it when idle", () => {
+    const planStatus = {
+      explanation: "Keep the change focused",
+      steps: [
+        { step: "Inspect the route", status: "completed" as const },
+        { step: "Wire the checklist", status: "in_progress" as const },
+        { step: "Run focused tests", status: "pending" as const },
+      ],
+    };
+    const { container } = renderComposer({
+      canAbort: true,
+      onAbort: vi.fn(),
+      planStatus,
+    });
+
+    const checklist = container.querySelector<HTMLDetailsElement>(".plan-checklist");
+    expect(checklist?.open).toBe(false);
+    expect(checklist?.querySelector(".plan-checklist__current")?.textContent).toBe(
+      "Wire the checklist",
+    );
+    expect(checklist?.querySelector(".plan-checklist__count")?.textContent).toBe("1/3");
+    expect(
+      [...(checklist?.querySelectorAll(".plan-checklist__step-marker") ?? [])].map((marker) =>
+        marker.textContent?.trim(),
+      ),
+    ).toEqual(["✓", "▸", "▢"]);
+    expect(checklist?.querySelector(".plan-checklist__explanation")?.textContent).toBe(
+      "Keep the change focused",
+    );
+
+    const idle = renderComposer({ planStatus });
+    expect(idle.container.querySelector(".plan-checklist")).toBeNull();
+  });
+
   it("renders session context and plan usage through the full composer", () => {
     const { container } = renderComposer({
       sessions: {
@@ -277,7 +533,7 @@ describe("renderChatComposer status", () => {
       },
     });
     expect(container.querySelector(".context-ring")?.getAttribute("aria-label")).toBe(
-      "Session context usage: 46k of 200k (23%)",
+      "Thread context usage: 46k of 200k (23%)",
     );
     expect(container.querySelector(".context-usage__plan-header")?.textContent).toContain(
       "Plan usage",

@@ -23,6 +23,7 @@ import { buildSkillWorkshopMocks } from "./control-ui-mock-skill-workshop.js";
 
 type CliOptions = {
   allowedHosts: string[];
+  fixture?: "board";
   host: string;
   port: number;
 };
@@ -40,6 +41,30 @@ const TOTAL_TELEGRAM_SESSIONS = 180;
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const uiRoot = path.join(repoRoot, "ui");
+const boardFixturePath = "/__fixtures/board/";
+const boardFixtureHtml = `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OpenClaw Board Fixture</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+    <style>
+      body { margin: 0; min-width: 320px; min-height: 100vh; background: #0f1115; }
+      .board-fixture-shell { box-sizing: border-box; margin: 0 auto; max-width: 1440px; padding: 36px; }
+      .board-fixture-header { align-items: end; display: flex; justify-content: space-between; margin-bottom: 24px; }
+      .board-fixture-header span { color: #747e8d; font: 10px ui-monospace, monospace; letter-spacing: .15em; }
+      .board-fixture-header h1 { color: #e5e7eb; font-size: 24px; letter-spacing: -.03em; margin: 5px 0 0; }
+      .board-fixture-status { color: #8892a0; font: 11px ui-monospace, monospace; }
+      .board-fixture-status i { background: #4ec9a8; border-radius: 50%; display: inline-block; height: 7px; margin-right: 6px; width: 7px; }
+      @media (max-width: 700px) { .board-fixture-shell { padding: 18px; } }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/test-helpers/board-fixture.ts"></script>
+  </body>
+</html>`;
 
 function mockFileHash(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
@@ -63,6 +88,10 @@ function parseArgs(args: string[]): CliOptions {
       options.host = args[++i] ?? options.host;
     } else if (arg.startsWith("--host=")) {
       options.host = arg.slice("--host=".length) || options.host;
+    } else if (arg === "--fixture") {
+      options.fixture = parseFixture(args[++i]);
+    } else if (arg.startsWith("--fixture=")) {
+      options.fixture = parseFixture(arg.slice("--fixture=".length));
     } else if (arg === "--port") {
       options.port = parsePort(args[++i], options.port);
     } else if (arg.startsWith("--port=")) {
@@ -70,6 +99,16 @@ function parseArgs(args: string[]): CliOptions {
     }
   }
   return options;
+}
+
+function parseFixture(value: string | undefined): "board" | undefined {
+  if (!value) {
+    return undefined;
+  }
+  if (value !== "board") {
+    throw new Error(`Unknown Control UI mock fixture: ${value}`);
+  }
+  return value;
 }
 
 function parsePort(value: string | undefined, fallback: number): number {
@@ -81,8 +120,9 @@ function sessionRow(
   key: string,
   label: string,
   updatedAt: number,
-  options: { model?: string; modelProvider?: string } = {},
+  options: { model?: string; modelProvider?: string } & Record<string, unknown> = {},
 ) {
+  const { model, modelProvider, ...extra } = options;
   return {
     contextTokens: 200_000,
     displayName: label,
@@ -90,11 +130,12 @@ function sessionRow(
     key,
     kind: "direct",
     label,
-    model: options.model ?? "gpt-5.6-luna",
-    modelProvider: options.modelProvider ?? "openai",
+    model: (model as string | undefined) ?? "gpt-5.6-luna",
+    modelProvider: (modelProvider as string | undefined) ?? "openai",
     status: "done",
     totalTokens: 0,
     updatedAt,
+    ...extra,
   };
 }
 
@@ -548,6 +589,17 @@ function buildConfigMocks() {
     gateway: { port: 18789, bind: "127.0.0.1" },
     agents: { defaults: { thinkingDefault: "medium" } },
     models: { mode: "merge" },
+    mcp: {
+      servers: {
+        context7: { url: "https://mcp.context7.com/mcp", transport: "streamable-http" },
+        github: {
+          url: "https://api.githubcopilot.com/mcp/",
+          transport: "streamable-http",
+          auth: "oauth",
+        },
+        "local-tools": { command: "npx", args: ["some-mcp-server", "--stdio"], enabled: false },
+      },
+    },
   };
   const schema = {
     type: "object",
@@ -898,7 +950,7 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
         },
         files: sessionFiles,
         root: sessionWorkspaceRoot,
-        sessionKey: "agent:alpha",
+        sessionKey: "agent:main:main",
       },
     },
   ];
@@ -912,7 +964,7 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
         hash: mockFileHash(sessionFileContentByPath.get(file.path) ?? ""),
       },
       root: sessionWorkspaceRoot,
-      sessionKey: "agent:alpha",
+      sessionKey: "agent:main:main",
     },
   }));
   const sessionFileSetCases = sessionFiles.map((file) => ({
@@ -926,7 +978,7 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
         updatedAtMs: baseTime,
       },
       root: sessionWorkspaceRoot,
-      sessionKey: "agent:alpha",
+      sessionKey: "agent:main:main",
     },
   }));
   const lobsterSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360">
@@ -950,14 +1002,85 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
     source: "session-transcript",
     download: { mode: "bytes" },
   };
+  // Five-zone sidebar fixture: main session (hidden behind the identity card,
+  // its child promoted to Threads), threads with a running tree, group rows,
+  // and a worktree row for the Coding zone.
+  const mainChildRow = sessionRow(
+    "agent:main:lisbon-trip",
+    "Lisbon trip planning",
+    baseTime - 120_000,
+    {
+      spawnedBy: "agent:main:main",
+      unread: true,
+    },
+  );
+  const taxChildRow = sessionRow(
+    "agent:main:subagent:tax-receipts",
+    "Reading receipts",
+    baseTime - 30_000,
+    {
+      spawnedBy: "agent:main:tax-research",
+      hasActiveRun: true,
+      status: "running",
+      startedAt: baseTime - 200_000,
+      runtimeMs: 200_000,
+    },
+  );
   const sessions = [
-    sessionRow("agent:alpha", "Alpha planning", baseTime - 1_000),
+    sessionRow("agent:main:main", "Molty", baseTime - 1_000, {
+      childSessions: ["agent:main:lisbon-trip"],
+    }),
+    sessionRow("agent:main:tax-research", "Tax filing research", baseTime - 60_000, {
+      hasActiveRun: true,
+      status: "running",
+      childSessions: ["agent:main:subagent:tax-receipts"],
+      pinned: true,
+      icon: "name:spark",
+    }),
+    mainChildRow,
+    sessionRow("agent:main:home-server", "Home server migration", baseTime - 240_000, {
+      pinned: true,
+      icon: "🛠️",
+    }),
+    sessionRow("agent:main:whatsapp:group:family", "Family", baseTime - 90_000, {
+      kind: "group",
+      channel: "whatsapp",
+      unread: true,
+    }),
+    sessionRow("agent:main:discord:channel:openclaw-dev", "#openclaw-dev", baseTime - 300_000, {
+      kind: "group",
+      channel: "discord",
+    }),
+    sessionRow("agent:main:sidebar-zones", "sidebar zones", baseTime - 150_000, {
+      worktree: {
+        id: "wt-sidebar-zones",
+        branch: "claude/sidebar-agent-zones",
+        repoRoot: "~/Projects/openclaw",
+      },
+    }),
     ...buildSessionRows({
-      baseTime: baseTime - 60_000,
-      count: TOTAL_MOCK_SESSIONS - 1,
-      keyPrefix: "history",
+      baseTime: baseTime - 400_000,
+      count: 3,
+      keyPrefix: "main:history",
       labelPrefix: "Long running session",
     }),
+  ];
+  const archivedSessions = [
+    sessionRow("agent:main:archived-launch-notes", "Archived launch notes", baseTime - 86_400_000, {
+      archived: true,
+      totalTokens: 42_000,
+    }),
+    sessionRow(
+      "agent:main:discord:channel:archived-lounge",
+      "#archived-lounge",
+      baseTime - 172_800_000,
+      {
+        archived: true,
+        channel: "discord",
+        kind: "group",
+        totalTokens: 18_000,
+      },
+    ),
   ];
   const telegramSessions = buildSessionRows({
     baseTime: baseTime - 30_000,
@@ -981,9 +1104,9 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
   const channelWizard = buildChannelWizardMocks();
   const configMocks = buildConfigMocks();
   return {
-    assistantAgentId: "openclaw-mock",
-    assistantName: "OpenClaw mock",
-    defaultAgentId: "openclaw-mock",
+    assistantAgentId: "main",
+    assistantName: "Molty",
+    defaultAgentId: "main",
     featureMethods: ["chat.metadata", "chat.startup", "sessions.diff", "sessions.files.set"],
     historyMessages: buildScrollableChatHistory(baseTime),
     methodResponses: {
@@ -992,7 +1115,38 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
       // (raw persists, hash advances) because config.get ships a raw fixture.
       "config.get": configMocks.get,
       "config.schema": configMocks.schema,
+      "sessions.patch": { ok: true },
       "sessions.diff": buildSessionDiffMock(),
+      // The worktrees page assumes the gateway contract shape; without this
+      // fixture the mock's {} fallback surfaces as a TypeError banner.
+      "worktrees.list": {
+        worktrees: [
+          {
+            id: "wt-mock-1",
+            name: "fix-session-icons",
+            repoFingerprint: "a1b2c3d4e5f60718",
+            repoRoot: "/Users/demo/Projects/openclaw",
+            path: "/Users/demo/Projects/openclaw/.openclaw/worktrees/fix-session-icons",
+            branch: "openclaw/fix-session-icons",
+            baseRef: "origin/main",
+            ownerKind: "session",
+            createdAt: baseTime - 3 * 86_400_000,
+            lastActiveAt: baseTime - 2 * 3_600_000,
+          },
+          {
+            id: "wt-mock-2",
+            name: "dashboard-polish",
+            repoFingerprint: "a1b2c3d4e5f60718",
+            repoRoot: "/Users/demo/Projects/openclaw",
+            path: "/Users/demo/Projects/openclaw/.openclaw/worktrees/dashboard-polish",
+            branch: "openclaw/dashboard-polish",
+            baseRef: "origin/main",
+            ownerKind: "manual",
+            createdAt: baseTime - 9 * 86_400_000,
+            lastActiveAt: baseTime - 26 * 3_600_000,
+          },
+        ],
+      },
       "plugins.list": buildPluginCatalogMock(),
       "channels.status": buildChannelsStatusMock(baseTime),
       "wizard.start": channelWizard.start,
@@ -1229,7 +1383,7 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
               },
               files: sessionFiles,
               root: sessionWorkspaceRoot,
-              sessionKey: "agent:alpha",
+              sessionKey: "agent:main:main",
             },
           },
           {
@@ -1258,7 +1412,7 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
               },
               files: sessionFiles,
               root: sessionWorkspaceRoot,
-              sessionKey: "agent:alpha",
+              sessionKey: "agent:main:main",
             },
           },
           ...sessionFileCases,
@@ -1286,18 +1440,28 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
       },
       "sessions.list": {
         cases: [
+          // Child fetches must precede the catch-all page case (subset match).
+          {
+            match: { spawnedBy: "agent:main:main" },
+            response: pagedSessionsListResponse([mainChildRow], 0),
+          },
+          {
+            match: { spawnedBy: "agent:main:tax-research" },
+            response: pagedSessionsListResponse([taxChildRow], 0),
+          },
           ...buildSearchSessionListCases(telegramSessions, searchPrefixes("telegram")),
           ...buildSearchSessionListCases(claudeSessions, [
             ...searchPrefixes("claude"),
             ...searchPrefixes("claude-sonnet-4-6"),
             ...searchPrefixes("anthropic"),
           ]),
-          ...buildSessionListCases(sessions),
+          ...buildSessionListCases([...sessions, ...archivedSessions]),
         ],
       },
     },
     models: modelProviders.models,
-    sessionKey: "agent:alpha",
+    sessionArchiveFiltering: true,
+    sessionKey: "agent:main:main",
   };
 }
 
@@ -1326,18 +1490,42 @@ function createMockGatewayPlugin(scenario: ControlUiMockGatewayScenario): Plugin
   };
 }
 
+function createBoardFixturePlugin(): Plugin {
+  return {
+    name: "openclaw-control-ui-board-fixture",
+    configureServer(server) {
+      server.middlewares.use(boardFixturePath, (_req, res, next) => {
+        void server
+          .transformIndexHtml(boardFixturePath, boardFixtureHtml)
+          .then((html) => {
+            res.statusCode = 200;
+            res.setHeader("content-type", "text/html; charset=utf-8");
+            res.end(html);
+          })
+          .catch((error: unknown) => {
+            next(error as Error);
+          });
+      });
+    },
+  };
+}
+
 function hostForUrl(boundAddress: string, requestedHost: string): string {
   const host = boundAddress === "0.0.0.0" || boundAddress === "::" ? requestedHost : boundAddress;
   const reachableHost = host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host;
   return reachableHost.includes(":") ? `[${reachableHost}]` : reachableHost;
 }
 
-function resolveServerUrl(server: ViteDevServer, requestedHost: string): string {
+function resolveServerUrl(
+  server: ViteDevServer,
+  requestedHost: string,
+  pathname = "/chat",
+): string {
   const address = server.httpServer?.address();
   if (!address || typeof address === "string") {
     throw new Error("Control UI mock server did not expose a TCP port");
   }
-  return `http://${hostForUrl(address.address, requestedHost)}:${address.port}/chat`;
+  return `http://${hostForUrl(address.address, requestedHost)}:${address.port}${pathname}`;
 }
 
 async function waitForShutdown(): Promise<void> {
@@ -1364,9 +1552,12 @@ const server = await createServer({
   },
   logLevel: "error",
   optimizeDeps: {
+    ...(options.fixture === "board"
+      ? { entries: [path.join(uiRoot, "src", "test-helpers", "board-fixture.ts")] }
+      : {}),
     include: ["lit/directives/repeat.js"],
   },
-  plugins: [createMockGatewayPlugin(scenario)],
+  plugins: [createMockGatewayPlugin(scenario), createBoardFixturePlugin()],
   publicDir: path.join(uiRoot, "public"),
   resolve: {
     alias: [
@@ -1386,5 +1577,8 @@ const server = await createServer({
 
 await server.listen();
 console.log(`[control-ui-mock] ${resolveServerUrl(server, options.host)}`);
+console.log(
+  `[control-ui-mock] board fixture: ${resolveServerUrl(server, options.host, boardFixturePath)}`,
+);
 await waitForShutdown();
 await server.close();

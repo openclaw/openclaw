@@ -30,6 +30,21 @@ Frame shapes:
 - Response: `{type:"res", id, ok, payload|error}`
 - Event: `{type:"event", event, payload, seq?, stateVersion?}`
 
+Response errors use `{ code, message, details?, retryable?, retryAfterMs? }`.
+Clients should branch on `code` and `details.code`; `message` remains human-readable
+and can change except where a compatibility note says otherwise. Method-level
+authorization failures use top-level `code: "FORBIDDEN"` with structured
+missing-scope details:
+
+- Missing scope: `{ code: "MISSING_SCOPE", missingScope, requiredScopes }`.
+  `requiredScopes` is the complete known scope set for the requested operation.
+  The legacy `missing scope: <scope>` message is retained for older clients.
+
+The schemas are exported as `GatewayErrorDetailsSchema`,
+`MissingScopeErrorDetailsSchema` from `@openclaw/gateway-protocol/schema`.
+HTTP scope failures mirror the `MISSING_SCOPE` object under `error.details` and
+use HTTP status `403`.
+
 Side-effecting methods require idempotency keys (see schema).
 
 ## Handshake
@@ -499,7 +514,7 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `config.apply` validates + replaces the full config payload.
     - `config.schema` returns the live config schema payload used by Control UI and CLI tooling: schema, `uiHints`, version, generation metadata, plugin + channel schema metadata when loadable. It includes `title` / `description` metadata from the same labels/help text as the UI, including nested object, wildcard, array-item, and `anyOf` / `oneOf` / `allOf` composition branches when matching field documentation exists.
     - `config.schema.lookup` returns a path-scoped lookup payload for one config path: normalized path, a shallow schema node, matched hint + `hintPath`, optional `reloadKind`, and immediate child summaries for UI/CLI drill-down. `reloadKind` is one of `restart`, `hot`, or `none` (`src/config/schema.ts`) and mirrors the gateway config reload planner for the requested path. Lookup schema nodes keep the user-facing docs and common validation fields (`title`, `description`, `type`, `enum`, `const`, `format`, `pattern`, numeric/string/array/object bounds, `additionalProperties`, `deprecated`, `readOnly`, `writeOnly`). Child summaries expose `key`, normalized `path`, `type`, `required`, `hasChildren`, optional `reloadKind`, plus the matched `hint` / `hintPath`.
-    - `update.run` runs the gateway update flow and schedules a restart only if the update succeeded; callers with a session can include `continuationMessage` so startup resumes one follow-up agent turn through the restart continuation queue. Package-manager updates and supervised git-checkout updates from the control plane use a detached managed-service handoff instead of replacing the package tree or mutating checkout/build output inside the live gateway. A started handoff returns `ok: true` with `result.reason: "managed-service-handoff-started"` and `handoff.status: "started"`; unavailable or failed handoffs return `ok: false` with `managed-service-handoff-unavailable` or `managed-service-handoff-failed`, plus `handoff.command` when a manual shell update is required. Unavailable means OpenClaw lacks a safe supervisor boundary or durable service identity, such as `OPENCLAW_SYSTEMD_UNIT` for systemd. During a started handoff, the restart sentinel may briefly report `stats.reason: "restart-health-pending"`; the continuation is delayed until the CLI verifies the restarted gateway and writes the final `ok` sentinel.
+    - `update.run` runs the gateway update flow and schedules a restart only if the update succeeded; callers with a session can include `continuationMessage` so startup resumes one follow-up agent turn through the restart continuation queue. Package-manager updates and supervised git-checkout updates from the control plane use a detached managed-service handoff instead of replacing the package tree or mutating checkout/build output inside the live gateway. A started handoff returns `ok: true` with `result.reason: "managed-service-handoff-started"` and `handoff.status: "started"`. A second concurrent `update.run` handled by the same Gateway process returns `ok: false` with `result.reason: "managed-service-handoff-already-running"` and `handoff.status: "already-running"`; its continuation is not accepted, so the caller can retry after the active update completes. Standalone CLI updaters and replacement Gateway processes are outside this process-local guard. Unavailable or failed handoffs return `ok: false` with `managed-service-handoff-unavailable` or `managed-service-handoff-failed`, plus `handoff.command` when a manual shell update is required. Unavailable means OpenClaw lacks a safe supervisor boundary or durable service identity, such as `OPENCLAW_SYSTEMD_UNIT` for systemd. During a started handoff, the restart sentinel may briefly report `stats.reason: "restart-health-pending"`; the continuation is delayed until the CLI verifies the restarted gateway and writes the final `ok` sentinel.
     - `update.status` refreshes and returns the latest update restart sentinel, including the post-restart running version when available.
     - `wizard.start`, `wizard.next`, `wizard.status`, and `wizard.cancel` expose the onboarding wizard over WS RPC.
 
@@ -527,7 +542,7 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `sessions.preview` returns bounded transcript previews for specific session keys.
     - `sessions.describe` returns one gateway session row for an exact session key.
     - `sessions.resolve` resolves or canonicalizes a session target.
-    - `sessions.create` creates a new session entry. `worktree: true` provisions a managed worktree; optional `worktreeBaseRef`/`worktreeName` select the base ref and branch name, and `execNode` (`operator.admin`) binds session exec to a node host. The created worktree is echoed in the result and persisted on the session row (`worktree: { id, branch, repoRoot }`). When the entry is created but its nested initial `chat.send` is rejected, the successful result includes `runStarted: false` and `runError`; clients can preserve the prompt and retry against the returned session key.
+    - `sessions.create` creates a new session entry. Optional `model` and `thinkingLevel` values persist the initial model and reasoning overrides atomically. `worktree: true` provisions a managed worktree; optional `worktreeBaseRef`/`worktreeName` select the base ref and branch name, and `execNode` (`operator.admin`) binds session exec to a node host. The created worktree is echoed in the result and persisted on the session row (`worktree: { id, branch, repoRoot }`). When the entry is created but its nested initial `chat.send` is rejected, the successful result includes `runStarted: false` and `runError`; clients can preserve the prompt and retry against the returned session key. A caller that passes `parentSessionKey` with `emitCommandHooks: true` should also declare the lifecycle disposition of a distinct child: `succeedsParent: true` ends the parent with `session_end`, while `false` keeps the parent active and emits only the child's `session_start`. Omitting `succeedsParent` preserves the legacy parent-rollover behavior for existing clients. The disposition requires both parent linkage and command hooks; a fork cannot succeed its parent. Main-session reset-in-place behavior is unchanged because no distinct child is created.
     - `sessions.dispatch` (`operator.admin`) moves an existing local OpenClaw session with a session-owned managed worktree to a configured cloud-worker profile. Pass `{ key, profileId, agentId? }`. The method is absent when no worker profile is configured, closes local turn admission before draining active work, and returns only after placement reaches `active` worker ownership. Dispatch is one-way; worker-to-local pull-back is not part of this RPC.
     - `sessions.groups.list`, `sessions.groups.put`, `sessions.groups.rename`, and `sessions.groups.delete` manage the gateway-owned custom session group catalog (names + display order). Membership stays on each session's `category` field; rename and delete update member sessions server-side.
     - `sessions.send` sends a message into an existing session.
@@ -539,7 +554,7 @@ methods. Treat this as feature discovery, not a full enumeration of
     - Chat execution still uses `chat.history`, `chat.send`, `chat.abort`, and `chat.inject`. `chat.history` is display-normalized for UI clients: inline directive tags are stripped from visible text, plain-text tool-call XML payloads (`<tool_call>...</tool_call>`, `<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`, `<function_calls>...</function_calls>`, and truncated tool-call blocks) and leaked ASCII/full-width model control tokens are stripped, pure silent-token assistant rows (exact `NO_REPLY` / `no_reply`) are omitted, and oversized rows can be replaced with placeholders.
     - `chat.message.get` is the additive bounded full-message reader for a single visible transcript entry. Pass `sessionKey`, optional `agentId` when session selection is agent-scoped, and a transcript `messageId` previously surfaced through `chat.history`; the gateway returns the same display-normalized projection without the lightweight history truncation cap when the stored entry is still available and not oversized.
     - `chat.toolTitles` returns short purpose titles for tool calls rendered in the Control UI (batched, max 24 items with bounded inputs). The feature is opt-in via `gateway.controlUi.toolTitles` (default off); disabled gateways answer `{ titles: {}, disabled: true }` with no model call so clients stop asking. When enabled, titles use standard utility-model routing: an explicitly configured `utilityModel` (an operator decision that, like all utility tasks, may send bounded task content to the chosen provider), else the session provider's declared small-model default so no new egress destination appears implicitly; an empty `utilityModel` disables them entirely. Titles never fall back to the primary model. Results cache in the per-agent state database keyed by tool name + input, so repeated views never re-bill the same calls.
-    - `chat.send` accepts one-turn `fastMode: "auto"` to use fast mode for model calls started before the auto cutoff, then start later retry, fallback, tool-result, or continuation calls without fast mode. The cutoff defaults to 60 seconds (`DEFAULT_FAST_MODE_AUTO_ON_SECONDS`) and can be configured per model with `agents.defaults.models["<provider>/<model>"].params.fastAutoOnSeconds`. A `chat.send` caller can pass one-turn `fastAutoOnSeconds` to override the cutoff for that request.
+    - `chat.send` accepts one-turn `fastMode: "auto"` to use fast mode for model calls started before the auto cutoff, then start later retry, fallback, tool-result, or continuation calls without fast mode. The cutoff defaults to 60 seconds (`DEFAULT_FAST_MODE_AUTO_ON_SECONDS`) and can be configured per model with `agents.defaults.models["<provider>/<model>"].params.fastAutoOnSeconds`. A `chat.send` caller can pass one-turn `fastAutoOnSeconds` to override the cutoff for that request. Pass `queueMode` (`steer`, `followup`, `collect`, or `interrupt`) to override the stored queue mode for this request only; explicit Control UI steer actions use `queueMode: "steer"`.
 
   </Accordion>
 
@@ -611,6 +626,9 @@ methods. Treat this as feature discovery, not a full enumeration of
 - `node.invoke.request`: node invoke request broadcast.
 - `device.pair.requested` / `device.pair.resolved`: paired-device lifecycle.
 - `voicewake.changed`: wake-word trigger config changed.
+- `config.changed`: a config write persisted (payload carries the config path,
+  the new snapshot hash, and a timestamp — never config content). Operator-read
+  scoped; clients refresh via `config.get`.
 - `exec.approval.requested` / `exec.approval.resolved`: exec approval
   lifecycle.
 - `plugin.approval.requested` / `plugin.approval.resolved`: plugin approval
@@ -861,11 +879,11 @@ context.
 `models.list` accepts an optional `view` parameter
 (`src/agents/model-catalog-visibility.ts`):
 
-- Omitted or `"default"`: if `agents.defaults.models` is configured, the
+- Omitted or `"default"`: if `agents.defaults.modelPolicy.allow` is configured, the
   response is the allowed catalog, including dynamically discovered models
   for `provider/*` entries. Otherwise the response is the full gateway
   catalog.
-- `"configured"`: picker-sized behavior. If `agents.defaults.models` is
+- `"configured"`: picker-sized behavior. If `agents.defaults.modelPolicy.allow` is
   configured, it still wins, including provider-scoped discovery for
   `provider/*` entries. Without an allowlist, the response uses explicit
   `models.providers.<provider>.models` entries, falling back to the full
@@ -874,7 +892,7 @@ context.
   independent of picker allowlists. Rows include public model capabilities and
   route-aware availability, but omit provider endpoints, auth material, and
   runtime request configuration.
-- `"all"`: full gateway catalog, bypassing `agents.defaults.models`. Use for
+- `"all"`: full gateway catalog, bypassing `agents.defaults.modelPolicy.allow`. Use for
   diagnostics/discovery UIs, not normal model pickers.
 
 ## Exec approvals

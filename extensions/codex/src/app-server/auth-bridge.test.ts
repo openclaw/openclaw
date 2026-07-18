@@ -1635,6 +1635,44 @@ describe("bridgeCodexAppServerStartOptions", () => {
     }
   });
 
+  it("selects ordered Codex OAuth before an OpenAI API-key backup", async () => {
+    const request = vi.fn(async () => ({ type: "chatgptAuthTokens" }));
+    const accessToken = "test-access-token";
+    const authProfileStore: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:media-api": {
+          type: "api_key",
+          provider: "openai",
+          key: "test-api-key",
+        },
+        "openai:qa-oauth": {
+          type: "oauth",
+          provider: "openai",
+          access: accessToken,
+          refresh: "test-refresh",
+          expires: Date.UTC(2036, 0, 1),
+          accountId: "qa-codex-account",
+        },
+      },
+      order: { openai: ["openai:qa-oauth", "openai:media-api"] },
+    };
+
+    expect(resolveCodexAppServerAuthProfileId({ store: authProfileStore })).toBe("openai:qa-oauth");
+    await applyCodexAppServerAuthProfile({
+      client: { request } as never,
+      agentDir: "/tmp/openclaw-codex-auth-product-proof",
+      authProfileStore,
+    });
+
+    expect(request).toHaveBeenCalledWith("account/login/start", {
+      type: "chatgptAuthTokens",
+      accessToken,
+      chatgptAccountId: "qa-codex-account",
+      chatgptPlanType: null,
+    });
+  });
+
   it("does not select Codex profiles without inline OAuth credential material", () => {
     expect(
       resolveCodexAppServerAuthProfileId({
@@ -1965,6 +2003,112 @@ describe("bridgeCodexAppServerStartOptions", () => {
     }
   });
 
+  it("fails subscription auth instead of falling back to an API key", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const request = vi.fn(async () => ({ type: "apiKey" }));
+    vi.stubEnv("CODEX_API_KEY", "placeholder");
+    let rejection: unknown;
+    try {
+      await applyCodexAppServerAuthProfile({
+        client: { request } as never,
+        agentDir,
+        authProfileId: "openai:work",
+        authProfileStore: {
+          version: 1,
+          profiles: {},
+        },
+        authRequirement: "subscription",
+        startOptions: createStartOptions({
+          env: { CODEX_API_KEY: "placeholder" },
+        }),
+      });
+    } catch (error) {
+      rejection = error;
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+
+    expect(rejection).toBeInstanceOf(Error);
+    expect((rejection as { status?: unknown }).status).toBe(401);
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("preserves transient subscription credential resolution errors", async () => {
+    const transientError = Object.assign(new Error("temporary refresh failure"), { status: 503 });
+    oauthMocks.refreshOpenAICodexToken.mockRejectedValueOnce(transientError);
+    const request = vi.fn();
+
+    await expect(
+      applyCodexAppServerAuthProfile({
+        client: { request } as never,
+        agentDir: "/tmp/openclaw-agent",
+        authProfileId: "openai:work",
+        authProfileStore: {
+          version: 1,
+          profiles: {
+            "openai:work": {
+              type: "oauth",
+              provider: "openai",
+              access: "placeholder",
+              refresh: "placeholder",
+              expires: Date.now() - 60_000,
+            },
+          },
+        },
+        authRequirement: "subscription",
+      }),
+    ).rejects.toBe(transientError);
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("accepts native ChatGPT auth for subscription routes", async () => {
+    const request = vi.fn(async () => ({
+      account: { type: "chatgpt", email: null, planType: "plus" },
+      requiresOpenaiAuth: true,
+    }));
+
+    await applyCodexAppServerAuthProfile({
+      client: { request } as never,
+      agentDir: "/tmp/openclaw-agent",
+      authProfileId: null,
+      authRequirement: "subscription",
+    });
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledWith("account/read", { refreshToken: false });
+  });
+
+  it("rejects native API-key auth for subscription routes", async () => {
+    const request = vi.fn(async () => ({
+      account: { type: "apiKey" },
+      requiresOpenaiAuth: false,
+    }));
+
+    await expect(
+      applyCodexAppServerAuthProfile({
+        client: { request } as never,
+        agentDir: "/tmp/openclaw-agent",
+        authProfileId: null,
+        authRequirement: "subscription",
+      }),
+    ).rejects.toMatchObject({ status: 401 });
+    expect(request).toHaveBeenCalledWith("account/read", { refreshToken: false });
+  });
+
+  it("rejects missing native auth for subscription routes", async () => {
+    const request = vi.fn(async () => ({ account: null, requiresOpenaiAuth: true }));
+
+    await expect(
+      applyCodexAppServerAuthProfile({
+        client: { request } as never,
+        agentDir: "/tmp/openclaw-agent",
+        authProfileId: null,
+        authRequirement: "subscription",
+      }),
+    ).rejects.toMatchObject({ status: 401 });
+    expect(request).toHaveBeenCalledWith("account/read", { refreshToken: false });
+  });
+
   it("falls back to CODEX_API_KEY when no auth profile and no Codex account is available", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
     const request = vi.fn(async (method: string) => {
@@ -1979,15 +2123,16 @@ describe("bridgeCodexAppServerStartOptions", () => {
       await applyCodexAppServerAuthProfile({
         client: { request } as never,
         agentDir,
+        authRequirement: "api-key",
         startOptions: createStartOptions({
-          env: { CODEX_API_KEY: "configured-codex-api-key" },
+          env: { CODEX_API_KEY: "test-token-placeholder" },
         }),
       });
 
       expect(request).toHaveBeenNthCalledWith(1, "account/read", { refreshToken: false });
       expect(request).toHaveBeenNthCalledWith(2, "account/login/start", {
         type: "apiKey",
-        apiKey: "configured-codex-api-key",
+        apiKey: "test-token-placeholder",
       });
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
@@ -2008,6 +2153,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
       await applyCodexAppServerAuthProfile({
         client: { request } as never,
         agentDir,
+        authRequirement: "api-key",
         startOptions: createStartOptions(),
       });
 
@@ -2037,6 +2183,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
       await applyCodexAppServerAuthProfile({
         client: { request } as never,
         agentDir,
+        authRequirement: "api-key",
         startOptions: createStartOptions(),
       });
 
@@ -2060,6 +2207,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
       await applyCodexAppServerAuthProfile({
         client: { request } as never,
         agentDir,
+        authRequirement: "api-key",
         startOptions: createStartOptions(),
       });
 
@@ -2092,6 +2240,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
       await applyCodexAppServerAuthProfile({
         client: { request } as never,
         agentDir,
+        authRequirement: "api-key",
         startOptions: createStartOptions({
           env: { CODEX_HOME: path.join(root, "isolated-codex-home") },
         }),
@@ -2173,6 +2322,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
       await applyCodexAppServerAuthProfile({
         client: { request } as never,
         agentDir,
+        authRequirement: "api-key",
         startOptions: createStartOptions({
           clearEnv: ["CODEX_API_KEY", "OPENAI_API_KEY"],
         }),
@@ -2198,6 +2348,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
       await applyCodexAppServerAuthProfile({
         client: { request } as never,
         agentDir,
+        authRequirement: "api-key",
         startOptions: createStartOptions({
           transport: "websocket",
           url: "ws://127.0.0.1:1455",

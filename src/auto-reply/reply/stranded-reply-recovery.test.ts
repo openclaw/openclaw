@@ -6,15 +6,19 @@ import { createMockFollowupRun } from "./test-helpers.js";
 const STRANDED_REPLY_RETRY_MARKER = "stranded-reply-retry";
 
 describe("buildStrandedReplyRetryFollowupRun lifecycle ownership", () => {
-  it("does not share the client turn's queuedLifecycle with the system retry", () => {
+  it("does not share the client turn's turnAdoptionLifecycle with the system retry", () => {
     const onComplete = vi.fn();
     const onEnqueued = vi.fn(() => true);
     const parent = createMockFollowupRun({
       prompt: "user question",
       transcriptPrompt: "user question",
-      queuedLifecycle: { onComplete, onEnqueued },
+      turnAdoptionLifecycle: {
+        onAdopted: async () => {},
+        onSettled: onComplete,
+        onDeferred: onEnqueued,
+      },
       admissionSessionId: "sess-rotated",
-      onFollowupAdmissionWaitChange: vi.fn(),
+      onReplyAdmissionWaitChange: vi.fn(),
     });
 
     const retry = buildStrandedReplyRetryFollowupRun(parent, {
@@ -22,12 +26,12 @@ describe("buildStrandedReplyRetryFollowupRun lifecycle ownership", () => {
       sourceReplyDeliveryMode: "message_tool_only",
     });
 
-    expect(retry.queuedLifecycle).toBeUndefined();
+    expect(retry.turnAdoptionLifecycle).toBeUndefined();
     expect(retry.strandedReplyRetry).toBe(true);
     expect(retry.summaryLine).toBe(STRANDED_REPLY_RETRY_MARKER);
     // Session routing stays; only the client-turn lifecycle identity is detached.
     expect(retry.admissionSessionId).toBe("sess-rotated");
-    expect(retry.onFollowupAdmissionWaitChange).toBe(parent.onFollowupAdmissionWaitChange);
+    expect(retry.onReplyAdmissionWaitChange).toBe(parent.onReplyAdmissionWaitChange);
     expect(retry.run.sessionKey).toBe(parent.run.sessionKey);
 
     // mark/complete no-op when lifecycle is absent (drop-policy onDrop path too).

@@ -6,6 +6,7 @@ import type {
   SessionsCatalogReadResult,
 } from "openclaw/plugin-sdk/session-catalog";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   materializeWindowsSpawnProgram,
   resolveWindowsSpawnProgram,
@@ -265,6 +266,12 @@ async function runOpenCode(args: string[]): Promise<string> {
   let overflow = false;
   const timeout = setTimeout(() => child.kill("SIGKILL"), CLI_TIMEOUT_MS);
   timeout.unref?.();
+  let outputError: Error | undefined;
+  const failFromOutputError = (source: "stdout" | "stderr", error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    outputError ??= new Error(`OpenCode ${source} stream failed: ${message}`, { cause: error });
+    child.kill("SIGKILL");
+  };
   const collect = (target: Buffer[], chunk: Buffer) => {
     bytes += chunk.length;
     if (bytes > MAX_CLI_OUTPUT_BYTES) {
@@ -274,6 +281,8 @@ async function runOpenCode(args: string[]): Promise<string> {
     }
     target.push(chunk);
   };
+  child.stdout.once("error", (error) => failFromOutputError("stdout", error));
+  child.stderr.once("error", (error) => failFromOutputError("stderr", error));
   child.stdout.on("data", (chunk: Buffer) => collect(stdout, chunk));
   child.stderr.on("data", (chunk: Buffer) => collect(stderr, chunk));
   const exitCode = await new Promise<number | null>((resolve, reject) => {
@@ -282,6 +291,9 @@ async function runOpenCode(args: string[]): Promise<string> {
   }).finally(() => clearTimeout(timeout));
   if (overflow) {
     throw new Error("OpenCode session output exceeded the safety limit");
+  }
+  if (outputError) {
+    throw outputError;
   }
   if (exitCode !== 0) {
     const detail = Buffer.concat(stderr).toString("utf8").trim();
@@ -362,7 +374,7 @@ export async function listLocalOpenCodeSessionPage(value?: unknown): Promise<Ope
 function jsonText(value: unknown, maxLength = 20_000): string | undefined {
   try {
     const text = JSON.stringify(value);
-    return text.length > maxLength ? `${text.slice(0, maxLength)}…` : text;
+    return text.length > maxLength ? `${truncateUtf16Safe(text, maxLength)}…` : text;
   } catch {
     return undefined;
   }

@@ -13,6 +13,7 @@ import { t } from "../../i18n/index.ts";
 import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
 import { OpenClawLitElement } from "../../lit/openclaw-element.ts";
 import { createDockPanelLayout, type DockPanelSide } from "../dock-panel-layout.ts";
+import { panelTabStripStyles } from "../panel-tab-strip.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
   type BrowserPanelToggleDetail,
@@ -60,7 +61,7 @@ const EXTERNAL_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill=
 const PENCIL_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M11.3 2.7l2 2L5 13H3v-2z" /></svg>`;
 const INSPECT_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l5.5 10 1.2-4.3L14 7.5z" /></svg>`;
 
-type BrowserDock = DockPanelSide;
+type BrowserDock = Exclude<DockPanelSide, "left">;
 type BrowserPanelMode = "interact" | "annotate" | "inspect";
 /** One rendered page snapshot plus the geometry needed to map pointer coords. */
 type BrowserPanelView = {
@@ -76,6 +77,7 @@ const panelLayout = createDockPanelLayout({
   minHeight: 240,
   minWidth: 380,
   defaultDock: "right",
+  supportedDocks: ["bottom", "right"],
   defaultHeight: 420,
   defaultWidth: 560,
 });
@@ -161,7 +163,7 @@ class OpenClawBrowserPanel extends OpenClawLitElement {
     }
   };
 
-  static override styles = browserPanelStyles;
+  static override styles = [panelTabStripStyles, browserPanelStyles];
 
   override connectedCallback(): void {
     super.connectedCallback();
@@ -282,6 +284,10 @@ class OpenClawBrowserPanel extends OpenClawLitElement {
         : null;
     if (detail?.dock === "right" || detail?.dock === "bottom") {
       this.dock = detail.dock;
+    }
+    if (detail?.open === false) {
+      this.closePanel();
+      return;
     }
     const url = typeof detail?.url === "string" ? normalizeBrowserUrlDraft(detail.url) : null;
     if (url || detail?.open === true) {

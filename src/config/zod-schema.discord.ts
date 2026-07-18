@@ -41,5 +41,8 @@ export const DiscordPresenceEventsSchema = z
     enabled: z.boolean().optional(),
     channelId: DiscordSnowflakeStringSchema,
     users: z.array(DiscordSnowflakeStringSchema).optional(),
+    reconnectSuppressSeconds: z.number().int().min(0).optional(),
+    burstLimit: z.number().int().positive().optional(),
+    burstWindowSeconds: z.number().int().positive().optional(),
   })
   .strict();

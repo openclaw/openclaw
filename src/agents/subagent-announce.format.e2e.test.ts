@@ -24,9 +24,9 @@ import {
   buildAnnounceIdempotencyKey,
 } from "./announce-idempotency.js";
 import * as embeddedRuns from "./embedded-agent-runner/runs.js";
-import { testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.js";
+import { testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.test-support.js";
 import { runSubagentAnnounceDispatch } from "./subagent-announce-dispatch.js";
-import { testing as subagentAnnounceOutputTesting } from "./subagent-announce-output.js";
+import { testing as subagentAnnounceOutputTesting } from "./subagent-announce-output.test-support.js";
 
 type AgentCallRequest = {
   method?: string;
@@ -157,7 +157,7 @@ const queueEmbeddedAgentMessageWithOutcomeMock = vi.fn<
   gatewayHealth: "live",
 }));
 const waitForEmbeddedAgentRunEndMock = vi.fn<typeof embeddedRuns.waitForEmbeddedAgentRunEnd>(
-  async (_sessionId: string, _timeoutMs?: number) => true,
+  async (_sessionId: string, _timeoutMs?: number | null) => true,
 );
 const embeddedRunMock = {
   isEmbeddedAgentRunActive: embeddedAgentRunActiveMock,
@@ -247,7 +247,18 @@ const announceFormatChannelPlugins = [
   },
   {
     pluginId: "matrix",
-    plugin: createChannelTestPluginBase({ id: "matrix", label: "Matrix" }),
+    plugin: {
+      ...createChannelTestPluginBase({ id: "matrix", label: "Matrix" }),
+      messaging: {
+        resolveDeliveryTarget: (params: {
+          conversationId: string;
+          parentConversationId?: string;
+        }) => ({
+          to: `room:${params.parentConversationId ?? params.conversationId}`,
+          ...(params.parentConversationId ? { threadId: params.conversationId } : {}),
+        }),
+      },
+    },
     source: "test",
   },
   {
