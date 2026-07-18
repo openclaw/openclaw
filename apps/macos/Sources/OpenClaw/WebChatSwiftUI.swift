@@ -737,6 +737,7 @@ private final class WebChatSessionKeyRelay {
 final class WebChatSwiftUIWindowController {
     private let presentation: WebChatPresentation
     private let sessionKey: String
+    private let initialActiveAgentID: String?
     private let contentController: NSViewController
     private let sessionKeyRelay: WebChatSessionKeyRelay
     private let speech: OpenClawChatSpeechController
@@ -749,21 +750,44 @@ final class WebChatSwiftUIWindowController {
     /// composer picker, /new) so the owner can track what this surface shows.
     var onSessionKeyChanged: ((String) -> Void)?
 
-    convenience init(sessionKey: String, presentation: WebChatPresentation) {
+    convenience init(
+        sessionKey: String,
+        agentID: String? = nil,
+        presentation: WebChatPresentation)
+    {
         // Connection-mode changes tear chat windows down via resetTunnels(),
         // so binding the cache identity at construction stays correct. One
         // store instance backs both the transcript cache and the offline
         // command outbox.
         let context = MacChatTranscriptCache.makeContext()
-        let store = context?.store
+        self.init(
+            sessionKey: sessionKey,
+            agentID: agentID,
+            presentation: presentation,
+            cachedRoutingIdentity: context?.routingIdentity,
+            store: context?.store)
+    }
+
+    convenience init(
+        sessionKey: String,
+        agentID: String?,
+        presentation: WebChatPresentation,
+        cachedRoutingIdentity: OpenClawChatSessionRoutingIdentity?,
+        store: OpenClawChatSQLiteTranscriptCache?)
+    {
+        let explicitAgentID = WebChatRoute.normalizedAgentID(agentID)
+        let effectiveAgentID = Self.effectiveAgentID(
+            explicitAgentID: explicitAgentID,
+            cachedDefaultAgentID: cachedRoutingIdentity?.defaultAgentID)
         self.init(
             sessionKey: sessionKey,
             presentation: presentation,
             transport: MacGatewayChatTransport(
                 outboxGatewayID: store?.gatewayID,
-                defaultGlobalAgentID: context?.routingIdentity?.defaultAgentID),
-            initialActiveAgentID: context?.routingIdentity?.defaultAgentID,
-            initialSessionRoutingContract: context?.routingIdentity?.contract,
+                defaultGlobalAgentID: effectiveAgentID),
+            initialActiveAgentID: effectiveAgentID,
+            explicitAgentID: explicitAgentID,
+            initialSessionRoutingContract: cachedRoutingIdentity?.contract,
             transcriptCache: store,
             outbox: store)
     }
@@ -773,12 +797,15 @@ final class WebChatSwiftUIWindowController {
         presentation: WebChatPresentation,
         transport: any OpenClawChatTransport,
         initialActiveAgentID: String? = nil,
+        explicitAgentID: String? = nil,
         initialSessionRoutingContract: String? = nil,
         transcriptCache: (any OpenClawChatTranscriptCache)? = nil,
         outbox: (any OpenClawChatCommandOutbox)? = nil)
     {
         self.sessionKey = sessionKey
         self.presentation = presentation
+        let initialActiveAgentID = WebChatRoute.normalizedAgentID(initialActiveAgentID)
+        self.initialActiveAgentID = initialActiveAgentID
         let voiceNoteRecorder = OpenClawVoiceNoteRecorder()
         voiceNoteRecorder.setCaptureAdmissionHandler {
             !AppStateStore.shared.talkEnabled
@@ -808,6 +835,7 @@ final class WebChatSwiftUIWindowController {
             onThinkingLevelChanged: { level in
                 UserDefaults.standard.set(level, forKey: webChatThinkingLevelDefaultsKey)
             })
+        let explicitAgentID = WebChatRoute.normalizedAgentID(explicitAgentID)
         Task { @MainActor [weak vm] in
             let pushes = await GatewayConnection.shared.subscribe()
             for await push in pushes {
@@ -821,8 +849,13 @@ final class WebChatSwiftUIWindowController {
                     nil
                 }
                 if let routingIdentity {
+                    // An explicit navigation agent owns this window; gateway
+                    // default refreshes only supply the fallback route.
+                    let effectiveAgentID = Self.effectiveAgentID(
+                        explicitAgentID: explicitAgentID,
+                        cachedDefaultAgentID: routingIdentity.defaultAgentID)
                     (transport as? MacGatewayChatTransport)?
-                        .updateDefaultGlobalAgentID(routingIdentity.defaultAgentID)
+                        .updateDefaultGlobalAgentID(effectiveAgentID)
                     if let store = transcriptCache as? OpenClawChatSQLiteTranscriptCache,
                        store.gatewayID == MacChatTranscriptCache.currentGatewayID(),
                        let persistedIdentity = OpenClawChatSessionRoutingIdentity(
@@ -831,7 +864,7 @@ final class WebChatSwiftUIWindowController {
                         await store.storeSessionRoutingIdentity(persistedIdentity)
                     }
                     vm.syncDeliveryIdentity(
-                        activeAgentId: routingIdentity.defaultAgentID,
+                        activeAgentId: effectiveAgentID,
                         sessionRoutingContract: routingIdentity.contract)
                 }
             }
@@ -967,6 +1000,14 @@ final class WebChatSwiftUIWindowController {
         return stored
     }
 
+    static func effectiveAgentID(
+        explicitAgentID: String?,
+        cachedDefaultAgentID: String?) -> String?
+    {
+        WebChatRoute.normalizedAgentID(explicitAgentID)
+            ?? WebChatRoute.normalizedAgentID(cachedDefaultAgentID)
+    }
+
     private static func makeWindow(
         for presentation: WebChatPresentation,
         contentViewController: NSViewController) -> NSWindow
@@ -1095,6 +1136,10 @@ final class WebChatSwiftUIWindowController {
         return self.contentController.children
             .compactMap { $0 as? NSHostingController<MacChatSurface> }
             .first?.rootView._testCapabilities
+    }
+
+    var _testActiveAgentID: String? {
+        self.initialActiveAgentID
     }
     #endif
 }

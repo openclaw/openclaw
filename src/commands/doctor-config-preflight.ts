@@ -141,10 +141,15 @@ function noteStateMigrationResult(result: {
   }
 }
 
+type StartupPluginVerificationDiagnostic = {
+  kind: "plugin-verification";
+  messages: string[];
+};
+
 async function runStartupUpgradeConvergence(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
-}): Promise<string[]> {
+}): Promise<StartupPluginVerificationDiagnostic | null> {
   const { planStartupPluginConvergence } = await measureStartupPreflightStep(
     "plugin-plan-import",
     () => import("./doctor/shared/startup-plugin-convergence-plan.js"),
@@ -156,7 +161,7 @@ async function runStartupUpgradeConvergence(params: {
     }),
   );
   if (!plan.required) {
-    return [];
+    return null;
   }
   const { runPostCorePluginConvergence } = await measureStartupPreflightStep(
     "plugin-convergence-import",
@@ -185,7 +190,7 @@ async function runStartupUpgradeConvergence(params: {
   if (warnings.length > 0) {
     note(warnings.map((warning) => `- ${warning}`).join("\n"), "Doctor warnings");
   }
-  return warnings;
+  return warnings.length > 0 ? { kind: "plugin-verification", messages: warnings } : null;
 }
 
 function formatStartupMigrationFailure(params: { warnings: string[]; blockers: string[] }): string {
@@ -197,6 +202,16 @@ function formatStartupMigrationFailure(params: { warnings: string[]; blockers: s
     "OpenClaw startup migrations did not complete cleanly; refusing to report the gateway ready.",
     ...details,
     'Run "openclaw doctor --fix" against the mounted state/config, then restart the container.',
+  ].join("\n");
+}
+
+function formatStartupPluginVerificationFailure(
+  diagnostic: StartupPluginVerificationDiagnostic,
+): string {
+  return [
+    "OpenClaw plugin verification failed; refusing to report the gateway ready.",
+    ...diagnostic.messages.map((message) => `- ${message}`),
+    "Resolve the plugin verification errors above, then restart the container.",
   ].join("\n");
 }
 
@@ -460,19 +475,28 @@ export async function runDoctorConfigPreflight(
           ? startupMigrationHeartbeatError
           : new Error("OpenClaw startup migration lease heartbeat failed.");
       }
-      const blockers =
-        startupMigrationWarnings.length > 0
-          ? []
-          : snapshot.valid
-            ? await runStartupUpgradeConvergence({ cfg: baseConfig, env: process.env })
-            : ['OpenClaw config is invalid; run "openclaw doctor --fix" before startup.'];
-      if (startupMigrationWarnings.length > 0 || blockers.length > 0) {
+      if (startupMigrationWarnings.length > 0) {
         throw new Error(
           formatStartupMigrationFailure({
             warnings: startupMigrationWarnings,
-            blockers,
+            blockers: [],
           }),
         );
+      }
+      if (!snapshot.valid) {
+        throw new Error(
+          formatStartupMigrationFailure({
+            warnings: [],
+            blockers: ['OpenClaw config is invalid; run "openclaw doctor --fix" before startup.'],
+          }),
+        );
+      }
+      const pluginVerificationDiagnostic = await runStartupUpgradeConvergence({
+        cfg: baseConfig,
+        env: process.env,
+      });
+      if (pluginVerificationDiagnostic) {
+        throw new Error(formatStartupPluginVerificationFailure(pluginVerificationDiagnostic));
       }
       startupCheckpoint?.recordSuccessfulStartupMigrations({
         env: startupMigrationEnv,

@@ -877,6 +877,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H4: HTTP Request URLs
   - H2: Install
   - H2: Quick setup
+  - H2: User identity (post as a real person)
   - H2: Socket Mode transport tuning
   - H2: Manifest and scope checklist
   - H3: Additional manifest settings
@@ -3698,6 +3699,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Environment variables
   - H2: Privacy and content capture
   - H2: Sampling and flushing
+  - H3: Model-call observation units
+  - H3: Claude Code CLI model-call fidelity
   - H2: Exported metrics
   - H3: Model usage
   - H3: Message flow
@@ -5157,7 +5160,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Requirements
   - H2: Enable access
   - H3: 1. Authorize the Gateway command
-  - H3: 2. Enable sharing on the iPhone
+  - H3: 2. Enable sharing on the iOS device
   - H2: Request today's summary
   - H2: Privacy behavior
   - H2: Troubleshooting
@@ -8851,11 +8854,10 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /reference/templates/BOOTSTRAP
 - Headings:
-  - H1: BOOTSTRAP.md - Hello, World
-  - H2: The Conversation
-  - H2: After You Know Who You Are
-  - H2: Connect (Optional)
-  - H2: When You Are Done
+  - H1: BOOTSTRAP.md - Birth Sequence
+  - H2: 1. Name Yourself
+  - H2: 2. Choose Your Vibe
+  - H2: 3. Finish With Recommendations
   - H2: Related
 
 ## reference/templates/HEARTBEAT.md
@@ -9308,18 +9310,21 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /start/onboarding-redesign
 - Headings:
-  - H1: Onboarding redesign — implementation plan
+  - H1: Onboarding redesign implementation plan
   - H2: North star
+  - H2: Current shipped flow (after phases 1-3)
   - H2: Phases
   - H2: Implementation notes per phase
   - H3: Phase 1 — app recommendations (PR #109668)
   - H3: Phase 2 — CLI custodian spine (PR #109841)
-  - H3: Phase 3 — browser-first handoff (planned)
+  - H3: Phase 3 — browser-first handoff (PR #110054, merged)
   - H3: Phase 4 — web custodian surface (planned)
   - H3: Phase 5 — hatch and bootstrap (planned)
   - H3: Phase 6 — custodian presence (planned)
   - H3: Phase 7 — resilience (follow-up)
+  - H2: Testing and landing playbook (hard-won; read before phases 4-6)
   - H2: Decision log
+  - H2: Known gaps and follow-ups
 
 ## start/onboarding.md
 
@@ -9488,6 +9493,15 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Example
   - H2: Related
 
+## tools/ask-user.md
+
+- Route: /tools/ask-user
+- Headings:
+  - H2: Answer a question
+  - H2: Timeout and no answer
+  - H2: Tool schema
+  - H2: Model guidance
+
 ## tools/brave-search.md
 
 - Route: /tools/brave-search
@@ -9616,6 +9630,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: How it works
   - H2: Install and pair
   - H2: Use it
+  - H3: Tab copilot side panel
   - H2: Remote / cross-machine
   - H2: Diagnostics
   - H2: Security model

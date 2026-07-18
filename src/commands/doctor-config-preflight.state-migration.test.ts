@@ -563,7 +563,9 @@ describe("runDoctorConfigPreflight state migration", () => {
         invalidConfigNote: false,
         requireStartupMigrationCheckpoint: true,
       }),
-    ).rejects.toThrow("refusing to report the gateway ready");
+    ).rejects.toThrow(
+      "OpenClaw startup migrations did not complete cleanly; refusing to report the gateway ready.",
+    );
 
     expect(recordSuccessfulStartupMigrations).not.toHaveBeenCalled();
     expect(startupMigrationLeaseRelease).toHaveBeenCalledOnce();
@@ -621,7 +623,9 @@ describe("runDoctorConfigPreflight state migration", () => {
         invalidConfigNote: false,
         requireStartupMigrationCheckpoint: true,
       }),
-    ).rejects.toThrow("failed post-core payload smoke check");
+    ).rejects.toThrow(
+      'OpenClaw plugin verification failed; refusing to report the gateway ready.\n- Plugin "discord" failed post-core payload smoke check',
+    );
 
     expect(recordSuccessfulStartupMigrations).not.toHaveBeenCalled();
     expect(startupMigrationLeaseRelease).toHaveBeenCalledOnce();

@@ -2092,6 +2092,9 @@ describe("agent event handler", () => {
     expect(requireMockArg(broadcastToConnIds, 0, 2, "run tool recipients")).toEqual(
       new Set(["conn-run"]),
     );
+    expect(requireMockArg(broadcastToConnIds, 0, 3, "run tool options")).toEqual({
+      sessionKeys: ["session-1"],
+    });
   });
 
   it("projects tool-search bridge calls like native channel verbose tool events", () => {

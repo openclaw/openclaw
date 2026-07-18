@@ -1885,7 +1885,7 @@ describe("scripts/changed-lanes", () => {
     const plan = createChangedCheckPlan(result);
 
     expect(plan.commands).toContainEqual({
-      name: "Plugin SDK API baseline",
+      name: "Plugin SDK API contract manifest",
       args: ["plugin-sdk:api:check"],
     });
     expect(plan.commands.map((command) => command.args[0])).not.toContain(
@@ -1911,7 +1911,7 @@ describe("scripts/changed-lanes", () => {
     const plan = createChangedCheckPlan(result);
 
     expect(plan.commands).toContainEqual({
-      name: "Plugin SDK API baseline",
+      name: "Plugin SDK API contract manifest",
       args: ["plugin-sdk:api:check"],
     });
     expect(plan.commands).toContainEqual({

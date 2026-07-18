@@ -20,6 +20,7 @@ import type {
 } from "./context.ts";
 import { shouldMergeChatChrome } from "./mobile-nav-layout.ts";
 import { navigationSurfaceIsHidden, renderFloatingUpdateCard } from "./navigation-surface.ts";
+import { resolveOnboardingMode } from "./onboarding-mode.ts";
 
 type AppLifecycleState = {
   loginToken: string;
@@ -357,6 +358,13 @@ describe("OpenClaw shell settings search", () => {
 });
 
 describe("OpenClaw shell keyboard shortcuts", () => {
+  it("resolves onboarding mode from the active route search", () => {
+    expect(resolveOnboardingMode("?onboarding=1")).toBe(true);
+    expect(resolveOnboardingMode("?onboarding=true")).toBe(true);
+    expect(resolveOnboardingMode("?onboarding=0")).toBe(false);
+    expect(resolveOnboardingMode("")).toBe(false);
+  });
+
   it("merges shell chrome only for plain-browser mobile chat", () => {
     expect(
       shouldMergeChatChrome({ mobileNavLayout: true, routeId: "chat", onboarding: false }),

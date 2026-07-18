@@ -1844,17 +1844,26 @@ describe("ci workflow guards", () => {
     expect(runStep.run).toContain(":benchmark:assembleDebug");
   });
 
-  it("debounces canonical main pushes before Blacksmith admission", () => {
+  it("debounces canonical main fan-out inside preflight", () => {
     const workflow = readCiWorkflow();
     const source = readFileSync(".github/workflows/ci.yml", "utf8");
-    const admission = workflow.jobs["runner-admission"];
 
-    expect(admission["runs-on"]).toBe("ubuntu-24.04");
-    expect(admission.steps[0].if).toContain("github.ref == 'refs/heads/main'");
-    expect(admission.steps[0].run).toContain('sleep "${OPENCLAW_MAIN_CI_DEBOUNCE_SECONDS}"');
-    expect(admission.env.OPENCLAW_MAIN_CI_DEBOUNCE_SECONDS).toBe("90");
-    expect(workflow.jobs.preflight.needs).toContain("runner-admission");
-    expect(workflow.jobs["security-fast"].needs).toContain("runner-admission");
+    // The debounce lives at the tail of preflight: heavy jobs all need
+    // preflight, so a superseding main push can cancel the run before fan-out
+    // while only one runner has been spent. No standalone admission job may
+    // reappear on the critical path.
+    expect(workflow.jobs["runner-admission"]).toBeUndefined();
+    const preflight = workflow.jobs.preflight;
+    expect(preflight.needs).toBeUndefined();
+    expect(preflight.env.OPENCLAW_MAIN_CI_DEBOUNCE_SECONDS).toBe("90");
+    const steps = preflight.steps as Array<{ if?: string; name?: string; run?: string }>;
+    expect(steps[0]?.name).toBe("Record debounce epoch");
+    expect(steps[0]?.if).toContain("github.ref == 'refs/heads/main'");
+    const gate = steps.at(-1);
+    expect(gate?.name).toBe("Debounce canonical main fan-out");
+    expect(gate?.if).toContain("github.ref == 'refs/heads/main'");
+    expect(gate?.run).toContain('sleep "$remaining"');
+    expect(workflow.jobs["security-fast"].needs).toBeUndefined();
     expect(source).toContain(
       "cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main') }}",
     );
@@ -2020,7 +2029,7 @@ describe("ci workflow guards", () => {
     // per-PR/per-manifest-hash keys saturated that cap. Install inputs and exact
     // runtime patches belong in the marker, not the backing-disk key.
     expect(mountStep.with.key).toBe(
-      "${{ github.repository }}-node-deps-bind-v3-${{ inputs.node-version }}",
+      "${{ github.repository }}-node-deps-bind-v4-${{ inputs.node-version }}",
     );
     expect(mountStep.with.commit).toBe(
       "${{ inputs.save-sticky-disk == 'true' && github.event_name != 'pull_request' && 'true' || 'false' }}",
@@ -2040,22 +2049,19 @@ describe("ci workflow guards", () => {
     expect(bindStep.run).toContain('echo "PNPM_CONFIG_STORE_DIR=$sticky_store"');
     expect(bindStep.run).toContain('echo "OPENCLAW_BUILD_ALL_NO_PNPM=1"');
     expect(bindStep.run).toContain(
-      'deps_fingerprint="os-${RUNNER_OS:?}-arch-${RUNNER_ARCH:?}-node-$(node --version)-${DEPS_INPUT_FINGERPRINT:?}"',
+      'deps_fingerprint="os-${RUNNER_OS:?}-arch-${RUNNER_ARCH:?}-node-$(node --version)-${deps_input_fingerprint:?}"',
     );
     expect(bindStep.run).toContain('echo "OPENCLAW_STICKY_DEPS_FINGERPRINT=$deps_fingerprint"');
     expect(bindStep.run).not.toContain("PNPM_CONFIG_MODULES_DIR");
     expect(bindStep.run).not.toContain("PNPM_CONFIG_VIRTUAL_STORE_DIR");
-    // The fingerprint must be evaluated on this step (before its bind mount
-    // lands): any later hashFiles('**/package.json') sweep would include
-    // snapshot-internal manifests and permanently miss the warm path.
-    const fingerprintEnv = bindStep.env.DEPS_INPUT_FINGERPRINT;
-    expect(fingerprintEnv).toContain("frozen-${{ inputs.frozen-lockfile }}");
-    expect(fingerprintEnv).toContain("hashFiles('**/package.json', 'pnpm-lock.yaml'");
-    expect(fingerprintEnv).toContain("'pnpm-workspace.yaml'");
-    expect(fingerprintEnv).toContain("'.npmrc'");
-    expect(fingerprintEnv).toContain("'.pnpmfile.cjs'");
-    expect(fingerprintEnv).toContain(".github/actions/setup-node-env/sticky-importers.sh");
-    expect(fingerprintEnv).toContain("scripts/postinstall-bundled-plugins.mjs");
+    // Compute from the checkout before the bind mount adds snapshot-internal
+    // manifests. Ordinary package scripts must not rotate dependency trees.
+    expect(bindStep.env.FROZEN_LOCKFILE).toBe("${{ inputs.frozen-lockfile }}");
+    expect(bindStep.env).not.toHaveProperty("DEPS_INPUT_FINGERPRINT");
+    expect(bindStep.run).toContain('node "$GITHUB_ACTION_PATH/dependency-fingerprint.mjs"');
+    expect(bindStep.run.indexOf("dependency-fingerprint.mjs")).toBeLessThan(
+      bindStep.run.indexOf('sudo mount --bind "$sticky_modules" "$workspace_modules"'),
+    );
     expect(installStep.env).toMatchObject({
       STICKY_DISK: "${{ inputs.sticky-disk }}",
       STICKY_ROOT: "/var/tmp/openclaw-node-deps",
@@ -2066,12 +2072,27 @@ describe("ci workflow guards", () => {
     expect(installStep.run).toContain(
       '[ "$sticky_fingerprint" = "${OPENCLAW_STICKY_DEPS_FINGERPRINT:?}" ]',
     );
+    expect(installStep.run).toContain('[ "$STICKY_WRITER" != "true" ]');
+    expect(installStep.run).toContain('sudo umount "$GITHUB_WORKSPACE/node_modules"');
+    expect(installStep.run).toContain('ephemeral_store="${RUNNER_TEMP:?}/openclaw-pnpm-store"');
+    expect(installStep.run).toContain(
+      "Sticky dependency snapshot is stale; using runner-local storage for this read-only run",
+    );
     expect(installStep.run).toContain(
       'bash "$GITHUB_ACTION_PATH/sticky-importers.sh" restore "$STICKY_ROOT" "$GITHUB_WORKSPACE"',
     );
     expect(installStep.run).toContain(
       "Sticky dependency snapshot matches the install fingerprint; skipping pnpm install",
     );
+    expect(installStep.run).toContain("timeout --signal=TERM --kill-after=15s 4m");
+    expect(installStep.run).toContain('pnpm "${install_args[@]}" --config.fetch-retries=0');
+    expect(installStep.run).toContain("install_attempts=2");
+    expect(installStep.run).toContain("install_attempts=3");
+    expect(installStep.run).toContain(
+      "for (( attempt = 1; attempt <= install_attempts; attempt += 1 )); do",
+    );
+    expect(installStep.run).toContain('if [ "$install_status" -ne 0 ]; then');
+    expect(installStep.run).not.toContain("accepting the populated sticky tree");
     // Read-only consumers never capture; only the designated writer refreshes
     // the archive and publishes the fingerprint after a successful install.
     expect(installStep.run).toContain('[ "$STICKY_WRITER" = "true" ]');
@@ -2079,6 +2100,17 @@ describe("ci workflow guards", () => {
       installStep.run.indexOf(
         'bash "$GITHUB_ACTION_PATH/sticky-importers.sh" capture "$STICKY_ROOT" "$GITHUB_WORKSPACE" "$OPENCLAW_STICKY_DEPS_FINGERPRINT"',
       ),
+    );
+    // The exact snapshot fingerprint or successful install already owns
+    // dependency validation. pnpm's redundant check sees intentionally pruned
+    // plugin importers as stale, so it must not mutate during shard fanout.
+    const disableImplicitInstall =
+      'echo "pnpm_config_verify_deps_before_run=false" >> "$GITHUB_ENV"';
+    expect(installStep.run).toContain('if [ "$STICKY_DISK" = "true" ]; then');
+    expect(installStep.run).not.toContain("pnpm_config_verify_deps_before_run=install pnpm exec");
+    expect(installStep.run).toContain(disableImplicitInstall);
+    expect(installStep.run.indexOf('sticky-importers.sh" restore')).toBeLessThan(
+      installStep.run.indexOf(disableImplicitInstall),
     );
     const cleanupAction = parse(
       readFileSync(".github/actions/register-bind-mount-cleanup/action.yml", "utf8"),
@@ -2207,6 +2239,125 @@ describe("ci workflow guards", () => {
         "fingerprint-a\n",
       );
       expect(() => execFileSync("bash", [helper, "capture", stickyRoot, workspace])).toThrow();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fingerprints dependency install inputs without ordinary script churn", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-dependency-fingerprint-"));
+    try {
+      const helper = path.resolve(".github/actions/setup-node-env/dependency-fingerprint.mjs");
+      const writeManifest = (manifest: Record<string, unknown>) => {
+        writeFileSync(path.join(root, "package.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+      };
+      const fingerprint = (frozenLockfile = true) =>
+        execFileSync(
+          process.execPath,
+          [helper, "--workspace", root, "--frozen-lockfile", frozenLockfile ? "true" : "false"],
+          { encoding: "utf8" },
+        ).trim();
+
+      execFileSync("git", ["init", "-q"], { cwd: root });
+      writeManifest({
+        name: "fixture",
+        scripts: {
+          postinstall: "node scripts/postinstall-bundled-plugins.mjs",
+          preinstall: "node scripts/preinstall-package-manager-warning.mjs",
+          prepare: "node scripts/prepare-git-hooks.mjs",
+          test: "vitest run",
+        },
+        devDependencies: { vitest: "1.0.0" },
+      });
+      writeFileSync(path.join(root, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
+      execFileSync("git", ["add", "package.json", "pnpm-lock.yaml"], { cwd: root });
+
+      const baseline = fingerprint();
+      expect(baseline).toMatch(/^v2-[a-f0-9]{64}$/);
+
+      // Presence is part of the record type, so a real file cannot collide
+      // with the representation of an absent optional install input.
+      writeFileSync(path.join(root, ".pnpmfile.cjs"), "<missing>");
+      expect(fingerprint()).not.toBe(baseline);
+      rmSync(path.join(root, ".pnpmfile.cjs"));
+      expect(fingerprint()).toBe(baseline);
+
+      mkdirSync(path.join(root, "scripts"), { recursive: true });
+      writeFileSync(path.join(root, "scripts", "prepare-git-hooks.mjs"), "export {};\n");
+      expect(fingerprint()).not.toBe(baseline);
+      rmSync(path.join(root, "scripts"), { recursive: true });
+      expect(fingerprint()).toBe(baseline);
+
+      // Formatting, key order, and scripts that pnpm install never executes
+      // should keep the existing dependency snapshot warm.
+      writeManifest({
+        devDependencies: { vitest: "1.0.0" },
+        scripts: {
+          test: "vitest run --reporter=dot",
+          prepare: "node scripts/prepare-git-hooks.mjs",
+          postinstall: "node scripts/postinstall-bundled-plugins.mjs",
+          preinstall: "node scripts/preinstall-package-manager-warning.mjs",
+        },
+        name: "fixture",
+      });
+      expect(fingerprint()).toBe(baseline);
+
+      writeManifest({
+        name: "fixture",
+        scripts: {
+          postinstall: "node scripts/postinstall-bundled-plugins.mjs",
+          preinstall: "node scripts/preinstall-package-manager-warning.mjs",
+          prepare: "node scripts/prepare-git-hooks.mjs",
+          test: "vitest run",
+        },
+        devDependencies: { vitest: "2.0.0" },
+      });
+      expect(fingerprint()).not.toBe(baseline);
+
+      writeManifest({
+        name: "fixture",
+        scripts: { postinstall: "node install-v2.mjs", test: "vitest run" },
+        devDependencies: { vitest: "1.0.0" },
+      });
+      expect(() => fingerprint()).toThrow(/unaudited install lifecycle scripts in package\.json/);
+
+      mkdirSync(path.join(root, "packages", "worker"), { recursive: true });
+      writeManifest({
+        name: "fixture",
+        scripts: {
+          postinstall: "node scripts/postinstall-bundled-plugins.mjs",
+          preinstall: "node scripts/preinstall-package-manager-warning.mjs",
+          prepare: "node scripts/prepare-git-hooks.mjs",
+        },
+        devDependencies: { vitest: "1.0.0" },
+      });
+      const workerManifest = path.join(root, "packages", "worker", "package.json");
+      writeFileSync(
+        workerManifest,
+        `${JSON.stringify({ name: "worker", scripts: { prepare: "node build.mjs" } })}\n`,
+      );
+      execFileSync("git", ["add", "packages/worker/package.json"], { cwd: root });
+      expect(() => fingerprint()).toThrow(
+        /unaudited install lifecycle scripts in packages\/worker\/package\.json/,
+      );
+      writeFileSync(
+        workerManifest,
+        `${JSON.stringify({ name: "worker", scripts: { build: "node build.mjs" } })}\n`,
+      );
+
+      writeManifest({
+        name: "fixture",
+        scripts: {
+          postinstall: "node scripts/postinstall-bundled-plugins.mjs",
+          preinstall: "node scripts/preinstall-package-manager-warning.mjs",
+          prepare: "node scripts/prepare-git-hooks.mjs",
+          test: "vitest run",
+        },
+        devDependencies: { vitest: "1.0.0" },
+      });
+      writeFileSync(path.join(root, "pnpm-lock.yaml"), "lockfileVersion: '9.1'\n");
+      expect(fingerprint()).not.toBe(baseline);
+      expect(fingerprint(false)).not.toBe(baseline);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -2751,10 +2902,10 @@ describe("ci workflow guards", () => {
     const steps = workflow.jobs["generated-doc-baselines"].steps;
     const stepNames = steps.map((step: WorkflowStep) => step.name);
 
-    expect(stepNames).toContain("Check plugin SDK API baseline drift");
+    expect(stepNames).toContain("Check plugin SDK API contract manifest");
     expect(stepNames).toContain("Check SQLite sessions/transcripts schema baseline drift");
     expect(stepNames).toContain("Check plugin SDK surface budget");
-    expect(stepNames.indexOf("Check plugin SDK API baseline drift")).toBeLessThan(
+    expect(stepNames.indexOf("Check plugin SDK API contract manifest")).toBeLessThan(
       stepNames.indexOf("Check SQLite sessions/transcripts schema baseline drift"),
     );
     expect(
@@ -3617,7 +3768,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
   });
 
-  it("keeps Control UI locale parity advisory until release CI", () => {
+  it("keeps source-only Control UI locale drift advisory", () => {
     const workflow = readCiWorkflow();
     const workflowSource = readFileSync(".github/workflows/ci.yml", "utf8");
     const buildArtifactSteps = workflow.jobs["build-artifacts"].steps;
@@ -3638,8 +3789,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     expect(localeJob.needs).toEqual(["preflight"]);
     expect(localeJob.if).toBe("needs.preflight.outputs.run_control_ui_i18n == 'true'");
-    expect(localeJob["continue-on-error"]).toBe(
-      "${{ github.event_name != 'workflow_dispatch' && needs.preflight.outputs.strict_control_ui_i18n != 'true' }}",
+    expect(localeJob["continue-on-error"]).toBeUndefined();
+    expect(localeStep["continue-on-error"]).toBe(
+      "${{ needs.preflight.outputs.strict_control_ui_i18n != 'true' }}",
     );
     expect(localeStep.run).toBe("pnpm ui:i18n:check");
     expect(readFileSync(".github/workflows/full-release-validation.yml", "utf8")).toContain(
@@ -3789,6 +3941,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_RETRY).toBe("1");
     expect(runStep.env.OPENCLAW_NODE_TEST_ENV_JSON).toBe("${{ toJson(matrix.env) }}");
     expect(runStep.env.OPENCLAW_NODE_TEST_TARGETS_JSON).toBe("${{ toJson(matrix.targets) }}");
+    expect(runStep.env.OPENCLAW_NODE_TEST_VITEST_ARGS_JSON).toBe(
+      "${{ needs.preflight.outputs.compatibility_target == 'true' && '[\"--hookTimeout=300000\"]' || '[]' }}",
+    );
     expect(runStep.env.JOB_CONTEXT_JSON).toBe("${{ toJSON(job) }}");
     // Shard execution policy lives in the unit-tested wrapper script. Frozen
     // release targets load that wrapper from the exact trusted workflow SHA.
@@ -3873,7 +4028,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
   it("emits one final CI gate after every selected lane", () => {
     const workflow = readCiWorkflow();
     const gate = workflow.jobs["ci-gate"];
-    const requiredJobs = ["runner-admission", "preflight", "security-fast"];
+    const requiredJobs = ["preflight", "security-fast"];
     const selectedJobs = [
       "pnpm-store-warmup",
       "build-artifacts",
@@ -3933,20 +4088,20 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     "accepts only successful required jobs and successful or skipped selected jobs",
     () => {
       const passing = runCiGateFixture(
-        "runner-admission=success\npreflight=success\nsecurity-fast=success",
+        "preflight=success\nsecurity-fast=success",
         "checks-ui=success\nmacos-swift=skipped",
       );
       expect(passing.status, `${passing.stdout}\n${passing.stderr}`).toBe(0);
 
       const skippedRequired = runCiGateFixture(
-        "runner-admission=success\npreflight=skipped\nsecurity-fast=success",
+        "preflight=skipped\nsecurity-fast=success",
         "checks-ui=skipped",
       );
       expect(skippedRequired.status).not.toBe(0);
       expect(skippedRequired.stdout).toContain("preflight finished with skipped");
 
       const failedSelected = runCiGateFixture(
-        "runner-admission=success\npreflight=success\nsecurity-fast=success",
+        "preflight=success\nsecurity-fast=success",
         "checks-ui=failure\nmacos-swift=cancelled",
       );
       expect(failedSelected.status).not.toBe(0);

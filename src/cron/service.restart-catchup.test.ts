@@ -320,6 +320,48 @@ describe("CronService restart catch-up", () => {
       },
     );
   });
+
+  it("releases queued reservations and runs due jobs after restart", async () => {
+    const dueAt = Date.parse("2025-12-13T16:30:00.000Z");
+    const queuedAt = Date.parse("2025-12-13T16:45:00.000Z");
+    const recurring = createOverdueEveryJob("restart-queued-recurring", dueAt);
+    recurring.state.queuedAtMs = queuedAt;
+    const oneShot: CronJob = {
+      id: "restart-queued-one-shot",
+      name: "queued one shot",
+      enabled: true,
+      deleteAfterRun: true,
+      createdAtMs: dueAt - 60_000,
+      updatedAtMs: queuedAt,
+      schedule: { kind: "at", at: new Date(dueAt).toISOString() },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "queued-one-shot" },
+      state: { nextRunAtMs: dueAt, queuedAtMs: queuedAt },
+    };
+
+    await withRestartedCron([recurring, oneShot], async ({ cron, enqueueSystemEvent, onEvent }) => {
+      expect(enqueueSystemEvent).toHaveBeenCalledTimes(2);
+      expect(enqueueSystemEvent.mock.calls.map(([text]) => text)).toEqual(
+        expect.arrayContaining(["tick-restart-queued-recurring", "queued-one-shot"]),
+      );
+
+      const listedJobs = await cron.list({ includeDisabled: true });
+      const updatedRecurring = listedJobs.find((job) => job.id === recurring.id);
+      expect(updatedRecurring?.state.queuedAtMs).toBeUndefined();
+      expect(updatedRecurring?.state.lastRunStatus).toBe("ok");
+      expect(updatedRecurring?.enabled).toBe(true);
+      expect(listedJobs.some((job) => job.id === oneShot.id)).toBe(false);
+      expect(
+        onEvent.mock.calls.some(
+          ([evt]) =>
+            (evt as CronEvent).action === "finished" &&
+            (evt as CronEvent).error === "cron: job interrupted by gateway restart",
+        ),
+      ).toBe(false);
+    });
+  });
+
   it("replays the most recent missed cron slot after restart when nextRunAtMs already advanced", async () => {
     vi.setSystemTime(new Date("2025-12-13T04:02:00.000Z"));
     await withRestartedCron(
