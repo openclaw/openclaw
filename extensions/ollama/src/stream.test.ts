@@ -10,6 +10,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 
+import { estimateStringChars } from "./cjk-char-estimate.js";
 import { buildAssistantMessage, createOllamaStreamFn } from "./stream.js";
 
 function makeOllamaResponse(params: {
@@ -524,6 +525,116 @@ describe("createOllamaStreamFn thinking events", () => {
       type: "error",
       reason: "aborted",
       error: { stopReason: "aborted" },
+    });
+  });
+
+  it("falls back to CJK-aware usage when the final chunk omits eval counts", async () => {
+    const cjkPrompt = "这是一个测试用的句子呢"; // 11 CJK characters
+    const cjkCompletion = "你好世界测试"; // 6 CJK characters
+    const naivePromptEstimate = Math.round((cjkPrompt.length + "[]".length) / 4);
+    const naiveCompletionEstimate = Math.round(cjkCompletion.length / 4);
+    const expectedInput = Math.max(
+      1,
+      Math.round((estimateStringChars(cjkPrompt) + estimateStringChars("[]")) / 4),
+    );
+    const expectedOutput = Math.max(1, Math.round(estimateStringChars(cjkCompletion) / 4));
+
+    const events = await streamOllamaEvents(
+      [
+        {
+          model: "qwen3.5",
+          created_at: "2026-01-01T00:00:00Z",
+          message: { role: "assistant", content: cjkCompletion },
+          done: false,
+        },
+        {
+          model: "qwen3.5",
+          created_at: "2026-01-01T00:00:01Z",
+          message: { role: "assistant", content: "" },
+          done: true,
+          done_reason: "stop",
+          // Intentionally omit prompt_eval_count / eval_count so the stream
+          // uses the local char-estimate fallback (early/native stream end).
+        },
+      ],
+      {},
+      { messages: [{ role: "user", content: cjkPrompt }] } as never,
+    );
+
+    const done = events.find((event) => event.type === "done") as {
+      message?: { usage?: { input?: number; output?: number } };
+    };
+    const usage = done?.message?.usage;
+    expect(usage?.input).toBe(expectedInput);
+    expect(usage?.output).toBe(expectedOutput);
+    expect(usage?.input).toBeGreaterThan(naivePromptEstimate * 2);
+    expect(usage?.output).toBeGreaterThan(naiveCompletionEstimate * 2);
+  });
+
+  it("keeps provider-reported eval counts authoritative over the CJK fallback", async () => {
+    const cjkPrompt = "这是一个测试用的句子呢";
+    const cjkCompletion = "你好世界测试";
+
+    const events = await streamOllamaEvents(
+      [
+        {
+          model: "qwen3.5",
+          created_at: "2026-01-01T00:00:00Z",
+          message: { role: "assistant", content: cjkCompletion },
+          done: false,
+        },
+        {
+          model: "qwen3.5",
+          created_at: "2026-01-01T00:00:01Z",
+          message: { role: "assistant", content: "" },
+          done: true,
+          done_reason: "stop",
+          prompt_eval_count: 77,
+          eval_count: 19,
+        },
+      ],
+      {},
+      { messages: [{ role: "user", content: cjkPrompt }] } as never,
+    );
+
+    const done = events.find((event) => event.type === "done") as {
+      message?: { usage?: { input?: number; output?: number } };
+    };
+    expect(done?.message?.usage).toMatchObject({ input: 77, output: 19 });
+  });
+
+  it("matches the plain chars/4 heuristic for ASCII-only fallback usage", async () => {
+    const asciiPrompt = "The quick brown fox jumps over the lazy dog";
+    const asciiCompletion = "Hello world";
+    const expectedInput = Math.max(1, Math.round((asciiPrompt.length + "[]".length) / 4));
+    const expectedOutput = Math.max(1, Math.round(asciiCompletion.length / 4));
+
+    const events = await streamOllamaEvents(
+      [
+        {
+          model: "qwen3.5",
+          created_at: "2026-01-01T00:00:00Z",
+          message: { role: "assistant", content: asciiCompletion },
+          done: false,
+        },
+        {
+          model: "qwen3.5",
+          created_at: "2026-01-01T00:00:01Z",
+          message: { role: "assistant", content: "" },
+          done: true,
+          done_reason: "stop",
+        },
+      ],
+      {},
+      { messages: [{ role: "user", content: asciiPrompt }] } as never,
+    );
+
+    const done = events.find((event) => event.type === "done") as {
+      message?: { usage?: { input?: number; output?: number } };
+    };
+    expect(done?.message?.usage).toMatchObject({
+      input: expectedInput,
+      output: expectedOutput,
     });
   });
 });
