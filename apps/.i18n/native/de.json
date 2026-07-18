@@ -10439,6 +10439,11 @@
       "translated": "Neuer Chat im Worktree"
     },
     {
+      "id": "native.apple.a1b0d289758e2213",
+      "source": "Sessions…",
+      "translated": "Sitzungen…"
+    },
+    {
       "id": "native.apple.17c13312e7532c89",
       "source": "Background Tasks",
       "translated": "Hintergrundaufgaben"
@@ -10447,6 +10452,11 @@
       "id": "native.apple.ced228bb4d20a726",
       "source": "Export Transcript",
       "translated": "Transkript exportieren"
+    },
+    {
+      "id": "native.apple.f26cef22f417abb4",
+      "source": "Show reasoning & tool activity",
+      "translated": "Denkprozess und Tool-Aktivität anzeigen"
     },
     {
       "id": "native.apple.940e1f943750c94b",

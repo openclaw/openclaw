@@ -10439,6 +10439,11 @@
       "translated": "Worktree에서 새 채팅"
     },
     {
+      "id": "native.apple.a1b0d289758e2213",
+      "source": "Sessions…",
+      "translated": "세션…"
+    },
+    {
       "id": "native.apple.17c13312e7532c89",
       "source": "Background Tasks",
       "translated": "백그라운드 작업"
@@ -10447,6 +10452,11 @@
       "id": "native.apple.ced228bb4d20a726",
       "source": "Export Transcript",
       "translated": "대화 기록 내보내기"
+    },
+    {
+      "id": "native.apple.f26cef22f417abb4",
+      "source": "Show reasoning & tool activity",
+      "translated": "추론 및 도구 활동 표시"
     },
     {
       "id": "native.apple.940e1f943750c94b",

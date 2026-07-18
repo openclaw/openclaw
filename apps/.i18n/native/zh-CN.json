@@ -10439,6 +10439,11 @@
       "translated": "在 Worktree 中新建聊天"
     },
     {
+      "id": "native.apple.a1b0d289758e2213",
+      "source": "Sessions…",
+      "translated": "会话…"
+    },
+    {
       "id": "native.apple.17c13312e7532c89",
       "source": "Background Tasks",
       "translated": "后台任务"
@@ -10447,6 +10452,11 @@
       "id": "native.apple.ced228bb4d20a726",
       "source": "Export Transcript",
       "translated": "导出转录"
+    },
+    {
+      "id": "native.apple.f26cef22f417abb4",
+      "source": "Show reasoning & tool activity",
+      "translated": "显示推理和工具活动"
     },
     {
       "id": "native.apple.940e1f943750c94b",

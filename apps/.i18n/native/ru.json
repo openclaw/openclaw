@@ -10439,6 +10439,11 @@
       "translated": "Новый чат в Worktree"
     },
     {
+      "id": "native.apple.a1b0d289758e2213",
+      "source": "Sessions…",
+      "translated": "Сеансы…"
+    },
+    {
       "id": "native.apple.17c13312e7532c89",
       "source": "Background Tasks",
       "translated": "Фоновые задачи"
@@ -10447,6 +10452,11 @@
       "id": "native.apple.ced228bb4d20a726",
       "source": "Export Transcript",
       "translated": "Экспортировать стенограмму"
+    },
+    {
+      "id": "native.apple.f26cef22f417abb4",
+      "source": "Show reasoning & tool activity",
+      "translated": "Показывать ход рассуждений и действия инструментов"
     },
     {
       "id": "native.apple.940e1f943750c94b",

@@ -10439,6 +10439,11 @@
       "translated": "Nouveau chat dans le worktree"
     },
     {
+      "id": "native.apple.a1b0d289758e2213",
+      "source": "Sessions…",
+      "translated": "Sessions…"
+    },
+    {
       "id": "native.apple.17c13312e7532c89",
       "source": "Background Tasks",
       "translated": "Tâches en arrière-plan"
@@ -10447,6 +10452,11 @@
       "id": "native.apple.ced228bb4d20a726",
       "source": "Export Transcript",
       "translated": "Exporter la transcription"
+    },
+    {
+      "id": "native.apple.f26cef22f417abb4",
+      "source": "Show reasoning & tool activity",
+      "translated": "Afficher le raisonnement et l’activité des outils"
     },
     {
       "id": "native.apple.940e1f943750c94b",

@@ -10439,6 +10439,11 @@
       "translated": "Worktree में नया चैट"
     },
     {
+      "id": "native.apple.a1b0d289758e2213",
+      "source": "Sessions…",
+      "translated": "सत्र…"
+    },
+    {
       "id": "native.apple.17c13312e7532c89",
       "source": "Background Tasks",
       "translated": "बैकग्राउंड कार्य"
@@ -10447,6 +10452,11 @@
       "id": "native.apple.ced228bb4d20a726",
       "source": "Export Transcript",
       "translated": "प्रतिलेख निर्यात करें"
+    },
+    {
+      "id": "native.apple.f26cef22f417abb4",
+      "source": "Show reasoning & tool activity",
+      "translated": "तर्क और टूल गतिविधि दिखाएँ"
     },
     {
       "id": "native.apple.940e1f943750c94b",
