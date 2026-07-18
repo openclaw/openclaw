@@ -370,7 +370,7 @@ class GatewayBootstrapAuthTest {
       )
     val prefs = SecurePrefs(app, securePrefsOverride = securePrefs)
     val runtime = NodeRuntime(app, prefs)
-    val deviceId = DeviceIdentityStore(app).loadOrCreate().deviceId
+    val deviceId = DeviceIdentityStore.withPrefs(app, prefs).loadOrCreate().deviceId
     val endpoint = GatewayEndpoint.manual(host = "127.0.0.1", port = 18789)
     DeviceAuthStore(prefs).saveToken(endpoint.stableId, deviceId, "operator", "bootstrap-operator-token")
 
@@ -726,7 +726,7 @@ class GatewayBootstrapAuthTest {
         )
       val prefs = SecurePrefs(app, securePrefsOverride = securePrefs)
       val runtime = NodeRuntime(app, prefs)
-      val deviceId = DeviceIdentityStore(app).loadOrCreate().deviceId
+      val deviceId = DeviceIdentityStore.withPrefs(app, prefs).loadOrCreate().deviceId
       val authStore = DeviceAuthStore(prefs)
       val target = GatewayEndpoint.manual("target.example", 18789).stableId
       val other = GatewayEndpoint.manual("other.example", 18789).stableId

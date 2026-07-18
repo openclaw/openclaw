@@ -527,6 +527,11 @@ class SecurePrefs(
     securePrefs.edit { putString(key, value) }
   }
 
+  internal fun putStringSynchronously(
+    key: String,
+    value: String,
+  ): Boolean = securePrefs.edit().putString(key, value).commit()
+
   fun remove(key: String) {
     securePrefs.edit { remove(key) }
   }
