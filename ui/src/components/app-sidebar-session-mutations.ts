@@ -38,7 +38,9 @@ export abstract class AppSidebarSessionMutationsElement extends AppSidebarSessio
       }
       // Unpin from any surface (menu, pin button, drag) retires the session's
       // persisted zone slot; leaving it would resurrect stale synced entries.
-      if (patch.pinned === false) {
+      // Archiving implicitly unpins server-side (sessions-patch clears
+      // pinnedAt), so it retires the slot too.
+      if (patch.pinned === false || (patch.archived === true && session.pinned)) {
         this.pruneSidebarSessionEntry(session.key);
       }
       if (patch.archived !== true || !session.active) {
