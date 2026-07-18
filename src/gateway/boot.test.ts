@@ -170,6 +170,26 @@ describe("runBootOnce", () => {
     });
   });
 
+  it("skips when BOOT.md disappears after path resolution", async () => {
+    await withBootWorkspace({ bootContent: "Say hello." }, async (workspaceDir) => {
+      const bootPath = path.join(workspaceDir, "BOOT.md");
+      const realpath = vi.spyOn(fs, "realpath");
+      realpath.mockImplementationOnce(async (inputPath) => {
+        realpath.mockRestore();
+        const resolvedPath = await fs.realpath(inputPath);
+        await fs.rm(resolvedPath);
+        return resolvedPath;
+      });
+
+      await expect(runBootOnce({ cfg: {}, deps: makeDeps(), workspaceDir })).resolves.toEqual({
+        status: "skipped",
+        reason: "missing",
+      });
+      expect(agentCommand).not.toHaveBeenCalled();
+      await expect(fs.access(bootPath)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+  });
+
   it("returns failed when BOOT.md exceeds the safe read size limit", async () => {
     await withBootWorkspace({ bootContent: "" }, async (workspaceDir) => {
       const bootPath = path.join(workspaceDir, "BOOT.md");

@@ -82,11 +82,15 @@ async function loadBootFile(
 
   // Resolve symlinks so BOOT.md can be a readable symlink to a regular file
   // while keeping directory/permission/size-limit failures surfaced to the
-  // operator. A realpath ENOENT (missing BOOT.md or a dangling symlink) keeps
-  // the established readFile ENOENT contract: treat as missing, not failure.
-  let resolvedPath: string;
+  // operator. ENOENT from either resolution or the bounded open keeps the
+  // established readFile contract: treat disappearance as missing.
+  let buffer: Buffer;
   try {
-    resolvedPath = await fs.realpath(bootPath);
+    const resolvedPath = await fs.realpath(bootPath);
+    ({ buffer } = await readRegularFile({
+      filePath: resolvedPath,
+      maxBytes: MAX_BOOT_FILE_BYTES,
+    }));
   } catch (err) {
     const anyErr = err as { code?: string };
     if (anyErr.code === "ENOENT") {
@@ -94,11 +98,6 @@ async function loadBootFile(
     }
     throw err;
   }
-
-  const { buffer } = await readRegularFile({
-    filePath: resolvedPath,
-    maxBytes: MAX_BOOT_FILE_BYTES,
-  });
   const content = buffer.toString("utf-8");
   const trimmed = content.trim();
   if (!trimmed) {
