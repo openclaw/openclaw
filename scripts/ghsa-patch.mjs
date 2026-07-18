@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 // Applies GHSA patch payloads to advisory branches.
 import { execFileSync, spawnSync } from "node:child_process";
+
+const GHSA_PATCH_TIMEOUT_MS = 120_000;
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -52,7 +54,7 @@ function runGh(args) {
 }
 
 function deriveRepoFromOrigin() {
-  const remote = execFileSync("git", ["remote", "get-url", "origin"], { encoding: "utf8" }).trim();
+  const remote = execFileSync("git", ["remote", "get-url", "origin"], { encoding: "utf8" , timeout: GHSA_PATCH_TIMEOUT_MS, killSignal: "SIGKILL"}).trim();
   const httpsMatch = remote.match(/github\.com[/:]([^/]+)\/([^/.]+)(?:\.git)?$/);
   if (!httpsMatch) {
     fail(`Could not parse origin remote: ${remote}`);
