@@ -6,11 +6,11 @@ scenario:
   runtimeParityTier: live-only
   coverage:
     primary:
-      - scheduling.cron
-      - agents.tool-use
+      - automation.agent-cron-tool
     secondary:
-      - scheduling.dedup
-      - scheduling.persistence
+      - automation.model-authored-cron-jobs
+      - automation.isolated-cron-execution-dedup
+      - automation.scheduler-persistence
   gatewayConfigPatch:
     commands:
       ownerAllowFrom:
