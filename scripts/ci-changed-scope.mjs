@@ -230,7 +230,11 @@ function resolveChangedBranchName() {
     return githubBranch;
   }
   try {
-    return execFileSync("git", ["branch", "--show-current"], { encoding: "utf8", timeout: 10_000, killSignal: "SIGKILL" }).trim();
+    return execFileSync("git", ["branch", "--show-current"], {
+      encoding: "utf8",
+      timeout: 10_000,
+      killSignal: "SIGKILL",
+    }).trim();
   } catch {
     return "";
   }
