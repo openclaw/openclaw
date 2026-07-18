@@ -482,6 +482,15 @@ describe("resolveGoogleChatAccount", () => {
     expect(resolved.credentialSource).toBe("env");
     expect(resolved.credentials).toBeUndefined();
     expect(resolved.credentialsFile).toBe("/tmp/googlechat.json");
+    expect(resolved.tokenStatus).toBe("configured_unavailable");
+    expect(resolved.credentialDiagnostics).toEqual([
+      {
+        code: "CREDENTIAL_FILE_UNAVAILABLE",
+        path: "env.GOOGLE_CHAT_SERVICE_ACCOUNT_FILE",
+        reason: "not-found",
+      },
+    ]);
+    expect(JSON.stringify(resolved.credentialDiagnostics)).not.toContain("/tmp/googlechat.json");
   });
 
   it("inherits shared defaults from accounts.default for named accounts", () => {

@@ -376,25 +376,59 @@ describe("resolveNextcloudTalkAccount", () => {
     expect(account.secretSource).toBe("config");
   });
 
-  it.runIf(process.platform !== "win32")("rejects symlinked botSecretFile paths", () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-nextcloud-talk-"));
-    const secretFile = path.join(dir, "secret.txt");
-    const secretLink = path.join(dir, "secret-link.txt");
-    fs.writeFileSync(secretFile, "bot-secret\n", "utf8");
-    fs.symlinkSync(secretFile, secretLink);
+  it.runIf(process.platform !== "win32")(
+    "marks symlinked botSecretFile paths configured-unavailable",
+    () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-nextcloud-talk-"));
+      const secretFile = path.join(dir, "secret.txt");
+      const secretLink = path.join(dir, "secret-link.txt");
+      fs.writeFileSync(secretFile, "bot-secret\n", "utf8");
+      fs.symlinkSync(secretFile, secretLink);
 
-    const cfg = {
-      channels: {
-        "nextcloud-talk": {
-          baseUrl: "https://cloud.example.com",
-          botSecretFile: secretLink,
+      const cfg = {
+        channels: {
+          "nextcloud-talk": {
+            baseUrl: "https://cloud.example.com",
+            botSecretFile: secretLink,
+          },
         },
-      },
-    } as CoreConfig;
+      } as CoreConfig;
 
-    expect(() => resolveNextcloudTalkAccount({ cfg })).toThrow(
-      /Nextcloud Talk bot secret file.*must not be a symlink/,
-    );
+      const account = resolveNextcloudTalkAccount({ cfg });
+      expect(account.secret).toBe("");
+      expect(account.secretSource).toBe("secretFile");
+      expect(account.tokenStatus).toBe("configured_unavailable");
+      expect(account.credentialDiagnostics).toEqual([
+        {
+          code: "CREDENTIAL_FILE_UNAVAILABLE",
+          path: "channels.nextcloud-talk.accounts.default.botSecretFile",
+          reason: "symlink",
+        },
+      ]);
+      expect(JSON.stringify(account.credentialDiagnostics)).not.toContain(secretLink);
+      fs.rmSync(dir, { recursive: true, force: true });
+    },
+  );
+
+  it("does not fall through from a missing explicit bot secret file", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-nextcloud-talk-missing-"));
+    const secretFile = path.join(dir, "missing-secret.txt");
+    const account = resolveNextcloudTalkAccount({
+      cfg: {
+        channels: {
+          "nextcloud-talk": {
+            baseUrl: "https://cloud.example.com",
+            botSecret: "inline-fallback",
+            botSecretFile: secretFile,
+          },
+        },
+      } as CoreConfig,
+    });
+
+    expect(account.secret).toBe("");
+    expect(account.secretSource).toBe("secretFile");
+    expect(account.tokenStatus).toBe("configured_unavailable");
+    expect(JSON.stringify(account.credentialDiagnostics)).not.toContain(secretFile);
     fs.rmSync(dir, { recursive: true, force: true });
   });
 

@@ -147,6 +147,35 @@ describe("readSecretFileSync", () => {
   });
 });
 
+describe("tryReadSecretFileSync diagnostics", () => {
+  it("returns a redacted diagnostic for an unavailable explicit file", async () => {
+    const dir = await createTempDir();
+    const file = path.join(dir, "missing-token.txt");
+
+    const result = tryReadSecretFileSync(file, "Telegram bot token", undefined, {
+      configPath: "channels.telegram.tokenFile",
+    });
+
+    expect(result).toEqual({
+      status: "configured_unavailable",
+      diagnostic: {
+        code: "CREDENTIAL_FILE_UNAVAILABLE",
+        path: "channels.telegram.tokenFile",
+        reason: "not-found",
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain(file);
+  });
+
+  it("distinguishes missing input from an unavailable configured file", () => {
+    expect(
+      tryReadSecretFileSync(undefined, "Telegram bot token", undefined, {
+        configPath: "channels.telegram.tokenFile",
+      }),
+    ).toEqual({ status: "missing" });
+  });
+});
+
 describe("writePrivateSecretFileAtomic", () => {
   it("writes a private file with owner-only permissions", async () => {
     const dir = await createTempDir();
