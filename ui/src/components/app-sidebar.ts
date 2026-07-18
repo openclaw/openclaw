@@ -132,7 +132,7 @@ class AppSidebar extends AppSidebarSessionListElement {
     const active =
       this.activeRouteId === "chat" &&
       areUiSessionKeysEquivalent(this.getRouteSessionKey(), mainKey);
-    const state = mainRow?.hasActiveRun
+    const stateBadge = mainRow?.hasActiveRun
       ? html`<span
           class="session-run-spinner nav-item__state"
           role="img"
@@ -161,7 +161,7 @@ class AppSidebar extends AppSidebarSessionListElement {
       >
         <span class="nav-item__icon" aria-hidden="true">${icons.home}</span>
         <span class="nav-item__text">${t("nav.home")}</span>
-        ${state}
+        ${stateBadge}
       </a>
     `;
   }
