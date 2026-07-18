@@ -59,7 +59,9 @@ describe("Microsoft Teams meeting runtime probes", () => {
       mode: "transcribe",
       transport: "chrome",
     } as TeamsMeetingsSession;
-    const refreshCaptionHealth = vi.fn(() => new Promise<void>(() => {}));
+    const refreshCaptionHealth = vi.fn(
+      (_session: TeamsMeetingsSession, _timeoutMs: number) => new Promise<void>(() => {}),
+    );
     const context = {
       config: resolveTeamsMeetingsConfig({ chrome: { joinTimeoutMs: 30_000 } }),
       hasHealthHandle: () => true,
@@ -80,8 +82,9 @@ describe("Microsoft Teams meeting runtime probes", () => {
     const result = await pending;
 
     expect(result.listenTimedOut).toBe(true);
-    expect(refreshCaptionHealth).toHaveBeenCalledTimes(1);
+    expect(refreshCaptionHealth).toHaveBeenCalledWith(session, 300);
     expect(Date.now()).toBe(350);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("refreshes captions before a short listening timeout expires", async () => {
@@ -94,13 +97,16 @@ describe("Microsoft Teams meeting runtime probes", () => {
       mode: "transcribe",
       transport: "chrome",
     } as TeamsMeetingsSession;
-    const refreshCaptionHealth = vi.fn(async () => {
-      session.chrome!.health = {
-        ...session.chrome!.health,
-        lastCaptionText: "Caption already waiting",
-        transcriptLines: 1,
-      };
-    });
+    const refreshCaptionHealth = vi.fn(
+      async (_session: TeamsMeetingsSession, _timeoutMs: number) => {
+        session.chrome!.health = {
+          ...session.chrome!.health,
+          lastCaptionText: "Caption already waiting",
+          manualActionRequired: true,
+          transcriptLines: 1,
+        };
+      },
+    );
     const context = {
       config: resolveTeamsMeetingsConfig({ chrome: { joinTimeoutMs: 30_000 } }),
       hasHealthHandle: () => true,
@@ -119,8 +125,50 @@ describe("Microsoft Teams meeting runtime probes", () => {
     });
 
     expect(result.listenVerified).toBe(true);
+    expect(result.manualActionRequired).toBe(true);
     expect(refreshCaptionHealth).toHaveBeenCalledTimes(1);
     expect(Date.now()).toBe(0);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("does not accept caption progress that arrives after the listening deadline", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const session = {
+      agentId: "main",
+      chrome: { health: { inCall: true }, launched: true },
+      id: "teams-listen-late",
+      mode: "transcribe",
+      transport: "chrome",
+    } as TeamsMeetingsSession;
+    const context = {
+      config: resolveTeamsMeetingsConfig({ chrome: { joinTimeoutMs: 30_000 } }),
+      hasHealthHandle: () => true,
+      isReusable: () => false,
+      join: vi.fn(async () => ({ session, spoken: false })),
+      list: () => [],
+      refreshCaptionHealth: async (_session: TeamsMeetingsSession, timeoutMs: number) => {
+        await new Promise<void>((resolve) => setTimeout(resolve, timeoutMs + 50));
+        session.chrome!.health = {
+          ...session.chrome!.health,
+          lastCaptionText: "Too late",
+          transcriptLines: 1,
+        };
+      },
+      refreshHealth: () => {},
+      resolveAgentId: () => "main",
+    } satisfies TeamsMeetingsProbeContext;
+
+    const pending = testTeamsMeetingListening(context, {
+      mode: "transcribe",
+      timeoutMs: 300,
+      url: URL,
+    });
+    await vi.advanceTimersByTimeAsync(400);
+
+    await expect(pending).resolves.toMatchObject({
+      listenTimedOut: true,
+      listenVerified: false,
+    });
   });
 });

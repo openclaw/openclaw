@@ -171,12 +171,14 @@ describe("meeting browser recovery", () => {
       meetingSessionId: "session-1",
       mode: "listen",
       requestedMeetingUrl: "https://meet.test/meeting",
+      timeoutMs: 500,
       trackedMeetingUrl: "https://meet.test/meeting",
       trackedTargetId: "target-1",
     });
 
     expect(evaluationAttempts).toBe(2);
     expect(adoptionAttempts).toEqual([true, false]);
+    expect(evaluationTimeouts[0]).toBeLessThanOrEqual(500);
     expect(evaluationTimeouts[1]).toBeLessThan(evaluationTimeouts[0] ?? 0);
     expect(result.browser).toMatchObject({
       inCall: true,

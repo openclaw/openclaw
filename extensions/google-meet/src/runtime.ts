@@ -715,6 +715,17 @@ export class GoogleMeetRuntime {
     }
     if (session.chrome && left) {
       session.chrome.browserTab = undefined;
+      if (session.chrome.health) {
+        session.chrome.health = {
+          ...session.chrome.health,
+          captioning: false,
+          audioOutputRouted: false,
+          providerConnected: false,
+          realtimeReady: false,
+          audioInputActive: false,
+          audioOutputActive: false,
+        };
+      }
     }
     session.browserLeft = left;
     return left;

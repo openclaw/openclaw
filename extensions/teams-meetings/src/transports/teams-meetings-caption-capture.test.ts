@@ -77,6 +77,9 @@ describe("Microsoft Teams meeting captions and permissions", () => {
       sessionMatched: true,
       urlMatched: true,
     });
+    expect(window["__openclawTeamsCaptions"]).toMatchObject({
+      identity: "teams-work:19:meeting_test@thread.v2",
+    });
   });
 
   it("retries an unverified live-caption activation", async () => {
@@ -794,6 +797,51 @@ describe("Microsoft Teams meeting captions and permissions", () => {
     expect(JSON.parse(readOldTranscript())).toMatchObject({
       sessionMatched: true,
       lines: [{ text: "Old live caption" }],
+    });
+  });
+
+  it("archives a prior meeting caption buffer without rewriting its identity", async () => {
+    const old = {
+      droppedLines: 0,
+      identity: "teams-work:19:meeting_test@thread.v2",
+      lines: [],
+      observerInstalled: true,
+      sessionId: "session-a",
+      visible: [{ text: "Meeting A caption" }],
+    };
+    const { window } = await runStatusScript({
+      allowMicrophone: false,
+      captureCaptions: true,
+      currentUrl: CONSUMER_URL,
+      leave: control({ label: "Leave" }),
+      meetingSessionId: "session-b",
+      meetingUrl: CONSUMER_URL,
+      priorCaptions: old,
+      priorMeeting: {
+        identity: "teams-work:19:meeting_test@thread.v2",
+        sessionId: "session-a",
+      },
+    });
+
+    expect(old).toMatchObject({
+      finalized: true,
+      identity: "teams-work:19:meeting_test@thread.v2",
+      lines: [{ text: "Meeting A caption" }],
+    });
+    delete window["__openclawTeamsCaptions"];
+    const readOldTranscript = runInNewContext(
+      `(${teamsMeetingTranscriptScript(URL, "session-a", false)})`,
+      {
+        URL: globalThis.URL,
+        clearTimeout,
+        location: new globalThis.URL(CONSUMER_URL),
+        window,
+      },
+    ) as () => string;
+    expect(JSON.parse(readOldTranscript())).toMatchObject({
+      sessionMatched: true,
+      urlMatched: true,
+      lines: [{ text: "Meeting A caption" }],
     });
   });
 

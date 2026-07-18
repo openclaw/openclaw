@@ -196,7 +196,6 @@ export function teamsMeetingStatusPreludeSource(params: TeamsMeetingStatusPrelud
       active.lines.splice(0, excess);
       active.droppedLines = (active.droppedLines || 0) + excess;
     }
-    active.identity = expectedIdentity;
     active.finalized = true;
     active.finalizedAt = Date.now();
   };
@@ -217,7 +216,10 @@ export function teamsMeetingStatusPreludeSource(params: TeamsMeetingStatusPrelud
     const owned = Boolean(
       active && sessionId && (!active.sessionId || active.sessionId === sessionId)
     );
-    if (owned) finalizeCaptionState(active);
+    if (owned) {
+      active.identity ||= priorMeeting?.identity || expectedIdentity;
+      finalizeCaptionState(active);
+    }
   };
   const toggleState = (node, kind) => parseToggleState({
     kind,

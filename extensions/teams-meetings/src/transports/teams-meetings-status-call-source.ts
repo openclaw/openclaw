@@ -256,7 +256,12 @@ export function teamsMeetingStatusCallSource(): string {
         active?.sessionId &&
         active.sessionId !== sessionId
       );
-      if (replacedPriorOwner) finalizeCaptionState(active);
+      if (replacedPriorOwner) {
+        if (priorMeeting?.sessionId === active.sessionId) {
+          active.identity ||= priorMeeting.identity;
+        }
+        finalizeCaptionState(active);
+      }
       else if (!canMutateSession || !captureCaptions || active?.finalized !== true) return undefined;
       archiveFinalizedCaptions(active);
       if (active.settleTimer !== undefined) clearTimeout(active.settleTimer);
@@ -278,6 +283,7 @@ export function teamsMeetingStatusCallSource(): string {
       active?.observer?.disconnect?.();
       window.__openclawTeamsCaptions = {
         sessionId,
+        identity: expectedIdentity,
         epoch: crypto.randomUUID(),
         enabledAttempted: false,
         observerInstalled: false,

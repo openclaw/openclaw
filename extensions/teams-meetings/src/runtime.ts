@@ -264,7 +264,8 @@ export class TeamsMeetingsRuntime {
       isReusable: (session, resolved) => this.#sessions.isReusableSession(session, resolved),
       hasHealthHandle: (sessionId) => this.#sessions.hasHealthHandle(sessionId),
       refreshHealth: (sessionId) => this.#sessions.refreshHealth(sessionId),
-      refreshCaptionHealth: async (session) => await this.#sessions.refreshCaptionHealth(session),
+      refreshCaptionHealth: async (session, timeoutMs) =>
+        await this.#refreshBrowserHealth(session, { timeoutMs }),
     };
   }
 
@@ -408,7 +409,7 @@ export class TeamsMeetingsRuntime {
 
   async #refreshBrowserHealth(
     session: TeamsMeetingsSession,
-    options: { readOnly?: boolean } = {},
+    options: { readOnly?: boolean; timeoutMs?: number } = {},
   ): Promise<void> {
     try {
       const result = await recoverCurrentTeamsMeetingTab({
@@ -421,6 +422,7 @@ export class TeamsMeetingsRuntime {
         trackedMeetingUrl: session.url,
         trackedTargetId: session.chrome?.browserTab?.targetId,
         transport: session.transport,
+        timeoutMs: options.timeoutMs,
         url: session.url,
       });
       if (result.found && session.chrome) {
@@ -496,6 +498,18 @@ export class TeamsMeetingsRuntime {
       noteSession(session, result.note);
       if (result.left && session.chrome) {
         session.chrome.browserTab = undefined;
+        if (session.chrome.health) {
+          session.chrome.health = {
+            ...session.chrome.health,
+            captioning: false,
+            audioInputRouted: false,
+            audioOutputRouted: false,
+            providerConnected: false,
+            realtimeReady: false,
+            audioInputActive: false,
+            audioOutputActive: false,
+          };
+        }
       }
       session.browserLeft = result.left;
       return result.left;

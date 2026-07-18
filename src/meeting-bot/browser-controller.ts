@@ -368,14 +368,20 @@ async function inspectRecoverableTab<
   requestedMeetingUrl: string | undefined;
   tab: MeetingBrowserCandidateTab;
   targetId: string;
+  deadline?: number;
   timeoutMs: number;
 }) {
   const allowMicrophone = params.adapter.browser.allowsMicrophone(params.mode);
+  const focusTimeoutMs =
+    params.deadline === undefined ? params.timeoutMs : Math.floor(params.deadline - Date.now());
+  if (focusTimeoutMs <= 0) {
+    throw new Error("Meeting browser recovery timed out.");
+  }
   await params.callBrowser({
     method: "POST",
     path: "/tabs/focus",
     body: { targetId: params.targetId },
-    timeoutMs: Math.min(params.timeoutMs, 5_000),
+    timeoutMs: Math.min(focusTimeoutMs, 5_000),
   });
   const localeAction = params.adapter.urls.localeAction(params.tab);
   if (localeAction) {
@@ -402,10 +408,13 @@ async function inspectRecoverableTab<
         callBrowser: params.callBrowser,
         meetingUrl: params.requestedMeetingUrl ?? params.tab.url ?? "",
         targetId: params.targetId,
-        timeoutMs: params.timeoutMs,
+        timeoutMs:
+          params.deadline === undefined
+            ? params.timeoutMs
+            : Math.max(1, Math.floor(params.deadline - Date.now())),
       });
   const navigationNotes: string[] = [];
-  const deadline = Date.now() + Math.min(params.timeoutMs, 10_000);
+  const inspectionDeadline = params.deadline ?? Date.now() + Math.min(params.timeoutMs, 10_000);
   let allowSessionAdoption = params.allowSessionAdoption ?? false;
   let evaluated: unknown;
   for (;;) {
@@ -413,7 +422,7 @@ async function inspectRecoverableTab<
       const adoptSession = allowSessionAdoption;
       allowSessionAdoption = false;
       evaluated = await runMeetingBrowserAct({
-        deadline,
+        deadline: inspectionDeadline,
         targetId: params.targetId,
         operation: async (remainingMs) =>
           await params.callBrowser({
@@ -439,7 +448,7 @@ async function inspectRecoverableTab<
       });
       break;
     } catch (error) {
-      const remainingMs = deadline - Date.now();
+      const remainingMs = inspectionDeadline - Date.now();
       if (!isMeetingBrowserTransientNavigationError(error) || remainingMs <= 0) {
         throw error;
       }
@@ -449,7 +458,7 @@ async function inspectRecoverableTab<
       await new Promise<void>((resolve) => {
         setTimeout(resolve, Math.min(250, remainingMs));
       });
-      if (Date.now() >= deadline) {
+      if (Date.now() >= inspectionDeadline) {
         throw error;
       }
     }
@@ -501,6 +510,7 @@ export async function recoverMeetingBrowserTab<
   mode: Mode;
   requestedMeetingUrl: string | undefined;
   readOnly?: boolean;
+  timeoutMs?: number;
   trackedMeetingUrl: string | undefined;
   trackedTargetId: string | undefined;
 }): Promise<{
@@ -510,12 +520,20 @@ export async function recoverMeetingBrowserTab<
   browser?: Health;
   message: string;
 }> {
-  const timeoutMs = Math.max(1_000, params.config.joinTimeoutMs);
+  const configuredTimeoutMs = Math.max(1_000, params.config.joinTimeoutMs);
+  const timeoutMs =
+    params.timeoutMs === undefined
+      ? configuredTimeoutMs
+      : Math.max(1, Math.min(configuredTimeoutMs, params.timeoutMs));
+  const deadline = params.timeoutMs === undefined ? undefined : Date.now() + timeoutMs;
   const tabs = asMeetingBrowserTabs(
     await params.callBrowser({
       method: "GET",
       path: "/tabs",
-      timeoutMs: Math.min(timeoutMs, 5_000),
+      timeoutMs:
+        deadline === undefined
+          ? Math.min(timeoutMs, 5_000)
+          : Math.min(Math.max(1, Math.floor(deadline - Date.now())), 5_000),
     }),
   );
   const trackedCandidate = params.trackedTargetId
@@ -563,6 +581,7 @@ export async function recoverMeetingBrowserTab<
     autoJoin: params.autoJoin,
     callBrowser: params.callBrowser,
     config: params.config,
+    ...(deadline === undefined ? {} : { deadline }),
     meetingSessionId: params.meetingSessionId,
     mode: params.mode,
     readOnly: params.readOnly,

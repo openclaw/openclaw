@@ -512,6 +512,7 @@ export async function recoverCurrentTeamsMeetingTab(params: {
   trackedMeetingUrl?: string;
   trackedTargetId?: string;
   transport: "chrome" | "chrome-node";
+  timeoutMs?: number;
   url?: string;
 }) {
   const nodeId =
@@ -546,6 +547,7 @@ export async function recoverCurrentTeamsMeetingTab(params: {
       requestedMeetingUrl: params.url,
       trackedMeetingUrl: params.trackedMeetingUrl,
       trackedTargetId: params.trackedTargetId,
+      timeoutMs: params.timeoutMs,
     })),
   };
 }

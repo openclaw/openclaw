@@ -294,10 +294,13 @@ describe("MeetingSessionRuntime leave cleanup", () => {
           launched: true,
           health: {
             inCall: true,
+            micMuted: false,
             manualActionMessage: "old action",
             manualActionReason: "old-action",
             manualActionRequired: true,
             speechReady: true,
+            speechBlockedMessage: "old speech block",
+            speechBlockedReason: "old-speech-block",
           },
           tab: { targetId: "leave-tab", openedByPlugin: true },
         };
@@ -323,6 +326,9 @@ describe("MeetingSessionRuntime leave cleanup", () => {
     });
     expect(session.browser?.health?.manualActionReason).toBeUndefined();
     expect(session.browser?.health?.manualActionMessage).toBeUndefined();
+    expect(session.browser?.health?.micMuted).toBeUndefined();
+    expect(session.browser?.health?.speechBlockedReason).toBeUndefined();
+    expect(session.browser?.health?.speechBlockedMessage).toBeUndefined();
   });
 
   it("retries a failed transport stop without repeating settled browser cleanup", async () => {

@@ -145,10 +145,32 @@ describe("Microsoft Teams meeting session flow", () => {
       found: true,
       spoken: false,
     });
+    Object.assign(first.session.chrome?.health ?? {}, {
+      audioInputActive: true,
+      audioInputRouted: true,
+      audioOutputActive: true,
+      audioOutputRouted: true,
+      captioning: true,
+      providerConnected: true,
+      realtimeReady: true,
+    });
     expect(await runtime.leave(first.session.id)).toMatchObject({
       found: true,
       browserLeft: true,
-      session: { state: "ended" },
+      session: {
+        state: "ended",
+        chrome: {
+          health: {
+            audioInputActive: false,
+            audioInputRouted: false,
+            audioOutputActive: false,
+            audioOutputRouted: false,
+            captioning: false,
+            providerConnected: false,
+            realtimeReady: false,
+          },
+        },
+      },
     });
     expect(harness.gatewayRequest).toHaveBeenCalledWith(
       "browser.request",

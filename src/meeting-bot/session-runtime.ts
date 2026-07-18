@@ -531,10 +531,13 @@ export class MeetingSessionRuntime<
         this.options.setBrowserHealth(session, {
           ...browser.health,
           inCall: false,
+          micMuted: undefined,
           manualActionRequired: false,
           manualActionReason: undefined,
           manualActionMessage: undefined,
           speechReady: false,
+          speechBlockedReason: undefined,
+          speechBlockedMessage: undefined,
         } as THealth);
       }
       if (cleanup.stopSettled && stop && this.#sessionStops.get(session.id) === stop) {

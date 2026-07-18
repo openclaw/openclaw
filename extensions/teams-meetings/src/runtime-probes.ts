@@ -22,7 +22,7 @@ export type TeamsMeetingsProbeContext = {
   ): boolean;
   hasHealthHandle(sessionId: string): boolean;
   refreshHealth(sessionId: string): void;
-  refreshCaptionHealth(session: TeamsMeetingsSession): Promise<void>;
+  refreshCaptionHealth(session: TeamsMeetingsSession, timeoutMs: number): Promise<void>;
 };
 
 function talkBackMode(mode: TeamsMeetingsMode): boolean {
@@ -132,7 +132,8 @@ export async function testTeamsMeetingListening(
     Boolean(health?.lastCaptionText && health.lastCaptionText !== start.text);
   const shouldWait =
     health?.manualActionRequired !== true && Boolean(result.session.chrome?.launched);
-  if (shouldWait && !advanced()) {
+  let listenVerified = advanced();
+  if (shouldWait && !listenVerified) {
     const deadline =
       Date.now() + resolveProbeTimeoutMs(request.timeoutMs, context.config.chrome.joinTimeoutMs);
     while (Date.now() < deadline) {
@@ -144,8 +145,11 @@ export async function testTeamsMeetingListening(
       const deadlineReached = new Promise<boolean>((resolve) => {
         deadlineTimer = setTimeout(() => resolve(false), remainingMs);
       });
+      // Browser recovery receives this same remaining budget. The outer race
+      // keeps the probe wall-clock bounded while the inner deadline prevents
+      // the per-target browser act from lingering on its normal longer timeout.
       const refreshed = await Promise.race([
-        context.refreshCaptionHealth(result.session).then(() => true),
+        context.refreshCaptionHealth(result.session, remainingMs).then(() => true),
         deadlineReached,
       ]).finally(() => {
         if (deadlineTimer !== undefined) {
@@ -156,13 +160,22 @@ export async function testTeamsMeetingListening(
         break;
       }
       health = result.session.chrome?.health;
-      if (health?.manualActionRequired || advanced()) {
+      if (Date.now() >= deadline) {
         break;
       }
-      await sleep(Math.min(250, deadline - Date.now()));
+      if (advanced()) {
+        listenVerified = true;
+      }
+      if (listenVerified || health?.manualActionRequired) {
+        break;
+      }
+      const retryDelayMs = deadline - Date.now();
+      if (retryDelayMs <= 0) {
+        break;
+      }
+      await sleep(Math.min(250, retryDelayMs));
     }
   }
-  const listenVerified = advanced();
   return {
     createdSession: !before.has(result.session.id),
     inCall: health?.inCall,
