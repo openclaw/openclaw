@@ -1293,6 +1293,7 @@ export async function augmentModelCatalogWithProviderPluginsResult(
     return [{ plugin, invocation, result: invocation.outcome }];
   });
   const outcomes = await Promise.all(pending.map(({ result }) => result));
+  let firstRejection: { error: unknown } | undefined;
   for (const [index, outcome] of outcomes.entries()) {
     const pendingItem = pending[index];
     if (!pendingItem) {
@@ -1300,7 +1301,8 @@ export async function augmentModelCatalogWithProviderPluginsResult(
     }
     const { invocation, plugin } = pendingItem;
     if (outcome.status === "rejected") {
-      throw outcome.error;
+      firstRejection ??= { error: outcome.error };
+      continue;
     }
     if (outcome.status === "aborted") {
       authoritative = false;
@@ -1322,6 +1324,9 @@ export async function augmentModelCatalogWithProviderPluginsResult(
       continue;
     }
     supplemental.push(...next);
+  }
+  if (firstRejection) {
+    throw firstRejection.error;
   }
   return { entries: supplemental, authoritative };
 }

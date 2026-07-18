@@ -1533,6 +1533,7 @@ describe("provider-runtime", () => {
       expect(settled).toBe(true);
       expect(rejection).toBe(failure);
       expect(hungSignal?.aborted).toBe(true);
+      expect(providerRuntimeWarnMock).toHaveBeenCalledTimes(1);
       expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
