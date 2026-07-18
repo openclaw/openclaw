@@ -66,6 +66,15 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
       // resolved turn to a prepared one that drives the harness dispatcher,
       // or reply waits never settle and turn tests hang to timeout.
       const harness = await import("./bot.create-telegram-bot.test-harness.js");
+      const { createPluginRuntimeMock } = await import("openclaw/plugin-sdk/plugin-test-runtime");
+      const dispatchRuntime = createPluginRuntimeMock({
+        channel: {
+          reply: {
+            dispatchReplyWithBufferedBlockDispatcher:
+              harness.dispatchReplyWithBufferedBlockDispatcher,
+          },
+        },
+      });
       const resolveTurn = params.adapter.resolveTurn;
       return await actual.runChannelInboundEvent({
         ...params,
@@ -76,17 +85,17 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
             if (!("route" in resolved) || "runDispatch" in resolved) {
               return resolved;
             }
-            type Assembled = Extract<typeof resolved, { dispatcherOptions: unknown }>;
-            const assembled = resolved as Assembled;
+            const plan: import("openclaw/plugin-sdk/channel-inbound").ChannelInboundTurnPlan =
+              resolved;
             return {
-              ...assembled,
-              runDispatch: async () =>
-                await harness.dispatchReplyWithBufferedBlockDispatcher({
-                  ctx: assembled.ctxPayload,
-                  cfg: assembled.cfg,
-                  dispatcherOptions: assembled.dispatcherOptions,
-                  replyOptions: assembled.replyOptions,
-                } as Parameters<typeof harness.dispatchReplyWithBufferedBlockDispatcher>[0]),
+              ...plan,
+              runDispatch: async () => {
+                const result = await dispatchRuntime.channel.inbound.dispatch(plan);
+                if (!result.dispatched) {
+                  throw new Error("Telegram harness turn did not dispatch");
+                }
+                return result.dispatchResult;
+              },
             } as typeof resolved;
           },
         },
