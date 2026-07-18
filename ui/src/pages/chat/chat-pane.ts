@@ -118,6 +118,7 @@ import {
   loadOlderChatHistoryPage,
   rewindChatHistory,
   resolveChatHistoryPagination,
+  switchChatHistoryBranch,
   syncSelectedSessionMessageSubscription,
 } from "./chat-history.ts";
 import {
@@ -164,6 +165,7 @@ import {
   renderBackgroundTasksToggle,
   type BackgroundTasksProps,
 } from "./components/chat-background-tasks.ts";
+import { isChatRunWorking } from "./components/chat-composer.ts";
 import { renderChatControls } from "./components/chat-controls.ts";
 import {
   canRevealSessionWorkspace,
@@ -1436,6 +1438,15 @@ class ChatPane extends OpenClawLightDomElement {
     }
   }
 
+  private async switchToBranch(leafEntryId: string): Promise<void> {
+    const state = this.state;
+    if (!state) {
+      return;
+    }
+    await switchChatHistoryBranch(state, leafEntryId);
+    state.requestUpdate?.();
+  }
+
   private readonly handleCommandPaletteSlashCommand = (command: string) => {
     const state = this.state;
     if (!state) {
@@ -2630,6 +2641,23 @@ class ChatPane extends OpenClawLightDomElement {
         isGatewayMethodAdvertised(this.context.gateway.snapshot, "sessions.files.reveal") === true,
       hasAdminAccess: hasOperatorAdminAccess(this.context.gateway.snapshot.hello?.auth ?? null),
     });
+    const branchSwitchWorking = this.state
+      ? this.state.chatSending ||
+        isChatRunWorking({
+          canAbort: hasAbortableSessionRun(this.state),
+          onAbort: () => undefined,
+          queue: this.state.chatQueue,
+          runStatus: this.state.chatRunStatus,
+          sessionKey: this.state.sessionKey,
+        })
+      : false;
+    const branchSwitchDisabledReason = !hasOperatorAdminAccess(
+      this.context.gateway.snapshot.hello?.auth ?? null,
+    )
+      ? t("chat.sessionHeader.branchSwitchRequiresAdmin")
+      : branchSwitchWorking
+        ? t("chat.sessionHeader.branchSwitchUnavailable")
+        : null;
     return renderChatPaneHeader({
       paneId: this.paneId,
       narrow: this.narrow,
@@ -2642,6 +2670,11 @@ class ChatPane extends OpenClawLightDomElement {
       workspaceRoot: workspace.root,
       workspaceLabel: workspace.label,
       branch,
+      branches:
+        this.state && this.state.chatBranchesSessionKey === this.state.sessionKey
+          ? (this.state.chatBranches ?? [])
+          : [],
+      branchSwitchDisabledReason,
       platform: this.headerPlatform,
       canReveal,
       copiedAction: this.headerCopiedAction,
@@ -2674,6 +2707,7 @@ class ChatPane extends OpenClawLightDomElement {
           this.handleHeaderMenuAction(action, row, workspace.root, branch);
         }
       },
+      onBranchSelect: (leafEntryId) => void this.switchToBranch(leafEntryId),
       onOpenSplitView: this.onOpenSplitView,
       onSplitDown: this.onSplitDown,
       onSplitRight: this.onSplitRight,
