@@ -61,6 +61,7 @@ import {
 } from "./model-auth-env.js";
 import {
   CUSTOM_LOCAL_AUTH_MARKER,
+  NO_AUTH_API_KEY_MARKER,
   isKnownEnvApiKeyMarker,
   isNonSecretApiKeyMarker,
   isSecretRefHeaderValueMarker,
@@ -960,6 +961,7 @@ export function hasRuntimeAvailableProviderAuth(params: {
   env?: NodeJS.ProcessEnv;
   allowPluginSyntheticAuth?: boolean;
   runtimeLookup?: RuntimeProviderAuthLookup;
+  modelId?: string;
   modelApi?: string;
 }): boolean {
   const provider = normalizeProviderId(params.provider);
@@ -1001,7 +1003,11 @@ export function hasRuntimeAvailableProviderAuth(params: {
       provider,
       runtimeLookup: params.runtimeLookup,
     }) &&
-    resolveSyntheticLocalProviderAuth({ cfg: params.cfg, provider })
+    resolveSyntheticLocalProviderAuth({
+      cfg: params.cfg,
+      provider,
+      modelId: params.modelId,
+    })
   ) {
     return true;
   }
@@ -1016,6 +1022,7 @@ type SyntheticProviderAuthResolution = {
 function resolveProviderSyntheticRuntimeAuth(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
+  modelId?: string;
   modelApi?: string;
   secretSentinels?: boolean;
 }): SyntheticProviderAuthResolution {
@@ -1038,6 +1045,7 @@ function resolveProviderSyntheticRuntimeAuth(params: {
         context: {
           config,
           provider: params.provider,
+          modelId: params.modelId,
           providerConfig,
         },
         modelApi: params.modelApi,
@@ -1078,18 +1086,27 @@ function resolveProviderSyntheticRuntimeAuth(params: {
 function resolveSyntheticLocalProviderAuth(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
+  modelId?: string;
   modelApi?: string;
   secretSentinels?: boolean;
   allowPluginSyntheticAuth?: boolean;
 }): ResolvedProviderAuth | null {
-  // Prepared direct attempts may use local no-auth config, but must not widen
-  // back into an unprepared plugin-owned credential source.
-  const syntheticProviderAuth =
-    params.allowPluginSyntheticAuth === false ? {} : resolveProviderSyntheticRuntimeAuth(params);
-  if (syntheticProviderAuth.auth) {
-    return syntheticProviderAuth.auth;
+  // Prepared direct attempts may use provider-owned non-secret markers, but
+  // must not widen back into an unprepared plugin-owned credential source.
+  const syntheticProviderAuth = resolveProviderSyntheticRuntimeAuth(params);
+  const syntheticAuth = syntheticProviderAuth.auth;
+  const syntheticApiKey = syntheticAuth?.apiKey;
+  if (
+    syntheticAuth &&
+    syntheticApiKey &&
+    (params.allowPluginSyntheticAuth !== false || isNonSecretApiKeyMarker(syntheticApiKey))
+  ) {
+    return syntheticAuth;
   }
-  if (syntheticProviderAuth.blockedOnManagedSecretRef) {
+  if (
+    params.allowPluginSyntheticAuth !== false &&
+    syntheticProviderAuth.blockedOnManagedSecretRef
+  ) {
     return null;
   }
 
@@ -1647,6 +1664,7 @@ export async function resolveApiKeyForProvider(params: {
   const syntheticLocalAuth = resolveSyntheticLocalProviderAuth({
     cfg,
     provider,
+    modelId: params.modelId,
     modelApi: params.modelApi,
     secretSentinels: params.secretSentinels,
     allowPluginSyntheticAuth: params.allowAuthProfileFallback !== false,
@@ -1800,7 +1818,7 @@ export async function hasAvailableAuthForProvider(params: {
   if (resolveUsableCustomProviderApiKey({ cfg, provider })) {
     return true;
   }
-  if (resolveSyntheticLocalProviderAuth({ cfg, provider })) {
+  if (resolveSyntheticLocalProviderAuth({ cfg, provider, modelId: params.modelId })) {
     return true;
   }
   const store =
@@ -1891,12 +1909,15 @@ export async function getApiKeyForModel(params: {
   });
 }
 
-/** Clears auth for local OpenAI-compatible servers that explicitly use no auth. */
+/** Clears auth for OpenAI-compatible transports that explicitly use no auth. */
 export function applyLocalNoAuthHeaderOverride<T extends Model>(
   model: T,
   auth: ResolvedProviderAuth | null | undefined,
 ): T {
-  if (auth?.apiKey !== CUSTOM_LOCAL_AUTH_MARKER || model.api !== "openai-completions") {
+  if (
+    (auth?.apiKey !== CUSTOM_LOCAL_AUTH_MARKER && auth?.apiKey !== NO_AUTH_API_KEY_MARKER) ||
+    model.api !== "openai-completions"
+  ) {
     return model;
   }
 

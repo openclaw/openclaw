@@ -657,6 +657,32 @@ describe("createModelAuthAvailabilityResolver", () => {
     expect(result).not.toHaveProperty("selectedRoute");
   });
 
+  it("resolves model-specific synthetic auth for catalog entries", () => {
+    const resolveRuntimeAuthAvailability = vi.fn(
+      (params: { provider: string; modelId?: string }) =>
+        params.provider === "opencode" && params.modelId === "deepseek-v4-flash-free",
+    );
+    const resolver = createModelAuthAvailabilityResolver({
+      cfg: {},
+      authStore: authStore(),
+      env: {},
+      resolveRuntimeAuthAvailability,
+    } as never);
+
+    expect(
+      resolver.evaluateModelAuth("opencode", {
+        modelId: "deepseek-v4-flash-free",
+        api: "openai-completions",
+      }),
+    ).toMatchObject({ availability: true, evidence: "synthetic" });
+    expect(
+      resolver.evaluateModelAuth("opencode", {
+        modelId: "gpt-5.5",
+        api: "openai-responses",
+      }),
+    ).toMatchObject({ availability: undefined });
+  });
+
   it("does not let invalid automatic profile evidence block synthetic Codex ownership", () => {
     expect(
       evaluate({

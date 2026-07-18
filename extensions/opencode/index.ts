@@ -13,6 +13,7 @@ import {
   buildStaticOpencodeZenProviderConfig,
   listOpencodeZenModelCatalogEntries,
   normalizeOpencodeZenBaseUrl,
+  resolveOpencodeZenSyntheticAuth,
   resolveOpencodeZenModel,
 } from "./provider-catalog.js";
 import { resolveThinkingProfile as resolveOpencodeThinkingProfile } from "./provider-policy-api.js";
@@ -108,9 +109,25 @@ export default definePluginEntry({
           api: model.api,
           baseUrl: model.baseUrl,
         });
-        return normalizedBaseUrl && normalizedBaseUrl !== model.baseUrl
-          ? { ...model, baseUrl: normalizedBaseUrl }
-          : undefined;
+        const normalizedModel =
+          normalizedBaseUrl && normalizedBaseUrl !== model.baseUrl
+            ? { ...model, baseUrl: normalizedBaseUrl }
+            : model;
+        if (
+          normalizedModel.api !== "openai-completions" ||
+          !resolveOpencodeZenSyntheticAuth(normalizedModel.id)
+        ) {
+          return normalizedModel === model ? undefined : normalizedModel;
+        }
+        const headers = Object.fromEntries(
+          Object.entries(normalizedModel.headers ?? {}).filter(
+            ([name]) => name.trim().toLowerCase() !== "authorization",
+          ),
+        );
+        return {
+          ...normalizedModel,
+          headers: { ...headers, Authorization: null } as unknown as Record<string, string>,
+        };
       },
       normalizeTransport: ({ api: apiLocal, baseUrl }) => {
         const normalizedBaseUrl = normalizeOpencodeZenBaseUrl({ api: apiLocal, baseUrl });
@@ -149,6 +166,7 @@ export default definePluginEntry({
         },
       },
       augmentModelCatalog: () => listOpencodeZenModelCatalogEntries(),
+      resolveSyntheticAuth: ({ modelId }) => resolveOpencodeZenSyntheticAuth(modelId),
       ...buildProviderReplayFamilyHooks({ family: "passthrough-gemini" }),
       isModernModelRef: ({ modelId }) => isModernOpencodeModel(modelId),
       resolveThinkingProfile: resolveOpencodeThinkingProfile,

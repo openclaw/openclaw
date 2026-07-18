@@ -15,6 +15,7 @@ export type ProviderAuthOptionBag = {
 export type ProviderResolveSyntheticAuthContext = {
   config?: OpenClawConfig;
   provider: string;
+  modelId?: string;
   providerConfig?: ModelProviderConfig;
 };
 

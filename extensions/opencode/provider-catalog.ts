@@ -19,6 +19,28 @@ const OPENCODE_ZEN_ANTHROPIC_BASE_URL = "https://opencode.ai/zen";
 const OPENCODE_ZEN_MODELS_ENDPOINT = "https://opencode.ai/zen/v1/models";
 const OPENCODE_ZEN_MODELS_TIMEOUT_MS = 5_000;
 const OPENCODE_ZEN_MODELS_CACHE_TTL_MS = 60_000;
+const OPENCODE_ZEN_NO_AUTH_MARKER = "no-auth";
+
+const OPENCODE_ZEN_PUBLIC_MODEL_IDS = new Set([
+  "big-pickle",
+  "deepseek-v4-flash-free",
+  "hy3-free",
+  "mimo-v2.5-free",
+  "nemotron-3-ultra-free",
+  "north-mini-code-free",
+]);
+
+export function resolveOpencodeZenSyntheticAuth(modelId: string | undefined) {
+  const normalizedModelId = modelId?.trim().toLowerCase();
+  if (!normalizedModelId || !OPENCODE_ZEN_PUBLIC_MODEL_IDS.has(normalizedModelId)) {
+    return undefined;
+  }
+  return {
+    apiKey: OPENCODE_ZEN_NO_AUTH_MARKER,
+    source: "OpenCode Zen public model",
+    mode: "api-key" as const,
+  };
+}
 
 const FREE_COST: ModelDefinitionConfig["cost"] = {
   input: 0,

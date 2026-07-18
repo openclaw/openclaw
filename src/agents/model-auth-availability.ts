@@ -110,6 +110,7 @@ type CreateModelAuthAvailabilityResolverParams = {
   externalCliProviderIds?: readonly string[];
   routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
   allowPreparedRuntimeAuth?: boolean;
+  resolveRuntimeAuthAvailability?: typeof hasRuntimeAvailableProviderAuth;
 };
 
 type AuthTarget = ModelAuthAvailabilityRef & {
@@ -265,6 +266,8 @@ export function createModelAuthAvailabilityResolver(
     config: params.cfg,
     env,
   });
+  const resolveRuntimeAuthAvailability =
+    params.resolveRuntimeAuthAvailability ?? hasRuntimeAvailableProviderAuth;
   const envCache = new Map<string, ReturnType<typeof resolveProviderEnvAuthEvidence>>();
   const orderCache = new Map<string, AuthProfileOrderResolution>();
   const normalizeProvider = (provider: string) => {
@@ -600,6 +603,25 @@ export function createModelAuthAvailabilityResolver(
         selectedAuthMode: mode,
         evidence: "environment",
       };
+    }
+    const modelId = target.modelId
+      ? normalizeModelIdForProvider(provider, target.modelId)
+      : undefined;
+    if (
+      provider !== OPENAI_PROVIDER_ID &&
+      modelId &&
+      (params.syntheticAuthProviderRefs === undefined ||
+        synthetic.has(normalizeProvider(provider))) &&
+      resolveRuntimeAuthAvailability({
+        provider,
+        modelId,
+        modelApi: target.api ?? undefined,
+        cfg: params.cfg,
+        workspaceDir: params.workspaceDir,
+        env,
+      })
+    ) {
+      return { availability: true, evidence: "synthetic" };
     }
     const hasCompatibleCodexSyntheticAuth =
       provider === OPENAI_PROVIDER_ID &&

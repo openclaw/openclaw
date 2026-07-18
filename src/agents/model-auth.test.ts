@@ -9,6 +9,7 @@ import type { AuthProfileStore } from "./auth-profiles.js";
 import {
   CUSTOM_LOCAL_AUTH_MARKER,
   GCP_VERTEX_CREDENTIALS_MARKER,
+  NO_AUTH_API_KEY_MARKER,
   NON_ENV_SECRETREF_MARKER,
 } from "./model-auth-markers.js";
 import {
@@ -99,7 +100,10 @@ vi.mock("../plugins/provider-runtime.js", async () => {
         };
       };
       modelApi?: string;
-      context: { providerConfig?: { api?: string; baseUrl?: string; models?: unknown[] } };
+      context: {
+        modelId?: string;
+        providerConfig?: { api?: string; baseUrl?: string; models?: unknown[] };
+      };
     }) => {
       if (params.provider === "plugin-web") {
         if (
@@ -131,6 +135,13 @@ vi.mock("../plugins/provider-runtime.js", async () => {
           apiKey: "native-cli-access-token",
           source: "Native CLI auth",
           mode: "oauth" as const,
+        };
+      }
+      if (params.provider === "opencode" && params.context.modelId === "deepseek-v4-flash-free") {
+        return {
+          apiKey: "no-auth",
+          source: "OpenCode Zen public model",
+          mode: "api-key" as const,
         };
       }
       const effectiveApi = params.modelApi ?? params.context.providerConfig?.api;
@@ -1755,6 +1766,37 @@ describe("resolveApiKeyForProvider", () => {
 });
 
 describe("resolveApiKeyForProvider – synthetic local auth for custom providers", () => {
+  it("passes the selected model id to provider-owned synthetic auth", async () => {
+    const auth = await resolveApiKeyForProvider({
+      provider: "opencode",
+      modelId: "deepseek-v4-flash-free",
+      modelApi: "openai-completions",
+      store: { version: 1, profiles: {} },
+    });
+
+    expectAuthFields(auth, {
+      apiKey: "no-auth",
+      source: "OpenCode Zen public model",
+      mode: "api-key",
+    });
+  });
+
+  it("keeps provider-owned non-secret auth markers in prepared direct attempts", async () => {
+    const auth = await resolveApiKeyForProvider({
+      provider: "opencode",
+      modelId: "deepseek-v4-flash-free",
+      modelApi: "openai-completions",
+      store: { version: 1, profiles: {} },
+      allowAuthProfileFallback: false,
+    });
+
+    expectAuthFields(auth, {
+      apiKey: "no-auth",
+      source: "OpenCode Zen public model",
+      mode: "api-key",
+    });
+  });
+
   it("recognizes local baseUrl variants for synthetic auth config", () => {
     const localBaseUrls = [
       "http://127.0.0.1:8080/v1",
@@ -2237,6 +2279,30 @@ describe("applyLocalNoAuthHeaderOverride", () => {
 
     expect(model.headers?.Authorization).toBeNull();
     expect(model.headers?.["X-Test"]).toBe("1");
+  });
+
+  it("clears Authorization for provider-owned public no-auth models", () => {
+    const model = applyLocalNoAuthHeaderOverride(
+      {
+        id: "deepseek-v4-flash-free",
+        name: "DeepSeek V4 Flash Free",
+        api: "openai-completions",
+        provider: "opencode",
+        baseUrl: "https://opencode.ai/zen/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_000_000,
+        maxTokens: 384_000,
+      } as Model<"openai-completions">,
+      {
+        apiKey: NO_AUTH_API_KEY_MARKER,
+        source: "OpenCode Zen public model",
+        mode: "api-key",
+      },
+    );
+
+    expect(model.headers?.Authorization).toBeNull();
   });
 });
 

@@ -78,6 +78,37 @@ describe("opencode provider plugin", () => {
     });
   });
 
+  it("uses keyless auth only for OpenCode Zen public models", async () => {
+    expect(manifest.nonSecretAuthMarkers).toEqual(["no-auth"]);
+    const provider = await registerSingleProviderPlugin(plugin);
+    const publicAuth = provider.resolveSyntheticAuth?.({
+      provider: "opencode",
+      modelId: "deepseek-v4-flash-free",
+    } as never);
+    const paidAuth = provider.resolveSyntheticAuth?.({
+      provider: "opencode",
+      modelId: "gpt-5.5",
+    } as never);
+
+    expect(publicAuth).toEqual({
+      apiKey: "no-auth",
+      source: "OpenCode Zen public model",
+      mode: "api-key",
+    });
+    expect(paidAuth).toBeUndefined();
+
+    const { default: discovery } = await import("./provider-discovery.js");
+    expect(
+      discovery.resolveSyntheticAuth?.({
+        provider: "opencode",
+        modelId: "deepseek-v4-flash-free",
+      } as never),
+    ).toEqual(publicAuth);
+    expect(
+      discovery.resolveSyntheticAuth?.({ provider: "opencode", modelId: "gpt-5.5" } as never),
+    ).toBeUndefined();
+  });
+
   it("keeps OpenCode Zen catalog coverage aligned with the curated seed", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
     expect(provider.catalog).toBeDefined();
@@ -682,6 +713,26 @@ describe("opencode provider plugin", () => {
       "normalized model",
     );
     expect(normalizedModel.baseUrl).toBe("https://opencode.ai/zen");
+
+    const publicModel = requireRecord(
+      provider.normalizeResolvedModel?.({
+        provider: "opencode",
+        model: {
+          provider: "opencode",
+          id: "big-pickle",
+          name: "Big Pickle",
+          api: "openai-completions",
+          baseUrl: "https://opencode.ai/zen/v1",
+          reasoning: true,
+          input: ["text", "image"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 128_000,
+          maxTokens: 8192,
+        },
+      } as never),
+      "public normalized model",
+    );
+    expect(requireRecord(publicModel.headers, "public model headers").Authorization).toBeNull();
 
     expect(
       provider.normalizeTransport?.({

@@ -1,6 +1,7 @@
 {
   "id": "opencode",
   "icon": "https://cdn.simpleicons.org/opencode",
+  "nonSecretAuthMarkers": ["no-auth"],
   "activation": {
     "onStartup": true
   },

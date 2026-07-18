@@ -34,7 +34,7 @@ function listValidatedSyntheticAuthProviderRefs(params: {
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
   metadataSnapshot?: PluginMetadataSnapshot;
-}): readonly string[] {
+}): readonly string[] | undefined {
   if (params.metadataSnapshot && (params.metadataSnapshot.registryDiagnostics?.length ?? 0) > 0) {
     return [];
   }
@@ -45,7 +45,7 @@ function listValidatedSyntheticAuthProviderRefs(params: {
     index: params.metadataSnapshot?.index,
   });
   if (result.source !== "persisted" && result.source !== "provided") {
-    return [];
+    return undefined;
   }
   return result.snapshot.plugins
     .filter((plugin) => plugin.enabled)
