@@ -71,7 +71,7 @@ function convertAuthProfileCredentialToAgent(
     const access = normalizeOptionalString(cred.access) ?? "";
     const refresh = normalizeOptionalString(cred.refresh) ?? "";
     const expires = asDateTimestampMs(cred.expires);
-    if (!access || !refresh || expires === undefined || expires <= 0 || Date.now() >= expires) {
+    if (!access || !refresh || expires === undefined || expires <= 0) {
       return null;
     }
     return {
@@ -93,11 +93,29 @@ export function resolveAgentCredentialMapFromStore(
   const credentials: AgentCredentialMap = {};
   for (const credential of Object.values(store.profiles)) {
     const provider = normalizeProviderId(credential.provider ?? "");
-    if (!provider || credentials[provider]) {
+    if (!provider) {
       continue;
     }
     const converted = convertAuthProfileCredentialToAgent(credential, options);
-    if (converted) {
+    if (!converted) {
+      continue;
+    }
+    const existing = credentials[provider];
+    if (!existing) {
+      credentials[provider] = converted;
+      continue;
+    }
+    // Prefer a non-expired OAuth credential over an expired one when the
+    // store holds multiple profiles for the same provider. Background
+    // operations still receive an expired credential as a last resort
+    // (the refresh path may recover it), but the map picks the fresher
+    // profile when one is available.
+    if (
+      existing.type === "oauth" &&
+      converted.type === "oauth" &&
+      Date.now() >= existing.expires &&
+      Date.now() < converted.expires
+    ) {
       credentials[provider] = converted;
     }
   }

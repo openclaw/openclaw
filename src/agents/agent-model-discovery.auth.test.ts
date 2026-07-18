@@ -130,25 +130,32 @@ describe("discoverAuthStorage", () => {
     expect(credentials.openai).toBeUndefined();
   });
 
-  // Regression: the oauth branch checked expires <= 0 but did NOT check
-  // Date.now() >= expires, while the token branch did. An expired OAuth
-  // credential in the past could pass conversion, poisoning the per-provider
-  // credential map used by background/automatic operations.
-  it("rejects an OAuth credential whose expiry is in the past", () => {
+  // Regression: the oauth branch did not check past expiry at all, so an
+  // expired OAuth credential silently took the one-per-provider slot ahead
+  // of any valid profile. The conversion layer keeps expired-but-refreshable
+  // OAuth (the auth resolution path may refresh it), but the map builder now
+  // prefers a non-expired credential when one is available.
+  it("keeps expired OAuth when it is the sole profile for a provider", () => {
     const credentials = resolveAgentCredentialMapFromStore({
       version: 1,
       profiles: {
-        "openai:expired-oauth": {
+        "openai:sole-expired": {
           type: "oauth",
           provider: "openai",
-          access: "access",
-          refresh: "refresh",
+          access: "sole-access",
+          refresh: "sole-refresh",
           expires: Date.now() - 3600_000,
         },
       },
     });
 
-    expect(credentials.openai).toBeUndefined();
+    // Sole profile — the expired credential is kept so the refresh
+    // path has something to work with.
+    const openai = credentials.openai as
+      | { type?: string; access?: string; refresh?: string }
+      | undefined;
+    expect(openai?.type).toBe("oauth");
+    expect(openai?.access).toBe("sole-access");
   });
 
   // A same-provider valid credential after an expired one must still fill
