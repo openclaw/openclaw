@@ -257,9 +257,8 @@ Remaining follow-ups from phases 4-6 (tracked, unscheduled): avatar/image-gen
 ladder for the hatch; macOS app rendering of the typed `question` field; a
 docked inline Settings pane for the custodian (needs shared conversation-view
 extraction); event-reactive commentary and channel summon/agent-down recovery
-(phase 6 PR2); Linux/Windows browser handoff; automatic `localModelLean` for
-weak models; whether existing users' saved sidebar pins should adopt the
-OpenClaw entry.
+(phase 6 PR2); automatic `localModelLean` for weak models; whether existing
+users' saved sidebar pins should adopt the OpenClaw entry.
 
 ## Testing and landing playbook (hard-won; read before phases 4-6)
 
