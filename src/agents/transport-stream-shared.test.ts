@@ -28,6 +28,19 @@ describe("transport stream shared helpers", () => {
     );
   });
 
+  it("strips the MiniMax stream-boundary marker from assistant text (#104403)", () => {
+    const esc = String.fromCharCode(0x1b);
+    const marker = `${esc}[e~[`;
+    const reply = "Here is the summary of the run.";
+    expect(sanitizeTransportPayloadText(`${reply}${marker}`)).toBe(reply);
+    expect(sanitizeTransportPayloadText(`${reply}[e~[`)).toBe(reply);
+    // Repeated markers (reported up to 3x) are all removed.
+    expect(sanitizeTransportPayloadText(`${reply}${marker}${marker}${marker}`)).toBe(reply);
+    // Real text is preserved and never has a trailing ESC left behind.
+    expect(sanitizeTransportPayloadText(reply)).toBe(reply);
+    expect(sanitizeTransportPayloadText(`${reply}${esc}[31mred${esc}[0m`)).toBe(`${reply}red`);
+  });
+
   it.each([
     ["empty", ""],
     ["whitespace-only", " \n\t "],
