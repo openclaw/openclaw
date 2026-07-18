@@ -41,6 +41,14 @@ function requireReadabilityResult(result: ReadabilityResult): NonNullable<Readab
   return result;
 }
 
+async function extractMarkdown(html: string) {
+  return createReadabilityWebContentExtractor().extract({
+    html,
+    url: "https://example.com/article",
+    extractMode: "markdown",
+  });
+}
+
 describe("web readability extractor", () => {
   it("extracts readable text", async () => {
     const extractor = createReadabilityWebContentExtractor();
@@ -68,71 +76,46 @@ describe("web readability extractor", () => {
   });
 
   it("does not count void tags toward the nesting limit", async () => {
-    const extractor = createReadabilityWebContentExtractor();
     const html = SAMPLE_HTML.replace("<article>", `<article>${"<BR>".repeat(3100)}`);
-    const result = await extractor.extract({
-      html,
-      url: "https://example.com/article",
-      extractMode: "markdown",
-    });
+    const result = await extractMarkdown(html);
     expect(requireReadabilityResult(result).text).toContain("Main content starts here");
   });
 
   it("does not count pseudo tags inside raw-text elements toward the nesting limit", async () => {
-    const extractor = createReadabilityWebContentExtractor();
     const pseudoTags = "<div>".repeat(3100);
     const html = SAMPLE_HTML.replace(
       "<article>",
       `<article><script>const template = ${JSON.stringify(pseudoTags)};</script>`,
     );
-    const result = await extractor.extract({
-      html,
-      url: "https://example.com/article",
-      extractMode: "markdown",
-    });
+    const result = await extractMarkdown(html);
     expect(requireReadabilityResult(result).text).toContain("Main content starts here");
   });
 
   it("handles quoted raw-text attributes while skipping pseudo tags", async () => {
-    const extractor = createReadabilityWebContentExtractor();
     const pseudoTags = "<div>".repeat(3100);
     const html = SAMPLE_HTML.replace(
       "<article>",
-      `<article><script data-close="</script>">const template = ${JSON.stringify(pseudoTags)};</script>`,
+      `<article><script data-close="/>">const template = ${JSON.stringify(pseudoTags)};</script>`,
     );
-    const result = await extractor.extract({
-      html,
-      url: "https://example.com/article",
-      extractMode: "markdown",
-    });
+    const result = await extractMarkdown(html);
     expect(requireReadabilityResult(result).text).toContain("Main content starts here");
   });
 
   it("does not count pseudo tags inside legacy raw-text content", async () => {
-    const extractor = createReadabilityWebContentExtractor();
     const pseudoTags = "<div ".repeat(3100);
     for (const tagName of ["noembed", "noframes"]) {
       const html = SAMPLE_HTML.replace(
         "<article>",
         `<article><${tagName}>${pseudoTags}</${tagName}>`,
       );
-      const result = await extractor.extract({
-        html,
-        url: "https://example.com/article",
-        extractMode: "markdown",
-      });
+      const result = await extractMarkdown(html);
       expect(requireReadabilityResult(result).text).toContain("Main content starts here");
     }
   });
 
   it("bounds malformed apparent start-tag scanning", async () => {
-    const extractor = createReadabilityWebContentExtractor();
     const html = `<main>${"<a".repeat(50_000)}</main>`;
-    const result = await extractor.extract({
-      html,
-      url: "https://example.com/article",
-      extractMode: "markdown",
-    });
+    const result = await extractMarkdown(html);
     expect(result).toBeNull();
   });
 
