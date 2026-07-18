@@ -4,16 +4,31 @@
 import { execFileSync } from "node:child_process";
 import { bundledPluginFile } from "./lib/bundled-plugin-paths.mjs";
 
-const args = [
-  "run",
-  "--config",
-  "vitest.config.ts",
+const testFiles = [
   bundledPluginFile("voice-call", "src/manager.test.ts"),
   bundledPluginFile("voice-call", "src/media-stream.test.ts"),
   "src/plugins/voice-call.plugin.test.ts",
-  "--maxWorkers=1",
 ];
+const args = ["run", "--config", "vitest.config.ts", ...testFiles, "--maxWorkers=1"];
+// The nested runner resets its watchdog on output, so this slice also needs a wall-clock limit.
+const totalDeadlineMs = 10 * 60 * 1000;
 
-execFileSync(process.execPath, ["scripts/run-vitest.mjs", ...args], {
-  stdio: "inherit",
-});
+try {
+  execFileSync(process.execPath, ["scripts/run-vitest.mjs", ...args], {
+    killSignal: "SIGTERM",
+    stdio: "inherit",
+    timeout: totalDeadlineMs,
+  });
+} catch (error) {
+  if (!error || typeof error !== "object" || !("code" in error) || error.code !== "ETIMEDOUT") {
+    throw error;
+  }
+  throw new Error(
+    [
+      `closed-loop voice-call test slice timed out after ${totalDeadlineMs}ms`,
+      "Target test files:",
+      ...testFiles.map((file) => `  - ${file}`),
+    ].join("\n"),
+    { cause: error },
+  );
+}
