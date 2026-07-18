@@ -2527,6 +2527,9 @@ describe("ci workflow guards", () => {
     expect(checkoutStep.with).toBeUndefined();
     expect(warmerSource).toContain('cron: "17 8 * * *"');
     expect(warmerSource).toContain('candidate.shardName.startsWith("core-unit-fast")');
+    expect(warmerSource).toContain('"agentic-agents-embedded"');
+    expect(warmerSource).toContain('"agentic-gateway-methods"');
+    expect(warmerSource).toContain('"auto-reply-reply-commands-3"');
     expect(warmerSetup.with).toMatchObject({
       "node-compile-cache-scope": "test",
       "save-actions-cache": "true",
