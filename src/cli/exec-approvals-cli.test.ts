@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => {
   const runtimeErrors: string[] = [];
   const stringifyArgs = (args: unknown[]) => args.map((value) => String(value)).join(" ");
   const readBestEffortConfig = vi.fn(async () => ({}));
+  const loadOrCreateDeviceIdentity = vi.fn(() => ({ deviceId: "cli-device" }));
   const defaultRuntime = {
     log: vi.fn(),
     error: vi.fn((...args: unknown[]) => {
@@ -38,47 +39,61 @@ const mocks = vi.hoisted(() => {
     }),
   };
   return {
-    callGatewayFromCli: vi.fn(async (method: string, _opts: unknown, params?: unknown) => {
-      if (method.endsWith(".get")) {
-        if (method === "config.get") {
-          return {
-            config: {
-              tools: {
-                exec: {
-                  security: "full",
-                  ask: "off",
+    callGatewayFromCli: vi.fn(
+      async (
+        method: string,
+        _opts: unknown,
+        params?: unknown,
+        _extra?: unknown,
+      ): Promise<unknown> => {
+        if (method.endsWith(".get")) {
+          if (method === "config.get") {
+            return {
+              config: {
+                tools: {
+                  exec: {
+                    security: "full",
+                    ask: "off",
+                  },
                 },
               },
-            },
+            };
+          }
+          const snapshot = {
+            path: "/tmp/exec-approvals.json",
+            exists: true,
+            hash: "hash-1",
+            file: { version: 1, agents: {} },
           };
+          return method === "exec.approvals.node.get"
+            ? {
+                ...snapshot,
+                resolvedDefaults: {
+                  security: "allowlist" as const,
+                  ask: "on-miss" as const,
+                  askFallback: "deny" as const,
+                  autoAllowSkills: false,
+                },
+              }
+            : snapshot;
         }
-        const snapshot = {
-          path: "/tmp/exec-approvals.json",
-          exists: true,
-          hash: "hash-1",
-          file: { version: 1, agents: {} },
-        };
-        return method === "exec.approvals.node.get"
-          ? {
-              ...snapshot,
-              resolvedDefaults: {
-                security: "allowlist" as const,
-                ask: "on-miss" as const,
-                askFallback: "deny" as const,
-                autoAllowSkills: false,
-              },
-            }
-          : snapshot;
-      }
-      return { method, params };
-    }),
+        return { method, params };
+      },
+    ),
     defaultRuntime,
+    loadOrCreateDeviceIdentity,
     readBestEffortConfig,
     runtimeErrors,
   };
 });
 
-const { callGatewayFromCli, defaultRuntime, readBestEffortConfig, runtimeErrors } = mocks;
+const {
+  callGatewayFromCli,
+  defaultRuntime,
+  loadOrCreateDeviceIdentity,
+  readBestEffortConfig,
+  runtimeErrors,
+} = mocks;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const localSnapshot = {
@@ -143,6 +158,70 @@ function writtenJson(): Record<string, unknown> {
   return requireRecord(value, "written json");
 }
 
+function runtimeOutput(): string {
+  return defaultRuntime.log.mock.calls.map(([line]) => String(line ?? "")).join("\n");
+}
+
+function approvalDisplayId(id: string): string {
+  return `id64_${Buffer.from(id).toString("base64url")}`;
+}
+
+function pendingApprovalSnapshot(params: {
+  id: string;
+  kind?: "exec" | "plugin" | "system-agent";
+  allowedDecisions?: string[];
+  expiresAtMs?: number;
+}) {
+  const kind = params.kind ?? "exec";
+  return {
+    approval: {
+      id: params.id,
+      status: "pending",
+      urlPath: `/approve/${params.id}`,
+      createdAtMs: Date.now() - 1_000,
+      expiresAtMs: params.expiresAtMs ?? Date.now() + 60_000,
+      presentation:
+        kind === "exec"
+          ? {
+              kind,
+              commandText: "echo ready",
+              allowedDecisions: params.allowedDecisions ?? ["allow-once", "allow-always", "deny"],
+            }
+          : {
+              kind,
+              title: kind === "plugin" ? "Plugin action" : "OpenClaw change",
+              description: "Apply the requested change",
+              ...(kind === "plugin" ? { severity: "warning" } : { proposalHash: "a".repeat(64) }),
+              allowedDecisions: params.allowedDecisions ?? ["allow-once", "deny"],
+            },
+    },
+  };
+}
+
+function terminalApprovalSnapshot(params: {
+  id: string;
+  decision: "allow-once" | "allow-always" | "deny";
+  resolverId?: string;
+}) {
+  const allowed = params.decision !== "deny";
+  return {
+    id: params.id,
+    status: allowed ? "allowed" : "denied",
+    decision: params.decision,
+    reason: "user",
+    urlPath: `/approve/${params.id}`,
+    createdAtMs: Date.now() - 1_000,
+    expiresAtMs: Date.now() + 60_000,
+    resolvedAtMs: Date.now(),
+    presentation: {
+      kind: "exec",
+      commandText: "echo ready",
+      allowedDecisions: ["allow-once", "allow-always", "deny"],
+    },
+    resolver: { kind: "device", id: params.resolverId ?? "device-1" },
+  };
+}
+
 function effectivePolicy(output: Record<string, unknown> = writtenJson()) {
   return requireRecord(output.effectivePolicy, "effective policy");
 }
@@ -167,8 +246,12 @@ function resetLocalSnapshot() {
 }
 
 vi.mock("./gateway-rpc.js", () => ({
-  callGatewayFromCli: (method: string, opts: unknown, params?: unknown) =>
-    mocks.callGatewayFromCli(method, opts, params),
+  callGatewayFromCli: (method: string, opts: unknown, params?: unknown, extra?: unknown) =>
+    mocks.callGatewayFromCli(method, opts, params, extra),
+}));
+
+vi.mock("../infra/device-identity.js", () => ({
+  loadOrCreateDeviceIdentity: () => mocks.loadOrCreateDeviceIdentity(),
 }));
 
 vi.mock("./nodes-cli/rpc.js", async () => {
@@ -255,6 +338,8 @@ describe("exec approvals CLI", () => {
     resetLocalSnapshot();
     runtimeErrors.length = 0;
     callGatewayFromCli.mockClear();
+    loadOrCreateDeviceIdentity.mockReset();
+    loadOrCreateDeviceIdentity.mockReturnValue({ deviceId: "cli-device" });
     readBestEffortConfig.mockClear();
     defaultRuntime.log.mockClear();
     defaultRuntime.error.mockClear();
@@ -300,6 +385,332 @@ describe("exec approvals CLI", () => {
       ),
     ).toHaveLength(1);
     expect(runtimeErrors).toHaveLength(0);
+  });
+
+  it("renders pending approvals from all three approval kinds", async () => {
+    const now = Date.now();
+    callGatewayFromCli.mockImplementation(async (method: string) => {
+      if (method === "exec.approval.list") {
+        return [
+          {
+            id: "exec-\u202E1",
+            request: {
+              command: `printf '${"x".repeat(120)}' \u001B]52;c;--osc-hidden-action\u0007 --full-command-tail`,
+              agentId: "m\u202Ea",
+              sessionKey: "agent:main:discord:dm:1",
+            },
+            createdAtMs: now - 5_000,
+            expiresAtMs: now + 60_000,
+          },
+        ];
+      }
+      if (method === "plugin.approval.list") {
+        return [
+          {
+            id: "plugin:1",
+            request: {
+              title: "Publish package",
+              description: "Publish the prepared plugin package",
+              agentId: "release",
+              sessionKey: "agent:release:main",
+            },
+            createdAtMs: now - 4_000,
+            expiresAtMs: now + 55_000,
+          },
+          {
+            id: "plugin:blank",
+            request: { title: " ", description: "\t" },
+            createdAtMs: now - 3_500,
+            expiresAtMs: now + 54_000,
+          },
+        ];
+      }
+      if (method === "openclaw.approval.list") {
+        return [
+          {
+            id: "system-agent:1",
+            request: {
+              title: "OpenClaw change",
+              description: "Change the system configuration",
+              command: "apply-system-change --force",
+              agentId: "main",
+              sessionKey: "agent:main:main",
+            },
+            createdAtMs: now - 3_000,
+            // The Gateway list is authoritative even when the CLI clock is ahead.
+            expiresAtMs: now - 500,
+          },
+        ];
+      }
+      return [];
+    });
+
+    await runApprovalsCommand(["approvals", "pending"]);
+
+    expect(callGatewayFromCli.mock.calls.map((call) => call[0])).toEqual([
+      "exec.approval.list",
+      "plugin.approval.list",
+      "openclaw.approval.list",
+    ]);
+    for (const call of callGatewayFromCli.mock.calls) {
+      expect(call[3]).toEqual({ scopes: ["operator.admin"] });
+    }
+    const output = runtimeOutput();
+    const execDisplayId = approvalDisplayId("exec-\u202E1");
+    expect(output).toContain("Pending approvals");
+    expect(output).toContain(execDisplayId);
+    expect(output).toContain("m\\u{202E}a");
+    expect(output).toContain(approvalDisplayId("plugin:1"));
+    expect(output).toContain(approvalDisplayId("system-agent:1"));
+    expect(output).toContain(approvalDisplayId("plugin:blank"));
+    expect(output).toContain("Publish package");
+    expect(output).toContain("Command: apply-system-change --force");
+    expect(output).toContain("\\u{9}");
+    expect(output).toContain("Full request text");
+    expect(output).toContain("--osc-hidden-action");
+    expect(output).toContain("\\u{1B}]52;c;");
+    expect(output).toContain("--full-command-tail");
+    expect(output).toContain("Agent / Session");
+    expect(output).toContain("Expires In");
+    expect(runtimeErrors).toHaveLength(0);
+  });
+
+  it("writes normalized pending approvals as JSON", async () => {
+    const now = Date.now();
+    callGatewayFromCli.mockImplementation(async (method: string) => {
+      if (method === "exec.approval.list") {
+        return [
+          {
+            id: "exec-json",
+            request: {
+              command: "uname -a\u001B]52;c;hidden-action\u0007",
+              agentId: "main",
+              sessionKey: "agent:main:main",
+            },
+            createdAtMs: now - 2_000,
+            expiresAtMs: now + 60_000,
+          },
+        ];
+      }
+      return [];
+    });
+
+    await runApprovalsCommand(["approvals", "pending", "--json"]);
+
+    expect(defaultRuntime.writeJson).toHaveBeenCalledTimes(1);
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(writtenJson(), 0);
+    expect(writtenJson()).toEqual({
+      approvals: [
+        {
+          id: "exec-json",
+          kind: "exec",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          createdAtMs: now - 2_000,
+          expiresAtMs: now + 60_000,
+          summary: "uname -a\u001B]52;c;hidden-action\u0007",
+        },
+      ],
+    });
+  });
+
+  it("resolves an approval and prints the settled decision and resolver", async () => {
+    const approvalId = "approval-\u202E1";
+    const displayId = approvalDisplayId(approvalId);
+    callGatewayFromCli.mockImplementation(
+      async (method: string, _opts: unknown, params?: unknown) => {
+        if (method === "approval.get") {
+          const requestedId = requireRecord(params, "approval lookup params").id;
+          if (requestedId === displayId) {
+            throw new Error("approval not found");
+          }
+          return pendingApprovalSnapshot({ id: approvalId });
+        }
+        if (method === "approval.resolve") {
+          return {
+            applied: true,
+            approval: terminalApprovalSnapshot({
+              id: approvalId,
+              decision: "allow-once",
+              resolverId: "device-\u202E1",
+            }),
+          };
+        }
+        return {};
+      },
+    );
+
+    await runApprovalsCommand(["approvals", "resolve", displayId, "allow-once"]);
+
+    expect(callGatewayFromCli.mock.calls[2]?.[0]).toBe("approval.resolve");
+    expect(callGatewayFromCli.mock.calls[2]?.[2]).toEqual({
+      id: approvalId,
+      kind: "exec",
+      decision: "allow-once",
+    });
+    for (const call of callGatewayFromCli.mock.calls) {
+      expect(call[3]).toEqual({
+        deviceIdentity: { deviceId: "cli-device" },
+        scopes: ["operator.admin", "operator.approvals"],
+      });
+    }
+    expect(runtimeOutput()).toContain(
+      `Approval ${displayId} resolved allow-once by device:device-\\u{202E}1`,
+    );
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
+  });
+
+  it("treats an already-resolved same decision as idempotent success", async () => {
+    const approvalId = "job\\u{41}";
+    callGatewayFromCli.mockImplementation(async (method: string) => {
+      if (method === "approval.get") {
+        return pendingApprovalSnapshot({ id: approvalId });
+      }
+      return {
+        applied: false,
+        approval: terminalApprovalSnapshot({
+          id: approvalId,
+          decision: "deny",
+          resolverId: "other-device",
+        }),
+      };
+    });
+
+    await runApprovalsCommand(["approvals", "resolve", approvalId, "deny"]);
+
+    expect(callGatewayFromCli.mock.calls[0]?.[2]).toEqual({ id: approvalId });
+    expect(callGatewayFromCli.mock.calls[1]?.[2]).toMatchObject({ id: approvalId });
+    expect(runtimeOutput()).toContain("already resolved (same decision: deny)");
+    expect(runtimeOutput()).toContain("device:other-device");
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
+  });
+
+  it("continues with shared credentials when device identity storage is unavailable", async () => {
+    loadOrCreateDeviceIdentity.mockImplementationOnce(() => {
+      throw new Error("read-only state directory");
+    });
+    callGatewayFromCli.mockImplementation(async (method: string) => {
+      if (method === "approval.get") {
+        return pendingApprovalSnapshot({ id: "approval-no-device" });
+      }
+      return {
+        applied: true,
+        approval: terminalApprovalSnapshot({
+          id: "approval-no-device",
+          decision: "deny",
+        }),
+      };
+    });
+
+    await runApprovalsCommand([
+      "approvals",
+      "resolve",
+      "approval-no-device",
+      "deny",
+      "--url",
+      "ws://127.0.0.1:18789",
+      "--token",
+      "test-token",
+    ]);
+
+    expect(callGatewayFromCli).toHaveBeenCalledTimes(2);
+    for (const call of callGatewayFromCli.mock.calls) {
+      expect(call[3]).toEqual({ scopes: ["operator.admin", "operator.approvals"] });
+    }
+  });
+
+  it("rejects an id token that also exists as a raw approval id", async () => {
+    const displayId = approvalDisplayId("foo");
+    callGatewayFromCli.mockImplementation(
+      async (method: string, _opts: unknown, params?: unknown) => {
+        if (method !== "approval.get") {
+          throw new Error("resolve must not be called");
+        }
+        const id = String(requireRecord(params, "approval lookup params").id);
+        return pendingApprovalSnapshot({ id });
+      },
+    );
+
+    await expect(runApprovalsCommand(["approvals", "resolve", displayId, "deny"])).rejects.toThrow(
+      "__exit__:1",
+    );
+
+    expect(runtimeErrors[0]).toContain("matches both a raw id and a displayed id token");
+    expect(callGatewayFromCli).toHaveBeenCalledTimes(2);
+  });
+
+  it("exits non-zero when an approval already has a different decision", async () => {
+    callGatewayFromCli.mockImplementation(async (method: string) => {
+      if (method === "approval.get") {
+        return pendingApprovalSnapshot({ id: "approval-3" });
+      }
+      return {
+        applied: false,
+        approval: terminalApprovalSnapshot({ id: "approval-3", decision: "deny" }),
+      };
+    });
+
+    await expect(
+      runApprovalsCommand(["approvals", "resolve", "approval-3", "allow-once"]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors[0]).toContain("already resolved with deny by device:device-1");
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("exits non-zero when an approval is not found", async () => {
+    callGatewayFromCli.mockRejectedValue(new Error("approval not found"));
+
+    await expect(runApprovalsCommand(["approvals", "resolve", "missing", "deny"])).rejects.toThrow(
+      "__exit__:1",
+    );
+
+    expect(runtimeErrors[0]).toBe("approval not found");
+    expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets the gateway decide that an approval expired", async () => {
+    callGatewayFromCli.mockImplementation(async (method: string) => {
+      if (method === "approval.get") {
+        return pendingApprovalSnapshot({ id: "expired-1", expiresAtMs: Date.now() - 1 });
+      }
+      const pending = pendingApprovalSnapshot({ id: "expired-1" }).approval;
+      return {
+        applied: false,
+        approval: {
+          ...pending,
+          status: "expired",
+          reason: "timeout",
+          resolvedAtMs: pending.expiresAtMs,
+        },
+      };
+    });
+
+    await expect(
+      runApprovalsCommand(["approvals", "resolve", "expired-1", "deny"]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors[0]).toBe(`Approval ${approvalDisplayId("expired-1")} expired.`);
+    expect(callGatewayFromCli).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects decisions unavailable for the approval kind", async () => {
+    callGatewayFromCli.mockResolvedValueOnce(
+      pendingApprovalSnapshot({
+        id: "system-agent:2",
+        kind: "system-agent",
+        allowedDecisions: ["allow-once", "deny"],
+      }),
+    );
+
+    await expect(
+      runApprovalsCommand(["approvals", "resolve", "system-agent:2", "allow-always"]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors[0]).toContain(
+      "allow-always is not allowed for system-agent approvals; allowed decisions: allow-once, deny",
+    );
+    expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
   });
 
   it("adds effective policy to json output", async () => {
