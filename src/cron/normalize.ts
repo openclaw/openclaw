@@ -9,6 +9,7 @@ import {
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { sanitizeAgentId } from "../routing/session-key.js";
 import { isRecord } from "../utils.js";
+import { shouldDefaultCronDeliveryToAnnounce } from "./delivery-defaults.js";
 import {
   TimeoutSecondsFieldSchema,
   TrimmedNonEmptyStringFieldSchema,
@@ -525,26 +526,6 @@ function normalizeWakeMode(raw: unknown) {
   return undefined;
 }
 
-/**
- * Returns true when a cron job's session target implies detached/isolated-agent
- * delivery semantics, meaning the job should get an announce delivery default
- * unless the caller explicitly set one.
- *
- * All three callers (normalize, delivery-plan, and initial-delivery service)
- * use this single predicate so the contract stays consistent.
- */
-export function isDetachedDeliveryTarget(sessionTarget: string, payloadKind: string): boolean {
-  if (payloadKind !== "agentTurn" && payloadKind !== "command") {
-    return false;
-  }
-  return (
-    sessionTarget === "isolated" ||
-    sessionTarget === "current" ||
-    sessionTarget.startsWith("session:") ||
-    sessionTarget === ""
-  );
-}
-
 /** Normalizes raw cron job input without deciding whether create-time defaults apply. */
 export function normalizeCronJobInput(
   raw: unknown,
@@ -740,15 +721,10 @@ export function normalizeCronJobInput(
     const payload = isRecord(next.payload) ? next.payload : null;
     const payloadKind = payload && typeof payload.kind === "string" ? payload.kind : "";
     const sessionTarget = typeof next.sessionTarget === "string" ? next.sessionTarget : "";
-    // Resolved "current" and custom session ids still use isolated-agent
-    // delivery semantics, so they get the same default announce behavior.
-    const isDetachedDeliveryJob = isDetachedDeliveryTarget(sessionTarget, payloadKind);
+    // Omitted output targets were canonicalized to "isolated" above. Resolved
+    // "current" and custom session ids share those announce semantics.
     const hasDelivery = "delivery" in next && next.delivery !== undefined;
-    if (
-      !hasDelivery &&
-      isDetachedDeliveryJob &&
-      (payloadKind === "agentTurn" || payloadKind === "command")
-    ) {
+    if (!hasDelivery && shouldDefaultCronDeliveryToAnnounce({ payloadKind, sessionTarget })) {
       next.delivery = { mode: "announce" };
     }
   }
@@ -777,4 +753,3 @@ export function normalizeCronJobPatch(
     ...options,
   }) as CronJobPatch | null;
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -7,7 +7,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { CronFailureDestinationConfig } from "../config/types.cron.js";
 import { resolveTargetPrefixedChannel } from "../infra/outbound/channel-target-prefix.js";
-import { isDetachedDeliveryTarget } from "./normalize.js";
+import { shouldDefaultCronDeliveryToAnnounce } from "./delivery-defaults.js";
 import type { CronDelivery, CronDeliveryMode, CronJob, CronMessageChannel } from "./types.js";
 
 /** Normalized routing plan for a cron job's primary delivery behavior. */
@@ -105,12 +105,14 @@ export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
   }
 
   // Isolated/current/session output jobs default to announce delivery so their
-  // result reaches the initiating session unless the job opts out.
-  const isDetachedOutputJob = isDetachedDeliveryTarget(
-    typeof job.sessionTarget === "string" ? job.sessionTarget : "",
-    job.payload.kind,
-  );
-  const resolvedMode = isDetachedOutputJob ? "announce" : "none";
+  // result reaches the initiating session unless the job opts out. Keep this
+  // aligned with create-time normalization and direct service callers.
+  const resolvedMode = shouldDefaultCronDeliveryToAnnounce({
+    payloadKind: job.payload.kind,
+    sessionTarget: job.sessionTarget,
+  })
+    ? "announce"
+    : "none";
 
   return {
     mode: resolvedMode,
