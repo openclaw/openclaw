@@ -1004,28 +1004,25 @@ describe("loadWorkspaceBootstrapFiles", () => {
       content: "# AGENTS.md\n\nkeep me\n",
     });
 
+    // The bounded fd reader consumes the descriptor via fs.read; inject the
+    // transient failure at that seam.
     const originalRead = syncFs.read.bind(syncFs);
     let readCalls = 0;
     let threwTransient = false;
-    const readSpy = vi.spyOn(syncFs, "read").mockImplementation(((
-      fd: number,
-      buffer: Buffer,
-      offset: number,
-      length: number,
-      position: number | null,
-      callback: (error: NodeJS.ErrnoException | null, bytesRead: number, buffer: Buffer) => void,
-    ) => {
+    const readSpy = vi.spyOn(syncFs, "read").mockImplementation(((...args: unknown[]) => {
       readCalls += 1;
       if (!threwTransient) {
         threwTransient = true;
-        const error = Object.assign(new Error("Unknown system error -11: read"), {
-          code: "EAGAIN",
-          errno: -11,
-        });
-        queueMicrotask(() => callback(error, 0, buffer));
+        const callback = args.at(-1) as (error: Error) => void;
+        callback(
+          Object.assign(new Error("Unknown system error -11: read"), {
+            code: "EAGAIN",
+            errno: -11,
+          }),
+        );
         return;
       }
-      return originalRead(fd, buffer, offset, length, position, callback);
+      (originalRead as (...forwarded: unknown[]) => void)(...args);
     }) as typeof syncFs.read);
 
     try {
@@ -1050,19 +1047,14 @@ describe("loadWorkspaceBootstrapFiles", () => {
       content: "# AGENTS.md\n",
     });
 
-    const readSpy = vi.spyOn(syncFs, "read").mockImplementation(((
-      _fd: number,
-      buffer: Buffer,
-      _offset: number,
-      _length: number,
-      _position: number | null,
-      callback: (error: NodeJS.ErrnoException | null, bytesRead: number, buffer: Buffer) => void,
-    ) => {
-      const error = Object.assign(new Error("Unknown system error -11: read"), {
-        code: "EAGAIN",
-        errno: -11,
-      });
-      queueMicrotask(() => callback(error, 0, buffer));
+    const readSpy = vi.spyOn(syncFs, "read").mockImplementation(((...args: unknown[]) => {
+      const callback = args.at(-1) as (error: Error) => void;
+      callback(
+        Object.assign(new Error("Unknown system error -11: read"), {
+          code: "EAGAIN",
+          errno: -11,
+        }),
+      );
     }) as typeof syncFs.read);
 
     try {
