@@ -33,6 +33,12 @@ import { formatErrorMessage } from "./errors.js";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
 import { writeJson } from "./json-files.js";
 import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
+import {
+  createLegacyAuditBackupSnapshots,
+  hasLegacyAuditBackupSources,
+  isLegacyAuditMigrationBackupPath,
+} from "./state-migrations.audit-backup.js";
+import { withLegacyAuditMigrationLease } from "./state-migrations.audit-coordination.js";
 
 const loadTarRuntime = createLazyRuntimeModule(() => import("tar"));
 
@@ -771,19 +777,45 @@ export async function createBackupArchive(
       .map((asset) => asset.sourcePath),
   ].filter((entry) => stateAsset && isPathWithin(entry, stateAsset.sourcePath));
   try {
-    const stateSqliteBackup = stateAsset
-      ? await createStateSqliteBackupPlan({
-          stateDir: stateAsset.sourcePath,
-          tempDir,
-          preservedStatePaths,
-        })
-      : { snapshots: [], discoveredSourcePaths: new Set<string>() };
+    // Capture every legacy file first, including active and claimed sources.
+    // A concurrent Doctor then leaves each row in this snapshot, the later
+    // SQLite snapshot, or both; restore-side import keys make overlap harmless.
+    const hasLegacyAuditSources = stateAsset
+      ? await hasLegacyAuditBackupSources(stateAsset.sourcePath)
+      : false;
+    const createSnapshotPlans = async () => ({
+      legacyAuditSnapshots:
+        stateAsset && hasLegacyAuditSources
+          ? await createLegacyAuditBackupSnapshots({
+              stateDir: stateAsset.sourcePath,
+              tempDir,
+            })
+          : [],
+      stateSqliteBackup: stateAsset
+        ? await createStateSqliteBackupPlan({
+            stateDir: stateAsset.sourcePath,
+            tempDir,
+            preservedStatePaths,
+          })
+        : { snapshots: [], discoveredSourcePaths: new Set<string>() },
+    });
+    const snapshotPlans =
+      stateAsset && hasLegacyAuditSources
+        ? await withLegacyAuditMigrationLease(stateAsset.sourcePath, createSnapshotPlans)
+        : await createSnapshotPlans();
+    const { legacyAuditSnapshots, stateSqliteBackup } = snapshotPlans;
     const sourcePathRemaps = new Map<string, string>();
-    const skippedSqliteSourcePaths = new Set<string>();
+    const skippedStateSourcePaths = new Set<string>();
     for (const snapshot of stateSqliteBackup.snapshots) {
       sourcePathRemaps.set(path.resolve(snapshot.sourcePath), snapshot.archiveSourcePath);
       for (const skippedSourcePath of snapshot.skippedSourcePaths) {
-        skippedSqliteSourcePaths.add(skippedSourcePath);
+        skippedStateSourcePaths.add(skippedSourcePath);
+      }
+    }
+    for (const snapshot of legacyAuditSnapshots) {
+      sourcePathRemaps.set(path.resolve(snapshot.sourcePath), snapshot.archiveSourcePath);
+      for (const skippedSourcePath of snapshot.skippedSourcePaths) {
+        skippedStateSourcePaths.add(skippedSourcePath);
       }
     }
     const manifest = buildManifest({
@@ -822,13 +854,19 @@ export async function createBackupArchive(
       if (stateFilter && !stateFilter(entryPath)) {
         return false;
       }
+      if (
+        stateAsset &&
+        isLegacyAuditMigrationBackupPath(resolvedEntryPath, stateAsset.sourcePath)
+      ) {
+        return false;
+      }
       const sqliteSourceKind = stateAsset
         ? classifyStateSqliteBackupSourcePath(resolvedEntryPath, stateAsset.sourcePath)
         : undefined;
       if (sqliteSourceKind === "excluded") {
         return false;
       }
-      if (skippedSqliteSourcePaths.has(resolvedEntryPath)) {
+      if (skippedStateSourcePaths.has(resolvedEntryPath)) {
         return false;
       }
       if (
@@ -878,6 +916,7 @@ export async function createBackupArchive(
             [
               manifestPath,
               ...stateSqliteBackup.snapshots.map((snapshot) => snapshot.sourcePath),
+              ...legacyAuditSnapshots.map((snapshot) => snapshot.sourcePath),
               ...result.assets.map((asset) => asset.sourcePath),
             ],
           ),

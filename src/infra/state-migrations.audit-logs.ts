@@ -17,19 +17,26 @@ import {
 import { root as createFsSafeRoot } from "./fs-safe.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import { createSqliteAuditRecordStore } from "./sqlite-audit-record-store.js";
+import { withLegacyAuditMigrationLease } from "./state-migrations.audit-coordination.js";
 import {
   hasLegacyAuditRawCheckpointCapacity,
-  legacyAuditRawCheckpointKey,
-  legacyAuditRawCheckpointsMatch,
   legacyAuditSourceGenerationKey,
-  openLegacyAuditRawCheckpointStore,
-  type LegacyAuditFileCheckpoint,
-  type LegacyAuditRawCheckpoint,
 } from "./state-migrations.audit-checkpoints.js";
 import type {
   LegacyAuditLogSource,
   LegacyAuditLogsDetection,
 } from "./state-migrations.audit-logs.types.js";
+import {
+  finalizeLegacyAuditRecoveryArchive,
+  findPreviousLegacyAuditRawCheckpoint,
+  readLegacyAuditSourceSnapshot,
+  recordLegacyAuditRawCheckpoint,
+  recordsAfterLegacyAuditRawCheckpoint,
+  restoreInterruptedAuditRecoveryArchive,
+  scrubLegacyAuditRecoveryArchive,
+  type AuditMigrationRoot,
+  type LegacyAuditSourceSnapshot,
+} from "./state-migrations.audit-recovery.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
 
 type PreparedAuditRecord = {
@@ -75,7 +82,7 @@ type PreparedLegacyAuditRecords =
       sanitizedJsonl: string;
     };
 
-function prepareLegacyAuditRecords(
+export function prepareLegacyAuditRecords(
   source: LegacyAuditLogSource,
   raw: string,
   sourceGeneration: string,
@@ -124,118 +131,6 @@ function prepareLegacyAuditRecords(
         ? `${records.map((record) => JSON.stringify(record.value)).join("\n")}\n`
         : "",
   };
-}
-
-type AuditMigrationRoot = Awaited<ReturnType<typeof createFsSafeRoot>>;
-
-type LegacyAuditSourceSnapshot = LegacyAuditFileCheckpoint & { raw: string };
-
-async function readLegacyAuditSourceSnapshot(
-  root: AuditMigrationRoot,
-  relativePath: string,
-): Promise<LegacyAuditSourceSnapshot> {
-  const opened = await root.open(relativePath);
-  try {
-    const before = await opened.handle.stat();
-    if (!before.isFile()) {
-      throw new Error("legacy audit source is not a regular file");
-    }
-    const raw = await opened.handle.readFile({ encoding: "utf8" });
-    const after = await opened.handle.stat();
-    const beforeCheckpoint = {
-      dev: before.dev,
-      ino: before.ino,
-      mtimeMs: before.mtimeMs,
-      size: before.size,
-    };
-    const afterCheckpoint = {
-      dev: after.dev,
-      ino: after.ino,
-      mtimeMs: after.mtimeMs,
-      size: after.size,
-    };
-    if (!legacyAuditRawCheckpointsMatch(beforeCheckpoint, afterCheckpoint)) {
-      throw new Error("legacy audit source changed while Doctor was reading it");
-    }
-    return { ...afterCheckpoint, raw };
-  } finally {
-    await opened.handle.close();
-  }
-}
-
-async function recordLegacyAuditRawCheckpoint(params: {
-  stateDir: string;
-  rawPath: string;
-  rawRelativePath: string;
-  root: AuditMigrationRoot;
-  snapshot: LegacyAuditSourceSnapshot;
-  recordCount: number;
-  warnings: string[];
-}): Promise<void> {
-  try {
-    const opened = await params.root.open(params.rawRelativePath);
-    let checkpoint: LegacyAuditRawCheckpoint;
-    try {
-      const stat = await opened.handle.stat();
-      checkpoint = {
-        dev: stat.dev,
-        ino: stat.ino,
-        mtimeMs: stat.mtimeMs,
-        size: stat.size,
-        generationKey: legacyAuditSourceGenerationKey(params.rawRelativePath),
-        recordCount: params.recordCount,
-        contentHash: createHash("sha256").update(params.snapshot.raw).digest("hex"),
-      };
-    } finally {
-      await opened.handle.close();
-    }
-    if (!legacyAuditRawCheckpointsMatch(checkpoint, params.snapshot)) {
-      params.warnings.push(
-        `Retained changed legacy audit backup ${params.rawPath}; rerun openclaw doctor --fix to import its later rows`,
-      );
-      return;
-    }
-    openLegacyAuditRawCheckpointStore(params.stateDir).upsert(
-      legacyAuditRawCheckpointKey(checkpoint),
-      checkpoint,
-    );
-  } catch (error) {
-    params.warnings.push(
-      `Failed recording legacy audit backup checkpoint for ${params.rawPath}: ${String(error)}`,
-    );
-  }
-}
-
-function findPreviousLegacyAuditRawCheckpoint(
-  stateDir: string,
-  rawRelativePath: string,
-): LegacyAuditRawCheckpoint | undefined {
-  const generationKey = legacyAuditSourceGenerationKey(rawRelativePath);
-  return openLegacyAuditRawCheckpointStore(stateDir)
-    .entries()
-    .toReversed()
-    .find((entry) => entry.value.generationKey === generationKey)?.value;
-}
-
-function recordsAfterLegacyAuditRawCheckpoint(params: {
-  checkpoint: LegacyAuditRawCheckpoint;
-  snapshot: LegacyAuditSourceSnapshot;
-  records: readonly PreparedAuditRecord[];
-}): readonly PreparedAuditRecord[] | undefined {
-  const rawBytes = Buffer.from(params.snapshot.raw, "utf8");
-  if (rawBytes.length < params.checkpoint.size) {
-    return undefined;
-  }
-  const prefixHash = createHash("sha256")
-    .update(rawBytes.subarray(0, params.checkpoint.size))
-    .digest("hex");
-  if (
-    prefixHash !== params.checkpoint.contentHash ||
-    params.records.length < params.checkpoint.recordCount
-  ) {
-    return undefined;
-  }
-  return params.records.slice(params.checkpoint.recordCount);
 }
 
 type AuditArchiveRelativePaths = {
@@ -299,11 +194,16 @@ async function archiveLegacyAuditClaim(params: {
   source: LegacyAuditLogSource;
   claimRelativePath: string;
   archivePaths: { sanitized: string; raw: string; resumeSanitized: boolean };
+  snapshot: LegacyAuditSourceSnapshot;
   sanitizedJsonl: string;
   root: AuditMigrationRoot;
   changes: string[];
   warnings: string[];
-}): Promise<{ moved: boolean; rawRelativePath?: string }> {
+}): Promise<{
+  moved: boolean;
+  rawRelativePath?: string;
+  scrubbedSnapshot?: LegacyAuditSourceSnapshot;
+}> {
   let moved = false;
   let sanitizedCreated = false;
   const archivePaths = params.archivePaths;
@@ -349,9 +249,21 @@ async function archiveLegacyAuditClaim(params: {
       return { moved: false };
     }
     moved = true;
+    const scrubbedSnapshot = await scrubLegacyAuditRecoveryArchive({
+      root: params.root,
+      relativePath: archivePaths.raw,
+      expectedSnapshot: params.snapshot,
+      label: params.source.label,
+      warnings: params.warnings,
+    });
     params.changes.push(
-      `Archived sanitized ${params.source.label} legacy source → ${path.join(path.dirname(params.source.logicalSourcePath), path.basename(archivePaths.sanitized))}; preserved original inode → ${path.join(path.dirname(params.source.logicalSourcePath), path.basename(archivePaths.raw))}`,
+      `Archived sanitized ${params.source.label} legacy source → ${path.join(path.dirname(params.source.logicalSourcePath), path.basename(archivePaths.sanitized))}; ${scrubbedSnapshot ? "scrubbed same-inode append recovery archive" : "retained same-inode append recovery archive for Doctor retry"} → ${path.join(path.dirname(params.source.logicalSourcePath), path.basename(archivePaths.raw))}`,
     );
+    return {
+      moved: true,
+      rawRelativePath: archivePaths.raw,
+      ...(scrubbedSnapshot ? { scrubbedSnapshot } : {}),
+    };
   } catch (error) {
     params.warnings.push(
       `Failed archiving ${params.source.label} ${params.source.logicalSourcePath}: ${String(error)}`,
@@ -473,6 +385,16 @@ async function migrateLegacyAuditLogSource(params: {
       );
       return { changes, warnings };
     }
+    if (
+      !(await restoreInterruptedAuditRecoveryArchive({
+        root,
+        relativePath: claimRelativePath,
+        label: params.source.label,
+        warnings,
+      }))
+    ) {
+      return { changes, warnings };
+    }
     const snapshot = await readLegacyAuditSourceSnapshot(root, claimRelativePath);
     const prepared = prepareLegacyAuditRecords(
       params.source,
@@ -561,15 +483,52 @@ async function migrateLegacyAuditLogSource(params: {
           `Recovered ${missing.length} later ${params.source.label} row(s) from ${params.source.sourcePath}${retentionNote}`,
         );
       }
-      await recordLegacyAuditRawCheckpoint({
+      const scrubbedSnapshot = await scrubLegacyAuditRecoveryArchive({
+        root,
+        relativePath: claimRelativePath,
+        expectedSnapshot: snapshot,
+        label: params.source.label,
+        warnings,
+      });
+      if (!scrubbedSnapshot) {
+        return { changes, warnings };
+      }
+      const scrubbedRecords = prepareLegacyAuditRecords(
+        params.source,
+        scrubbedSnapshot.raw,
+        legacyAuditSourceGenerationKey(rawArchiveRelativePath),
+      );
+      if (!scrubbedRecords.ok) {
+        warnings.push(...scrubbedRecords.warnings);
+        warnings.push(
+          `Retained uncheckpointed ${params.source.label} recovery archive; rerun openclaw doctor --fix`,
+        );
+        return { changes, warnings };
+      }
+      if (scrubbedRecords.records.length !== 0) {
+        warnings.push(
+          `A legacy ${params.source.label} writer appended during recovery; rerun openclaw doctor --fix to import the retained rows`,
+        );
+        return { changes, warnings };
+      }
+      const checkpointed = await recordLegacyAuditRawCheckpoint({
         stateDir: params.stateDir,
         rawPath: params.source.sourcePath,
         rawRelativePath: claimRelativePath,
         root,
-        snapshot,
-        recordCount: prepared.records.length,
+        snapshot: scrubbedSnapshot,
+        recordCount: 0,
         warnings,
       });
+      if (checkpointed) {
+        await finalizeLegacyAuditRecoveryArchive({ root, relativePath: claimRelativePath }).catch(
+          (error: unknown) => {
+            warnings.push(
+              `Failed removing completed ${params.source.label} recovery journal: ${String(error)}`,
+            );
+          },
+        );
+      }
       return { changes, warnings };
     }
     if (!archivePaths) {
@@ -582,6 +541,7 @@ async function migrateLegacyAuditLogSource(params: {
       source: params.source,
       claimRelativePath,
       archivePaths,
+      snapshot,
       sanitizedJsonl: prepared.sanitizedJsonl,
       root,
       changes,
@@ -592,16 +552,47 @@ async function migrateLegacyAuditLogSource(params: {
       changes.pop();
       return { changes, warnings };
     }
+    if (!archived.scrubbedSnapshot) {
+      return { changes, warnings };
+    }
+    const scrubbedRecords = prepareLegacyAuditRecords(
+      params.source,
+      archived.scrubbedSnapshot.raw,
+      legacyAuditSourceGenerationKey(archived.rawRelativePath),
+    );
+    if (!scrubbedRecords.ok) {
+      warnings.push(...scrubbedRecords.warnings);
+      warnings.push(
+        `Retained uncheckpointed ${params.source.label} recovery archive; rerun openclaw doctor --fix`,
+      );
+      return { changes, warnings };
+    }
+    if (scrubbedRecords.records.length !== 0) {
+      warnings.push(
+        `A legacy ${params.source.label} writer appended during migration; rerun openclaw doctor --fix to import the retained rows`,
+      );
+      return { changes, warnings };
+    }
     const rawPath = path.join(params.stateDir, archived.rawRelativePath);
-    await recordLegacyAuditRawCheckpoint({
+    const checkpointed = await recordLegacyAuditRawCheckpoint({
       stateDir: params.stateDir,
       rawPath,
       rawRelativePath: archived.rawRelativePath,
       root,
-      snapshot,
-      recordCount: prepared.records.length,
+      snapshot: archived.scrubbedSnapshot,
+      recordCount: 0,
       warnings,
     });
+    if (checkpointed) {
+      await finalizeLegacyAuditRecoveryArchive({
+        root,
+        relativePath: archived.rawRelativePath,
+      }).catch((error: unknown) => {
+        warnings.push(
+          `Failed removing completed ${params.source.label} recovery journal: ${String(error)}`,
+        );
+      });
+    }
     if ((await root.exists(sourceRelativePath)) && !params.recreatedSourceScheduled) {
       warnings.push(
         `An old writer recreated ${params.source.label} at ${params.source.logicalSourcePath}; rerun openclaw doctor --fix to import the retained rows`,
@@ -657,26 +648,30 @@ export async function migrateLegacyAuditLogs(params: {
     return { changes, warnings };
   }
   try {
-    for (const [index, source] of params.detected.sources.entries()) {
-      try {
-        const recreatedSourceScheduled = params.detected.sources
-          .slice(index + 1)
-          .some(
-            (candidate) =>
-              candidate.storage === "active" &&
-              candidate.logicalSourcePath === source.logicalSourcePath,
-          );
-        const result = await migrateLegacyAuditLogSource({
-          source,
-          stateDir: params.stateDir,
-          ...(recreatedSourceScheduled ? { recreatedSourceScheduled: true } : {}),
-        });
-        changes.push(...result.changes);
-        warnings.push(...result.warnings);
-      } catch (error) {
-        warnings.push(`Failed migrating ${source.label}: ${String(error)}`);
+    await withLegacyAuditMigrationLease(params.stateDir, async () => {
+      for (const [index, source] of params.detected.sources.entries()) {
+        try {
+          const recreatedSourceScheduled = params.detected.sources
+            .slice(index + 1)
+            .some(
+              (candidate) =>
+                candidate.storage === "active" &&
+                candidate.logicalSourcePath === source.logicalSourcePath,
+            );
+          const result = await migrateLegacyAuditLogSource({
+            source,
+            stateDir: params.stateDir,
+            ...(recreatedSourceScheduled ? { recreatedSourceScheduled: true } : {}),
+          });
+          changes.push(...result.changes);
+          warnings.push(...result.warnings);
+        } catch (error) {
+          warnings.push(`Failed migrating ${source.label}: ${String(error)}`);
+        }
       }
-    }
+    });
+  } catch (error) {
+    warnings.push(`Skipped legacy audit migration because coordination failed: ${String(error)}`);
   } finally {
     await lock.release();
   }

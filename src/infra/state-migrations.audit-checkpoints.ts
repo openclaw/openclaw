@@ -209,11 +209,15 @@ export function detectLegacyAuditLogs(params: {
       const rawRelativePath = path.relative(path.resolve(params.stateDir), rawPath);
       const generationKey = legacyAuditSourceGenerationKey(rawRelativePath);
       const checkpoint = statLegacyAuditRawCheckpoint(rawPath);
+      const hasRecoveryJournal =
+        statLegacyAuditRawCheckpoint(`${rawPath}.doctor-scrub-restore`) !== undefined;
       if (
+        !hasRecoveryJournal &&
         checkpoint &&
         loadCheckpoints().some(
           (candidate) =>
             candidate.generationKey === generationKey &&
+            candidate.recordCount === 0 &&
             legacyAuditRawCheckpointsMatch(candidate, checkpoint) &&
             legacyAuditRawCheckpointIsCurrent(rawPath, candidate),
         )

@@ -28,4 +28,11 @@ export function sanitizeOpenClawGlobalStateSnapshot(database: DatabaseSync): voi
     // that is still live, so restore cannot prolong its original retention.
     database.prepare("DELETE FROM plugin_blob_entries WHERE expires_at IS NOT NULL").run(); // sqlite-allow-raw -- Offline snapshot maintenance boundary.
   }
+  if (tableExists(database, "diagnostic_events")) {
+    // Backup replaces each legacy raw append archive with sanitized JSONL.
+    // Its byte checkpoint cannot describe that replacement and must be rebuilt by Doctor.
+    database
+      .prepare("DELETE FROM diagnostic_events WHERE scope = ?") // sqlite-allow-raw -- Offline snapshot maintenance boundary.
+      .run("migration.legacy-audit-raw");
+  }
 }
