@@ -646,7 +646,7 @@ function createChatProps(
     onSend: () => undefined,
     onCompact: () => undefined,
     onToggleRealtimeTalk: () => undefined,
-    onToggleRealtimeVideo: () => undefined,
+    onToggleRealtimeCamera: () => undefined,
     onDismissError: () => undefined,
     onAbort: () => undefined,
     onQueueRemove: () => undefined,
@@ -2158,23 +2158,37 @@ describe("chat voice controls", () => {
     await i18n.setLocale("en");
   });
 
-  it("keeps voice input visible without a second dictation control", () => {
+  it("shows one mic button for starting realtime talk", () => {
     const container = renderChatView();
 
     requireElement(container, '[aria-label="Start voice input"]', "voice input button");
-    requireElement(container, '[aria-label="Start video talk"]', "video talk button");
+    expect(container.querySelector('[aria-label="Start video talk"]')).toBeNull();
     expect(container.querySelector('[aria-label="Voice input"]')).toBeNull();
   });
 
-  it("starts Video Talk separately and renders the live camera preview", () => {
-    const onToggleRealtimeVideo = vi.fn();
+  it("toggles camera inside a video-capable voice session and renders the preview", () => {
+    const onToggleRealtimeCamera = vi.fn();
     const stream = {} as MediaStream;
-    const container = renderChatView({
-      onToggleRealtimeVideo,
-      realtimeTalkVideoStream: stream,
+    let container = renderChatView({
+      realtimeTalkActive: true,
+      realtimeTalkStatus: "listening",
+      realtimeTalkVideoCapable: true,
+      onToggleRealtimeCamera,
     });
 
-    requireElement(container, '[aria-label="Start video talk"]', "video talk button").dispatchEvent(
+    requireElement(container, '[aria-label="Turn camera on"]', "camera on button").dispatchEvent(
+      new MouseEvent("click", { bubbles: true }),
+    );
+    expect(onToggleRealtimeCamera).toHaveBeenCalledOnce();
+
+    container = renderChatView({
+      realtimeTalkActive: true,
+      realtimeTalkStatus: "listening",
+      realtimeTalkVideoCapable: true,
+      realtimeTalkVideoStream: stream,
+      onToggleRealtimeCamera,
+    });
+    requireElement(container, '[aria-label="Turn camera off"]', "camera off button").dispatchEvent(
       new MouseEvent("click", { bubbles: true }),
     );
     const preview = requireElement(
@@ -2183,7 +2197,7 @@ describe("chat voice controls", () => {
       "camera preview",
     ) as HTMLVideoElement;
 
-    expect(onToggleRealtimeVideo).toHaveBeenCalledOnce();
+    expect(onToggleRealtimeCamera).toHaveBeenCalledTimes(2);
     expect(preview.srcObject).toBe(stream);
     expect(preview.autoplay).toBe(true);
     expect(preview.muted).toBe(true);
@@ -4007,6 +4021,39 @@ describe("chat model controls", () => {
     modelOption?.click();
 
     expect(onModelSelect).toHaveBeenCalledWith(modelOption?.dataset.chatModelOption, "main");
+  });
+
+  it("marks the inherited default muted and resets an override from the provenance row", () => {
+    const { state } = createChatHeaderState({
+      model: null,
+      models: [
+        { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
+        { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
+      ],
+    });
+    const container = document.createElement("div");
+    render(renderChatModelControls(createChatModelControlsProps(state)), container);
+
+    expect(
+      container.querySelector(".chat-controls__model-provenance-value--inherit"),
+    ).not.toBeNull();
+    expect(container.querySelector("[data-chat-model-reset]")).toBeNull();
+
+    const onModelSelect = vi.fn(async () => true);
+    render(
+      renderChatModelControls({
+        ...createChatModelControlsProps(state),
+        modelOverrides: { main: "openai/gpt-5.4" },
+        onModelSelect,
+      }),
+      container,
+    );
+
+    expect(container.querySelector(".chat-controls__model-provenance-value--inherit")).toBeNull();
+    const reset = container.querySelector<HTMLButtonElement>("[data-chat-model-reset]");
+    expect(reset).toBeInstanceOf(HTMLButtonElement);
+    reset?.click();
+    expect(onModelSelect).toHaveBeenCalledWith("", "main");
   });
 
   it("hides model choices for locked sessions while preserving reasoning and speed", () => {

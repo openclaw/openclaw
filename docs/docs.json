@@ -1750,7 +1750,6 @@
                 "pages": [
                   "web/index",
                   "web/control-ui",
-                  "web/workspaces",
                   "web/dashboard",
                   "web/webchat",
                   "web/tui",

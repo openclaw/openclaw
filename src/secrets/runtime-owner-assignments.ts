@@ -1,4 +1,7 @@
 /** Resolves SecretRef assignments atomically by owning runtime surface. */
+import { isDeepStrictEqual } from "node:util";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { SecretRef } from "../config/types.secrets.js";
 import { toErrorObject } from "../infra/errors.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { secretRefKey } from "./ref-contract.js";
@@ -8,15 +11,57 @@ import {
   isSecretResolutionError,
 } from "./resolve-errors.js";
 import { resolveSecretRefValues, resolveSecretRefValuesSettledByProvider } from "./resolve.js";
-import type { DegradedSecretOwner } from "./runtime-degraded-state.js";
+import { getSecretAssignmentSource } from "./runtime-assignment-provenance.js";
+import { resolveAuthProfileSecretOwnerId } from "./runtime-auth-profile-owner.js";
+import type {
+  DegradedSecretOwner,
+  SecretDegradationReason,
+  SecretOwnerRefState,
+} from "./runtime-degraded-state.js";
+import { associateSecretResolutionErrorOwners } from "./runtime-degraded-state.js";
 import {
   applyResolvedAssignments,
+  getSecretAssignmentValidationFailures,
   pushWarning,
   type ResolverContext,
   type SecretAssignment,
 } from "./runtime-shared.js";
+import {
+  getActiveSecretsRuntimeSnapshot,
+  hasSameSecretProviderDefinition,
+} from "./runtime-state.js";
 
 type SecretResolutionOptions = Parameters<typeof resolveSecretRefValues>[1];
+
+/** Classifies whether an unresolved owner has an unchanged active SecretRef snapshot. */
+export function classifySecretOwnerDegradationState(params: {
+  ownerKind: DegradedSecretOwner["ownerKind"];
+  ownerId: string;
+  refs: SecretRef[];
+  config: OpenClawConfig;
+}): "cold" | "stale" {
+  const active = getActiveSecretsRuntimeSnapshot();
+  if (
+    !active ||
+    active.degradedOwners?.some(
+      (entry) => entry.ownerKind === params.ownerKind && entry.ownerId === params.ownerId,
+    )
+  ) {
+    return "cold";
+  }
+  const activeOwner = active.secretOwners?.find(
+    (entry) => entry.ownerKind === params.ownerKind && entry.ownerId === params.ownerId,
+  );
+  const refKeys = params.refs.map(secretRefKey).toSorted();
+  const providerDefinitionsMatch = params.refs.every((ref) =>
+    hasSameSecretProviderDefinition(ref, [active.sourceConfig, params.config]),
+  );
+  return activeOwner &&
+    isDeepStrictEqual(activeOwner.refKeys.toSorted(), refKeys) &&
+    providerDefinitionsMatch
+    ? "stale"
+    : "cold";
+}
 
 function registerResolvedValuesForRedaction(resolved: ReadonlyMap<string, unknown>): void {
   for (const value of resolved.values()) {
@@ -27,7 +72,7 @@ function registerResolvedValuesForRedaction(resolved: ReadonlyMap<string, unknow
 }
 
 function assignmentOwnerKey(assignment: SecretAssignment): string {
-  return `${assignment.ownerKind}\0${assignment.ownerId}`;
+  return `${getSecretAssignmentSource(assignment)}\0${assignment.ownerKind}\0${assignment.ownerId}`;
 }
 
 function groupAssignmentsByOwner(assignments: SecretAssignment[]): SecretAssignment[][] {
@@ -53,7 +98,26 @@ function groupAssignmentsByOwner(assignments: SecretAssignment[]): SecretAssignm
   return [...groups.values()];
 }
 
-function createDegradedOwner(assignments: SecretAssignment[], reason: string): DegradedSecretOwner {
+/** Captures every typed owner/ref relationship for later reload classification. */
+export function listSecretAssignmentOwners(assignments: SecretAssignment[]): SecretOwnerRefState[] {
+  return groupAssignmentsByOwner(assignments).flatMap((ownerAssignments) => {
+    const owner = ownerAssignments[0];
+    return !owner || owner.ownerKind === "unknown"
+      ? []
+      : [
+          {
+            ownerKind: owner.ownerKind,
+            ownerId: owner.ownerId,
+            refKeys: ownerAssignments.map((assignment) => secretRefKey(assignment.ref)).toSorted(),
+          },
+        ];
+  });
+}
+
+function createDegradedOwner(
+  assignments: SecretAssignment[],
+  reason: SecretDegradationReason,
+): DegradedSecretOwner {
   const owner = assignments[0]!;
   if (owner.ownerKind === "unknown") {
     throw new Error(`Secret assignment ${owner.path} has no runtime owner.`);
@@ -66,6 +130,140 @@ function createDegradedOwner(assignments: SecretAssignment[], reason: string): D
     refKeys: assignments.map((assignment) => secretRefKey(assignment.ref)),
     reason,
   };
+}
+
+function associateAssignmentFailureOwners(params: {
+  assignments: SecretAssignment[];
+  error: unknown;
+  config: OpenClawConfig;
+}): void {
+  const validationFailures = getSecretAssignmentValidationFailures(params.error);
+  const validationFailureRefKeys = new Set(validationFailures.map((failure) => failure.refKey));
+  const validationFailureOwnerKeys = new Set(
+    validationFailures.flatMap((failure) =>
+      params.assignments
+        .filter(
+          (assignment) =>
+            assignment.ownerKind === failure.ownerKind &&
+            assignment.ownerId === failure.ownerId &&
+            assignment.expected === failure.expected &&
+            secretRefKey(assignment.ref) === failure.refKey,
+        )
+        .map(assignmentOwnerKey),
+    ),
+  );
+  const reason =
+    validationFailures.length > 0
+      ? "resolved secret value was invalid"
+      : describeSecretResolutionError(params.error);
+  if (!reason) {
+    return;
+  }
+  const owners = groupAssignmentsByOwner(params.assignments).flatMap((assignments) => {
+    if (assignments[0]?.ownerKind === "unknown") {
+      return [];
+    }
+    const failureMatched = assignments.some((assignment) =>
+      validationFailures.length > 0
+        ? validationFailureOwnerKeys.has(assignmentOwnerKey(assignment))
+        : assignmentMatchesResolutionFailure(assignment, params.error),
+    );
+    if (!failureMatched) {
+      return [];
+    }
+    const degradedOwner = createDegradedOwner(assignments, reason);
+    return [
+      {
+        ...degradedOwner,
+        degradationState: classifySecretOwnerDegradationState({
+          ownerKind: degradedOwner.ownerKind,
+          ownerId: degradedOwner.ownerId,
+          refs: assignments.map((assignment) => assignment.ref),
+          config: params.config,
+        }),
+        failureMatched,
+        source: getSecretAssignmentSource(assignments[0]!),
+      },
+    ];
+  });
+  const failureRefs = new Map(
+    validationFailures.length > 0
+      ? params.assignments
+          .filter((assignment) => validationFailureRefKeys.has(secretRefKey(assignment.ref)))
+          .map((assignment) => [secretRefKey(assignment.ref), assignment.ref] as const)
+      : params.assignments
+          .filter((assignment) => assignmentMatchesResolutionFailure(assignment, params.error))
+          .map((assignment) => [secretRefKey(assignment.ref), assignment.ref] as const),
+  );
+  const providerFailure =
+    validationFailures.length === 0 && isProviderScopedSecretResolutionError(params.error)
+      ? params.error
+      : null;
+  const providerRefPrefix = providerFailure
+    ? `${providerFailure.source}:${providerFailure.provider}:`
+    : null;
+  const ownerKeys = new Set(
+    owners.map((owner) => `${owner.source}\0${owner.ownerKind}\0${owner.ownerId}`),
+  );
+  const collectedOwnerKeys = new Set(params.assignments.map(assignmentOwnerKey));
+  const activeSnapshot = getActiveSecretsRuntimeSnapshot();
+  const activeAuthOwnerIds = new Set(
+    (activeSnapshot?.authStores ?? []).flatMap(({ agentDir, store }) =>
+      Object.keys(store.profiles).map((profileId) =>
+        resolveAuthProfileSecretOwnerId({ agentDir, profileId }),
+      ),
+    ),
+  );
+  const activeCoOwners = (activeSnapshot?.secretOwners ?? []).flatMap((owner) => {
+    const source =
+      owner.ownerKind === "account" && activeAuthOwnerIds.has(owner.ownerId)
+        ? ("auth-store" as const)
+        : ("config" as const);
+    const ownerKey = `${source}\0${owner.ownerKind}\0${owner.ownerId}`;
+    // Current assignments are authoritative. Retain active co-owners only for runtime surfaces
+    // that strict assignment validation prevented this preparation from reaching.
+    if (ownerKeys.has(ownerKey) || collectedOwnerKeys.has(ownerKey)) {
+      return [];
+    }
+    const refs = owner.refKeys.flatMap((refKey) => {
+      const ref = failureRefs.get(refKey);
+      if (ref) {
+        return [ref];
+      }
+      if (!providerFailure || !providerRefPrefix || !refKey.startsWith(providerRefPrefix)) {
+        return [];
+      }
+      return [
+        {
+          source: providerFailure.source,
+          provider: providerFailure.provider,
+          id: refKey.slice(providerRefPrefix.length),
+        },
+      ];
+    });
+    if (refs.length === 0) {
+      return [];
+    }
+    return [
+      {
+        ownerKind: owner.ownerKind,
+        ownerId: owner.ownerId,
+        state: "unavailable" as const,
+        paths: [],
+        refKeys: [...owner.refKeys],
+        reason,
+        degradationState: classifySecretOwnerDegradationState({
+          ownerKind: owner.ownerKind,
+          ownerId: owner.ownerId,
+          refs,
+          config: params.config,
+        }),
+        failureMatched: true,
+        source,
+      },
+    ];
+  });
+  associateSecretResolutionErrorOwners(params.error, [...owners, ...activeCoOwners]);
 }
 
 /** Emits the canonical warning for one isolated runtime secret owner. */
@@ -86,25 +284,39 @@ async function resolveStrictAssignments(params: {
   assignments: SecretAssignment[];
   options: SecretResolutionOptions;
 }): Promise<void> {
-  const resolved = await resolveSecretRefValues(
-    params.assignments.map((assignment) => assignment.ref),
-    params.options,
-  );
-  registerResolvedValuesForRedaction(resolved);
-  applyResolvedAssignments({ assignments: params.assignments, resolved });
+  try {
+    const resolved = await resolveSecretRefValues(
+      params.assignments.map((assignment) => assignment.ref),
+      params.options,
+    );
+    registerResolvedValuesForRedaction(resolved);
+    applyResolvedAssignments({ assignments: params.assignments, resolved });
+  } catch (error) {
+    associateAssignmentFailureOwners({
+      assignments: params.assignments,
+      error,
+      config: params.options.config,
+    });
+    throw error;
+  }
 }
 
 function assignmentMatchesResolutionFailure(assignment: SecretAssignment, error: unknown): boolean {
   if (!isSecretResolutionError(error)) {
     return false;
   }
+  // Provider failures affect every ref under that exact source/provider pair. Ref failures
+  // additionally require the id, so equal ids under sibling providers never share attribution.
   if (assignment.ref.source !== error.source || assignment.ref.provider !== error.provider) {
     return false;
   }
   return isProviderScopedSecretResolutionError(error) || assignment.ref.id.trim() === error.refId;
 }
 
-function assertOwnerCanBeIsolated(assignments: SecretAssignment[], error: unknown): string {
+function assertOwnerCanBeIsolated(
+  assignments: SecretAssignment[],
+  error: unknown,
+): SecretDegradationReason {
   const owner = assignments[0]!;
   const reason = describeSecretResolutionError(error);
   if (
@@ -138,8 +350,13 @@ export async function resolveAndApplySecretAssignments(params: {
     );
     registerResolvedValuesForRedaction(resolution.resolved);
 
-    const failedOwners = new Map<SecretAssignment[], string>();
+    const failedOwners = new Map<SecretAssignment[], SecretDegradationReason>();
     for (const failure of resolution.failures) {
+      associateAssignmentFailureOwners({
+        assignments: pendingOwners.flat(),
+        error: failure.error,
+        config: params.options.config,
+      });
       const matchingOwners = pendingOwners.filter((assignments) =>
         assignments.some((assignment) =>
           assignmentMatchesResolutionFailure(assignment, failure.error),
@@ -152,6 +369,28 @@ export async function resolveAndApplySecretAssignments(params: {
         if (!failedOwners.has(assignments)) {
           failedOwners.set(assignments, assertOwnerCanBeIsolated(assignments, failure.error));
         }
+      }
+    }
+
+    const readyAssignments = pendingOwners
+      .filter(
+        (assignments) =>
+          !failedOwners.has(assignments) &&
+          assignments.every((assignment) => resolution.resolved.has(secretRefKey(assignment.ref))),
+      )
+      .flat();
+    if (readyAssignments.length > 0) {
+      // Validate the whole ready set so owners sharing one invalid ref are all reported.
+      // Failure association filters by validated owner keys; unrelated owners stay healthy.
+      try {
+        applyResolvedAssignments({ assignments: readyAssignments, resolved: resolution.resolved });
+      } catch (error) {
+        associateAssignmentFailureOwners({
+          assignments: readyAssignments,
+          error,
+          config: params.options.config,
+        });
+        throw error;
       }
     }
 
@@ -172,7 +411,6 @@ export async function resolveAndApplySecretAssignments(params: {
       if (
         assignments.every((assignment) => resolution.resolved.has(secretRefKey(assignment.ref)))
       ) {
-        applyResolvedAssignments({ assignments, resolved: resolution.resolved });
         continue;
       }
       nextPendingOwners.push(assignments);

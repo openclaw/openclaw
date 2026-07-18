@@ -315,6 +315,23 @@ describe("check-database-first-legacy-stores", () => {
     expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 4 }]);
   });
 
+  it("flags runtime writes to retired core audit JSONL stores", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        import path from "node:path";
+        await fs.appendFile(path.join(stateDir, "logs", "config-audit.jsonl"), "{}\\n");
+        await fs.appendFile(path.join(stateDir, "audit", "system-agent.jsonl"), "{}\\n");
+      `,
+      "src/infra/audit-writer.ts",
+    );
+
+    expect(violations).toEqual([
+      { kind: "legacy store filesystem write", line: 4 },
+      { kind: "legacy store filesystem write", line: 5 },
+    ]);
+  });
+
   it("flags runtime writes to retired managed-image record JSON", () => {
     const violations = collectDatabaseFirstLegacyStoreViolations(
       `

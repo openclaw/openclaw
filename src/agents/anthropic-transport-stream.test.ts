@@ -1262,19 +1262,19 @@ describe("anthropic transport stream", () => {
     expect(latestAnthropicRequest().payload.stream).toBe(true);
   });
 
-  it("fails locally when Anthropic maxTokens is non-positive after resolution", async () => {
+  it("uses a default maxTokens for custom Anthropic models that omit it", async () => {
     const model = attachModelProviderRequestTransport(
       {
-        id: "claude-haiku-4-5",
-        name: "Claude Haiku 4.5",
+        id: "custom-model",
+        name: "Custom Model",
         api: "anthropic-messages",
-        provider: "anthropic",
-        baseUrl: "https://api.anthropic.com",
+        provider: "custom-anthropic",
+        baseUrl: "https://custom.example/anthropic",
         reasoning: false,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 32000,
-        maxTokens: 0,
+        contextWindow: 200_000,
+        maxTokens: undefined as never,
       } satisfies Model<"anthropic-messages">,
       {
         proxy: {
@@ -1293,6 +1293,76 @@ describe("anthropic transport stream", () => {
         {
           apiKey: "sk-ant-api",
         } as Parameters<typeof streamFn>[2],
+      ),
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("stop");
+    expect(latestAnthropicRequest().payload).toMatchObject({
+      model: "custom-model",
+      max_tokens: 4_096,
+      stream: true,
+    });
+  });
+
+  it("clamps the custom Anthropic maxTokens fallback to the context window", async () => {
+    const model = attachModelProviderRequestTransport(
+      {
+        id: "custom-model",
+        name: "Custom Model",
+        api: "anthropic-messages",
+        provider: "custom-anthropic",
+        baseUrl: "https://custom.example/anthropic",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 4_096,
+        maxTokens: undefined as never,
+      } satisfies Model<"anthropic-messages">,
+      {
+        proxy: {
+          mode: "env-proxy",
+        },
+      },
+    );
+
+    await runTransportStream(
+      model,
+      { messages: [{ role: "user", content: "hello" }] } as AnthropicStreamContext,
+      { apiKey: "fake" } as AnthropicStreamOptions,
+    );
+
+    expect(latestAnthropicRequest().payload.max_tokens).toBe(1_024);
+  });
+
+  it("fails locally when a custom Anthropic model has an invalid maxTokens", async () => {
+    const model = attachModelProviderRequestTransport(
+      {
+        id: "custom-model",
+        name: "Custom Model",
+        api: "anthropic-messages",
+        provider: "custom-anthropic",
+        baseUrl: "https://custom.example/anthropic",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 32_000,
+        maxTokens: 0,
+      } satisfies Model<"anthropic-messages">,
+      {
+        proxy: {
+          mode: "env-proxy",
+        },
+      },
+    );
+    const streamFn = createAnthropicMessagesTransportStreamFn();
+
+    const stream = await Promise.resolve(
+      streamFn(
+        model,
+        { messages: [{ role: "user", content: "hello" }] } as Parameters<typeof streamFn>[1],
+        { apiKey: "fake" } as Parameters<typeof streamFn>[2],
       ),
     );
 

@@ -526,6 +526,10 @@ export function buildGatewayCronService(params: {
         reason: opts?.reason,
         agentId,
         sessionKey,
+        // Preserve ownership across this adapter so the wake does not self-block on
+        // the cron run that is awaiting it.
+        owningCronJobMarker: opts?.owningCronJobMarker,
+        owningCronLaneTaskMarker: opts?.owningCronLaneTaskMarker,
         heartbeat: resolveCronHeartbeatOverride({
           runtimeConfig,
           agentId,

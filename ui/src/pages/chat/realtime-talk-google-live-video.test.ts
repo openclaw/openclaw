@@ -79,7 +79,6 @@ function createTransport(callbacks: RealtimeTalkCallbacks) {
       callbacks,
       client: { request: vi.fn(), addEventListener: vi.fn() } as never,
       sessionKey: "main",
-      videoEnabled: true,
     },
   );
 }
@@ -102,12 +101,12 @@ describe("Google Live Video Talk", () => {
     const audioStop = vi.fn();
     const videoStop = vi.fn();
     const audioTrack = { stop: audioStop } as unknown as MediaStreamTrack;
-    const videoTrack = {
+    const videoTrack = Object.assign(new EventTarget(), {
       stop: videoStop,
       readyState: "live",
       enabled: true,
       muted: false,
-    } as unknown as MediaStreamTrack;
+    }) as unknown as MediaStreamTrack;
     const audio = {
       getAudioTracks: () => [audioTrack],
       getTracks: () => [audioTrack],
@@ -116,21 +115,8 @@ describe("Google Live Video Talk", () => {
       getVideoTracks: () => [videoTrack],
       getTracks: () => [videoTrack],
     } as unknown as MediaStream;
-    class TestMediaStream {
-      constructor(readonly tracks: MediaStreamTrack[]) {}
-      getAudioTracks() {
-        return [audioTrack];
-      }
-      getVideoTracks() {
-        return [videoTrack];
-      }
-      getTracks() {
-        return this.tracks;
-      }
-    }
     const getUserMedia = vi.fn().mockResolvedValueOnce(audio).mockResolvedValueOnce(camera);
     vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
-    vi.stubGlobal("MediaStream", TestMediaStream);
 
     const originalCreateElement = document.createElement.bind(document);
     vi.spyOn(document, "createElement").mockImplementation((tagName: string) => {
@@ -156,6 +142,9 @@ describe("Google Live Video Talk", () => {
     const transport = createTransport({ onStatus, onVideoStream });
 
     await transport.start();
+    expect(getUserMedia).toHaveBeenCalledOnce();
+    expect(onVideoStream).not.toHaveBeenCalled();
+    await transport.setVideoEnabled(true);
     const ws = FakeGoogleLiveWebSocket.instance;
     if (!ws) {
       throw new Error("missing Google Live WebSocket");
@@ -201,7 +190,7 @@ describe("Google Live Video Talk", () => {
       },
     });
     expect(getUserMedia).toHaveBeenNthCalledWith(2, { video: true });
-    expect(onVideoStream).toHaveBeenCalledWith(expect.any(TestMediaStream));
+    expect(onVideoStream).toHaveBeenCalledWith(camera);
     expect(onStatus).toHaveBeenCalledWith("listening");
 
     const countVideoMessages = () =>
@@ -212,9 +201,9 @@ describe("Google Live Video Talk", () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(countVideoMessages()).toBe(2);
 
-    (videoTrack as { readyState: MediaStreamTrackState }).readyState = "ended";
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(countVideoMessages()).toBe(2);
+    await transport.setVideoEnabled(false);
+    expect(videoStop).toHaveBeenCalledOnce();
+    expect(audioStop).not.toHaveBeenCalled();
     ws.emitMessage({
       toolCall: {
         functionCalls: [
@@ -231,8 +220,7 @@ describe("Google Live Video Talk", () => {
             name: REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME,
             response: {
               ok: false,
-              cameraStreamActive: false,
-              error: "Camera stream is unavailable",
+              error: "camera is off",
             },
           },
         ],
@@ -246,6 +234,54 @@ describe("Google Live Video Talk", () => {
     expect(onVideoStream).toHaveBeenLastCalledWith(null);
     expect(audioStop).toHaveBeenCalledOnce();
     expect(videoStop).toHaveBeenCalledOnce();
+  });
+
+  it("clears ended camera state and reacquires on the next enable", async () => {
+    const audioTrack = { stop: vi.fn() } as unknown as MediaStreamTrack;
+    const firstVideoTrack = Object.assign(new EventTarget(), {
+      stop: vi.fn(),
+      readyState: "live",
+      enabled: true,
+      muted: false,
+    }) as unknown as MediaStreamTrack;
+    const secondVideoTrack = Object.assign(new EventTarget(), {
+      stop: vi.fn(),
+      readyState: "live",
+      enabled: true,
+      muted: false,
+    }) as unknown as MediaStreamTrack;
+    const audio = {
+      getAudioTracks: () => [audioTrack],
+      getTracks: () => [audioTrack],
+    } as unknown as MediaStream;
+    const firstCamera = {
+      getVideoTracks: () => [firstVideoTrack],
+      getTracks: () => [firstVideoTrack],
+    } as unknown as MediaStream;
+    const secondCamera = {
+      getVideoTracks: () => [secondVideoTrack],
+      getTracks: () => [secondVideoTrack],
+    } as unknown as MediaStream;
+    const getUserMedia = vi
+      .fn()
+      .mockResolvedValueOnce(audio)
+      .mockResolvedValueOnce(firstCamera)
+      .mockResolvedValueOnce(secondCamera);
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+    vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+    const onVideoStream = vi.fn();
+    const transport = createTransport({ onVideoStream });
+
+    await transport.start();
+    await transport.setVideoEnabled(true);
+    firstVideoTrack.dispatchEvent(new Event("ended"));
+
+    expect(onVideoStream).toHaveBeenLastCalledWith(null);
+    await transport.setVideoEnabled(true);
+    expect(getUserMedia).toHaveBeenNthCalledWith(3, { video: true });
+    expect(onVideoStream).toHaveBeenLastCalledWith(secondCamera);
+
+    transport.stop();
   });
 
   it("releases acquired media when stopped during the camera prompt", async () => {
@@ -267,14 +303,15 @@ describe("Google Live Video Talk", () => {
     vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
     const transport = createTransport({});
 
-    const start = transport.start();
-    await Promise.resolve();
+    await transport.start();
+    const enabling = transport.setVideoEnabled(true);
+    await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(2));
     transport.stop();
     resolveCamera(camera);
-    await start;
+    await enabling;
 
     expect(audioStop).toHaveBeenCalledOnce();
     expect(videoStop).toHaveBeenCalledOnce();
-    expect(FakeGoogleLiveWebSocket.instance).toBeUndefined();
+    expect(FakeGoogleLiveWebSocket.instance?.readyState).toBe(3);
   });
 });
