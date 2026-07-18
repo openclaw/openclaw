@@ -384,6 +384,12 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
 }
 
 export function handleChatGatewayEvent(state: ChatState, payload?: ChatEventPayload) {
+  if (!payload) {
+    return null;
+  }
+  if (shouldConsumeChatEventFrame(state, payload) && !acceptChatEventFrame(state, payload)) {
+    return null;
+  }
   // A BTW run that fails before seeding context terminates with a plain chat
   // event and never emits chat.side_result. Convert the failure into an error
   // side-result card and swallow the event: detached BTW runs must not reach
@@ -416,7 +422,7 @@ export function handleChatGatewayEvent(state: ChatState, payload?: ChatEventPayl
     return null;
   }
   const activeRunIdBeforeEvent = state.chatRunId;
-  const result = handleChatEvent(state, payload);
+  const result = handleChatEventInner(state, payload);
   if (
     isTerminalChatState(result) &&
     !isEventForDifferentActiveRun(payload, activeRunIdBeforeEvent)

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import { retirePendingChatSideQuestion } from "../../lib/chat/side-result.ts";
 import {
+  handleChatEvent,
   handleChatGatewayEvent,
   handleChatSideResultGatewayEvent,
   type ChatEventPayload,
@@ -269,6 +270,27 @@ describe("chat side result gateway events", () => {
     });
     // Swallowed: the detached failure must not be adopted into the transcript.
     expect(state.chatMessages).toEqual([]);
+  });
+
+  it("deduplicates trailing side-result terminal frames before they reach main chat", () => {
+    const state = createState();
+    state.chatSideResultTerminalRuns?.add("btw-run-deduped");
+    const payload: ChatEventPayload = {
+      runId: "btw-run-deduped",
+      seq: 7,
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Side result must stay out of main chat." }],
+      },
+    };
+
+    expect(handleChatGatewayEvent(state, payload)).toBeNull();
+    expect(handleChatGatewayEvent(state, payload)).toBeNull();
+    expect(state.chatSideResultTerminalRuns?.has("btw-run-deduped")).toBe(false);
+    expect(state.chatMessages).toEqual([]);
+    expect(state.chatRunId).toBeNull();
   });
 
   it("ignores side results from retired (superseded or dismissed) runs", () => {
