@@ -177,6 +177,7 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
   // Match the predecessor worker's per-spool cap across repeated drain pumps.
   const activeDeliveries = new Set<Promise<void>>();
   const deferredClaims = new Map<string, Promise<void>>();
+  let acceptsDeferredClaims = true;
   const drain = createChannelIngressDrain<LineWebhookSpoolPayload>({
     queue,
     abortSignal: shutdown.signal,
@@ -233,6 +234,11 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
             }
           },
           onDeferred: () => {
+            if (!acceptsDeferredClaims) {
+              settleDeferredClaim();
+              void boundLifecycle.onAbandoned();
+              return;
+            }
             if (!deferredClaimSettled) {
               deferredClaims.set(claimed.id, deferredClaim);
             }
@@ -352,13 +358,19 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
               `line: timed out after ${LINE_WEBHOOK_ACTIVE_DELIVERY_STOP_GRACE_MS}ms waiting for active webhook deliveries; releasing drain ownership`,
             ),
           );
-          return;
         }
         // Accepted shutdown tradeoff: deferred claims may wait for the full agent run.
         // A deadline would allow duplicate side effects after replacement recovery;
         // remove this wait only when core can cancel or abandon the run before release.
-        await Promise.allSettled(deferredClaims.values());
-        await drain.waitForIdle();
+        while (deferredClaims.size > 0) {
+          await Promise.allSettled(deferredClaims.values());
+        }
+        // Close registration only after the live map drains. Later deferrals
+        // are rejected through onAbandoned so disposal cannot orphan a run.
+        acceptsDeferredClaims = false;
+        if (deliveriesSettled) {
+          await drain.waitForIdle();
+        }
       } finally {
         drain.dispose();
       }
