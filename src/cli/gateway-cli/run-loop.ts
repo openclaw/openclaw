@@ -943,7 +943,8 @@ export async function runGatewayLoop(params: {
       rotateAgentEventLifecycleGeneration();
       advanceCronActiveJobGeneration();
       abortActiveCronTaskRuns("Gateway restarting.");
-      const cronTaskDrain = await waitForActiveCronTaskRuns(1_000);
+      const drainAbort = new AbortController();
+      const cronTaskDrain = await waitForActiveCronTaskRuns(1_000, drainAbort.signal);
       const cronDrain = await waitForActiveCronJobs(1_000);
       if (!cronTaskDrain.drained || !cronDrain.drained) {
         gatewayLog.warn(

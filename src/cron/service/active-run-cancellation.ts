@@ -111,16 +111,18 @@ export async function waitForActiveCronTaskRuns(
     !signal?.aborted
   ) {
     await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, DEFAULT_CRON_TASK_RUN_DRAIN_POLL_MS);
+      let cleanup: (() => void) | undefined;
+      const timer = setTimeout(() => {
+        cleanup?.();
+        resolve();
+      }, DEFAULT_CRON_TASK_RUN_DRAIN_POLL_MS);
       if (signal) {
-        signal.addEventListener(
-          "abort",
-          () => {
-            clearTimeout(timer);
-            resolve();
-          },
-          { once: true },
-        );
+        const onAbort = () => {
+          clearTimeout(timer);
+          resolve();
+        };
+        signal.addEventListener("abort", onAbort, { once: true });
+        cleanup = () => signal.removeEventListener("abort", onAbort);
       }
     });
   }
