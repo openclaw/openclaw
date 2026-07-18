@@ -96,12 +96,13 @@ const RERUN_GROUP_CHILD_KEYS = new Map([
 export function runReleaseCiGh(args, params = {}) {
   const execFileSyncImpl = params.execFileSyncImpl ?? execFileSync;
   const timeoutMs = params.timeoutMs ?? GH_COMMAND_TIMEOUT_MS;
+  const stdio = params.stdio ?? ["ignore", "pipe", "pipe"];
   return execFileSyncImpl(resolvePlainGhBin(), args, {
     encoding: "utf8",
     env: plainGhEnv(),
     killSignal: "SIGKILL",
     maxBuffer: 64 * 1024 * 1024,
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio,
     timeout: timeoutMs,
   });
 }
@@ -129,11 +130,8 @@ export function artifactDownloadArgs(artifactId, repository = DEFAULT_REPO) {
 function downloadArtifactZip(artifactId, destination, repository = DEFAULT_REPO) {
   const output = openSync(destination, "w");
   try {
-    execFileSync(resolvePlainGhBin(), artifactDownloadArgs(artifactId, repository), {
-      env: plainGhEnv(),
-      killSignal: "SIGKILL",
+    runReleaseCiGh(artifactDownloadArgs(artifactId, repository), {
       stdio: ["ignore", output, "pipe"],
-      timeout: GH_COMMAND_TIMEOUT_MS,
     });
   } finally {
     closeSync(output);
