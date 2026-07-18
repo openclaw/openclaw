@@ -206,7 +206,7 @@ const SETTINGS_TAKEOVER_ROUTES = SETTINGS_NAVIGATION_ROUTES.filter(
 const NAVIGATION_ICONS: NavigationItem = {
   agents: "bot",
   activity: "activity",
-  apps: "smartphone",
+  apps: "layoutGrid",
   approvals: "shieldCheck",
   workboard: "kanban",
   worktrees: "folder",
