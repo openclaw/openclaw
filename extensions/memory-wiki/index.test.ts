@@ -15,7 +15,6 @@ import { resolveMemoryWikiConfig } from "./src/config.js";
 import {
   appendMemoryWikiLog,
   loadMemoryWikiValidatedVaultIdentity,
-  loadMemoryWikiVaultGeneration,
   loadMemoryWikiVaultIdentity,
   resolveMemoryWikiVaultSourceGeneration,
 } from "./src/log.js";
@@ -166,7 +165,9 @@ describe("memory-wiki plugin", () => {
     const service = registerService.mock.calls[0]?.[0];
     await service?.start?.();
 
-    await expect(loadMemoryWikiVaultGeneration(rootDir)).resolves.toEqual(expect.any(String));
+    await expect(loadMemoryWikiVaultIdentity(rootDir)).resolves.toMatchObject({
+      vaultGeneration: expect.any(String),
+    });
   });
 
   it("clears active owners before a fallible lifecycle identity refresh", async () => {

@@ -186,7 +186,7 @@ export async function loadMemoryWikiValidatedVaultIdentity(
   };
 }
 
-export async function loadMemoryWikiVaultGeneration(vaultRoot: string): Promise<string | null> {
+async function loadMemoryWikiVaultGeneration(vaultRoot: string): Promise<string | null> {
   return (await loadMemoryWikiVaultIdentity(vaultRoot)).vaultGeneration;
 }
 
