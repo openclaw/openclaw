@@ -5,6 +5,7 @@ export {
   listSqliteSessionTranscriptInstances,
   loadExactSqliteSessionEntry,
   loadSqliteSessionEntry,
+  loadSqliteSessionEntryReadOnly,
   patchSqliteSessionEntry,
   patchSqliteSessionEntryTarget,
   readSqliteSessionUpdatedAt,

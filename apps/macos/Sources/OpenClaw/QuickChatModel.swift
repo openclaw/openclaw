@@ -75,9 +75,14 @@ struct QuickChatAgentDisplay: Equatable, Sendable, Identifiable {
     }
 }
 
-struct QuickChatRoutingTarget: Equatable, Sendable {
+struct QuickChatRoutingTarget: Equatable, Hashable, Sendable {
     let sessionKey: String
     let agentID: String?
+}
+
+struct QuickChatSessionTargetOverride: Equatable, Hashable, Sendable {
+    let key: String
+    let displayName: String
 }
 
 enum QuickChatConnectionGate: Equatable {
@@ -134,6 +139,7 @@ final class QuickChatModel {
 
     private(set) var sessionKey = ""
     private(set) var sendAgentID: String?
+    private(set) var targetSessionOverride: QuickChatSessionTargetOverride?
     private(set) var agents: [QuickChatAgentDisplay] = []
     private(set) var defaultAgentID: String?
     private(set) var selectedAgentID: String?
@@ -154,9 +160,13 @@ final class QuickChatModel {
     @ObservationIgnored private let permissionStatusProvider: PermissionStatusProvider
     @ObservationIgnored private let permissionGrantProvider: PermissionGrantProvider
     @ObservationIgnored private let connectionGateProvider: ConnectionGateProvider
+    /// Invoked with the snapshotted route just before a send is dispatched, for every
+    /// send path (text and capture); wires the reply consumer's pre-bind.
+    @ObservationIgnored var onSendDispatched: ((QuickChatRoutingTarget) -> Void)?
     @ObservationIgnored private var presentationID = UUID()
     @ObservationIgnored private var agentsScope: String?
     @ObservationIgnored private var agentsMainKey: String?
+    @ObservationIgnored private var baseRoutingTarget: QuickChatRoutingTarget?
     @ObservationIgnored private var sendTask: Task<String, Error>?
     @ObservationIgnored private var permissionTask: Task<Void, Never>?
     @ObservationIgnored private var permissionPollTask: Task<Void, Never>?
@@ -241,6 +251,22 @@ final class QuickChatModel {
         !self.sessionKey.isEmpty && self.connectionGate == .available && self.sendState != .sending
     }
 
+    var canSelectRecentSession: Bool {
+        !self.sessionKey.isEmpty && self.connectionGate == .available && self.sendState != .sending
+    }
+
+    var messagePlaceholder: String {
+        if let targetSessionOverride {
+            return "Reply in \(targetSessionOverride.displayName)"
+        }
+        return "Message \(self.agentDisplay.name)"
+    }
+
+    var routingTarget: QuickChatRoutingTarget? {
+        guard !self.sessionKey.isEmpty else { return nil }
+        return QuickChatRoutingTarget(sessionKey: self.sessionKey, agentID: self.sendAgentID)
+    }
+
     var activePresentationID: UUID? {
         self.isPresentationActive ? self.presentationID : nil
     }
@@ -250,6 +276,8 @@ final class QuickChatModel {
         self.isPresentationActive = true
         self.sessionKey = ""
         self.sendAgentID = nil
+        self.targetSessionOverride = nil
+        self.baseRoutingTarget = nil
         // The cached list stays displayable, but routing metadata must wait for the fresh
         // contract: selecting from a stale scope/mainKey could target an obsolete session.
         self.agentsScope = nil
@@ -289,11 +317,20 @@ final class QuickChatModel {
               let display = self.agents.first(where: { $0.id == id }),
               let mainKey = self.agentsMainKey
         else { return }
+        // Agent and recent-session targeting are mutually exclusive: keeping both would
+        // make the avatar advertise one destination while sends go somewhere else.
+        self.targetSessionOverride = nil
         self.selectedAgentID = id
         self.agentDisplay = display
         let target = Self.routingTarget(scope: self.agentsScope, selectedAgentID: id, mainKey: mainKey)
-        self.sessionKey = target.sessionKey
-        self.sendAgentID = target.agentID
+        self.baseRoutingTarget = target
+        self.applyRoutingTarget()
+    }
+
+    func selectSessionOverride(_ target: QuickChatSessionTargetOverride?) {
+        guard self.sendState != .sending else { return }
+        self.targetSessionOverride = target
+        self.applyRoutingTarget()
     }
 
     func dismissPermissionsForSession() {
@@ -426,6 +463,17 @@ final class QuickChatModel {
             agentID: nil)
     }
 
+    nonisolated static func routingTarget(
+        override: QuickChatSessionTargetOverride?,
+        base: QuickChatRoutingTarget) -> QuickChatRoutingTarget
+    {
+        guard let override else { return base }
+        // sessions.list preserves the bare global sentinel. It needs the same explicit
+        // agent owner as the selected base route when session scope is global.
+        let agentID = override.key.lowercased() == "global" ? base.agentID : nil
+        return QuickChatRoutingTarget(sessionKey: override.key, agentID: agentID)
+    }
+
     nonisolated static func defaultScreenshotCaption(appName: String, title: String) -> String {
         "Screenshot: \(appName) — \(title)"
     }
@@ -443,6 +491,10 @@ final class QuickChatModel {
     func endPresentation() {
         self.isPresentationActive = false
         self.presentationID = UUID()
+        // A quick bar target is presentation-scoped. Never carry a stale recent session
+        // into the next invocation where the compact UI no longer explains that choice.
+        self.targetSessionOverride = nil
+        self.baseRoutingTarget = nil
         self.sessionKey = ""
         self.sendAgentID = nil
         // A dispatched chat.send may already be accepted; cancelling and retrying with a new UUID can duplicate it.
@@ -481,6 +533,7 @@ final class QuickChatModel {
               let display = displays.first(where: { $0.id == selectedID })
         else {
             self.agentDisplay = .placeholder
+            self.baseRoutingTarget = nil
             self.sessionKey = ""
             self.sendAgentID = nil
             return
@@ -490,15 +543,15 @@ final class QuickChatModel {
             scope: self.agentsScope,
             selectedAgentID: selectedID,
             mainKey: result.mainkey)
-        self.sessionKey = target.sessionKey
-        self.sendAgentID = target.agentID
+        self.baseRoutingTarget = target
+        self.applyRoutingTarget()
     }
 
     private func refreshFallbackIdentity(id: UUID) async {
         let resolvedSessionKey = await self.sessionKeyProvider()
         guard self.isCurrentPresentation(id), !Task.isCancelled else { return }
-        self.sessionKey = resolvedSessionKey
-        self.sendAgentID = nil
+        self.baseRoutingTarget = QuickChatRoutingTarget(sessionKey: resolvedSessionKey, agentID: nil)
+        self.applyRoutingTarget()
         self.agents = []
         self.defaultAgentID = nil
         self.selectedAgentID = nil
@@ -516,6 +569,17 @@ final class QuickChatModel {
         } catch {
             // The fallback session remains sendable even when its optional identity cannot load.
         }
+    }
+
+    private func applyRoutingTarget() {
+        guard let baseRoutingTarget else {
+            self.sessionKey = ""
+            self.sendAgentID = nil
+            return
+        }
+        let target = Self.routingTarget(override: self.targetSessionOverride, base: baseRoutingTarget)
+        self.sessionKey = target.sessionKey
+        self.sendAgentID = target.agentID
     }
 
     private func performSend(
@@ -536,6 +600,9 @@ final class QuickChatModel {
 
         let sessionKey = self.sessionKey
         let agentID = self.sendAgentID
+        // Pre-bind the reply consumer for every send path (text and screenshots): a
+        // fast turn must not emit frames before the reply view model starts listening.
+        self.onSendDispatched?(QuickChatRoutingTarget(sessionKey: sessionKey, agentID: agentID))
         let idempotencyKey: String
         if let retryIdentity = self.retryIdentity,
            retryIdentity.draft == draft,

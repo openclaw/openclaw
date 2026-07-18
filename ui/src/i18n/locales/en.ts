@@ -1866,6 +1866,14 @@ export const en: TranslationMap = {
     requestFailed: "OpenClaw could not reply. Try again.",
     connectionChanged: "The Gateway connection changed. Retry to continue this setup.",
     unsupportedGateway: "Update the Gateway to continue setup with OpenClaw.",
+    nudge: {
+      configReload: "Configuration reload stopped — ask me what happened",
+      channelAuth: "{channel} authentication degraded — ask me what happened",
+      channelDisconnected: "{channel} just disconnected — ask me what happened",
+      channelDegraded: "{channel} is degraded — ask me what happened",
+      channelFallback: "A channel",
+      dismiss: "Dismiss this update",
+    },
   },
   mcpServers: {
     add: "Add server",
