@@ -73,6 +73,15 @@ export type StatusSummary = {
     paths: string[];
     reason: string;
   }>;
+  degradedPlugins?: Array<{
+    pluginId: string;
+    state: "configured-unavailable";
+    diagnostic: {
+      kind: "plugin-verification";
+      reason: import("../plugins/runtime-degraded-state.js").PluginVerificationFailureReason;
+      detail: string;
+    };
+  }>;
   tasks: TaskRegistrySummary;
   taskAudit: TaskAuditSummary;
   taskAuditRetainedLost?: RetainedLostTaskAuditSummary;

@@ -507,6 +507,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 
 - **Socket mode** requires both `botToken` and `appToken` (`SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN` for default account env fallback).
 - **HTTP mode** requires `botToken` plus `signingSecret` (at root or per-account).
+- **User identity** (`identity: "user"`) posts and reads as the authorizing human. It requires `userToken` plus `appToken` in Socket Mode, or `userToken` plus `signingSecret` in HTTP mode. No bot token or bot user is required. See [User identity](/channels/slack#user-identity-post-as-a-real-person) for user scopes and event subscriptions.
 - `enterpriseOrgInstall: true` opts an account into the Slack Enterprise Grid
   org-wide event path. Startup verifies the bot token with `auth.test` and
   fails when the configured mode does not match Slack's installation identity.
@@ -525,8 +526,9 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 - `botToken`, `appToken`, `signingSecret`, and `userToken` accept plaintext
   strings or SecretRef objects.
 - Slack account snapshots expose per-credential source/status fields such as
-  `botTokenSource`, `botTokenStatus`, `appTokenStatus`, and, in HTTP mode,
-  `signingSecretStatus`. `configured_unavailable` means the account is
+  `botTokenSource`, `botTokenStatus`, `userTokenSource`, `userTokenStatus`,
+  `appTokenStatus`, and, in HTTP mode, `signingSecretStatus`.
+  `configured_unavailable` means the account is
   configured through SecretRef but the current command/runtime path could not
   resolve the secret value.
 - `configWrites: false` blocks Slack-initiated config writes.

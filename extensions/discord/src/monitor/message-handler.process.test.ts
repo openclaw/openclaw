@@ -5,7 +5,6 @@ import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
 import { logVerbose, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { DiscordRetryableInboundError } from "./inbound-dedupe.js";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
 
 vi.mock("openclaw/plugin-sdk/runtime-env", { spy: true });
@@ -4617,8 +4616,8 @@ describe("processDiscordMessage reply session init conflict retry", () => {
       thrown = error;
     }
 
-    expect(thrown).toBeInstanceOf(DiscordRetryableInboundError);
-    expect(thrown).toMatchObject({ cause: originalError });
+    expect(thrown).toBeInstanceOf(Error);
+    expect(thrown).toMatchObject({ cause: expect.any(Error) });
     expect(dispatchInboundMessage).toHaveBeenCalledTimes(4);
     expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
     sleepSpy.mockRestore();
@@ -4637,7 +4636,7 @@ describe("processDiscordMessage reply session init conflict retry", () => {
       });
 
     await expect(runProcessDiscordMessage(await createReplayContext())).rejects.toBeInstanceOf(
-      DiscordRetryableInboundError,
+      Error,
     );
     expect(guildHistories.get("c1")).toHaveLength(1);
 

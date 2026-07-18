@@ -32,10 +32,17 @@ import {
   type ConfigSchemaAnalysis,
 } from "../../components/config-form.ts";
 import { icons } from "../../components/icons.ts";
+import { getLobsterdex, getLobsterdexEntries } from "../../components/lobster-dex.ts";
+import {
+  LOBSTER_PET_PALETTES,
+  canonicalLobsterLook,
+  renderLobsterSvg,
+} from "../../components/lobster-pet.ts";
 import {
   renderSettingsRow,
   renderSettingsSegmented,
   renderSettingsStatus,
+  renderSettingsToggleRow,
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
@@ -167,6 +174,10 @@ export type ConfigProps = {
   onOpenCustomThemeImport?: () => void;
   textScale: number;
   setTextScale: (value: number) => void;
+  lobsterPetVisits?: boolean;
+  setLobsterPetVisits?: (enabled: boolean) => void;
+  lobsterPetSounds?: boolean;
+  setLobsterPetSounds?: (enabled: boolean) => void;
   chatSendShortcut: ChatSendShortcut;
   setChatSendShortcut: (value: ChatSendShortcut) => void;
   chatFollowUpMode: ChatFollowUpMode | undefined;
@@ -500,8 +511,12 @@ const SECTION_CATEGORIES: SectionCategoryDefinition[] = [
     sections: ["channels", "messages", "broadcast", "__notifications__", "talk", "audio"],
   },
   {
+    id: "security",
+    sections: ["security", "approvals"],
+  },
+  {
     id: "automation",
-    sections: ["commands", "hooks", "bindings", "cron", "approvals", "plugins"],
+    sections: ["commands", "hooks", "bindings", "cron", "plugins"],
   },
   {
     id: "infrastructure",
@@ -1162,6 +1177,77 @@ function renderChatPreferencesSection(props: ConfigProps) {
   `;
 }
 
+// Lobster pet toggles and the Lobsterdex live with the rest of the appearance
+// prefs; the toggles are browser-local (ui/src/app/settings.ts), so hosts that
+// do not wire them (embedded editors) simply omit the section.
+function renderLobsterPetSection(props: ConfigProps) {
+  if (!props.setLobsterPetVisits || !props.setLobsterPetSounds) {
+    return nothing;
+  }
+  const lobsterPetVisits = props.lobsterPetVisits === true;
+  const lobsterPetSounds = props.lobsterPetSounds === true;
+  return html`
+    <section class="settings-section">
+      <div class="settings-section__header">
+        <h2 class="settings-section__heading">${t("quickSettings.appearance.lobsterdex")}</h2>
+      </div>
+      <div class="settings-group">
+        ${renderSettingsToggleRow({
+          title: t("quickSettings.appearance.lobsterVisits"),
+          description: lobsterPetVisits
+            ? t("quickSettings.appearance.lobsterVisitsOn")
+            : t("quickSettings.appearance.lobsterVisitsOff"),
+          checked: lobsterPetVisits,
+          onChange: (enabled) => props.setLobsterPetVisits?.(enabled),
+        })}
+        ${renderSettingsToggleRow({
+          title: t("quickSettings.appearance.lobsterSounds"),
+          description: lobsterPetSounds
+            ? t("quickSettings.appearance.lobsterSoundsOn")
+            : t("quickSettings.appearance.lobsterSoundsOff"),
+          checked: lobsterPetSounds,
+          onChange: (enabled) => props.setLobsterPetSounds?.(enabled),
+        })}
+        ${renderSettingsRow({
+          title: t("quickSettings.appearance.lobsterdex"),
+          description: t("quickSettings.appearance.lobsterdexSeen", {
+            seen: String(LOBSTER_PET_PALETTES.filter((p) => getLobsterdex().has(p.id)).length),
+            total: String(LOBSTER_PET_PALETTES.length),
+          }),
+          stacked: true,
+          control: html`
+            <div class="lobsterdex">
+              ${LOBSTER_PET_PALETTES.map((palette) => {
+                const entry = getLobsterdexEntries().get(palette.id);
+                const seen = entry !== undefined;
+                const title = !seen
+                  ? "?"
+                  : entry.firstSeenAt !== null
+                    ? t("quickSettings.appearance.lobsterdexFirstVisited", {
+                        name: entry.name ?? palette.id,
+                        date: new Date(entry.firstSeenAt).toLocaleDateString(),
+                      })
+                    : (entry.name ?? palette.id);
+                return html`
+                  <span
+                    class="lobsterdex__mini lobster-pet--palette-${palette.id} ${seen
+                      ? ""
+                      : "lobsterdex__mini--unseen"}"
+                    style="--lob-shell:${palette.shell};--lob-claw:${palette.claw}"
+                    title=${title}
+                  >
+                    ${renderLobsterSvg(canonicalLobsterLook(palette), { standalone: true })}
+                  </span>
+                `;
+              })}
+            </div>
+          `,
+        })}
+      </div>
+    </section>
+  `;
+}
+
 function renderAppearanceSection(props: ConfigProps) {
   const viewState = props.viewState;
   const showCustomThemeImport = props.hasCustomTheme || props.customThemeImportExpanded === true;
@@ -1356,7 +1442,7 @@ function renderAppearanceSection(props: ConfigProps) {
         </div>
       </section>
 
-      ${renderChatPreferencesSection(props)}
+      ${renderLobsterPetSection(props)} ${renderChatPreferencesSection(props)}
 
       <section id=${APPEARANCE_SETTINGS_TARGET_IDS.connection} class="settings-section">
         <div class="settings-section__header">

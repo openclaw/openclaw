@@ -9,6 +9,7 @@ private let chatUILogger = Logger(subsystem: "ai.openclaw", category: "OpenClawC
 @Observable
 public final class OpenClawChatViewModel {
     public nonisolated static let defaultModelSelectionID = "__default__"
+    public nonisolated static let inheritedThinkingSelectionID = "__inherited__"
     static let maxAttachmentBytes = 5_000_000
     static let sessionListFetchLimit = 200
 
@@ -42,6 +43,8 @@ public final class OpenClawChatViewModel {
     public internal(set) var thinkingLevelOptions: [OpenClawChatThinkingLevelOption]
     /// Setter is module-internal for the thinking-level extension only.
     public internal(set) var showsThinkingPicker = true
+    public internal(set) var preferredVerboseLevel: String
+    var prefersExplicitVerboseLevel: Bool
     public private(set) var modelSelectionID: String = "__default__"
     public private(set) var modelChoices: [OpenClawChatModelChoice] = []
     private var modelPickerFavorites: [String]
@@ -85,6 +88,11 @@ public final class OpenClawChatViewModel {
     }
 
     public private(set) var pendingRunCount: Int = 0
+    public internal(set) var questionCards: [OpenClawQuestionCardModel] = []
+    var questionRefreshGeneration: UInt64 = 0
+    var questionStateRevision: UInt64 = 0
+    var questionEvictionTasks: [String: Task<Void, Never>] = [:]
+    var questionEvictionDeadlines: [String: Date] = [:]
     var hasActiveSessionRunWithoutChatSnapshot = false
 
     public private(set) var sessionKey: String {
@@ -113,6 +121,9 @@ public final class OpenClawChatViewModel {
     /// one), a slow cache read must never paint stale rows over it.
     var hasAppliedLiveHistory = false
     var hasAppliedLiveSessions = false
+    @ObservationIgnored
+    var unreadPatchGuard = ChatSessionUnreadPatchGuard()
+    let unreadMutationQueue = ChatSessionUnreadMutationQueue()
     /// Internal for the outbox extension's flush path only.
     let transport: any OpenClawChatTransport
     let haptics: OpenClawChatHaptics
@@ -165,6 +176,9 @@ public final class OpenClawChatViewModel {
     var prefersExplicitThinkingLevel: Bool
     private let onSessionChanged: (@MainActor (String) -> Void)?
     let onThinkingLevelChanged: (@MainActor @Sendable (String) -> Void)?
+    let onThinkingPreferenceChanged: (@MainActor @Sendable (String?) -> Void)?
+    let onVerboseLevelChanged: (@MainActor @Sendable (String) -> Void)?
+    let onVerbosePreferenceChanged: (@MainActor @Sendable (String?) -> Void)?
     private let diagnosticsLog: (@MainActor @Sendable (String) -> Void)?
     private let attachmentOwnerIsActive: @MainActor () -> Bool
 
@@ -233,17 +247,30 @@ public final class OpenClawChatViewModel {
     /// Rollback and pre-refresh sends need the authoritative state from the latest settings patch.
     var lastSuccessfulSettingsPatchResultsByTarget: [ModelPatchTarget: OpenClawChatModelPatchResult] = [:]
     var completedModelPatchTargets: Set<ModelPatchTarget> = []
-    private var inFlightSettingsPatchCountsByTarget: [ModelPatchTarget: Int] = [:]
+    var inFlightSettingsPatchCountsByTarget: [ModelPatchTarget: Int] = [:]
     private var settingsPatchRevisionsByTarget: [ModelPatchTarget: UInt64] = [:]
     private var settingsPatchWaitersByTarget: [ModelPatchTarget: [CheckedContinuation<Void, Never>]] = [:]
     @ObservationIgnored
     private var settingsPatchTailsByTarget: [ModelPatchTarget: SettingsPatchTail] = [:]
     var nextThinkingSelectionRequestID: UInt64 = 0
     var latestThinkingSelectionRequestIDsByTarget: [ModelPatchTarget: UInt64] = [:]
+    var confirmedThinkingPreference: ThinkingPreferenceState
+    var emittedThinkingPreference: ThinkingPreferenceState
+    var thinkingPreferenceRequests: [UInt64: ThinkingPreferenceRequest] = [:]
+    var nextVerboseSelectionRequestID: UInt64 = 0
+    var confirmedVerbosePreference: VerbosePreferenceState
+    var emittedVerbosePreference: VerbosePreferenceState
+    var verbosePreferenceRequests: [UInt64: VerbosePreferenceRequest] = [:]
+    var acceptedVerboseLevelsByTarget: [ModelPatchTarget: VerboseLevelState] = [:]
+    var acceptedFastModesByTarget: [ModelPatchTarget: FastModeState] = [:]
+    var lastSuccessfulThinkingOverrideClearedByTarget: [ModelPatchTarget: Bool] = [:]
+    var lastSuccessfulFastOverrideClearedByTarget: [ModelPatchTarget: Bool] = [:]
+    var lastSuccessfulVerboseOverrideClearedByTarget: [ModelPatchTarget: Bool] = [:]
     var acceptedSettingsPatchResultsByTarget: [ModelPatchTarget: OpenClawChatModelPatchResult] = [:]
     var acceptedThinkingLevelsByTarget: [ModelPatchTarget: String] = [:]
     var acceptedPreferredThinkingLevelsByTarget: [ModelPatchTarget: String] = [:]
     var acceptedExplicitThinkingPreferencesByTarget: [ModelPatchTarget: Bool] = [:]
+    var acceptedThinkingOverrideClearedByTarget: [ModelPatchTarget: Bool] = [:]
     private var isCompacting = false
     private var lastCompactAt: Date?
     private let compactCooldown: TimeInterval = 60
@@ -257,6 +284,43 @@ public final class OpenClawChatViewModel {
         let canonicalSessionKey: String
         let agentID: String?
         let sessionRoutingContract: String?
+    }
+
+    struct VerbosePreferenceState: Equatable {
+        let level: String
+        let isExplicit: Bool
+    }
+
+    enum VerbosePreferenceRequest {
+        case pending(VerbosePreferenceState)
+        case succeeded(VerbosePreferenceState)
+        case failed
+    }
+
+    struct ThinkingPreferenceState: Equatable {
+        let level: String
+        let isExplicit: Bool
+    }
+
+    enum ThinkingPreferenceRequest {
+        case pending(ThinkingPreferenceState)
+        case succeeded(ThinkingPreferenceState)
+        case failed
+    }
+
+    enum VerboseLevelState {
+        case none
+        case value(String)
+
+        var level: String? {
+            if case let .value(level) = self { return level }
+            return nil
+        }
+    }
+
+    struct FastModeState {
+        let override: OpenClawChatFastMode?
+        let effective: OpenClawChatFastMode?
     }
 
     private struct ModelSelectionRequest {
@@ -350,8 +414,12 @@ public final class OpenClawChatViewModel {
         outbox: (any OpenClawChatCommandOutbox)? = nil,
         modelPickerStore: ChatModelPickerStore = ChatModelPickerStore(),
         initialThinkingLevel: String? = nil,
+        initialVerboseLevel: String? = nil,
         onSessionChanged: (@MainActor (String) -> Void)? = nil,
         onThinkingLevelChanged: (@MainActor @Sendable (String) -> Void)? = nil,
+        onThinkingPreferenceChanged: (@MainActor @Sendable (String?) -> Void)? = nil,
+        onVerboseLevelChanged: (@MainActor @Sendable (String) -> Void)? = nil,
+        onVerbosePreferenceChanged: (@MainActor @Sendable (String?) -> Void)? = nil,
         diagnosticsLog: (@MainActor @Sendable (String) -> Void)? = nil)
     {
         self.sessionKey = sessionKey
@@ -375,8 +443,25 @@ public final class OpenClawChatViewModel {
             Self.baseThinkingLevelOptions,
             current: initialResolvedThinkingLevel)
         self.prefersExplicitThinkingLevel = normalizedThinkingLevel != nil
+        let initialThinkingPreference = ThinkingPreferenceState(
+            level: initialResolvedThinkingLevel,
+            isExplicit: normalizedThinkingLevel != nil)
+        self.confirmedThinkingPreference = initialThinkingPreference
+        self.emittedThinkingPreference = initialThinkingPreference
+        let normalizedVerboseLevel = Self.normalizedVerboseLevel(initialVerboseLevel)
+        let initialResolvedVerboseLevel = normalizedVerboseLevel ?? "off"
+        self.preferredVerboseLevel = initialResolvedVerboseLevel
+        self.prefersExplicitVerboseLevel = normalizedVerboseLevel != nil
+        let initialVerbosePreference = VerbosePreferenceState(
+            level: initialResolvedVerboseLevel,
+            isExplicit: normalizedVerboseLevel != nil)
+        self.confirmedVerbosePreference = initialVerbosePreference
+        self.emittedVerbosePreference = initialVerbosePreference
         self.onSessionChanged = onSessionChanged
         self.onThinkingLevelChanged = onThinkingLevelChanged
+        self.onThinkingPreferenceChanged = onThinkingPreferenceChanged
+        self.onVerboseLevelChanged = onVerboseLevelChanged
+        self.onVerbosePreferenceChanged = onVerbosePreferenceChanged
         self.diagnosticsLog = diagnosticsLog
         self.attachmentOwnerIsActive = attachmentOwnerIsActive
 
@@ -403,12 +488,15 @@ public final class OpenClawChatViewModel {
         }
     }
 
-    deinit {
+    isolated deinit {
         self.eventTask?.cancel()
         self.bootstrapTask?.cancel()
         self.outboxRetryTask?.cancel()
         self.outboxChangesTask?.cancel()
         self.activeSessionRunIndicatorTimeoutTask?.cancel()
+        for (_, task) in self.questionEvictionTasks {
+            task.cancel()
+        }
         for (_, task) in self.pendingRunOwnerTasks {
             task.cancel()
         }
@@ -423,10 +511,21 @@ public final class OpenClawChatViewModel {
     }
 
     public var modelPickerSections: ChatModelPickerSections {
-        ChatModelPickerStore.sections(
+        let defaultProvider = ChatModelPickerStore.resolvedDefaultProvider(
+            provider: self.sessionDefaults?.modelProvider,
+            model: self.sessionDefaults?.model)
+        return ChatModelPickerStore.sections(
             choices: self.modelChoices,
             favorites: self.modelPickerFavorites,
-            recents: self.modelPickerRecents)
+            recents: self.modelPickerRecents,
+            defaultProvider: defaultProvider)
+    }
+
+    public func isDefaultModel(_ model: OpenClawChatModelChoice) -> Bool {
+        ChatModelPickerStore.isDefaultModel(
+            model,
+            defaultProvider: self.sessionDefaults?.modelProvider,
+            defaultModel: self.sessionDefaults?.model)
     }
 
     public var isSelectedModelPinned: Bool {
@@ -550,6 +649,14 @@ public final class OpenClawChatViewModel {
         performSelectThinkingLevel(level)
     }
 
+    public func selectVerboseLevel(_ level: String) {
+        performSelectVerboseLevel(level)
+    }
+
+    public func selectFastMode(_ selectionID: String) {
+        performSelectFastMode(selectionID)
+    }
+
     public func selectModel(_ selectionID: String) {
         guard let request = reserveModelSelection(selectionID) else { return }
         enqueueSessionSettingsPatch(requestID: request.id, target: request.target) { [weak self] routeLease in
@@ -654,6 +761,15 @@ public final class OpenClawChatViewModel {
             !self.attachments.isEmpty
     }
 
+    func canCreateSessionForImmediateSwitch() -> Bool {
+        guard !self.blocksAttachmentOwnerChange else {
+            self.errorText = String(
+                localized: "Remove attachments or wait for delivery to resolve before starting a new chat.")
+            return false
+        }
+        return true
+    }
+
     var hasBlockingRunActivity: Bool {
         self.pendingRunCount > 0 || self.hasActiveSessionRunWithoutChatSnapshot
     }
@@ -731,6 +847,7 @@ extension OpenClawChatViewModel {
     private func startBootstrap(sessionKey requestedSessionKey: String? = nil) {
         let sessionKey = requestedSessionKey ?? self.sessionKey
         guard sessionKey == self.sessionKey else { return }
+        self.unreadPatchGuard.activate(key: self.sessionMutationIdentity(for: sessionKey))
         self.bootstrapGeneration &+= 1
         self.bootstrapTask?.cancel()
         self.isLoading = true
@@ -766,6 +883,8 @@ extension OpenClawChatViewModel {
             await self.syncActiveSessionSubscription(startingWith: context.session.key)
             guard self.isCurrentBootstrap(context) else { return }
 
+            Task { [weak self] in await self?.refreshQuestions() }
+
             let payload = try await transport.requestHistory(sessionKey: context.session.key)
             guard self.isCurrentBootstrap(context) else { return }
             _ = self.applyHistoryPayload(
@@ -778,7 +897,14 @@ extension OpenClawChatViewModel {
                 sessionSnapshot: context.session,
                 refreshSessionsOnReconnect: false)
             guard self.isCurrentBootstrap(context) else { return }
+            // A sidebar-selected row can sit outside the bootstrap's 50-row refresh.
+            // Retain its unread metadata until activation acknowledgement finishes.
+            let activationEntry = self.currentSessionEntry()
             await self.fetchSessions(limit: 50, sessionSnapshot: context.session)
+            guard self.isCurrentBootstrap(context) else { return }
+            await self.markCurrentSessionReadAfterActivation(
+                context.session,
+                fallbackEntry: activationEntry)
             guard self.isCurrentBootstrap(context) else { return }
             await self.fetchModels(sessionSnapshot: context.session)
             guard self.isCurrentBootstrap(context) else { return }
@@ -928,27 +1054,16 @@ extension OpenClawChatViewModel {
             }
             self.latestAppliedSessionsFetchRequestID = sessionsFetchRequestID
             let organized = OpenClawChatSessionListOrganizer.organize(res.sessions)
-            self.sessions = organized
-            self.sessionDefaults = res.defaults
-            if let overlappingRequestID = overlappingSuccessfulSettingsPatchRequestID,
-               lastSuccessfulSettingsPatchRequestIDsByTarget[target] == overlappingRequestID
-            {
-                // A post-patch list retry may still carry the pre-patch row.
-                // Preserve only the route whose patch overlapped this fetch.
-                let patchResult = self.lastSuccessfulSettingsPatchResultsByTarget[target]
-                if let selectionID = lastSuccessfulModelSelectionIDsByTarget[target] {
-                    self.applySuccessfulModelSelection(
-                        selectionID,
-                        target: target,
-                        sessionEntryKey: patchResult?.key ?? target.canonicalSessionKey,
-                        syncSelection: false,
-                        patchResult: patchResult)
-                } else if let thinkingLevel = patchResult?.thinkingLevel {
-                    updateCurrentSessionThinkingLevel(
-                        thinkingLevel,
-                        sessionKey: patchResult?.key ?? target.canonicalSessionKey)
-                }
+            for session in organized {
+                self.unreadPatchGuard.observe(
+                    key: self.sessionMutationIdentity(for: session.key, listedKey: session.key),
+                    unread: session.unread)
             }
+            self.sessions = self.applyingLocalUnreadOverrides(to: organized)
+            self.sessionDefaults = res.defaults
+            self.restoreOverlappingSettingsPatch(
+                requestID: overlappingSuccessfulSettingsPatchRequestID,
+                target: target)
             self.hasAppliedLiveSessions = true
             self.syncSelectedModel()
             syncThinkingLevelOptions()
@@ -958,6 +1073,39 @@ extension OpenClawChatViewModel {
                 flushOutboxIfNeeded()
             }
             return
+        }
+    }
+
+    private func restoreOverlappingSettingsPatch(requestID: UInt64?, target: ModelPatchTarget) {
+        guard let requestID,
+              self.lastSuccessfulSettingsPatchRequestIDsByTarget[target] == requestID
+        else { return }
+
+        // A post-patch list retry may still carry the pre-patch row. Preserve
+        // only the route whose patch overlapped this fetch.
+        let patchResult = self.lastSuccessfulSettingsPatchResultsByTarget[target]
+        let resultKey = patchResult?.key ?? target.canonicalSessionKey
+        if let selectionID = self.lastSuccessfulModelSelectionIDsByTarget[target] {
+            self.applySuccessfulModelSelection(
+                selectionID,
+                target: target,
+                sessionEntryKey: resultKey,
+                syncSelection: false,
+                patchResult: patchResult)
+        } else if let thinkingLevel = patchResult?.thinkingLevel,
+                  self.lastSuccessfulThinkingOverrideClearedByTarget[target] != true
+        {
+            self.updateCurrentSessionThinkingLevel(thinkingLevel, sessionKey: resultKey)
+        }
+        if self.lastSuccessfulThinkingOverrideClearedByTarget[target] == true {
+            self.updateCurrentSessionThinkingLevel(nil, sessionKey: resultKey)
+        }
+        if let patchResult {
+            self.applyModelControlPatchResult(
+                patchResult,
+                sessionKey: resultKey,
+                fastOverrideCleared: self.lastSuccessfulFastOverrideClearedByTarget[target] == true,
+                verboseOverrideCleared: self.lastSuccessfulVerboseOverrideClearedByTarget[target] == true)
         }
     }
 
@@ -1289,6 +1437,9 @@ extension OpenClawChatViewModel {
             self.acceptedThinkingLevelsByTarget.removeValue(forKey: target)
             self.acceptedPreferredThinkingLevelsByTarget.removeValue(forKey: target)
             self.acceptedExplicitThinkingPreferencesByTarget.removeValue(forKey: target)
+            self.acceptedThinkingOverrideClearedByTarget.removeValue(forKey: target)
+            self.acceptedVerboseLevelsByTarget.removeValue(forKey: target)
+            self.acceptedFastModesByTarget.removeValue(forKey: target)
             self.latestThinkingSelectionRequestIDsByTarget.removeValue(forKey: target)
             let waiters = self.settingsPatchWaitersByTarget.removeValue(forKey: target) ?? []
             for waiter in waiters {
@@ -1497,6 +1648,7 @@ extension OpenClawChatViewModel {
             self.acceptedThinkingLevelsByTarget[target] = thinkingLevel
             if self.acceptedExplicitThinkingPreferencesByTarget[target] == false {
                 self.acceptedPreferredThinkingLevelsByTarget[target] = thinkingLevel
+                self.recordAuthoritativeInheritedThinkingPreference(thinkingLevel)
             }
         }
         if let patchResult {
@@ -1506,7 +1658,10 @@ extension OpenClawChatViewModel {
                 modelProvider: patchResult.modelProvider ?? previous?.modelProvider,
                 model: patchResult.model ?? previous?.model,
                 thinkingLevel: patchResult.thinkingLevel ?? previous?.thinkingLevel,
-                thinkingLevels: patchResult.thinkingLevels ?? previous?.thinkingLevels)
+                thinkingLevels: patchResult.thinkingLevels ?? previous?.thinkingLevels,
+                fastMode: patchResult.fastMode ?? previous?.fastMode,
+                effectiveFastMode: patchResult.effectiveFastMode ?? previous?.effectiveFastMode,
+                verboseLevel: patchResult.verboseLevel ?? previous?.verboseLevel)
         }
         self.completedModelPatchTargets.insert(target)
     }

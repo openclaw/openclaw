@@ -27,7 +27,7 @@ Socket Mode and HTTP Request URLs reach feature parity for messaging, slash comm
 | ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
 | Public Gateway URL           | Not required                                                                                                                                         | Required (DNS, TLS, reverse proxy or tunnel)                                                                   |
 | Outbound network             | Outbound WSS to `wss-primary.slack.com` must be reachable                                                                                            | No outbound WS; inbound HTTPS only                                                                             |
-| Tokens needed                | Bot token + App-Level Token with `connections:write`                                                                                                 | Bot token + Signing Secret                                                                                     |
+| Tokens needed                | Bot identity: bot token + App-Level Token with `connections:write`; user identity: user token + App-Level Token                                      | Bot identity: bot token + Signing Secret; user identity: user token + Signing Secret                           |
 | Dev laptop / behind firewall | Works as-is                                                                                                                                          | Needs a public tunnel (ngrok, Cloudflare Tunnel, Tailscale Funnel) or staging Gateway                          |
 | Horizontal scaling           | One Socket Mode session per app per host; multiple Gateways need separate Slack apps                                                                 | Stateless POST handler; multiple Gateway replicas can share one app behind a load balancer                     |
 | Multi-account on one Gateway | Supported; each account opens its own WS                                                                                                             | Supported; each account needs a unique `webhookPath` (default `/slack/events`) so registrations do not collide |
@@ -744,6 +744,70 @@ openclaw gateway
   </Tab>
 </Tabs>
 
+## User identity (post as a real person)
+
+User identity lets OpenClaw read and post as the human who authorizes the Slack app. The `userToken` is the acting identity; a companion Slack app carries Events API traffic over Socket Mode or an HTTP Request URL. The companion app does not need a bot user or bot token.
+
+Set up the companion app as follows:
+
+1. Under **OAuth & Permissions -> User Token Scopes**, add these user-scoped permissions:
+
+   - history: `channels:history`, `groups:history`, `im:history`, `mpim:history`
+   - conversation lookup: `channels:read`, `groups:read`, `im:read`, `mpim:read`
+   - people: `users:read`
+   - posting: `chat:write` (messages are posted as the authorizing user)
+   - opening DMs: `im:write`, `mpim:write`
+
+2. Under **Event Subscriptions -> Subscribe to events on behalf of users**, add these user events. Do not add them only to the bot-events list:
+
+   - `message.channels`
+   - `message.groups`
+   - `message.im`
+   - `message.mpim`
+
+3. Choose one event transport:
+
+   - **Socket Mode:** enable Socket Mode and create an app-level token with `connections:write`. Configure it as `appToken`.
+   - **HTTP Request URL:** point Event Subscriptions at the public OpenClaw Slack endpoint and copy **Basic Information -> App Credentials -> Signing Secret**. Configure it as `signingSecret`.
+
+4. Install or reinstall the app, authorize it as the intended human, and copy the resulting user OAuth token into `userToken`.
+
+Socket Mode configuration:
+
+```json5
+{
+  channels: {
+    slack: {
+      identity: "user",
+      userToken: "<xoxp>",
+      appToken: "<xapp>",
+    },
+  },
+}
+```
+
+HTTP Request URL configuration:
+
+```json5
+{
+  channels: {
+    slack: {
+      identity: "user",
+      mode: "http",
+      userToken: "<xoxp>",
+      signingSecret: "<signing-secret>",
+      webhookPath: "/slack/events",
+    },
+  },
+}
+```
+
+<Warning>
+  DMs and group DMs work only through the user-scope event subscription above. A bot cannot join a human 1:1 DM or be inserted into an existing group DM. The companion app is invisible plumbing: other Slack members see messages from the authorizing human, not from an OpenClaw bot.
+</Warning>
+
+OpenClaw automatically drops user-scope message events authored by the resolved human identity, so messages it sends do not trigger self-replies.
+
 ## Socket Mode transport tuning
 
 OpenClaw sets the Slack SDK client pong timeout to 15 seconds by default for Socket Mode. Override the transport settings only when you need workspace- or host-specific tuning:
@@ -1102,8 +1166,8 @@ The default manifest enables the Slack App Home **Home** tab and subscribes to `
 
 ## Token model
 
-- `botToken` + `appToken` are required for Socket Mode.
-- HTTP mode requires `botToken` + `signingSecret`.
+- Bot identity (default) requires `botToken` + `appToken` for Socket Mode, or `botToken` + `signingSecret` for HTTP mode.
+- User identity requires `userToken` + `appToken` for Socket Mode, or `userToken` + `signingSecret` for HTTP mode. It does not use a bot token.
 - Relay mode requires `botToken` plus `relay.url`, `relay.authToken`, and `relay.gatewayId`; it does not use an app token or signing secret.
 - `botToken`, `appToken`, `signingSecret`, `relay.authToken`, and `userToken` accept plaintext
   strings or SecretRef objects.
@@ -1119,11 +1183,12 @@ Status snapshot behavior:
 - `configured_unavailable` means the account is configured through SecretRef
   or another non-inline secret source, but the current command/runtime path
   could not resolve the actual value.
-- In HTTP mode, `signingSecretStatus` is included; in Socket Mode, the
-  required pair is `botTokenStatus` + `appTokenStatus`.
+- In HTTP mode, `signingSecretStatus` is included. Socket Mode uses
+  `botTokenStatus` + `appTokenStatus` for bot identity and
+  `userTokenStatus` + `appTokenStatus` for user identity.
 
 <Tip>
-For actions/directory reads, user token can be preferred when configured. For writes, bot token remains preferred; user-token writes are only allowed when `userTokenReadOnly: false` and bot token is unavailable.
+For bot identity, actions and directory reads can prefer an optional user token; writes continue to use the bot token unless `userTokenReadOnly: false` allows fallback. For `identity: "user"`, reads and writes always use `userToken`.
 </Tip>
 
 ## Actions and gates
@@ -1831,7 +1896,7 @@ Primary reference: [Configuration reference - Slack](/gateway/config-channels#sl
 
 <Accordion title="High-signal Slack fields">
 
-- mode/auth: `mode`, `enterpriseOrgInstall`, `botToken`, `appToken`, `signingSecret`, `webhookPath`, `accounts.*`
+- mode/auth: `identity`, `mode`, `enterpriseOrgInstall`, `botToken`, `appToken`, `userToken`, `signingSecret`, `webhookPath`, `accounts.*`
 - DM access: `dm.enabled`, `dmPolicy`, `allowFrom` (legacy: `dm.policy`, `dm.allowFrom`), `dm.groupEnabled`, `dm.groupChannels`
 - compatibility toggle: `dangerouslyAllowNameMatching` (break-glass; keep off unless needed)
 - channel access: `groupPolicy`, `channels.*`, `channels.*.users`, `channels.*.requireMention`, `implicitMentions.*`

@@ -27,6 +27,7 @@ import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { resolveConfigPath } from "../config/paths.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
+import type { GatewayAuthMode } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolveAdvertisedControlUiLinks,
@@ -51,6 +52,18 @@ export { randomToken } from "./random-token.js";
 export { detectBinary };
 export { detectBrowserOpenSupport, openUrl, resolveBrowserOpenCommand };
 export { resolveAdvertisedControlUiLinks, resolveControlUiLinks, resolveLocalControlUiProbeLinks };
+
+/** Builds the token-authenticated Control UI URL shown by onboarding surfaces. */
+export function buildOnboardingControlUiUrl(params: {
+  httpUrl: string;
+  authMode?: GatewayAuthMode;
+  token?: string;
+  suppressTokenOutput?: boolean;
+}): string {
+  return params.authMode === "token" && params.token && !params.suppressTokenOutput
+    ? `${params.httpUrl}#token=${encodeURIComponent(params.token)}`
+    : params.httpUrl;
+}
 
 /** Handles Clack cancellation by exiting through the runtime. */
 export function guardCancel<T>(value: T | symbol, runtime: RuntimeEnv, exitCode = 0): T {
@@ -238,7 +251,7 @@ export async function ensureWorkspaceAndSessions(
     skipOptionalBootstrapFiles?: OptionalBootstrapFileName[];
     agentId?: string;
   },
-) {
+): Promise<{ bootstrapPending: boolean }> {
   const ws = await ensureAgentWorkspace({
     dir: workspaceDir,
     ensureBootstrapFiles: !options?.skipBootstrap,
@@ -248,6 +261,7 @@ export async function ensureWorkspaceAndSessions(
   const sessionsDir = resolveSessionTranscriptsDirForAgent(options?.agentId);
   await fs.mkdir(sessionsDir, { recursive: true });
   runtime.log(`Sessions OK: ${shortenHomePath(sessionsDir)}`);
+  return { bootstrapPending: ws.bootstrapPending === true };
 }
 
 /** Moves a path to Trash when it exists, logging a manual-delete fallback on failure. */

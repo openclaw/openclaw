@@ -177,11 +177,31 @@ function matchesConnector(connector: ConnectorSuggestion, query: string): boolea
 }
 
 function sortCatalogPlugins(plugins: readonly PluginCatalogItem[]): PluginCatalogItem[] {
-  return plugins.toSorted(
-    (left, right) =>
+  return plugins.toSorted((left, right) => {
+    const featured = Number(Boolean(right.featured)) - Number(Boolean(left.featured));
+    if (featured !== 0) {
+      return featured;
+    }
+    if (left.featured && right.featured) {
+      const leftFeaturedAt = left.featuredAt;
+      const rightFeaturedAt = right.featuredAt;
+      if (leftFeaturedAt !== undefined || rightFeaturedAt !== undefined) {
+        if (leftFeaturedAt === undefined) {
+          return 1;
+        }
+        if (rightFeaturedAt === undefined) {
+          return -1;
+        }
+        if (leftFeaturedAt !== rightFeaturedAt) {
+          return rightFeaturedAt - leftFeaturedAt;
+        }
+      }
+    }
+    return (
       (left.order ?? Number.MAX_SAFE_INTEGER) - (right.order ?? Number.MAX_SAFE_INTEGER) ||
-      left.name.localeCompare(right.name),
-  );
+      left.name.localeCompare(right.name)
+    );
+  });
 }
 
 function installedPlugins(

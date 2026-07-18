@@ -24,7 +24,7 @@ import {
   normalizeAgentModelMapForConfig,
   normalizeAgentModelRefForConfig,
 } from "../config/model-input.js";
-import { CONFIG_PATH } from "../config/paths.js";
+import { CONFIG_PATH, resolveConfigPath } from "../config/paths.js";
 import { isPluginPackagingRuntimeOutputInvalidConfigSnapshot } from "../config/recovery-policy.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
 import { readBestEffortRuntimeConfigSchema } from "../config/runtime-schema.js";
@@ -47,10 +47,11 @@ import { diffConfigPaths } from "../gateway/config-diff.js";
 import { buildGatewayReloadPlan } from "../gateway/config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "../gateway/config-reload-settings.js";
 import { danger, info, success, warn } from "../globals.js";
+import { hasErrnoCode } from "../infra/errors.js";
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { ExitError, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import {
   isPluginIntegrationSecretProviderConfig,
@@ -1050,7 +1051,7 @@ function configApplyHintForPaths(paths: string[], afterConfig: OpenClawConfig): 
   if (paths.some(isPluginEntryConfigPath)) {
     return RESTART_HINT;
   }
-  const plan = buildGatewayReloadPlan(paths);
+  const plan = buildGatewayReloadPlan(paths, { candidateConfig: afterConfig });
   if (plan.restartGateway) {
     return RESTART_HINT;
   }
@@ -1505,7 +1506,19 @@ async function readConfigPatchInput(opts: ConfigPatchOptions): Promise<unknown> 
     throw configPatchModeError("provide exactly one of --file <path> or --stdin.");
   }
   const sourceLabel = stdin ? "--stdin" : "--file";
-  const raw = stdin ? await readStdinText() : fs.readFileSync(file as string, "utf8");
+  let raw: string;
+  if (stdin) {
+    raw = await readStdinText();
+  } else {
+    try {
+      raw = fs.readFileSync(file as string, "utf8");
+    } catch (err) {
+      if (hasErrnoCode(err, "ENOENT")) {
+        throw new Error(`--file not found: ${file}`, { cause: err });
+      }
+      throw err;
+    }
+  }
   try {
     return JSON5.parse(raw);
   } catch (err) {
@@ -2459,6 +2472,11 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
     const redacted = redactConfigObject(snapshot.config);
     const res = getAtPath(redacted, parsedPath);
     if (!res.found) {
+      if (opts.json) {
+        writeRuntimeJson(runtime, { error: `Config path not found: ${opts.path}` });
+        runtime.exit(1);
+        return;
+      }
       runtime.error(
         danger(
           `Config path not found: ${opts.path}. Run ${formatCliCommand("openclaw config validate")} to inspect config shape.`,
@@ -2481,6 +2499,9 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
     }
     writeRuntimeJson(runtime, res.value ?? null);
   } catch (err) {
+    if (err instanceof ExitError) {
+      throw err;
+    }
     runtime.error(danger(String(err)));
     runtime.exit(1);
   }
@@ -2577,8 +2598,7 @@ export async function runConfigUnset(opts: {
 async function runConfigFile(opts: { runtime?: RuntimeEnv }) {
   const runtime = opts.runtime ?? defaultRuntime;
   try {
-    const snapshot = await readConfigFileSnapshot();
-    runtime.log(snapshot.path);
+    runtime.log(resolveConfigPath());
   } catch (err) {
     runtime.error(danger(String(err)));
     runtime.exit(1);

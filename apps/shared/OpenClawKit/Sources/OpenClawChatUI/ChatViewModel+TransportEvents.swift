@@ -24,7 +24,11 @@ extension OpenClawChatViewModel {
     func handleTransportEvent(_ evt: OpenClawChatTransportEvent) {
         switch evt {
         case let .health(ok):
+            let reconnected = ok && !self.healthOK
             applyTransportHealth(ok)
+            if reconnected {
+                Task { [weak self] in await self?.refreshQuestions() }
+            }
         case .tick:
             let context = self.currentSessionSnapshot()
             Task { await self.pollHealthIfNeeded(force: false, sessionSnapshot: context) }
@@ -38,6 +42,12 @@ extension OpenClawChatViewModel {
             self.handleSessionMessageEvent(message)
         case let .agent(agent):
             self.handleAgentEvent(agent)
+        case let .questionRequested(question):
+            self.upsertQuestion(question)
+            self.reconcileQuestionsAfterEvent()
+        case let .questionResolved(resolved):
+            self.resolveQuestionEvent(resolved)
+            self.reconcileQuestionsAfterEvent()
         case .seqGap:
             self.errorText = nil
             self.invalidateHistorySnapshots()
@@ -47,6 +57,9 @@ extension OpenClawChatViewModel {
             self.updateStreamingAssistantText(nil)
             self.clearPlan()
             let context = self.beginHistoryRequest()
+            // Question refresh is best-effort and must not delay transcript
+            // recovery behind a slow gateway round trip.
+            Task { await self.refreshQuestions() }
             Task {
                 await self.refreshHistoryAfterRun(historyRequest: context)
                 await self.pollHealthIfNeeded(force: true, sessionSnapshot: context.session)
@@ -448,7 +461,6 @@ extension OpenClawChatViewModel {
                 // but it is enough to retain the run ID this client already owns.
                 self.pendingToolCallsById = [:]
                 self.updateStreamingAssistantText(nil)
-                self.clearPlan(for: runId)
                 return true
             }
             if let timestamp,
@@ -972,7 +984,8 @@ extension OpenClawChatViewModel {
 
     func clearPendingRuns(
         reason: String?,
-        hapticEvent: OpenClawChatHaptics.Event? = nil)
+        hapticEvent: OpenClawChatHaptics.Event? = nil,
+        preservePlan: Bool = false)
     {
         let runIds = Array(pendingRuns)
         for runId in self.pendingRuns {
@@ -981,7 +994,9 @@ extension OpenClawChatViewModel {
         self.pendingRunOwnerTasks.removeAll()
         self.pendingRunOwnerArmIDs.removeAll()
         self.pendingRuns.removeAll()
-        self.clearPlan()
+        if !preservePlan {
+            self.clearPlan()
+        }
         self.pendingLocalUserEchoMessageIDsByRunID.removeAll()
         if !runIds.isEmpty, let hapticEvent {
             self.haptics.perform(hapticEvent)

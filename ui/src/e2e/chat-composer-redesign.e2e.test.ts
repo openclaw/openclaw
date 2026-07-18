@@ -143,6 +143,9 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       await expect.poll(() => camera.isVisible()).toBe(false);
       await expect.poll(() => voice.isVisible()).toBe(true);
       await expect
+        .poll(() => page.getByRole("button", { name: "Start video talk" }).count())
+        .toBe(0);
+      await expect
         .poll(() =>
           attach.evaluate((node) => node.closest(".agent-chat__composer-input-row") != null),
         )
