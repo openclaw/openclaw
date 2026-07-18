@@ -440,7 +440,12 @@ class ChatQuestionTest {
                     .content
                 getCalls[id] = getCalls.getOrDefault(id, 0) + 1
                 when (id) {
-                  recoveredPending.id -> json.encodeToString(QuestionGetResult(recoveredAnswered))
+                  recoveredPending.id ->
+                    json.encodeToString(
+                      QuestionGetResult(
+                        if (getCalls.getValue(id) == 1) recoveredPending else recoveredAnswered,
+                      ),
+                    )
                   newlyMissingPending.id -> json.encodeToString(QuestionGetResult(newlyMissingAnswered))
                   failingPending.id -> {
                     if (getCalls.getValue(id) == 1) {
@@ -475,19 +480,71 @@ class ChatQuestionTest {
           ?.get("meal")
           ?.answers,
       )
-      assertEquals(ChatQuestionStatus.AnsweredElsewhere, prompts.getValue("ask_recovered").status())
+      assertEquals(ChatQuestionStatus.Pending, prompts.getValue("ask_recovered").status())
       assertEquals(ChatQuestionStatus.Pending, prompts.getValue("ask_failing").status())
       assertEquals(ChatQuestionStatus.Pending, prompts.getValue("ask_newly_missing").status())
 
       advanceTimeBy(1_000)
       runCurrent()
-      assertEquals(1, getCalls["ask_recovered"])
+      assertEquals(2, getCalls["ask_recovered"])
       assertEquals(2, getCalls["ask_failing"])
       assertEquals(1, getCalls["ask_newly_missing"])
       assertEquals(
         ChatQuestionStatus.AnsweredElsewhere,
         controller.questions.value
           .single { it.record.id == "ask_newly_missing" }
+          .status(),
+      )
+      assertEquals(
+        ChatQuestionStatus.AnsweredElsewhere,
+        controller.questions.value
+          .single { it.record.id == "ask_recovered" }
+          .status(),
+      )
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun questionGetRetryUsesLatestRevisionAfterAnotherQuestionChanges() =
+    runTest {
+      val json = Json { ignoreUnknownKeys = true }
+      val recovering = record(id = "ask_recovering")
+      val unrelated = record(id = "ask_unrelated")
+      val recovered = recovering.copy(status = "answered")
+      var getCalls = 0
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, _ ->
+            when (method) {
+              "question.list" -> json.encodeToString(QuestionListResult(listOf(unrelated)))
+              "question.get" -> {
+                getCalls += 1
+                if (getCalls == 1) error("temporary question.get failure")
+                json.encodeToString(QuestionGetResult(recovered))
+              }
+              "question.resolve" -> "{}"
+              else -> "{}"
+            }
+          },
+        )
+
+      controller.handleGatewayEvent("question.requested", json.encodeToString(recovering))
+      controller.handleGatewayEvent("question.requested", json.encodeToString(unrelated))
+      runCurrent()
+      assertEquals(1, getCalls)
+
+      controller.skipQuestion(unrelated.id)
+      runCurrent()
+      advanceTimeBy(1_000)
+      runCurrent()
+
+      assertEquals(2, getCalls)
+      assertEquals(
+        ChatQuestionStatus.AnsweredElsewhere,
+        controller.questions.value
+          .single { it.record.id == recovering.id }
           .status(),
       )
     }
@@ -521,16 +578,7 @@ class ChatQuestionTest {
         )
 
       controller.handleGatewayEvent("question.requested", json.encodeToString(pending))
-      advanceUntilIdle()
-      assertEquals(
-        ChatQuestionStatus.Expired,
-        controller.questions.value
-          .single()
-          .status(),
-      )
-
-      controller.handleGatewayEvent("health", null)
-      advanceUntilIdle()
+      runCurrent()
 
       assertEquals(1, getCalls)
       assertEquals(
@@ -628,49 +676,6 @@ class ChatQuestionTest {
 
       assertEquals(
         ChatQuestionStatus.AnsweredElsewhere,
-        controller.questions.value
-          .single()
-          .status(),
-      )
-    }
-
-  @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
-  fun missingExpiredQuestionNotFoundRemainsExpired() =
-    runTest {
-      val json = Json { ignoreUnknownKeys = true }
-      val pending = record(expiresAtMs = 0)
-      val controller =
-        ChatController(
-          scope = this,
-          json = json,
-          requestGateway = { method, _ ->
-            when (method) {
-              "question.list" -> json.encodeToString(QuestionListResult(emptyList()))
-              "question.get" ->
-                throw GatewayRequestRejected(
-                  GatewaySession.ErrorShape(
-                    code = "INVALID_REQUEST",
-                    message = "question not found",
-                    details =
-                      GatewayConnectErrorDetails(
-                        code = null,
-                        reason = "QUESTION_NOT_FOUND",
-                        canRetryWithDeviceToken = false,
-                        recommendedNextStep = null,
-                      ),
-                  ),
-                )
-              else -> "{}"
-            }
-          },
-        )
-
-      controller.handleGatewayEvent("question.requested", json.encodeToString(pending))
-      advanceUntilIdle()
-
-      assertEquals(
-        ChatQuestionStatus.Expired,
         controller.questions.value
           .single()
           .status(),

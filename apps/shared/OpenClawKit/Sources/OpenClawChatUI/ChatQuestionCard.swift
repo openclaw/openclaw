@@ -579,12 +579,10 @@ extension OpenClawChatViewModel {
                 case let .record(record):
                     changed = model.apply(record: record) || changed
                 case .notFound:
-                    if model.status() == .expired {
-                        changed = model.observeLocalExpiry(at: Date()) || changed
-                    } else {
-                        model.markAnsweredElsewhere()
-                        changed = true
-                    }
+                    // Match the Control UI recovery contract: after the gateway's terminal
+                    // grace window, authoritative absence means the prompt is no longer actionable.
+                    model.markAnsweredElsewhere()
+                    changed = true
                 case .failed:
                     complete = false
                 }

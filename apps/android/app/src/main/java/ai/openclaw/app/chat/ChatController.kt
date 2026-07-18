@@ -53,12 +53,6 @@ import java.util.concurrent.atomic.AtomicLong
 internal const val SESSION_LIST_FETCH_LIMIT = 200
 private val QUESTION_REFRESH_RETRY_DELAYS_MS = longArrayOf(1_000L, 2_000L, 4_000L)
 
-private data class QuestionRefreshOutcome(
-  val complete: Boolean,
-  val stateRevision: Long,
-  val completedFallbackIds: Set<String> = emptySet(),
-)
-
 internal fun chatOutboxQueueFailureText(): NativeText = ChatController.queueFailureText()
 
 // Capture before suspend points; both fields must still match before gateway data reaches UI state.
@@ -2183,38 +2177,21 @@ class ChatController internal constructor(
 
   private fun refreshQuestions() {
     val gatewayScope = currentCacheScope()
-    val (refreshGeneration, stateRevision) =
+    val refreshGeneration =
       synchronized(questionStateLock) {
         questionRefreshGeneration += 1
-        questionRefreshGeneration to questionStateRevision
+        questionRefreshGeneration
       }
     scope.launch {
-      var expectedStateRevision = stateRevision
-      var completedFallbackIds = emptySet<String>()
       for (attempt in 0..QUESTION_REFRESH_RETRY_DELAYS_MS.size) {
-        val outcome =
+        val expectedStateRevision = questionRefreshCurrentRevision(refreshGeneration, gatewayScope) ?: return@launch
+        val complete =
           runCatching {
-            refreshQuestions(
-              refreshGeneration,
-              expectedStateRevision,
-              gatewayScope,
-              completedFallbackIds,
-            )
-          }.getOrElse {
-            QuestionRefreshOutcome(
-              complete = false,
-              stateRevision = expectedStateRevision,
-              completedFallbackIds = completedFallbackIds,
-            )
-          }
-        if (
-          outcome.complete ||
-          !questionRefreshIsCurrent(refreshGeneration, outcome.stateRevision, gatewayScope)
-        ) {
+            refreshQuestions(refreshGeneration, expectedStateRevision, gatewayScope)
+          }.getOrDefault(false)
+        if (complete || questionRefreshCurrentRevision(refreshGeneration, gatewayScope) == null) {
           return@launch
         }
-        expectedStateRevision = outcome.stateRevision
-        completedFallbackIds = outcome.completedFallbackIds
         val retryDelayMs = QUESTION_REFRESH_RETRY_DELAYS_MS.getOrNull(attempt) ?: return@launch
         delay(retryDelayMs)
       }
@@ -2225,45 +2202,34 @@ class ChatController internal constructor(
     refreshGeneration: Long,
     stateRevision: Long,
     gatewayScope: ChatCacheScope?,
-    completedFallbackIds: Set<String>,
-  ): QuestionRefreshOutcome {
+  ): Boolean {
     val response = requestGatewayBound(gatewayScope?.gatewayId, "question.list", "{}")
-    if (!questionRefreshIsCurrent(refreshGeneration, stateRevision, gatewayScope)) {
-      return QuestionRefreshOutcome(complete = true, stateRevision = stateRevision)
-    }
+    if (!questionRefreshIsCurrent(refreshGeneration, stateRevision, gatewayScope)) return false
     val listedRecords = json.decodeFromString<QuestionListResult>(response).questions
     val listedIds = listedRecords.mapTo(mutableSetOf()) { it.id }
-    val retainedCompletedFallbackIds = completedFallbackIds - listedIds
     val missingPendingRecords =
       synchronized(questionStateLock) {
-        if (!questionRefreshIsCurrentLocked(refreshGeneration, stateRevision)) {
-          return QuestionRefreshOutcome(complete = true, stateRevision = stateRevision)
-        }
+        if (!questionRefreshIsCurrentLocked(refreshGeneration, stateRevision)) return false
         _questions.value
           .filter { prompt ->
-            // Skip only successful prior fallbacks. A newly missing listed prompt
-            // still needs question.get so a remote terminal transition is observed.
             prompt.record.id !in listedIds &&
-              prompt.record.status == "pending" &&
-              prompt.record.id !in retainedCompletedFallbackIds
+              prompt.record.status == "pending"
           }.map { it.record }
       }
     val fallbackRecords = mutableListOf<QuestionRecord>()
-    val successfulFallbackIds = mutableSetOf<String>()
     val unresolvedIds = mutableSetOf<String>()
     for (record in missingPendingRecords) {
       val params = buildJsonObject { put("id", JsonPrimitive(record.id)) }
       try {
         val fallback = requestGatewayBound(gatewayScope?.gatewayId, "question.get", params.toString())
         fallbackRecords += json.decodeFromString<QuestionGetResult>(fallback).question
-        successfulFallbackIds += record.id
       } catch (err: CancellationException) {
         throw err
       } catch (err: GatewayRequestRejected) {
         if (err.gatewayError.details?.reason == "QUESTION_NOT_FOUND") {
-          val status = if (System.currentTimeMillis() >= record.expiresAtMs) "expired" else "answered"
-          fallbackRecords += record.copy(status = status, answers = null)
-          successfulFallbackIds += record.id
+          // Match the Control UI recovery contract: after the gateway's terminal
+          // grace window, authoritative absence means the prompt is no longer actionable.
+          fallbackRecords += record.copy(status = "answered", answers = null)
         } else {
           unresolvedIds += record.id
         }
@@ -2271,14 +2237,10 @@ class ChatController internal constructor(
         unresolvedIds += record.id
       }
     }
-    if (!questionRefreshIsCurrent(refreshGeneration, stateRevision, gatewayScope)) {
-      return QuestionRefreshOutcome(complete = true, stateRevision = stateRevision)
-    }
+    if (!questionRefreshIsCurrent(refreshGeneration, stateRevision, gatewayScope)) return false
     val records = listedRecords + fallbackRecords.filter { it.id !in listedIds }
     return synchronized(questionStateLock) {
-      if (!questionRefreshIsCurrentLocked(refreshGeneration, stateRevision)) {
-        return@synchronized QuestionRefreshOutcome(complete = true, stateRevision = stateRevision)
-      }
+      if (!questionRefreshIsCurrentLocked(refreshGeneration, stateRevision)) return@synchronized false
       val current = _questions.value
       val existing = current.associateBy { it.record.id }
       val nowMs = System.currentTimeMillis()
@@ -2286,13 +2248,9 @@ class ChatController internal constructor(
       val retainedPrompts =
         current.filter {
           val status = it.status(nowMs)
-          // Retry only failed lookups without dropping a prior successful fallback
-          // that authoritatively remained pending while another lookup failed.
-          val completedFallback = it.record.id in retainedCompletedFallbackIds
           it.record.id !in refreshedIds &&
             (
               it.record.id in unresolvedIds ||
-                completedFallback ||
                 (
                   status != ChatQuestionStatus.Pending &&
                     status != ChatQuestionStatus.Submitting
@@ -2313,11 +2271,17 @@ class ChatController internal constructor(
         questionStateRevision += 1
       }
       syncQuestionEvictionsLocked()
-      QuestionRefreshOutcome(
-        complete = unresolvedIds.isEmpty(),
-        stateRevision = questionStateRevision,
-        completedFallbackIds = retainedCompletedFallbackIds + successfulFallbackIds,
-      )
+      unresolvedIds.isEmpty()
+    }
+  }
+
+  private fun questionRefreshCurrentRevision(
+    refreshGeneration: Long,
+    gatewayScope: ChatCacheScope?,
+  ): Long? {
+    if (gatewayScope != currentCacheScope()) return null
+    return synchronized(questionStateLock) {
+      questionStateRevision.takeIf { refreshGeneration == questionRefreshGeneration }
     }
   }
 
