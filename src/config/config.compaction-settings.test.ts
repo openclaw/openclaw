@@ -19,6 +19,7 @@ function materializeCompactionConfig(
 describe("config compaction settings", () => {
   it("preserves memory flush config values", () => {
     const compaction = materializeCompactionConfig({
+      enabled: false,
       mode: "safeguard",
       reserveTokensFloor: 12_345,
       identifierPolicy: "custom",
@@ -40,6 +41,7 @@ describe("config compaction settings", () => {
       maxActiveTranscriptBytes: "20mb",
     });
 
+    expect(compaction?.enabled).toBe(false);
     expect(compaction?.reserveTokensFloor).toBe(12_345);
     expect(compaction?.mode).toBe("safeguard");
     expect(compaction?.reserveTokens).toBeUndefined();

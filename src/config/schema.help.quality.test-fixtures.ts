@@ -405,6 +405,7 @@ export const TARGET_KEYS = [
   "agents.defaults",
   "agents.list",
   "agents.defaults.compaction",
+  "agents.defaults.compaction.enabled",
   "agents.defaults.compaction.mode",
   "agents.defaults.compaction.provider",
   "agents.defaults.compaction.reserveTokens",

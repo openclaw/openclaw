@@ -316,6 +316,15 @@ describe("agent defaults schema", () => {
     );
   });
 
+  it("accepts compaction.enabled", () => {
+    const result = AgentDefaultsSchema.parse({
+      compaction: {
+        enabled: false,
+      },
+    })!;
+    expect(result.compaction?.enabled).toBe(false);
+  });
+
   it("accepts compaction.truncateAfterCompaction", () => {
     const result = AgentDefaultsSchema.parse({
       compaction: {
