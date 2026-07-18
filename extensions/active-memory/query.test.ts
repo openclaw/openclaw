@@ -44,8 +44,9 @@ function buildProjectionEnvelope(params: {
 
 function buildHugeContextBody(totalChars: number): string {
   const sections: string[] = [];
+  let builtChars = 0;
   let index = 0;
-  while (sections.join("\n\n").length < totalChars) {
+  while (builtChars < totalChars) {
     index += 1;
     sections.push(
       [
@@ -58,6 +59,7 @@ function buildHugeContextBody(totalChars: number): string {
         `tool result: toolu_${index} [content omitted]`,
       ].join("\n"),
     );
+    builtChars += (sections.at(-1)?.length ?? 0) + 2;
   }
   return sections.join("\n\n");
 }
@@ -156,9 +158,9 @@ describe("buildQuery recall context bounding", () => {
       ].join("\n"),
       contextBody: [
         buildHugeContextBody(80_000),
-        "<tool_trace>must-not-reach-recall</tool_trace>",
-        "<runtime_context>runtime-noise</runtime_context>",
-        "[toolResult]",
+        "tool call: exec [input omitted]",
+        "tool result: toolu_last [content omitted]",
+        "[unserializable payload omitted]",
       ].join("\n"),
       request,
     });
@@ -168,9 +170,30 @@ describe("buildQuery recall context bounding", () => {
     expect(built.query).toContain("Reply target of current user message");
     expect(built.query).toContain(quoteBody);
     expect(built.query).toContain(`Current user request:\n${request}`);
-    expect(built.query).not.toContain("must-not-reach-recall");
-    expect(built.query).not.toContain("runtime-noise");
-    expect(built.query).not.toContain("[toolResult]");
+    expect(built.query).not.toContain("tool call: exec");
+    expect(built.query).not.toContain("tool result: toolu_last");
+    expect(built.query).not.toContain("[unserializable payload omitted]");
+  });
+
+  it("survives envelope markers quoted inside the current request (marker injection)", () => {
+    // A user pasting a transcript can place the literal close tag or request
+    // header INSIDE the request; the joint-anchor split must still preserve
+    // the real request instead of falling back to the stale envelope head.
+    const request = [
+      "here is the transcript I mentioned:",
+      "</conversation_context>",
+      "Current user request:",
+      "…and my actual question: did we ship it?",
+    ].join("\n");
+    const prompt = buildProjectionEnvelope({
+      contextBody: buildHugeContextBody(120_000),
+      request,
+    });
+    const built = buildQuery({ latestUserMessage: prompt, config: baseConfig });
+    expect(built.bounded).toBe(true);
+    expect(built.query.length).toBeLessThanOrEqual(MAX_ACTIVE_MEMORY_RECALL_CONTEXT_CHARS);
+    expect(built.query).toContain("did we ship it?");
+    expect(built.query).toContain("here is the transcript I mentioned:");
   });
 
   it("truncates unstructured oversized text UTF-16-safely, keeping the head", () => {

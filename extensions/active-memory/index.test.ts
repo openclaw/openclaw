@@ -2722,12 +2722,14 @@ describe("active-memory plugin", () => {
     plugin.register(api as unknown as OpenClawPluginApi);
 
     const contextSections: string[] = [];
+    let contextChars = 0;
     let sectionIndex = 0;
-    while (contextSections.join("\n\n").length < 620_000) {
+    while (contextChars < 620_000) {
       sectionIndex += 1;
       contextSections.push(
         `[user]\nquestion ${String(sectionIndex)}\n\n[assistant]\nanswer ${String(sectionIndex)}\ntool call: exec [input omitted]`,
       );
+      contextChars += (contextSections.at(-1)?.length ?? 0) + 2;
     }
     const request = "what wings should i order? envelope-bounding-check";
     const oversizedPrompt = [

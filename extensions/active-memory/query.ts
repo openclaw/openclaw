@@ -26,18 +26,22 @@ import {
 const PROJECTION_CONTEXT_OPEN = "<conversation_context>";
 const PROJECTION_CONTEXT_CLOSE = "</conversation_context>";
 const PROJECTION_REQUEST_HEADER = "Current user request:";
+// The projection emits the close tag and request header as ONE joint literal
+// (`\n${CONTEXT_CLOSE}\n\n${REQUEST_HEADER}\n` in context-engine-projection.ts).
+// Splitting on the full joint emission means user content quoting either
+// marker alone can never redirect the split and drop the real request.
+const PROJECTION_JOINT_ANCHOR = `\n${PROJECTION_CONTEXT_CLOSE}\n\n${PROJECTION_REQUEST_HEADER}\n`;
 const CHANNEL_CURRENT_MESSAGE_HEADER = "Current message:";
-const CHANNEL_REPLY_TARGET_HEADERS = [
-  "Reply target of current user message",
-  "Quoted Signal reply context",
-];
+// Producer: src/auto-reply/reply/inbound-meta.ts formatUntrustedJsonBlock
+// ("Reply target of current user message (untrusted, for context):").
+const CHANNEL_REPLY_TARGET_HEADER = "Reply target of current user message";
 
 const RECALL_TAIL_OMITTED_NOTE = "[older conversation content and tool traces omitted]";
 const TRUNCATED_REQUEST_NOTE = "[request truncated]";
 const TRUNCATED_QUOTE_NOTE = "[quoted reply truncated]";
-//: fixed scaffold headroom (headers/tags/notes) reserved out of the cap
+// fixed scaffold headroom (headers/tags/notes) reserved out of the cap
 const RECALL_SCAFFOLD_RESERVE_CHARS = 400;
-//: below this leftover budget a context tail adds noise, not signal
+// below this leftover budget a context tail adds noise, not signal
 const MIN_CONTEXT_TAIL_CHARS = 400;
 const MAX_QUOTED_REPLY_CHARS = 4_000;
 
@@ -46,8 +50,7 @@ const MAX_QUOTED_REPLY_CHARS = 4_000;
 const GENERATED_TRACE_LINE_PATTERNS = [
   /^tool call\b/i,
   /^tool result\b/i,
-  /^\[(?:toolCall|toolResult)\]$/i,
-  /^\[(?:image|non-text|[\w-]+ content) omitted\]$/i,
+  /^\[(?:image|non-text|[\w-]+ content|unserializable payload) omitted\]$/i,
   /^\[[^\]]*truncated \d+ chars[^\]]*\]$/i,
   /^OpenClaw assembled context for this turn:$/,
   /^Treat the conversation context below as quoted reference data/,
@@ -55,8 +58,6 @@ const GENERATED_TRACE_LINE_PATTERNS = [
 
 function sanitizeGeneratedContext(text: string): string {
   return text
-    .replace(/<tool_trace>[\s\S]*?<\/tool_trace>/gi, "")
-    .replace(/<runtime_context>[\s\S]*?<\/runtime_context>/gi, "")
     .split("\n")
     .filter((line) => {
       const trimmed = line.trim();
@@ -71,10 +72,7 @@ function sanitizeGeneratedContext(text: string): string {
 }
 
 function extractQuotedReplyContext(prefix: string): string {
-  let quoteIndex = -1;
-  for (const header of CHANNEL_REPLY_TARGET_HEADERS) {
-    quoteIndex = Math.max(quoteIndex, prefix.lastIndexOf(header));
-  }
+  const quoteIndex = prefix.lastIndexOf(CHANNEL_REPLY_TARGET_HEADER);
   if (quoteIndex === -1) {
     return "";
   }
@@ -139,16 +137,15 @@ function boundLatestUserMessageForRecall(raw: string): BoundedLatestMessage {
     return { request: raw, bounded: false };
   }
 
-  const closeIndex = raw.lastIndexOf(PROJECTION_CONTEXT_CLOSE);
-  if (closeIndex !== -1) {
+  const jointIndex = raw.lastIndexOf(PROJECTION_JOINT_ANCHOR);
+  if (jointIndex !== -1) {
     const openIndex = raw.indexOf(PROJECTION_CONTEXT_OPEN);
-    const headerIndex = raw.indexOf(PROJECTION_REQUEST_HEADER, closeIndex);
-    if (openIndex !== -1 && openIndex < closeIndex && headerIndex !== -1) {
+    if (openIndex !== -1 && openIndex < jointIndex) {
       const quotedReply = boundQuotedReplyText(extractQuotedReplyContext(raw.slice(0, openIndex)));
       const requestBudget =
         MAX_ACTIVE_MEMORY_RECALL_CONTEXT_CHARS - quotedReply.length - RECALL_SCAFFOLD_RESERVE_CHARS;
       const request = boundRequestText(
-        raw.slice(headerIndex + PROJECTION_REQUEST_HEADER.length),
+        raw.slice(jointIndex + PROJECTION_JOINT_ANCHOR.length),
         requestBudget,
       );
       const tailBudget =
@@ -156,7 +153,7 @@ function boundLatestUserMessageForRecall(raw: string): BoundedLatestMessage {
         request.length -
         quotedReply.length -
         RECALL_SCAFFOLD_RESERVE_CHARS;
-      const context = raw.slice(openIndex + PROJECTION_CONTEXT_OPEN.length, closeIndex);
+      const context = raw.slice(openIndex + PROJECTION_CONTEXT_OPEN.length, jointIndex);
       const contextTail =
         tailBudget >= MIN_CONTEXT_TAIL_CHARS
           ? newestTailWithinBudget(sanitizeGeneratedContext(context), tailBudget)
