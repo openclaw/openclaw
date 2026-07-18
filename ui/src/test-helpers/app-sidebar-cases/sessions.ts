@@ -71,6 +71,38 @@ describe("AppSidebar session pagination", () => {
     expect(sidebar.querySelector('[data-session-key="agent:main:session-10"]')).toBeNull();
   });
 
+  it("renders pinned emoji and named icons with unknown-name fallback", async () => {
+    const keys = ["agent:main:main", "agent:main:emoji", "agent:main:named", "agent:main:unknown"];
+    const sessions = createSessionsHarness("main", keys);
+    const result = sessions.sessions.state.result;
+    expect(result).not.toBeNull();
+    if (!result) {
+      return;
+    }
+    const iconsByKey = new Map([
+      ["agent:main:emoji", "🦞"],
+      ["agent:main:named", "name:spark"],
+      ["agent:main:unknown", "name:constructor"],
+    ]);
+    sessions.publish({
+      result: {
+        ...result,
+        sessions: result.sessions.map((row) => {
+          const icon = iconsByKey.get(row.key);
+          return icon ? { ...row, pinned: true, icon } : row;
+        }),
+      },
+    });
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(gateway, sessions.sessions);
+
+    const iconFor = (key: string) =>
+      sidebar.querySelector(`[data-session-key="${key}"] .sidebar-pinned-session__icon`);
+    expect(iconFor("agent:main:emoji")?.textContent).toContain("🦞");
+    expect(iconFor("agent:main:named")?.querySelector('path[d^="M9.937"]')).not.toBeNull();
+    expect(iconFor("agent:main:unknown")?.querySelector('path[d^="M21 15"]')).not.toBeNull();
+  });
+
   it("hides pagination when required sessions cannot be collapsed", async () => {
     const keys = [
       "agent:main:pinned-0",
@@ -558,6 +590,25 @@ describe("AppSidebar session mutation feedback", () => {
     expect(navigate).toHaveBeenLastCalledWith("chat", {
       search: "?session=agent%3Amain%3Aa",
     });
+  });
+
+  it("patches a session icon from the picker", async () => {
+    const { harness, sidebar } = await mountMutationHarness();
+    const menu = await openSessionMenu(sidebar, "agent:main:a");
+    menu.querySelector<HTMLElement>('wa-dropdown-item[value="change-icon"]')?.click();
+    await menu.updateComplete;
+
+    menu
+      .querySelector<HTMLButtonElement>('.session-menu__icon-choice[aria-label="spark"]')
+      ?.click();
+
+    await waitForFast(() =>
+      expect(harness.patch).toHaveBeenCalledWith(
+        "agent:main:a",
+        { icon: "name:spark" },
+        { agentId: "main" },
+      ),
+    );
   });
 
   it("reconciles and stops an idle active cloud worker through its session", async () => {

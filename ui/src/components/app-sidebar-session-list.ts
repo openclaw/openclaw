@@ -24,6 +24,7 @@ import {
   type SidebarRecentSession,
 } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
+import { resolveSessionIcon } from "./session-icon-registry.ts";
 import { renderSessionRowBadges } from "./session-row-badges.ts";
 import "./elapsed-time.ts";
 
@@ -87,10 +88,19 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
         ? session.subtitle
         : undefined;
     const meta = display?.meta ?? session.meta;
+    const rowMeta = session.pinned ? "" : meta;
     const hasTrail = session.isChild && (session.runtimeMs != null || session.startedAt != null);
     const metaId = hasTrail ? sidebarSessionMetaId(session.key) : undefined;
     const menuSession = display ? { ...session, meta } : session;
-    const title = display?.title ?? [label, meta].filter(Boolean).join(" · ");
+    const title = display?.title ?? [label, rowMeta].filter(Boolean).join(" · ");
+    // Pinned rows reposition the state badge into the nav-item slot; render
+    // every state renderSessionState knows (spinner, unread, child terminal
+    // badges) so pinning a subagent session cannot hide its outcome.
+    const sessionState = this.renderSessionState(session);
+    const pinnedState =
+      session.pinned && sessionState !== nothing
+        ? html`<span class="nav-item__state">${sessionState}</span>`
+        : nothing;
     const rowClass = [
       "sidebar-recent-session",
       "session-row-host",
@@ -141,14 +151,19 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
           aria-describedby=${metaId ?? nothing}
           @click=${(event: MouseEvent) => this.handleSessionRowClick(event, session)}
         >
+          ${session.pinned
+            ? html`<span class="sidebar-pinned-session__icon" aria-hidden="true"
+                >${resolveSessionIcon(session.icon)}</span
+              >`
+            : nothing}
           <span class="sidebar-recent-session__text">
             <span class="sidebar-recent-session__name hover-marquee">${label}</span>
             ${subtitle
               ? html`<span class="sidebar-recent-session__subtitle">${subtitle}</span>`
               : nothing}
           </span>
-          ${this.renderSessionState(session)}
-          ${session.isChild ? nothing : renderSessionRowBadges(session)}
+          ${session.pinned ? nothing : sessionState}
+          ${session.isChild ? nothing : renderSessionRowBadges(session)} ${pinnedState}
         </a>
         ${session.childSessionKeys.length > 0
           ? html`<button

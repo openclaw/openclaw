@@ -201,7 +201,7 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "sessions.send", scope: "operator.write", startup: true },
   { name: "sessions.abort", scope: "operator.write", startup: true },
   // Params-aware: write scope may mutate chat-organization fields
-  // (label/category/pinned/archived/unread); every other patch field stays
+  // (label/category/icon/pinned/archived/unread); every other patch field stays
   // admin-only. Policy lives in method-scopes.ts.
   { name: "sessions.patch", scope: "dynamic" },
   { name: "sessions.pluginPatch", scope: "operator.admin" },

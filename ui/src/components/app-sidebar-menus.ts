@@ -399,6 +399,7 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
         <openclaw-session-menu
           .session=${{
             label: session.label,
+            icon: session.icon,
             pinned: session.pinned,
             unread: batchRows ? allUnread : session.unread,
             archived: false,
@@ -444,6 +445,9 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
                 break;
               case "toggle-pin":
                 void this.patchSession(session, { pinned: !session.pinned });
+                break;
+              case "set-icon":
+                void this.patchSession(session, { icon: action.icon });
                 break;
               case "toggle-unread":
                 void this.patchSession(session, { unread: !session.unread });

@@ -175,6 +175,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
         modelSelectionLocked: row.modelSelectionLocked === true,
         kind: row.kind,
         pinned: row.pinned === true,
+        icon: row.icon,
         category: normalizeOptionalString(row.category),
         channel: channelInfo.channel,
         channelSession: channelInfo.channelSession,
