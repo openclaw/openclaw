@@ -175,7 +175,17 @@ function inspectMattermostIngressEvent(rawEvent: string): {
   const data = isRecord(envelope.data) ? envelope.data : null;
   const post = parseRawPost(data?.post);
   const eventId = requiredString(post.id, "post.id");
-  const channelId = requiredString(post.channel_id, "post.channel_id");
+  // Mattermost can carry the channel id on the post, the event data, or the
+  // broadcast envelope (the monitor dispatch honors all three). Rejecting the
+  // envelope-level shapes as permanent would drop valid posts and tear the
+  // socket down for a storage failure that never happened.
+  const broadcast = isRecord(envelope.broadcast) ? envelope.broadcast : null;
+  const channelId =
+    typeof post.channel_id === "string" && post.channel_id.trim()
+      ? post.channel_id.trim()
+      : typeof data?.channel_id === "string" && data.channel_id.trim()
+        ? data.channel_id.trim()
+        : requiredString(broadcast?.channel_id, "channel_id");
   return { eventId, laneKey: `channel:${channelId}` };
 }
 
@@ -194,7 +204,13 @@ function parseClaimedEvent(
     );
   }
   const post = parseMattermostPost(payload.data?.post);
-  if (!post || post.id !== eventId || !post.channel_id?.trim()) {
+  // Channel id may live on the post, the event data, or the broadcast — the
+  // durable inspector accepted all three, so the claim-side check must too.
+  const claimedChannelId =
+    post?.channel_id?.trim() ||
+    payload.data?.channel_id?.trim() ||
+    payload.broadcast?.channel_id?.trim();
+  if (!post || post.id !== eventId || !claimedChannelId) {
     throw new MattermostIngressPermanentError(
       "invalid-event",
       `Mattermost ingress row ${eventId} has invalid post identity.`,

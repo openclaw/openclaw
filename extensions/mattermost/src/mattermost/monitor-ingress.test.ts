@@ -299,6 +299,32 @@ describe("Mattermost durable ingress", () => {
     });
   });
 
+  it("accepts a post whose channel id arrives at the envelope level", async () => {
+    await withQueue(async (queue) => {
+      const dispatched: string[] = [];
+      const ingress = startMonitor(queue, async (post, _payload, lifecycle) => {
+        dispatched.push(post.id);
+        await lifecycle.onAdopted();
+      });
+      try {
+        // The monitor dispatch honors post/data/broadcast channel ids; the
+        // durable inspector must not reject the envelope-level shapes.
+        await ingress.receive(
+          JSON.stringify({
+            event: "posted",
+            data: {
+              channel_id: "channel-envelope",
+              post: JSON.stringify({ id: "post-envelope", user_id: "user-1", message: "hi" }),
+            },
+          }),
+        );
+        await vi.waitFor(() => expect(dispatched).toEqual(["post-envelope"]));
+      } finally {
+        await ingress.stop();
+      }
+    });
+  });
+
   it("dead-letters malformed persisted payloads without retry", async () => {
     await withQueue(async (queue) => {
       await queue.enqueue(
