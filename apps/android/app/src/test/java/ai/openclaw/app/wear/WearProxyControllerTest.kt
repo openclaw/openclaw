@@ -287,7 +287,7 @@ class WearProxyControllerTest {
     }
 
   @Test
-  fun modelListCapPreservesTheWatchSelectedSessionsModel() =
+  fun modelListCapCentersAWindowOnTheWatchSelectedSessionsModel() =
     runTest {
       val controller =
         WearProxyController(
@@ -323,7 +323,46 @@ class WearProxyControllerTest {
 
       assertEquals(50, refs.size)
       assertTrue("openai/gpt-59" in refs)
-      assertFalse("openai/gpt-49" in refs)
+      assertEquals("openai/gpt-10", refs.first())
+      assertEquals("openai/gpt-59", refs.last())
+    }
+
+  @Test
+  fun modelListWindowKeepsAdjacentModelsReachableAcrossTheCap() =
+    runTest {
+      val controller =
+        WearProxyController(
+          requestGateway = { _, _ -> buildJsonObject {} },
+          isGatewayConnected = { true },
+          gatewayStatusText = { "Connected" },
+          models = {
+            (0 until 120).map { index ->
+              WearProxyModel(ref = "openai/gpt-$index", name = "GPT $index")
+            }
+          },
+        )
+
+      val listed =
+        controller.handle(
+          request(
+            WearRpcMethod.ModelsList,
+            buildJsonObject { put("selectedModelRef", "openai/gpt-49") },
+          ),
+        )
+      val refs =
+        checkNotNull(listed.result)
+          .jsonObject
+          .getValue("models")
+          .jsonArray
+          .map { model ->
+            model.jsonObject
+              .getValue("ref")
+              .jsonPrimitive.content
+          }
+
+      val selectedIndex = refs.indexOf("openai/gpt-49")
+      assertEquals("openai/gpt-48", refs[selectedIndex - 1])
+      assertEquals("openai/gpt-50", refs[selectedIndex + 1])
     }
 
   @Test

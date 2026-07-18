@@ -191,16 +191,17 @@ internal class WearProxyController(
       canonicalModelRef(params.optionalStringParam("selectedModelRef", MAX_MODEL_REF_CHARS))
         ?: canonicalModelRef(selectedModelRef())
     val availableModels = availableModels()
-    val boundedModels = availableModels.take(MAX_MODEL_COUNT).toMutableList()
-    availableModels
-      .firstOrNull { (ref) -> ref == selected }
-      ?.takeIf { selectedModel -> boundedModels.none { (ref) -> ref == selectedModel.first } }
-      ?.let { selectedModel ->
-        if (boundedModels.size == MAX_MODEL_COUNT) {
-          boundedModels[boundedModels.lastIndex] = selectedModel
-        } else {
-          boundedModels += selectedModel
-        }
+    // The Watch picker moves one adjacent model at a time and reloads after each choice.
+    // Centering keeps both directions reachable without exceeding the message cap.
+    val selectedIndex = availableModels.indexOfFirst { (ref) -> ref == selected }
+    val boundedModels =
+      if (availableModels.size <= MAX_MODEL_COUNT || selectedIndex < 0) {
+        availableModels.take(MAX_MODEL_COUNT)
+      } else {
+        val start =
+          (selectedIndex - MAX_MODEL_COUNT / 2)
+            .coerceIn(0, availableModels.size - MAX_MODEL_COUNT)
+        availableModels.subList(start, start + MAX_MODEL_COUNT)
       }
     return buildJsonObject {
       put(
