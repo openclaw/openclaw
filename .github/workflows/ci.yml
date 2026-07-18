@@ -2050,6 +2050,7 @@ jobs:
           case "$TASK" in
             guards)
               pnpm check:no-conflict-markers
+              pnpm check:script-declarations
               pnpm tool-display:check
               pnpm check:host-env-policy:swift
               pnpm dup:check:coverage
