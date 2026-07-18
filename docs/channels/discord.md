@@ -92,6 +92,21 @@ Create a Discord application with a bot, add the bot to your server, and pair it
 
   </Step>
 
+  <Step title="Install the Discord channel plugin">
+    Discord is distributed as an official external channel plugin. On Docker, npm,
+    and other package installs, a `channels.discord` config block alone is not
+    enough: install the plugin package before starting the gateway.
+
+```bash
+openclaw plugins install @openclaw/discord
+```
+
+    If Discord is configured but missing from `openclaw plugins list`, run
+    `openclaw doctor --fix` or install `@openclaw/discord` explicitly, then
+    restart the gateway.
+
+  </Step>
+
   <Step title="Set your bot token securely (do not send it in chat)">
     The bot token is a secret. Set it on the machine running OpenClaw before messaging your agent:
 
