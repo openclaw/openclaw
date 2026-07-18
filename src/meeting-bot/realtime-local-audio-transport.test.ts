@@ -90,4 +90,64 @@ describe("createLocalMeetingRealtimeAudioTransport", () => {
 
     expect(debug).toHaveBeenCalledTimes(cases.length * 2);
   });
+
+  it("bounds unterminated diagnostics and skips decoding without a debug logger", async () => {
+    const withoutDebug = new Map<string, TestBridgeProcess>();
+    const transportWithoutDebug = createLocalMeetingRealtimeAudioTransport({
+      inputCommand: ["input"],
+      outputCommand: ["output"],
+      bargeInInputCommand: ["barge-in"],
+      bargeInRmsThreshold: 10,
+      bargeInPeakThreshold: 10,
+      bargeInCooldownMs: 1,
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      logScope: "[meeting]",
+      spawn: (command) => {
+        const proc = createTestBridgeProcess();
+        withoutDebug.set(command, proc);
+        return proc;
+      },
+    });
+    transportWithoutDebug.startBargeInMonitor?.(() => false);
+    for (const proc of withoutDebug.values()) {
+      expect(proc.stderr.listenerCount("data")).toBe(0);
+    }
+
+    const processes = new Map<string, TestBridgeProcess>();
+    const debug = vi.fn();
+    createLocalMeetingRealtimeAudioTransport({
+      inputCommand: ["input"],
+      outputCommand: ["output"],
+      bargeInRmsThreshold: 10,
+      bargeInPeakThreshold: 10,
+      bargeInCooldownMs: 1,
+      logger: { debug, info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      logScope: "[meeting]",
+      spawn: (command) => {
+        const proc = createTestBridgeProcess();
+        processes.set(command, proc);
+        return proc;
+      },
+    });
+    const outputProcess = processes.get("output");
+    if (!outputProcess) {
+      throw new Error("Expected output process");
+    }
+
+    outputProcess.stderr.write("progress\r");
+    expect(debug).toHaveBeenCalledWith("[meeting] audio output: progress");
+
+    outputProcess.stderr.write("诊".repeat(3_000));
+    outputProcess.stderr.end();
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    const trailingMessage = debug.mock.calls.at(-1)?.[0];
+    expect(trailingMessage).toEqual(expect.stringMatching(/^\[meeting\] audio output: 诊+$/u));
+    expect(Buffer.byteLength(trailingMessage ?? "", "utf8")).toBeLessThanOrEqual(
+      8 * 1024 + Buffer.byteLength("[meeting] audio output: ", "utf8"),
+    );
+    expect(trailingMessage).not.toContain("�");
+  });
 });

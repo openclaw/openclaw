@@ -4,10 +4,13 @@ import { StringDecoder } from "node:string_decoder";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeLogger } from "../plugins/runtime/types.js";
 import { createSpeechThresholdGate, readPcm16AudioStats } from "../talk/audio-energy.js";
+import { truncateUtf8Suffix } from "../utils/utf8-truncate.js";
 import { terminateMeetingBridgeProcess } from "./bridge-process.js";
 import type { MeetingRealtimeAudioTransport } from "./realtime-audio-transport.js";
 
 const LOCAL_BRIDGE_TERMINATION_GRACE_MS = 1_000;
+// Custom media commands can run for hours and emit progress without LF.
+const MAX_LOCAL_AUDIO_STDERR_PENDING_BYTES = 8 * 1024;
 
 type BridgeProcess = {
   pid?: number;
@@ -56,19 +59,20 @@ function splitCommand(argv: string[]): { command: string; args: string[] } {
 
 function attachStderrLineLogger(params: {
   stderr: BridgeProcess["stderr"];
-  logLine: (line: string) => void;
+  debug: RuntimeLogger["debug"];
+  prefix: string;
 }): void {
-  if (!params.stderr) {
+  if (!params.stderr || !params.debug) {
     return;
   }
   const decoder = new StringDecoder("utf8");
   let pendingLine = "";
   let flushed = false;
   const append = (text: string) => {
-    const lines = `${pendingLine}${text}`.split(/\r?\n/u);
-    pendingLine = lines.pop() ?? "";
+    const lines = `${pendingLine}${text}`.split(/\r\n|[\r\n]/u);
+    pendingLine = truncateUtf8Suffix(lines.pop() ?? "", MAX_LOCAL_AUDIO_STDERR_PENDING_BYTES);
     for (const line of lines) {
-      params.logLine(line.trim());
+      params.debug(`${params.prefix}: ${line.trim()}`);
     }
   };
   const flush = () => {
@@ -78,7 +82,7 @@ function attachStderrLineLogger(params: {
     flushed = true;
     append(decoder.end());
     if (pendingLine.length > 0) {
-      params.logLine(pendingLine.trim());
+      params.debug(`${params.prefix}: ${pendingLine.trim()}`);
       pendingLine = "";
     }
   };
@@ -152,7 +156,8 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
     });
     attachStderrLineLogger({
       stderr: proc.stderr,
-      logLine: (line) => params.logger.debug?.(`${params.logScope} audio output: ${line}`),
+      debug: params.logger.debug,
+      prefix: `${params.logScope} audio output`,
     });
     proc.stderr?.on("error", (error: Error) => {
       if (proc === outputProcess) {
@@ -172,7 +177,8 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
   });
   attachStderrLineLogger({
     stderr: inputProcess.stderr,
-    logLine: (line) => params.logger.debug?.(`${params.logScope} audio input: ${line}`),
+    debug: params.logger.debug,
+    prefix: `${params.logScope} audio input`,
   });
   inputProcess.stdout?.on("error", fail("audio input command stdout"));
   inputProcess.stderr?.on("error", fail("audio input command stderr"));
@@ -288,7 +294,8 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
       });
       attachStderrLineLogger({
         stderr: bargeInInputProcess.stderr,
-        logLine: (line) => params.logger.debug?.(`${params.logScope} barge-in input: ${line}`),
+        debug: params.logger.debug,
+        prefix: `${params.logScope} barge-in input`,
       });
       bargeInInputProcess.stderr?.on("error", (error: Error) => {
         params.logger.warn(
