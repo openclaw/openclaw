@@ -144,10 +144,10 @@ describeControlUiE2e("Control UI mobile pairing mocked Gateway E2E", () => {
       await page.locator(".device-pair-setup__close").click();
       await dialog.waitFor({ state: "hidden" });
 
-      const settingsResponse = await page.goto(`${server.baseUrl}config`);
+      const settingsResponse = await page.goto(`${server.baseUrl}settings/security`);
       expect(settingsResponse?.status()).toBe(200);
       const quickSettingsPairingButton = page
-        .locator("#settings-general-security")
+        .locator(".security-page")
         .getByRole("button", { name: "Pair mobile device" });
       await quickSettingsPairingButton.waitFor();
       const setupRequestsBeforeQuickSettings = (await gateway.getRequests("device.pair.setupCode"))

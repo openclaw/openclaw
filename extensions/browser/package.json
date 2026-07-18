@@ -24,6 +24,9 @@
     ],
     "assetScripts": {
       "build": "node scripts/build-copilot-runtime.mjs",
+      "buildOutputs": [
+        "chrome-extension/modules/copilot-runtime.js"
+      ],
       "copy": "node scripts/copy-chrome-extension.mjs"
     }
   }

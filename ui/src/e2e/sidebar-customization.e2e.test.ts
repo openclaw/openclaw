@@ -278,26 +278,12 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
             ),
           ),
         )
-        .toEqual(["MCP", "General", "Automations"]);
-      await settingsSidebar.getByRole("link", { name: "Automations" }).click();
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/general");
-      await expect.poll(() => new URL(page.url()).hash).toBe("#settings-general-automations");
-      await expect.poll(() => page.locator("#settings-general-automations").isVisible()).toBe(true);
-      await expect
-        .poll(() =>
-          settingsSidebar.getByRole("link", { name: "Automations" }).getAttribute("aria-current"),
-        )
-        .toBe("location");
-      await expect
-        .poll(() =>
-          settingsSidebar.getByRole("link", { name: "General" }).getAttribute("aria-current"),
-        )
-        .toBeNull();
+        .toEqual(["MCP"]);
+      await settingsSidebar.getByRole("link", { name: "MCP" }).click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/mcp");
       await settingsSearch.fill("  ThEmE  ");
-      await expect
-        .poll(() => trimmedTextContents(settingsLinks))
-        .toEqual(["Appearance", "General"]);
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/general");
+      await expect.poll(() => trimmedTextContents(settingsLinks)).toEqual(["Appearance"]);
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/mcp");
       await captureSettingsSidebarProof(settingsSidebar, "01b-settings-search-filtered.png");
       await holdUiProof(page);
       await settingsSearch.fill("system");
@@ -307,11 +293,9 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
           "Ask OpenClaw",
           "Approvals",
           "Infrastructure",
-          "Devices",
-          "Worktrees",
+          "Advanced",
           "Debug",
           "Logs",
-          "Activity",
           "About",
           "General",
           "Appearance",

@@ -42,7 +42,7 @@ import {
 } from "../components/panel-toggle-contract.ts";
 import { renderSettingsSidebar } from "../components/settings-sidebar.ts";
 import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
-import { t } from "../i18n/index.ts";
+import { i18n, isSupportedLocale, t } from "../i18n/index.ts";
 import { copyToClipboard } from "../lib/clipboard.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../lib/plugin-activation.ts";
@@ -86,10 +86,18 @@ import { hasOperatorAdminAccess } from "./operator-access.ts";
 import { controlUiPublicAssetPath } from "./public-assets.ts";
 import { selectRenderedRouteMatch } from "./router-outlet.ts";
 import {
+  applyServerUiPrefs,
+  changedServerUiPrefs,
+  isApplyingServerUiPrefs,
+  pushServerUiPrefs,
+  resetServerUiPrefsSync,
+} from "./server-prefs.ts";
+import {
   NAV_WIDTH_MAX,
   NAV_WIDTH_MIN,
   loadSettings,
   normalizeCatalogOpenTarget,
+  setSettingsChangeListener,
 } from "./settings.ts";
 
 type ShellRouteState = {
@@ -538,14 +546,42 @@ class OpenClawShell extends OpenClawLightDomElement {
       )
       .watch(
         () => this.context?.runtimeConfig,
-        (runtimeConfig, notify) => runtimeConfig.subscribe(notify),
+        (runtimeConfig, notify) =>
+          runtimeConfig.subscribe(() => {
+            this.reconcileServerUiPrefs(runtimeConfig);
+            notify();
+          }),
         (runtimeConfig) => {
           const snapshot = this.context?.gateway.snapshot;
           if (snapshot) {
             this.ensureRuntimeConfig(snapshot, runtimeConfig);
           }
+          this.reconcileServerUiPrefs(runtimeConfig);
         },
       );
+  }
+
+  /**
+   * Server config (ui.prefs) is the canonical home for synced display prefs;
+   * apply server-side deltas to the browser mirror whenever a config snapshot
+   * lands (connect, settings pages, reloads).
+   */
+  private reconcileServerUiPrefs(runtimeConfig: ApplicationContext["runtimeConfig"]) {
+    const snapshot = runtimeConfig.state.configSnapshot;
+    const context = this.context;
+    if (!snapshot?.config || !context) {
+      return;
+    }
+    applyServerUiPrefs(snapshot.config, {
+      scope: context.gateway.connection.gatewayUrl,
+      snapshotHash: snapshot.hash ?? undefined,
+      onApplied: (patch) => {
+        if (isSupportedLocale(patch.locale)) {
+          void i18n.setLocale(patch.locale);
+        }
+        context.theme.refresh();
+      },
+    });
   }
 
   override connectedCallback() {
@@ -566,6 +602,18 @@ class OpenClawShell extends OpenClawLightDomElement {
     window.addEventListener("openclaw:native-new-session", this.handleNativeNewSession);
     window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.handleDeferredTerminalToggle);
     window.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleDeferredBrowserToggle);
+    // Write-through of synced display prefs to config ui.prefs. Server-applied
+    // deltas are suppressed so a reconcile never echoes back to the gateway.
+    setSettingsChangeListener((previous, next) => {
+      if (isApplyingServerUiPrefs()) {
+        return;
+      }
+      const prefs = changedServerUiPrefs(previous, next);
+      const snapshot = this.context?.gateway.snapshot;
+      if (prefs && snapshot?.connected && snapshot.client) {
+        pushServerUiPrefs(snapshot.client, prefs);
+      }
+    });
   }
 
   override disconnectedCallback() {
@@ -581,6 +629,7 @@ class OpenClawShell extends OpenClawLightDomElement {
     window.removeEventListener("openclaw:native-new-session", this.handleNativeNewSession);
     window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.handleDeferredTerminalToggle);
     window.removeEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleDeferredBrowserToggle);
+    setSettingsChangeListener(null);
     this.resetShellEpochState();
     super.disconnectedCallback();
   }
@@ -597,6 +646,7 @@ class OpenClawShell extends OpenClawLightDomElement {
     this.sessionKeyClient = null;
     this.runtimeConfigClient = null;
     this.runtimeConfigSource = null;
+    resetServerUiPrefsSync();
     for (const timer of this.settingsPreloadTimers.values()) {
       globalThis.clearTimeout(timer);
     }

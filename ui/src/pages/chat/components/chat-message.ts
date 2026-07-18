@@ -47,7 +47,11 @@ import {
 } from "../../../lib/format.ts";
 import "../../../components/tooltip.ts";
 import { getMediaFileExtension } from "../../../lib/media-file-extension.ts";
-import { openExternalUrlSafe } from "../../../lib/open-external-url.ts";
+import {
+  openExternalUrlSafe,
+  reserveExternalWindowForDeferredNavigation,
+  resolveSafeExternalUrl,
+} from "../../../lib/open-external-url.ts";
 import { stripThinkingTags } from "../../../lib/strip-thinking-tags.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { getSafeLocalStorage } from "../../../local-storage.ts";
@@ -261,7 +265,68 @@ type AttachmentItem = Extract<MessageContentItem, { type: "attachment" }>;
 const managedImageBlobUrlCache = new Map<string, Promise<string | null>>();
 const managedImageBlobUrlResolvedCache = new Map<string, string>();
 const managedImageBlobUrlMissCache = new Map<string, number>();
+const MANAGED_IMAGE_BLOB_URL_CACHE_MAX_ENTRIES = 64;
 const MANAGED_IMAGE_BLOB_URL_MISS_RETRY_MS = 5_000;
+
+function readManagedImageBlobUrl(cacheKey: string): string | undefined {
+  const cached = managedImageBlobUrlResolvedCache.get(cacheKey);
+  if (!cached) {
+    return undefined;
+  }
+  managedImageBlobUrlResolvedCache.delete(cacheKey);
+  managedImageBlobUrlResolvedCache.set(cacheKey, cached);
+  return cached;
+}
+
+function cacheManagedImageBlobUrl(cacheKey: string, blobUrl: string) {
+  const previous = managedImageBlobUrlResolvedCache.get(cacheKey);
+  managedImageBlobUrlResolvedCache.delete(cacheKey);
+  managedImageBlobUrlResolvedCache.set(cacheKey, blobUrl);
+  managedImageBlobUrlMissCache.delete(cacheKey);
+  if (previous && previous !== blobUrl) {
+    URL.revokeObjectURL(previous);
+  }
+
+  // Blob URLs retain browser-managed image data. Keep recent previews reusable,
+  // but revoke evicted URLs so long-lived chat sessions cannot retain them forever.
+  while (managedImageBlobUrlResolvedCache.size > MANAGED_IMAGE_BLOB_URL_CACHE_MAX_ENTRIES) {
+    const oldest = managedImageBlobUrlResolvedCache.keys().next();
+    if (oldest.done) {
+      break;
+    }
+    const evicted = managedImageBlobUrlResolvedCache.get(oldest.value);
+    managedImageBlobUrlResolvedCache.delete(oldest.value);
+    if (evicted) {
+      URL.revokeObjectURL(evicted);
+    }
+  }
+}
+
+function hasRecentManagedImageBlobUrlMiss(cacheKey: string): boolean {
+  const missAt = managedImageBlobUrlMissCache.get(cacheKey);
+  if (missAt === undefined) {
+    return false;
+  }
+  if (Date.now() - missAt >= MANAGED_IMAGE_BLOB_URL_MISS_RETRY_MS) {
+    managedImageBlobUrlMissCache.delete(cacheKey);
+    return false;
+  }
+  managedImageBlobUrlMissCache.delete(cacheKey);
+  managedImageBlobUrlMissCache.set(cacheKey, missAt);
+  return true;
+}
+
+function cacheManagedImageBlobUrlMiss(cacheKey: string) {
+  managedImageBlobUrlMissCache.delete(cacheKey);
+  managedImageBlobUrlMissCache.set(cacheKey, Date.now());
+  while (managedImageBlobUrlMissCache.size > MANAGED_IMAGE_BLOB_URL_CACHE_MAX_ENTRIES) {
+    const oldest = managedImageBlobUrlMissCache.keys().next();
+    if (oldest.done) {
+      break;
+    }
+    managedImageBlobUrlMissCache.delete(oldest.value);
+  }
+}
 
 function appendImageBlock(images: ImageBlock[], block: ImageBlock) {
   if (!images.some((entry) => entry.url === block.url && entry.alt === block.alt)) {
@@ -1304,8 +1369,34 @@ function renderMessageImages(images: RenderableImageBlock[], opts?: ImageRenderO
     return nothing;
   }
 
-  const openImage = (url: string) => {
-    openExternalUrlSafe(url, { allowDataImage: true });
+  const openImage = (img: RenderableImageBlock, previewUrl: string) => {
+    if (
+      !isManagedOutgoingImageSource(img.displayUrl) ||
+      readManagedOutgoingImageBlobUrl(img.displayUrl, opts) === previewUrl
+    ) {
+      openExternalUrlSafe(previewUrl, { allowDataImage: true });
+      return;
+    }
+
+    // Reserve the tab during the click's user activation. An evicted Blob URL
+    // must be refetched before navigation, after popup permission has expired.
+    const pendingWindow = reserveExternalWindowForDeferredNavigation();
+    void resolveManagedOutgoingImageBlobUrl(img.displayUrl, opts)
+      .then((freshUrl) => {
+        const safeUrl = freshUrl
+          ? resolveSafeExternalUrl(freshUrl, window.location.href, { allowDataImage: true })
+          : null;
+        if (!safeUrl) {
+          pendingWindow?.close();
+          return;
+        }
+        if (pendingWindow) {
+          pendingWindow.location.replace(safeUrl);
+          return;
+        }
+        openExternalUrlSafe(safeUrl, { allowDataImage: true });
+      })
+      .catch(() => pendingWindow?.close());
   };
 
   const renderImageElement = (img: RenderableImageBlock, previewUrl: string) => html`
@@ -1315,7 +1406,7 @@ function renderMessageImages(images: RenderableImageBlock[], opts?: ImageRenderO
       class="chat-message-image"
       width=${img.width ?? nothing}
       height=${img.height ?? nothing}
-      @click=${() => openImage(previewUrl)}
+      @click=${() => openImage(img, previewUrl)}
     />
   `;
 
@@ -1545,19 +1636,34 @@ function buildManagedOutgoingImageFetchUrl(source: string, basePath?: string): s
   return `${normalizedBasePath}${source}`;
 }
 
+function resolveManagedOutgoingImageBlobUrlCacheKey(
+  source: string,
+  opts?: ImageRenderOptions,
+): string {
+  const authToken = opts?.authToken?.trim() ?? "";
+  const fetchUrl = buildManagedOutgoingImageFetchUrl(source, opts?.basePath);
+  return `${fetchUrl}::${authToken}`;
+}
+
+function readManagedOutgoingImageBlobUrl(
+  source: string,
+  opts?: ImageRenderOptions,
+): string | undefined {
+  return readManagedImageBlobUrl(resolveManagedOutgoingImageBlobUrlCacheKey(source, opts));
+}
+
 async function resolveManagedOutgoingImageBlobUrl(
   source: string,
   opts?: ImageRenderOptions,
 ): Promise<string | null> {
   const authToken = opts?.authToken?.trim() ?? "";
   const fetchUrl = buildManagedOutgoingImageFetchUrl(source, opts?.basePath);
-  const cacheKey = `${fetchUrl}::${authToken}`;
-  const cached = managedImageBlobUrlResolvedCache.get(cacheKey);
+  const cacheKey = resolveManagedOutgoingImageBlobUrlCacheKey(source, opts);
+  const cached = readManagedImageBlobUrl(cacheKey);
   if (cached) {
     return cached;
   }
-  const missAt = managedImageBlobUrlMissCache.get(cacheKey);
-  if (missAt && Date.now() - missAt < MANAGED_IMAGE_BLOB_URL_MISS_RETRY_MS) {
+  if (hasRecentManagedImageBlobUrlMiss(cacheKey)) {
     return null;
   }
   let pending = managedImageBlobUrlCache.get(cacheKey);
@@ -1577,17 +1683,16 @@ async function resolveManagedOutgoingImageBlobUrl(
         credentials: "same-origin",
       });
       if (!res.ok) {
-        managedImageBlobUrlMissCache.set(cacheKey, Date.now());
+        cacheManagedImageBlobUrlMiss(cacheKey);
         return null;
       }
       const blob = await res.blob();
       if (!blob.type.startsWith("image/")) {
-        managedImageBlobUrlMissCache.set(cacheKey, Date.now());
+        cacheManagedImageBlobUrlMiss(cacheKey);
         return null;
       }
       const blobUrl = URL.createObjectURL(blob);
-      managedImageBlobUrlResolvedCache.set(cacheKey, blobUrl);
-      managedImageBlobUrlMissCache.delete(cacheKey);
+      cacheManagedImageBlobUrl(cacheKey, blobUrl);
       return blobUrl;
     })().finally(() => {
       managedImageBlobUrlCache.delete(cacheKey);

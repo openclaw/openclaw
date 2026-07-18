@@ -600,6 +600,32 @@ export async function updatePairedNodeMetadata(
   });
 }
 
+/** Atomically classify and persist one successful node connection. */
+export async function claimPairedNodeConnection(
+  nodeId: string,
+  connectedAtMs: number,
+  baseDir?: string,
+): Promise<{ recorded: boolean; firstConnection: boolean }> {
+  return await withPairedDeviceRecords<{ recorded: boolean; firstConnection: boolean }>(
+    baseDir,
+    (pairedByDeviceId) => {
+      const device = nodeSurfaceDevice(pairedByDeviceId, nodeId);
+      if (!device?.nodeSurface) {
+        return { value: { recorded: false, firstConnection: false }, persist: false };
+      }
+      // Read and write under the pairing lock. Concurrent rehandshakes must not
+      // both claim the same node's first connection and schedule duplicate alerts.
+      const firstConnection = device.nodeSurface.lastConnectedAtMs === undefined;
+      const previousConnectedAtMs = device.nodeSurface.lastConnectedAtMs ?? connectedAtMs;
+      device.nodeSurface = {
+        ...device.nodeSurface,
+        lastConnectedAtMs: Math.max(previousConnectedAtMs, connectedAtMs),
+      };
+      return { value: { recorded: true, firstConnection }, persist: true };
+    },
+  );
+}
+
 /** Rename a paired node display name while preserving approval metadata. */
 export async function renamePairedNode(
   nodeId: string,

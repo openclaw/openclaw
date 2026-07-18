@@ -29,6 +29,10 @@ const ALL_ROUTES: RouteId[] = Array.from(
     ...SIDEBAR_NAV_ROUTES,
     "skills",
     "skill-workshop",
+    // Hub tabs and settings subpages route without their own nav entry.
+    "worktrees",
+    "memory-import",
+    "model-setup",
     ...SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.routes),
   ]),
 );
@@ -50,14 +54,14 @@ const SETTINGS_ROUTE_PATHS = [
     path: "/settings/infrastructure",
     alias: "/infrastructure",
   },
-  { routeId: "worktrees", path: "/settings/worktrees", alias: "/worktrees" },
-  { routeId: "sessions", path: "/settings/sessions", alias: "/sessions" },
+  { routeId: "worktrees", path: "/worktrees", alias: "/settings/worktrees" },
+  { routeId: "sessions", path: "/sessions", alias: "/settings/sessions" },
   { routeId: "nodes", path: "/settings/devices", alias: "/nodes" },
   { routeId: "agents", path: "/settings/agents", alias: "/agents" },
   {
     routeId: "memory-import",
-    path: "/settings/memory-import",
-    alias: "/memory-import",
+    path: "/memory-import",
+    alias: "/settings/memory-import",
   },
   { routeId: "ai-agents", path: "/settings/ai-agents", alias: "/ai-agents" },
   {
@@ -106,6 +110,9 @@ describe("navigationIconForRoute", () => {
       "model-setup": "spark",
       "model-providers": "plug",
       "memory-import": "download",
+      notifications: "send",
+      security: "shieldCheck",
+      advanced: "fileCode",
       debug: "bug",
       logs: "scrollText",
     });
@@ -160,6 +167,9 @@ describe("titleForRoute", () => {
       "model-setup": "Model Setup",
       "model-providers": "Model Providers",
       "memory-import": "Import Memory",
+      notifications: "Notifications",
+      security: "Privacy & Security",
+      advanced: "Advanced",
       debug: "Debug",
       logs: "Logs",
     });
@@ -200,6 +210,9 @@ describe("subtitleForRoute", () => {
       "model-setup": "Connect a verified AI model",
       "model-providers": "Configured providers with plan, quota, and cost.",
       "memory-import": "Bring Codex and Claude Code memory into an agent workspace.",
+      notifications: "Browser push notifications from your gateway.",
+      security: "Gateway auth, exec policy, tool profile, and approvals.",
+      advanced: "Every remaining config section, plus the raw file editor.",
       debug: "Snapshots, events, RPC.",
       logs: "Live gateway logs.",
     });
@@ -219,7 +232,7 @@ describe("pathForRoute", () => {
 
   it("prepends base path", () => {
     expect(pathForRoute("chat", "/ui")).toBe("/ui/chat");
-    expect(pathForRoute("sessions", "/apps/openclaw")).toBe("/apps/openclaw/settings/sessions");
+    expect(pathForRoute("sessions", "/apps/openclaw")).toBe("/apps/openclaw/sessions");
   });
 });
 
@@ -370,24 +383,22 @@ describe("SIDEBAR_NAV_ROUTES", () => {
       "profile",
       "config",
       "appearance",
+      "notifications",
       "connection",
       "channels",
       "communications",
+      "nodes",
       "agents",
       "ai-agents",
-      "sessions",
-      "memory-import",
-      "model-setup",
       "model-providers",
-      "automation",
       "mcp",
-      "infrastructure",
-      "nodes",
+      "automation",
+      "security",
       "approvals",
-      "worktrees",
+      "infrastructure",
+      "advanced",
       "debug",
       "logs",
-      "activity",
       "about",
     ]);
   });
