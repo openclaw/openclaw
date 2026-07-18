@@ -92,6 +92,20 @@ describe("applyServerUiPrefs", () => {
     expect(loadSettings().themeMode).toBe("system");
   });
 
+  it("applies only the fields the server actually changed", () => {
+    const onApplied = vi.fn();
+    applyServerUiPrefs(configWithPrefs({ themeMode: "dark", textScale: 100 }), { onApplied });
+    // Unpushable local edit on one field...
+    patchSettings({ themeMode: "light" });
+
+    // ...survives a server change to a *different* field.
+    expect(
+      applyServerUiPrefs(configWithPrefs({ themeMode: "dark", textScale: 125 }), { onApplied }),
+    ).toBe(true);
+    expect(loadSettings().textScale).toBe(125);
+    expect(loadSettings().themeMode).toBe("light");
+  });
+
   it("ignores a server custom theme until this browser imported one", () => {
     const onApplied = vi.fn();
     expect(applyServerUiPrefs(configWithPrefs({ theme: "custom" }), { onApplied })).toBe(false);
@@ -147,6 +161,16 @@ describe("pushServerUiPrefs", () => {
       }),
     ).toBe(true);
     expect(loadSettings().themeMode).toBe("system");
+
+    // Once post-patch state was observed, the old hash means another writer
+    // genuinely restored that config, so it becomes authoritative again.
+    expect(
+      applyServerUiPrefs(configWithPrefs({ themeMode: "light" }), {
+        snapshotHash: "hash-1",
+        onApplied,
+      }),
+    ).toBe(true);
+    expect(loadSettings().themeMode).toBe("light");
   });
 
   it("coalesces rapid changes into serial patches instead of racing the hash", async () => {

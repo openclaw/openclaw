@@ -194,17 +194,39 @@ export function applyServerUiPrefs(
     onApplied: (patch: Partial<UiSettings>) => void;
   },
 ): boolean {
-  if (hooks.snapshotHash && staleConfigHashes.has(hooks.snapshotHash)) {
-    return false;
+  if (hooks.snapshotHash) {
+    if (staleConfigHashes.has(hooks.snapshotHash)) {
+      return false;
+    }
+    // Post-patch state observed: retire the stale marks. Hashes identify
+    // content, not age — if the pre-patch hash reappears later, another
+    // writer genuinely restored that config and it is authoritative again.
+    staleConfigHashes.clear();
   }
   const scope = hooks.scope ?? "";
   const prefs = extractServerUiPrefs(configObject);
   const key = JSON.stringify(prefs);
-  if (key === loadLastSeenKey(scope)) {
+  const lastSeenRaw = loadLastSeenKey(scope);
+  if (key === lastSeenRaw) {
     return false;
   }
+  // Apply per field: only keys whose *server* value changed since last seen.
+  // Reapplying unchanged fields would revert unpushable local edits on other
+  // keys whenever any one server field moves.
+  let lastSeen: ServerUiPrefs = {};
+  try {
+    lastSeen = lastSeenRaw ? (JSON.parse(lastSeenRaw) as ServerUiPrefs) : {};
+  } catch {
+    lastSeen = {};
+  }
+  const changed: ServerUiPrefs = {};
+  for (const prefKey of Object.keys(prefs) as Array<keyof ServerUiPrefs>) {
+    if (lastSeenRaw === null || prefs[prefKey] !== lastSeen[prefKey]) {
+      (changed as Record<string, unknown>)[prefKey] = prefs[prefKey];
+    }
+  }
   storeLastSeenKey(scope, key);
-  const patch = serverPrefsLocalPatch(prefs, loadSettings());
+  const patch = serverPrefsLocalPatch(changed, loadSettings());
   if (!patch) {
     return false;
   }

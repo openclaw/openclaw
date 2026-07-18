@@ -69,6 +69,14 @@ const CONFIG_PAGE_I18N_KEYS = {
   advanced: "advanced",
 } as const satisfies Record<ConfigPageId, string>;
 
+// Sections relocated by the settings restructure, keyed by "<oldPage>:<section>".
+// Kept so pre-restructure bookmarks and generated links still land somewhere
+// sensible instead of silently opening the old page's default section.
+const MOVED_SECTION_ROUTES: Record<string, { routeId: RouteId; keepSection: boolean }> = {
+  "communications:__notifications__": { routeId: "notifications", keepSection: false },
+  "automation:approvals": { routeId: "security", keepSection: true },
+};
+
 const SYSTEM_INFO_POLL_INTERVAL_MS = 10_000;
 
 function isUnknownSystemInfoMethodError(error: unknown): boolean {
@@ -344,6 +352,21 @@ export class ConfigPage extends OpenClawLightDomElement {
   }
 
   private syncRouteData() {
+    // Pre-restructure deep links: sections that moved to their own page must
+    // redirect before normalization discards them from the old page's list.
+    const rawSection = this.routeData
+      ? this.routeData.section
+      : new URLSearchParams(globalThis.location?.search ?? "").get("section");
+    if (rawSection) {
+      const movedRoute = MOVED_SECTION_ROUTES[`${this.pageId}:${rawSection}`];
+      if (movedRoute) {
+        this.context?.navigate(movedRoute.routeId, {
+          search: movedRoute.keepSection ? `?section=${encodeURIComponent(rawSection)}` : "",
+          hash: globalThis.location?.hash ?? "",
+        });
+        return;
+      }
+    }
     const selection = this.routeData
       ? normalizeConfigSelection(this.pageId, this.routeData.section, null)
       : configSelectionFromSearch(this.pageId, globalThis.location?.search ?? "");

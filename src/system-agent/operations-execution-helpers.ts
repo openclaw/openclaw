@@ -292,11 +292,17 @@ export async function runConfigSetOperation(params: {
     });
   if (operation.kind === "config-set") {
     await ctx.commit(async () => {
+      // Conditional verdicts (per-agent routing, plugin entries) depend on the
+      // current config; a concurrent edit can flip them between the
+      // pre-approval check and this write. Re-verify at the commit boundary,
+      // like the plugin-uninstall path.
+      await assertConfigWriteDoesNotBypassInferenceVerification(operation);
       await runConfigSet({ path: operation.path, value: operation.value, cliOptions: {} });
     });
     return;
   }
   await ctx.commit(async () => {
+    await assertConfigWriteDoesNotBypassInferenceVerification(operation);
     await runConfigSet({
       path: operation.path,
       cliOptions: {
