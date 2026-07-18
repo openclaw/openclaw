@@ -42,6 +42,7 @@ const CRON_RECOVERABLE_OBJECT_KEYS: ReadonlySet<string> = new Set([
   "displayName",
   "owner",
   "schedule",
+  "trigger",
   "sessionTarget",
   "wakeMode",
   "payload",

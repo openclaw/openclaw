@@ -404,7 +404,7 @@ describe("dispatchAgentHook trust handling", () => {
 
   it("prefers cron diagnostics for returned hook errors", async () => {
     const diagnosticSummary =
-      "cron payload.model 'anthropic/claude-sonnet-4-6' rejected by agents.defaults.models allowlist: anthropic/claude-sonnet-4-6";
+      "cron payload.model 'anthropic/claude-sonnet-4-6' rejected by agents.defaults.modelPolicy.allow: anthropic/claude-sonnet-4-6";
     runCronIsolatedAgentTurnMock.mockResolvedValueOnce({
       status: "error",
       summary: "generic failure",

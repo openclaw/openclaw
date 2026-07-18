@@ -412,9 +412,10 @@ const hooksModelCheck: HealthCheck = {
       findings.push({
         checkId: "core/doctor/hooks-model",
         severity: "warning",
-        message: `hooks.gmail.model "${status.key}" is not in agents.defaults.models allowlist.`,
+        message: `hooks.gmail.model "${status.key}" is not allowed by agents.defaults.modelPolicy.allow.`,
         path: "hooks.gmail.model",
-        fixHint: "Add the model to agents.defaults.models or remove hooks.gmail.model.",
+        fixHint:
+          "Add the model or its provider wildcard to agents.defaults.modelPolicy.allow, or remove hooks.gmail.model.",
       });
     }
     if (!status.inCatalog) {

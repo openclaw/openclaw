@@ -1667,6 +1667,10 @@ class MainViewModel private constructor(
     ensureRuntime().resolveChatQuestion(id, answers)
   }
 
+  fun skipChatQuestion(id: String) {
+    ensureRuntime().skipChatQuestion(id)
+  }
+
   suspend fun listBackgroundTasks(agentId: String): List<BackgroundTask> = ensureRuntime().listBackgroundTasks(agentId)
 
   suspend fun getBackgroundTask(taskId: String): BackgroundTask = ensureRuntime().getBackgroundTask(taskId)

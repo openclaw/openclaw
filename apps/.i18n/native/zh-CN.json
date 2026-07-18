@@ -7389,9 +7389,34 @@
       "translated": "其他答案"
     },
     {
+      "id": "native.android.de591e6e2e440ecb",
+      "source": "Skip",
+      "translated": "跳过"
+    },
+    {
+      "id": "native.android.92dfa7979d04989c",
+      "source": "Submitting…",
+      "translated": "正在提交…"
+    },
+    {
       "id": "native.android.fa81739f52e7697f",
       "source": "Submit",
       "translated": "提交"
+    },
+    {
+      "id": "native.android.7da074848cacfe4b",
+      "source": "Skipped",
+      "translated": "已跳过"
+    },
+    {
+      "id": "native.android.1a0e6b33059a63aa",
+      "source": "Expired",
+      "translated": "已过期"
+    },
+    {
+      "id": "native.android.86c8d6113d07ef82",
+      "source": "Unavailable",
+      "translated": "不可用"
     },
     {
       "id": "native.android.f68cd7a84be4089e",
@@ -7402,36 +7427,6 @@
       "id": "native.android.a0dc883947c2f980",
       "source": "Answered elsewhere",
       "translated": "已在其他地方回答"
-    },
-    {
-      "id": "native.android.1a0e6b33059a63aa",
-      "source": "Expired",
-      "translated": "已过期"
-    },
-    {
-      "id": "native.android.d6d8fc83cec68418",
-      "source": "Cancelled",
-      "translated": "已取消"
-    },
-    {
-      "id": "native.android.73f64d0d54b7f9c0",
-      "source": "Pending",
-      "translated": "待处理"
-    },
-    {
-      "id": "native.android.92dfa7979d04989c",
-      "source": "Submitting…",
-      "translated": "正在提交…"
-    },
-    {
-      "id": "native.android.c5e9ee99f9d9c612",
-      "source": "Expires in ${seconds / 60}m ${seconds % 60}s",
-      "translated": "${seconds / 60}分${seconds % 60}秒后过期"
-    },
-    {
-      "id": "native.android.2ca602fbdf96f1e7",
-      "source": "Expires in ${seconds}s",
-      "translated": "${seconds}秒后过期"
     },
     {
       "id": "native.android.118e8d239b18895e",
@@ -23039,6 +23034,41 @@
       "translated": "展开计划"
     },
     {
+      "id": "native.apple.ce899320a84d4086",
+      "source": "Answered",
+      "translated": "已回答"
+    },
+    {
+      "id": "native.apple.f019b6a07d5a33d8",
+      "source": "Answered elsewhere",
+      "translated": "已在其他地方回答"
+    },
+    {
+      "id": "native.apple.ebdedeffad570c43",
+      "source": "Skipped",
+      "translated": "已跳过"
+    },
+    {
+      "id": "native.apple.8dde2eaaf6b0dfa9",
+      "source": "Expired",
+      "translated": "已过期"
+    },
+    {
+      "id": "native.apple.6dff9e9194347f3b",
+      "source": "Unavailable",
+      "translated": "不可用"
+    },
+    {
+      "id": "native.apple.b34cd890366824f0",
+      "source": "Pending",
+      "translated": "待处理"
+    },
+    {
+      "id": "native.apple.b97da55b7e16e60c",
+      "source": "Question summary",
+      "translated": "问题摘要"
+    },
+    {
       "id": "native.apple.da4494f9e875169d",
       "source": "Other answer",
       "translated": "其他答案"
@@ -23054,9 +23084,14 @@
       "translated": "已选择"
     },
     {
-      "id": "native.apple.e3095b651fc46b52",
-      "source": "Submit",
-      "translated": "提交"
+      "id": "native.apple.1bbbbfd1ad3842ce",
+      "source": "Skipping…",
+      "translated": "正在跳过…"
+    },
+    {
+      "id": "native.apple.14a4bf7b6b7d40dc",
+      "source": "Skip",
+      "translated": "跳过"
     },
     {
       "id": "native.apple.6c1adc16e0a846e5",
@@ -23064,14 +23099,9 @@
       "translated": "正在提交…"
     },
     {
-      "id": "native.apple.698bdb0d6537edb6",
-      "source": "Expires in \\(seconds / 60)m \\(seconds % 60)s",
-      "translated": "\\(seconds / 60)分\\(seconds % 60)秒后过期"
-    },
-    {
-      "id": "native.apple.30e1c342b3345290",
-      "source": "Expires in \\(seconds)s",
-      "translated": "\\(seconds)秒后过期"
+      "id": "native.apple.e3095b651fc46b52",
+      "source": "Submit",
+      "translated": "提交"
     },
     {
       "id": "native.apple.7cd6fb01b9f5d14a",

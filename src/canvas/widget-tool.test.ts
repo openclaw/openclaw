@@ -60,15 +60,15 @@ async function executeWidget(params: {
 }
 
 describe("show_widget", () => {
-  it("keeps the pre-move wrapped document bytes stable", () => {
+  it("keeps the wrapped document bytes stable", () => {
     const html = buildWidgetDocument(
       "Status <live>",
       '<SvG viewBox="0 0 10 10"><circle r="4" /></SvG>',
     );
 
-    expect(Buffer.byteLength(html)).toBe(1558);
+    expect(Buffer.byteLength(html)).toBe(5158);
     expect(createHash("sha256").update(html).digest("hex")).toBe(
-      "ba5fd66ce29e864415c60fecc2b03290c05f1d66bd02b47de39ced8afec6e65c",
+      "650992e812051ff451a2aa5d85a040e93615fe19579912d2bcc5acecce080060",
     );
   });
 
@@ -111,6 +111,8 @@ describe("show_widget", () => {
       `Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:;`,
     );
     expect(html).toContain("<title>&lt;Status&gt;</title>");
+    expect(html).toContain("--accent:#bd4531");
+    expect(html).toContain("--accent:#ff5c5c");
     expect(html).toContain('<body class="svg-widget"><script>');
     expect(html).toContain("openclaw:widget-size");
     const manifest = JSON.parse(
@@ -135,6 +137,28 @@ describe("show_widget", () => {
 
     expect(html).not.toContain('<body class="svg-widget">');
     expect(html.indexOf("window.sendPrompt")).toBeLessThan(html.indexOf("<section>"));
+    expect(html).toContain("openclaw:widget-theme");
+    expect(html.indexOf("openclaw:widget-theme")).toBeLessThan(html.indexOf("<section>"));
+    const bridgeKeys = JSON.parse(html.match(/const keys=(\[[^\]]+\])/)?.[1] ?? "[]") as string[];
+    expect(bridgeKeys).toEqual([
+      "surface",
+      "card",
+      "elevated",
+      "text",
+      "text-strong",
+      "muted",
+      "border",
+      "border-strong",
+      "accent",
+      "accent-fg",
+      "ok",
+      "warn",
+      "danger",
+      "info",
+      "radius",
+      "font-body",
+      "font-mono",
+    ]);
     expect(html).toContain("openclaw:widget-prompt-offer");
     expect(html).toContain("navigator.userActivation");
     expect(html).toContain("c.port1.postMessage.bind(c.port1)");
