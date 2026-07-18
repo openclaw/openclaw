@@ -613,7 +613,7 @@ export async function applySystemAgentSetup(
     configPath: committed.path,
     configHashBefore: committed.previousHash,
     configHashAfter: committed.persistedHash,
-    bootstrapPending: workspaceResult?.bootstrapExists === true,
+    bootstrapPending: workspaceResult?.bootstrapPending === true,
     lines,
   };
 }

@@ -707,7 +707,7 @@ export async function ensureAgentWorkspace(params?: {
   userPath?: string;
   heartbeatPath?: string;
   bootstrapPath?: string;
-  bootstrapExists?: boolean;
+  bootstrapPending?: boolean;
   identityPathCreated?: boolean;
 }> {
   const rawDir = params?.dir?.trim() ? params.dir.trim() : DEFAULT_AGENT_WORKSPACE_DIR;
@@ -754,7 +754,7 @@ export async function ensureAgentWorkspace(params?: {
     if (hasContentEvidence) {
       await maybeWriteWorkspaceAttestation(dir);
     }
-    return { dir, bootstrapExists: false };
+    return { dir, bootstrapPending: false };
   }
 
   const agentsPath = path.join(dir, DEFAULT_AGENTS_FILENAME);
@@ -938,7 +938,7 @@ export async function ensureAgentWorkspace(params?: {
     userPath,
     heartbeatPath,
     bootstrapPath,
-    bootstrapExists,
+    bootstrapPending: !state.setupCompletedAt && bootstrapExists,
     identityPathCreated,
   };
 }

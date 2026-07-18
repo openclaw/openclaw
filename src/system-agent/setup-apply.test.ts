@@ -288,7 +288,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     );
     mocks.ensureWorkspace.mockImplementation(async () => {
       mocks.events.push("workspace");
-      return { bootstrapExists: true };
+      return { bootstrapPending: true };
     });
     mocks.ensureGatewayService.mockResolvedValue({ installDaemon: false });
     mocks.refreshPluginRegistry.mockResolvedValue(undefined);
