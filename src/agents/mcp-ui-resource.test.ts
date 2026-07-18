@@ -200,12 +200,12 @@ describe("MCP App UI resources", () => {
     expect(decodeMcpAppSandboxCsp(encodedCsp)).toStrictEqual(view?.csp);
   });
 
-  it.each([
-    "bm90LWpzb24",
-    Buffer.from("{not json}", "utf8").toString("base64url"),
-  ])("rejects malformed encoded CSP metadata", (value) => {
-    expect(() => decodeMcpAppSandboxCsp(value)).toThrow();
-  });
+  it.each(["bm90LWpzb24", Buffer.from("{not json}", "utf8").toString("base64url")])(
+    "rejects malformed encoded CSP metadata",
+    (value) => {
+      expect(() => decodeMcpAppSandboxCsp(value)).toThrow();
+    },
+  );
 
   it("builds proxy HTML", () => {
     const proxyHtml = buildMcpAppSandboxProxyHtml();
