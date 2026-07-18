@@ -4,6 +4,7 @@
 // Drawn in the smooth OpenClaw lobster style (see the dreams scene and
 // icons.lobster). Look and personality are seeded per session + page load so
 // every new session hatches a slightly different lobster.
+import "../styles/lobster-pet.css";
 import { expectDefined } from "@openclaw/normalization-core";
 import { html, LitElement, nothing, svg, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
@@ -20,6 +21,33 @@ import {
   recordLobsterVisit,
   type LobsterFamiliarity,
 } from "./lobster-dex.ts";
+import {
+  LOBSTER_LOGO_VISIT_EVENT,
+  type LobsterLogoVisitDetail,
+  type LobsterLogoVisitPhase,
+  type LobsterPetAccessory,
+  type LobsterPetAntennae,
+  type LobsterPetBuild,
+  type LobsterPetClawSize,
+  type LobsterPetLook,
+  type LobsterPetMode,
+  type LobsterPetPalette,
+  type LobsterPetPaletteId,
+  type LobsterPetPersonalityId,
+  type LobsterRunOutcome,
+} from "./lobster-pet-contract.ts";
+
+export {
+  LOBSTER_LOGO_VISIT_EVENT,
+  lobsterPetSeed,
+  resolveLobsterPetMode,
+  resolveLobsterRunOutcome,
+  type LobsterLogoVisitDetail,
+  type LobsterLogoVisitPhase,
+  type LobsterPetLook,
+  type LobsterPetMode,
+  type LobsterRunOutcome,
+} from "./lobster-pet-contract.ts";
 
 type LobsterPetAct =
   | "wave"
@@ -36,53 +64,6 @@ type LobsterPetAct =
   | "pet"
   | "droop"
   | "sweep";
-
-type LobsterPetMode = "idle" | "busy" | "offline";
-
-type LobsterPetPersonalityId = "sleepy" | "zoomy" | "friendly" | "showoff";
-
-type LobsterPetPaletteId =
-  | "crimson"
-  | "coral"
-  | "teal"
-  | "violet"
-  | "ink"
-  | "blue"
-  | "gold"
-  | "calico"
-  | "abyss"
-  | "ghost"
-  | "split"
-  | "retro";
-
-type LobsterPetPalette = {
-  id: LobsterPetPaletteId;
-  shell: string;
-  claw: string;
-};
-
-type LobsterPetAccessory = "none" | "crown" | "sprout" | "patch" | "santa" | "pumpkin" | "party";
-
-type LobsterPetAntennae = "perky" | "droopy";
-
-type LobsterPetBuild = "round" | "squat" | "slender";
-
-type LobsterPetClawSize = "dainty" | "regular" | "mighty";
-
-type LobsterPetLook = {
-  palette: LobsterPetPalette;
-  scale: number;
-  accessory: LobsterPetAccessory;
-  antennae: LobsterPetAntennae;
-  side: "left" | "right";
-  spotPct: number;
-  facing: 1 | -1;
-  personality: LobsterPetPersonalityId;
-  blinkDelayS: number;
-  build: LobsterPetBuild;
-  clawSize: LobsterPetClawSize;
-  tailFan: boolean;
-};
 
 type ActProfile = {
   // [min, max] delay before the next act.
@@ -385,20 +366,6 @@ function isLobsterLogoLoad(seed: number): boolean {
   return mulberry32((seed ^ 0x1063) >>> 0)() < 0.12;
 }
 
-type LobsterLogoVisitPhase = "in" | "leaving" | "out";
-
-export type LobsterLogoVisitDetail = {
-  phase: LobsterLogoVisitPhase;
-  // A null look on a non-"out" phase means "hide the logo, render no
-  // stand-in": a ledge visit scared the brand mark away.
-  look: LobsterPetLook | null;
-  name: string | null;
-};
-
-// Fired on the pet host whenever the logo stand-in phase changes; the
-// sidebar owns the brand slot, so the swap renders there, not here.
-export const LOBSTER_LOGO_VISIT_EVENT = "openclaw-lobster-logo-visit";
-
 type LobsterPasserKind = "stranger" | "crab";
 
 type LobsterPasserPlan = {
@@ -461,15 +428,6 @@ function isLobsterNightTime(now: Date = new Date()): boolean {
   return hour >= 22 || hour < 6;
 }
 
-function fnv1a(value: string): number {
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < value.length; i++) {
-    hash ^= value.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return hash >>> 0;
-}
-
 function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
   return () => {
@@ -494,14 +452,6 @@ function pickWeighted<T>(rng: () => number, entries: Array<[T, number]>): T {
 
 function randomBetween(rng: () => number, min: number, max: number): number {
   return min + rng() * (max - min);
-}
-
-// One salt per page load: revisiting the UI re-rolls every session's lobster,
-// while re-renders within a load stay stable for a given session key.
-const LOAD_SALT = Math.trunc(Math.random() * 0xffffffff);
-
-export function lobsterPetSeed(sessionKey: string): number {
-  return (fnv1a(sessionKey) ^ LOAD_SALT) >>> 0;
 }
 
 export function createLobsterPetLook(seed: number, now: Date = new Date()): LobsterPetLook {
@@ -553,52 +503,6 @@ export function createLobsterPetLook(seed: number, now: Date = new Date()): Lobs
     clawSize,
     tailFan,
   };
-}
-
-type LobsterRunOutcome = "ok" | "error" | "aborted";
-
-// The most recently active session with a terminal status decides how the
-// pet reacts when the busy state clears: failures earn sympathy, not cheers.
-export function resolveLobsterRunOutcome(
-  sessions:
-    | ReadonlyArray<{
-        status?: "running" | "done" | "failed" | "killed" | "timeout";
-        endedAt?: number | null;
-        lastActivityAt?: number | null;
-        updatedAt?: number | null;
-      }>
-    | null
-    | undefined,
-): LobsterRunOutcome {
-  let latest: { at: number; outcome: LobsterRunOutcome } | null = null;
-  for (const row of sessions ?? []) {
-    if (!row.status || row.status === "running") {
-      continue;
-    }
-    // endedAt is the run-completion timestamp; activity/updated stamps also
-    // move on unrelated events (reads, renames) and only serve as fallbacks.
-    const at = row.endedAt ?? row.lastActivityAt ?? row.updatedAt ?? 0;
-    if (!latest || at > latest.at) {
-      const outcome: LobsterRunOutcome =
-        row.status === "failed" || row.status === "timeout"
-          ? "error"
-          : row.status === "killed"
-            ? "aborted"
-            : "ok";
-      latest = { at, outcome };
-    }
-  }
-  return latest?.outcome ?? "ok";
-}
-
-export function resolveLobsterPetMode(
-  connected: boolean,
-  sessions: ReadonlyArray<{ hasActiveRun?: boolean | null }> | null | undefined,
-): LobsterPetMode {
-  if (!connected) {
-    return "offline";
-  }
-  return sessions?.some((row) => row.hasActiveRun === true) ? "busy" : "idle";
 }
 
 function prefersReducedMotion(): boolean {
@@ -902,6 +806,42 @@ export function renderLobsterSvg(
       ${options.sailorCap && !options.shell && !HEADWEAR.has(look.accessory) ? SAILOR_CAP : nothing}
     </svg>
   `;
+}
+
+class LobsterLogoStandIn extends LitElement {
+  override createRenderRoot() {
+    return this;
+  }
+
+  @property({ attribute: false }) visit: LobsterLogoVisitDetail | null = null;
+
+  override render() {
+    const visit = this.visit;
+    if (!visit?.look) {
+      return nothing;
+    }
+    const look = visit.look;
+    const classes = [
+      "sidebar-brand__pet",
+      `lobster-pet--palette-${look.palette.id}`,
+      visit.phase === "leaving" ? "sidebar-brand__pet--leaving" : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+    const style = [
+      `--lob-shell:${look.palette.shell}`,
+      `--lob-claw:${look.palette.claw}`,
+      `--lob-blink-delay:${look.blinkDelayS}s`,
+      `--lob-w:${LOBSTER_PET_BUILD_MULS[look.build].w}`,
+      `--lob-h:${LOBSTER_PET_BUILD_MULS[look.build].h}`,
+      `--lob-claw-scale:${LOBSTER_PET_CLAW_MULS[look.clawSize]}`,
+    ].join(";");
+    return html`
+      <span class=${classes} style=${style} title=${`${visit.name} · filling in for the logo`}
+        >${renderLobsterSvg(look)}</span
+      >
+    `;
+  }
 }
 
 class LobsterPet extends LitElement {
@@ -1833,6 +1773,10 @@ class LobsterPet extends LitElement {
       </div>
     `;
   }
+}
+
+if (!customElements.get("openclaw-lobster-logo-standin")) {
+  customElements.define("openclaw-lobster-logo-standin", LobsterLogoStandIn);
 }
 
 if (!customElements.get("openclaw-lobster-pet")) {

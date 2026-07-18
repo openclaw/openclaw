@@ -7114,6 +7114,46 @@
       "translated": "$text "
     },
     {
+      "id": "native.android.d0d3975e637ca1a0",
+      "source": "Stop Dictation",
+      "translated": "Dừng đọc chính tả"
+    },
+    {
+      "id": "native.android.6349fe65bab3c7f5",
+      "source": "Dictation",
+      "translated": "Đọc chính tả"
+    },
+    {
+      "id": "native.android.0a166c48e7cd6443",
+      "source": "On-device speech recognition is unavailable.",
+      "translated": "Tính năng nhận dạng giọng nói trên thiết bị không khả dụng."
+    },
+    {
+      "id": "native.android.2c4742b33e272b13",
+      "source": "Microphone permission is required.",
+      "translated": "Cần có quyền truy cập micrô."
+    },
+    {
+      "id": "native.android.956057c06c3421af",
+      "source": "Recognizer busy",
+      "translated": "Trình nhận dạng đang bận"
+    },
+    {
+      "id": "native.android.d33751c0ac92fe33",
+      "source": "Network error",
+      "translated": "Lỗi mạng"
+    },
+    {
+      "id": "native.android.53593582608e9873",
+      "source": "No matches",
+      "translated": "Không có kết quả phù hợp"
+    },
+    {
+      "id": "native.android.ec1c1e50397faf58",
+      "source": "Speech recognition",
+      "translated": "Nhận dạng giọng nói"
+    },
+    {
       "id": "native.android.d1712183ebf86197",
       "source": "Widget unavailable",
       "translated": "Tiện ích không khả dụng"
@@ -7679,9 +7719,14 @@
       "translated": "Nhắn tin cho OpenClaw"
     },
     {
-      "id": "native.android.97602a28629a331f",
-      "source": "Open voice",
-      "translated": "Mở giọng nói"
+      "id": "native.android.9b42791ed9da90d3",
+      "source": "End Talk",
+      "translated": "Kết thúc cuộc trò chuyện"
+    },
+    {
+      "id": "native.android.1d55fe6bab0d3f74",
+      "source": "Start Talk",
+      "translated": "Bắt đầu trò chuyện"
     },
     {
       "id": "native.android.6f4dc5330b262dea",
@@ -20194,6 +20239,16 @@
       "translated": "Trả lời OpenClaw… (chọn có để thiết lập mọi thứ)"
     },
     {
+      "id": "native.apple.134b9ae1d8a543df",
+      "source": "Skip for now",
+      "translated": "Bỏ qua lúc này"
+    },
+    {
+      "id": "native.apple.5435391fa338f227",
+      "source": "Recommended",
+      "translated": "Được đề xuất"
+    },
+    {
       "id": "native.apple.78d1ad73762a7ce8",
       "source": "Connect your AI",
       "translated": "Kết nối AI của bạn"
@@ -21179,14 +21234,129 @@
       "translated": "Tiếp tục"
     },
     {
+      "id": "native.apple.0a4fcdf09c5e7b3f",
+      "source": "Capture Window…",
+      "translated": "Chụp cửa sổ…"
+    },
+    {
+      "id": "native.apple.d7ac1580e29304af",
+      "source": "Capture Area…",
+      "translated": "Chụp vùng…"
+    },
+    {
+      "id": "native.apple.33adb82aa3c53c00",
+      "source": "focused app",
+      "translated": "ứng dụng đang được chọn"
+    },
+    {
+      "id": "native.apple.5d20c8bd1235a43c",
+      "source": "No focused application is available.",
+      "translated": "Không có ứng dụng nào đang được chọn."
+    },
+    {
+      "id": "native.apple.3c1a2f1ac3b50de0",
+      "source": "Focused app",
+      "translated": "Ứng dụng đang được chọn"
+    },
+    {
+      "id": "native.apple.511248f39affffc4",
+      "source": "Focus another app before attaching its text.",
+      "translated": "Chọn một ứng dụng khác trước khi đính kèm văn bản của ứng dụng đó."
+    },
+    {
+      "id": "native.apple.1c94e8c0010021d9",
+      "source": "Accessibility access is required to attach text from \\(appName).",
+      "translated": "Cần có quyền Trợ năng để đính kèm văn bản từ \\(appName)."
+    },
+    {
+      "id": "native.apple.a3e3d4b0ab6e94d9",
+      "source": "No focused window is available in \\(appName).",
+      "translated": "Không có cửa sổ nào đang được chọn trong \\(appName)."
+    },
+    {
+      "id": "native.apple.a2a454a96a011397",
+      "source": "Focused Window",
+      "translated": "Cửa sổ đang được chọn"
+    },
+    {
+      "id": "native.apple.67d183bf2f9e4c2c",
+      "source": "\\(appName) is not responding to Accessibility requests.",
+      "translated": "\\(appName) không phản hồi các yêu cầu Trợ năng."
+    },
+    {
+      "id": "native.apple.2f56bc484453a456",
+      "source": "No readable text was found in \\(appName).",
+      "translated": "Không tìm thấy văn bản có thể đọc được trong \\(appName)."
+    },
+    {
+      "id": "native.apple.507c2d9c7e94716f",
+      "source": "Allow OpenClaw to read text from \\(appName)",
+      "translated": "Cho phép OpenClaw đọc văn bản từ \\(appName)"
+    },
+    {
+      "id": "native.apple.c5313d544a833af0",
+      "source": "Attaching focused-window text uses macOS Accessibility access.",
+      "translated": "Việc đính kèm văn bản từ cửa sổ đang được chọn sử dụng quyền Trợ năng của macOS."
+    },
+    {
+      "id": "native.apple.e68aeef0995a7d00",
+      "source": "Grant Access",
+      "translated": "Cấp quyền truy cập"
+    },
+    {
+      "id": "native.apple.43dd985a6d9ec004",
+      "source": "Cancel",
+      "translated": "Hủy"
+    },
+    {
+      "id": "native.apple.a8880557335b5a25",
+      "source": "focused app",
+      "translated": "ứng dụng đang được chọn"
+    },
+    {
+      "id": "native.apple.6af15237e49bd0bd",
+      "source": "Couldn't capture that image.",
+      "translated": "Không thể chụp hình ảnh đó."
+    },
+    {
+      "id": "native.apple.b31041aa0da3768c",
+      "source": "Screenshot: \\(label)",
+      "translated": "Ảnh chụp màn hình: \\(label)"
+    },
+    {
+      "id": "native.apple.72e5bffb7ee89f19",
+      "source": "Context from \\(context.appName) — \\(context.windowTitle)",
+      "translated": "Ngữ cảnh từ \\(context.appName) — \\(context.windowTitle)"
+    },
+    {
+      "id": "native.apple.b5524e37a230e571",
+      "source": "New message to \\(agentName)",
+      "translated": "Tin nhắn mới tới \\(agentName)"
+    },
+    {
+      "id": "native.apple.b99799f97999f481",
+      "source": "Reply in \\(override.displayName)",
+      "translated": "Trả lời trong \\(override.displayName)"
+    },
+    {
       "id": "native.apple.b3700cf60f4520dc",
       "source": "Message \\(self.model.agentDisplay.name)",
       "translated": "Nhắn tin cho \\(self.model.agentDisplay.name)"
     },
     {
-      "id": "native.apple.edf12ff583307f43",
-      "source": "Send a window screenshot",
-      "translated": "Gửi ảnh chụp màn hình cửa sổ"
+      "id": "native.apple.da0b9bd07a337bda",
+      "source": "Continue a recent conversation",
+      "translated": "Tiếp tục một cuộc trò chuyện gần đây"
+    },
+    {
+      "id": "native.apple.c76e52d21bef75ba",
+      "source": "Attach text from \\(self.model.frontmostAppName)",
+      "translated": "Đính kèm văn bản từ \\(self.model.frontmostAppName)"
+    },
+    {
+      "id": "native.apple.aedd7e9870c3579a",
+      "source": "Capture a screenshot",
+      "translated": "Chụp ảnh màn hình"
     },
     {
       "id": "native.apple.136cef9f750d3803",
@@ -21207,6 +21377,46 @@
       "id": "native.apple.a3332fa4db187973",
       "source": "Not now",
       "translated": "Để sau"
+    },
+    {
+      "id": "native.apple.1962232c9bc52e12",
+      "source": "\\(context.appName) — \\(context.windowTitle) (\\(context.characterCount) chars)",
+      "translated": "\\(context.appName) — \\(context.windowTitle) (\\(context.characterCount) ký tự)"
+    },
+    {
+      "id": "native.apple.66ec93e9eefd9bd7",
+      "source": "Remove attached text context",
+      "translated": "Xóa ngữ cảnh văn bản đính kèm"
+    },
+    {
+      "id": "native.apple.88d0123c86b06144",
+      "source": "Allow OpenClaw to capture windows",
+      "translated": "Cho phép OpenClaw chụp các cửa sổ"
+    },
+    {
+      "id": "native.apple.677c5733cd132aed",
+      "source": "Allow OpenClaw to capture a screen area",
+      "translated": "Cho phép OpenClaw chụp một vùng màn hình"
+    },
+    {
+      "id": "native.apple.529a6fc5aeba03b0",
+      "source": "Sending a screenshot uses macOS Screen Recording access.",
+      "translated": "Việc gửi ảnh chụp màn hình sử dụng quyền truy cập Ghi màn hình của macOS."
+    },
+    {
+      "id": "native.apple.615245bf05ed3234",
+      "source": "Grant Access",
+      "translated": "Cấp quyền truy cập"
+    },
+    {
+      "id": "native.apple.2a64131ba32d175d",
+      "source": "Cancel",
+      "translated": "Hủy"
+    },
+    {
+      "id": "native.apple.6521871fc0ddc987",
+      "source": "Selected area",
+      "translated": "Vùng đã chọn"
     },
     {
       "id": "native.apple.1eeca02c45d3db5a",
@@ -22894,11 +23104,6 @@
       "translated": "Ảnh đại diện của tác tử"
     },
     {
-      "id": "native.apple.8509385953c19619",
-      "source": "\\(display.emoji) \\(display.title)",
-      "translated": "\\(display.emoji) \\(display.title)"
-    },
-    {
       "id": "native.apple.6426e369511b043c",
       "source": "Message usage",
       "translated": "Mức dùng tin nhắn"
@@ -22907,16 +23112,6 @@
       "id": "native.apple.3c8c3679fd99c074",
       "source": "Voice note",
       "translated": "Voice note"
-    },
-    {
-      "id": "native.apple.aff6385b0a8dd0ac",
-      "source": "Show full output",
-      "translated": "Hiển thị toàn bộ đầu ra"
-    },
-    {
-      "id": "native.apple.b9c78020ae8be34a",
-      "source": "Show less",
-      "translated": "Hiển thị ít hơn"
     },
     {
       "id": "native.apple.e9914cfc93a514cb",
@@ -22942,11 +23137,6 @@
       "id": "native.apple.142c01bf6b97e380",
       "source": "Speaking, tap to stop",
       "translated": "Đang nói, chạm để dừng"
-    },
-    {
-      "id": "native.apple.6b18ea1d85b5d3a2",
-      "source": "Running tools…",
-      "translated": "Đang chạy công cụ…"
     },
     {
       "id": "native.apple.51ef5e41f9124819",
@@ -23004,6 +23194,286 @@
       "translated": "Người dùng"
     },
     {
+      "id": "native.apple.b1cdcb906a43d5d6",
+      "source": "This session cannot be archived while it is active or running.",
+      "translated": "Không thể lưu trữ phiên này khi phiên đang hoạt động hoặc đang chạy."
+    },
+    {
+      "id": "native.apple.5817e3f3dab1ee19",
+      "source": "The main session cannot be deleted.",
+      "translated": "Không thể xóa phiên chính."
+    },
+    {
+      "id": "native.apple.a6b8df3f18171c91",
+      "source": "Remove attachments or wait for delivery before archiving or deleting this session.",
+      "translated": "Hãy xóa tệp đính kèm hoặc chờ gửi xong trước khi lưu trữ hoặc xóa phiên này."
+    },
+    {
+      "id": "native.apple.476b3862e0449857",
+      "source": "Running",
+      "translated": "Đang chạy"
+    },
+    {
+      "id": "native.apple.83b41e41f428cffb",
+      "source": "Identity",
+      "translated": "Danh tính"
+    },
+    {
+      "id": "native.apple.ba6710da42846eed",
+      "source": "Name",
+      "translated": "Tên"
+    },
+    {
+      "id": "native.apple.bdb1928f7e63c4c6",
+      "source": "Key",
+      "translated": "Khóa"
+    },
+    {
+      "id": "native.apple.7259d51423f8def0",
+      "source": "Copy session key",
+      "translated": "Sao chép khóa phiên"
+    },
+    {
+      "id": "native.apple.1494b638984ddca3",
+      "source": "Kind",
+      "translated": "Loại"
+    },
+    {
+      "id": "native.apple.49cd6c21bdd0d8da",
+      "source": "Organization",
+      "translated": "Tổ chức"
+    },
+    {
+      "id": "native.apple.83e2ae5c4c7dbb94",
+      "source": "Group",
+      "translated": "Nhóm"
+    },
+    {
+      "id": "native.apple.1ba465bfa16ed23b",
+      "source": "None",
+      "translated": "Không có"
+    },
+    {
+      "id": "native.apple.2c7c9e5dc8ad574e",
+      "source": "Pinned",
+      "translated": "Đã ghim"
+    },
+    {
+      "id": "native.apple.b0d3e265af9f562a",
+      "source": "Archived",
+      "translated": "Đã lưu trữ"
+    },
+    {
+      "id": "native.apple.de94ca2cf7d4d766",
+      "source": "Run",
+      "translated": "Lần chạy"
+    },
+    {
+      "id": "native.apple.f7a51dca3268b26c",
+      "source": "Status",
+      "translated": "Trạng thái"
+    },
+    {
+      "id": "native.apple.12678de5fa43321d",
+      "source": "Model",
+      "translated": "Mô hình"
+    },
+    {
+      "id": "native.apple.8ec6bd6001df285d",
+      "source": "Provider",
+      "translated": "Nhà cung cấp"
+    },
+    {
+      "id": "native.apple.f43534cf1ee73605",
+      "source": "Runtime",
+      "translated": "Môi trường chạy"
+    },
+    {
+      "id": "native.apple.f0775e602bbe75ed",
+      "source": "Run duration",
+      "translated": "Thời lượng chạy"
+    },
+    {
+      "id": "native.apple.ecde91d89eab026b",
+      "source": "Worktree",
+      "translated": "Worktree"
+    },
+    {
+      "id": "native.apple.1ef1698bb3ff7166",
+      "source": "ID",
+      "translated": "ID"
+    },
+    {
+      "id": "native.apple.69bc49f9663fa205",
+      "source": "Branch",
+      "translated": "Nhánh"
+    },
+    {
+      "id": "native.apple.aa430e81e52e2354",
+      "source": "Repository root",
+      "translated": "Thư mục gốc của kho lưu trữ"
+    },
+    {
+      "id": "native.apple.6e851b012a982d38",
+      "source": "Activity",
+      "translated": "Hoạt động"
+    },
+    {
+      "id": "native.apple.bf87c6fd92c9315a",
+      "source": "Updated",
+      "translated": "Đã cập nhật"
+    },
+    {
+      "id": "native.apple.dcb1734cba578b79",
+      "source": "Last activity",
+      "translated": "Hoạt động gần nhất"
+    },
+    {
+      "id": "native.apple.58ca290e3f032865",
+      "source": "Last interaction",
+      "translated": "Lần tương tác gần nhất"
+    },
+    {
+      "id": "native.apple.7020bd521499f3b8",
+      "source": "Run started",
+      "translated": "Lượt chạy đã bắt đầu"
+    },
+    {
+      "id": "native.apple.abb2b24d6378b605",
+      "source": "Run ended",
+      "translated": "Lượt chạy đã kết thúc"
+    },
+    {
+      "id": "native.apple.cd7c3095a22f80a9",
+      "source": "Session Info",
+      "translated": "Thông tin phiên"
+    },
+    {
+      "id": "native.apple.e308b012d84b3b3e",
+      "source": "Groups",
+      "translated": "Nhóm"
+    },
+    {
+      "id": "native.apple.6438f66cfcaefaf7",
+      "source": "Rename…",
+      "translated": "Đổi tên…"
+    },
+    {
+      "id": "native.apple.58b0f1df4985b0d1",
+      "source": "Delete…",
+      "translated": "Xóa…"
+    },
+    {
+      "id": "native.apple.bc70cc0f0b882179",
+      "source": "No groups",
+      "translated": "Không có nhóm"
+    },
+    {
+      "id": "native.apple.cb3e1fa7783a35d2",
+      "source": "Create Group",
+      "translated": "Tạo nhóm"
+    },
+    {
+      "id": "native.apple.4ac72aeb70f107d8",
+      "source": "Add Group",
+      "translated": "Thêm nhóm"
+    },
+    {
+      "id": "native.apple.23d628606fe0734f",
+      "source": "Session Groups",
+      "translated": "Nhóm phiên"
+    },
+    {
+      "id": "native.apple.7777b2d2ec43ed59",
+      "source": "Done",
+      "translated": "Xong"
+    },
+    {
+      "id": "native.apple.0b0149661cacfe36",
+      "source": "Rename Group",
+      "translated": "Đổi tên nhóm"
+    },
+    {
+      "id": "native.apple.8cbd863aa4d0524f",
+      "source": "Group name",
+      "translated": "Tên nhóm"
+    },
+    {
+      "id": "native.apple.6021088d5ed9c301",
+      "source": "Rename",
+      "translated": "Đổi tên"
+    },
+    {
+      "id": "native.apple.e697417338a47751",
+      "source": "Cancel",
+      "translated": "Hủy"
+    },
+    {
+      "id": "native.apple.cc89328a14af7a23",
+      "source": "Delete “%@”?",
+      "translated": "Xóa “%@”?"
+    },
+    {
+      "id": "native.apple.4c09741db2e6c624",
+      "source": "Delete group?",
+      "translated": "Xóa nhóm?"
+    },
+    {
+      "id": "native.apple.ddb1bbbd3c1a9c5e",
+      "source": "Delete Group",
+      "translated": "Xóa nhóm"
+    },
+    {
+      "id": "native.apple.b049c8a4d2805e08",
+      "source": "Sessions in this group become ungrouped.",
+      "translated": "Các phiên trong nhóm này sẽ không còn thuộc nhóm nào."
+    },
+    {
+      "id": "native.apple.5aa6082d78027c5f",
+      "source": "Gateway changed. Close and reopen Groups to continue.",
+      "translated": "Gateway đã thay đổi. Hãy đóng rồi mở lại Nhóm để tiếp tục."
+    },
+    {
+      "id": "native.apple.bb4b44183929c881",
+      "source": "No agents are available on this gateway.",
+      "translated": "Không có tác nhân nào khả dụng trên gateway này."
+    },
+    {
+      "id": "native.apple.6c89f35d53506406",
+      "source": "New Session Options",
+      "translated": "Tùy chọn phiên mới"
+    },
+    {
+      "id": "native.apple.5b0cde807ccb4241",
+      "source": "Agent",
+      "translated": "Tác nhân"
+    },
+    {
+      "id": "native.apple.124a640f9620d9cd",
+      "source": "Create in a worktree",
+      "translated": "Tạo trong một worktree"
+    },
+    {
+      "id": "native.apple.632ce245d5575fea",
+      "source": "Base ref (optional)",
+      "translated": "Tham chiếu cơ sở (không bắt buộc)"
+    },
+    {
+      "id": "native.apple.fd81909fc9719a59",
+      "source": "Retry",
+      "translated": "Thử lại"
+    },
+    {
+      "id": "native.apple.a085278be62286b2",
+      "source": "Create",
+      "translated": "Tạo"
+    },
+    {
+      "id": "native.apple.795ba37f6782cf28",
+      "source": "The session could not be created.",
+      "translated": "Không thể tạo phiên."
+    },
+    {
       "id": "native.apple.8ec708a3605a2cc3",
       "source": "Search sessions",
       "translated": "Tìm kiếm phiên"
@@ -23027,6 +23497,11 @@
       "id": "native.apple.66ba42960eb4135b",
       "source": "New session",
       "translated": "Phiên mới"
+    },
+    {
+      "id": "native.apple.2ef0e34db02ad255",
+      "source": "New session options",
+      "translated": "Tùy chọn phiên mới"
     },
     {
       "id": "native.apple.36753ef2f1ed4264",
@@ -23077,6 +23552,11 @@
       "id": "native.apple.ac85292b16a7465f",
       "source": "Unread",
       "translated": "Chưa đọc"
+    },
+    {
+      "id": "native.apple.f57a4b9c14d31867",
+      "source": "Get Info…",
+      "translated": "Xem thông tin…"
     },
     {
       "id": "native.apple.a174cb1027a9b881",
@@ -23139,6 +23619,11 @@
       "translated": "Đang kết nối…"
     },
     {
+      "id": "native.apple.79f708b3bc1d3a6c",
+      "source": "Retry session groups",
+      "translated": "Thử tải lại các nhóm phiên"
+    },
+    {
       "id": "native.apple.63320b6d5138c0db",
       "source": "Pinned",
       "translated": "Đã ghim"
@@ -23184,6 +23669,41 @@
       "translated": "Hủy"
     },
     {
+      "id": "native.apple.751e0f6b81cd374a",
+      "source": "Delete selected sessions?",
+      "translated": "Xóa các phiên đã chọn?"
+    },
+    {
+      "id": "native.apple.aa679276581b0058",
+      "source": "Delete Sessions",
+      "translated": "Xóa các phiên"
+    },
+    {
+      "id": "native.apple.f837129cbee23297",
+      "source": "Each selected session and its transcript will be removed from the gateway.",
+      "translated": "Mỗi phiên đã chọn và bản ghi của phiên đó sẽ bị xóa khỏi gateway."
+    },
+    {
+      "id": "native.apple.bf09df5e38a7a950",
+      "source": "Groups",
+      "translated": "Nhóm"
+    },
+    {
+      "id": "native.apple.64013cfee5e25305",
+      "source": "Manage session groups",
+      "translated": "Quản lý nhóm phiên"
+    },
+    {
+      "id": "native.apple.185f4688f98e244e",
+      "source": "Done",
+      "translated": "Xong"
+    },
+    {
+      "id": "native.apple.58133fc5791847e6",
+      "source": "Select",
+      "translated": "Chọn"
+    },
+    {
       "id": "native.apple.b67eaecec1b423ac",
       "source": "No archived sessions",
       "translated": "Không có phiên đã lưu trữ"
@@ -23199,29 +23719,14 @@
       "translated": "Khôi phục"
     },
     {
-      "id": "native.apple.666ba6eb696e649f",
-      "source": "Archive",
-      "translated": "Lưu trữ"
-    },
-    {
-      "id": "native.apple.05cb1fecc5844b69",
-      "source": "Pinned",
-      "translated": "Đã ghim"
+      "id": "native.apple.158cfa096c57bcb9",
+      "source": "Get Info…",
+      "translated": "Xem thông tin…"
     },
     {
       "id": "native.apple.080fce25e4a9bb61",
       "source": "Rename",
       "translated": "Đổi tên"
-    },
-    {
-      "id": "native.apple.d148288258094aa6",
-      "source": "Pin",
-      "translated": "Ghim"
-    },
-    {
-      "id": "native.apple.3c62aaf44e6ab4d4",
-      "source": "Unpin",
-      "translated": "Bỏ ghim"
     },
     {
       "id": "native.apple.6de479e9d780869a",
@@ -23239,6 +23744,31 @@
       "translated": "Đánh dấu là chưa đọc"
     },
     {
+      "id": "native.apple.05cb1fecc5844b69",
+      "source": "Pinned",
+      "translated": "Đã ghim"
+    },
+    {
+      "id": "native.apple.d148288258094aa6",
+      "source": "Pin",
+      "translated": "Ghim"
+    },
+    {
+      "id": "native.apple.3c62aaf44e6ab4d4",
+      "source": "Unpin",
+      "translated": "Bỏ ghim"
+    },
+    {
+      "id": "native.apple.666ba6eb696e649f",
+      "source": "Archive",
+      "translated": "Lưu trữ"
+    },
+    {
+      "id": "native.apple.b09b91392835fe58",
+      "source": "Delete",
+      "translated": "Xóa"
+    },
+    {
       "id": "native.apple.946b677d8dbf0f37",
       "source": "Hide talk transcript",
       "translated": "Ẩn bản chép lời cuộc trò chuyện"
@@ -23252,6 +23782,31 @@
       "id": "native.apple.e7beeef6043ffd2a",
       "source": "System Default",
       "translated": "Mặc định hệ thống"
+    },
+    {
+      "id": "native.apple.f390b84397c0d240",
+      "source": "Running",
+      "translated": "Đang chạy"
+    },
+    {
+      "id": "native.apple.e2e7faa7c9c5c61f",
+      "source": "Collapse tool result",
+      "translated": "Thu gọn kết quả công cụ"
+    },
+    {
+      "id": "native.apple.4e7850fe95fcd898",
+      "source": "Expand tool result",
+      "translated": "Mở rộng kết quả công cụ"
+    },
+    {
+      "id": "native.apple.d65ae0776d6b86ce",
+      "source": "Show less",
+      "translated": "Hiển thị ít hơn"
+    },
+    {
+      "id": "native.apple.065f4da5ddaf14a1",
+      "source": "Show all %lld lines",
+      "translated": "Hiển thị tất cả %lld dòng"
     },
     {
       "id": "native.apple.c4e808a2ec8d49f5",
@@ -23297,11 +23852,6 @@
       "id": "native.apple.99df7de891c8235f",
       "source": "Listen",
       "translated": "Nghe"
-    },
-    {
-      "id": "native.apple.f84b674ad395b694",
-      "source": "Jump to latest",
-      "translated": "Chuyển đến mới nhất"
     },
     {
       "id": "native.apple.429d825201b2cb85",
@@ -23399,14 +23949,24 @@
       "translated": "đã đưa vào hàng đợi sau khi thay đổi tuyến"
     },
     {
-      "id": "native.apple.710c7bd117a7cc12",
-      "source": "Remove attachments or wait for delivery to resolve before switching chats.",
-      "translated": "Gỡ tệp đính kèm hoặc chờ gửi xong trước khi chuyển cuộc trò chuyện."
+      "id": "native.apple.787047d0da6b8b9f",
+      "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
+      "translated": "Xóa tệp đính kèm hoặc chờ quá trình gửi hoàn tất trước khi bắt đầu cuộc trò chuyện mới."
+    },
+    {
+      "id": "native.apple.980f552bb0f96c0f",
+      "source": "Gateway changed before the session operation started.",
+      "translated": "Gateway đã thay đổi trước khi thao tác phiên bắt đầu."
     },
     {
       "id": "native.apple.d93e6fe16ec1b0e5",
       "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
       "translated": "Gỡ tệp đính kèm hoặc chờ gửi xong trước khi bắt đầu cuộc trò chuyện mới."
+    },
+    {
+      "id": "native.apple.710c7bd117a7cc12",
+      "source": "Remove attachments or wait for delivery to resolve before switching chats.",
+      "translated": "Gỡ tệp đính kèm hoặc chờ gửi xong trước khi chuyển cuộc trò chuyện."
     },
     {
       "id": "native.apple.87ba543b42696b92",
@@ -23527,6 +24087,11 @@
       "id": "native.apple.eb58552e43c8dde2",
       "source": "New Session",
       "translated": "Phiên Mới"
+    },
+    {
+      "id": "native.apple.a7119fbf9d25df5e",
+      "source": "New Session Options…",
+      "translated": "Tùy chọn phiên mới…"
     },
     {
       "id": "native.apple.5361129a24118af6",

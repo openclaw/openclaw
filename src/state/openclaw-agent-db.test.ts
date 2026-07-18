@@ -14,6 +14,7 @@ import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { listOpenFileDescriptorsForPath } from "../infra/open-file-descriptors.test-support.js";
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
 import { VERSION } from "../version.js";
+import { withOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "./openclaw-agent-db.generated.js";
 import {
   assertOpenClawAgentDatabaseForMaintenance,
@@ -432,6 +433,60 @@ describe("openclaw agent database", () => {
         "openclaw-agent.sqlite",
       ),
     );
+  });
+
+  it("returns typed not-found without creating a missing read-only database", () => {
+    const stateDir = createTempStateDir();
+    const options = {
+      agentId: "worker-1",
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    };
+    const databasePath = resolveOpenClawAgentSqlitePath(options);
+
+    expect(withOpenClawAgentDatabaseReadOnly(() => "unused", options)).toEqual({
+      found: false,
+      reason: "database-missing",
+    });
+    expect(fs.existsSync(databasePath)).toBe(false);
+  });
+
+  it("refuses a newer schema from the read-only database helper", () => {
+    const stateDir = createTempStateDir();
+    const options = {
+      agentId: "worker-1",
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    };
+    const databasePath = resolveOpenClawAgentSqlitePath(options);
+    fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+    const { DatabaseSync } = requireNodeSqlite();
+    const database = new DatabaseSync(databasePath);
+    database.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION + 1};`);
+    database.close();
+
+    expect(() => withOpenClawAgentDatabaseReadOnly(() => "unused", options)).toThrow(
+      `newer schema version ${OPENCLAW_AGENT_SCHEMA_VERSION + 1}`,
+    );
+  });
+
+  it("returns typed not-found when a read-only query targets a missing table", () => {
+    const stateDir = createTempStateDir();
+    const options = {
+      agentId: "worker-1",
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    };
+    const databasePath = openOpenClawAgentDatabase(options).path;
+    closeOpenClawAgentDatabasesForTest();
+    const { DatabaseSync } = requireNodeSqlite();
+    const database = new DatabaseSync(databasePath);
+    database.exec("DROP TABLE session_entries;");
+    database.close();
+
+    expect(
+      withOpenClawAgentDatabaseReadOnly(
+        ({ db }) => db.prepare("SELECT * FROM session_entries").all(),
+        options,
+      ),
+    ).toEqual({ found: false, reason: "table-missing" });
   });
 
   it("lists a missing registry without creating the shared state database", () => {

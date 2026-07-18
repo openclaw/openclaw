@@ -263,7 +263,11 @@ class WearProxyControllerTest {
 
       assertEquals(
         "openai/gpt-a",
-        checkNotNull(status.result).jsonObject.getValue("selectedModelRef").jsonPrimitive.content,
+        checkNotNull(status.result)
+          .jsonObject
+          .getValue("selectedModelRef")
+          .jsonPrimitive
+          .content,
       )
       assertEquals(
         listOf("openai/gpt-a"),
@@ -271,7 +275,12 @@ class WearProxyControllerTest {
           .jsonObject
           .getValue("models")
           .jsonArray
-          .map { it.jsonObject.getValue("ref").jsonPrimitive.content },
+          .map {
+            it.jsonObject
+              .getValue("ref")
+              .jsonPrimitive
+              .content
+          },
       )
       assertTrue(selected.ok)
       assertEquals("agent:main:thread-7" to "openai/gpt-a", selection)

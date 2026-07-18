@@ -13,6 +13,7 @@ import { searchForSession } from "../../lib/sessions/navigation.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import "../../styles/custodian.css";
+import { classifyCustodianEventNudge, type CustodianEventNudge } from "./event-nudge.ts";
 import { parseCustodianQuestion, type CustodianStructuredQuestion } from "./structured-question.ts";
 
 const SYSTEM_AGENT_CHAT_TIMEOUT_MS = 190_000;
@@ -56,6 +57,7 @@ export class CustodianPage extends OpenClawLightDomElement {
   @state() private answeredQuestions = new Set<string>();
   @state() private activeClient: GatewayBrowserClient | null = null;
   @state() private chatAvailable = false;
+  @state() private eventNudge: CustodianEventNudge | null = null;
 
   private sessionId = createSessionId();
   private requestEpoch = 0;
@@ -64,14 +66,29 @@ export class CustodianPage extends OpenClawLightDomElement {
   private sessionScopeKey: string | null = null;
   private sessionStarted = false;
   private lastHelloDeviceToken = "";
+  private eventNudgeClosed = false;
   private readonly subscriptions = new SubscriptionsController(this).watch(
     () => this.context?.gateway,
     (gateway, notify) => gateway.subscribe(notify),
+  );
+  private readonly eventSubscriptions = new SubscriptionsController(this).effect(
+    () => this.context?.gateway,
+    (gateway) =>
+      gateway.subscribeEvents((event) => {
+        if (this.onboarding || this.eventNudgeClosed) {
+          return;
+        }
+        const next = classifyCustodianEventNudge(event);
+        if (next && (!this.eventNudge || next.severity > this.eventNudge.severity)) {
+          this.eventNudge = next;
+        }
+      }),
   );
 
   override disconnectedCallback(): void {
     this.requestEpoch += 1;
     this.subscriptions.clear();
+    this.eventSubscriptions.clear();
     super.disconnectedCallback();
   }
 
@@ -128,6 +145,7 @@ export class CustodianPage extends OpenClawLightDomElement {
     if (scopeChanged) {
       this.sessionScopeKey = scopeKey;
       this.sessionStarted = false;
+      this.eventNudge = null;
       this.clearConversation();
     } else if (requestWasPending) {
       this.error = t("custodian.connectionChanged");
@@ -251,6 +269,35 @@ export class CustodianPage extends OpenClawLightDomElement {
     });
   }
 
+  private sendEventNudge(): void {
+    const nudge = this.eventNudge;
+    if (!nudge) {
+      return;
+    }
+    this.eventNudge = null;
+    this.eventNudgeClosed = true;
+    this.send(nudge.message);
+  }
+
+  private dismissEventNudge(): void {
+    this.eventNudge = null;
+    this.eventNudgeClosed = true;
+  }
+
+  private eventNudgeText(nudge: CustodianEventNudge): string {
+    if (nudge.kind === "config-reload") {
+      return t("custodian.nudge.configReload");
+    }
+    const channel = nudge.channelLabel ?? t("custodian.nudge.channelFallback");
+    if (nudge.kind === "channel-auth") {
+      return t("custodian.nudge.channelAuth", { channel });
+    }
+    if (nudge.kind === "channel-disconnected") {
+      return t("custodian.nudge.channelDisconnected", { channel });
+    }
+    return t("custodian.nudge.channelDegraded", { channel });
+  }
+
   private dismissQuestion(message: CustodianMessage): void {
     const questionId = message.question?.id;
     if (!questionId) {
@@ -327,6 +374,26 @@ export class CustodianPage extends OpenClawLightDomElement {
         </header>
 
         <div class="custodian__messages" aria-live="polite">
+          ${!this.onboarding && this.eventNudge
+            ? html`<div class="custodian__nudge" role="status">
+                <button
+                  class="custodian__nudge-action"
+                  type="button"
+                  ?disabled=${!this.activeClient || !this.chatAvailable || this.sending}
+                  @click=${() => this.sendEventNudge()}
+                >
+                  ${this.eventNudgeText(this.eventNudge)}
+                </button>
+                <button
+                  class="custodian__nudge-dismiss"
+                  type="button"
+                  aria-label=${t("custodian.nudge.dismiss")}
+                  @click=${() => this.dismissEventNudge()}
+                >
+                  ×
+                </button>
+              </div>`
+            : nothing}
           ${this.messages.map((message) => {
             const questionKey = message.question ? `${message.id}:${message.question.id}` : "";
             const showQuestion =

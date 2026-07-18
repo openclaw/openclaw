@@ -1,3 +1,5 @@
+import "../../styles/config.css";
+import "../../styles/config-quick.css";
 import { consume } from "@lit/context";
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, type PropertyValues } from "lit";
@@ -290,6 +292,10 @@ export class ConfigPage extends OpenClawLightDomElement {
       () => this.context?.gateway,
       (gateway, notify) => gateway.subscribe(notify),
       (gateway) => this.synchronizeSystemInfoGateway(gateway),
+    )
+    .watch(
+      () => this.context?.nativeNotifications ?? undefined,
+      (nativeNotifications, notify) => nativeNotifications.subscribe(notify),
     )
     .watch(
       () => this.context?.webPush,
@@ -811,6 +817,10 @@ export class ConfigPage extends OpenClawLightDomElement {
       excludeSections,
       includeVirtualSections: this.pageId === "appearance" || this.pageId === "notifications",
       settingsLayout: this.pageId === "advanced" ? "accordion" : undefined,
+      nativeNotifications: this.context.nativeNotifications?.snapshot,
+      onNativeNotificationsRequestPermission: () =>
+        this.context.nativeNotifications?.requestPermission(),
+      onNativeNotificationsSendTest: () => this.context.nativeNotifications?.sendTest(),
       webPush: this.context.webPush.snapshot,
       onWebPushSubscribe: () => void this.context.webPush.enable(),
       onWebPushUnsubscribe: () => void this.context.webPush.disable(),
@@ -825,7 +835,6 @@ export class ConfigPage extends OpenClawLightDomElement {
           activeSection: "mcp",
           activeSubsection: null,
           showModeToggle: false,
-          includeSections: ["mcp"],
           navRootLabel: "MCP",
         }),
       });

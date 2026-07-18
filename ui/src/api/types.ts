@@ -503,6 +503,7 @@ export type GatewaySessionRow = {
   archivedAt?: number;
   pinned?: boolean;
   pinnedAt?: number;
+  icon?: string;
   sessionId?: string;
   systemSent?: boolean;
   abortedLastRun?: boolean;
@@ -578,6 +579,11 @@ export type SessionsCompactionRestoreResult = {
     updatedAt: number;
   } & Record<string, unknown>;
 };
+
+export type SessionsRewindResult =
+  import("../../../packages/gateway-protocol/src/index.js").SessionsRewindResult;
+export type SessionsForkResult =
+  import("../../../packages/gateway-protocol/src/index.js").SessionsForkResult;
 
 export type SessionsPatchResult = SessionsPatchResultBase<{
   sessionId: string;

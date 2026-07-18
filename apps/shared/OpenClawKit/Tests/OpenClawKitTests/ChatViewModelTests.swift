@@ -5675,6 +5675,40 @@ struct ChatViewModelTests {
         #expect(await transport.lastSentRunId() == nil)
     }
 
+    @Test func `default create session overload rejects unsupported agent and base ref options`() async throws {
+        let (transport, _) = await makeViewModel(historyResponses: [historyPayload()])
+
+        await #expect(throws: (any Error).self) {
+            _ = try await transport.createSession(
+                key: "next",
+                label: nil,
+                agentID: nil,
+                parentSessionKey: nil,
+                worktree: true,
+                worktreeBaseRef: "release/2026.7")
+        }
+        await #expect(throws: (any Error).self) {
+            _ = try await transport.createSession(
+                key: "next",
+                label: nil,
+                agentID: "reviewer",
+                parentSessionKey: nil,
+                worktree: nil,
+                worktreeBaseRef: nil)
+        }
+        #expect(await transport.createdSessionKeys().isEmpty)
+
+        let created = try await transport.createSession(
+            key: "next",
+            label: nil,
+            agentID: nil,
+            parentSessionKey: nil,
+            worktree: nil,
+            worktreeBaseRef: nil)
+        #expect(created.key == "next")
+        #expect(await transport.createdSessionKeys() == ["next"])
+    }
+
     @Test func `new trigger keeps selected global agent scope`() async throws {
         let (transport, vm) = await makeViewModel(
             sessionKey: "global",
