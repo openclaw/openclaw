@@ -11,6 +11,7 @@ import { hasConfiguredSecretInput, resolveSecretInputRef } from "../config/types
 import { resolveGatewayAuthTokenSourceConflict } from "../gateway/auth-token-source-conflict.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { isLoopbackHost, resolveGatewayBindHost } from "../gateway/net.js";
+import { checkBrowserOrigin } from "../gateway/origin-check.js";
 import { resolveExecPolicyScopeSnapshot } from "../infra/exec-approvals-effective.js";
 import {
   loadExecApprovals,
@@ -24,6 +25,7 @@ import { hasConfiguredPlaintextSecretValue } from "../secrets/secret-value.js";
 import { discoverConfigSecretTargets } from "../secrets/target-registry.js";
 import { collectExecFilesystemPolicyDriftHits } from "../security/exec-filesystem-policy.js";
 import { resolveDefaultChannelAccountContext } from "./channel-account-context.js";
+import { resolveTrustedProxyReadiness } from "./doctor-trusted-proxy-readiness.js";
 
 function collectImplicitHeartbeatDirectPolicyWarnings(cfg: OpenClawConfig): string[] {
   const warnings: string[] = [];
@@ -295,7 +297,61 @@ export async function collectSecurityWarnings(
   ];
 
   if (isExposed) {
-    if (!hasSharedSecret) {
+    if (resolvedAuth.mode === "trusted-proxy") {
+      const controlUiAllowedOrigins = (cfg.gateway?.controlUi?.allowedOrigins ?? [])
+        .map((origin) => normalizeOptionalString(origin))
+        .filter((origin): origin is string => origin !== undefined);
+      const hasWildcardControlUiOrigin = controlUiAllowedOrigins.includes("*");
+      const hasDangerousHostHeaderOriginFallback =
+        cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
+      const hasRuntimeMatchableControlUiOrigin = controlUiAllowedOrigins.some((origin) => {
+        if (origin === "*") {
+          return false;
+        }
+        const result = checkBrowserOrigin({ origin, allowedOrigins: [origin] });
+        return result.ok && result.matchedBy === "allowlist";
+      });
+
+      // Browser-origin protections are independent of proxy-auth readiness. Report both classes
+      // together so fixing one critical exposure does not leave the other hidden until a rerun.
+      if (hasDangerousHostHeaderOriginFallback) {
+        warnings.push(
+          `- CRITICAL: Gateway bound to ${bindDescriptor} with dangerous browser Host-header origin fallback enabled.`,
+          "  This can authorize additional Host-matching browser origins outside gateway.controlUi.allowedOrigins and weakens DNS rebinding protections.",
+          "  Fix: disable gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback and configure only explicit trusted browser origins.",
+        );
+      }
+      if (hasWildcardControlUiOrigin) {
+        warnings.push(
+          `- CRITICAL: Gateway bound to ${bindDescriptor} with Control UI allowed origins containing "*", which allows any browser origin.`,
+          '  Fix: remove "*" from gateway.controlUi.allowedOrigins and list only the trusted HTTPS origins used through your reverse proxy.',
+        );
+      } else if (cfg.gateway?.controlUi?.enabled !== false && !hasRuntimeMatchableControlUiOrigin) {
+        warnings.push(
+          `- CRITICAL: Gateway bound to ${bindDescriptor} with Control UI enabled but no explicit browser origin that the runtime can match.`,
+          "  Fix: set gateway.controlUi.allowedOrigins to a canonical trusted origin without a path or default-port alias.",
+        );
+      }
+
+      const trustedProxyReadiness = await resolveTrustedProxyReadiness({
+        cfg,
+        auth: resolvedAuth,
+      });
+      if (trustedProxyReadiness.problems.length > 0) {
+        warnings.push(
+          `- CRITICAL: Gateway bound to ${bindDescriptor} with unsafe or incomplete trusted-proxy authentication.`,
+          ...trustedProxyReadiness.problems.map((problem) => `  ${problem}`),
+          "  Fix: correct gateway.auth.trustedProxy and gateway.trustedProxies before exposing this port.",
+        );
+      } else {
+        warnings.push(
+          `- WARNING: Gateway bound to ${bindDescriptor} with trusted-proxy authentication configured.`,
+          "  The Gateway validates each request's proxy source and identity headers; review the deep security audit before exposing this port.",
+          "  Ensure only configured trusted proxies can reach the Gateway port; block direct clients at a host firewall, network firewall, or loopback bind.",
+          "  Docs: https://docs.openclaw.ai/gateway/trusted-proxy-auth",
+        );
+      }
+    } else if (!hasSharedSecret) {
       const authFixLines =
         resolvedAuth.mode === "password"
           ? [
