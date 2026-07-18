@@ -923,6 +923,7 @@ describe("Microsoft Teams meeting captions and permissions", () => {
     expect(disconnects).toBe(1);
     expect(captions.observerInstalled).toBe(false);
     expect(captions.identity).toBe("teams-work:19:meeting_test@thread.v2");
+    expect(typeof captions.finalizedAt).toBe("number");
 
     const refreshed = await runStatusScript({
       allowMicrophone: false,

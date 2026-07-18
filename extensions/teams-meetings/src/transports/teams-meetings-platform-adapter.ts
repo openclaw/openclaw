@@ -122,6 +122,10 @@ function parseBrowserStatus(result: unknown): TeamsMeetingsChromeHealth | undefi
       typeof parsed.audioOutputDeviceLabel === "string" ? parsed.audioOutputDeviceLabel : undefined,
     audioOutputRouteError:
       typeof parsed.audioOutputRouteError === "string" ? parsed.audioOutputRouteError : undefined,
+    audioOutputRouteRetryable:
+      typeof parsed.audioOutputRouteRetryable === "boolean"
+        ? parsed.audioOutputRouteRetryable
+        : undefined,
     manualActionRequired:
       typeof parsed.manualActionRequired === "boolean" ? parsed.manualActionRequired : undefined,
     manualActionReason:
@@ -295,7 +299,7 @@ export const TEAMS_MEETINGS_PLATFORM_ADAPTER: MeetingPlatformAdapter<
       health.inCall === true &&
       ((health.manualActionReason === "teams-audio-choice-required" &&
         !health.audioInputRouteError &&
-        !health.audioOutputRouteError) ||
+        (!health.audioOutputRouteError || health.audioOutputRouteRetryable === true)) ||
         (health.manualActionRequired !== true &&
           health.captionCaptureRequested === true &&
           health.captioning !== true)),

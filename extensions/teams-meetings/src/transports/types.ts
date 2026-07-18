@@ -61,6 +61,7 @@ export type TeamsMeetingsChromeHealth = MeetingBrowserHealth<
   audioOutputRouted?: boolean;
   audioOutputDeviceLabel?: string;
   audioOutputRouteError?: string;
+  audioOutputRouteRetryable?: boolean;
   providerConnected?: boolean;
   realtimeReady?: boolean;
   audioInputActive?: boolean;

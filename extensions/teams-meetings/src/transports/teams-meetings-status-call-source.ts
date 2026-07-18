@@ -5,6 +5,7 @@ export function teamsMeetingStatusCallSource(): string {
   return `  let audioOutputRouted;
   let audioOutputDeviceLabel;
   let audioOutputRouteError;
+  let audioOutputRouteRetryable = false;
   if (inCall && allowMicrophone && navigator.mediaDevices?.enumerateDevices) {
     const media = [...document.querySelectorAll("audio, video")].filter(
       (element) =>
@@ -94,7 +95,10 @@ export function teamsMeetingStatusCallSource(): string {
                 await element.setSinkId(output.deviceId);
                 elementRouted = element.sinkId === output.deviceId;
               } catch (error) {
-                directRouteError = error?.message || String(error);
+                directRouteError = {
+                  message: error?.message || String(error),
+                  retryable: false,
+                };
               }
             }
             if (elementRouted && entry && canMutateSession) {
@@ -173,7 +177,10 @@ export function teamsMeetingStatusCallSource(): string {
                 } catch (error) {
                   entry.playing = false;
                   if (canMutateSession) retireAudioBridge(entry, false);
-                  routeErrors.push(error?.message || String(error));
+                  routeErrors.push({
+                    message: error?.message || String(error),
+                    retryable: error?.name === "AbortError",
+                  });
                 }
               }
             }
@@ -200,7 +207,8 @@ export function teamsMeetingStatusCallSource(): string {
           // An unloaded Teams media element can reject setSinkId before its stream
           // arrives. Keep that state retryable; loaded-source failures are terminal.
           if (!audioOutputRouted && routed.length > 0 && routeErrors.length > 0) {
-            audioOutputRouteError = routeErrors[routeErrors.length - 1];
+            audioOutputRouteError = routeErrors[routeErrors.length - 1]?.message;
+            audioOutputRouteRetryable = routeErrors.every((error) => error.retryable === true);
           }
         } else {
           audioOutputRouted = false;
@@ -598,6 +606,7 @@ export function teamsMeetingStatusCallSource(): string {
     audioOutputRouted,
     audioOutputDeviceLabel,
     audioOutputRouteError,
+    audioOutputRouteRetryable,
     manualActionRequired: Boolean(manualActionReason),
     manualActionReason,
     manualActionMessage,

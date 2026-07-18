@@ -138,6 +138,7 @@ describe("Microsoft Teams meeting audio routing", () => {
     });
 
     expect(first.result.audioOutputRouted).toBe(false);
+    expect(first.result.audioOutputRouteRetryable).toBe(false);
     expect(second.result.audioOutputRouted).toBe(false);
     expect(playAttempts).toBe(2);
     expect(source.muted).toBe(true);
@@ -239,6 +240,7 @@ describe("Microsoft Teams meeting audio routing", () => {
       priorMeeting: first.window[MEETING_STATE_KEY] as Record<string, unknown>,
     });
     expect(second.result.audioOutputRouted).toBe(false);
+    expect(second.result.audioOutputRouteRetryable).toBe(true);
     expect(source.muted).toBe(true);
 
     failPlayback = false;

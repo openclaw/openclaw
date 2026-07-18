@@ -40,6 +40,13 @@ describe("Microsoft Teams meeting platform adapter", () => {
         audioOutputRouteError: "sink failed",
       }),
     ).toBe(false);
+    expect(
+      TEAMS_MEETINGS_PLATFORM_ADAPTER.browser.shouldRetryJoinStatus?.({
+        ...pending,
+        audioOutputRouteError: "play interrupted",
+        audioOutputRouteRetryable: true,
+      }),
+    ).toBe(true);
   });
 
   it("retries transcribe join readiness until live captions are enabled", () => {

@@ -164,6 +164,7 @@ export function teamsMeetingTranscriptScript(
     captions.observerInstalled = false;
     captions.identity = expectedIdentity;
     captions.finalized = true;
+    captions.finalizedAt = Date.now();
   }
   const allLines = [
     ...(Array.isArray(captions?.lines) ? captions.lines : []),
