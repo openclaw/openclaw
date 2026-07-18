@@ -278,6 +278,84 @@ describe("ChatStateController render lifecycle", () => {
     expect(cancelAnimationFrame).toHaveBeenCalledWith(2);
     expect(painted).not.toHaveBeenCalled();
   });
+
+  it("re-renders when input-history navigation mutates chatMessage (#109031)", () => {
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    const requestUpdate = vi.fn();
+    const host = {
+      addController: () => undefined,
+      removeController: () => undefined,
+      requestUpdate,
+      updateComplete: Promise.resolve(true),
+    } satisfies ReactiveControllerHost;
+    const controller = new ChatStateController<ChatPageHost>(host);
+    controller.hostConnected();
+    const renderLifecycle = controller.createRenderLifecycle();
+
+    const state = {
+      settings: { gatewayUrl: "ws://gateway.test/control" },
+      sessionKey: "main",
+      assistantAgentId: "main",
+      agentsList: { defaultId: "main", mainKey: "main" },
+      chatMessage: "",
+      chatQueue: [],
+      chatQueueByScope: {},
+      chatMessages: [],
+      chatMessagesBySession: new Map(),
+      chatAttachments: [],
+      chatToolMessages: [],
+      chatStreamSegments: [],
+      toolStreamById: new Map(),
+      toolStreamOrder: [],
+      realtimeTalkConversation: [],
+      renderLifecycle,
+      handleSendChat: vi.fn(async () => undefined),
+      handleChatDraftChange: vi.fn(),
+      handleChatInputHistoryKey: vi.fn(),
+      requestUpdate: vi.fn(),
+    } as unknown as ChatPageHost;
+    state.handleChatInputHistoryKey = vi.fn((input: { key: string }) => {
+      if (input.key !== "ArrowUp") {
+        return { handled: false };
+      }
+      state.chatMessage = "previous draft";
+      return { handled: true };
+    }) as ChatPageHost["handleChatInputHistoryKey"];
+
+    controller.attach(state);
+    requestUpdate.mockClear();
+
+    const blocked = state.handleChatInputHistoryKey({
+      key: "ArrowDown",
+      selectionStart: 0,
+      selectionEnd: 0,
+      valueLength: 0,
+      altKey: false,
+      ctrlKey: false,
+      metaKey: false,
+      shiftKey: false,
+      isComposing: false,
+      keyCode: 40,
+    });
+    expect(blocked.handled).toBe(false);
+    expect(requestUpdate).not.toHaveBeenCalled();
+
+    const recalled = state.handleChatInputHistoryKey({
+      key: "ArrowUp",
+      selectionStart: 0,
+      selectionEnd: 0,
+      valueLength: 0,
+      altKey: false,
+      ctrlKey: false,
+      metaKey: false,
+      shiftKey: false,
+      isComposing: false,
+      keyCode: 38,
+    });
+    expect(recalled.handled).toBe(true);
+    expect(state.chatMessage).toBe("previous draft");
+    expect(requestUpdate).toHaveBeenCalledOnce();
+  });
 });
 
 describe("route composer fallback", () => {

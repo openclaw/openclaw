@@ -1718,6 +1718,9 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
       const result = navigateInputHistory(input);
       if (result.handled) {
         this.composerPersistence.schedule();
+        // History nav mutates chatMessage on a plain state object; re-render so
+        // the composer textarea reflects the recalled draft (same path as send).
+        renderLifecycle.invalidate();
       }
       return result;
     };
