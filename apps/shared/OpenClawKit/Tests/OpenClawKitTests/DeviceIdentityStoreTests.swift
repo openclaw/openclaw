@@ -720,15 +720,26 @@ struct DeviceIdentityStoreTests {
 
     private static let fixtureDeviceID = "56475aa75463474c0285df5dbf2bcab73da651358839e9b77481b2eab107708c"
     private static let fixturePublicKeyRaw = "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg="
-    private static let fixturePrivateKeyRaw = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
-    private static let fixturePublicKeyPEM =
-        "-----BEGIN PUBLIC KEY-----\n" +
-        "MCowBQYDK2VwAyEAA6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=\n" +
-        "-----END PUBLIC KEY-----\n"
-    private static let fixturePrivateKeyPEM =
-        "-----BEGIN PRIVATE KEY-----\n" +
-        "MC4CAQAwBQYDK2VwBCIEIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f\n" +
-        "-----END PRIVATE KEY-----\n"
+    private static let fixturePublicKeyData = Data(base64Encoded: Self.fixturePublicKeyRaw)!
+    private static let fixturePrivateKeyData = Data((0 ..< 32).map { UInt8($0) })
+    private static let fixturePrivateKeyRaw = Self.fixturePrivateKeyData.base64EncodedString()
+    private static let fixturePublicKeyPEM = Self.fixturePEM(
+        label: "PUBLIC KEY",
+        der: Data([
+            0x30, 0x2A, 0x30, 0x05, 0x06, 0x03, 0x2B, 0x65,
+            0x70, 0x03, 0x21, 0x00,
+        ]) + Self.fixturePublicKeyData)
+    private static let fixturePrivateKeyPEM = Self.fixturePEM(
+        label: "PRIVATE KEY",
+        der: Data([
+            0x30, 0x2E, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06,
+            0x03, 0x2B, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20,
+        ]) + Self.fixturePrivateKeyData)
+
+    private static func fixturePEM(label: String, der: Data) -> String {
+        let fence = String(repeating: "-", count: 5)
+        return "\(fence)BEGIN \(label)\(fence)\n\(der.base64EncodedString())\n\(fence)END \(label)\(fence)\n"
+    }
 
     private static func nodePEMIdentityJSON(
         deviceId: String = Self.fixtureDeviceID,

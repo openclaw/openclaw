@@ -351,12 +351,20 @@ public enum DeviceIdentityStore {
         let keys = Set(object.keys)
         let decoder = JSONDecoder()
         if keys == ["deviceId", "publicKey", "privateKey", "createdAtMs"],
-           let decoded = try? decoder.decode(DeviceIdentity.self, from: data)
+           let decoded = try? decoder.decode(DeviceIdentity.self, from: data),
+           decoded.createdAtMs >= 0
         {
-            guard let material = normalizedRawIdentity(decoded) else {
+            guard let normalized = normalizedRawIdentity(decoded),
+                  let publicKeyData = Data(base64Encoded: normalized.publicKey),
+                  let privateKeyData = Data(base64Encoded: normalized.privateKey)
+            else {
                 throw DeviceIdentityStoreError("Legacy raw device identity has invalid key material or deviceId")
             }
-            return material
+            return DeviceIdentityMaterial(
+                identity: normalized,
+                publicKeyPEM: pem(label: "PUBLIC KEY", der: ed25519SPKIPrefix + publicKeyData),
+                privateKeyPEM: pem(label: "PRIVATE KEY", der: ed25519PKCS8PrivatePrefix + privateKeyData)
+            )
         }
         if keys == ["version", "deviceId", "publicKeyPem", "privateKeyPem", "createdAtMs"],
            let decoded = try? decoder.decode(PemDeviceIdentity.self, from: data)
@@ -404,22 +412,21 @@ public enum DeviceIdentityStore {
         return canonical
     }
 
-    private static func normalizedRawIdentity(_ identity: DeviceIdentity) -> DeviceIdentityMaterial? {
-        guard identity.createdAtMs >= 0,
-              let publicKeyData = decodeRawKey(identity.publicKey),
-              let privateKeyData = decodeRawKey(identity.privateKey)
+    private static func normalizedRawIdentity(_ rawIdentity: DeviceIdentity) -> DeviceIdentity? {
+        let rawKey = rawIdentity.privateKey
+        guard !rawIdentity.deviceId.isEmpty,
+              let publicKeyData = Data(base64Encoded: rawIdentity.publicKey),
+              let privateKeyData = Data(base64Encoded: rawKey)
         else { return nil }
 
         guard publicKeyData.count == 32, privateKeyData.count == 32,
-              keyPairMatches(publicKeyData: publicKeyData, privateKeyData: privateKeyData)
+              self.keyPairMatches(publicKeyData: publicKeyData, privateKeyData: privateKeyData)
         else { return nil }
-        // Legacy deviceId was derived metadata. Preserve the key bytes and recompute it,
-        // matching the shipped identity behavior without rotating the device keypair.
-        return material(
-            publicKeyData: publicKeyData,
-            privateKeyData: privateKeyData,
-            createdAtMs: identity.createdAtMs
-        )
+        return DeviceIdentity(
+            deviceId: self.deviceId(publicKeyData: publicKeyData),
+            publicKey: rawIdentity.publicKey,
+            privateKey: rawKey,
+            createdAtMs: rawIdentity.createdAtMs)
     }
 
     static func rawPublicKey(fromPEM pem: String) -> Data? {
@@ -458,22 +465,11 @@ public enum DeviceIdentityStore {
         return Data(base64Encoded: body.joined())
     }
 
-    private static func decodeRawKey(_ value: String) -> Data? {
-        if let data = Data(base64Encoded: value) {
-            return data
-        }
-        let normalized = value
-            .replacingOccurrences(of: "-", with: "+")
-            .replacingOccurrences(of: "_", with: "/")
-        let padded = normalized + String(repeating: "=", count: (4 - normalized.count % 4) % 4)
-        return Data(base64Encoded: padded)
-    }
-
     static func deviceId(publicKeyData: Data) -> String {
         SHA256.hash(data: publicKeyData).compactMap { String(format: "%02x", $0) }.joined()
     }
 
-    private static func material(
+    static func material(
         publicKeyData: Data,
         privateKeyData: Data,
         createdAtMs: Int64
@@ -493,12 +489,13 @@ public enum DeviceIdentityStore {
 
     private static func pem(label: String, der: Data) -> String {
         let base64 = der.base64EncodedString()
+        let fence = String(repeating: "-", count: 5)
         let lines = stride(from: 0, to: base64.count, by: 64).map { offset -> String in
             let start = base64.index(base64.startIndex, offsetBy: offset)
             let end = base64.index(start, offsetBy: min(64, base64.distance(from: start, to: base64.endIndex)))
             return String(base64[start ..< end])
         }
-        return "-----BEGIN \(label)-----\n\(lines.joined(separator: "\n"))\n-----END \(label)-----\n"
+        return "\(fence)BEGIN \(label)\(fence)\n\(lines.joined(separator: "\n"))\n\(fence)END \(label)\(fence)\n"
     }
 
     private static func databaseURL(stateDirURL: URL) -> URL {
