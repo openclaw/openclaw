@@ -10,6 +10,15 @@ export function parseCacheRetention(value: unknown): CacheRetention | undefined 
   return value === "none" || value === "short" || value === "long" ? value : undefined;
 }
 
+export function modelSupportsExplicitCacheRetention(model: unknown): boolean {
+  const compat = (model as { compat?: unknown } | null | undefined)?.compat;
+  if (!compat || typeof compat !== "object") {
+    return false;
+  }
+  const record = compat as Record<string, unknown>;
+  return record.supportsPromptCacheKey === true || record.supportsCacheRetention === true;
+}
+
 export function isGooglePromptCacheEligible(params: {
   modelApi?: string;
   modelId?: string;
@@ -26,7 +35,7 @@ export function resolveCacheRetention(
   provider: string,
   modelApi?: string,
   modelId?: string,
-  supportsPromptCacheKey?: boolean,
+  supportsExplicitCacheRetention?: boolean,
 ): CacheRetention | undefined {
   const hasExplicitCacheConfig =
     extraParams?.cacheRetention !== undefined || extraParams?.cacheControlTtl !== undefined;
@@ -37,16 +46,13 @@ export function resolveCacheRetention(
     hasExplicitCacheConfig,
   });
   const googleEligible = isGooglePromptCacheEligible({ modelApi, modelId });
-  // OpenAI-compatible completions backends (oMLX, llama.cpp, etc.) opt into
-  // prompt caching via `compat.supportsPromptCacheKey: true`. Without that
-  // flag they sit outside the anthropic/google family gates, so issue #81281
-  // dropped the user's explicit `cacheRetention` before the transport layer
-  // could emit it. Proxies that route non-cacheable models via the same
-  // openai-completions wire (amazon-bedrock + amazon.* nova models) leave
-  // the flag unset, so the existing family gate still applies to them.
-  const cacheKeyEligible = supportsPromptCacheKey === true;
+  // Providers outside the Anthropic/Google families can declare that their
+  // resolved model accepts explicit cache retention. The provider owns the
+  // model-family decision; this shared resolver only consumes the capability.
+  const providerCapabilityEligible =
+    hasExplicitCacheConfig && supportsExplicitCacheRetention === true;
 
-  if (!family && !googleEligible && !cacheKeyEligible) {
+  if (!family && !googleEligible && !providerCapabilityEligible) {
     return undefined;
   }
 

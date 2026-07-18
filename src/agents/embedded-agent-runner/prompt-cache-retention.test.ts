@@ -1,6 +1,10 @@
 // Coverage for prompt-cache retention resolution by provider and model API.
 import { describe, expect, it } from "vitest";
-import { isGooglePromptCacheEligible, resolveCacheRetention } from "./prompt-cache-retention.js";
+import {
+  isGooglePromptCacheEligible,
+  modelSupportsExplicitCacheRetention,
+  resolveCacheRetention,
+} from "./prompt-cache-retention.js";
 
 describe("prompt cache retention", () => {
   it("passes explicit cacheRetention through for direct Google models", () => {
@@ -74,15 +78,46 @@ describe("prompt cache retention", () => {
     ).toBeUndefined();
   });
 
-  it("does not honor explicit cacheRetention for openai-completions without supportsPromptCacheKey", () => {
-    // Providers that route via openai-completions but do not advertise prompt
-    // caching must keep retention out of outgoing payloads.
+  it("passes explicit cacheRetention through for a provider-declared capability", () => {
     expect(
       resolveCacheRetention(
         { cacheRetention: "long" },
         "amazon-bedrock",
         "openai-completions",
         "amazon.nova-micro-v1:0",
+        true,
+      ),
+    ).toBe("long");
+    expect(
+      resolveCacheRetention(
+        { cacheRetention: "short" },
+        "amazon-bedrock",
+        "openai-completions",
+        "us.amazon.nova-lite-v1:0",
+        true,
+      ),
+    ).toBe("short");
+    expect(
+      resolveCacheRetention(
+        { cacheRetention: "none" },
+        "amazon-bedrock",
+        "openai-completions",
+        "amazon.nova-2-lite-v1:0",
+        true,
+      ),
+    ).toBe("none");
+  });
+
+  it("does not honor explicit cacheRetention for unrelated openai-completions models without supportsPromptCacheKey", () => {
+    // Providers that route via openai-completions but do not advertise prompt
+    // caching must keep retention out of outgoing payloads unless a provider
+    // family has a native cache-point contract.
+    expect(
+      resolveCacheRetention(
+        { cacheRetention: "long" },
+        "amazon-bedrock",
+        "openai-completions",
+        "amazon.titan-text-express-v1",
       ),
     ).toBeUndefined();
     expect(
@@ -106,6 +141,38 @@ describe("prompt cache retention", () => {
     expect(
       resolveCacheRetention({}, "omlx-local", "openai-completions", "local_model", true),
     ).toBeUndefined();
+  });
+
+  it("does not default cacheRetention for a provider-declared capability", () => {
+    expect(
+      resolveCacheRetention(
+        undefined,
+        "amazon-bedrock",
+        "openai-completions",
+        "amazon.nova-micro-v1:0",
+        true,
+      ),
+    ).toBeUndefined();
+    expect(
+      resolveCacheRetention(
+        {},
+        "amazon-bedrock",
+        "openai-completions",
+        "amazon.nova-pro-v1:0",
+        true,
+      ),
+    ).toBeUndefined();
+  });
+
+  it("reads explicit cache-retention support from generic model compatibility metadata", () => {
+    expect(modelSupportsExplicitCacheRetention(undefined)).toBe(false);
+    expect(modelSupportsExplicitCacheRetention({ compat: {} })).toBe(false);
+    expect(modelSupportsExplicitCacheRetention({ compat: { supportsPromptCacheKey: true } })).toBe(
+      true,
+    );
+    expect(modelSupportsExplicitCacheRetention({ compat: { supportsCacheRetention: true } })).toBe(
+      true,
+    );
   });
 
   it("does not map legacy cacheControlTtl for openai-completions prompt-cache-key providers", () => {

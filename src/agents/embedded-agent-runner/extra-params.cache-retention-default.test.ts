@@ -35,6 +35,66 @@ function applyAndExpectWrapped(params: {
   }
 }
 
+function createMockStream(): ReturnType<StreamFn> {
+  return {
+    push() {},
+    async result() {
+      return undefined;
+    },
+    async *[Symbol.asyncIterator]() {
+      // Minimal async stream surface for wrappers that decorate iteration.
+    },
+  } as unknown as ReturnType<StreamFn>;
+}
+
+function captureAppliedCacheRetention(params: {
+  cacheRetention: "none" | "short" | "long";
+  modelId: string;
+}): unknown {
+  let captured: unknown;
+  const baseStreamFn: StreamFn = (_model, _context, options) => {
+    captured = (options as { cacheRetention?: unknown } | undefined)?.cacheRetention;
+    return createMockStream();
+  };
+  const agent: { streamFn?: StreamFn } = { streamFn: baseStreamFn };
+  const cfg: Parameters<typeof applyExtraParamsToAgent>[1] = {
+    agents: {
+      defaults: {
+        models: {
+          [`amazon-bedrock/${params.modelId}`]: {
+            params: {
+              cacheRetention: params.cacheRetention,
+            },
+          },
+        },
+      },
+    },
+  };
+  const model = {
+    api: "openai-completions",
+    compat: { supportsCacheRetention: true },
+    provider: "amazon-bedrock",
+    id: params.modelId,
+  } as Parameters<typeof applyExtraParamsToAgent>[8] & Parameters<StreamFn>[0];
+
+  applyExtraParamsToAgent(
+    agent,
+    cfg,
+    "amazon-bedrock",
+    params.modelId,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    model,
+  );
+
+  const context = { messages: [] } as Parameters<StreamFn>[1];
+  void agent.streamFn?.(model, context, {});
+
+  return captured;
+}
+
 // Keep cache-retention warning/debug output out of assertion logs.
 vi.mock("./logger.js", () => ({
   log: {
@@ -238,13 +298,47 @@ describe("cacheRetention default behavior", () => {
     ).toBe("short");
   });
 
-  it("does not treat non-Anthropic Bedrock models as cache-retention eligible", () => {
+  it("keeps explicit cacheRetention for a provider-declared Bedrock model", () => {
     expect(
       resolveCacheRetention(
         { cacheRetention: "long" },
         "amazon-bedrock",
         "openai-completions",
         "amazon.nova-micro-v1:0",
+        true,
+      ),
+    ).toBe("long");
+    expect(
+      resolveCacheRetention(
+        { cacheRetention: "none" },
+        "amazon-bedrock",
+        "openai-completions",
+        "us.amazon.nova-pro-v1:0",
+        true,
+      ),
+    ).toBe("none");
+  });
+
+  it.each(["none", "short", "long"] as const)(
+    "passes configured Bedrock Nova cacheRetention '%s' through the agent path",
+    (cacheRetention) => {
+      expect(
+        captureAppliedCacheRetention({
+          cacheRetention,
+          modelId: "amazon.nova-micro-v1:0",
+        }),
+      ).toBe(cacheRetention);
+    },
+  );
+
+  it("does not default cacheRetention for a provider-declared Bedrock model", () => {
+    expect(
+      resolveCacheRetention(
+        undefined,
+        "amazon-bedrock",
+        "openai-completions",
+        "amazon.nova-micro-v1:0",
+        true,
       ),
     ).toBeUndefined();
   });

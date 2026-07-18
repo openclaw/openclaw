@@ -94,8 +94,9 @@ Source: `src/agents/anthropic-payload-policy.ts` (`resolveAnthropicEphemeralCach
 ### Amazon Bedrock
 
 - Anthropic Claude model refs (`amazon-bedrock/*anthropic.claude*`, plus AWS system inference profile prefixes `us.`/`eu.`/`global.anthropic.claude*`) support explicit `cacheRetention` pass-through.
-- Non-Anthropic Bedrock models (for example `amazon.nova-*`) resolve to no cache retention at runtime, regardless of any configured `cacheRetention` value.
-- Opaque Bedrock application inference profile ARNs (profile IDs that do not contain `claude`) also resolve to no cache retention unless `cacheRetention` is set explicitly, since the model family cannot be inferred from the ARN alone.
+- Amazon Nova generation model refs (`amazon-bedrock/*amazon.nova-micro*`, `*nova-lite*`, `*nova-pro*`, `*nova-premier*`, and `*nova-2-lite*`) support Bedrock `cachePoint` insertion. `cacheRetention: "long"` still sends Nova's default cache point without adding Claude's `ttl: "1h"` field.
+- Other non-Anthropic Bedrock models resolve to no cache retention at runtime, regardless of any configured `cacheRetention` value.
+- Opaque Bedrock application inference profile ARNs resolve their underlying model before inserting cache points when `cacheRetention` is set explicitly.
 
 ### OpenRouter
 
@@ -260,7 +261,7 @@ Defaults:
 - **High `cacheWrite` on Anthropic**: often means the cache breakpoint is landing on content that changes every request.
 - **Low OpenAI `cacheRead`**: verify the stable prefix is at the front, the repeated prefix is at least 1024 tokens, and the same `prompt_cache_key` is reused for turns that should share a cache.
 - **No effect from `cacheRetention`**: confirm the model key matches `agents.defaults.models["provider/model"]`.
-- **Bedrock Nova requests with cache settings**: expected - these resolve to no cache retention at runtime.
+- **Bedrock Mistral or other unsupported non-Anthropic requests with cache settings**: expected to resolve to no cache retention; Nova generation models should receive Bedrock `cachePoint` entries.
 
 Related docs:
 
