@@ -4,13 +4,13 @@
  * This module turns normalized MCP server config into stdio, SSE, or
  * streamable-HTTP SDK transports with OpenClaw auth, redirect, and logging rules.
  */
+import { StringDecoder } from "node:string_decoder";
 import {
   SSEClientTransport,
   type SSEClientTransportOptions,
 } from "@modelcontextprotocol/sdk/client/sse.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { FetchLike, Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logDebug } from "../logger.js";
 import { resolveMcpAuthProfileId, withMcpAuthProfileBearer } from "./mcp-auth-profile.js";
@@ -38,26 +38,39 @@ function attachStderrLogging(serverName: string, transport: OpenClawStdioClientT
   if (!stderr || typeof stderr.on !== "function") {
     return undefined;
   }
+  const decoder = new StringDecoder("utf8");
+  let pendingLine = "";
+  let detached = false;
+  const logLine = (line: string) => {
+    const trimmed = line.trim();
+    if (trimmed) {
+      logDebug(`bundle-mcp:${serverName}: ${trimmed}`);
+    }
+  };
   const onData = (chunk: Buffer | string) => {
-    const message =
-      normalizeOptionalString(typeof chunk === "string" ? chunk : String(chunk)) ?? "";
+    const message = decoder.write(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
     if (!message) {
       return;
     }
-    for (const line of message.split(/\r?\n/)) {
-      const trimmed = line.trim();
-      if (trimmed) {
-        logDebug(`bundle-mcp:${serverName}: ${trimmed}`);
-      }
+    const lines = (pendingLine + message).split(/\r?\n/);
+    pendingLine = lines.pop() ?? "";
+    for (const line of lines) {
+      logLine(line);
     }
   };
   stderr.on("data", onData);
   return () => {
+    if (detached) {
+      return;
+    }
+    detached = true;
     if (typeof stderr.off === "function") {
       stderr.off("data", onData);
     } else if (typeof stderr.removeListener === "function") {
       stderr.removeListener("data", onData);
     }
+    logLine(pendingLine + decoder.end());
+    pendingLine = "";
   };
 }
 
