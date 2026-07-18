@@ -182,15 +182,18 @@ function readRawDeltaInTransaction(
       .where("seq", ">", cursor.lastSeq)
       .orderBy("seq", "asc")
       .limit(maxEvents + 1),
-  ).rows;
+  ).rows.map((row) => ({
+    seq: normalizeSqliteNumber(row.seq),
+    serializedBytes: normalizeSqliteNumber(row.serialized_bytes),
+  }));
 
   let serializedBytes = 0;
   let selectedCount = 0;
   for (const row of metadata) {
-    if (selectedCount >= maxEvents || serializedBytes + row.serialized_bytes > maxBytes) {
+    if (selectedCount >= maxEvents || serializedBytes + row.serializedBytes > maxBytes) {
       break;
     }
-    serializedBytes += row.serialized_bytes;
+    serializedBytes += row.serializedBytes;
     selectedCount += 1;
   }
   const selectedMetadata = metadata.slice(0, selectedCount);
@@ -213,7 +216,7 @@ function readRawDeltaInTransaction(
         }));
   const nextCursor = encodeRawTranscriptCursor({ ...cursor, lastSeq });
   const requiredBytes =
-    selectedCount === 0 && metadata[0] ? metadata[0].serialized_bytes : undefined;
+    selectedCount === 0 && metadata[0] ? metadata[0].serializedBytes : undefined;
   return {
     kind: "page",
     cursor: nextCursor,
