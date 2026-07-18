@@ -144,10 +144,9 @@ describe("memory index same-file legacy migration", () => {
           { key: "legacy-only-key", value: "imported" },
           { key: "memory_index_meta_v1", value: "canonical" },
         ],
-        sources: [
-          { path: "doc.md", hash: "new-hash", size: 42 },
-          { path: "old-note.md", hash: "old-note-hash", size: 10 },
-        ],
+        // The extra legacy chunk identity makes doc.md's canonical chunk set
+        // ambiguous, so removing its source row forces a normal sync rebuild.
+        sources: [{ path: "old-note.md", hash: "old-note-hash", size: 10 }],
         chunks: [
           { id: "chunk-new-1", text: "current canonical body" },
           { id: "chunk-old-2", text: "note body" },
@@ -193,7 +192,7 @@ describe("memory index same-file legacy migration", () => {
     }
   });
 
-  it("imports legacy chunks only for matching canonical sources that have no chunks yet", () => {
+  it("keeps canonical chunk sets coherent and invalidates ambiguous partial sources", () => {
     const db = new DatabaseSync(":memory:");
     try {
       ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: false });
@@ -204,6 +203,14 @@ describe("memory index same-file legacy migration", () => {
         INSERT INTO memory_index_chunks VALUES (
           'chunk-doc-canonical', 'doc.md', 'memory', 1, 10, 'doc-chunk-hash', 'model',
           'canonical body', '[]', 200
+        );
+        -- partial.md has only the first canonical chunk. Seeing a second legacy
+        -- identity makes completeness ambiguous, so the source must reindex.
+        INSERT INTO memory_index_sources (path, source, hash, mtime, size)
+          VALUES ('partial.md', 'memory', 'partial-hash', 175.0, 30);
+        INSERT INTO memory_index_chunks VALUES (
+          'chunk-partial-1', 'partial.md', 'memory', 1, 5, 'partial-1-hash', 'model',
+          'canonical first half', '[]', 175
         );
         -- pending.md has a canonical source row but no chunks yet (indexing
         -- interrupted before its chunks were written): its legacy chunk is the
@@ -237,11 +244,20 @@ describe("memory index same-file legacy migration", () => {
           updated_at INTEGER NOT NULL
         );
         INSERT INTO files VALUES ('doc.md', 'memory', 'doc-hash', 200, 42);
+        INSERT INTO files VALUES ('partial.md', 'memory', 'partial-hash', 175, 30);
         INSERT INTO files VALUES ('pending.md', 'memory', 'pending-hash', 150, 20);
         INSERT INTO files VALUES ('diverged.md', 'memory', 'stale-hash', 50, 12);
         INSERT INTO chunks VALUES (
           'chunk-doc-legacy', 'doc.md', 'memory', 1, 8, 'stale-hash', 'model',
           'stale legacy body', '[]', 100
+        );
+        INSERT INTO chunks VALUES (
+          'chunk-partial-1', 'partial.md', 'memory', 1, 5, 'legacy-partial-1-hash', 'model',
+          'legacy first half', '[]', 150
+        );
+        INSERT INTO chunks VALUES (
+          'chunk-partial-2', 'partial.md', 'memory', 6, 10, 'partial-2-hash', 'model',
+          'legacy second half', '[]', 150
         );
         INSERT INTO chunks VALUES (
           'chunk-pending-legacy', 'pending.md', 'memory', 1, 6, 'pending-chunk-hash', 'model',
@@ -264,10 +280,17 @@ describe("memory index same-file legacy migration", () => {
       // chunk so the file is not left silently unsearchable.
       expect(db.prepare("SELECT id, text FROM memory_index_chunks ORDER BY id").all()).toEqual([
         { id: "chunk-doc-canonical", text: "canonical body" },
+        { id: "chunk-partial-1", text: "canonical first half" },
         { id: "chunk-pending-legacy", text: "only searchable content for pending" },
       ]);
-      // Removing the diverged chunkless source prevents hash-based sync from
-      // skipping it; the next sync must rebuild current content from disk.
+      // Removing ambiguous or diverged sources prevents hash-based sync from
+      // skipping them; the next sync must rebuild current content from disk.
+      expect(
+        db.prepare("SELECT hash FROM memory_index_sources WHERE path = 'doc.md'").get(),
+      ).toBeUndefined();
+      expect(
+        db.prepare("SELECT hash FROM memory_index_sources WHERE path = 'partial.md'").get(),
+      ).toBeUndefined();
       expect(
         db.prepare("SELECT hash FROM memory_index_sources WHERE path = 'diverged.md'").get(),
       ).toBeUndefined();

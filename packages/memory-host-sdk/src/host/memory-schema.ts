@@ -368,14 +368,28 @@ function copyLegacyMemoryIndexRows(
   preservedEmbeddingCacheTable?: string,
 ): void {
   // A (path, source) the canonical index already has chunks for keeps its whole
-  // canonical chunk set. A chunkless canonical source imports legacy chunks only
-  // when both source rows describe the same content. Diverged chunkless sources
-  // are invalidated after the copy so sync cannot skip their required rebuild.
+  // canonical chunk set. If legacy has additional chunk identities, invalidate
+  // the source metadata so sync rebuilds instead of accepting an incomplete set.
+  // Chunkless canonical sources import legacy chunks only when their source rows
+  // match; diverged chunkless sources are invalidated for the same reason.
   // Snapshot exclusions before inserts so the predicate sees canonical state.
   db.exec(`
     CREATE TEMP TABLE legacy_import_chunk_excluded_sources AS
-    SELECT DISTINCT path, source, 0 AS force_reindex
-    FROM main.${MEMORY_INDEX_CHUNKS_TABLE}
+    SELECT DISTINCT owned.path, owned.source,
+      CASE WHEN EXISTS (
+        SELECT 1 FROM ${schema}.chunks AS legacy_chunk
+        WHERE legacy_chunk.path = owned.path AND legacy_chunk.source IS owned.source
+          AND NOT EXISTS (
+            SELECT 1 FROM main.${MEMORY_INDEX_CHUNKS_TABLE} AS canonical_chunk
+            WHERE canonical_chunk.id = legacy_chunk.id
+              AND canonical_chunk.path IS legacy_chunk.path AND canonical_chunk.source IS legacy_chunk.source
+          )
+      ) THEN 1 ELSE 0 END AS force_reindex
+    FROM main.${MEMORY_INDEX_CHUNKS_TABLE} AS owned
+    WHERE EXISTS (
+      SELECT 1 FROM ${schema}.files AS legacy_file
+      WHERE legacy_file.path = owned.path AND legacy_file.source IS owned.source
+    )
     UNION ALL
     SELECT canonical.path, canonical.source, 1 AS force_reindex
     FROM main.${MEMORY_INDEX_SOURCES_TABLE} AS canonical
