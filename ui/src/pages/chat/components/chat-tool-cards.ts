@@ -2,28 +2,37 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
+import { ensureCustomElementDefined } from "../../../app/lazy-custom-element.ts";
 import { icons, type IconName } from "../../../components/icons.ts";
 import { isMarkdownBlockArtText } from "../../../components/markdown.ts";
+import {
+  dispatchWidgetPrompt,
+  WIDGET_PROMPT_EVENT,
+  type WidgetPromptEventDetail,
+} from "../../../components/mcp-app-security.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
-import type { ToolCard } from "../../../lib/chat/chat-types.ts";
-import type { DiffLine, DiffStat } from "../../../lib/chat/tool-call-diff.ts";
+import type { ToolCard, ToolCardOutcome } from "../../../lib/chat/chat-types.ts";
 import { resolveToolCallView, type ToolCallView } from "../../../lib/chat/tool-call-view.ts";
 import {
-  formatDistinctCollapsedToolSummaryText,
+  formatDistinctCollapsedToolSummaryText as distinctSummaryText,
   formatCollapsedToolPreviewText,
   formatCollapsedToolSummaryText,
   isToolCardError,
+  resolveCollapsedToolArgumentPreview as toolArgumentPreview,
+  resolveToolCardOutcome,
   type ToolPreview,
 } from "../../../lib/chat/tool-cards.ts";
 import {
   formatToolDetail,
+  isInternalCanvasEntryUrl,
   resolveCanvasIframeUrl,
   resolveEmbedSandbox,
   resolveToolDisplay,
   type EmbedSandboxMode,
 } from "../../../lib/chat/tool-display.ts";
 import { getToolCallTitle } from "../tool-titles.ts";
+import { renderDiffBlock, renderDiffStatChips } from "./chat-diff-render.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
 
 type FullMessageRequest = NonNullable<SidebarContent["fullMessageRequest"]>;
@@ -83,32 +92,35 @@ ${text}
 \`\`\``;
 }
 
-export function buildToolCardSidebarContent(card: ToolCard): string {
+function buildToolCardSidebarContent(card: ToolCard): string {
   const display = resolveToolDisplay({ name: card.name, args: card.args });
   const detail = formatToolDetail(display);
   const isError = isToolCardError(card);
-  const sections = [`## ${display.label}`, `**Tool:** \`${display.name}\``];
+  const outcome = resolveToolCardOutcome(card, false);
+  const sections = [`## ${display.label}`, `**${t("chat.toolCards.tool")}:** \`${display.name}\``];
 
   if (detail) {
-    sections.push(`**Summary:** ${detail}`);
+    sections.push(`**${t("chat.toolCards.summary")}:** ${detail}`);
   }
 
   if (card.inputText?.trim()) {
     const inputIsJson = typeof card.args === "object" && card.args !== null;
     sections.push(
-      `### Tool input\n${formatPayloadForSidebar(card.inputText, inputIsJson ? "json" : "text")}`,
+      `### ${t("chat.toolCards.toolInput")}\n${formatPayloadForSidebar(card.inputText, inputIsJson ? "json" : "text")}`,
     );
   }
 
   if (card.outputText?.trim()) {
     sections.push(
-      `### ${isError ? "Tool error" : "Tool output"}\n${formatToolOutputForSidebar(card.outputText)}`,
+      `### ${t(isError ? "chat.toolCards.toolError" : "chat.toolCards.toolOutput")}\n${formatToolOutputForSidebar(card.outputText)}`,
     );
   } else {
     sections.push(
       isError
-        ? "### Tool error\n*No output — tool failed.*"
-        : "### Tool output\n*No output — tool completed successfully.*",
+        ? `### ${t("chat.toolCards.toolError")}\n*${t("chat.toolCards.noOutputFailed")}*`
+        : outcome === "succeeded"
+          ? `### ${t("chat.toolCards.toolOutput")}\n*${t("chat.toolCards.noOutputSucceeded")}*`
+          : `### ${t("chat.toolCards.toolOutput")}\n*${t("chat.toolCards.noResult")}*`,
     );
   }
 
@@ -132,6 +144,10 @@ function handleRawDetailsToggle(event: Event) {
 // preview frames and the height is clamped, so widget code can only resize its
 // own frame within the same bounds the preview contract allows.
 const WIDGET_SIZE_MESSAGE_TYPE = "openclaw:widget-size";
+const WIDGET_PROMPT_OFFER_MESSAGE_TYPE = "openclaw:widget-prompt-offer";
+const WIDGET_PROMPT_MESSAGE_TYPE = "openclaw:widget-prompt";
+export { WIDGET_PROMPT_EVENT };
+export type { WidgetPromptEventDetail };
 const WIDGET_FRAME_MIN_HEIGHT = 160;
 const WIDGET_FRAME_MAX_HEIGHT = 1200;
 // Preview frames render inside lit shadow roots, so a document query cannot
@@ -141,7 +157,9 @@ const widgetFrameRegistry = new Set<HTMLIFrameElement>();
 // binding, so the template must read the reported height back or it resets.
 const widgetFrameHeightsBySrc = new Map<string, number>();
 const WIDGET_FRAME_HEIGHTS_MAX_ENTRIES = 100;
-let widgetSizeListenerInstalled = false;
+// Keyed by window, not a module boolean: non-isolated test workers swap the
+// global window between files while module state persists.
+const widgetSizeListenerWindows = new WeakSet<Window>();
 
 function rememberWidgetFrameHeight(src: string, height: number) {
   if (
@@ -163,11 +181,97 @@ function registerWidgetFrame(event: Event) {
   }
 }
 
-function installWidgetSizeListener() {
-  if (widgetSizeListenerInstalled || typeof window === "undefined") {
+function handleWidgetPromptMessage(frame: HTMLIFrameElement, data: unknown) {
+  const payload = data as { type?: unknown; prompt?: unknown } | null;
+  if (!payload || payload.type !== WIDGET_PROMPT_MESSAGE_TYPE) {
     return;
   }
-  widgetSizeListenerInstalled = true;
+  dispatchWidgetPrompt(frame, payload.prompt, frame.getAttribute("src") ?? "");
+}
+
+// Prompt authority is a MessagePort OFFERED by the trusted bridge script that
+// wraps every hosted widget document. The bridge posts its offer at document
+// parse time — before any widget code can run, steal the endpoint, or navigate
+// the frame — so buffering only the FIRST offer per content window and adopting
+// it once, at the frame's first load, binds the capability to the genuine
+// widget document. A document that navigates away closes its ports with it,
+// externally allowed embed URLs are never adopted, and later offers or loads
+// cannot re-arm a consumed frame.
+const pendingWidgetPromptPorts = new WeakMap<object, MessagePort>();
+const offeredWidgetPromptSources = new WeakSet<object>();
+const promptEligibleFrames = new WeakSet<HTMLIFrameElement>();
+const adoptedWidgetPromptFrames = new WeakSet<HTMLIFrameElement>();
+// Keyed by window, not a module boolean: non-isolated test workers swap the
+// global window between files while module state persists.
+const widgetPromptOfferListenerWindows = new WeakSet<Window>();
+
+function tryAdoptWidgetPromptPort(frame: HTMLIFrameElement) {
+  const source = frame.contentWindow as unknown as object | null;
+  if (adoptedWidgetPromptFrames.has(frame) || !promptEligibleFrames.has(frame) || !source) {
+    return;
+  }
+  const port = pendingWidgetPromptPorts.get(source);
+  if (!port) {
+    return;
+  }
+  adoptedWidgetPromptFrames.add(frame);
+  pendingWidgetPromptPorts.delete(source);
+  port.addEventListener("message", (message: MessageEvent) => {
+    handleWidgetPromptMessage(frame, message.data);
+  });
+  port.start();
+}
+
+function installWidgetPromptOfferListener() {
+  if (typeof window === "undefined" || widgetPromptOfferListenerWindows.has(window)) {
+    return;
+  }
+  widgetPromptOfferListenerWindows.add(window);
+  window.addEventListener("message", (event: MessageEvent) => {
+    const data = event.data as { type?: unknown } | null;
+    if (!data || data.type !== WIDGET_PROMPT_OFFER_MESSAGE_TYPE) {
+      return;
+    }
+    const source = event.source;
+    const port = event.ports[0];
+    // Hosted widget documents run in an opaque origin; anything else is not a
+    // Canvas widget bridge.
+    if (!source || !port || event.origin !== "null") {
+      return;
+    }
+    if (offeredWidgetPromptSources.has(source as unknown as object)) {
+      // Only the first offer per content window can win; a replacement
+      // document's offer must never displace the genuine bridge's.
+      port.close();
+      return;
+    }
+    offeredWidgetPromptSources.add(source as unknown as object);
+    pendingWidgetPromptPorts.set(source as unknown as object, port);
+    // Posted-message and iframe-load tasks have no guaranteed cross-source
+    // ordering, so the offer may arrive after the eligible frame's load;
+    // adopt for it now instead of stranding the widget without a channel.
+    for (const frame of widgetFrameRegistry) {
+      if (frame.contentWindow === source) {
+        tryAdoptWidgetPromptPort(frame);
+        return;
+      }
+    }
+  });
+}
+
+function adoptWidgetPromptPort(frame: HTMLIFrameElement) {
+  // Eligibility is granted at the frame's first prompt-capable load and the
+  // adoption itself is one-shot; first-offer-wins buffering ensures the port
+  // adopted here always belongs to the frame's original bridge document.
+  promptEligibleFrames.add(frame);
+  tryAdoptWidgetPromptPort(frame);
+}
+
+function installWidgetSizeListener() {
+  if (typeof window === "undefined" || widgetSizeListenerWindows.has(window)) {
+    return;
+  }
+  widgetSizeListenerWindows.add(window);
   window.addEventListener("message", (event: MessageEvent) => {
     const data = event.data as { type?: unknown; height?: unknown } | null;
     if (!data || data.type !== WIDGET_SIZE_MESSAGE_TYPE || typeof data.height !== "number") {
@@ -202,12 +306,22 @@ function renderPreviewFrame(params: {
   src?: string;
   height?: number;
   sandbox?: string;
+  promptCapable?: boolean;
 }) {
   installWidgetSizeListener();
   const sandbox = params.sandbox ?? "";
   const src = params.src ?? "";
   const reportedHeight = src ? widgetFrameHeightsBySrc.get(src) : undefined;
   const height = reportedHeight ?? params.height;
+  if (params.promptCapable) {
+    installWidgetPromptOfferListener();
+  }
+  const handleLoad = (event: Event) => {
+    registerWidgetFrame(event);
+    if (params.promptCapable && event.currentTarget instanceof HTMLIFrameElement) {
+      adoptWidgetPromptPort(event.currentTarget);
+    }
+  };
   return keyed(
     `${sandbox}\u0000${src}\u0000${params.height ?? ""}`,
     html`
@@ -217,10 +331,31 @@ function renderPreviewFrame(params: {
         sandbox=${sandbox}
         src=${src || nothing}
         style=${height ? `height:${height}px;min-height:${height}px` : ""}
-        @load=${registerWidgetFrame}
+        @load=${handleLoad}
       ></iframe>
     `,
   );
+}
+
+const loadMcpAppView = () => import("../../../components/mcp-app-view-registration.ts");
+
+function renderMcpAppView(params: {
+  sessionKey: string;
+  viewId: string;
+  height: number;
+  title: string;
+}) {
+  // Insert the tag before its chunk arrives. Native custom-element upgrade
+  // preserves these bound fields, so the first preview initializes after registration.
+  void ensureCustomElementDefined("mcp-app-view", loadMcpAppView).catch((error: unknown) => {
+    console.error("[openclaw] failed to load MCP App view", error);
+  });
+  return html`<mcp-app-view
+    .sessionKey=${params.sessionKey}
+    .viewId=${params.viewId}
+    .height=${params.height}
+    .title=${params.title}
+  ></mcp-app-view>`;
 }
 
 export function renderToolPreview(
@@ -232,12 +367,17 @@ export function renderToolPreview(
     canvasPluginSurfaceUrl?: string | null;
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
+    sessionKey?: string;
   },
 ) {
   if (!preview) {
     return nothing;
   }
-  if (preview.kind !== "canvas" || surface === "chat_tool") {
+  if (
+    preview.kind !== "canvas" ||
+    surface === "chat_tool" ||
+    (preview.mcpApp && surface !== "chat_message")
+  ) {
     return nothing;
   }
   if (preview.surface !== "assistant_message") {
@@ -246,19 +386,31 @@ export function renderToolPreview(
   return html`
     <div class="chat-tool-card__preview" data-kind="canvas" data-surface=${surface}>
       <div class="chat-tool-card__preview-header">
-        <span class="chat-tool-card__preview-label">${preview.title?.trim() || "Canvas"}</span>
+        <span class="chat-tool-card__preview-label"
+          >${preview.title?.trim() || t("chat.toolCards.canvas")}</span
+        >
       </div>
       <div class="chat-tool-card__preview-panel" data-side="canvas">
-        ${renderPreviewFrame({
-          title: preview.title?.trim() || "Canvas",
-          src: resolveCanvasIframeUrl(
-            preview.url,
-            options?.canvasPluginSurfaceUrl,
-            options?.allowExternalEmbedUrls ?? false,
-          ),
-          height: preview.preferredHeight,
-          sandbox: resolveEmbedSandbox(options?.embedSandboxMode ?? "scripts", preview.sandbox),
-        })}
+        ${preview.mcpApp
+          ? renderMcpAppView({
+              sessionKey: options?.sessionKey ?? "",
+              viewId: preview.mcpApp.viewId,
+              height: preview.preferredHeight ?? 600,
+              title: preview.title?.trim() || t("mcpApp.title"),
+            })
+          : renderPreviewFrame({
+              title: preview.title?.trim() || t("chat.toolCards.canvas"),
+              src: resolveCanvasIframeUrl(
+                preview.url,
+                options?.canvasPluginSurfaceUrl,
+                options?.allowExternalEmbedUrls ?? false,
+              ),
+              height: preview.preferredHeight,
+              sandbox: resolveEmbedSandbox(options?.embedSandboxMode ?? "scripts", preview.sandbox),
+              // Only hosted Canvas documents may drive the chat; externally
+              // allowed embed URLs render but never get prompt authority.
+              promptCapable: isInternalCanvasEntryUrl(preview.url),
+            })}
       </div>
     </div>
   `;
@@ -279,7 +431,7 @@ function buildSidebarContent(
   };
 }
 
-export function buildPreviewSidebarContent(
+function buildPreviewSidebarContent(
   preview: ToolPreview,
   rawText?: string | null,
   options?: { fullMessageRequest?: FullMessageRequest },
@@ -322,11 +474,11 @@ export function renderRawOutputToggle(text: string) {
         aria-expanded="false"
         @click=${handleRawDetailsToggle}
       >
-        <span>Raw details</span>
+        <span>${t("chat.toolCards.rawDetails")}</span>
         <span class="chat-tool-card__raw-toggle-icon">${icons.chevronDown}</span>
       </button>
       <div class="chat-tool-card__raw-body" hidden>
-        ${renderToolDataBlock({ label: "Tool output", text })}
+        ${renderToolDataBlock({ label: t("chat.toolCards.toolOutput"), text })}
       </div>
     </div>
   `;
@@ -348,13 +500,42 @@ function renderToolDataBlock(params: { label: string; text: string }) {
 
 // ── Kind-aware tool rows (command / read / edit / write / search / fetch) ──
 
-const TOOL_ROW_VERBS: Partial<Record<ToolCallView["kind"], string>> = {
-  read: "Read",
-  edit: "Edited",
-  write: "Wrote",
-  search: "Searched",
-  fetch: "Fetched",
+const TOOL_ROW_VERB_KEYS: Partial<Record<ToolCallView["kind"], string>> = {
+  read: "chat.toolCards.verbs.read",
+  search: "chat.toolCards.verbs.searched",
+  fetch: "chat.toolCards.verbs.fetched",
 };
+
+const MUTATION_VERB_KEYS = {
+  edit: {
+    running: "chat.toolCards.verbs.editing",
+    succeeded: "chat.toolCards.verbs.edited",
+    fallback: "chat.toolCards.verbs.edit",
+  },
+  write: {
+    running: "chat.toolCards.verbs.writing",
+    succeeded: "chat.toolCards.verbs.wrote",
+    fallback: "chat.toolCards.verbs.write",
+  },
+} as const;
+
+function resolveToolRowVerb(
+  kind: ToolCallView["kind"],
+  outcome: ToolCardOutcome,
+): string | undefined {
+  if (kind === "edit" || kind === "write") {
+    const keys = MUTATION_VERB_KEYS[kind];
+    const key =
+      outcome === "running"
+        ? keys.running
+        : outcome === "succeeded"
+          ? keys.succeeded
+          : keys.fallback;
+    return t(key);
+  }
+  const key = TOOL_ROW_VERB_KEYS[kind];
+  return key ? t(key) : undefined;
+}
 
 const TOOL_ROW_ICONS: Partial<Record<ToolCallView["kind"], string>> = {
   command: "terminal",
@@ -370,20 +551,10 @@ function firstCommandLine(command: string): string {
   return truncateUtf16Safe(line, 120);
 }
 
-export function renderDiffStatChips(stat: DiffStat) {
-  if (stat.added === 0 && stat.removed === 0) {
-    return nothing;
-  }
-  return html`<span class="chat-diffstat">
-    ${stat.added > 0 ? html`<span class="chat-diffstat__add">+${stat.added}</span>` : nothing}
-    ${stat.removed > 0 ? html`<span class="chat-diffstat__del">-${stat.removed}</span>` : nothing}
-  </span>`;
-}
-
-function renderToolRowContent(card: ToolCard, view: ToolCallView, isError: boolean) {
+function renderToolRowContent(card: ToolCard, view: ToolCallView, outcome: ToolCardOutcome) {
   if (view.kind === "command" && view.command) {
-    const aiTitle = getToolCallTitle(card.name, card.args);
     const commandPreview = firstCommandLine(view.command);
+    const aiTitle = getToolCallTitle(card.name, card.args);
     if (aiTitle) {
       return html`
         <span class="chat-tool-row__title">${aiTitle}</span>
@@ -396,34 +567,33 @@ function renderToolRowContent(card: ToolCard, view: ToolCallView, isError: boole
     `;
   }
 
-  const verb = TOOL_ROW_VERBS[view.kind];
+  const verb = resolveToolRowVerb(view.kind, outcome);
   if (verb && view.target) {
     return html`
       <span class="chat-tool-row__verb">${verb}</span>
       <span class="chat-tool-row__target">${view.target}</span>
-      ${view.stat ? renderDiffStatChips(view.stat) : nothing}
+      ${outcome === "succeeded" && view.stat ? renderDiffStatChips(view.stat) : nothing}
       ${view.targetDetail
         ? html`<span class="chat-tool-row__detail">${view.targetDetail}</span>`
         : nothing}
     `;
   }
 
-  // Generic tools keep the resolver-driven label + detail, with an optional
-  // AI purpose title when the args are complex enough to warrant one.
   const display = resolveToolDisplay({ name: card.name, args: card.args, detailMode: "explain" });
-  const aiTitle = getToolCallTitle(card.name, card.args);
   const summary = resolveCollapsedToolSummaryParts({
     card,
     displayLabel: display.label,
     displayDetail: display.detail,
-    isError,
+    isError: outcome === "failed",
   });
   const displayLabel = formatCollapsedToolSummaryText(summary.label) ?? summary.label;
-  const displayName = formatDistinctCollapsedToolSummaryText(summary.name, displayLabel);
+  const argumentPreview = outcome === "failed" ? undefined : toolArgumentPreview(card.args);
+  const displayName = distinctSummaryText(argumentPreview ?? summary.name, displayLabel);
+  const aiTitle = getToolCallTitle(card.name, card.args);
   if (aiTitle) {
     return html`
       <span class="chat-tool-row__title">${aiTitle}</span>
-      <span class="chat-tool-row__detail">${displayLabel}</span>
+      <span class="chat-tool-row__detail">${argumentPreview ?? displayLabel}</span>
     `;
   }
   return html`
@@ -431,37 +601,6 @@ function renderToolRowContent(card: ToolCard, view: ToolCallView, isError: boole
     ${displayName
       ? html`<span class="chat-tool-msg-summary__names">${displayName}</span>`
       : nothing}
-  `;
-}
-
-export function renderDiffBlock(lines: readonly DiffLine[]) {
-  const hasLineNumbers = lines.some((line) => line.lineNo !== undefined);
-  return html`
-    <div class="chat-diff" role="figure" aria-label="File changes">
-      ${lines.map((line) => {
-        if (line.kind === "skip") {
-          return html`<div class="chat-diff__row chat-diff__row--skip">
-            ${hasLineNumbers ? html`<span class="chat-diff__gutter"></span>` : nothing}
-            <span class="chat-diff__sign"></span>
-            <span class="chat-diff__text">⋯</span>
-          </div>`;
-        }
-        const kindClass =
-          line.kind === "add"
-            ? "chat-diff__row--add"
-            : line.kind === "del"
-              ? "chat-diff__row--del"
-              : "";
-        const sign = line.kind === "add" ? "+" : line.kind === "del" ? "-" : "";
-        return html`<div class="chat-diff__row ${kindClass}">
-          ${hasLineNumbers
-            ? html`<span class="chat-diff__gutter">${line.lineNo ?? ""}</span>`
-            : nothing}
-          <span class="chat-diff__sign">${sign}</span>
-          <span class="chat-diff__text">${line.text || " "}</span>
-        </div>`;
-      })}
-    </div>
   `;
 }
 
@@ -478,10 +617,10 @@ function tokenizeCommand(command: string): CommandToken[] {
   let index = 0;
   let expectName = true;
   while (index < command.length) {
-    const char = command[index];
+    const char = command.charAt(index);
     if (/\s/.test(char)) {
       let end = index;
-      while (end < command.length && /\s/.test(command[end])) {
+      while (end < command.length && /\s/.test(command.charAt(end))) {
         end++;
       }
       tokens.push({ text: command.slice(index, end), cls: "ws" });
@@ -490,8 +629,8 @@ function tokenizeCommand(command: string): CommandToken[] {
     }
     if (char === "'" || char === '"') {
       let end = index + 1;
-      while (end < command.length && command[end] !== char) {
-        end += command[end] === "\\" ? 2 : 1;
+      while (end < command.length && command.charAt(end) !== char) {
+        end += command.charAt(end) === "\\" ? 2 : 1;
       }
       end = Math.min(end + 1, command.length);
       tokens.push({ text: command.slice(index, end), cls: "str" });
@@ -501,7 +640,7 @@ function tokenizeCommand(command: string): CommandToken[] {
     }
     if (COMMAND_OP_CHARS.has(char)) {
       let end = index;
-      while (end < command.length && COMMAND_OP_CHARS.has(command[end])) {
+      while (end < command.length && COMMAND_OP_CHARS.has(command.charAt(end))) {
         end++;
       }
       tokens.push({ text: command.slice(index, end), cls: "op" });
@@ -512,10 +651,10 @@ function tokenizeCommand(command: string): CommandToken[] {
     let end = index;
     while (
       end < command.length &&
-      !/\s/.test(command[end]) &&
-      !COMMAND_OP_CHARS.has(command[end]) &&
-      command[end] !== "'" &&
-      command[end] !== '"'
+      !/\s/.test(command.charAt(end)) &&
+      !COMMAND_OP_CHARS.has(command.charAt(end)) &&
+      command.charAt(end) !== "'" &&
+      command.charAt(end) !== '"'
     ) {
       end++;
     }
@@ -534,7 +673,7 @@ function tokenizeCommand(command: string): CommandToken[] {
   return tokens;
 }
 
-export function renderHighlightedCommand(command: string) {
+function renderHighlightedCommand(command: string) {
   if (command.length > COMMAND_HIGHLIGHT_MAX_CHARS) {
     return html`${command}`;
   }
@@ -593,7 +732,7 @@ function canRenderArgsAsKeyValue(args: unknown): args is Record<string, unknown>
 // Args already represented in the collapsed row / header detail for kinds that
 // summarize their primary target; everything else stays auditable on expand.
 const ROW_SUMMARIZED_ARG_KEYS: Partial<Record<ToolCallView["kind"], ReadonlySet<string>>> = {
-  read: new Set(["path", "file_path", "filePath", "notebook_path", "offset", "limit"]),
+  read: new Set(["path", "file_path", "filePath", "notebook_path"]),
   search: new Set(["pattern", "query", "glob", "path"]),
   fetch: new Set(["url"]),
 };
@@ -613,6 +752,39 @@ function extraArgsBeyondRowTarget(
     Object.entries(args as Record<string, unknown>).filter(([key]) => !summarized.has(key)),
   );
   return Object.keys(extras).length > 0 ? extras : null;
+}
+
+function resolveToolWorkspaceFilePath(card: ToolCard, view: ToolCallView): string | null {
+  if (card.args && typeof card.args === "object" && !Array.isArray(card.args)) {
+    const args = card.args as Record<string, unknown>;
+    for (const key of ["path", "file_path", "filePath", "notebook_path"]) {
+      const value = args[key];
+      if (typeof value === "string" && value.trim()) {
+        return value;
+      }
+    }
+  }
+  const fallback = `${view.targetDetail ? `${view.targetDetail}/` : ""}${view.target ?? ""}`;
+  return fallback.trim() || null;
+}
+
+function renderToolWorkspaceFilePath(
+  label: string,
+  path: string | null,
+  onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void,
+) {
+  return path && onOpenWorkspaceFile
+    ? html`
+        <button
+          class="chat-tool-card__detail chat-tool-card__detail-link"
+          type="button"
+          title=${t("chat.toolCards.openFile")}
+          @click=${() => onOpenWorkspaceFile({ path })}
+        >
+          ${label}
+        </button>
+      `
+    : html`<div class="chat-tool-card__detail">${label}</div>`;
 }
 
 function renderTerminalBlock(command: string, output: string | undefined, isError: boolean) {
@@ -668,27 +840,20 @@ export function isRunningToolCard(card: ToolCard, runActive: boolean | undefined
   // Only live tool-stream cards can be running; historical transcript calls
   // without results (aborted runs) must stay inert during later runs. The
   // result event ends the running state — partial streamed output does not.
-  return (
-    runActive === true && card.live === true && card.completed !== true && !isToolCardError(card)
-  );
+  return resolveToolCardOutcome(card, runActive) === "running";
 }
 
-/** Plain-text row label, e.g. for the group header while a tool is running. */
-export function resolveToolRowText(card: ToolCard): string {
+export function resolveToolRowText(card: ToolCard, runActive?: boolean): string {
   const view = resolveToolCallView({ name: card.name, args: card.args, details: card.details });
   if (view.kind === "command" && view.command) {
-    return getToolCallTitle(card.name, card.args) ?? `$ ${firstCommandLine(view.command)}`;
+    return `$ ${firstCommandLine(view.command)}`;
   }
-  const verb = TOOL_ROW_VERBS[view.kind];
+  const verb = resolveToolRowVerb(view.kind, resolveToolCardOutcome(card, runActive));
   if (verb && view.target) {
     return `${verb} ${view.target}`;
   }
-  const aiTitle = getToolCallTitle(card.name, card.args);
-  if (aiTitle) {
-    return aiTitle;
-  }
   const display = resolveToolDisplay({ name: card.name, args: card.args, detailMode: "explain" });
-  return display.label;
+  return [display.label, toolArgumentPreview(card.args)].filter(Boolean).join(" ");
 }
 
 export function renderToolCard(
@@ -696,11 +861,11 @@ export function renderToolCard(
   opts: {
     expanded: boolean;
     onToggleExpanded: (id: string) => void;
-    turnSucceeded?: boolean;
     runActive?: boolean;
     sessionKey?: string;
     agentId?: string;
     onOpenSidebar?: (content: SidebarContent) => void;
+    onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
     canvasPluginSurfaceUrl?: string | null;
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
@@ -708,8 +873,9 @@ export function renderToolCard(
 ) {
   const view = resolveToolCallView({ name: card.name, args: card.args, details: card.details });
   const display = resolveToolDisplay({ name: card.name, args: card.args, detailMode: "explain" });
-  const isError = isToolCardError(card) && opts.turnSucceeded !== true;
-  const isRunning = !isError && isRunningToolCard(card, opts.runActive);
+  const outcome = resolveToolCardOutcome(card, opts.runActive);
+  const isError = outcome === "failed";
+  const isRunning = outcome === "running";
   const icon = TOOL_ROW_ICONS[view.kind] ?? display.icon;
 
   return html`
@@ -731,10 +897,15 @@ export function renderToolCard(
         }}
       >
         <span class="chat-tool-msg-summary__icon">${renderToolIcon(icon)}</span>
-        ${renderToolRowContent(card, view, isError)}
-        ${isError ? html`<span class="chat-tool-row__badge">failed</span>` : nothing}
+        ${renderToolRowContent(card, view, outcome)}
+        ${isError
+          ? html`<span class="chat-tool-row__badge">${t("chat.toolCards.failed")}</span>`
+          : nothing}
         ${isRunning
-          ? html`<span class="chat-tool-row__spinner" aria-label="Running"></span>`
+          ? html`<span
+              class="chat-tool-row__spinner"
+              aria-label=${t("chat.toolCards.running")}
+            ></span>`
           : nothing}
       </button>
       ${opts.expanded
@@ -747,6 +918,8 @@ export function renderToolCard(
                 opts.canvasPluginSurfaceUrl,
                 opts.embedSandboxMode ?? "scripts",
                 opts.allowExternalEmbedUrls ?? false,
+                opts.runActive,
+                opts.onOpenWorkspaceFile,
               )}
             </div>
           `
@@ -762,6 +935,8 @@ export function renderExpandedToolCardContent(
   canvasPluginSurfaceUrl?: string | null,
   embedSandboxMode: EmbedSandboxMode = "scripts",
   allowExternalEmbedUrls = false,
+  runActive?: boolean,
+  onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void,
 ) {
   const view = resolveToolCallView({ name: card.name, args: card.args, details: card.details });
   const display = resolveToolDisplay({ name: card.name, args: card.args });
@@ -774,6 +949,11 @@ export function renderExpandedToolCardContent(
   const hasOutput = Boolean(card.outputText?.trim());
   const hasInput = Boolean(card.inputText?.trim());
   const isError = isToolCardError(card);
+  const outcome = resolveToolCardOutcome(card, runActive);
+  const workspaceFilePath =
+    view.kind === "read" || view.kind === "edit" || view.kind === "write"
+      ? resolveToolWorkspaceFilePath(card, view)
+      : null;
   const canOpenSidebar = Boolean(onOpenSidebar);
   const fullMessageRequest = buildToolSidebarFullMessageRequest(card, sessionKey);
   const previewSidebarContent =
@@ -793,17 +973,18 @@ export function renderExpandedToolCardContent(
         canvasPluginSurfaceUrl,
         embedSandboxMode,
         allowExternalEmbedUrls,
+        sessionKey,
       })
     : nothing;
   const sidebarAction = canOpenSidebar
     ? html`
         <div class="chat-tool-card__actions">
-          <openclaw-tooltip content="Open in the side panel">
+          <openclaw-tooltip content=${t("chat.toolCards.openDetails")}>
             <button
               class="chat-tool-card__action-btn"
               type="button"
               @click=${() => onOpenSidebar?.(sidebarActionContent)}
-              aria-label="Open tool details in side panel"
+              aria-label=${t("chat.toolCards.openDetails")}
             >
               <span class="chat-tool-card__action-icon">${icons.panelRightOpen}</span>
             </button>
@@ -828,7 +1009,7 @@ export function renderExpandedToolCardContent(
         ${sidebarAction}
         ${renderTerminalBlock(
           view.command,
-          card.outputText ?? (isError ? "No output — tool failed." : undefined),
+          card.outputText ?? (isError ? t("chat.toolCards.noOutputFailed") : undefined),
           isError,
         )}
         ${Object.keys(extraArgs).length > 0 ? renderArgsKeyValueList(extraArgs) : nothing}
@@ -842,14 +1023,16 @@ export function renderExpandedToolCardContent(
     return html`
       <div class="chat-tool-card ${isError ? "chat-tool-card--error" : ""}">
         <div class="chat-tool-card__header">
-          <div class="chat-tool-card__detail">
-            ${view.targetDetail ? `${view.targetDetail}/` : ""}${view.target ?? ""}
-          </div>
+          ${renderToolWorkspaceFilePath(
+            `${view.targetDetail ? `${view.targetDetail}/` : ""}${view.target ?? ""}`,
+            workspaceFilePath,
+            onOpenWorkspaceFile,
+          )}
           ${sidebarAction}
         </div>
-        ${renderDiffBlock(view.diff)}
+        ${renderDiffBlock(view.diff, outcome)}
         ${isError && hasOutput
-          ? renderToolDataBlock({ label: "Tool error", text: card.outputText! })
+          ? renderToolDataBlock({ label: t("chat.toolCards.toolError"), text: card.outputText! })
           : hasOutput
             ? renderRawOutputToggle(card.outputText!)
             : nothing}
@@ -871,7 +1054,11 @@ export function renderExpandedToolCardContent(
       ${detail || canOpenSidebar
         ? html`
             <div class="chat-tool-card__header">
-              ${detail ? html`<div class="chat-tool-card__detail">${detail}</div>` : nothing}
+              ${detail
+                ? view.kind === "read"
+                  ? renderToolWorkspaceFilePath(detail, workspaceFilePath, onOpenWorkspaceFile)
+                  : html`<div class="chat-tool-card__detail">${detail}</div>`
+                : nothing}
               ${sidebarAction}
             </div>
           `
@@ -880,7 +1067,7 @@ export function renderExpandedToolCardContent(
         ? canRenderArgsAsKeyValue(inputBlockArgs)
           ? renderArgsKeyValueList(inputBlockArgs)
           : renderToolDataBlock({
-              label: "Tool input",
+              label: t("chat.toolCards.toolInput"),
               text: card.inputText!,
             })
         : nothing}
@@ -888,15 +1075,16 @@ export function renderExpandedToolCardContent(
         ? card.preview
           ? html`${visiblePreview} ${renderRawOutputToggle(card.outputText!)}`
           : renderToolDataBlock({
-              label: isError ? "Tool error" : "Tool output",
+              label: t(isError ? "chat.toolCards.toolError" : "chat.toolCards.toolOutput"),
               text: card.outputText!,
             })
         : isError
           ? renderToolDataBlock({
-              label: "Tool error",
-              text: "No output — tool failed.",
+              label: t("chat.toolCards.toolError"),
+              text: t("chat.toolCards.noOutputFailed"),
             })
           : nothing}
     </div>
   `;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

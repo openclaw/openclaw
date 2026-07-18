@@ -1,9 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { withoutPluginInstallRecords } from "../plugins/installed-plugin-index-records.js";
 
 const mocks = vi.hoisted(() => ({
   commitConfigWriteWithPendingPluginInstalls: vi.fn(),
+  replaceConfigFile: vi.fn(),
+}));
+
+vi.mock("../config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/config.js")>()),
+  replaceConfigFile: mocks.replaceConfigFile,
 }));
 
 vi.mock("../plugins/install-record-commit.js", async (importOriginal) => ({
@@ -24,6 +30,7 @@ describe("writeWizardConfigFile pending install ownership", () => {
         persistedHash: "test-hash",
       }),
     );
+    mocks.replaceConfigFile.mockResolvedValue({ persistedHash: "next-hash" });
   });
 
   it("rejects a normal write with pending records but no migration base", async () => {
@@ -71,6 +78,50 @@ describe("writeWizardConfigFile pending install ownership", () => {
     expect(mocks.commitConfigWriteWithPendingPluginInstalls).toHaveBeenCalledOnce();
     expect(mocks.commitConfigWriteWithPendingPluginInstalls).toHaveBeenCalledWith(
       expect.objectContaining({ nextConfig: config }),
+    );
+  });
+
+  it("binds the final write to the live-verified config hash", async () => {
+    const config: OpenClawConfig = { gateway: { port: 18789 } };
+
+    await writeWizardConfigFile(config, { baseHash: "verified-hash" });
+
+    const commit = mocks.commitConfigWriteWithPendingPluginInstalls.mock.calls[0]?.[0]?.commit;
+    expect(commit).toBeTypeOf("function");
+    await commit(config);
+    expect(mocks.replaceConfigFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nextConfig: config,
+        baseHash: "verified-hash",
+        afterWrite: { mode: "auto" },
+      }),
+    );
+  });
+
+  it("preserves an absent config snapshot through the final write", async () => {
+    const config: OpenClawConfig = { gateway: { port: 18789 } };
+    const baseSnapshot: ConfigFileSnapshot = {
+      path: "/tmp/openclaw.json",
+      exists: false,
+      raw: null,
+      parsed: undefined,
+      sourceConfig: {},
+      resolved: {},
+      valid: true,
+      runtimeConfig: {},
+      config: {},
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    };
+
+    await writeWizardConfigFile(config, { baseSnapshot });
+
+    const commit = mocks.commitConfigWriteWithPendingPluginInstalls.mock.calls[0]?.[0]?.commit;
+    expect(commit).toBeTypeOf("function");
+    await commit(config);
+    expect(mocks.replaceConfigFile).toHaveBeenCalledWith(
+      expect.objectContaining({ nextConfig: config, snapshot: baseSnapshot }),
     );
   });
 });

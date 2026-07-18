@@ -3,11 +3,12 @@
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
-import { createReadStream, readFileSync, statSync } from "node:fs";
+import { type BigIntStats, readFileSync, statSync } from "node:fs";
 import fs from "node:fs/promises";
 import { isDeepStrictEqual } from "node:util";
 import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { parseSqliteSessionFileMarker } from "../../../config/sessions/sqlite-marker.js";
 import {
   type OwnedSessionTranscriptPublishedEntry,
   type OwnedSessionTranscriptWriteOptions,
@@ -126,7 +127,7 @@ type SessionFileFingerprint =
       ctimeNs: bigint;
     };
 
-export type TrustedSessionFileSnapshot = Extract<SessionFileFingerprint, { exists: true }>;
+type TrustedSessionFileSnapshot = Extract<SessionFileFingerprint, { exists: true }>;
 
 const MAX_BENIGN_SESSION_FENCE_ADVANCE_BYTES = 1024 * 1024;
 const MAX_BENIGN_SESSION_FENCE_REWRITE_BYTES = 8 * 1024 * 1024;
@@ -140,6 +141,19 @@ type SessionFileFenceSnapshot = {
   bytes?: Buffer;
   digest?: string;
 };
+
+type SessionFileHandle = Awaited<ReturnType<typeof fs.open>>;
+
+function sessionFileFingerprintFromStat(stat: BigIntStats): SessionFileFingerprint {
+  return {
+    exists: true,
+    dev: stat.dev,
+    ino: stat.ino,
+    size: stat.size,
+    mtimeNs: stat.mtimeNs,
+    ctimeNs: stat.ctimeNs,
+  };
+}
 
 function sameSessionFileFingerprint(
   left: SessionFileFingerprint | undefined,
@@ -257,7 +271,7 @@ type PromptReleasedSessionEntry =
   | PromptReleasedOpaqueEntry;
 
 type PromptReleasedSessionMergeResult = {
-  sessionFileSnapshot: OwnedSessionTranscriptCacheSnapshot;
+  sessionFileSnapshot?: OwnedSessionTranscriptCacheSnapshot;
   publishedEntries?: readonly OwnedSessionTranscriptPublishedEntry[];
   requiresReload?: true;
 };
@@ -606,42 +620,86 @@ async function readSessionFileFenceSnapshot(
   if (!fingerprint.exists) {
     return { fingerprint };
   }
-  if (
-    fingerprint.size <= BigInt(MAX_BENIGN_SESSION_FENCE_REWRITE_BYTES) &&
-    fingerprint.size <= MAX_SAFE_FILE_OFFSET
-  ) {
-    try {
-      return {
-        fingerprint,
-        bytes: await fs.readFile(sessionFile),
-      };
-    } catch {
-      return { fingerprint };
-    }
-  }
   if (fingerprint.size > BigInt(MAX_BENIGN_SESSION_FENCE_CONTENT_DIGEST_BYTES)) {
     return { fingerprint };
   }
-  return {
-    fingerprint,
-    digest: await readSessionFileDigest(sessionFile),
-  };
+  let file: SessionFileHandle;
+  try {
+    file = await fs.open(sessionFile, "r");
+  } catch {
+    return { fingerprint };
+  }
+  try {
+    const openedFingerprint = sessionFileFingerprintFromStat(await file.stat({ bigint: true }));
+    if (!sameSessionFileIdentityAndSize(fingerprint, openedFingerprint)) {
+      return { fingerprint: await readSessionFileFingerprint(sessionFile) };
+    }
+
+    let bytes: Buffer | undefined;
+    let digest: string | undefined;
+    if (
+      fingerprint.size <= BigInt(MAX_BENIGN_SESSION_FENCE_REWRITE_BYTES) &&
+      fingerprint.size <= MAX_SAFE_FILE_OFFSET
+    ) {
+      bytes = await readSessionFileBytes(file, Number(fingerprint.size));
+    } else if (fingerprint.size <= BigInt(MAX_BENIGN_SESSION_FENCE_CONTENT_DIGEST_BYTES)) {
+      digest = await readSessionFileDigest(file, Number(fingerprint.size));
+    }
+
+    const postReadFingerprint = sessionFileFingerprintFromStat(await file.stat({ bigint: true }));
+    const resolvedFingerprint = await readSessionFileFingerprint(sessionFile);
+    if (
+      !sameSessionFileIdentityAndSize(openedFingerprint, postReadFingerprint) ||
+      !sameSessionFileFingerprint(fingerprint, resolvedFingerprint) ||
+      !sameSessionFileIdentityAndSize(postReadFingerprint, resolvedFingerprint)
+    ) {
+      return { fingerprint: resolvedFingerprint };
+    }
+    return {
+      fingerprint: resolvedFingerprint,
+      ...(bytes !== undefined ? { bytes } : {}),
+      ...(digest !== undefined ? { digest } : {}),
+    };
+  } catch {
+    return { fingerprint: await readSessionFileFingerprint(sessionFile) };
+  } finally {
+    await file.close();
+  }
 }
 
-async function readSessionFileDigest(sessionFile: string): Promise<string | undefined> {
+async function readSessionFileBytes(
+  file: SessionFileHandle,
+  length: number,
+): Promise<Buffer | undefined> {
+  const buffer = Buffer.alloc(length);
+  let offset = 0;
+  while (offset < length) {
+    const { bytesRead } = await file.read(buffer, offset, length - offset, offset);
+    if (bytesRead === 0) {
+      return undefined;
+    }
+    offset += bytesRead;
+  }
+  return buffer;
+}
+
+async function readSessionFileDigest(
+  file: SessionFileHandle,
+  length: number,
+): Promise<string | undefined> {
   const hash = createHash("sha256");
-  return await new Promise<string | undefined>((resolve) => {
-    const stream = createReadStream(sessionFile);
-    stream.on("data", (chunk) => {
-      hash.update(chunk);
-    });
-    stream.on("error", () => {
-      resolve(undefined);
-    });
-    stream.on("end", () => {
-      resolve(hash.digest("hex"));
-    });
-  });
+  const buffer = Buffer.allocUnsafe(Math.min(length, 64 * 1024));
+  let offset = 0;
+  while (offset < length) {
+    const nextLength = Math.min(buffer.length, length - offset);
+    const { bytesRead } = await file.read(buffer, 0, nextLength, offset);
+    if (bytesRead === 0) {
+      return undefined;
+    }
+    hash.update(buffer.subarray(0, bytesRead));
+    offset += bytesRead;
+  }
+  return hash.digest("hex");
 }
 
 async function classifySessionFenceAdvance(params: {
@@ -728,33 +786,31 @@ async function classifyOwnedSessionFileInitialization(params: {
     : resolvedChange;
 }
 
-async function sessionFenceByteIdenticalRewriteIsBenign(params: {
+async function readByteIdenticalSessionFenceSnapshot(params: {
   sessionFile: string;
   previous: SessionFileFenceSnapshot | undefined;
   current: SessionFileFingerprint;
-}): Promise<boolean> {
+}): Promise<SessionFileFenceSnapshot | undefined> {
   const previous = params.previous;
   if (
     previous?.fingerprint.exists !== true ||
     !params.current.exists ||
     !sameSessionFileIdentityAndSize(previous.fingerprint, params.current)
   ) {
-    return false;
+    return undefined;
+  }
+  const verified = await readSessionFileFenceSnapshot(params.sessionFile);
+  if (!sameSessionFileIdentityAndSize(params.current, verified.fingerprint)) {
+    return undefined;
   }
   // Truncate-and-rewrite keeps inode and size while advancing timestamps.
-  // Only exact bytes may make that metadata-only fence drift trustworthy.
-  if (previous.bytes === undefined) {
-    if (previous.digest === undefined) {
-      return false;
-    }
-    const currentDigest = await readSessionFileDigest(params.sessionFile);
-    return currentDigest !== undefined && currentDigest === previous.digest;
+  // Install only the stable snapshot whose exact bytes were compared here.
+  if (previous.bytes !== undefined && verified.bytes !== undefined) {
+    return previous.bytes.equals(verified.bytes) ? verified : undefined;
   }
-  try {
-    return previous.bytes.equals(await fs.readFile(params.sessionFile));
-  } catch {
-    return false;
-  }
+  return previous.digest !== undefined && previous.digest === verified.digest
+    ? verified
+    : undefined;
 }
 
 async function classifySessionFenceRewrite(params: {
@@ -1005,7 +1061,7 @@ export async function acquireEmbeddedAttemptSessionFileOwner(params: {
   }
 }
 
-export function resetEmbeddedAttemptSessionFileOwnersForTest(): void {
+function resetEmbeddedAttemptSessionFileOwnersForTest(): void {
   for (const entry of sessionFileOwnerState.owners.values()) {
     for (const waiter of entry.waiters) {
       waiter.reject(
@@ -1019,6 +1075,12 @@ export function resetEmbeddedAttemptSessionFileOwnersForTest(): void {
   ownedSessionFileWrites.clear();
   trustedSessionFileStates.clear();
   ownedSessionFileWriteGeneration = 0;
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.embeddedAttemptSessionFileOwnersTestApi")
+  ] = { resetEmbeddedAttemptSessionFileOwnersForTest };
 }
 
 function resolveOwnedSessionFileWriteHistory(sessionFileKey: string): OwnedSessionFileWriteHistory {
@@ -1106,16 +1168,11 @@ function isTrustedSessionFileState(
 }
 
 async function readSessionFileFingerprint(sessionFile: string): Promise<SessionFileFingerprint> {
+  if (parseSqliteSessionFileMarker(sessionFile)) {
+    return { exists: false };
+  }
   try {
-    const stat = await fs.stat(sessionFile, { bigint: true });
-    return {
-      exists: true,
-      dev: stat.dev,
-      ino: stat.ino,
-      size: stat.size,
-      mtimeNs: stat.mtimeNs,
-      ctimeNs: stat.ctimeNs,
-    };
+    return sessionFileFingerprintFromStat(await fs.stat(sessionFile, { bigint: true }));
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
       return { exists: false };
@@ -1125,16 +1182,11 @@ async function readSessionFileFingerprint(sessionFile: string): Promise<SessionF
 }
 
 function readSessionFileFingerprintSync(sessionFile: string): SessionFileFingerprint {
+  if (parseSqliteSessionFileMarker(sessionFile)) {
+    return { exists: false };
+  }
   try {
-    const stat = statSync(sessionFile, { bigint: true });
-    return {
-      exists: true,
-      dev: stat.dev,
-      ino: stat.ino,
-      size: stat.size,
-      mtimeNs: stat.mtimeNs,
-      ctimeNs: stat.ctimeNs,
-    };
+    return sessionFileFingerprintFromStat(statSync(sessionFile, { bigint: true }));
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
       return { exists: false };
@@ -1492,16 +1544,17 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       return;
     }
 
-    if (
-      await sessionFenceByteIdenticalRewriteIsBenign({
-        sessionFile: params.lockOptions.sessionFile,
-        previous: fenceSnapshot,
-        current,
-      })
-    ) {
-      fenceSnapshot = await readSessionFileFenceSnapshot(params.lockOptions.sessionFile);
-      fenceFingerprint = fenceSnapshot.fingerprint;
-      setFenceGeneration(recordTrustedSessionFileState(sessionFileFenceKey, current));
+    const byteIdenticalSnapshot = await readByteIdenticalSessionFenceSnapshot({
+      sessionFile: params.lockOptions.sessionFile,
+      previous: fenceSnapshot,
+      current,
+    });
+    if (byteIdenticalSnapshot) {
+      fenceSnapshot = byteIdenticalSnapshot;
+      fenceFingerprint = byteIdenticalSnapshot.fingerprint;
+      setFenceGeneration(
+        recordTrustedSessionFileState(sessionFileFenceKey, byteIdenticalSnapshot.fingerprint),
+      );
       return;
     }
 
@@ -2160,3 +2213,4 @@ export function installPromptSubmissionLockRelease(params: {
   wrappedStreamFn["__openclawSessionLockPromptReleaseInstalled"] = true;
   agent.streamFn = wrappedStreamFn;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

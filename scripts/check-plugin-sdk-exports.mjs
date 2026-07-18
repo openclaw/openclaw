@@ -14,6 +14,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   MAX_PRIVATE_QA_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES,
   MAX_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES,
+  PLUGIN_SDK_DECLARATION_OUTPUT_VARIANCE_BYTES,
   evaluatePluginSdkDeclarationBudget,
   isPrivateQaPluginSdkBuild,
 } from "./lib/plugin-sdk-declaration-budget.mjs";
@@ -49,6 +50,7 @@ const exportSet = new Set(exportedNames);
 
 const requiredRuntimeShimEntries = ["compat.js", "root-alias.cjs"];
 const forbiddenPublicDeclarationSpecifiers = ["@openclaw/llm-core"];
+const FORBIDDEN_PUBLIC_PROTOCOL_REGISTRY_RE = /\bdeclare\s+const\s+ProtocolSchemas(?:\$\d+)?\b/u;
 const RELATIVE_DECLARATION_SPECIFIER_RE = /\b(?:from|import)\s*(?:\(\s*)?["']([^"']+)["']/gu;
 const requiredSubpathExports = {
   "secret-input-runtime": [
@@ -140,6 +142,12 @@ while (declarationQueue.length > 0) {
   }
   declarationPaths.add(dtsPath);
   const dtsContent = readFileSync(dtsPath, "utf8");
+  if (FORBIDDEN_PUBLIC_PROTOCOL_REGISTRY_RE.test(dtsContent)) {
+    console.error(
+      `FORBIDDEN PUBLIC DTS REGISTRY: ${relative(resolve(scriptDir, ".."), dtsPath)} retains ProtocolSchemas`,
+    );
+    missing += 1;
+  }
   for (const match of dtsContent.matchAll(RELATIVE_DECLARATION_SPECIFIER_RE)) {
     const specifier = match[1];
     if (!specifier?.startsWith(".")) {
@@ -179,15 +187,18 @@ if (declarationBudget.shouldFail) {
   console.error(
     `${budgetLabel} DTS TOO LARGE: ${declarationBytes} bytes exceeds ${declarationBudget.budgetBytes} bytes.`,
   );
+  console.error(
+    `Budget: ${declarationBudget.ratchetBytes}-byte ratchet + ${declarationBudget.varianceBytes}-byte Rolldown output variance.`,
+  );
   console.error("Keep plugin SDK declarations in the canonical unified tsdown graph.");
   missing += 1;
 } else if (declarationBudget.budgetKind === "private-qa-public-entry") {
   console.log(
-    `Private QA build public-entry declaration graph: ${declarationBytes}/${MAX_PRIVATE_QA_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES} bytes; publication budget ${MAX_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES} bytes is not applied.`,
+    `Private QA build public-entry declaration graph: ${declarationBytes}/${declarationBudget.budgetBytes} bytes (${MAX_PRIVATE_QA_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES}-byte ratchet + ${PLUGIN_SDK_DECLARATION_OUTPUT_VARIANCE_BYTES}-byte output variance); publication ratchet ${MAX_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES} bytes is not applied.`,
   );
 } else {
   console.log(
-    `Public plugin SDK declaration graph: ${declarationBytes}/${MAX_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES} bytes.`,
+    `Public plugin SDK declaration graph: ${declarationBytes}/${declarationBudget.budgetBytes} bytes (${MAX_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES}-byte ratchet + ${PLUGIN_SDK_DECLARATION_OUTPUT_VARIANCE_BYTES}-byte output variance).`,
   );
 }
 

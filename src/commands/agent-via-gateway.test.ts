@@ -7,6 +7,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { OpenClawConfig } from "../config/config.js";
 import { loggingState } from "../logging/state.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../sessions/agent-harness-session-key.js";
 import { agentCliCommand, agentViaGatewayTesting } from "./agent-via-gateway.js";
 import type { agentCommand as AgentCommand } from "./agent.js";
 
@@ -182,10 +183,12 @@ function createGatewayTimeoutError() {
 }
 
 function createGatewayClosedError() {
-  const err = new Error("gateway closed before response");
+  const err = new Error("gateway closed (1006 abnormal closure): no close reason");
   err.name = "GatewayTransportError";
   return Object.assign(err, {
     kind: "closed",
+    code: 1006,
+    reason: "no close reason",
     connectionDetails: {
       url: "ws://127.0.0.1:18789",
       urlSource: "local loopback",
@@ -234,6 +237,7 @@ let zeroTimeoutGatewayRequestMs: number | undefined;
 
 function resetAgentCliCommandMocksForTest() {
   vi.clearAllMocks();
+  vi.stubEnv("OPENCLAW_GATEWAY_URL", "");
   agentViaGatewayTesting.resetLazyImportsForTests();
   agentViaGatewayTesting.setGatewayAbortRetryDelaysMsForTests([0, 0, 0, 0]);
   loadAgentSessionModuleMock.mockImplementation(async () => await import("./agent/session.js"));
@@ -247,6 +251,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   agentViaGatewayTesting.setGatewayAbortRetryDelaysMsForTests();
   loggingState.forceConsoleToStderr = originalForceConsoleToStderr;
 });
@@ -290,7 +295,42 @@ describe("agentCliCommand", () => {
     });
   });
 
-  it("uses gateway by default", async () => {
+  it("uses owner authority with the configured local gateway by default", async () => {
+    await withTempStore(async () => {
+      mockGatewaySuccessReply();
+
+      await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
+
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "gateway request");
+      expect(request.clientName).toBe("cli");
+      expect(request.mode).toBe("cli");
+      expect(request.scopes).toEqual(["operator.admin"]);
+      expect(request.params).toHaveProperty("cleanupBundleMcpOnRunEnd", true);
+      expect(agentCommand).not.toHaveBeenCalled();
+      expect(agentModuleLoadCount).not.toHaveBeenCalled();
+      expect(runtime.log).toHaveBeenCalledWith("hello");
+    });
+  });
+
+  it.each([
+    {
+      label: "configured remote gateway",
+      overrides: {
+        gateway: {
+          mode: "remote" as const,
+          remote: { url: "wss://gateway.example" },
+        },
+      },
+    },
+    {
+      label: "gateway URL override",
+      gatewayUrl: "wss://gateway-override.example",
+    },
+  ])("keeps ordinary $label runs least-privilege", async ({ gatewayUrl, overrides }) => {
+    if (gatewayUrl) {
+      vi.stubEnv("OPENCLAW_GATEWAY_URL", gatewayUrl);
+    }
     await withTempStore(async () => {
       mockGatewaySuccessReply();
 
@@ -301,11 +341,7 @@ describe("agentCliCommand", () => {
       expect(request.clientName).toBe("cli");
       expect(request.mode).toBe("cli");
       expect(request).not.toHaveProperty("scopes");
-      expect(request.params).toHaveProperty("cleanupBundleMcpOnRunEnd", true);
-      expect(agentCommand).not.toHaveBeenCalled();
-      expect(agentModuleLoadCount).not.toHaveBeenCalled();
-      expect(runtime.log).toHaveBeenCalledWith("hello");
-    });
+    }, overrides);
   });
 
   it("reads a UTF-8 message file for gateway dispatch", async () => {
@@ -1572,9 +1608,12 @@ describe("agentCliCommand", () => {
       );
       expect(resultMetaOverrides.transport).toBe("embedded");
       expect(resultMetaOverrides.fallbackFrom).toBe("gateway");
+      expect(resultMetaOverrides.fallbackReason).toBe("gateway_closed");
       expect(
         mockMessages(runtime.error).some((message) =>
-          message.includes("EMBEDDED FALLBACK: Gateway agent failed"),
+          message.includes(
+            "Gateway agent connection closed; running embedded agent with fresh session",
+          ),
         ),
       ).toBe(true);
       expect(runtime.log).toHaveBeenCalledWith("local");
@@ -1620,9 +1659,18 @@ describe("agentCliCommand", () => {
     }
   });
 
-  it("preserves explicit session keys for embedded fallback when the gateway closes", async () => {
+  it("uses a fresh embedded session when an accepted gateway turn closes abnormally", async () => {
     await withTempStore(async () => {
-      callGateway.mockRejectedValue(createGatewayClosedError());
+      callGateway.mockImplementationOnce(async (requestValue: unknown) => {
+        const request = requireRecord(requestValue, "gateway request");
+        const onAccepted = request.onAccepted as ((payload: unknown) => void) | undefined;
+        onAccepted?.({
+          status: "accepted",
+          runId: "accepted-run",
+          sessionKey: "agent:main:incident-42",
+        });
+        throw createGatewayClosedError();
+      });
       mockLocalAgentReply();
 
       await agentCliCommand({ message: "hi", sessionKey: "agent:main:incident-42" }, runtime);
@@ -1633,11 +1681,39 @@ describe("agentCliCommand", () => {
         requireFirstCallArg(agentCommand, "embedded agent"),
         "embedded agent options",
       );
-      expect(fallbackOpts.sessionKey).toBe("agent:main:incident-42");
+      const fallbackSessionId = String(fallbackOpts.sessionId);
+      const fallbackSessionKey = String(fallbackOpts.sessionKey);
+      expect(fallbackSessionId).toMatch(/^gateway-fallback-/);
+      expect(fallbackSessionKey).toBe(`agent:main:explicit:${fallbackSessionId}`);
+      expect(fallbackSessionKey).not.toBe("agent:main:incident-42");
+      expect(fallbackOpts.runId).toBe(fallbackSessionId);
       expect(fallbackOpts.resultMetaOverrides).toMatchObject({
         transport: "embedded",
         fallbackFrom: "gateway",
+        fallbackReason: "gateway_closed",
+        fallbackSessionId,
+        fallbackSessionKey,
       });
+    });
+  });
+
+  it("does not pass a harness-owned session key into closed gateway fallback", async () => {
+    await withTempStore(async () => {
+      const sessionKey = "agent:main:harness:codex:supervision:missing-fallback";
+      callGateway.mockRejectedValue(createGatewayClosedError());
+      mockLocalAgentReply();
+
+      await agentCliCommand({ message: "hi", sessionKey }, runtime);
+
+      expect(callGateway).toHaveBeenCalledOnce();
+      expect(agentCommand).toHaveBeenCalledOnce();
+      const fallbackOpts = requireRecord(
+        requireFirstCallArg(agentCommand, "embedded agent"),
+        "options",
+      );
+      const fallbackSessionId = String(fallbackOpts.sessionId);
+      expect(fallbackOpts.sessionKey).toBe(`agent:main:explicit:${fallbackSessionId}`);
+      expect(fallbackOpts.sessionKey).not.toBe(sessionKey);
     });
   });
 
@@ -1835,7 +1911,7 @@ describe("agentCliCommand", () => {
       expect(resultMetaOverrides.fallbackFrom).toBe("gateway");
       expect(
         mockMessages(jsonRuntime.error).some((message) =>
-          message.includes("EMBEDDED FALLBACK: Gateway agent failed"),
+          message.includes("EMBEDDED FALLBACK: Gateway agent connection closed"),
         ),
       ).toBe(true);
       expect(loggingState.forceConsoleToStderr).toBe(true);
@@ -1923,6 +1999,23 @@ describe("agentCliCommand", () => {
         "embedded agent options",
       );
       expect(localOpts.sessionKey).toBe("agent:main:incident-42");
+    });
+  });
+
+  it("propagates harness-owned session rejection from --local dispatch", async () => {
+    await withTempStore(async () => {
+      const sessionKey = "agent:main:harness:codex:supervision:missing-local";
+      agentCommand.mockRejectedValueOnce(new Error(AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE));
+
+      await expect(
+        agentCliCommand({ message: "hi", sessionKey, local: true }, runtime),
+      ).rejects.toThrow(AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE);
+
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(agentCommand).toHaveBeenCalledOnce();
+      expect(
+        requireRecord(requireFirstCallArg(agentCommand, "embedded agent"), "options"),
+      ).toMatchObject({ sessionKey });
     });
   });
 
@@ -2060,3 +2153,4 @@ describe("agentCliCommand", () => {
     expect(runtime.exit).not.toHaveBeenCalledWith(1);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

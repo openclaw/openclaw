@@ -8,6 +8,7 @@
  * labels.
  */
 
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { resolveToolCallKind, unwrapShellWrapperCommand } from "../../lib/chat/tool-call-view.ts";
 
@@ -40,8 +41,11 @@ type PendingItem = {
   client: GatewayBrowserClient;
   notify: (() => void) | null;
 };
-type ToolTitlesResult = { titles?: Record<string, string> };
+type ToolTitlesResult = { titles?: Record<string, string>; disabled?: boolean };
 
+// Set when the gateway reports the opt-in is off; cleared on a new client
+// (a different gateway may have titles enabled).
+let titlesDisabledByGateway = false;
 let queue = new Map<string, PendingItem>();
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
 let activeClient: GatewayBrowserClient | null = null;
@@ -65,22 +69,21 @@ function serializeArgs(args: unknown): string | null {
     return null;
   }
   if (typeof args === "string") {
-    return args.slice(0, MAX_TITLE_INPUT_CHARS);
+    return truncateUtf16Safe(args, MAX_TITLE_INPUT_CHARS);
   }
   try {
     const encoded = JSON.stringify(args);
-    return typeof encoded === "string" ? encoded.slice(0, MAX_TITLE_INPUT_CHARS) : null;
+    return typeof encoded === "string" ? truncateUtf16Safe(encoded, MAX_TITLE_INPUT_CHARS) : null;
   } catch {
     return null;
   }
 }
-
 /**
  * Only calls where a purpose summary beats the deterministic label qualify:
  * shell commands and arg-heavy generic/MCP tools. File reads/edits/writes
  * already render precise labels.
  */
-export function resolveToolTitleRequest(
+function resolveToolTitleRequest(
   name: string,
   args: unknown,
 ): { key: string; input: string } | null {
@@ -95,7 +98,7 @@ export function resolveToolTitleRequest(
     if (command.length < MIN_COMMAND_CHARS_FOR_TITLE) {
       return null;
     }
-    const input = command.slice(0, MAX_TITLE_INPUT_CHARS);
+    const input = truncateUtf16Safe(command, MAX_TITLE_INPUT_CHARS);
     return { key: digest("command", input), input };
   }
   if (kind !== "generic") {
@@ -128,6 +131,20 @@ export function configureToolTitleFetcher(params: {
   agentId?: string | null;
   onTitlesChanged: (() => void) | null;
 }): void {
+  if (!params.client) {
+    titlesDisabledByGateway = false;
+    titlesByKey.clear();
+    pendingKeys.clear();
+    failedKeys.clear();
+    queue = new Map();
+    if (flushTimer) {
+      clearTimeout(flushTimer);
+      flushTimer = null;
+    }
+  }
+  if (params.client !== activeClient) {
+    titlesDisabledByGateway = false;
+  }
   activeClient = params.client;
   activeSessionKey = params.sessionKey;
   activeAgentId = params.agentId ?? null;
@@ -136,6 +153,7 @@ export function configureToolTitleFetcher(params: {
 
 function scheduleTitleRequest(name: string, request: { key: string; input: string }): void {
   if (
+    titlesDisabledByGateway ||
     !activeClient ||
     !activeSessionKey ||
     titlesByKey.has(request.key) ||
@@ -190,10 +208,16 @@ async function flushTitleQueue(): Promise<void> {
       ...(head.agentId ? { agentId: head.agentId } : {}),
       items: batch.map((item) => ({ id: item.key, name: item.name, input: item.input })),
     });
+    if (result?.disabled === true) {
+      titlesDisabledByGateway = true;
+      queue = new Map();
+      return;
+    }
     const titles = result?.titles ?? {};
     let changed = false;
     for (const item of batch) {
-      const title = typeof titles[item.key] === "string" ? titles[item.key].trim() : "";
+      const rawTitle = titles[item.key];
+      const title = typeof rawTitle === "string" ? rawTitle.trim() : "";
       if (title) {
         titlesByKey.set(item.key, title);
         changed = true;
@@ -203,7 +227,15 @@ async function flushTitleQueue(): Promise<void> {
     }
     if (changed) {
       titlesVersion += 1;
-      head.notify?.();
+      // Split panes can contribute rows for the same session to one batch;
+      // every contributing pane must repaint, not just the head's.
+      const notified = new Set<() => void>();
+      for (const item of batch) {
+        if (item.notify && !notified.has(item.notify)) {
+          notified.add(item.notify);
+          item.notify();
+        }
+      }
     }
   } catch {
     // Gateway without the method, no usable cheap model, transient errors:
@@ -222,19 +254,4 @@ async function flushTitleQueue(): Promise<void> {
       }, REQUEST_DEBOUNCE_MS);
     }
   }
-}
-
-export function resetToolTitlesForTest(): void {
-  titlesByKey.clear();
-  pendingKeys.clear();
-  failedKeys.clear();
-  queue = new Map();
-  if (flushTimer) {
-    clearTimeout(flushTimer);
-    flushTimer = null;
-  }
-}
-
-export function setToolTitleForTest(key: string, title: string): void {
-  titlesByKey.set(key, title);
 }

@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawProtocol
 
 public enum OpenClawChatTransportEvent: Sendable {
     case health(ok: Bool)
@@ -7,7 +8,22 @@ public enum OpenClawChatTransportEvent: Sendable {
     case chat(OpenClawChatEventPayload)
     case sessionMessage(OpenClawSessionMessageEventPayload)
     case agent(OpenClawAgentEventPayload)
+    case questionRequested(QuestionRecord)
+    case questionResolved(OpenClawQuestionResolvedEvent)
     case seqGap
+}
+
+public struct OpenClawQuestionResolvedEvent: Codable, Sendable {
+    public let id: String
+    public let status: QuestionStatus
+    public let answers: QuestionAnswers?
+
+    // periphery:ignore - Package consumers construct transport events; native apps decode them.
+    public init(id: String, status: QuestionStatus, answers: QuestionAnswers? = nil) {
+        self.id = id
+        self.status = status
+        self.answers = answers
+    }
 }
 
 public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
@@ -102,6 +118,58 @@ public enum OpenClawChatTransportRouteLeaseResult: Sendable {
     case unavailable(reason: String?)
 }
 
+/// One physical gateway connection captured before a settings mutation waits
+/// behind earlier mutations for the same session.
+public struct OpenClawChatSessionSettingsRouteLease: Sendable {
+    public typealias PatchSessionSettings = @Sendable (
+        _ sessionKey: String,
+        _ agentID: String?,
+        _ patch: OpenClawChatSessionSettingsPatch) async throws -> OpenClawChatModelPatchResult?
+
+    private let patchSessionSettingsImpl: PatchSessionSettings
+
+    public init(patchSessionSettings: @escaping PatchSessionSettings) {
+        self.patchSessionSettingsImpl = patchSessionSettings
+    }
+
+    public func patchSessionSettings(
+        sessionKey: String,
+        agentID: String?,
+        patch: OpenClawChatSessionSettingsPatch) async throws -> OpenClawChatModelPatchResult?
+    {
+        try await self.patchSessionSettingsImpl(sessionKey, agentID, patch)
+    }
+}
+
+/// One physical gateway connection captured before a session mutation waits
+/// behind an earlier mutation for the same session.
+public struct OpenClawChatSessionMutationRouteLease: Sendable {
+    public typealias PatchSession = @Sendable (
+        _ key: String,
+        _ label: String??,
+        _ category: String??,
+        _ pinned: Bool?,
+        _ archived: Bool?,
+        _ unread: Bool?) async throws -> Void
+
+    private let patchSessionImpl: PatchSession
+
+    public init(patchSession: @escaping PatchSession) {
+        self.patchSessionImpl = patchSession
+    }
+
+    public func patchSession(
+        key: String,
+        label: String??,
+        category: String??,
+        pinned: Bool?,
+        archived: Bool?,
+        unread: Bool?) async throws
+    {
+        try await self.patchSessionImpl(key, label, category, pinned, archived, unread)
+    }
+}
+
 /// The transport rejected a send before it reached its request channel. This
 /// is the only failure class safe for automatic outbox retry.
 public enum OpenClawChatTransportSendError: Error, Sendable {
@@ -113,6 +181,98 @@ public enum OpenClawChatTransportUpgradeMessage {
         "Update the gateway before sending queued messages. This version requires safe delivery routing."
 }
 
+public enum OpenClawChatRunTerminalState: Sendable, Equatable {
+    case completed
+    case failed(message: String)
+}
+
+public enum OpenClawChatRunObservation: Sendable, Equatable {
+    case terminal(OpenClawChatRunTerminalState)
+    case checkAgain
+    case unavailable
+
+    public static func fromWaitResponse(
+        status: String?,
+        endedAt: Double? = nil,
+        error: String? = nil,
+        stopReason: String? = nil,
+        livenessState: String? = nil,
+        yielded: Bool? = nil,
+        pendingError: Bool? = nil,
+        timeoutPhase: String? = nil,
+        providerStarted: Bool? = nil,
+        aborted: Bool? = nil) -> Self
+    {
+        let status = Self.normalized(status)
+        if status == "pending" {
+            return .checkAgain
+        }
+        if ["ok", "completed", "success", "succeeded"].contains(status) {
+            return .terminal(.completed)
+        }
+        if [
+            "error", "failed", "aborted", "cancelled", "canceled", "killed", "timed_out",
+        ].contains(status) {
+            return .terminal(.failed(message: Self.failureMessage(
+                status: status,
+                error: error,
+                stopReason: stopReason,
+                aborted: aborted)))
+        }
+        guard status == "timeout" else { return .unavailable }
+        guard pendingError != true else { return .checkAgain }
+
+        let timeoutPhase = Self.normalized(timeoutPhase)
+        let stopReason = Self.normalized(stopReason)
+        let terminalTimeout = ["preflight", "provider", "post_turn"].contains(timeoutPhase) ||
+            ["timeout", "timed_out"].contains(stopReason) ||
+            endedAt != nil ||
+            !Self.normalized(error).isEmpty ||
+            !stopReason.isEmpty ||
+            !Self.normalized(livenessState).isEmpty ||
+            yielded == true ||
+            aborted == true ||
+            (providerStarted == true && timeoutPhase != "queue" && timeoutPhase != "gateway_draining")
+        return terminalTimeout
+            ? .terminal(.failed(message: Self.failureMessage(
+                status: status,
+                error: error,
+                stopReason: stopReason,
+                aborted: aborted)))
+            : .checkAgain
+    }
+
+    private static func normalized(_ value: String?) -> String {
+        (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private static func failureMessage(
+        status: String,
+        error: String?,
+        stopReason: String?,
+        aborted: Bool?) -> String
+    {
+        if let error = error?.trimmingCharacters(in: .whitespacesAndNewlines), !error.isEmpty {
+            return error
+        }
+        let stopReason = Self.normalized(stopReason)
+        if aborted == true || status == "aborted" || stopReason == "aborted" {
+            return "Run aborted"
+        }
+        if ["cancelled", "canceled", "killed"].contains(status) ||
+            ["cancelled", "canceled", "killed", "restart", "rpc", "stop", "user"].contains(stopReason)
+        {
+            return "Run cancelled"
+        }
+        if status == "timeout" || status == "timed_out" ||
+            stopReason == "timeout" || stopReason == "timed_out"
+        {
+            return "Run timed out"
+        }
+        return "Chat failed"
+    }
+}
+
 public protocol OpenClawChatTransport: Sendable {
     func createSession(
         key: String,
@@ -121,6 +281,7 @@ public protocol OpenClawChatTransport: Sendable {
         worktree: Bool?) async throws -> OpenClawChatCreateSessionResponse
 
     func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload
+    func requestFullMessage(sessionKey: String, messageID: String) async throws -> OpenClawChatMessage?
     func listModels() async throws -> [OpenClawChatModelChoice]
     var supportsSlashCommandCatalog: Bool { get }
     func listCommands(sessionKey: String) async throws -> [OpenClawChatCommandChoice]
@@ -156,6 +317,7 @@ public protocol OpenClawChatTransport: Sendable {
         pinned: Bool?,
         archived: Bool?,
         unread: Bool?) async throws
+    func acquireSessionMutationRouteLease() async -> OpenClawChatSessionMutationRouteLease?
     func deleteSession(key: String) async throws
     func forkSession(parentKey: String) async throws -> String
     func setSessionModel(sessionKey: String, model: String?) async throws
@@ -164,10 +326,23 @@ public protocol OpenClawChatTransport: Sendable {
         agentID: String?,
         model: String?) async throws -> OpenClawChatModelPatchResult?
     func setSessionThinking(sessionKey: String, thinkingLevel: String) async throws
+    func patchSessionSettings(
+        sessionKey: String,
+        agentID: String?,
+        patch: OpenClawChatSessionSettingsPatch) async throws -> OpenClawChatModelPatchResult?
+    /// Mutable gateway transports must capture the physical connection here;
+    /// queued settings work must never resolve its route after waiting.
+    func acquireSessionSettingsRouteLease() async -> OpenClawChatSessionSettingsRouteLease?
 
     func requestHealth(timeoutMs: Int) async throws -> Bool
-    func waitForRunCompletion(runId: String, timeoutMs: Int) async -> Bool
+    func listQuestions() async throws -> [QuestionRecord]
+    func resolveQuestion(id: String, answers: [String: [String]]) async throws
+    func waitForRunCompletion(runId: String, timeoutMs: Int) async -> OpenClawChatRunObservation
     func events() -> AsyncStream<OpenClawChatTransportEvent>
+    func resolveInlineWidgetResource(
+        path: String,
+        replacing failedResource: OpenClawChatWidgetResource?) async -> OpenClawChatWidgetResource?
+    func resolveInlineWidgetURL(path: String, replacing failedURL: URL?) async -> URL?
 
     func setActiveSessionKey(_ sessionKey: String) async throws
     func resetSession(sessionKey: String) async throws
@@ -175,6 +350,33 @@ public protocol OpenClawChatTransport: Sendable {
 }
 
 extension OpenClawChatTransport {
+    public func listQuestions() async throws -> [QuestionRecord] {
+        []
+    }
+
+    public func resolveQuestion(id _: String, answers _: [String: [String]]) async throws {
+        throw NSError(
+            domain: "OpenClawChatTransport",
+            code: 0,
+            userInfo: [NSLocalizedDescriptionKey: "question.resolve not supported by this transport"])
+    }
+
+    public func requestFullMessage(sessionKey _: String, messageID _: String) async throws -> OpenClawChatMessage? {
+        nil
+    }
+
+    public func resolveInlineWidgetResource(
+        path: String,
+        replacing failedResource: OpenClawChatWidgetResource?) async -> OpenClawChatWidgetResource?
+    {
+        guard let url = await resolveInlineWidgetURL(path: path, replacing: failedResource?.url) else { return nil }
+        return OpenClawChatWidgetResource(url: url)
+    }
+
+    public func resolveInlineWidgetURL(path _: String, replacing _: URL?) async -> URL? {
+        nil
+    }
+
     public var outboxRequiresSessionRoutingContract: Bool {
         false
     }
@@ -193,6 +395,29 @@ extension OpenClawChatTransport {
             requestHistory: { sessionKey in
                 try await transport.requestHistory(sessionKey: sessionKey)
             }))
+    }
+
+    public func acquireSessionSettingsRouteLease() async -> OpenClawChatSessionSettingsRouteLease? {
+        let transport = self
+        return OpenClawChatSessionSettingsRouteLease { sessionKey, agentID, patch in
+            try await transport.patchSessionSettings(
+                sessionKey: sessionKey,
+                agentID: agentID,
+                patch: patch)
+        }
+    }
+
+    public func acquireSessionMutationRouteLease() async -> OpenClawChatSessionMutationRouteLease? {
+        let transport = self
+        return OpenClawChatSessionMutationRouteLease { key, label, category, pinned, archived, unread in
+            try await transport.patchSession(
+                key: key,
+                label: label,
+                category: category,
+                pinned: pinned,
+                archived: archived,
+                unread: unread)
+        }
     }
 
     public func sendMessage(
@@ -226,8 +451,8 @@ extension OpenClawChatTransport {
 
     public func setActiveSessionKey(_: String) async throws {}
 
-    public func waitForRunCompletion(runId _: String, timeoutMs _: Int) async -> Bool {
-        false
+    public func waitForRunCompletion(runId _: String, timeoutMs _: Int) async -> OpenClawChatRunObservation {
+        .unavailable
     }
 
     public func resetSession(sessionKey _: String) async throws {
@@ -338,6 +563,40 @@ extension OpenClawChatTransport {
             domain: "OpenClawChatTransport",
             code: 0,
             userInfo: [NSLocalizedDescriptionKey: "sessions.patch(thinkingLevel) not supported by this transport"])
+    }
+
+    public func patchSessionSettings(
+        sessionKey: String,
+        agentID: String?,
+        patch: OpenClawChatSessionSettingsPatch) async throws -> OpenClawChatModelPatchResult?
+    {
+        var result: OpenClawChatModelPatchResult?
+        if let model = patch.model {
+            result = try await self.patchSessionModel(
+                sessionKey: sessionKey,
+                agentID: agentID,
+                model: model)
+        }
+        if let thinkingLevelUpdate = patch.thinkingLevel {
+            guard let thinkingLevel = thinkingLevelUpdate else {
+                throw NSError(
+                    domain: "OpenClawChatTransport",
+                    code: 0,
+                    userInfo: [
+                        NSLocalizedDescriptionKey: "sessions.patch(thinkingLevel=null) not supported by this transport",
+                    ])
+            }
+            try await self.setSessionThinking(
+                sessionKey: sessionKey,
+                thinkingLevel: thinkingLevel)
+            result = OpenClawChatModelPatchResult(
+                key: result?.key ?? sessionKey,
+                modelProvider: result?.modelProvider,
+                model: result?.model,
+                thinkingLevel: thinkingLevel,
+                thinkingLevels: result?.thinkingLevels)
+        }
+        return result
     }
 }
 

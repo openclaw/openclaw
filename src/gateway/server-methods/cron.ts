@@ -23,23 +23,31 @@ import {
 import { resolveCronDeliveryPreviews } from "../../cron/delivery-preview.js";
 import { assertCronDeliveryInputNonBlankFields } from "../../cron/delivery-target-validation.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
-import {
-  isInvalidCronRunLogJobIdError,
-  readCronRunLogEntriesPage,
-  readCronRunLogEntriesPageAll,
-} from "../../cron/run-log.js";
+import { toPublicCronJob } from "../../cron/public-job.js";
 import { applyJobPatch } from "../../cron/service/jobs.js";
-import type {
-  CronListPageOptions,
-  CronListPageResult,
-} from "../../cron/service/list-page-types.js";
-import { isInvalidCronSessionTargetIdError } from "../../cron/session-target.js";
+import {
+  isInvalidCronSessionTargetIdError,
+  resolveCronSessionTargetSessionKey,
+} from "../../cron/session-target.js";
+import { cronStoreKey } from "../../cron/store/key.js";
+import {
+  isInvalidCronTaskRunJobIdError,
+  readCronTaskRunHistoryPage,
+} from "../../cron/task-run-history.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "../../cron/types.js";
 import { validateScheduleTimestamp } from "../../cron/validate-timestamp.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveTargetPrefixedChannel } from "../../infra/outbound/channel-target-prefix.js";
 import { isSubagentSessionKey, normalizeAgentId } from "../../routing/session-key.js";
+import {
+  AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE,
+  AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
+  isAgentHarnessSessionKey,
+  resolveAgentHarnessSessionStoreEntryError,
+} from "../../sessions/agent-harness-session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import { getGatewayProcessInstanceId } from "../process-instance.js";
+import { loadSessionEntry } from "../session-utils.js";
 import {
   applyCronCreateCallerScopeDefault,
   cronCreateMatchesCallerScope,
@@ -47,14 +55,16 @@ import {
   cronJobMatchesCallerScope,
   cronPatchSessionRefsMatchCaller,
   readCronCallerScope,
-  type CronCallerScope,
 } from "./cron-caller-scope.js";
 import { isCronInvalidRequestError } from "./cron-error-classification.js";
+import { listCronPageForCallerScope } from "./cron-list-caller-scope.js";
+import { cronRunLogPageFilters, filterCronRunLogJobsByAgent } from "./cron-run-log-filters.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 type CronJobIdParams = { id?: string; jobId?: string };
 
 type CronRunsRequestParams = CronJobIdParams & {
+  agentId?: string;
   scope?: "job" | "all";
   runId?: string;
   limit?: number;
@@ -67,13 +77,6 @@ type CronRunsRequestParams = CronJobIdParams & {
   sortDir?: "asc" | "desc";
 };
 
-type CronListCallerScopeContext = {
-  cron: {
-    getDefaultAgentId(): string | undefined;
-    listPage(opts?: CronListPageOptions): Promise<CronListPageResult>;
-  };
-};
-
 class CronJobConfigRevisionConflictError extends Error {
   constructor(
     readonly expectedConfigRevision: string,
@@ -84,8 +87,9 @@ class CronJobConfigRevisionConflictError extends Error {
 }
 
 function cronJobReadView(job: CronJob) {
+  const publicJob = toPublicCronJob(job);
   return {
-    ...job,
+    ...publicJob,
     configRevision: resolveCronJobConfigRevision(job),
     nextRunAtMs: job.state.nextRunAtMs,
     lastRunAtMs: job.state.lastRunAtMs,
@@ -135,60 +139,6 @@ function compactCronListJob(job: CronJob) {
   };
 }
 
-async function listCronPageForCallerScope({
-  callerScope,
-  context,
-  options,
-}: {
-  callerScope: CronCallerScope;
-  context: CronListCallerScopeContext;
-  options: CronListPageOptions;
-}): Promise<CronListPageResult> {
-  const scopedJobs: CronJob[] = [];
-  let offset = 0;
-
-  for (;;) {
-    const sourcePage = await context.cron.listPage({
-      ...options,
-      // Owner attribution can intentionally differ from a job's execution agent.
-      // Scan source pages, then apply the trusted caller predicate below.
-      agentId: undefined,
-      limit: 200,
-      offset,
-    });
-
-    scopedJobs.push(
-      ...sourcePage.jobs.filter((job) =>
-        cronJobMatchesCallerScope({
-          job,
-          callerScope,
-          defaultAgentId: context.cron.getDefaultAgentId(),
-        }),
-      ),
-    );
-
-    if (!sourcePage.hasMore || sourcePage.nextOffset === null || sourcePage.nextOffset <= offset) {
-      break;
-    }
-    offset = sourcePage.nextOffset;
-  }
-
-  const total = scopedJobs.length;
-  const pageOffset = Math.max(0, Math.min(total, Math.floor(options.offset ?? 0)));
-  const defaultLimit = total === 0 ? 50 : total;
-  const limit = Math.max(1, Math.min(200, Math.floor(options.limit ?? defaultLimit)));
-  const jobs = scopedJobs.slice(pageOffset, pageOffset + limit);
-  const nextOffset = pageOffset + jobs.length;
-  return {
-    jobs,
-    total,
-    offset: pageOffset,
-    limit,
-    hasMore: nextOffset < total,
-    nextOffset: nextOffset < total ? nextOffset : null,
-  };
-}
-
 async function assertValidCronUpdatePatch(params: {
   cfg: OpenClawConfig;
   defaultAgentId?: string;
@@ -203,6 +153,13 @@ async function assertValidCronUpdatePatch(params: {
     defaultAgentId: params.defaultAgentId,
     cronConfig: params.cfg.cron,
   });
+  if (
+    "agentId" in params.patch ||
+    "sessionTarget" in params.patch ||
+    "sessionKey" in params.patch
+  ) {
+    assertCronDoesNotTargetAgentHarness(nextJob);
+  }
   if ("delivery" in params.patch) {
     const delivery =
       params.patch.delivery?.channel === null &&
@@ -219,6 +176,44 @@ async function assertValidCronUpdatePatch(params: {
   }
 }
 
+function assertCronDoesNotTargetAgentHarness(input: {
+  agentId?: string | null;
+  sessionTarget?: string | null;
+  sessionKey?: string | null;
+}): void {
+  const targetSessionKey =
+    resolveCronSessionTargetSessionKey(input.sessionTarget) ??
+    (input.sessionTarget === "current" ? input.sessionKey?.trim() : undefined);
+  if (!targetSessionKey) {
+    return;
+  }
+
+  const loaded = loadSessionEntry(
+    targetSessionKey,
+    input.agentId?.trim() ? { agentId: input.agentId.trim() } : {},
+  );
+  const reservedKey =
+    isAgentHarnessSessionKey(targetSessionKey) || isAgentHarnessSessionKey(loaded.canonicalKey);
+  if (loaded.entry?.modelSelectionLocked === true) {
+    // Detached cron execution is a generic model path and cannot preserve a
+    // harness-owned runtime lock, even when the durable row uses an ordinary key.
+    throw new Error(
+      reservedKey
+        ? AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE
+        : AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE,
+    );
+  }
+  if (!reservedKey || loaded.entry) {
+    // `harness:*` was historically a valid public key. Preserve an existing
+    // unlocked row while reserving missing keys for trusted harness creation.
+    return;
+  }
+
+  // Cron's detached runner does not carry the owning harness lock. Harness
+  // execution targets must enter through ordinary session dispatch instead.
+  throw new Error(AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE);
+}
+
 function resolveCronJobId(params: CronJobIdParams): string | undefined {
   return params.id ?? params.jobId;
 }
@@ -233,20 +228,6 @@ function respondInvalidCronParams(respond: RespondFn, method: string, reason: st
 
 function respondMissingCronJobId(respond: RespondFn, method: string): void {
   respondInvalidCronParams(respond, method, "missing id");
-}
-
-function cronRunLogPageFilters(params: CronRunsRequestParams) {
-  return {
-    limit: params.limit,
-    offset: params.offset,
-    statuses: params.statuses,
-    status: params.status,
-    runId: params.runId,
-    deliveryStatuses: params.deliveryStatuses,
-    deliveryStatus: params.deliveryStatus,
-    query: params.query,
-    sortDir: params.sortDir,
-  };
 }
 
 /** Gateway request handlers for cron jobs and cron run-log access. */
@@ -276,6 +257,16 @@ export const cronHandlers: GatewayRequestHandlers = {
     };
     const sessionKey = p.sessionKey?.trim() || undefined;
     const agentId = p.agentId?.trim() || undefined;
+    if (sessionKey && isAgentHarnessSessionKey(sessionKey)) {
+      const loaded = loadSessionEntry(sessionKey, agentId ? { agentId } : {});
+      const harnessSessionError = loaded.entry
+        ? resolveAgentHarnessSessionStoreEntryError(loaded.canonicalKey, loaded.entry)
+        : AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE;
+      if (harnessSessionError) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, harnessSessionError));
+        return;
+      }
+    }
     if (sessionKey && isSubagentSessionKey(sessionKey)) {
       // Wake requests resume user-visible sessions only; subagent sessions are
       // internal task execution targets and should not receive operator wakes.
@@ -504,6 +495,12 @@ export const cronHandlers: GatewayRequestHandlers = {
     const callerScope = readCronCallerScope(client);
     const jobCreate = applyCronCreateCallerScopeDefault(candidate as CronJobCreate, callerScope);
     const cfg = context.getRuntimeConfig();
+    try {
+      assertCronDoesNotTargetAgentHarness(jobCreate);
+    } catch (err) {
+      respondInvalidCronParams(respond, "cron.add", formatErrorMessage(err));
+      return;
+    }
     if (
       !cronCreateMatchesCallerScope({
         job: jobCreate,
@@ -813,7 +810,10 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const p = params as CronJobIdParams & { mode?: "due" | "force" };
+    const p = params as CronJobIdParams & {
+      mode?: "due" | "force";
+      expectedProcessInstanceId?: string;
+    };
     const callerScope = readCronCallerScope(client);
     const jobId = resolveCronJobId(p);
     if (!jobId) {
@@ -832,6 +832,13 @@ export const cronHandlers: GatewayRequestHandlers = {
       respondInvalidCronParams(respond, "cron.run", "id not found");
       return;
     }
+    if (
+      p.expectedProcessInstanceId &&
+      p.expectedProcessInstanceId !== getGatewayProcessInstanceId()
+    ) {
+      respondInvalidCronParams(respond, "cron.run", "Gateway process changed after preflight");
+      return;
+    }
     let result: Awaited<ReturnType<typeof context.cron.enqueueRun>>;
     try {
       result = await context.cron.enqueueRun(jobId, p.mode ?? "force");
@@ -846,7 +853,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       }
       throw error;
     }
-    respond(true, result, undefined);
+    respond(true, { ...result, processInstanceId: getGatewayProcessInstanceId() }, undefined);
   },
   "cron.runs": async ({ params, respond, context, client }) => {
     if (!validateCronRunsParams(params)) {
@@ -871,22 +878,31 @@ export const cronHandlers: GatewayRequestHandlers = {
         respondInvalidCronParams(respond, "cron.runs", "scope all is not allowed by caller scope");
         return;
       }
-      const jobs = await context.cron.list({ includeDisabled: true });
+      const jobs = filterCronRunLogJobsByAgent(
+        await context.cron.list({ includeDisabled: true }),
+        p.agentId,
+        context.cron.getDefaultAgentId(),
+      );
       const jobNameById = Object.fromEntries(
         jobs
           .filter((job) => typeof job.id === "string" && typeof job.name === "string")
           .map((job) => [job.id, job.name]),
       );
-      const page = await readCronRunLogEntriesPageAll({
-        storePath: context.cronStorePath,
+      const page = readCronTaskRunHistoryPage({
+        storeKey: cronStoreKey(context.cronStorePath),
         ...cronRunLogPageFilters(p),
+        ...(p.agentId ? { jobIds: jobs.map((job) => job.id) } : {}),
         jobNameById,
       });
       respond(true, page, undefined);
       return;
     }
     try {
-      const jobs = await context.cron.list({ includeDisabled: true });
+      const jobs = filterCronRunLogJobsByAgent(
+        await context.cron.list({ includeDisabled: true }),
+        p.agentId,
+        context.cron.getDefaultAgentId(),
+      );
       const matchedJob = jobs.find(
         (job) =>
           job.id === jobId &&
@@ -896,7 +912,7 @@ export const cronHandlers: GatewayRequestHandlers = {
             defaultAgentId: context.cron.getDefaultAgentId(),
           }),
       );
-      if (callerScope && !matchedJob) {
+      if ((callerScope || p.agentId) && !matchedJob) {
         respondInvalidCronParams(respond, "cron.runs", "id not found");
         return;
       }
@@ -904,15 +920,15 @@ export const cronHandlers: GatewayRequestHandlers = {
         matchedJob && typeof matchedJob.name === "string"
           ? { [jobId as string]: matchedJob.name }
           : undefined;
-      const page = await readCronRunLogEntriesPage({
-        storePath: context.cronStorePath,
+      const page = readCronTaskRunHistoryPage({
+        storeKey: cronStoreKey(context.cronStorePath),
         jobId: jobId as string,
         ...cronRunLogPageFilters(p),
         jobNameById,
       });
       respond(true, page, undefined);
     } catch (err) {
-      if (!isInvalidCronRunLogJobIdError(err)) {
+      if (!isInvalidCronTaskRunJobIdError(err)) {
         throw err;
       }
       respond(
@@ -923,3 +939,4 @@ export const cronHandlers: GatewayRequestHandlers = {
     }
   },
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -7,8 +7,8 @@ import {
 } from "../commands/command-visibility.js";
 import { initCommands } from "../commands/slash-commands-impl.js";
 import { resolveGroupCommandLevelFromAccountConfig } from "../config/group.js";
-import { createNodeSessionStoreReader } from "../group/activation.js";
 import type { HistoryEntry } from "../group/history.js";
+import { claimMessageReply } from "../messaging/outbound-reply.js";
 import { setOutboundAudioPort } from "../messaging/outbound.js";
 import {
   clearTokenCache,
@@ -95,16 +95,11 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
     allowTextCommands: ctx.group?.allowTextCommands,
     isControlCommand: ctx.group?.isControlCommand,
     resolveIntroHint: ctx.group?.resolveIntroHint,
-    sessionStoreReader: ctx.group?.sessionStoreReader,
   };
   const groupChatEnabled = groupOpts.enabled;
   const groupHistories: Map<string, HistoryEntry[]> | undefined = groupChatEnabled
     ? new Map()
     : undefined;
-  const sessionStoreReader = groupChatEnabled
-    ? (groupOpts.sessionStoreReader ?? createNodeSessionStoreReader())
-    : undefined;
-
   // Live config provider: per-inbound lookup so binding edits applied
   // through the CLI take effect without a gateway restart (#69546).
   const activeCfgProvider = createActiveCfgProvider({ fallback: ctx.cfg });
@@ -134,7 +129,6 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
       runtime,
       startTyping: (ev) => startTypingForEvent(ev, account, log),
       groupHistories,
-      sessionStoreReader,
       allowTextCommands: groupOpts.allowTextCommands,
       isControlCommand: groupOpts.isControlCommand,
       resolveGroupIntroHint: groupOpts.resolveIntroHint,
@@ -288,6 +282,13 @@ async function startTypingForEvent(
     const creds = accountToCreds(account);
     const rawNotifyFn = createRawInputNotifyFn(account.appId);
     const sendNotifyAndStartKeepAlive = async () => {
+      // Typing and text share QQ's five passive calls. Keep one slot for the
+      // final reply. The claim stays inside this retried closure so each wire
+      // attempt consumes its own slot.
+      const passive = claimMessageReply(event.messageId, 1);
+      if (!passive.allowed) {
+        return { keepAlive: null };
+      }
       const resp = await senderSendInputNotify({
         openid: event.senderId,
         creds,

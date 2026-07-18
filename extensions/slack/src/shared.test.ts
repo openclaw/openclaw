@@ -1,7 +1,8 @@
 // Slack tests cover shared plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
-import { createSlackPluginBase, setSlackChannelAllowlist, slackConfigAdapter } from "./shared.js";
+import { setSlackChannelAllowlist } from "./setup-shared.js";
+import { createSlackPluginBase, slackConfigAdapter } from "./shared.js";
 
 describe("createSlackPluginBase", () => {
   it("owns Slack native command name overrides", () => {
@@ -60,6 +61,35 @@ describe("setSlackChannelAllowlist", () => {
 });
 
 describe("slackConfigAdapter", () => {
+  it("clears user-identity credentials when deleting the root account", () => {
+    const cfg = {
+      channels: {
+        slack: {
+          identity: "user",
+          mode: "http",
+          userToken: "test-user-token",
+          signingSecret: "test-signing-secret",
+          accounts: {
+            work: {
+              identity: "user",
+              userToken: "test-work-user-token",
+              appToken: "test-work-app-token",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const next = slackConfigAdapter.deleteAccount?.({ cfg, accountId: "default" });
+
+    expect(next?.channels?.slack?.userToken).toBeUndefined();
+    expect(next?.channels?.slack?.signingSecret).toBeUndefined();
+    expect(next?.channels?.slack?.accounts?.work).toMatchObject({
+      userToken: "test-work-user-token",
+      appToken: "test-work-app-token",
+    });
+  });
+
   it("keeps read-only accessors from resolving token SecretRefs", () => {
     const cfg = {
       secrets: {

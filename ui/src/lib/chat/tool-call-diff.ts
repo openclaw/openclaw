@@ -7,7 +7,7 @@
  *    harness does not ship diff details.
  */
 
-export type DiffLineKind = "add" | "del" | "ctx" | "skip";
+export type DiffLineKind = "add" | "del" | "ctx" | "file" | "skip";
 
 export type DiffLine = {
   kind: DiffLineKind;
@@ -49,7 +49,7 @@ export function parseDiffDetailsString(diff: string): DiffLine[] | null {
     if (!raw) {
       continue;
     }
-    const skipMatch = raw.match(/^\s*\.\.\.\s*$/);
+    const skipMatch = raw.match(/^\s*\.\.\.(?:\(truncated\)\.\.\.)?\s*$/);
     if (skipMatch) {
       lines.push({ kind: "skip", text: "" });
       continue;
@@ -60,6 +60,9 @@ export function parseDiffDetailsString(diff: string): DiffLine[] | null {
       return null;
     }
     const [, sign, lineNo, text] = match;
+    if (!sign || !lineNo) {
+      return null;
+    }
     lines.push({
       kind: sign === "+" ? "add" : sign === "-" ? "del" : "ctx",
       lineNo: Number.parseInt(lineNo, 10),
@@ -89,13 +92,65 @@ function splitDiffLines(text: string): string[] {
   return lines;
 }
 
+function compactLineDiff(lines: DiffLine[], inputTruncated: boolean): DiffLine[] {
+  if (lines.length <= MAX_DIFF_RENDER_LINES && !inputTruncated) {
+    return lines;
+  }
+  const hasChange = lines.some((line) => line.kind === "add" || line.kind === "del");
+  if (!hasChange) {
+    return inputTruncated
+      ? [{ kind: "skip", text: "" }]
+      : [...lines.slice(0, MAX_DIFF_RENDER_LINES), { kind: "skip", text: "" }];
+  }
+  const keep = new Uint8Array(lines.length);
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index];
+    if (!line || (line.kind !== "add" && line.kind !== "del")) {
+      continue;
+    }
+    const start = Math.max(0, index - 3);
+    const end = Math.min(lines.length, index + 4);
+    keep.fill(1, start, end);
+  }
+  const preview: DiffLine[] = [];
+  let gap = false;
+  let clipped = inputTruncated;
+  for (let index = 0; index < lines.length; index++) {
+    if (keep[index] === 0) {
+      gap = true;
+      clipped = true;
+      continue;
+    }
+    if (gap && preview.at(-1)?.kind !== "skip") {
+      preview.push({ kind: "skip", text: "" });
+    }
+    gap = false;
+    if (preview.length >= MAX_DIFF_RENDER_LINES) {
+      clipped = true;
+      break;
+    }
+    const line = lines[index];
+    if (line) {
+      preview.push(line);
+    }
+  }
+  if (clipped && preview.at(-1)?.kind !== "skip") {
+    preview.push({ kind: "skip", text: "" });
+  }
+  return preview;
+}
+
 /**
  * Compute a line diff between two snippets (no file line numbers available).
  * Standard LCS table; inputs are bounded so the quadratic cost stays small.
  */
 export function computeLineDiff(oldText: string, newText: string): DiffLine[] {
-  const oldLines = splitDiffLines(oldText).slice(0, MAX_DIFF_INPUT_LINES);
-  const newLines = splitDiffLines(newText).slice(0, MAX_DIFF_INPUT_LINES);
+  const allOldLines = splitDiffLines(oldText);
+  const allNewLines = splitDiffLines(newText);
+  const inputTruncated =
+    allOldLines.length > MAX_DIFF_INPUT_LINES || allNewLines.length > MAX_DIFF_INPUT_LINES;
+  const oldLines = allOldLines.slice(0, MAX_DIFF_INPUT_LINES);
+  const newLines = allNewLines.slice(0, MAX_DIFF_INPUT_LINES);
   const n = oldLines.length;
   const m = newLines.length;
   // lcs[i][j] = LCS length of oldLines[i..] vs newLines[j..]
@@ -103,51 +158,62 @@ export function computeLineDiff(oldText: string, newText: string): DiffLine[] {
     Array.from({ length: m + 1 }, () => 0),
   );
   for (let i = n - 1; i >= 0; i--) {
+    const row = lcs[i];
+    const nextRow = lcs[i + 1];
+    if (!row || !nextRow) {
+      continue;
+    }
     for (let j = m - 1; j >= 0; j--) {
-      lcs[i][j] =
+      row[j] =
         oldLines[i] === newLines[j]
-          ? lcs[i + 1][j + 1] + 1
-          : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
+          ? (nextRow[j + 1] ?? 0) + 1
+          : Math.max(nextRow[j] ?? 0, row[j + 1] ?? 0);
     }
   }
   const lines: DiffLine[] = [];
   let i = 0;
   let j = 0;
   while (i < n && j < m) {
-    if (oldLines[i] === newLines[j]) {
-      lines.push({ kind: "ctx", text: oldLines[i] });
+    const oldLine = oldLines[i];
+    const newLine = newLines[j];
+    if (oldLine === undefined || newLine === undefined) {
+      break;
+    }
+    if (oldLine === newLine) {
+      lines.push({ kind: "ctx", text: oldLine });
       i++;
       j++;
-    } else if (lcs[i + 1][j] >= lcs[i][j + 1]) {
-      lines.push({ kind: "del", text: oldLines[i] });
+    } else if ((lcs[i + 1]?.[j] ?? 0) >= (lcs[i]?.[j + 1] ?? 0)) {
+      lines.push({ kind: "del", text: oldLine });
       i++;
     } else {
-      lines.push({ kind: "add", text: newLines[j] });
+      lines.push({ kind: "add", text: newLine });
       j++;
     }
   }
   while (i < n) {
-    lines.push({ kind: "del", text: oldLines[i] });
+    const line = oldLines[i];
+    if (line !== undefined) {
+      lines.push({ kind: "del", text: line });
+    }
     i++;
   }
   while (j < m) {
-    lines.push({ kind: "add", text: newLines[j] });
+    const line = newLines[j];
+    if (line !== undefined) {
+      lines.push({ kind: "add", text: line });
+    }
     j++;
   }
-  if (lines.length > MAX_DIFF_RENDER_LINES) {
-    const kept = lines.slice(0, MAX_DIFF_RENDER_LINES);
-    kept.push({ kind: "skip", text: "" });
-    return kept;
-  }
-  return lines;
+  return compactLineDiff(lines, inputTruncated);
 }
 
 /** All-added preview for freshly written files, numbered from line 1. */
 export function buildWriteDiffLines(content: string, maxLines = 80): DiffLine[] {
   const sourceLines = splitDiffLines(content);
   const lines: DiffLine[] = [];
-  for (let index = 0; index < sourceLines.length && index < maxLines; index++) {
-    lines.push({ kind: "add", lineNo: index + 1, text: sourceLines[index] });
+  for (const [index, text] of sourceLines.slice(0, maxLines).entries()) {
+    lines.push({ kind: "add", lineNo: index + 1, text });
   }
   if (sourceLines.length > maxLines) {
     lines.push({ kind: "skip", text: "" });
@@ -163,16 +229,34 @@ export function countTextLines(content: string): number {
  * Concatenate per-edit diffs with skip separators, e.g. for multi-edit calls
  * where each `edits[i]` produced its own local diff.
  */
-export function joinDiffSections(sections: ReadonlyArray<DiffLine[]>): DiffLine[] {
+export function joinDiffSections(
+  sections: ReadonlyArray<DiffLine[]>,
+  options?: { truncated?: boolean; maxLines?: number },
+): DiffLine[] {
+  const maxLines = options?.maxLines ?? MAX_DIFF_RENDER_LINES;
   const joined: DiffLine[] = [];
+  let truncated = options?.truncated === true;
   for (const section of sections) {
     if (section.length === 0) {
       continue;
     }
     if (joined.length > 0) {
+      if (joined.length >= maxLines) {
+        truncated = true;
+        break;
+      }
       joined.push({ kind: "skip", text: "" });
     }
+    const remaining = maxLines - joined.length;
+    if (section.length > remaining) {
+      joined.push(...section.slice(0, remaining));
+      truncated = true;
+      break;
+    }
     joined.push(...section);
+  }
+  if (truncated && joined.at(-1)?.kind !== "skip") {
+    joined.push({ kind: "skip", text: "" });
   }
   return joined;
 }

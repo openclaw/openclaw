@@ -121,10 +121,15 @@ describe("agents tools panel (browser)", () => {
     await Promise.resolve();
 
     expect(
-      Array.from(container.querySelectorAll(".agent-tools-pane > .label")).map((label) =>
-        label.textContent?.trim(),
+      Array.from(container.querySelectorAll(".settings-section__heading")).map((heading) =>
+        heading.textContent?.trim(),
       ),
-    ).toEqual(["Available Right Now", "Quick Presets"]);
+    ).toEqual(["Tool Access", "Available Right Now", "Tool Catalog"]);
+    expect(
+      Array.from(container.querySelectorAll(".settings-row__title")).some(
+        (title) => title.textContent?.trim() === "Quick Presets",
+      ),
+    ).toBe(true);
     const runtimeChips = Array.from(container.querySelectorAll(".agent-tools-runtime-chip")).map(
       (chip) => ({
         label: chip.querySelector(".mono")?.textContent?.trim(),
@@ -136,16 +141,16 @@ describe("agents tools panel (browser)", () => {
       { label: "Probe Tool", meta: "MCP" },
     ]);
     expect(
-      Array.from(container.querySelectorAll(".agent-tools-group__title > .agent-pill")).map(
-        (pill) => pill.textContent?.trim(),
-      ),
+      Array.from(
+        container.querySelectorAll(".agent-tools-group__title > .settings-row__value"),
+      ).map((pill) => pill.textContent?.trim()),
     ).toEqual(["Plugin: voice-call"]);
     expect(
       Array.from(container.querySelectorAll(".agent-tool-card")).map((card) => ({
         title: card.querySelector(".agent-tool-title")?.textContent?.trim(),
-        badges: Array.from(card.querySelectorAll(".agent-tool-summary__badges .agent-pill")).map(
-          (pill) => pill.textContent?.trim(),
-        ),
+        badges: Array.from(
+          card.querySelectorAll(".agent-tool-summary__badges .settings-row__value"),
+        ).map((pill) => pill.textContent?.trim()),
       })),
     ).toEqual([
       { title: "tts", badges: ["Built-In"] },
@@ -285,7 +290,7 @@ describe("agents tools panel (browser)", () => {
 
     const tool = container.querySelector<HTMLDetailsElement>(".agent-tool-card");
     const summary = container.querySelector<HTMLElement>(".agent-tool-summary");
-    const toggle = container.querySelector<HTMLInputElement>(".agent-tool-toggle input");
+    const toggle = container.querySelector(".agent-tool-toggle wa-switch");
 
     expect(tool?.open).toBe(false);
     expect(toggle?.closest(".agent-tool-summary")).toBe(summary);

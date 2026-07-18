@@ -208,6 +208,11 @@ function createLegacyStateMigrationDetectionResult(params?: {
     targetScope: undefined,
     stateDir: "/tmp/state",
     oauthDir: "/tmp/oauth",
+    mcpOauth: {
+      sourceDir: "/tmp/state/mcp-oauth",
+      sourcePaths: [],
+      hasLegacy: false,
+    },
     sessions: {
       legacyDir: "/tmp/state/sessions",
       legacyStorePath: "/tmp/state/sessions/sessions.json",
@@ -276,9 +281,53 @@ function createLegacyStateMigrationDetectionResult(params?: {
       sourcePath: "/tmp/state/bindings/current-conversations.json",
       hasLegacy: false,
     },
-    execApprovals: {
-      sourcePath: "/tmp/state/exec-approvals.legacy.json",
-      targetPath: "/tmp/state/exec-approvals.json",
+    tuiLastSessions: {
+      sourcePath: "/tmp/state/tui/last-session.json",
+      hasLegacy: false,
+    },
+    commitments: {
+      sourcePath: "/tmp/state/commitments/commitments.json",
+      hasLegacy: false,
+    },
+    acpReplayLedger: {
+      sourcePath: "/tmp/state/acp/event-ledger.json",
+      hasLegacy: false,
+    },
+    managedOutgoingImages: {
+      sourceDir: "/tmp/state/media/outgoing/records",
+      hasLegacy: false,
+    },
+    apns: {
+      sourcePath: "/tmp/state/push/apns-registrations.json",
+      hasLegacy: false,
+    },
+    workspace: {
+      sources: [],
+      hasLegacy: false,
+    },
+    webPush: {
+      subscriptionsPath: "/tmp/state/push/web-push-subscriptions.json",
+      vapidKeysPath: "/tmp/state/push/vapid-keys.json",
+      hasLegacy: false,
+    },
+    nodeHost: {
+      sourcePath: "/tmp/state/node.json",
+      hasLegacy: false,
+    },
+    subagentRegistry: {
+      sourcePath: "/tmp/state/subagents/runs.json",
+      hasLegacy: false,
+    },
+    rescuePending: {
+      sourcePaths: ["/tmp/state/crestodian/rescue-pending", "/tmp/state/openclaw/rescue-pending"],
+      hasLegacy: false,
+    },
+    channelPairing: {
+      sourceDir: "/tmp/oauth",
+      files: [],
+      knownChannelIds: [],
+      defaultAccountIds: {},
+      accountIds: {},
       hasLegacy: false,
     },
     channelPlans: {
@@ -421,10 +470,13 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   }),
 }));
 
-vi.mock("../infra/openclaw-root.js", () => ({
-  resolveOpenClawPackageRoot,
-  resolveOpenClawPackageRootSync: vi.fn(() => "/tmp/openclaw"),
-}));
+vi.mock("../infra/openclaw-root.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/openclaw-root.js")>();
+  return {
+    ...actual,
+    resolveOpenClawPackageRoot,
+  };
+});
 
 vi.mock("../infra/update-runner.js", () => ({
   runGatewayUpdate,

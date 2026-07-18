@@ -6,9 +6,11 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { resolveGatewayPort } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { formatErrorMessage, hasErrnoCode } from "./errors.js";
 import { isGatewayArgv, parseProcCmdline } from "./gateway-process-argv.js";
 import { parseStrictPositiveInteger } from "./parse-finite-number.js";
 import { resolveLsofCommandSync } from "./ports-lsof.js";
+import { spawnPsSync } from "./spawn-ps.js";
 import { getWindowsInstallRoots } from "./windows-install-roots.js";
 import {
   readWindowsListeningPidsOnPortSync,
@@ -47,9 +49,9 @@ const POLL_SPAWN_TIMEOUT_MS = 400;
 const MAX_ANCESTOR_WALK_DEPTH = 32;
 
 const restartLog = createSubsystemLogger("restart");
-let sleepSyncOverride: ((ms: number) => void) | null = null;
-let dateNowOverride: (() => number) | null = null;
-let parentPidOverride: (() => number) | null = null;
+const sleepSyncOverride: ((ms: number) => void) | null = null;
+const dateNowOverride: (() => number) | null = null;
+const parentPidOverride: (() => number) | null = null;
 
 function getTimeMs(): number {
   return dateNowOverride ? dateNowOverride() : Date.now();
@@ -109,10 +111,7 @@ function readParentPidFromProc(pid: number): number | null {
 
 function readParentPidFromPs(pid: number, spawnTimeoutMs: number): number | null {
   try {
-    const res = spawnSync("ps", ["-o", "ppid=", "-p", String(pid)], {
-      encoding: "utf8",
-      timeout: spawnTimeoutMs,
-    });
+    const res = spawnPsSync(["-o", "ppid=", "-p", String(pid)], spawnTimeoutMs);
     if (res.error || res.status !== 0 || !res.stdout.trim()) {
       return null;
     }
@@ -251,10 +250,7 @@ function readUnixProcessArgsSync(pid: number, spawnTimeoutMs: number): string[] 
       // Fall back to ps below; /proc may be unavailable or restricted.
     }
   }
-  const res = spawnSync("ps", ["-ww", "-p", String(pid), "-o", "command="], {
-    encoding: "utf8",
-    timeout: spawnTimeoutMs,
-  });
+  const res = spawnPsSync(["-ww", "-p", String(pid), "-o", "command="], spawnTimeoutMs);
   if (res.error || res.status !== 0 || !res.stdout.trim()) {
     return null;
   }
@@ -494,11 +490,8 @@ function terminateStaleProcessesSync(pids: number[]): number[] {
   }
   const killed: number[] = [];
   for (const pid of pids) {
-    try {
-      process.kill(pid, "SIGTERM");
+    if (trySignalStaleProcess(pid, "SIGTERM")) {
       killed.push(pid);
-    } catch {
-      // ESRCH — already gone
     }
   }
   if (killed.length === 0) {
@@ -506,15 +499,26 @@ function terminateStaleProcessesSync(pids: number[]): number[] {
   }
   sleepSync(STALE_SIGTERM_WAIT_MS);
   for (const pid of killed) {
-    try {
-      process.kill(pid, 0);
-      process.kill(pid, "SIGKILL");
-    } catch {
-      // already gone
+    if (isProcessAlive(pid)) {
+      trySignalStaleProcess(pid, "SIGKILL");
     }
   }
   sleepSync(STALE_SIGKILL_WAIT_MS);
   return killed;
+}
+
+function trySignalStaleProcess(pid: number, signal: NodeJS.Signals): boolean {
+  try {
+    process.kill(pid, signal);
+    return true;
+  } catch (error) {
+    if (!hasErrnoCode(error, "ESRCH")) {
+      restartLog.warn(
+        `failed to send ${signal} to stale gateway process ${pid}: ${formatErrorMessage(error)}`,
+      );
+    }
+    return false;
+  }
 }
 
 /**
@@ -656,18 +660,3 @@ export function cleanStaleGatewayProcessesSync(
     return [];
   }
 }
-
-export const testing = {
-  setSleepSyncOverride(fn: ((ms: number) => void) | null) {
-    sleepSyncOverride = fn;
-  },
-  setDateNowOverride(fn: (() => number) | null) {
-    dateNowOverride = fn;
-  },
-  setParentPidOverride(fn: (() => number) | null) {
-    parentPidOverride = fn;
-  },
-  /** Invoke sleepSync directly (bypasses the override) for unit-testing the real Atomics path. */
-  callSleepSyncRaw: sleepSync,
-};
-export { testing as __testing };

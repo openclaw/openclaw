@@ -12,9 +12,7 @@ public enum OpenClawChatOutboxMessageState: Equatable, Sendable {
     case failed(reason: String?)
 
     public var isFailed: Bool {
-        if case .failed = self {
-            return true
-        }
+        if case .failed = self { return true }
         return false
     }
 
@@ -141,33 +139,35 @@ extension OpenClawChatViewModel {
     /// Durable capture path used before text or attachment delivery: persist
     /// first, then render the queued bubble. A full queue refuses the enqueue
     /// and keeps the exact draft intact.
+    @discardableResult
     func enqueueOutboxCommand(
         text: String,
         draftInput: String,
+        draftRevision: UInt64,
         draftAttachments: [OpenClawPendingAttachment] = [],
-        session: SessionSnapshot) async
+        session: SessionSnapshot) async -> Bool
     {
-        guard let outbox else { return }
+        guard let outbox else { return false }
         let agentID = self.outboxAgentID(for: session)
         if self.outboxRequiresAgentID(for: session), agentID == nil {
             self.errorText = "Select an agent before queueing this message."
-            return
+            return false
         }
         guard
             let deliverySessionKey = self.outboxDeliverySessionKey(for: session, agentID: agentID),
             let routingContract = self.outboxRoutingContract(for: session)
         else {
             self.errorText = "Reconnect to verify this message's delivery target before queueing."
-            return
+            return false
         }
         // Capture the effective value only after model selection settles. Raw
         // preferences can outlive this process, when model metadata is absent.
-        await self.waitForPendingModelPatches(
+        await self.waitForPendingSessionSettings(
             in: session.key,
             canonicalSessionKey: deliverySessionKey,
             agentID: agentID,
             sessionRoutingContract: routingContract)
-        guard self.isCurrentSession(session) else { return }
+        guard self.isCurrentSession(session) else { return false }
         let thinking = self.effectiveThinkingLevelForSend(
             self.preferredThinkingLevel,
             sessionKey: session.key,
@@ -195,12 +195,19 @@ extension OpenClawChatViewModel {
             retryCount: 0,
             lastError: nil)
         let accepted = await outbox.enqueueCommand(command)
-        guard self.isCurrentSession(session) else { return }
         guard accepted else {
-            self.errorText = "Offline queue is full. Delete a queued message or reconnect to send."
-            return
+            if self.isCurrentSession(session) {
+                self.errorText = "Offline queue is full. Delete a queued message or reconnect to send."
+            }
+            return false
         }
-        if self.input == draftInput {
+        // Acceptance is durable even if the user switched sessions during the
+        // await. The caller must still retire that session's draft/history.
+        // Bubble render and flush scheduling stay with the displayed session
+        // (shipped behavior predating this path); the stored command delivers
+        // on the next flush trigger, e.g. returning here or a health event.
+        guard self.isCurrentSession(session) else { return true }
+        if self.input == draftInput, self.composerRevision(for: session.key) == draftRevision {
             self.input = ""
         }
         let capturedAttachmentIDs = Set(draftAttachments.map(\.id))
@@ -212,6 +219,7 @@ extension OpenClawChatViewModel {
         if self.healthOK {
             self.flushOutboxIfNeeded()
         }
+        return true
     }
 
     /// Durable path for a failed live text send. Known pre-dispatch route
@@ -379,9 +387,7 @@ extension OpenClawChatViewModel {
         guard !commands.isEmpty else { return }
         var next = self.messages
         for command in commands.sorted(by: { $0.createdAt < $1.createdAt }) {
-            if self.cancelingOutboxCommandIDs.contains(command.id) {
-                continue
-            }
+            if self.cancelingOutboxCommandIDs.contains(command.id) { continue }
             let key = Self.outboxUserIdempotencyKey(command.id)
             if let existing = next.first(where: { $0.idempotencyKey == key }) {
                 self.mapOutboxCommand(command, to: existing.id)
@@ -452,14 +458,10 @@ extension OpenClawChatViewModel {
         self.lastHealthPollAt = Date()
         do {
             let ok = try await self.transport.requestHealth(timeoutMs: 5000)
-            if let sessionSnapshot, !self.isCurrentSession(sessionSnapshot) {
-                return
-            }
+            if let sessionSnapshot, !self.isCurrentSession(sessionSnapshot) { return }
             self.applyTransportHealth(ok, refreshSessionsOnReconnect: refreshSessionsOnReconnect)
         } catch {
-            if let sessionSnapshot, !self.isCurrentSession(sessionSnapshot) {
-                return
-            }
+            if let sessionSnapshot, !self.isCurrentSession(sessionSnapshot) { return }
             self.applyTransportHealth(false)
         }
     }
@@ -566,9 +568,9 @@ extension OpenClawChatViewModel {
                 continue
             }
             // Same ordering contract as the live send path: a run must not
-            // start on a stale model while a sessions.patch(model) for its
-            // session is still in flight.
-            await self.waitForPendingModelPatches(
+            // start with stale model or thinking state while a settings patch
+            // for its session is still in flight.
+            await self.waitForPendingSessionSettings(
                 in: next.sessionKey,
                 canonicalSessionKey: next.deliverySessionKey,
                 agentID: next.agentID,
@@ -882,17 +884,11 @@ extension OpenClawChatViewModel {
         let raw = session.key.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !raw.isEmpty else { return nil }
         guard self.transport.outboxRequiresSessionRoutingContract else { return raw }
-        if raw.lowercased() == "unknown" {
-            return raw
-        }
+        if raw.lowercased() == "unknown" { return raw }
         guard let agentID else { return nil }
         let normalized = raw.lowercased()
-        if normalized == "global" {
-            return "global"
-        }
-        if Self.agentID(fromSessionKey: raw) != nil {
-            return raw
-        }
+        if normalized == "global" { return "global" }
+        if OpenClawChatSessionKey.agentID(from: raw) != nil { return raw }
         // A malformed ownership prefix must fail closed, not become a nested
         // key such as agent:<id>:agent::main.
         guard !normalized.hasPrefix("agent:") else { return nil }
@@ -908,9 +904,7 @@ extension OpenClawChatViewModel {
         guard command.sessionKey == session.key else { return false }
         // Failed rows never auto-send. Keep them reachable on their original
         // presentation alias after an owner change for explicit retry/delete.
-        if command.status == .failed {
-            return true
-        }
+        if command.status == .failed { return true }
         // Migrated v2 aliases have no owner and are parked as failed. Show
         // them so explicit retry can adopt the currently selected agent.
         guard let commandAgentID = command.agentID else { return true }

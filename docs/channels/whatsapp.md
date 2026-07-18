@@ -228,6 +228,10 @@ WhatsApp can render exec and plugin approval prompts as `👍`/`👎` reactions,
 
 WhatsApp approval reactions require explicit approvers in `allowFrom` (or `"*"`). `defaultTo` sets ordinary default message targets, not an approver list. Manual `/approve` commands still pass the normal WhatsApp sender-authorization path before approval resolution.
 
+## Question reactions
+
+For an `ask_user` prompt with one non-secret, single-select question and one to four options, WhatsApp shows `1️⃣` through `4️⃣` beside the option labels. React to the delivered prompt with the matching number to answer it. OpenClaw maps the number to the canonical option through the Gateway; stale or duplicate taps are ignored. Multi-question, multi-select, and free-text prompts remain text-reply-only. Normal WhatsApp DM/group admission rules authorize the reacting sender.
+
 ## Plugin hooks and privacy
 
 Inbound WhatsApp messages can carry personal content, phone numbers, group identifiers, sender names, and session correlation fields. WhatsApp does not broadcast inbound `message_received` hook payloads to plugins unless you opt in:
@@ -391,7 +395,7 @@ When the linked self number is also present in `allowFrom`, self-chat safeguards
 <AccordionGroup>
   <Accordion title="Text chunking">
     - default chunk limit: `channels.whatsapp.textChunkLimit = 4000`
-    - `channels.whatsapp.chunkMode = "length" | "newline"`; `newline` prefers paragraph boundaries (blank lines), then falls back to length-safe chunking
+    - `channels.whatsapp.streaming.chunkMode = "length" | "newline"`; `newline` prefers paragraph boundaries (blank lines), then falls back to length-safe chunking
 
   </Accordion>
 
@@ -598,7 +602,7 @@ openclaw channels status
   </Accordion>
 
   <Accordion title="Bun runtime warning">
-    WhatsApp gateway runtime should use Node. Bun is flagged as incompatible for stable WhatsApp/Telegram gateway operation.
+    OpenClaw gateways require Node. Bun does not provide the `node:sqlite` API used by the canonical state store, and doctor migrates legacy Bun services to Node.
   </Accordion>
 </AccordionGroup>
 
@@ -677,7 +681,7 @@ Primary reference: [Configuration reference - WhatsApp](/gateway/config-channels
 | Area             | Fields                                                                                                         |
 | ---------------- | -------------------------------------------------------------------------------------------------------------- |
 | Access           | `dmPolicy`, `allowFrom`, `groupPolicy`, `groupAllowFrom`, `groups`                                             |
-| Delivery         | `textChunkLimit`, `chunkMode`, `mediaMaxMb`, `sendReadReceipts`, `ackReaction`, `reactionLevel`                |
+| Delivery         | `textChunkLimit`, `streaming.chunkMode`, `mediaMaxMb`, `sendReadReceipts`, `ackReaction`, `reactionLevel`      |
 | Multi-account    | `accounts.<id>.enabled`, `accounts.<id>.authDir`, and other per-account overrides                              |
 | Operations       | `configWrites`, `debounceMs`, `web.enabled`, `web.heartbeatSeconds`, `web.reconnect.*`, `web.whatsapp.*`       |
 | Session behavior | `session.dmScope`, `historyLimit`, `dmHistoryLimit`, `dms.<id>.historyLimit`                                   |

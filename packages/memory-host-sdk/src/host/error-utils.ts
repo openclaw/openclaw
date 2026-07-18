@@ -1,4 +1,5 @@
 // Memory Host SDK helper module supports error utils behavior.
+import { formatErrorMessage as formatSharedErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 
 const SECRET_PATTERNS: RegExp[] = [
@@ -45,7 +46,14 @@ function redactMatch(match: string, groups: string[]): string {
   }
   const token = groups.findLast((value) => typeof value === "string" && value.length > 0) ?? match;
   const masked = maskToken(token);
-  return token === match ? masked : match.replace(token, masked);
+  if (token === match) {
+    return masked;
+  }
+  const tokenOffset = match.lastIndexOf(token);
+  if (tokenOffset < 0) {
+    return "***";
+  }
+  return `${match.slice(0, tokenOffset)}${masked}${match.slice(tokenOffset + token.length)}`;
 }
 
 function redactSensitiveText(text: string): string {
@@ -58,37 +66,7 @@ function redactSensitiveText(text: string): string {
   return next;
 }
 
-/** Format unknown errors with causes while redacting likely secrets. */
+/** Format memory-host errors through the canonical formatter and local redaction policy. */
 export function formatErrorMessage(err: unknown): string {
-  let formatted: string;
-  if (err instanceof Error) {
-    formatted = err.message || err.name || "Error";
-    let cause: unknown = err.cause;
-    const seen = new Set<unknown>([err]);
-    while (cause && !seen.has(cause)) {
-      seen.add(cause);
-      if (cause instanceof Error) {
-        if (cause.message) {
-          formatted += ` | ${cause.message}`;
-        }
-        cause = cause.cause;
-      } else if (typeof cause === "string") {
-        formatted += ` | ${cause}`;
-        break;
-      } else {
-        break;
-      }
-    }
-  } else if (typeof err === "string") {
-    formatted = err;
-  } else if (typeof err === "number" || typeof err === "boolean" || typeof err === "bigint") {
-    formatted = String(err);
-  } else {
-    try {
-      formatted = JSON.stringify(err);
-    } catch {
-      formatted = Object.prototype.toString.call(err);
-    }
-  }
-  return redactSensitiveText(formatted);
+  return formatSharedErrorMessage(err, { redact: redactSensitiveText });
 }

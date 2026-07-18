@@ -60,6 +60,9 @@ const CODEX_HARNESS_GUARDIAN_PROBE = isTruthyEnvValue(
 const CODEX_HARNESS_CODE_MODE_ONLY = isTruthyEnvValue(
   process.env.OPENCLAW_LIVE_CODEX_HARNESS_CODE_MODE_ONLY,
 );
+const CODEX_HARNESS_DISABLE_LOOP_RELAY = isTruthyEnvValue(
+  process.env.OPENCLAW_LIVE_CODEX_HARNESS_DISABLE_LOOP_RELAY,
+);
 const CODEX_HARNESS_SUBAGENT_ONLY =
   CODEX_HARNESS_SUBAGENT_PROBE &&
   !CODEX_HARNESS_CHAT_IMAGE_PROBE &&
@@ -69,6 +72,21 @@ const CODEX_HARNESS_SUBAGENT_ONLY =
   process.env.OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_ONLY !== "0";
 const CODEX_HARNESS_REQUIRE_GUARDIAN_EVENTS = isTruthyEnvValue(
   process.env.OPENCLAW_LIVE_CODEX_HARNESS_REQUIRE_GUARDIAN_EVENTS,
+);
+const CODEX_HARNESS_RESUME_STRESS = isTruthyEnvValue(
+  process.env.OPENCLAW_LIVE_CODEX_HARNESS_RESUME_STRESS,
+);
+const CODEX_HARNESS_RESUME_STRESS_HISTORY_TURNS = resolveBoundedPositiveIntEnv(
+  "OPENCLAW_LIVE_CODEX_HARNESS_RESUME_STRESS_HISTORY_TURNS",
+  process.env.OPENCLAW_LIVE_CODEX_HARNESS_RESUME_STRESS_HISTORY_TURNS,
+  4,
+  20,
+);
+const CODEX_HARNESS_RESUME_STRESS_RESTARTS = resolveBoundedPositiveIntEnv(
+  "OPENCLAW_LIVE_CODEX_HARNESS_RESUME_STRESS_RESTARTS",
+  process.env.OPENCLAW_LIVE_CODEX_HARNESS_RESUME_STRESS_RESTARTS,
+  3,
+  10,
 );
 const CODEX_HARNESS_REQUEST_TIMEOUT_MS = resolveLiveTimeoutMs(
   process.env.OPENCLAW_LIVE_CODEX_HARNESS_REQUEST_TIMEOUT_MS,
@@ -85,15 +103,35 @@ const CODEX_HARNESS_THINKING = resolveCodexHarnessThinkingLevel(
 );
 const describeLive = LIVE && CODEX_HARNESS_LIVE ? describe : describe.skip;
 const describeDisabled = LIVE && !CODEX_HARNESS_LIVE ? describe : describe.skip;
-const CODEX_HARNESS_TIMEOUT_MS = 900_000;
-const DEFAULT_CODEX_MODEL = "codex/gpt-5.5";
+const CODEX_HARNESS_TIMEOUT_MS = CODEX_HARNESS_RESUME_STRESS ? 1_800_000 : 900_000;
+const DEFAULT_CODEX_MODEL = "openai/gpt-5.6-luna";
 const GATEWAY_CONNECT_TIMEOUT_MS = 60_000;
+const CODEX_HARNESS_REASONING_EFFORTS = [
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+  "ultra",
+] as const;
+const CODEX_HARNESS_SUPPORTED_EFFORTS = new Map<string, readonly string[]>([
+  ["gpt-5.6-sol", ["low", "medium", "high", "xhigh", "max", "ultra"]],
+  ["gpt-5.6-terra", ["low", "medium", "high", "xhigh", "max", "ultra"]],
+  ["gpt-5.6-luna", ["low", "medium", "high", "xhigh", "max"]],
+  ["gpt-5.5", ["low", "medium", "high", "xhigh"]],
+  ["gpt-5.4", ["low", "medium", "high", "xhigh"]],
+  ["gpt-5.4-mini", ["low", "medium", "high", "xhigh"]],
+  ["gpt-5.2", ["low", "medium", "high", "xhigh"]],
+]);
 
 type CapturedAgentEvent = {
   stream: string;
   data?: Record<string, unknown>;
   sessionKey?: string;
 };
+
+const observedCodexThreadIds = new Map<string, string>();
 
 type GuardianPluginApprovalDecision = "allow-once" | "deny";
 type CodexHarnessThinkingLevel =
@@ -111,12 +149,63 @@ function resolveLiveTimeoutMs(raw: string | undefined, fallback: number): number
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
 }
 
+function resolveBoundedPositiveIntEnv(
+  name: string,
+  raw: string | undefined,
+  fallback: number,
+  max: number,
+): number {
+  if (raw === undefined || raw.trim() === "") {
+    return fallback;
+  }
+  if (!/^\d+$/u.test(raw)) {
+    throw new Error(`invalid ${name}: ${raw}`);
+  }
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > max) {
+    throw new Error(`${name} must be between 1 and ${max}`);
+  }
+  return parsed;
+}
+
 function resolveCodexHarnessThinkingLevel(raw: string | undefined): CodexHarnessThinkingLevel {
   const normalized = raw?.trim().toLowerCase() || "low";
   if (!["off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"].includes(normalized)) {
     throw new Error(`invalid OPENCLAW_LIVE_CODEX_HARNESS_THINKING: ${raw}`);
   }
   return normalized as CodexHarnessThinkingLevel;
+}
+
+function resolveCodexHarnessExpectedEffort(modelId: string): string | null {
+  const configured = process.env.OPENCLAW_LIVE_CODEX_HARNESS_EXPECTED_EFFORT;
+  if (configured?.trim()) {
+    const expected = resolveCodexHarnessThinkingLevel(configured);
+    return expected === "off" ? null : expected;
+  }
+  const supported = CODEX_HARNESS_SUPPORTED_EFFORTS.get(modelId);
+  if (!supported) {
+    throw new Error(`set OPENCLAW_LIVE_CODEX_HARNESS_EXPECTED_EFFORT for unknown model ${modelId}`);
+  }
+  if (CODEX_HARNESS_THINKING === "off") {
+    return null;
+  }
+  // Independent oracle for the pinned Codex model catalog. Lower requested
+  // levels choose the nearest advertised effort; Ultra remains explicit.
+  const candidates =
+    CODEX_HARNESS_THINKING === "ultra"
+      ? supported
+      : supported.filter((effort) => effort !== "ultra");
+  const requestedRank = CODEX_HARNESS_REASONING_EFFORTS.indexOf(CODEX_HARNESS_THINKING);
+  return (
+    candidates.find(
+      (effort) =>
+        CODEX_HARNESS_REASONING_EFFORTS.indexOf(
+          effort as (typeof CODEX_HARNESS_REASONING_EFFORTS)[number],
+        ) >= requestedRank,
+    ) ??
+    candidates.at(-1) ??
+    null
+  );
 }
 
 function logCodexLiveStep(step: string, details?: Record<string, unknown>): void {
@@ -248,6 +337,37 @@ async function assertCodexHarnessSessionSelection(params: {
   expect(row?.thinkingLevel).toBe(CODEX_HARNESS_THINKING);
 }
 
+async function readCodexHarnessSessionUsageFreshness(params: {
+  client: GatewayClient;
+  sessionKey: string;
+}): Promise<boolean> {
+  const result: {
+    sessions?: Array<{
+      key?: string;
+      inputTokens?: number;
+      outputTokens?: number;
+      cacheRead?: number;
+      cacheWrite?: number;
+      totalTokens?: number;
+      totalTokensFresh?: boolean;
+    }>;
+  } = await params.client.request("sessions.list", {
+    includeGlobal: true,
+    limit: 200,
+  });
+  const row = result.sessions?.find((entry) => entry.key === params.sessionKey);
+  expect(row, `expected sessions.list row for ${params.sessionKey}`).toBeDefined();
+  const fresh = row?.totalTokensFresh === true;
+  if (fresh) {
+    expect(row?.totalTokens).toBeTypeOf("number");
+    expect(row?.totalTokens).toBeGreaterThan(0);
+  } else {
+    expect(row?.totalTokensFresh).toBe(false);
+  }
+  logCodexLiveStep("session-usage", row);
+  return fresh;
+}
+
 async function assertCodexHarnessTranscriptModelIdentity(params: {
   client: GatewayClient;
   modelKey: string;
@@ -272,6 +392,7 @@ async function assertCodexHarnessTranscriptModelIdentity(params: {
 async function writeLiveGatewayConfig(params: {
   codexAppServerMode?: "guardian" | "yolo";
   codeModeOnly?: boolean;
+  loopDetectionPreToolUseRelay?: boolean;
   configPath: string;
   modelKey: string;
   port: number;
@@ -294,6 +415,9 @@ async function writeLiveGatewayConfig(params: {
             appServer: {
               mode: params.codexAppServerMode ?? "yolo",
               ...(params.codeModeOnly === true ? { codeModeOnly: true } : {}),
+              ...(params.loopDetectionPreToolUseRelay === false
+                ? { loopDetectionPreToolUseRelay: false }
+                : {}),
             },
           },
         },
@@ -399,11 +523,22 @@ async function requestAgentText(params: {
   const expectedModel = parseModelKey(
     process.env.OPENCLAW_LIVE_CODEX_HARNESS_MODEL ?? DEFAULT_CODEX_MODEL,
   ).modelId;
-  expect(turnStarting?.data).toMatchObject({
-    model: expectedModel,
-    effort: CODEX_HARNESS_THINKING,
-    collaborationEffort: CODEX_HARNESS_THINKING,
-  });
+  expect(turnStarting?.data).toMatchObject({ model: expectedModel });
+  const actualEffort = turnStarting?.data?.effort;
+  const actualCollaborationEffort = turnStarting?.data?.collaborationEffort;
+  const expectedEffort = resolveCodexHarnessExpectedEffort(expectedModel);
+  expect(actualEffort ?? null).toBe(expectedEffort);
+  expect(actualCollaborationEffort ?? null).toBe(actualEffort ?? null);
+  const threadReady = events.find(
+    (event) =>
+      event.stream === "codex_app_server.lifecycle" && event.data?.phase === "thread_ready",
+  );
+  const threadId = threadReady?.data?.threadId;
+  expect(
+    typeof threadId === "string" && threadId.trim().length > 0,
+    `expected Codex thread_ready identity for ${params.sessionKey}; events=${JSON.stringify(events)}`,
+  ).toBe(true);
+  observedCodexThreadIds.set(params.sessionKey, threadId as string);
   return text;
 }
 
@@ -512,7 +647,7 @@ async function waitForChatAgentRunOk(client: GatewayClient, runId: string): Prom
     },
   );
   if (result?.status !== "ok") {
-    throw new Error(`agent.wait failed for ${runId}: status=${String(result?.status)}`);
+    throw new Error(`agent.wait failed for ${runId}: ${JSON.stringify(result)}`);
   }
 }
 
@@ -913,6 +1048,7 @@ async function verifyCodexCronMcpProbe(params: {
     expectedName: cronProbe.name,
     expectedMessage: cronProbe.message,
     expectedSessionKey: params.sessionKey,
+    expectedSessionTarget: "current",
   });
   if (createdJob.id) {
     await runOpenClawCliJson(
@@ -980,7 +1116,7 @@ async function verifyCodexSubagentProbe(params: {
   });
   try {
     const { testing: subagentSpawnTesting, spawnSubagentDirect } =
-      await import("../agents/subagent-spawn.js");
+      await import("../agents/subagent-spawn.test-support.js");
     const noOpContextEngine: ContextEngine = {
       info: { id: "codex-harness-subagent-smoke", name: "Codex harness subagent smoke" },
       ingest: async () => ({ ingested: false }),
@@ -1054,7 +1190,8 @@ async function verifyCodexSubagentProbe(params: {
       events,
     });
   } finally {
-    const { testing: subagentSpawnTesting } = await import("../agents/subagent-spawn.js");
+    const { testing: subagentSpawnTesting } =
+      await import("../agents/subagent-spawn.test-support.js");
     subagentSpawnTesting.setDepsForTest();
     unsubscribe();
   }
@@ -1169,6 +1306,7 @@ describeLive("gateway live (Codex harness)", () => {
         workspace,
         codexAppServerMode: CODEX_HARNESS_GUARDIAN_PROBE ? "guardian" : "yolo",
         codeModeOnly: CODEX_HARNESS_CODE_MODE_ONLY,
+        ...(CODEX_HARNESS_DISABLE_LOOP_RELAY ? { loopDetectionPreToolUseRelay: false } : {}),
       });
       const deviceIdentity = await ensurePairedTestGatewayClientIdentity({
         displayName: "vitest-codex-harness-live",
@@ -1179,6 +1317,9 @@ describeLive("gateway live (Codex harness)", () => {
       const resolvedGuardianPluginApprovalIds = new Set<string>();
       let guardianPluginApprovalDecision: GuardianPluginApprovalDecision | undefined;
       let activeApprovalClient: GatewayClient | undefined;
+      let resumeStressState:
+        | { lastMarker: string; sessionKey: string; threadId: string }
+        | undefined;
       const maybeResolveGuardianPluginApproval = (event: EventFrame): void => {
         const decision = guardianPluginApprovalDecision;
         const approvalClient = activeApprovalClient;
@@ -1203,6 +1344,7 @@ describeLive("gateway live (Codex harness)", () => {
           });
       };
       logCodexLiveStep("config-written", { configPath, modelKey, port });
+      observedCodexThreadIds.clear();
 
       try {
         server = await startGatewayServer(port, {
@@ -1295,6 +1437,27 @@ describeLive("gateway live (Codex harness)", () => {
                 modelKey,
                 sessionKey,
               });
+              const sessionUsageFresh = await readCodexHarnessSessionUsageFreshness({
+                client: activeClient,
+                sessionKey,
+              });
+              const openClawStatusText = await requestCodexCommandText({
+                client: activeClient,
+                events: gatewayEvents,
+                sessionKey,
+                command: "/status",
+                expectedText: "Context:",
+                isExpectedText: (text) =>
+                  text.split("\n").some((line) => {
+                    if (!line.includes("Context:")) {
+                      return false;
+                    }
+                    const reportsUnknown = line.includes("Context: ?/");
+                    return sessionUsageFresh ? !reportsUnknown : reportsUnknown;
+                  }),
+                predicateOnly: true,
+              });
+              logCodexLiveStep("openclaw-status-command", { statusText: openClawStatusText });
 
               if (CODEX_HARNESS_CODE_MODE_ONLY) {
                 logCodexLiveStep("code-mode-only-tool-probe:start", { sessionKey });
@@ -1366,6 +1529,34 @@ describeLive("gateway live (Codex harness)", () => {
               });
               logCodexLiveStep("guardian-probe:done");
             }
+            if (CODEX_HARNESS_RESUME_STRESS) {
+              const threadId = observedCodexThreadIds.get(sessionKey);
+              if (!threadId) {
+                throw new Error("Codex resume stress did not observe a thread identity");
+              }
+              let lastMarker = "";
+              for (
+                let historyTurn = 1;
+                historyTurn <= CODEX_HARNESS_RESUME_STRESS_HISTORY_TURNS;
+                historyTurn += 1
+              ) {
+                lastMarker = `CODEX-HISTORY-${historyTurn}-${randomBytes(3)
+                  .toString("hex")
+                  .toUpperCase()}`;
+                await requestAgentText({
+                  client: activeClient,
+                  sessionKey,
+                  expectedToken: lastMarker,
+                  message: `Reply with exactly ${lastMarker} and nothing else.`,
+                });
+                expect(observedCodexThreadIds.get(sessionKey)).toBe(threadId);
+              }
+              resumeStressState = { lastMarker, sessionKey, threadId };
+              logCodexLiveStep("resume-stress:history-ready", {
+                historyTurns: CODEX_HARNESS_RESUME_STRESS_HISTORY_TURNS + 2,
+                threadId,
+              });
+            }
             break;
           } catch (error) {
             if (isCodexAccountTokenError(error)) {
@@ -1392,6 +1583,65 @@ describeLive("gateway live (Codex harness)", () => {
             }
           }
         }
+        if (CODEX_HARNESS_RESUME_STRESS) {
+          if (!resumeStressState) {
+            throw new Error("Codex resume stress did not seed a thread");
+          }
+          for (let restart = 1; restart <= CODEX_HARNESS_RESUME_STRESS_RESTARTS; restart += 1) {
+            activeApprovalClient = undefined;
+            await client?.stopAndWait();
+            client = undefined;
+            await server?.close();
+            server = undefined;
+            clearRuntimeConfigSnapshot();
+            gatewayEvents.length = 0;
+
+            server = await startGatewayServer(port, {
+              bind: "loopback",
+              auth: { mode: "token", token },
+              controlUiEnabled: false,
+            });
+            client = await connectTestGatewayClient({
+              url: `ws://127.0.0.1:${port}`,
+              token,
+              deviceIdentity,
+              timeoutMs: GATEWAY_CONNECT_TIMEOUT_MS,
+              requestTimeoutMs: CODEX_HARNESS_REQUEST_TIMEOUT_MS,
+              clientDisplayName: `vitest-codex-resume-stress-${restart}`,
+              onEvent: (event) => {
+                gatewayEvents.push(event);
+                maybeResolveGuardianPluginApproval(event);
+              },
+            });
+            activeApprovalClient = client;
+            await assertCodexHarnessSessionSelection({
+              client,
+              modelKey,
+              sessionKey: resumeStressState.sessionKey,
+            });
+            const nextMarker = `CODEX-RESTART-${restart}-${randomBytes(3)
+              .toString("hex")
+              .toUpperCase()}`;
+            const resumedText = await requestAgentText({
+              client,
+              sessionKey: resumeStressState.sessionKey,
+              expectedToken: nextMarker,
+              message: [
+                "Reply with exactly two lines and nothing else.",
+                "First line: the final marker from the immediately preceding assistant message.",
+                `Second line: ${nextMarker}`,
+              ].join(" "),
+            });
+            expect(resumedText.trim()).toBe(`${resumeStressState.lastMarker}\n${nextMarker}`);
+            const resumedThreadId = observedCodexThreadIds.get(resumeStressState.sessionKey);
+            expect(resumedThreadId).toBe(resumeStressState.threadId);
+            resumeStressState.lastMarker = nextMarker;
+            logCodexLiveStep("resume-stress:restart-complete", {
+              restart,
+              threadId: resumedThreadId,
+            });
+          }
+        }
       } finally {
         try {
           clearRuntimeConfigSnapshot();
@@ -1400,11 +1650,8 @@ describeLive("gateway live (Codex harness)", () => {
           } finally {
             await server?.close();
           }
-          const [{ resetTaskRegistryForTests }, { resetTaskFlowRegistryForTests }] =
-            await Promise.all([
-              import("../tasks/runtime-internal.js"),
-              import("../tasks/task-flow-runtime-internal.js"),
-            ]);
+          const { resetTaskFlowRegistryForTests, resetTaskRegistryForTests } =
+            await import("../tasks/task-runtime.test-helpers.js");
           resetTaskRegistryForTests({ persist: false });
           resetTaskFlowRegistryForTests({ persist: false });
         } finally {
@@ -1422,3 +1669,4 @@ describeDisabled("gateway live (Codex harness disabled)", () => {
     expect(CODEX_HARNESS_LIVE).toBe(false);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

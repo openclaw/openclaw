@@ -92,6 +92,7 @@ const PLUGIN_SDK_TYPE_INPUTS = [
   "packages/media-generation-core/src",
   "packages/media-understanding-common/src",
   "packages/normalization-core/src",
+  "packages/retry/src",
   "packages/acp-core/src",
   "packages/terminal-core/src",
   "src/video-generation/dashscope-compatible.ts",
@@ -167,6 +168,7 @@ const ROOT_DTS_REQUIRED_OUTPUTS = [
   "dist/plugin-sdk/packages/model-catalog-core/src/provider-id.d.ts",
   "dist/plugin-sdk/packages/model-catalog-core/src/provider-model-id-normalization.d.ts",
   "dist/plugin-sdk/packages/model-catalog-core/src/provider-model-id-normalize.d.ts",
+  "dist/plugin-sdk/packages/retry/src/index.d.ts",
   "dist/plugin-sdk/error-runtime.d.ts",
   "dist/plugin-sdk/plugin-entry.d.ts",
   "dist/plugin-sdk/provider-auth.d.ts",
@@ -221,6 +223,7 @@ const PACKAGE_DTS_REQUIRED_OUTPUTS = [
   "packages/plugin-sdk/dist/packages/normalization-core/src/record-coerce.d.ts",
   "packages/plugin-sdk/dist/packages/normalization-core/src/string-coerce.d.ts",
   "packages/plugin-sdk/dist/packages/normalization-core/src/string-normalization.d.ts",
+  "packages/plugin-sdk/dist/packages/retry/src/index.d.ts",
   "packages/plugin-sdk/dist/packages/terminal-core/src/ansi.d.ts",
   "packages/plugin-sdk/dist/packages/terminal-core/src/decorative-emoji.d.ts",
   "packages/plugin-sdk/dist/packages/terminal-core/src/health-style.d.ts",
@@ -253,6 +256,13 @@ const QA_CHANNEL_DTS_INPUTS = [
 ];
 const QA_CHANNEL_DTS_STAMP = "dist/plugin-sdk/extensions/qa-channel/.boundary-dts.stamp";
 const QA_CHANNEL_DTS_REQUIRED_OUTPUTS = ["dist/plugin-sdk/extensions/qa-channel/api.d.ts"];
+const MATRIX_DTS_INPUTS = [
+  "extensions/matrix/test-api.ts",
+  "extensions/matrix/src",
+  "extensions/matrix/tsconfig.json",
+];
+const MATRIX_DTS_STAMP = "dist/plugin-sdk/extensions/matrix/.boundary-dts.stamp";
+const MATRIX_DTS_REQUIRED_OUTPUTS = ["dist/plugin-sdk/extensions/matrix/test-api.d.ts"];
 const DISCORD_DTS_INPUTS = [
   "extensions/discord/api.ts",
   "extensions/discord/src/api.ts",
@@ -267,10 +277,7 @@ const SLACK_DTS_INPUTS = [
 ];
 const SLACK_DTS_STAMP = "dist/plugin-sdk/extensions/slack/.boundary-dts.stamp";
 const SLACK_DTS_REQUIRED_OUTPUTS = ["dist/plugin-sdk/extensions/slack/api.d.ts"];
-const TELEGRAM_DTS_INPUTS = [
-  "extensions/telegram/api.ts",
-  "extensions/telegram/tsconfig.json",
-];
+const TELEGRAM_DTS_INPUTS = ["extensions/telegram/api.ts", "extensions/telegram/tsconfig.json"];
 const TELEGRAM_DTS_STAMP = "dist/plugin-sdk/extensions/telegram/.boundary-dts.stamp";
 const TELEGRAM_DTS_REQUIRED_OUTPUTS = ["dist/plugin-sdk/extensions/telegram/api.d.ts"];
 const WHATSAPP_DTS_INPUTS = [
@@ -742,6 +749,12 @@ async function main(argv = process.argv.slice(2)) {
         outputPaths: [QA_CHANNEL_DTS_STAMP, ...QA_CHANNEL_DTS_REQUIRED_OUTPUTS],
         includeFile: isRelevantTypeInput,
       }) && !hasMissingOutput(QA_CHANNEL_DTS_REQUIRED_OUTPUTS);
+    const matrixDtsFresh =
+      isArtifactSetFresh({
+        inputPaths: MATRIX_DTS_INPUTS,
+        outputPaths: [MATRIX_DTS_STAMP, ...MATRIX_DTS_REQUIRED_OUTPUTS],
+        includeFile: isRelevantTypeInput,
+      }) && !hasMissingOutput(MATRIX_DTS_REQUIRED_OUTPUTS);
     const discordDtsFresh =
       isArtifactSetFresh({
         inputPaths: DISCORD_DTS_INPUTS,
@@ -832,6 +845,37 @@ async function main(argv = process.argv.slice(2)) {
         });
       } else {
         process.stdout.write("[qa-channel boundary dts] fresh; skipping\n");
+      }
+      if (!matrixDtsFresh) {
+        removeIncrementalStateForMissingOutput({
+          outputPaths: MATRIX_DTS_REQUIRED_OUTPUTS,
+          tsBuildInfoPath: "dist/plugin-sdk/extensions/matrix/.tsbuildinfo",
+        });
+        dependentSteps.push({
+          label: "matrix boundary dts",
+          args: [
+            runTsgoScript,
+            "-p",
+            "extensions/matrix/tsconfig.json",
+            "--declaration",
+            "true",
+            "--emitDeclarationOnly",
+            "true",
+            "--noEmit",
+            "false",
+            "--outDir",
+            "dist/plugin-sdk/extensions/matrix",
+            "--rootDir",
+            "extensions/matrix",
+            "--tsBuildInfoFile",
+            "dist/plugin-sdk/extensions/matrix/.tsbuildinfo",
+          ],
+          env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
+          timeoutMs: 300_000,
+          stampPath: MATRIX_DTS_STAMP,
+        });
+      } else {
+        process.stdout.write("[matrix boundary dts] fresh; skipping\n");
       }
       if (!discordDtsFresh) {
         removeIncrementalStateForMissingOutput({

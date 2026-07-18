@@ -1,6 +1,7 @@
 // Amazon Bedrock tests cover embedding provider plugin behavior.
 import { describe, expect, it, vi } from "vitest";
-import { testing, hasAwsCredentials } from "./embedding-provider.js";
+import { hasAwsCredentials } from "./embedding-provider.js";
+import { embeddingTesting as testing } from "./test-support.js";
 
 describe("hasAwsCredentials", () => {
   it("accepts static AWS key credentials without loading the credential chain", async () => {
@@ -35,9 +36,9 @@ describe("hasAwsCredentials", () => {
   });
 
   it("requires AWS profile credentials to resolve through the credential chain", async () => {
-    const loadCredentialProvider = vi.fn().mockResolvedValue({
-      defaultProvider: () => async () => ({ accessKeyId: "resolved-access-key" }),
-    });
+    const loadCredentialProvider = vi
+      .fn()
+      .mockResolvedValue(() => async () => ({ accessKeyId: "resolved-access-key" }));
 
     await expect(hasAwsCredentials({ AWS_PROFILE: "work" }, loadCredentialProvider)).resolves.toBe(
       true,
@@ -47,10 +48,8 @@ describe("hasAwsCredentials", () => {
   });
 
   it("rejects AWS profile markers when the credential chain cannot resolve", async () => {
-    const loadCredentialProvider = vi.fn().mockResolvedValue({
-      defaultProvider: () => async () => {
-        throw new Error("Could not load credentials from any providers");
-      },
+    const loadCredentialProvider = vi.fn().mockResolvedValue(() => async () => {
+      throw new Error("Could not load credentials from any providers");
     });
 
     await expect(
@@ -129,9 +128,7 @@ describe("stripInferenceProfilePrefix", () => {
   });
 
   it("strips apac prefix", () => {
-    expect(testing.stripInferenceProfilePrefix("apac.cohere.embed-v4:0")).toBe(
-      "cohere.embed-v4:0",
-    );
+    expect(testing.stripInferenceProfilePrefix("apac.cohere.embed-v4:0")).toBe("cohere.embed-v4:0");
   });
 
   it("strips au prefix", () => {

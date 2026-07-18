@@ -3,19 +3,20 @@ import { html, type PropertyValues } from "lit";
 import { state } from "lit/decorators.js";
 import type { EventLogEntry } from "../../api/event-log.ts";
 import type { GatewayEventFrame } from "../../api/gateway.ts";
-import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
+import { titleForRoute } from "../../app-navigation.ts";
 import {
   applicationContext,
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
 import { loadSettings } from "../../app/settings.ts";
+import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { resolveSessionKey } from "../../lib/sessions/index.ts";
 import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import {
-  parseToolActivityEvent,
+  parseActivityEvent,
   updateToolActivity,
   type ActivityEntry,
   type ActivityStatus,
@@ -136,7 +137,7 @@ class ActivityPage extends OpenClawLightDomElement {
     if (eventName !== "agent" && eventName !== "session.tool") {
       return entries;
     }
-    const event = parseToolActivityEvent(payload, receivedAt);
+    const event = parseActivityEvent(payload, receivedAt);
     if (!event) {
       return entries;
     }
@@ -199,51 +200,53 @@ class ActivityPage extends OpenClawLightDomElement {
   }
 
   override render() {
+    const body = renderActivity({
+      entries: this.entries,
+      filterText: this.filterText,
+      statusFilters: this.statusFilters,
+      toolFilter: this.toolFilter,
+      expandedIds: this.expandedIds,
+      autoFollow: this.autoFollow,
+      onFilterTextChange: (next) => (this.filterText = next),
+      onToolFilterChange: (next) => (this.toolFilter = next),
+      onStatusToggle: (status, enabled) => {
+        this.statusFilters = { ...this.statusFilters, [status]: enabled };
+      },
+      onToggleAutoFollow: (next) => {
+        this.autoFollow = next;
+        if (next) {
+          this.scheduleScroll(true);
+        }
+      },
+      onClear: () => this.clearEntries(),
+      onExpandAll: () => {
+        this.expandedIds = new Set(this.entries.map((entry) => entry.id));
+      },
+      onCollapseAll: () => {
+        this.expandedIds = new Set();
+      },
+      onEntryToggle: (id, open) => {
+        const next = new Set(this.expandedIds);
+        if (open) {
+          next.add(id);
+        } else {
+          next.delete(id);
+        }
+        this.expandedIds = next;
+      },
+      onScroll: (event) => this.handleScroll(event),
+    });
     return html`
-      <section class="content-header content-header--page">
+      <section class="content-header">
         <div>
           <div class="page-title">${titleForRoute("activity")}</div>
-          <div class="page-sub">${subtitleForRoute("activity")}</div>
         </div>
       </section>
-      ${renderActivity({
-        entries: this.entries,
-        filterText: this.filterText,
-        statusFilters: this.statusFilters,
-        toolFilter: this.toolFilter,
-        expandedIds: this.expandedIds,
-        autoFollow: this.autoFollow,
-        onFilterTextChange: (next) => (this.filterText = next),
-        onToolFilterChange: (next) => (this.toolFilter = next),
-        onStatusToggle: (status, enabled) => {
-          this.statusFilters = { ...this.statusFilters, [status]: enabled };
-        },
-        onToggleAutoFollow: (next) => {
-          this.autoFollow = next;
-          if (next) {
-            this.scheduleScroll(true);
-          }
-        },
-        onClear: () => this.clearEntries(),
-        onExpandAll: () => {
-          this.expandedIds = new Set(this.entries.map((entry) => entry.id));
-        },
-        onCollapseAll: () => {
-          this.expandedIds = new Set();
-        },
-        onEntryToggle: (id, open) => {
-          const next = new Set(this.expandedIds);
-          if (open) {
-            next.add(id);
-          } else {
-            next.delete(id);
-          }
-          this.expandedIds = next;
-        },
-        onScroll: (event) => this.handleScroll(event),
-      })}
+      ${renderSettingsWorkspace(body, { fillHeight: true })}
     `;
   }
 }
 
-customElements.define("openclaw-activity-page", ActivityPage);
+if (!customElements.get("openclaw-activity-page")) {
+  customElements.define("openclaw-activity-page", ActivityPage);
+}

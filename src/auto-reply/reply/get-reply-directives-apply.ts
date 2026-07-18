@@ -2,6 +2,10 @@
 import type { SessionEntry, SessionScope } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
+import {
+  isModelSelectionLocked,
+  MODEL_SELECTION_LOCKED_MESSAGE,
+} from "../../sessions/model-overrides.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { MsgContext } from "../templating.js";
 import type { ElevatedLevel } from "../thinking.js";
@@ -65,11 +69,18 @@ function hasOnlyModelDirective(directives: InlineDirectives): boolean {
   );
 }
 
-export function formatModelOverrideResetEvent(params: {
+function formatModelOverrideResetEvent(params: {
   rejectedRef?: string;
   initialModelLabel: string;
-  reason?: "disallowed" | "stale";
+  reason?: "disallowed" | "stale" | "temporarily-unavailable";
 }): string {
+  if (params.reason === "temporarily-unavailable") {
+    // Non-destructive: the pin is preserved and comes back once the catalog reloads.
+    if (params.rejectedRef) {
+      return `Model override ${params.rejectedRef} is temporarily unavailable (model catalog is still loading); using ${params.initialModelLabel} for this turn. Your pinned model is unchanged.`;
+    }
+    return `Your pinned model override is temporarily unavailable (model catalog is still loading); using ${params.initialModelLabel} for this turn. Your pinned model is unchanged.`;
+  }
   if (params.reason === "stale") {
     if (params.rejectedRef) {
       return `Stored model override ${params.rejectedRef} is stale for this session; reverted to ${params.initialModelLabel}. Pick a model again with /model if you still want to override the default.`;
@@ -196,7 +207,9 @@ export async function applyInlineDirectiveOverrides(params: {
 
   let directiveAck: ReplyPayload | undefined;
 
-  if (modelState.resetModelOverride) {
+  // Fire on the reason, not the boolean: a temporarily-unavailable override
+  // surfaces a notice without destroying the pin, so resetModelOverride stays false.
+  if (modelState.resetModelOverrideReason) {
     enqueueSystemEvent(
       formatModelOverrideResetEvent({
         rejectedRef: modelState.resetModelOverrideRef,
@@ -214,6 +227,31 @@ export async function applyInlineDirectiveOverrides(params: {
     directives = clearInlineDirectives(directives.cleaned);
   }
 
+  if (
+    directives.hasModelDirective &&
+    effectiveModelDirective &&
+    isModelSelectionLocked(sessionEntry)
+  ) {
+    const lockedModelResolution = resolveModelSelectionFromDirective({
+      directives: {
+        ...directives,
+        rawModelDirective: effectiveModelDirective,
+      },
+      cfg,
+      agentDir,
+      defaultProvider,
+      defaultModel,
+      aliasIndex,
+      allowedModelKeys: modelState.allowedModelKeys,
+      allowedModelCatalog: modelState.allowedModelCatalog,
+      provider,
+    });
+    if (lockedModelResolution.modelSelection) {
+      typing.cleanup();
+      return { kind: "reply", reply: { text: MODEL_SELECTION_LOCKED_MESSAGE } };
+    }
+  }
+
   const hasAnyDirective =
     directives.hasThinkDirective ||
     directives.hasFastDirective ||
@@ -226,7 +264,7 @@ export async function applyInlineDirectiveOverrides(params: {
     directives.hasQueueDirective ||
     directives.hasStatusDirective;
 
-  if (!hasAnyDirective && !modelState.resetModelOverride) {
+  if (!hasAnyDirective && !modelState.resetModelOverride && !modelState.resetModelOverrideReason) {
     return {
       kind: "continue",
       directives,

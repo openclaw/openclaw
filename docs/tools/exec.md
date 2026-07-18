@@ -79,6 +79,7 @@ Notes:
 - Important: sandboxing is **off by default**. If sandboxing is off, implicit `host=auto` resolves to `gateway`. Explicit `host=sandbox` still fails closed instead of silently running on the gateway host. Enable sandboxing or use `host=gateway` with approvals.
 - Script preflight checks (for common Python/Node shell-syntax mistakes) only inspect files inside the effective `workdir` boundary. If a script path resolves outside `workdir`, preflight is skipped for that file. Preflight also skips entirely when `host=gateway` and the effective policy is `security=full` with `ask=off`.
 - For long-running work that starts now, start it once and rely on automatic completion wake when it is enabled and the command emits output or fails. Use `process` for logs, status, input, or intervention; do not emulate scheduling with sleep loops, timeout loops, or repeated polling.
+- Agent-started background commands appear in the Web, iOS, and Android background-task views until they finish. The task ledger is finalized before the completion heartbeat wakes the agent again.
 - For work that should happen later or on a schedule, use cron instead of `exec` sleep/delay patterns.
 
 ## Config
@@ -154,7 +155,7 @@ openclaw config get agents.list
 openclaw config set 'agents.list[0].tools.exec.node' "node-id-or-name"
 ```
 
-Control UI: the Nodes tab includes a small "Exec node binding" panel for the same settings.
+Control UI: the **Devices** page includes a small "Exec node binding" panel for the same settings.
 
 ## Session overrides (`/exec`)
 
@@ -244,7 +245,7 @@ Paste (bracketed by default):
 {
   tools: {
     exec: {
-      applyPatch: { workspaceOnly: true, allowModels: ["gpt-5.5"] },
+      applyPatch: { workspaceOnly: true, allowModels: ["gpt-5.6-sol"] },
     },
   },
 }

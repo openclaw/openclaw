@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import OpenClawChatUI
 import OpenClawKit
 import OpenClawProtocol
 import SwiftUI
@@ -266,6 +267,23 @@ final class ControlChannel {
         }
     }
 
+    func request(
+        _ request: OpenClawChatGatewayRequest,
+        retryTransportFailures: Bool = true) async throws -> Data
+    {
+        do {
+            let data = try await GatewayConnection.shared.request(
+                request,
+                retryTransportFailures: retryTransportFailures)
+            self.setStateThrottled(.connected)
+            return data
+        } catch {
+            let message = self.friendlyGatewayMessage(error)
+            self.setStateThrottled(.degraded(message))
+            throw ControlChannelError.badResponse(message)
+        }
+    }
+
     private func friendlyGatewayMessage(_ error: Error) -> String {
         // Map URLSession/WS errors into user-facing, actionable text.
         if let ctrlErr = error as? ControlChannelError, let desc = ctrlErr.errorDescription {
@@ -343,9 +361,7 @@ final class ControlChannel {
 
         let detail = nsError.localizedDescription.isEmpty ? "unknown gateway error" : nsError.localizedDescription
         let trimmed = detail.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.lowercased().hasPrefix("gateway error:") {
-            return trimmed
-        }
+        if trimmed.lowercased().hasPrefix("gateway error:") { return trimmed }
         return "Gateway error: \(trimmed)"
     }
 
@@ -367,9 +383,7 @@ final class ControlChannel {
 
     private func scheduleRecovery(reason: String) {
         let now = Date()
-        if let last = self.lastRecoveryAt, now.timeIntervalSince(last) < 10 {
-            return
-        }
+        if let last = self.lastRecoveryAt, now.timeIntervalSince(last) < 10 { return }
         guard self.recoveryTask == nil else { return }
         self.lastRecoveryAt = now
 
@@ -532,5 +546,4 @@ final class ControlChannel {
 
 extension Notification.Name {
     static let controlHeartbeat = Notification.Name("openclaw.control.heartbeat")
-    static let controlAgentEvent = Notification.Name("openclaw.control.agent")
 }

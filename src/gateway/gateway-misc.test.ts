@@ -4,7 +4,13 @@ import * as fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it, test, vi } from "vitest";
+import {
+  GATEWAY_CLIENT_CAPS,
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../packages/gateway-protocol/src/client-info.js";
 import type { RequestFrame } from "../../packages/gateway-protocol/src/index.js";
 import {
   onDiagnosticEvent,
@@ -12,7 +18,6 @@ import {
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import {
-  resetActiveManagedProxyStateForTests,
   registerActiveManagedProxyUrl,
   stopActiveManagedProxyRegistration,
 } from "../infra/net/proxy/active-proxy-state.js";
@@ -24,6 +29,10 @@ import {
 } from "./node-command-policy.js";
 import type { SerializedEventPayload } from "./node-registry.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
+import {
+  createSessionEventSubscriberRegistry,
+  createSessionMessageSubscriberRegistry,
+} from "./server-chat-state.js";
 import { createChatRunRegistry } from "./server-chat.js";
 import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import { handleNodeInvokeResult } from "./server-methods/nodes.handlers.invoke-result.js";
@@ -80,7 +89,6 @@ describe("GatewayClient", () => {
 
   beforeEach(() => {
     wsMockState.last = null;
-    resetActiveManagedProxyStateForTests();
     delete process.env["NO_PROXY"];
     delete process.env["no_proxy"];
     delete process.env["HTTP_PROXY"];
@@ -383,6 +391,77 @@ function broadcastChatClassEvents(
 }
 
 describe("gateway broadcaster", () => {
+  it("exposes current buffered bytes for a targeted connection", () => {
+    const socket = makeRecordingSocket();
+    socket.bufferedAmount = 1234;
+    const client = makeOperatorWsClient("c-admin", socket, ["operator.admin"]);
+    const clients = new Set<GatewayWsClient>([client]);
+    const { getBufferedAmount } = createGatewayBroadcaster({ clients });
+
+    expect(getBufferedAmount("c-admin")).toBe(1234);
+    clients.delete(client);
+    expect(getBufferedAmount("c-admin")).toBeUndefined();
+  });
+
+  it("keeps workers outside all generic and targeted gateway broadcasts", () => {
+    const workerSocket = makeRecordingSocket();
+    const worker = makeGatewayWsClient("c-worker", workerSocket, {
+      role: "worker",
+      scopes: [],
+    } as unknown as GatewayWsClient["connect"]);
+    worker.connectionKind = "worker";
+    const clients = new Set<GatewayWsClient>([worker]);
+    const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({ clients });
+
+    for (const event of ["heartbeat", "presence", "health", "tick", "shutdown", "chat"]) {
+      broadcast(event, { value: event });
+    }
+    broadcastToConnIds("tick", { ts: 1 }, new Set([worker.connId]));
+
+    expect(workerSocket.send).not.toHaveBeenCalled();
+  });
+
+  it("delivers scoped client events only for gateway-owned session subscriptions", () => {
+    const legacySocket = makeRecordingSocket();
+    const firstSocket = makeRecordingSocket();
+    const secondSocket = makeRecordingSocket();
+    const legacy = makeOperatorWsClient("legacy", legacySocket, ["operator.read"]);
+    const first = makeOperatorWsClient("first", firstSocket, ["operator.read"]);
+    const second = makeOperatorWsClient("second", secondSocket, ["operator.read"]);
+    first.connect.caps = [
+      GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS,
+      GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
+    ];
+    second.connect.caps = [];
+    second.connect.client = {
+      id: GATEWAY_CLIENT_IDS.BROWSER_COPILOT,
+      version: "test",
+      platform: "chrome",
+      mode: GATEWAY_CLIENT_MODES.UI,
+    };
+    const clients = new Set([legacy, first, second]);
+    const sessionMessageSubscribers = createSessionMessageSubscriberRegistry();
+    sessionMessageSubscribers.subscribe(first.connId, "session-a");
+    sessionMessageSubscribers.subscribe(second.connId, "session-b");
+    const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({
+      clients,
+      sessionMessageSubscribers,
+    });
+
+    broadcast("chat", { sessionKey: "session-a" }, { sessionKeys: ["session-a"] });
+    broadcast("agent", { stream: "lifecycle" });
+    broadcastToConnIds("agent", { sessionKey: "session-a" }, new Set([first.connId]), {
+      sessionKeys: ["session-a"],
+    });
+    broadcastToConnIds("agent", { sessionKey: "session-a" }, new Set([second.connId]), {
+      sessionKeys: ["session-a"],
+    });
+
+    expect(sentEvents(legacySocket)).toEqual(["chat", "agent"]);
+    expect(sentEvents(firstSocket)).toEqual(["chat", "agent"]);
+    expect(sentEvents(secondSocket)).toEqual([]);
+  });
+
   it("filters approval and pairing events by scope", () => {
     const approvalsSocket: TestSocket = {
       bufferedAmount: 0,
@@ -439,6 +518,53 @@ describe("gateway broadcaster", () => {
     expectSentEvents(adminSocket, expectedEvents);
   });
 
+  it("requires operator.read for config.changed broadcasts", () => {
+    const { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, broadcast } =
+      makeScopedBroadcastContext();
+
+    broadcast("config.changed", { path: "/tmp/openclaw.json", hash: "hash-1", ts: 1 });
+
+    expect(pairingSocket.send).not.toHaveBeenCalled();
+    expect(nodeSocket.send).not.toHaveBeenCalled();
+    expect(readSocket.send).toHaveBeenCalledTimes(1);
+    expect(writeSocket.send).toHaveBeenCalledTimes(1);
+    expect(adminSocket.send).toHaveBeenCalledTimes(1);
+  });
+
+  it("requires operator.questions for question broadcasts", () => {
+    const questionSocket: TestSocket = { bufferedAmount: 0, send: vi.fn(), close: vi.fn() };
+    const readSocket: TestSocket = { bufferedAmount: 0, send: vi.fn(), close: vi.fn() };
+    const clients = new Set<GatewayWsClient>([
+      makeOperatorWsClient("c-questions", questionSocket, ["operator.questions"]),
+      makeOperatorWsClient("c-read", readSocket, ["operator.read"]),
+    ]);
+    const { broadcast } = createGatewayBroadcaster({ clients });
+
+    broadcast("question.requested", { id: "question-1" });
+    broadcast("question.resolved", { id: "question-1", status: "expired" });
+
+    expect(questionSocket.send).toHaveBeenCalledTimes(2);
+    expect(readSocket.send).not.toHaveBeenCalled();
+  });
+
+  it("requires operator.read for progressive session catalog events", () => {
+    const { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, broadcastToConnIds } =
+      makeScopedBroadcastContext();
+    const targets = new Set(["c-pairing", "c-node", "c-read", "c-write", "c-admin"]);
+
+    broadcastToConnIds(
+      "sessions.catalog.host",
+      { progressId: "progress-1", agentId: "main", catalog: { id: "codex", hosts: [] } },
+      targets,
+    );
+
+    expect(pairingSocket.send).not.toHaveBeenCalled();
+    expect(nodeSocket.send).not.toHaveBeenCalled();
+    expectSentEvents(readSocket, ["sessions.catalog.host"]);
+    expectSentEvents(writeSocket, ["sessions.catalog.host"]);
+    expectSentEvents(adminSocket, ["sessions.catalog.host"]);
+  });
+
   it("requires operator.read for task ledger broadcast events", () => {
     const { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, broadcast } =
       makeScopedBroadcastContext();
@@ -450,6 +576,19 @@ describe("gateway broadcaster", () => {
     expectSentEvents(readSocket, ["task"]);
     expectSentEvents(writeSocket, ["task"]);
     expectSentEvents(adminSocket, ["task"]);
+  });
+
+  it("requires operator.read for node presence broadcasts", () => {
+    const { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, broadcast } =
+      makeScopedBroadcastContext();
+
+    broadcast("node.presence", { nodeId: "mac-1", lastActiveAtMs: 100 });
+
+    expect(pairingSocket.send).not.toHaveBeenCalled();
+    expect(nodeSocket.send).not.toHaveBeenCalled();
+    expectSentEvents(readSocket, ["node.presence"]);
+    expectSentEvents(writeSocket, ["node.presence"]);
+    expectSentEvents(adminSocket, ["node.presence"]);
   });
 
   it("allows plugin.* broadcast events for operator.write and operator.admin", () => {
@@ -469,6 +608,44 @@ describe("gateway broadcaster", () => {
     expectSentEvents(adminSocket, expectedEvents);
   });
 
+  it("honors explicit read scope for plugin lifecycle events", () => {
+    const {
+      pairingSocket,
+      nodeSocket,
+      readSocket,
+      writeSocket,
+      adminSocket,
+      broadcastPluginEvent,
+    } = makeScopedBroadcastContext();
+
+    broadcastPluginEvent("plugin.workboard.changed", { revision: 1 }, "operator.read");
+
+    expect(pairingSocket.send).not.toHaveBeenCalled();
+    expect(nodeSocket.send).not.toHaveBeenCalled();
+    expectSentEvents(readSocket, ["plugin.workboard.changed"]);
+    expectSentEvents(writeSocket, ["plugin.workboard.changed"]);
+    expectSentEvents(adminSocket, ["plugin.workboard.changed"]);
+  });
+
+  it("rejects invalid or reserved plugin event broadcasts", () => {
+    const { broadcastPluginEvent } = makeScopedBroadcastContext();
+    const unsafe = broadcastPluginEvent as unknown as (
+      event: string,
+      payload: unknown,
+      scope: string,
+    ) => void;
+
+    expect(() => unsafe("workboard.changed", {}, "operator.read")).toThrow(
+      "invalid plugin gateway event",
+    );
+    expect(() => unsafe("plugin.approval.requested", {}, "operator.read")).toThrow(
+      "invalid plugin gateway event",
+    );
+    expect(() => unsafe("plugin.workboard.changed", {}, "operator.approvals")).toThrow(
+      "invalid plugin gateway event scope",
+    );
+  });
+
   it("defaults unknown events to deny and classifies remaining gateway broadcast events", () => {
     const { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, broadcast } =
       makeScopedBroadcastContext();
@@ -482,7 +659,13 @@ describe("gateway broadcaster", () => {
     broadcast("health", { ok: true });
     broadcast("tick", { ts: 2 });
     broadcast("shutdown", { reason: "restart" });
-    broadcast("update.available", { updateAvailable: { version: "2026.4.20" } });
+    broadcast("update.available", {
+      updateAvailable: {
+        currentVersion: "2026.4.19",
+        latestVersion: "2026.4.20",
+        channel: "stable",
+      },
+    });
     broadcast("unknown.future.event", { hidden: true });
 
     expectSentEvents(pairingSocket, [
@@ -729,7 +912,7 @@ describe("node subscription manager", () => {
 
     expect(sent).toHaveLength(2);
     expect(sent.map((s) => s.nodeId).toSorted()).toEqual(["node-a", "node-b"]);
-    expect(sent[0].event).toBe("chat");
+    expect(expectDefined(sent[0], "sent[0] test invariant").event).toBe("chat");
   });
 
   test("runtime forwards subscribed node payload json without parsing it again", () => {
@@ -741,7 +924,11 @@ describe("node subscription manager", () => {
     };
     const parseSpy = vi.spyOn(JSON, "parse");
     try {
-      const runtime = createGatewayNodeSessionRuntime({ broadcast: vi.fn() });
+      const runtime = createGatewayNodeSessionRuntime({
+        broadcast: vi.fn(),
+        sessionEventSubscribers: createSessionEventSubscriberRegistry(),
+        sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
+      });
       runtime.nodeRegistry.register(
         makeGatewayWsClient("conn-node-a", socket, {
           role: "node",
@@ -863,6 +1050,7 @@ describe("resolveNodeCommandAllowlist", () => {
 
     expect(DEFAULT_DANGEROUS_NODE_COMMANDS).not.toContain("screen.snapshot");
     expect(DEFAULT_DANGEROUS_NODE_COMMANDS).toContain("screen.record");
+    expect(DEFAULT_DANGEROUS_NODE_COMMANDS).toContain("health.summary");
     expect(allow.has("screen.snapshot")).toBe(true);
     expect(allow.has("screen.record")).toBe(false);
   });

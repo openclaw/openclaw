@@ -272,7 +272,8 @@ describe("signalCheck", () => {
 
 describe("streamSignalEvents", () => {
   it("streams events through node http instead of fetch", async () => {
-    const events: Array<import("./client.js").SignalSseEvent> = [];
+    type StreamEvent = Parameters<Parameters<typeof streamSignalEvents>[0]["onEvent"]>[0];
+    const events: StreamEvent[] = [];
     const baseUrl = await withSignalServer((req, res) => {
       expect(req.url).toBe("/api/v1/events?account=%2B15555550123");
       expect(req.headers.accept).toBe("text/event-stream");
@@ -287,6 +288,23 @@ describe("streamSignalEvents", () => {
     });
 
     expect(events).toEqual([{ id: "42", event: "message", data: '{"group":true}' }]);
+  });
+
+  it("propagates receive-handler failures to the stream", async () => {
+    const appendError = new Error("durable append failed");
+    const baseUrl = await withSignalServer((_req, res) => {
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      res.end('event: receive\ndata: {"envelope":{}}\n\n');
+    });
+
+    await expect(
+      streamSignalEvents({
+        baseUrl,
+        onEvent: async () => {
+          throw appendError;
+        },
+      }),
+    ).rejects.toBe(appendError);
   });
 
   it("reports HTTP status failures from the event stream", async () => {

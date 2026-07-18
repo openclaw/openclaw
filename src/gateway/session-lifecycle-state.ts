@@ -1,11 +1,17 @@
 // Gateway session lifecycle state projection.
 // Converts agent run lifecycle events into session row/store status updates.
+import { isAgentLifecycleYieldedWaiting } from "../agents/agent-lifecycle-parent-state.js";
 import {
   buildAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
 } from "../agents/agent-run-terminal-outcome.js";
-import { updateSessionStoreEntry, type SessionEntry } from "../config/sessions.js";
-import type { AgentEventPayload } from "../infra/agent-events.js";
+import {
+  isMainSessionRecoveryLifecycleEvent,
+  projectMainSessionRecoveryLifecycle,
+} from "../agents/main-session-recovery-lifecycle.js";
+import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
+import { updateSessionEntry } from "../config/sessions/session-accessor.js";
+import { getAgentEventLifecycleGeneration, type AgentEventPayload } from "../infra/agent-events.js";
 import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
 import { loadSessionEntry } from "./session-utils.js";
 import type { GatewaySessionRow, SessionRunStatus } from "./session-utils.types.js";
@@ -25,6 +31,8 @@ type LifecycleEventLike = Pick<AgentEventPayload, "ts" | "sessionId"> & {
     livenessState?: unknown;
     timeoutPhase?: unknown;
     providerStarted?: unknown;
+    yielded?: unknown;
+    status?: unknown;
   };
 };
 
@@ -42,6 +50,7 @@ type PersistedLifecycleSessionShape = Pick<
   | "runtimeMs"
   | "abortedLastRun"
   | "restartRecoveryRuns"
+  | "mainRestartRecovery"
 >;
 
 type GatewaySessionLifecycleSnapshot = Partial<LifecycleSessionShape>;
@@ -130,7 +139,7 @@ function resolveRuntimeMs(params: {
   return undefined;
 }
 
-export function deriveGatewaySessionLifecycleSnapshot(params: {
+function deriveGatewaySessionLifecycleSnapshot(params: {
   session?: Partial<LifecycleSessionShape> | null;
   event: LifecycleEventLike;
 }): GatewaySessionLifecycleSnapshot {
@@ -158,9 +167,21 @@ export function deriveGatewaySessionLifecycleSnapshot(params: {
   const startedAt = resolveLifecycleStartedAt(existing?.startedAt, params.event);
   const endedAt = resolveLifecycleEndedAt(params.event);
   const updatedAt = endedAt ?? existing?.updatedAt;
+  const status = isAgentLifecycleYieldedWaiting({
+    phase,
+    yielded: params.event.data?.yielded,
+    livenessState: params.event.data?.livenessState,
+    stopReason: params.event.data?.stopReason,
+    aborted: params.event.data?.aborted,
+    status: params.event.data?.status,
+    timeoutPhase: params.event.data?.timeoutPhase,
+    error: params.event.data?.error,
+  })
+    ? "running"
+    : resolveTerminalStatus(params.event);
   return {
     updatedAt,
-    status: resolveTerminalStatus(params.event),
+    status,
     startedAt,
     endedAt,
     runtimeMs: resolveRuntimeMs({
@@ -168,45 +189,29 @@ export function deriveGatewaySessionLifecycleSnapshot(params: {
       endedAt,
       existingRuntimeMs: existing?.runtimeMs,
     }),
-    abortedLastRun: resolveTerminalStatus(params.event) === "killed",
+    abortedLastRun: status === "killed",
   };
 }
 
-export function derivePersistedSessionLifecyclePatch(params: {
+function derivePersistedSessionLifecyclePatch(params: {
   entry?: Partial<PersistedLifecycleSessionShape> | null;
   event: LifecycleEventLike;
 }): Partial<PersistedLifecycleSessionShape> {
-  if (isRestartRecoveryLifecycleEvent(params)) {
-    return {};
-  }
   const snapshot = deriveGatewaySessionLifecycleSnapshot({
     session: params.entry ?? undefined,
     event: params.event,
   });
-  const patch: Partial<PersistedLifecycleSessionShape> = {
+  const snapshotPatch: Partial<PersistedLifecycleSessionShape> = {
     ...snapshot,
     updatedAt: typeof snapshot.updatedAt === "number" ? snapshot.updatedAt : undefined,
   };
-  const runId = params.event.runId?.trim();
-  const lifecycleGeneration = params.event.lifecycleGeneration?.trim();
-  const restartRecoveryRuns = params.entry?.restartRecoveryRuns;
-  if (
-    resolveLifecyclePhase(params.event) !== "start" &&
-    runId &&
-    lifecycleGeneration &&
-    restartRecoveryRuns?.some(
-      (run) => run.runId === runId && run.lifecycleGeneration === lifecycleGeneration,
-    )
-  ) {
-    const remainingRuns = restartRecoveryRuns.filter(
-      (run) => run.runId !== runId || run.lifecycleGeneration !== lifecycleGeneration,
-    );
-    if (remainingRuns.length > 0) {
-      return { restartRecoveryRuns: remainingRuns };
-    }
-    patch.restartRecoveryRuns = undefined;
-  }
-  return patch;
+  const projection = projectMainSessionRecoveryLifecycle({
+    currentLifecycleGeneration: getAgentEventLifecycleGeneration(),
+    entry: params.entry,
+    event: params.event,
+    snapshotPatch,
+  });
+  return projection.action === "suppress" ? {} : projection.patch;
 }
 
 export function deriveGatewaySessionLifecycleProjectionPatch(params: {
@@ -222,21 +227,7 @@ export function isRestartRecoveryLifecycleEvent(params: {
   entry?: Pick<SessionEntry, "restartRecoveryRuns"> | null;
   event: Pick<LifecycleEventLike, "runId" | "lifecycleGeneration" | "data">;
 }): boolean {
-  const runId = params.event.runId?.trim();
-  const lifecycleGeneration = params.event.lifecycleGeneration?.trim();
-  const phase = resolveLifecyclePhase(params.event);
-  const interrupted = params.event.data?.stopReason === "restart";
-  const matchesRecoveryRun = Boolean(
-    runId &&
-    lifecycleGeneration &&
-    params.entry?.restartRecoveryRuns?.some(
-      (run) => run.runId === runId && run.lifecycleGeneration === lifecycleGeneration,
-    ),
-  );
-  return (
-    matchesRecoveryRun &&
-    (phase === "start" || ((phase === "end" || phase === "error") && interrupted))
-  );
+  return isMainSessionRecoveryLifecycleEvent(params);
 }
 
 /**
@@ -290,13 +281,12 @@ export async function persistGatewaySessionLifecycleEvent(params: {
       : undefined;
 
   const exactCronRun = parseCronRunScopeSuffix(sessionEntry.canonicalKey).runId !== undefined;
-  await updateSessionStoreEntry({
-    storePath: sessionEntry.storePath,
-    sessionKey: sessionEntry.canonicalKey,
-    skipMaintenance: true,
-    takeCacheOwnership: true,
-    requireWriteSuccess: true,
-    update: async (entry) => {
+  await updateSessionEntry(
+    {
+      storePath: sessionEntry.storePath,
+      sessionKey: sessionEntry.canonicalKey,
+    },
+    async (entry) => {
       if (
         exactCronRun &&
         !acceptsCronRunContinuationLifecycleEvent({ entry, event: params.event })
@@ -317,5 +307,10 @@ export async function persistGatewaySessionLifecycleEvent(params: {
       });
       return Object.keys(patch).length > 0 ? patch : null;
     },
-  });
+    {
+      skipMaintenance: true,
+      takeCacheOwnership: true,
+      requireWriteSuccess: true,
+    },
+  );
 }

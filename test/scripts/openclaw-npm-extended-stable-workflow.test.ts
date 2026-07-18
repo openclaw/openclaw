@@ -40,6 +40,15 @@ function step(job: Job | undefined, name: string): Step {
 }
 
 describe("minimal npm extended-stable workflow", () => {
+  it("bounds every git fetch operation", () => {
+    const source = readFileSync(workflowPath, "utf8");
+    const gitFetchLines = source.split("\n").filter((line) => line.includes("git fetch"));
+    expect(gitFetchLines).toHaveLength(6);
+    expect(
+      gitFetchLines.every((line) => line.includes("timeout --signal=TERM --kill-after=10s 120s")),
+    ).toBe(true);
+  });
+
   it("adds extended-stable without adding policy or verifier contracts", () => {
     const raw = readFileSync(workflowPath, "utf8");
     const parsed = workflow();
@@ -170,9 +179,23 @@ describe("minimal npm extended-stable workflow", () => {
   });
 
   it("authenticates exact extended-stable run and Full Validation identities", () => {
+    const parsed = workflow();
     const raw = readFileSync(workflowPath, "utf8");
     expect(raw).toContain("--json workflowName,headBranch,headSha,event,conclusion,url");
-    expect(raw).toContain("--json workflowName,headBranch,headSha,event,status,conclusion,url");
+    const fullValidationRun = step(
+      parsed.jobs?.publish_openclaw_npm,
+      "Verify full release validation run metadata",
+    );
+    expect(fullValidationRun.env?.FULL_RELEASE_VALIDATION_RUN_ATTEMPT).toBe(
+      "${{ inputs.full_release_validation_run_attempt }}",
+    );
+    expect(fullValidationRun.run).toContain(
+      "actions/runs/${FULL_RELEASE_VALIDATION_RUN_ID}/attempts/${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}",
+    );
+    expect(fullValidationRun.run).toContain(
+      '"$run_attempt" != "$FULL_RELEASE_VALIDATION_RUN_ATTEMPT"',
+    );
+    expect(fullValidationRun.run).toContain('echo "attempt=$run_attempt" >> "$GITHUB_OUTPUT"');
     expect(raw.match(/openclaw-npm-extended-stable-release\.mjs verify-run/g)).toHaveLength(3);
     expect(raw).toContain("openclaw-npm-extended-stable-release.mjs verify-manifest");
   });

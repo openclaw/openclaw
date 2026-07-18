@@ -7,6 +7,7 @@ import { normalizeTrimmedStringList } from "../../packages/normalization-core/sr
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway as defaultCallGateway } from "../gateway/call.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { listAmbientGroupWatchTargets } from "../sessions/session-state-events.js";
 
 type GatewayCaller = typeof defaultCallGateway;
 
@@ -271,6 +272,7 @@ function treeVisibilityMessage(action: SessionAccessAction): string {
 /** Create a direct session-key visibility checker for one requester/action pair. */
 export function createSessionVisibilityChecker(params: {
   action: SessionAccessAction;
+  requesterAgentId?: string;
   requesterSessionKey: string;
   visibility: SessionToolsVisibility;
   a2aPolicy: AgentToAgentPolicy;
@@ -279,6 +281,7 @@ export function createSessionVisibilityChecker(params: {
   const spawnedKeys = params.spawnedKeys;
   const rowChecker = createSessionVisibilityRowChecker({
     action: params.action,
+    requesterAgentId: params.requesterAgentId,
     requesterSessionKey: params.requesterSessionKey,
     visibility: params.visibility,
     a2aPolicy: params.a2aPolicy,
@@ -306,18 +309,32 @@ function rowOwnedByRequester(row: SessionVisibilityRow, requesterSessionKey: str
 /** Create a row-aware visibility checker that can use owner/spawn metadata. */
 export function createSessionVisibilityRowChecker(params: {
   action: SessionAccessAction;
+  requesterAgentId?: string;
   requesterSessionKey: string;
   visibility: SessionToolsVisibility;
   a2aPolicy: AgentToAgentPolicy;
 }): { check: (row: SessionVisibilityRow) => SessionAccessResult } {
-  const requesterAgentId = resolveAgentIdFromSessionKey(params.requesterSessionKey);
+  const requesterAgentId =
+    normalizeLowercaseStringOrEmpty(params.requesterAgentId) ||
+    resolveAgentIdFromSessionKey(params.requesterSessionKey);
+  let watchedSessionKeys: Set<string> | undefined;
 
   const check = (row: SessionVisibilityRow): SessionAccessResult => {
     const targetSessionKey = row.key;
     const targetAgentId = row.agentId ?? resolveAgentIdFromSessionKey(targetSessionKey);
     const isRequesterSession =
       targetSessionKey === params.requesterSessionKey || targetSessionKey === "current";
-    const isRequesterOwned = rowOwnedByRequester(row, params.requesterSessionKey);
+    // Only durable ambient-group provenance makes the target ownership-equivalent
+    // for same-agent reads. Explicit A2A watches, send access, and cross-agent
+    // targets remain fail-closed.
+    const isWatchedRead =
+      params.action !== "send" &&
+      params.visibility === "tree" &&
+      targetAgentId === requesterAgentId &&
+      (watchedSessionKeys ??= listAmbientGroupWatchTargets(params.requesterSessionKey)).has(
+        targetSessionKey,
+      );
+    const isRequesterOwned = rowOwnedByRequester(row, params.requesterSessionKey) || isWatchedRead;
     // Row ownership is stronger than agent ids: ACP children may use a backend
     // agent id while still belonging to the requester that spawned them.
     if (
@@ -378,6 +395,7 @@ export function createSessionVisibilityRowChecker(params: {
 /** Create a visibility guard, loading spawned-session ownership when direct keys need it. */
 export async function createSessionVisibilityGuard(params: {
   action: SessionAccessAction;
+  requesterAgentId?: string;
   requesterSessionKey: string;
   visibility: SessionToolsVisibility;
   a2aPolicy: AgentToAgentPolicy;
@@ -392,6 +410,7 @@ export async function createSessionVisibilityGuard(params: {
       : null;
   return createSessionVisibilityChecker({
     action: params.action,
+    requesterAgentId: params.requesterAgentId,
     requesterSessionKey: params.requesterSessionKey,
     visibility: params.visibility,
     a2aPolicy: params.a2aPolicy,

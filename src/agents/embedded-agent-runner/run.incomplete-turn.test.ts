@@ -19,14 +19,13 @@ import {
   mockedSleepWithAbort,
   overflowBaseRunParams,
   resetRunOverflowCompactionHarnessMocks,
+  useOpenAIPlatformAuthFixture,
   warmRunOverflowCompactionHarness,
 } from "./run.overflow-compaction.harness.js";
 import {
   buildAttemptReplayMetadata,
   DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT,
   DEFAULT_REASONING_ONLY_RETRY_LIMIT,
-  EMPTY_RESPONSE_RETRY_INSTRUCTION,
-  REASONING_ONLY_RETRY_INSTRUCTION,
   resolveEmptyResponseRetryInstruction,
   isIncompleteTerminalAssistantTurn,
   resolveIncompleteTurnPayloadText as resolveIncompleteTurnPayloadTextCore,
@@ -34,11 +33,19 @@ import {
   resolveReplayInvalidFlag,
   resolveRunLivenessState,
   resolveSilentToolResultReplyPayload,
+  resolveToolUseTerminalContinuationInstruction,
   shouldRetryMissingAssistantTurn,
   shouldRetrySilentErrorAssistantTurn,
   shouldTreatEmptyAssistantReplyAsSilent,
 } from "./run/incomplete-turn.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
+
+const REASONING_ONLY_RETRY_INSTRUCTION =
+  "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
+const EMPTY_RESPONSE_RETRY_INSTRUCTION =
+  "The previous attempt did not produce a user-visible answer. Continue from the current state and produce the visible answer now. Do not restart from scratch.";
+const TOOL_USE_TERMINAL_CONTINUATION_INSTRUCTION =
+  "The previous assistant turn completed its tool calls but did not produce a user-visible answer. Continue from the current transcript and produce the final user-visible answer now. Do not repeat completed tool calls or restart from scratch.";
 
 let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
 
@@ -60,6 +67,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
   beforeEach(() => {
     resetRunOverflowCompactionHarnessMocks();
+    useOpenAIPlatformAuthFixture();
     mockedGlobalHookRunner.hasHooks.mockImplementation(() => false);
   });
 
@@ -75,14 +83,30 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(warnMessages().join("\n")).not.toContain(text);
   }
 
-  function runAttemptCall(index: number): { prompt?: string } {
+  function runAttemptCall(index: number): {
+    prompt?: string;
+    suppressNextUserMessagePersistence?: boolean;
+    skipPreparedUserTurnMessage?: boolean;
+  } {
     // Continuation prompt assertions read the exact prompt passed to the runner
     // attempt rather than derived result metadata.
     const call = mockedRunEmbeddedAttempt.mock.calls[index];
     if (!call) {
       throw new Error(`Expected run embedded attempt call ${index}`);
     }
-    return call[0] as { prompt?: string };
+    return call[0] as {
+      prompt?: string;
+      suppressNextUserMessagePersistence?: boolean;
+      skipPreparedUserTurnMessage?: boolean;
+    };
+  }
+
+  function markUserMessagePersisted(attemptParams: unknown): void {
+    (
+      attemptParams as {
+        onUserMessagePersisted?: (message: { role: "user"; content: string }) => void;
+      }
+    ).onUserMessagePersisted?.({ role: "user", content: "test prompt" });
   }
 
   it("counts failed tool results in trace tool summaries", async () => {
@@ -198,6 +222,122 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       { text: "⚠️ Agent couldn't generate a response. Please try again.", isError: true },
     ]);
     expect(result.meta?.livenessState).toBe("abandoned");
+  });
+
+  it("does not route caller timeouts through provider failover", async () => {
+    const controller = new AbortController();
+    const timeoutError = new Error("caller deadline elapsed");
+    timeoutError.name = "TimeoutError";
+    const setTerminalLifecycleMeta = vi.fn();
+    const interruptedAssistant = {
+      role: "assistant",
+      stopReason: "error",
+      errorMessage: "HTTP 429 Too Many Requests",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    mockedClassifyFailoverReason.mockReturnValue("rate_limit");
+    mockedIsRateLimitAssistantError.mockReturnValue(true);
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async () => {
+      controller.abort(timeoutError);
+      return makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: interruptedAssistant,
+        currentAttemptAssistant: interruptedAssistant,
+        setTerminalLifecycleMeta,
+      });
+    });
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      runId: "run-caller-timeout",
+      abortSignal: controller.signal,
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads?.at(-1)?.text).toContain("timed out");
+    expect(result.meta?.aborted).toBe(false);
+    expect(result.meta?.timeoutPhase).toBeUndefined();
+    expect(result.meta?.providerStarted).toBeUndefined();
+    const lifecycleMeta = setTerminalLifecycleMeta.mock.lastCall?.[0];
+    expect(lifecycleMeta).toMatchObject({
+      aborted: false,
+      livenessState: "blocked",
+      stopReason: "timeout",
+    });
+    expect(lifecycleMeta).not.toHaveProperty("timeoutPhase");
+    expect(lifecycleMeta).not.toHaveProperty("providerStarted");
+  });
+
+  it("does not synthesize an incomplete turn for a caller abort before attempt flags settle", async () => {
+    const controller = new AbortController();
+    const abortError = new Error("caller cancelled");
+    abortError.name = "AbortError";
+    const setTerminalLifecycleMeta = vi.fn();
+    const lateAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "text", text: "Late answer" }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async () => {
+      controller.abort(abortError);
+      return makeAttemptResult({
+        assistantTexts: ["Late answer"],
+        lastAssistant: lateAssistant,
+        currentAttemptAssistant: lateAssistant,
+        setTerminalLifecycleMeta,
+      });
+    });
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      runId: "run-caller-abort",
+      abortSignal: controller.signal,
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads).toBeUndefined();
+    expect(result.meta?.aborted).toBe(true);
+    expect(result.meta?.error).toBeUndefined();
+    expectNoWarnMessageWith("incomplete turn detected");
+    expect(setTerminalLifecycleMeta.mock.lastCall?.[0]).toMatchObject({
+      aborted: true,
+      livenessState: "blocked",
+      stopReason: "aborted",
+    });
+  });
+
+  it("propagates canonical assistant aborts into terminal lifecycle metadata", async () => {
+    const setTerminalLifecycleMeta = vi.fn();
+    const abortedAssistant = {
+      role: "assistant",
+      stopReason: "aborted",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: abortedAssistant,
+        currentAttemptAssistant: abortedAssistant,
+        setTerminalLifecycleMeta,
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      runId: "run-canonical-assistant-abort",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.meta?.aborted).toBe(true);
+    expect(setTerminalLifecycleMeta.mock.lastCall?.[0]).toMatchObject({
+      aborted: true,
+    });
   });
 
   it("synthesizes a silent cron payload from a trailing current-attempt NO_REPLY tool result", () => {
@@ -618,6 +758,221 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     });
   });
 
+  it("does not recover a stale prior assistant after the current prompt times out", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    const staleAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "text", text: "Stale answer from the prior attempt." }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        timedOut: true,
+        lastAssistant: staleAssistant,
+        currentAttemptAssistant: undefined,
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-prompt-timeout-stale-assistant",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads?.some((payload) => payload.text?.includes("timed out"))).toBe(true);
+    expect(result.payloads?.some((payload) => payload.text?.includes("Stale answer"))).toBe(false);
+    expect(result.meta.finalAssistantVisibleText).toBeUndefined();
+  });
+
+  it("does not resolve a successful run from a stale transcript assistant", async () => {
+    const staleAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "text", text: "Prior transcript reply." }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    const completedAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "text", text: "Current run reply." }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["currentAttemptCompletedAssistant"]>;
+    mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "Current run reply." }]);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Current run reply."],
+        lastAssistant: staleAssistant,
+        currentAttemptAssistant: staleAssistant,
+        currentAttemptCompletedAssistant: completedAssistant,
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-success-stale-transcript-assistant",
+    });
+
+    expect(result.payloads).toEqual([{ text: "Current run reply." }]);
+    expect(result.meta.finalAssistantVisibleText).toBe("Current run reply.");
+    expect(result.meta.finalAssistantRawText).toBe("Current run reply.");
+    expect(mockedBuildEmbeddedRunPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        currentAssistant: completedAssistant,
+        lastAssistant: completedAssistant,
+      }),
+    );
+  });
+
+  it("retains the yielded attempt assistant for paused-turn payload classification", async () => {
+    const completedAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "text", text: "Earlier completed cycle." }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["currentAttemptCompletedAssistant"]>;
+    const yieldedAssistant = {
+      role: "assistant",
+      stopReason: "aborted",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "toolCall", name: "sessions_yield", arguments: {} }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: yieldedAssistant,
+        currentAttemptAssistant: undefined,
+        currentAttemptCompletedAssistant: completedAssistant,
+        yieldDetected: true,
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-yielded-assistant-classification",
+    });
+
+    expect(result.meta).toMatchObject({ livenessState: "paused", yielded: true });
+    expect(mockedBuildEmbeddedRunPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({ currentAssistant: null, lastAssistant: yieldedAssistant }),
+    );
+  });
+
+  it("recovers a completed prompt-timeout assistant without collected assistant text", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    const finalText = "Completed answer after the timeout race.";
+    const finalAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "text", text: finalText }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["currentAttemptAssistant"]>;
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: undefined as unknown as string[],
+        timedOut: true,
+        lastAssistant: finalAssistant,
+        currentAttemptAssistant: finalAssistant,
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-prompt-timeout-no-assistant-texts",
+    });
+
+    expect(result.payloads).toEqual([{ text: finalText }]);
+  });
+
+  it("preserves tool media when prompt-timeout recovery replaces partial assistant text", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    const partialText = "Partial answer before the timeout race.";
+    const finalText = "Complete answer after the timeout race.";
+    const finalAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "text", text: finalText }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["currentAttemptAssistant"]>;
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [partialText],
+        timedOut: true,
+        lastAssistant: finalAssistant,
+        currentAttemptAssistant: finalAssistant,
+        toolMediaUrls: ["https://example.test/recovered-output.png"],
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-prompt-timeout-final-assistant-media",
+    });
+
+    expect(result.payloads).toEqual([
+      {
+        mediaUrl: "https://example.test/recovered-output.png",
+        mediaUrls: ["https://example.test/recovered-output.png"],
+        audioAsVoice: undefined,
+        trustedLocalMedia: undefined,
+      },
+      { text: finalText },
+    ]);
+  });
+
+  it("replaces the latest partial assistant payload after prompt-timeout recovery", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    const completedText = "Completed answer block before the final response.";
+    const partialText = "Partial final response before the timeout race.";
+    const finalText = "Complete final response after the timeout race.";
+    mockedBuildEmbeddedRunPayloads.mockReturnValueOnce([
+      { text: completedText },
+      { text: partialText },
+    ]);
+    const finalAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "text", text: finalText }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["currentAttemptAssistant"]>;
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [completedText, partialText],
+        timedOut: true,
+        lastAssistant: finalAssistant,
+        currentAttemptAssistant: finalAssistant,
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-prompt-timeout-latest-partial",
+    });
+
+    expect(result.payloads).toEqual([{ text: completedText }, { text: finalText }]);
+  });
+
   it("records same-model rate-limit retries without a profile-rotation trace", async () => {
     const rateLimitMessage =
       "429 rate_limit_exceeded: requests per minute exceeded; Retry-After: 30";
@@ -689,8 +1044,9 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
   it("retries reasoning-only GPT turns with a visible-answer continuation instruction", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-      makeAttemptResult({
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams) => {
+      markUserMessagePersisted(attemptParams);
+      return makeAttemptResult({
         assistantTexts: [],
         lastAssistant: {
           role: "assistant",
@@ -705,8 +1061,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
             },
           ],
         } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
-      }),
-    );
+      });
+    });
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: ["Visible answer."],
@@ -729,8 +1085,204 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     const secondCall = runAttemptCall(1);
-    expect(secondCall.prompt).toContain(REASONING_ONLY_RETRY_INSTRUCTION);
+    expect(secondCall.prompt).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
+    expect(secondCall.suppressNextUserMessagePersistence).toBe(false);
+    expect(secondCall.skipPreparedUserTurnMessage).toBe(true);
     expectWarnMessageWith("reasoning-only assistant turn detected");
+  });
+
+  it("continues once after settled side-effecting tools finish without a final answer", async () => {
+    const toolUseAssistant = {
+      role: "assistant",
+      stopReason: "toolUse",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "toolCall", id: "tool_1", name: "write", arguments: { path: "note.txt" } }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    const settledToolResults = [
+      toolUseAssistant,
+      { role: "toolResult", toolCallId: "tool_1", toolName: "write", isError: false },
+    ] as unknown as EmbeddedRunAttemptResult["messagesSnapshot"];
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams) => {
+      markUserMessagePersisted(attemptParams);
+      return makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [{ toolName: "write", meta: "path=note.txt" }],
+        itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+        messagesSnapshot: settledToolResults,
+        lastAssistant: toolUseAssistant,
+        currentAttemptAssistant: toolUseAssistant,
+      });
+    });
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({ assistantTexts: ["Write completed. Here is the final answer."] }),
+    );
+    mockedBuildEmbeddedRunPayloads
+      .mockReturnValueOnce([])
+      .mockReturnValueOnce([{ text: "Write completed. Here is the final answer." }]);
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-tool-use-terminal-continuation",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.payloads?.[0]?.text).toBe("Write completed. Here is the final answer.");
+    const secondCall = runAttemptCall(1);
+    expect(secondCall.prompt).toBe(TOOL_USE_TERMINAL_CONTINUATION_INSTRUCTION);
+    expect(secondCall.suppressNextUserMessagePersistence).toBe(false);
+    expect(secondCall.skipPreparedUserTurnMessage).toBe(true);
+    expectWarnMessageWith("tool-use terminal turn lacked a final answer");
+  });
+
+  it("surfaces the existing incomplete-turn error after one tool-use continuation", async () => {
+    const toolUseAssistant = {
+      role: "assistant",
+      stopReason: "toolUse",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "toolCall", id: "tool_1", name: "write", arguments: { path: "note.txt" } }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [{ toolName: "write", meta: "path=note.txt" }],
+        itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+        messagesSnapshot: [
+          toolUseAssistant,
+          { role: "toolResult", toolCallId: "tool_1", toolName: "write", isError: false },
+        ] as unknown as EmbeddedRunAttemptResult["messagesSnapshot"],
+        lastAssistant: toolUseAssistant,
+        currentAttemptAssistant: toolUseAssistant,
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-tool-use-terminal-continuation-exhausted",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.payloads?.[0]?.isError).toBe(true);
+    expect(result.payloads?.[0]?.text).toContain(
+      "some tool actions may have already been executed",
+    );
+    expectWarnMessageWith("toolUseContinuations=1/1");
+  });
+
+  it("does not claim completion for a toolUse terminal whose tools never started", async () => {
+    const toolUseAssistant = {
+      role: "assistant",
+      stopReason: "toolUse",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "toolCall", id: "tool_1", name: "write", arguments: { path: "note.txt" } }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [],
+        itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
+        lastAssistant: toolUseAssistant,
+        currentAttemptAssistant: toolUseAssistant,
+      }),
+    );
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-tool-use-terminal-never-started",
+    });
+
+    for (let call = 0; call < mockedRunEmbeddedAttempt.mock.calls.length; call += 1) {
+      expect(runAttemptCall(call).prompt).not.toContain(TOOL_USE_TERMINAL_CONTINUATION_INSTRUCTION);
+    }
+    expectNoWarnMessageWith("tool-use terminal turn lacked a final answer");
+  });
+
+  it("ignores stale prior-turn tool results with colliding ids", async () => {
+    const toolUseAssistant = {
+      role: "assistant",
+      stopReason: "toolUse",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "toolCall", id: "tool_1", name: "write", arguments: { path: "note.txt" } }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [],
+        itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
+        // A completed result from a PRIOR turn reusing the same id sits before
+        // the terminal assistant; it must not prove the new batch dispatched.
+        messagesSnapshot: [
+          { role: "toolResult", toolCallId: "tool_1", toolName: "write", isError: false },
+          toolUseAssistant,
+        ] as unknown as EmbeddedRunAttemptResult["messagesSnapshot"],
+        lastAssistant: toolUseAssistant,
+        currentAttemptAssistant: toolUseAssistant,
+      }),
+    );
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-tool-use-terminal-stale-prior-result",
+    });
+
+    for (let call = 0; call < mockedRunEmbeddedAttempt.mock.calls.length; call += 1) {
+      expect(runAttemptCall(call).prompt).not.toContain(TOOL_USE_TERMINAL_CONTINUATION_INSTRUCTION);
+    }
+    expectNoWarnMessageWith("tool-use terminal turn lacked a final answer");
+  });
+
+  it("does not claim completion when only part of a multi-tool request dispatched", async () => {
+    const toolUseAssistant = {
+      role: "assistant",
+      stopReason: "toolUse",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [
+        { type: "toolCall", id: "tool_1", name: "write", arguments: { path: "a.txt" } },
+        { type: "toolCall", id: "tool_2", name: "write", arguments: { path: "b.txt" } },
+      ],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [{ toolName: "write", meta: "path=a.txt" }],
+        itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+        messagesSnapshot: [
+          toolUseAssistant,
+          { role: "toolResult", toolCallId: "tool_1", toolName: "write", isError: false },
+        ] as unknown as EmbeddedRunAttemptResult["messagesSnapshot"],
+        lastAssistant: toolUseAssistant,
+        currentAttemptAssistant: toolUseAssistant,
+      }),
+    );
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-tool-use-terminal-partial-dispatch",
+    });
+
+    for (let call = 0; call < mockedRunEmbeddedAttempt.mock.calls.length; call += 1) {
+      expect(runAttemptCall(call).prompt).not.toContain(TOOL_USE_TERMINAL_CONTINUATION_INSTRUCTION);
+    }
+    expectNoWarnMessageWith("tool-use terminal turn lacked a final answer");
   });
 
   it("returns NO_REPLY without retrying reasoning-only assistant turns when silence is allowed", async () => {
@@ -770,6 +1322,58 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(result.payloads).toEqual([{ text: "NO_REPLY" }]);
     expect(result.meta.terminalReplyKind).toBe("silent-empty");
     expect(result.meta.livenessState).toBe("working");
+  });
+
+  it("replays an unpersisted reasoning continuation across a missing-assistant retry", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams) => {
+      markUserMessagePersisted(attemptParams);
+      return makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "end_turn",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [
+            {
+              type: "thinking",
+              thinking: "internal reasoning",
+              thinkingSignature: JSON.stringify({ id: "rs_retry_boundary", type: "reasoning" }),
+            },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      });
+    });
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: undefined,
+        currentAttemptAssistant: undefined,
+      }),
+    );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({ assistantTexts: ["Visible answer."] }),
+    );
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.4",
+      runId: "run-reasoning-continuation-missing-assistant",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(3);
+    expect(runAttemptCall(1)).toMatchObject({
+      prompt: REASONING_ONLY_RETRY_INSTRUCTION,
+      skipPreparedUserTurnMessage: true,
+      suppressNextUserMessagePersistence: false,
+    });
+    expect(runAttemptCall(2)).toMatchObject({
+      prompt: REASONING_ONLY_RETRY_INSTRUCTION,
+      skipPreparedUserTurnMessage: true,
+      suppressNextUserMessagePersistence: false,
+    });
   });
 
   it("does not retry or warn on reasoning-only turns when a messaging tool already delivered", async () => {
@@ -952,8 +1556,9 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
   it("retries generic empty GPT turns with a visible-answer continuation instruction", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-      makeAttemptResult({
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams) => {
+      markUserMessagePersisted(attemptParams);
+      return makeAttemptResult({
         assistantTexts: [],
         lastAssistant: {
           role: "assistant",
@@ -962,8 +1567,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
           model: "gpt-5.4",
           content: [{ type: "text", text: "" }],
         } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
-      }),
-    );
+      });
+    });
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: ["Visible answer."],
@@ -986,16 +1591,25 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     const secondCall = runAttemptCall(1);
-    expect(secondCall.prompt).toContain(EMPTY_RESPONSE_RETRY_INSTRUCTION);
+    expect(secondCall.prompt).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
+    expect(secondCall.suppressNextUserMessagePersistence).toBe(false);
+    expect(secondCall.skipPreparedUserTurnMessage).toBe(true);
     expectWarnMessageWith("empty response detected");
   });
 
-  it("retries replay-safe missing terminal assistant turns once with the same prompt", async () => {
+  it("retries replay-safe missing turns despite a stale aborted transcript assistant", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
+    const staleAssistant = {
+      role: "assistant",
+      stopReason: "aborted",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: [],
-        lastAssistant: undefined,
+        lastAssistant: staleAssistant,
         currentAttemptAssistant: undefined,
       }),
     );
@@ -1022,11 +1636,165 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     });
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(runAttemptCall(1).prompt).toContain(EMPTY_RESPONSE_RETRY_INSTRUCTION);
+    expect(result.meta?.finalAssistantVisibleText).toBe("Recovered answer.");
+    expectWarnMessageWith("empty response detected");
+    expectNoWarnMessageWith("missing assistant terminal message detected");
+    expectNoWarnMessageWith("incomplete turn detected");
+  });
+
+  it("retries missing terminal assistant turns with the same prompt without re-persisting the user message", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams) => {
+      markUserMessagePersisted(attemptParams);
+      return makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: undefined,
+        currentAttemptAssistant: undefined,
+      });
+    });
+    const recoveredAssistant = {
+      role: "assistant",
+      stopReason: "end_turn",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "text", text: "Recovered answer." }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["currentAttemptAssistant"]>;
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Recovered answer."],
+        lastAssistant: recoveredAssistant,
+        currentAttemptAssistant: recoveredAssistant,
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-missing-assistant-same-prompt-retry",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    // The same-prompt replay must not append the inbound user message a second time.
     expect(runAttemptCall(1).prompt).toBe(runAttemptCall(0).prompt);
+    expect(runAttemptCall(1).suppressNextUserMessagePersistence).toBe(true);
     expect(result.meta?.finalAssistantVisibleText).toBe("Recovered answer.");
     expectWarnMessageWith("missing assistant terminal message detected");
     expectNoWarnMessageWith("empty response detected");
     expectNoWarnMessageWith("incomplete turn detected");
+  });
+
+  it("waits for asynchronous user persistence before retrying a missing terminal turn", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    const persistedMessage = { role: "user" as const, content: "test prompt", timestamp: 1 };
+    let resolvePersistApproved:
+      | ((result: {
+          sessionFile: string;
+          sessionEntry: undefined;
+          messageId: string;
+          message: typeof persistedMessage;
+        }) => void)
+      | undefined;
+    let pendingPersistence: Promise<void> | undefined;
+    const persistApproved = vi.fn(
+      () =>
+        new Promise<{
+          sessionFile: string;
+          sessionEntry: undefined;
+          messageId: string;
+          message: typeof persistedMessage;
+        }>((resolve) => {
+          resolvePersistApproved = resolve;
+        }),
+    );
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams) => {
+      markUserMessagePersisted(attemptParams);
+      return makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: undefined,
+        currentAttemptAssistant: undefined,
+      });
+    });
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({ assistantTexts: ["Recovered answer."] }),
+    );
+
+    const runPromise = runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-missing-assistant-delayed-persistence",
+      userTurnTranscriptRecorder: {
+        message: persistedMessage,
+        resolveMessage: vi.fn(async () => persistedMessage),
+        markRuntimePersistencePending: vi.fn((pending) => {
+          pendingPersistence = pending;
+        }),
+        markRuntimePersisted: vi.fn(),
+        markBlocked: vi.fn(),
+        hasPersisted: vi.fn(() => false),
+        isBlocked: vi.fn(() => false),
+        hasRuntimePersistencePending: vi.fn(() => pendingPersistence !== undefined),
+        waitForRuntimePersistence: vi.fn(async () => {
+          await pendingPersistence;
+        }),
+        persistApproved,
+        persistBlocked: vi.fn(async () => undefined),
+        persistFallback: vi.fn(async () => undefined),
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(persistApproved).toHaveBeenCalledOnce();
+    });
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+
+    resolvePersistApproved?.({
+      sessionFile: "/tmp/openclaw-transcript.jsonl",
+      sessionEntry: undefined,
+      messageId: "msg-user-delayed",
+      message: persistedMessage,
+    });
+    await runPromise;
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(runAttemptCall(1).suppressNextUserMessagePersistence).toBe(true);
+  });
+
+  it("persists a missing-turn retry when the first attempt never persisted the user message", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: undefined,
+        currentAttemptAssistant: undefined,
+      }),
+    );
+    const recoveredAssistant = {
+      role: "assistant",
+      stopReason: "end_turn",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "text", text: "Recovered answer." }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["currentAttemptAssistant"]>;
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Recovered answer."],
+        lastAssistant: recoveredAssistant,
+        currentAttemptAssistant: recoveredAssistant,
+      }),
+    );
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-missing-assistant-unpersisted-retry",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(runAttemptCall(1).suppressNextUserMessagePersistence).toBe(false);
   });
 
   it("retries zero-token empty Claude stop turns with a visible-answer continuation instruction", async () => {
@@ -1411,6 +2179,38 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         lastAssistant: { stopReason: "toolUse" },
       }),
     ).toBe(true);
+  });
+
+  it.each([
+    { label: "aborted", aborted: true, timedOut: false, promptError: null },
+    { label: "timed out", aborted: false, timedOut: true, promptError: null },
+    { label: "prompt error", aborted: false, timedOut: false, promptError: new Error("closed") },
+  ])("does not continue a $label tool-use terminal turn", ({ aborted, timedOut, promptError }) => {
+    const toolUseAssistant = {
+      role: "assistant",
+      stopReason: "toolUse",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "tool_use", id: "tool_1", name: "bash", input: {} }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    const instruction = resolveToolUseTerminalContinuationInstruction({
+      provider: "openai",
+      modelId: "gpt-5.5",
+      modelApi: "openai-chatgpt-responses",
+      payloadCount: 0,
+      aborted,
+      timedOut,
+      promptError,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [{ toolName: "bash" }],
+        itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+        lastAssistant: toolUseAssistant,
+        currentAttemptAssistant: toolUseAssistant,
+      }),
+    });
+
+    expect(instruction).toBeNull();
   });
 
   it("does not flag stale lastAssistant=toolUse when currentAttemptAssistant=stop exists (#80918)", () => {
@@ -1804,7 +2604,10 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
           stopReason: "stop",
           content: [{ type: "text", text: finalText }],
         }),
-        lastAssistant: expect.objectContaining({ stopReason: "toolUse" }),
+        lastAssistant: expect.objectContaining({
+          stopReason: "stop",
+          content: [{ type: "text", text: finalText }],
+        }),
       }),
     );
     expect(result.meta.finalAssistantVisibleText).toBe(finalText);
@@ -3580,3 +4383,4 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expectNoWarnMessageWith("planning");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

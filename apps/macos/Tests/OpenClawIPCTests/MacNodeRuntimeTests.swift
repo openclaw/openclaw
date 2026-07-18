@@ -1,4 +1,5 @@
 import CoreLocation
+import Dispatch
 import Foundation
 import OpenClawKit
 import Testing
@@ -43,6 +44,40 @@ struct MacNodeRuntimeTests {
         }
     }
 
+    private final class CatalogWorkerProbe: @unchecked Sendable {
+        private let lock = NSLock()
+        private let releaseFirst = DispatchSemaphore(value: 0)
+        private var calls = 0
+        private var active = 0
+        private var peakActive = 0
+
+        func run() -> String {
+            self.lock.lock()
+            self.calls += 1
+            let call = self.calls
+            self.active += 1
+            self.peakActive = max(self.peakActive, self.active)
+            self.lock.unlock()
+            if call == 1 {
+                self.releaseFirst.wait()
+            }
+            self.lock.lock()
+            self.active -= 1
+            self.lock.unlock()
+            return "call-\(call)"
+        }
+
+        func release() {
+            self.releaseFirst.signal()
+        }
+
+        func snapshot() -> (calls: Int, peakActive: Int) {
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            return (self.calls, self.peakActive)
+        }
+    }
+
     private func waitForCount(_ expected: Int, counter: LockedCounter) async -> Bool {
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: .seconds(1))
@@ -57,19 +92,20 @@ struct MacNodeRuntimeTests {
 
         func refresh() -> String? {
             self.calls += 1
-            return "http://127.0.0.1:18789/refreshed"
+            return "http://127.0.0.1:18789/__openclaw__/cap/refreshed-token"
         }
     }
 
-    actor ExecEventProbe {
-        private var captured: [(event: String, json: String)] = []
+    actor CanvasReconnectProbe {
+        private var surfaceURL = "http://127.0.0.1:18789/__openclaw__/cap/old-token"
 
-        func append(event: String, json: String?) {
-            self.captured.append((event: event, json: json ?? ""))
+        func current() -> String? {
+            self.surfaceURL
         }
 
-        func events() -> [(event: String, json: String)] {
-            self.captured
+        func reconnectDuringRefresh() -> String? {
+            self.surfaceURL = "http://127.0.0.1:18789/__openclaw__/cap/new-token"
+            return nil
         }
     }
 
@@ -197,97 +233,163 @@ struct MacNodeRuntimeTests {
         #expect(response.error?.message == "UNAVAILABLE: Codex session catalog is disabled")
     }
 
-    @Test func `A2UI host capability refresh uses injected node session refresher`() async {
-        let probe = CanvasRefreshProbe()
+    @Test func `handle invoke returns an injected Codex transcript turn page`() async {
+        let payload = #"{"data":[{"id":"item-1","type":"agentMessage","text":"answer"}],"nextCursor":"page-2"}"#
         let runtime = MacNodeRuntime(
-            canvasSurfaceUrl: { "http://127.0.0.1:18789/current" },
-            refreshCanvasSurfaceUrl: { await probe.refresh() })
+            codexThreadCatalogEnabled: { true },
+            codexThreadTurnsRequest: { paramsJSON in
+                #expect(paramsJSON == #"{"threadId":"thread-1","limit":50}"#)
+                return payload
+            })
+        let response = await runtime.handleInvoke(BridgeInvokeRequest(
+            id: "req-codex-items",
+            command: MacNodeCodexThreadCatalogContract.turnsCommand,
+            paramsJSON: #"{"threadId":"thread-1","limit":50}"#))
 
-        let current = await runtime.resolveA2UIHostUrlWithCapabilityRefresh()
-        #expect(current == "http://127.0.0.1:18789/current/__openclaw__/a2ui/?platform=macos")
-        #expect(await probe.calls == 0)
-
-        let refreshed = await runtime.resolveA2UIHostUrlWithCapabilityRefresh(forceRefresh: true)
-        #expect(refreshed == "http://127.0.0.1:18789/refreshed/__openclaw__/a2ui/?platform=macos")
-        #expect(await probe.calls == 1)
+        #expect(response.ok)
+        #expect(response.payloadJSON == payload)
     }
 
-    @Test func `handle invoke rejects empty system run`() async throws {
-        let runtime = MacNodeRuntime()
-        let params = OpenClawSystemRunParams(command: [])
-        let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
-        let response = await runtime.handleInvoke(
-            BridgeInvokeRequest(id: "req-2", command: OpenClawSystemCommand.run.rawValue, paramsJSON: json))
-        #expect(response.ok == false)
+    @Test func `handle invoke returns injected Claude session pages`() async {
+        let listPayload = #"{"sessions":[]}"#
+        let readPayload = #"{"threadId":"thread-1","items":[]}"#
+        let runtime = MacNodeRuntime(
+            claudeSessionCatalogEnabled: { true },
+            claudeSessionListRequest: { paramsJSON in
+                #expect(paramsJSON == #"{"limit":7}"#)
+                return listPayload
+            },
+            claudeSessionReadRequest: { paramsJSON in
+                #expect(paramsJSON == #"{"threadId":"thread-1","limit":20}"#)
+                return readPayload
+            })
+
+        let list = await runtime.handleInvoke(BridgeInvokeRequest(
+            id: "req-claude-list",
+            command: MacNodeClaudeSessionCatalogContract.listCommand,
+            paramsJSON: #"{"limit":7}"#))
+        let read = await runtime.handleInvoke(BridgeInvokeRequest(
+            id: "req-claude-read",
+            command: MacNodeClaudeSessionCatalogContract.readCommand,
+            paramsJSON: #"{"threadId":"thread-1","limit":20}"#))
+
+        #expect(list.ok)
+        #expect(list.payloadJSON == listPayload)
+        #expect(read.ok)
+        #expect(read.payloadJSON == readPayload)
     }
 
-    @Test func `system run denied event preserves gateway run id`() async throws {
-        let stateDir = FileManager().temporaryDirectory
-            .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)
-        defer { try? FileManager().removeItem(at: stateDir) }
+    @Test func `Claude catalog worker serializes filesystem operations`() async throws {
+        let probe = CatalogWorkerProbe()
+        let worker = MacNodeClaudeSessionCatalogWorker(
+            listOperation: { _ in probe.run() },
+            readOperation: { _ in probe.run() })
+        let first = Task { try await worker.list(paramsJSON: nil) }
+        while probe.snapshot().calls == 0 {
+            await Task.yield()
+        }
+        let second = Task { try await worker.read(paramsJSON: nil) }
+        try await Task.sleep(for: .milliseconds(50))
 
-        try await TestIsolation.withEnvValues(["OPENCLAW_STATE_DIR": stateDir.path]) {
-            let probe = ExecEventProbe()
-            let runtime = MacNodeRuntime()
-            await runtime.setEventSender { event, json in
-                await probe.append(event: event, json: json)
-            }
-            let params = OpenClawSystemRunParams(
-                command: ["/bin/sh", "-lc", "printf ok"],
-                sessionKey: "agent:main:main",
-                runId: "gateway-run-1")
-            let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
-            let response = await runtime.handleInvoke(
-                BridgeInvokeRequest(
-                    id: "req-run-id",
-                    command: OpenClawSystemCommand.run.rawValue,
-                    paramsJSON: json))
+        #expect(probe.snapshot().calls == 1)
+        let cancelStarted = ContinuousClock.now
+        let watchdog = Task {
+            try await Task.sleep(for: .seconds(1))
+            probe.release()
+        }
+        second.cancel()
+        await #expect(throws: CancellationError.self) {
+            try await second.value
+        }
+        #expect(ContinuousClock.now - cancelStarted < .milliseconds(500))
+        watchdog.cancel()
+        probe.release()
+        #expect(try await first.value == "call-1")
+        #expect(try await worker.read(paramsJSON: nil) == "call-2")
+        #expect(probe.snapshot().peakActive == 1)
+    }
 
-            #expect(response.ok == false)
-            let denied = try #require(await (probe.events()).first { $0.event == "exec.denied" })
-            struct Payload: Decodable {
-                var sessionKey: String
-                var runId: String
-            }
-            let payload = try JSONDecoder().decode(Payload.self, from: Data(denied.json.utf8))
-            #expect(payload.sessionKey == "agent:main:main")
-            #expect(payload.runId == "gateway-run-1")
+    @Test func `Claude catalog worker propagates caller cancellation`() async {
+        let started = LockedCounter()
+        let worker = MacNodeClaudeSessionCatalogWorker(
+            listOperation: { _ in
+                started.increment()
+                while !Task.isCancelled {
+                    Thread.sleep(forTimeInterval: 0.001)
+                }
+                throw CancellationError()
+            },
+            readOperation: { _ in "unused" })
+        let task = Task { try await worker.list(paramsJSON: nil) }
+        #expect(await self.waitForCount(1, counter: started))
+
+        task.cancel()
+        await #expect(throws: CancellationError.self) {
+            try await task.value
         }
     }
 
-    @Test func `handle invoke rejects blocked system run env override before execution`() async throws {
-        let runtime = MacNodeRuntime()
-        let params = OpenClawSystemRunParams(
-            command: ["/bin/sh", "-lc", "echo ok"],
-            env: ["CLASSPATH": "/tmp/evil-classpath"])
-        let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
-        let response = await runtime.handleInvoke(
-            BridgeInvokeRequest(id: "req-2c", command: OpenClawSystemCommand.run.rawValue, paramsJSON: json))
-        #expect(response.ok == false)
-        #expect(response.error?.message.contains("SYSTEM_RUN_DENIED: environment override rejected") == true)
-        #expect(response.error?.message.contains("CLASSPATH") == true)
+    @Test func `handle invoke enforces local Claude catalog policy`() async {
+        let runtime = MacNodeRuntime(
+            claudeSessionCatalogEnabled: { false },
+            claudeSessionListRequest: { _ in
+                Issue.record("disabled Claude catalog request must not execute")
+                return #"{"sessions":[]}"#
+            })
+        let response = await runtime.handleInvoke(BridgeInvokeRequest(
+            id: "req-claude-disabled",
+            command: MacNodeClaudeSessionCatalogContract.listCommand))
+
+        #expect(!response.ok)
+        #expect(response.error?.code == .unavailable)
+        #expect(response.error?.message == "UNAVAILABLE: Claude session catalog is disabled")
     }
 
-    @Test func `handle invoke rejects invalid system run env override key before execution`() async throws {
-        let runtime = MacNodeRuntime()
-        let params = OpenClawSystemRunParams(
-            command: ["/bin/sh", "-lc", "echo ok"],
-            env: ["BAD-KEY": "x"])
-        let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
-        let response = await runtime.handleInvoke(
-            BridgeInvokeRequest(id: "req-2d", command: OpenClawSystemCommand.run.rawValue, paramsJSON: json))
-        #expect(response.ok == false)
-        #expect(response.error?.message.contains("SYSTEM_RUN_DENIED: environment override rejected") == true)
-        #expect(response.error?.message.contains("BAD-KEY") == true)
+    @Test func `A2UI host capability refresh uses injected node session refresher`() async {
+        let probe = CanvasRefreshProbe()
+        let resolver = MacNodeCanvasHostedSurfaceResolver(
+            currentSurfaceURL: { "http://127.0.0.1:18789/__openclaw__/cap/current-token" },
+            refreshSurfaceURL: { _ in await probe.refresh() })
+
+        let current = await resolver.resolveA2UIURL()
+        #expect(current ==
+            "http://127.0.0.1:18789/__openclaw__/cap/current-token/__openclaw__/a2ui/?platform=macos")
+        #expect(await probe.calls == 0)
+
+        let refreshed = await resolver.resolveA2UIURL(forceRefresh: true)
+        #expect(refreshed ==
+            "http://127.0.0.1:18789/__openclaw__/cap/refreshed-token/__openclaw__/a2ui/?platform=macos")
+        #expect(await probe.calls == 1)
     }
 
-    @Test func `handle invoke rejects empty system which`() async throws {
-        let runtime = MacNodeRuntime()
-        let params = OpenClawSystemWhichParams(bins: [])
-        let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
-        let response = await runtime.handleInvoke(
-            BridgeInvokeRequest(id: "req-2b", command: OpenClawSystemCommand.which.rawValue, paramsJSON: json))
-        #expect(response.ok == false)
+    @Test func `hosted Canvas commands refresh capability and preserve target components`() async throws {
+        let probe = CanvasRefreshProbe()
+        let resolver = MacNodeCanvasHostedSurfaceResolver(
+            currentSurfaceURL: { "http://127.0.0.1:18789/__openclaw__/cap/current-token" },
+            refreshSurfaceURL: { _ in await probe.refresh() })
+
+        let resolved = try await resolver.resolveTarget(
+            "/__openclaw__/canvas/demo%20page.html?mode=proof#result")
+        #expect(resolved?.url.absoluteString ==
+            "http://127.0.0.1:18789/__openclaw__/cap/refreshed-token/__openclaw__/canvas/demo%20page.html?mode=proof#result")
+        #expect(resolved?.allowsA2UIActions == false)
+        #expect(await probe.calls == 1)
+
+        let external = try await resolver.resolveTarget("https://example.com/")
+        #expect(external == nil)
+        #expect(await probe.calls == 1)
+    }
+
+    @Test func `hosted Canvas commands use replacement route after refresh fails`() async throws {
+        let probe = CanvasReconnectProbe()
+        let resolver = MacNodeCanvasHostedSurfaceResolver(
+            currentSurfaceURL: { await probe.current() },
+            refreshSurfaceURL: { _ in await probe.reconnectDuringRefresh() })
+
+        let resolved = try await resolver.resolveTarget("/__openclaw__/canvas/demo.html")
+
+        #expect(resolved?.url.absoluteString ==
+            "http://127.0.0.1:18789/__openclaw__/cap/new-token/__openclaw__/canvas/demo.html")
     }
 
     @Test func `handle invoke rejects empty notification`() async throws {
@@ -986,40 +1088,5 @@ struct MacNodeRuntimeTests {
             requestId: "req-control",
             nodeId: controlHeavyNodeId)
         #expect(controlHeavyProjection > 25 * 1024 * 1024)
-    }
-
-    @Test func `handle invoke browser proxy uses injected request`() async {
-        let runtime = MacNodeRuntime(
-            browserProxyRequest: { paramsJSON in
-                #expect(paramsJSON?.contains("/tabs") == true)
-                return #"{"result":{"ok":true,"tabs":[{"id":"tab-1"}]}}"#
-            },
-            browserControlEnabled: { true })
-        let paramsJSON = #"{"method":"GET","path":"/tabs","timeoutMs":2500}"#
-        let response = await runtime.handleInvoke(
-            BridgeInvokeRequest(
-                id: "req-browser",
-                command: OpenClawBrowserCommand.proxy.rawValue,
-                paramsJSON: paramsJSON))
-
-        #expect(response.ok == true)
-        #expect(response.payloadJSON == #"{"result":{"ok":true,"tabs":[{"id":"tab-1"}]}}"#)
-    }
-
-    @Test func `handle invoke browser proxy rejects disabled browser control`() async {
-        let runtime = MacNodeRuntime(
-            browserProxyRequest: { _ in
-                Issue.record("browserProxyRequest should not run when browser control is disabled")
-                return "{}"
-            },
-            browserControlEnabled: { false })
-        let response = await runtime.handleInvoke(
-            BridgeInvokeRequest(
-                id: "req-browser-disabled",
-                command: OpenClawBrowserCommand.proxy.rawValue,
-                paramsJSON: #"{"method":"GET","path":"/tabs"}"#))
-
-        #expect(response.ok == false)
-        #expect(response.error?.message.contains("BROWSER_DISABLED") == true)
     }
 }

@@ -4,6 +4,7 @@ import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { redactIdentifier } from "openclaw/plugin-sdk/logging-core";
 import { MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS } from "openclaw/plugin-sdk/media-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -27,13 +28,13 @@ const WHATSAPP_TEST_CFG: OpenClawConfig = {
   channels: { whatsapp: {} },
 };
 
-vi.mock("./connection-controller-registry.js", async () => {
-  const actual = await vi.importActual<typeof import("./connection-controller-registry.js")>(
-    "./connection-controller-registry.js",
+vi.mock("./connection-controller-runtime-context.js", async () => {
+  const actual = await vi.importActual<typeof import("./connection-controller-runtime-context.js")>(
+    "./connection-controller-runtime-context.js",
   );
   return {
     ...actual,
-    getRegisteredWhatsAppConnectionController: vi.fn((accountId: string) => {
+    getWhatsAppConnectionController: vi.fn((accountId: string) => {
       const listener = hoisted.controllerListeners.get(accountId) ?? null;
       return listener
         ? {
@@ -83,7 +84,10 @@ describe("web outbound", () => {
   beforeAll(async () => {
     ({ sendMessageWhatsApp, sendPollWhatsApp, sendReactionWhatsApp, sendTypingWhatsApp } =
       await import("./send.js"));
-    ({ resetLogger, setLoggerOverride } = await import("openclaw/plugin-sdk/runtime-env"));
+    const { resetLogger: loadedResetLogger, setLoggerOverride: loadedSetLoggerOverride } =
+      await import("openclaw/plugin-sdk/runtime-env");
+    resetLogger = loadedResetLogger;
+    setLoggerOverride = loadedSetLoggerOverride;
   });
 
   beforeEach(() => {
@@ -326,27 +330,19 @@ describe("web outbound", () => {
 
   it("throws a helpful error when no active listener exists", async () => {
     hoisted.controllerListeners.clear();
-    await expect(
-      sendMessageWhatsApp("+1555", "hi", {
-        verbose: false,
-        cfg: WHATSAPP_TEST_CFG,
-        accountId: "work",
-      }),
-    ).rejects.toThrow(/No active WhatsApp Web listener/);
-    await expect(
-      sendMessageWhatsApp("+1555", "hi", {
-        verbose: false,
-        cfg: WHATSAPP_TEST_CFG,
-        accountId: "work",
-      }),
-    ).rejects.toThrow(/channels login/);
-    await expect(
-      sendMessageWhatsApp("+1555", "hi", {
-        verbose: false,
-        cfg: WHATSAPP_TEST_CFG,
-        accountId: "work",
-      }),
-    ).rejects.toThrow(/account: work/);
+    const error = await sendMessageWhatsApp("+1555", "hi", {
+      verbose: false,
+      cfg: WHATSAPP_TEST_CFG,
+      accountId: "work",
+    }).catch((err: unknown) => err);
+
+    expect(error).toBeInstanceOf(PlatformMessageNotDispatchedError);
+    expect(error).toMatchObject({
+      code: "OPENCLAW_PLATFORM_MESSAGE_NOT_DISPATCHED",
+      message: expect.stringMatching(
+        /No active WhatsApp Web listener.*channels login.*account work/,
+      ),
+    });
   });
 
   it("maps audio to PTT with opus mime when ogg", async () => {
@@ -546,7 +542,7 @@ describe("web outbound", () => {
     expect(sendMessage).toHaveBeenCalledTimes(1);
   });
 
-  it("prefers explicit mediaUrl over mediaUrls when both are present", async () => {
+  it("keeps direct API mediaUrl ahead of additive mediaUrls", async () => {
     const buf = Buffer.from("img");
     loadWebMediaMock.mockResolvedValueOnce({
       buffer: buf,

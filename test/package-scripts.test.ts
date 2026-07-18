@@ -1,5 +1,6 @@
 // Package script tests validate root package script invariants.
 import fs from "node:fs";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 
 type RootPackageJson = {
@@ -120,11 +121,14 @@ describe("package scripts", () => {
   });
 
   it.each([
-    { scriptName: "build:docker", expectedCount: 5 },
+    { scriptName: "build:docker", expectedCount: 4 },
     { scriptName: "build:plugin-sdk:strict-smoke", expectedCount: 1 },
     { scriptName: "build:strict-smoke", expectedCount: 1 },
   ])("runs TypeScript steps in $scriptName through tsx", ({ scriptName, expectedCount }) => {
-    const script = readPackageJson().scripts[scriptName];
+    const script = expectDefined(
+      readPackageJson().scripts[scriptName],
+      `package script ${scriptName}`,
+    );
 
     expect(script).not.toContain("--experimental-strip-types");
     expect(script.match(/node --import tsx scripts\/[^\s]+\.ts/gu)).toHaveLength(expectedCount);
@@ -155,7 +159,7 @@ describe("package scripts", () => {
   it("builds iOS against a generic simulator by default", () => {
     const script = readPackageJson().scripts["ios:build"];
 
-    expect(script).toContain('${IOS_DEST:-generic/platform=iOS Simulator}');
+    expect(script).toContain("${IOS_DEST:-generic/platform=iOS Simulator}");
     expect(script).not.toContain("name=iPhone");
   });
 
@@ -165,9 +169,27 @@ describe("package scripts", () => {
     );
   });
 
+  it("runs SQLite transcript archive durability coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "src/config/sessions/store.session-lifecycle-mutation.test.ts",
+    );
+  });
+
+  it("runs cross-OS installer behavior coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "test/scripts/openclaw-cross-os-installer.windows.test.ts",
+    );
+  });
+
   it("runs env launcher coverage in Windows CI", () => {
     expect(readPackageJson().scripts["test:windows:ci"]).toContain(
       "test/scripts/run-with-env.test.ts",
+    );
+  });
+
+  it("runs ts-topology entrypoint coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "test/scripts/ts-topology.test.ts",
     );
   });
 });

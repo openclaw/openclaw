@@ -11,7 +11,12 @@ import {
   validateWorktreesRestoreParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
-import { managedWorktrees } from "../../agents/worktrees/service.js";
+import { createManagedWorktreeOwnerProtection } from "../../agents/worktrees/owner-protection.js";
+import {
+  managedWorktrees,
+  resolveWorktreeCleanupLimits,
+  WorktreeSnapshotError,
+} from "../../agents/worktrees/service.js";
 import type { ManagedWorktreeService } from "../../agents/worktrees/service.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -79,6 +84,12 @@ export function createWorktreesHandlers(service: WorktreeService): GatewayReques
           undefined,
         );
       } catch (error) {
+        // Snapshot failures are a structured outcome: clients decide whether
+        // to retry with force instead of sniffing error strings.
+        if (error instanceof WorktreeSnapshotError) {
+          respond(true, { removed: false, snapshotError: error.snapshotError }, undefined);
+          return;
+        }
         respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(error)));
       }
     },
@@ -131,13 +142,22 @@ export function createWorktreesHandlers(service: WorktreeService): GatewayReques
         respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(error)));
       }
     },
-    "worktrees.gc": async ({ params, respond }) => {
+    "worktrees.gc": async ({ params, respond, context }) => {
       if (!validateWorktreesGcParams(params)) {
         invalidParams(respond);
         return;
       }
       try {
-        respond(true, await service.gc(), undefined);
+        const cfg = context.getRuntimeConfig();
+        const limits = resolveWorktreeCleanupLimits(cfg.worktrees);
+        respond(
+          true,
+          await service.gc({
+            limits,
+            shouldProtectOwner: createManagedWorktreeOwnerProtection(cfg),
+          }),
+          undefined,
+        );
       } catch (error) {
         respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(error)));
       }

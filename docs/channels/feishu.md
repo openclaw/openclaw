@@ -150,6 +150,22 @@ In `allowlist` mode, you can also admit a group by adding an explicit `groups.<c
 
 `channels.feishu.groupSenderAllowFrom` sets the same sender allowlist for all groups; a per-group `allowFrom` takes precedence.
 
+### Bot-authored messages
+
+Feishu ignores messages authored by other bots by default. To allow bot-to-bot group conversations, grant the app the `im:message.group_at_msg.include_bot:readonly` and `im:message:readonly` scopes, then set `allowBots`:
+
+```json5
+{
+  channels: {
+    feishu: {
+      allowBots: true,
+    },
+  },
+}
+```
+
+Feishu only delivers bot-authored group events when another bot mentions this bot. Existing group policy, sender allowlists, and mention requirements still apply. OpenClaw drops self-authored messages, mentions the peer bot on every text or card reply, and applies the shared [`channels.defaults.botLoopProtection`](/channels/bot-loop-protection) guard.
+
 <a id="get-groupuser-ids"></a>
 
 ## Get group/user IDs
@@ -199,10 +215,34 @@ Feishu/Lark does not support native slash-command menus, so send these as plain 
 
 1. Ensure the bot is published and approved in Feishu Open Platform / Lark Developer
 2. Ensure event subscription includes `im.message.receive_v1`
-3. Ensure **persistent connection** (WebSocket) is selected
-4. Ensure all required permission scopes are granted
-5. Ensure the gateway is running: `openclaw gateway status`
-6. Check logs: `openclaw logs --follow`
+3. For meeting invite auto-join, also subscribe to `vc.bot.meeting_invited_v1`
+4. Ensure **persistent connection** (WebSocket) is selected
+5. Ensure all required permission scopes are granted
+6. Ensure the gateway is running: `openclaw gateway status`
+7. Check logs: `openclaw logs --follow`
+
+Subscribing to `vc.bot.meeting_invited_v1` only delivers the event. Automatic joins are
+default-off; enable them globally or for one account:
+
+```json5
+{
+  channels: {
+    feishu: {
+      vcAutoJoin: true,
+      accounts: {
+        meetings: { vcAutoJoin: true },
+      },
+    },
+  },
+}
+```
+
+Inviters still pass through the normal Feishu DM policy, allowlist/pairing, session, and reply
+routing before the agent receives a join turn. Joining also requires an available Feishu VC join
+tool configured for app identity with the
+`vc:meeting.bot.join:write` scope. For example, the official
+[`lark-cli` VC agent skill](https://github.com/larksuite/cli/tree/main/skills/lark-vc-agent)
+provides `vc +meeting-join`.
 
 ### QR setup does not react in the Feishu mobile app
 
@@ -255,7 +295,7 @@ Feishu/Lark does not support native slash-command menus, so send these as plain 
 ### Message limits
 
 - `textChunkLimit` - outbound text chunk size (default: `4000` chars)
-- `chunkMode` - `"length"` (default) splits at the limit; `"newline"` prefers newline boundaries
+- `streaming.chunkMode` - `"length"` (default) splits at the limit; `"newline"` prefers newline boundaries
 - `mediaMaxMb` - media upload/download limit (default: `30` MB)
 
 ### Streaming
@@ -266,14 +306,16 @@ Feishu/Lark supports streaming replies via interactive cards (Card Kit streaming
 {
   channels: {
     feishu: {
-      streaming: true, // enable streaming card output (default: true)
-      blockStreaming: true, // opt into completed-block streaming
+      streaming: {
+        mode: "partial", // streaming card output (default: "partial")
+        block: { enabled: true }, // opt into completed-block streaming
+      },
     },
   },
 }
 ```
 
-Set `streaming: false` to send the complete reply in one message; `renderMode: "raw"` (plain text instead of cards) also disables streaming cards. `blockStreaming` is off by default; enable it only when you want completed assistant blocks flushed before the final reply.
+Set `streaming.mode: "off"` to send the complete reply in one message; `renderMode: "raw"` (plain text instead of cards) also disables streaming cards. `streaming.block.enabled` is off by default; enable it only when you want completed assistant blocks flushed before the final reply. Legacy boolean `streaming` and the flat `blockStreaming` / `blockStreamingCoalesce` / `chunkMode` keys migrate to this nested shape via `openclaw doctor --fix`.
 
 ### Quota optimization
 
@@ -323,6 +365,10 @@ The plugin ships agent tools for Feishu documents, chats, knowledge base, cloud 
 | `tools.bitable` | `feishu_bitable_*` Bitable/Base operations    | `true`              |
 
 `tools.base` is an alias for `tools.bitable`; the explicit `bitable` value wins when both are set. Per-account gates live under `accounts.<id>.tools`.
+
+Grant `drive:drive.metadata:readonly` for direct `feishu_drive info` lookups outside the root
+directory, unless the app already has the full `drive:drive` scope. Without either scope, `info`
+keeps the legacy root-directory lookup available through `drive:drive:readonly`.
 
 ### ACP sessions
 
@@ -588,16 +634,17 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 | `channels.feishu.groupSessionScope`                      | Group session mapping (`group`, `group_sender`, `group_topic`, `group_topic_sender`) | `group`                              |
 | `channels.feishu.replyInThread`                          | Bot replies create/continue topic threads (`disabled`, `enabled`)                    | `disabled`                           |
 | `channels.feishu.reactionNotifications`                  | Inbound reaction events (`off`, `own`, `all`)                                        | `own`                                |
+| `channels.feishu.vcAutoJoin`                             | Join invited VC meetings after normal DM authorization                               | `false`                              |
 | `channels.feishu.dynamicAgentCreation.enabled`           | Enable automatic per-user agent creation                                             | `false`                              |
 | `channels.feishu.dynamicAgentCreation.workspaceTemplate` | Path template for dynamic agent workspaces                                           | `~/.openclaw/workspace-{agentId}`    |
 | `channels.feishu.dynamicAgentCreation.agentDirTemplate`  | Agent directory name template                                                        | `~/.openclaw/agents/{agentId}/agent` |
 | `channels.feishu.dynamicAgentCreation.maxAgents`         | Maximum number of dynamic agents to create                                           | unlimited                            |
 | `channels.feishu.textChunkLimit`                         | Message chunk size                                                                   | `4000`                               |
-| `channels.feishu.chunkMode`                              | Chunk splitting (`length` or `newline`)                                              | `length`                             |
+| `channels.feishu.streaming.chunkMode`                    | Chunk splitting (`length` or `newline`)                                              | `length`                             |
 | `channels.feishu.mediaMaxMb`                             | Media size limit                                                                     | `30`                                 |
 | `channels.feishu.renderMode`                             | Reply rendering (`auto`, `raw`, `card`)                                              | `auto`                               |
-| `channels.feishu.streaming`                              | Streaming card output                                                                | `true`                               |
-| `channels.feishu.blockStreaming`                         | Completed-block reply streaming                                                      | `false`                              |
+| `channels.feishu.streaming.mode`                         | Streaming card output (`partial` or `off`)                                           | `partial`                            |
+| `channels.feishu.streaming.block.enabled`                | Completed-block reply streaming                                                      | `false`                              |
 | `channels.feishu.typingIndicator`                        | Send typing reactions                                                                | `true`                               |
 | `channels.feishu.resolveSenderNames`                     | Resolve sender display names                                                         | `true`                               |
 | `channels.feishu.configWrites`                           | Allow channel-initiated config writes (needed by dynamic agents)                     | `true`                               |

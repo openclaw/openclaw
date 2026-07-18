@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/telegram",
-  "version": "2026.6.11",
+  "version": "2026.7.2",
   "private": true,
   "description": "OpenClaw Telegram channel plugin",
   "type": "module",
@@ -47,9 +47,7 @@
           "allOf": [
             "TELEGRAM_BOT_TOKEN"
           ]
-        },
-        "specifier": "./configured-state",
-        "exportName": "hasTelegramConfiguredState"
+        }
       }
     }
   }

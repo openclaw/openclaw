@@ -2,6 +2,7 @@
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { until } from "lit/directives/until.js";
+import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import { resolveLocalUserName } from "../../../app/user-identity.ts";
 import { renderCopyAsMarkdownButton } from "../../../components/copy-button.ts";
 import { icons, type IconName } from "../../../components/icons.ts";
@@ -39,14 +40,25 @@ import {
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
 import { resolveUiHourCycleOptions } from "../../../lib/format.ts";
-import { formatCompactTokenCount } from "../../../lib/format.ts";
+import {
+  formatCompactTokenCount,
+  formatDurationCompact,
+  formatTimeAgo,
+} from "../../../lib/format.ts";
 import "../../../components/tooltip.ts";
 import { getMediaFileExtension } from "../../../lib/media-file-extension.ts";
-import { openExternalUrlSafe } from "../../../lib/open-external-url.ts";
+import {
+  openExternalUrlSafe,
+  reserveExternalWindowForDeferredNavigation,
+  resolveSafeExternalUrl,
+} from "../../../lib/open-external-url.ts";
 import { stripThinkingTags } from "../../../lib/strip-thinking-tags.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { getSafeLocalStorage } from "../../../local-storage.ts";
 import { renderChatAvatar } from "../chat-avatar.ts";
+import type { PlanStatus } from "../tool-stream.ts";
+import { renderChatPlanChecklist } from "./chat-plan-checklist.ts";
+import { renderChatQuestionSummary } from "./chat-question-card.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
 import {
   isRunningToolCard,
@@ -58,6 +70,7 @@ import {
   resolveToolRowText,
   shouldToggleSelectableDisclosure,
 } from "./chat-tool-cards.ts";
+import { renderChatWorkingIndicator } from "./chat-working-indicator.ts";
 
 function renderChatIcon(name: string) {
   return icons[name as IconName] ?? icons.zap;
@@ -81,6 +94,7 @@ const assistantAttachmentAvailabilityCache = new Map<string, AssistantAttachment
 const assistantAttachmentRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const pairingQrExpiryRefreshTimers = new Map<string, PairingQrExpiryRefreshTimer>();
 const ASSISTANT_ATTACHMENT_UNAVAILABLE_RETRY_MS = 5_000;
+const ASSISTANT_ATTACHMENT_METADATA_FETCH_TIMEOUT_MS = 30_000;
 const ASSISTANT_ATTACHMENT_MEDIA_TICKET_REFRESH_SKEW_MS = 30_000;
 let assistantAttachmentAvailabilityRenderVersion = 0;
 
@@ -90,12 +104,12 @@ type ChatTimestampDisplay = {
   dateTime: string;
 };
 
-export function formatChatTimestampForDisplay(timestamp: number): ChatTimestampDisplay {
+function formatChatTimestampForDisplay(timestamp: number): ChatTimestampDisplay {
   const date = new Date(timestamp);
   if (!Number.isFinite(date.getTime())) {
     return {
-      label: "Unknown date",
-      title: "Unknown date",
+      label: t("chat.messages.unknownDate"),
+      title: t("chat.messages.unknownDate"),
       dateTime: "",
     };
   }
@@ -109,6 +123,7 @@ export function formatChatTimestampForDisplay(timestamp: number): ChatTimestampD
       year: "numeric",
       hour: "numeric",
       minute: "2-digit",
+      timeZoneName: "short",
     }),
     title: date.toLocaleString([], {
       ...hourCycle,
@@ -125,17 +140,46 @@ export function formatChatTimestampForDisplay(timestamp: number): ChatTimestampD
   };
 }
 
+const CHAT_RELATIVE_TIMESTAMP_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const CHAT_RELATIVE_TIMESTAMP_FUTURE_SKEW_MS = 2 * 60 * 1000;
+
+/** Footer label: relative for recent messages, compact date beyond a week. */
+function formatChatRelativeTimestampLabel(timestamp: number, nowMs = Date.now()): string {
+  const date = new Date(timestamp);
+  if (!Number.isFinite(date.getTime())) {
+    return t("chat.messages.unknownDate");
+  }
+  const ageMs = nowMs - date.getTime();
+  // Derive from ageMs so the injected clock stays the single time source.
+  // Slightly-future (clock-skewed) messages clamp to "just now"; anything
+  // further out falls through to the compact date instead of lying forever.
+  if (
+    ageMs >= -CHAT_RELATIVE_TIMESTAMP_FUTURE_SKEW_MS &&
+    ageMs < CHAT_RELATIVE_TIMESTAMP_MAX_AGE_MS
+  ) {
+    return formatTimeAgo(Math.max(0, ageMs));
+  }
+  return date.toLocaleDateString([], {
+    month: "short",
+    day: "numeric",
+    ...(date.getFullYear() === new Date(nowMs).getFullYear() ? {} : { year: "numeric" }),
+  });
+}
+
+// Footer times read relative ("5m ago"); the absolute timestamp lives in the
+// tooltip, or in the msg-meta popover when usage metadata makes the
+// timestamp interactive (a nested tooltip would fight the popover).
 function renderChatTimestamp(timestamp: number, interactive = false) {
   const display = formatChatTimestampForDisplay(timestamp);
-  return html`
-    <time
-      class="chat-group-timestamp"
-      datetime=${display.dateTime}
-      title=${interactive ? nothing : display.title}
-    >
-      ${display.label}
+  const timeEl = html`
+    <time class="chat-group-timestamp" datetime=${display.dateTime} aria-live="off">
+      ${formatChatRelativeTimestampLabel(timestamp)}
     </time>
   `;
+  if (interactive) {
+    return timeEl;
+  }
+  return html`<openclaw-tooltip content=${display.label}>${timeEl}</openclaw-tooltip>`;
 }
 
 function resolveMessageMetaDetails(target: EventTarget | null): HTMLDetailsElement | null {
@@ -172,25 +216,6 @@ function pinMessageMetaPreview(event: MouseEvent) {
   }
   event.preventDefault();
   delete details.dataset.preview;
-}
-
-export function resetAssistantAttachmentAvailabilityCacheForTest() {
-  assistantAttachmentAvailabilityCache.clear();
-  bumpAssistantAttachmentAvailabilityRenderVersion();
-  for (const timer of assistantAttachmentRefreshTimers.values()) {
-    clearTimeout(timer);
-  }
-  assistantAttachmentRefreshTimers.clear();
-  for (const { timer } of pairingQrExpiryRefreshTimers.values()) {
-    clearTimeout(timer);
-  }
-  pairingQrExpiryRefreshTimers.clear();
-  for (const blobUrl of managedImageBlobUrlResolvedCache.values()) {
-    URL.revokeObjectURL(blobUrl);
-  }
-  managedImageBlobUrlCache.clear();
-  managedImageBlobUrlResolvedCache.clear();
-  managedImageBlobUrlMissCache.clear();
 }
 
 export function getAssistantAttachmentAvailabilityRenderVersion(): number {
@@ -240,7 +265,68 @@ type AttachmentItem = Extract<MessageContentItem, { type: "attachment" }>;
 const managedImageBlobUrlCache = new Map<string, Promise<string | null>>();
 const managedImageBlobUrlResolvedCache = new Map<string, string>();
 const managedImageBlobUrlMissCache = new Map<string, number>();
+const MANAGED_IMAGE_BLOB_URL_CACHE_MAX_ENTRIES = 64;
 const MANAGED_IMAGE_BLOB_URL_MISS_RETRY_MS = 5_000;
+
+function readManagedImageBlobUrl(cacheKey: string): string | undefined {
+  const cached = managedImageBlobUrlResolvedCache.get(cacheKey);
+  if (!cached) {
+    return undefined;
+  }
+  managedImageBlobUrlResolvedCache.delete(cacheKey);
+  managedImageBlobUrlResolvedCache.set(cacheKey, cached);
+  return cached;
+}
+
+function cacheManagedImageBlobUrl(cacheKey: string, blobUrl: string) {
+  const previous = managedImageBlobUrlResolvedCache.get(cacheKey);
+  managedImageBlobUrlResolvedCache.delete(cacheKey);
+  managedImageBlobUrlResolvedCache.set(cacheKey, blobUrl);
+  managedImageBlobUrlMissCache.delete(cacheKey);
+  if (previous && previous !== blobUrl) {
+    URL.revokeObjectURL(previous);
+  }
+
+  // Blob URLs retain browser-managed image data. Keep recent previews reusable,
+  // but revoke evicted URLs so long-lived chat sessions cannot retain them forever.
+  while (managedImageBlobUrlResolvedCache.size > MANAGED_IMAGE_BLOB_URL_CACHE_MAX_ENTRIES) {
+    const oldest = managedImageBlobUrlResolvedCache.keys().next();
+    if (oldest.done) {
+      break;
+    }
+    const evicted = managedImageBlobUrlResolvedCache.get(oldest.value);
+    managedImageBlobUrlResolvedCache.delete(oldest.value);
+    if (evicted) {
+      URL.revokeObjectURL(evicted);
+    }
+  }
+}
+
+function hasRecentManagedImageBlobUrlMiss(cacheKey: string): boolean {
+  const missAt = managedImageBlobUrlMissCache.get(cacheKey);
+  if (missAt === undefined) {
+    return false;
+  }
+  if (Date.now() - missAt >= MANAGED_IMAGE_BLOB_URL_MISS_RETRY_MS) {
+    managedImageBlobUrlMissCache.delete(cacheKey);
+    return false;
+  }
+  managedImageBlobUrlMissCache.delete(cacheKey);
+  managedImageBlobUrlMissCache.set(cacheKey, missAt);
+  return true;
+}
+
+function cacheManagedImageBlobUrlMiss(cacheKey: string) {
+  managedImageBlobUrlMissCache.delete(cacheKey);
+  managedImageBlobUrlMissCache.set(cacheKey, Date.now());
+  while (managedImageBlobUrlMissCache.size > MANAGED_IMAGE_BLOB_URL_CACHE_MAX_ENTRIES) {
+    const oldest = managedImageBlobUrlMissCache.keys().next();
+    if (oldest.done) {
+      break;
+    }
+    managedImageBlobUrlMissCache.delete(oldest.value);
+  }
+}
 
 function appendImageBlock(images: ImageBlock[], block: ImageBlock) {
   if (!images.some((entry) => entry.url === block.url && entry.alt === block.alt)) {
@@ -540,21 +626,27 @@ function extractTranscriptAttachments(message: unknown): AttachmentItem[] {
 }
 
 /** A contiguous run of in-flight streaming items rendered under one assistant group. */
-type StreamGroupPart = Extract<ChatItem, { kind: "stream" } | { kind: "reading-indicator" }>;
+type StreamGroupPart = Extract<
+  ChatItem,
+  { kind: "stream" } | { kind: "reading-indicator" } | { kind: "question" } | { kind: "plan" }
+>;
 
 type StreamGroupOptions = {
   onOpenSidebar?: (content: SidebarContent) => void;
   assistant?: AssistantIdentity;
   basePath?: string;
   authToken?: string | null;
+  planStatus?: PlanStatus | null;
+  planActive?: boolean;
+  questionPrompts?: ReadonlyMap<string, QuestionPrompt>;
 };
 
-function renderReadingIndicatorBubble() {
-  return html`
-    <div class="chat-bubble chat-reading-indicator" aria-hidden="true">
-      <span class="chat-reading-indicator__dots"> <span></span><span></span><span></span> </span>
-    </div>
-  `;
+function renderQuestionStreamPart(
+  part: Extract<StreamGroupPart, { kind: "question" }>,
+  opts: StreamGroupOptions,
+) {
+  const prompt = opts.questionPrompts?.get(part.questionId);
+  return prompt ? renderChatQuestionSummary(prompt) : nothing;
 }
 
 // One assistant group per contiguous run of streaming items: a reply that
@@ -567,30 +659,49 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
   // is only the reading indicator has no timestamp and therefore no footer.
   const streamStarts = parts.flatMap((part) => (part.kind === "stream" ? [part.startedAt] : []));
   const footerStartedAt = streamStarts.length > 0 ? Math.min(...streamStarts) : null;
+  // While the agent works with nothing streamed yet the run is pure claw: no
+  // avatar next to it - the punching pincer is the whole signal. The avatar
+  // arrives with the first stream part.
+  const workingOnly = parts.every((part) => part.kind !== "stream");
+  const avatar = workingOnly
+    ? nothing
+    : renderChatAvatar("assistant", assistant, undefined, basePath, authToken);
 
   return html`
-    <div class="chat-group assistant">
-      ${renderChatAvatar("assistant", assistant, undefined, basePath, authToken)}
+    <div
+      class="chat-group assistant ${workingOnly ? "chat-group--working" : ""}"
+      data-chat-row-key=${parts[0]?.key ?? nothing}
+    >
+      ${avatar}
       <div class="chat-group-messages">
         ${parts.map((part) =>
           part.kind === "reading-indicator"
-            ? renderReadingIndicatorBubble()
-            : renderGroupedMessage(
-                {
-                  role: "assistant",
-                  content: [{ type: "text", text: part.text }],
-                  timestamp: part.startedAt,
-                },
-                part.key,
-                { isStreaming: part.isStreaming, showReasoning: false },
-                onOpenSidebar,
-              ),
+            ? renderChatWorkingIndicator(part)
+            : part.kind === "question"
+              ? renderQuestionStreamPart(part, opts)
+              : part.kind === "plan"
+                ? renderChatPlanChecklist(opts.planStatus, {
+                    active: opts.planActive === true,
+                    variant: "card",
+                  })
+                : renderGroupedMessage(
+                    {
+                      role: "assistant",
+                      content: [{ type: "text", text: part.text }],
+                      timestamp: part.startedAt,
+                    },
+                    part.key,
+                    { isStreaming: part.isStreaming, showReasoning: false },
+                    onOpenSidebar,
+                  ),
         )}
         ${footerStartedAt !== null
           ? html`
               <div class="chat-group-footer">
-                <span class="chat-sender-name">${name}</span>
-                ${renderChatTimestamp(footerStartedAt)}
+                <div class="chat-group-footer__meta">
+                  <span class="chat-sender-name">${name}</span>
+                  ${renderChatTimestamp(footerStartedAt)}
+                </div>
               </div>
             `
           : nothing}
@@ -599,8 +710,58 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
   `;
 }
 
+/**
+ * Collapsed-turn rollup header: one slim "Worked for X" disclosure standing in
+ * for the turn's intermediate work once the run is done. The check/x icon is
+ * the turn's done indicator; the expanded groups render after this row.
+ */
+export function renderWorkGroupSummary(
+  item: { key: string; durationMs: number | null; hasError: boolean },
+  opts: { expanded: boolean; onToggle: () => void },
+) {
+  const duration = formatDurationCompact(item.durationMs, { spaced: true });
+  const label = duration ? t("chat.workRun.workedFor", { duration }) : t("chat.workRun.worked");
+  return html`
+    <div class="chat-group tool chat-group--work" data-chat-row-key=${item.key}>
+      <span class="chat-work-group__gutter" aria-hidden="true"></span>
+      <div class="chat-group-messages">
+        <div class="chat-activity-group chat-work-group ${opts.expanded ? "is-open" : ""}">
+          <button
+            class="chat-activity-group__summary ${item.hasError
+              ? "chat-activity-group__summary--error"
+              : ""}"
+            type="button"
+            aria-expanded=${String(opts.expanded)}
+            aria-label=${item.hasError
+              ? duration
+                ? t("chat.workRun.workedForError", { duration })
+                : t("chat.workRun.workedError")
+              : nothing}
+            @click=${(event: MouseEvent) => {
+              if (shouldToggleSelectableDisclosure(event)) {
+                opts.onToggle();
+              }
+            }}
+          >
+            <span class="chat-activity-group__icon">
+              ${item.hasError ? icons.x : icons.check}
+            </span>
+            <span class="chat-activity-group__label" title=${label}>${label}</span>
+            <span
+              class="collapse-chevron ${opts.expanded ? "" : "collapse-chevron--collapsed"}"
+              aria-hidden="true"
+              >${icons.chevronDown}</span
+            >
+          </button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 type RenderMessageGroupOptions = {
   onOpenSidebar?: (content: SidebarContent) => void;
+  onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
   sessionKey?: string;
   agentId?: string;
   showReasoning: boolean;
@@ -639,6 +800,7 @@ function buildGroupedMessageRenderOptions(
     isStreaming: group.isStreaming && index === group.messages.length - 1,
     sessionKey: opts.sessionKey,
     agentId: opts.agentId,
+    onOpenWorkspaceFile: opts.onOpenWorkspaceFile,
     duplicateCount: item.duplicateCount ?? 1,
     showReasoning: opts.showReasoning,
     showToolCalls: opts.showToolCalls ?? true,
@@ -692,8 +854,13 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
     return nothing;
   }
 
-  if (normalizedRole === "tool" && group.messages.length > 1) {
-    const cards = group.messages.flatMap((item) => extractToolCardsCached(item.message, item.key));
+  const groupedToolCards =
+    normalizedRole === "tool"
+      ? group.messages.flatMap((item) => extractToolCardsCached(item.message, item.key))
+      : [];
+
+  if (normalizedRole === "tool" && (group.messages.length > 1 || groupedToolCards.length > 1)) {
+    const cards = groupedToolCards;
     const toolCount = cards.length || group.messages.length;
     const hasError = cards.some(isToolCardError) && group.turnSucceeded !== true;
     // While a run is live, the newest still-running call names the group so
@@ -702,19 +869,19 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
       ? cards.findLast((card) => isRunningToolCard(card, opts.runActive))
       : undefined;
     const groupSummaryLabel = runningCard
-      ? `${resolveToolRowText(runningCard)}…`
+      ? `${resolveToolRowText(runningCard, opts.runActive)}…`
       : summarizeToolGroup(
           cards.map((card) => ({
             name: card.name,
             args: card.args,
-            isError: isToolCardError(card) && group.turnSucceeded !== true,
+            isError: isToolCardError(card),
           })),
         );
     const activityDisclosureId = `activity:${group.key}`;
     const activityExpanded = opts.isToolMessageExpanded?.(activityDisclosureId) ?? hasError;
 
     return html`
-      <div class="chat-group tool chat-group--activity">
+      <div class="chat-group tool chat-group--activity" data-chat-row-key=${group.key}>
         ${renderChatAvatar(
           group.role,
           {
@@ -737,7 +904,12 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
               type="button"
               aria-expanded=${String(activityExpanded)}
               aria-label=${hasError
-                ? `Activity: ${toolCount} tool${toolCount === 1 ? "" : "s"}, includes errors.`
+                ? t(
+                    toolCount === 1
+                      ? "chat.toolCards.group.activityErrorOne"
+                      : "chat.toolCards.group.activityErrorMany",
+                    { count: String(toolCount) },
+                  )
                 : nothing}
               @click=${(event: MouseEvent) => {
                 if (shouldToggleSelectableDisclosure(event)) {
@@ -746,9 +918,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
               }}
             >
               <span class="chat-activity-group__icon">${hasError ? icons.x : icons.activity}</span>
-              <span
-                class="chat-activity-group__label"
-                title=${`${toolCount} tool call${toolCount === 1 ? "" : "s"}`}
+              <span class="chat-activity-group__label" title=${groupSummaryLabel}
                 >${groupSummaryLabel}</span
               >
               <span
@@ -773,7 +943,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
               : nothing}
           </div>
           <div class="chat-group-footer">
-            <span class="chat-sender-name">Activity</span>
+            <span class="chat-sender-name">${t("chat.messages.activity")}</span>
             ${renderChatTimestamp(group.timestamp)}
             ${opts.onDelete ? renderDeleteButton(opts.onDelete, "right") : nothing}
           </div>
@@ -789,7 +959,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
   const footerActionDetails = messageActionDetails[lastMessageIndex] ?? null;
 
   return html`
-    <div class="chat-group ${roleClass}">
+    <div class="chat-group ${roleClass}" data-chat-row-key=${group.key}>
       ${renderChatAvatar(
         group.role,
         {
@@ -967,6 +1137,8 @@ function renderMessageMeta(timestamp: number, meta: GroupMeta | null) {
   }
 
   const display = formatChatTimestampForDisplay(timestamp);
+  // Absolute time leads the popover; the summary label itself stays relative.
+  parts.unshift(html`<span class="msg-meta__time">${display.label}</span>`);
 
   return html`
     <details
@@ -1073,10 +1245,10 @@ function placeDeleteConfirmPopover(
 function renderDeleteButton(onDelete: () => void, side: DeleteConfirmSide) {
   return html`
     <span class="chat-delete-wrap">
-      <openclaw-tooltip content="Delete">
+      <openclaw-tooltip .content=${t("common.delete")}>
         <button
           class="chat-group-delete"
-          aria-label="Delete message"
+          aria-label=${t("chat.messages.deleteMessage")}
           @click=${(e: Event) => {
             if (shouldSkipDeleteConfirm()) {
               onDelete();
@@ -1189,8 +1361,34 @@ function renderMessageImages(images: RenderableImageBlock[], opts?: ImageRenderO
     return nothing;
   }
 
-  const openImage = (url: string) => {
-    openExternalUrlSafe(url, { allowDataImage: true });
+  const openImage = (img: RenderableImageBlock, previewUrl: string) => {
+    if (
+      !isManagedOutgoingImageSource(img.displayUrl) ||
+      readManagedOutgoingImageBlobUrl(img.displayUrl, opts) === previewUrl
+    ) {
+      openExternalUrlSafe(previewUrl, { allowDataImage: true });
+      return;
+    }
+
+    // Reserve the tab during the click's user activation. An evicted Blob URL
+    // must be refetched before navigation, after popup permission has expired.
+    const pendingWindow = reserveExternalWindowForDeferredNavigation();
+    void resolveManagedOutgoingImageBlobUrl(img.displayUrl, opts)
+      .then((freshUrl) => {
+        const safeUrl = freshUrl
+          ? resolveSafeExternalUrl(freshUrl, window.location.href, { allowDataImage: true })
+          : null;
+        if (!safeUrl) {
+          pendingWindow?.close();
+          return;
+        }
+        if (pendingWindow) {
+          pendingWindow.location.replace(safeUrl);
+          return;
+        }
+        openExternalUrlSafe(safeUrl, { allowDataImage: true });
+      })
+      .catch(() => pendingWindow?.close());
   };
 
   const renderImageElement = (img: RenderableImageBlock, previewUrl: string) => html`
@@ -1200,7 +1398,7 @@ function renderMessageImages(images: RenderableImageBlock[], opts?: ImageRenderO
       class="chat-message-image"
       width=${img.width ?? nothing}
       height=${img.height ?? nothing}
-      @click=${() => openImage(previewUrl)}
+      @click=${() => openImage(img, previewUrl)}
     />
   `;
 
@@ -1430,19 +1628,34 @@ function buildManagedOutgoingImageFetchUrl(source: string, basePath?: string): s
   return `${normalizedBasePath}${source}`;
 }
 
+function resolveManagedOutgoingImageBlobUrlCacheKey(
+  source: string,
+  opts?: ImageRenderOptions,
+): string {
+  const authToken = opts?.authToken?.trim() ?? "";
+  const fetchUrl = buildManagedOutgoingImageFetchUrl(source, opts?.basePath);
+  return `${fetchUrl}::${authToken}`;
+}
+
+function readManagedOutgoingImageBlobUrl(
+  source: string,
+  opts?: ImageRenderOptions,
+): string | undefined {
+  return readManagedImageBlobUrl(resolveManagedOutgoingImageBlobUrlCacheKey(source, opts));
+}
+
 async function resolveManagedOutgoingImageBlobUrl(
   source: string,
   opts?: ImageRenderOptions,
 ): Promise<string | null> {
   const authToken = opts?.authToken?.trim() ?? "";
   const fetchUrl = buildManagedOutgoingImageFetchUrl(source, opts?.basePath);
-  const cacheKey = `${fetchUrl}::${authToken}`;
-  const cached = managedImageBlobUrlResolvedCache.get(cacheKey);
+  const cacheKey = resolveManagedOutgoingImageBlobUrlCacheKey(source, opts);
+  const cached = readManagedImageBlobUrl(cacheKey);
   if (cached) {
     return cached;
   }
-  const missAt = managedImageBlobUrlMissCache.get(cacheKey);
-  if (missAt && Date.now() - missAt < MANAGED_IMAGE_BLOB_URL_MISS_RETRY_MS) {
+  if (hasRecentManagedImageBlobUrlMiss(cacheKey)) {
     return null;
   }
   let pending = managedImageBlobUrlCache.get(cacheKey);
@@ -1462,17 +1675,16 @@ async function resolveManagedOutgoingImageBlobUrl(
         credentials: "same-origin",
       });
       if (!res.ok) {
-        managedImageBlobUrlMissCache.set(cacheKey, Date.now());
+        cacheManagedImageBlobUrlMiss(cacheKey);
         return null;
       }
       const blob = await res.blob();
       if (!blob.type.startsWith("image/")) {
-        managedImageBlobUrlMissCache.set(cacheKey, Date.now());
+        cacheManagedImageBlobUrlMiss(cacheKey);
         return null;
       }
       const blobUrl = URL.createObjectURL(blob);
-      managedImageBlobUrlResolvedCache.set(cacheKey, blobUrl);
-      managedImageBlobUrlMissCache.delete(cacheKey);
+      cacheManagedImageBlobUrl(cacheKey, blobUrl);
       return blobUrl;
     })().finally(() => {
       managedImageBlobUrlCache.delete(cacheKey);
@@ -1569,10 +1781,19 @@ function resolveAssistantAttachmentAvailability(
     if (normalizedAuthToken) {
       headers.set("Authorization", `Bearer ${normalizedAuthToken}`);
     }
+    const controller = new AbortController();
+    const timeout = setTimeout(
+      () =>
+        controller.abort(
+          new DOMException("assistant attachment metadata fetch timed out", "TimeoutError"),
+        ),
+      ASSISTANT_ATTACHMENT_METADATA_FETCH_TIMEOUT_MS,
+    );
     void fetch(buildAssistantAttachmentMetaUrl(source, basePath), {
       method: "GET",
       headers,
       credentials: "same-origin",
+      signal: controller.signal,
     })
       .then(async (res) => {
         const payload = (await res.json().catch(() => null)) as {
@@ -1617,6 +1838,7 @@ function resolveAssistantAttachmentAvailability(
         });
       })
       .finally(() => {
+        clearTimeout(timeout);
         onRequestUpdate?.();
       });
   }
@@ -1707,7 +1929,9 @@ function renderAssistantAttachments(
                       >${availability.status === "checking" ? "Checking..." : "Unavailable"}</span
                     >`
                   : attachment.isVoiceNote
-                    ? html`<span class="chat-assistant-attachment-badge">Voice note</span>`
+                    ? html`<span class="chat-assistant-attachment-badge"
+                        >${t("chat.messages.voiceNote")}</span
+                      >`
                     : nothing}
               </div>
               ${attachmentUrl
@@ -1784,9 +2008,9 @@ function renderInlineToolCards(
     sessionKey?: string;
     agentId?: string;
     onOpenSidebar?: (content: SidebarContent) => void;
+    onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
     isToolExpanded?: (toolCardId: string) => boolean;
     onToggleToolExpanded?: (toolCardId: string) => void;
-    turnSucceeded?: boolean;
     runActive?: boolean;
     canvasPluginSurfaceUrl?: string | null;
     embedSandboxMode?: EmbedSandboxMode;
@@ -1798,7 +2022,6 @@ function renderInlineToolCards(
       ${toolCards.map((card, index) =>
         renderToolCard(card, {
           expanded: opts.isToolExpanded?.(`${opts.messageKey}:toolcard:${index}`) ?? false,
-          turnSucceeded: opts.turnSucceeded,
           runActive: opts.runActive,
           onToggleExpanded: opts.onToggleToolExpanded
             ? () => opts.onToggleToolExpanded?.(`${opts.messageKey}:toolcard:${index}`)
@@ -1806,6 +2029,7 @@ function renderInlineToolCards(
           sessionKey: opts.sessionKey,
           agentId: opts.agentId,
           onOpenSidebar: opts.onOpenSidebar,
+          onOpenWorkspaceFile: opts.onOpenWorkspaceFile,
           canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
           embedSandboxMode: opts.embedSandboxMode ?? "scripts",
           allowExternalEmbedUrls: opts.allowExternalEmbedUrls ?? false,
@@ -1873,11 +2097,11 @@ function renderExpandButton(
   },
 ) {
   return html`
-    <openclaw-tooltip content="Open in canvas">
+    <openclaw-tooltip .content=${t("chat.messages.openInCanvas")}>
       <button
         class="btn btn--xs chat-expand-btn"
         type="button"
-        aria-label="Open in canvas"
+        aria-label=${t("chat.messages.openInCanvas")}
         @click=${() =>
           onOpenSidebar({
             kind: "markdown",
@@ -2000,6 +2224,7 @@ function renderGroupedMessage(
     onAssistantAttachmentLoaded?: () => void;
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
+    onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
   },
   onOpenSidebar?: (content: SidebarContent) => void,
 ) {
@@ -2035,10 +2260,10 @@ function renderGroupedMessage(
   );
   const extractedThinking =
     opts.showReasoning && role === "assistant" ? extractThinkingCached(message) : null;
-  const markdownBase = extractedText?.trim() ? extractedText : null;
   const reasoningMarkdown = extractedThinking ? formatReasoningMarkdown(extractedThinking) : null;
-  const markdown = markdownBase;
+  const markdown = extractedText?.trim() ? extractedText : null;
   const markdownRenderOptions: MarkdownRenderOptions = {
+    assistantTranscriptRoleHeaders: role === "assistant",
     codeBlockChrome: role === "user" ? "none" : "copy",
     fileLinks: true,
   };
@@ -2050,7 +2275,6 @@ function renderGroupedMessage(
     "chat-bubble",
     isToolShell ? "chat-bubble--tool-shell" : "",
     opts.isStreaming ? "streaming" : "",
-    "fade-in",
   ]
     .filter(Boolean)
     .join(" ");
@@ -2102,10 +2326,10 @@ function renderGroupedMessage(
         : `${toolNames.slice(0, 2).join(", ")} +${toolNames.length - 2} more`;
   const toolPreview = markdown ? (formatCollapsedToolPreviewText(markdown) ?? "") : "";
   const toolMessageLabelRaw = toolMessageHasError
-    ? "Tool error"
+    ? t("chat.toolCards.toolError")
     : singleToolDisplay && !markdown && !hasImages
       ? singleToolDisplay.label
-      : "Tool output";
+      : t("chat.toolCards.toolOutput");
   const toolMessageLabel =
     formatCollapsedToolSummaryText(toolMessageLabelRaw) ?? toolMessageLabelRaw;
   const toolSummaryLabel = formatDistinctCollapsedToolSummaryText(
@@ -2121,6 +2345,7 @@ function renderGroupedMessage(
             rawText: block.rawText ?? null,
             canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
             embedSandboxMode: opts.embedSandboxMode ?? "scripts",
+            sessionKey: opts.sessionKey,
           })}
           ${block.rawText ? renderRawOutputToggle(block.rawText) : nothing}`,
         )}`
@@ -2153,9 +2378,9 @@ function renderGroupedMessage(
           sessionKey: opts.sessionKey,
           agentId: opts.agentId,
           onOpenSidebar,
+          onOpenWorkspaceFile: opts.onOpenWorkspaceFile,
           isToolExpanded: opts.isToolExpanded,
           onToggleToolExpanded: opts.onToggleToolExpanded,
-          turnSucceeded: opts.turnSucceeded,
           runActive: opts.runActive,
           canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
           embedSandboxMode: opts.embedSandboxMode ?? "scripts",
@@ -2251,15 +2476,17 @@ function renderGroupedMessage(
                               opts.canvasPluginSurfaceUrl,
                               opts.embedSandboxMode ?? "scripts",
                               opts.allowExternalEmbedUrls ?? false,
+                              opts.runActive,
+                              opts.onOpenWorkspaceFile,
                             )
                           : renderInlineToolCards(toolCards, {
                               messageKey,
                               sessionKey: opts.sessionKey,
                               agentId: opts.agentId,
                               onOpenSidebar,
+                              onOpenWorkspaceFile: opts.onOpenWorkspaceFile,
                               isToolExpanded: opts.isToolExpanded,
                               onToggleToolExpanded: opts.onToggleToolExpanded,
-                              turnSucceeded: opts.turnSucceeded,
                               runActive: opts.runActive,
                               canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
                               embedSandboxMode: opts.embedSandboxMode ?? "scripts",
@@ -2305,9 +2532,9 @@ function renderGroupedMessage(
                   sessionKey: opts.sessionKey,
                   agentId: opts.agentId,
                   onOpenSidebar,
+                  onOpenWorkspaceFile: opts.onOpenWorkspaceFile,
                   isToolExpanded: opts.isToolExpanded,
                   onToggleToolExpanded: opts.onToggleToolExpanded,
-                  turnSucceeded: opts.turnSucceeded,
                   runActive: opts.runActive,
                   canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
                   embedSandboxMode: opts.embedSandboxMode ?? "scripts",
@@ -2345,3 +2572,4 @@ function renderMarkdownText(
     </div>
   `;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

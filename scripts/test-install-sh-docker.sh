@@ -303,7 +303,7 @@ process.stdout.write(packageJson.version);
 prepare_update_tarball() {
   local pack_json_file
   local baseline_pack_json_file
-  local package_args
+  local -a package_args
   local package_tgz
   local packed_update_version
   pack_json_file="${UPDATE_DIR}/pack.json"
@@ -329,6 +329,9 @@ prepare_update_tarball() {
       --pack-json "$pack_json_file"
       --skip-build
     )
+    if [[ "${OPENCLAW_INSTALL_SMOKE_ALLOW_UNRELEASED_CHANGELOG:-true}" == "true" ]]; then
+      package_args+=(--allow-unreleased-changelog)
+    fi
     package_tgz="$(
       node "$HARNESS_ROOT/scripts/package-openclaw-for-docker.mjs" "${package_args[@]}"
     )"
@@ -586,4 +589,4 @@ run_install_smoke_container --rm -t \
   -e OPENCLAW_NO_ONBOARD=1 \
   -e OPENCLAW_NO_PROMPT=1 \
   -e DEBIAN_FRONTEND=noninteractive \
-  "$NONROOT_IMAGE" -lc "curl -fsSL \"$CLI_INSTALL_URL\" | bash -s -- --set-npm-prefix --no-onboard"
+  "$NONROOT_IMAGE" -lc 'set -o pipefail; curl -fsSL --connect-timeout 30 --max-time 300 -- "$OPENCLAW_INSTALL_CLI_URL" | bash -s -- --set-npm-prefix --no-onboard'

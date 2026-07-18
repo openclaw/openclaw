@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Finds a prior green Full Release Validation run for the exact target SHA.
-# Cross-SHA evidence reuse is intentionally left to the granular delta manifest,
-# which can require fresh package/install/provider closure per changed artifact.
+# Finds a prior green Full Release Validation run for the exact target SHA or
+# for its immediate product-equivalent predecessor. Cross-SHA reuse is limited
+# to a descendant whose complete tree delta is CHANGELOG.md; package/install
+# proof still runs against the release SHA after that changelog is committed.
 # Always exits 0 with reuse=true/false; callers fail open to a full validation.
 
 REPO="${GH_REPO:-}"
 WORKFLOW_FILE="full-release-validation.yml"
 TARGET_SHA=""
 VERIFIER_WORKFLOW_SHA=""
+WORKFLOW_REF=""
 RELEASE_PROFILE=""
 RUN_RELEASE_SOAK="false"
 INPUTS_JSON=""
@@ -19,11 +21,12 @@ GITHUB_OUTPUT_FILE="${GITHUB_OUTPUT:-}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PREFLIGHT="${SCRIPT_DIR}/../release-preflight.mjs"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-VALIDATOR="${OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR:-${REPO_ROOT}/.agents/skills/release-openclaw-ci/scripts/release-ci-summary.mjs}"
+VALIDATOR="${OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR:-${REPO_ROOT}/scripts/release-ci-summary.mjs}"
 
 usage() {
   cat >&2 <<'EOF'
 Usage: find-reusable-release-validation.sh --target-sha <sha> --workflow-sha <sha> \
+  --workflow-ref <main|release-ci/sha12-timestamp> \
   --release-profile <beta|stable|full> --inputs-json <json> \
   [--run-release-soak <true|false>] [--repo <owner/repo>] [--repo-dir <path>] \
   [--workflow <file>] [--max-candidates <n>] [--github-output <file>]
@@ -32,8 +35,9 @@ Scans recent successful Full Release Validation runs for an exact-target
 validation manifest whose recorded lane-selection inputs match --inputs-json
 and whose normalized strict-v3 evidence is accepted by the current trusted-main
 verifier identified by --workflow-sha. The historical producer workflow SHA
-remains independent. Writes reuse=true plus evidence_* outputs when found;
-reuse=false otherwise.
+remains independent. A descendant target may reuse product validation only
+when GitHub proves the entire delta is CHANGELOG.md. Writes reuse=true plus
+evidence_* outputs when found; reuse=false otherwise.
 EOF
 }
 
@@ -45,6 +49,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --workflow-sha)
       VERIFIER_WORKFLOW_SHA="${2:-}"
+      shift 2
+      ;;
+    --workflow-ref)
+      WORKFLOW_REF="${2:-}"
       shift 2
       ;;
     --release-profile)
@@ -116,6 +124,13 @@ if [[ ! "$VERIFIER_WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]; then
   echo "Expected --workflow-sha to be a full lowercase commit SHA; got: ${VERIFIER_WORKFLOW_SHA}" >&2
   exit 2
 fi
+if [[ "$WORKFLOW_REF" != "main" ]]; then
+  expected_release_ref="release-ci/${VERIFIER_WORKFLOW_SHA:0:12}-"
+  if [[ ! "$WORKFLOW_REF" =~ ^release-ci/[0-9a-f]{12}-[1-9][0-9]*$ ]] ||
+    [[ "$WORKFLOW_REF" != "$expected_release_ref"* ]]; then
+    no_reuse "workflow ref is not a canonical SHA-pinned release ref"
+  fi
+fi
 if [[ -z "$REPO" ]]; then
   echo "Expected --repo <owner/repo> or GH_REPO." >&2
   exit 2
@@ -132,6 +147,20 @@ expected_inputs=""
 if ! expected_inputs="$(jq -Sc 'if type == "object" then . else error("expected object") end' <<< "$INPUTS_JSON" 2>/dev/null)" || [[ -z "$expected_inputs" ]]; then
   echo "Expected --inputs-json to be a JSON object of lane-selection inputs." >&2
   exit 2
+fi
+
+workflow_lineage=""
+if ! workflow_lineage="$(
+  gh api "repos/${REPO}/compare/${VERIFIER_WORKFLOW_SHA}...main"
+)"; then
+  no_reuse "could not verify workflow SHA against trusted main"
+fi
+if ! jq -e \
+  --arg workflow_sha "$VERIFIER_WORKFLOW_SHA" '
+    (.status == "ahead" or .status == "identical")
+    and .merge_base_commit.sha == $workflow_sha
+  ' <<< "$workflow_lineage" >/dev/null; then
+  no_reuse "workflow SHA is not on trusted main lineage"
 fi
 
 # Exact-target reuse still requires internally consistent version stamps
@@ -191,22 +220,33 @@ for ((index = 0; index < run_count; index += 1)); do
       and (.root.targetSha | type == "string" and test("^[0-9a-f]{40}$"))
       and (.root.artifact.digest | type == "string" and test("^sha256:[0-9a-f]{64}$"))
       and all($record.current, $record.root;
-        .producerOnTrustedMainLineage == true
-        and .workflowFullRef == "refs/heads/main"
+        . as $parent
+        | .producerOnTrustedMainLineage == true
         and .workflowRefType == "branch"
         and .workflowPath == ".github/workflows/full-release-validation.yml"
+        and .workflowFullRef == ("refs/heads/" + .workflowRef)
         and .workflowQualifiedPath ==
-          ".github/workflows/full-release-validation.yml@refs/heads/main"
+          (".github/workflows/full-release-validation.yml@" + .workflowFullRef)
         and (
           .workflowRunPath == ".github/workflows/full-release-validation.yml"
-          or .workflowRunPath ==
-            ".github/workflows/full-release-validation.yml@refs/heads/main"
+          or .workflowRunPath == .workflowQualifiedPath
         )
         and (
-          (.manifestVersion == 3 and .workflowRefProof == "manifest-v3-branch")
+          (
+            .workflowRef == "main"
+            and (
+              (.manifestVersion == 3 and .workflowRefProof == "manifest-v3-branch")
+              or (
+                .manifestVersion == 2
+                and .workflowRefProof == "legacy-v2-main-ancestry"
+              )
+            )
+          )
           or (
-            .manifestVersion == 2
-            and .workflowRefProof == "legacy-v2-main-ancestry"
+            .manifestVersion == 3
+            and .workflowRefProof == "manifest-v3-sha-pinned-main-ancestry"
+            and (.workflowRef | test("^release-ci/[0-9a-f]{12}-[1-9][0-9]*$"))
+            and (.workflowRef | startswith("release-ci/\($parent.workflowSha[0:12])-"))
           )
         )
       )
@@ -249,20 +289,42 @@ for ((index = 0; index < run_count; index += 1)); do
   fi
 
   prior_sha="$(jq -r '.root.targetSha' <<< "$validation_record")"
+  evidence_policy="exact-target-full-validation-v1"
+  changed_paths="[]"
   if [[ "$prior_sha" != "$TARGET_SHA" ]]; then
-    echo "[evidence-reuse] run ${run_id}: target ${prior_sha} differs from ${TARGET_SHA}; cross-SHA reuse requires granular artifact evidence" >&2
-    continue
+    compare_json=""
+    if ! compare_json="$(
+      gh api "repos/${REPO}/compare/${prior_sha}...${TARGET_SHA}"
+    )"; then
+      echo "[evidence-reuse] run ${run_id}: could not compare ${prior_sha}...${TARGET_SHA}; skipping" >&2
+      continue
+    fi
+    if ! jq -e \
+      --arg prior_sha "$prior_sha" '
+        .status == "ahead"
+        and .merge_base_commit.sha == $prior_sha
+        and (.files | type == "array" and length == 1)
+        and .files[0].filename == "CHANGELOG.md"
+        and .files[0].status == "modified"
+        and ((.files[0].previous_filename // "") == "")
+      ' <<< "$compare_json" >/dev/null; then
+      echo "[evidence-reuse] run ${run_id}: target ${TARGET_SHA} is not a CHANGELOG.md-only descendant of ${prior_sha}; skipping" >&2
+      continue
+    fi
+    evidence_policy="changelog-only-release-v1"
+    changed_paths='["CHANGELOG.md"]'
   fi
 
   run_url="$(jq -r '.root.url' <<< "$validation_record")"
-  echo "[evidence-reuse] reusing exact-target run ${run_id} (${run_url}) for ${TARGET_SHA}" >&2
+  echo "[evidence-reuse] reusing ${evidence_policy} run ${run_id} (${run_url}) for ${TARGET_SHA}" >&2
   write_output reuse true
   write_output evidence_run_id "$run_id"
   write_output evidence_root_run_id "$run_id"
   write_output evidence_run_url "$run_url"
   write_output evidence_sha "$prior_sha"
-  write_output changed_path_count "0"
-  write_output changed_paths "[]"
+  write_output evidence_policy "$evidence_policy"
+  write_output changed_path_count "$(jq 'length' <<< "$changed_paths")"
+  write_output changed_paths "$changed_paths"
   write_output evidence_manifest "$(jq -c '.manifest' <<< "$validation_record")"
   exit 0
 done

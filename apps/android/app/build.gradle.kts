@@ -164,9 +164,11 @@ android {
   productFlavors {
     create("play") {
       dimension = "store"
+      manifestPlaceholders["nodeForegroundServiceType"] = "connectedDevice|microphone"
     }
     create("thirdParty") {
       dimension = "store"
+      manifestPlaceholders["nodeForegroundServiceType"] = "connectedDevice|microphone|location"
     }
   }
 
@@ -299,6 +301,9 @@ dependencies {
   implementation(composeBom)
   androidTestImplementation(composeBom)
 
+  implementation(project(":wear-shared"))
+  implementation(libs.play.services.wearable)
+
   implementation(libs.androidx.core.ktx)
   // AppCompat owns per-app locale persistence and Activity recreation on API 31-32.
   implementation(libs.androidx.appcompat)
@@ -322,12 +327,14 @@ dependencies {
   implementation(libs.kotlinx.serialization.json)
 
   implementation(libs.androidx.security.crypto)
-  // Read-only offline cache for chat sessions/transcripts (disposable, destructive migrations only).
+  // Room owns the disposable transcript cache and durable chat outbox; migrations preserve outbox rows.
   implementation(libs.androidx.room.runtime)
   ksp(libs.androidx.room.compiler)
   implementation(libs.androidx.exifinterface)
   implementation(libs.okhttp)
   implementation(libs.bcprov)
+  implementation(libs.coil.compose)
+  implementation(libs.coil.svg)
   implementation(libs.commonmark)
   implementation(libs.commonmark.ext.autolink)
   implementation(libs.commonmark.ext.gfm.strikethrough)
@@ -360,6 +367,10 @@ dependencies {
 
 tasks.withType<Test>().configureEach {
   useJUnitPlatform()
+  testLogging {
+    events("failed")
+    exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+  }
 }
 
 val validateOpenClawReleaseBuildMetadata =

@@ -12,6 +12,7 @@ import {
   getCompactionProvider,
   type CompactionProvider,
 } from "../../plugins/compaction-provider.js";
+import { normalizeInputProvenance } from "../../sessions/input-provenance.js";
 import { normalizeAcceptedSessionSpawnResult } from "../accepted-session-spawn.js";
 import {
   buildHistoryPrunePlanWithWorker,
@@ -74,6 +75,7 @@ const DEFAULT_QUALITY_GUARD_MAX_RETRIES = 1;
 const MAX_RECENT_TURNS_PRESERVE = 12;
 const MAX_QUALITY_GUARD_MAX_RETRIES = 3;
 const MAX_RECENT_TURN_TEXT_CHARS = 600;
+const TOOL_CALL_BLOCK_TYPES = new Set(["toolCall", "toolUse", "functionCall"]);
 const PREVIOUS_SUMMARY_REDISTILL_PREFIX =
   "Previous compaction summary to re-distill with the current conversation. " +
   "Prune stale, duplicate, or superseded details instead of preserving it verbatim.";
@@ -178,6 +180,154 @@ function collectSessionBranchMessages(sessionManager: unknown): AgentMessage[] {
     .filter((message): message is AgentMessage => Boolean(message));
 }
 
+function isReplayUnsafeInterSessionInput(message: AgentMessage): boolean {
+  if ((message as { role?: unknown }).role !== "user") {
+    return false;
+  }
+  const provenance = normalizeInputProvenance((message as { provenance?: unknown }).provenance);
+  return provenance?.kind === "inter_session" && provenance.sourceTool === "sessions_send";
+}
+
+function isSessionsSendToolName(value: unknown): boolean {
+  if (typeof value !== "string") {
+    return false;
+  }
+  return (
+    value
+      .trim()
+      .toLowerCase()
+      .replace(/^(?:functions?|tools?)[./_-]/, "") === "sessions_send"
+  );
+}
+
+function sanitizeSourceSessionSends(messages: AgentMessage[]): AgentMessage[] {
+  const sendCallIds = new Set<string>();
+  const resolvedCallIds = new Set<string>();
+  const resultTextByCallId = new Map<string, string>();
+
+  for (const message of messages) {
+    if (message.role !== "assistant" || !Array.isArray(message.content)) {
+      continue;
+    }
+    for (const block of message.content) {
+      if (!block || typeof block !== "object") {
+        continue;
+      }
+      const record = block as { type?: unknown; id?: unknown; name?: unknown };
+      if (
+        typeof record.type === "string" &&
+        TOOL_CALL_BLOCK_TYPES.has(record.type) &&
+        isSessionsSendToolName(record.name) &&
+        typeof record.id === "string" &&
+        record.id.trim()
+      ) {
+        sendCallIds.add(record.id.trim());
+      }
+    }
+  }
+
+  for (const message of messages) {
+    if (message.role !== "toolResult") {
+      continue;
+    }
+    const callId = extractToolResultId(message);
+    if (!callId || !sendCallIds.has(callId)) {
+      continue;
+    }
+    resolvedCallIds.add(callId);
+    const resultText = extractMessageText(message) || formatNonTextPlaceholder(message.content);
+    if (resultText) {
+      resultTextByCallId.set(callId, resultText);
+    }
+  }
+
+  return messages.flatMap((message) => {
+    if (message.role === "assistant" && Array.isArray(message.content)) {
+      let replaced = false;
+      const content = message.content.map((block) => {
+        if (!block || typeof block !== "object") {
+          return block;
+        }
+        const record = block as {
+          type?: unknown;
+          id?: unknown;
+          name?: unknown;
+          arguments?: unknown;
+        };
+        if (
+          typeof record.type !== "string" ||
+          !TOOL_CALL_BLOCK_TYPES.has(record.type) ||
+          !isSessionsSendToolName(record.name)
+        ) {
+          return block;
+        }
+        replaced = true;
+        const callId = typeof record.id === "string" ? record.id.trim() : "";
+        const resultText = callId ? resultTextByCallId.get(callId) : undefined;
+        const resolved = Boolean(callId && resolvedCallIds.has(callId));
+        const requestText = JSON.stringify({ callId: callId || undefined, args: record.arguments });
+        return {
+          type: "text",
+          text:
+            resolved && resultText
+              ? `sessions_send result received; delivery call omitted from replay.\nRequest: ${requestText}\nResult: ${resultText}`
+              : resolved
+                ? `sessions_send result received; delivery call omitted from replay.\nRequest: ${requestText}\nResult: [empty]`
+                : `sessions_send result missing; delivery call omitted from replay.\nRequest: ${requestText}`,
+        };
+      });
+      return replaced ? [{ ...message, content } as AgentMessage] : [message];
+    }
+    if (message.role === "toolResult") {
+      const callId = extractToolResultId(message);
+      if ((callId && sendCallIds.has(callId)) || isSessionsSendToolName(message.toolName)) {
+        return [];
+      }
+    }
+    return [message];
+  });
+}
+
+function filterReplayUnsafeSessionBranchMessages(messages: AgentMessage[]): AgentMessage[] {
+  const sanitizedMessages = sanitizeSourceSessionSends(messages);
+  let turnStart = sanitizedMessages.length;
+  while (turnStart > 0) {
+    const role = (sanitizedMessages[turnStart - 1] as { role?: unknown }).role;
+    if (role !== "assistant" && role !== "toolResult") {
+      break;
+    }
+    turnStart -= 1;
+  }
+
+  const tailMessage = messages.at(-1);
+  const endsWithTerminalAssistantText =
+    tailMessage !== undefined &&
+    tailMessage.role === "assistant" &&
+    Boolean(extractMessageText(tailMessage).trim()) &&
+    (!Array.isArray(tailMessage.content) ||
+      !tailMessage.content.some((block) => {
+        if (!block || typeof block !== "object") {
+          return false;
+        }
+        const type = (block as { type?: unknown }).type;
+        return typeof type === "string" && TOOL_CALL_BLOCK_TYPES.has(type);
+      }));
+  const activeInput = sanitizedMessages[turnStart - 1];
+
+  // A completed sessions_send target run is already delivered to its caller.
+  // Require terminal text so compaction after tool output can still recover unfinished work.
+  if (
+    endsWithTerminalAssistantText &&
+    turnStart < sanitizedMessages.length &&
+    turnStart > 0 &&
+    activeInput !== undefined &&
+    isReplayUnsafeInterSessionInput(activeInput)
+  ) {
+    return sanitizedMessages.slice(0, turnStart - 1);
+  }
+  return sanitizedMessages;
+}
+
 function containsRealConversation(messages: AgentMessage[]): boolean {
   return messages.some((message, index, allMessages) =>
     isRealConversationMessage(message, allMessages, index),
@@ -247,7 +397,7 @@ async function summarizeViaLLM(params: {
     messages: params.messages,
     previousSummary: params.previousSummary,
   });
-  return compactionSafeguardDeps.summarizeInStages({
+  const result = await compactionSafeguardDeps.summarizeInStages({
     messages,
     model: params.model,
     apiKey: params.apiKey,
@@ -260,6 +410,14 @@ async function summarizeViaLLM(params: {
     summarizationInstructions: params.summarizationInstructions,
     previousSummary: undefined,
   });
+  if (result.kind === "summary") {
+    return result.text;
+  }
+
+  // A generic fallback means redistillation never happened. Preserve the
+  // known summary verbatim so a temporary model outage cannot erase it.
+  const previousSummary = params.previousSummary?.trim();
+  return previousSummary ? `${previousSummary}\n\n${result.text}` : result.text;
 }
 
 /**
@@ -671,8 +829,8 @@ function splitPreservedRecentTurns(params: {
   }
   const conversationIndexes: number[] = [];
   const userIndexes: number[] = [];
-  for (let i = 0; i < params.messages.length; i += 1) {
-    const role = (params.messages[i] as { role?: unknown }).role;
+  for (const [i, message] of params.messages.entries()) {
+    const role = message.role;
     if (role === "user" || role === "assistant") {
       conversationIndexes.push(i);
       if (role === "user") {
@@ -714,11 +872,10 @@ function splitPreservedRecentTurns(params: {
     return { summarizableMessages: params.messages, preservedMessages: [] };
   }
   const preservedToolCallIds = new Set<string>();
-  for (let i = 0; i < params.messages.length; i += 1) {
+  for (const [i, message] of params.messages.entries()) {
     if (!preservedIndexSet.has(i)) {
       continue;
     }
-    const message = params.messages[i];
     if (message.role !== "assistant") {
       continue;
     }
@@ -736,14 +893,13 @@ function splitPreservedRecentTurns(params: {
       }
     }
     if (preservedStartIndex >= 0) {
-      for (let i = preservedStartIndex; i < params.messages.length; i += 1) {
-        const message = params.messages[i];
+      for (const [offset, message] of params.messages.slice(preservedStartIndex).entries()) {
         if (message.role !== "toolResult") {
           continue;
         }
         const toolResultId = extractToolResultId(message);
         if (toolResultId && preservedToolCallIds.has(toolResultId)) {
-          preservedIndexSet.add(i);
+          preservedIndexSet.add(preservedStartIndex + offset);
         }
       }
     }
@@ -817,8 +973,7 @@ function formatSplitTurnContextSection(messages: AgentMessage[]): string {
 }
 
 function extractLatestUserAsk(messages: AgentMessage[]): string | null {
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const message = messages[i];
+  for (const message of messages.toReversed()) {
     if (message.role !== "user") {
       continue;
     }
@@ -902,8 +1057,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     let hasRealSummarizable = containsRealConversation(baseMessagesToSummarize);
     let hasRealTurnPrefix = containsRealConversation(baseTurnPrefixMessages);
     if (!hasRealSummarizable && !hasRealTurnPrefix) {
-      const branchMessages = stripRuntimeContextCustomMessages(
-        collectSessionBranchMessages(ctx.sessionManager),
+      const branchMessages = filterReplayUnsafeSessionBranchMessages(
+        stripRuntimeContextCustomMessages(collectSessionBranchMessages(ctx.sessionManager)),
       );
       if (containsRealConversation(branchMessages)) {
         log.info(
@@ -1332,7 +1487,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
   });
 }
 
-export const testing = {
+const testing = {
   setSummarizeInStagesForTest(next?: typeof summarizeInStages) {
     compactionSafeguardDeps.summarizeInStages = next ?? summarizeInStages;
   },
@@ -1365,4 +1520,9 @@ export const testing = {
   MAX_FILE_OPS_LIST_CHARS,
   SUMMARY_TRUNCATED_MARKER,
 } as const;
-export { testing as __testing };
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.compactionSafeguardTestApi")] =
+    testing;
+}
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

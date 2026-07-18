@@ -2,6 +2,7 @@
 // rotation, output extraction, and decision summaries.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeNullableString,
@@ -45,6 +46,8 @@ import {
 import { resolveOfficialExternalPluginRepairHint } from "../plugins/official-external-plugin-repair-hints.js";
 import { runExec } from "../process/exec.js";
 import { providerOperationRetryConfig } from "../provider-runtime/operation-retry.js";
+import { assertSecretOwnerAvailable } from "../secrets/runtime-degraded-state.js";
+import { assertRuntimeMediaRequestSecretOwnerAvailable } from "../secrets/runtime-media-secret-owner.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { MediaAttachmentCache } from "./attachments.js";
 import {
@@ -54,6 +57,10 @@ import {
 } from "./defaults.constants.js";
 import { normalizeImageDescriptionInput } from "./image-input-normalize.js";
 import { describeImageWithModel } from "./image-runtime.js";
+import {
+  recordLocalAudioBackendObservation,
+  resolveRequestedLocalAudioBackend,
+} from "./local-audio.js";
 import { resolveOpenAiAudioAuthModelApi } from "./openai-audio-api.js";
 import { normalizeMediaExecutionProviderId } from "./provider-id.js";
 import { getMediaUnderstandingProvider, normalizeMediaProviderId } from "./provider-registry.js";
@@ -393,10 +400,17 @@ export function buildModelDecision(params: {
 }): MediaUnderstandingModelDecision {
   if (params.entryType === "cli") {
     const command = params.entry.command?.trim();
+    const requestedBackend = command
+      ? resolveRequestedLocalAudioBackend({
+          command,
+          args: params.entry.args ?? [],
+        })
+      : undefined;
     return {
       type: "cli",
       provider: command ?? "cli",
       model: params.entry.model ?? command,
+      ...(requestedBackend ? { requestedBackend } : {}),
       outcome: params.outcome,
       reason: params.reason,
     };
@@ -653,11 +667,20 @@ export function formatDecisionSummary(decision: MediaUnderstandingDecision): str
   const chosen = attachments.find((entry) => entry?.chosen)?.chosen;
   const provider = typeof chosen?.provider === "string" ? chosen.provider.trim() : undefined;
   const model = typeof chosen?.model === "string" ? chosen.model.trim() : undefined;
-  const modelLabel = provider ? (model ? `${provider}/${model}` : provider) : undefined;
+  const modelLabel = provider
+    ? model && model !== provider
+      ? `${provider}/${model}`
+      : provider
+    : undefined;
+  const backendLabel = chosen?.observedBackend
+    ? ` observed=${chosen.observedBackend}`
+    : chosen?.requestedBackend
+      ? ` requested=${chosen.requestedBackend}`
+      : "";
   const reason = findDecisionReason(decision, decision.outcome === "failed" ? "failed" : undefined);
   const shortReason = summarizeDecisionReason(reason);
   const countLabel = total > 0 ? ` (${success}/${total})` : "";
-  const viaLabel = modelLabel ? ` via ${modelLabel}` : "";
+  const viaLabel = modelLabel ? ` via ${modelLabel}${backendLabel}` : "";
   const reasonLabel = shortReason ? ` reason=${shortReason}` : "";
   return `${decision.capability}: ${decision.outcome}${countLabel}${viaLabel}${reasonLabel}`;
 }
@@ -730,7 +753,7 @@ function assertMinAudioSize(params: { size: number; attachmentIndex: number }): 
  *   register with the official external provider catalog to receive the
  *   actionable hint.
  */
-export function formatMissingProviderHint(providerId: string): string {
+function formatMissingProviderHint(providerId: string): string {
   const trimmed = providerId.trim();
   if (!trimmed) {
     return "";
@@ -771,6 +794,7 @@ export async function runProviderEntry(params: {
   workspaceDir?: string;
   providerRegistry: ProviderRegistry;
   config?: MediaUnderstandingConfig;
+  secretOwnerId?: string;
 }): Promise<MediaUnderstandingOutput | null> {
   const { entry, capability, cfg } = params;
   const providerIdRaw = entry.provider?.trim();
@@ -779,6 +803,10 @@ export async function runProviderEntry(params: {
   }
   const providerId = normalizeMediaProviderId(providerIdRaw);
   const requestProviderId = normalizeMediaExecutionProviderId(providerIdRaw);
+  assertRuntimeMediaRequestSecretOwnerAvailable({ capability, entry });
+  if (params.secretOwnerId) {
+    assertSecretOwnerAvailable("capability", params.secretOwnerId);
+  }
   const { maxBytes, maxChars, timeoutMs, prompt, hasConfiguredPrompt } = resolveEntryRunOptions({
     capability,
     entry,
@@ -957,6 +985,16 @@ export async function runProviderEntry(params: {
     workspaceDir: params.workspaceDir,
   });
   const authSource = auth.source ?? `provider:${providerId}`;
+  const model =
+    entry.model?.trim() ||
+    (await import("./defaults.js")).resolveDefaultMediaModel({
+      cfg,
+      providerId,
+      capability: "video",
+      workspaceDir: params.workspaceDir,
+      providerRegistry: params.providerRegistry,
+    }) ||
+    entry.model;
   const buildRequest = (requestAuth: { kind: "api-key"; apiKey: string } | { kind: "none" }) => ({
     buffer: media.buffer,
     fileName: media.fileName,
@@ -969,7 +1007,7 @@ export async function runProviderEntry(params: {
     baseUrl,
     headers,
     request,
-    model: entry.model,
+    model,
     prompt,
     timeoutMs,
     fetchFn,
@@ -988,7 +1026,7 @@ export async function runProviderEntry(params: {
     attachmentIndex: params.attachmentIndex,
     text: trimOutput(result.text, maxChars),
     provider: providerId,
-    model: result.model ?? entry.model,
+    model: result.model ?? model,
   };
 }
 
@@ -1052,11 +1090,30 @@ export async function runCliEntry(params: {
     if (shouldLogVerbose()) {
       logVerbose(`Media understanding via CLI: ${argv.join(" ")}`);
     }
-    const { stdout } = await runExec(argv[0], argv.slice(1), {
-      timeoutMs,
-      maxBuffer: CLI_OUTPUT_MAX_BUFFER,
-      cwd: isAntigravityCliCommand(command) ? path.dirname(mediaPath) : undefined,
-    });
+    const { stdout, stderr } = await runExec(
+      expectDefined(argv[0], "argv entry at 0"),
+      argv.slice(1),
+      {
+        timeoutMs,
+        maxBuffer: CLI_OUTPUT_MAX_BUFFER,
+        cwd: isAntigravityCliCommand(command) ? path.dirname(mediaPath) : undefined,
+      },
+    );
+    const requestedBackend =
+      capability === "audio"
+        ? resolveRequestedLocalAudioBackend({
+            command,
+            args: argv.slice(1),
+          })
+        : undefined;
+    const observedBackend =
+      capability === "audio"
+        ? recordLocalAudioBackendObservation({
+            command,
+            args: argv.slice(1),
+            output: `${stderr ?? ""}\n${stdout}`,
+          })
+        : undefined;
     const resolved = await resolveCliOutput({
       command,
       args: argv.slice(1),
@@ -1071,10 +1128,13 @@ export async function runCliEntry(params: {
       kind: capability === "audio" ? "audio.transcription" : `${capability}.description`,
       attachmentIndex: params.attachmentIndex,
       text,
-      provider: "cli",
+      provider: capability === "audio" ? commandBase(command) : "cli",
       model: command,
+      ...(requestedBackend ? { requestedBackend } : {}),
+      ...(observedBackend ? { observedBackend } : {}),
     };
   } finally {
     await fs.rm(outputDir, { recursive: true, force: true }).catch(() => {});
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
