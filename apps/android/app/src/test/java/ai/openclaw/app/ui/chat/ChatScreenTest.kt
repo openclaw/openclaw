@@ -11,6 +11,22 @@ import org.junit.Test
 
 class ChatScreenTest {
   @Test
+  fun realtimeTalkLaunchRequestsPermissionBeforeSetupOrStart() {
+    assertEquals(
+      ChatRealtimeTalkLaunch.RequestPermission,
+      resolveChatRealtimeTalkLaunch(hasMicPermission = false, requiresSetup = true),
+    )
+    assertEquals(
+      ChatRealtimeTalkLaunch.ShowSetupInline,
+      resolveChatRealtimeTalkLaunch(hasMicPermission = true, requiresSetup = true),
+    )
+    assertEquals(
+      ChatRealtimeTalkLaunch.StartTalk,
+      resolveChatRealtimeTalkLaunch(hasMicPermission = true, requiresSetup = false),
+    )
+  }
+
+  @Test
   fun agentChipUsesEmojiAndFallsBackToId() {
     assertEquals(
       "🦾 Scout",

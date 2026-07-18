@@ -165,7 +165,8 @@ internal fun resolveInitialChatLoadSessionKey(
 @Composable
 fun ChatScreen(
   viewModel: MainViewModel,
-  onVoice: () -> Unit,
+  onStartTalk: () -> Unit,
+  realtimeTalkContent: (@Composable () -> Unit)? = null,
   onOpenSessions: () -> Unit,
   onOpenGatewaySettings: () -> Unit,
 ) {
@@ -527,164 +528,170 @@ fun ChatScreen(
       )
     }
 
-    ChatMessageList(
-      sessionKey = sessionKey,
-      messages = messages,
-      historyLoading = historyLoading,
-      pendingRunCount = pendingRunCount,
-      pendingToolCalls = pendingToolCalls,
-      questions = questionsForSession(questions, sessionKey, mainSessionKey, activeAgentId),
-      streamingAssistantText = streamingAssistantText,
-      healthOk = healthOk,
-      gatewayOffline = gatewayOffline,
-      outboxItems =
-        outboxItemsForSession(
-          items = outboxItems,
-          sessionKey = sessionKey,
-          mainSessionKey = mainSessionKey,
-          ownerAgentId = composerOwner.agentId,
-          messages = messages,
-        ),
-      recoveryOutboxItems =
-        outboxItemsForRecovery(
-          items = outboxItems,
-        ),
-      onRetryOutbox = viewModel::retryChatOutboxCommand,
-      onDeleteOutbox = viewModel::deleteChatOutboxCommand,
-      onResolveQuestion = viewModel::resolveChatQuestion,
-      onStarterPrompt = { prompt -> inputDrafts[composerOwner] = prompt },
-      onReplyMessage = { value -> viewModel.setChatReplyDraft(value, composerOwner) },
-      speechState = messageSpeechState,
-      onToggleListen = viewModel::toggleChatMessageSpeech,
-      resolveInlineWidgetResource = viewModel::resolveInlineWidgetResource,
-      modifier = Modifier.weight(1f),
-    )
+    if (realtimeTalkContent != null) {
+      Box(modifier = Modifier.weight(1f)) {
+        realtimeTalkContent()
+      }
+    } else {
+      ChatMessageList(
+        sessionKey = sessionKey,
+        messages = messages,
+        historyLoading = historyLoading,
+        pendingRunCount = pendingRunCount,
+        pendingToolCalls = pendingToolCalls,
+        questions = questionsForSession(questions, sessionKey, mainSessionKey, activeAgentId),
+        streamingAssistantText = streamingAssistantText,
+        healthOk = healthOk,
+        gatewayOffline = gatewayOffline,
+        outboxItems =
+          outboxItemsForSession(
+            items = outboxItems,
+            sessionKey = sessionKey,
+            mainSessionKey = mainSessionKey,
+            ownerAgentId = composerOwner.agentId,
+            messages = messages,
+          ),
+        recoveryOutboxItems =
+          outboxItemsForRecovery(
+            items = outboxItems,
+          ),
+        onRetryOutbox = viewModel::retryChatOutboxCommand,
+        onDeleteOutbox = viewModel::deleteChatOutboxCommand,
+        onResolveQuestion = viewModel::resolveChatQuestion,
+        onStarterPrompt = { prompt -> inputDrafts[composerOwner] = prompt },
+        onReplyMessage = { value -> viewModel.setChatReplyDraft(value, composerOwner) },
+        speechState = messageSpeechState,
+        onToggleListen = viewModel::toggleChatMessageSpeech,
+        resolveInlineWidgetResource = viewModel::resolveInlineWidgetResource,
+        modifier = Modifier.weight(1f),
+      )
 
-    if (pendingRunCount > 0 && planSteps.isNotEmpty()) {
-      PlanChecklistPill(steps = planSteps)
-    }
+      if (pendingRunCount > 0 && planSteps.isNotEmpty()) {
+        PlanChecklistPill(steps = planSteps)
+      }
 
-    ChatComposer(
-      value = input,
-      onValueChange = {
-        sendMessageTooLong = false
-        sendCheckpointFull = false
-        inputDrafts[composerOwner] = it
-      },
-      attachments = attachments,
-      thinkingLevel = thinkingLevel,
-      thinkingOptions = thinkingLevelSelection.options,
-      thinkingSupported = thinkingSupported,
-      contextUsage = contextUsage,
-      selectedModelLabel = selectedModelLabel,
-      modelPickerEnabled = gatewayConnectionDisplay.isConnected,
-      healthOk = healthOk,
-      gatewayOffline = gatewayOffline,
-      offlineStatus = offlineStatus,
-      pendingRunCount = pendingRunCount,
-      shareStaging = shareStaging,
-      sendInFlight = sendInFlight,
-      shareImportNotice = shareImportNotice,
-      onDismissShareImportNotice = {
-        sendMessageTooLong = false
-        sendCheckpointFull = false
-        composerState.clearAttachmentOmission(composerOwner)
-      },
-      commands = chatCommands,
-      onThinkingLevelChange = viewModel::setChatThinkingLevel,
-      onOpenModelPicker = { showModelPicker = true },
-      onPickImages = {
-        if (!viewModel.isCurrentChatComposerOwner(composerOwner)) return@ChatComposer
-        val authorizationId = composerState.beginMediaAcquisition(composerOwner) ?: return@ChatComposer
-        imagePickerOwnerCheckpoint.begin(composerOwner, authorizationId)
-        pickImages.launch("image/*")
-      },
-      onRemoveAttachment = { id -> composerState.removeAttachments(composerOwner, setOf(id)) },
-      voiceNoteState = voiceNoteState,
-      voiceNoteElapsedMs = voiceNoteElapsedMs,
-      voiceNoteLevel = voiceNoteLevel,
-      recordVoiceNoteEnabled = pendingRunCount == 0 && !micCaptureActive && !dictationActive && !sendInFlight,
-      onStartVoiceNote = {
-        scope.launch {
-          val ownerSnapshot = composerOwner
-          val mediaAuthorizationId = composerState.beginMediaAcquisition(ownerSnapshot) ?: return@launch
-          val recordingId = UUID.randomUUID().toString()
-          if (!viewModel.isCurrentChatComposerOwner(ownerSnapshot)) {
-            composerState.cancelMediaAcquisition(mediaAuthorizationId)
-            return@launch
-          }
-          if (voiceNoteRecorder.start(recordingId)) {
-            if (
-              viewModel.isCurrentChatComposerOwner(ownerSnapshot) &&
-              composerState.isMediaAcquisitionActive(mediaAuthorizationId)
-            ) {
-              voiceNoteCommitCheckpoint.begin(ownerSnapshot, mediaAuthorizationId, recordingId)
-            } else {
-              voiceNoteRecorder.cancel()
-              composerState.cancelMediaAcquisition(mediaAuthorizationId)
-            }
-          } else {
-            composerState.cancelMediaAcquisition(mediaAuthorizationId)
-          }
-        }
-      },
-      onCancelVoiceNote = {
-        voiceNoteCommitCheckpoint.clear()?.let { lease ->
-          composerState.cancelMediaAcquisition(lease.authorizationId)
-        }
-        voiceNoteRecorder.cancel()
-      },
-      onFinishVoiceNote = voiceNoteRecorder::finish,
-      dictationState = dictationState,
-      dictationEnabled =
-        pendingRunCount == 0 &&
-          !micCaptureActive &&
-          !sendInFlight &&
-          (voiceNoteState is VoiceNoteRecorderState.Idle || voiceNoteState is VoiceNoteRecorderState.Failure),
-      onToggleDictation = {
-        if (dictationActive) {
-          dictationController.finish()
-        } else {
+      ChatComposer(
+        value = input,
+        onValueChange = {
+          sendMessageTooLong = false
+          sendCheckpointFull = false
+          inputDrafts[composerOwner] = it
+        },
+        attachments = attachments,
+        thinkingLevel = thinkingLevel,
+        thinkingOptions = thinkingLevelSelection.options,
+        thinkingSupported = thinkingSupported,
+        contextUsage = contextUsage,
+        selectedModelLabel = selectedModelLabel,
+        modelPickerEnabled = gatewayConnectionDisplay.isConnected,
+        healthOk = healthOk,
+        gatewayOffline = gatewayOffline,
+        offlineStatus = offlineStatus,
+        pendingRunCount = pendingRunCount,
+        shareStaging = shareStaging,
+        sendInFlight = sendInFlight,
+        shareImportNotice = shareImportNotice,
+        onDismissShareImportNotice = {
+          sendMessageTooLong = false
+          sendCheckpointFull = false
+          composerState.clearAttachmentOmission(composerOwner)
+        },
+        commands = chatCommands,
+        onThinkingLevelChange = viewModel::setChatThinkingLevel,
+        onOpenModelPicker = { showModelPicker = true },
+        onPickImages = {
+          if (!viewModel.isCurrentChatComposerOwner(composerOwner)) return@ChatComposer
+          val authorizationId = composerState.beginMediaAcquisition(composerOwner) ?: return@ChatComposer
+          imagePickerOwnerCheckpoint.begin(composerOwner, authorizationId)
+          pickImages.launch("image/*")
+        },
+        onRemoveAttachment = { id -> composerState.removeAttachments(composerOwner, setOf(id)) },
+        voiceNoteState = voiceNoteState,
+        voiceNoteElapsedMs = voiceNoteElapsedMs,
+        voiceNoteLevel = voiceNoteLevel,
+        recordVoiceNoteEnabled = pendingRunCount == 0 && !micCaptureActive && !dictationActive && !sendInFlight,
+        onStartVoiceNote = {
           scope.launch {
             val ownerSnapshot = composerOwner
-            val transcript = dictationController.start()
-            // Recognition can finish after navigation. Only the composer that started
-            // dictation may receive its transcript; otherwise a late result crosses drafts.
-            if (transcript != null && viewModel.isCurrentChatComposerOwner(ownerSnapshot)) {
-              inputDrafts[ownerSnapshot] =
-                appendChatDictationTranscript(inputDrafts[ownerSnapshot], transcript)
+            val mediaAuthorizationId = composerState.beginMediaAcquisition(ownerSnapshot) ?: return@launch
+            val recordingId = UUID.randomUUID().toString()
+            if (!viewModel.isCurrentChatComposerOwner(ownerSnapshot)) {
+              composerState.cancelMediaAcquisition(mediaAuthorizationId)
+              return@launch
+            }
+            if (voiceNoteRecorder.start(recordingId)) {
+              if (
+                viewModel.isCurrentChatComposerOwner(ownerSnapshot) &&
+                composerState.isMediaAcquisitionActive(mediaAuthorizationId)
+              ) {
+                voiceNoteCommitCheckpoint.begin(ownerSnapshot, mediaAuthorizationId, recordingId)
+              } else {
+                voiceNoteRecorder.cancel()
+                composerState.cancelMediaAcquisition(mediaAuthorizationId)
+              }
+            } else {
+              composerState.cancelMediaAcquisition(mediaAuthorizationId)
             }
           }
-        }
-      },
-      onVoice = onVoice,
-      onFixConnection = onOpenGatewaySettings,
-      onCopyDiagnostics = {
-        copyGatewayDiagnosticsReport(
-          context = context,
-          screen = "chat composer",
-          gatewayAddress = gatewayAddress,
-          statusText = offlineStatus,
-        )
-      },
-      onAbort = viewModel::abortChat,
-      onSend = {
-        // Re-read the ViewModel so a stale click callback cannot beat StateFlow recomposition.
-        val currentShare = viewModel.chatShareDraftForOwner(composerOwner, mainSessionKey)
-        if (currentShare != null || composerOwner in sendStates) {
-          return@ChatComposer
-        }
-        val ownerSnapshot = composerOwner
-        if (!viewModel.isCurrentChatComposerOwner(ownerSnapshot)) return@ChatComposer
-        val result =
-          viewModel.beginChatComposerSend(
-            owner = ownerSnapshot,
-            thinking = thinkingLevel,
+        },
+        onCancelVoiceNote = {
+          voiceNoteCommitCheckpoint.clear()?.let { lease ->
+            composerState.cancelMediaAcquisition(lease.authorizationId)
+          }
+          voiceNoteRecorder.cancel()
+        },
+        onFinishVoiceNote = voiceNoteRecorder::finish,
+        dictationState = dictationState,
+        dictationEnabled =
+          pendingRunCount == 0 &&
+            !micCaptureActive &&
+            !sendInFlight &&
+            (voiceNoteState is VoiceNoteRecorderState.Idle || voiceNoteState is VoiceNoteRecorderState.Failure),
+        onToggleDictation = {
+          if (dictationActive) {
+            dictationController.finish()
+          } else {
+            scope.launch {
+              val ownerSnapshot = composerOwner
+              val transcript = dictationController.start()
+              // Recognition can finish after navigation. Only the composer that started
+              // dictation may receive its transcript; otherwise a late result crosses drafts.
+              if (transcript != null && viewModel.isCurrentChatComposerOwner(ownerSnapshot)) {
+                inputDrafts[ownerSnapshot] =
+                  appendChatDictationTranscript(inputDrafts[ownerSnapshot], transcript)
+              }
+            }
+          }
+        },
+        onStartTalk = onStartTalk,
+        onFixConnection = onOpenGatewaySettings,
+        onCopyDiagnostics = {
+          copyGatewayDiagnosticsReport(
+            context = context,
+            screen = "chat composer",
+            gatewayAddress = gatewayAddress,
+            statusText = offlineStatus,
           )
-        sendMessageTooLong = result == ChatComposerSendStartResult.MessageTooLong
-        sendCheckpointFull = result == ChatComposerSendStartResult.CheckpointFull
-      },
-    )
+        },
+        onAbort = viewModel::abortChat,
+        onSend = {
+          // Re-read the ViewModel so a stale click callback cannot beat StateFlow recomposition.
+          val currentShare = viewModel.chatShareDraftForOwner(composerOwner, mainSessionKey)
+          if (currentShare != null || composerOwner in sendStates) {
+            return@ChatComposer
+          }
+          val ownerSnapshot = composerOwner
+          if (!viewModel.isCurrentChatComposerOwner(ownerSnapshot)) return@ChatComposer
+          val result =
+            viewModel.beginChatComposerSend(
+              owner = ownerSnapshot,
+              thinking = thinkingLevel,
+            )
+          sendMessageTooLong = result == ChatComposerSendStartResult.MessageTooLong
+          sendCheckpointFull = result == ChatComposerSendStartResult.CheckpointFull
+        },
+      )
+    }
   }
 
   if (showModelPicker) {
@@ -1595,7 +1602,7 @@ private fun ChatComposer(
   dictationState: ChatDictationState,
   dictationEnabled: Boolean,
   onToggleDictation: () -> Unit,
-  onVoice: () -> Unit,
+  onStartTalk: () -> Unit,
   onFixConnection: () -> Unit,
   onCopyDiagnostics: () -> Unit,
   onAbort: () -> Unit,
@@ -1705,7 +1712,7 @@ private fun ChatComposer(
           dictationActive = dictationActive,
           dictationEnabled = dictationEnabled,
           onToggleDictation = onToggleDictation,
-          onVoice = onVoice,
+          onStartTalk = onStartTalk,
           sendEnabled = sendEnabled,
           onSend = onSend,
           modifier = Modifier.weight(1f),
@@ -2070,7 +2077,7 @@ private fun ChatInputPill(
   dictationActive: Boolean,
   dictationEnabled: Boolean,
   onToggleDictation: () -> Unit,
-  onVoice: () -> Unit,
+  onStartTalk: () -> Unit,
   sendEnabled: Boolean,
   onSend: () -> Unit,
   modifier: Modifier = Modifier,
@@ -2140,7 +2147,7 @@ private fun ChatInputPill(
       if (sendEnabled) {
         SendButton(enabled = true, onClick = onSend)
       } else {
-        LiveTalkButton(onClick = onVoice)
+        LiveTalkButton(onClick = onStartTalk)
       }
     }
   }
