@@ -97,6 +97,40 @@ describe("readMattermostMessages", () => {
     ).resolves.toMatchObject({ messages: [{ id: "post-2" }, { id: "post-1" }] });
   });
 
+  it.each([
+    {
+      label: "open policy",
+      providerConfig: { groupPolicy: "open" as const },
+    },
+    {
+      label: "allowlisted groups",
+      providerConfig: {
+        groupPolicy: "allowlist" as const,
+        groups: { OTHER: { requireMention: false } },
+      },
+    },
+  ])("inherits provider-level $label for a named account", async ({ providerConfig }) => {
+    const cfg = createMattermostTestConfig("read-named-inheritance") as OpenClawConfig;
+    Object.assign(cfg.channels!.mattermost!, providerConfig, {
+      accounts: { work: { enabled: true } },
+    });
+    const fetchImpl = createReadFetch();
+
+    await expect(
+      readMattermostMessages({
+        cfg,
+        channelId: "OTHER",
+        accountId: "work",
+        context: {
+          ...delegatedContext(),
+          requesterAccountId: "work",
+        },
+        fetchImpl,
+      }),
+    ).resolves.toMatchObject({ messages: [{ id: "post-2" }, { id: "post-1" }] });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
   it("denies unconfigured and direct-message cross-channel targets before reading posts", async () => {
     for (const channelType of ["O", "D"]) {
       const fetchImpl = createReadFetch({ channelType });

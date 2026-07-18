@@ -62,6 +62,8 @@ function isConfiguredMattermostReadTarget(params: {
   account: ReturnType<typeof resolveMattermostAccount>;
   channelId: string;
 }): boolean {
+  // `account.config` already merges provider-level defaults with the selected
+  // named account, so omitted account fields inherit groupPolicy and groups.
   const { groupPolicy } = resolveAllowlistProviderRuntimeGroupPolicy({
     providerConfigPresent: params.cfg.channels?.mattermost !== undefined,
     groupPolicy: params.account.config.groupPolicy,
