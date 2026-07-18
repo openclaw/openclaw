@@ -13,10 +13,7 @@ export type { ProtocolValidator } from "./protocol-validator.js";
 export * from "./schema/worker-inference.js";
 export * from "./schema/skill-history.js";
 export * from "./schema/ui-command.js";
-export type {
-  GatewayErrorDetails,
-  MissingScopeErrorDetails,
-} from "./schema/error-codes.js";
+export type { GatewayErrorDetails, MissingScopeErrorDetails } from "./schema/error-codes.js";
 export * from "./migration-api.js";
 export type * from "./public-session-catalog.js";
 import {
