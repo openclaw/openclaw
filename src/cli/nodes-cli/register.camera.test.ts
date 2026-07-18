@@ -1,4 +1,4 @@
-// Node camera command tests cover the RPC contract for omitted vs explicit CLI options.
+// Node camera command tests cover help text and RPC handling for optional values.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerNodesCameraCommands } from "./register.camera.js";
@@ -70,6 +70,22 @@ describe("nodes camera snap CLI option forwarding", () => {
   beforeEach(() => {
     capturedInvokeParams.length = 0;
     vi.clearAllMocks();
+  });
+
+  it("describes node-owned camera defaults in help", () => {
+    const nodes = buildRootCommand();
+    const camera = nodes.commands.find((command) => command.name() === "camera");
+    const snap = camera?.commands.find((command) => command.name() === "snap");
+    if (!snap) {
+      throw new Error("expected camera snap command");
+    }
+
+    expect(snap.options.find((option) => option.long === "--quality")?.description).toBe(
+      "JPEG quality (optional; platform-specific default)",
+    );
+    expect(snap.options.find((option) => option.long === "--delay-ms")?.description).toBe(
+      "Delay before capture in ms (optional; platform-specific default)",
+    );
   });
 
   it("omits quality and delayMs from RPC params when flags are not provided", async () => {
