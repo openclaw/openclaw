@@ -48,7 +48,7 @@ describe("mattermost actions contract", () => {
           channels: {
             mattermost: {
               enabled: true,
-              botToken: "[REDACTED]",
+              botToken: "test-token-placeholder",
               baseUrl: "https://chat.example.com",
               actions: { messages: false },
             },

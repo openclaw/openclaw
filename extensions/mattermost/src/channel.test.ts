@@ -736,7 +736,7 @@ describe("mattermostPlugin", () => {
         channels: {
           mattermost: {
             enabled: true,
-            botToken: "[REDACTED]",
+            botToken: "test-token-placeholder",
             baseUrl: "https://chat.example.com",
             actions: { messages: false },
           },
@@ -758,7 +758,7 @@ describe("mattermostPlugin", () => {
             accounts: {
               default: {
                 enabled: true,
-                botToken: "[REDACTED]",
+                botToken: "test-token-placeholder",
                 baseUrl: "https://chat.example.com",
                 actions: { messages: true },
               },
@@ -858,7 +858,7 @@ describe("mattermostPlugin", () => {
             accounts: {
               default: {
                 enabled: true,
-                botToken: "[REDACTED]",
+                botToken: "test-token-placeholder",
                 baseUrl: "https://chat.example.com",
                 actions: { messages: false },
               },
