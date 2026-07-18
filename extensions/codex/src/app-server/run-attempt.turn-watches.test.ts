@@ -1260,13 +1260,12 @@ describe("runCodexAppServerAttempt turn watches", () => {
     expect(result.promptError).toBeNull();
   });
 
-  it("counts pending user input requests as turn attempt progress", async () => {
+  it("records pending secret input requests as turn attempt progress", async () => {
     const harness = createStartedThreadHarness();
     const params = createParams(
       path.join(tempDir, "session.jsonl"),
       path.join(tempDir, "workspace"),
     );
-    params.timeoutMs = 250;
     params.onBlockReply = vi.fn();
     const onRunProgress = vi.fn();
     params.onRunProgress = onRunProgress;
@@ -1285,9 +1284,6 @@ describe("runCodexAppServerAttempt turn watches", () => {
       fastWait,
     );
 
-    await new Promise((resolve) => {
-      setTimeout(resolve, 75);
-    });
     const response = harness.handleServerRequest({
       id: "request-user-input",
       method: "item/tool/requestUserInput",
@@ -1301,7 +1297,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
             header: "Mode",
             question: "Pick a mode",
             isOther: false,
-            isSecret: false,
+            isSecret: true,
             options: [
               { label: "Fast", description: "Use less reasoning" },
               { label: "Deep", description: "Use more reasoning" },
@@ -1311,9 +1307,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
       },
     });
     await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledTimes(1), fastWait);
-    await new Promise((resolve) => {
-      setTimeout(resolve, 125);
-    });
+    expect(onRunProgress).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "request:item/tool/requestUserInput:start" }),
+    );
 
     expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
     expect(queueActiveRunMessageForTest("session-1", "2")).toBe(true);
