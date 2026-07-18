@@ -2207,8 +2207,6 @@ export async function runReplyAgent(params: {
         cfg,
         sessionKey,
         agentId: followupRun.run.agentId,
-        defaultProvider: followupRun.run.provider,
-        defaultModel,
         providerUsed,
         modelUsed,
       });

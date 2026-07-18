@@ -497,8 +497,6 @@ describe("live model switch", () => {
       cfg: { session: { store: "/tmp/custom-store.json" } },
       sessionKey: "main",
       agentId: "reply",
-      defaultProvider: "anthropic",
-      defaultModel: "claude-opus-4-6",
     };
 
     it("clears the pending flag when the run executed the persisted selection", async () => {
@@ -539,7 +537,6 @@ describe("live model switch", () => {
       });
 
       expect(sessionEntry.liveModelSwitchPending).toBe(true);
-      expect(state.updateSessionStoreMock).not.toHaveBeenCalled();
     });
 
     it("clears via the openai runtime promotion when providers differ only by alias", async () => {
@@ -561,7 +558,7 @@ describe("live model switch", () => {
       expect(sessionEntry).not.toHaveProperty("liveModelSwitchPending");
     });
 
-    it("is a no-op when the flag is not set", async () => {
+    it("leaves the entry untouched when the flag is not set", async () => {
       const sessionEntry = {
         providerOverride: "openai",
         modelOverride: "gpt-5.5",
@@ -576,7 +573,28 @@ describe("live model switch", () => {
         modelUsed: "gpt-5.5",
       });
 
-      expect(state.updateSessionStoreMock).not.toHaveBeenCalled();
+      expect(sessionEntry).toEqual({ providerOverride: "openai", modelOverride: "gpt-5.5" });
+    });
+
+    it("clears a pending default switch once the agent default actually ran", async () => {
+      // /model default clears the override and leaves only runtime fields; the
+      // selection then resolves to the agent default, which just ran.
+      const sessionEntry = {
+        liveModelSwitchPending: true,
+        modelProvider: "anthropic",
+        model: "claude-opus-4-6",
+      };
+      state.loadSessionStoreMock.mockReturnValue({ main: sessionEntry });
+
+      const { consolidateLiveModelSwitchAfterRun } = await loadModule();
+
+      await consolidateLiveModelSwitchAfterRun({
+        ...consolidateParams,
+        providerUsed: "anthropic",
+        modelUsed: "claude-opus-4-6",
+      });
+
+      expect(sessionEntry).not.toHaveProperty("liveModelSwitchPending");
     });
   });
 
