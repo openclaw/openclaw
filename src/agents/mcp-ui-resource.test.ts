@@ -200,13 +200,11 @@ describe("MCP App UI resources", () => {
     expect(decodeMcpAppSandboxCsp(encodedCsp)).toStrictEqual(view?.csp);
   });
 
-  it("returns undefined when CSP metadata is not valid base64-encoded JSON", () => {
-    expect(decodeMcpAppSandboxCsp("bm90LWpzb24")).toBeUndefined();
-  });
-
-  it("returns undefined when base64-decoded CSP is not valid JSON", () => {
-    const invalid = Buffer.from("{not json}", "utf8").toString("base64url");
-    expect(decodeMcpAppSandboxCsp(invalid)).toBeUndefined();
+  it.each([
+    "bm90LWpzb24",
+    Buffer.from("{not json}", "utf8").toString("base64url"),
+  ])("rejects malformed encoded CSP metadata", (value) => {
+    expect(() => decodeMcpAppSandboxCsp(value)).toThrow();
   });
 
   it("builds proxy HTML", () => {

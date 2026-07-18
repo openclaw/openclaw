@@ -98,12 +98,8 @@ export function decodeMcpAppSandboxCsp(value: string | null): McpAppCsp | undefi
   if (value.length > MCP_APP_SANDBOX_CSP_MAX_ENCODED_BYTES) {
     throw new Error("MCP App CSP metadata is too large");
   }
-  try {
-    const decoded = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as unknown;
-    return normalizeMcpAppCsp(decoded);
-  } catch {
-    return undefined;
-  }
+  const decoded = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as unknown;
+  return normalizeMcpAppCsp(decoded);
 }
 
 /** Trusted outer document. The untrusted app HTML is written only into its inner iframe. */
