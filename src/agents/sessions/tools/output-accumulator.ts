@@ -42,7 +42,8 @@ export class OutputAccumulator {
   private readonly maxRollingBytes: number;
   private readonly tempFilePrefix: string;
   private readonly transformDecodedText?: (text: string) => string;
-  private readonly decoder = new TextDecoder();
+  private decoder = new TextDecoder("utf-8", { fatal: true });
+  private binaryDetected = false;
 
   private spillChunks: Buffer[] = [];
   private tailText = "";
@@ -73,7 +74,7 @@ export class OutputAccumulator {
     }
 
     this.totalRawBytes += data.length;
-    const decodedText = this.decoder.decode(data, { stream: true });
+    const decodedText = this.decodeChunk(data);
     const text = this.transformDecodedText?.(decodedText) ?? decodedText;
     this.appendDecodedText(text);
 
@@ -92,7 +93,7 @@ export class OutputAccumulator {
       return "";
     }
     this.finished = true;
-    const decodedText = this.decoder.decode();
+    const decodedText = this.decodeFinal();
     const text = this.transformDecodedText?.(decodedText) ?? decodedText;
     this.appendDecodedText(text);
     if (this.transformDecodedText && text.length > 0) {
@@ -102,6 +103,50 @@ export class OutputAccumulator {
       this.ensureTempFile();
     }
     return text;
+  }
+
+  /** Returns true when the output contained non-UTF-8 bytes and fell back to permissive decoding. */
+  hasBinaryData(): boolean {
+    return this.binaryDetected;
+  }
+
+  private decodeChunk(data: Buffer): string {
+    try {
+      return this.decoder.decode(data, { stream: true });
+    } catch (e) {
+      if (e instanceof TypeError && this.isEncodingError(e)) {
+        return this.fallbackDecode(data);
+      }
+      throw e;
+    }
+  }
+
+  private decodeFinal(): string {
+    try {
+      return this.decoder.decode();
+    } catch (e) {
+      if (e instanceof TypeError && this.isEncodingError(e)) {
+        this.binaryDetected = true;
+        return new TextDecoder().decode();
+      }
+      throw e;
+    }
+  }
+
+  private fallbackDecode(data: Buffer): string {
+    // Flush any pending state from the strict decoder, then switch to a
+    // permissive fallback so the rest of the stream is not interrupted.
+    this.binaryDetected = true;
+    const flushed = new TextDecoder().decode();
+    this.decoder = new TextDecoder();
+    return flushed + this.decoder.decode(data, { stream: true });
+  }
+
+  private isEncodingError(error: TypeError): boolean {
+    return (
+      (error as unknown as { code?: string }).code === "ERR_ENCODING_INVALID_ENCODED_DATA" ||
+      error.message.includes("not valid for encoding")
+    );
   }
 
   snapshot(options: { persistIfTruncated?: boolean } = {}): OutputSnapshot {
