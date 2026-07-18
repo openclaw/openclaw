@@ -1,11 +1,11 @@
 // Zalo tests share isolated durable-ingress state and Bot API envelopes.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { expect, vi } from "vitest";
 import type { zaloWebhookIngressRuntime } from "./webhook-spool.js";
 
@@ -36,7 +36,9 @@ export function createZaloWebhookTestEvent(params?: {
 export async function withZaloWebhookTestQueue<T>(
   fn: (queue: ZaloWebhookTestQueue) => Promise<T>,
 ): Promise<T> {
-  const createdDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-zalo-ingress-"));
+  const createdDir = await fs.mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-zalo-ingress-"),
+  );
   const stateDir = await fs.realpath(createdDir);
   const previousStateDir = process.env.OPENCLAW_STATE_DIR;
   process.env.OPENCLAW_STATE_DIR = stateDir;
