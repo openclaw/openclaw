@@ -151,7 +151,6 @@ export async function loadSubagentSpawnModuleForTest(params: {
   resolveSubagentSpawnModelSelection?: () => string | undefined;
   getSubagentDepthFromSessionStore?: (sessionKey: string, opts?: unknown) => number;
   countActiveRunsForSession?: (sessionKey: string) => number;
-  listActiveSwarmRunsForRequester?: (requesterSessionKey: string) => unknown[];
   listSwarmRunsForGroup?: (groupId: string) => unknown[];
   resolveSandboxRuntimeStatus?: (params: {
     cfg?: Record<string, unknown>;
@@ -390,8 +389,6 @@ export async function loadSubagentSpawnModuleForTest(params: {
   vi.doMock("./subagent-registry.js", () => ({
     completeCollectorLaunchCleanup: params.completeCollectorLaunchCleanupMock ?? vi.fn(),
     countActiveRunsForSession: params.countActiveRunsForSession ?? (() => 0),
-    failQueuedSubagentRun: vi.fn(() => true),
-    listActiveSwarmRunsForRequester: params.listActiveSwarmRunsForRequester ?? vi.fn(() => []),
     listSwarmRunsForGroup: params.listSwarmRunsForGroup ?? vi.fn(() => []),
     registerSubagentRun:
       params.registerSubagentRunMock ?? vi.fn((_record: Record<string, unknown>) => undefined),

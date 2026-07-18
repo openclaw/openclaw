@@ -2,7 +2,6 @@ import { Type } from "typebox";
 import { validateJsonSchemaValue } from "../../plugins/schema-validator.js";
 import type { JsonSchemaObject } from "../../shared/json-schema.types.js";
 import type { SwarmStructuredOutputState } from "../subagent-registry.types.js";
-import { validateStructuredOutputSchema } from "../swarm-output-schema.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, ToolInputError } from "./common.js";
 
@@ -15,7 +14,7 @@ function formatSchemaError(errors: Array<{ text: string }>): string {
     .join("; ");
 }
 
-export function readSwarmStructuredOutput(runId: string): SwarmStructuredOutputState | undefined {
+function readSwarmStructuredOutput(runId: string): SwarmStructuredOutputState | undefined {
   const state = states.get(runId);
   return state ? structuredClone(state) : undefined;
 }
@@ -27,8 +26,6 @@ export function consumeSwarmStructuredOutput(
   states.delete(runId);
   return state;
 }
-
-export { validateStructuredOutputSchema };
 
 export function createStructuredOutputTool(params: {
   runId: string;
@@ -101,8 +98,14 @@ export function createStructuredOutputTool(params: {
   };
 }
 
-export const testing = {
+const testing = {
+  readSwarmStructuredOutput,
   reset() {
     states.clear();
   },
 };
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.structuredOutputToolTestApi")] =
+    { testing };
+}

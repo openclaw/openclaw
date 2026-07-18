@@ -165,10 +165,16 @@ export function createAgentsWaitTool(opts: {
   };
 }
 
-export const testing = {
+const testing = {
   ownsRun,
   readResolvedWaitState,
   readWaitState,
   resolveWaitTargets,
   waitForCollector,
 };
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.agentsWaitToolTestApi")] = {
+    testing,
+  };
+}

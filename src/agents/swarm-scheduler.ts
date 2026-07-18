@@ -177,8 +177,14 @@ export function isSwarmRunQueued(runId: string): boolean {
   return false;
 }
 
-export const testing = {
+const testing = {
   reset() {
     lanes.clear();
   },
 };
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.swarmSchedulerTestApi")] = {
+    testing,
+  };
+}

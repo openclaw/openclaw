@@ -41,18 +41,12 @@ import {
   shouldIncludeAskUserToolForOpenClawTools,
   shouldIncludeUpdatePlanToolForOpenClawTools,
 } from "./openclaw-tools.registration.js";
+import { createOpenClawSwarmToolGroups } from "./openclaw-tools.swarm.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
-import {
-  getLatestSubagentRunByChildSessionKey,
-  getSubagentRunByRunId,
-  recordSwarmStructuredOutput,
-} from "./subagent-registry.js";
-import { resolveSwarmConfig } from "./swarm-config.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
 import { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
 import { createAgentsListTool } from "./tools/agents-list-tool.js";
-import { createAgentsWaitTool } from "./tools/agents-wait-tool.js";
 import { createAskUserTool } from "./tools/ask-user-tool.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { createComputerTool } from "./tools/computer-tool.js";
@@ -89,7 +83,6 @@ import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createSessionsTool } from "./tools/sessions-tool.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 import { createConfiguredSkillWorkshopTool } from "./tools/skill-workshop-tool-factory.js";
-import { createStructuredOutputTool } from "./tools/structured-output-tool.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
 import { createTaskSuggestionTools } from "./tools/task-suggestion-tools.js";
 import { createTerminalTool } from "./tools/terminal-tool.js";
@@ -256,6 +249,15 @@ export function createOpenClawTools(
     agentId: options?.requesterAgentIdOverride,
   });
   const effectiveRequesterAgentId = sessionAgentId;
+  const swarmToolGroups = createOpenClawSwarmToolGroups({
+    config: resolvedConfig,
+    effectiveRequesterAgentId,
+    agentSessionKey: options?.agentSessionKey,
+    runSessionKey: options?.runSessionKey,
+    runId: options?.runId,
+    swarmCollector: options?.swarmCollector,
+    swarmOutputSchema: options?.swarmOutputSchema,
+  });
   // Fall back to the session agent workspace so plugin loading stays workspace-stable
   // even when a caller forgets to thread workspaceDir explicitly.
   const inferredWorkspaceDir =
@@ -603,23 +605,7 @@ export function createOpenClawTools(
           }),
         ]),
     ...(includeUpdatePlanTool ? [createUpdatePlanTool()] : []),
-    ...(options?.swarmCollector && options.runId && options.swarmOutputSchema
-      ? (() => {
-          const childSessionKey = options.runSessionKey ?? options.agentSessionKey;
-          const collectorEntry =
-            getSubagentRunByRunId(options.runId) ??
-            (childSessionKey ? getLatestSubagentRunByChildSessionKey(childSessionKey) : undefined);
-          return [
-            createStructuredOutputTool({
-              runId: options.runId,
-              schema: options.swarmOutputSchema,
-              initialState: collectorEntry?.structuredOutput,
-              onStateChange: (state) =>
-                recordSwarmStructuredOutput({ runId: options.runId, childSessionKey }, state),
-            }),
-          ];
-        })()
-      : []),
+    ...swarmToolGroups.structuredOutput,
     ...(includeAskUserTool
       ? [
           createAskUserTool({
@@ -709,16 +695,7 @@ export function createOpenClawTools(
           }),
         ]
       : []),
-    ...(resolveSwarmConfig(resolvedConfig, effectiveRequesterAgentId).enabled
-      ? [
-          createAgentsWaitTool({
-            agentSessionKey: options?.agentSessionKey,
-            runSessionKey: options?.runSessionKey,
-            agentId: effectiveRequesterAgentId,
-            config: resolvedConfig,
-          }),
-        ]
-      : []),
+    ...swarmToolGroups.agentsWait,
     createSessionsYieldTool({
       sessionId: options?.sessionId,
       onBeforeYield:

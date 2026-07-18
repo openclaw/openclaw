@@ -9,13 +9,10 @@ import {
 } from "../subagent-registry.test-helpers.js";
 import "../subagent-registry.mocks.shared.js";
 import { testing as spawnTesting } from "../subagent-spawn.test-support.js";
-import { testing as swarmSchedulerTesting } from "../swarm-scheduler.js";
+import { testing as swarmSchedulerTesting } from "../swarm-scheduler.test-support.js";
 import { createAgentsWaitTool } from "./agents-wait-tool.js";
 import { createSessionsSpawnTool } from "./sessions-spawn-tool.js";
-import {
-  readSwarmStructuredOutput,
-  testing as structuredOutputTesting,
-} from "./structured-output-tool.js";
+import { testing as structuredOutputTesting } from "./structured-output-tool.test-support.js";
 
 const requesterSessionKey = "agent:main:main";
 const config: OpenClawConfig = {
@@ -197,7 +194,7 @@ describe("swarm tools integration", () => {
       expect(completionOrder).toEqual([runIds[1], runIds[2], runIds[0]]);
       expect(pending.size).toBe(0);
       for (const runId of runIds) {
-        expect(readSwarmStructuredOutput(runId)).toBeUndefined();
+        expect(structuredOutputTesting.readSwarmStructuredOutput(runId)).toBeUndefined();
       }
     });
   });

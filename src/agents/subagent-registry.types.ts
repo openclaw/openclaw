@@ -56,7 +56,7 @@ export type SubagentCompletionState = {
 
 export type SwarmCollectorStatus = "done" | "failed" | "killed" | "timeout";
 
-export type SwarmCollectorCompletion = {
+type SwarmCollectorCompletion = {
   status: SwarmCollectorStatus;
   structured?: unknown;
   schemaError?: string;

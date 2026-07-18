@@ -37,7 +37,7 @@ import {
   SUBAGENT_ENDED_REASON_ERROR,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
-import { testing as swarmSchedulerTesting } from "./swarm-scheduler.js";
+import { testing as swarmSchedulerTesting } from "./swarm-scheduler.test-support.js";
 
 const noop = () => {};
 const waitForFast = <T>(callback: () => T | Promise<T>) =>
@@ -1265,7 +1265,7 @@ describe("subagent registry seam flow", () => {
       throw new Error("sqlite busy");
     });
 
-    expect(() => mod.failQueuedSubagentRun(runId, "launch failed")).toThrow("sqlite busy");
+    expect(() => mod.testing.failQueuedSubagentRun(runId, "launch failed")).toThrow("sqlite busy");
 
     expect(mod.getSubagentRunByRunId(runId)).toMatchObject({
       execution: { status: "queued" },

@@ -8,7 +8,8 @@ vi.mock("../subagent-registry.js", () => ({
     entries: new Map(
       runIds.flatMap((runId) => {
         const entry =
-          records.get(runId) ?? [...records.values()].find((entry) => entry.swarmRunId === runId);
+          records.get(runId) ??
+          [...records.values()].find((candidate) => candidate.swarmRunId === runId);
         return entry ? [[runId, entry] as const] : [];
       }),
     ),
@@ -19,6 +20,7 @@ vi.mock("../subagent-registry.js", () => ({
 }));
 
 import { createAgentsWaitTool } from "./agents-wait-tool.js";
+import { testing } from "./agents-wait-tool.test-support.js";
 
 function collectorRun(
   runId: string,
@@ -44,6 +46,11 @@ function collectorRun(
 
 describe("agents_wait", () => {
   beforeEach(() => records.clear());
+
+  it("exposes ownership helpers through test support", () => {
+    const entry = collectorRun("owned", "agent:main:main");
+    expect(testing.ownsRun(entry, new Set(["agent:main:main"]))).toBe(true);
+  });
 
   it("returns the first completed child and leaves siblings pending", async () => {
     records.set("one", collectorRun("one", "agent:main:main"));

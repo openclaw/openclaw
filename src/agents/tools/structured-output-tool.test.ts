@@ -1,11 +1,8 @@
 import { Value } from "typebox/value";
 import { beforeEach, describe, expect, it } from "vitest";
-import {
-  createStructuredOutputTool,
-  readSwarmStructuredOutput,
-  testing,
-  validateStructuredOutputSchema,
-} from "./structured-output-tool.js";
+import { validateStructuredOutputSchema } from "../swarm-output-schema.js";
+import { createStructuredOutputTool } from "./structured-output-tool.js";
+import { testing } from "./structured-output-tool.test-support.js";
 
 describe("structured_output", () => {
   beforeEach(() => testing.reset());
@@ -21,7 +18,7 @@ describe("structured_output", () => {
       },
     });
     await expect(tool.execute("call-1", { result: { answer: "yes" } })).resolves.toBeDefined();
-    expect(readSwarmStructuredOutput("run-1")?.structured).toEqual({ answer: "yes" });
+    expect(testing.readSwarmStructuredOutput("run-1")?.structured).toEqual({ answer: "yes" });
   });
 
   it("nudges once then freezes schemaError", async () => {
@@ -40,11 +37,11 @@ describe("structured_output", () => {
     );
     await expect(tool.execute("call-2", { result: { count: "still bad" } })).resolves.toBeDefined();
     await expect(tool.execute("call-3", { result: { count: 3 } })).resolves.toBeDefined();
-    expect(readSwarmStructuredOutput("run-2")).toMatchObject({
+    expect(testing.readSwarmStructuredOutput("run-2")).toMatchObject({
       structured: undefined,
       invalidAttempts: 2,
     });
-    expect(readSwarmStructuredOutput("run-2")?.schemaError).toBeTruthy();
+    expect(testing.readSwarmStructuredOutput("run-2")?.schemaError).toBeTruthy();
   });
 
   it("accepts general JSON Schemas and rejects malformed schemas before spawn", async () => {
@@ -56,11 +53,11 @@ describe("structured_output", () => {
     );
     const tool = createStructuredOutputTool({ runId: "run-array", schema: arraySchema });
     await expect(tool.execute("call-array", { result: ["one", "two"] })).resolves.toBeDefined();
-    expect(readSwarmStructuredOutput("run-array")?.structured).toEqual(["one", "two"]);
+    expect(testing.readSwarmStructuredOutput("run-array")?.structured).toEqual(["one", "two"]);
   });
 
   it("resumes the one-retry budget from durable state", async () => {
-    let durableState: ReturnType<typeof readSwarmStructuredOutput>;
+    let durableState: ReturnType<typeof testing.readSwarmStructuredOutput>;
     const schema = {
       type: "object",
       properties: { count: { type: "number" } },
@@ -86,6 +83,6 @@ describe("structured_output", () => {
     await expect(
       restored.execute("call-2", { result: { count: "still bad" } }),
     ).resolves.toBeDefined();
-    expect(readSwarmStructuredOutput("run-restart")?.invalidAttempts).toBe(2);
+    expect(testing.readSwarmStructuredOutput("run-restart")?.invalidAttempts).toBe(2);
   });
 });

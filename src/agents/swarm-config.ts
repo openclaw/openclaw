@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clampNumber } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
 
-export type ResolvedSwarmConfig = {
+type ResolvedSwarmConfig = {
   enabled: boolean;
   maxConcurrent: number;
   maxChildrenPerGroup: number;

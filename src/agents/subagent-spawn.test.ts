@@ -8,7 +8,7 @@ import {
   installSessionStoreCaptureMock,
   loadSubagentSpawnModuleForTest,
 } from "./subagent-spawn.test-helpers.js";
-import { testing as swarmSchedulerTesting } from "./swarm-scheduler.js";
+import { testing as swarmSchedulerTesting } from "./swarm-scheduler.test-support.js";
 import { installAcceptedSubagentGatewayMock } from "./test-helpers/subagent-gateway.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -26,7 +26,6 @@ const hoisted = vi.hoisted(() => ({
   resolveAgentConfigMock: vi.fn(),
   resolveContextEngineMock: vi.fn(),
   countActiveRunsForSessionMock: vi.fn(),
-  listActiveSwarmRunsForRequesterMock: vi.fn(),
   listSwarmRunsForGroupMock: vi.fn(),
   configOverride: {} as Record<string, unknown>,
 }));
@@ -91,7 +90,6 @@ describe("spawnSubagentDirect seam flow", () => {
       resolveAgentConfig: hoisted.resolveAgentConfigMock,
       resolveContextEngineMock: hoisted.resolveContextEngineMock,
       countActiveRunsForSession: hoisted.countActiveRunsForSessionMock,
-      listActiveSwarmRunsForRequester: hoisted.listActiveSwarmRunsForRequesterMock,
       listSwarmRunsForGroup: hoisted.listSwarmRunsForGroupMock,
       resolveSubagentSpawnModelSelection: () => "openai/gpt-5.4",
       resolveSandboxRuntimeStatus: () => ({ sandboxed: false }),
@@ -116,7 +114,6 @@ describe("spawnSubagentDirect seam flow", () => {
     hoisted.resolveAgentConfigMock.mockReset();
     hoisted.resolveContextEngineMock.mockReset().mockResolvedValue({});
     hoisted.countActiveRunsForSessionMock.mockReset().mockReturnValue(0);
-    hoisted.listActiveSwarmRunsForRequesterMock.mockReset().mockReturnValue([]);
     hoisted.listSwarmRunsForGroupMock.mockReset().mockReturnValue([]);
     hoisted.resolveAgentConfigMock.mockImplementation(
       (cfg: { agents?: { list?: Array<{ id?: string }> } }, agentId: string) =>
@@ -578,10 +575,6 @@ describe("spawnSubagentDirect seam flow", () => {
     hoisted.configOverride = createConfigOverride({
       tools: { swarm: { enabled: true, maxChildrenPerGroup: 1 } },
     });
-    hoisted.listActiveSwarmRunsForRequesterMock.mockReturnValue([
-      { runId: "live-other-group", collect: true, groupId: "other" },
-    ]);
-
     const accepted = await spawnSubagentDirect(
       { task: "new group", collect: true, groupId: "fresh" },
       { agentSessionKey: "agent:main:main", requesterRunId: "parent-run" },

@@ -5,8 +5,8 @@ import {
   releaseSwarmRun,
   removeQueuedSwarmRun,
   reserveSwarmRun,
-  testing,
 } from "./swarm-scheduler.js";
+import { testing } from "./swarm-scheduler.test-support.js";
 
 // queueMicrotask-driven starts need real microtask turns; fake timers'
 // runAllTicks only drains nextTick, so flush the microtask queue explicitly.

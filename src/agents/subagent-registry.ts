@@ -2226,7 +2226,7 @@ export function startQueuedSubagentRun(runId: string, gatewayRunId?: string) {
   return subagentRunManager.startQueuedSubagentRun(runId, gatewayRunId);
 }
 
-export function failQueuedSubagentRun(runId: string, error: string) {
+function failQueuedSubagentRun(runId: string, error: string) {
   return subagentRunManager.failQueuedSubagentRun(runId, error);
 }
 
@@ -2266,6 +2266,7 @@ function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
 }
 
 const testing = {
+  failQueuedSubagentRun,
   async sweepOnceForTests() {
     await sweepSubagentRuns();
   },
@@ -2526,16 +2527,6 @@ export function listSwarmRunsForGroup(
       entry.groupId === key &&
       (!requesterKey ||
         (entry.swarmRequesterSessionKey ?? entry.requesterSessionKey) === requesterKey),
-  );
-}
-
-export function listActiveSwarmRunsForRequester(requesterSessionKey: string): SubagentRunRecord[] {
-  const key = requesterSessionKey.trim();
-  return [...subagentRegistryDeps.getSubagentRunsSnapshotForRead(subagentRuns).values()].filter(
-    (entry) =>
-      entry.collect === true &&
-      (entry.swarmRequesterSessionKey ?? entry.requesterSessionKey) === key &&
-      !entry.collectorCompletion,
   );
 }
 
