@@ -452,18 +452,6 @@ internal class WearViewModel(
                 phoneNodeId = status.phoneNodeId,
               )
             }
-          val modelList =
-            if (status.connected && WearProxyCapability.ModelControls in status.capabilities) {
-              repository.models(status.phoneNodeId, status.capabilities)
-            } else {
-              WearModelList(
-                models = emptyList(),
-                eventStreamId = sessionList.eventStreamId,
-                eventSequence = sessionList.eventSequence,
-                phoneNodeId = sessionList.phoneNodeId,
-              )
-            }
-          if (mutableState.value.selectedSession?.key != previousSession?.key) return@launch
           val activeSessionKey =
             coherentWearActiveSessionKey(
               statusAgentId = status.activeAgentId,
@@ -496,6 +484,25 @@ internal class WearViewModel(
             projectedSessions.firstOrNull { session -> session.key == previousSession?.key }
               ?: projectedSessions.firstOrNull { session -> session.key == activeSessionKey }
               ?: projectedSessions.firstOrNull()
+          val selectedModelRef =
+            selectedSession?.modelRef
+              ?: wearSelectedModelRef(selectedSession?.key, activeSessionKey, status.selectedModelRef)
+          val modelList =
+            if (status.connected && WearProxyCapability.ModelControls in status.capabilities) {
+              repository.models(
+                expectedNodeId = status.phoneNodeId,
+                capabilities = status.capabilities,
+                selectedModelRef = selectedModelRef,
+              )
+            } else {
+              WearModelList(
+                models = emptyList(),
+                eventStreamId = sessionList.eventStreamId,
+                eventSequence = sessionList.eventSequence,
+                phoneNodeId = sessionList.phoneNodeId,
+              )
+            }
+          if (mutableState.value.selectedSession?.key != previousSession?.key) return@launch
           val selectionChanged = selectedSession?.key != previousSession?.key
           val pendingEvents =
             finishSequenceSnapshot(
@@ -517,9 +524,7 @@ internal class WearViewModel(
                 sessionList.activeAgentId
                   ?: status.activeAgentId
                   ?: agentList.agents.firstOrNull(WearAgent::selected)?.id,
-              selectedModelRef =
-                selectedSession?.modelRef
-                  ?: wearSelectedModelRef(selectedSession?.key, activeSessionKey, status.selectedModelRef),
+              selectedModelRef = selectedModelRef,
               models = modelList.models,
               proxyCapabilities = status.capabilities,
               sessions = projectedSessions,

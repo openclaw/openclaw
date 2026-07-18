@@ -194,12 +194,15 @@ internal class WearGatewayRepository(
   suspend fun models(
     expectedNodeId: String,
     capabilities: Set<WearProxyCapability>,
+    selectedModelRef: String? = null,
   ): WearModelList {
     capabilities.require(WearProxyCapability.ModelControls)
     val response =
       requester.request(
         WearRpcMethod.ModelsList,
-        buildJsonObject {},
+        buildJsonObject {
+          selectedModelRef?.let { put("selectedModelRef", it) }
+        },
         expectedNodeId,
         requirePreferredNode = true,
       )

@@ -287,6 +287,46 @@ class WearProxyControllerTest {
     }
 
   @Test
+  fun modelListCapPreservesTheWatchSelectedSessionsModel() =
+    runTest {
+      val controller =
+        WearProxyController(
+          requestGateway = { _, _ -> buildJsonObject {} },
+          isGatewayConnected = { true },
+          gatewayStatusText = { "Connected" },
+          selectedModelRef = { "openai/gpt-0" },
+          models = {
+            (0 until 60).map { index ->
+              WearProxyModel(ref = "openai/gpt-$index", name = "GPT $index")
+            }
+          },
+        )
+
+      val listed =
+        controller.handle(
+          request(
+            WearRpcMethod.ModelsList,
+            buildJsonObject { put("selectedModelRef", "openai/gpt-59") },
+          ),
+        )
+      val refs =
+        checkNotNull(listed.result)
+          .jsonObject
+          .getValue("models")
+          .jsonArray
+          .map { model ->
+            model.jsonObject
+              .getValue("ref")
+              .jsonPrimitive
+              .content
+          }
+
+      assertEquals(50, refs.size)
+      assertTrue("openai/gpt-59" in refs)
+      assertFalse("openai/gpt-49" in refs)
+    }
+
+  @Test
   fun modelSelectionRejectsAStaleModelBeforePatchingTheSession() =
     runTest {
       var selections = 0

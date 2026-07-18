@@ -186,8 +186,10 @@ internal class WearProxyController(
   }
 
   private fun listModels(params: JsonObject): JsonObject {
-    params.requireOnly()
-    val selected = canonicalModelRef(selectedModelRef())
+    params.requireOnly("selectedModelRef")
+    val selected =
+      canonicalModelRef(params.optionalStringParam("selectedModelRef", MAX_MODEL_REF_CHARS))
+        ?: canonicalModelRef(selectedModelRef())
     val availableModels = availableModels()
     val boundedModels = availableModels.take(MAX_MODEL_COUNT).toMutableList()
     availableModels
