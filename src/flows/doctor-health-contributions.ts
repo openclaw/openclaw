@@ -2114,7 +2114,6 @@ function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
         id: "core/doctor/inactive-compaction-byte-guard",
         description:
           "Warn when maxActiveTranscriptBytes is configured but truncateAfterCompaction is not enabled, leaving the byte guard inactive.",
-        defaultEnabled: false,
         detect: async (ctx) => collectCompactionByteGuardFindings(ctx.cfg),
       },
       run: runCompactionByteGuardHealth,
