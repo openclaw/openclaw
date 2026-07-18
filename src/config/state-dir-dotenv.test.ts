@@ -2,10 +2,21 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+const logWarnSpy = vi.hoisted(() => vi.fn());
+
+vi.mock("../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => ({ warn: logWarnSpy }),
+}));
+
 import { readStateDirDotEnvFromStateDir } from "./state-dir-dotenv.js";
 
 describe("readStateDirDotEnvFromStateDir", () => {
+  afterEach(() => {
+    logWarnSpy.mockClear();
+  });
+
   async function withDotEnv<T>(content: string, run: (dir: string) => T | Promise<T>): Promise<T> {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-dotenv-test-"));
     await fs.writeFile(path.join(dir, ".env"), content, "utf8");
@@ -105,16 +116,17 @@ describe("readStateDirDotEnvFromStateDir", () => {
     }
   });
 
-  it("returns empty entries when .env exceeds the size limit", async () => {
+  it("warns when an oversized .env is skipped", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-dotenv-oversized-"));
     try {
-      // Write a .env file larger than 1 MiB — the bounded reader must reject
-      // it and the catch path must return an empty result instead of crashing.
       const large = Buffer.alloc(2 * 1024 * 1024, "x");
       large.write("KEY=value\n", 0, "utf8");
       await fs.writeFile(path.join(dir, ".env"), large);
       const result = readStateDirDotEnvFromStateDir(dir).entries;
       expect(result).toEqual({});
+      expect(logWarnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("skipping oversized state-directory .env file"),
+      );
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }

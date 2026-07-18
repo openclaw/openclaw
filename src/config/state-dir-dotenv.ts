@@ -8,6 +8,7 @@ import {
   normalizeEnvVarKey,
 } from "../infra/host-env-security.js";
 import { readRegularFileSync } from "../infra/regular-file.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { collectConfigServiceEnvVars } from "./config-env-vars.js";
 import { ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV } from "./future-version-guard.js";
 import { resolveStateDir } from "./paths.js";
@@ -15,6 +16,7 @@ import type { OpenClawConfig } from "./types.js";
 
 /** Maximum bytes to read from the state-directory .env file. */
 const MAX_STATE_DIR_DOTENV_BYTES = 1024 * 1024;
+const log = createSubsystemLogger("config/dotenv");
 
 function isBlockedServiceEnvVar(key: string): boolean {
   return (
@@ -108,7 +110,15 @@ export function readStateDirDotEnvFromStateDir(stateDir: string): ParsedStateDir
       maxBytes: MAX_STATE_DIR_DOTENV_BYTES,
     });
     return parseStateDirDotEnvContent(buffer);
-  } catch {
+  } catch (err) {
+    // Surface oversized files so operators know a configured .env was
+    // skipped — unlike parse or permission errors which mean the file is
+    // genuinely unusable.
+    if (err instanceof Error && err.message.startsWith("File exceeds")) {
+      log.warn(
+        `skipping oversized state-directory .env file (max ${MAX_STATE_DIR_DOTENV_BYTES} bytes): ${dotEnvPath}`,
+      );
+    }
     return { entries: {}, skippedShellReferenceKeys: [] };
   }
 }
