@@ -42,4 +42,30 @@ describe("OutputAccumulator", () => {
     expect(snapshot.fullOutputPath).toBeDefined();
     await rm(snapshot.fullOutputPath!, { force: true });
   });
+
+  it("does not leak temp file after closeTempFile is called without a spill", async () => {
+    const accumulator = new OutputAccumulator({
+      maxBytes: 128,
+      maxLines: 10,
+      tempFilePrefix: "openclaw-output-test",
+    });
+    accumulator.append(Buffer.from("short"));
+    accumulator.finish();
+    // closeTempFile is safe (idempotent) when no temp file was created
+    await expect(accumulator.closeTempFile()).resolves.toBeUndefined();
+  });
+
+  it("cleans up spilled temp file after normal completion", async () => {
+    const accumulator = new OutputAccumulator({
+      maxBytes: 4,
+      maxLines: 10,
+      tempFilePrefix: "openclaw-output-test",
+    });
+    accumulator.append(Buffer.from("more than 4 bytes"));
+    accumulator.finish();
+    const snapshot = accumulator.snapshot({ persistIfTruncated: true });
+    expect(snapshot.fullOutputPath).toBeDefined();
+    await accumulator.closeTempFile();
+    await rm(snapshot.fullOutputPath!, { force: true });
+  });
 });
