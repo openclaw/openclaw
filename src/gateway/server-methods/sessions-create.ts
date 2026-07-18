@@ -301,6 +301,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       agentId: sessionAgentId,
       label: p.label,
       ...(catalogTarget ? { catalogTarget: catalogTarget.target } : { model: p.model }),
+      thinkingLevel: p.thinkingLevel,
       parentSessionKey: p.parentSessionKey,
       spawnedCwd: sessionCwd,
       worktree: sessionWorktree
@@ -316,6 +317,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       // A plain New Chat that resets an existing session must not inherit its prior worktree cwd.
       clearSpawnedCwd: p.worktree !== true,
       fork: p.fork,
+      succeedsParent: p.succeedsParent,
       emitCommandHooks: p.emitCommandHooks,
       resetMainWhenUnspecified: !hasInitialTurn,
       commandSource: "webchat",

@@ -41,6 +41,7 @@ export type SessionMenuAction =
   | { kind: "move-to-group"; category: string | null }
   | { kind: "new-group" }
   | { kind: "toggle-archived" }
+  | { kind: "stop-cloud-worker" }
   | { kind: "delete" };
 
 const EMPTY_SESSION: SessionMenuData = {
@@ -57,6 +58,7 @@ class SessionMenu extends OpenClawLightDomElement {
   // session (unread/group/archive/delete); `session` then carries aggregated
   // flags (unread = all unread, category = shared category or null).
   @property({ attribute: false }) selectionCount = 1;
+  @property({ attribute: false }) lastActive = "";
   @property({ attribute: false }) anchor: { x: number; y: number } = { x: 0, y: 0 };
   @property({ attribute: false }) trigger: HTMLElement | null = null;
   @property({ attribute: false }) disabled = false;
@@ -64,6 +66,7 @@ class SessionMenu extends OpenClawLightDomElement {
   // Guards both Archive and Delete: hosts pass canArchiveSessionRow() so agent
   // main sessions and active runs stay protected from casual retirement.
   @property({ attribute: false }) archiveAllowed = false;
+  @property({ attribute: false }) cloudWorkerStopAllowed = false;
   @property({ attribute: false }) groups: readonly string[] = [];
   @property({ attribute: false }) canOpenChat = false;
   @property({ attribute: false }) work: SessionMenuWork | null = null;
@@ -117,6 +120,7 @@ class SessionMenu extends OpenClawLightDomElement {
       workboard: { kind: "workboard" },
       "new-group": { kind: "new-group" },
       "toggle-archived": { kind: "toggle-archived" },
+      "stop-cloud-worker": { kind: "stop-cloud-worker" },
       delete: { kind: "delete" },
     };
     const simpleAction = simpleActions[value];
@@ -270,6 +274,11 @@ class SessionMenu extends OpenClawLightDomElement {
           aria-label=${menuLabel}
           style="position: fixed; left: ${clampedX}px; top: ${clampedY}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
         ></button>
+        ${!batch && this.lastActive
+          ? html`<div class="session-menu__info">
+              ${t("sessionsView.lastActive", { time: this.lastActive })}
+            </div>`
+          : nothing}
         ${!batch && this.canOpenChat
           ? html`
               <wa-dropdown-item
@@ -387,6 +396,19 @@ class SessionMenu extends OpenClawLightDomElement {
           ${this.renderGroupSubmenu()}
         </wa-dropdown-item>
         <div class="session-menu__separator" role="separator"></div>
+        ${!batch && this.cloudWorkerStopAllowed
+          ? html`
+              <wa-dropdown-item
+                class="session-menu__item session-menu__item--destructive"
+                value="stop-cloud-worker"
+                variant="danger"
+                ?disabled=${this.disabled}
+              >
+                <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.stop}</span>
+                <span class="session-menu__text">${t("sessionsView.stopCloudWorker")}</span>
+              </wa-dropdown-item>
+            `
+          : nothing}
         <wa-dropdown-item
           class="session-menu__item"
           value="toggle-archived"

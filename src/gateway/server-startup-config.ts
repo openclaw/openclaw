@@ -28,6 +28,7 @@ import {
 import {
   activateSecretsRuntimeSnapshotState,
   graftActiveSecretsRuntimeAuthState,
+  getActiveSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshotRevision,
   hasCurrentAuthStoreCredentialsRevision,
 } from "../secrets/runtime-state.js";
@@ -95,18 +96,6 @@ type GatewayStartupConfigMeasure = <T>(
   options?: { omitErrorMessage?: boolean },
 ) => Promise<T>;
 
-/** Timeline attributes kept small and deterministic for startup secret preparation spans. */
-function secretsPrepareTimelineAttributes(
-  config: OpenClawConfig,
-  activationParams: RuntimeSecretsActivationParams,
-) {
-  return {
-    activate: activationParams.activate,
-    gatewayAuthSecretRef: hasActiveGatewayAuthSecretRef(config),
-    reason: activationParams.reason,
-  };
-}
-
 /** Config snapshot plus optional plugin metadata loaded before Gateway startup auth. */
 export type GatewayStartupConfigSnapshotLoadResult = {
   snapshot: ConfigFileSnapshot;
@@ -134,6 +123,7 @@ export async function loadGatewayStartupConfigSnapshot(params: {
     throw createInvalidConfigError(
       configSnapshot.path,
       "Legacy config entries detected while running in Nix mode. Update your Nix config to the latest schema and restart.",
+      { recovery: "manual" },
     );
   }
   if (configSnapshot.exists) {
@@ -334,12 +324,15 @@ export function createRuntimeSecretsActivator(params: {
             : await loadSecretsRuntime();
         const prepareRuntimeSecretsSnapshot =
           params.prepareRuntimeSecretsSnapshot ?? secretsRuntime!.prepareSecretsRuntimeSnapshot;
+        const allowUnavailableSecretOwners =
+          activationParams.reason === "startup" && getActiveSecretsRuntimeSnapshot() === null;
         const prepared = await measureDiagnosticsTimelineSpan(
           "secrets.prepare",
           () =>
             prepareRuntimeSecretsSnapshot({
               config: sourceConfig,
               ...(assignmentConfig !== undefined ? { assignmentConfig } : {}),
+              allowUnavailableSecretOwners,
               ...(activationParams.env ? { env: activationParams.env } : {}),
               includeAuthStoreRefs: activationParams.includeAuthStoreRefs,
               ...(startupManifestRegistry ? { manifestRegistry: startupManifestRegistry } : {}),
@@ -349,7 +342,11 @@ export function createRuntimeSecretsActivator(params: {
               ...(loadAuthStore ? { loadAuthStore } : {}),
             }),
           {
-            attributes: secretsPrepareTimelineAttributes(config, activationParams),
+            attributes: {
+              activate: activationParams.activate,
+              gatewayAuthSecretRef: hasActiveGatewayAuthSecretRef(config),
+              reason: activationParams.reason,
+            },
             config,
             env: activationParams.env ?? process.env,
             omitErrorMessage: true,
@@ -442,7 +439,9 @@ function assertValidGatewayStartupConfigSnapshot(
       : options.includeDoctorHint
         ? `\n${formatInvalidConfigRecoveryHint()}`
         : "";
-  throw createInvalidConfigError(snapshot.path, `${issues}${recoveryHint}`);
+  throw createInvalidConfigError(snapshot.path, `${issues}${recoveryHint}`, {
+    recovery: isPluginPackagingRuntimeOutputInvalidConfigSnapshot(snapshot) ? "manual" : "doctor",
+  });
 }
 
 /** Prepare the effective Gateway startup config after auth, overrides, and secrets activation. */

@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
-import { render, type ReactiveController } from "lit";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ReactiveController } from "lit";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
@@ -9,6 +9,7 @@ import type {
   ApplicationGateway,
   ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
+import { createStorageMock } from "../../test-helpers/storage.ts";
 import { ConfigPage, configSelectionFromSearch, supportsSystemInfo } from "./config-page.ts";
 import type { ConfigViewState } from "./view.ts";
 
@@ -20,9 +21,17 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+let localStorageMock: Storage;
+
+beforeEach(() => {
+  localStorageMock = createStorageMock();
+  vi.stubGlobal("localStorage", localStorageMock);
+});
+
 afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("configSelectionFromSearch", () => {
@@ -56,35 +65,16 @@ describe("supportsSystemInfo", () => {
   });
 });
 
-describe("ConfigPage settings mode control", () => {
-  it("uses the shared settings segmented control to switch modes", () => {
-    const page = new ConfigPage();
-    const state = page as unknown as {
-      pageId: string;
-      settingsMode: "quick" | "advanced";
-      renderSettingsModeToggle: () => unknown;
-    };
-    state.pageId = "config";
-    state.settingsMode = "quick";
-    const container = document.createElement("div");
-    document.body.append(container);
-    render(state.renderSettingsModeToggle(), container);
-    const group = container.querySelector<HTMLElement & { value: string }>("wa-radio-group");
-    const [quick, advanced] = Array.from(
-      container.querySelectorAll<HTMLElement & { checked: boolean }>("wa-radio"),
-    );
-
-    expect(group?.classList.contains("settings-segmented")).toBe(true);
-    expect(group?.querySelector('[slot="label"]')?.textContent).toBe("Settings view");
-    expect(quick?.classList.contains("settings-segmented__btn--active")).toBe(true);
-    expect(quick?.checked).toBe(true);
-    expect(advanced?.checked).toBe(false);
-    if (group) {
-      group.value = "advanced";
-      group.dispatchEvent(new Event("change", { bubbles: true }));
-    }
-
-    expect(state.settingsMode).toBe("advanced");
+describe("ConfigPage advanced selection guard", () => {
+  it("keeps curated sections off the Advanced page", () => {
+    expect(configSelectionFromSearch("advanced", "?section=messages")).toEqual({
+      activeSection: null,
+      activeSubsection: null,
+    });
+    expect(configSelectionFromSearch("advanced", "?section=env")).toEqual({
+      activeSection: "env",
+      activeSubsection: null,
+    });
   });
 });
 

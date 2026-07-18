@@ -5,11 +5,8 @@ import { ifDefined } from "lit/directives/if-defined.js";
 import { ref } from "lit/directives/ref.js";
 import type { GatewaySessionRow, SessionGoal, SessionsListResult } from "../../../api/types.ts";
 import { normalizeBasePath } from "../../../app-route-paths.ts";
-import {
-  normalizeChatSendShortcut,
-  type ChatFollowUpMode,
-  type ChatSendShortcut,
-} from "../../../app/settings.ts";
+import type { QuestionPrompt } from "../../../app/question-prompt.ts";
+import { normalizeChatSendShortcut, type ChatSendShortcut } from "../../../app/settings.ts";
 import { icons, type IconName } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
 import "../../../components/web-awesome.ts";
@@ -24,6 +21,7 @@ import {
   type SlashCommandCategory,
   type SlashCommandDef,
 } from "../../../lib/chat/commands.ts";
+import type { ControlUiFollowUpMode } from "../../../lib/chat/follow-up-mode.ts";
 import { formatCompactTokenCount, formatCost } from "../../../lib/format.ts";
 import { isMonitoredAuthProvider } from "../../../lib/model-auth.ts";
 import {
@@ -41,6 +39,7 @@ import {
   formatGoalUsage,
   goalElapsedMs,
 } from "../../../lib/session-goal.ts";
+import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { exportChatMarkdown } from "../export.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../input-history.ts";
@@ -48,7 +47,7 @@ import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversatio
 import type { RealtimeTalkLevelSignal } from "../realtime-talk-level.ts";
 import type { RealtimeTalkStatus } from "../realtime-talk.ts";
 import { CHAT_RUN_STATUS_TOAST_DURATION_MS, type ChatRunUiStatus } from "../run-lifecycle.ts";
-import type { CompactionStatus, FallbackStatus } from "../tool-stream.ts";
+import type { CompactionStatus, FallbackStatus, PlanStatus } from "../tool-stream.ts";
 import {
   handleChatAttachmentPaste,
   isLargePastedTextAttachment,
@@ -56,6 +55,8 @@ import {
   renderChatAttachmentInputs,
   renderChatAttachmentMenu,
 } from "./chat-attachments.ts";
+import { renderChatPlanChecklist } from "./chat-plan-checklist.ts";
+import { createGatewayQuestionPanelProps } from "./chat-question-card.ts";
 import {
   renderChatVoiceError,
   renderMicrophoneActivity,
@@ -92,6 +93,8 @@ type ChatComposerProps = {
   runStatus?: ChatRunUiStatus | null;
   compactionStatus?: CompactionStatus | null;
   fallbackStatus?: FallbackStatus | null;
+  planStatus?: PlanStatus | null;
+  gatewayQuestionPrompts?: readonly QuestionPrompt[];
   messages: unknown[];
   stream: string | null;
   queue: ChatQueueItem[];
@@ -100,7 +103,7 @@ type ChatComposerProps = {
   providerUsage?: ProviderUsageDisplayProps;
   assistantName: string;
   sendShortcut?: ChatSendShortcut;
-  followUpMode?: ChatFollowUpMode;
+  followUpMode?: ControlUiFollowUpMode;
   attachments?: ChatAttachment[];
   getAttachments?: () => ChatAttachment[];
   replyTarget?: { messageId: string; text: string; senderLabel?: string | null } | null;
@@ -109,6 +112,10 @@ type ChatComposerProps = {
   realtimeTalkDetail?: string | null;
   realtimeTalkInputLevel?: RealtimeTalkLevelSignal;
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];
+  realtimeTalkVideoStream?: MediaStream | null;
+  realtimeTalkVideoCapable?: boolean;
+  realtimeTalkVideoPending?: boolean;
+  realtimeTalkCameraError?: boolean;
   composerControls?: TemplateResult | typeof nothing;
   getDraft?: () => string;
   onDraftChange: (next: string) => void;
@@ -118,6 +125,7 @@ type ChatComposerProps = {
   onSend: () => void;
   onCompact?: () => void | Promise<void>;
   onToggleRealtimeTalk?: () => void;
+  onToggleRealtimeCamera?: () => void;
   onDismissRealtimeTalkError?: () => void;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
@@ -127,6 +135,9 @@ type ChatComposerProps = {
   onClearReply?: () => void;
   onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
   onGoalCommand?: (command: string) => void;
+  onGatewayQuestionChange?: () => void;
+  onGatewayQuestionSubmit?: (id: string, answers: Record<string, string[]>) => void | Promise<void>;
+  onGatewayQuestionSkip?: (id: string) => void | Promise<void>;
 };
 
 type PendingClearedSubmittedDraft = {
@@ -153,6 +164,11 @@ type ChatComposerState = {
   composerInputIntentKey: string | null;
   pendingClearedSubmittedDraft: PendingClearedSubmittedDraft | null;
   goalExpandedId: string | null;
+  activeGatewayQuestionId: string | null;
+  composerTextarea: HTMLTextAreaElement | null;
+  // Stable Lit ref: an inline arrow would change identity per render and force
+  // a layout re-measure of the textarea on every chat render, not just attach.
+  textareaRef: ((element?: Element) => void) | null;
 };
 
 function createChatComposerState(): ChatComposerState {
@@ -170,6 +186,9 @@ function createChatComposerState(): ChatComposerState {
     composerInputIntentKey: null,
     pendingClearedSubmittedDraft: null,
     goalExpandedId: null,
+    activeGatewayQuestionId: null,
+    composerTextarea: null,
+    textareaRef: null,
   };
 }
 
@@ -285,6 +304,7 @@ export function resetChatComposerState(paneId?: string) {
 }
 
 const composerTextareaResizeObservers = new WeakMap<HTMLTextAreaElement, ResizeObserver>();
+const questionDockResizeObservers = new WeakMap<HTMLElement, ResizeObserver>();
 
 function updateTextareaOverflow(el: HTMLTextAreaElement) {
   el.style.overflowY = el.scrollHeight > el.clientHeight ? "auto" : "hidden";
@@ -311,6 +331,29 @@ function observeTextareaOverflow(el: HTMLTextAreaElement) {
 function disconnectTextareaOverflowObserver(el: HTMLTextAreaElement) {
   composerTextareaResizeObservers.get(el)?.disconnect();
   composerTextareaResizeObservers.delete(el);
+}
+
+function syncQuestionDockHeight(el: HTMLElement): void {
+  el.closest<HTMLElement>(".chat")?.style.setProperty(
+    "--chat-question-dock-height",
+    `${el.offsetHeight}px`,
+  );
+}
+
+function observeQuestionDock(el: HTMLElement): void {
+  syncQuestionDockHeight(el);
+  if (typeof ResizeObserver !== "function" || questionDockResizeObservers.has(el)) {
+    return;
+  }
+  const observer = new ResizeObserver(() => syncQuestionDockHeight(el));
+  observer.observe(el);
+  questionDockResizeObservers.set(el, observer);
+}
+
+function disconnectQuestionDock(el: HTMLElement): void {
+  questionDockResizeObservers.get(el)?.disconnect();
+  questionDockResizeObservers.delete(el);
+  el.closest<HTMLElement>(".chat")?.style.removeProperty("--chat-question-dock-height");
 }
 
 function scheduleTextareaHeightAdjustment(el: HTMLTextAreaElement) {
@@ -1675,31 +1718,46 @@ type ChatRunControlsProps = {
   hasAttachments?: boolean;
   hasMessages: boolean;
   isBusy: boolean;
-  followUpMode?: ChatFollowUpMode;
+  followUpMode?: ControlUiFollowUpMode;
   sending: boolean;
   voiceActive?: boolean;
   voiceStatus?: RealtimeTalkStatus;
   voiceDetail?: string | null;
   voiceInputLevel?: RealtimeTalkLevelSignal;
+  voiceVideoCapable?: boolean;
+  voiceVideoEnabled?: boolean;
+  voiceVideoPending?: boolean;
   onAbort?: () => void;
   onExport: () => void;
   onNewSession: () => void;
   onSend: () => void;
   onStoreDraft: (draft: string) => void;
   onToggleVoice?: () => void;
+  onToggleCamera?: () => void;
   showPrimary?: boolean;
   showSecondary?: boolean;
 };
 
 function renderChatPrimaryActions(props: ChatRunControlsProps) {
   const hasComposedContent = Boolean(props.draft.trim() || props.hasAttachments);
-  const steersActiveRun = props.followUpMode !== "queue";
-  const activeRunActionLabel = steersActiveRun
-    ? t("chat.queue.steer")
-    : t("chat.runControls.queue");
-  const activeRunActionDescription = steersActiveRun
-    ? t("chat.followUpModeSteer")
-    : t("chat.runControls.queueMessage");
+  const steersActiveRun = props.followUpMode === "steer";
+  const interruptsActiveRun = props.followUpMode === "interrupt";
+  const activeRunActionLabel =
+    props.followUpMode === undefined
+      ? t("chat.runControls.send")
+      : steersActiveRun
+        ? t("chat.queue.steer")
+        : interruptsActiveRun
+          ? t("chat.runControls.send")
+          : t("chat.runControls.queue");
+  const activeRunActionDescription =
+    props.followUpMode === undefined
+      ? t("chat.runControls.sendMessage")
+      : steersActiveRun
+        ? t("chat.followUpModeSteer")
+        : interruptsActiveRun
+          ? t("chat.runControls.sendMessage")
+          : t("chat.runControls.queueMessage");
   const storeDraftAndSend = () => {
     if (props.draft.trim()) {
       props.onStoreDraft(props.draft);
@@ -1757,6 +1815,34 @@ function renderChatPrimaryActions(props: ChatRunControlsProps) {
                   >${voiceStatusLabel(props.voiceStatus, props.voiceDetail)}</span
                 >
               `}
+          ${props.voiceVideoCapable && props.onToggleCamera
+            ? html`
+                <openclaw-tooltip
+                  .content=${props.voiceVideoEnabled
+                    ? t("chat.composer.turnCameraOff")
+                    : t("chat.composer.turnCameraOn")}
+                >
+                  <button
+                    class="chat-send-btn chat-send-btn--voice"
+                    @click=${props.onToggleCamera}
+                    ?disabled=${props.voiceVideoPending ||
+                    props.voiceStatus === "connecting" ||
+                    props.voiceStatus === "error"}
+                    aria-label=${props.voiceVideoEnabled
+                      ? t("chat.composer.turnCameraOff")
+                      : t("chat.composer.turnCameraOn")}
+                    aria-pressed=${props.voiceVideoEnabled ? "true" : "false"}
+                  >
+                    ${icons.camera}
+                    <span class="agent-chat__control-label"
+                      >${props.voiceVideoEnabled
+                        ? t("chat.composer.turnCameraOff")
+                        : t("chat.composer.turnCameraOn")}</span
+                    >
+                  </button>
+                </openclaw-tooltip>
+              `
+            : nothing}
           ${abortAction}
         `
       : props.canAbort
@@ -1849,7 +1935,24 @@ export function renderChatComposer(props: ChatComposerProps) {
   const draftKey = composerDraftKey(props);
   const actionDraft =
     state.composingDraft?.key === draftKey ? state.composingDraft.value : visibleDraft;
-  let composerTextarea: HTMLTextAreaElement | null = null;
+  let questionDock: HTMLElement | null = null;
+  state.textareaRef ??= (element?: Element) => {
+    const nextTextarea = element instanceof HTMLTextAreaElement ? element : null;
+    const prevTextarea = state.composerTextarea;
+    if (prevTextarea && prevTextarea !== nextTextarea) {
+      disconnectTextareaOverflowObserver(prevTextarea);
+    }
+    state.composerTextarea = nextTextarea;
+    if (nextTextarea) {
+      observeTextareaOverflow(nextTextarea);
+      scheduleTextareaHeightAdjustment(nextTextarea);
+    }
+  };
+  // The stable ref only measures on attach, so programmatic draft swaps (send
+  // clear, session switch, history restore) must re-measure explicitly.
+  if (state.composerTextarea?.isConnected && state.composerTextarea.value !== visibleDraft) {
+    scheduleTextareaHeightAdjustment(state.composerTextarea);
+  }
   const hasVisualAttachments = (props.attachments ?? []).some(
     (attachment) => !isLargePastedTextAttachment(attachment),
   );
@@ -1887,6 +1990,52 @@ export function renderChatComposer(props: ChatComposerProps) {
           : t("chat.composer.runInterrupted");
   const requestUpdate = props.onRequestUpdate ?? (() => {});
   const sendShortcut = normalizeChatSendShortcut(props.sendShortcut);
+  const gatewayQuestionPrompts =
+    props.gatewayQuestionPrompts?.filter(
+      (prompt) =>
+        prompt.status === "pending" &&
+        prompt.sessionKey !== undefined &&
+        areUiSessionKeysEquivalent(prompt.sessionKey, props.sessionKey),
+    ) ?? [];
+  let gatewayQuestionIndex = gatewayQuestionPrompts.findIndex(
+    (prompt) => prompt.id === state.activeGatewayQuestionId,
+  );
+  if (gatewayQuestionIndex < 0 && gatewayQuestionPrompts.length > 0) {
+    gatewayQuestionIndex = 0;
+    state.activeGatewayQuestionId = gatewayQuestionPrompts[0]?.id ?? null;
+  }
+  const gatewayQuestionPrompt = gatewayQuestionPrompts[gatewayQuestionIndex];
+  const selectGatewayQuestion = (index: number) => {
+    const prompt = gatewayQuestionPrompts[index];
+    if (!prompt) {
+      return;
+    }
+    state.activeGatewayQuestionId = prompt.id;
+    requestUpdate();
+  };
+  const questionPanelProps = gatewayQuestionPrompt
+    ? createGatewayQuestionPanelProps(gatewayQuestionPrompt, {
+        nowMs: Date.now(),
+        onChange: props.onGatewayQuestionChange,
+        onSubmit: props.onGatewayQuestionSubmit
+          ? (answers) => props.onGatewayQuestionSubmit?.(gatewayQuestionPrompt.id, answers)
+          : undefined,
+        onSkip: props.onGatewayQuestionSkip
+          ? () => props.onGatewayQuestionSkip?.(gatewayQuestionPrompt.id)
+          : undefined,
+        requestPosition:
+          gatewayQuestionPrompts.length > 1
+            ? { current: gatewayQuestionIndex + 1, total: gatewayQuestionPrompts.length }
+            : undefined,
+        onPreviousRequest: () =>
+          selectGatewayQuestion(
+            (gatewayQuestionIndex - 1 + gatewayQuestionPrompts.length) %
+              gatewayQuestionPrompts.length,
+          ),
+        onNextRequest: () =>
+          selectGatewayQuestion((gatewayQuestionIndex + 1) % gatewayQuestionPrompts.length),
+      })
+    : null;
 
   const placeholder =
     !canCompose && props.disabledReason
@@ -2105,20 +2254,20 @@ export function renderChatComposer(props: ChatComposerProps) {
     commitComposerDraft(props, target.value);
   };
   const handleSend = () => {
-    const draft = composerTextarea?.value ?? props.draft;
+    const draft = state.composerTextarea?.value ?? props.draft;
     if (!canSubmitDraft(draft)) {
       return;
     }
     commitComposerDraft(props, draft);
     props.onSend();
-    syncComposerDraftAfterSend(composerTextarea);
+    syncComposerDraftAfterSend(state.composerTextarea);
   };
   const handleVoicePrimaryAction = () => {
     if (props.realtimeTalkActive) {
       props.onToggleRealtimeTalk?.();
       return;
     }
-    const liveDraft = composerTextarea?.value ?? visibleDraft;
+    const liveDraft = state.composerTextarea?.value ?? visibleDraft;
     if (liveDraft.trim() || props.attachments?.length) {
       handleSend();
       return;
@@ -2139,12 +2288,16 @@ export function renderChatComposer(props: ChatComposerProps) {
     voiceStatus: props.realtimeTalkStatus,
     voiceDetail: props.realtimeTalkDetail,
     voiceInputLevel: props.realtimeTalkInputLevel,
+    voiceVideoCapable: props.realtimeTalkVideoCapable,
+    voiceVideoEnabled: Boolean(props.realtimeTalkVideoStream),
+    voiceVideoPending: props.realtimeTalkVideoPending,
     onAbort: props.onAbort,
     onExport: () => exportMarkdown(props),
     onNewSession: props.onNewSession,
     onSend: handleSend,
     onStoreDraft: () => {},
     onToggleVoice: props.onToggleRealtimeTalk ? handleVoicePrimaryAction : undefined,
+    onToggleCamera: props.onToggleRealtimeCamera,
   };
   const slashMenuVisible = props.connected && canCompose && isSlashMenuVisible(state);
   const activeSlashMenuOptionId = getActiveSlashMenuOptionId(state, props.paneId);
@@ -2161,6 +2314,27 @@ export function renderChatComposer(props: ChatComposerProps) {
       onQueueRemove: props.onQueueRemove,
     })}
     <div class="agent-chat__composer-shell">
+      ${questionPanelProps
+        ? html`
+            <div
+              class="agent-chat__question-dock"
+              ${ref((element) => {
+                const nextDock = element instanceof HTMLElement ? element : null;
+                if (questionDock && questionDock !== nextDock) {
+                  disconnectQuestionDock(questionDock);
+                }
+                questionDock = nextDock;
+                if (questionDock) {
+                  observeQuestionDock(questionDock);
+                }
+              })}
+            >
+              <openclaw-chat-question-panel
+                .props=${questionPanelProps}
+              ></openclaw-chat-question-panel>
+            </div>
+          `
+        : nothing}
       <div
         class="agent-chat__input"
         @click=${(event: MouseEvent) => focusComposerFromChrome(event, canCompose)}
@@ -2193,6 +2367,10 @@ export function renderChatComposer(props: ChatComposerProps) {
             `
           : nothing}
         <div class="agent-chat__composer-status-stack">
+          ${renderChatPlanChecklist(props.planStatus, {
+            active: showAbortableUi,
+            variant: "bar",
+          })}
           ${renderFallbackIndicator(props.fallbackStatus)}
           ${renderCompactionIndicator(props.compactionStatus)}
           ${renderChatGoal(state, activeSession?.goal, {
@@ -2201,7 +2379,7 @@ export function renderChatComposer(props: ChatComposerProps) {
             onGoalEdit: (goal) => {
               commitComposerDraft(props, `/goal edit ${goal.objective}`);
               requestUpdate();
-              queueMicrotask(() => composerTextarea?.focus({ preventScroll: true }));
+              queueMicrotask(() => state.composerTextarea?.focus({ preventScroll: true }));
             },
             requestUpdate,
           })}
@@ -2209,26 +2387,35 @@ export function renderChatComposer(props: ChatComposerProps) {
 
         ${renderChatAttachmentInputs({ ...props, disabled: !canCompose })}
         ${renderChatVoiceError({
-          status: props.realtimeTalkStatus,
+          status: props.realtimeTalkCameraError ? "error" : props.realtimeTalkStatus,
           detail: props.realtimeTalkDetail,
-          onDismissError: props.onDismissRealtimeTalkError,
+          onDismissError: props.realtimeTalkCameraError
+            ? undefined
+            : props.onDismissRealtimeTalkError,
         })}
+        ${props.realtimeTalkVideoStream
+          ? html`
+              <div class="agent-chat__video-preview">
+                <video
+                  autoplay
+                  .muted=${true}
+                  playsinline
+                  aria-label=${t("chat.composer.cameraPreview")}
+                  ${ref((element) => {
+                    if (element instanceof HTMLVideoElement) {
+                      element.srcObject = props.realtimeTalkVideoStream ?? null;
+                    }
+                  })}
+                ></video>
+              </div>
+            `
+          : nothing}
 
         <div class="agent-chat__composer-input-row">
           ${renderChatAttachmentMenu({ ...props, disabled: !canCompose })}
           <div class="agent-chat__composer-combobox">
             <textarea
-              ${ref((element) => {
-                const nextTextarea = element instanceof HTMLTextAreaElement ? element : null;
-                if (composerTextarea && composerTextarea !== nextTextarea) {
-                  disconnectTextareaOverflowObserver(composerTextarea);
-                }
-                composerTextarea = nextTextarea;
-                if (composerTextarea) {
-                  observeTextareaOverflow(composerTextarea);
-                  scheduleTextareaHeightAdjustment(composerTextarea);
-                }
-              })}
+              ${ref(state.textareaRef)}
               .value=${visibleDraft}
               dir=${detectTextDirection(visibleDraft)}
               ?disabled=${!canCompose}

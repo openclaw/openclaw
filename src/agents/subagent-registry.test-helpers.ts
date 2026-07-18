@@ -36,6 +36,9 @@ type RegistryTestApi = {
 
 type RegistryDeps = {
   callGateway: typeof import("../gateway/call.js").callGateway;
+  getGatewayRecoveryRuntime: () =>
+    | import("../gateway/server-instance-runtime.types.js").GatewayRecoveryRuntime
+    | undefined;
   captureSubagentCompletionReply: typeof import("./subagent-announce.js").captureSubagentCompletionReply;
   cleanupBrowserSessionsForLifecycleEnd: typeof import("../browser-lifecycle-cleanup.js").cleanupBrowserSessionsForLifecycleEnd;
   getSubagentRunsSnapshotForRead: typeof import("./subagent-registry-state.js").getSubagentRunsSnapshotForRead;
@@ -46,6 +49,7 @@ type RegistryDeps = {
   resolveAgentTimeoutMs: typeof import("./timeout.js").resolveAgentTimeoutMs;
   restoreSubagentRunsFromDisk: typeof import("./subagent-registry-state.js").restoreSubagentRunsFromDisk;
   runSubagentAnnounceFlow: typeof import("./subagent-announce.js").runSubagentAnnounceFlow;
+  maybeWakeRequesterAfterAllChildrenSettled: typeof import("./subagent-announce.requester-settle-wake.js").maybeWakeRequesterAfterAllChildrenSettled;
   ensureContextEnginesInitialized?: () => void;
   ensureRuntimePluginsLoaded?: typeof import("./runtime-plugins.js").ensureRuntimePluginsLoaded;
   resolveContextEngine?: typeof import("../context-engine/registry.js").resolveContextEngine;

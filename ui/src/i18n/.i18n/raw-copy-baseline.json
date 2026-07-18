@@ -6,6 +6,13 @@
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/app/lazy-custom-element.ts",
+      "text": "approval page"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/app/lazy-custom-element.ts",
       "text": "browser panel"
     },
     {
@@ -21,13 +28,6 @@
       "name": "label",
       "path": "ui/src/app/lazy-custom-element.ts",
       "text": "terminal panel"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/components/app-sidebar.ts",
-      "text": "OpenClaw"
     },
     {
       "count": 1,
@@ -111,7 +111,7 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/components/sidebar-update-card.ts",
-      "text": "v"
+      "text": "· v"
     },
     {
       "count": 1,
@@ -593,15 +593,15 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/debug/view.ts",
-      "text": "openclaw security audit --deep"
+      "path": "ui/src/pages/custodian/custodian-page.ts",
+      "text": "OC"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/memory-import/view.ts",
-      "text": "/memory/imports/"
+      "path": "ui/src/pages/debug/view.ts",
+      "text": "openclaw security audit --deep"
     },
     {
       "count": 1,

@@ -12,12 +12,15 @@ import { applicationContext, type ApplicationContext } from "../../app/context.t
 import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
 import { fetchSessionMenuWork } from "../../components/session-menu-work.ts";
-import "../../components/session-menu.ts";
 import type { SessionMenuAction, SessionMenuWork } from "../../components/session-menu.ts";
+import "../../components/session-menu.ts";
+import { isStoppableCloudWorkerPlacement } from "../../components/session-row-badges.ts";
+import { renderSessionsHubTabs } from "../../components/sessions-hub-tabs.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
-import { editorOpenUrl } from "../../lib/editor-links.ts";
+import { openEditor } from "../../lib/editor-links.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
 import type { SessionsGroupBy } from "../../lib/sessions/grouping.ts";
 import {
@@ -695,6 +698,44 @@ class SessionsPage extends OpenClawLightDomElement {
     await this.deleteSessions([row.key]);
   }
 
+  private async stopCloudWorker(row: GatewaySessionRow) {
+    const label = normalizeOptionalString(row.label) ?? row.key;
+    if (
+      !isStoppableCloudWorkerPlacement(row.placement) ||
+      row.hasActiveRun === true ||
+      !window.confirm(t("sessionsView.stopCloudWorkerConfirm", { session: label }))
+    ) {
+      return;
+    }
+    const scope = this.captureRequestScope();
+    if (!scope) {
+      return;
+    }
+    const agentId = parseAgentSessionKey(row.key)?.agentId;
+    this.sessionMutationPending = true;
+    try {
+      await scope.client.request(
+        "sessions.reclaim",
+        {
+          key: row.key,
+          ...(agentId ? { agentId } : {}),
+        },
+        { timeoutMs: 10 * 60_000 },
+      );
+      if (this.isRequestScopeCurrent(scope)) {
+        await this.loadSessions();
+      }
+    } catch (error) {
+      if (this.isRequestScopeCurrent(scope)) {
+        this.error = String(error);
+      }
+    } finally {
+      if (this.isRequestScopeCurrent(scope)) {
+        this.sessionMutationPending = false;
+      }
+    }
+  }
+
   private knownCategories(): string[] {
     return sessionCategoryNames(this.result, this.context?.sessions.state.groups ?? []);
   }
@@ -1038,6 +1079,9 @@ class SessionsPage extends OpenClawLightDomElement {
         .disabled=${this.loading}
         .forkDisabled=${row.modelSelectionLocked === true}
         .archiveAllowed=${archiveAllowed}
+        .cloudWorkerStopAllowed=${isStoppableCloudWorkerPlacement(row.placement) &&
+        row.hasActiveRun !== true &&
+        isGatewayMethodAdvertised(gateway, "sessions.reclaim") === true}
         .groups=${this.knownCategories()}
         .canOpenChat=${row.kind !== "global"}
         .work=${this.sessionMenuWork}
@@ -1054,11 +1098,10 @@ class SessionsPage extends OpenClawLightDomElement {
               context.navigate("chat", { search: searchForSession(row.key), hash: "" });
               break;
             case "open-pr":
-              window.open(action.url, "_blank", "noopener");
+              openExternalUrlSafe(action.url);
               break;
             case "open-in":
-              // A custom-scheme window hands off to the OS without navigating this page.
-              window.open(editorOpenUrl(action.editor, action.path));
+              openEditor(action.editor, action.path);
               break;
             case "toggle-pin":
               void this.patchSession(row.key, { pinned: row.pinned !== true });
@@ -1084,6 +1127,9 @@ class SessionsPage extends OpenClawLightDomElement {
             case "toggle-archived":
               void this.patchSession(row.key, { archived: row.archived !== true });
               break;
+            case "stop-cloud-worker":
+              void this.stopCloudWorker(row);
+              break;
             case "delete":
               void this.deleteSessionFromMenu(row);
               break;
@@ -1103,6 +1149,14 @@ class SessionsPage extends OpenClawLightDomElement {
         <div>
           <div class="page-title">${titleForRoute("sessions")}</div>
         </div>
+        ${renderSessionsHubTabs({
+          active: "sessions",
+          onSelect: (tab) => {
+            if (tab !== "sessions") {
+              context.navigate(tab);
+            }
+          },
+        })}
         ${renderAgentScopeControl({
           agents: context.agents.state.agentsList?.agents ?? [],
           selection: context.agentSelection,
@@ -1211,6 +1265,7 @@ class SessionsPage extends OpenClawLightDomElement {
           onRestoreCheckpoint: (sessionKey, checkpointId) =>
             void this.restoreCheckpoint(sessionKey, checkpointId),
         }),
+        { id: "sessions-hub-panel" },
       )}
       ${this.renderSessionMenu()}
     `;

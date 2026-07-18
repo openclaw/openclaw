@@ -1,6 +1,6 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import {
-  channelDisplayLabel,
   resolveChannelSessionInfo,
   resolveSessionDisplayName,
   resolveSessionWorkSubtitle,
@@ -36,6 +36,31 @@ describe("resolveSessionDisplayName", () => {
     expect(
       resolveSessionDisplayName("agent:main:dashboard:uuid", {
         worktree: { branch: "openclaw/wt-3f2a", repoRoot: "/Users/dev/Projects/clawdbot" },
+      }),
+    ).toBe("clawdbot ⎇ wt-3f2a");
+  });
+
+  it("uses a gateway-derived title for otherwise unnamed sessions", () => {
+    expect(
+      resolveSessionDisplayName("agent:main:dashboard:uuid", {
+        label: "agent:main:dashboard:uuid",
+        displayName: "agent:main:dashboard:uuid",
+        derivedTitle: "Quarterly launch plan",
+      }),
+    ).toBe("Quarterly launch plan");
+  });
+
+  it("keeps explicit and worktree names ahead of derived titles", () => {
+    expect(
+      resolveSessionDisplayName("agent:main:dashboard:uuid", {
+        label: "Release room",
+        derivedTitle: "Quarterly launch plan",
+      }),
+    ).toBe("Release room");
+    expect(
+      resolveSessionDisplayName("agent:main:dashboard:uuid", {
+        worktree: { branch: "openclaw/wt-3f2a", repoRoot: "/repo/clawdbot" },
+        derivedTitle: "Quarterly launch plan",
       }),
     ).toBe("clawdbot ⎇ wt-3f2a");
   });
@@ -105,13 +130,5 @@ describe("resolveChannelSessionInfo", () => {
     expect(resolveChannelSessionInfo("agent:main:dashboard:uuid")).toEqual({
       channelSession: false,
     });
-  });
-});
-
-describe("channelDisplayLabel", () => {
-  it("uses friendly names for known channels and capitalizes the rest", () => {
-    expect(channelDisplayLabel("imessage")).toBe("iMessage");
-    expect(channelDisplayLabel("telegram")).toBe("Telegram");
-    expect(channelDisplayLabel("mattermost")).toBe("Mattermost");
   });
 });

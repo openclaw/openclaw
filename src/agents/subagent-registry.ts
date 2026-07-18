@@ -9,6 +9,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ResolveContextEngineOptions } from "../context-engine/registry.js";
 import type { ContextEngine, SubagentEndReason } from "../context-engine/types.js";
 import { callGateway } from "../gateway/call.js";
+import type { GatewayRecoveryRuntime } from "../gateway/server-instance-runtime.types.js";
+import { getGatewayRecoveryRuntime } from "../gateway/server-recovery-runtime-context.js";
 import { getAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -55,6 +57,7 @@ import {
 } from "./subagent-lifecycle-events.js";
 import {
   emitSubagentEndedHookOnce,
+  emitSubagentProgressEndedHook,
   resolveLifecycleOutcomeFromRunOutcome,
 } from "./subagent-registry-completion.js";
 import {
@@ -112,6 +115,10 @@ type SubagentAnnounceModule = Pick<
   typeof import("./subagent-announce.js"),
   "captureSubagentCompletionReply" | "runSubagentAnnounceFlow"
 >;
+type RequesterSettleWakeModule = Pick<
+  typeof import("./subagent-announce.requester-settle-wake.js"),
+  "maybeWakeRequesterAfterAllChildrenSettled"
+>;
 type BrowserCleanupModule = Pick<
   typeof import("../browser-lifecycle-cleanup.js"),
   "cleanupBrowserSessionsForLifecycleEnd"
@@ -119,6 +126,7 @@ type BrowserCleanupModule = Pick<
 
 type SubagentRegistryDeps = {
   callGateway: typeof callGateway;
+  getGatewayRecoveryRuntime: () => GatewayRecoveryRuntime | undefined;
   captureSubagentCompletionReply: SubagentAnnounceModule["captureSubagentCompletionReply"];
   cleanupBrowserSessionsForLifecycleEnd: typeof cleanupBrowserSessionsForLifecycleEnd;
   getSubagentRunsSnapshotForRead: typeof getSubagentRunsSnapshotForRead;
@@ -129,6 +137,7 @@ type SubagentRegistryDeps = {
   resolveAgentTimeoutMs: typeof resolveAgentTimeoutMs;
   restoreSubagentRunsFromDisk: typeof restoreSubagentRunsFromDisk;
   runSubagentAnnounceFlow: SubagentAnnounceModule["runSubagentAnnounceFlow"];
+  maybeWakeRequesterAfterAllChildrenSettled: RequesterSettleWakeModule["maybeWakeRequesterAfterAllChildrenSettled"];
   ensureContextEnginesInitialized?: () => void;
   ensureRuntimePluginsLoaded?: (
     params: Parameters<typeof ensureRuntimePluginsLoadedFn>[0],
@@ -158,6 +167,7 @@ async function loadCleanupBrowserSessionsForLifecycleEnd(): Promise<
 
 const defaultSubagentRegistryDeps: SubagentRegistryDeps = {
   callGateway,
+  getGatewayRecoveryRuntime,
   captureSubagentCompletionReply: async (sessionKey, options) =>
     (await loadSubagentAnnounceModule()).captureSubagentCompletionReply(sessionKey, options),
   cleanupBrowserSessionsForLifecycleEnd: async (params) =>
@@ -171,6 +181,10 @@ const defaultSubagentRegistryDeps: SubagentRegistryDeps = {
   restoreSubagentRunsFromDisk,
   runSubagentAnnounceFlow: async (params) =>
     (await loadSubagentAnnounceModule()).runSubagentAnnounceFlow(params),
+  maybeWakeRequesterAfterAllChildrenSettled: async (params) =>
+    (
+      await import("./subagent-announce.requester-settle-wake.js")
+    ).maybeWakeRequesterAfterAllChildrenSettled(params),
 };
 
 let subagentRegistryDeps: SubagentRegistryDeps = defaultSubagentRegistryDeps;
@@ -366,6 +380,11 @@ function resolveCompletionFromTerminalTask(
 }
 
 export function scheduleSubagentOrphanRecovery(params?: { delayMs?: number; maxRetries?: number }) {
+  const gatewayRuntime = subagentRegistryDeps.getGatewayRecoveryRuntime();
+  if (!gatewayRuntime) {
+    log.warn("subagent orphan recovery deferred until the Gateway instance runtime is available");
+    return;
+  }
   const now = Date.now();
   if (now - lastOrphanRecoveryScheduleAt < ORPHAN_RECOVERY_DEBOUNCE_MS) {
     return;
@@ -376,6 +395,9 @@ export function scheduleSubagentOrphanRecovery(params?: { delayMs?: number; maxR
       // This import only installs timers. Each delayed or retrying recovery
       // attempt owns independent root admission inside the recovery module.
       scheduleOrphanRecovery({
+        // Retries follow the process's current lifecycle-bound Gateway
+        // principal instead of retaining the instance that scheduled them.
+        getGatewayRuntime: subagentRegistryDeps.getGatewayRecoveryRuntime,
         getActiveRuns: () => subagentRuns,
         delayMs: params?.delayMs,
         maxRetries: params?.maxRetries,
@@ -742,6 +764,7 @@ const subagentLifecycleController = createSubagentRegistryLifecycleController({
   resolveSubagentTask: findSubagentTaskForRun,
   shouldEmitEndedHookForRun,
   emitSubagentEndedHookForRun,
+  emitSubagentProgressEndedForRun: emitSubagentProgressEndedHook,
   notifyContextEngineSubagentEnded,
   retireSupersededRun: retireSupersededSubagentRun,
   resumeSubagentRun,
@@ -751,6 +774,8 @@ const subagentLifecycleController = createSubagentRegistryLifecycleController({
   cleanupBrowserSessionsForLifecycleEnd: (args) =>
     subagentRegistryDeps.cleanupBrowserSessionsForLifecycleEnd(args),
   runSubagentAnnounceFlow: (params) => subagentRegistryDeps.runSubagentAnnounceFlow(params),
+  maybeWakeRequesterAfterAllChildrenSettled: (args) =>
+    subagentRegistryDeps.maybeWakeRequesterAfterAllChildrenSettled(args),
   warn: (message, meta) => log.warn(message, meta),
 });
 
@@ -760,6 +785,7 @@ const {
   completeSubagentRun,
   finalizeResumedAnnounceGiveUp,
   refreshFrozenResultFromSession,
+  resumeRequesterSettleWake,
   startSubagentAnnounceCleanupFlow,
 } = subagentLifecycleController;
 
@@ -830,6 +856,10 @@ function resumeSubagentRun(runId: string) {
     // Startup orphan recovery replays this durable exact-run winner before it
     // reads session/config state. Do not prune or resume it through announce.
     resumedRuns.add(runId);
+    return;
+  }
+  if (entry.requesterSettleWake) {
+    resumeRequesterSettleWake(runId, entry);
     return;
   }
   if (entry.cleanupCompletedAt) {
@@ -937,12 +967,23 @@ function restoreSubagentRunsOnce() {
     ensureListener();
     // Always start sweeper — session-mode runs (no archiveAtMs) also need TTL cleanup.
     startSweeper();
-    for (const runId of subagentRuns.keys()) {
+    const restoredSessionCache: SubagentSessionStoreCache = new Map();
+    for (const [runId, entry] of subagentRuns) {
+      // An aborted persisted session belongs to orphan recovery. Waiting on its
+      // pre-restart run can terminalize it before the replacement turn starts.
+      if (
+        loadSubagentSessionEntry({
+          childSessionKey: entry.childSessionKey,
+          storeCache: restoredSessionCache,
+        })?.abortedLastRun === true
+      ) {
+        continue;
+      }
       resumeSubagentRun(runId);
     }
 
-    // Cold-start restore path: queue the same recovery pass that restart
-    // startup also uses so resumed children are handled through one seam.
+    // Cold-start restore can precede instance-runtime registration. The post-attach
+    // startup pass retries this seam once the lifecycle-bound principal exists.
     scheduleSubagentOrphanRecovery();
   } catch (err) {
     log.warn(
@@ -1062,6 +1103,8 @@ async function discardSuspendedPendingFinalDelivery(
     entry,
     cleanup: entry.cleanup,
     completedAt: now,
+    // The requester settle wake already ran when this delivery was suspended.
+    skipRequesterSettleWake: true,
   });
   if (
     entry.expectsCompletionMessage === true &&
@@ -1130,6 +1173,10 @@ async function sweepSubagentRuns() {
       });
     }
     for (const [runId, entry] of subagentRuns.entries()) {
+      if (entry.requesterSettleWake) {
+        resumeRequesterSettleWake(runId, entry);
+        continue;
+      }
       if (isSuspendedPendingFinalDelivery(entry)) {
         const suspendedAgeMs = now - (entry.delivery?.suspendedAt ?? now);
         const expired = suspendedAgeMs >= resolveSuspendedDeliveryExpiryMs(entry);
@@ -1670,7 +1717,20 @@ const subagentRunManager = createSubagentRunManager({
   resumedRuns,
   persist: persistSubagentRuns,
   persistOrThrow: persistSubagentRunsOrThrow,
-  callGateway: (request) => subagentRegistryDeps.callGateway(request),
+  callGateway: async <T>(request: Parameters<typeof callGateway>[0]) => {
+    if (request.method === "agent.wait") {
+      const gatewayRuntime = getGatewayRecoveryRuntime();
+      if (gatewayRuntime) {
+        // Registry waits are Gateway-owned lifecycle work. Keep them on the
+        // owning instance when one exists; standalone processes authenticate normally.
+        return await gatewayRuntime.waitForAgent<T>(
+          (request.params ?? {}) as Record<string, unknown>,
+          request.timeoutMs ?? undefined,
+        );
+      }
+    }
+    return await subagentRegistryDeps.callGateway<T>(request);
+  },
   getRuntimeConfig: () => subagentRegistryDeps.getRuntimeConfig(),
   ensureListener,
   startSweeper,

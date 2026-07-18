@@ -14,6 +14,7 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
   pinActivePluginChannelRegistry,
   pinActivePluginHttpRouteRegistry,
+  releasePinnedPluginChannelRegistry,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
@@ -28,7 +29,11 @@ import {
 } from "../skills/runtime/refresh-state.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { diffConfigPaths, diffGatewayReloadPaths } from "./config-diff.js";
-import { buildGatewayReloadPlan, resolveConfigReloadMetadata } from "./config-reload-plan.js";
+import {
+  buildGatewayReloadPlan,
+  type ChannelKind,
+  resolveConfigReloadMetadata,
+} from "./config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "./config-reload-settings.js";
 import {
   type GatewayConfigReloadTransactionOwnership,
@@ -179,9 +184,26 @@ describe("buildGatewayReloadPlan", () => {
       noopPrefixes: ["channels.whatsapp"],
     },
   };
+  const mattermostPlugin: ChannelPlugin = {
+    id: "mattermost",
+    meta: {
+      id: "mattermost",
+      label: "Mattermost",
+      selectionLabel: "Mattermost",
+      docsPath: "/channels/mattermost",
+      blurb: "test",
+    },
+    capabilities: { chatTypes: ["direct"] },
+    config: {
+      listAccountIds: (cfg) => Object.keys(cfg.channels?.mattermost?.accounts ?? {}),
+      resolveAccount: () => ({}),
+    },
+    reload: { configPrefixes: ["channels.mattermost"], accountScopedRestart: true },
+  };
   const registry = createTestRegistry([
     { pluginId: "telegram", plugin: telegramPlugin, source: "test" },
     { pluginId: "whatsapp", plugin: whatsappPlugin, source: "test" },
+    { pluginId: "mattermost", plugin: mattermostPlugin, source: "test" },
   ]);
   registry.reloads = [
     {
@@ -371,6 +393,75 @@ describe("buildGatewayReloadPlan", () => {
     const plan = buildGatewayReloadPlan(["channels.telegram.botToken"]);
     expect(plan.restartGateway).toBe(false);
     expect(plan.restartChannels).toEqual(new Set(["telegram"]));
+  });
+
+  const mattermostAccountConfig = {
+    channels: {
+      mattermost: {
+        accounts: {
+          alpha: { enabled: true },
+          beta: { enabled: true },
+        },
+      },
+    },
+  } as OpenClawConfig;
+
+  it.each([
+    {
+      label: "targets changed named accounts",
+      paths: [
+        "channels.mattermost.accounts.alpha.enabled",
+        "channels.mattermost.accounts.beta.commands",
+      ],
+      expectedChannels: new Set<ChannelKind>(),
+      expectedAccounts: new Map<ChannelKind, Set<string>>([
+        ["mattermost", new Set(["alpha", "beta"])],
+      ]),
+    },
+    {
+      label: "promotes accounts.default changes",
+      paths: ["channels.mattermost.accounts.default.commands"],
+      expectedChannels: new Set<ChannelKind>(["mattermost"]),
+      expectedAccounts: new Map<ChannelKind, Set<string>>(),
+    },
+    {
+      label: "promotes channel-global changes",
+      paths: ["channels.mattermost.botToken"],
+      expectedChannels: new Set<ChannelKind>(["mattermost"]),
+      expectedAccounts: new Map<ChannelKind, Set<string>>(),
+    },
+    {
+      label: "promotes unlisted account changes",
+      paths: ["channels.mattermost.accounts.removed.enabled"],
+      expectedChannels: new Set<ChannelKind>(["mattermost"]),
+      expectedAccounts: new Map<ChannelKind, Set<string>>(),
+    },
+    {
+      label: "lets an unlisted account replace earlier scoped targets",
+      paths: [
+        "channels.mattermost.accounts.alpha.enabled",
+        "channels.mattermost.accounts.removed.enabled",
+      ],
+      expectedChannels: new Set<ChannelKind>(["mattermost"]),
+      expectedAccounts: new Map<ChannelKind, Set<string>>(),
+    },
+    {
+      label: "lets a mixed global change replace scoped targets",
+      paths: ["channels.mattermost.accounts.alpha.enabled", "channels.mattermost.botToken"],
+      expectedChannels: new Set<ChannelKind>(["mattermost"]),
+      expectedAccounts: new Map<ChannelKind, Set<string>>(),
+    },
+    {
+      label: "keeps non-opted-in channels wholesale",
+      paths: ["channels.telegram.accounts.alpha.enabled"],
+      expectedChannels: new Set<ChannelKind>(["telegram"]),
+      expectedAccounts: new Map<ChannelKind, Set<string>>(),
+    },
+  ])("$label", ({ paths, expectedChannels, expectedAccounts }) => {
+    const plan = buildGatewayReloadPlan(paths, { candidateConfig: mattermostAccountConfig });
+
+    expect(plan.restartChannels).toEqual(expectedChannels);
+    expect(plan.restartChannelAccounts).toEqual(expectedAccounts);
   });
 
   it("restarts every channel whose config prefix matches", () => {
@@ -1659,6 +1750,53 @@ describe("startGatewayConfigReloader", () => {
       harness.onConfigApplied.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
     await harness.reloader.stop();
+  });
+
+  it("runs account-scoped channel changes through hot reload", async () => {
+    const channelRegistry = createTestRegistry([
+      {
+        pluginId: "mattermost",
+        plugin: {
+          id: "mattermost",
+          meta: {
+            id: "mattermost",
+            label: "Mattermost",
+            selectionLabel: "Mattermost",
+            docsPath: "/channels/mattermost",
+            blurb: "test",
+          },
+          capabilities: { chatTypes: ["direct"] },
+          config: { listAccountIds: () => ["default", "alpha"], resolveAccount: () => ({}) },
+          reload: { configPrefixes: ["channels.mattermost"], accountScopedRestart: true },
+        } satisfies ChannelPlugin,
+        source: "test",
+      },
+    ]);
+    const initialConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      channels: { mattermost: { accounts: { alpha: { enabled: false } } } },
+    } as OpenClawConfig;
+    const nextConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      channels: { mattermost: { accounts: { alpha: { enabled: true } } } },
+    } as OpenClawConfig;
+    const harness = createReloaderHarness(
+      vi.fn(async () => makeSnapshot({ config: nextConfig, hash: "account-reload" })),
+      { initialConfig },
+    );
+
+    pinActivePluginChannelRegistry(channelRegistry);
+    try {
+      harness.watcher.emit("change");
+      await vi.runAllTimersAsync();
+
+      const [plan] = getOnlyHotReloadCall(harness);
+      expect(plan.restartChannelAccounts).toEqual(new Map([["mattermost", new Set(["alpha"])]]));
+      expect(harness.onNoopConfigCommit).not.toHaveBeenCalled();
+    } finally {
+      releasePinnedPluginChannelRegistry(channelRegistry);
+      await harness.reloader.stop();
+    }
   });
 
   it("plans one immutable runtime override snapshot per candidate", async () => {
@@ -3431,6 +3569,46 @@ describe("startGatewayConfigReloader", () => {
     await harness.reloader.stop();
   });
 
+  it("reloads explicitly signaled plugin metadata when config bytes stay identical", async () => {
+    const activeConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+    };
+    const readSnapshot = vi.fn(async () =>
+      makeSnapshot({
+        sourceConfig: activeConfig,
+        runtimeConfig: activeConfig,
+        config: activeConfig,
+        hash: "unchanged-config",
+      }),
+    );
+    const readPluginInstallRecords = vi.fn(async () => ({
+      brave: {
+        source: "npm" as const,
+        spec: "@openclaw/brave",
+        installPath: "/tmp/openclaw/plugins/brave",
+      },
+    }));
+    const harness = createReloaderHarness(readSnapshot, {
+      initialConfig: activeConfig,
+      initialCompareConfig: activeConfig,
+      initialInternalWriteHash: "unchanged-config",
+      initialPluginInstallRecords: {},
+      readPluginInstallRecords,
+    });
+
+    harness.reloader.notifyPluginMetadataChanged();
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(readSnapshot).toHaveBeenCalledOnce();
+    expect(readPluginInstallRecords).toHaveBeenCalledOnce();
+    const [plan, nextConfig] = getOnlyRestartCall(harness);
+    expect(plan.changedPaths).toEqual(["plugins.installs.brave"]);
+    expect(plan.restartReasons).toEqual(["plugins.installs.brave"]);
+    expect(nextConfig).toBe(activeConfig);
+
+    await harness.reloader.stop();
+  });
+
   it("keeps external plugin policy-only writes on the hot reload path", async () => {
     const previousConfig: OpenClawConfig = {
       gateway: { reload: { debounceMs: 0 } },
@@ -3762,6 +3940,63 @@ describe("startGatewayConfigReloader watcher error recovery", () => {
     expect(log.error).not.toHaveBeenCalled();
 
     await reloader.stop();
+  });
+
+  it("keeps hot-reload active when transient errors are separated by working watchers", async () => {
+    const originalVitest = process.env.VITEST;
+    const originalChokidarPolling = process.env.CHOKIDAR_USEPOLLING;
+    delete process.env.VITEST;
+    delete process.env.CHOKIDAR_USEPOLLING;
+    let reloader: { stop: () => Promise<void>; hotReloadStatus: () => string } | undefined;
+    try {
+      // One initial watcher plus one re-create per error/recovery round.
+      const watchers = Array.from({ length: 5 }, () => createWatcherMock());
+      const started = startReloaderWithWatchers(watchers);
+      const { watchSpy, log } = started;
+      reloader = started.reloader;
+      const watchOptions = (index: number) =>
+        watchSpy.mock.calls[index]?.[1] as { usePolling?: boolean } | undefined;
+
+      // The initial error consumes one attempt. Every replacement then proves
+      // itself before failing, so each new episode must restart at attempt one.
+      watchers[0]?.emit("error");
+      expect(log.warn).toHaveBeenLastCalledWith(
+        expect.stringContaining("re-creating watcher (attempt 1/3 in 500ms)"),
+      );
+      await vi.advanceTimersByTimeAsync(500);
+
+      for (let round = 1; round < 4; round += 1) {
+        watchers[round]?.emit("change");
+        await vi.advanceTimersByTimeAsync(0);
+        watchers[round]?.emit("error");
+        expect(log.warn).toHaveBeenLastCalledWith(
+          expect.stringContaining("re-creating watcher (attempt 1/3 in 500ms)"),
+        );
+        await vi.advanceTimersByTimeAsync(500);
+        expect(watchSpy).toHaveBeenCalledTimes(round + 2);
+      }
+
+      // Hot-reload survives in native mode: no polling degradation, no disable.
+      expect(reloader.hotReloadStatus()).toBe("active");
+      expect(log.warn).toHaveBeenCalledTimes(4);
+      expect(watchOptions(4)?.usePolling).toBe(false);
+      expect(log.warn).not.toHaveBeenCalledWith(
+        expect.stringContaining("degrading to polling mode"),
+      );
+      expect(log.error).not.toHaveBeenCalled();
+    } finally {
+      if (originalVitest === undefined) {
+        delete process.env.VITEST;
+      } else {
+        process.env.VITEST = originalVitest;
+      }
+      if (originalChokidarPolling === undefined) {
+        delete process.env.CHOKIDAR_USEPOLLING;
+      } else {
+        process.env.CHOKIDAR_USEPOLLING = originalChokidarPolling;
+      }
+      await reloader?.stop();
+    }
   });
 
   it("degrades to polling then disables after both native and polling retries are exhausted", async () => {

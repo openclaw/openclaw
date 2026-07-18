@@ -25,11 +25,11 @@ import {
 } from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
-import { formatErrorMessage } from "../src/infra/errors.ts";
 import { ALWAYS_ALLOWED_RUNTIME_DIR_NAMES } from "../src/plugin-sdk/facade-activation-contract.ts";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../src/plugins/runtime-sidecar-paths.ts";
 import { readBoundedResponseText } from "./lib/bounded-response.ts";
 import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
+import { formatErrorMessage } from "./lib/error-format.mjs";
 import { runNpmVerifyCommand } from "./lib/npm-verify-exec.ts";
 import {
   collectRuntimeDependencySpecs,
@@ -1086,6 +1086,7 @@ function isRetryableRegistryProvenanceError(error: unknown): boolean {
     /npm registry request failed \((?:404|408|425|429|5\d\d)\)/u.test(message) ||
     message.includes("npm registry metadata is incomplete") ||
     message.includes("npm registry provenance metadata is incomplete") ||
+    message.includes("npm provenance attestation does not bind") ||
     /aborted|fetch failed|network|timeout|timed out/u.test(message)
   );
 }

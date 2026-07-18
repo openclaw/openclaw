@@ -3,8 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { GPT5_BEHAVIOR_CONTRACT as CODEX_GPT5_BEHAVIOR_CONTRACT } from "openclaw/plugin-sdk/provider-model-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "../../prompt-overlay.js";
 import { CodexAppServerRpcError } from "./client.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import { CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE } from "./protocol.js";
@@ -79,8 +79,41 @@ describe("Codex ring-zero thread config", () => {
       cwd: "/repo",
       dynamicTools: [],
       hostSystemAgentActive: false,
+      config: { "features.goals": true },
     });
     expect(normal.baseInstructions).toBeUndefined();
+    expect(normal.config?.["features.goals"]).toBe(false);
+  });
+});
+
+describe("Codex delegation capability", () => {
+  it("disables native delegation and goal continuation on start and resume", () => {
+    const params = createAttemptParams({ provider: "openai" });
+    params.delegationCapability = "report_only";
+    const appServer = createAppServerOptions() as never;
+    const config = {
+      "features.multi_agent": true,
+      "features.multi_agent_v2": true,
+      "features.goals": true,
+    };
+    const start = buildThreadStartParams(params, {
+      appServer,
+      cwd: "/repo",
+      dynamicTools: [],
+      config,
+    });
+    const resume = buildThreadResumeParams(params, {
+      appServer,
+      dynamicTools: [],
+      threadId: "thread-1",
+      config,
+    });
+
+    for (const request of [start, resume]) {
+      expect(request.config?.["features.multi_agent"]).toBe(false);
+      expect(request.config?.["features.multi_agent_v2"]).toBe(false);
+      expect(request.config?.["features.goals"]).toBe(false);
+    }
   });
 });
 
@@ -607,6 +640,7 @@ describe("Codex app-server native code mode config", () => {
       },
       "features.code_mode": true,
       "features.code_mode_only": false,
+      "features.goals": false,
       "features.apply_patch_streaming_events": true,
       "features.standalone_web_search": false,
       web_search: "cached",
@@ -751,6 +785,7 @@ describe("Codex app-server native code mode config", () => {
     expect(request.config).toEqual({
       "features.code_mode": true,
       "features.code_mode_only": false,
+      "features.goals": false,
       "features.apply_patch_streaming_events": true,
       "features.multi_agent": false,
       "features.standalone_web_search": false,
@@ -862,6 +897,7 @@ describe("Codex app-server native code mode config", () => {
     expect(request.config).toEqual({
       "features.code_mode": true,
       "features.code_mode_only": true,
+      "features.goals": false,
       "features.apply_patch_streaming_events": true,
       "features.standalone_web_search": false,
       web_search: "cached",
@@ -883,6 +919,7 @@ describe("Codex app-server native code mode config", () => {
     expect(request.config).toEqual({
       "features.code_mode": true,
       "features.code_mode_only": true,
+      "features.goals": false,
       "features.apply_patch_streaming_events": true,
       "features.standalone_web_search": false,
       web_search: "cached",
@@ -940,6 +977,7 @@ describe("Codex app-server native code mode config", () => {
     expect(request.config).toEqual({
       "features.code_mode": true,
       "features.code_mode_only": false,
+      "features.goals": false,
       "features.apply_patch_streaming_events": true,
       "features.standalone_web_search": false,
       web_search: "cached",
@@ -964,6 +1002,7 @@ describe("Codex app-server native code mode config", () => {
     expect(request.config).toEqual({
       "features.code_mode": false,
       "features.code_mode_only": false,
+      "features.goals": false,
       "features.standalone_web_search": false,
       web_search: "disabled",
     });
@@ -983,6 +1022,7 @@ describe("Codex app-server native code mode config", () => {
     expect(request.config).toEqual({
       "features.code_mode": false,
       "features.code_mode_only": false,
+      "features.goals": false,
       "features.standalone_web_search": false,
       web_search: "disabled",
     });
@@ -1012,6 +1052,7 @@ describe("Codex app-server native code mode config", () => {
       "features.hooks": true,
       "features.code_mode": true,
       "features.code_mode_only": false,
+      "features.goals": false,
       "features.apply_patch_streaming_events": true,
       "features.standalone_web_search": false,
       web_search: "cached",
@@ -1035,6 +1076,7 @@ describe("Codex app-server native code mode config", () => {
       project_doc_max_bytes: 64_000,
       "features.code_mode": true,
       "features.code_mode_only": false,
+      "features.goals": false,
       "features.apply_patch_streaming_events": true,
       "features.standalone_web_search": false,
       web_search: "cached",
@@ -1181,12 +1223,19 @@ describe("Codex app-server turn params", () => {
     const resumeParams = buildThreadResumeParams(params, { threadId: "thread-1", appServer });
     expect(resumeParams).toEqual({
       threadId: "thread-1",
+      excludeTurns: true,
+      initialTurnsPage: {
+        limit: 1,
+        sortDirection: "desc",
+        itemsView: "notLoaded",
+      },
       model: "gpt-5.4-codex",
       approvalPolicy: "on-request",
       approvalsReviewer: "guardian_subagent",
       config: {
         "features.code_mode": true,
         "features.code_mode_only": false,
+        "features.goals": false,
         "features.apply_patch_streaming_events": true,
         "features.standalone_web_search": false,
         web_search: "cached",
@@ -3089,8 +3138,8 @@ describe("resolveReasoningEffort (#71946)", () => {
 
 describe("native Codex Ultra turn mapping", () => {
   it.each([
-    { modelId: "gpt-5.6-sol", expected: "ultra" },
-    { modelId: "gpt-5.6-terra", expected: "ultra" },
+    { modelId: "gpt-5.6-sol", expected: "max" },
+    { modelId: "gpt-5.6-terra", expected: "max" },
     { modelId: "gpt-5.6-luna", expected: "max" },
   ] as const)(
     "maps Ultra to $expected for $modelId with direct OpenAI API metadata",
