@@ -1,9 +1,8 @@
 // Exercise the scheduler's active marker against the real heartbeat busy guard.
 // Stubbing runHeartbeatOnce hides this cross-owner interaction.
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
 import {
@@ -22,6 +21,7 @@ import { CronService, type CronEvent } from "./service.js";
 import type { CronServiceDeps } from "./service/state.js";
 
 setupTelegramHeartbeatPluginRuntimeForTests();
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(() => {
   resetSystemEventsForTest();
@@ -31,20 +31,19 @@ afterEach(() => {
 
 const noopLogger = { debug() {}, info() {}, warn() {}, error() {} };
 
-async function makeSandbox() {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-real-heartbeat-"));
+function makeSandbox() {
+  const dir = tempDirs.make("openclaw-cron-real-heartbeat-");
   return {
     dir,
     cronStorePath: path.join(dir, "cron", "jobs.json"),
     sessionStorePath: path.join(dir, "sessions.json"),
-    cleanup: () => fs.rm(dir, { recursive: true, force: true }),
   };
 }
 
 type WakeNowRunMode = "direct" | "queued" | "scheduled";
 
 async function runWakeNowCase(mode: WakeNowRunMode) {
-  const sandbox = await makeSandbox();
+  const sandbox = makeSandbox();
   const getReplySpy = vi.fn().mockResolvedValue({ text: "Handled the reminder" });
   const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "155462274" });
   const requestHeartbeat = vi.fn();
@@ -153,7 +152,6 @@ async function runWakeNowCase(mode: WakeNowRunMode) {
     const drained = await waitForActiveCronJobs(5_000);
     expect(drained).toEqual({ drained: true, active: 0 });
     await vi.waitFor(() => expect(getQueueSize(CommandLane.Cron)).toBe(0), { timeout: 5_000 });
-    await sandbox.cleanup();
   }
 }
 
