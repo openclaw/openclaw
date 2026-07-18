@@ -1065,7 +1065,6 @@ src/snapshot/local-repository.ts
 src/state/openclaw-agent-db.test.ts
 src/state/openclaw-agent-db.ts
 src/state/openclaw-state-db.test.ts
-src/state/openclaw-state-db.ts
 src/status/status-message.ts
 src/system-agent/agent-turn.test.ts
 src/system-agent/chat-engine.test.ts

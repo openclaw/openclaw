@@ -176,6 +176,56 @@ describe("provider error utils", () => {
     } satisfies Partial<ProviderHttpError>);
   });
 
+  it("propagates a bounded error-body timeout instead of hanging normalization", async () => {
+    vi.useFakeTimers();
+    try {
+      const cancel = vi.fn();
+      const response = new Response(
+        new ReadableStream<Uint8Array>({
+          pull() {
+            return new Promise<void>(() => {});
+          },
+          cancel,
+        }),
+        { status: 503 },
+      );
+      const assertion = expect(
+        assertOkOrThrowHttpError(response, "Provider API error", {
+          bodyTimeoutMs: () => 50,
+          onBodyTimeout: ({ timeoutMs }) => new Error(`provider body timed out ${timeoutMs}`),
+        }),
+      ).rejects.toThrow("provider body timed out 50");
+
+      await vi.advanceTimersByTimeAsync(50);
+      await assertion;
+      expect(cancel).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("propagates an already-expired lazy error-body deadline", async () => {
+    const cancel = vi.fn();
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        pull() {
+          return new Promise<void>(() => {});
+        },
+        cancel,
+      }),
+      { status: 503 },
+    );
+
+    await expect(
+      assertOkOrThrowHttpError(response, "Provider API error", {
+        bodyTimeoutMs: () => {
+          throw new Error("provider deadline already expired");
+        },
+      }),
+    ).rejects.toThrow("provider deadline already expired");
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
   it("releases provider error body reader locks after bounded reads complete", async () => {
     const releaseLock = vi.fn();
     const cancel = vi.fn(async () => undefined);
