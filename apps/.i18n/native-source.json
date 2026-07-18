@@ -11443,7 +11443,55 @@
     },
     {
       "kind": "ui-call",
-      "line": 151,
+      "line": 111,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatInlineWidgetView.kt",
+      "source": "Could not copy widget image",
+      "surface": "android",
+      "id": "native.android.5bbcfd75bf605de8"
+    },
+    {
+      "kind": "ui-call",
+      "line": 112,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatInlineWidgetView.kt",
+      "source": "Could not save widget image",
+      "surface": "android",
+      "id": "native.android.43d98caa4a9fa44c"
+    },
+    {
+      "kind": "ui-call",
+      "line": 113,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatInlineWidgetView.kt",
+      "source": "Widget image copied",
+      "surface": "android",
+      "id": "native.android.88e52d3ea4d2059a"
+    },
+    {
+      "kind": "ui-call",
+      "line": 114,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatInlineWidgetView.kt",
+      "source": "Widget image saved to Downloads",
+      "surface": "android",
+      "id": "native.android.04b164bc44c08e38"
+    },
+    {
+      "kind": "ui-call",
+      "line": 215,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatInlineWidgetView.kt",
+      "source": "Copy image",
+      "surface": "android",
+      "id": "native.android.a29e724e9e3b5cc9"
+    },
+    {
+      "kind": "ui-call",
+      "line": 220,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatInlineWidgetView.kt",
+      "source": "Save image",
+      "surface": "android",
+      "id": "native.android.6b45a391b1289aa5"
+    },
+    {
+      "kind": "ui-call",
+      "line": 230,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatInlineWidgetView.kt",
       "source": "Widget unavailable",
       "surface": "android",
