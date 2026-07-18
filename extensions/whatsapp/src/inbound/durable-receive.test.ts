@@ -157,8 +157,9 @@ describe("createWhatsAppIngressDrain", () => {
           dispatched.push(id);
           if (id === "msg-4a") {
             adoptFirst = lifecycle.onAdopted;
-            return { kind: "deferred" };
+            return { kind: "deferred" as const };
           }
+          return undefined;
         },
       });
 

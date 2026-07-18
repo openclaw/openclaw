@@ -8,7 +8,6 @@ import {
   type ChannelIngressDrain,
   type ChannelIngressQueue,
 } from "openclaw/plugin-sdk/channel-outbound";
-import type { PluginJsonValue } from "openclaw/plugin-sdk/plugin-entry";
 import { getWhatsAppRuntime } from "../runtime.js";
 import {
   deserializeWhatsAppDurableInboundMessage,
