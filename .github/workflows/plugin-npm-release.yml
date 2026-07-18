@@ -1321,6 +1321,8 @@ jobs:
           } > "$npmrc"
           chmod 0600 "$npmrc"
           unset NODE_AUTH_TOKEN NPM_TOKEN NODE_OPTIONS
+          # A timeout can race a committed publish. On rerun, the preceding check
+          # accepts only this tarball's exact integrity and shasum before skipping.
           HOME="$publish_home" \
             NPM_CONFIG_GLOBALCONFIG=/dev/null \
             NPM_CONFIG_IGNORE_SCRIPTS=true \
