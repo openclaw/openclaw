@@ -68,7 +68,14 @@ function migrateMcpServerTimeoutAliases(
         continue;
       }
       const value = server[alias];
-      if (server[canonical] === undefined && typeof value === "number" && Number.isFinite(value)) {
+      // Old runtime only honored positive alias seconds; canonical fields are
+      // finite().positive(), so migrating 0/negative/overflow would fail validation.
+      if (
+        server[canonical] === undefined &&
+        typeof value === "number" &&
+        value > 0 &&
+        Number.isFinite(value * 1_000)
+      ) {
         server[canonical] = value * 1_000;
         changes.push(
           `Moved ${pathPrefix}.${serverName}.${alias} → ${canonical} (${value * 1_000} ms).`,
