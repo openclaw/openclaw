@@ -119,8 +119,7 @@ internal class ChatComposerStateStore(
         return@synchronized ChatComposerSendStart(ChatComposerSendStartResult.CheckpointFull)
       }
       sendStatesState.value =
-        sendStatesState.value +
-          (owner to ChatComposerSendState(activeOperationIds = setOf(commandId)))
+        sendStatesState.value + (owner to ChatComposerSendState(activeOperationIds = setOf(commandId)))
       ChatComposerSendStart(
         result = ChatComposerSendStartResult.Started,
         request = ChatComposerSendRequest(commandId, owner, inputSnapshot, inputSnapshot.trim(), attachments),
@@ -207,8 +206,10 @@ internal class ChatComposerStateStore(
       }
     }
 
-  fun removeAttachments(owner: ChatComposerOwner, ids: Set<String>) =
-    synchronized(lock) { attachmentStore.remove(owner, ids) }
+  fun removeAttachments(
+    owner: ChatComposerOwner,
+    ids: Set<String>,
+  ) = synchronized(lock) { attachmentStore.remove(owner, ids) }
 
   fun beginMediaImport(
     owner: ChatComposerOwner,
@@ -241,11 +242,14 @@ internal class ChatComposerStateStore(
 
   fun cancelMediaImport(importId: Long) = synchronized(lock) { attachmentStore.cancelImport(importId) }
 
-  fun clearAttachmentOmission(owner: ChatComposerOwner) =
-    synchronized(lock) { attachmentNoticesState.value = attachmentNoticesState.value - owner }
+  fun clearAttachmentOmission(owner: ChatComposerOwner) = synchronized(lock) {
+    attachmentNoticesState.value = attachmentNoticesState.value - owner
+  }
 
-  fun reportImageOmission(owner: ChatComposerOwner, omitted: Int) =
-    synchronized(lock) { recordAttachmentOmissionLocked(owner, omitted, ChatComposerAttachmentNotice.Image) }
+  fun reportImageOmission(
+    owner: ChatComposerOwner,
+    omitted: Int,
+  ) = synchronized(lock) { recordAttachmentOmissionLocked(owner, omitted, ChatComposerAttachmentNotice.Image) }
 
   /** Migrates every state surface and returns aliases owned by external queues. */
   fun resolveAliases(
