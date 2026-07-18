@@ -88,6 +88,8 @@ type ChatComposerProps = {
   connected: boolean;
   canSend: boolean;
   disabledReason: string | null;
+  disabledActionLabel?: string | null;
+  onDisabledAction?: (() => void) | null;
   sending: boolean;
   canAbort?: boolean;
   runStatus?: ChatRunUiStatus | null;
@@ -2440,6 +2442,24 @@ export function renderChatComposer(props: ChatComposerProps) {
                         }
                       })}
                     ></video>
+                  </div>
+                `
+              : nothing}
+            ${props.disabledReason
+              ? html`
+                  <div class="agent-chat__disabled-reason">
+                    <span>${props.disabledReason}</span>
+                    ${props.disabledActionLabel && props.onDisabledAction
+                      ? html`
+                          <button
+                            type="button"
+                            class="btn btn--xs"
+                            @click=${props.onDisabledAction}
+                          >
+                            ${props.disabledActionLabel}
+                          </button>
+                        `
+                      : nothing}
                   </div>
                 `
               : nothing}

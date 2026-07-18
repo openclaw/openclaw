@@ -74,6 +74,21 @@ describe("AppSidebar brand actions", () => {
     button?.click();
     expect(onOpenNewSession).toHaveBeenCalledExactlyOnceWith("research");
   });
+
+  it("opens the archived Sessions view from the sessions-zone footer", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(
+      gateway,
+      createSessions("main", ["agent:main:main", "agent:main:work"]),
+    );
+    const onNavigate = vi.fn();
+    sidebar.onNavigate = onNavigate;
+    await sidebar.updateComplete;
+
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-view-archived")?.click();
+
+    expect(onNavigate).toHaveBeenCalledWith("sessions", { search: "?showArchived=1" });
+  });
 });
 
 describe("AppSidebar agent chip", () => {
