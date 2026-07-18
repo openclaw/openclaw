@@ -1,0 +1,33 @@
+import { Value } from "typebox/value";
+import { describe, expect, it } from "vitest";
+import { BoardSnapshotSchema } from "./board.js";
+
+describe("BoardSnapshotSchema", () => {
+  it("accepts an optional HTML widget frame URL", () => {
+    const snapshot = {
+      sessionKey: "agent:main:main",
+      revision: 1,
+      tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
+      widgets: [
+        {
+          name: "status",
+          tabId: "main",
+          contentKind: "html",
+          sizeW: 6,
+          sizeH: 4,
+          position: 0,
+          grantState: "none",
+          revision: 1,
+          frameUrl: "/__openclaw__/board/agent%3Amain%3Amain/status/index.html?bt=ticket",
+        },
+      ],
+    };
+    expect(Value.Check(BoardSnapshotSchema, snapshot)).toBe(true);
+    expect(
+      Value.Check(BoardSnapshotSchema, {
+        ...snapshot,
+        widgets: [{ ...snapshot.widgets[0], frameUrl: 42 }],
+      }),
+    ).toBe(false);
+  });
+});

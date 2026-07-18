@@ -1,30 +1,26 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { BoardStore } from "../boards/board-store.js";
 import { boardStore } from "../boards/board-store.js";
-import type { AuthRateLimiter } from "./auth-rate-limit.js";
-import type { ResolvedGatewayAuth } from "./auth.js";
-import { sendMethodNotAllowed, sendMissingScopeForbidden } from "./http-common.js";
-import {
-  authorizeGatewayHttpRequestOrReply,
-  resolveSharedSecretHttpOperatorScopes,
-} from "./http-utils.js";
-import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
+import { BOARD_HTTP_PATH_PREFIX, verifyBoardViewTicket } from "./board-view-ticket.js";
+import { sendMethodNotAllowed } from "./http-common.js";
 
-export const BOARD_HTTP_PATH_PREFIX = "/__openclaw__/board/";
 const BOARD_WIDGET_NAME_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 
 type BoardHttpOptions = {
-  auth: ResolvedGatewayAuth;
-  trustedProxies?: string[];
-  allowRealIpFallback?: boolean;
-  rateLimiter?: AuthRateLimiter;
   store?: BoardStore;
+  nowMs?: number;
 };
 
 function sendNotFound(res: ServerResponse): void {
   res.statusCode = 404;
   res.setHeader("Content-Type", "text/plain; charset=utf-8");
   res.end("Not Found");
+}
+
+function sendUnauthorized(res: ServerResponse): void {
+  res.statusCode = 401;
+  res.setHeader("Content-Type", "text/plain; charset=utf-8");
+  res.end("Unauthorized");
 }
 
 function parseBoardWidgetPath(pathname: string): { sessionKey: string; name: string } | undefined {
@@ -44,12 +40,13 @@ function parseBoardWidgetPath(pathname: string): { sessionKey: string; name: str
   }
 }
 
-export async function handleBoardHttpRequest(
+export function handleBoardHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
-  opts: BoardHttpOptions,
-): Promise<boolean> {
-  const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+  opts: BoardHttpOptions = {},
+): boolean {
+  const url = new URL(req.url ?? "/", "http://localhost");
+  const pathname = url.pathname;
   if (!pathname.startsWith(BOARD_HTTP_PATH_PREFIX)) {
     return false;
   }
@@ -62,28 +59,22 @@ export async function handleBoardHttpRequest(
     sendNotFound(res);
     return true;
   }
-  const requestAuth = await authorizeGatewayHttpRequestOrReply({
-    req,
-    res,
-    auth: opts.auth,
-    trustedProxies: opts.trustedProxies,
-    allowRealIpFallback: opts.allowRealIpFallback,
-    rateLimiter: opts.rateLimiter,
-  });
-  if (!requestAuth) {
-    return true;
-  }
-  const scopeAuth = authorizeOperatorScopesForMethod(
-    "board.get",
-    resolveSharedSecretHttpOperatorScopes(req, requestAuth),
-  );
-  if (!scopeAuth.allowed) {
-    sendMissingScopeForbidden(res, scopeAuth.missingScope);
-    return true;
-  }
   const document = (opts.store ?? boardStore).readWidgetHtml(path.sessionKey, path.name);
   if (!document || !("html" in document)) {
     sendNotFound(res);
+    return true;
+  }
+  const ticket = url.searchParams.get("bt");
+  if (
+    !ticket ||
+    !verifyBoardViewTicket(ticket, {
+      sessionKey: path.sessionKey,
+      name: path.name,
+      revision: document.revision,
+      nowMs: opts.nowMs,
+    })
+  ) {
+    sendUnauthorized(res);
     return true;
   }
   res.statusCode = 200;

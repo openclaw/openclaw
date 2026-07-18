@@ -15,6 +15,7 @@ import {
 import { BoardValidationError } from "../../boards/board-layout.js";
 import { appendBoardEventNotice, BoardEventPayloadError } from "../../boards/board-notices.js";
 import { boardStore, type BoardStore } from "../../boards/board-store.js";
+import { buildBoardWidgetFrameUrl, createBoardViewTicket } from "../board-view-ticket.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 type NoticeAppender = typeof appendBoardEventNotice;
@@ -55,7 +56,24 @@ export function createBoardHandlers(
         invalidParams("board.get", validateBoardGetParams.errors, respond);
         return;
       }
-      respond(true, store.getSnapshot(params.sessionKey));
+      const snapshot = store.getSnapshot(params.sessionKey);
+      for (const widget of snapshot.widgets) {
+        const document = store.readWidgetHtml(snapshot.sessionKey, widget.name);
+        if (!document || !("html" in document) || document.revision !== widget.revision) {
+          continue;
+        }
+        const { ticket } = createBoardViewTicket({
+          sessionKey: snapshot.sessionKey,
+          name: widget.name,
+          revision: widget.revision,
+        });
+        widget.frameUrl = buildBoardWidgetFrameUrl({
+          sessionKey: snapshot.sessionKey,
+          name: widget.name,
+          ticket,
+        });
+      }
+      respond(true, snapshot);
     },
     "board.update": ({ params, respond, context }) => {
       if (!validateBoardUpdateParams(params)) {

@@ -44,6 +44,7 @@ export const BoardWidgetSchema = closedObject({
     Type.Literal("rejected"),
   ]),
   revision: Type.Integer({ minimum: 1 }),
+  frameUrl: Type.Optional(Type.String()),
 });
 export type BoardWidget = Static<typeof BoardWidgetSchema>;
 

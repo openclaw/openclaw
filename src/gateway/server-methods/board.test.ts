@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { BoardSnapshot } from "../../../packages/gateway-protocol/src/index.js";
 import { resetBoardEventNoticeStateForTest } from "../../boards/board-notices.js";
 import { boardStore, InMemoryBoardStore } from "../../boards/board-store.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
@@ -71,6 +72,43 @@ describe("board gateway methods", () => {
       expect.objectContaining({ code: "INVALID_REQUEST" }),
     );
     expect(store.listSessionsWithBoards()).toEqual([]);
+  });
+
+  it("adds fresh frame URLs to HTML widgets only on board.get", async () => {
+    const { invoke } = createHarness();
+    await invoke("board.widget.put", {
+      sessionKey: "agent:main:main",
+      name: "status",
+      content: { kind: "html", html: "<p>ok</p>" },
+    });
+    await invoke("board.widget.put", {
+      sessionKey: "agent:main:main",
+      name: "app",
+      content: {
+        kind: "mcp-app",
+        descriptor: {
+          serverName: "server",
+          toolName: "tool",
+          uiResourceUri: "ui://resource",
+          originSessionKey: "origin",
+          toolCallId: "call",
+        },
+      },
+    });
+
+    const firstResponse = await invoke("board.get", { sessionKey: "agent:main:main" });
+    const first = firstResponse.mock.calls[0]?.[1] as BoardSnapshot;
+    const htmlFrameUrl = first.widgets.find((widget) => widget.name === "status")?.frameUrl;
+    expect(htmlFrameUrl).toMatch(
+      /^\/__openclaw__\/board\/agent%3Amain%3Amain\/status\/index\.html\?bt=v1\./u,
+    );
+    expect(first.widgets.find((widget) => widget.name === "app")).not.toHaveProperty("frameUrl");
+
+    const secondResponse = await invoke("board.get", { sessionKey: "agent:main:main" });
+    const second = secondResponse.mock.calls[0]?.[1] as BoardSnapshot;
+    expect(second.widgets.find((widget) => widget.name === "status")?.frameUrl).not.toBe(
+      htmlFrameUrl,
+    );
   });
 
   it("applies updates and broadcasts board.changed", async () => {

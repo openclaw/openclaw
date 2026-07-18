@@ -3,8 +3,14 @@ import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { InMemoryBoardStore } from "../boards/board-store.js";
 import { handleBoardHttpRequest } from "./board-http.js";
+import {
+  BOARD_VIEW_TICKET_TTL_MS,
+  createBoardViewTicket,
+  verifyBoardViewTicket,
+} from "./board-view-ticket.js";
 
 const store = new InMemoryBoardStore();
+const nowMs = 1_800_000_000_000;
 let server: Server;
 let baseUrl: string;
 
@@ -28,16 +34,20 @@ beforeAll(async () => {
       },
     },
   });
+  store.putWidget({
+    sessionKey: "agent:main:main",
+    name: "revisioned",
+    content: { kind: "html", html: "<p>one</p>" },
+  });
   server = createServer((req, res) => {
-    void handleBoardHttpRequest(req, res, {
-      auth: { mode: "token", token: "test-token", allowTailscale: false },
+    const handled = handleBoardHttpRequest(req, res, {
       store,
-    }).then((handled) => {
-      if (!handled) {
-        res.statusCode = 404;
-        res.end("unhandled");
-      }
+      nowMs,
     });
+    if (!handled) {
+      res.statusCode = 404;
+      res.end("unhandled");
+    }
   });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -58,23 +68,78 @@ afterAll(async () => {
   });
 });
 
-function request(name: string, init: { method?: string; headers?: Record<string, string> } = {}) {
-  const headers = new Headers({
-    Authorization: "Bearer test-token",
-    "x-openclaw-scopes": "operator.read",
-  });
-  for (const [key, value] of Object.entries(init.headers ?? {})) {
-    headers.set(key, value);
-  }
-  return fetch(`${baseUrl}/__openclaw__/board/agent%3Amain%3Amain/${name}/index.html`, {
-    ...init,
-    headers,
+function ticketFor(name: string, revision = 1, issuedAtMs = nowMs): string {
+  return createBoardViewTicket({
+    sessionKey: "agent:main:main",
+    name,
+    revision,
+    nowMs: issuedAtMs,
+  }).ticket;
+}
+
+function request(
+  name: string,
+  init: { method?: string; headers?: Record<string, string>; ticket?: string } = {},
+) {
+  const query = init.ticket ? `?bt=${encodeURIComponent(init.ticket)}` : "";
+  return fetch(`${baseUrl}/__openclaw__/board/agent%3Amain%3Amain/${name}/index.html${query}`, {
+    method: init.method,
+    headers: init.headers,
   });
 }
 
 describe("board widget HTTP", () => {
-  it("serves authenticated HTML bytes with sandbox and no-cache headers", async () => {
-    const response = await request("status");
+  it("round-trips an opaque two-minute ticket bound to the widget revision", () => {
+    const issued = createBoardViewTicket({
+      sessionKey: "agent:main:main",
+      name: "status",
+      revision: 1,
+      nowMs,
+    });
+    expect(issued.ticket).toMatch(/^v1\.[A-Za-z0-9_-]+\.\d+\.[A-Za-z0-9_-]+$/u);
+    expect(issued.ticket).not.toContain("agent:main:main");
+    expect(issued.expiresAtMs).toBe(nowMs + BOARD_VIEW_TICKET_TTL_MS);
+    expect(
+      verifyBoardViewTicket(issued.ticket, {
+        sessionKey: "agent:other:main",
+        name: "status",
+        revision: 1,
+        nowMs,
+      }),
+    ).toBeUndefined();
+    expect(
+      verifyBoardViewTicket(issued.ticket, {
+        sessionKey: "agent:main:main",
+        name: "other",
+        revision: 1,
+        nowMs,
+      }),
+    ).toBeUndefined();
+    expect(
+      verifyBoardViewTicket(issued.ticket, {
+        sessionKey: "agent:main:main",
+        name: "status",
+        revision: 1,
+        nowMs,
+      }),
+    ).toEqual({
+      sessionKey: "agent:main:main",
+      name: "status",
+      revision: 1,
+      expiresAtMs: issued.expiresAtMs,
+    });
+    expect(
+      verifyBoardViewTicket(issued.ticket, {
+        sessionKey: "agent:main:main",
+        name: "status",
+        revision: 2,
+        nowMs,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("serves HTML bytes with a valid ticket and no gateway auth", async () => {
+    const response = await request("status", { ticket: ticketFor("status") });
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toBe("text/html; charset=utf-8");
     expect(response.headers.get("content-security-policy")).toBe("sandbox allow-scripts");
@@ -82,12 +147,33 @@ describe("board widget HTTP", () => {
     await expect(response.text()).resolves.toBe("<!doctype html><p>Status</p>");
   });
 
-  it("requires gateway authentication", async () => {
-    const unauthenticated = await fetch(
-      `${baseUrl}/__openclaw__/board/agent%3Amain%3Amain/status/index.html`,
-      { headers: { "x-openclaw-scopes": "operator.read" } },
-    );
-    expect(unauthenticated.status).toBe(401);
+  it("does not require or inspect an operator token", async () => {
+    const response = await request("status", {
+      ticket: ticketFor("status"),
+      headers: { Authorization: "Bearer test-token" },
+    });
+    expect(response.status).toBe(200);
+  });
+
+  it("rejects missing, tampered, and expired tickets", async () => {
+    expect((await request("status")).status).toBe(401);
+    const ticket = ticketFor("status");
+    expect((await request("status", { ticket: `${ticket.slice(0, -1)}x` })).status).toBe(401);
+    const expired = ticketFor("status", 1, nowMs - BOARD_VIEW_TICKET_TTL_MS - 1);
+    expect((await request("status", { ticket: expired })).status).toBe(401);
+  });
+
+  it("rejects a ticket after the widget revision changes", async () => {
+    const stale = ticketFor("revisioned");
+    store.putWidget({
+      sessionKey: "agent:main:main",
+      name: "revisioned",
+      content: { kind: "html", html: "<p>two</p>" },
+    });
+    expect((await request("revisioned", { ticket: stale })).status).toBe(401);
+    const current = await request("revisioned", { ticket: ticketFor("revisioned", 2) });
+    expect(current.status).toBe(200);
+    await expect(current.text()).resolves.toBe("<p>two</p>");
   });
 
   it("returns 404 for unknown and MCP app widgets", async () => {
@@ -96,7 +182,7 @@ describe("board widget HTTP", () => {
   });
 
   it("allows GET only", async () => {
-    const response = await request("status", { method: "POST" });
+    const response = await request("status", { method: "POST", ticket: ticketFor("status") });
     expect(response.status).toBe(405);
     expect(response.headers.get("allow")).toBe("GET");
   });
