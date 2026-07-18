@@ -142,6 +142,69 @@ describe("script declaration contracts", () => {
     ).toEqual({ checked: 1, issues: [] });
   });
 
+  it("propagates ambiguity through nested star re-exports", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-script-declarations-"));
+    tempDirs.push(root);
+    fs.mkdirSync(path.join(root, "scripts"), { recursive: true });
+    fs.writeFileSync(path.join(root, "scripts", "left.mjs"), "export const shared = 1;\n");
+    fs.writeFileSync(path.join(root, "scripts", "right.mjs"), "export const shared = 2;\n");
+    fs.writeFileSync(
+      path.join(root, "scripts", "inner.mjs"),
+      'export * from "./left.mjs";\nexport * from "./right.mjs";\n',
+    );
+    fs.writeFileSync(
+      path.join(root, "scripts", "outer.mjs"),
+      'export * from "./inner.mjs";\nexport * from "./left.mjs";\n',
+    );
+    fs.writeFileSync(path.join(root, "scripts", "outer.d.mts"), "export {};\n");
+
+    expect(
+      verifyScriptDeclarationContracts({
+        root,
+        files: [
+          "scripts/inner.mjs",
+          "scripts/left.mjs",
+          "scripts/outer.d.mts",
+          "scripts/outer.mjs",
+          "scripts/right.mjs",
+        ],
+      }),
+    ).toEqual({ checked: 1, issues: [] });
+  });
+
+  it("fails closed on explicit re-exports of ambiguous bindings", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-script-declarations-"));
+    tempDirs.push(root);
+    fs.mkdirSync(path.join(root, "scripts"), { recursive: true });
+    fs.writeFileSync(path.join(root, "scripts", "left.mjs"), "export const shared = 1;\n");
+    fs.writeFileSync(path.join(root, "scripts", "right.mjs"), "export const shared = 2;\n");
+    fs.writeFileSync(
+      path.join(root, "scripts", "inner.mjs"),
+      'export * from "./left.mjs";\nexport * from "./right.mjs";\n',
+    );
+    fs.writeFileSync(
+      path.join(root, "scripts", "barrel.mjs"),
+      'export { shared } from "./inner.mjs";\n',
+    );
+    fs.writeFileSync(path.join(root, "scripts", "barrel.d.mts"), "export {};\n");
+
+    expect(
+      verifyScriptDeclarationContracts({
+        root,
+        files: [
+          "scripts/barrel.d.mts",
+          "scripts/barrel.mjs",
+          "scripts/inner.mjs",
+          "scripts/left.mjs",
+          "scripts/right.mjs",
+        ],
+      }),
+    ).toEqual({
+      checked: 1,
+      issues: ['scripts/barrel.mjs: ambiguous named re-export "./inner.mjs:shared"'],
+    });
+  });
+
   it("fails closed when a star re-export cannot be resolved", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-script-declarations-"));
     tempDirs.push(root);
@@ -248,5 +311,127 @@ describe("script declaration contracts", () => {
         ],
       }),
     ).toEqual({ checked: 1, issues: [] });
+  });
+
+  it("preserves statically named exports from external modules", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-script-declarations-"));
+    tempDirs.push(root);
+    fs.mkdirSync(path.join(root, "scripts"), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, "scripts", "external.mjs"),
+      'import { readFile } from "fs/promises";\nexport { readFile };\n',
+    );
+    fs.writeFileSync(
+      path.join(root, "scripts", "external.d.mts"),
+      "export declare const readFile: unknown;\n",
+    );
+
+    expect(
+      verifyScriptDeclarationContracts({
+        root,
+        files: ["scripts/external.d.mts", "scripts/external.mjs"],
+      }),
+    ).toEqual({ checked: 1, issues: [] });
+  });
+
+  it("fails closed on external declaration re-exports with unknown value provenance", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-script-declarations-"));
+    tempDirs.push(root);
+    fs.mkdirSync(path.join(root, "scripts"), { recursive: true });
+    fs.writeFileSync(path.join(root, "scripts", "external.mjs"), "export const Foo = 1;\n");
+    fs.writeFileSync(
+      path.join(root, "scripts", "external.d.mts"),
+      'export { Foo } from "types-only-package";\n',
+    );
+
+    expect(
+      verifyScriptDeclarationContracts({
+        root,
+        files: ["scripts/external.d.mts", "scripts/external.mjs"],
+      }),
+    ).toEqual({
+      checked: 1,
+      issues: [
+        'scripts/external.d.mts: unresolved external declaration re-export "types-only-package"',
+      ],
+    });
+  });
+
+  it("fails closed on re-exported external declaration imports", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-script-declarations-"));
+    tempDirs.push(root);
+    fs.mkdirSync(path.join(root, "scripts"), { recursive: true });
+    fs.writeFileSync(path.join(root, "scripts", "external.mjs"), "export const Foo = 1;\n");
+    fs.writeFileSync(
+      path.join(root, "scripts", "external.d.mts"),
+      'import { Foo } from "types-only-package";\nexport { Foo };\n',
+    );
+
+    expect(
+      verifyScriptDeclarationContracts({
+        root,
+        files: ["scripts/external.d.mts", "scripts/external.mjs"],
+      }),
+    ).toEqual({
+      checked: 1,
+      issues: [
+        'scripts/external.d.mts: unresolved external declaration import "types-only-package"',
+      ],
+    });
+  });
+
+  it("accepts statically value-bearing external namespace declaration imports", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-script-declarations-"));
+    tempDirs.push(root);
+    fs.mkdirSync(path.join(root, "scripts"), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, "scripts", "external.mjs"),
+      'import * as pkg from "pkg";\nexport { pkg };\n',
+    );
+    fs.writeFileSync(
+      path.join(root, "scripts", "external.d.mts"),
+      'import * as pkg from "pkg";\nexport { pkg };\n',
+    );
+
+    expect(
+      verifyScriptDeclarationContracts({
+        root,
+        files: ["scripts/external.d.mts", "scripts/external.mjs"],
+      }),
+    ).toEqual({ checked: 1, issues: [] });
+  });
+
+  it("distinguishes namespace objects from named external bindings", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-script-declarations-"));
+    tempDirs.push(root);
+    fs.mkdirSync(path.join(root, "scripts"), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, "scripts", "namespace.mjs"),
+      'export * as shared from "pkg";\n',
+    );
+    fs.writeFileSync(
+      path.join(root, "scripts", "named.mjs"),
+      'export { namespace as shared } from "pkg";\n',
+    );
+    fs.writeFileSync(
+      path.join(root, "scripts", "barrel.mjs"),
+      'export * from "./namespace.mjs";\nexport * from "./named.mjs";\n',
+    );
+    fs.writeFileSync(path.join(root, "scripts", "barrel.d.mts"), "export {};\n");
+
+    expect(
+      verifyScriptDeclarationContracts({
+        root,
+        files: [
+          "scripts/barrel.d.mts",
+          "scripts/barrel.mjs",
+          "scripts/named.mjs",
+          "scripts/namespace.mjs",
+        ],
+      }),
+    ).toEqual({
+      checked: 1,
+      issues: ['scripts/barrel.mjs: opaque external star collision "shared"'],
+    });
   });
 });

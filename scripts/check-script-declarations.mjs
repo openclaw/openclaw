@@ -160,7 +160,7 @@ function collectBindingNames(name, names) {
 function collectLocalBindings(sourceFile, filePath) {
   const bindings = new Map();
   const setValueBinding = (name) => {
-    bindings.set(name, { kind: "value", origins: new Set([`${filePath}#${name}`]) });
+    bindings.set(name, { kind: "value", origins: new Set([createBindingOrigin(filePath, name)]) });
   };
   for (const statement of sourceFile.statements) {
     if (ts.isVariableStatement(statement)) {
@@ -251,6 +251,26 @@ function mergeOrigins(target, origins) {
   }
 }
 
+function createBindingOrigin(moduleId, name) {
+  return JSON.stringify(["binding", moduleId, name]);
+}
+
+function createNamespaceOrigin(moduleId) {
+  return JSON.stringify(["namespace", moduleId]);
+}
+
+function isExternalModuleSpecifier(specifier) {
+  return !specifier.startsWith(".") && !path.isAbsolute(specifier);
+}
+
+function createOpaqueExternalOrigin(importerPath, specifier, kind, name = null) {
+  return JSON.stringify(["opaque-external", importerPath, specifier, kind, name]);
+}
+
+function isOpaqueExternalOrigin(origin) {
+  return origin.startsWith('["opaque-external",');
+}
+
 function resolveLocalBindingOrigins(binding, importerPath, fsImpl, state, issues) {
   if (!binding || binding.kind === "type") {
     return null;
@@ -260,6 +280,24 @@ function resolveLocalBindingOrigins(binding, importerPath, fsImpl, state, issues
   }
   const target = resolveReexport(importerPath, binding.specifier, fsImpl);
   if (!target) {
+    if (isExternalModuleSpecifier(binding.specifier)) {
+      if (/\.d\.[cm]?ts$/u.test(importerPath) && binding.kind !== "namespace-import") {
+        issues.push({
+          filePath: importerPath,
+          specifier: binding.specifier,
+          reason: "unresolved external declaration import",
+        });
+        return null;
+      }
+      return new Set([
+        createOpaqueExternalOrigin(
+          importerPath,
+          binding.specifier,
+          binding.kind === "namespace-import" ? "namespace" : "binding",
+          binding.kind === "namespace-import" ? null : binding.importedName,
+        ),
+      ]);
+    }
     issues.push({
       filePath: importerPath,
       specifier: binding.specifier,
@@ -268,10 +306,17 @@ function resolveLocalBindingOrigins(binding, importerPath, fsImpl, state, issues
     return null;
   }
   if (binding.kind === "namespace-import") {
-    return new Set([`${target}#namespace`]);
+    return new Set([createNamespaceOrigin(target)]);
   }
   const targetResult = collectValueExports(target, fsImpl, state);
   issues.push(...targetResult.issues);
+  if (targetResult.ambiguous.has(binding.importedName)) {
+    issues.push({
+      filePath: importerPath,
+      specifier: `${binding.specifier}:${binding.importedName}`,
+      reason: "ambiguous exported import",
+    });
+  }
   return targetResult.exports.get(binding.importedName) ?? null;
 }
 
@@ -283,6 +328,7 @@ function collectValueExports(filePath, fsImpl, state) {
   }
   if (state.visiting.has(normalizedFilePath)) {
     return {
+      ambiguous: new Set(),
       exports: new Map(),
       issues: [
         {
@@ -304,10 +350,11 @@ function collectValueExports(filePath, fsImpl, state) {
   const localBindings = collectLocalBindings(sourceFile, normalizedFilePath);
   const isDeclaration = /\.d\.[cm]?ts$/u.test(normalizedFilePath);
   const explicitExports = new Map();
+  const explicitAmbiguous = new Set();
   const starResults = [];
   const issues = [];
   const setExplicitExport = (name, origins) => {
-    explicitExports.set(name, origins ?? new Set([`${normalizedFilePath}#${name}`]));
+    explicitExports.set(name, origins ?? new Set([createBindingOrigin(normalizedFilePath, name)]));
   };
   for (const statement of sourceFile.statements) {
     if (ts.isExportAssignment(statement)) {
@@ -338,17 +385,48 @@ function collectValueExports(filePath, fsImpl, state) {
             const origins = targetResult?.exports.get(sourceName);
             if (origins) {
               explicitExports.set(exportedName, origins);
-            } else if (!isDeclaration) {
-              explicitExports.set(
-                exportedName,
-                new Set([`${target ?? specifier.text}#${sourceName}`]),
-              );
-            } else if (!target) {
+            } else if (targetResult?.ambiguous.has(sourceName)) {
+              explicitAmbiguous.add(exportedName);
               issues.push({
                 filePath: normalizedFilePath,
-                specifier: specifier.text,
-                reason: "unresolved named re-export",
+                specifier: `${specifier.text}:${sourceName}`,
+                reason: "ambiguous named re-export",
               });
+            } else if (!target && isExternalModuleSpecifier(specifier.text)) {
+              if (isDeclaration) {
+                issues.push({
+                  filePath: normalizedFilePath,
+                  specifier: specifier.text,
+                  reason: "unresolved external declaration re-export",
+                });
+              } else {
+                explicitExports.set(
+                  exportedName,
+                  new Set([
+                    createOpaqueExternalOrigin(
+                      normalizedFilePath,
+                      specifier.text,
+                      "binding",
+                      sourceName,
+                    ),
+                  ]),
+                );
+              }
+            } else if (!target) {
+              if (!isDeclaration) {
+                explicitExports.set(
+                  exportedName,
+                  new Set([createBindingOrigin(specifier.text, sourceName)]),
+                );
+              } else {
+                issues.push({
+                  filePath: normalizedFilePath,
+                  specifier: specifier.text,
+                  reason: "unresolved named re-export",
+                });
+              }
+            } else if (!isDeclaration) {
+              explicitExports.set(exportedName, new Set([createBindingOrigin(target, sourceName)]));
             }
           } else {
             const origins = resolveLocalBindingOrigins(
@@ -371,9 +449,19 @@ function collectValueExports(filePath, fsImpl, state) {
           specifier && ts.isStringLiteral(specifier)
             ? resolveReexport(normalizedFilePath, specifier.text, fsImpl)
             : null;
+        const externalSpecifier =
+          specifier && ts.isStringLiteral(specifier) && isExternalModuleSpecifier(specifier.text)
+            ? specifier.text
+            : null;
         setExplicitExport(
           statement.exportClause.name.text,
-          new Set([`${target ?? specifier?.getText(sourceFile) ?? normalizedFilePath}#namespace`]),
+          new Set([
+            target
+              ? createNamespaceOrigin(target)
+              : externalSpecifier
+                ? createOpaqueExternalOrigin(normalizedFilePath, externalSpecifier, "namespace")
+                : createNamespaceOrigin(specifier?.getText(sourceFile) ?? normalizedFilePath),
+          ]),
         );
         continue;
       }
@@ -426,9 +514,15 @@ function collectValueExports(filePath, fsImpl, state) {
 
   const exports = new Map(explicitExports);
   const starOrigins = new Map();
+  const ambiguous = new Set(explicitAmbiguous);
   for (const targetResult of starResults) {
+    for (const name of targetResult.ambiguous) {
+      if (name !== "default" && !explicitExports.has(name)) {
+        ambiguous.add(name);
+      }
+    }
     for (const [name, origins] of targetResult.exports) {
-      if (name === "default" || explicitExports.has(name)) {
+      if (name === "default" || explicitExports.has(name) || explicitAmbiguous.has(name)) {
         continue;
       }
       const merged = starOrigins.get(name) ?? new Set();
@@ -438,12 +532,21 @@ function collectValueExports(filePath, fsImpl, state) {
   }
   for (const [name, origins] of starOrigins) {
     // ESM omits a name when multiple star exports resolve to different bindings.
-    if (origins.size === 1) {
+    if (origins.size > 1) {
+      ambiguous.add(name);
+      if ([...origins].some(isOpaqueExternalOrigin)) {
+        issues.push({
+          filePath: normalizedFilePath,
+          specifier: name,
+          reason: "opaque external star collision",
+        });
+      }
+    } else if (!ambiguous.has(name)) {
       exports.set(name, origins);
     }
   }
 
-  const result = { exports, issues };
+  const result = { ambiguous, exports, issues };
   state.visiting.delete(normalizedFilePath);
   state.cache.set(normalizedFilePath, result);
   return result;
