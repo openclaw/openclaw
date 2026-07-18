@@ -93,6 +93,28 @@ function formatHookRunWarningConsoleMessage(params: {
   return parts.join(" ");
 }
 
+function createSessionKeyedHookDispatchQueue() {
+  const hookAgentDispatchTails = new Map<string, Promise<void>>();
+
+  return (sessionKey: string, operation: () => Promise<void>) => {
+    const previousTail = hookAgentDispatchTails.get(sessionKey);
+    const run = previousTail ? previousTail.catch(() => undefined).then(operation) : operation();
+    const tail = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    hookAgentDispatchTails.set(sessionKey, tail);
+    // Same-session hook agent runs append to one Codex session. Serializing avoids
+    // optimistic lifecycle-claim races while preserving parallelism across sessions.
+    void tail.finally(() => {
+      if (hookAgentDispatchTails.get(sessionKey) === tail) {
+        hookAgentDispatchTails.delete(sessionKey);
+      }
+    });
+    return run;
+  };
+}
+
 /** Creates the HTTP handler used by gateway hook endpoints. */
 export function createGatewayHooksRequestHandler(params: {
   deps: CliDeps;
@@ -103,6 +125,7 @@ export function createGatewayHooksRequestHandler(params: {
   logHooks: SubsystemLogger;
 }) {
   const { deps, getHooksConfig, getClientIpConfig, bindHost, port, logHooks } = params;
+  const enqueueHookAgentDispatch = createSessionKeyedHookDispatchQueue();
 
   const dispatchWakeHook = (value: { text: string; mode: "now" | "next-heartbeat" }) => {
     const sessionKey = resolveMainSessionKeyFromConfig();
@@ -151,79 +174,81 @@ export function createGatewayHooksRequestHandler(params: {
     };
 
     let hookEventSessionKey: string | undefined;
-    void runWithGatewayIndependentRootWorkContinuation(async () => {
-      try {
-        // Agent hooks run after the HTTP response path has returned, so failure
-        // handling must record a system event instead of throwing to the caller.
-        const cfg = getRuntimeConfig();
-        hookEventSessionKey = resolveHookEventSessionKey({
-          cfg,
-          agentId: value.agentId,
-        });
-        const { runCronIsolatedAgentTurn } = await import("../../cron/isolated-agent.js");
-        const result = await runCronIsolatedAgentTurn({
-          cfg,
-          deps,
-          job,
-          message: value.message,
-          sessionKey,
-          lane: "cron",
-        });
-        const summary = resolveHookRunSummary(result);
-        const prefix =
-          result.status === "ok" ? `Hook ${safeName}` : `Hook ${safeName} (${result.status})`;
-        const shouldAnnounce = shouldAnnounceHookRunResult({ deliver: value.deliver, result });
-        if (result.status !== "ok") {
-          logHooks.warn("hook agent run returned non-ok status", {
-            sourcePath: value.sourcePath,
-            name: safeName,
-            runId,
-            jobId,
+    void runWithGatewayIndependentRootWorkContinuation(() =>
+      enqueueHookAgentDispatch(sessionKey, async () => {
+        try {
+          // Agent hooks run after the HTTP response path has returned, so failure
+          // handling must record a system event instead of throwing to the caller.
+          const cfg = getRuntimeConfig();
+          hookEventSessionKey = resolveHookEventSessionKey({
+            cfg,
             agentId: value.agentId,
+          });
+          const { runCronIsolatedAgentTurn } = await import("../../cron/isolated-agent.js");
+          const result = await runCronIsolatedAgentTurn({
+            cfg,
+            deps,
+            job,
+            message: value.message,
             sessionKey,
-            status: result.status,
-            model: value.model,
-            summary,
-            consoleMessage: formatHookRunWarningConsoleMessage({
+            lane: "cron",
+          });
+          const summary = resolveHookRunSummary(result);
+          const prefix =
+            result.status === "ok" ? `Hook ${safeName}` : `Hook ${safeName} (${result.status})`;
+          const shouldAnnounce = shouldAnnounceHookRunResult({ deliver: value.deliver, result });
+          if (result.status !== "ok") {
+            logHooks.warn("hook agent run returned non-ok status", {
+              sourcePath: value.sourcePath,
+              name: safeName,
+              runId,
+              jobId,
+              agentId: value.agentId,
+              sessionKey,
               status: result.status,
               model: value.model,
               summary,
-            }),
-          });
-        }
-        if (shouldAnnounce) {
-          const eventSessionKey = hookEventSessionKey ?? resolveMainSessionKeyFromConfig();
-          enqueueSystemEvent(`${prefix}: ${summary}`.trim(), {
-            sessionKey: eventSessionKey,
+              consoleMessage: formatHookRunWarningConsoleMessage({
+                status: result.status,
+                model: value.model,
+                summary,
+              }),
+            });
+          }
+          if (shouldAnnounce) {
+            const eventSessionKey = hookEventSessionKey ?? resolveMainSessionKeyFromConfig();
+            enqueueSystemEvent(`${prefix}: ${summary}`.trim(), {
+              sessionKey: eventSessionKey,
+            });
+            if (value.wakeMode === "now") {
+              requestHeartbeat({ source: "hook", intent: "immediate", reason: `hook:${jobId}` });
+            }
+          } else if (result.status === "ok" && !value.deliver) {
+            logHooks.info("hook agent run completed without announcement", {
+              sourcePath: value.sourcePath,
+              name: safeName,
+              runId,
+              jobId,
+              agentId: value.agentId,
+              sessionKey,
+              completedAt: new Date().toISOString(),
+            });
+          }
+        } catch (err) {
+          logHooks.warn(`hook agent failed: ${String(err)}`);
+          enqueueSystemEvent(`Hook ${safeName} (error): ${String(err)}`, {
+            sessionKey: hookEventSessionKey ?? resolveMainSessionKeyFromConfig(),
           });
           if (value.wakeMode === "now") {
-            requestHeartbeat({ source: "hook", intent: "immediate", reason: `hook:${jobId}` });
+            requestHeartbeat({
+              source: "hook",
+              intent: "immediate",
+              reason: `hook:${jobId}:error`,
+            });
           }
-        } else if (result.status === "ok" && !value.deliver) {
-          logHooks.info("hook agent run completed without announcement", {
-            sourcePath: value.sourcePath,
-            name: safeName,
-            runId,
-            jobId,
-            agentId: value.agentId,
-            sessionKey,
-            completedAt: new Date().toISOString(),
-          });
         }
-      } catch (err) {
-        logHooks.warn(`hook agent failed: ${String(err)}`);
-        enqueueSystemEvent(`Hook ${safeName} (error): ${String(err)}`, {
-          sessionKey: hookEventSessionKey ?? resolveMainSessionKeyFromConfig(),
-        });
-        if (value.wakeMode === "now") {
-          requestHeartbeat({
-            source: "hook",
-            intent: "immediate",
-            reason: `hook:${jobId}:error`,
-          });
-        }
-      }
-    });
+      }),
+    );
 
     return runId;
   };

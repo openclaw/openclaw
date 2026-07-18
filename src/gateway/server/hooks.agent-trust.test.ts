@@ -95,10 +95,22 @@ function buildAgentPayload(name: string, agentId?: string) {
 }
 
 function dispatchAgentHook(payload: unknown): unknown {
+  return resolveDispatchAgentHook()(payload);
+}
+
+function resolveDispatchAgentHook(): (...args: unknown[]) => unknown {
   if (!capturedDispatchAgentHook) {
     throw new Error("dispatchAgentHook missing");
   }
-  return capturedDispatchAgentHook(payload);
+  return capturedDispatchAgentHook;
+}
+
+function createDeferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((innerResolve) => {
+    resolve = innerResolve;
+  });
+  return { promise, resolve };
 }
 
 type HookLogMeta = {
@@ -178,6 +190,80 @@ describe("dispatchAgentHook trust handling", () => {
     );
     expect(subordinateAdmissionClosed).toBe(false);
     expect(getActiveGatewayRootWorkCount()).toBe(0);
+  });
+
+  it("serializes same-session agent hook runs in dispatch order", async () => {
+    const dispatch = resolveDispatchAgentHook();
+    const firstGate = createDeferred();
+    runCronIsolatedAgentTurnMock.mockImplementationOnce(async () => {
+      await firstGate.promise;
+      return { status: "ok", summary: "first done", delivered: false };
+    });
+    runCronIsolatedAgentTurnMock.mockResolvedValueOnce({
+      status: "ok",
+      summary: "second done",
+      delivered: false,
+    });
+
+    dispatch({
+      ...buildAgentPayload("First"),
+      message: "first",
+      sessionKey: "shared-session",
+    });
+    dispatch({
+      ...buildAgentPayload("Second"),
+      message: "second",
+      sessionKey: "shared-session",
+    });
+
+    await waitForFast(() => expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledTimes(1));
+    expect(runCronIsolatedAgentTurnMock.mock.calls[0]?.[0]).toMatchObject({
+      message: "first",
+      sessionKey: "shared-session",
+    });
+
+    firstGate.resolve();
+
+    await waitForFast(() => expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledTimes(2));
+    expect(runCronIsolatedAgentTurnMock.mock.calls[1]?.[0]).toMatchObject({
+      message: "second",
+      sessionKey: "shared-session",
+    });
+  });
+
+  it("continues a same-session hook queue after a failed run", async () => {
+    const dispatch = resolveDispatchAgentHook();
+    runCronIsolatedAgentTurnMock.mockRejectedValueOnce(new Error("agent exploded"));
+    runCronIsolatedAgentTurnMock.mockResolvedValueOnce({
+      status: "ok",
+      summary: "second done",
+      delivered: false,
+    });
+
+    dispatch({
+      ...buildAgentPayload("First"),
+      message: "first",
+      sessionKey: "shared-session",
+    });
+    dispatch({
+      ...buildAgentPayload("Second"),
+      message: "second",
+      sessionKey: "shared-session",
+    });
+
+    await waitForFast(() =>
+      expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+        "Hook First (error): Error: agent exploded",
+        {
+          sessionKey: "agent:main:main",
+        },
+      ),
+    );
+    await waitForFast(() => expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledTimes(2));
+    expect(runCronIsolatedAgentTurnMock.mock.calls[1]?.[0]).toMatchObject({
+      message: "second",
+      sessionKey: "shared-session",
+    });
   });
 
   it("does not announce successful deliver:false hook results", async () => {
