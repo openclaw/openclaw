@@ -7374,6 +7374,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /plugins/sdk-channel-outbound
 - Headings:
+  - H2: Durable ingress monitors
   - H2: Adapter
   - H2: Plain-text sanitization
   - H2: Delivery Evidence
