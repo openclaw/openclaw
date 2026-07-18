@@ -1,10 +1,6 @@
 // Line plugin module implements download behavior.
-import { Readable } from "node:stream";
-import { finished } from "node:stream/promises";
-import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { setTimeout as delay } from "node:timers/promises";
-import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
-import { saveMediaStream } from "openclaw/plugin-sdk/media-store";
+import { MediaFetchError, saveResponseMedia } from "openclaw/plugin-sdk/media-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithRuntimeDispatcherOrMockedGlobal } from "openclaw/plugin-sdk/runtime-fetch";
 
@@ -26,23 +22,24 @@ function contentBackoffDelayMs(attempt: number): number {
   return Math.min(CONTENT_READY_BASE_DELAY_MS * 2 ** attempt, CONTENT_READY_MAX_DELAY_MS);
 }
 
+function lineContentUrl(messageId: string): string {
+  return `${LINE_CONTENT_BASE_URL}/${encodeURIComponent(messageId)}/content`;
+}
+
 async function fetchLineContentWhenReady(
   messageId: string,
   channelAccessToken: string,
-): Promise<Readable> {
+): Promise<Response> {
   const controller = new AbortController();
   const deadline = setTimeout(() => controller.abort(), CONTENT_READY_TIMEOUT_MS);
   deadline.unref();
   try {
     for (let attempt = 0; attempt < CONTENT_READY_MAX_ATTEMPTS; attempt++) {
-      const response = await fetchWithRuntimeDispatcherOrMockedGlobal(
-        `${LINE_CONTENT_BASE_URL}/${encodeURIComponent(messageId)}/content`,
-        {
-          headers: { Authorization: `Bearer ${channelAccessToken}` },
-          redirect: "error",
-          signal: controller.signal,
-        },
-      );
+      const response = await fetchWithRuntimeDispatcherOrMockedGlobal(lineContentUrl(messageId), {
+        headers: { Authorization: `Bearer ${channelAccessToken}` },
+        redirect: "error",
+        signal: controller.signal,
+      });
       if (response.status === 200) {
         if (!response.body) {
           throw new MediaFetchError(
@@ -50,7 +47,7 @@ async function fetchLineContentWhenReady(
             `LINE media response for message ${messageId} had no body`,
           );
         }
-        return Readable.fromWeb(response.body as NodeReadableStream<Uint8Array>);
+        return response;
       }
 
       await response.body?.cancel();
@@ -73,7 +70,14 @@ async function fetchLineContentWhenReady(
         { cause: err },
       );
     }
-    throw err;
+    if (err instanceof MediaFetchError) {
+      throw err;
+    }
+    throw new MediaFetchError(
+      "fetch_failed",
+      `LINE media download failed for message ${messageId}`,
+      { cause: err },
+    );
   } finally {
     clearTimeout(deadline);
   }
@@ -113,21 +117,13 @@ export async function downloadLineMedia(
   maxBytes = 10 * 1024 * 1024,
   options?: { originalFilename?: string },
 ): Promise<DownloadResult> {
-  const content = await fetchLineContentWhenReady(messageId, channelAccessToken);
-  let saved: Awaited<ReturnType<typeof saveMediaStream>>;
-  try {
-    saved = await saveMediaStream(
-      content,
-      undefined,
-      "inbound",
-      maxBytes,
-      options?.originalFilename,
-    );
-  } catch (err) {
-    content.destroy();
-    await finished(content).catch(() => undefined);
-    throw err;
-  }
+  const response = await fetchLineContentWhenReady(messageId, channelAccessToken);
+  const saved = await saveResponseMedia(response, {
+    sourceUrl: lineContentUrl(messageId),
+    subdir: "inbound",
+    maxBytes,
+    originalFilename: options?.originalFilename,
+  });
   logVerbose(`line: persisted media ${messageId} to ${saved.path} (${saved.size} bytes)`);
 
   return {
