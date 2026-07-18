@@ -133,6 +133,9 @@ export function createEventHandlers(context: EventHandlerContext) {
     { errorMessage: string; timer: ReturnType<typeof setTimeout> }
   >();
   const toolValidationDiagnostics = new Map<string, string>();
+  // Agent frames can arrive late across transport/retry boundaries. Keep the
+  // diagnostic projection monotonic so stale failures cannot replace newer progress.
+  const toolValidationDiagnosticSeqByRun = new Map<string, number>();
 
   const streamingWatchdogMs =
     typeof context.streamingWatchdogMs === "number" &&
@@ -218,6 +221,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     sessionRuns.clear();
     postFinalizingRuns.clear();
     toolValidationDiagnostics.clear();
+    toolValidationDiagnosticSeqByRun.clear();
     streamAssembler = new TuiStreamAssembler();
     pendingHistoryRefresh = false;
     clearPendingSubmit(state);
@@ -655,6 +659,22 @@ export function createEventHandlers(context: EventHandlerContext) {
   };
 
   const noteToolValidationDiagnostic = (evt: AgentEvent) => {
+    const seq = typeof evt.seq === "number" && Number.isFinite(evt.seq) ? evt.seq : undefined;
+    const previousSeq = toolValidationDiagnosticSeqByRun.get(evt.runId);
+    if (seq !== undefined && previousSeq !== undefined && seq <= previousSeq) {
+      return;
+    }
+    if (seq !== undefined) {
+      toolValidationDiagnosticSeqByRun.delete(evt.runId);
+      toolValidationDiagnosticSeqByRun.set(evt.runId, seq);
+      while (toolValidationDiagnosticSeqByRun.size > MAX_TRACKED_TOOL_VALIDATION_DIAGNOSTICS) {
+        const oldestRunId = toolValidationDiagnosticSeqByRun.keys().next().value;
+        if (!oldestRunId) {
+          break;
+        }
+        toolValidationDiagnosticSeqByRun.delete(oldestRunId);
+      }
+    }
     const data = evt.data ?? {};
     const phase = asString(data.phase, "");
     if (
@@ -1217,6 +1237,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     clearStreamingWatchdog();
     clearPendingTerminalLifecycleErrors();
     toolValidationDiagnostics.clear();
+    toolValidationDiagnosticSeqByRun.clear();
   };
 
   const consumeCompletedRunForPendingSend = (runId: string) => {

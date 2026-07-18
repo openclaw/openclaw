@@ -199,6 +199,27 @@ describe("chat.abort authorization", () => {
     expect(context.chatAbortControllers.has("run-hidden")).toBe(true);
   });
 
+  it("does not treat the broad agent alias as an explicit channel session", async () => {
+    const channelSessionKey = "agent:main:openclaw-weixin:direct:o9cq802hhmfc@im.wechat";
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([
+        ["run-hidden-channel", createActiveRun(channelSessionKey, { controlUiVisible: false })],
+      ]),
+    });
+
+    const respond = await invokeAbort({
+      context,
+      sessionKey: "agent:main",
+      connId: "conn-owner",
+      deviceId: "dev-owner",
+    });
+
+    const [ok, payload] = requireLastRespondCall(respond);
+    expect(ok).toBe(true);
+    expectAbortPayload(payload, { aborted: false, runIds: [] });
+    expect(context.chatAbortControllers.has("run-hidden-channel")).toBe(true);
+  });
+
   it("aborts hidden channel runs by explicit channel session key", async () => {
     const sessionKey = "agent:main:openclaw-weixin:direct:o9cq802hhmfc@im.wechat";
     const context = createChatAbortContext({

@@ -528,6 +528,80 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(chatLog.addSystem).toHaveBeenCalledWith("run aborted");
   });
 
+  it("does not restore a cleared diagnostic from a stale agent event", () => {
+    const { state, chatLog, handleAgentEvent, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-validation-loop", sessionInfo: { verboseLevel: "off" } },
+    });
+
+    handleAgentEvent({
+      runId: "run-validation-loop",
+      seq: 2,
+      stream: "tool",
+      data: {
+        phase: "result",
+        toolErrorSummary: "edit tool validation failed: invalid arguments",
+      },
+      sessionKey: state.currentSessionKey,
+    });
+    handleAgentEvent({
+      runId: "run-validation-loop",
+      seq: 3,
+      stream: "assistant",
+      data: { text: "Recovered" },
+      sessionKey: state.currentSessionKey,
+    });
+    handleAgentEvent({
+      runId: "run-validation-loop",
+      seq: 2,
+      stream: "tool",
+      data: {
+        phase: "result",
+        toolErrorSummary: "edit tool validation failed: stale arguments",
+      },
+      sessionKey: state.currentSessionKey,
+    });
+    handleChatEvent({
+      runId: "run-validation-loop",
+      sessionKey: state.currentSessionKey,
+      state: "aborted",
+    });
+
+    expect(chatLog.addSystem).toHaveBeenCalledWith("run aborted");
+  });
+
+  it("does not clear a newer diagnostic from a stale lifecycle start", () => {
+    const { state, chatLog, handleAgentEvent, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-validation-loop", sessionInfo: { verboseLevel: "off" } },
+    });
+
+    handleAgentEvent({
+      runId: "run-validation-loop",
+      seq: 2,
+      stream: "tool",
+      data: {
+        phase: "result",
+        toolErrorSummary: "edit tool validation failed: invalid arguments",
+      },
+      sessionKey: state.currentSessionKey,
+    });
+    handleAgentEvent({
+      runId: "run-validation-loop",
+      seq: 1,
+      stream: "lifecycle",
+      data: { phase: "start" },
+      sessionKey: state.currentSessionKey,
+    });
+    handleChatEvent({
+      runId: "run-validation-loop",
+      sessionKey: state.currentSessionKey,
+      state: "aborted",
+    });
+
+    expect(chatLog.addSystem).toHaveBeenCalledWith(
+      "run aborted: edit tool validation failed: invalid arguments",
+    );
+  });
+
   it("sanitizes untrusted abort diagnostics before rendering", () => {
     const { state, chatLog, handleChatEvent } = createHandlersHarness({
       state: { activeChatRunId: "run-hostile" },

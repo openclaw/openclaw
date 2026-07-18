@@ -1,6 +1,6 @@
 // Authorization and pending-run state transitions for chat cancellation.
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { normalizeAgentId } from "../../routing/session-key.js";
+import { classifySessionKeyShape, normalizeAgentId } from "../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import type { QueuedChatTurnEntry } from "../chat-queued-turns.js";
@@ -56,7 +56,13 @@ const CHANNEL_AGNOSTIC_SESSION_SCOPES = new Set([
 ]);
 
 function isExplicitChannelScopedSessionKey(sessionKey: string): boolean {
-  const scoped = parseAgentSessionKey(sessionKey)?.rest ?? sessionKey;
+  const parsed = parseAgentSessionKey(sessionKey);
+  // `agent:<id>` is a broad UI alias, not a channel identity. Keep malformed
+  // agent wrappers fail-closed so they cannot reveal hidden channel runs.
+  if (!parsed && classifySessionKeyShape(sessionKey) === "malformed_agent") {
+    return false;
+  }
+  const scoped = parsed?.rest ?? sessionKey;
   const parts = scoped
     .split(":", 3)
     .map((part) => part.trim().toLowerCase())

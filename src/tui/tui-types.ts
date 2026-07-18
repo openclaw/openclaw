@@ -67,6 +67,7 @@ export type SessionChangedEvent = {
 
 export type AgentEvent = {
   runId: string;
+  seq?: number;
   stream: string;
   data?: Record<string, unknown>;
   // Stamped by the gateway on every emitted payload (see infra/agent-events.ts).
