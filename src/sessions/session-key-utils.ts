@@ -476,3 +476,19 @@ export function parseRawSessionConversationRef(
 
   return { channel, kind, rawId, prefix };
 }
+
+import { deriveSessionChatTypeFromScopedKey } from "./session-chat-type-base.js";
+
+export function isSharedChannelSessionKey(sessionKey: string | undefined | null): boolean {
+  const route = parseSessionDeliveryRoute(sessionKey);
+  if (route) {
+    return route.peerKind === "group" || route.peerKind === "channel";
+  }
+  const raw = normalizeLowercaseStringOrEmpty(sessionKey);
+  if (!raw) {
+    return false;
+  }
+  const scoped = parseAgentSessionKey(raw)?.rest ?? raw;
+  const chatType = deriveSessionChatTypeFromScopedKey(scoped);
+  return chatType === "group" || chatType === "channel";
+}
