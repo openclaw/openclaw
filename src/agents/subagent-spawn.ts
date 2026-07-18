@@ -28,6 +28,7 @@ import {
   resolveThreadBindingSpawnPolicy,
 } from "../channels/thread-bindings-policy.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { SandboxToolPolicy } from "./sandbox/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SubagentSpawnPreparation } from "../context-engine/types.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
@@ -183,6 +184,8 @@ type SpawnSubagentContext = {
   workspaceDir?: string;
   inheritedToolAllowlist?: string[];
   inheritedToolDenylist?: string[];
+  /** Parent's resolved senderPolicy carried to the spawned child session. */
+  inheritedSenderPolicy?: SandboxToolPolicy;
 };
 
 type SpawnSubagentResult = {
@@ -312,6 +315,9 @@ function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<S
   const inheritedToolAllow = normalizeInheritedToolAllowlist(patch.inheritedToolAllow);
   if (inheritedToolAllow.length > 0) {
     entry.inheritedToolAllow = inheritedToolAllow;
+  }
+  if (patch.inheritedSenderPolicy && typeof patch.inheritedSenderPolicy === "object") {
+    entry.inheritedSenderPolicy = patch.inheritedSenderPolicy;
   }
   if (typeof patch.thinkingLevel === "string" && patch.thinkingLevel.trim()) {
     entry.thinkingLevel = patch.thinkingLevel.trim();
@@ -1300,6 +1306,7 @@ export async function spawnSubagentDirect(
     subagentControlScope: childCapabilities.controlScope,
     ...inheritedToolAllowPatch(ctx.inheritedToolAllowlist),
     ...inheritedToolDenyPatch(ctx.inheritedToolDenylist),
+    ...(ctx.inheritedSenderPolicy ? { inheritedSenderPolicy: ctx.inheritedSenderPolicy } : {}),
     ...plan.initialSessionPatch,
   };
 

@@ -998,6 +998,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             oneShotCliRun: options?.oneShotCliRun,
             inheritedToolAllowlist,
             inheritedToolDenylist,
+            inheritedSenderPolicy: senderPolicy,
             onYield: options?.onYield,
             allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
             recordToolPrepStage: options?.recordToolPrepStage,

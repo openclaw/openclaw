@@ -24,6 +24,7 @@ import {
   normalizeInheritedToolAllowlist,
   normalizeInheritedToolDenylist,
 } from "./inherited-tool-deny.js";
+import type { SandboxToolPolicy } from "./sandbox/types.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 
 /** Resolved role for a main session, orchestrating subagent, or leaf subagent. */
@@ -45,6 +46,7 @@ type SessionCapabilityEntry = {
   spawnedBy?: unknown;
   inheritedToolAllow?: unknown;
   inheritedToolDeny?: unknown;
+  inheritedSenderPolicy?: unknown;
 };
 
 /** Minimal persisted session-store shape needed to resolve subagent capabilities. */
@@ -58,6 +60,7 @@ export type SessionCapabilityStore = Record<
     spawnedBy?: unknown;
     inheritedToolAllow?: unknown;
     inheritedToolDeny?: unknown;
+    inheritedSenderPolicy?: unknown;
   }
 >;
 
@@ -382,4 +385,40 @@ export function resolveStoredSubagentInheritedToolAllowlist(
     store,
   });
   return normalizeInheritedToolAllowlist(entry?.inheritedToolAllow);
+}
+
+/**
+ * Resolve a stored parent sender policy inherited by a subagent session.
+ * Returns the parent's resolved senderPolicy, or undefined if none was stored.
+ */
+export function resolveStoredSenderPolicy(
+  sessionKey: string | undefined | null,
+  opts?: {
+    cfg?: OpenClawConfig;
+    store?: SessionCapabilityStore;
+  },
+): SandboxToolPolicy | undefined {
+  const normalizedSessionKey = normalizeOptionalString(sessionKey);
+  if (!normalizedSessionKey || !shouldInspectStoredSubagentEnvelope(normalizedSessionKey)) {
+    return undefined;
+  }
+  const store = resolveSubagentCapabilityStore(normalizedSessionKey, opts);
+  const entry = resolveSessionCapabilityEntry({
+    sessionKey: normalizedSessionKey,
+    cfg: opts?.cfg,
+    store,
+  });
+  const raw = entry?.inheritedSenderPolicy;
+  if (!raw || typeof raw !== "object") {
+    return undefined;
+  }
+  const policy = raw as Record<string, unknown>;
+  const result: SandboxToolPolicy = {};
+  if (Array.isArray(policy.allow)) {
+    result.allow = policy.allow as string[];
+  }
+  if (Array.isArray(policy.deny)) {
+    result.deny = policy.deny as string[];
+  }
+  return result.allow || result.deny ? result : undefined;
 }

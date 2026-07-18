@@ -394,6 +394,7 @@ export function createSessionsSpawnTool(
             sandboxed: opts?.sandboxed,
             inheritedToolAllowlist: opts?.inheritedToolAllowlist,
             inheritedToolDenylist: opts?.inheritedToolDenylist,
+            inheritedSenderPolicy: opts?.inheritedSenderPolicy,
           },
         );
         const childSessionKey = result.childSessionKey?.trim();
@@ -491,6 +492,7 @@ export function createSessionsSpawnTool(
           workspaceDir: opts?.workspaceDir,
           inheritedToolAllowlist: opts?.inheritedToolAllowlist,
           inheritedToolDenylist: opts?.inheritedToolDenylist,
+          inheritedSenderPolicy: opts?.inheritedSenderPolicy,
         },
       );
 

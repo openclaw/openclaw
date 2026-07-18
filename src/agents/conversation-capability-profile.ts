@@ -24,6 +24,7 @@ import { resolveSenderToolPolicy } from "./sender-tool-policy.js";
 import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
+  resolveStoredSenderPolicy,
 } from "./subagent-capabilities.js";
 import type { PromptMode } from "./system-prompt.types.js";
 import {
@@ -224,15 +225,20 @@ export function resolveConversationCapabilityProfile(
     });
   // Owner WebChat intentionally has no external sender identity. Its trusted
   // owner state must not fall through to the wildcard policy for guests.
-  // Spawned subagents inherit the parent's already-resolved sender policy and
-  // must not re-resolve without a sender identity, which would match the
-  // wildcard "*" entry and strip filesystem/runtime tools.
+  // Spawned subagents inherit the parent's already-resolved sender policy so
+  // the authorization ceiling (both allow and deny) is preserved. When no
+  // stored policy exists (pre-existing sessions), undefined is safe — the
+  // parent already resolved the correct policy during spawn.
   const isOwnerInternalSession =
     params.senderIsOwner === true &&
     normalizeMessageChannel(messageProvider ?? params.messageChannel) === INTERNAL_MESSAGE_CHANNEL;
-  const senderPolicy =
-    isOwnerInternalSession || isSubagentSession
-      ? undefined
+  const senderPolicy = isOwnerInternalSession
+    ? undefined
+    : isSubagentSession
+      ? resolveStoredSenderPolicy(subagentSessionKey, {
+          cfg: params.config,
+          store: subagentStore,
+        })
       : resolveSenderToolPolicy({
           config: params.config,
           agentId: effective.agentId,

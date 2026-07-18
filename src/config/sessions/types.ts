@@ -292,6 +292,8 @@ export type SessionEntry = SessionRestartRecoveryState &
     inheritedToolDeny?: string[];
     /** Session-scoped tool allow entries inherited from the caller that created this session. */
     inheritedToolAllow?: string[];
+    /** Parent's resolved sender policy carried to a spawned child session. */
+    inheritedSenderPolicy?: unknown;
     systemSent?: boolean;
     abortedLastRun?: boolean;
     /** Interrupted run generations whose late lifecycle events must be ignored. */

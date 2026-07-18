@@ -7,6 +7,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveAgentWorkspaceDir } from "./agent-scope.js";
+import type { SandboxToolPolicy } from "./sandbox/types.js";
 
 export type SpawnedRunMetadata = {
   spawnedBy?: string | null;
@@ -24,6 +25,8 @@ export type SpawnedToolContext = {
   workspaceDir?: string;
   inheritedToolAllowlist?: string[];
   inheritedToolDenylist?: string[];
+  /** Parent's resolved senderPolicy carried to the spawned child. */
+  inheritedSenderPolicy?: SandboxToolPolicy;
 };
 
 type NormalizedSpawnedRunMetadata = {

@@ -292,22 +292,20 @@ describe("applyFinalEffectiveToolPolicy", () => {
     expect(filtered).toStrictEqual([]);
   });
 
-  // ──  fix #109025: sender-scoped tool policy for subagents  ──────────────
+  // ──  fix #109025: carry parent sender-policy ceiling for subagents  ──────
   //
   //  A spawned subagent has no external sender identity, so
   //  `resolveSenderToolPolicy` would fall through all exact sender matchers
   //  and return the wildcard "*" entry, stripping filesystem/runtime tools.
-  //  The fix skips sender-policy resolution for recognized subagent
-  //  envelopes (`isSubagentEnvelopeSession`), letting the child inherit the
-  //  parent's already-resolved policy. Subagent restrictions are still
-  //  applied independently so the final clamp is preserved.
+  //  The fix carries the parent's resolved senderPolicy into the child's
+  //  session store entry during spawn, then reads it back when resolving the
+  //  child's capability profile. This preserves both allow AND deny ceilings.
   //
-  //  1. Parent with exact E164 identity   → all tools pass sender policy
-  //  2. Anonymous user (no sender fields)  → wildcard deny strips tools
-  //  3. Spawned subagent from E164 parent  → senderPolicy skipped, subagent
-  //     restrictions still narrow the final inventory
-  //  4. Spawned subagent without subagent  → subagent restrictions still
-  //     restrict (inherited allowlist applies on top)
+  //  1. Parent with exact E164 allow     → all tools pass sender policy
+  //  2. Anonymous (no sender fields)     → wildcard deny strips tools
+  //  3. Subagent (no sender fields)      → inherited allow from store
+  //  4. Subagent + subagent denies       → inherited allow + subagent deny
+  //  5. Subagent with inherited deny     → parent's deny ceiling preserved
 
   it("fix #109025: parent with E164 gets exact toolsBySender allow (no denies)", () => {
     // WhatsApp parent with E164 → exact allow override, no wildcard denies
@@ -355,14 +353,30 @@ describe("applyFinalEffectiveToolPolicy", () => {
     expect(filtered.map((t) => t.name)).toEqual(["message"]);
   });
 
-  it("fix #109025: spawned subagent skips sender policy, retains parent tools", () => {
-    // Subagent with subagent session key → isSubagentEnvelopeSession
-    // detected → senderPolicy = undefined (skipped), so exec/fs_read survive
-    // the sender-policy step. Subagent restrictions still apply but nothing
-    // is configured here, so all tools pass.
+  it("fix #109025: subagent inherits parent allow policy via stored senderPolicy", async () => {
+    // Realistic subagent scenario: subagent has NO sender fields, but the
+    // parent's resolved senderPolicy was stored during spawn as
+    // inheritedSenderPolicy in the session store entry.
+    const agentId = `subagent-allow-inherit-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const sessionKey = `agent:${agentId}:subagent:child`;
+    const storePath = createSessionStorePath("openclaw-subagent-allow-inherit", agentId);
+    await writeSessionEntries(storePath, {
+      [sessionKey]: {
+        sessionId: "child-session",
+        updatedAt: Date.now(),
+        spawnDepth: 1,
+        subagentRole: "orchestrator",
+        subagentControlScope: "children",
+        // Parent had exact E164 allow:["*"] override stored during spawn
+        inheritedSenderPolicy: { allow: ["*"] },
+      },
+    });
+
+    // No sender fields — resolveStoredSenderPolicy reads from store
     const filtered = applyFinalPolicy({
       bundledTools: [makeTool("exec"), makeTool("fs_read"), makeTool("message")],
       config: {
+        session: { store: storePath },
         tools: {
           toolsBySender: {
             "e164:+1234567890": { allow: ["*"] },
@@ -370,24 +384,36 @@ describe("applyFinalEffectiveToolPolicy", () => {
           },
         },
       },
-      sessionKey: "subagent:child::main",
-      sandboxSessionKey: "subagent:child::main",
-      spawnedBy: "main",
+      sessionKey,
+      sandboxSessionKey: sessionKey,
+      spawnedBy: "parent",
       messageProvider: "whatsapp",
-      senderE164: "+1234567890",
-      senderIsOwner: false,
       warn: () => {},
     });
 
-    // Subagent inherits parent's tools via senderPolicy skip
+    // Subagent inherits parent's allow — wildcard deny not applied
     expect(filtered.map((t) => t.name)).toEqual(
       expect.arrayContaining(["exec", "fs_read", "message"]),
     );
   });
 
-  it("fix #109025: subagent restrictions still narrow tools after sender-policy skip", () => {
-    // Subagent skips sender policy (retains parent tools), but
-    // subagent tools.deny still removes the configured restricted tools.
+  it("fix #109025: subagent restrictions still narrow tools after inheritance", async () => {
+    // Subagent inherits parent's allow policy, but subagent tools.deny
+    // still removes the configured restricted tools.
+    const agentId = `subagent-restrict-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const sessionKey = `agent:${agentId}:subagent:restricted`;
+    const storePath = createSessionStorePath("openclaw-subagent-restrict", agentId);
+    await writeSessionEntries(storePath, {
+      [sessionKey]: {
+        sessionId: "restricted-session",
+        updatedAt: Date.now(),
+        spawnDepth: 1,
+        subagentRole: "orchestrator",
+        subagentControlScope: "children",
+        inheritedSenderPolicy: { allow: ["*"] },
+      },
+    });
+
     const filtered = applyFinalPolicy({
       bundledTools: [
         makeTool("exec"),
@@ -396,6 +422,7 @@ describe("applyFinalEffectiveToolPolicy", () => {
         makeTool("message"),
       ],
       config: {
+        session: { store: storePath },
         tools: {
           toolsBySender: {
             "e164:+1234567890": { allow: ["*"] },
@@ -408,20 +435,65 @@ describe("applyFinalEffectiveToolPolicy", () => {
           },
         },
       },
-      sessionKey: "subagent:child::main",
-      sandboxSessionKey: "subagent:child::main",
-      spawnedBy: "main",
+      sessionKey,
+      sandboxSessionKey: sessionKey,
+      spawnedBy: "parent",
       messageProvider: "whatsapp",
-      senderE164: "+1234567890",
-      senderIsOwner: false,
       warn: () => {},
     });
 
-    // Subagent retains exec and fs_read (sender policy skipped), but
+    // Subagent retains exec and fs_read (inherited allow), but
     // fs_write is removed by the subagent restriction layer
     expect(filtered.map((t) => t.name)).toEqual(
       expect.arrayContaining(["exec", "fs_read", "message"]),
     );
     expect(filtered.map((t) => t.name)).not.toContain("fs_write");
+  });
+
+  it("fix #109025: subagent inherits parent deny ceiling — no privilege escalation", async () => {
+    // Parent had exact E164 deny:["exec","fs_read"] — the child must NOT
+    // regain those tools even though it has no sender fields.
+    const agentId = `subagent-deny-ceiling-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const sessionKey = `agent:${agentId}:subagent:denied`;
+    const storePath = createSessionStorePath("openclaw-subagent-deny-ceiling", agentId);
+    await writeSessionEntries(storePath, {
+      [sessionKey]: {
+        sessionId: "denied-session",
+        updatedAt: Date.now(),
+        spawnDepth: 1,
+        subagentRole: "orchestrator",
+        subagentControlScope: "children",
+        // Parent had exact deny — child must also have this ceiling
+        inheritedSenderPolicy: { deny: ["exec", "fs_read"] },
+      },
+    });
+
+    const filtered = applyFinalPolicy({
+      bundledTools: [
+        makeTool("exec"),
+        makeTool("fs_read"),
+        makeTool("fs_write"),
+        makeTool("message"),
+      ],
+      config: {
+        session: { store: storePath },
+        tools: {
+          toolsBySender: {
+            "e164:+1234567890": { deny: ["exec", "fs_read"] },
+            "*": { allow: ["*"] },
+          },
+        },
+      },
+      sessionKey,
+      sandboxSessionKey: sessionKey,
+      spawnedBy: "parent",
+      messageProvider: "whatsapp",
+      warn: () => {},
+    });
+
+    // Subagent loses exec and fs_read — parent's deny ceiling preserved
+    expect(filtered.map((t) => t.name)).toEqual(expect.arrayContaining(["fs_write", "message"]));
+    expect(filtered.map((t) => t.name)).not.toContain("exec");
+    expect(filtered.map((t) => t.name)).not.toContain("fs_read");
   });
 });
