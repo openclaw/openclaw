@@ -857,4 +857,50 @@ describe("exec approvals CLI", () => {
       "Exec approvals stdin exceeds 5 bytes.",
     );
   });
+
+  it("bounds approvals JSON read from --file via readRegularFile", async () => {
+    const dir = tempDirs.make("openclaw-approvals-file-bound-");
+    const normalPath = path.join(dir, "normal.json");
+    const oversizedPath = path.join(dir, "oversized.json");
+    fs.writeFileSync(normalPath, JSON.stringify({ defaultAction: "deny", rules: [] }));
+    fs.writeFileSync(oversizedPath, Buffer.alloc(1024 * 1024 + 1, "x"));
+
+    const mockSnapshot = {
+      enabled: true,
+      hash: "sha256:current",
+      defaultAction: "deny",
+      rules: [],
+    } as never;
+
+    // Normal file (under limit) with valid JSON should succeed.
+    callGatewayFromCli.mockResolvedValue(mockSnapshot);
+    await runApprovalsCommand([
+      "approvals",
+      "set",
+      "--node",
+      "windows",
+      "--file",
+      normalPath,
+      "--json",
+    ]);
+    expect(callGatewayFromCli).toHaveBeenCalled();
+    expect(runtimeErrors).toHaveLength(0);
+
+    // Oversized file (> 1 MiB) should be rejected before the gateway call.
+    callGatewayFromCli.mockClear();
+    callGatewayFromCli.mockResolvedValue(mockSnapshot);
+    await expect(
+      runApprovalsCommand(["approvals", "set", "--node", "windows", "--file", oversizedPath]),
+    ).rejects.toThrow("__exit__:1");
+    expect(runtimeErrors[0]).toContain("exceeds");
+
+    // Non-regular path (directory) should be rejected.
+    runtimeErrors.length = 0;
+    callGatewayFromCli.mockClear();
+    callGatewayFromCli.mockResolvedValue(mockSnapshot);
+    await expect(
+      runApprovalsCommand(["approvals", "set", "--node", "windows", "--file", dir]),
+    ).rejects.toThrow("__exit__:1");
+    expect(runtimeErrors[0]).toContain("regular file");
+  });
 });
