@@ -6,6 +6,7 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent
 import { DEFAULT_AGENTS_FILENAME } from "../agents/workspace.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { readRegularFile } from "../infra/regular-file.js";
 import {
   CANONICAL_ROOT_MEMORY_FILENAME,
   LEGACY_ROOT_MEMORY_FILENAME,
@@ -15,6 +16,8 @@ import {
 } from "../memory/root-memory-files.js";
 import { shortenHomePath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
+
+const WORKSPACE_DOCTOR_MAX_BYTES = 10 * 1024 * 1024;
 
 export const MEMORY_SYSTEM_PROMPT = [
   "Memory system not found in workspace.",
@@ -41,7 +44,7 @@ export async function shouldSuggestMemorySystem(workspaceDir: string): Promise<b
 
   const agentsPath = path.join(workspaceDir, DEFAULT_AGENTS_FILENAME);
   try {
-    const content = await fs.promises.readFile(agentsPath, "utf-8");
+    const content = await readRegularFile({ filePath: agentsPath, maxBytes: WORKSPACE_DOCTOR_MAX_BYTES });
     if (new RegExp(`\\b${CANONICAL_ROOT_MEMORY_FILENAME.replace(".", "\\.")}\\b`).test(content)) {
       return false;
     }
@@ -208,8 +211,8 @@ export async function migrateLegacyRootMemoryFile(
     legacyPath: detection.legacyPath,
   });
   const [canonicalText, legacyText] = await Promise.all([
-    fs.promises.readFile(detection.canonicalPath, "utf-8"),
-    fs.promises.readFile(archivedLegacyPath, "utf-8"),
+    readRegularFile({ filePath: detection.canonicalPath, maxBytes: WORKSPACE_DOCTOR_MAX_BYTES }),
+    readRegularFile({ filePath: archivedLegacyPath, maxBytes: WORKSPACE_DOCTOR_MAX_BYTES }),
   ]);
   if (canonicalText !== legacyText) {
     const merged = `${canonicalText.trimEnd()}\n${buildMergedLegacyRootMemorySection({
