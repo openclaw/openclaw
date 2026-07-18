@@ -90,6 +90,76 @@ describe("root memory repair", () => {
     await expect(fs.access(migration.archivedLegacyPath)).resolves.toBeUndefined();
   });
 
+  it("reads legacy content after moving it into the archive", async () => {
+    const canonicalPath = path.join(tmpDir, "MEMORY.md");
+    const legacyPath = path.join(tmpDir, "memory.md");
+    await fs.writeFile(canonicalPath, "# Canonical\n", "utf8");
+    await fs.writeFile(legacyPath, "# Legacy\n", "utf8");
+
+    const rename = vi.spyOn(fs, "rename");
+    rename.mockImplementationOnce(async (sourcePath, targetPath) => {
+      await fs.appendFile(sourcePath, "# Added before archive\n", "utf8");
+      rename.mockRestore();
+      await fs.rename(sourcePath, targetPath);
+    });
+
+    const migration = await migrateLegacyRootMemoryFile(tmpDir);
+
+    expect(migration.changed).toBe(true);
+    const canonical = await fs.readFile(canonicalPath, "utf8");
+    expect(canonical).toContain("# Legacy");
+    expect(canonical).toContain("# Added before archive");
+  });
+
+  it("restores the legacy path when the archived file grows past the read limit", async () => {
+    const canonicalPath = path.join(tmpDir, "MEMORY.md");
+    const legacyPath = path.join(tmpDir, "memory.md");
+    await fs.writeFile(canonicalPath, "# Canonical\n", "utf8");
+    await fs.writeFile(legacyPath, "# Legacy\n", "utf8");
+
+    const rename = vi.spyOn(fs, "rename");
+    rename.mockImplementationOnce(async (sourcePath, targetPath) => {
+      await fs.appendFile(sourcePath, Buffer.alloc(9 * 1024 * 1024));
+      rename.mockRestore();
+      await fs.rename(sourcePath, targetPath);
+    });
+
+    const migration = await migrateLegacyRootMemoryFile(tmpDir);
+
+    expect(migration.changed).toBe(false);
+    expect(migration.removedLegacy).toBe(false);
+    expect(migration.readLimitExceeded).toBe(true);
+    await expect(fs.readFile(legacyPath, "utf8")).resolves.toContain("# Legacy");
+  });
+
+  it("preserves the archive when the legacy path cannot be restored", async () => {
+    const canonicalPath = path.join(tmpDir, "MEMORY.md");
+    const legacyPath = path.join(tmpDir, "memory.md");
+    await fs.writeFile(canonicalPath, "# Canonical\n", "utf8");
+    await fs.writeFile(legacyPath, "# Legacy\n", "utf8");
+
+    const rename = vi.spyOn(fs, "rename");
+    rename.mockImplementationOnce(async (sourcePath, targetPath) => {
+      await fs.appendFile(sourcePath, Buffer.alloc(9 * 1024 * 1024));
+      rename.mockRestore();
+      await fs.rename(sourcePath, targetPath);
+    });
+    vi.spyOn(fs, "link").mockRejectedValueOnce(
+      Object.assign(new Error("hard links unavailable"), { code: "EPERM" }),
+    );
+
+    const migration = await migrateLegacyRootMemoryFile(tmpDir);
+
+    expect(migration.changed).toBe(true);
+    expect(migration.removedLegacy).toBe(true);
+    expect(migration.readLimitExceeded).toBe(true);
+    if (!migration.archivedLegacyPath) {
+      throw new Error("expected preserved archive path");
+    }
+    await expectPathMissing(legacyPath);
+    await expect(fs.access(migration.archivedLegacyPath)).resolves.toBeUndefined();
+  });
+
   it("warns and repairs split-brain root memory through workspace doctor helpers", async () => {
     await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Canonical\n", "utf8");
     await fs.writeFile(path.join(tmpDir, "memory.md"), "# Legacy\n", "utf8");
@@ -226,5 +296,30 @@ describe("root memory repair", () => {
     expect(repairLines).toContain(`- canonical: ${path.join(tmpDir, "MEMORY.md")}`);
     expect(repairLines).toContain(`- legacy: ${path.join(tmpDir, "memory.md")}`);
     expect(repairNote?.[1]).toBe("Doctor changes");
+  });
+
+  it("reports a preserved archive when a failed repair cannot restore legacy", async () => {
+    const canonicalPath = path.join(tmpDir, "MEMORY.md");
+    const legacyPath = path.join(tmpDir, "memory.md");
+    await fs.writeFile(canonicalPath, "# Canonical\n", "utf8");
+    await fs.writeFile(legacyPath, "# Legacy\n", "utf8");
+    const cfg = { agents: { defaults: { workspace: tmpDir } } } as OpenClawConfig;
+    const prompter = {
+      confirmRuntimeRepair: vi.fn(async () => true),
+    } as unknown as DoctorPrompter;
+    const rename = vi.spyOn(fs, "rename");
+    rename.mockImplementationOnce(async (sourcePath, targetPath) => {
+      await fs.appendFile(sourcePath, Buffer.alloc(9 * 1024 * 1024));
+      rename.mockRestore();
+      await fs.rename(sourcePath, targetPath);
+    });
+    vi.spyOn(fs, "link").mockRejectedValueOnce(
+      Object.assign(new Error("hard links unavailable"), { code: "EPERM" }),
+    );
+
+    await maybeRepairWorkspaceMemoryHealth({ cfg, prompter });
+
+    const repairLines = String(firstNoteCall()?.[0] ?? "").split("\n");
+    expect(repairLines).toContainEqual(expect.stringContaining("- preserved archive: "));
   });
 });

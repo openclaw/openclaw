@@ -180,16 +180,29 @@ async function moveLegacyRootMemoryFileToArchive(params: {
   );
   await fs.promises.mkdir(archiveDir, { recursive: true });
   const archivePath = path.join(archiveDir, LEGACY_ROOT_MEMORY_FILENAME);
-  try {
-    await fs.promises.rename(params.legacyPath, archivePath);
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException | undefined)?.code !== "EXDEV") {
-      throw err;
-    }
-    await fs.promises.copyFile(params.legacyPath, archivePath);
-    await fs.promises.unlink(params.legacyPath);
-  }
+  // Source and repair archive live under one workspace. If a mounted file makes
+  // this cross-device, fail before mutation instead of copying an unbounded file.
+  await fs.promises.rename(params.legacyPath, archivePath);
   return archivePath;
+}
+
+async function restoreArchivedLegacyRootMemoryFile(params: {
+  archivedLegacyPath: string;
+  legacyPath: string;
+}): Promise<boolean> {
+  try {
+    // The successful archive rename proves both paths share a filesystem.
+    // link() restores atomically without overwriting a concurrent replacement.
+    await fs.promises.link(params.archivedLegacyPath, params.legacyPath);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException | undefined)?.code;
+    if (code === "EEXIST" || code === "EPERM" || code === "EOPNOTSUPP" || code === "ENOSYS") {
+      return false;
+    }
+    throw err;
+  }
+  await fs.promises.unlink(params.archivedLegacyPath);
+  return true;
 }
 
 function buildMergedLegacyRootMemorySection(params: {
@@ -222,22 +235,7 @@ export async function migrateLegacyRootMemoryFile(
       mergedLegacy: false,
     };
   }
-  let canonicalText: string;
-  let legacyText: string;
-  try {
-    [canonicalText, legacyText] = await Promise.all([
-      readRegularFile({
-        filePath: detection.canonicalPath,
-        maxBytes: ROOT_MEMORY_FILE_MAX_BYTES,
-      }).then(({ buffer }) => buffer.toString("utf-8")),
-      readRegularFile({
-        filePath: detection.legacyPath,
-        maxBytes: ROOT_MEMORY_FILE_MAX_BYTES,
-      }).then(({ buffer }) => buffer.toString("utf-8")),
-    ]);
-  } catch (err) {
-    // One of the files is unreadable or exceeds the safe read cap. Leave both
-    // files in place and do not attempt a memory merge.
+  const skippedForReadFailure = (err: unknown): RootMemoryMigrationResult => {
     const isTooLarge =
       typeof err === "object" &&
       err !== null &&
@@ -253,11 +251,56 @@ export async function migrateLegacyRootMemoryFile(
       readLimitExceeded: isTooLarge,
       readError: !isTooLarge,
     };
+  };
+  try {
+    // Reject oversized, unreadable, symlinked, or non-regular inputs before the
+    // archive rename. The archived snapshot is read again after the atomic move.
+    await Promise.all([
+      readRegularFile({
+        filePath: detection.canonicalPath,
+        maxBytes: ROOT_MEMORY_FILE_MAX_BYTES,
+      }),
+      readRegularFile({
+        filePath: detection.legacyPath,
+        maxBytes: ROOT_MEMORY_FILE_MAX_BYTES,
+      }),
+    ]);
+  } catch (err) {
+    return skippedForReadFailure(err);
   }
   const archivedLegacyPath = await moveLegacyRootMemoryFileToArchive({
     workspaceDir: detection.workspaceDir,
     legacyPath: detection.legacyPath,
   });
+  let canonicalText: string;
+  let legacyText: string;
+  try {
+    [canonicalText, legacyText] = await Promise.all([
+      readRegularFile({
+        filePath: detection.canonicalPath,
+        maxBytes: ROOT_MEMORY_FILE_MAX_BYTES,
+      }).then(({ buffer }) => buffer.toString("utf-8")),
+      readRegularFile({
+        filePath: archivedLegacyPath,
+        maxBytes: ROOT_MEMORY_FILE_MAX_BYTES,
+      }).then(({ buffer }) => buffer.toString("utf-8")),
+    ]);
+  } catch (err) {
+    const skipped = skippedForReadFailure(err);
+    const restored = await restoreArchivedLegacyRootMemoryFile({
+      archivedLegacyPath,
+      legacyPath: detection.legacyPath,
+    });
+    if (restored) {
+      return skipped;
+    }
+    return {
+      ...skipped,
+      changed: true,
+      removedLegacy: true,
+      archivedLegacyPath,
+    };
+  }
   if (canonicalText !== legacyText) {
     const merged = `${canonicalText.trimEnd()}\n${buildMergedLegacyRootMemorySection({
       legacyText,
@@ -318,7 +361,12 @@ export async function maybeRepairWorkspaceMemoryHealth(params: {
           "Workspace memory root repair skipped (a file exceeded the safe read limit):",
           `- canonical: ${migration.canonicalPath}`,
           `- legacy: ${migration.legacyPath}`,
-        ].join("\n"),
+          migration.archivedLegacyPath
+            ? `- preserved archive: ${migration.archivedLegacyPath}`
+            : null,
+        ]
+          .filter((line): line is string => Boolean(line))
+          .join("\n"),
         "Doctor changes",
       );
       return;
@@ -329,7 +377,12 @@ export async function maybeRepairWorkspaceMemoryHealth(params: {
           "Workspace memory root repair skipped (a file could not be read):",
           `- canonical: ${migration.canonicalPath}`,
           `- legacy: ${migration.legacyPath}`,
-        ].join("\n"),
+          migration.archivedLegacyPath
+            ? `- preserved archive: ${migration.archivedLegacyPath}`
+            : null,
+        ]
+          .filter((line): line is string => Boolean(line))
+          .join("\n"),
         "Doctor changes",
       );
       return;
