@@ -328,7 +328,7 @@ export default async function extension(api) {
     // encounters a file exceeding MAX_EXTENSION_SOURCE_BYTES (10 MiB), it returns true
     // (jiti needed) instead of trying to read the source. The function already returns
     // true on any error, so the stat pre-check integrates naturally.
-    const { loadExtensions } = await import("./loader.js");
+    const { loadExtensionsCached: loadExtensions } = await import("./loader.js");
     const dir = await mkdtemp(join(tmpdir(), "openclaw-extension-js-"));
     tempDirs.push(dir);
     const extensionPath = join(dir, "extension.js");
