@@ -99,6 +99,7 @@ import type {
 } from "./types.js";
 
 const log = createSubsystemLogger("plugins/provider-runtime");
+const PROVIDER_MODEL_CATALOG_AUGMENT_TIMEOUT_MS = 15_000;
 const warnedExternalAuthFallbackPluginIds = new Set<string>();
 
 function matchesProviderPluginRef(provider: ProviderPlugin, providerId: string): boolean {
@@ -1115,7 +1116,26 @@ export async function augmentModelCatalogWithProviderPlugins(params: {
 }) {
   const supplemental = [] as ProviderAugmentModelCatalogContext["entries"];
   for (const plugin of resolveProviderPluginsForCatalogHooks(params)) {
-    const next = await plugin.augmentModelCatalog?.(params.context);
+    const timedOut = Symbol("provider-model-catalog-augment-timeout");
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const next = await Promise.race([
+      Promise.resolve().then(() => plugin.augmentModelCatalog?.(params.context)),
+      new Promise<typeof timedOut>((resolve) => {
+        timer = setTimeout(() => resolve(timedOut), PROVIDER_MODEL_CATALOG_AUGMENT_TIMEOUT_MS);
+        timer.unref?.();
+      }),
+    ]).finally(() => {
+      if (timer) {
+        clearTimeout(timer);
+      }
+    });
+    if (next === timedOut) {
+      const pluginId = plugin.pluginId ?? plugin.id;
+      log.warn(
+        `Provider plugin "${sanitizeForLog(pluginId)}" augmentModelCatalog hook timed out after ${PROVIDER_MODEL_CATALOG_AUGMENT_TIMEOUT_MS}ms; skipping hook and continuing catalog discovery`,
+      );
+      continue;
+    }
     if (!next || next.length === 0) {
       continue;
     }

@@ -1095,6 +1095,60 @@ describe("provider-runtime", () => {
     expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(2);
   });
 
+  it("continues catalog augmentation after a plugin times out", async () => {
+    vi.useFakeTimers();
+    try {
+      const augmentHealthyCatalog = vi.fn(() => [
+        { provider: "healthy", id: "healthy-model", name: "Healthy Model" },
+      ]);
+      resolveCatalogHookProviderPluginIdsMock.mockReturnValue(["hung-plugin", "healthy-plugin"]);
+      resolvePluginProvidersMock.mockReturnValue([
+        {
+          id: "hung",
+          pluginId: "hung-plugin\nWARN forged",
+          label: "Hung Provider",
+          auth: [],
+          augmentModelCatalog: () => new Promise(() => {}),
+        },
+        {
+          id: "healthy",
+          pluginId: "healthy-plugin",
+          label: "Healthy Provider",
+          auth: [],
+          augmentModelCatalog: augmentHealthyCatalog,
+        },
+      ]);
+
+      const catalogLoad = augmentModelCatalogWithProviderPlugins({
+        env: process.env,
+        context: { env: process.env, entries: [] },
+      });
+      const outcome = Promise.race([
+        catalogLoad.then((entries) => ({ status: "resolved", entries }) as const),
+        new Promise<{ status: "blocked" }>((resolve) => {
+          setTimeout(() => resolve({ status: "blocked" }), 60_000);
+        }),
+      ]);
+
+      await vi.runAllTimersAsync();
+
+      await expect(outcome).resolves.toEqual({
+        status: "resolved",
+        entries: [{ provider: "healthy", id: "healthy-model", name: "Healthy Model" }],
+      });
+      expect(augmentHealthyCatalog).toHaveBeenCalledTimes(1);
+      expect(providerRuntimeWarnMock).toHaveBeenCalledTimes(1);
+      const warning = firstMockStringArg(providerRuntimeWarnMock, "provider warning");
+      expect(warning).toContain('Provider plugin "hung-pluginWARN forged"');
+      expect(warning).toContain(
+        "augmentModelCatalog hook timed out after 15000ms; skipping hook and continuing catalog discovery",
+      );
+      expect(warning).not.toContain("\n");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("returns provider-prepared runtime auth for the matched provider", async () => {
     const prepareRuntimeAuth = vi.fn(async () => ({
       apiKey: "runtime-token",
