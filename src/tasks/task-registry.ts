@@ -244,7 +244,18 @@ function ensureTaskCancellationReady(task: TaskRecord): void {
   }
 }
 
-function snapshotTaskRecords(source: ReadonlyMap<string, TaskRecord>): TaskRecord[] {
+function snapshotTaskRecords(
+  source: ReadonlyMap<string, TaskRecord>,
+  limit?: number,
+): TaskRecord[] {
+  if (limit !== undefined && limit > 0) {
+    const result: TaskRecord[] = [];
+    for (const record of source.values()) {
+      result.push(cloneTaskRecord(record));
+      if (result.length >= limit) break;
+    }
+    return result;
+  }
   return [...source.values()].map((record) => cloneTaskRecord(record));
 }
 
@@ -2538,9 +2549,52 @@ export function assertTaskCancellationReadyById(taskId: string): TaskRecord | nu
 
 // Callers that provide their own order use this cloned snapshot to avoid paying
 // for listTaskRecords' createdAt sort before immediately discarding that order.
-export function listTaskRecordsUnsorted(): TaskRecord[] {
+// Callers that only need the first few matches can pass a limit to bound the
+// clone and avoid O(N) memory pressure on large task registries (#105425).
+export function listTaskRecordsUnsorted(limit?: number): TaskRecord[] {
   ensureTaskRegistryReady();
-  return snapshotTaskRecords(tasks);
+  return snapshotTaskRecords(tasks, limit);
+}
+
+/** Iterates task registry entries without cloning and returns a clone of the
+ *  first record matching the predicate.  Avoids O(N) cloning when the caller
+ *  only needs one record — worst case is still O(N) iteration but with 0
+ *  heap allocations for non-matching entries. */
+export function findFirstTaskRecord(
+  predicate: (task: Readonly<TaskRecord>) => boolean,
+): TaskRecord | undefined {
+  ensureTaskRegistryReady();
+  for (const record of tasks.values()) {
+    if (predicate(record)) {
+      return cloneTaskRecord(record);
+    }
+  }
+  return undefined;
+}
+
+/** Filters, sorts, and paginates tasks inside the registry without cloning
+ *  every record.  Only the returned page is deep-cloned, so memory pressure
+ *  is O(matches) for the intermediate array and O(page) for the clones.
+ *  Callers that currently call listTaskRecordsUnsorted().filter().toSorted()
+ *  .slice() should use this instead. */
+export function queryTaskRecords(options: {
+  filter?: (task: TaskRecord) => boolean;
+  compare?: (a: TaskRecord, b: TaskRecord) => number;
+  offset: number;
+  limit: number;
+}): { tasks: TaskRecord[]; total: number } {
+  ensureTaskRegistryReady();
+  const candidates: TaskRecord[] = [];
+  for (const record of tasks.values()) {
+    if (options.filter && !options.filter(record)) continue;
+    candidates.push(record);
+  }
+  if (options.compare) {
+    candidates.sort(options.compare);
+  }
+  const total = candidates.length;
+  const page = candidates.slice(options.offset, options.offset + options.limit);
+  return { tasks: page.map((r) => cloneTaskRecord(r)), total };
 }
 
 export function listTaskRecords(): TaskRecord[] {
