@@ -2268,7 +2268,6 @@ describe("launchd install", () => {
       env,
       mode: "kickstart",
       waitForPid: process.pid,
-      drainTimeoutMs: 300_000,
     });
     expect(state.launchctlCalls).toStrictEqual([]);
   });
@@ -2308,7 +2307,6 @@ describe("launchd install", () => {
       env,
       mode: "reload",
       waitForPid: process.pid,
-      drainTimeoutMs: 300_000,
     });
     expect(state.files.get(plistPath)).toContain("/Users/test/Library/Logs/openclaw/gateway.log");
     expect(state.launchctlCalls).toStrictEqual([]);
@@ -2355,7 +2353,6 @@ describe("launchd install", () => {
       env,
       mode: "kickstart",
       waitForPid: process.pid,
-      drainTimeoutMs: 300_000,
     });
     expect(state.launchctlCalls).toStrictEqual([]);
   });

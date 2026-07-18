@@ -111,9 +111,10 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     expect(args[1]).toContain("openclaw restart attempt source=launchd-handoff mode=reload");
     expect(args[1]).toContain('launchctl enable "$service_target"');
     expect(args[1]).toContain('launchctl bootout "$service_target"');
-    // The unload poll must outlast the gateway's 300s drain-before-exit budget
-    // (#110137): 315 × 1s vs the old 15 × 0.2s that stranded active-run restarts.
-    expect(args[1]).toContain('bootout_wait_count="315"');
+    // The unload poll must outlast launchd's ExitTimeOut SIGKILL ceiling plus
+    // margin (#110137): 35 × 1s vs the old 15 × 0.2s that stranded active-run
+    // restarts.
+    expect(args[1]).toContain('bootout_wait_count="35"');
     expect(args[1]).toContain('if ! launchctl print "$service_target" >/dev/null 2>&1; then');
     expect(args[1]).toContain("sleep 1");
     // Bootstrap failures retry; kickstart -k only fires while the label is
@@ -126,29 +127,59 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     expect(args[1]).toContain("bootstrap_retry_count=$((bootstrap_retry_count - 1))");
   });
 
-  it("scales the reload bootout wait to a non-default drain budget", () => {
-    spawnMock.mockReturnValue({ pid: 4242, unref: unrefMock });
 
-    scheduleDetachedLaunchdRestartHandoff({
-      env: { HOME: "/Users/test", OPENCLAW_PROFILE: "default" },
-      mode: "reload",
-      waitForPid: 9876,
-      drainTimeoutMs: 600_000,
-    });
-    const [, raised] = requireSpawnCall();
-    expect(raised[1]).toContain('bootout_wait_count="615"');
+  it("reload retry exhaustion exits nonzero instead of reporting a successful restart", async () => {
+    // Execution-level: run the generated script with stubbed launchctl (always
+    // fails, label absent) so the exhausted retry path is exercised for real.
+    // A completed if with a false condition leaves $? at 0, which previously
+    // let this path log "restart done" while the LaunchAgent stayed
+    // deregistered.
+    const { execFile } = await vi.importActual<typeof import("node:child_process")>(
+      "node:child_process",
+    );
+    const { mkdtempSync, writeFileSync, chmodSync, mkdirSync, readFileSync } = await import(
+      "node:fs"
+    );
+    const { tmpdir } = await import("node:os");
+    const path = await import("node:path");
 
-    spawnMock.mockClear();
+    const stubDir = mkdtempSync(path.join(tmpdir(), "launchd-stub-"));
+    const home = path.join(stubDir, "home");
+    mkdirSync(path.join(home, ".openclaw", "logs"), { recursive: true });
+    writeFileSync(
+      path.join(stubDir, "launchctl"),
+      '#!/bin/sh\ncase "$1" in bootstrap) exit 5 ;; print) exit 113 ;; *) exit 0 ;; esac\n',
+    );
+    chmodSync(path.join(stubDir, "launchctl"), 0o755);
+    writeFileSync(path.join(stubDir, "sleep"), "#!/bin/sh\nexit 0\n");
+    chmodSync(path.join(stubDir, "sleep"), 0o755);
+
     spawnMock.mockReturnValue({ pid: 4242, unref: unrefMock });
     scheduleDetachedLaunchdRestartHandoff({
-      env: { HOME: "/Users/test", OPENCLAW_PROFILE: "default" },
+      env: { HOME: home, OPENCLAW_PROFILE: "default" },
       mode: "reload",
-      waitForPid: 9876,
-      drainTimeoutMs: 0,
+      waitForPid: 1,
     });
-    const [, unbounded] = requireSpawnCall();
-    // An unbounded (<=0) deferral config keeps the finite default wait.
-    expect(unbounded[1]).toContain('bootout_wait_count="315"');
+    const [, args] = requireSpawnCall();
+
+    const exitCode = await new Promise<number>((resolve) => {
+      execFile(
+        "/bin/sh",
+        ["-c", args[1], "handoff-test", "gui/501/test.label", "gui/501", "/tmp/test.plist", "1"],
+        { env: { ...process.env, PATH: `${stubDir}:${process.env.PATH}` } },
+        (error) => {
+          resolve(error && typeof error.code === "number" ? error.code : 0);
+        },
+      );
+    });
+
+    expect(exitCode).not.toBe(0);
+    const log = readFileSync(
+      path.join(home, ".openclaw", "logs", "gateway-restart.log"),
+      "utf8",
+    );
+    expect(log).toContain("restart failed");
+    expect(log).not.toContain("restart done");
   });
 
   it("sanitizes restart helper environment overrides before spawning", () => {
