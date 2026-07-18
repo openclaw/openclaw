@@ -29,7 +29,7 @@ type DaemonHintItem = {
 };
 
 /** Machine-readable response shape for service lifecycle commands. */
-export type DaemonActionResponse = {
+type DaemonActionResponse = {
   ok: boolean;
   action: DaemonAction;
   result?: string;
