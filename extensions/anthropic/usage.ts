@@ -87,11 +87,7 @@ function finiteNumber(value: unknown): number | undefined {
   const decimalMatch =
     typeof value === "string" ? DECIMAL_NUMBER_PATTERN.exec(value)?.[0] : undefined;
   const parsed =
-    typeof value === "number"
-      ? value
-      : decimalMatch === value
-        ? Number(value)
-        : Number.NaN;
+    typeof value === "number" ? value : decimalMatch === value ? Number(value) : Number.NaN;
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
