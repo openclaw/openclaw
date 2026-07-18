@@ -132,7 +132,12 @@ internal class WearProxyClient private constructor(
     recordPreferredPhoneAttempt(preferredPhone?.takeIf { it.nodeId == nodeId })
     val requestId = UUID.randomUUID().toString()
     val response = CompletableDeferred<WearMessage.Response>()
-    val pendingRequest = PendingWearRequest(nodeId = nodeId, response = response)
+    val pendingRequest =
+      PendingWearRequest(
+        nodeId = nodeId,
+        response = response,
+        preferredPhone = preferredPhone?.takeIf { it.nodeId == nodeId },
+      )
     check(pending.putIfAbsent(requestId, pendingRequest) == null)
     return try {
       try {
@@ -153,7 +158,6 @@ internal class WearProxyClient private constructor(
         throw WearProxyException("phone_unavailable", "Paired phone is unavailable")
       }
       val envelope = response.await()
-      confirmPreferredPhoneResponse(preferredPhone?.takeIf { it.nodeId == nodeId })
       if (
         (expectedNodeId == null || requirePreferredNode || method.requiresPreferredSnapshotSource()) &&
         currentPreferredPhone()?.nodeId != nodeId
@@ -188,8 +192,12 @@ internal class WearProxyClient private constructor(
         path == WearProtocol.RESPONSE_PATH && message is WearMessage.Response -> {
           pending[message.requestId]
             ?.takeIf { it.nodeId == sourceNodeId }
-            ?.response
-            ?.complete(message)
+            ?.let { request ->
+              // Correlation is the reachability proof. Advance the registration
+              // before a concurrently expiring request can invalidate it.
+              confirmPreferredPhoneResponse(request.preferredPhone)
+              request.response.complete(message)
+            }
           null
         }
         path == WearProtocol.EVENT_PATH && message is WearMessage.Event -> {
@@ -317,6 +325,7 @@ internal class WearProxyClient private constructor(
   private data class PendingWearRequest(
     val nodeId: String,
     val response: CompletableDeferred<WearMessage.Response>,
+    val preferredPhone: PreferredPhoneRegistration?,
   )
 
   companion object {
@@ -367,13 +376,6 @@ internal fun selectReachablePhoneNodeId(nodes: Collection<WearReachablePhoneNode
     else -> null
   }
 }
-
-internal fun selectUniqueNearbyPhoneNodeId(nodes: Collection<WearReachablePhoneNode>): String? =
-  nodes
-    .distinctBy(WearReachablePhoneNode::id)
-    .filter(WearReachablePhoneNode::isNearby)
-    .singleOrNull()
-    ?.id
 
 private fun WearRpcMethod.requiresPreferredSnapshotSource(): Boolean = this == WearRpcMethod.ProxyStatus || this == WearRpcMethod.SessionsList || this == WearRpcMethod.ChatHistory
 

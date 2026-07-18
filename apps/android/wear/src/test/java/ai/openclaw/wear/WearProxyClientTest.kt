@@ -579,6 +579,55 @@ class WearProxyClientTest {
     }
 
   @Test
+  fun correlatedResponseProtectsPhoneBeforeRequesterResumes() =
+    runTest {
+      var discoveries = 0
+      var respond = false
+      val requests = mutableListOf<WearMessage.Request>()
+      lateinit var client: WearProxyClient
+      client =
+        WearProxyClient.createForTests(
+          nodeResolver =
+            WearNodeResolver {
+              discoveries += 1
+              "resolver-phone"
+            },
+          transport =
+            WearMessageTransport { nodeId, _, data ->
+              val request = (WearProtocolCodec.decode(data) as WearDecodeResult.Success).message as WearMessage.Request
+              requests += request
+              if (respond) {
+                client.handleMessage(
+                  sourceNodeId = nodeId,
+                  path = WearProtocol.RESPONSE_PATH,
+                  data = WearProtocolCodec.encode(WearMessage.Response(requestId = request.requestId, ok = true)),
+                )
+              }
+            },
+        )
+      client.updatePreferredPhoneNodeId("phone-current")
+
+      val older = async { runCatching { client.request(WearRpcMethod.ProxyStatus, buildJsonObject {}, null) } }
+      val newer = async { runCatching { client.request(WearRpcMethod.ProxyStatus, buildJsonObject {}, null) } }
+      runCurrent()
+      assertEquals(2, requests.size)
+
+      client.handleMessage(
+        sourceNodeId = "phone-current",
+        path = WearProtocol.RESPONSE_PATH,
+        data = WearProtocolCodec.encode(WearMessage.Response(requestId = requests[1].requestId, ok = true)),
+      )
+      newer.cancel()
+      advanceUntilIdle()
+
+      assertTrue(newer.isCancelled)
+      assertEquals("timeout", (older.await().exceptionOrNull() as WearProxyException).code)
+      respond = true
+      assertEquals("phone-current", client.request(WearRpcMethod.ProxyStatus, buildJsonObject {}, null).sourceNodeId)
+      assertEquals(0, discoveries)
+    }
+
+  @Test
   fun ambiguousCapabilityCallbackForcesReachableRediscovery() =
     runTest {
       var discoveries = 0
@@ -620,9 +669,6 @@ class WearProxyClientTest {
     assertEquals("phone-cloud", selectReachablePhoneNodeId(listOf(cloud)))
     assertEquals(null, selectReachablePhoneNodeId(listOf(nearby, nearbyTwo, cloud)))
     assertEquals(null, selectReachablePhoneNodeId(listOf(cloud, cloudTwo)))
-    assertEquals("phone-nearby", selectUniqueNearbyPhoneNodeId(listOf(cloud, nearby)))
-    assertEquals(null, selectUniqueNearbyPhoneNodeId(listOf(cloud)))
-    assertEquals(null, selectUniqueNearbyPhoneNodeId(listOf(nearby, nearbyTwo, cloud)))
   }
 
   @Test
