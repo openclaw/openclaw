@@ -36731,7 +36731,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 234,
+      "line": 237,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
       "source": "Other answer",
       "surface": "apple",
@@ -36739,7 +36739,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 273,
+      "line": 276,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
       "source": "Not selected",
       "surface": "apple",
@@ -36747,7 +36747,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 273,
+      "line": 276,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
       "source": "Selected",
       "surface": "apple",
@@ -36755,7 +36755,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 285,
+      "line": 288,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
       "source": "Submit",
       "surface": "apple",
@@ -36763,7 +36763,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 285,
+      "line": 288,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
       "source": "Submitting…",
       "surface": "apple",
@@ -36771,7 +36771,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 306,
+      "line": 309,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
       "source": "Expires in \\(seconds / 60)m \\(seconds % 60)s",
       "surface": "apple",
@@ -36779,7 +36779,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 306,
+      "line": 309,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
       "source": "Expires in \\(seconds)s",
       "surface": "apple",
