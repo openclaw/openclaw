@@ -139,6 +139,16 @@ export function readActiveCodexTurnIds(thread: unknown): string[] {
     .filter((turnId) => turnId.trim().length > 0);
 }
 
+export function readActiveCodexTurnIdsFromResume(response: {
+  thread: unknown;
+  initialTurnsPage?: { data?: unknown[] } | null;
+}): string[] {
+  const pagedTurns = response.initialTurnsPage?.data;
+  return readActiveCodexTurnIds(
+    Array.isArray(pagedTurns) ? { turns: pagedTurns } : response.thread,
+  );
+}
+
 const LEGACY_EMPTY_DYNAMIC_TOOLS_FINGERPRINT = legacyFingerprintDynamicTools([]);
 const EMPTY_DYNAMIC_TOOLS_FINGERPRINT = hashCodexAppServerBindingFingerprint(
   LEGACY_EMPTY_DYNAMIC_TOOLS_FINGERPRINT,
