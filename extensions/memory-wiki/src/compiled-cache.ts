@@ -436,14 +436,9 @@ export async function writeMemoryWikiCompiledCache(
     }
     throw error;
   }
-  let durableIdentity: Awaited<ReturnType<typeof loadDurableIdentity>>;
-  try {
-    durableIdentity = await loadDurableIdentity();
-  } catch (error) {
-    // The publication committed, but identity validation failed. Retain the
-    // immutable row so a later lifecycle refresh can reconcile it.
-    throw error;
-  }
+  // The publication committed. If validation fails, retain its immutable row
+  // so a later lifecycle refresh can reconcile it.
+  const durableIdentity = await loadDurableIdentity();
   if (
     durableIdentity.vaultGeneration !== activeVault.vaultGeneration ||
     durableIdentity.compiledCachePublicationId !== publicationId
