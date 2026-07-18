@@ -62,7 +62,7 @@ function findDuplicateStableIds(items: unknown[]): Set<string> {
   return duplicates;
 }
 
-export interface RedactedArrayOriginalResolver {
+interface RedactedArrayOriginalResolver {
   /** True when the original array is unambiguously keyed by a unique string `id`. */
   readonly identityKeyed: boolean;
   /** Resolves the original item that `incomingItem` may restore redacted values from. */

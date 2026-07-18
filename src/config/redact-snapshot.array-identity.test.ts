@@ -266,6 +266,36 @@ describe("restoreRedactedValues — identity-keyed object arrays", () => {
   });
 });
 
+// Identity semantics: the restoration identity is the visible unique id exactly
+// as the client sends it back. Config entries are addressed by id rather than by
+// position — the schema gives every entry an `id`, lookups and per-agent state
+// resolve by that id, and config writes locate a row by finding its id — so an
+// item's array position is not its identity. (Uniqueness is conventional, not
+// schema-enforced; this module falls back to positional restore when an original
+// array violates it.) The complementary half of the contract — an id that was
+// not in the original inherits nothing — is covered by the fail-closed block
+// below.
+describe("restoreRedactedValues — identity semantics", () => {
+  const hints = { "rows[].mark": { sensitive: true } } as unknown as ConfigUiHints;
+  const original = {
+    rows: [
+      { id: "alpha", mark: "mark-alpha" },
+      { id: "bravo", mark: "mark-bravo" },
+    ],
+  };
+
+  it("restores values for the authoritative id when an original id is reused", () => {
+    const redacted = redactConfigObject(original, hints) as typeof original;
+    const sentinel = redacted.rows[0]?.mark;
+    // Final array holds a single item carrying the original id `alpha`.
+    const res = restoreRedactedValues({ rows: [{ id: "alpha", mark: sentinel }] }, original, hints);
+    expect(res.ok).toBe(true);
+    expect((res.result as typeof original).rows).toEqual([{ id: "alpha", mark: "mark-alpha" }]);
+    // The value belonging to a different id is not transferred.
+    expect(JSON.stringify(res.result)).not.toContain("mark-bravo");
+  });
+});
+
 describe("restoreRedactedValues — identity-keyed fail-closed edges", () => {
   const original = agentsConfig([
     { id: "alpha", mark: "mark-alpha" },
