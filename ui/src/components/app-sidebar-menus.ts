@@ -465,7 +465,7 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
                 this.createSessionGroup([session]);
                 break;
               case "toggle-archived":
-                void this.patchSession(session, { archived: true });
+                void this.archiveSessionWithUndo(session);
                 break;
               case "stop-cloud-worker":
                 void this.stopCloudWorker(session);
