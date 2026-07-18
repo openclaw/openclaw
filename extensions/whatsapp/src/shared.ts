@@ -12,6 +12,7 @@ import {
 } from "openclaw/plugin-sdk/channel-policy";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 import { createChannelPluginBase } from "openclaw/plugin-sdk/core";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   createDelegatedSetupWizardProxy,
   type ChannelSetupWizard,
@@ -41,9 +42,12 @@ import {
 
 const WHATSAPP_CHANNEL = "whatsapp" as const;
 
-export async function loadWhatsAppChannelRuntime() {
-  return await import("./channel.runtime.js");
-}
+// Single-flight: concurrent first imports of the channel runtime through the
+// source-plugin loader (jiti) can observe a partially evaluated module graph;
+// sharing one cached import keeps concurrent multi-account startup off that race.
+export const loadWhatsAppChannelRuntime = createLazyRuntimeModule(
+  () => import("./channel.runtime.js"),
+);
 
 async function loadWhatsAppSetupSurface() {
   return await import("./setup-surface.js");
