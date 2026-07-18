@@ -39,10 +39,7 @@ export function listLegacyAuthJsonPaths(stateDir: string): string[] {
 }
 
 /** Lists global dotenv files that can supply secrets for the selected config and state roots. */
-export function listSecretsDotEnvPaths(params: {
-  configPath: string;
-  stateDir: string;
-}): string[] {
+export function listSecretsDotEnvPaths(params: { configPath: string; stateDir: string }): string[] {
   const candidates = [
     path.join(params.stateDir, ".env"),
     path.join(path.dirname(params.configPath), ".env"),
