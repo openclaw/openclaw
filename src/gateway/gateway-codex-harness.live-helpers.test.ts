@@ -10,6 +10,7 @@ import {
   isExpectedYieldedAgentTimeout,
   isRetryableCodexHarnessLiveError,
   isStrictExpectedCodexModelsCommandText,
+  shouldUseCodexHarnessSubagentOnlyFastPath,
 } from "./gateway-codex-harness.live-helpers.js";
 
 const includesExpectedCodexModelsCommandText = (text: string) =>
@@ -30,6 +31,30 @@ function expectStrictCodexModelsCommandText(text: string): void {
 }
 
 describe("gateway codex harness live helpers", () => {
+  it("keeps combined stress probes out of the subagent-only fast path", () => {
+    const base = {
+      chatImageProbe: false,
+      codeModeOnly: false,
+      compactionStress: false,
+      explicitOptOut: false,
+      guardianProbe: false,
+      imageProbe: false,
+      mcpProbe: false,
+      resumeStress: false,
+      subagentProbe: true,
+    };
+
+    expect(shouldUseCodexHarnessSubagentOnlyFastPath(base)).toBe(true);
+    expect(shouldUseCodexHarnessSubagentOnlyFastPath({ ...base, resumeStress: true })).toBe(false);
+    expect(shouldUseCodexHarnessSubagentOnlyFastPath({ ...base, compactionStress: true })).toBe(
+      false,
+    );
+    expect(shouldUseCodexHarnessSubagentOnlyFastPath({ ...base, codeModeOnly: true })).toBe(false);
+    expect(shouldUseCodexHarnessSubagentOnlyFastPath({ ...base, explicitOptOut: true })).toBe(
+      false,
+    );
+  });
+
   it("classifies sessions.list timeouts as retryable live Codex errors", () => {
     const error = new Error("gateway request timeout for sessions.list");
 

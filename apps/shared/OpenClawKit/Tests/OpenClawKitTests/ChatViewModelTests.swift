@@ -7659,6 +7659,7 @@ struct ChatViewModelTests {
     }
 
     @Test func `late model patch updates captured canonical alias after agent switch`() async throws {
+        let patchGate = AsyncGate()
         let now = Date().timeIntervalSince1970 * 1000
         let sessions = OpenClawChatSessionsListResponse(
             ts: now,
@@ -7682,7 +7683,7 @@ struct ChatViewModelTests {
             modelResponses: [models],
             setSessionModelHook: { model in
                 if model == "openai/gpt-5.4" {
-                    try await Task.sleep(for: .milliseconds(100))
+                    await patchGate.wait()
                 }
             })
 
@@ -7693,6 +7694,10 @@ struct ChatViewModelTests {
         }
 
         await MainActor.run { vm.syncActiveAgentId("beta") }
+        try await waitUntil("replacement agent bootstrap completes") {
+            await MainActor.run { vm.activeAgentId == "beta" && vm.sessionId == "sess-beta" }
+        }
+        await patchGate.open()
         try await waitUntil("late patch updates canonical main row") {
             await MainActor.run {
                 vm.sessions.first(where: { $0.key == "agent:alpha:main" })?.model == "gpt-5.4"

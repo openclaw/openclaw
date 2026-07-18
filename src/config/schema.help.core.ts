@@ -54,6 +54,8 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Command invocation recorded for the latest wizard run to preserve execution context. Use this to reproduce setup steps when verifying setup regressions.",
   "wizard.lastRunMode":
     'Wizard execution mode recorded as "local" or "remote" for the most recent setup flow. Use this to understand whether setup targeted direct local runtime or remote gateway topology.',
+  "wizard.localModelLeanAutoModel":
+    "System-managed model reference indicating that inference onboarding enabled the global lean-model surface. A later verified route uses this marker to remove only the onboarding-owned setting; a model changed outside onboarding hands ownership back to the user.",
   "wizard.securityAcknowledgedAt":
     "ISO timestamp for when the setup security acknowledgement was accepted on this config. Setup uses this to avoid repeating the acknowledgement on later wizard runs.",
   audit:

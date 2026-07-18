@@ -143,6 +143,8 @@ export type OpenClawConfig = {
     lastRunCommand?: string;
     /** Whether the last wizard run configured a local or remote install. */
     lastRunMode?: "local" | "remote";
+    /** Model whose lean-mode default is owned by inference onboarding. */
+    localModelLeanAutoModel?: string;
     /** ISO timestamp when the setup security acknowledgement was accepted on this config. */
     securityAcknowledgedAt?: string;
   };

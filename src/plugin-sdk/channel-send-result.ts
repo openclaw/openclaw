@@ -28,8 +28,8 @@ export function attachChannelToResult<T extends object>(
   result: T,
 ) {
   return {
-    channel,
     ...result,
+    channel,
   };
 }
 
