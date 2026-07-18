@@ -7,7 +7,7 @@ import {
   DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
   type ChannelIngressQueue,
 } from "openclaw/plugin-sdk/channel-outbound";
-import { danger, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { danger, type RuntimeEnv, warn } from "openclaw/plugin-sdk/runtime-env";
 import { runDetachedWebhookWork } from "openclaw/plugin-sdk/webhook-request-guards";
 import { getLineRuntime } from "./runtime.js";
 
@@ -15,6 +15,7 @@ const LINE_WEBHOOK_SPOOL_VERSION = 1;
 const LINE_WEBHOOK_DRAIN_INTERVAL_MS = 500;
 const LINE_WEBHOOK_MAX_CONCURRENT_DELIVERIES = 8;
 const LINE_WEBHOOK_DRAIN_SCAN_LIMIT = 100;
+const LINE_WEBHOOK_ACTIVE_DELIVERY_STOP_GRACE_MS = 5_000;
 const LINE_WEBHOOK_TOMBSTONE_TTL_MS = 30 * 24 * 60 * 60_000;
 const LINE_WEBHOOK_TOMBSTONE_MAX_ENTRIES = 4096;
 
@@ -145,6 +146,25 @@ function isLineAuthenticationFailure(error: unknown): boolean {
   // @line/bot-sdk HTTPFetchError exposes the response code as `status`.
   const status = (error as { status?: unknown }).status;
   return status === 401 || status === 403;
+}
+
+async function waitForActiveDeliveriesBeforeDispose(
+  activeDeliveries: ReadonlySet<Promise<void>>,
+): Promise<boolean> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      Promise.allSettled(activeDeliveries).then(() => true),
+      new Promise<boolean>((resolve) => {
+        timeout = setTimeout(() => resolve(false), LINE_WEBHOOK_ACTIVE_DELIVERY_STOP_GRACE_MS);
+        timeout.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
 }
 
 export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWebhookSpool {
@@ -322,15 +342,26 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
       }
       shutdown.abort();
       await drainTask;
-      // Keep the claim owner live until every real delivery and core handler exits;
-      // disposing earlier lets a replacement drain recover work still producing replies.
-      await Promise.allSettled(activeDeliveries);
-      // Accepted shutdown tradeoff: deferred claims may wait for the full agent run.
-      // A deadline would allow duplicate side effects after replacement recovery;
-      // remove this wait only when core can cancel or abandon the run before release.
-      await Promise.allSettled(deferredClaims.values());
-      await drain.waitForIdle();
-      drain.dispose();
+      try {
+        // Bound restart even though a delivery may finish after its row is recovered;
+        // that duplicate-side-effect window is the accepted at-least-once tradeoff.
+        const deliveriesSettled = await waitForActiveDeliveriesBeforeDispose(activeDeliveries);
+        if (!deliveriesSettled) {
+          options.runtime.log(
+            warn(
+              `line: timed out after ${LINE_WEBHOOK_ACTIVE_DELIVERY_STOP_GRACE_MS}ms waiting for active webhook deliveries; releasing drain ownership`,
+            ),
+          );
+          return;
+        }
+        // Accepted shutdown tradeoff: deferred claims may wait for the full agent run.
+        // A deadline would allow duplicate side effects after replacement recovery;
+        // remove this wait only when core can cancel or abandon the run before release.
+        await Promise.allSettled(deferredClaims.values());
+        await drain.waitForIdle();
+      } finally {
+        drain.dispose();
+      }
     },
   };
 }

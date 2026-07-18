@@ -278,6 +278,66 @@ describe("LINE webhook spool", () => {
     });
   });
 
+  it("disposes after the active-delivery stop grace expires", async () => {
+    await withQueue(async (queue) => {
+      let releaseDelivery = () => {};
+      const deliveryGate = new Promise<void>((resolve) => {
+        releaseDelivery = resolve;
+      });
+      const firstDeliver = vi.fn(async () => {
+        await deliveryGate;
+      });
+      const firstRuntime = runtime();
+      const first = createLineWebhookSpool({
+        accountId: "default",
+        runtime: firstRuntime,
+        queue,
+        deliver: firstDeliver,
+      });
+      const event = createEvent({ webhookEventId: "event-stop-timeout" });
+
+      first.start();
+      await first.accept(callback(event));
+      await vi.waitFor(() => expect(firstDeliver).toHaveBeenCalledTimes(1));
+
+      vi.useFakeTimers();
+      const stopping = first.stop();
+      let stopSettled = false;
+      void stopping.then(() => {
+        stopSettled = true;
+      });
+      try {
+        await vi.advanceTimersByTimeAsync(4_999);
+        expect(stopSettled).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+        await stopping;
+        expect(firstRuntime.log).toHaveBeenCalledWith(
+          expect.stringContaining("timed out after 5000ms"),
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+
+      const restartedDeliver = vi.fn(async (_event, _destination, control) => {
+        await control.turnAdoptionLifecycle.onAdopted();
+      });
+      const restarted = createLineWebhookSpool({
+        accountId: "default",
+        runtime: runtime(),
+        queue,
+        deliver: restartedDeliver,
+      });
+      restarted.start();
+      try {
+        await waitForVerdict(queue, "message:message-event-stop-timeout", "completed");
+        expect(restartedDeliver).toHaveBeenCalledTimes(1);
+      } finally {
+        releaseDelivery();
+        await restarted.stop();
+      }
+    });
+  });
+
   it("waits for deferred claim settlement before disposing on stop", async () => {
     await withQueue(async (queue) => {
       let deferredLifecycle: LineWebhookTurnAdoptionLifecycle | undefined;
