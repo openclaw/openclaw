@@ -20194,6 +20194,16 @@
       "translated": "Répondre à OpenClaw… (« yes » configure tout)"
     },
     {
+      "id": "native.apple.134b9ae1d8a543df",
+      "source": "Skip for now",
+      "translated": "Ignorer pour l’instant"
+    },
+    {
+      "id": "native.apple.5435391fa338f227",
+      "source": "Recommended",
+      "translated": "Recommandé"
+    },
+    {
       "id": "native.apple.78d1ad73762a7ce8",
       "source": "Connect your AI",
       "translated": "Connectez votre IA"
