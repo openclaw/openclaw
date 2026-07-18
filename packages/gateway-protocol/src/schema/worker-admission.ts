@@ -23,7 +23,6 @@ export {
   WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH,
   WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
   WorkerAdmissionFailureReasonSchema,
-  WorkerErrorShapeSchema,
   WorkerProtocolCloseReasonSchema,
 } from "./worker-protocol-primitives.js";
 
@@ -93,7 +92,7 @@ const WorkerConnectAdmissionSchema = Type.Union([
 ]);
 
 /** Dedicated first-frame payload accepted only on the worker ingress. */
-export const WorkerConnectParamsSchema = closedObject({
+const WorkerConnectParamsSchema = closedObject({
   minProtocol: Type.Integer({ minimum: 1 }),
   maxProtocol: Type.Integer({ minimum: 1 }),
   client: closedObject({
@@ -114,7 +113,7 @@ export const WorkerConnectRequestFrameSchema = closedObject({
 });
 
 /** Minimal admission response; workers never receive the general gateway snapshot. */
-export const WorkerHelloOkSchema = closedObject({
+const WorkerHelloOkSchema = closedObject({
   type: Type.Literal("worker-hello-ok"),
   environmentId: WorkerIdentifierSchema,
   sessionId: Type.Union([WorkerIdentifierSchema, Type.Null()]),
@@ -154,7 +153,7 @@ export const WorkerHeartbeatParamsSchema = closedObject({
   status: WorkerStatusSchema,
 });
 
-export const WorkerHeartbeatResultSchema = closedObject({
+const WorkerHeartbeatResultSchema = closedObject({
   receivedAtMs: Type.Integer({ minimum: 0 }),
   status: Type.Literal("ok"),
   ownerEpoch: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),

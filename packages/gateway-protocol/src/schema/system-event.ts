@@ -5,7 +5,7 @@ import { lazyCompile } from "../protocol-validator.js";
 import { closedObject } from "./closed-object.js";
 
 /** Operator event plus optional presence metadata and exact-session wake routing. */
-export const SystemEventParamsSchema = closedObject({
+const SystemEventParamsSchema = closedObject({
   text: Type.String(),
   idempotencyKey: Type.Optional(Type.String({ minLength: 1 })),
   sessionKey: Type.Optional(Type.String()),
@@ -26,5 +26,4 @@ export const SystemEventParamsSchema = closedObject({
   tags: Type.Optional(Type.Array(Type.String())),
 });
 
-export type SystemEventParams = Static<typeof SystemEventParamsSchema>;
 export const validateSystemEventParams = lazyCompile(SystemEventParamsSchema);

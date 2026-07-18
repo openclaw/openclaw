@@ -6,7 +6,6 @@ import { SESSION_PLACEMENT_STATES } from "./session-placement-state.js";
 
 export {
   isCloudWorkerPlacementState,
-  SESSION_PLACEMENT_STATES,
   type SessionPlacementState,
 } from "./session-placement-state.js";
 

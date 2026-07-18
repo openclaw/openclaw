@@ -3,14 +3,14 @@
 // operator connection and stream its bytes back over the existing WebSocket.
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import { closedObject } from "./closed-object.js";
+import { NonEmptyString } from "./primitives.js";
+import { SessionCatalogLocatorSchema } from "./sessions-catalog.js";
 import {
   MAX_TERMINAL_UPLOAD_BASE64_LENGTH,
   MAX_TERMINAL_UPLOAD_BYTES,
   MAX_TERMINAL_UPLOAD_NAME_LENGTH,
-} from "../terminal-upload-constants.js";
-import { closedObject } from "./closed-object.js";
-import { NonEmptyString } from "./primitives.js";
-import { SessionCatalogLocatorSchema } from "./sessions-catalog.js";
+} from "./terminal-constants.js";
 
 // PTY grids are bounded so a hostile client cannot request an allocation that
 // overflows the terminal backend's row/column math.

@@ -50,7 +50,7 @@ export const GatewayClientIdSchema = Type.Enum(GATEWAY_CLIENT_IDS);
 export const GatewayClientModeSchema = Type.Enum(GATEWAY_CLIENT_MODES);
 
 /** Supported secret reference backing stores for protocol SecretRef payloads. */
-export const SecretRefSourceSchema = Type.Union([
+const SecretRefSourceSchema = Type.Union([
   Type.Literal("env"),
   Type.Literal("file"),
   Type.Literal("exec"),

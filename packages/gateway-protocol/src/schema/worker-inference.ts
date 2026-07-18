@@ -23,7 +23,7 @@ export const WORKER_INFERENCE_METHODS = [
 ] as const;
 export const WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES = 25 * 1024 * 1024;
 export const WORKER_INFERENCE_MAX_CONTEXT_MESSAGES = 1_024;
-export const WORKER_INFERENCE_MAX_TOOLS = 256;
+const WORKER_INFERENCE_MAX_TOOLS = 256;
 export const WORKER_INFERENCE_MAX_OUTPUT_TOKENS = 1_000_000;
 
 function workerInferenceObject<const Properties extends TProperties>(properties: Properties) {
@@ -395,7 +395,6 @@ export type WorkerInferenceCancelRequestFrame = Static<
 export type WorkerInferenceCancelResponseFrame = Static<
   typeof WorkerInferenceCancelResponseFrameSchema
 >;
-export type WorkerInferenceResolvedModel = Static<typeof WorkerInferenceResolvedModelSchema>;
 export type WorkerInferenceEventParams = Static<typeof WorkerInferenceEventParamsSchema>;
 export type WorkerInferenceEventFrame = Static<typeof WorkerInferenceEventFrameSchema>;
 export type WorkerInferenceTerminalOutcome = Static<typeof WorkerInferenceTerminalOutcomeSchema>;
