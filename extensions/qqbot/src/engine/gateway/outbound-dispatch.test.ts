@@ -223,6 +223,11 @@ function makeRuntime(params: {
     return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
   });
   return {
+    state: {
+      openChannelIngressQueue: () => {
+        throw new Error("unexpected durable ingress access");
+      },
+    },
     channel: {
       activity: { record: vi.fn() },
       routing: {

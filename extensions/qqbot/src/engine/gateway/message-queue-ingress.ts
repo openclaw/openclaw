@@ -1,5 +1,4 @@
 // QQBot plugin module fans one merged turn lifecycle across its durable claims.
-import type { QueuedMessage } from "./message-queue.js";
 import type { QQBotIngressLifecycle } from "./types.js";
 
 async function settleAll(
@@ -43,7 +42,7 @@ function notifyAll(
 }
 
 export function buildQQBotMergedIngressLifecycle(
-  messages: readonly QueuedMessage[],
+  messages: readonly { turnAdoptionLifecycle?: QQBotIngressLifecycle }[],
 ): QQBotIngressLifecycle | undefined {
   const lifecycles = messages
     .map((message) => message.turnAdoptionLifecycle)
