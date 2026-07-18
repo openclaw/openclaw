@@ -339,8 +339,6 @@ extensions/workboard/src/store-core.ts
 extensions/workboard/src/store-normalizers.ts
 extensions/workboard/src/store.test.ts
 extensions/workboard/src/tools.ts
-extensions/workspaces/src/gateway.ts
-extensions/workspaces/src/tools.ts
 extensions/xai/realtime-voice-provider.test.ts
 extensions/xai/web-search.test.ts
 extensions/zalo/src/monitor.ts
@@ -526,7 +524,6 @@ src/agents/session-file-repair.test.ts
 src/agents/session-file-repair.ts
 src/agents/session-tool-result-guard.ts
 src/agents/session-transcript-repair.test.ts
-src/agents/session-transcript-repair.ts
 src/agents/session-write-lock.test.ts
 src/agents/session-write-lock.ts
 src/agents/sessions/extensions/runner.ts
@@ -673,7 +670,6 @@ src/cli/skills-cli.commands.test.ts
 src/cli/skills-cli.ts
 src/cli/update-cli.test.ts
 src/cli/update-cli/update-command-service.ts
-src/cli/update-cli/update-command.ts
 src/commands/agent-via-gateway.test.ts
 src/commands/agent-via-gateway.ts
 src/commands/agent.test.ts
@@ -948,7 +944,6 @@ src/infra/state-migrations.test.ts
 src/infra/update-global.ts
 src/infra/update-managed-service-handoff.ts
 src/infra/update-runner.test.ts
-src/infra/update-runner.ts
 src/infra/update-startup.test.ts
 src/infra/update-startup.ts
 src/infra/windows-gateway-firewall-diagnostics.ts
@@ -1068,9 +1063,7 @@ src/skills/workshop/service.ts
 src/snapshot/local-repository.test.ts
 src/snapshot/local-repository.ts
 src/state/openclaw-agent-db.test.ts
-src/state/openclaw-agent-db.ts
 src/state/openclaw-state-db.test.ts
-src/state/openclaw-state-db.ts
 src/status/status-message.ts
 src/system-agent/agent-turn.test.ts
 src/system-agent/chat-engine.test.ts
@@ -1106,10 +1099,8 @@ src/worker/worker.runtime.test.ts
 ui/src/api/gateway.node.test.ts
 ui/src/api/types.ts
 ui/src/app/app-host.ts
-ui/src/components/app-sidebar.test.ts
 ui/src/components/browser/browser-panel.ts
 ui/src/components/config-form.node.ts
-ui/src/components/lobster-pet.ts
 ui/src/components/markdown.ts
 ui/src/components/terminal/terminal-panel.ts
 ui/src/e2e/chat-flow.e2e.test.ts
@@ -1158,7 +1149,6 @@ ui/src/pages/config/view.browser.test.ts
 ui/src/pages/config/view.ts
 ui/src/pages/cron/view.ts
 ui/src/pages/new-session/new-session-page.ts
-ui/src/pages/plugin/workspace-view.ts
 ui/src/pages/plugins/plugins-page.ts
 ui/src/pages/plugins/view.ts
 ui/src/pages/sessions/sessions-page.ts

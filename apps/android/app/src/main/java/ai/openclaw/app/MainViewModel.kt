@@ -7,6 +7,7 @@ import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatPlanStep
+import ai.openclaw.app.chat.ChatQuestionPrompt
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatThinkingLevelSelection
 import ai.openclaw.app.chat.ChatWidgetResource
@@ -614,6 +615,7 @@ class MainViewModel private constructor(
   val chatModelCatalog: StateFlow<List<GatewayModelSummary>> = runtimeState(initial = emptyList()) { it.chatModelCatalog }
   val chatStreamingAssistantText: StateFlow<String?> = runtimeState(initial = null) { it.chatStreamingAssistantText }
   val chatPendingToolCalls: StateFlow<List<ChatPendingToolCall>> = runtimeState(initial = emptyList()) { it.chatPendingToolCalls }
+  val chatQuestions: StateFlow<List<ChatQuestionPrompt>> = runtimeState(initial = emptyList()) { it.chatQuestions }
   val chatPlanSteps: StateFlow<List<ChatPlanStep>> = runtimeState(initial = emptyList()) { it.chatPlanSteps }
   val chatSessions: StateFlow<List<ChatSessionEntry>> = runtimeState(initial = emptyList()) { it.chatSessions }
   val pendingRunCount: StateFlow<Int> = runtimeState(initial = 0) { it.pendingRunCount }
@@ -1090,7 +1092,11 @@ class MainViewModel private constructor(
     ensureRuntime().setTalkModeEnabled(enabled)
   }
 
-  suspend fun requestVoiceNotePermission(): Boolean {
+  suspend fun requestVoiceNotePermission(): Boolean = requestRecordAudioPermission()
+
+  suspend fun requestDictationPermission(): Boolean = requestRecordAudioPermission()
+
+  private suspend fun requestRecordAudioPermission(): Boolean {
     val requester = permissionRequester ?: return false
     return try {
       requester.requestIfMissing(listOf(Manifest.permission.RECORD_AUDIO))[Manifest.permission.RECORD_AUDIO] == true
@@ -1105,6 +1111,12 @@ class MainViewModel private constructor(
 
   internal fun releaseVoiceNoteMic() {
     runtimeRef.value?.releaseVoiceNoteMic()
+  }
+
+  internal fun tryAcquireDictationMic(): Boolean = runtimeRef.value?.tryAcquireDictationMic() == true
+
+  internal fun releaseDictationMic() {
+    runtimeRef.value?.releaseDictationMic()
   }
 
   fun setSpeakerEnabled(enabled: Boolean) {
@@ -1646,6 +1658,17 @@ class MainViewModel private constructor(
 
   fun deleteChatOutboxCommand(id: String) {
     ensureRuntime().deleteChatOutboxCommand(id)
+  }
+
+  fun resolveChatQuestion(
+    id: String,
+    answers: Map<String, List<String>>,
+  ) {
+    ensureRuntime().resolveChatQuestion(id, answers)
+  }
+
+  fun skipChatQuestion(id: String) {
+    ensureRuntime().skipChatQuestion(id)
   }
 
   suspend fun listBackgroundTasks(agentId: String): List<BackgroundTask> = ensureRuntime().listBackgroundTasks(agentId)

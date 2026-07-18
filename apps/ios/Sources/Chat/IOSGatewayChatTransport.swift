@@ -499,6 +499,24 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
         return (try? JSONDecoder().decode(OpenClawGatewayHealthOK.self, from: res))?.ok ?? true
     }
 
+    func listQuestions() async throws -> [QuestionRecord] {
+        let data = try await self.gateway.request(OpenClawChatGatewayRequests.questionList())
+        return try JSONDecoder().decode(QuestionListResult.self, from: data).questions
+    }
+
+    func getQuestion(id: String) async throws -> QuestionRecord {
+        let data = try await self.gateway.request(OpenClawChatGatewayRequests.questionGet(id: id))
+        return try JSONDecoder().decode(QuestionGetResult.self, from: data).question
+    }
+
+    func resolveQuestion(id: String, answers: [String: [String]]) async throws {
+        _ = try await self.gateway.request(OpenClawChatGatewayRequests.resolveQuestion(id: id, answers: answers))
+    }
+
+    func cancelQuestion(id: String) async throws {
+        _ = try await self.gateway.request(OpenClawChatGatewayRequests.cancelQuestion(id: id))
+    }
+
     func events() -> AsyncStream<OpenClawChatTransportEvent> {
         AsyncStream { continuation in
             let task = Task {

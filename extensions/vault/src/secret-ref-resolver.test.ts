@@ -15,7 +15,8 @@ const packagePath = fileURLToPath(new URL("../package.json", import.meta.url));
 function runResolver(params: {
   request: unknown;
   env?: Record<string, string>;
-}): Promise<{ stdout: string; stderr: string; code: number | null }> {
+  timeoutMs?: number;
+}): Promise<{ stdout: string; stderr: string; code: number | null; timedOut: boolean }> {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [resolverPath], {
       stdio: ["pipe", "pipe", "pipe"],
@@ -36,6 +37,14 @@ function runResolver(params: {
     });
     let stdout = "";
     let stderr = "";
+    let timedOut = false;
+    const timeout =
+      params.timeoutMs === undefined
+        ? undefined
+        : setTimeout(() => {
+            timedOut = true;
+            child.kill();
+          }, params.timeoutMs);
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
@@ -46,7 +55,10 @@ function runResolver(params: {
     });
     child.on("error", reject);
     child.on("exit", (code) => {
-      resolve({ stdout, stderr, code });
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+      resolve({ stdout, stderr, code, timedOut });
     });
     child.stdin.end(`${JSON.stringify(params.request)}\n`);
   });
@@ -119,6 +131,30 @@ async function startVaultErrorFixture() {
     close: () =>
       new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
+      }),
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("fixture server did not bind to a TCP port");
+  }
+  return {
+    vaultAddr: `http://127.0.0.1:${address.port}`,
+  };
+}
+
+async function startVaultStalledBodyFixture() {
+  const server = createServer((_request, response) => {
+    response.setHeader("content-type", "application/json");
+    response.write('{"data":{"data":{"value":"partial');
+  });
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  servers.push({
+    close: () =>
+      new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+        server.closeAllConnections();
       }),
   });
   const address = server.address();
@@ -336,7 +372,7 @@ describe("vault SecretRef resolver", () => {
       },
       env: {
         VAULT_ADDR: fixture.vaultAddr,
-        VAULT_TOKEN: "not-a-real-auth-header",
+        VAULT_TOKEN: "test-token",
         VAULT_NAMESPACE: "team-a",
       },
     });
@@ -352,7 +388,7 @@ describe("vault SecretRef resolver", () => {
     expect(fixture.requests).toEqual([
       {
         url: "/v1/secret/data/providers/openai",
-        token: "not-a-real-auth-header",
+        token: "test-token",
         namespace: "team-a",
       },
     ]);
@@ -684,5 +720,32 @@ describe("vault SecretRef resolver", () => {
       },
     });
     expect(result.stdout).not.toContain("not-a-real-sensitive-jwt");
+  });
+
+  it("times out while reading a stalled Vault JSON response body", async () => {
+    const fixture = await startVaultStalledBodyFixture();
+    const result = await runResolver({
+      request: {
+        protocolVersion: 1,
+        provider: "vault",
+        ids: ["providers/openai/apiKey"],
+      },
+      env: {
+        VAULT_ADDR: fixture.vaultAddr,
+        VAULT_TOKEN: "not-a-real-auth-header",
+      },
+      timeoutMs: 6_500,
+    });
+
+    expect(result).toMatchObject({ code: 0, stderr: "", timedOut: false });
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      protocolVersion: 1,
+      values: {},
+      errors: {
+        "providers/openai/apiKey": {
+          message: expect.stringMatching(/abort/iu),
+        },
+      },
+    });
   });
 });

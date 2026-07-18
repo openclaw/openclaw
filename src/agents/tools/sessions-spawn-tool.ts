@@ -218,6 +218,7 @@ function resolveAcpUnavailableMessage(opts?: { sandboxed?: boolean; config?: Ope
 export function createSessionsSpawnTool(
   opts?: {
     agentSessionKey?: string;
+    requesterTurnRunId?: string;
     /** Separate key used only for completion routing (registerSubagentRun requesterSessionKey). */
     completionOwnerKey?: string;
     agentChannel?: GatewayMessageChannel;
@@ -434,6 +435,7 @@ export function createSessionsSpawnTool(
           try {
             registerSubagentRun({
               runId: childRunId,
+              requesterTurnRunId: opts?.requesterTurnRunId,
               childSessionKey,
               controllerSessionKey: ownership.controllerSessionKey,
               requesterSessionKey: ownership.completionRequesterSessionKey,
@@ -509,6 +511,7 @@ export function createSessionsSpawnTool(
         },
         {
           agentSessionKey: opts?.agentSessionKey,
+          requesterTurnRunId: opts?.requesterTurnRunId,
           completionOwnerKey: opts?.completionOwnerKey,
           agentChannel: opts?.agentChannel,
           agentAccountId: opts?.agentAccountId,

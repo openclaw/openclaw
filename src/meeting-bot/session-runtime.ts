@@ -1,6 +1,11 @@
 import type { RuntimeLogger } from "../plugins/runtime/types.js";
 import { MeetingSessionCleanupTracker } from "./session-cleanup-tracker.js";
 import { MeetingSessionJoinLock } from "./session-join-lock.js";
+import type {
+  MeetingBrowserSessionView,
+  MeetingSessionRuntimeHandles,
+  MeetingSessionRuntimeJoinContext,
+} from "./session-runtime-types.js";
 import { MeetingSessionTranscriptStore } from "./session-transcript-store.js";
 import type {
   MeetingBrowserHealth,
@@ -9,40 +14,11 @@ import type {
   MeetingSessionRecord,
   MeetingTranscriptSnapshot,
 } from "./session-types.js";
-
-export type MeetingSessionRuntimeHandles<THealth extends MeetingBrowserHealth> = {
-  stop?: () => Promise<void>;
-  speak?: (instructions?: string) => void;
-  getHealth?: () => Partial<THealth>;
-};
-
-export type MeetingBrowserSessionView<
-  THealth extends MeetingBrowserHealth,
-  TTab extends MeetingBrowserTab,
-> = {
-  launched: boolean;
-  nodeId?: string;
-  tab?: TTab;
-  health?: THealth;
-  hasAudioBridge: boolean;
-};
-
-export type MeetingSessionRuntimeJoinContext<
-  TSession extends MeetingSessionRecord<TTransport, TMode>,
-  TTransport extends string,
-  TMode extends string,
-  THealth extends MeetingBrowserHealth,
-  TTab extends MeetingBrowserTab,
-> = {
-  attachRuntimeHandles(session: TSession, handles: MeetingSessionRuntimeHandles<THealth>): void;
-  inheritedBrowserTab(params: {
-    session: TSession;
-    transport: TTransport;
-    nodeId?: string;
-    meetingUrl: string;
-    tab?: TTab;
-  }): TTab | undefined;
-};
+export type {
+  MeetingBrowserSessionView,
+  MeetingSessionRuntimeHandles,
+  MeetingSessionRuntimeJoinContext,
+} from "./session-runtime-types.js";
 
 export type MeetingSessionRuntimeMessages<TSpeechBlockedReason extends string> = {
   previousBrowserLeaveFailed: string;
@@ -550,6 +526,20 @@ export class MeetingSessionRuntime<
         releaseBrowser: async () => await this.options.releaseBrowserTab(session),
       });
       session.browserLeft = cleanup.browserLeft;
+      const browser = this.options.getBrowser(session);
+      if (cleanup.browserLeft === true && browser?.health) {
+        this.options.setBrowserHealth(session, {
+          ...browser.health,
+          inCall: false,
+          micMuted: undefined,
+          manualActionRequired: false,
+          manualActionReason: undefined,
+          manualActionMessage: undefined,
+          speechReady: false,
+          speechBlockedReason: undefined,
+          speechBlockedMessage: undefined,
+        } as THealth);
+      }
       if (cleanup.stopSettled && stop && this.#sessionStops.get(session.id) === stop) {
         this.#sessionStops.delete(session.id);
       }
