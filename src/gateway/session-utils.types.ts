@@ -75,6 +75,7 @@ export type GatewaySessionRow = {
   archivedAt?: number;
   pinned?: boolean;
   pinnedAt?: number;
+  icon?: string;
   unread?: boolean;
   lastReadAt?: number;
   /** Last real user/channel interaction; background work does not advance it. */
