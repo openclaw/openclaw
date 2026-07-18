@@ -7,11 +7,11 @@ import { i18n, t } from "../../i18n/index.ts";
 import { renderChatComposer, resetChatComposerState } from "./components/chat-composer.ts";
 
 vi.mock("../../components/icons.ts", async () => {
-  const { html } = await import("lit");
+  const { html: litHtml } = await import("lit");
   return {
     icons: {
-      camera: html`<svg data-icon="camera"></svg>`,
-      cameraOff: html`<svg data-icon="camera-off"></svg>`,
+      camera: litHtml`<svg data-icon="camera"></svg>`,
+      cameraOff: litHtml`<svg data-icon="camera-off"></svg>`,
     },
   };
 });
