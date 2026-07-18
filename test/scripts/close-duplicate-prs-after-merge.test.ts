@@ -1,15 +1,5 @@
 // Close Duplicate Prs After Merge tests cover close duplicate prs after merge script behavior.
-import { execFileSync, spawnSync } from "node:child_process";
 import { describe, expect, it, vi } from "vitest";
-
-vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:child_process")>();
-  return {
-    ...actual,
-    execFileSync: vi.fn(),
-  };
-});
-
 import {
   applyClosePlan,
   buildDuplicateClosePlan,
@@ -267,62 +257,50 @@ Closing #70592 as a duplicate.`,
 
 describe("defaultRunGh", () => {
   it("bounds each GitHub lookup with a timeout and SIGKILL", () => {
-    const mockExecFileSync = vi.mocked(execFileSync);
-    mockExecFileSync.mockReturnValue("result");
+    const execFileSyncImpl = vi.fn(() => "result");
 
-    const result = defaultRunGh(["pr", "view", "123"]);
+    const result = defaultRunGh(["pr", "view", "123"], {}, { execFileSyncImpl });
 
     expect(result).toBe("result");
-    expect(mockExecFileSync).toHaveBeenCalledTimes(1);
-    const [command, args, options] = mockExecFileSync.mock.calls[0]!;
-    expect(command).toBe("gh");
-    expect(args).toEqual(["pr", "view", "123"]);
-    expect(options).toMatchObject({
-      encoding: "utf8",
-      killSignal: "SIGKILL",
-      timeout: 60_000,
-    });
+    expect(execFileSyncImpl).toHaveBeenCalledWith(
+      "gh",
+      ["pr", "view", "123"],
+      expect.objectContaining({
+        encoding: "utf8",
+        killSignal: "SIGKILL",
+        stdio: ["ignore", "pipe", "inherit"],
+        timeout: 60_000,
+      }),
+    );
   });
 
   it("forwards stdin input while keeping the timeout bound", () => {
-    const mockExecFileSync = vi.mocked(execFileSync);
-    mockExecFileSync.mockReturnValue("ok");
+    const execFileSyncImpl = vi.fn(() => "ok");
 
-    defaultRunGh(["pr", "edit", "123", "--add-label", "duplicate"], { input: "body" });
+    defaultRunGh(
+      ["pr", "edit", "123", "--add-label", "duplicate"],
+      { input: "body" },
+      { execFileSyncImpl },
+    );
 
-    const lastCall = mockExecFileSync.mock.calls.at(-1)!;
-    const options = lastCall[2];
-    expect(options).toMatchObject({
-      killSignal: "SIGKILL",
-      timeout: 60_000,
-      input: "body",
-      stdio: ["pipe", "pipe", "inherit"],
-    });
-  });
-});
-
-describe("defaultRunGh real subprocess behavior", () => {
-  // These tests use the real spawnSync (not mocked by vi.mock) to prove the
-  // timeout + SIGKILL surface works against actual child processes.
-  // spawnSync is not in the vi.mock("node:child_process") factory so it
-  // remains the real implementation.
-  it("kills a real subprocess that exceeds a short timeout", () => {
-    const proc = spawnSync("node", ["-e", "setTimeout(() => {}, 60000)"], {
-      encoding: "utf8",
-      killSignal: "SIGKILL",
-      timeout: 1,
-    });
-    expect(proc.error).toBeDefined();
-    expect(proc.signal).toBe("SIGKILL");
+    expect(execFileSyncImpl).toHaveBeenCalledWith(
+      "gh",
+      ["pr", "edit", "123", "--add-label", "duplicate"],
+      expect.objectContaining({
+        input: "body",
+        killSignal: "SIGKILL",
+        stdio: ["pipe", "pipe", "inherit"],
+        timeout: 60_000,
+      }),
+    );
   });
 
-  it("completes a real short-lived subprocess within the 60-second bound", () => {
-    const proc = spawnSync("node", ["-e", "process.exit(0)"], {
-      encoding: "utf8",
-      killSignal: "SIGKILL",
-      timeout: 60_000,
+  it("propagates timeout failures from the GitHub CLI process", () => {
+    const timeout = Object.assign(new Error("spawnSync gh ETIMEDOUT"), { code: "ETIMEDOUT" });
+    const execFileSyncImpl = vi.fn(() => {
+      throw timeout;
     });
-    expect(proc.status).toBe(0);
-    expect(proc.signal).toBeNull();
+
+    expect(() => defaultRunGh(["pr", "view", "123"], {}, { execFileSyncImpl })).toThrow(timeout);
   });
 });

@@ -93,8 +93,9 @@ function ghJson(args, runGh) {
   return JSON.parse(runGh(args));
 }
 
-export function defaultRunGh(args, options = {}) {
-  return execFileSync("gh", args, {
+export function defaultRunGh(args, options = {}, params = {}) {
+  const execFileSyncImpl = params.execFileSyncImpl ?? execFileSync;
+  return execFileSyncImpl("gh", args, {
     encoding: "utf8",
     killSignal: "SIGKILL",
     stdio: options.input ? ["pipe", "pipe", "inherit"] : ["ignore", "pipe", "inherit"],
