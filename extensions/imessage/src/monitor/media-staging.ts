@@ -1,9 +1,9 @@
 // Imessage plugin module implements media staging behavior.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { isInboundPathAllowed } from "openclaw/plugin-sdk/media-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import type { IMessageAttachment } from "./types.js";
 
@@ -75,7 +75,9 @@ async function withHeicSnapshot<T>(
   buffer: Buffer,
   fn: (snapshotPath: string, snapshotDir: string) => Promise<T>,
 ): Promise<T> {
-  const snapshotDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-imessage-heic-"));
+  const snapshotDir = await fs.mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-imessage-heic-"),
+  );
   try {
     const snapshotPath = path.join(snapshotDir, path.basename(sourcePath));
     await fs.writeFile(snapshotPath, buffer, { flag: "wx" });
@@ -153,16 +155,19 @@ async function readAttachmentBuffer(params: {
     try {
       const sourceBuffer = await readFileWithinLimit(canonicalPath, params.maxBytes);
       const convert = params.deps.convertHeicToJpeg;
-      const converted = await withHeicSnapshot(canonicalPath, sourceBuffer, async (snapshotPath, snapshotDir) =>
-        convert
-          ? {
-              buffer: await convert(snapshotPath, params.maxBytes),
-              fileName: jpegFilenameForAttachment(params.attachmentPath),
-            }
-          : await loadWebMedia(snapshotPath, {
-              maxBytes: params.maxBytes,
-              localRoots: [snapshotDir],
-            }),
+      const converted = await withHeicSnapshot(
+        canonicalPath,
+        sourceBuffer,
+        async (snapshotPath, snapshotDir) =>
+          convert
+            ? {
+                buffer: await convert(snapshotPath, params.maxBytes),
+                fileName: jpegFilenameForAttachment(params.attachmentPath),
+              }
+            : await loadWebMedia(snapshotPath, {
+                maxBytes: params.maxBytes,
+                localRoots: [snapshotDir],
+              }),
       );
       return {
         buffer: converted.buffer,
