@@ -21,7 +21,7 @@ const resolveEnvApiKey = vi.fn().mockReturnValue(undefined);
 const resolveAwsSdkEnvVarName = vi.fn().mockReturnValue(undefined);
 const hasUsableCustomProviderApiKey = vi.fn().mockReturnValue(false);
 const hasSyntheticLocalProviderAuthConfig = vi.fn().mockReturnValue(false);
-const loadModelCatalog = vi.fn(async () => []);
+const loadModelCatalog = vi.fn<(_params?: unknown) => Promise<never[]>>(async () => []);
 const loadProviderCatalogModelsForList = vi.fn<() => Promise<Array<Record<string, unknown>>>>(
   async () => [],
 );

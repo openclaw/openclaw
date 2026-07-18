@@ -20,7 +20,7 @@ const contextTestState = vi.hoisted(() => {
     staticCatalogModels: [] as DiscoveredModel[],
     runtimeConfigSnapshot: null as OpenClawConfig | null,
     runtimeConfigSourceSnapshot: null as OpenClawConfig | null,
-    loadModelCatalogOwnerSnapshot: vi.fn(async () => ({
+    loadModelCatalogOwnerSnapshot: vi.fn(async (_params: unknown) => ({
       modelCatalog: {
         entries: state.discoveredModels,
         routeVariants: [],

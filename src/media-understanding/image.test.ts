@@ -4,6 +4,7 @@ import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { attachModelProviderRequestTransport } from "../agents/provider-request-config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   looksLikeSecretSentinel,
   mintSecretSentinel,
@@ -2010,8 +2011,8 @@ describe("describeImageWithModel", () => {
   });
 
   it("uses one committed prepared generation for image setup and streaming", async () => {
-    const requestedCfg = { logging: { level: "info" } };
-    const committedCfg = { logging: { level: "debug" } };
+    const requestedCfg: OpenClawConfig = { logging: { level: "info" } };
+    const committedCfg: OpenClawConfig = { logging: { level: "debug" } };
     acquireAgentRunPreparedModelRuntimeMock.mockResolvedValueOnce({
       snapshot: {
         agentDir: "/tmp/committed-agent",
@@ -2071,7 +2072,7 @@ describe("describeImageWithModel", () => {
   });
 
   it("reuses a parent run generation without acquiring another image lease", async () => {
-    const cfg = { logging: { level: "info" } };
+    const cfg: OpenClawConfig = { logging: { level: "info" } };
     discoverModelsMock.mockReturnValue({
       find: vi.fn(() => ({
         provider: "google",

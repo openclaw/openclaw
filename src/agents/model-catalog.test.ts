@@ -11,8 +11,13 @@ import {
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import type { ModelRegistry } from "./sessions/index.js";
 
+type AugmentModelCatalogWithProviderPlugins =
+  typeof import("../plugins/provider-runtime.js").augmentModelCatalogWithProviderPlugins;
+
 const mocks = vi.hoisted(() => ({
-  augmentModelCatalogWithProviderPlugins: vi.fn(async () => []),
+  augmentModelCatalogWithProviderPlugins: vi.fn<AugmentModelCatalogWithProviderPlugins>(
+    async () => [],
+  ),
 }));
 
 vi.mock("../plugins/provider-runtime.runtime.js", () => ({
@@ -83,7 +88,7 @@ describe("prepared model catalog builder", () => {
                 contextWindow: 32_000,
                 maxTokens: 4_096,
                 reasoning: true,
-                input: ["text", "document"],
+                input: ["text", "image"],
                 cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
               },
             ],
@@ -110,7 +115,7 @@ describe("prepared model catalog builder", () => {
       api: "openai-completions",
       contextWindow: 32_000,
       reasoning: true,
-      input: ["text", "document"],
+      input: ["text", "image"],
     });
     expect(snapshot.routeVariants).toHaveLength(2);
   });

@@ -91,7 +91,7 @@ describe("loadPreparedModelCatalogSnapshotForBrowse", () => {
     );
 
     await expect(
-      loadModelCatalogSnapshotForBrowse({
+      loadPreparedModelCatalogSnapshotForBrowse({
         cfg: config({ providerWildcard: true }),
         view: "configured",
         loadCatalog,
@@ -166,7 +166,7 @@ describe("loadPreparedModelCatalogSnapshotForBrowse", () => {
     const clearTimeout = vi.spyOn(globalThis, "clearTimeout");
     const loadCatalog = vi.fn(async () => readOnlyCatalog);
 
-    const resultPromise = loadModelCatalogSnapshotForBrowse({
+    const resultPromise = loadPreparedModelCatalogSnapshotForBrowse({
       cfg: config(),
       loadCatalog,
       timeoutMs: Number.NaN,
@@ -187,7 +187,7 @@ describe("loadPreparedModelCatalogSnapshotForBrowse", () => {
     const clearTimeout = vi.spyOn(globalThis, "clearTimeout");
     const loadCatalog = vi.fn(async () => readOnlyCatalog);
 
-    const resultPromise = loadModelCatalogSnapshotForBrowse({
+    const resultPromise = loadPreparedModelCatalogSnapshotForBrowse({
       cfg: config(),
       loadCatalog,
       timeoutMs: Number.MAX_SAFE_INTEGER,

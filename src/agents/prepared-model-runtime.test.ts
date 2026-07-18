@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+type LoadStaticCatalog =
+  typeof import("./embedded-agent-runner/model.static-catalog.js").loadBundledProviderStaticCatalogContextModels;
+
 const mocks = vi.hoisted(() => ({
   authStorage: { getAll: vi.fn(() => ({ custom: { type: "api_key", key: "test-key" } })) },
   modelRegistry: {
@@ -17,7 +20,7 @@ const mocks = vi.hoisted(() => ({
     routeVariants: [],
   })),
   ensureRuntimePluginsLoaded: vi.fn(),
-  loadStaticCatalog: vi.fn(async () => []),
+  loadStaticCatalog: vi.fn<LoadStaticCatalog>(async () => []),
   configuredAgentIds: [] as string[],
   mutationListener: undefined as
     | ((event: { agentDir?: string; affectsInheritedStores: boolean }) => void)
@@ -1102,7 +1105,7 @@ describe("prepared model runtime snapshots", () => {
     for (const [agentDir, workspaceDir] of [
       ["/tmp/unused-agent", "/tmp/unused-workspace"],
       ["/tmp/configured-secondary", "/tmp/workspace-secondary"],
-    ]) {
+    ] as const) {
       await expect(
         prepareModelRuntimeSnapshot({
           config: {},
