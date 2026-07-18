@@ -27,9 +27,11 @@ struct QuickChatViewSmokeTests {
             connectionGateProvider: { .available })
         let view = QuickChatView(
             model: model,
+            replyBinding: QuickChatReplyBinding(),
             onDismiss: {},
             onSendAccepted: { _ in },
             onShowAgentPicker: {},
+            onShowRecentSessions: {},
             onWindowScreenshot: {},
             onContentHeightChange: { _ in },
             onTextViewReady: { _ in })

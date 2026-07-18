@@ -1,13 +1,16 @@
 import AppKit
 import Observation
+import OpenClawChatUI
 import SwiftUI
 
 @MainActor
 struct QuickChatView: View {
     @Bindable var model: QuickChatModel
+    @Bindable var replyBinding: QuickChatReplyBinding
     let onDismiss: () -> Void
     let onSendAccepted: (Bool) -> Void
     let onShowAgentPicker: () -> Void
+    let onShowRecentSessions: () -> Void
     let onWindowScreenshot: () -> Void
     let onContentHeightChange: (CGFloat) -> Void
     let onTextViewReady: (NSTextView) -> Void
@@ -40,12 +43,18 @@ struct QuickChatView: View {
                     self.permissionStrip
                         .transition(.opacity.combined(with: .move(edge: .top)))
                 }
+
+                if let viewModel = self.replyBinding.viewModel {
+                    self.replyArea(viewModel: viewModel)
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                }
             }
         }
         .frame(width: 620)
         .fixedSize(horizontal: false, vertical: true)
         .animation(.spring(duration: 0.25), value: self.model.shouldShowPermissionStrip)
         .animation(.easeOut(duration: 0.14), value: self.statusLine?.message)
+        .animation(.spring(duration: 0.28), value: self.replyBinding.route)
         .onGeometryChange(for: CGFloat.self) { proxy in
             proxy.size.height
         } action: { height in
@@ -59,7 +68,7 @@ struct QuickChatView: View {
 
             ZStack(alignment: .leading) {
                 if self.model.text.isEmpty {
-                    Text("Message \(self.model.agentDisplay.name)")
+                    Text(self.model.messagePlaceholder)
                         .font(.system(size: 13.5))
                         .foregroundStyle(.tertiary)
                         .padding(.leading, 2)
@@ -74,6 +83,19 @@ struct QuickChatView: View {
                     .frame(height: self.editorHeight)
             }
             .frame(maxWidth: .infinity)
+
+            if self.model.sendState != .sending {
+                Button(action: self.onShowRecentSessions) {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.system(size: 16.5, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 22, height: 22)
+                }
+                .buttonStyle(.plain)
+                .disabled(!self.model.canSelectRecentSession)
+                .help("Continue a recent conversation")
+                .accessibilityLabel("Continue a recent conversation")
+            }
 
             if self.model.sendState != .sending {
                 Button(action: self.onWindowScreenshot) {
@@ -190,6 +212,23 @@ struct QuickChatView: View {
         }
     }
 
+    private func replyArea(viewModel: OpenClawChatViewModel) -> some View {
+        VStack(spacing: 0) {
+            Divider()
+            OpenClawChatView(
+                viewModel: viewModel,
+                drawsBackground: false,
+                showsSessionSwitcher: false,
+                displayOptions: [],
+                showsAssistantAvatars: false,
+                composerChrome: .clean,
+                isComposerEnabled: false,
+                isAttachmentInputEnabled: false)
+                .id(self.replyBinding.route)
+                .frame(height: 300)
+        }
+    }
+
     private var statusLine: (message: String, isError: Bool)? {
         if case let .failed(message) = self.model.sendState {
             return (message, true)
@@ -211,11 +250,7 @@ struct QuickChatView: View {
                 self.onSendAccepted(true)
                 return
             }
-            // Plain Return lingers briefly on the checkmark before the bar dismisses itself.
-            try? await Task.sleep(for: .seconds(0.45))
-            guard self.model.activePresentationID == presentationID,
-                  self.model.sendState == .sent,
-                  self.model.text.isEmpty else { return }
+            guard self.model.activePresentationID == presentationID else { return }
             self.onSendAccepted(false)
         }
     }
