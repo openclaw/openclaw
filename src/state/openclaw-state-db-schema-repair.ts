@@ -168,6 +168,9 @@ export function detectOpenClawStateDatabaseSchemaMigrations(
     if (sessionWatchMigration.needsSessionWatchCursorProvenanceMigration(db, userVersion)) {
       migrations.push({ kind: "session-watch-cursor-provenance-v4", path: pathname });
     }
+    if (tableExists(db, "audit_events") && userVersion < OPENCLAW_STATE_SCHEMA_VERSION) {
+      migrations.push({ kind: "marketplace-feed-watches-v6", path: pathname });
+    }
     migrations.push(
       ...operatorApprovalMigration.detectOperatorApprovalSchemaMigration(db, pathname),
     );

@@ -134,4 +134,55 @@ describe("plugins cli lazy runtime boundary", () => {
       expect.objectContaining({ feedProfile: "acme", expectedSha256: "abc123", json: true }),
     );
   });
+
+  it("loads the marketplace watch command only for watch actions", async () => {
+    const runMarketplaceWatchAddCommand = vi.fn().mockResolvedValue(undefined);
+    vi.doMock("./plugins-marketplace-watch-command.js", () => ({
+      runMarketplaceWatchAddCommand,
+    }));
+
+    const { registerPluginsCli } = await import("./plugins-cli.js");
+    const program = new Command();
+    registerPluginsCli(program);
+
+    await program.parseAsync(
+      [
+        "plugins",
+        "marketplace",
+        "watch",
+        "add",
+        "demo",
+        "--feed-profile",
+        "acme",
+        "--offline",
+        "--json",
+      ],
+      { from: "user" },
+    );
+
+    expect(runMarketplaceWatchAddCommand).toHaveBeenCalledWith(
+      "demo",
+      expect.objectContaining({ feedProfile: "acme", offline: true, json: true }),
+    );
+  });
+
+  it("routes bounded marketplace update list options", async () => {
+    const runMarketplaceUpdateListCommand = vi.fn();
+    vi.doMock("./plugins-marketplace-watch-command.js", () => ({
+      runMarketplaceUpdateListCommand,
+    }));
+
+    const { registerPluginsCli } = await import("./plugins-cli.js");
+    const program = new Command();
+    registerPluginsCli(program);
+
+    await program.parseAsync(
+      ["plugins", "marketplace", "updates", "list", "--unread", "--limit", "25", "--json"],
+      { from: "user" },
+    );
+
+    expect(runMarketplaceUpdateListCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ unread: true, limit: 25, json: true }),
+    );
+  });
 });

@@ -12,6 +12,7 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { materializeMarketplaceFeedWatchUpdates } from "./official-external-plugin-catalog-watch-store.js";
 import {
   type HostedOfficialExternalPluginCatalogMetadata,
   type HostedOfficialExternalPluginCatalogSnapshot,
@@ -294,6 +295,14 @@ export function createSqliteHostedOfficialExternalPluginCatalogSnapshotStore(
               }),
             ),
         );
+        if (snapshot.trust?.mode === "signed" && snapshot.monotonic?.mode === "signed-feed") {
+          materializeMarketplaceFeedWatchUpdates({
+            db: database.db,
+            feedUrl: snapshot.metadata.url,
+            nextBody: snapshot.body,
+            now,
+          });
+        }
       }, resolveStateDatabaseOptions(options));
     },
   };

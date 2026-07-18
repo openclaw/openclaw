@@ -1950,6 +1950,7 @@ describe("state migrations", () => {
     expect(detected.preview.filter((line) => line.startsWith("- Shared SQLite schema:"))).toEqual([
       "- Shared SQLite schema: audit event ledger → versioned message lifecycle schema",
       "- Shared SQLite schema: tables → SQLite STRICT typing",
+      "- Shared SQLite schema: local marketplace feed watches and update history",
     ]);
 
     const result = await runLegacyStateMigrations({ detected, config: cfg, env });

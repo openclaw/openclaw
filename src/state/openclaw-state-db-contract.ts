@@ -2,7 +2,8 @@ import type { DatabaseSync } from "node:sqlite";
 import type { SqliteWalMaintenance } from "../infra/sqlite-wal.js";
 
 // v5 records durable cloud-worker result refs on pending workspace fences.
-export const OPENCLAW_STATE_SCHEMA_VERSION = 5;
+// v6 adds local marketplace feed watches and their bounded update history.
+export const OPENCLAW_STATE_SCHEMA_VERSION = 6;
 export const OPENCLAW_STATE_STRICT_SCHEMA_VERSION = 3;
 /** Maximum time one synchronous SQLite call may wait for a lock. */
 export const OPENCLAW_SQLITE_BUSY_TIMEOUT_MS = 5_000;
@@ -27,6 +28,7 @@ export type OpenClawStateDatabaseSchemaMigration = {
     | "audit-events-v2"
     | "operator-approvals-system-agent"
     | "session-watch-cursor-provenance-v4"
+    | "marketplace-feed-watches-v6"
     | "strict-tables-v3";
   path: string;
 };

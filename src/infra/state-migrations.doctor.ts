@@ -166,6 +166,8 @@ function describeStateSchemaMigration(migration: OpenClawStateDatabaseSchemaMigr
       return "session watch cursors → provenance column";
     case "strict-tables-v3":
       return "tables → SQLite STRICT typing";
+    case "marketplace-feed-watches-v6":
+      return "local marketplace feed watches and update history";
   }
   return migration.kind satisfies never;
 }
