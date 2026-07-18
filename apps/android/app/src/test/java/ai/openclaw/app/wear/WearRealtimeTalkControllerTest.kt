@@ -180,6 +180,43 @@ class WearRealtimeTalkControllerTest {
     }
 
   @Test
+  fun `late append error from a stopped session does not fail its replacement`() =
+    runTest {
+      var relaySequence = 0
+      var staleAppendError: ((String) -> Unit)? = null
+      val controller =
+        WearRealtimeTalkController(
+          scope = this,
+          isConnected = { true },
+          requestGateway = { method, _, _ ->
+            if (method == "talk.session.create") {
+              relaySequence += 1
+              """{"relaySessionId":"relay-$relaySequence"}"""
+            } else {
+              """{"ok":true}"""
+            }
+          },
+          sendGatewayFrame = { _, _, _, onError ->
+            if (staleAppendError == null) staleAppendError = onError
+          },
+          sendWatchFrame = { _, _, _ -> },
+        )
+
+      assertTrue(controller.start("watch-a", "session-a", "attempt-a", "de"))
+      controller.appendAudio("watch-a", ByteArray(2))
+      runCurrent()
+      assertTrue(staleAppendError != null)
+
+      assertTrue(controller.stop("watch-a", "attempt-a"))
+      assertTrue(controller.start("watch-a", "session-b", "attempt-b", "de"))
+      staleAppendError?.invoke("request timeout")
+
+      assertEquals(WearRealtimeTalkStatus.LISTENING, controller.snapshot.value.status)
+      assertEquals("attempt-b", controller.snapshot.value.attemptId)
+      assertTrue(controller.stop("watch-a", "attempt-b"))
+    }
+
+  @Test
   fun `retries without language when an older gateway rejects only that field`() =
     runTest {
       val createParams = mutableListOf<String?>()
