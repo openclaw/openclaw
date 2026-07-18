@@ -1587,12 +1587,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         // the draft preview in place; record participation on whichever path fires.
         const markThreadParticipation = () => {
           if (kind !== "direct" && effectiveReplyToId) {
-            recordMattermostThreadParticipation(
-              account.accountId,
-              channelId,
-              effectiveReplyToId,
-              { agentId: route.agentId },
-            );
+            recordMattermostThreadParticipation(account.accountId, channelId, effectiveReplyToId, {
+              agentId: route.agentId,
+            });
           }
         };
         await deliverMattermostReplyWithDraftPreview({
@@ -1643,10 +1640,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             // (reasoning-only/empty/suppressed) do not auto-engage later.
             if (outcome === "text" || outcome === "media") {
               markThreadParticipation();
-            } else if (
-              outcome === "empty" &&
-              finalTextResolution?.kind === "already-delivered"
-            ) {
+            } else if (outcome === "empty" && finalTextResolution?.kind === "already-delivered") {
               // The terminal payload confirms the already-published assistant block as
               // the visible final reply even though this delivery has no remaining text.
               markThreadParticipation();
@@ -1821,9 +1815,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                       phase: payloadValue.phase,
                       args: payloadValue.args,
                     },
-                    payloadValue.detailMode
-                      ? { detailMode: payloadValue.detailMode }
-                      : undefined,
+                    payloadValue.detailMode ? { detailMode: payloadValue.detailMode } : undefined,
                   ),
                   { startImmediately: true },
                 );
