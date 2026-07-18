@@ -33,11 +33,12 @@ OpenClaw always enables a free-text **Other** answer. The agent must not add an
 
 ## Platform behavior
 
-Answers work on every supported conversation surface. The web Control UI docks
-a stepper panel above the composer. iOS, macOS, and Android show inline cards;
-multiple questions stay stacked as an intentional touch-friendly idiom. Every
-platform keeps a persistent question-to-answer summary, and **Skip** is
-available everywhere.
+Answers work on every supported conversation surface. The web Control UI uses a
+docked stepper that replaces the composer while expanded; collapsing it restores
+the full composer beneath a slim question bar. iOS, macOS, and Android show
+inline cards; multiple questions stay stacked as an intentional touch-friendly
+idiom. Every platform keeps a persistent question-to-answer summary, and
+**Skip** is available everywhere.
 
 Prompts that cannot use native buttons, including multi-question and
 multi-select prompts, degrade to readable text on channels. The Control UI
