@@ -175,6 +175,24 @@ describe("LINE send helpers", () => {
     expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(item?.action.label ?? "")).toBe(false);
   });
 
+  it("sends quick reply action text within LINE's 300 character limit", async () => {
+    await sendModule.pushTextMessageWithQuickReplies(
+      "line:user:U123",
+      "Pick one",
+      ["x".repeat(301)],
+      { cfg: LINE_TEST_CFG },
+    );
+
+    const firstCall = pushMessageMock.mock.calls.at(0) as [
+      { messages: Array<{ quickReply?: { items?: Array<{ action?: { text?: string } }> } }> },
+    ];
+    const payload = expectDefined(firstCall[0], "LINE push payload");
+    const message = expectDefined(payload.messages[0], "LINE push message");
+    const quickReplyItem = expectDefined(message.quickReply?.items?.[0], "LINE quick reply item");
+
+    expect(quickReplyItem.action?.text).toHaveLength(300);
+  });
+
   it("pushes images via normalized LINE target", async () => {
     const result = await sendModule.pushImageMessage(
       "line:user:U123",
