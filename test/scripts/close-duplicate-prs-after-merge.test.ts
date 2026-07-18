@@ -1,8 +1,13 @@
 // Close Duplicate Prs After Merge tests cover close duplicate prs after merge script behavior.
-import { describe, expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("node:child_process", () => ({ execFileSync: vi.fn() }));
+
 import {
   applyClosePlan,
   buildDuplicateClosePlan,
+  defaultRunGh,
   parseArgs,
   parsePrNumberList,
   parseUnifiedDiffRanges,
@@ -251,5 +256,41 @@ Closing #70592 as a duplicate.`,
       ["pr", "comment", "70592", "--repo", "openclaw/openclaw", "--body", "closing"],
       ["pr", "close", "70592", "--repo", "openclaw/openclaw"],
     ]);
+  });
+});
+
+describe("defaultRunGh", () => {
+  it("bounds each GitHub lookup with a timeout and SIGKILL", () => {
+    const mockExecFileSync = vi.mocked(execFileSync);
+    mockExecFileSync.mockReturnValue("result");
+
+    const result = defaultRunGh(["pr", "view", "123"]);
+
+    expect(result).toBe("result");
+    expect(mockExecFileSync).toHaveBeenCalledTimes(1);
+    const [command, args, options] = mockExecFileSync.mock.calls[0]!;
+    expect(command).toBe("gh");
+    expect(args).toEqual(["pr", "view", "123"]);
+    expect(options).toMatchObject({
+      encoding: "utf8",
+      killSignal: "SIGKILL",
+      timeout: 60_000,
+    });
+  });
+
+  it("forwards stdin input while keeping the timeout bound", () => {
+    const mockExecFileSync = vi.mocked(execFileSync);
+    mockExecFileSync.mockReturnValue("ok");
+
+    defaultRunGh(["pr", "edit", "123", "--add-label", "duplicate"], { input: "body" });
+
+    const lastCall = mockExecFileSync.mock.calls.at(-1)!;
+    const options = lastCall[2];
+    expect(options).toMatchObject({
+      killSignal: "SIGKILL",
+      timeout: 60_000,
+      input: "body",
+      stdio: ["pipe", "pipe", "inherit"],
+    });
   });
 });
