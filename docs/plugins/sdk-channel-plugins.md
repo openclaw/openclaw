@@ -96,14 +96,17 @@ ownership boundary, and test expectations.
 
 ### Durable ingress and replay dedupe
 
-Channels adopting the durable ingress drain follow the Telegram reference
-pattern: enqueue the raw transport envelope at a single receive chokepoint
-(no normalization at receive time), gate the transport ack on the durable
-append for webhook transports, derive one serialized lane per conversation,
-and mark the event complete at dispatch adoption. The queue's primary key is
-`(queue_name, event_id)` and completion tombstones the row instead of
-deleting it, so a late platform redelivery of the same `event_id` is rejected
-durably for the tombstone retention window.
+Channels adopting durable ingress should use `createChannelIngressMonitor`
+from `openclaw/plugin-sdk/channel-outbound` unless they need a materially
+different admission or pump contract. Enqueue the raw transport envelope at a
+single receive chokepoint (no normalization at receive time), gate the
+transport ack on the durable append for webhook transports, derive one
+serialized lane per conversation, and mark the event complete at dispatch
+adoption. The queue's primary key is `(queue_name, event_id)` and completion
+tombstones the row instead of deleting it, so a late platform redelivery of
+the same `event_id` is rejected durably for the tombstone retention window.
+See [Channel outbound API](/plugins/sdk-channel-outbound#durable-ingress-monitors)
+for the monitor API and shutdown contract.
 
 That tombstone is the layering rule for replay guards
 (`openclaw/plugin-sdk/persistent-dedupe`): a drained channel keeps a separate

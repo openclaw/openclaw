@@ -642,6 +642,11 @@ async function runDatabaseBloatHealth(ctx: DoctorHealthFlowContext): Promise<voi
   noteSqliteDatabaseBloat(ctx.cfg);
 }
 
+async function runChannelIngressDeadLettersHealth(): Promise<void> {
+  const { noteChannelIngressDeadLetters } = await import("../commands/doctor-channel-ingress.js");
+  noteChannelIngressDeadLetters();
+}
+
 async function runStateIntegrityHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteStateIntegrity } = await loadDoctorStateIntegrityModule();
   await noteStateIntegrity(ctx.cfg, ctx.prompter, ctx.configPath);
@@ -1778,6 +1783,11 @@ function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:db-bloat",
       label: "SQLite database size",
       run: runDatabaseBloatHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:channel-ingress-dead-letters",
+      label: "Channel ingress dead letters",
+      run: runChannelIngressDeadLettersHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:state-integrity",
