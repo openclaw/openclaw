@@ -33,7 +33,7 @@ vi.mock("node:child_process", async () => {
 
 vi.mock("../../scripts/lib/managed-child-process.mjs", () => ({
   signalExitCode: (signal: NodeJS.Signals) =>
-    signal === "SIGINT" ? 130 : signal === "SIGQUIT" ? 131 : 143,
+    signal === "SIGINT" ? 130 : signal === "SIGQUIT" ? 131 : signal === "SIGKILL" ? 137 : 143,
   terminateManagedChild: terminateManagedChildMock,
 }));
 
@@ -243,6 +243,36 @@ describe("test-update-cli-startup-bench", () => {
       }
     },
   );
+
+  it("cleans the reported active sample when the driver crashes", async () => {
+    const fixtureRoot = mkdtempSync(path.join(process.cwd(), ".tmp-cli-startup-driver-crash-"));
+    const outputPath = path.join(fixtureRoot, "cli-startup-bench.json");
+    const child = Object.assign(new EventEmitter(), { pid: 123_456, kill: vi.fn() });
+    spawnMock.mockImplementation(() => {
+      queueMicrotask(() => {
+        child.emit("message", {
+          kind: "openclaw-cli-startup-bench-active-sample",
+          pid: 654_321,
+        });
+        child.emit("close", null, "SIGKILL");
+      });
+      return child;
+    });
+    setSuccessfulUpdateArgv(outputPath);
+
+    try {
+      await import(pathToFileURL(UPDATE_SCRIPT_PATH).href);
+
+      expect(process.exitCode).toBe(1);
+      expect(terminateManagedChildMock).toHaveBeenCalledWith(
+        expect.objectContaining({ pid: 654_321 }),
+        "SIGKILL",
+      );
+      expect(existsSync(outputPath)).toBe(false);
+    } finally {
+      rmSync(fixtureRoot, { recursive: true, force: true });
+    }
+  });
 
   it("exits before a hanging benchmark driver can block fixture refresh forever", async () => {
     const actualChildProcess =
@@ -497,6 +527,62 @@ describe("test-update-cli-startup-bench", () => {
         expect(statSync(outputPath).mode & 0o777).toBe(0o400);
         expect(spawnMock).not.toHaveBeenCalled();
       } finally {
+        rmSync(fixtureRoot, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "updates an existing output inside a non-writable directory",
+    async () => {
+      const fixtureRoot = mkdtempSync(path.join(process.cwd(), ".tmp-cli-startup-restricted-dir-"));
+      const outputRoot = path.join(fixtureRoot, "restricted");
+      const outputPath = path.join(outputRoot, "cli-startup-bench.json");
+      mkdirSync(outputRoot);
+      writeFileSync(outputPath, "existing\n", "utf8");
+      chmodSync(outputPath, 0o600);
+      chmodSync(outputRoot, 0o500);
+      mockSuccessfulBenchmarkRun();
+      setSuccessfulUpdateArgv(outputPath);
+
+      try {
+        await import(pathToFileURL(UPDATE_SCRIPT_PATH).href);
+
+        const args = spawnMock.mock.calls[0]?.[1] as string[];
+        const temporaryOutputPath = args[args.indexOf("--output") + 1] ?? "";
+        expect(path.dirname(temporaryOutputPath)).not.toBe(outputRoot);
+        expect(existsSync(path.dirname(temporaryOutputPath))).toBe(false);
+        expect(readFileSync(outputPath, "utf8")).toBe("replacement\n");
+        expect(statSync(outputPath).mode & 0o777).toBe(0o600);
+      } finally {
+        chmodSync(outputRoot, 0o700);
+        rmSync(fixtureRoot, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "updates an existing write-only output without requiring read access",
+    async () => {
+      const fixtureRoot = mkdtempSync(path.join(process.cwd(), ".tmp-cli-startup-write-only-"));
+      const outputPath = path.join(fixtureRoot, "cli-startup-bench.json");
+      writeFileSync(outputPath, "existing\n", "utf8");
+      chmodSync(outputPath, 0o200);
+      mockSuccessfulBenchmarkRun();
+      setSuccessfulUpdateArgv(outputPath);
+
+      try {
+        await import(pathToFileURL(UPDATE_SCRIPT_PATH).href);
+
+        const args = spawnMock.mock.calls[0]?.[1] as string[];
+        const temporaryOutputPath = args[args.indexOf("--output") + 1] ?? "";
+        expect(path.dirname(temporaryOutputPath)).not.toBe(fixtureRoot);
+        expect(existsSync(path.dirname(temporaryOutputPath))).toBe(false);
+        expect(statSync(outputPath).mode & 0o777).toBe(0o200);
+        chmodSync(outputPath, 0o600);
+        expect(readFileSync(outputPath, "utf8")).toBe("replacement\n");
+      } finally {
+        chmodSync(outputPath, 0o600);
         rmSync(fixtureRoot, { recursive: true, force: true });
       }
     },

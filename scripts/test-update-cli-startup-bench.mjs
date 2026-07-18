@@ -2,7 +2,9 @@
 import { spawn } from "node:child_process";
 import {
   closeSync,
+  constants as fsConstants,
   lstatSync,
+  mkdtempSync,
   openSync,
   readFileSync,
   readlinkSync,
@@ -10,6 +12,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { parseFlagArgs, stringFlag, intFlag } from "./lib/arg-utils.mjs";
 import { signalExitCode, terminateManagedChild } from "./lib/managed-child-process.mjs";
@@ -65,6 +68,22 @@ function resolveTemporaryOutputPath(outputPath) {
   return path.join(parsed.dir, `.${parsed.base}.tmp-${process.pid}`);
 }
 
+function prepareTemporaryOutput(outputDestination) {
+  if (outputDestination.exists) {
+    const directory = mkdtempSync(path.join(tmpdir(), "openclaw-cli-startup-bench-"));
+    return {
+      cleanup: () => rmSync(directory, { force: true, recursive: true }),
+      path: path.join(directory, path.basename(outputDestination.path)),
+    };
+  }
+  const temporaryOutputPath = resolveTemporaryOutputPath(outputDestination.path);
+  rmSync(temporaryOutputPath, { force: true });
+  return {
+    cleanup: () => rmSync(temporaryOutputPath, { force: true }),
+    path: temporaryOutputPath,
+  };
+}
+
 // Direct benchmark writes followed output symlinks and retained target metadata.
 // Resolve that same destination for staging, but never rename over a special file.
 function resolveOutputDestination(outputPath) {
@@ -98,7 +117,7 @@ function resolveOutputDestination(outputPath) {
       // Successful publication writes this inode in place, preserving links and metadata.
       let handle;
       try {
-        handle = openSync(destinationPath, "r+");
+        handle = openSync(destinationPath, fsConstants.O_WRONLY);
       } catch (error) {
         throw new Error(`CLI startup benchmark output is not writable: ${destinationPath}`, {
           cause: error,
@@ -245,9 +264,9 @@ async function runBenchmarkDriver(args, opts) {
 
     const onError = () => finish(null, null);
     const onClose = (status, signal) => {
-      if (timedOut || receivedSignal) {
-        terminateActiveSample();
-      }
+      // Any still-reported sample outlived the driver cleanup path, regardless
+      // of whether the driver timed out, was interrupted, or crashed independently.
+      terminateActiveSample();
       finish(status, signal);
     };
     child.once("error", onError);
@@ -300,7 +319,8 @@ const opts = parseFlagArgs(
 );
 
 const outputDestination = resolveOutputDestination(opts.out);
-const temporaryOutputPath = resolveTemporaryOutputPath(outputDestination.path);
+const temporaryOutput = prepareTemporaryOutput(outputDestination);
+const temporaryOutputPath = temporaryOutput.path;
 const args = [
   "--import",
   "tsx",
@@ -319,9 +339,6 @@ const args = [
   temporaryOutputPath,
 ];
 
-// Publish only a completed report; a timed-out driver may have already written
-// its output before stalling in reporting or final cleanup.
-rmSync(temporaryOutputPath, { force: true });
 try {
   const run = await runBenchmarkDriver(args, opts);
 
@@ -336,5 +353,5 @@ try {
     console.log(`[test-update-cli-startup-bench] wrote fixture to ${opts.out}`);
   }
 } finally {
-  rmSync(temporaryOutputPath, { force: true });
+  temporaryOutput.cleanup();
 }
