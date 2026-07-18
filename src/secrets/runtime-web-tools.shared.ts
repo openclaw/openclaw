@@ -53,7 +53,7 @@ export type RuntimeWebProviderSelectionResult = {
 };
 
 /** Carries typed web-provider ownership through strict reload failures. */
-export class RuntimeWebProviderUnavailableError extends Error {
+class RuntimeWebProviderUnavailableError extends Error {
   readonly unavailableProviders: RuntimeWebUnavailableProvider[];
 
   constructor(
