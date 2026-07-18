@@ -417,7 +417,7 @@ mod tests {
             role: CLIENT_ROLE,
             scopes: &["operator.admin", "operator.read"],
             signed_at_ms: 1_800_000_000_000,
-            token: Some("tok-123"),
+            token: Some("test-token"),
             nonce: "nonce-abc",
             platform: " LiNuX ",
             device_family: "DESKTOP",
@@ -425,7 +425,7 @@ mod tests {
 
         assert_eq!(
             payload.as_bytes(),
-            b"v3|dev-1|openclaw-linux|ui|operator|operator.admin,operator.read|1800000000000|tok-123|nonce-abc|linux|desktop"
+            b"v3|dev-1|openclaw-linux|ui|operator|operator.admin,operator.read|1800000000000|test-token|nonce-abc|linux|desktop"
         );
     }
 
