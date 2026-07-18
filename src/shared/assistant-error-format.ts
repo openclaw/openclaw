@@ -107,7 +107,7 @@ function extractHttpStatusMatch(
     return null;
   }
   const code = Number(match[1]);
-  if (!Number.isFinite(code)) {
+  if (!Number.isFinite(code) || code < 100 || code > 599) {
     return null;
   }
   return { code, rest: (match[2] ?? "").trim() };
