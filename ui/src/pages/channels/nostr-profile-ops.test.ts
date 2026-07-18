@@ -101,7 +101,9 @@ describe("Nostr profile operations", () => {
     const headersOnlyServer = createServer((_req, res) => {
       res.writeHead(200, { "content-type": "application/json" });
     });
-    await new Promise<void>((resolve) => headersOnlyServer.listen(0, resolve));
+    await new Promise<void>((resolve) => {
+      headersOnlyServer.listen(0, resolve);
+    });
     const address = headersOnlyServer.address();
     const port = typeof address === "object" && address ? address.port : 0;
     const headersOnlyServerUrl = `http://127.0.0.1:${port}`;
@@ -121,7 +123,9 @@ describe("Nostr profile operations", () => {
     const headersOnlyServer = createServer((_req, res) => {
       res.writeHead(200, { "content-type": "application/json" });
     });
-    await new Promise<void>((resolve) => headersOnlyServer.listen(0, resolve));
+    await new Promise<void>((resolve) => {
+      headersOnlyServer.listen(0, resolve);
+    });
     const address = headersOnlyServer.address();
     const port = typeof address === "object" && address ? address.port : 0;
     const headersOnlyServerUrl = `http://127.0.0.1:${port}`;

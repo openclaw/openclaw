@@ -81,6 +81,7 @@ export async function importNostrProfile(params: {
       imported?: NostrProfile;
       merged?: NostrProfile;
       saved?: boolean;
+      persisted?: boolean;
     } | null;
     return { data, response };
   } finally {
