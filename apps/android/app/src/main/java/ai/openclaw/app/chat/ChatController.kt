@@ -2230,6 +2230,7 @@ class ChatController internal constructor(
       }
     val fallbackRecords = mutableListOf<QuestionRecord>()
     val unresolvedIds = mutableSetOf<String>()
+    val unavailableIds = mutableSetOf<String>()
     for (record in missingPendingRecords) {
       val params = buildJsonObject { put("id", JsonPrimitive(record.id)) }
       try {
@@ -2239,9 +2240,9 @@ class ChatController internal constructor(
         throw err
       } catch (err: GatewayRequestRejected) {
         if (err.gatewayError.details?.reason == "QUESTION_NOT_FOUND") {
-          // Match the Control UI recovery contract: after the gateway's terminal
-          // grace window, authoritative absence means the prompt is no longer actionable.
-          fallbackRecords += record.copy(status = "answered", answers = null)
+          // The terminal tombstone has aged out, so the question is no longer actionable,
+          // but its answered/cancelled/expired outcome cannot be reconstructed.
+          unavailableIds += record.id
         } else {
           unresolvedIds += record.id
         }
@@ -2257,17 +2258,31 @@ class ChatController internal constructor(
       val existing = current.associateBy { it.record.id }
       val nowMs = System.currentTimeMillis()
       val refreshedIds = records.mapTo(mutableSetOf()) { it.id }
+      val retainedCandidates =
+        current
+          .filter { prompt ->
+            val status = prompt.status(nowMs)
+            prompt.record.id !in refreshedIds &&
+              (
+                prompt.record.id in unresolvedIds ||
+                  prompt.record.id in unavailableIds ||
+                  (
+                    status != ChatQuestionStatus.Pending &&
+                      status != ChatQuestionStatus.Submitting
+                  )
+              )
+          }
       val retainedPrompts =
-        current.filter {
-          val status = it.status(nowMs)
-          it.record.id !in refreshedIds &&
-            (
-              it.record.id in unresolvedIds ||
-                (
-                  status != ChatQuestionStatus.Pending &&
-                    status != ChatQuestionStatus.Submitting
-                )
+        retainedCandidates.map { prompt ->
+          if (prompt.record.id in unavailableIds) {
+            prompt.copy(
+              submitting = false,
+              terminalObservedAtMs = prompt.terminalObservedAtMs ?: nowMs,
+              recoveryUnavailable = true,
             )
+          } else {
+            prompt
+          }
         }
       val next =
         records.map { record ->
@@ -2340,6 +2355,7 @@ class ChatController internal constructor(
       record = record.copy(answers = record.answers ?: prompt.record.answers),
       submitting = prompt.submitting && record.status == "pending",
       answeredLocally = prompt.answeredLocally && record.status == "answered",
+      recoveryUnavailable = false,
       terminalObservedAtMs =
         if (record.status == "pending" && nowMs < record.expiresAtMs) {
           null
@@ -2361,6 +2377,7 @@ class ChatController internal constructor(
           prompt.copy(
             record = prompt.record.copy(status = status, answers = answers ?: prompt.record.answers),
             submitting = false,
+            recoveryUnavailable = false,
             terminalObservedAtMs = prompt.terminalObservedAtMs ?: nowMs,
           )
         } else {

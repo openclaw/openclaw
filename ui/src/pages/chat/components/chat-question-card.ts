@@ -139,6 +139,9 @@ function terminalAnswer(prompt: QuestionPrompt, question: QuestionPanelQuestion)
   if (prompt.status === "expired") {
     return t("chat.questions.expired");
   }
+  if (prompt.status === "unavailable") {
+    return t("chat.questions.unavailable");
+  }
   const answer = prompt.answers?.answers[question.id]?.answers.join(", ");
   if (answer) {
     return answer;

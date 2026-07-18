@@ -11,6 +11,7 @@ public enum OpenClawQuestionCardStatus: Sendable, Equatable {
     case answeredElsewhere
     case expired
     case cancelled
+    case unavailable
 }
 
 @MainActor
@@ -25,6 +26,7 @@ public final class OpenClawQuestionCardModel: Identifiable {
     public private(set) var selectedOptions: [String: Set<String>] = [:]
     public private(set) var otherText: [String: String] = [:]
     public private(set) var isLocallyExpired = false
+    public private(set) var isRecoveryUnavailable = false
 
     public init(record: QuestionRecord) {
         self.id = record.id
@@ -42,6 +44,7 @@ public final class OpenClawQuestionCardModel: Identifiable {
         self.isSubmitting = self.isSubmitting && nextRecord.status == .pending
         self.isSkipping = self.isSkipping && nextRecord.status == .pending
         self.isLocallyExpired = false
+        self.isRecoveryUnavailable = false
         return true
     }
 
@@ -62,6 +65,7 @@ public final class OpenClawQuestionCardModel: Identifiable {
     }
 
     public func status(at date: Date = Date()) -> OpenClawQuestionCardStatus {
+        if self.isRecoveryUnavailable { return .unavailable }
         switch self.record.status {
         case .answered:
             return self.wasAnsweredLocally ? .answered : .answeredElsewhere
@@ -195,11 +199,22 @@ public final class OpenClawQuestionCardModel: Identifiable {
             resolvedby: self.record.resolvedby)
     }
 
+    @discardableResult
+    public func markRecoveryUnavailable() -> Bool {
+        guard !self.isRecoveryUnavailable else { return false }
+        self.isSubmitting = false
+        self.isSkipping = false
+        self.isLocallyExpired = false
+        self.isRecoveryUnavailable = true
+        return true
+    }
+
     public func apply(resolved: OpenClawQuestionResolvedEvent) {
         guard resolved.id == self.id else { return }
         self.isSubmitting = false
         self.isSkipping = false
         self.isLocallyExpired = false
+        self.isRecoveryUnavailable = false
         self.record = QuestionRecord(
             id: self.record.id,
             questions: self.record.questions,
@@ -244,6 +259,8 @@ public final class OpenClawQuestionCardModel: Identifiable {
             String(localized: "Skipped")
         case .expired:
             String(localized: "Expired")
+        case .unavailable:
+            String(localized: "Unavailable")
         case .pending, .submitting:
             String(localized: "Pending")
         }
@@ -615,10 +632,9 @@ extension OpenClawChatViewModel {
             case let .record(record):
                 changed = model.apply(record: record) || changed
             case .notFound:
-                // Match the Control UI recovery contract: after the gateway's terminal
-                // grace window, authoritative absence means the prompt is no longer actionable.
-                model.markAnsweredElsewhere()
-                changed = true
+                // The terminal tombstone has aged out, so the question is no longer actionable,
+                // but its answered/cancelled/expired outcome cannot be reconstructed.
+                changed = model.markRecoveryUnavailable() || changed
             case .failed:
                 complete = false
             }

@@ -95,6 +95,7 @@ class ChatQuestionTest {
     assertEquals("Pizza, Salad", terminalQuestionAnswer(answered, question, ChatQuestionStatus.Answered))
     assertEquals("Skipped", terminalQuestionAnswer(answered, question, ChatQuestionStatus.Cancelled))
     assertEquals("Expired", terminalQuestionAnswer(answered, question, ChatQuestionStatus.Expired))
+    assertEquals("Unavailable", terminalQuestionAnswer(answered, question, ChatQuestionStatus.Unavailable))
     assertEquals(
       "Answered elsewhere",
       terminalQuestionAnswer(answered.copy(record = answered.record.copy(answers = null)), question, ChatQuestionStatus.AnsweredElsewhere),
@@ -711,7 +712,7 @@ class ChatQuestionTest {
 
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)
-  fun missingQuestionNotFoundBecomesAnsweredElsewhere() =
+  fun missingQuestionNotFoundHasUnknownTerminalOutcome() =
     runTest {
       val json = Json { ignoreUnknownKeys = true }
       val pending = record(expiresAtMs = Long.MAX_VALUE)
@@ -745,7 +746,7 @@ class ChatQuestionTest {
       advanceUntilIdle()
 
       assertEquals(
-        ChatQuestionStatus.AnsweredElsewhere,
+        ChatQuestionStatus.Unavailable,
         controller.questions.value
           .single()
           .status(),

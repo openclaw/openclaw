@@ -10,6 +10,7 @@ enum class ChatQuestionStatus {
   AnsweredElsewhere,
   Expired,
   Cancelled,
+  Unavailable,
 }
 
 data class ChatQuestionPrompt(
@@ -18,18 +19,23 @@ data class ChatQuestionPrompt(
   val answeredLocally: Boolean = false,
   val errorText: String? = null,
   val terminalObservedAtMs: Long? = null,
+  val recoveryUnavailable: Boolean = false,
 ) {
   fun status(nowMs: Long = System.currentTimeMillis()): ChatQuestionStatus =
-    when (record.status) {
-      "answered" -> if (answeredLocally) ChatQuestionStatus.Answered else ChatQuestionStatus.AnsweredElsewhere
-      "cancelled" -> ChatQuestionStatus.Cancelled
-      "expired" -> ChatQuestionStatus.Expired
-      else ->
-        when {
-          nowMs >= record.expiresAtMs -> ChatQuestionStatus.Expired
-          submitting -> ChatQuestionStatus.Submitting
-          else -> ChatQuestionStatus.Pending
-        }
+    if (recoveryUnavailable) {
+      ChatQuestionStatus.Unavailable
+    } else {
+      when (record.status) {
+        "answered" -> if (answeredLocally) ChatQuestionStatus.Answered else ChatQuestionStatus.AnsweredElsewhere
+        "cancelled" -> ChatQuestionStatus.Cancelled
+        "expired" -> ChatQuestionStatus.Expired
+        else ->
+          when {
+            nowMs >= record.expiresAtMs -> ChatQuestionStatus.Expired
+            submitting -> ChatQuestionStatus.Submitting
+            else -> ChatQuestionStatus.Pending
+          }
+      }
     }
 }
 

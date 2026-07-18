@@ -7374,6 +7374,11 @@
       "translated": "انتهت الصلاحية"
     },
     {
+      "id": "native.android.86c8d6113d07ef82",
+      "source": "Unavailable",
+      "translated": "غير متاح"
+    },
+    {
       "id": "native.android.f68cd7a84be4089e",
       "source": "Answered",
       "translated": "تمت الإجابة"
@@ -22982,6 +22987,11 @@
       "id": "native.apple.8dde2eaaf6b0dfa9",
       "source": "Expired",
       "translated": "انتهت الصلاحية"
+    },
+    {
+      "id": "native.apple.6dff9e9194347f3b",
+      "source": "Unavailable",
+      "translated": "غير متاح"
     },
     {
       "id": "native.apple.b34cd890366824f0",

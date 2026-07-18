@@ -1464,6 +1464,27 @@ struct ChatViewModelTests {
             for: viewModel.questionCards[0].record.questions[0]) == "Two")
     }
 
+    @Test @MainActor func `missing question tombstone has unknown terminal outcome`() async {
+        let transport = TestChatTransport(
+            historyResponses: [],
+            listQuestionsHook: { [] },
+            getQuestionHook: { id in
+                throw GatewayResponseError(
+                    method: "question.get",
+                    code: "INVALID_REQUEST",
+                    message: "question '\(id)' was not found",
+                    details: ["reason": AnyCodable("QUESTION_NOT_FOUND")])
+            })
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        viewModel.upsertQuestion(chatQuestionRecord(id: "ask_missing"))
+
+        await viewModel.refreshQuestions()
+
+        #expect(viewModel.questionCards[0].status() == .unavailable)
+        #expect(viewModel.questionCards[0].terminalSummaryText(
+            for: viewModel.questionCards[0].record.questions[0]) == "Unavailable")
+    }
+
     @Test @MainActor func `question refresh retries transport failure`() async throws {
         let listCalls = AsyncCounter()
         let getCalls = AsyncCounter()

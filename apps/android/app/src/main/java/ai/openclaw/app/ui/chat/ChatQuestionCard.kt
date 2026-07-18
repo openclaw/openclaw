@@ -222,6 +222,7 @@ internal fun terminalQuestionAnswer(
 ): String {
   if (status == ChatQuestionStatus.Cancelled) return nativeString("Skipped")
   if (status == ChatQuestionStatus.Expired) return nativeString("Expired")
+  if (status == ChatQuestionStatus.Unavailable) return nativeString("Unavailable")
   prompt.record.answers?.answers?.get(question.id)?.answers?.takeIf { it.isNotEmpty() }?.let {
     return it.joinToString(", ")
   }

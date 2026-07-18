@@ -166,6 +166,11 @@ private func questionRecord(
 
     let expired = OpenClawQuestionCardModel(record: questionRecord(status: .expired))
     #expect(expired.terminalSummaryText(for: question) == "Expired")
+
+    let unavailable = OpenClawQuestionCardModel(record: questionRecord())
+    unavailable.markRecoveryUnavailable()
+    #expect(unavailable.status() == .unavailable)
+    #expect(unavailable.terminalSummaryText(for: question) == "Unavailable")
 }
 
 @MainActor
