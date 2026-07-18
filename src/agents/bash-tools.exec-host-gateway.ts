@@ -1102,6 +1102,9 @@ export async function processGatewayAllowlist(
           ? { allowAlwaysDecision: approvalDecision.allowAlwaysDecision }
           : {}),
       });
+      // The commit awaits: an abort that lands during it must not admit the
+      // process (mirrors the detached path's post-commit check).
+      params.signal?.throwIfAborted();
       return {
         execCommandOverride: approvalDecision.execCommandOverride,
         allowWithoutEnforcedCommand: approvalDecision.execCommandOverride === undefined,
