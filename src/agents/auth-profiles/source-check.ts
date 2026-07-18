@@ -3,6 +3,7 @@
  * These checks intentionally avoid loading secret-bearing credential payloads.
  */
 import fs from "node:fs";
+import { readRegularFileSync } from "@openclaw/fs-safe/advanced";
 import { evaluateStoredCredentialEligibility } from "./credential-state.js";
 import {
   resolveAuthStatePath,
@@ -28,18 +29,16 @@ function hasStoredAuthProfileFiles(agentDir?: string): boolean {
 }
 
 // Cap auth-profile JSON reads at 10 MiB — credential stores are compact config files.
+// Uses descriptor-level bounded reads to prevent OOM and TOCTOU races.
 const MAX_AUTH_PROFILE_JSON_BYTES = 10 * 1024 * 1024;
 
 function readJsonFile(pathname: string): unknown {
   try {
-    const stats = fs.statSync(pathname);
-    if (!stats.isFile()) {
-      return null;
-    }
-    if (stats.size > MAX_AUTH_PROFILE_JSON_BYTES) {
-      return null;
-    }
-    return JSON.parse(fs.readFileSync(pathname, "utf8")) as unknown;
+    const { buffer } = readRegularFileSync({
+      filePath: pathname,
+      maxBytes: MAX_AUTH_PROFILE_JSON_BYTES,
+    });
+    return JSON.parse(buffer.toString("utf8")) as unknown;
   } catch {
     return null;
   }
