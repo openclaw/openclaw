@@ -569,6 +569,7 @@ describe("custodian page", () => {
     });
     const { context } = createContext(request);
     const { page } = await mountPage(context);
+    (page as TestCustodianPage & { onboarding: boolean }).onboarding = true;
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
     await page.updateComplete;
 

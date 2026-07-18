@@ -1,7 +1,7 @@
 import { consume } from "@lit/context";
 import type { SystemAgentChatParams, SystemAgentChatResult } from "@openclaw/gateway-protocol";
 import { html, nothing, type PropertyValues } from "lit";
-import { state } from "lit/decorators.js";
+import { property, state } from "lit/decorators.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
@@ -42,6 +42,9 @@ function errorMessage(error: unknown): string {
 export class CustodianPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
+
+  /** Onboarding mode shows the Exit setup control; the route view sets this. */
+  @property({ attribute: false }) onboarding = false;
 
   @state() private messages: CustodianMessage[] = [];
   @state() private input = "";
@@ -293,9 +296,11 @@ export class CustodianPage extends OpenClawLightDomElement {
               <p>${t("custodian.subtitle")}</p>
             </div>
           </div>
-          <button class="btn btn--ghost" type="button" @click=${() => this.exitSetup()}>
-            ${t("custodian.exitSetup")}
-          </button>
+          ${this.onboarding
+            ? html`<button class="btn btn--ghost" type="button" @click=${() => this.exitSetup()}>
+                ${t("custodian.exitSetup")}
+              </button>`
+            : nothing}
         </header>
 
         <div class="custodian__messages" aria-live="polite">

@@ -67,7 +67,7 @@ describe("custodian route", () => {
     expect(loadRoute("?onboarding=1")).toEqual({ onboarding: true });
   });
 
-  it("shows Exit setup only in onboarding mode", async () => {
+  it("renders Exit setup only in onboarding mode", async () => {
     const provider = createApplicationContextProvider(createContext());
     document.body.append(provider);
 
@@ -76,19 +76,13 @@ describe("custodian route", () => {
       "openclaw-custodian-page",
     );
     await normalPage?.updateComplete;
-    const normalExit = normalPage?.querySelector<HTMLButtonElement>(".custodian__header > .btn");
-    expect(normalPage?.className).toBe("custodian-route--normal");
-    expect(getComputedStyle(normalExit!).display).toBe("none");
+    expect(normalPage?.querySelector(".custodian__header > .btn")).toBeNull();
 
     render(renderCustodianRoute({ onboarding: true }), provider);
     const onboardingPage = provider.querySelector<
       HTMLElement & { updateComplete: Promise<boolean> }
     >("openclaw-custodian-page");
     await onboardingPage?.updateComplete;
-    const onboardingExit = onboardingPage?.querySelector<HTMLButtonElement>(
-      ".custodian__header > .btn",
-    );
-    expect(onboardingPage?.className).toBe("custodian-route--onboarding");
-    expect(getComputedStyle(onboardingExit!).display).not.toBe("none");
+    expect(onboardingPage?.querySelector(".custodian__header > .btn")).not.toBeNull();
   });
 });
