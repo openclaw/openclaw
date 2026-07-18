@@ -42,10 +42,11 @@ describe("resolveInitialCronDelivery", () => {
   it.each(["isolated", "current", "session:project-alpha"] as const)(
     "defaults %s output jobs to announce",
     (sessionTarget) => {
-      for (const payload of [
+      const payloads: CronJobCreate["payload"][] = [
         { kind: "agentTurn", message: "hello" },
         { kind: "command", argv: ["echo", "hello"] },
-      ] as const) {
+      ];
+      for (const payload of payloads) {
         expect(resolveInitialCronDelivery(createInput({ sessionTarget, payload }))).toEqual({
           mode: "announce",
         });

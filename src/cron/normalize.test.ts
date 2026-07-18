@@ -438,10 +438,8 @@ describe("normalizeCronJobCreate", () => {
       name: "agent turn default",
       schedule: { kind: "every", everyMs: 60_000 },
       payload: { kind: "agentTurn", message: "hello" },
-    }) as unknown as Record<string, unknown>;
-
-    expect(normalized.sessionTarget).toBe("isolated");
-    expect((normalized.delivery as Record<string, unknown>).mode).toBe("announce");
+    });
+    expect(normalized).toMatchObject({ sessionTarget: "isolated", delivery: { mode: "announce" } });
   });
 
   it("defaults command payloads to isolated announce jobs", () => {
