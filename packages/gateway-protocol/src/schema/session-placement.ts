@@ -107,23 +107,23 @@ function createWorkerOwnedSessionPlacementSchema<
   });
 }
 
-export const LocalSessionPlacementSchema = createUnownedSessionPlacementSchema("local");
-export const RequestedSessionPlacementSchema = createUnownedSessionPlacementSchema("requested");
+const LocalSessionPlacementSchema = createUnownedSessionPlacementSchema("local");
+const RequestedSessionPlacementSchema = createUnownedSessionPlacementSchema("requested");
 
-export const ProvisioningSessionPlacementSchema = closedObject({
+const ProvisioningSessionPlacementSchema = closedObject({
   state: Type.Literal("provisioning"),
   ...SessionPlacementTimingProperties,
   environmentId: Type.Optional(NonEmptyString),
 });
 
-export const SyncingSessionPlacementSchema = closedObject({
+const SyncingSessionPlacementSchema = closedObject({
   state: Type.Literal("syncing"),
   ...SessionPlacementTimingProperties,
   environmentId: NonEmptyString,
   workerBundleHash: WorkerBundleHashSchema,
 });
 
-export const StartingSessionPlacementSchema = closedObject({
+const StartingSessionPlacementSchema = closedObject({
   state: Type.Literal("starting"),
   ...SessionPlacementTimingProperties,
   environmentId: NonEmptyString,
@@ -131,18 +131,17 @@ export const StartingSessionPlacementSchema = closedObject({
   ...SessionPlacementWorkspaceProperties,
 });
 
-export const ActiveWorkerSessionPlacementSchema = createWorkerOwnedSessionPlacementSchema("active");
-export const DrainingSessionPlacementSchema = createWorkerOwnedSessionPlacementSchema("draining");
-export const ReconcilingSessionPlacementSchema =
-  createWorkerOwnedSessionPlacementSchema("reconciling");
+const ActiveWorkerSessionPlacementSchema = createWorkerOwnedSessionPlacementSchema("active");
+const DrainingSessionPlacementSchema = createWorkerOwnedSessionPlacementSchema("draining");
+const ReconcilingSessionPlacementSchema = createWorkerOwnedSessionPlacementSchema("reconciling");
 
-export const ReclaimedSessionPlacementSchema = closedObject({
+const ReclaimedSessionPlacementSchema = closedObject({
   state: Type.Literal("reclaimed"),
   ...SessionPlacementTimingProperties,
   ...TerminalSessionPlacementProperties,
 });
 
-export const FailedSessionPlacementSchema = closedObject({
+const FailedSessionPlacementSchema = closedObject({
   state: Type.Literal("failed"),
   ...SessionPlacementTimingProperties,
   ...TerminalSessionPlacementProperties,

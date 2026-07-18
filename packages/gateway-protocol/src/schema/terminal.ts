@@ -10,6 +10,7 @@ import {
 } from "../terminal-upload-constants.js";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
+import { SessionCatalogLocatorSchema } from "./sessions-catalog.js";
 
 // PTY grids are bounded so a hostile client cannot request an allocation that
 // overflows the terminal backend's row/column math.
@@ -20,13 +21,7 @@ export const TerminalOpenParamsSchema = closedObject({
   // Optional agent selector; defaults to the gateway's default agent. The
   // session starts in that agent's workspace and inherits its isolation.
   agentId: Type.Optional(NonEmptyString),
-  catalog: Type.Optional(
-    closedObject({
-      catalogId: NonEmptyString,
-      hostId: NonEmptyString,
-      threadId: NonEmptyString,
-    }),
-  ),
+  catalog: Type.Optional(SessionCatalogLocatorSchema),
   cols: TerminalDimension,
   rows: TerminalDimension,
 });

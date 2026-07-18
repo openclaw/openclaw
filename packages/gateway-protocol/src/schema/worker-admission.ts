@@ -1,6 +1,31 @@
 import { Type, type Static, type TProperties } from "typebox";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../client-info.js";
 import { closedObject } from "./closed-object.js";
+import {
+  LiveIntegerSchema,
+  LiveSequenceSchema,
+  LiveTextSchema,
+  WORKER_PROTOCOL_MAX_FRAME_ID_LENGTH,
+  WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH,
+  WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
+  WorkerAdmissionFailureReasonSchema,
+  WorkerErrorResponseFrameSchema,
+  WorkerErrorShapeSchema,
+  WorkerFrameIdSchema,
+  WorkerIdentifierSchema,
+  WorkerProtocolCloseReasonSchema,
+  WorkerTranscriptAssistantDiagnosticSchema,
+  WorkerTranscriptUsageSchema,
+} from "./worker-protocol-primitives.js";
+
+export {
+  WORKER_PROTOCOL_MAX_FRAME_ID_LENGTH,
+  WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH,
+  WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
+  WorkerAdmissionFailureReasonSchema,
+  WorkerErrorShapeSchema,
+  WorkerProtocolCloseReasonSchema,
+} from "./worker-protocol-primitives.js";
 
 // Additive RPCs require exact build-bound features; bump only for an incompatible base set.
 export const WORKER_RPC_SET_VERSION = 1;
@@ -18,26 +43,14 @@ export const WORKER_PROTOCOL_FEATURES = [
   WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
   "worker-inference-v1",
 ] as const;
-export const WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH = 256;
-export const WORKER_PROTOCOL_MAX_FRAME_ID_LENGTH = 128;
 export const WORKER_PROTOCOL_MAX_METHOD_LENGTH = 64;
-export const WORKER_PROTOCOL_MAX_PAYLOAD_BYTES = 64 * 1024;
 export const WORKER_PROTOCOL_MAX_FEATURES = 64;
 export const WORKER_PROTOCOL_MAX_FEATURE_LENGTH = 128;
 export const WORKER_TRANSCRIPT_MAX_BATCH_MESSAGES = 64;
 export const WORKER_TRANSCRIPT_MAX_CONTENT_PARTS = 128;
 export const WORKER_TRANSCRIPT_MAX_JSON_DEPTH = 32;
 
-const WorkerIdentifierSchema = Type.String({
-  minLength: 1,
-  maxLength: WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH,
-  pattern: "^\\S(?:.*\\S)?$",
-});
 const WorkerCredentialSchema = Type.String({ minLength: 16, maxLength: 256 });
-const WorkerFrameIdSchema = Type.String({
-  minLength: 1,
-  maxLength: WORKER_PROTOCOL_MAX_FRAME_ID_LENGTH,
-});
 const WorkerProtocolFeatureSchema = Type.String({
   minLength: 1,
   maxLength: WORKER_PROTOCOL_MAX_FEATURE_LENGTH,
@@ -100,48 +113,6 @@ export const WorkerConnectRequestFrameSchema = closedObject({
   params: WorkerConnectParamsSchema,
 });
 
-export const WorkerAdmissionFailureReasonSchema = Type.Union([
-  Type.Literal("invalid-credential"),
-  Type.Literal("credential-expired"),
-  Type.Literal("environment-mismatch"),
-  Type.Literal("environment-unavailable"),
-  Type.Literal("bundle-mismatch"),
-  Type.Literal("version-mismatch"),
-  Type.Literal("session-mismatch"),
-  Type.Literal("placement-mismatch"),
-  Type.Literal("owner-epoch-mismatch"),
-  Type.Literal("rpc-set-mismatch"),
-  Type.Literal("protocol-features-mismatch"),
-]);
-
-export const WorkerProtocolCloseReasonSchema = Type.Union([
-  WorkerAdmissionFailureReasonSchema,
-  Type.Literal("invalid-handshake"),
-  Type.Literal("protocol-mismatch"),
-  Type.Literal("gateway-unavailable"),
-  Type.Literal("invalid-frame"),
-  Type.Literal("slow-consumer"),
-  Type.Literal("method-not-allowed"),
-  Type.Literal("invalid-heartbeat"),
-  Type.Literal("credential-replaced"),
-  Type.Literal("gateway-shutdown"),
-]);
-
-const WorkerErrorCodeSchema = Type.Union([
-  Type.Literal("INVALID_REQUEST"),
-  Type.Literal("UNAVAILABLE"),
-]);
-
-const WorkerErrorDetailsSchema = closedObject({ reason: WorkerProtocolCloseReasonSchema });
-
-export const WorkerErrorShapeSchema = closedObject({
-  code: WorkerErrorCodeSchema,
-  message: Type.String({ minLength: 1, maxLength: 256 }),
-  details: WorkerErrorDetailsSchema,
-  retryable: Type.Optional(Type.Boolean()),
-  retryAfterMs: Type.Optional(Type.Integer({ minimum: 0 })),
-});
-
 /** Minimal admission response; workers never receive the general gateway snapshot. */
 export const WorkerHelloOkSchema = closedObject({
   type: Type.Literal("worker-hello-ok"),
@@ -158,13 +129,6 @@ export const WorkerHelloOkSchema = closedObject({
     heartbeatIntervalMs: Type.Integer({ minimum: 1 }),
     maxPayload: Type.Integer({ minimum: 1 }),
   }),
-});
-
-const WorkerErrorResponseFrameSchema = closedObject({
-  type: Type.Literal("res"),
-  id: WorkerFrameIdSchema,
-  ok: Type.Literal(false),
-  error: WorkerErrorShapeSchema,
 });
 
 const WorkerAdmissionSuccessResponseFrameSchema = closedObject({
@@ -247,48 +211,6 @@ const WorkerTranscriptToolCallSchema = closedObject({
     Type.String({ minLength: 1, maxLength: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES }),
   ),
   executionMode: Type.Optional(Type.Union([Type.Literal("sequential"), Type.Literal("parallel")])),
-});
-
-const WorkerTranscriptUsageSchema = closedObject({
-  input: Type.Number({ minimum: 0 }),
-  output: Type.Number({ minimum: 0 }),
-  cacheRead: Type.Number({ minimum: 0 }),
-  cacheWrite: Type.Number({ minimum: 0 }),
-  contextUsage: Type.Optional(
-    Type.Union([
-      closedObject({
-        state: Type.Literal("available"),
-        promptTokens: Type.Number({ minimum: 0 }),
-        totalTokens: Type.Number({ minimum: 0 }),
-      }),
-      closedObject({ state: Type.Literal("unavailable") }),
-    ]),
-  ),
-  totalTokens: Type.Number({ minimum: 0 }),
-  cost: closedObject({
-    input: Type.Number({ minimum: 0 }),
-    output: Type.Number({ minimum: 0 }),
-    cacheRead: Type.Number({ minimum: 0 }),
-    cacheWrite: Type.Number({ minimum: 0 }),
-    total: Type.Number({ minimum: 0 }),
-    totalOrigin: Type.Optional(Type.Literal("provider-billed")),
-  }),
-});
-
-const WorkerTranscriptAssistantDiagnosticSchema = closedObject({
-  type: WorkerIdentifierSchema,
-  timestamp: Type.Integer({ minimum: 0 }),
-  error: Type.Optional(
-    closedObject({
-      name: Type.Optional(Type.String({ maxLength: 256 })),
-      message: Type.String({ maxLength: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES }),
-      stack: Type.Optional(Type.String({ maxLength: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES })),
-      code: Type.Optional(Type.Union([Type.String({ maxLength: 256 }), Type.Number()])),
-    }),
-  ),
-  details: Type.Optional(
-    Type.Record(Type.String({ minLength: 1, maxLength: 256 }), Type.Unknown()),
-  ),
 });
 
 const WorkerTranscriptUserMessageSchema = closedObject({
@@ -416,19 +338,8 @@ function workerLiveObject<const Properties extends TProperties>(properties: Prop
   return closedObject(properties);
 }
 
-const LiveTextSchema = Type.String({
-  maxLength: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
-});
 const OptionalLiveTextSchema = Type.Optional(LiveTextSchema);
-const LiveIntegerSchema = Type.Integer({
-  minimum: 0,
-  maximum: Number.MAX_SAFE_INTEGER,
-});
 const OptionalLiveIntegerSchema = Type.Optional(LiveIntegerSchema);
-const LiveSequenceSchema = Type.Integer({
-  minimum: 1,
-  maximum: Number.MAX_SAFE_INTEGER,
-});
 
 const LiveIdentifierSchema = Type.String({
   minLength: 1,

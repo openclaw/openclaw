@@ -3779,7 +3779,7 @@ public struct SessionCatalogSession: Codable, Sendable {
     public let cliversion: String?
     public let gitbranch: String?
     public let archived: Bool
-    public let openclawsessionkey: String?
+    public let sessionkey: String?
     public let cancontinue: Bool
     public let canarchive: Bool
     public let canopenterminal: Bool?
@@ -3797,7 +3797,7 @@ public struct SessionCatalogSession: Codable, Sendable {
         cliversion: String? = nil,
         gitbranch: String? = nil,
         archived: Bool,
-        openclawsessionkey: String? = nil,
+        sessionkey: String? = nil,
         cancontinue: Bool,
         canarchive: Bool,
         canopenterminal: Bool? = nil)
@@ -3814,7 +3814,7 @@ public struct SessionCatalogSession: Codable, Sendable {
         self.cliversion = cliversion
         self.gitbranch = gitbranch
         self.archived = archived
-        self.openclawsessionkey = openclawsessionkey
+        self.sessionkey = sessionkey
         self.cancontinue = cancontinue
         self.canarchive = canarchive
         self.canopenterminal = canopenterminal
@@ -3833,7 +3833,7 @@ public struct SessionCatalogSession: Codable, Sendable {
         case cliversion = "cliVersion"
         case gitbranch = "gitBranch"
         case archived
-        case openclawsessionkey = "openClawSessionKey"
+        case sessionkey = "sessionKey"
         case cancontinue = "canContinue"
         case canarchive = "canArchive"
         case canopenterminal = "canOpenTerminal"
@@ -3952,39 +3952,39 @@ public struct SessionCatalogTranscriptItem: Codable, Sendable {
 
 public struct SessionsCatalogListParams: Codable, Sendable {
     public let catalogid: String?
+    public let cursors: [String: AnyCodable]?
     public let agentid: String?
     public let progressid: String?
     public let search: String?
     public let limitperhost: Int?
     public let hostids: [String]?
-    public let cursors: [String: AnyCodable]?
 
     public init(
         catalogid: String? = nil,
+        cursors: [String: AnyCodable]? = nil,
         agentid: String? = nil,
         progressid: String? = nil,
         search: String? = nil,
         limitperhost: Int? = nil,
-        hostids: [String]? = nil,
-        cursors: [String: AnyCodable]? = nil)
+        hostids: [String]? = nil)
     {
         self.catalogid = catalogid
+        self.cursors = cursors
         self.agentid = agentid
         self.progressid = progressid
         self.search = search
         self.limitperhost = limitperhost
         self.hostids = hostids
-        self.cursors = cursors
     }
 
     private enum CodingKeys: String, CodingKey {
         case catalogid = "catalogId"
+        case cursors
         case agentid = "agentId"
         case progressid = "progressId"
         case search
         case limitperhost = "limitPerHost"
         case hostids = "hostIds"
-        case cursors
     }
 }
 
