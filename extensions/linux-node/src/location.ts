@@ -71,9 +71,11 @@ function parseLocationOutput(
     const altitude = /Altitude:\s*([-+\d.]+)/u.exec(block)?.[1];
     const speed = /Speed:\s*([-+\d.]+)/u.exec(block)?.[1];
     const heading = /Heading:\s*([-+\d.]+)/u.exec(block)?.[1];
-    const timestamp = epochSeconds
-      ? new Date(Number(epochSeconds) * 1000).toISOString()
-      : now().toISOString();
+    const timestampMs = epochSeconds ? Number(epochSeconds) * 1000 : now().getTime();
+    if (!Number.isFinite(timestampMs) || !Number.isFinite(new Date(timestampMs).getTime())) {
+      continue;
+    }
+    const timestamp = new Date(timestampMs).toISOString();
     if (
       maxAgeMs !== undefined &&
       now().getTime() - Date.parse(timestamp) >= maxAgeMs + GEOCLUE_TIMESTAMP_RESOLUTION_MS
