@@ -49,7 +49,7 @@ const CONFIG_LOAD_RETRY_POLICY: BackoffPolicy = {
   factor: 2,
   jitter: 0,
 };
-const loadPreparedModelCatalogRuntime = () => import("./model-catalog.runtime.js");
+const loadPreparedModelCatalogRuntime = () => import("./prepared-model-catalog.js");
 
 export function applyDiscoveredContextWindows(params: {
   cache: Map<string, number>;

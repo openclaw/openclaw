@@ -42,7 +42,7 @@ vi.mock("../config/runtime-source-projection.js", () => ({
       : config,
 }));
 
-vi.mock("./model-catalog.runtime.js", () => ({
+vi.mock("./prepared-model-catalog.js", () => ({
   loadPreparedModelCatalogOwnerSnapshot: contextTestState.loadModelCatalogOwnerSnapshot,
 }));
 

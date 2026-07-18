@@ -225,6 +225,32 @@ describe("prepared model runtime snapshots", () => {
     ]);
   });
 
+  it("omits provider runtime APIs outside the catalog contract", async () => {
+    mocks.loadStaticCatalog.mockResolvedValueOnce([
+      {
+        provider: "custom",
+        id: "custom-static",
+        name: "Custom Static",
+        api: "mistral-conversations",
+        contextWindow: 32_000,
+      },
+    ]);
+
+    const snapshot = await publishPreparedModelRuntimeSnapshot({
+      config: {},
+      agentDir: "/tmp/prepared-model-runtime-unsupported-api",
+    });
+
+    expect(snapshot.modelCatalog.staticEntries).toEqual([
+      {
+        provider: "custom",
+        id: "custom-static",
+        name: "Custom Static",
+        contextWindow: 32_000,
+      },
+    ]);
+  });
+
   it("stales a published owner synchronously before replacement", async () => {
     const input = { config: {}, agentDir: "/tmp/prepared-model-runtime-stale" };
     await publishPreparedModelRuntimeSnapshot(input);

@@ -1,6 +1,7 @@
 /** Lifecycle-owned auth/model discovery snapshots for agent runs. */
 import path from "node:path";
 import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
+import { MODEL_APIS } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { withTimeout } from "../node-host/with-timeout.js";
@@ -262,6 +263,12 @@ function effectiveEnvironmentFingerprint(input: PreparedModelRuntimeInput): stri
   return hashRuntimeConfigValue(input.env ?? process.env);
 }
 
+function isCatalogModelApi(
+  value: string | undefined,
+): value is NonNullable<ModelCatalogEntry["api"]> {
+  return value !== undefined && (MODEL_APIS as readonly string[]).includes(value);
+}
+
 function toStaticCatalogEntry(
   model: Awaited<ReturnType<typeof loadBundledProviderStaticCatalogContextModels>>[number],
 ): ModelCatalogEntry {
@@ -269,7 +276,7 @@ function toStaticCatalogEntry(
     id: model.id,
     name: model.name ?? model.id,
     provider: model.provider,
-    ...(model.api ? { api: model.api } : {}),
+    ...(isCatalogModelApi(model.api) ? { api: model.api } : {}),
     ...(model.baseUrl ? { baseUrl: model.baseUrl } : {}),
     ...(model.contextWindow ? { contextWindow: model.contextWindow } : {}),
     ...(model.contextTokens ? { contextTokens: model.contextTokens } : {}),

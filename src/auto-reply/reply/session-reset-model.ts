@@ -174,6 +174,8 @@ async function applySelectionToSession(params: {
 export async function applyResetModelOverride(params: {
   cfg: OpenClawConfig;
   agentId?: string;
+  agentDir?: string;
+  workspaceDir?: string;
   resetTriggered: boolean;
   bodyStripped?: string;
   sessionCtx: TemplateContext;
