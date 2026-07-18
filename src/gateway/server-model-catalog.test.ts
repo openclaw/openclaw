@@ -132,6 +132,24 @@ describe("loadGatewayModelCatalog", () => {
     });
   });
 
+  it("caches an explicitly degraded read-only catalog fallback", async () => {
+    const degradedCatalog: GatewayModelChoice[] = [];
+    const loadModelCatalogSnapshot = vi.fn(async () => ({
+      entries: degradedCatalog,
+      routeVariants: degradedCatalog,
+      authoritative: false,
+    }));
+
+    await expect(loadGatewayModelCatalog({ getConfig, loadModelCatalogSnapshot })).resolves.toBe(
+      degradedCatalog,
+    );
+    await expect(loadGatewayModelCatalog({ getConfig, loadModelCatalogSnapshot })).resolves.toBe(
+      degradedCatalog,
+    );
+
+    expect(loadModelCatalogSnapshot).toHaveBeenCalledTimes(1);
+  });
+
   it("does not cache an empty full catalog so the next all-model request retries", async () => {
     const emptyCatalog: GatewayModelChoice[] = [];
     const freshCatalog = [model("gpt-5.5")];
