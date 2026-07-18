@@ -1,5 +1,6 @@
 // Googlechat tests cover setup plugin behavior.
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import {
   createStartAccountContext,
@@ -17,7 +18,6 @@ import type { WizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/status-helpers";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../runtime-api.js";
 import {
   listGoogleChatAccountIds,
@@ -461,10 +461,21 @@ describe("googlechat setup", () => {
 });
 
 describe("resolveGoogleChatAccount", () => {
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  const tempDirs: string[] = [];
+  const makeTempDir = (prefix: string) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+    tempDirs.push(dir);
+    return dir;
+  };
+
+  afterEach(() => {
+    for (const dir of tempDirs.splice(0)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 
   it("resolves user-relative service-account files before checking availability", () => {
-    const homeDir = tempDirs.make("openclaw-googlechat-home-");
+    const homeDir = makeTempDir("openclaw-googlechat-home-");
     fs.writeFileSync(path.join(homeDir, "service-account.json"), "{}", { mode: 0o600 });
     vi.stubEnv("OPENCLAW_HOME", homeDir);
     try {
@@ -500,7 +511,7 @@ describe("resolveGoogleChatAccount", () => {
   });
 
   it("ignores env JSON credentials when they decode to a non-object value", () => {
-    const missingFile = path.join(tempDirs.make("openclaw-googlechat-missing-"), "missing.json");
+    const missingFile = path.join(makeTempDir("openclaw-googlechat-missing-"), "missing.json");
     vi.stubEnv("GOOGLE_CHAT_SERVICE_ACCOUNT", '["not","an","object"]');
     vi.stubEnv("GOOGLE_CHAT_SERVICE_ACCOUNT_FILE", missingFile);
 
