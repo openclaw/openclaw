@@ -232,7 +232,7 @@ describe("sessions page lifecycle", () => {
       list: vi.fn(async () => ({
         count: 2,
         sessions: archivedKeys.map((key) => ({ key, archived: true })),
-      })) as SessionCapability["list"],
+      })) as unknown as SessionCapability["list"],
       deleteMany: vi.fn(async () => ({
         deleted: archivedKeys,
         errors: [],
@@ -278,7 +278,7 @@ describe("sessions page lifecycle", () => {
 
   it("aborts delete-all when an enumeration page fails", async () => {
     const sessions = createSessions({
-      list: vi.fn(async () => null) as SessionCapability["list"],
+      list: vi.fn(async () => null) as unknown as SessionCapability["list"],
       deleteMany: vi.fn(async () => ({ deleted: [], errors: [], preservedWorktrees: [] })),
     });
     sessions.state.error = "list failed";
@@ -318,7 +318,7 @@ describe("sessions page lifecycle", () => {
         nextOffset: null,
       });
     const sessions = createSessions({
-      list: list as SessionCapability["list"],
+      list: list as unknown as SessionCapability["list"],
       deleteMany: vi.fn(async () => ({
         deleted: [...pageOne, ...pageTwo],
         errors: [],

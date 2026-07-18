@@ -3,7 +3,7 @@ import { state } from "lit/decorators.js";
 import { t } from "../i18n/index.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 
-export type ToastOptions = {
+type ToastOptions = {
   message: string;
   actionLabel?: string;
   onAction?: () => void;
