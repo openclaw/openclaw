@@ -268,14 +268,22 @@ internal class WearProxyClient private constructor(
   }
 
   private suspend fun resolvePreferredPhone(): PreferredPhoneRegistration {
-    currentPreferredPhone()?.let { return it }
+    // Capability callbacks can invalidate the route while discovery suspends.
+    // Only a result from the same generation may repopulate it.
+    val discoveryGeneration =
+      synchronized(preferredPhoneLock) {
+        registeredPhone?.let { return it }
+        preferredPhoneGeneration
+      }
     val resolved = resolvePhoneNode()
     return synchronized(preferredPhoneLock) {
-      registeredPhone ?: run {
+      registeredPhone ?: if (preferredPhoneGeneration == discoveryGeneration) {
         preferredPhoneGeneration += 1
         PreferredPhoneRegistration(resolved, preferredPhoneGeneration).also { registeredPhone = it }
+      } else {
+        null
       }
-    }
+    } ?: throw WearProxyException("phone_unavailable", "Paired phone is unavailable")
   }
 
   private fun currentPreferredPhone(): PreferredPhoneRegistration? =

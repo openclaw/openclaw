@@ -8,6 +8,7 @@ import ai.openclaw.wear.shared.WearProtocolCodec
 import ai.openclaw.wear.shared.WearProxyCapability
 import ai.openclaw.wear.shared.WearRpcMethod
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
@@ -656,6 +657,51 @@ class WearProxyClientTest {
 
       assertEquals("phone-reachable", result.sourceNodeId)
       assertEquals(1, discoveries)
+    }
+
+  @Test
+  fun inFlightDiscoveryCannotRestoreInvalidatedPhone() =
+    runTest {
+      val discoveryStarted = CompletableDeferred<Unit>()
+      val releaseDiscovery = CompletableDeferred<Unit>()
+      var resolvedNode = "phone-old"
+      var discoveries = 0
+      val sentNodes = mutableListOf<String>()
+      lateinit var client: WearProxyClient
+      client =
+        WearProxyClient.createForTests(
+          nodeResolver =
+            WearNodeResolver {
+              val result = resolvedNode
+              discoveries += 1
+              if (discoveries == 1) {
+                discoveryStarted.complete(Unit)
+                releaseDiscovery.await()
+              }
+              result
+            },
+          transport =
+            WearMessageTransport { nodeId, _, data ->
+              sentNodes += nodeId
+              val request = (WearProtocolCodec.decode(data) as WearDecodeResult.Success).message as WearMessage.Request
+              client.handleMessage(
+                sourceNodeId = nodeId,
+                path = WearProtocol.RESPONSE_PATH,
+                data = WearProtocolCodec.encode(WearMessage.Response(requestId = request.requestId, ok = true)),
+              )
+            },
+        )
+
+      val first = async { runCatching { client.request(WearRpcMethod.ProxyStatus, buildJsonObject {}, null) } }
+      discoveryStarted.await()
+      client.invalidatePreferredPhoneNode()
+      resolvedNode = "phone-new"
+      releaseDiscovery.complete(Unit)
+
+      assertEquals("phone_unavailable", (first.await().exceptionOrNull() as WearProxyException).code)
+      assertEquals("phone-new", client.request(WearRpcMethod.ProxyStatus, buildJsonObject {}, null).sourceNodeId)
+      assertEquals(2, discoveries)
+      assertEquals(listOf("phone-new"), sentNodes)
     }
 
   @Test
