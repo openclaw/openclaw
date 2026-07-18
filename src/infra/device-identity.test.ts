@@ -9,10 +9,7 @@ import {
   OPENCLAW_STATE_SCHEMA_VERSION,
 } from "../state/openclaw-state-db.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
-import {
-  acquireDeviceIdentityCoordinator,
-  DeviceIdentityCoordinatorError,
-} from "./device-identity-coordinator.js";
+import { acquireDeviceIdentityCoordinator } from "./device-identity-coordinator.js";
 import { normalizeLegacyDeviceIdentity } from "./device-identity-legacy.js";
 import type { DeviceIdentityStoreOptions } from "./device-identity-store.js";
 import {
@@ -142,7 +139,7 @@ describe("device identity SQLite store", () => {
       try {
         expect(() =>
           acquireDeviceIdentityCoordinator({ databasePath, lockDir, busyTimeoutMs: 0 }),
-        ).toThrow(DeviceIdentityCoordinatorError);
+        ).toThrow(/migration or creation already owns this state database/);
       } finally {
         first.release();
       }

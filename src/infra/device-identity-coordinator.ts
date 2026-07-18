@@ -6,7 +6,7 @@ import { requireNodeSqlite } from "./node-sqlite.js";
 
 const DEFAULT_BUSY_TIMEOUT_MS = 5000;
 
-export class DeviceIdentityCoordinatorError extends Error {
+class DeviceIdentityCoordinatorError extends Error {
   constructor(
     message: string,
     public override readonly cause?: unknown,
@@ -39,7 +39,7 @@ function canonicalizeDatabasePath(databasePath: string): string {
   }
 }
 
-export function resolveDeviceIdentityCoordinatorPath(
+function resolveDeviceIdentityCoordinatorPath(
   databasePath: string,
   lockDir = resolveGatewayLockDir(),
 ): string {

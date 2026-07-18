@@ -952,7 +952,9 @@ enum DeviceIdentitySQLiteStore {
     {
         DeviceIdentityStoreError("Could not \(operation): \(String(cString: sqlite3_errmsg(database)))")
     }
+}
 
+extension DeviceIdentitySQLiteStore {
     private static func secureDirectory(_ url: URL) throws {
         let fileManager = FileManager.default
         try fileManager.createDirectory(at: url, withIntermediateDirectories: true)
