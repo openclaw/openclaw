@@ -40,6 +40,8 @@ type KimiUsageResponse = {
 };
 
 const DEFAULT_KIMI_USAGE_BASE_URL = "https://api.kimi.com/coding/v1";
+const KIMI_MANAGED_USAGE_ORIGIN = "https://api.kimi.com";
+const KIMI_MANAGED_USAGE_PATHS = new Set(["/coding", "/coding/v1"]);
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -181,4 +183,14 @@ export function normalizeKimiUsageBaseUrl(baseUrl?: string): string {
     return `${raw}/v1`;
   }
   return raw;
+}
+
+export function isManagedKimiUsageBaseUrl(baseUrl?: string): boolean {
+  try {
+    const url = new URL(normalizeKimiUsageBaseUrl(baseUrl));
+    const pathname = url.pathname.replace(/\/+$/, "") || "/";
+    return url.origin === KIMI_MANAGED_USAGE_ORIGIN && KIMI_MANAGED_USAGE_PATHS.has(pathname);
+  } catch {
+    return false;
+  }
 }

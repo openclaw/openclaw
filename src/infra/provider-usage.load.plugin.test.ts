@@ -233,6 +233,35 @@ describe("provider-usage.load plugin boundary", () => {
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
+  it("skips Kimi usage discovery for custom proxy baseUrl", async () => {
+    const mockFetch = createProviderUsageFetch(async () => {
+      throw new Error("custom Kimi usage proxy should not be polled");
+    });
+
+    await expect(
+      loadProviderUsageSummary({
+        now: usageNow,
+        agentDir: mkdtempSync(join(tmpdir(), "openclaw-kimi-usage-skip-")),
+        config: {
+          models: {
+            providers: {
+              kimi: { baseUrl: "https://proxy.example/kimi/v1/" },
+            },
+          },
+        } as never,
+        env: { KIMI_API_KEY: "kimi-token" },
+        fetch: mockFetch as unknown as typeof fetch,
+        skipPluginAuthWithoutCredentialSource: true,
+      }),
+    ).resolves.toEqual({
+      updatedAt: usageNow,
+      providers: [],
+    });
+
+    expect(resolveProviderUsageSnapshotWithPluginMock).not.toHaveBeenCalled();
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
   it("passes an env proxy fetch into plugin usage context when no explicit fetch is supplied", async () => {
     undiciFetch.mockResolvedValueOnce(new Response("{}", { status: 200 }));
     resolveProviderUsageSnapshotWithPluginMock.mockImplementationOnce(async (params: unknown) => {

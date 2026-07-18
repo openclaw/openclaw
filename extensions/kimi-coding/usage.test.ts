@@ -1,7 +1,12 @@
 // Covers Kimi Coding plan usage parsing.
 import { createProviderUsageFetch, makeResponse } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
-import { fetchKimiUsage, normalizeKimiUsageBaseUrl, parseKimiUsageWindows } from "./usage.js";
+import {
+  fetchKimiUsage,
+  isManagedKimiUsageBaseUrl,
+  normalizeKimiUsageBaseUrl,
+  parseKimiUsageWindows,
+} from "./usage.js";
 
 describe("fetchKimiUsage", () => {
   it("returns token-expired errors for auth failures", async () => {
@@ -116,4 +121,20 @@ describe("normalizeKimiUsageBaseUrl", () => {
   ])("normalizes %j", ({ input, expected }) => {
     expect(normalizeKimiUsageBaseUrl(input)).toBe(expected);
   });
+});
+
+describe("isManagedKimiUsageBaseUrl", () => {
+  it.each([undefined, "https://api.kimi.com/coding/", "https://api.kimi.com/coding/v1/"])(
+    "accepts managed Kimi Coding baseUrl %j",
+    (input) => {
+      expect(isManagedKimiUsageBaseUrl(input)).toBe(true);
+    },
+  );
+
+  it.each(["https://proxy.example/kimi/v1/", "https://api.kimi.com/other/", "not-a-url"])(
+    "rejects non-managed Kimi usage baseUrl %j",
+    (input) => {
+      expect(isManagedKimiUsageBaseUrl(input)).toBe(false);
+    },
+  );
 });
