@@ -176,12 +176,12 @@ describe("show_widget", () => {
       params: Record<string, unknown>,
     ): Promise<T> => {
       let result: unknown;
-      let failure: unknown;
+      let failure: Error | undefined;
       const respond: RespondFn = (ok, payload, error) => {
         if (ok) {
           result = payload;
         } else {
-          failure = error;
+          failure = new Error(error?.message ?? "board request failed");
         }
       };
       await handlers[method]!({
@@ -219,7 +219,7 @@ describe("show_widget", () => {
       revision: 1,
     });
     expect(store.getSnapshot("agent:main:pinned").widgets[0]?.title).toBe(
-      [...title].slice(0, 80).join(""),
+      Array.from(title).slice(0, 80).join(""),
     );
     expect(result.resultText).toContain("pinned to dashboard tab main as release-status (lg)");
     expect(result.boardWidgetName).toBe("release-status");

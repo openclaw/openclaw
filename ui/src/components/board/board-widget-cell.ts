@@ -399,7 +399,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
       return nothing;
     }
     let body: TemplateResult;
-    let bodyErrored = false;
+    let bodyErrored: boolean;
     try {
       body = this.frameError
         ? this.renderError(this.frameError)

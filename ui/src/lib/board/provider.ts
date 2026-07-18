@@ -102,7 +102,7 @@ function emptySnapshot(sessionKey: string): BoardSnapshot {
 
 function boardWidgetTitle(title: string | undefined): string | undefined {
   const normalized = title?.trim() ?? "";
-  return normalized ? [...normalized].slice(0, 80).join("") : undefined;
+  return normalized ? Array.from(normalized).slice(0, 80).join("") : undefined;
 }
 
 function mockSnapshot(sessionKey: string): BoardSnapshot {
@@ -453,7 +453,10 @@ export class GatewayBoardProvider implements BoardProvider {
           this.changedWidgets.add(name);
         }
         await this.waitForRetry(retryDelayMs);
+        // Carry backoff across failed loop iterations; successful refreshes reset it above.
+        // oxlint-disable-next-line eslint/no-useless-assignment
         retryDelayMs = Math.min(retryDelayMs * 2, 30_000);
+        continue;
       }
     }
   }

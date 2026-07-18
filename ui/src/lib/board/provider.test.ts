@@ -576,7 +576,7 @@ describe("board providers", () => {
     expect(request).toHaveBeenCalledWith("board.widget.put", {
       sessionKey: "agent:main:live",
       name: "canvas-cv-1",
-      title: [...longTitle].slice(0, 80).join(""),
+      title: Array.from(longTitle).slice(0, 80).join(""),
       content: { kind: "canvas-doc", docId: "cv-1" },
     });
     expect(request.mock.calls.filter(([method]) => method === "board.get")).toHaveLength(1);

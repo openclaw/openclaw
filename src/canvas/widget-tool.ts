@@ -75,7 +75,7 @@ function slugWidgetName(title: string): string {
 
 function boardWidgetTitle(title: string): string | undefined {
   const normalized = title.trim();
-  return normalized ? [...normalized].slice(0, 80).join("") : undefined;
+  return normalized ? Array.from(normalized).slice(0, 80).join("") : undefined;
 }
 
 function resolveRetentionScope(options: ShowWidgetToolOptions): string {
