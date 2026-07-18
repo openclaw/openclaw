@@ -28,6 +28,7 @@ import {
   getActiveSecretsRuntimeConfigSnapshot,
   getActiveSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshotRevision,
+  hasSameSecretReloadContract,
   restoreSecretsRuntimeSnapshotStateIfCurrent,
   type PreparedSecretsRuntimeSnapshot,
 } from "./runtime-state.js";
@@ -44,6 +45,33 @@ describe("secrets runtime state", () => {
     clearSecretsRuntimeSnapshot();
     runtimeSnapshotsTesting.resetPersistedMutationLineage();
     envSnapshot.restore();
+  });
+
+  it("includes env shorthand SecretRefs in the reload contract", () => {
+    const configWithRef = (apiKey: string): OpenClawConfig => ({
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            apiKey,
+            models: [],
+          },
+        },
+      },
+    });
+
+    expect(
+      hasSameSecretReloadContract(
+        configWithRef("$OPENAI_API_KEY"),
+        configWithRef("$OPENAI_API_KEY"),
+      ),
+    ).toBe(true);
+    expect(
+      hasSameSecretReloadContract(
+        configWithRef("$OPENAI_API_KEY"),
+        configWithRef("$OPENAI_API_KEY_NEXT"),
+      ),
+    ).toBe(false);
   });
 
   it("exposes the active config pair for hot paths without requiring the full snapshot", () => {

@@ -493,11 +493,18 @@ async function ensureResolvableSecretRefsOrRespond(params: {
   respond: RespondFn;
 }): Promise<PreparedSecretsRuntimeSnapshot | null> {
   try {
-    return await prepareSecretsRuntimeSnapshot({
+    const snapshot = await prepareSecretsRuntimeSnapshot({
       config: params.config,
       includeAuthStoreRefs: false,
       allowUnavailableSecretOwners: true,
     });
+    for (const owner of snapshot.degradedOwners ?? []) {
+      const reason = redactSecretDegradationReason(owner.reason);
+      if (reason !== "secret provider failed" && reason !== "secret reference was not found") {
+        throw new Error(reason);
+      }
+    }
+    return snapshot;
   } catch (error) {
     const details = formatErrorMessage(error);
     params.respond(

@@ -23,7 +23,12 @@ import {
   type RuntimeConfigSnapshotRefreshHandler,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { coerceSecretRef, isSecretRef, type SecretRef } from "../config/types.secrets.js";
+import {
+  coerceSecretRef,
+  isSecretRef,
+  type SecretDefaults,
+  type SecretRef,
+} from "../config/types.secrets.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { isRecord } from "../utils.js";
@@ -58,22 +63,24 @@ type LocatedSecretRef = {
 
 function listLocatedSecretRefs(
   value: unknown,
+  defaults: SecretDefaults | undefined,
   path: Array<string | number> = [],
   refs: LocatedSecretRef[] = [],
 ): LocatedSecretRef[] {
-  if (isSecretRef(value)) {
-    refs.push({ path, ref: value });
+  const ref = coerceSecretRef(value, defaults);
+  if (ref) {
+    refs.push({ path, ref });
     return refs;
   }
   if (Array.isArray(value)) {
     for (const [index, entry] of value.entries()) {
-      listLocatedSecretRefs(entry, [...path, index], refs);
+      listLocatedSecretRefs(entry, defaults, [...path, index], refs);
     }
     return refs;
   }
   if (isRecord(value)) {
     for (const key of Object.keys(value).toSorted()) {
-      listLocatedSecretRefs(value[key], [...path, key], refs);
+      listLocatedSecretRefs(value[key], defaults, [...path, key], refs);
     }
   }
   return refs;
@@ -83,12 +90,12 @@ function listLocatedSecretRefs(
 export function hasSameSecretReloadContract(left: OpenClawConfig, right: OpenClawConfig): boolean {
   return isDeepStrictEqual(
     {
-      refs: listLocatedSecretRefs(left),
+      refs: listLocatedSecretRefs(left, left.secrets?.defaults),
       defaults: left.secrets?.defaults,
       providers: left.secrets?.providers,
     },
     {
-      refs: listLocatedSecretRefs(right),
+      refs: listLocatedSecretRefs(right, right.secrets?.defaults),
       defaults: right.secrets?.defaults,
       providers: right.secrets?.providers,
     },
