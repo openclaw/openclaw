@@ -20,6 +20,29 @@ vi.mock("openclaw/plugin-sdk/session-transcript-runtime", () => ({
 }));
 
 describe("importClaudeHistory", () => {
+  it("uses the import timestamp when a native row has an invalid timestamp", async () => {
+    appended.length = 0;
+    const fallbackTimestamp = new Date("2026-07-18T12:00:00.000Z").getTime();
+    vi.useFakeTimers();
+    vi.setSystemTime(fallbackTimestamp);
+    try {
+      await importClaudeHistory({
+        items: [{ type: "userMessage", text: "continue", timestamp: "not-a-date", uuid: "u-1" }],
+        threadId: "thread-1",
+        sessionFile: "/tmp/unused.jsonl",
+        sessionId: "session-1",
+        sessionKey: "agent:main:catalog-adopt",
+        agentId: "main",
+        config: {} as OpenClawConfig,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(appended[0]?.timestamp).toBe(fallbackTimestamp);
+    expect(JSON.stringify(appended[0])).toContain(`"timestamp":${fallbackTimestamp}`);
+  });
+
   it("tags imported native user rows so self-echo provenance excludes them", async () => {
     appended.length = 0;
     await importClaudeHistory({
