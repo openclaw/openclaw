@@ -10,6 +10,7 @@ import {
 import { resolveSessionConversationRef } from "../../channels/plugins/session-conversation.js";
 import { normalizeChannelId as normalizeChatChannelId } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { ANNOUNCE_SKIP_TOKEN, REPLY_SKIP_TOKEN } from "./sessions-send-tokens.js";
 export {
   isAnnounceSkip,
@@ -52,21 +53,62 @@ export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget
   };
 }
 
+function inferStableSessionScope(sessionKey: string): string {
+  const parsed = parseAgentSessionKey(sessionKey);
+  const rest = parsed?.rest ?? sessionKey;
+  const parts = new Set(rest.split(":").filter(Boolean));
+  const conversation = resolveSessionConversationRef(sessionKey);
+  let baseScope: string | undefined = conversation?.kind;
+
+  if (!baseScope) {
+    if (rest === "main") {
+      baseScope = "main";
+    } else if (parts.has("channel")) {
+      baseScope = "channel";
+    } else if (parts.has("group")) {
+      baseScope = "group";
+    } else if (parts.has("direct")) {
+      baseScope = "direct";
+    } else if (rest.startsWith("cron:")) {
+      baseScope = "cron";
+    } else {
+      baseScope = parsed ? "custom" : "legacy";
+    }
+  }
+
+  const qualifiers = [
+    parts.has("thread") ? "thread" : undefined,
+    parts.has("run") ? "run" : undefined,
+  ].filter((qualifier): qualifier is string => Boolean(qualifier));
+  return [baseScope, ...qualifiers].join("-");
+}
+
 function buildAgentSessionLines(params: {
   requesterSessionKey?: string;
   requesterChannel?: string;
   targetSessionKey: string;
   targetChannel?: string;
 }): string[] {
+  const requesterSession = params.requesterSessionKey
+    ? parseAgentSessionKey(params.requesterSessionKey)
+    : null;
+  const targetSession = parseAgentSessionKey(params.targetSessionKey);
   return [
     // Session keys are high-cardinality (thread/run ids), so concrete values churn the
-    // system prompt and break provider prompt-cache reuse across A2A turns. Channels are
-    // low-cardinality and inform reply formatting, so they stay concrete.
+    // system prompt and break provider prompt-cache reuse across A2A turns. Channels and
+    // agent/session-shape metadata are low-cardinality and inform reply formatting and
+    // coordination role, so they stay concrete.
     params.requesterSessionKey ? "Agent 1 (requester) session: <REQUESTER_SESSION>." : undefined,
+    requesterSession ? `Agent 1 (requester) agent: ${requesterSession.agentId}.` : undefined,
+    params.requesterSessionKey
+      ? `Agent 1 (requester) scope: ${inferStableSessionScope(params.requesterSessionKey)}.`
+      : undefined,
     params.requesterChannel
       ? `Agent 1 (requester) channel: ${params.requesterChannel}.`
       : undefined,
     "Agent 2 (target) session: <TARGET_SESSION>.",
+    targetSession ? `Agent 2 (target) agent: ${targetSession.agentId}.` : undefined,
+    `Agent 2 (target) scope: ${inferStableSessionScope(params.targetSessionKey)}.`,
     params.targetChannel ? `Agent 2 (target) channel: ${params.targetChannel}.` : undefined,
   ].filter((line): line is string => Boolean(line));
 }

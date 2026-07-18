@@ -99,7 +99,7 @@ describe("resolvePingPongTurns", () => {
 });
 
 describe("agent-to-agent prompt context", () => {
-  it("keeps volatile routing identifiers out of system prompt context", () => {
+  it("keeps volatile routing identifiers out while preserving stable agent metadata", () => {
     const context = buildAgentToAgentMessageContext({
       requesterSessionKey: "agent:main:slack:channel:C123:thread:171.222",
       requesterChannel: "slack",
@@ -107,10 +107,18 @@ describe("agent-to-agent prompt context", () => {
     });
 
     expect(context).toContain("Agent 1 (requester) session: <REQUESTER_SESSION>.");
+    expect(context).toContain("Agent 1 (requester) agent: main.");
+    expect(context).toContain("Agent 1 (requester) scope: channel-thread.");
     expect(context).toContain("Agent 1 (requester) channel: slack.");
     expect(context).toContain("Agent 2 (target) session: <TARGET_SESSION>.");
+    expect(context).toContain("Agent 2 (target) agent: worker.");
+    expect(context).toContain("Agent 2 (target) scope: channel-run.");
     expect(context).not.toContain("agent:main:slack:channel:C123:thread:171.222");
     expect(context).not.toContain("agent:worker:discord:channel:ops:run:run-123");
+    expect(context).not.toContain("C123");
+    expect(context).not.toContain("171.222");
+    expect(context).not.toContain("ops");
+    expect(context).not.toContain("run-123");
   });
 
   it("preserves optional session line shape with concrete channel values", () => {
