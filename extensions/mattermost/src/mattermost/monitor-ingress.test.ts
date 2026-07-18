@@ -228,15 +228,20 @@ describe("Mattermost durable ingress", () => {
         }
         return await enqueue(...args);
       };
-      const ingress = startMonitor(queue, vi.fn());
+      const dispatched: string[] = [];
+      const ingress = startMonitor(queue, async (post, _payload, lifecycle) => {
+        dispatched.push(post.id);
+        await lifecycle.onAdopted();
+      });
       try {
         // A's first append fails into backoff; B arrives concurrently. The
         // admission chain must hold B until A commits, or lane order inverts.
         const admitA = ingress.receive(postedEvent({ postId: "post-A" }));
         const admitB = ingress.receive(postedEvent({ postId: "post-B" }));
         await Promise.all([admitA, admitB]);
-        const pending = await queue.listPending({ limit: "all", orderBy: "received" });
-        expect(pending.map((row) => row.id)).toEqual(["post-A", "post-B"]);
+        await vi.waitFor(() => expect(dispatched).toEqual(["post-A", "post-B"]), {
+          timeout: 5_000,
+        });
       } finally {
         await ingress.stop();
       }
