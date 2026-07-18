@@ -839,6 +839,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
     }
   }
   if (opts.force) {
+    const interactive = isTerminalInteractive();
     const describeNonInteractiveGatewayOwner = () => {
       const gatewayPids = findVerifiedGatewayListenerPidsOnPortSync(port);
       if (gatewayPids.length === 0) {
@@ -846,7 +847,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
       }
       return `${NON_INTERACTIVE_GATEWAY_RUN_FORCE_MESSAGE} Existing gateway listener pid${gatewayPids.length === 1 ? "" : "s"}: ${formatGatewayPidList(gatewayPids)}.`;
     };
-    if (!isTerminalInteractive()) {
+    if (!interactive) {
       const refusal = describeNonInteractiveGatewayOwner();
       if (refusal) {
         defaultRuntime.error(refusal);
@@ -860,7 +861,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
         timeoutMs: 2000,
         intervalMs: 100,
         sigtermTimeoutMs: 700,
-        ...(isTerminalInteractive()
+        ...(interactive
           ? {}
           : {
               beforeSignal: () => {
