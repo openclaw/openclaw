@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { makeTempDir } from "./exec-approvals-test-helpers.js";
 import {
+  loadExecApprovals,
   normalizeExecApprovals,
   resetExecApprovalsSyncLockStateForTest,
   saveExecApprovals,
@@ -147,6 +148,70 @@ describe("exec approvals async lock", () => {
     await updateExecApprovals({ update: () => file });
     saveExecApprovals(file);
     expect(fs.existsSync(lockPath)).toBe(false);
+    expect(fs.existsSync(statePath)).toBe(true);
+  });
+
+  // openclaw/openclaw#106971 (closed, unmerged) reproduced this as: an
+  // in-flight async lock hold makes the sync lock see ownerPid ===
+  // process.pid on the still-held sidecar and fail closed immediately
+  // instead of retrying, because pid alone can't distinguish "this is my
+  // own nested call" from "an unrelated concurrent operation in the same
+  // process." Its proposed fix (an unlocked read fallback) was rejected by
+  // review for a real authorization-ordering gap: an unrelated read could
+  // observe pre-revocation policy while a write was in flight. The shared
+  // held-lock map here fixes the same-process case structurally instead:
+  // a nested sync call functions as one continuous critical section, so it
+  // sees exactly the not-yet-committed (pre-rename) on-disk state, never a
+  // stale post-revocation-should-have-applied read.
+  it("lets a nested sync read observe consistent pre-commit state instead of failing closed on same-process contention", async () => {
+    const { statePath } = setupStateDir();
+    const before = normalizeExecApprovals({
+      version: 1,
+      entries: [],
+      host: "gateway",
+      security: "allowlist",
+      agents: { "*": { allowlist: [{ id: "1", pattern: "ls", source: "manual" }] } },
+    });
+    saveExecApprovals(before);
+
+    let nestedRead: ReturnType<typeof normalizeExecApprovals> | undefined;
+    let nestedReadThrew: unknown;
+    const origWriteFileSync = fs.writeFileSync.bind(fs);
+    const writeSpy = vi
+      .spyOn(fs, "writeFileSync")
+      .mockImplementation((...args: Parameters<typeof fs.writeFileSync>) => {
+        const target = args[0];
+        const isContentTempWrite = typeof target === "string" && target.includes(".tmp");
+        if (isContentTempWrite && nestedRead === undefined && nestedReadThrew === undefined) {
+          // The async writer holds the lock right now (acquired before this
+          // temp-file write) and the rename hasn't happened yet, so a
+          // same-process nested read here is exactly #106971's scenario.
+          try {
+            nestedRead = loadExecApprovals();
+          } catch (err) {
+            nestedReadThrew = err;
+          }
+        }
+        return origWriteFileSync(...args);
+      });
+
+    await updateExecApprovals({
+      update: (file) => ({
+        ...file,
+        agents: { ...file.agents, "*": { ...file.agents?.["*"], allowlist: [] } },
+      }),
+    });
+    writeSpy.mockRestore();
+
+    expect(nestedReadThrew).toBeUndefined();
+    expect(nestedRead).toBeDefined();
+    // Pre-rename: the nested read must see the not-yet-committed state
+    // (allowlist still present), not a torn read and not a spurious
+    // fail-closed fallback (which would report security !== "allowlist").
+    expect(nestedRead?.agents?.["*"]?.allowlist).toHaveLength(1);
+
+    const after = loadExecApprovals();
+    expect(after.agents?.["*"]?.allowlist ?? []).toHaveLength(0);
     expect(fs.existsSync(statePath)).toBe(true);
   });
 });

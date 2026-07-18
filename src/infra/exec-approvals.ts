@@ -1092,6 +1092,21 @@ export async function loadExecApprovalsAsync(): Promise<ExecApprovalsFile> {
 // the external @openclaw/fs-safe sidecar lock: that package's release compares
 // an fd-based fstat against a path-based lstat, which can diverge on VirtioFS
 // bind mounts and silently skip the unlink (openclaw/openclaw#106777).
+//
+// Sharing HELD_EXEC_APPROVALS_LOCKS also fixes the same-process contention
+// openclaw/openclaw#106971 targeted (async holder + same-pid sync caller
+// wrongly treated as an unrelated owner and failing closed instead of
+// retrying): a same-process caller now reuses the already-held lock instead.
+// That is only safe because every acquire/critical-section/release step here
+// uses synchronous fs calls with no internal `await`, so the whole sequence
+// is atomic with respect to the event loop for the callers below (verified in
+// exec-approvals-sync-lock.test.ts) — nothing else in this process can ever
+// observe a "held" entry except a genuinely nested call within that same
+// synchronous stretch. An unrelated concurrent operation instead goes through
+// the normal EEXIST contention path. If a future caller's locked callback
+// ever needs a real `await` for I/O, this invariant breaks and the shared
+// map could let an unrelated caller reuse a lock it doesn't logically own —
+// re-audit before adding one.
 type ExecApprovalsSyncLock = {
   descriptor: number;
   lockPath: string;
