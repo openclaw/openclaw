@@ -20,7 +20,6 @@ export function createFeishuBroadcastIngressSettlement(params: {
   type LaneState = {
     replayClaim?: ChannelReplayClaimHandle;
     status: "pending" | "deferred" | "adopted" | "completed" | "failed" | "abandoned";
-    dispatchComplete: boolean;
   };
 
   const lanes = new Set<LaneState>();
@@ -149,22 +148,10 @@ export function createFeishuBroadcastIngressSettlement(params: {
 
   return {
     createLane: (replayClaim) => {
-      const lane: LaneState = { replayClaim, status: "pending", dispatchComplete: false };
+      const lane: LaneState = { replayClaim, status: "pending" };
       lanes.add(lane);
       const releaseLane = (error: unknown) => {
         lane.replayClaim?.release({ error });
-      };
-      const completeAdoptedLane = async () => {
-        if (lane.status !== "adopted" || !lane.dispatchComplete) {
-          return;
-        }
-        lane.status = "completed";
-        try {
-          await lane.replayClaim?.commit();
-        } catch (error) {
-          reportReplayCommitError(error);
-        }
-        await maybeSettle();
       };
       return {
         lifecycle: {
@@ -180,7 +167,13 @@ export function createFeishuBroadcastIngressSettlement(params: {
             }
             lane.status = "adopted";
             beginFinalizing();
-            await completeAdoptedLane();
+            try {
+              await lane.replayClaim?.commit();
+            } catch (error) {
+              reportReplayCommitError(error);
+            }
+            lane.status = "completed";
+            await maybeSettle();
           },
           onDeferred: () => {
             if (lane.status !== "pending") {
@@ -204,16 +197,11 @@ export function createFeishuBroadcastIngressSettlement(params: {
           },
         },
         onDispatchComplete: async (dispatched) => {
-          lane.dispatchComplete = true;
           if (!dispatched && lane.status === "pending") {
             const error = new Error("feishu broadcast lane was not dispatched");
             lane.status = "failed";
             failures.push(error);
             releaseLane(error);
-            return;
-          }
-          if (lane.status === "adopted") {
-            await completeAdoptedLane();
             return;
           }
           if (lane.status !== "pending") {

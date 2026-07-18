@@ -74,16 +74,6 @@ export async function finalizeFeishuMessageProcessing(params: {
   return await ("kind" in claim ? claim.handle : claim).commit();
 }
 
-/** Records a handled message so restart/replay cannot dispatch it again; false when already recorded. */
-export async function recordProcessedFeishuMessage(
-  messageId: string | undefined | null,
-  namespace = "global",
-  log?: FeishuDedupeLog,
-): Promise<boolean> {
-  const claim = await feishuDedupeState.guard.claim(messageId, dedupeOptions(namespace, log));
-  return claim.kind === "claimed" ? await claim.handle.commit() : false;
-}
-
 /** Forgets a recorded message so a retryable synthetic event can be handled on redelivery. */
 export async function forgetProcessedFeishuMessage(
   messageId: string | undefined | null,

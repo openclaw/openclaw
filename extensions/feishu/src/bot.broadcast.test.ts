@@ -686,7 +686,7 @@ describe("broadcast dispatch", () => {
     expect(retrySusanClaim.release).not.toHaveBeenCalled();
   });
 
-  it("releases the active lane when its no-visible fallback fails", async () => {
+  it("keeps an adopted active lane committed when its no-visible fallback fails", async () => {
     const broadcastClaim = createReplayClaim("broadcast-fallback-failure");
     const susanClaim = createReplayClaim("broadcast-fallback-failure-susan");
     const mainClaim = createReplayClaim("broadcast-fallback-failure-main");
@@ -733,8 +733,8 @@ describe("broadcast dispatch", () => {
     ).rejects.toThrow("fallback send failed");
 
     expect(susanClaim.commit).toHaveBeenCalledTimes(1);
-    expect(mainClaim.commit).not.toHaveBeenCalled();
-    expect(mainClaim.release).toHaveBeenCalledTimes(1);
+    expect(mainClaim.commit).toHaveBeenCalledTimes(1);
+    expect(mainClaim.release).not.toHaveBeenCalled();
     expect(broadcastClaim.commit).not.toHaveBeenCalled();
     expect(broadcastClaim.release).toHaveBeenCalledTimes(1);
     expect(transport.calls.abandoned).toHaveBeenCalledTimes(1);
