@@ -5,12 +5,15 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
-import type {
-  WhatsAppQaDriverObservedMessage,
-  WhatsAppQaDriverSession,
+import {
+  resolveWhatsAppAccount,
+  type WhatsAppQaDriverObservedMessage,
+  type WhatsAppQaDriverSession,
 } from "@openclaw/whatsapp/api.js";
 import { describe, expect, it, vi } from "vitest";
 import { fingerprintQaCredentialId } from "../../qa-credentials-fingerprint.runtime.js";
+import { readQaScenarioById } from "../../scenario-catalog.js";
+import { applyQaMergePatch, collectQaSuiteGatewayConfigPatch } from "../../suite-planning.js";
 import { createWhatsAppQaScenarioEnvironment } from "./scenario-environment.js";
 import { resolveWhatsAppQaScenarioIds } from "./scenario-selection.js";
 import { runWhatsAppApprovalScenario } from "./whatsapp-live.approvals.js";
@@ -1204,6 +1207,76 @@ describe("WhatsApp QA live runtime", () => {
       }),
     ).resolves.toBeUndefined();
     expect(gatewayCall).not.toHaveBeenCalled();
+  });
+
+  it("patches the effective WhatsApp policy for default and named SUT accounts", async () => {
+    const policyScenarios = [
+      {
+        id: "whatsapp-access-control-dm-disabled",
+        policyKey: "dmPolicy",
+        policyValue: "disabled",
+        staleValue: "allowlist",
+      },
+      {
+        id: "whatsapp-access-control-dm-open",
+        policyKey: "dmPolicy",
+        policyValue: "open",
+        staleValue: "allowlist",
+      },
+      {
+        id: "whatsapp-access-control-group-disabled",
+        policyKey: "groupPolicy",
+        policyValue: "disabled",
+        staleValue: "open",
+      },
+      {
+        id: "whatsapp-access-control-group-open",
+        policyKey: "groupPolicy",
+        policyValue: "open",
+        staleValue: "disabled",
+      },
+      {
+        id: "whatsapp-pairing-block",
+        policyKey: "dmPolicy",
+        policyValue: "pairing",
+        staleValue: "allowlist",
+      },
+    ] as const;
+
+    for (const accountId of ["default", "work"]) {
+      for (const policyScenario of policyScenarios) {
+        const staleAccount = {
+          [policyScenario.policyKey]: policyScenario.staleValue,
+        };
+        const initialConfig = buildWhatsAppQaConfigFixture(
+          { sutAccountId: accountId },
+          {
+            channels: {
+              whatsapp: {
+                accounts: { [accountId]: staleAccount },
+              },
+            },
+          },
+        );
+        const scenario = readQaScenarioById(policyScenario.id);
+        const flow = scenario.execution.kind === "flow" ? scenario.execution.flow : undefined;
+        expect(JSON.stringify(flow), policyScenario.id).not.toContain('"patchConfig"');
+        const startupPatch = collectQaSuiteGatewayConfigPatch([scenario], accountId);
+        const patchedConfig = applyQaMergePatch(
+          initialConfig,
+          startupPatch ?? {},
+        ) as WhatsAppQaConfigBase;
+        const effective = resolveWhatsAppAccount({ cfg: patchedConfig, accountId });
+        expect(
+          effective[policyScenario.policyKey],
+          `${policyScenario.id}:${accountId}:effective`,
+        ).toBe(policyScenario.policyValue);
+
+        if (policyScenario.id === "whatsapp-pairing-block") {
+          expect(effective.allowFrom).toEqual(["+15550000000"]);
+        }
+      }
+    }
   });
 
   it("preserves configured command owners while adding the WhatsApp QA driver", () => {
