@@ -261,6 +261,7 @@ async function getMemexUploadUrl(params: {
     });
     release = guarded.release;
     if (!guarded.response.ok) {
+      await guarded.response.body?.cancel().catch(() => undefined);
       throw new Error(`Memex upload request failed: ${guarded.response.status}`);
     }
 
@@ -328,8 +329,14 @@ export async function uploadFile(params: UploadFileParams): Promise<UploadResult
         timeoutMs: TLON_UPLOAD_TIMEOUT_MS,
       });
       release = guarded.release;
-      assertTrustedMemexUploadUrl(guarded.finalUrl, "Memex final upload URL");
+      try {
+        assertTrustedMemexUploadUrl(guarded.finalUrl, "Memex final upload URL");
+      } catch (error) {
+        await guarded.response.body?.cancel().catch(() => undefined);
+        throw error;
+      }
       if (!guarded.response.ok) {
+        await guarded.response.body?.cancel().catch(() => undefined);
         throw new Error(`Upload failed: ${guarded.response.status}`);
       }
     } finally {
@@ -388,6 +395,7 @@ export async function uploadFile(params: UploadFileParams): Promise<UploadResult
     });
     release = guarded.release;
     if (!guarded.response.ok) {
+      await guarded.response.body?.cancel().catch(() => undefined);
       throw new Error(`Upload failed: ${guarded.response.status}`);
     }
   } finally {

@@ -63,6 +63,15 @@ function createGuardedResult(response: Response, finalUrl: string) {
   };
 }
 
+function responseWithCancelableBody(status: number, cancelBody: () => void): Response {
+  return new Response(
+    new ReadableStream<Uint8Array>({
+      cancel: cancelBody,
+    }),
+    { status },
+  );
+}
+
 function guardedFetchCall(index: number): Parameters<typeof fetchWithSsrFGuard>[0] {
   const call = mockGuardedFetch.mock.calls[index]?.at(0);
   if (call === undefined) {
@@ -162,6 +171,27 @@ describe("uploadFile memex upload hardening", () => {
     expect(mockRelease).toHaveBeenCalledTimes(2);
   });
 
+  it("cancels failed Memex upload URL responses before releasing their guard", async () => {
+    const cancelBody = vi.fn();
+    mockGuardedFetch.mockResolvedValueOnce(
+      createGuardedResult(
+        responseWithCancelableBody(500, cancelBody),
+        "https://memex.tlon.network/v1/zod/upload",
+      ),
+    );
+
+    await expect(
+      uploadFile({
+        blob: new Blob(["image-bytes"], { type: "image/png" }),
+        fileName: "avatar.png",
+        contentType: "image/png",
+      }),
+    ).rejects.toThrow("Memex upload request failed: 500");
+
+    expect(cancelBody).toHaveBeenCalledTimes(1);
+    expect(mockRelease).toHaveBeenCalledTimes(1);
+  });
+
   it("surfaces guarded upload failures for hosted Memex targets", async () => {
     mockGuardedFetch
       .mockResolvedValueOnce(
@@ -188,6 +218,62 @@ describe("uploadFile memex upload hardening", () => {
     expect(uploadCall?.capture).toBe(false);
     expect(uploadCall?.maxRedirects).toBe(0);
     expect(mockRelease).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels failed Memex upload responses before releasing their guard", async () => {
+    const cancelBody = vi.fn();
+    mockGuardedFetch
+      .mockResolvedValueOnce(
+        createGuardedResult(
+          createMemexResponse("https://uploads.tlon.network/put"),
+          "https://memex.tlon.network/v1/zod/upload",
+        ),
+      )
+      .mockResolvedValueOnce(
+        createGuardedResult(
+          responseWithCancelableBody(500, cancelBody),
+          "https://uploads.tlon.network/put",
+        ),
+      );
+
+    await expect(
+      uploadFile({
+        blob: new Blob(["image-bytes"], { type: "image/png" }),
+        fileName: "avatar.png",
+        contentType: "image/png",
+      }),
+    ).rejects.toThrow("Upload failed: 500");
+
+    expect(cancelBody).toHaveBeenCalledTimes(1);
+    expect(mockRelease).toHaveBeenCalledTimes(2);
+  });
+
+  it("cancels hosted upload responses when their final URL is untrusted", async () => {
+    const cancelBody = vi.fn();
+    mockGuardedFetch
+      .mockResolvedValueOnce(
+        createGuardedResult(
+          createMemexResponse("https://uploads.tlon.network/put"),
+          "https://memex.tlon.network/v1/zod/upload",
+        ),
+      )
+      .mockResolvedValueOnce(
+        createGuardedResult(
+          responseWithCancelableBody(200, cancelBody),
+          "https://evil.example/put",
+        ),
+      );
+
+    await expect(
+      uploadFile({
+        blob: new Blob(["image-bytes"], { type: "image/png" }),
+        fileName: "avatar.png",
+        contentType: "image/png",
+      }),
+    ).rejects.toThrow("Memex final upload URL must target a trusted hosted Tlon domain");
+
+    expect(cancelBody).toHaveBeenCalledTimes(1);
+    expect(mockRelease).toHaveBeenCalledTimes(2);
   });
 
   it("rejects Memex upload targets outside the hosted Tlon domain allowlist", async () => {
@@ -532,6 +618,28 @@ describe("uploadFile custom S3 upload hardening", () => {
     expect(mockGuardedFetch).toHaveBeenCalledTimes(1);
     expect(mockRelease).not.toHaveBeenCalled();
     expect(vi.mocked(globalThis.fetch)).not.toHaveBeenCalled();
+  });
+
+  it("cancels failed custom S3 upload responses before releasing their guard", async () => {
+    const cancelBody = vi.fn();
+    mockGetSignedUrl.mockResolvedValueOnce("https://s3.example.com/uploads/file?sig=abc");
+    mockGuardedFetch.mockResolvedValueOnce(
+      createGuardedResult(
+        responseWithCancelableBody(500, cancelBody),
+        "https://s3.example.com/uploads/file?sig=abc",
+      ),
+    );
+
+    await expect(
+      uploadFile({
+        blob: new Blob(["image-bytes"], { type: "image/png" }),
+        fileName: "avatar.png",
+        contentType: "image/png",
+      }),
+    ).rejects.toThrow("Upload failed: 500");
+
+    expect(cancelBody).toHaveBeenCalledTimes(1);
+    expect(mockRelease).toHaveBeenCalledTimes(1);
   });
 
   it("passes the private-network opt-in to guarded custom S3 uploads", async () => {
