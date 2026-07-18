@@ -38,8 +38,7 @@ flow:
               patch:
                 expr: "({ channels: { whatsapp: { dmPolicy: 'pairing', allowFrom: ['+15550000000'], ...(env.transport.accountId === 'default' ? {} : { accounts: { [env.transport.accountId]: { dmPolicy: 'pairing', allowFrom: ['+15550000000'] } } }) } } })"
               replacePaths:
-                - channels.whatsapp.allowFrom
-                - channels.whatsapp.accounts.sut.allowFrom
+                expr: "['channels.whatsapp.allowFrom', `channels.whatsapp.accounts.${env.transport.accountId}.allowFrom`]"
         - resetTransport: true
         - set: marker
           value:

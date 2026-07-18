@@ -24,7 +24,7 @@ scenario:
       conversationKind: group
       conversationId: 120363000000000000@g.us
       senderId: 15550000002@s.whatsapp.net
-      mentionPrefix: "@openclaw "
+      mentionPrefix: "openclawqa "
       expectReply: true
       markerPrefix: WHATSAPP_QA_GROUP_OPEN
       timeoutMs: 60000

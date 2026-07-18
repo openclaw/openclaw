@@ -11,10 +11,17 @@ import type {
 } from "@openclaw/whatsapp/api.js";
 import { describe, expect, it, vi } from "vitest";
 import { fingerprintQaCredentialId } from "../../qa-credentials-fingerprint.runtime.js";
+import {
+  createWhatsAppQaScenarioEnvironment,
+  resolveWhatsAppQaReplacePaths,
+} from "./scenario-environment.js";
 import { resolveWhatsAppQaScenarioIds } from "./scenario-selection.js";
 import { runWhatsAppApprovalScenario } from "./whatsapp-live.approvals.js";
 import { buildWhatsAppQaConfig, parseWhatsAppQaCredentialPayload } from "./whatsapp-live.config.js";
-import { resolveWhatsAppQaMessageTargets } from "./whatsapp-live.contracts.js";
+import {
+  formatWhatsAppQaBusTarget,
+  resolveWhatsAppQaMessageTargets,
+} from "./whatsapp-live.contracts.js";
 import {
   callWhatsAppGatewayMessageAction,
   callWhatsAppGatewayPoll,
@@ -149,6 +156,7 @@ function buildWhatsAppQaConfigFixture(
     allowFrom: ["+15550000001"],
     authDir: "/tmp/openclaw-whatsapp-qa-auth",
     dmPolicy: "allowlist",
+    ownerAllowFrom: ["+15550000001"],
     sutAccountId: "sut",
     ...options,
   });
@@ -969,6 +977,21 @@ describe("WhatsApp QA live runtime", () => {
     });
   });
 
+  it("formats observed WhatsApp conversations without loading the QA Channel runtime", () => {
+    expect(
+      formatWhatsAppQaBusTarget({
+        conversationId: "+15550000001",
+        conversationKind: "direct",
+      }),
+    ).toBe("dm:+15550000001");
+    expect(
+      formatWhatsAppQaBusTarget({
+        conversationId: "120363000000000000@g.us",
+        conversationKind: "group",
+      }),
+    ).toBe("group:120363000000000000@g.us");
+  });
+
   it("routes WhatsApp Gateway DM helper calls to the driver peer", async () => {
     const { calls, context } = createGatewayTargetContext({
       gatewayTarget: "+15550000001",
@@ -1106,9 +1129,57 @@ describe("WhatsApp QA live runtime", () => {
       });
       const account = cfg.channels?.whatsapp?.accounts?.sut;
       expect(account?.allowFrom).toEqual(["+15550000001"]);
+      expect(cfg.commands?.ownerAllowFrom).toEqual(["+15550000001"]);
       expect(account?.groupPolicy).toBe("open");
       expect(account?.groups?.[groupJid]?.requireMention).toBe(true);
     }
+  });
+
+  it("authorizes the exact WhatsApp account allowlist replacement path", () => {
+    expect(resolveWhatsAppQaReplacePaths("work")).toContain(
+      "channels.whatsapp.accounts.work.allowFrom",
+    );
+  });
+
+  it("leaves generic declarative flows to their own config preparation", async () => {
+    const gatewayCall = vi.fn();
+    const { prepareFlow } = createWhatsAppQaScenarioEnvironment({
+      accountId: "work",
+      driverAuthDir: "/tmp/whatsapp-driver",
+      explicitScenarioSelection: true,
+      getDriver: vi.fn(() => undefined as never),
+      replaceDriver: vi.fn(),
+      runtimeEnv: {
+        driverAuthArchiveBase64: "driver-auth",
+        driverPhoneE164: "+15550000001",
+        sutAuthArchiveBase64: "sut-auth",
+        sutPhoneE164: "+15550000002",
+      },
+      sutAuthDir: "/tmp/whatsapp-sut",
+    });
+
+    await expect(
+      prepareFlow({
+        config: { policyKey: "dmPolicy", policyValue: "disabled" },
+        gateway: { call: gatewayCall } as never,
+        outputDir: "/tmp/whatsapp-output",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        timeoutMs: 60_000,
+        waitForConfigRestartSettle: vi.fn(),
+      }),
+    ).resolves.toBeUndefined();
+    expect(gatewayCall).not.toHaveBeenCalled();
+  });
+
+  it("preserves configured command owners while adding the WhatsApp QA driver", () => {
+    const cfg = buildWhatsAppQaConfigFixture(
+      {},
+      {
+        commands: { ownerAllowFrom: ["telegram:existing-owner"] },
+      },
+    );
+
+    expect(cfg.commands?.ownerAllowFrom).toEqual(["telegram:existing-owner", "+15550000001"]);
   });
 
   it("models activation always through visible group behavior and restores mention gating", async () => {

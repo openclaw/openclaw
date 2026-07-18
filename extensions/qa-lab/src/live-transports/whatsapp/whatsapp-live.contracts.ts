@@ -15,6 +15,13 @@ export type WhatsAppQaRuntimeEnv = {
   groupJid?: string;
 };
 
+export function formatWhatsAppQaBusTarget(params: {
+  conversationId: string;
+  conversationKind: "direct" | "group";
+}): string {
+  return `${params.conversationKind === "direct" ? "dm" : "group"}:${params.conversationId}`;
+}
+
 export type WhatsAppQaScenarioId =
   | "whatsapp-approval-exec-deny-native"
   | "whatsapp-approval-exec-group-reaction-native"
