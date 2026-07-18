@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
@@ -154,6 +156,21 @@ describe.each([
 });
 
 describe("SqliteBoardStore persistence", () => {
+  it("does not create an unregistered agent database during widget byte lookup", () => {
+    const stateDir = tempDirs.make("openclaw-board-no-create-");
+    const store = new SqliteBoardStore({
+      resolveAgentId: () => "attacker-selected",
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+
+    expect(store.readWidgetHtml("agent:attacker-selected:main", "missing")).toBeUndefined();
+    expect(
+      existsSync(
+        path.join(stateDir, "agents", "attacker-selected", "agent", "openclaw-agent.sqlite"),
+      ),
+    ).toBe(false);
+  });
+
   it("reopens durable boards and isolates owning agent databases", () => {
     const stateDir = tempDirs.make("openclaw-board-durable-");
     const options = {

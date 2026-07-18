@@ -202,6 +202,7 @@ CREATE TABLE IF NOT EXISTS board_widgets (
   html BLOB,
   descriptor_json TEXT,
   sha256 TEXT NOT NULL,
+  view_generation TEXT,
   revision INTEGER NOT NULL CHECK (revision >= 1),
   size_w INTEGER NOT NULL CHECK (size_w BETWEEN 1 AND 12),
   size_h INTEGER NOT NULL CHECK (size_h BETWEEN 1 AND 20),
@@ -215,8 +216,8 @@ CREATE TABLE IF NOT EXISTS board_widgets (
   PRIMARY KEY (session_key, name),
   FOREIGN KEY (session_key, tab_id) REFERENCES board_tabs(session_key, tab_id) ON DELETE CASCADE,
   CHECK (
-    (content_kind = 'html' AND html IS NOT NULL AND descriptor_json IS NULL) OR
-    (content_kind = 'mcp-app' AND html IS NULL AND descriptor_json IS NOT NULL)
+    (content_kind = 'html' AND html IS NOT NULL AND descriptor_json IS NULL AND view_generation IS NOT NULL) OR
+    (content_kind = 'mcp-app' AND html IS NULL AND descriptor_json IS NOT NULL AND view_generation IS NULL)
   )
 ) STRICT;
 

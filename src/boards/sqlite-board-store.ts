@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import type { Selectable } from "kysely";
 import type {
   BoardMcpAppDescriptor,
@@ -233,7 +233,12 @@ function deleteRemovedTabs(
   }
 }
 
-function contentFields(params: BoardWidgetPutParams, revision: number, now: number) {
+function contentFields(
+  params: BoardWidgetPutParams,
+  revision: number,
+  viewGeneration: string,
+  now: number,
+) {
   const manifest = JSON.stringify(params.declared ?? {});
   if (params.content.kind === "html") {
     return {
@@ -241,6 +246,7 @@ function contentFields(params: BoardWidgetPutParams, revision: number, now: numb
       html: Buffer.from(params.content.html, "utf8"),
       descriptor_json: null,
       sha256: createHash("sha256").update(params.content.html).digest("hex"),
+      view_generation: viewGeneration,
       revision,
       manifest,
       grant_state: createBoardDeclaredSummary(params.declared) ? "pending" : "none",
@@ -254,6 +260,7 @@ function contentFields(params: BoardWidgetPutParams, revision: number, now: numb
     html: null,
     descriptor_json: descriptorJson,
     sha256: createHash("sha256").update(descriptorJson).digest("hex"),
+    view_generation: null,
     revision,
     manifest,
     grant_state: createBoardDeclaredSummary(params.declared) ? "pending" : "none",
@@ -308,6 +315,7 @@ export class SqliteBoardStore implements BoardStore {
 
   putWidget(params: BoardWidgetPutParams): BoardSnapshot {
     const agentId = this.resolveAgentId(params.sessionKey);
+    const viewGeneration = randomBytes(16).toString("hex");
     return runOpenClawAgentWriteTransaction(
       (database) => {
         const previous = readStoredBoard(database, params.sessionKey);
@@ -317,7 +325,7 @@ export class SqliteBoardStore implements BoardStore {
         const now = Date.now();
         upsertTabs(database, previous, next);
         const db = getNodeSqliteKysely<BoardDatabase>(database.db);
-        const fields = contentFields(params, widget.revision, now);
+        const fields = contentFields(params, widget.revision, viewGeneration, now);
         executeSqliteQuerySync(
           database.db,
           db
@@ -382,13 +390,32 @@ export class SqliteBoardStore implements BoardStore {
   }
 
   readWidgetHtml(sessionKey: string, name: string): BoardWidgetDocument | undefined {
-    const database = this.open(sessionKey);
+    const agentId = this.resolveAgentId(sessionKey);
+    const registered = listOpenClawRegisteredAgentDatabases({ env: this.options.env }).find(
+      (entry) => entry.agentId === agentId,
+    );
+    if (!registered) {
+      return undefined;
+    }
+    // Public ticket lookup must not materialize an attacker-selected agent DB.
+    const database = openOpenClawAgentDatabase({
+      agentId,
+      path: registered.path,
+      env: this.options.env,
+    });
     const db = getNodeSqliteKysely<BoardDatabase>(database.db);
     const row = executeSqliteQuerySync(
       database.db,
       db
         .selectFrom("board_widgets")
-        .select(["content_kind", "html", "descriptor_json", "revision", "sha256"])
+        .select([
+          "content_kind",
+          "html",
+          "descriptor_json",
+          "revision",
+          "sha256",
+          "view_generation",
+        ])
         .where("session_key", "=", sessionKey)
         .where("name", "=", name)
         .limit(1),
@@ -396,11 +423,12 @@ export class SqliteBoardStore implements BoardStore {
     if (!row) {
       return undefined;
     }
-    if (row.content_kind === "html" && row.html !== null) {
+    if (row.content_kind === "html" && row.html !== null && row.view_generation !== null) {
       return {
         html: Buffer.from(row.html).toString("utf8"),
         revision: row.revision,
         sha256: row.sha256,
+        viewGeneration: row.view_generation,
       };
     }
     if (row.content_kind === "mcp-app" && row.descriptor_json !== null) {

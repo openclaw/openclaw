@@ -31,7 +31,7 @@ function parseBoardWidgetPath(pathname: string): { sessionKey: string; name: str
   try {
     const sessionKey = decodeURIComponent(match[1]!);
     const name = decodeURIComponent(match[2]!);
-    if (!sessionKey || sessionKey.includes("/") || !BOARD_WIDGET_NAME_PATTERN.test(name)) {
+    if (!sessionKey || !BOARD_WIDGET_NAME_PATTERN.test(name)) {
       return undefined;
     }
     return { sessionKey, name };
@@ -71,6 +71,8 @@ export function handleBoardHttpRequest(
       sessionKey: path.sessionKey,
       name: path.name,
       revision: document.revision,
+      sha256: document.sha256,
+      viewGeneration: document.viewGeneration,
       nowMs: opts.nowMs,
     })
   ) {

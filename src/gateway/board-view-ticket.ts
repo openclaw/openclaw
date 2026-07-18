@@ -16,6 +16,8 @@ export type BoardViewTicketBinding = {
   sessionKey: string;
   name: string;
   revision: number;
+  sha256: string;
+  viewGeneration: string;
   expiresAtMs: number;
 };
 
@@ -27,7 +29,7 @@ function signTicket(
 ): string {
   return createHmac("sha256", secret)
     .update(
-      `${BOARD_VIEW_TICKET_SCOPE}\0${nonce}\0${expiresAtMs}\0${binding.sessionKey}\0${binding.name}\0${binding.revision}`,
+      `${BOARD_VIEW_TICKET_SCOPE}\0${nonce}\0${expiresAtMs}\0${binding.sessionKey}\0${binding.name}\0${binding.revision}\0${binding.sha256}\0${binding.viewGeneration}`,
     )
     .digest("base64url");
 }
@@ -36,10 +38,17 @@ export function createBoardViewTicket(params: {
   sessionKey: string;
   name: string;
   revision: number;
+  sha256: string;
+  viewGeneration: string;
   nowMs?: number;
 }): BoardViewTicket {
   const nowMs = params.nowMs ?? Date.now();
-  if (!Number.isSafeInteger(nowMs) || !Number.isSafeInteger(params.revision)) {
+  if (
+    !Number.isSafeInteger(nowMs) ||
+    !Number.isSafeInteger(params.revision) ||
+    !/^[a-f0-9]{64}$/u.test(params.sha256) ||
+    !/^[a-f0-9]{32}$/u.test(params.viewGeneration)
+  ) {
     throw new Error("invalid board view ticket binding");
   }
   const expiresAtMs = nowMs + BOARD_VIEW_TICKET_TTL_MS;
@@ -57,11 +66,18 @@ export function verifyBoardViewTicket(
     sessionKey: string;
     name: string;
     revision: number;
+    sha256: string;
+    viewGeneration: string;
     nowMs?: number;
   },
 ): BoardViewTicketBinding | undefined {
   const nowMs = expected.nowMs ?? Date.now();
-  if (!Number.isSafeInteger(nowMs) || !Number.isSafeInteger(expected.revision)) {
+  if (
+    !Number.isSafeInteger(nowMs) ||
+    !Number.isSafeInteger(expected.revision) ||
+    !/^[a-f0-9]{64}$/u.test(expected.sha256) ||
+    !/^[a-f0-9]{32}$/u.test(expected.viewGeneration)
+  ) {
     return undefined;
   }
   const parts = value.split(".");
@@ -84,6 +100,8 @@ export function verifyBoardViewTicket(
     sessionKey: expected.sessionKey,
     name: expected.name,
     revision: expected.revision,
+    sha256: expected.sha256,
+    viewGeneration: expected.viewGeneration,
     expiresAtMs,
   };
 }

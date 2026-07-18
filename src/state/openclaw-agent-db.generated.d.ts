@@ -59,6 +59,7 @@ export interface BoardWidgets {
   tab_id: string;
   title: string | null;
   updated_at: number;
+  view_generation: string | null;
 }
 
 export interface CacheEntries {

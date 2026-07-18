@@ -67,6 +67,8 @@ export function createBoardHandlers(
           sessionKey: snapshot.sessionKey,
           name: widget.name,
           revision: widget.revision,
+          sha256: document.sha256,
+          viewGeneration: document.viewGeneration,
         });
         widget.frameUrl = buildBoardWidgetFrameUrl({
           sessionKey: snapshot.sessionKey,

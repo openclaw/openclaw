@@ -69,10 +69,16 @@ afterAll(async () => {
 });
 
 function ticketFor(name: string, revision = 1, issuedAtMs = nowMs): string {
+  const document = store.readWidgetHtml("agent:main:main", name);
+  if (!document || !("html" in document)) {
+    throw new Error(`missing HTML widget: ${name}`);
+  }
   return createBoardViewTicket({
     sessionKey: "agent:main:main",
     name,
     revision,
+    sha256: document.sha256,
+    viewGeneration: document.viewGeneration,
     nowMs: issuedAtMs,
   }).ticket;
 }
@@ -90,10 +96,16 @@ function request(
 
 describe("board widget HTTP", () => {
   it("round-trips an opaque two-minute ticket bound to the widget revision", () => {
+    const document = store.readWidgetHtml("agent:main:main", "status");
+    if (!document || !("html" in document)) {
+      throw new Error("missing status widget");
+    }
     const issued = createBoardViewTicket({
       sessionKey: "agent:main:main",
       name: "status",
       revision: 1,
+      sha256: document.sha256,
+      viewGeneration: document.viewGeneration,
       nowMs,
     });
     expect(issued.ticket).toMatch(/^v1\.[A-Za-z0-9_-]+\.\d+\.[A-Za-z0-9_-]+$/u);
@@ -104,6 +116,8 @@ describe("board widget HTTP", () => {
         sessionKey: "agent:other:main",
         name: "status",
         revision: 1,
+        sha256: document.sha256,
+        viewGeneration: document.viewGeneration,
         nowMs,
       }),
     ).toBeUndefined();
@@ -112,6 +126,8 @@ describe("board widget HTTP", () => {
         sessionKey: "agent:main:main",
         name: "other",
         revision: 1,
+        sha256: document.sha256,
+        viewGeneration: document.viewGeneration,
         nowMs,
       }),
     ).toBeUndefined();
@@ -120,12 +136,16 @@ describe("board widget HTTP", () => {
         sessionKey: "agent:main:main",
         name: "status",
         revision: 1,
+        sha256: document.sha256,
+        viewGeneration: document.viewGeneration,
         nowMs,
       }),
     ).toEqual({
       sessionKey: "agent:main:main",
       name: "status",
       revision: 1,
+      sha256: document.sha256,
+      viewGeneration: document.viewGeneration,
       expiresAtMs: issued.expiresAtMs,
     });
     expect(
@@ -133,6 +153,8 @@ describe("board widget HTTP", () => {
         sessionKey: "agent:main:main",
         name: "status",
         revision: 2,
+        sha256: document.sha256,
+        viewGeneration: document.viewGeneration,
         nowMs,
       }),
     ).toBeUndefined();
@@ -174,6 +196,49 @@ describe("board widget HTTP", () => {
     const current = await request("revisioned", { ticket: ticketFor("revisioned", 2) });
     expect(current.status).toBe(200);
     await expect(current.text()).resolves.toBe("<p>two</p>");
+  });
+
+  it("rejects a stale ticket when a widget name and revision are reused", async () => {
+    store.putWidget({
+      sessionKey: "agent:main:main",
+      name: "recreated",
+      content: { kind: "html", html: "<p>old</p>" },
+    });
+    const stale = ticketFor("recreated");
+    store.applyOps("agent:main:main", [{ kind: "widget_remove", name: "recreated" }]);
+    store.putWidget({
+      sessionKey: "agent:main:main",
+      name: "recreated",
+      content: { kind: "html", html: "<p>old</p>" },
+    });
+
+    expect((await request("recreated", { ticket: stale })).status).toBe(401);
+    expect((await request("recreated", { ticket: ticketFor("recreated") })).status).toBe(200);
+  });
+
+  it("serves an encoded slash as part of an opaque session key", async () => {
+    store.putWidget({
+      sessionKey: "session/with/slash",
+      name: "slash-key",
+      content: { kind: "html", html: "slash" },
+    });
+    const document = store.readWidgetHtml("session/with/slash", "slash-key");
+    if (!document || !("html" in document)) {
+      throw new Error("missing slash-key widget");
+    }
+    const ticket = createBoardViewTicket({
+      sessionKey: "session/with/slash",
+      name: "slash-key",
+      revision: 1,
+      sha256: document.sha256,
+      viewGeneration: document.viewGeneration,
+      nowMs,
+    }).ticket;
+    const response = await fetch(
+      `${baseUrl}/__openclaw__/board/session%2Fwith%2Fslash/slash-key/index.html?bt=${encodeURIComponent(ticket)}`,
+    );
+    expect(response.status).toBe(200);
+    await expect(response.text()).resolves.toBe("slash");
   });
 
   it("returns 404 for unknown and MCP app widgets", async () => {

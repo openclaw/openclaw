@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import type {
   BoardMcpAppDescriptor,
   BoardOp,
@@ -15,7 +15,12 @@ import {
   type BoardSize,
 } from "./board-layout.js";
 
-export type BoardWidgetHtmlDocument = { html: string; revision: number; sha256: string };
+export type BoardWidgetHtmlDocument = {
+  html: string;
+  revision: number;
+  sha256: string;
+  viewGeneration: string;
+};
 export type BoardWidgetMcpAppDocument = {
   descriptor: BoardMcpAppDescriptor;
   revision: number;
@@ -64,6 +69,7 @@ export function createBoardWidgetDocument(
       html: content.html,
       revision,
       sha256: createHash("sha256").update(content.html).digest("hex"),
+      viewGeneration: randomBytes(16).toString("hex"),
     };
   }
   return { descriptor: { ...content.descriptor }, revision };
