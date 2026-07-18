@@ -200,6 +200,10 @@ export async function executeMcpAppOperation(
         }
         return await runtime.readResource(view.serverName, operation.params.uri);
       });
+    default: {
+      const unsupported: never = operation;
+      throw new Error(`Unsupported MCP App operation: ${String(unsupported)}`);
+    }
   }
 }
 
