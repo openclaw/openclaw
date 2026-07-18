@@ -627,6 +627,7 @@ export const en: TranslationMap = {
     showChildSessions: "Show {count} child sessions for {session}",
     hideChildSessions: "Hide {count} child sessions for {session}",
     childSessions: "Child sessions",
+    showMoreChildren: "Show {count} more",
     archived: "Archived",
     pinned: "Pinned",
     unread: "Unread",

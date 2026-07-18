@@ -77,6 +77,34 @@ describe("resolveSessionDisplayName", () => {
       "node-fleet-…8b2e",
     );
   });
+
+  it("can omit only the subagent prefix while preserving its untitled fallback", () => {
+    const key = "agent:main:subagent:worker";
+    expect(resolveSessionDisplayName(key, { label: "Research sources" })).toBe(
+      "Subagent: Research sources",
+    );
+    expect(
+      resolveSessionDisplayName(
+        key,
+        { label: "Subagent: Research sources" },
+        {
+          includeSubagentPrefix: false,
+        },
+      ),
+    ).toBe("Research sources");
+    expect(resolveSessionDisplayName(key, undefined, { includeSubagentPrefix: false })).toBe(
+      "Subagent:",
+    );
+    expect(
+      resolveSessionDisplayName(
+        "agent:main:cron:daily",
+        { label: "Daily" },
+        {
+          includeSubagentPrefix: false,
+        },
+      ),
+    ).toBe("Cron: Daily");
+  });
 });
 
 describe("resolveSessionWorkSubtitle", () => {

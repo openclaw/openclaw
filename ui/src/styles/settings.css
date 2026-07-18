@@ -66,6 +66,9 @@
 
 /* ── Page ── */
 
+/* Section separation stays generous (--space-8) so group surfaces read as
+   distinct blocks; headings bind to their own group via the tighter
+   .settings-section gap. */
 .settings-page {
   width: 100%;
   max-width: 760px;
@@ -73,7 +76,7 @@
   padding: var(--space-3) var(--space-4) var(--space-8);
   display: flex;
   flex-direction: column;
-  gap: var(--space-7);
+  gap: var(--space-8);
 }
 
 /* Table/list-heavy pages (sessions, automations, plugins) need more width. */
@@ -96,26 +99,28 @@
   min-width: 0;
 }
 
+/* Header and description indent to var(--space-4) so the eyebrow label lines
+   up with the row content inside the group surface below it. */
 .settings-section__header {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
-  padding: 0 var(--space-1);
+  padding: 0 var(--space-4);
 }
 
 .settings-section__heading {
   margin: 0;
-  font-size: var(--control-ui-text-sm);
+  font-size: var(--control-ui-text-xs);
   font-weight: 600;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.06em;
   color: var(--muted-strong);
   text-transform: uppercase;
 }
 
 .settings-section__desc {
   margin: calc(-1 * var(--space-2)) 0 0;
-  padding: 0 var(--space-1);
+  padding: 0 var(--space-4);
   font-size: var(--control-ui-text-sm);
   line-height: 1.5;
   color: var(--muted);
@@ -424,10 +429,68 @@ wa-radio-group.settings-segmented::part(radios) {
   transition: border-color var(--duration-fast) var(--ease-out);
 }
 
-.settings-row:not(.settings-row--stacked) .settings-row__control > .settings-select,
-.settings-row:not(.settings-row--stacked) .settings-row__control > .settings-input {
+.settings-row:not(.settings-row--stacked) .settings-row__control > .settings-select {
   width: auto;
   min-width: min(220px, 100%);
+}
+
+/* Lone value inputs share one width so stacked rows in a group read as a
+   grid instead of ragged right-aligned fields. A percentage guard cannot work
+   here (the shrink-to-fit control resolves 100% circularly); the fixed width
+   shrinks via flex because .settings-input/.settings-secret set min-width: 0. */
+.settings-row:not(.settings-row--stacked) .settings-row__control > .settings-input,
+.settings-row:not(.settings-row--stacked) .settings-row__control > .settings-secret {
+  width: 340px;
+}
+
+/* ── Secret input (inset reveal toggle; no trailing button) ── */
+
+.settings-secret {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.settings-secret > .settings-input {
+  width: 100%;
+  padding-right: 36px;
+}
+
+.settings-secret__toggle {
+  position: absolute;
+  right: 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color var(--duration-fast) var(--ease-out);
+}
+
+.settings-secret__toggle:hover {
+  color: var(--text);
+}
+
+.settings-secret__toggle:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.settings-secret__toggle svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .settings-input::placeholder {
