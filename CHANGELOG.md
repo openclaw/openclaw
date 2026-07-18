@@ -2,6 +2,16 @@
 
 Docs: https://docs.openclaw.ai
 
+## 2026.7.1-1
+
+### Fixes
+
+- **Codex progress replies:** keep app-server turns running after delivered progress messages so GPT/Codex reaches its authoritative terminal response instead of stopping mid-turn. (#106961, #108487) Thanks @joshavant.
+- **Memory Core startup repair:** recover derived legacy-index and cache-sidecar conflicts without trapping the Gateway in a fatal restart loop, while keeping structural vector-store corruption retryable. (#107220, #108652) Thanks @goutam-adwant.
+- **WSL state permissions:** tolerate `EROFS` from guarded chmod operations only when the existing state path is already private, preserving fail-closed handling for broad permissions. (#108250, #108258)
+- **Legacy migration recovery:** keep reviewed migration residue nonfatal during startup instead of blocking otherwise healthy upgrades. (#106101)
+- **Managed plugin updates:** recover stale npm lock metadata so official managed plugins can update cleanly. (#107294, #107866)
+
 ## 2026.7.1
 
 ### Highlights
