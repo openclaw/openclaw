@@ -459,6 +459,21 @@
       "translated": "无法处理批准。请刷新后重试。"
     },
     {
+      "id": "native.android.ab7de09b2e9bafd2",
+      "source": "Device approved.",
+      "translated": "设备已批准。"
+    },
+    {
+      "id": "native.android.0f3b1e2ce6f0aed5",
+      "source": "Pairing request rejected.",
+      "translated": "配对请求已拒绝。"
+    },
+    {
+      "id": "native.android.e98062fe81b36c4a",
+      "source": "Paired device removed.",
+      "translated": "已移除配对设备。"
+    },
+    {
       "id": "native.android.5cf2b6b55ea97b67",
       "source": "Proposal applied.",
       "translated": "提案已应用。"
@@ -802,6 +817,11 @@
       "id": "native.android.df0d071809dfbbb3",
       "source": "Connect the gateway to update Skill Workshop proposals.",
       "translated": "连接 Gateway 以更新 Skill Workshop 提案。"
+    },
+    {
+      "id": "native.android.9481b642ee32ed95",
+      "source": "Could not verify the device pairing change. Refresh and try again.",
+      "translated": "无法验证设备配对变更。请刷新后重试。"
     },
     {
       "id": "native.android.21445608d791c302",
@@ -2429,6 +2449,91 @@
       "translated": "已配对设备"
     },
     {
+      "id": "native.android.8c6f23f9b2a2f5c3",
+      "source": "Approve device?",
+      "translated": "批准设备？"
+    },
+    {
+      "id": "native.android.61e56e7c2425c765",
+      "source": "Reject pairing request?",
+      "translated": "拒绝配对请求？"
+    },
+    {
+      "id": "native.android.a233e379d3281626",
+      "source": "Remove paired device?",
+      "translated": "移除配对设备？"
+    },
+    {
+      "id": "native.android.84789f373ff7e379",
+      "source": "Verify this requesting device before granting access.",
+      "translated": "授予访问权限前，请验证发出请求的设备。"
+    },
+    {
+      "id": "native.android.80f2666384538867",
+      "source": "$label: $value",
+      "translated": "$label：$value"
+    },
+    {
+      "id": "native.android.857fc6dbd43c147c",
+      "source": "Reject the pairing request from this device?",
+      "translated": "拒绝来自此设备的配对请求？"
+    },
+    {
+      "id": "native.android.a0cb7097dac32274",
+      "source": "This device will lose its trusted Gateway access.",
+      "translated": "此设备将失去其受信任的 Gateway 访问权限。"
+    },
+    {
+      "id": "native.android.d62bd835e46f047f",
+      "source": "Cancel",
+      "translated": "取消"
+    },
+    {
+      "id": "native.android.54bc27d84e77fdeb",
+      "source": "Name",
+      "translated": "名称"
+    },
+    {
+      "id": "native.android.549fcca19ab575e8",
+      "source": "Device ID",
+      "translated": "设备 ID"
+    },
+    {
+      "id": "native.android.0a2b46e9ba9a43a7",
+      "source": "Public key",
+      "translated": "公钥"
+    },
+    {
+      "id": "native.android.3029d9b112d91460",
+      "source": "Platform",
+      "translated": "平台"
+    },
+    {
+      "id": "native.android.34495d4163dd2b0d",
+      "source": "Client",
+      "translated": "客户端"
+    },
+    {
+      "id": "native.android.9d5173f45aa99bc9",
+      "source": "Origin",
+      "translated": "来源"
+    },
+    {
+      "id": "native.android.1690971a387e62fa",
+      "source": "Remote IP",
+      "translated": "远程 IP"
+    },
+    {
+      "id": "native.android.e478d6d87813a30a",
+      "source": "Roles",
+      "translated": "角色"
+    },
+    {
+      "id": "native.android.d390e77c38097584",
+      "source": "Scopes",
+      "translated": "权限范围"
+    },
+    {
       "id": "native.android.f87fa5da40b7f94f",
       "source": "New device",
       "translated": "新设备"
@@ -2444,9 +2549,24 @@
       "translated": "审核"
     },
     {
+      "id": "native.android.caa6c7dea18d5127",
+      "source": "Reject",
+      "translated": "拒绝"
+    },
+    {
+      "id": "native.android.ef8a2c38eba42e89",
+      "source": "Approve",
+      "translated": "批准"
+    },
+    {
       "id": "native.android.36735662df3e8ab2",
       "source": "Paired device",
       "translated": "已配对设备"
+    },
+    {
+      "id": "native.android.ce8e5c5a934ed2aa",
+      "source": "Remove",
+      "translated": "移除"
     },
     {
       "id": "native.android.e274308654ddc04b",
@@ -2504,9 +2624,9 @@
       "translated": "功能未批准"
     },
     {
-      "id": "native.android.13024ff403917bfe",
-      "source": "This gateway sign-in can list connected nodes, but it cannot approve new phone pairing. Pair new phones from a gateway admin session. Node capability approval is separate and still uses nodes approve <request id>.",
-      "translated": "此 Gateway 登录会话可以列出已连接的节点，但无法批准新的手机配对。请通过 Gateway 管理员会话配对新手机。节点功能批准是独立的，仍需使用 nodes approve <request id>。"
+      "id": "native.android.8b55ed05cd70b8d9",
+      "source": "Device pairing actions are unavailable in this Gateway session. Run openclaw devices list on the Gateway host and manage the request there. Node capability approval is separate and still uses nodes approve <request id>.",
+      "translated": "此 Gateway 会话中无法执行设备配对操作。请在 Gateway 主机上运行 openclaw devices list，并在那里处理请求。节点能力批准是独立操作，仍需使用 nodes approve <request id>。"
     },
     {
       "id": "native.android.0d8e9ede9c229b8e",
