@@ -31,6 +31,7 @@ import {
   PNPM_OPTIONS_WITH_VALUE,
   unwrapKnownPackageManagerExecInvocation,
 } from "../infra/package-manager-exec-wrapper.js";
+import { readRegularFileSync } from "../infra/regular-file.js";
 import {
   advancePosixInlineOptionScan,
   POSIX_INLINE_COMMAND_FLAGS,
@@ -269,8 +270,17 @@ function shouldPinExecutableForApproval(params: {
   return (params.wrapperChain?.length ?? 0) === 0;
 }
 
+// Cap at 8 MiB — script operands are code files, not data dumps.
+// Larger files should not be fingerprinted for approval; the operator
+// must rewrite argv to avoid the unbounded-read OOM vector.
+const MAX_APPROVAL_SCRIPT_FILE_BYTES = 8 * 1024 * 1024;
+
 function hashFileContentsSync(filePath: string): string {
-  return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+  const { buffer } = readRegularFileSync({
+    filePath,
+    maxBytes: MAX_APPROVAL_SCRIPT_FILE_BYTES,
+  });
+  return crypto.createHash("sha256").update(buffer).digest("hex");
 }
 
 function looksLikePathToken(token: string): boolean {
@@ -919,12 +929,21 @@ export function resolveMutableFileOperandSnapshotSync(params: {
       message: "SYSTEM_RUN_DENIED: approval requires a file script operand",
     };
   }
+  let sha256: string;
+  try {
+    sha256 = hashFileContentsSync(realPath);
+  } catch {
+    return {
+      ok: false,
+      message: "SYSTEM_RUN_DENIED: approval script operand is too large or not a regular file",
+    };
+  }
   return {
     ok: true,
     snapshot: {
       argvIndex,
       path: realPath,
-      sha256: hashFileContentsSync(realPath),
+      sha256,
     },
   };
 }
