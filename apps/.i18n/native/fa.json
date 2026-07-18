@@ -20194,6 +20194,16 @@
       "translated": "به OpenClaw پاسخ دهید… (با «بله» همه‌چیز راه‌اندازی می‌شود)"
     },
     {
+      "id": "native.apple.134b9ae1d8a543df",
+      "source": "Skip for now",
+      "translated": "فعلاً رد شود"
+    },
+    {
+      "id": "native.apple.5435391fa338f227",
+      "source": "Recommended",
+      "translated": "پیشنهادشده"
+    },
+    {
       "id": "native.apple.78d1ad73762a7ce8",
       "source": "Connect your AI",
       "translated": "هوش مصنوعی خود را متصل کنید"
@@ -23297,11 +23307,6 @@
       "id": "native.apple.99df7de891c8235f",
       "source": "Listen",
       "translated": "گوش دادن"
-    },
-    {
-      "id": "native.apple.f84b674ad395b694",
-      "source": "Jump to latest",
-      "translated": "پرش به آخرین مورد"
     },
     {
       "id": "native.apple.429d825201b2cb85",

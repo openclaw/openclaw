@@ -20194,6 +20194,16 @@
       "translated": "Odpowiedz OpenClaw… („yes” skonfiguruje wszystko)"
     },
     {
+      "id": "native.apple.134b9ae1d8a543df",
+      "source": "Skip for now",
+      "translated": "Pomiń na razie"
+    },
+    {
+      "id": "native.apple.5435391fa338f227",
+      "source": "Recommended",
+      "translated": "Zalecane"
+    },
+    {
       "id": "native.apple.78d1ad73762a7ce8",
       "source": "Connect your AI",
       "translated": "Połącz swoją AI"
@@ -23297,11 +23307,6 @@
       "id": "native.apple.99df7de891c8235f",
       "source": "Listen",
       "translated": "Słuchaj"
-    },
-    {
-      "id": "native.apple.f84b674ad395b694",
-      "source": "Jump to latest",
-      "translated": "Przejdź do najnowszych"
     },
     {
       "id": "native.apple.429d825201b2cb85",

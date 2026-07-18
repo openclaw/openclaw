@@ -20194,6 +20194,16 @@
       "translated": "Trả lời OpenClaw… (chọn có để thiết lập mọi thứ)"
     },
     {
+      "id": "native.apple.134b9ae1d8a543df",
+      "source": "Skip for now",
+      "translated": "Bỏ qua lúc này"
+    },
+    {
+      "id": "native.apple.5435391fa338f227",
+      "source": "Recommended",
+      "translated": "Được đề xuất"
+    },
+    {
       "id": "native.apple.78d1ad73762a7ce8",
       "source": "Connect your AI",
       "translated": "Kết nối AI của bạn"
@@ -23297,11 +23307,6 @@
       "id": "native.apple.99df7de891c8235f",
       "source": "Listen",
       "translated": "Nghe"
-    },
-    {
-      "id": "native.apple.f84b674ad395b694",
-      "source": "Jump to latest",
-      "translated": "Chuyển đến mới nhất"
     },
     {
       "id": "native.apple.429d825201b2cb85",

@@ -1,3 +1,5 @@
+import "../../styles/config.css";
+import "../../styles/config-quick.css";
 import { consume } from "@lit/context";
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, type PropertyValues } from "lit";
