@@ -510,11 +510,19 @@ async function processMessage(
 
   const fromLabel = isGroup ? groupName || `group:${chatId}` : senderName || `user:${senderId}`;
   const buildEnvelope = createChannelInboundEnvelopeBuilder({ cfg: config, route });
+  // Inbound agent body: account messagePrefix, then account/channel responsePrefix,
+  // then global messages.responsePrefix. Explicit empty string still wins via ??.
+  const messagePrefix =
+    account.config.messagePrefix ??
+    account.config.responsePrefix ??
+    config.messages?.responsePrefix ??
+    "";
+  const bodyForPrefix = messagePrefix ? `${messagePrefix} ${rawBody}` : rawBody;
   const body = buildEnvelope({
     channel: "Zalo Personal",
     from: fromLabel,
     timestamp: message.timestampMs,
-    body: rawBody,
+    body: bodyForPrefix,
   });
   const combinedBody =
     isGroup && historyKey
@@ -582,7 +590,7 @@ async function processMessage(
     },
     message: {
       body: combinedBody,
-      bodyForAgent: rawBody,
+      bodyForAgent: bodyForPrefix,
       rawBody,
       commandBody,
       inboundHistory,
