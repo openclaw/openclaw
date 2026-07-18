@@ -495,7 +495,7 @@ final class QuickChatController: NSObject, NSWindowDelegate {
         // Competing interaction: invalidate any in-flight recents fetch before blocking.
         self.invalidateRecentsFetch()
         withExtendedLifetime(target) {
-            menu.popUp(positioning: nil, at: contentPoint, in: contentView)
+            _ = menu.popUp(positioning: nil, at: contentPoint, in: contentView)
         }
     }
 
@@ -585,7 +585,7 @@ final class QuickChatController: NSObject, NSWindowDelegate {
         let windowPoint = panel.convertPoint(fromScreen: NSEvent.mouseLocation)
         let contentPoint = contentView.convert(windowPoint, from: nil)
         withExtendedLifetime(target) {
-            menu.popUp(positioning: nil, at: contentPoint, in: contentView)
+            _ = menu.popUp(positioning: nil, at: contentPoint, in: contentView)
         }
     }
 
@@ -629,7 +629,7 @@ final class QuickChatController: NSObject, NSWindowDelegate {
         // Competing interaction: invalidate any in-flight recents fetch before blocking.
         self.invalidateRecentsFetch()
         withExtendedLifetime(target) {
-            menu.popUp(positioning: nil, at: contentPoint, in: contentView)
+            _ = menu.popUp(positioning: nil, at: contentPoint, in: contentView)
         }
     }
 

@@ -24,6 +24,17 @@ struct QuickChatFocusedTextCollectorTests {
         #expect(result.textEntryCount == 4)
     }
 
+    @Test func `collector suppresses echoes from any ancestor`() {
+        let grandchild = FakeTextNode(id: 3, stringValue: "same")
+        let child = FakeTextNode(id: 2, stringValue: "same", computedName: "middle", children: [grandchild])
+        let root = FakeTextNode(id: 1, stringValue: "same", children: [child])
+
+        let result = QuickChatFocusedTextCollector.collect(root: root)
+
+        #expect(result.text == "same\nmiddle")
+        #expect(result.textEntryCount == 2)
+    }
+
     @Test func `collector honors cancellation and deadline`() {
         let children = (2...40).map { FakeTextNode(id: UInt64($0), stringValue: "item \($0)") }
         let root = FakeTextNode(id: 1, stringValue: "root", children: children)

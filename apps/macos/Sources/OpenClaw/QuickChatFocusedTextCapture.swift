@@ -10,7 +10,6 @@ struct QuickChatTextContext: Equatable, Sendable {
     var characterCount: Int {
         self.text.count
     }
-
 }
 
 struct QuickChatTextCollectionLimits: Equatable, Sendable {
@@ -41,6 +40,48 @@ protocol QuickChatTextTreeNode: Sendable {
     func stringValue() -> String?
     func computedName() -> String?
     func children(limit: Int) -> QuickChatTextTreeChildren
+}
+
+private enum QuickChatCaptureRaceResult: Sendable {
+    case snapshot(String, QuickChatTextCollection)
+    case timedOut
+    case cancelled
+}
+
+/// Synchronous one-shot arbitration lets a cancellation handler settle the AX race
+/// immediately, including when cancellation wins before the continuation is installed.
+private final class QuickChatCaptureRace: @unchecked Sendable {
+    private let lock = NSLock()
+    private var result: QuickChatCaptureRaceResult?
+    private var continuation: CheckedContinuation<QuickChatCaptureRaceResult, Never>?
+
+    func wait() async -> QuickChatCaptureRaceResult {
+        await withCheckedContinuation { continuation in
+            self.lock.lock()
+            if let result = self.result {
+                self.lock.unlock()
+                continuation.resume(returning: result)
+            } else {
+                self.continuation = continuation
+                self.lock.unlock()
+            }
+        }
+    }
+
+    @discardableResult
+    func resolve(_ result: QuickChatCaptureRaceResult) -> Bool {
+        self.lock.lock()
+        guard self.result == nil else {
+            self.lock.unlock()
+            return false
+        }
+        self.result = result
+        let continuation = self.continuation
+        self.continuation = nil
+        self.lock.unlock()
+        continuation?.resume(returning: result)
+        return true
+    }
 }
 
 enum QuickChatFocusedTextCollector {
@@ -114,8 +155,9 @@ enum QuickChatFocusedTextCollector {
             if childResult.wasTruncated {
                 wasStructurallyTruncated = true
             }
+            let descendantTexts = next.parentTexts + ownTexts.filter { !next.parentTexts.contains($0) }
             for child in childResult.nodes.reversed() {
-                stack.append((child, next.depth + 1, ownTexts))
+                stack.append((child, next.depth + 1, descendantTexts))
             }
         }
 
@@ -175,9 +217,12 @@ enum QuickChatFocusedTextCaptureService {
         }
 
         let hasPermission = await PermissionManager.status([.accessibility])[.accessibility] == true
+        guard !Task.isCancelled else { return .cancelled }
         guard hasPermission else {
             guard self.confirmAccessibilityRequest(appName: appName) else { return .cancelled }
+            guard !Task.isCancelled else { return .cancelled }
             let result = await PermissionManager.ensure([.accessibility], interactive: true)
+            guard !Task.isCancelled else { return .cancelled }
             guard result[.accessibility] == true else {
                 return .failed(String(localized: "Accessibility access is required to attach text from \(appName)."))
             }
@@ -190,6 +235,7 @@ enum QuickChatFocusedTextCaptureService {
         application: NSRunningApplication,
         appName: String) async -> QuickChatTextContextCaptureOutcome
     {
+        guard !Task.isCancelled else { return .cancelled }
         let appElement = AXUIElementCreateApplication(application.processIdentifier)
         // Bound the very first read too; the focused-window copy below otherwise waits
         // for the system default (~6s) on a hung target.
@@ -223,35 +269,43 @@ enum QuickChatFocusedTextCaptureService {
             return (title, collection)
         }
         // Hard outer bound: a hung target can stall individual AX reads past any
-        // cooperative check, so the wait itself races a timer and the walk is
-        // abandoned (cancelled, result discarded) on loss. The detached task may
-        // linger briefly on its current AX call; Quick Chat stays responsive.
-        let snapshot = await withTaskCancellationHandler {
-            await withTaskGroup(of: (String, QuickChatTextCollection)?.self) { group in
-                group.addTask { await walk.value }
-                group.addTask {
-                    try? await Task.sleep(for: .seconds(4))
-                    return nil
-                }
-                let first = await group.next() ?? nil
-                group.cancelAll()
-                return first
+        // cooperative check. A structured group would JOIN the losing child (and thus
+        // still wait for the walk), so the race is unstructured: first result wins the
+        // continuation, the abandoned walk is cancelled and its result discarded.
+        let race = QuickChatCaptureRace()
+        Task.detached {
+            let value = await walk.value
+            race.resolve(.snapshot(value.0, value.1))
+        }
+        let timeout = Task.detached {
+            try? await Task.sleep(for: .seconds(4))
+            if race.resolve(.timedOut) {
+                walk.cancel()
             }
+        }
+        let result = await withTaskCancellationHandler {
+            await race.wait()
         } onCancel: {
             walk.cancel()
+            race.resolve(.cancelled)
         }
-        guard !Task.isCancelled else { return .cancelled }
-        guard let snapshot else {
+        timeout.cancel()
+
+        switch result {
+        case .cancelled:
+            return .cancelled
+        case .timedOut:
             walk.cancel()
-            return .failed("\(appName) is not responding to Accessibility requests.")
+            return .failed(String(localized: "\(appName) is not responding to Accessibility requests."))
+        case let .snapshot(title, collection):
+            guard collection.textEntryCount > 0 else {
+                return .failed(String(localized: "No readable text was found in \(appName)."))
+            }
+            return .captured(QuickChatTextContext(
+                appName: appName,
+                windowTitle: title,
+                text: collection.text))
         }
-        guard snapshot.1.textEntryCount > 0 else {
-            return .failed(String(localized: "No readable text was found in \(appName)."))
-        }
-        return .captured(QuickChatTextContext(
-            appName: appName,
-            windowTitle: snapshot.0,
-            text: snapshot.1.text))
     }
 
     private static func confirmAccessibilityRequest(appName: String) -> Bool {
