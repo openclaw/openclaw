@@ -145,7 +145,7 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
   }
 
   protected approvalBadgeSnapshot(): ApprovalBadgeSnapshot {
-    const queue = this.context?.overlays.snapshot.approvalQueue ?? [];
+    const queue = this.context?.overlays?.snapshot.approvalQueue ?? [];
     if (queue !== this.approvalBadgeQueue) {
       this.approvalBadgeQueue = queue;
       this.approvalBadges = deriveApprovalBadgeSnapshot(queue);

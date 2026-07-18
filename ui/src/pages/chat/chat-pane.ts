@@ -2750,9 +2750,10 @@ class ChatPane extends OpenClawLightDomElement {
     );
     const currentAgentId = resolveChatAgentId(state);
     const catalogKey = parseCatalogSessionKey(state.sessionKey);
-    const approvalSnapshot = this.context.overlays.snapshot;
+    const overlays = this.context?.overlays;
+    const approvalSnapshot = overlays?.snapshot;
     const inlineApproval = this.active
-      ? findInlineApproval(approvalSnapshot.approvalQueue, state.sessionKey)
+      ? findInlineApproval(approvalSnapshot?.approvalQueue ?? [], state.sessionKey)
       : null;
     // Tool rows consult the global title store while rendering; point its
     // fetcher at this pane's connection. Requests capture session + agent at
@@ -2873,11 +2874,12 @@ class ChatPane extends OpenClawLightDomElement {
           : null,
       error: state.lastError,
       inlineApproval,
-      approvalBusy: approvalSnapshot.approvalBusy,
-      approvalErrors: approvalSnapshot.approvalErrors,
-      approvalNowMs: approvalSnapshot.approvalNowMs,
-      onApprovalDecision: (approvalId, decision) =>
-        this.context.overlays.decideApproval(decision, approvalId),
+      approvalBusy: approvalSnapshot?.approvalBusy,
+      approvalErrors: approvalSnapshot?.approvalErrors,
+      approvalNowMs: approvalSnapshot?.approvalNowMs,
+      onApprovalDecision: overlays
+        ? (approvalId, decision) => overlays.decideApproval(decision, approvalId)
+        : undefined,
       sessions: state.sessionsResult,
       sessionHost: {
         assistantAgentId: state.assistantAgentId,

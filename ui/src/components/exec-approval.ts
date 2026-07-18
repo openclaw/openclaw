@@ -40,7 +40,7 @@ type ExecApprovalProps = {
   onDecision: (approvalId: string, decision: ExecApprovalDecision) => void | Promise<void>;
 };
 
-export type ExecApprovalCardProps = {
+type ExecApprovalCardProps = {
   approval: ExecApprovalRequest;
   busy: boolean;
   error: string | null;
@@ -50,7 +50,7 @@ export type ExecApprovalCardProps = {
   onDecision: (approvalId: string, decision: ExecApprovalDecision) => void | Promise<void>;
 };
 
-export function formatApprovalCountdown(expiresAtMs: number, nowMs: number): string {
+function formatApprovalCountdown(expiresAtMs: number, nowMs: number): string {
   const totalSeconds = Math.max(0, Math.ceil((expiresAtMs - nowMs) / 1_000));
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
@@ -162,9 +162,7 @@ function approvalDecisionShortcut(decision: ExecApprovalDecision): string {
   return APPROVAL_DECISION_SHORTCUTS[decision];
 }
 
-export function resolveApprovalDecisions(
-  active: ExecApprovalRequest,
-): readonly ExecApprovalDecision[] {
+function resolveApprovalDecisions(active: ExecApprovalRequest): readonly ExecApprovalDecision[] {
   if (active.request.allowedDecisions?.length) {
     return active.request.allowedDecisions;
   }

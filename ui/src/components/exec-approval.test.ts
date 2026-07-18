@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExecApprovalRequest } from "../app/exec-approval.ts";
 import { i18n } from "../i18n/index.ts";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
-import { formatApprovalCountdown } from "./exec-approval.ts";
 import "./exec-approval.ts";
 
 let container: HTMLDivElement;
@@ -124,9 +123,13 @@ describe("openclaw-exec-approval", () => {
     expect(container.querySelector(".exec-approval-warning")).toBeNull();
   });
 
-  it("formats the live expiry countdown as mm:ss", () => {
-    expect(formatApprovalCountdown(90_500, 0)).toBe("01:31");
-    expect(formatApprovalCountdown(1_000, 1_500)).toBe("00:00");
+  it("renders the live expiry countdown as mm:ss", async () => {
+    await renderApproval(createExecRequest({ expiresAtMs: 90_500 }), { nowMs: 0 });
+    await getRenderedModalDialog(container);
+
+    expect(container.querySelector(".exec-approval-countdown")?.textContent?.trim()).toBe(
+      "expires in 01:31",
+    );
   });
 
   it("selects another queued request without changing queue order", async () => {
