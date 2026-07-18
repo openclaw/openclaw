@@ -42,6 +42,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **iOS chat edge treatment:** restore the layered chat canvas and use a soft native scroll-edge blur so message content no longer meets opaque black bands at the navigation bar or composer.
 - **Codex model status diagnostics:** report a configured Codex route as unavailable when its harness plugin is disabled, missing, or quarantined, while preserving the separate credential result and making `models status --check` fail instead of silently treating fallback execution as healthy. Thanks @shakkernerd.
 - **Gateway control-plane rate limiting:** use per-method buckets with a 30-per-minute budget so interactive admin writes remain responsive while retaining runaway-loop protection.
 - **External supervisor restart health:** accept device-identity policy closes only when the replacement gateway lock and listener PID agree, preventing OCM-managed restarts from timing out after a successful handoff. Thanks @shakkernerd.
