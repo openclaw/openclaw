@@ -62,8 +62,8 @@ import type {
   SimpleStreamOptions,
   ThinkingLevel,
 } from "../llm/types.js";
-import "../llm/ai-transport-host.js";
 import { looksLikeSecretSentinel, resolveSecretSentinel } from "../secrets/sentinel.js";
+import "../llm/ai-transport-host.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import {
   applyAnthropicPayloadPolicyToParams,
@@ -73,6 +73,7 @@ import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dyn
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
 import { unwrapModelHeaderSentinelsForProviderEgress } from "./provider-secret-egress.js";
+import { parseRetryAfterSeconds } from "./provider-transport-fetch.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 import type { StreamFn } from "./runtime/index.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
@@ -852,9 +853,19 @@ function createAnthropicMessagesClient(params: {
         });
         if (!response.ok) {
           const detail = await readAnthropicMessagesErrorBodySnippet(response);
-          throw new Error(
+          const error = new Error(
             detail || `Anthropic Messages request failed with HTTP ${response.status}`,
           );
+          // Surface the HTTP status and any server-specified Retry-After so the
+          // session retry policy can honor the provider's cooldown instead of a
+          // fixed backoff (see AgentSession.prepareRetry).
+          const typedError = error as Error & { status?: number; retryAfterMs?: number };
+          typedError.status = response.status;
+          const retryAfterSeconds = parseRetryAfterSeconds(response.headers);
+          if (retryAfterSeconds !== undefined && Number.isFinite(retryAfterSeconds)) {
+            typedError.retryAfterMs = Math.round(retryAfterSeconds * 1000);
+          }
+          throw typedError;
         }
         if (!response.body) {
           return;

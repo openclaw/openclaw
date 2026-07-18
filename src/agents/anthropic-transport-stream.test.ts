@@ -13,7 +13,10 @@ const { buildGuardedModelFetchMock, guardedFetchMock } = vi.hoisted(() => ({
   guardedFetchMock: vi.fn(),
 }));
 
-vi.mock("./provider-transport-fetch.js", () => ({
+vi.mock("./provider-transport-fetch.js", async () => ({
+  ...(await vi.importActual<typeof import("./provider-transport-fetch.js")>(
+    "./provider-transport-fetch.js",
+  )),
   buildGuardedModelFetch: buildGuardedModelFetchMock,
 }));
 
@@ -268,6 +271,29 @@ describe("anthropic transport stream", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("surfaces HTTP status and Retry-After from a 429 into the error message", async () => {
+    // Regression test for #103849: a rate-limited 429 with a server-specified
+    // Retry-After must reach the caller as structured data so the session retry
+    // policy can honor the provider's cooldown.
+    guardedFetchMock.mockResolvedValueOnce(
+      new Response("", {
+        status: 429,
+        headers: { "retry-after": "30" },
+      }),
+    );
+
+    const result = await runTransportStream(
+      makeAnthropicTransportModel(),
+      { messages: [{ role: "user", content: "hello" }] } as AnthropicStreamContext,
+      { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+    );
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toContain("429");
+    expect(result.errorStatus).toBe(429);
+    expect(result.errorRetryAfterMs).toBe(30_000);
   });
 
   it("keeps aggregate cache billing buckets out of the context total", async () => {
