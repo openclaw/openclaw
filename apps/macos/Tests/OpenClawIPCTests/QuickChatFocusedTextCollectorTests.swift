@@ -3,7 +3,7 @@ import Testing
 
 @Suite(.serialized)
 struct QuickChatFocusedTextCollectorTests {
-    @Test func `collector de-duplicates string values and computed names`() {
+    @Test func `collector collapses adjacent parent-child echoes`() {
         let child = FakeTextNode(id: 2, stringValue: "same", computedName: "other")
         let root = FakeTextNode(id: 1, stringValue: "same", computedName: "same", children: [child])
 
@@ -12,6 +12,35 @@ struct QuickChatFocusedTextCollectorTests {
         #expect(result.text == "same\nother")
         #expect(result.textEntryCount == 2)
         #expect(!result.wasTruncated)
+    }
+
+    @Test func `collector preserves equal text from distinct elements`() {
+        let cells = (2...4).map { FakeTextNode(id: UInt64($0), stringValue: "42") }
+        let root = FakeTextNode(id: 1, stringValue: "table", children: cells)
+
+        let result = QuickChatFocusedTextCollector.collect(root: root)
+
+        #expect(result.text == "table\n42\n42\n42")
+        #expect(result.textEntryCount == 4)
+    }
+
+    @Test func `collector honors cancellation and deadline`() {
+        let children = (2...40).map { FakeTextNode(id: UInt64($0), stringValue: "item \($0)") }
+        let root = FakeTextNode(id: 1, stringValue: "root", children: children)
+
+        var calls = 0
+        let cancelled = QuickChatFocusedTextCollector.collect(root: root, isCancelled: {
+            calls += 1
+            return calls > 3
+        })
+        #expect(cancelled.visitedElementCount < children.count)
+        #expect(cancelled.wasTruncated)
+
+        let expired = QuickChatFocusedTextCollector.collect(
+            root: root,
+            deadline: ContinuousClock.now.advanced(by: .seconds(-1)))
+        #expect(expired.visitedElementCount == 0)
+        #expect(expired.wasTruncated)
     }
 
     @Test func `collector enforces depth cap`() {

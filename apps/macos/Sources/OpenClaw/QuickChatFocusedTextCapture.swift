@@ -48,14 +48,19 @@ enum QuickChatFocusedTextCollector {
 
     static func collect(
         root: any QuickChatTextTreeNode,
-        limits: QuickChatTextCollectionLimits = .standard) -> QuickChatTextCollection
+        limits: QuickChatTextCollectionLimits = .standard,
+        deadline: ContinuousClock.Instant? = nil,
+        isCancelled: () -> Bool = { false }) -> QuickChatTextCollection
     {
         let maximumDepth = max(0, limits.maximumDepth)
         let maximumElements = max(1, limits.maximumElements)
         let maximumCharacters = max(1, limits.maximumCharacters)
         var stack: [(node: any QuickChatTextTreeNode, depth: Int)] = [(root, 0)]
         var visitedNodeIDs = Set<UInt64>()
-        var seenText = Set<String>()
+        // Only the parent/child echo is de-duplicated (an element repeating its parent's
+        // text); equal text from unrelated elements (table cells, repeated lines) is real
+        // document content and must be preserved.
+        var lastEmittedText: String?
         var rendered = ""
         var visitedElementCount = 0
         var textEntryCount = 0
@@ -63,6 +68,12 @@ enum QuickChatFocusedTextCollector {
         var wasTextTruncated = false
 
         traversal: while let next = stack.popLast() {
+            // Unresponsive AX targets can stall per-message; a wall-clock deadline and
+            // cooperative cancellation keep the walk bounded regardless of app health.
+            if isCancelled() || deadline.map({ ContinuousClock.now >= $0 }) == true {
+                wasStructurallyTruncated = true
+                break
+            }
             guard visitedNodeIDs.insert(next.node.identity).inserted else { continue }
             guard visitedElementCount < maximumElements else {
                 wasStructurallyTruncated = true
@@ -71,9 +82,10 @@ enum QuickChatFocusedTextCollector {
             visitedElementCount += 1
 
             for rawCandidate in [next.node.stringValue(), next.node.computedName()] {
-                guard let candidate = Self.normalized(rawCandidate), seenText.insert(candidate).inserted else {
+                guard let candidate = Self.normalized(rawCandidate), candidate != lastEmittedText else {
                     continue
                 }
+                lastEmittedText = candidate
                 let piece = rendered.isEmpty ? candidate : "\n\(candidate)"
                 let remaining = maximumCharacters + 1 - rendered.count
                 guard remaining > 0 else {
@@ -190,16 +202,29 @@ enum QuickChatFocusedTextCaptureService {
             return .failed(String(localized: "No focused window is available in \(appName)."))
         }
         let focusedWindow = unsafeDowncast(focusedWindowValue, to: AXUIElement.self)
+        // A hung target app would otherwise block each AX message for the system default
+        // (~6s); a short per-message timeout keeps worst-case walks near the deadline.
+        AXUIElementSetMessagingTimeout(appElement, 1.0)
+        AXUIElementSetMessagingTimeout(focusedWindow, 1.0)
         let root = QuickChatAXTextTreeNode(element: focusedWindow)
 
         // AX reads are synchronous and can be expensive. Keep the bounded walk off the
-        // main actor; this adapter never logs or persists attribute values.
-        let snapshot = await Task.detached(priority: .userInitiated) {
+        // main actor; this adapter never logs or persists attribute values. The walk
+        // itself checks cancellation and a 3s wall-clock deadline per iteration.
+        let walk = Task.detached(priority: .userInitiated) {
             let title = root.title()?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
                 ?? String(localized: "Focused Window")
-            let collection = QuickChatFocusedTextCollector.collect(root: root)
+            let collection = QuickChatFocusedTextCollector.collect(
+                root: root,
+                deadline: ContinuousClock.now.advanced(by: .seconds(3)),
+                isCancelled: { Task.isCancelled })
             return (title, collection)
-        }.value
+        }
+        let snapshot = await withTaskCancellationHandler {
+            await walk.value
+        } onCancel: {
+            walk.cancel()
+        }
         guard !Task.isCancelled else { return .cancelled }
         guard snapshot.1.textEntryCount > 0 else {
             return .failed(String(localized: "No readable text was found in \(appName)."))
