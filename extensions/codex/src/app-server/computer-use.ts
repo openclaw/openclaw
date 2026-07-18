@@ -1117,7 +1117,7 @@ export async function killStaleComputerUseMcpChildren(
   }
   let stdout: string;
   try {
-    const result = await runExec("/bin/ps", ["-axo", "pid=,ppid=,command="], {
+    const result = await runExec("/bin/ps", ["-axo", "pid=,ppid=,lstart=,command="], {
       logOutput: false,
       maxBuffer: 5 * 1024 * 1024,
     });
@@ -1149,6 +1149,7 @@ export async function killStaleComputerUseMcpChildren(
       // process traps or ignores SIGTERM. Revalidate process identity
       // before escalating — the PID could have been reused.
       const ancestorPid = options.ancestorPid;
+      const launchStart = processInfo.lstart;
       const sigkillTimer = setTimeout(() => {
         void (async () => {
           try {
@@ -1158,7 +1159,7 @@ export async function killStaleComputerUseMcpChildren(
             return; // already exited
           }
           try {
-            const result = await runExec("/bin/ps", ["-axo", "pid=,ppid=,command="], {
+            const result = await runExec("/bin/ps", ["-axo", "pid=,ppid=,lstart=,command="], {
               logOutput: false,
               maxBuffer: 5 * 1024 * 1024,
             });
@@ -1166,6 +1167,7 @@ export async function killStaleComputerUseMcpChildren(
             const current = currentInfos.find((info) => info.pid === processInfo.pid);
             if (
               !current ||
+              current.lstart !== launchStart ||
               !isStaleComputerUseMcpChild(current.command) ||
               !isDescendantOfPid(current.pid, ancestorPid, currentInfos)
             ) {
@@ -1196,15 +1198,28 @@ export async function killStaleComputerUseMcpChildren(
   };
 }
 
-function parsePsOutput(stdout: string): Array<{ pid: number; ppid: number; command: string }> {
+function parsePsOutput(
+  stdout: string,
+): Array<{ pid: number; ppid: number; lstart: string; command: string }> {
   return stdout
     .split(/\r?\n/u)
     .flatMap((line) => {
-      const match = /^\s*(\d+)\s+(\d+)\s+(.+)$/u.exec(line);
+      // pid ppid lstart(5 tokens) command
+      const match =
+        /^\s*(\d+)\s+(\d+)\s+((?:Sun|Mon|Tue|Wed|Thu|Fri|Sat)\s+\S+\s+\S+\s+\S+\s+\S+)\s+(.+)$/u.exec(
+          line,
+        );
       if (!match) {
         return [];
       }
-      return [{ pid: Number(match[1]), ppid: Number(match[2]), command: match[3] ?? "" }];
+      return [
+        {
+          pid: Number(match[1]),
+          ppid: Number(match[2]),
+          lstart: match[3] ?? "",
+          command: match[4] ?? "",
+        },
+      ];
     })
     .filter(
       (processInfo) =>
