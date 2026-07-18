@@ -284,6 +284,10 @@ class OpenClawBrowserPanel extends OpenClawLitElement {
     if (detail?.dock === "right" || detail?.dock === "bottom") {
       this.dock = detail.dock;
     }
+    if (detail?.open === false) {
+      this.closePanel();
+      return;
+    }
     const url = typeof detail?.url === "string" ? normalizeBrowserUrlDraft(detail.url) : null;
     if (url || detail?.open === true) {
       if (!this.available) {

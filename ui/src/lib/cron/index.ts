@@ -24,6 +24,7 @@ import {
   isMissingOperatorReadScopeError,
 } from "../gateway-errors.ts";
 import { normalizeLowercaseStringOrEmpty, sortUniqueStrings } from "../string-coerce.ts";
+import { parseCronEveryMs } from "./decimal.ts";
 import { loadCronFailingCount } from "./scope.ts";
 
 export { loadCronFailingCount, loadCronScopeStats } from "./scope.ts";
@@ -43,7 +44,7 @@ export type CronFormState = {
   scheduleKind: "at" | "every" | "cron" | "on-exit";
   scheduleAt: string;
   everyAmount: string;
-  everyUnit: "minutes" | "hours" | "days";
+  everyUnit: "seconds" | "minutes" | "hours" | "days";
   cronExpr: string;
   cronTz: string;
   scheduleExact: boolean;
@@ -293,8 +294,7 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
       errors.scheduleAt = "cron.errors.scheduleAtInvalid";
     }
   } else if (form.scheduleKind === "every") {
-    const amount = toNumber(form.everyAmount, 0);
-    if (amount <= 0) {
+    if (parseCronEveryMs(form.everyAmount, form.everyUnit) === undefined) {
       errors.everyAmount = "cron.errors.everyAmountInvalid";
     }
   } else if (form.scheduleKind === "cron") {
@@ -693,15 +693,32 @@ function formatDateTimeLocal(input: string): string {
   return `${year}-${month}-${day}T${hour}:${minute}`;
 }
 
+// Render everyMs back to the largest unit that divides it exactly, falling through
+// to decimal seconds. Sub-second remainders are built from BigInt quotient/remainder,
+// not float division, so every integer millisecond up to Number.MAX_SAFE_INTEGER
+// round-trips losslessly through parseCronEveryMs when the job is resaved.
 function parseEverySchedule(everyMs: number): Pick<CronFormState, "everyAmount" | "everyUnit"> {
   if (everyMs % 86_400_000 === 0) {
-    return { everyAmount: String(Math.max(1, everyMs / 86_400_000)), everyUnit: "days" };
+    return { everyAmount: String(everyMs / 86_400_000), everyUnit: "days" };
   }
   if (everyMs % 3_600_000 === 0) {
-    return { everyAmount: String(Math.max(1, everyMs / 3_600_000)), everyUnit: "hours" };
+    return { everyAmount: String(everyMs / 3_600_000), everyUnit: "hours" };
   }
-  const minutes = Math.max(1, Math.ceil(everyMs / 60_000));
-  return { everyAmount: String(minutes), everyUnit: "minutes" };
+  if (everyMs % 60_000 === 0) {
+    return { everyAmount: String(everyMs / 60_000), everyUnit: "minutes" };
+  }
+  return { everyAmount: everyMsToSecondsString(everyMs), everyUnit: "seconds" };
+}
+
+function everyMsToSecondsString(everyMs: number): string {
+  const value = BigInt(everyMs);
+  const whole = value / 1_000n;
+  const remainder = value % 1_000n;
+  if (remainder === 0n) {
+    return String(whole);
+  }
+  const fractional = remainder.toString().padStart(3, "0").replace(/0+$/u, "");
+  return `${whole}.${fractional}`;
 }
 
 function parseStaggerSchedule(
@@ -834,13 +851,11 @@ function buildCronSchedule(form: CronFormState) {
     return { kind: "at" as const, at: new Date(ms).toISOString() };
   }
   if (form.scheduleKind === "every") {
-    const amount = toNumber(form.everyAmount, 0);
-    if (amount <= 0) {
+    const everyMs = parseCronEveryMs(form.everyAmount, form.everyUnit);
+    if (everyMs === undefined) {
       throw new Error(t("cron.errors.invalidIntervalAmount"));
     }
-    const unit = form.everyUnit;
-    const mult = unit === "minutes" ? 60_000 : unit === "hours" ? 3_600_000 : 86_400_000;
-    return { kind: "every" as const, everyMs: amount * mult };
+    return { kind: "every" as const, everyMs };
   }
   const expr = form.cronExpr.trim();
   if (!expr) {

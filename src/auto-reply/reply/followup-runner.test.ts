@@ -402,7 +402,6 @@ async function loadFreshFollowupRunnerModuleForTest() {
     compactEmbeddedAgentSession: (params: unknown) => compactEmbeddedAgentSessionMock(params),
     isEmbeddedAgentRunActive: vi.fn(() => false),
     isEmbeddedAgentRunStreaming: vi.fn(() => false),
-    queueEmbeddedAgentMessage: vi.fn(async () => undefined),
     resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
     runEmbeddedAgent: (params: unknown) => runEmbeddedAgentMock(params),
     waitForEmbeddedAgentRunEnd: vi.fn(async () => undefined),
@@ -411,12 +410,12 @@ async function loadFreshFollowupRunnerModuleForTest() {
     runCliAgent: (params: unknown) => runCliAgentMock(params),
   }));
   vi.doMock("./queue.js", () => ({
-    admitFollowupRunLifecycle: async (run: Pick<FollowupRun, "queuedLifecycle">) => {
-      await run.queuedLifecycle?.onAdmitted?.();
+    admitFollowupRunLifecycle: async (run: Pick<FollowupRun, "turnAdoptionLifecycle">) => {
+      await run.turnAdoptionLifecycle?.onAdopted?.();
     },
     clearFollowupQueue: clearFollowupQueueForFollowupTest,
-    completeFollowupRunLifecycle: (run: Pick<FollowupRun, "queuedLifecycle">) =>
-      run.queuedLifecycle?.onComplete?.(),
+    completeFollowupRunLifecycle: (run: Pick<FollowupRun, "turnAdoptionLifecycle">) =>
+      run.turnAdoptionLifecycle?.onSettled?.(),
     enqueueFollowupRun: enqueueFollowupRunForFollowupTest,
     isFollowupRunAborted: (run: Pick<FollowupRun, "abortSignal" | "queueAbortSignal">) =>
       run.abortSignal?.aborted === true || run.queueAbortSignal?.aborted === true,
@@ -903,13 +902,15 @@ describe("createFollowupRunner reply-lane admission", () => {
 
     const pending = runner(
       createQueuedRun({
-        queuedLifecycle: {
-          onAdmitted: async () => {
+        turnAdoptionLifecycle: {
+          onAdopted: async () => {
             events.push("admission-started");
             await admissionBarrier;
             events.push("admitted");
           },
-          onComplete: () => events.push("complete"),
+          onSettled: () => events.push("complete"),
+          admission: "exclusive",
+          onAbandoned: () => {},
         },
         run: { provider: "anthropic", model: "claude" },
       }),
@@ -943,13 +944,15 @@ describe("createFollowupRunner reply-lane admission", () => {
     const pending = runner(
       createQueuedRun({
         abortSignal: abortController.signal,
-        queuedLifecycle: {
-          onAdmitted: async () => {
+        turnAdoptionLifecycle: {
+          onAdopted: async () => {
             events.push("admission-started");
             await admissionBarrier;
             events.push("admitted");
           },
-          onComplete: () => events.push("complete"),
+          onSettled: () => events.push("complete"),
+          admission: "exclusive",
+          onAbandoned: () => {},
         },
         run: { provider: "anthropic", model: "claude" },
       }),
@@ -1298,7 +1301,7 @@ describe("createFollowupRunner reply-lane admission", () => {
             model: "claude",
             sessionKey: "main",
           },
-          queuedLifecycle: { onComplete },
+          turnAdoptionLifecycle: { onAdopted: async () => {}, onSettled: onComplete },
         }),
       ),
     ).rejects.toThrow("session load failed");
@@ -2565,8 +2568,9 @@ describe("createFollowupRunner runtime config", () => {
         createQueuedRun({
           originatingChannel: "telegram",
           originatingTo: "chat-1",
-          queuedLifecycle: {
-            onComplete: () => {
+          turnAdoptionLifecycle: {
+            onAdopted: async () => {},
+            onSettled: () => {
               operationResultDuringCompletion = replyRunRegistryForTest.get("main")?.result;
             },
           },
@@ -2661,8 +2665,9 @@ describe("createFollowupRunner runtime config", () => {
         createQueuedRun({
           originatingChannel: "telegram",
           originatingTo: "chat-1",
-          queuedLifecycle: {
-            onComplete: () => {
+          turnAdoptionLifecycle: {
+            onAdopted: async () => {},
+            onSettled: () => {
               operationResultDuringCompletion = replyRunRegistryForTest.get("main")?.result;
             },
           },
@@ -3062,8 +3067,9 @@ describe("createFollowupRunner runtime config", () => {
       createQueuedRun({
         originatingChannel: "telegram",
         originatingTo: "chat-1",
-        queuedLifecycle: {
-          onComplete: () => {
+        turnAdoptionLifecycle: {
+          onAdopted: async () => {},
+          onSettled: () => {
             operationResultDuringCompletion = replyRunRegistryForTest.get("main")?.result;
           },
         },
@@ -6039,7 +6045,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     const finalText =
       "Here is the answer the queued user asked for. It includes enough detail to be a visible response, and it has another sentence so the substantive-final detector treats it as a real reply.";
     const parentOnComplete = vi.fn();
-    const parentLifecycle = { onComplete: parentOnComplete };
+    const parentLifecycle = { onAdopted: async () => {}, onSettled: parentOnComplete };
     const queued = baseQueuedRun("discord");
     const { onBlockReply } = await runMessagingCase({
       agentResult: {
@@ -6050,7 +6056,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
         ...queued,
         originatingChannel: "discord",
         originatingTo: "channel:C1",
-        queuedLifecycle: parentLifecycle,
+        turnAdoptionLifecycle: parentLifecycle,
         run: {
           ...queued.run,
           sourceReplyDeliveryMode: "message_tool_only",
@@ -6073,7 +6079,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     expect(retry?.prompt).toContain("message(action=send)");
     expect(retry?.prompt).toContain(finalText);
     // System retry detaches from the client turn lifecycle; parent completion owns onComplete once.
-    expect(retry?.queuedLifecycle).toBeUndefined();
+    expect(retry?.turnAdoptionLifecycle).toBeUndefined();
     expect(parentOnComplete).toHaveBeenCalledTimes(1);
   });
 

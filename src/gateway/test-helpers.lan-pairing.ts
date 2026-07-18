@@ -123,13 +123,15 @@ export async function withLanNodePairingAttempt(params: {
           deviceIdentityPath: loaded.identityPath,
         });
       } finally {
-        ws.close();
+        // These tests cover pairing, not the WebSocket close handshake. Terminate so
+        // gateway cleanup never waits on a client that has already returned its result.
+        ws.terminate();
       }
     };
     await params.run({ lanIp, loaded, connectNode });
   } finally {
     for (const ws of openSockets) {
-      ws.close();
+      ws.terminate();
     }
     await started.server.close();
     started.envSnapshot.restore();

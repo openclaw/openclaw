@@ -269,8 +269,7 @@ export async function resolveDiscordVoiceIngressContextWithParticipants(params: 
   client: Client;
   cfg: OpenClawConfig;
   discordConfig: DiscordAccountConfig;
-  ownerAllowFrom?: string[];
-  ownerAllowAll?: boolean;
+  admissionAllowFrom?: string[];
   botUserId?: string;
   speakerContext: DiscordVoiceSpeakerContextResolver;
 }): Promise<DiscordVoiceIngressContext | null> {
@@ -279,8 +278,7 @@ export async function resolveDiscordVoiceIngressContextWithParticipants(params: 
     userId: params.userId,
     cfg: params.cfg,
     discordConfig: params.discordConfig,
-    ownerAllowFrom: params.ownerAllowFrom,
-    ownerAllowAll: params.ownerAllowAll,
+    admissionAllowFrom: params.admissionAllowFrom,
     fetchGuildName: async (guildId) => {
       const guild = await params.client.fetchGuild(guildId).catch(() => null);
       return guild && typeof guild.name === "string" && guild.name.trim() ? guild.name : undefined;
