@@ -4,7 +4,7 @@ import { refreshFollowedPublisherFeeds } from "../plugins/publisher-feed-follow-
 import { createSqlitePublisherFeedFollowStore } from "../plugins/publisher-feed-follow-store.js";
 import { createSqlitePublisherFeedStateStore } from "../plugins/publisher-feed-state-store.js";
 
-export type GatewayPublisherFeedRefreshStatus = {
+type GatewayPublisherFeedRefreshStatus = {
   running: boolean;
   stopped: boolean;
   lastStartedAt: string | null;
