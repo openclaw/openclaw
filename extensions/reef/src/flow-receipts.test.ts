@@ -414,7 +414,7 @@ describe("ReefMessageFlow delivery receipts", () => {
   it("surfaces one resend notice even when a later batch receipt is invalid", async () => {
     const alice = generateIdentity();
     const bob = reefKeys();
-    const onOwnerNotice = vi.fn(async () => {});
+    const onOwnerNotice = vi.fn(async (_text: string) => {});
     const relay = transport();
     const trusted = trust({ alice: peerTrust(alice) });
     const audit = new MemoryAuditStore(new Uint8Array(32).fill(11));
@@ -778,7 +778,7 @@ describe("ReefMessageFlow overdue delivery follow-up", () => {
     const bob = reefKeys();
     const trusted = trust({ alice: peerTrust(alice) });
     const relay = transport();
-    const onOwnerNotice = vi.fn(async () => {});
+    const onOwnerNotice = vi.fn(async (_text: string) => {});
     const flow = new ReefMessageFlow({
       config: config(),
       trust: trusted.store,
@@ -813,7 +813,7 @@ describe("ReefMessageFlow overdue delivery follow-up", () => {
     const bob = reefKeys();
     const trusted = trust({ alice: peerTrust(alice) });
     const relay = transport();
-    const onOwnerNotice = vi.fn(async () => {});
+    const onOwnerNotice = vi.fn(async (_text: string) => {});
     const flow = new ReefMessageFlow({
       config: config(),
       trust: trusted.store,

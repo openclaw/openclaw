@@ -459,14 +459,14 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
             // The overdue sweep must run even while the relay is unreachable:
             // that outage is exactly when queued sends go unconfirmed, and the
             // notices themselves are local.
-            let reconcileError: unknown;
+            let reconcileError: Error | undefined;
             try {
               await reconcile();
             } catch (error) {
-              reconcileError = error;
+              reconcileError = error instanceof Error ? error : new Error(String(error));
             }
             await notifyOverdueReefDeliveries({ trust, ownerNotice });
-            if (reconcileError !== undefined) {
+            if (reconcileError) {
               throw reconcileError;
             }
           },

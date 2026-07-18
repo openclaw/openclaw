@@ -478,7 +478,14 @@ describe("notifyOverdueReefDeliveries", () => {
   it("wakes the sender agent once per overdue delivery", async () => {
     const sentAt = Date.now() - 12 * 60_000;
     const store = overdueStore([{ peer: "clawd", id: "01JZ0000000000000000000150", sentAt }]);
-    const ownerNotice = vi.fn(async () => {});
+    const ownerNotice = vi.fn(
+      async (_notice: {
+        text: string;
+        peer?: string;
+        contextKey: string;
+        wakeAgent?: boolean;
+      }) => {},
+    );
 
     await notifyOverdueReefDeliveries({ trust: store, ownerNotice });
     await notifyOverdueReefDeliveries({ trust: store, ownerNotice });
@@ -489,7 +496,7 @@ describe("notifyOverdueReefDeliveries", () => {
       wakeAgent: true,
       contextKey: "reef:delivery-overdue:clawd:01JZ0000000000000000000150",
     });
-    expect(ownerNotice.mock.calls[0]?.[0].text).toContain("not been confirmed delivered");
+    expect(ownerNotice.mock.calls[0]?.[0]?.text).toContain("not been confirmed delivered");
   });
 
   it("does not mark a delivery notified when dispatch fails, so the next sweep retries", async () => {
@@ -505,7 +512,14 @@ describe("notifyOverdueReefDeliveries", () => {
     ).rejects.toThrow("enqueue failed");
     expect(store.markOutboundDeliveryOverdueNotified).not.toHaveBeenCalled();
 
-    const ownerNotice = vi.fn(async () => {});
+    const ownerNotice = vi.fn(
+      async (_notice: {
+        text: string;
+        peer?: string;
+        contextKey: string;
+        wakeAgent?: boolean;
+      }) => {},
+    );
     await notifyOverdueReefDeliveries({ trust: store, ownerNotice });
     expect(ownerNotice).toHaveBeenCalledOnce();
     expect(store.marked.has("01JZ0000000000000000000151")).toBe(true);
