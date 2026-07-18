@@ -572,11 +572,14 @@ fn show_quickchat(app: &AppHandle) -> Result<(), String> {
         .map_err(|error| format!("Could not show Quick Chat: {error}"))?;
     if let Err(error) = window.set_focus() {
         // X11 focus-stealing prevention can reject the focus grab; retract the bar
-        // instead of leaving an unfocusable always-on-top window on screen.
+        // instead of leaving an unfocusable always-on-top window on screen. If even
+        // hide fails, destroy the window rather than strand it; the next toggle rebuilds.
         app.state::<QuickChatState>()
             .hide_requested
             .store(true, Ordering::SeqCst);
-        let _ = window.hide();
+        if window.hide().is_err() {
+            let _ = window.destroy();
+        }
         return Err(format!("Could not focus Quick Chat: {error}"));
     }
     window
