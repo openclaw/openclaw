@@ -203,6 +203,11 @@ export async function createGatewaySession(params: {
   clearExecBinding?: boolean;
   clearSpawnedCwd?: boolean;
   fork?: boolean;
+  /**
+   * Controls whether a distinct child terminates its parent. Omission preserves
+   * the legacy rollover; callers use `false` for a parallel child.
+   */
+  succeedsParent?: boolean;
   emitCommandHooks?: boolean;
   resetMainWhenUnspecified?: boolean;
   commandSource: string;
@@ -216,6 +221,7 @@ export async function createGatewaySession(params: {
   afterCreate?: (created: CreatedGatewaySession) => Promise<void>;
 }): Promise<CreateGatewaySessionResult> {
   const requestedKey = normalizeOptionalString(params.key);
+  const parentSessionKey = normalizeOptionalString(params.parentSessionKey);
   const agentId = normalizeAgentId(
     normalizeOptionalString(params.agentId) ?? resolveDefaultAgentId(params.cfg),
   );
@@ -227,6 +233,29 @@ export async function createGatewaySession(params: {
       ok: false,
       error: errorShape(ErrorCodes.INVALID_REQUEST, "invalid catalog session target"),
     };
+  }
+  if (params.succeedsParent !== undefined) {
+    if (!parentSessionKey) {
+      return {
+        ok: false,
+        error: errorShape(ErrorCodes.INVALID_REQUEST, "succeedsParent requires parentSessionKey"),
+      };
+    }
+    if (params.emitCommandHooks !== true) {
+      return {
+        ok: false,
+        error: errorShape(ErrorCodes.INVALID_REQUEST, "succeedsParent requires emitCommandHooks"),
+      };
+    }
+    if (params.succeedsParent && params.fork === true) {
+      return {
+        ok: false,
+        error: errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "succeedsParent conflicts with fork: a fork runs in parallel to its parent",
+        ),
+      };
+    }
   }
   if (requestedKey) {
     const requestedAgentId = parseAgentSessionKey(requestedKey)?.agentId;
@@ -305,7 +334,6 @@ export async function createGatewaySession(params: {
     };
   }
 
-  const parentSessionKey = normalizeOptionalString(params.parentSessionKey);
   if (params.fork === true && !parentSessionKey) {
     return {
       ok: false,
@@ -735,17 +763,21 @@ export async function createGatewaySession(params: {
       const parentEntry = currentParentSessionEntry;
       const { emitGatewaySessionEndPluginHook, emitGatewaySessionStartPluginHook } =
         await loadSessionLifecycleRuntime();
-      emitGatewaySessionEndPluginHook({
-        cfg: params.cfg,
-        sessionKey: canonicalParentSessionKey,
-        sessionId: parentEntry?.sessionId,
-        storePath: parentSessionTarget.storePath,
-        sessionFile: parentEntry?.sessionFile,
-        agentId: parentSessionTarget.agentId,
-        reason: "new",
-        nextSessionId: created.entry.sessionId,
-        nextSessionKey: target.canonicalKey,
-      });
+      // Child key shape does not establish lifecycle ownership. The caller owns
+      // that fact; omission keeps the shipped rollover for out-of-tree clients.
+      if (params.succeedsParent !== false) {
+        emitGatewaySessionEndPluginHook({
+          cfg: params.cfg,
+          sessionKey: canonicalParentSessionKey,
+          sessionId: parentEntry?.sessionId,
+          storePath: parentSessionTarget.storePath,
+          sessionFile: parentEntry?.sessionFile,
+          agentId: parentSessionTarget.agentId,
+          reason: "new",
+          nextSessionId: created.entry.sessionId,
+          nextSessionKey: target.canonicalKey,
+        });
+      }
       emitGatewaySessionStartPluginHook({
         cfg: params.cfg,
         sessionKey: target.canonicalKey,

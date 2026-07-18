@@ -143,6 +143,8 @@ export type OpenClawConfig = {
     lastRunCommand?: string;
     /** Whether the last wizard run configured a local or remote install. */
     lastRunMode?: "local" | "remote";
+    /** Model whose lean-mode default is owned by inference onboarding. */
+    localModelLeanAutoModel?: string;
     /** ISO timestamp when the setup security acknowledgement was accepted on this config. */
     securityAcknowledgedAt?: string;
   };
@@ -204,8 +206,12 @@ export type OpenClawConfig = {
       chatShowThinking?: boolean;
       /** Show tool call cards in chat. */
       chatShowToolCalls?: boolean;
+      /** Keep model commentary visible in the transcript after a run. */
+      chatPersistCommentary?: boolean;
       /** Chat send shortcut: Enter sends, or modifier+Enter sends. */
       chatSendShortcut?: "enter" | "modifier-enter";
+      /** Follow-up handling while a run is active; unset uses the server queue mode. */
+      chatFollowUpMode?: "steer" | "queue";
     };
   };
   /** Terminal UI display settings. */

@@ -4672,6 +4672,32 @@ td.data-table-key-col {
   line-height: 1.5;
 }
 
+.device-pair-setup__header p.device-pair-setup__get-apps {
+  margin-top: 2px;
+  font-size: 13px;
+}
+
+.device-pair-setup__get-apps button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.device-pair-setup__get-apps button:hover {
+  color: var(--text-strong);
+}
+
+.device-pair-setup__get-apps button:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: 4px;
+}
+
 .device-pair-setup__phone {
   display: grid;
   width: 44px;

@@ -94,11 +94,11 @@ The Control UI fetches its runtime settings from `/control-ui-config.json`, reso
 
 ## Gateway host status
 
-Open **Settings** in Simple view to see the **Gateway Host** card with the Gateway machine, LAN address, operating system, runtime, uptime, CPU load, memory, and state-volume disk space. The card refreshes every 10 seconds while visible through the `system.info` Gateway RPC, which requires the `operator.read` scope. Older Gateways and connections without that scope omit the card.
+Open **Settings → General** to see the **Gateway Host** card with the Gateway machine, LAN address, operating system, runtime, uptime, CPU load, memory, and state-volume disk space. The card refreshes every 10 seconds while visible through the `system.info` Gateway RPC, which requires the `operator.read` scope. Older Gateways and connections without that scope omit the card.
 
 ## Language support
 
-The Control UI localizes itself on first load based on your browser locale. To override it later, open **Settings -> General -> Language** (the picker lives in the General quick-settings card, not under Appearance).
+The Control UI localizes itself on first load based on your browser locale. To override it later, open **Settings -> General -> Language** (the picker lives on the General page, not under Appearance).
 
 - Supported locales: `en`, `ar`, `de`, `es`, `fa`, `fr`, `hi`, `id`, `it`, `ja-JP`, `ko`, `nl`, `pl`, `pt-BR`, `ru`, `th`, `tr`, `uk`, `vi`, `zh-CN`, `zh-TW`
 - Non-English translations are lazy-loaded in the browser.
@@ -172,6 +172,18 @@ required. OAuth-backed MCP connectors need a one-time
 The page intentionally focuses on inventory, discovery, install, enablement,
 and removal. Use [`openclaw plugins`](/cli/plugins) for arbitrary npm, git, or
 local-path sources, updates, and advanced plugin configuration.
+
+## Apps and extensions
+
+Open **Apps** from the sidebar **More** menu, the command palette, or the
+sidebar agent menu (**Get the apps**), or use `/apps` relative to the
+configured Control UI base path. The page collects install links for every
+OpenClaw companion surface: the [iOS](/platforms/ios) and
+[Android](/platforms/android) apps, the Apple Watch and Wear OS companions
+bundled with them, the [macOS](/platforms/macos), [Windows](/platforms/windows),
+and [Linux](/platforms/linux) desktop apps, the
+[Chrome extension](/tools/chrome-extension), the in-app Plugins hub with
+[ClawHub](https://clawhub.ai), and the Discord community and docs.
 
 ## Sidebar navigation
 

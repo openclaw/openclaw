@@ -5053,6 +5053,7 @@ public struct SessionsCreateParams: Codable, Sendable {
     public let parentsessionkey: String?
     public let fork: Bool?
     public let emitcommandhooks: Bool?
+    public let succeedsparent: Bool?
     public let task: String?
     public let message: String?
     public let attachments: [AnyCodable]?
@@ -5072,6 +5073,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         parentsessionkey: String? = nil,
         fork: Bool? = nil,
         emitcommandhooks: Bool? = nil,
+        succeedsparent: Bool? = nil,
         task: String? = nil,
         message: String? = nil,
         attachments: [AnyCodable]? = nil,
@@ -5090,6 +5092,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         self.parentsessionkey = parentsessionkey
         self.fork = fork
         self.emitcommandhooks = emitcommandhooks
+        self.succeedsparent = succeedsparent
         self.task = task
         self.message = message
         self.attachments = attachments
@@ -5110,6 +5113,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         case parentsessionkey = "parentSessionKey"
         case fork
         case emitcommandhooks = "emitCommandHooks"
+        case succeedsparent = "succeedsParent"
         case task
         case message
         case attachments

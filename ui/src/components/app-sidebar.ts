@@ -1,4 +1,4 @@
-import { html, nothing } from "lit";
+import { html, nothing, type PropertyValues } from "lit";
 import { state } from "lit/decorators.js";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import { pathForRoute } from "../app-route-paths.ts";
@@ -34,9 +34,13 @@ import {
 const PALETTE_SHORTCUT = /Mac|iP(hone|ad|od)/i.test(globalThis.navigator?.platform ?? "")
   ? "⌘K"
   : "Ctrl K";
+const OFFLINE_INDICATOR_DELAY_MS = 2_000;
 
 class AppSidebar extends AppSidebarSessionListElement {
   @state() private logoVisit: LobsterLogoVisitDetail | null = null;
+  @state() private debouncedDisconnected = false;
+
+  private offlineIndicatorTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
 
   constructor() {
     super();
@@ -44,9 +48,43 @@ class AppSidebar extends AppSidebarSessionListElement {
     this.addEventListener(LOBSTER_LOGO_VISIT_EVENT, this.handleLogoVisit as EventListener);
   }
 
+  override connectedCallback() {
+    super.connectedCallback();
+    this.syncOfflineIndicator();
+  }
+
+  override disconnectedCallback() {
+    this.syncOfflineIndicator(false);
+    super.disconnectedCallback();
+  }
+
+  protected override willUpdate(changed: PropertyValues<this>) {
+    if (changed.has("connected")) {
+      this.syncOfflineIndicator();
+    }
+  }
+
+  private syncOfflineIndicator(schedule = !this.connected) {
+    if (this.offlineIndicatorTimer !== null) {
+      globalThis.clearTimeout(this.offlineIndicatorTimer);
+      this.offlineIndicatorTimer = null;
+    }
+    this.debouncedDisconnected = false;
+    if (!schedule) {
+      return;
+    }
+    // Both sidebar signals share one grace window so brief transport blips stay quiet.
+    this.offlineIndicatorTimer = globalThis.setTimeout(() => {
+      this.offlineIndicatorTimer = null;
+      this.debouncedDisconnected = true;
+    }, OFFLINE_INDICATOR_DELAY_MS);
+  }
+
   private readonly handleLogoVisit = (event: Event) => {
     const detail = (event as CustomEvent<LobsterLogoVisitDetail>).detail;
-    this.logoVisit = detail.phase === "out" || !detail.look ? null : detail;
+    // A lookless visit is a logo scare: the brand mark hides (the img gets
+    // the --vacated class) but no stand-in crab renders in its place.
+    this.logoVisit = detail.phase === "out" ? null : detail;
   };
 
   private renderLogoStandIn() {
@@ -97,7 +135,7 @@ class AppSidebar extends AppSidebarSessionListElement {
           .agentName=${cardName}
           .avatarUrl=${cardAgent ? resolveAgentAvatarUrl(cardAgent) : null}
           .avatarText=${cardAvatarText}
-          .connected=${this.connected}
+          .offline=${this.debouncedDisconnected}
           .statusLabel=${gatewayStatus}
           .subtitle=${this.agentChipSubtitle(cardAgentId)}
           .menuOpen=${this.agentMenuPosition !== null}
@@ -207,15 +245,17 @@ class AppSidebar extends AppSidebarSessionListElement {
           .gatewayVersion=${this.gatewayVersion}
           .onNavigate=${(routeId: "about") => this.onNavigate?.(routeId)}
         ></openclaw-sidebar-build-chip>
-        <span
-          class="sidebar-footer-bar__status ${this.connected
-            ? "sidebar-connection-status--online"
-            : "sidebar-connection-status--offline"}"
-          role="img"
-          aria-live="polite"
-          aria-label=${gatewayStatus}
-          title=${gatewayStatus}
-        ></span>
+        ${this.debouncedDisconnected
+          ? html`<span
+              class="sidebar-footer-bar__status"
+              role="status"
+              aria-live="polite"
+              title=${gatewayStatus}
+              ><span class="sidebar-footer-bar__status-dot" aria-hidden="true"></span>${t(
+                "common.offline",
+              )}</span
+            >`
+          : nothing}
         <openclaw-tooltip .content=${t("nav.settings")}>
           <button
             type="button"

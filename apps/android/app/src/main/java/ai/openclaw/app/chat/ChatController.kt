@@ -4,6 +4,7 @@ import ai.openclaw.app.GatewayModelSummary
 import ai.openclaw.app.gateway.GatewayRequestDefinitiveFailure
 import ai.openclaw.app.gateway.GatewayRequestNotEnqueued
 import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
+import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.QuestionListResult
 import ai.openclaw.app.gateway.QuestionRecord
@@ -1050,11 +1051,12 @@ class ChatController internal constructor(
           if (hasLoadedParentSession) {
             put("parentSessionKey", JsonPrimitive(parentKey))
             put("emitCommandHooks", JsonPrimitive(true))
+            put("succeedsParent", JsonPrimitive(false))
           }
           put("label", JsonPrimitive(label))
           if (worktree) put("worktree", JsonPrimitive(true))
         }
-      val res = requestGatewayBound(createGatewayId, "sessions.create", params.toString())
+      val res = requestSessionCreateWithDispositionFallback(createGatewayId, params)
       if (!isCurrentHistoryLoad(parentKey, _sessionKey.value, requestGeneration, historyLoadGeneration.get())) {
         return false
       }
@@ -4743,6 +4745,31 @@ class ChatController internal constructor(
       requestGateway(method, paramsJson)
     } else {
       requestGatewayForGateway(gatewayId, method, paramsJson)
+    }
+
+  private suspend fun requestSessionCreateWithDispositionFallback(
+    gatewayId: String?,
+    params: JsonObject,
+  ): String =
+    try {
+      requestGatewayBound(gatewayId, "sessions.create", params.toString())
+    } catch (err: GatewayRequestRejected) {
+      val message = err.gatewayError.message
+      val isOlderGateway =
+        err.gatewayError.code == "INVALID_REQUEST" &&
+          message.contains("invalid sessions.create params") &&
+          message.contains("succeedsParent")
+      if (!isOlderGateway || "succeedsParent" !in params) throw err
+
+      // Older Gateways cannot express a linked parallel child. Keep New Chat parallel by
+      // dropping the parent lifecycle fields instead of falling back to legacy rollover.
+      val legacyParams =
+        JsonObject(
+          params.filterKeys { key ->
+            key != "succeedsParent" && key != "parentSessionKey" && key != "emitCommandHooks"
+          },
+        )
+      requestGatewayBound(gatewayId, "sessions.create", legacyParams.toString())
     }
 
   private fun currentCacheScope(): ChatCacheScope? = normalizedChatCacheScope(cacheScope())

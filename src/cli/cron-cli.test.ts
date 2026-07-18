@@ -772,21 +772,29 @@ describe("cron cli", () => {
     expect(params?.delivery?.threadId).toBe(42);
   });
 
-  it("rejects --account on non-isolated/systemEvent cron add", async () => {
+  it.each([
+    ["--channel", "telegram"],
+    ["--to", "+1234567890"],
+    ["--account", "coordinator"],
+    ["--thread-id", "42"],
+  ])("rejects explicit chat delivery %s on main systemEvent cron add", async (flag, value) => {
     await expectCronCommandExit([
       "cron",
       "add",
       "--name",
-      "invalid account add",
+      "invalid delivery add",
       "--cron",
       "* * * * *",
       "--session",
       "main",
       "--system-event",
       "tick",
-      "--account",
-      "coordinator",
+      flag,
+      value,
     ]);
+    expectRuntimeErrorContaining(
+      "--channel, --to, --account, and --thread-id require a non-main agentTurn or command job with delivery",
+    );
   });
 
   it("rejects invalid --thread-id on cron add", async () => {

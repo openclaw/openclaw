@@ -113,6 +113,8 @@ const rootEntries = [
   "src/audit/audit-event-writer.worker.ts!",
   "src/state/openclaw-database-verify.worker.ts!",
   "src/agents/model-provider-auth.worker.ts!",
+  // Loaded by URL from setup-inference-detection.ts; no static import edge exists.
+  "src/system-agent/setup-inference-detection.worker.ts!",
   // Split runtime loaded through a path assembled in subagent-registry.ts.
   "src/agents/subagent-registry.runtime.ts!",
   // Loaded lazily by the registry; its callbacks form the orphan-recovery runtime contract.
