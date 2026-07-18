@@ -82,7 +82,7 @@ function closeServer(server: ReturnType<typeof createServer>): Promise<void> {
 
 async function requestRealAdminRpc(
   port: number,
-  options: { body?: Buffer | string; contentLength?: number },
+  options: { body?: Buffer | string; contentLength?: number | string },
 ): Promise<CapturedResponse> {
   return await new Promise((resolve, reject) => {
     const headers: Record<string, string> = {
@@ -347,6 +347,34 @@ describe("admin-http-rpc plugin handler", () => {
       const address = server.address() as AddressInfo;
       const result = await requestRealAdminRpc(address.port, {
         contentLength: 1024 * 1024 + 1,
+      });
+
+      expect(result.statusCode).toBe(413);
+      expect(JSON.parse(result.body) as unknown).toEqual({
+        ok: false,
+        error: {
+          type: "invalid_request",
+          message: "Payload too large",
+        },
+      });
+      expect(dispatchGatewayMethod).not.toHaveBeenCalled();
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("rejects declared lengths above the safe integer range before dispatch", async () => {
+    const server = createServer((req, res) => {
+      void handleAdminHttpRpcRequest(req, res);
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+
+    try {
+      const address = server.address() as AddressInfo;
+      const result = await requestRealAdminRpc(address.port, {
+        contentLength: "9007199254740992",
       });
 
       expect(result.statusCode).toBe(413);

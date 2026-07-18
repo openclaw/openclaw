@@ -5,7 +5,6 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { dispatchGatewayMethod } from "openclaw/plugin-sdk/gateway-method-runtime";
-import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isAdminHttpRpcAllowedMethod, listAdminHttpRpcAllowedMethods } from "./methods.js";
 
@@ -83,11 +82,13 @@ function sendError(res: ServerResponse, status: number, error: { type: string; m
 function declaredContentLengthExceeds(req: IncomingMessage, maxBytes: number): boolean {
   const header = req.headers["content-length"];
   const raw = Array.isArray(header) ? header[0] : header;
-  if (typeof raw !== "string") {
+  if (typeof raw !== "string" || !/^\d+$/.test(raw)) {
     return false;
   }
-  const declaredLength = parseStrictNonNegativeInteger(raw);
-  return declaredLength !== undefined && declaredLength > maxBytes;
+  // Preserve decimal precision because HTTP lengths can exceed JavaScript's safe integer range.
+  const normalized = raw.replace(/^0+/, "") || "0";
+  const max = String(maxBytes);
+  return normalized.length > max.length || (normalized.length === max.length && normalized > max);
 }
 
 async function readJsonBody(
