@@ -248,6 +248,7 @@ export type PluginManifestRecord = {
   packageChannel?: PluginPackageChannel;
   packageInstall?: PluginPackageInstall;
   trustedOfficialInstall?: boolean;
+  safetyEventTypes?: string[];
   qaRunners?: PluginManifestQaRunner[];
   dashboard?: PluginManifestDashboard;
   skills: string[];
@@ -599,6 +600,7 @@ function buildRecord(params: {
     packageChannel: params.candidate.packageManifest?.channel,
     packageInstall: params.candidate.packageManifest?.install,
     trustedOfficialInstall: params.trustedOfficialInstall === true ? true : undefined,
+    safetyEventTypes: params.manifest.safetyEventTypes,
     qaRunners: params.manifest.qaRunners,
     dashboard: params.manifest.dashboard,
     skills: params.manifest.skills ?? [],

@@ -276,6 +276,8 @@ export type PluginServiceRegistration = {
   source: string;
   origin: PluginOrigin;
   trustedOfficialInstall?: boolean;
+  /** Host-parsed manifest capability; never supplied by plugin runtime code. */
+  safetyEventTypes?: readonly string[];
   rootDir?: string;
 };
 
@@ -424,6 +426,8 @@ export type PluginRecord = {
   origin: PluginOrigin;
   workspaceDir?: string;
   trustedOfficialInstall?: boolean;
+  /** Host-parsed manifest capability used to authorize safety event emission. */
+  safetyEventTypes?: readonly string[];
   enabled: boolean;
   explicitlyEnabled?: boolean;
   activated?: boolean;

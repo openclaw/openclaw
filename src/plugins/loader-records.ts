@@ -27,6 +27,7 @@ export function createPluginRecord(params: {
   origin: PluginRecord["origin"];
   workspaceDir?: string;
   trustedOfficialInstall?: boolean;
+  safetyEventTypes?: readonly string[];
   enabled: boolean;
   compat?: readonly PluginCompatCode[];
   activationState?: PluginActivationState;
@@ -51,6 +52,7 @@ export function createPluginRecord(params: {
     origin: params.origin,
     workspaceDir: params.workspaceDir,
     trustedOfficialInstall: params.trustedOfficialInstall,
+    safetyEventTypes: params.safetyEventTypes,
     enabled: params.enabled,
     compat: params.compat,
     explicitlyEnabled: params.activationState?.explicitlyEnabled,

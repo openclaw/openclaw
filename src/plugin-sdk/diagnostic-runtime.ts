@@ -27,7 +27,6 @@ export type {
   AISafetyEventInput,
   AISafetyEventType,
 } from "../plugins/safety-event-emission.js";
-export { emitPluginSafetyEvent } from "../plugins/safety-event-emission.js";
 export type {
   AISafetyEventMetadata,
   DiagnosticAISafetyEventPayload,

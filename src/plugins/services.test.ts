@@ -17,6 +17,7 @@ vi.mock("../logging/subsystem.js", () => ({
 }));
 
 import { STATE_DIR } from "../config/paths.js";
+import { onAISafetyDiagnosticEvent } from "../infra/diagnostic-ai-safety-events.js";
 import { registerPluginHttpRoute } from "./http-registry.js";
 import {
   pinActivePluginHttpRouteRegistry,
@@ -30,6 +31,7 @@ function createRegistry(
   pluginId = "plugin:test",
   origin: PluginOrigin = "workspace",
   trustedOfficialInstall = false,
+  safetyEventTypes?: readonly string[],
 ) {
   const registry = createEmptyPluginRegistry();
   registry.services = services.map((service) => ({
@@ -38,6 +40,7 @@ function createRegistry(
     source: "test",
     origin,
     ...(trustedOfficialInstall ? { trustedOfficialInstall } : {}),
+    ...(safetyEventTypes ? { safetyEventTypes } : {}),
     rootDir: "/plugins/test-plugin",
   })) as typeof registry.services;
   return registry;
@@ -146,6 +149,44 @@ describe("startPluginServices", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resetPluginRuntimeStateForTest();
+  });
+
+  it("forwards manifest-declared safety event permissions to an external service", async () => {
+    const observed: Array<{ type: string; trusted: boolean }> = [];
+    const unsubscribe = onAISafetyDiagnosticEvent((event, metadata) => {
+      observed.push({ type: event.type, trusted: metadata.trusted });
+    });
+    try {
+      await startPluginServices({
+        registry: createRegistry(
+          [
+            {
+              id: "safety-emitter",
+              start: (ctx) => {
+                expect(
+                  ctx.safetyDiagnostics?.emit({
+                    type: "ai_safety.external_content.consumed",
+                    sessionId: "session-test",
+                    sourceType: "plugin",
+                    trusted: false,
+                  }),
+                ).toEqual({ ok: true });
+              },
+            },
+          ],
+          "external-safety-plugin",
+          "workspace",
+          false,
+          ["ai_safety.external_content.consumed"],
+        ),
+        config: createServiceConfig(),
+      });
+    } finally {
+      unsubscribe();
+    }
+    expect(observed).toEqual([
+      { type: "ai_safety.external_content.consumed", trusted: false },
+    ]);
   });
 
   it("starts services and stops them in reverse order", async () => {

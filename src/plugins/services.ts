@@ -71,10 +71,7 @@ function createServiceContext(params: {
           pluginId: params.service.pluginId,
           event,
           trusted: params.service.origin === "bundled" || params.service.trustedOfficialInstall === true,
-          // safetyEventTypes is a manifest-level field not carried on
-          // PluginServiceRegistration; external plugins that need it must declare
-          // it in their manifest and have it forwarded here by the loader.
-          declaredSafetyEventTypes: undefined,
+          declaredSafetyEventTypes: params.service.safetyEventTypes,
         }),
     },
   };

@@ -390,6 +390,9 @@ export function createOpenClawTools(
     sandboxed: options?.sandboxed,
     runtimeWebFetch: runtimeWebTools?.fetch,
     lateBindRuntimeConfig: true,
+    sessionId: options?.sessionId,
+    agentId: options?.requesterAgentIdOverride ?? sessionAgentId,
+    channel: options?.currentChannelId,
   });
   options?.recordToolPrepStage?.("openclaw-tools:web-fetch-tool");
   const messageTool = options?.disableMessageTool

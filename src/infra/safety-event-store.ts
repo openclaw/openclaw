@@ -1,7 +1,7 @@
-// In-memory ring buffer for AI safety taxonomy events (MVP; no SQLite persistence).
-// Max capacity is 10 000 events; oldest entries are evicted when the buffer is full.
+// Durable AI safety taxonomy history in the shared OpenClaw state database.
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   onAISafetyDiagnosticEvent,
   type DiagnosticAISafetyEventPayload,
@@ -46,30 +46,78 @@ type MetricBucket = {
   byType: Record<string, number>;
 };
 
-const RING_BUFFER_CAPACITY = 10_000;
+const EVENT_RETENTION_CAPACITY = 10_000;
+
+type SafetyEventRow = {
+  sequence: number | bigint;
+  event_type: string;
+  severity: SafetyEventSeverity;
+  session_id: string | null;
+  agent_id: string | null;
+  channel: string | null;
+  message: string;
+  meta_json: string;
+  recorded_at_ms: number | bigint;
+};
+
+function inflateSafetyEvent(row: SafetyEventRow): SafetyEventRecord {
+  let meta: Record<string, unknown> | undefined;
+  try {
+    const parsed = JSON.parse(row.meta_json) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      meta = parsed as Record<string, unknown>;
+    }
+  } catch {
+    meta = undefined;
+  }
+  return {
+    type: row.event_type,
+    severity: row.severity,
+    ...(row.session_id ? { sessionId: row.session_id } : {}),
+    ...(row.agent_id ? { agentId: row.agent_id } : {}),
+    ...(row.channel ? { channel: row.channel } : {}),
+    message: row.message,
+    ...(meta ? { meta } : {}),
+    sequence: Number(row.sequence),
+    recordedAt: Number(row.recorded_at_ms),
+  };
+}
 
 class SafetyEventStore {
-  /** Circular buffer; oldest events at `head`, newest at `(head - 1 + capacity) % capacity`. */
-  private readonly ring: (SafetyEventRecord | undefined)[] = new Array(RING_BUFFER_CAPACITY);
-  private head = 0;
-  private size = 0;
-  private nextSequence = 1;
   private readonly changeListeners = new Set<(event: SafetyEventRecord) => void>();
 
   appendSafetyEvent(event: DiagnosticAiSafetyEvent): void {
+    const recordedAt = Date.now();
+    const database = openOpenClawStateDatabase().db;
+    const result = database
+      .prepare(
+        `INSERT INTO ai_safety_events (
+           event_type, severity, session_id, agent_id, channel, message, meta_json, recorded_at_ms
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        event.type,
+        event.severity,
+        event.sessionId ?? null,
+        event.agentId ?? null,
+        event.channel ?? null,
+        event.message,
+        JSON.stringify(event.meta ?? {}),
+        recordedAt,
+      );
+    database
+      .prepare(
+        `DELETE FROM ai_safety_events
+         WHERE sequence <= (
+           SELECT COALESCE(MAX(sequence), 0) - ? FROM ai_safety_events
+         )`,
+      )
+      .run(EVENT_RETENTION_CAPACITY);
     const record: SafetyEventRecord = {
       ...event,
-      sequence: this.nextSequence++,
-      recordedAt: Date.now(),
+      sequence: Number(result.lastInsertRowid),
+      recordedAt,
     };
-    const slot = (this.head + this.size) % RING_BUFFER_CAPACITY;
-    this.ring[slot] = record;
-    if (this.size < RING_BUFFER_CAPACITY) {
-      this.size++;
-    } else {
-      // Overwrite oldest; advance head.
-      this.head = (this.head + 1) % RING_BUFFER_CAPACITY;
-    }
     notifyListeners(this.changeListeners, record);
   }
 
@@ -95,33 +143,37 @@ class SafetyEventStore {
       return { events: [] };
     }
 
-    const results: SafetyEventRecord[] = [];
-    // Iterate from oldest to newest.
-    for (let i = 0; i < this.size; i++) {
-      const entry = this.ring[(this.head + i) % RING_BUFFER_CAPACITY];
-      if (!entry) {
-        continue;
-      }
-      if (entry.sequence <= afterSequence) {
-        continue;
-      }
-      if (opts.eventType && entry.type !== opts.eventType) {
-        continue;
-      }
-      if (opts.severity && entry.severity !== opts.severity) {
-        continue;
-      }
-      if (opts.sessionId && entry.sessionId !== opts.sessionId) {
-        continue;
-      }
-      if (opts.channel && entry.channel !== opts.channel) {
-        continue;
-      }
-      results.push(entry);
-      if (results.length === limit + 1) {
-        break;
-      }
+    const clauses = ["sequence > ?"];
+    const values: Array<string | number> = [afterSequence];
+    if (opts.eventType) {
+      clauses.push("event_type = ?");
+      values.push(opts.eventType);
     }
+    if (opts.severity) {
+      clauses.push("severity = ?");
+      values.push(opts.severity);
+    }
+    if (opts.sessionId) {
+      clauses.push("session_id = ?");
+      values.push(opts.sessionId);
+    }
+    if (opts.channel) {
+      clauses.push("channel = ?");
+      values.push(opts.channel);
+    }
+    values.push(limit + 1);
+    const results = (
+      openOpenClawStateDatabase().db
+        .prepare(
+          `SELECT sequence, event_type, severity, session_id, agent_id, channel,
+                  message, meta_json, recorded_at_ms
+             FROM ai_safety_events
+            WHERE ${clauses.join(" AND ")}
+            ORDER BY sequence ASC
+            LIMIT ?`,
+        )
+        .all(...values) as SafetyEventRow[]
+    ).map(inflateSafetyEvent);
 
     const hasMore = results.length > limit;
     const page = hasMore ? results.slice(0, limit) : results;
@@ -148,11 +200,17 @@ class SafetyEventStore {
       byType: {},
     }));
 
-    for (let i = 0; i < this.size; i++) {
-      const entry = this.ring[(this.head + i) % RING_BUFFER_CAPACITY];
-      if (!entry || entry.recordedAt < fromMs || entry.recordedAt >= toMs) {
-        continue;
-      }
+    const entries = openOpenClawStateDatabase().db
+      .prepare(
+        `SELECT sequence, event_type, severity, session_id, agent_id, channel,
+                message, meta_json, recorded_at_ms
+           FROM ai_safety_events
+          WHERE recorded_at_ms >= ? AND recorded_at_ms < ?
+          ORDER BY sequence ASC`,
+      )
+      .all(fromMs, toMs) as SafetyEventRow[];
+    for (const row of entries) {
+      const entry = inflateSafetyEvent(row);
       const bucketIndex = Math.floor((entry.recordedAt - fromMs) / bucketMs);
       if (bucketIndex < 0 || bucketIndex >= buckets.length) {
         continue;

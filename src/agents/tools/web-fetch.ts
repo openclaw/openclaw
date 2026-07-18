@@ -829,6 +829,9 @@ export function createWebFetchTool(options?: {
   runtimeWebFetch?: RuntimeWebFetchMetadata;
   lateBindRuntimeConfig?: boolean;
   lookupFn?: LookupFn;
+  sessionId?: string;
+  agentId?: string;
+  channel?: string;
 }): AnyAgentTool | null {
   const fetch = resolveFetchConfig(options?.config);
   if (!resolveFetchEnabled({ fetch, sandboxed: options?.sandboxed })) {
@@ -933,7 +936,9 @@ export function createWebFetchTool(options?: {
         // Fix #3 (external-content): emit at real web_fetch boundary.
         emitTrustedAISafetyEvent({
           type: "ai_safety.external_content.consumed",
-          sessionId: "unknown",
+          ...(options?.sessionId ? { sessionId: options.sessionId } : {}),
+          ...(options?.agentId ? { agentId: options.agentId } : {}),
+          ...(options?.channel ? { channel: options.channel } : {}),
           sourceType: "web_fetch",
           trusted: false,
         });
