@@ -3,6 +3,7 @@
  * These checks intentionally avoid loading secret-bearing credential payloads.
  */
 import fs from "node:fs";
+import { readRegularFileSync } from "../../infra/regular-file.js";
 import { evaluateStoredCredentialEligibility } from "./credential-state.js";
 import {
   resolveAuthStatePath,
@@ -17,6 +18,11 @@ import {
 import { readPersistedAuthProfileStateRaw, readPersistedAuthProfileStoreRaw } from "./sqlite.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
 
+// Auth-profile JSON probes are existence/eligibility checks, not full store
+// loads. Cap the read so a hostile or corrupted auth-profiles.json / auth.json
+// cannot force an unbounded buffer into the probe path.
+const MAX_AUTH_PROFILE_SOURCE_JSON_BYTES = 1024 * 1024;
+
 // Auth-profile source checks look at runtime snapshots, JSON compatibility
 // files, legacy files, and SQLite stores without materializing secret values.
 function hasStoredAuthProfileFiles(agentDir?: string): boolean {
@@ -29,7 +35,12 @@ function hasStoredAuthProfileFiles(agentDir?: string): boolean {
 
 function readJsonFile(pathname: string): unknown {
   try {
-    return JSON.parse(fs.readFileSync(pathname, "utf8")) as unknown;
+    const resolvedPath = fs.realpathSync(pathname);
+    const { buffer } = readRegularFileSync({
+      filePath: resolvedPath,
+      maxBytes: MAX_AUTH_PROFILE_SOURCE_JSON_BYTES,
+    });
+    return JSON.parse(buffer.toString("utf8")) as unknown;
   } catch {
     return null;
   }
