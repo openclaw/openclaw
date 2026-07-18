@@ -2396,6 +2396,15 @@ describe("config cli", () => {
       expect(payload.configPath).not.toContain("~");
     });
 
+    it("rejects --file when the file does not exist", async () => {
+      await expect(
+        runConfigCommand(["config", "patch", "--file", "/nonexistent/path/patch.json5"]),
+      ).rejects.toThrow("__exit__:1");
+
+      expectErrorIncludes("--file not found: /nonexistent/path/patch.json5");
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+    });
+
     it("dry-runs pluginIntegration provider patches against manifest integration metadata", async () => {
       const pluginId = "secret-provider-proof";
       const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-plugin-provider-"));

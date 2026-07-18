@@ -171,6 +171,8 @@ export const mcpAppHandlers: GatewayRequestHandlers = {
                     standaloneExpiresAtMs: standalone.expiresAtMs,
                   }
                 : {}),
+              // Reconstruction marks views read-only; fresh runs may legitimately grant zero App tools.
+              messageSupported: view.allowedAppToolNames !== undefined && view.readOnly !== true,
             };
           },
           context.getRuntimeConfig(),

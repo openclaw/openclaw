@@ -40,7 +40,12 @@ import {
   resolveCliStreamJsonOutputLimits,
 } from "../cli-output.js";
 import { classifyFailoverReason } from "../embedded-agent-helpers.js";
-import { FailoverError, isTimeoutError, resolveFailoverStatus } from "../failover-error.js";
+import {
+  type CliTimeoutContext,
+  FailoverError,
+  isTimeoutError,
+  resolveFailoverStatus,
+} from "../failover-error.js";
 import { resolveCliToolTerminalReason } from "../run-termination.js";
 import { prepareCliBundleMcpCaptureAttempt } from "./bundle-mcp.js";
 import { LIVE_SESSION_LIMITS, resolveClaudeLiveMode } from "./claude-live-session-policy.js";
@@ -565,6 +570,7 @@ function createTimeoutError(
   session: ClaudeLiveSession,
   message: string,
   code?: string,
+  cliTimeout?: CliTimeoutContext,
 ): FailoverError {
   return new FailoverError(message, {
     reason: "timeout",
@@ -572,6 +578,7 @@ function createTimeoutError(
     model: session.modelId,
     status: resolveFailoverStatus("timeout"),
     code,
+    cliTimeout,
   });
 }
 
@@ -807,6 +814,14 @@ function armNoOutputTimer(session: ClaudeLiveSession, turn: ClaudeLiveTurn, dela
         `CLI produced no output for ${Math.round((Date.now() - quietSinceMs) / 1000)}s and was terminated.`,
         // Retryable only when the process never produced any output this turn.
         turn.lastOutputAtMs === null ? "cli_no_output_timeout" : undefined,
+        {
+          mode: "no-output",
+          timeoutSeconds: Math.round((Date.now() - quietSinceMs) / 1000),
+          observedActivity:
+            turn.lastOutputAtMs !== null || turn.toolEventCount > 0 || turn.rawLines.length > 0,
+          activeToolCount: turn.activeTools.size,
+          backgroundTaskCount: session.outstandingBackgroundTaskIds.size,
+        },
       ),
     );
   }, delayMs);
@@ -1446,6 +1461,15 @@ function createTurn(params: {
       createTimeoutError(
         params.session,
         `CLI exceeded timeout (${Math.round(params.context.params.timeoutMs / 1000)}s) and was terminated.`,
+        "cli_overall_timeout",
+        {
+          mode: "overall",
+          timeoutSeconds: Math.round(params.context.params.timeoutMs / 1000),
+          observedActivity:
+            turn.observedStdout || turn.rawLines.length > 0 || turn.toolEventCount > 0,
+          activeToolCount: turn.activeTools.size,
+          backgroundTaskCount: params.session.outstandingBackgroundTaskIds.size,
+        },
       ),
     );
   }, params.context.params.timeoutMs);
