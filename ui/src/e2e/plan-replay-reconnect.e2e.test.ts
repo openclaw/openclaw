@@ -58,7 +58,7 @@ describeControlUiE2e("Control UI plan snapshot replay", () => {
   });
 
   afterEach(async () => {
-    for (const context of [...openBrowserContexts]) {
+    for (const context of openBrowserContexts) {
       await closeBrowserContext(context);
     }
   });
