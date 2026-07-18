@@ -522,11 +522,11 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
         state: "visible",
       });
       await details.locator(".workboard-card__move-select").waitFor({ state: "visible" });
-      expect(await details.getByRole("button", { name: "Open session" }).count()).toBe(1);
+      expect(await details.getByRole("button", { name: "Open thread" }).count()).toBe(1);
       expect(await details.getByRole("button", { name: "Edit card" }).count()).toBe(1);
       expect(await details.getByRole("button", { name: "Archive card" }).count()).toBe(1);
       expect(await details.getByRole("button", { name: "Delete card" }).count()).toBe(1);
-      expect(await details.getByRole("button", { name: "Stop session" }).count()).toBe(0);
+      expect(await details.getByRole("button", { name: "Stop thread" }).count()).toBe(0);
       await captureScreenshot(writable.page, artifacts, "05-detail-actions");
       await details.locator('button[aria-label="Cancel"]').click();
 

@@ -432,7 +432,7 @@ function confirmChatResetCommand(text: string) {
   if (typeof globalThis.confirm !== "function") {
     return false;
   }
-  return globalThis.confirm("Start a new session? This will reset the current chat.");
+  return globalThis.confirm("Start a new thread? This will reset the current chat.");
 }
 
 function isBtwCommand(text: string) {
