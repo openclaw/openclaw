@@ -84,6 +84,7 @@ describe("navigationIconForRoute", () => {
       chat: "messageSquare",
       custodian: "lobster",
       activity: "activity",
+      apps: "layoutGrid",
       approvals: "shieldCheck",
       workboard: "kanban",
       worktrees: "folder",
@@ -141,6 +142,7 @@ describe("titleForRoute", () => {
       chat: "Chat",
       custodian: "OpenClaw",
       activity: "Activity",
+      apps: "Apps",
       approvals: "Approvals",
       workboard: "Workboard",
       worktrees: "Worktrees",
@@ -184,6 +186,7 @@ describe("subtitleForRoute", () => {
       chat: "Gateway chat for quick interventions.",
       custodian: "System setup and care.",
       activity: "Browser-local tool activity summaries.",
+      apps: "Companion apps for phone, watch, desktop, and browser.",
       approvals: "Recent exec, plugin, and system-agent approvals.",
       workboard: "Agent work queue and session handoff.",
       worktrees: "Isolated agent task checkouts and recovery snapshots.",
@@ -222,6 +225,7 @@ describe("subtitleForRoute", () => {
 describe("pathForRoute", () => {
   it("returns correct path without base", () => {
     expect(pathForRoute("chat")).toBe("/chat");
+    expect(pathForRoute("apps")).toBe("/apps");
     expect(pathForRoute("custodian")).toBe("/custodian");
     expect(pathForRoute("connection")).toBe("/settings/connection");
     expect(pathForRoute("debug")).toBe("/debug");
@@ -256,6 +260,7 @@ describe("routeIdFromPath", () => {
     expect(routeIdFromPath("/settings/connection")).toBe("connection");
     expect(routeIdFromPath("/connection")).toBeNull();
     expect(routeIdFromPath("/activity")).toBe("activity");
+    expect(routeIdFromPath("/apps")).toBe("apps");
     expect(routeIdFromPath("/sessions")).toBe("sessions");
     expect(routeIdFromPath("/debug")).toBe("debug");
     expect(routeIdFromPath("/logs")).toBe("logs");
