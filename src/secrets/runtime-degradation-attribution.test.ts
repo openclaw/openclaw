@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.ts";
 import type { SecretRef } from "../config/types.secrets.js";
+import { resolveAuthProfileSecretOwnerId } from "./runtime-auth-profile-owner.js";
 import { listSecretResolutionErrorOwners } from "./runtime-degraded-state.js";
 import { activateSecretsRuntimeSnapshotState } from "./runtime-state.js";
 import { asConfig, setupSecretsRuntimeSnapshotTestHooks } from "./runtime.test-support.ts";
@@ -221,6 +222,90 @@ describe("secrets runtime degraded-owner attribution", () => {
     ]);
   });
 
+  it("includes active web-tool co-owners when strict resolution fails first", async () => {
+    const sharedRef = { source: "env" as const, provider: "default", id: "SHARED_API_KEY" };
+    const authAgentDir = "/tmp/shared-secret-co-owner";
+    const authProfileId = "openai:shared";
+    const authOwnerId = resolveAuthProfileSecretOwnerId({
+      agentDir: authAgentDir,
+      profileId: authProfileId,
+    });
+    const config = asConfig({
+      models: {
+        providers: {
+          example: {
+            apiKey: sharedRef,
+            baseUrl: "https://example.invalid/v1",
+            models: [],
+          },
+        },
+      },
+      tools: { web: { search: { provider: "gemini" } } },
+      plugins: {
+        entries: {
+          google: { config: { webSearch: { apiKey: sharedRef } } },
+        },
+      },
+    });
+    const active = await prepareSecretsRuntimeSnapshot({
+      config,
+      env: { SHARED_API_KEY: "dummy" },
+      includeAuthStoreRefs: false,
+      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+    });
+    active.authStores = [
+      {
+        agentDir: authAgentDir,
+        store: {
+          version: 1,
+          profiles: {
+            [authProfileId]: {
+              type: "api_key",
+              provider: "openai",
+              key: "dummy",
+              keyRef: sharedRef,
+            },
+          },
+        },
+      },
+    ];
+    active.secretOwners?.push({
+      ownerKind: "account",
+      ownerId: authOwnerId,
+      refKeys: ["env:default:SHARED_API_KEY"],
+    });
+    activateSecretsRuntimeSnapshotState({
+      snapshot: active,
+      refreshContext: null,
+      refreshHandler: null,
+    });
+
+    const error = await prepareSecretsRuntimeSnapshot({
+      config,
+      env: {},
+      includeAuthStoreRefs: false,
+      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+    }).catch((failure: unknown) => failure);
+
+    expect(listSecretResolutionErrorOwners(error)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ ownerKind: "provider", ownerId: "example" }),
+        expect.objectContaining({
+          ownerKind: "capability",
+          ownerId: "web-search:gemini",
+          degradationState: "stale",
+          failureMatched: true,
+        }),
+        expect.objectContaining({
+          ownerKind: "account",
+          ownerId: authOwnerId,
+          source: "auth-store",
+          failureMatched: true,
+        }),
+      ]),
+    );
+  });
+
   it("keeps TTS SecretRefs that resolve to non-strings fail-closed", async () => {
     if (process.platform === "win32") {
       return;
@@ -243,32 +328,69 @@ describe("secrets runtime degraded-owner attribution", () => {
       "utf8",
     );
     await fs.chmod(secretsPath, 0o600);
+    const ref = {
+      source: "file" as const,
+      provider: "ttsfile",
+      id: "/providers/elevenlabs/apiKey",
+    };
+    const config = asConfig({
+      secrets: {
+        providers: {
+          ttsfile: {
+            source: "file",
+            path: secretsPath,
+            mode: "json",
+          },
+        },
+      },
+      messages: {
+        tts: { providers: { elevenlabs: { apiKey: ref } } },
+      },
+    });
+    const authAgentDir = "/tmp/invalid-value-auth-co-owner";
+    const authProfileId = "openai:invalid-value";
+    const authOwnerId = resolveAuthProfileSecretOwnerId({
+      agentDir: authAgentDir,
+      profileId: authProfileId,
+    });
+    const active = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({}),
+      includeAuthStoreRefs: false,
+      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+    });
+    active.sourceConfig = config;
+    active.config = config;
+    active.authStores = [
+      {
+        agentDir: authAgentDir,
+        store: {
+          version: 1,
+          profiles: {
+            [authProfileId]: {
+              type: "api_key",
+              provider: "openai",
+              key: "dummy",
+              keyRef: ref,
+            },
+          },
+        },
+      },
+    ];
+    active.secretOwners = [
+      {
+        ownerKind: "account",
+        ownerId: authOwnerId,
+        refKeys: ["file:ttsfile:/providers/elevenlabs/apiKey"],
+      },
+    ];
+    activateSecretsRuntimeSnapshotState({
+      snapshot: active,
+      refreshContext: null,
+      refreshHandler: null,
+    });
 
     const error = await prepareSecretsRuntimeSnapshot({
-      config: asConfig({
-        secrets: {
-          providers: {
-            ttsfile: {
-              source: "file",
-              path: secretsPath,
-              mode: "json",
-            },
-          },
-        },
-        messages: {
-          tts: {
-            providers: {
-              elevenlabs: {
-                apiKey: {
-                  source: "file",
-                  provider: "ttsfile",
-                  id: "/providers/elevenlabs/apiKey",
-                },
-              },
-            },
-          },
-        },
-      }),
+      config,
       env: {},
       includeAuthStoreRefs: false,
       allowUnavailableSecretOwners: true,
@@ -279,16 +401,25 @@ describe("secrets runtime degraded-owner attribution", () => {
     expect(String(error)).toContain(
       "messages.tts.providers.elevenlabs.apiKey resolved to a non-string or empty value.",
     );
-    expect(listSecretResolutionErrorOwners(error)).toEqual([
-      expect.objectContaining({
-        ownerKind: "capability",
-        ownerId: "tts",
-        paths: ["messages.tts.providers.elevenlabs.apiKey"],
-        reason: "resolved secret value was invalid",
-        degradationState: "cold",
-        failureMatched: true,
-      }),
-    ]);
+    expect(listSecretResolutionErrorOwners(error)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ownerKind: "capability",
+          ownerId: "tts",
+          paths: ["messages.tts.providers.elevenlabs.apiKey"],
+          reason: "resolved secret value was invalid",
+          degradationState: "cold",
+          failureMatched: true,
+        }),
+        expect.objectContaining({
+          ownerKind: "account",
+          ownerId: authOwnerId,
+          reason: "resolved secret value was invalid",
+          source: "auth-store",
+          failureMatched: true,
+        }),
+      ]),
+    );
   });
 
   it("reports every cold-start owner sharing an invalid resolved value", async () => {

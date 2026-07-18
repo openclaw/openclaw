@@ -22,6 +22,7 @@ import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
   classifySecretResolutionErrorDegradations,
+  listSecretResolutionErrorOwners,
   redactSecretDegradationReason,
   SECRET_DEGRADATION_RETRY_HINT,
   type SecretDegradation,
@@ -234,6 +235,7 @@ export function createRuntimeSecretsActivator(params: {
   let degradationGeneration = 0;
   let activeDegradationGeneration: number | null = null;
   let activeDegradationConfig: OpenClawConfig | null = null;
+  let activeDegradationSupportsSourceOnlyRecovery = false;
   const deferredRecoveryGenerations = new WeakMap<object, number>();
   let secretsActivationTail: Promise<void> = Promise.resolve();
   const loadSecretsRuntime = createLazyPromise(() => import("../secrets/runtime.js"), {
@@ -276,6 +278,7 @@ export function createRuntimeSecretsActivator(params: {
     secretsDegraded = false;
     activeDegradationGeneration = null;
     activeDegradationConfig = null;
+    activeDegradationSupportsSourceOnlyRecovery = false;
   };
 
   const finishPreparedSnapshot = async (
@@ -350,6 +353,14 @@ export function createRuntimeSecretsActivator(params: {
             eventConfig,
           );
         }
+        const failedOwners = listSecretResolutionErrorOwners(err).filter(
+          (owner) => owner.failureMatched,
+        );
+        const currentFailureSupportsSourceOnlyRecovery =
+          failedOwners.length > 0 && failedOwners.every((owner) => owner.source === "config");
+        activeDegradationSupportsSourceOnlyRecovery = secretsDegraded
+          ? activeDegradationSupportsSourceOnlyRecovery && currentFailureSupportsSourceOnlyRecovery
+          : currentFailureSupportsSourceOnlyRecovery;
         secretsDegraded = true;
         activeDegradationGeneration = ++degradationGeneration;
         activeDegradationConfig = structuredClone(eventConfig);
@@ -529,7 +540,8 @@ export function createRuntimeSecretsActivator(params: {
     deferredRecoveryGenerations.delete(snapshot);
     const sourceOnlyContractRecovered =
       options?.sourceOnly !== true ||
-      (activeDegradationConfig !== null &&
+      (activeDegradationSupportsSourceOnlyRecovery &&
+        activeDegradationConfig !== null &&
         !hasSameSecretReloadContract(activeDegradationConfig, snapshot.sourceConfig));
     if (expectedGeneration !== undefined && sourceOnlyContractRecovered) {
       publishRecovery(snapshot.config, expectedGeneration);

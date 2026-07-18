@@ -70,6 +70,7 @@ function collectApiKeyProfileAssignment(params: {
   collectRuntimeSecretInputAssignment({
     value: resolvedKeyRef,
     path: `${params.agentDir}.auth-profiles.${params.profileId}.key`,
+    source: "auth-store",
     expected: "string",
     defaults: params.defaults,
     context: params.context,
@@ -132,6 +133,7 @@ function collectTokenProfileAssignment(params: {
   collectRuntimeSecretInputAssignment({
     value: resolvedTokenRef,
     path: `${params.agentDir}.auth-profiles.${params.profileId}.token`,
+    source: "auth-store",
     expected: "string",
     defaults: params.defaults,
     context: params.context,

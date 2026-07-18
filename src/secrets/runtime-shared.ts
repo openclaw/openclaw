@@ -30,6 +30,7 @@ export type SecretResolverWarning = {
 export type SecretAssignment = {
   ref: SecretRef;
   path: string;
+  source?: "auth-store" | "config";
   expected: "string" | "string-or-object";
   ownerKind: SecretOwnerKind;
   ownerId: string;
@@ -40,7 +41,7 @@ export type SecretAssignment = {
 
 type SecretAssignmentValidationFailure = Pick<
   SecretAssignment,
-  "ownerKind" | "ownerId" | "expected"
+  "ownerKind" | "ownerId" | "expected" | "source"
 > & {
   refKey: string;
 };
@@ -105,7 +106,7 @@ export function createResolverContext(params: {
  * Records a SecretRef assignment that should be resolved and applied later.
  */
 export function pushAssignment(context: ResolverContext, assignment: SecretAssignment): void {
-  context.assignments.push(assignment);
+  context.assignments.push({ ...assignment, source: assignment.source ?? "config" });
 }
 
 /**
@@ -149,6 +150,7 @@ export function collectSecretInputAssignment(params: {
   context: ResolverContext;
   active?: boolean;
   inactiveReason?: string;
+  source?: SecretAssignment["source"];
   owner?: SecretAssignmentOwner;
   apply: (value: unknown) => void;
 }): void {
@@ -182,6 +184,7 @@ export function collectRuntimeSecretInputAssignment(params: {
   pushAssignment(params.context, {
     ref,
     path: params.path,
+    source: params.source ?? "config",
     expected: params.expected,
     ownerKind: params.owner?.ownerKind ?? "unknown",
     ownerId: params.owner?.ownerId ?? params.path,
@@ -223,6 +226,7 @@ export function applyResolvedAssignments(params: {
         ownerKind: assignment.ownerKind,
         ownerId: assignment.ownerId,
         expected: assignment.expected,
+        source: assignment.source,
         refKey: key,
       });
     }

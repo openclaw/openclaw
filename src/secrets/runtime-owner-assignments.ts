@@ -11,6 +11,7 @@ import {
   isSecretResolutionError,
 } from "./resolve-errors.js";
 import { resolveSecretRefValues, resolveSecretRefValuesSettledByProvider } from "./resolve.js";
+import { resolveAuthProfileSecretOwnerId } from "./runtime-auth-profile-owner.js";
 import type {
   DegradedSecretOwner,
   SecretDegradationReason,
@@ -70,7 +71,7 @@ function registerResolvedValuesForRedaction(resolved: ReadonlyMap<string, unknow
 }
 
 function assignmentOwnerKey(assignment: SecretAssignment): string {
-  return `${assignment.ownerKind}\0${assignment.ownerId}`;
+  return `${assignment.source ?? "config"}\0${assignment.ownerKind}\0${assignment.ownerId}`;
 }
 
 function groupAssignmentsByOwner(assignments: SecretAssignment[]): SecretAssignment[][] {
@@ -136,8 +137,11 @@ function associateAssignmentFailureOwners(params: {
   config: OpenClawConfig;
 }): void {
   const validationFailures = getSecretAssignmentValidationFailures(params.error);
+  const validationFailureRefKeys = new Set(validationFailures.map((failure) => failure.refKey));
   const validationFailureOwnerKeys = new Set(
-    validationFailures.map((failure) => `${failure.ownerKind}\0${failure.ownerId}`),
+    validationFailures.map(
+      (failure) => `${failure.source ?? "config"}\0${failure.ownerKind}\0${failure.ownerId}`,
+    ),
   );
   const reason =
     validationFailures.length > 0
@@ -169,10 +173,72 @@ function associateAssignmentFailureOwners(params: {
           config: params.config,
         }),
         failureMatched,
+        source: assignments[0]?.source ?? "config",
       },
     ];
   });
-  associateSecretResolutionErrorOwners(params.error, owners);
+  const failureRefs = new Map(
+    validationFailures.length > 0
+      ? params.assignments
+          .filter((assignment) => validationFailureRefKeys.has(secretRefKey(assignment.ref)))
+          .map((assignment) => [secretRefKey(assignment.ref), assignment.ref] as const)
+      : params.assignments
+          .filter((assignment) => assignmentMatchesResolutionFailure(assignment, params.error))
+          .map((assignment) => [secretRefKey(assignment.ref), assignment.ref] as const),
+  );
+  const ownerKeys = new Set(
+    owners.map((owner) => `${owner.source}\0${owner.ownerKind}\0${owner.ownerId}`),
+  );
+  const collectedOwnerKeys = new Set(params.assignments.map(assignmentOwnerKey));
+  const activeSnapshot = getActiveSecretsRuntimeSnapshot();
+  const activeAuthOwnerIds = new Set(
+    (activeSnapshot?.authStores ?? []).flatMap(({ agentDir, store }) =>
+      Object.keys(store.profiles).map((profileId) =>
+        resolveAuthProfileSecretOwnerId({ agentDir, profileId }),
+      ),
+    ),
+  );
+  const activeCoOwners = (activeSnapshot?.secretOwners ?? []).flatMap((owner) => {
+    const source =
+      owner.ownerKind === "account" && activeAuthOwnerIds.has(owner.ownerId)
+        ? ("auth-store" as const)
+        : ("config" as const);
+    if (validationFailures.length > 0 && source !== "auth-store") {
+      return [];
+    }
+    const ownerKey = `${source}\0${owner.ownerKind}\0${owner.ownerId}`;
+    // Collected auth assignments are authoritative for the intended store. Retain the active
+    // fallback only when this preparation excluded that store and cannot supersede its owner.
+    if (ownerKeys.has(ownerKey) || (source === "auth-store" && collectedOwnerKeys.has(ownerKey))) {
+      return [];
+    }
+    const refs = owner.refKeys.flatMap((refKey) => {
+      const ref = failureRefs.get(refKey);
+      return ref ? [ref] : [];
+    });
+    if (refs.length === 0) {
+      return [];
+    }
+    return [
+      {
+        ownerKind: owner.ownerKind,
+        ownerId: owner.ownerId,
+        state: "unavailable" as const,
+        paths: [],
+        refKeys: [...owner.refKeys],
+        reason,
+        degradationState: classifySecretOwnerDegradationState({
+          ownerKind: owner.ownerKind,
+          ownerId: owner.ownerId,
+          refs,
+          config: params.config,
+        }),
+        failureMatched: true,
+        source,
+      },
+    ];
+  });
+  associateSecretResolutionErrorOwners(params.error, [...owners, ...activeCoOwners]);
 }
 
 /** Emits the canonical warning for one isolated runtime secret owner. */

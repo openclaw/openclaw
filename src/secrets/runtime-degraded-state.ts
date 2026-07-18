@@ -38,6 +38,7 @@ export type SecretOwnerRefState = Pick<DegradedSecretOwner, "ownerKind" | "owner
 type SecretResolutionErrorOwner = DegradedSecretOwner & {
   degradationState: "cold" | "stale";
   failureMatched: boolean;
+  source: "auth-store" | "config";
 };
 
 export const SECRET_DEGRADATION_RETRY_HINT = "openclaw secrets reload" as const;
@@ -141,6 +142,7 @@ function cloneResolutionErrorOwner(owner: SecretResolutionErrorOwner): SecretRes
     ...cloneOwner(owner),
     degradationState: owner.degradationState,
     failureMatched: owner.failureMatched,
+    source: owner.source,
   };
 }
 

@@ -164,6 +164,7 @@ describe("secrets runtime snapshot auth refresh failure", () => {
           ownerId: resolveAuthProfileSecretOwnerId({ agentDir, profileId: "openai:default" }),
           degradationState: "stale",
           failureMatched: true,
+          source: "auth-store",
         }),
       );
     });

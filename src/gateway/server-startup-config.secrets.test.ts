@@ -663,6 +663,7 @@ describe("gateway startup config secret preflight", () => {
         reason: "secret reference was not found",
         degradationState: "cold",
         failureMatched: true,
+        source: "config",
       },
     ]);
     const prepareRuntimeSecretsSnapshot = vi.fn(async () => {
@@ -854,6 +855,7 @@ describe("gateway startup config secret preflight", () => {
           reason: "resolved secret value was invalid",
           degradationState: "stale",
           failureMatched: true,
+          source: "config",
         },
       ]);
       const prepareRuntimeSecretsSnapshot = vi.fn(async () => {
@@ -915,6 +917,7 @@ describe("gateway startup config secret preflight", () => {
         reason: "secret reference was not found",
         degradationState: "stale",
         failureMatched: true,
+        source: "config",
       },
     ]);
     const emitStateEvent = vi.fn();
@@ -1218,6 +1221,7 @@ describe("gateway startup config secret preflight", () => {
         reason: "secret reference was not found",
         degradationState: "stale",
         failureMatched: true,
+        source: "config",
       },
     ]);
     const prepareRuntimeSecretsSnapshot = vi.fn(async ({ config }) => {
@@ -1404,6 +1408,139 @@ describe("gateway startup config secret preflight", () => {
     ).resolves.toMatchObject({ sourceConfig });
     publishRuntimeSecretsRecovery(activateRuntimeSecrets, unchangedSnapshot, { sourceOnly: true });
     expect(emitStateEvent.mock.calls.map((call) => call[0]).slice(-2)).toEqual([
+      "SECRETS_RELOADER_RECOVERED",
+      "SECRETS_RELOADER_DEGRADED",
+    ]);
+  });
+
+  it("does not recover auth-store degradation from a config-only source reversion", async () => {
+    const stableConfig = gatewayTokenConfig({
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: { source: "env", provider: "default", id: "OPENAI_STABLE" },
+            models: [],
+          },
+        },
+      },
+    });
+    const changedConfig = structuredClone(stableConfig);
+    changedConfig.models!.providers!.openai!.apiKey = {
+      source: "env",
+      provider: "default",
+      id: "OPENAI_CHANGED",
+    };
+    const configFailure = new Error("config secret failed");
+    associateSecretResolutionErrorOwners(configFailure, [
+      {
+        ownerKind: "provider",
+        ownerId: "openai",
+        state: "unavailable",
+        paths: ["models.providers.openai.apiKey"],
+        refKeys: ["env:default:OPENAI_CHANGED"],
+        reason: "secret reference was not found",
+        degradationState: "cold",
+        failureMatched: true,
+        source: "config",
+      },
+    ]);
+    const authStoreFailure = new Error("auth store secret failed");
+    associateSecretResolutionErrorOwners(authStoreFailure, [
+      {
+        ownerKind: "account",
+        ownerId: "auth-profile-owner",
+        state: "unavailable",
+        paths: ["/tmp/agent.auth-profiles.openai:default.key"],
+        refKeys: ["env:default:AUTH_PROFILE_KEY"],
+        reason: "secret reference was not found",
+        degradationState: "stale",
+        failureMatched: true,
+        source: "auth-store",
+      },
+    ]);
+    const emitStateEvent = vi.fn();
+    let nextFailure = configFailure;
+    const activateRuntimeSecrets = runtimeSecretsActivatorForTest({
+      emitStateEvent,
+      prepareRuntimeSecretsSnapshot: vi.fn(async () => {
+        throw nextFailure;
+      }),
+      activateRuntimeSecretsSnapshot: activateSecretsRuntimeSnapshotForTest,
+    });
+    activateSecretsRuntimeSnapshotForTest(preparedSnapshot(stableConfig));
+
+    await expect(
+      activateRuntimeSecrets(changedConfig, {
+        reason: "reload",
+        activate: false,
+        publishFailureAsDegraded: true,
+      }),
+    ).rejects.toBe(configFailure);
+    nextFailure = authStoreFailure;
+    await expect(
+      activateRuntimeSecrets(changedConfig, {
+        reason: "reload",
+        activate: false,
+        publishFailureAsDegraded: true,
+      }),
+    ).rejects.toBe(authStoreFailure);
+
+    const revertedSnapshot = preparedSnapshot(stableConfig);
+    await expect(
+      activateRuntimeSecrets.activatePreparedSnapshotIfCurrent?.(
+        revertedSnapshot,
+        getActiveSecretsRuntimeSnapshotRevision(),
+        { reason: "reload", activate: true, publishRecovery: false },
+      ),
+    ).resolves.toBe(revertedSnapshot);
+    publishRuntimeSecretsRecovery(activateRuntimeSecrets, revertedSnapshot, { sourceOnly: true });
+    expect(emitStateEvent.mock.calls.map((call) => call[0])).toEqual(["SECRETS_RELOADER_DEGRADED"]);
+
+    const fullyResolvedSnapshot = preparedSnapshot(stableConfig);
+    await expect(
+      activateRuntimeSecrets.activatePreparedSnapshotIfCurrent?.(
+        fullyResolvedSnapshot,
+        getActiveSecretsRuntimeSnapshotRevision(),
+        { reason: "reload", activate: true, publishRecovery: false },
+      ),
+    ).resolves.toBe(fullyResolvedSnapshot);
+    publishRuntimeSecretsRecovery(activateRuntimeSecrets, fullyResolvedSnapshot);
+    expect(emitStateEvent.mock.calls.map((call) => call[0])).toEqual([
+      "SECRETS_RELOADER_DEGRADED",
+      "SECRETS_RELOADER_RECOVERED",
+    ]);
+
+    nextFailure = authStoreFailure;
+    await expect(
+      activateRuntimeSecrets(changedConfig, {
+        reason: "reload",
+        activate: false,
+        publishFailureAsDegraded: true,
+      }),
+    ).rejects.toBe(authStoreFailure);
+    nextFailure = configFailure;
+    await expect(
+      activateRuntimeSecrets(changedConfig, {
+        reason: "reload",
+        activate: false,
+        publishFailureAsDegraded: true,
+      }),
+    ).rejects.toBe(configFailure);
+
+    const secondRevertedSnapshot = preparedSnapshot(stableConfig);
+    await expect(
+      activateRuntimeSecrets.activatePreparedSnapshotIfCurrent?.(
+        secondRevertedSnapshot,
+        getActiveSecretsRuntimeSnapshotRevision(),
+        { reason: "reload", activate: true, publishRecovery: false },
+      ),
+    ).resolves.toBe(secondRevertedSnapshot);
+    publishRuntimeSecretsRecovery(activateRuntimeSecrets, secondRevertedSnapshot, {
+      sourceOnly: true,
+    });
+    expect(emitStateEvent.mock.calls.map((call) => call[0])).toEqual([
+      "SECRETS_RELOADER_DEGRADED",
       "SECRETS_RELOADER_RECOVERED",
       "SECRETS_RELOADER_DEGRADED",
     ]);

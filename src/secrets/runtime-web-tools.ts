@@ -138,6 +138,7 @@ function associateWebProviderResolutionError(params: {
           config: params.config,
         }),
         failureMatched: true,
+        source: "config" as const,
       };
     }),
   );

@@ -2016,7 +2016,7 @@ export function startManagedGatewayConfigReloader(
             !(await restoreSecretsRuntimeSnapshotIfCurrent(
               previousSecretsSnapshot,
               committedSecretsRevision,
-              sourceOnlySnapshot,
+              activated,
               { runtimeSourceConfig: previousRuntimeSourceConfig },
             ))
           ) {
@@ -2030,7 +2030,7 @@ export function startManagedGatewayConfigReloader(
         return {
           rollback: rollbackPublishedSource,
           commit: () =>
-            publishRuntimeSecretsRecovery(params.activateRuntimeSecrets, sourceOnlySnapshot, {
+            publishRuntimeSecretsRecovery(params.activateRuntimeSecrets, activated, {
               sourceOnly: true,
             }),
         };
@@ -2081,7 +2081,7 @@ export function startManagedGatewayConfigReloader(
           !(await restoreSecretsRuntimeSnapshotIfCurrent(
             previousSecretsSnapshot,
             committedSecretsRevision,
-            preparedSecrets,
+            activated,
             { runtimeSourceConfig: previousRuntimeSourceConfig },
           ))
         ) {
@@ -2094,7 +2094,7 @@ export function startManagedGatewayConfigReloader(
       }
       return {
         rollback: rollbackPublishedSource,
-        commit: () => publishRuntimeSecretsRecovery(params.activateRuntimeSecrets, preparedSecrets),
+        commit: () => publishRuntimeSecretsRecovery(params.activateRuntimeSecrets, activated),
       };
     },
     onNoopConfigCommit: async (plan, nextConfig, transactionOwnership, sourceConfig) => {

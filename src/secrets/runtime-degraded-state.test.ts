@@ -50,6 +50,7 @@ describe("runtime degraded SecretRef owners", () => {
       reason: "secret provider failed",
       degradationState: "stale" as const,
       failureMatched: true,
+      source: "config" as const,
     };
     associateSecretResolutionErrorOwners(error, [owner]);
 
