@@ -57,4 +57,36 @@ describe("check-docs-i18n-glossary", () => {
       "docs:check-i18n-glossary: git diff --name-only --diff-filter=ACMR HEAD~1 -- docs timed out after 500ms.",
     );
   });
+
+  it("propagates timeout diagnostics when git merge-base hangs", () => {
+    const tempDir = makeTempDir(tempDirs, "check-docs-i18n-glossary-");
+    const binDir = path.join(tempDir, "bin");
+    mkdirSync(binDir);
+    writeFileSync(
+      path.join(binDir, "git"),
+      [
+        `#!${process.execPath}`,
+        'if (process.argv[2] === "merge-base") { setTimeout(() => {}, 10_000); }',
+        "else { process.exit(0); }",
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+
+    const result = spawnSync(process.execPath, [scriptPath], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OPENCLAW_DOCS_I18N_GLOSSARY_GIT_TIMEOUT_MS: "500",
+        PATH: binDir,
+      },
+      timeout: 5_000,
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "docs:check-i18n-glossary: git merge-base origin/main HEAD timed out after 500ms.",
+    );
+  });
 });
