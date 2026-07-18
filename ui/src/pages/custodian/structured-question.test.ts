@@ -1,63 +1,78 @@
+import type { SystemAgentChatQuestion } from "@openclaw/gateway-protocol";
 import { describe, expect, it } from "vitest";
-import { parseCustodianReply } from "./structured-question.ts";
+import { parseCustodianQuestion } from "./structured-question.ts";
 
-const CUSTODIAN_QUESTION_MARKER = "openclaw-user-input";
-
-function markedQuestion(question: unknown): string {
-  return `Pick a path.\n<!-- ${CUSTODIAN_QUESTION_MARKER}\n${JSON.stringify(question)}\n-->`;
-}
-
-describe("custodian structured question marker", () => {
-  it("extracts a valid harness question and preserves visible reply text", () => {
-    expect(
-      parseCustodianReply(
-        markedQuestion({
-          id: "access",
-          header: "Access",
-          question: "How should I work?",
-          options: [
-            { label: "Full access", description: "Use announced defaults", recommended: true },
-            { label: "Ask first" },
-          ],
-          isOther: false,
-        }),
-      ),
-    ).toEqual({
-      text: "Pick a path.",
-      question: {
-        id: "access",
-        header: "Access",
-        question: "How should I work?",
-        options: [
-          { label: "Full access", description: "Use announced defaults", recommended: true },
-          { label: "Ask first" },
-        ],
-        isOther: false,
-      },
+describe("custodian typed question", () => {
+  it("accepts a valid typed question and keeps replies and recommendations", () => {
+    const question: SystemAgentChatQuestion = {
+      id: "onboarding-next-step",
+      header: "Next step",
+      question: "What would you like to do first?",
+      options: [
+        { label: "Talk to my agent", reply: "talk to agent", recommended: true },
+        { label: "Connect WhatsApp", reply: "connect whatsapp", description: "Chat there." },
+      ],
+      isOther: true,
+    };
+    expect(parseCustodianQuestion(question)).toEqual({
+      id: "onboarding-next-step",
+      header: "Next step",
+      question: "What would you like to do first?",
+      options: [
+        { label: "Talk to my agent", reply: "talk to agent", recommended: true },
+        { label: "Connect WhatsApp", reply: "connect whatsapp", description: "Chat there." },
+      ],
+      isOther: true,
     });
   });
 
-  it("leaves plain numbered prose and invalid markers untouched", () => {
-    const prose = "Choose one:\n1. Full access\n2. Ask first";
-    expect(parseCustodianReply(prose)).toEqual({ text: prose, question: null });
+  it("accepts wizard-style questions without any recommendation", () => {
+    const parsed = parseCustodianQuestion({
+      id: "channel",
+      header: "Channel",
+      question: "Which channel?",
+      options: [{ label: "WhatsApp" }, { label: "Telegram" }],
+    });
+    expect(parsed?.options).toHaveLength(2);
+    expect(parsed?.isOther).toBe(false);
+  });
 
-    const invalid = markedQuestion({
-      id: "too-many",
-      header: "Choices",
-      question: "Pick one",
-      options: ["one", "two"],
-    });
-    expect(parseCustodianReply(invalid)).toEqual({ text: invalid, question: null });
-
-    const noRecommendation = markedQuestion({
-      id: "no-recommendation",
-      header: "Choices",
-      question: "Pick one",
-      options: [{ label: "One" }, { label: "Two" }],
-    });
-    expect(parseCustodianReply(noRecommendation)).toEqual({
-      text: noRecommendation,
-      question: null,
-    });
+  it("rejects malformed questions instead of rendering broken cards", () => {
+    expect(parseCustodianQuestion(undefined)).toBeNull();
+    expect(
+      parseCustodianQuestion({
+        id: "one-option",
+        header: "H",
+        question: "Q",
+        options: [{ label: "Only" }],
+      }),
+    ).toBeNull();
+    expect(
+      parseCustodianQuestion({
+        id: "dupes",
+        header: "H",
+        question: "Q",
+        options: [{ label: "Same" }, { label: "same" }],
+      }),
+    ).toBeNull();
+    expect(
+      parseCustodianQuestion({
+        id: "two-recommended",
+        header: "H",
+        question: "Q",
+        options: [
+          { label: "A", recommended: true },
+          { label: "B", recommended: true },
+        ],
+      }),
+    ).toBeNull();
+    expect(
+      parseCustodianQuestion({
+        id: "blank-label",
+        header: "H",
+        question: "Q",
+        options: [{ label: "A" }, { label: "   " }],
+      }),
+    ).toBeNull();
   });
 });

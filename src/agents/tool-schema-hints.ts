@@ -8,7 +8,9 @@ const MAX_COMPACT_SCHEMA_PROPERTY_NAME_CHARS = 128;
 const MAX_COMPACT_INPUT_DEPTH = 4;
 const MAX_COMPACT_OUTPUT_DEPTH = 6;
 const MAX_COMPACT_UNION_TYPES = 4;
-const MAX_COMPACT_ENUM_VALUES = 6;
+// Keeps real literal unions such as agents_list's eight runtime sources renderable,
+// while the combined literal text remains independently capped below.
+const MAX_COMPACT_ENUM_VALUES = 8;
 const MAX_COMPACT_ENUM_CHARS = 96;
 const IDENTIFIER_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/u;
 const UNSUPPORTED_SHAPE_KEYWORDS = [
@@ -126,10 +128,13 @@ function compactSchemaUnion(
     return UNKNOWN_HINT;
   }
   const variants = hasAnyOf ? schema.anyOf : schema.oneOf;
+  // Bound before any per-variant scan: neither the eight-value literal cap nor
+  // the four-variant structural cap can render a larger union, so oversized
+  // unions must be rejected in O(1) instead of O(variants).
   if (
     !Array.isArray(variants) ||
     variants.length === 0 ||
-    variants.length > MAX_COMPACT_UNION_TYPES
+    variants.length > MAX_COMPACT_ENUM_VALUES
   ) {
     return UNKNOWN_HINT;
   }
@@ -157,6 +162,9 @@ function compactSchemaUnion(
     if (literalUnion) {
       return literalUnion;
     }
+  }
+  if (variants.length > MAX_COMPACT_UNION_TYPES) {
+    return UNKNOWN_HINT;
   }
   const rendered = variants.map((variant) => compactSchemaType(variant, depth + 1, limits));
   if (rendered.some((hint) => !hint.complete)) {
@@ -287,7 +295,16 @@ function compactSchemaType(
   depth = 0,
   limits: CompactSchemaLimits = INPUT_LIMITS,
 ): SchemaHint {
-  if (!isRecord(schema) || depth >= limits.maxDepth) {
+  if (!isRecord(schema)) {
+    return UNKNOWN_HINT;
+  }
+  // An empty schema is JSON Schema's top type: it accepts any value, so
+  // `unknown` is its exact rendering, not a truncation. Without this, one
+  // opaque leaf (Type.Unknown/Type.Any) demotes an otherwise-exact contract.
+  if (Object.keys(schema).length === 0) {
+    return completeHint("unknown");
+  }
+  if (depth >= limits.maxDepth) {
     return UNKNOWN_HINT;
   }
   const normalizedNullableSchema = normalizeNullableSchemaForHint(schema);

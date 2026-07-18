@@ -74,23 +74,32 @@ type SlackTestState = {
   createSlackStartupAuthClientActual?: SlackStartupAuthClientFactory;
 };
 
-const slackTestState: SlackTestState = vi.hoisted(() => ({
-  config: {} as Record<string, unknown>,
-  appConstructorArgs: undefined,
-  appStartMock: vi.fn(),
-  appStopMock: vi.fn(),
-  sendMock: vi.fn(),
-  replyMock: vi.fn(),
-  updateLastRouteMock: vi.fn(),
-  reactMock: vi.fn(),
-  reactionAddMock: vi.fn(),
-  reactionRemoveMock: vi.fn(),
-  readAllowFromStoreMock: vi.fn(),
-  upsertPairingRequestMock: vi.fn(),
-  resolveSlackUserAllowlistMock: vi.fn(),
-  socketModeLogger: undefined,
-  createSlackStartupAuthClientMock: vi.fn(),
-}));
+// globalThis-backed singleton: with isolate=false, a vi.resetModules() in any
+// sibling file recreates this module while the cached __slackClient on
+// globalThis keeps routing reactions to the OLD instance's mocks — tests then
+// assert on fresh mocks that never receive calls. One shared state object
+// keeps every module incarnation and the cached client converged.
+const slackTestState: SlackTestState = vi.hoisted(() => {
+  const globalState = globalThis as { __slackTestState?: SlackTestState };
+  globalState["__slackTestState"] ??= {
+    config: {} as Record<string, unknown>,
+    appConstructorArgs: undefined,
+    appStartMock: vi.fn(),
+    appStopMock: vi.fn(),
+    sendMock: vi.fn(),
+    replyMock: vi.fn(),
+    updateLastRouteMock: vi.fn(),
+    reactMock: vi.fn(),
+    reactionAddMock: vi.fn(),
+    reactionRemoveMock: vi.fn(),
+    readAllowFromStoreMock: vi.fn(),
+    upsertPairingRequestMock: vi.fn(),
+    resolveSlackUserAllowlistMock: vi.fn(),
+    socketModeLogger: undefined,
+    createSlackStartupAuthClientMock: vi.fn(),
+  } as SlackTestState;
+  return globalState["__slackTestState"];
+});
 
 export const getSlackTestState = (): SlackTestState => slackTestState;
 
@@ -245,6 +254,9 @@ export async function stopSlackMonitor(params: {
   await flush();
   params.controller.abort();
   await params.run;
+  // A stopped provider's handlers must not satisfy the next start's
+  // waitForSlackEvent — see the reset-time clear above.
+  (globalThis as { __slackHandlers?: Map<string, SlackHandler> })["__slackHandlers"]?.clear();
 }
 
 async function runSlackEventOnce(
@@ -295,6 +307,11 @@ export function resetSlackTestState(config: Record<string, unknown> = defaultSla
   // so a carried-over DB would dedupe unrelated test messages. realpath keeps
   // macOS /var vs /private/var symlinks out of resolver assertions.
   closeOpenClawStateDatabaseForTest();
+  // Clear worker-global Bolt handler registrations from previous test files:
+  // with isolate=false a stale "message" handler makes waitForSlackEvent
+  // return before THIS test's provider registers, dispatching through the old
+  // provider's closure config (reactions silently suppressed, replies fine).
+  (globalThis as { __slackHandlers?: Map<string, SlackHandler> })["__slackHandlers"]?.clear();
   if (lastSlackTestStateDir) {
     fs.rmSync(lastSlackTestStateDir, { recursive: true, force: true });
   }

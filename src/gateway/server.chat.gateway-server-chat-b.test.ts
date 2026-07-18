@@ -4036,6 +4036,7 @@ describe("gateway server chat", () => {
       expect(broadcast).not.toHaveBeenCalledWith(
         "chat",
         expect.objectContaining({ runId: "idem-queued-followup", state: "final" }),
+        expect.anything(),
       );
       dispatchRelease.resolve();
       await waitForFast(() => {
@@ -4046,6 +4047,7 @@ describe("gateway server chat", () => {
             sessionKey: "agent:main:main",
             state: "final",
           }),
+          { sessionKeys: ["agent:main:main"] },
         );
       }, FAST_WAIT_OPTS);
       const finalEvents = broadcast.mock.calls.filter(
@@ -4465,6 +4467,7 @@ describe("gateway server chat", () => {
                 ]),
               }),
             }),
+            { sessionKeys: ["agent:main:main"] },
           );
         },
         { timeout: 2_000, interval: 5 },

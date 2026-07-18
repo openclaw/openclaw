@@ -1150,6 +1150,8 @@ export async function startGatewayServer(
     chatAbortControllers,
     chatQueuedTurns,
     toolEventRecipients,
+    sessionEventSubscribers,
+    sessionMessageSubscribers,
     getWorkerIngressEndpoint,
     getMcpAppSandboxPort,
   } = await startupTrace.measure("runtime.state", () =>
@@ -1192,8 +1194,6 @@ export async function startGatewayServer(
   const {
     nodeRegistry,
     nodePresenceTimers,
-    sessionEventSubscribers,
-    sessionMessageSubscribers,
     nodeSendToSession,
     nodeSendToAllSubscribed,
     nodeSubscribe,
@@ -1203,6 +1203,8 @@ export async function startGatewayServer(
     hasTalkNodeConnected,
   } = createGatewayNodeSessionRuntime({
     broadcast,
+    sessionEventSubscribers,
+    sessionMessageSubscribers,
     listRegisteredNodePluginToolCommands: () => pluginRegistry.nodeHostCommands,
     nodePluginToolsEnabled: cfgAtStart.gateway?.nodes?.pluginTools?.enabled !== false,
     nodeSkillsEnabled: cfgAtStart.gateway?.nodes?.skills?.enabled !== false,

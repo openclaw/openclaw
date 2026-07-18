@@ -531,14 +531,13 @@ function wouldCapActiveSession(params: {
  */
 export function capEntryCount(
   store: Record<string, SessionEntry>,
-  overrideMax?: number,
+  maxEntries: number,
   opts: {
     log?: boolean;
     onCapped?: (params: { key: string; entry: SessionEntry }) => void;
     preserveKeys?: ReadonlySet<string>;
   } = {},
 ): number {
-  const maxEntries = overrideMax ?? resolveMaintenanceConfigFromInput().maxEntries;
   const preservedCount = Object.entries(store).filter(([key, entry]) =>
     shouldPreserveMaintenanceEntry({ key, entry, preserveKeys: opts.preserveKeys }),
   ).length;

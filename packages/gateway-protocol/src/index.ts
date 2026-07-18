@@ -413,6 +413,7 @@ import {
   SessionsCatalogContinueResultSchema,
   SessionsCatalogListParamsSchema,
   SessionsCatalogListResultSchema,
+  SessionsCatalogHostEventSchema,
   SessionsCatalogReadParamsSchema,
   SessionsCatalogReadResultSchema,
   SessionsMessagesSubscribeParamsSchema,
@@ -489,6 +490,7 @@ import {
   WebLoginStartParamsSchema,
   WebLoginWaitParamsSchema,
   SystemAgentChatParamsSchema,
+  SystemAgentChatQuestionSchema,
   SystemAgentChatResultSchema,
   SystemAgentSetupDetectParamsSchema,
   SystemAgentSetupDetectResultSchema,
@@ -671,6 +673,7 @@ export const validateSecretsResolveParams = lazyCompile(SecretsResolveParamsSche
 export const validateSecretsResolveResult = lazyCompile(SecretsResolveResultSchema);
 export const validateSessionsListParams = lazyCompile(SessionsListParamsSchema);
 export const validateSessionsCatalogListParams = lazyCompile(SessionsCatalogListParamsSchema);
+export const validateSessionsCatalogHostEvent = lazyCompile(SessionsCatalogHostEventSchema);
 export const validateSessionsCatalogReadParams = lazyCompile(SessionsCatalogReadParamsSchema);
 export const validateSessionsCatalogContinueParams = lazyCompile(
   SessionsCatalogContinueParamsSchema,
@@ -1033,6 +1036,7 @@ export {
   SessionCatalogTranscriptItemSchema,
   SessionsCatalogListParamsSchema,
   SessionsCatalogListResultSchema,
+  SessionsCatalogHostEventSchema,
   SessionsCatalogReadParamsSchema,
   SessionsCatalogReadResultSchema,
   SessionsCatalogContinueParamsSchema,
@@ -1133,6 +1137,7 @@ export {
   ConfigSchemaLookupResultSchema,
   UpdateStatusParamsSchema,
   SystemAgentChatParamsSchema,
+  SystemAgentChatQuestionSchema,
   SystemAgentChatResultSchema,
   SystemAgentSetupDetectParamsSchema,
   SystemAgentSetupDetectResultSchema,
@@ -1456,6 +1461,7 @@ export type {
   ConfigSchemaParams,
   ConfigSchemaResponse,
   SystemAgentChatParams,
+  SystemAgentChatQuestion,
   SystemAgentChatResult,
   SystemAgentSetupDetectParams,
   SystemAgentSetupDetectResult,

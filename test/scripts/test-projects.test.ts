@@ -371,6 +371,13 @@ describe("scripts/test-projects changed-target routing", () => {
         ["test/scripts/browser-cdp-snapshot.test.ts"],
       ],
       [
+        "scripts/e2e/lib/codex-app-server-fixture.mjs",
+        [
+          "test/scripts/codex-media-path-client.test.ts",
+          "test/e2e/qa-lab/runtime/codex-auth-product-proof.e2e.test.ts",
+        ],
+      ],
+      [
         "scripts/e2e/lib/codex-media-path/fake-codex-app-server.mjs",
         ["test/scripts/codex-media-path-client.test.ts"],
       ],
@@ -380,7 +387,10 @@ describe("scripts/test-projects changed-target routing", () => {
       ],
       [
         "scripts/e2e/lib/codex-media-path/jsonl-request-tail.mjs",
-        ["test/scripts/codex-media-path-client.test.ts"],
+        [
+          "test/scripts/codex-media-path-client.test.ts",
+          "test/e2e/qa-lab/runtime/codex-auth-product-proof.e2e.test.ts",
+        ],
       ],
       [
         "scripts/e2e/lib/codex-media-path/limits.mjs",
@@ -602,6 +612,7 @@ describe("scripts/test-projects changed-target routing", () => {
           "test/scripts/incremental-line-reader.test.ts",
           "test/scripts/config-reload-log-scanner.test.ts",
           "test/scripts/codex-media-path-client.test.ts",
+          "test/e2e/qa-lab/runtime/codex-auth-product-proof.e2e.test.ts",
         ],
       ],
       [

@@ -140,14 +140,6 @@ describe("qa scenario catalog", () => {
   it("loads scenario-specific execution config from per-scenario YAML", () => {
     const discovery = readQaScenarioById("source-docs-discovery-report");
     const discoveryConfig = readQaScenarioExecutionConfig("source-docs-discovery-report");
-    const codexLeak = readQaScenarioById("codex-harness-no-meta-leak");
-    const codexLeakConfig = readQaScenarioExecutionConfig("codex-harness-no-meta-leak") as
-      | {
-          harnessRuntime?: string;
-          expectedReply?: string;
-          forbiddenReplySubstrings?: string[];
-        }
-      | undefined;
     const fallbackConfig = readQaScenarioExecutionConfig("memory-failure-fallback");
     const bundledSkill = readQaScenarioById("bundled-plugin-skill-runtime");
     const bundledSkillConfig = readQaScenarioExecutionConfig("bundled-plugin-skill-runtime") as
@@ -161,12 +153,6 @@ describe("qa scenario catalog", () => {
     expect((discoveryConfig?.requiredFiles as string[] | undefined)?.[0]).toBe(
       "repo/qa/scenarios/index.yaml",
     );
-    expect(codexLeak.title).toBe("Codex harness no meta leak");
-    expect(codexLeakConfig?.harnessRuntime).toBe("codex");
-    expect(JSON.stringify(codexLeak.execution.flow)).toContain("agentRuntime");
-    expect(JSON.stringify(codexLeak.execution.flow)).not.toContain("embeddedHarness");
-    expect(codexLeakConfig?.expectedReply).toBe("QA_LEAK_OK");
-    expect(codexLeakConfig?.forbiddenReplySubstrings).toContain("checking thread context");
     expect(fallbackConfig?.gracefulFallbackAny as string[] | undefined).toContain(
       "will not reveal",
     );
@@ -319,8 +305,6 @@ describe("qa scenario catalog", () => {
 
     expect(notApplicable).toStrictEqual(
       [
-        "auth-profile-codex-mixed-profiles",
-        "auth-profile-doctor-migration-safety",
         "codex-plugin-cold-install",
         "codex-plugin-pinned-new",
         "codex-plugin-pinned-old",
@@ -599,12 +583,7 @@ describe("qa scenario catalog", () => {
     expect(coldInstall.coverage?.secondary).toBeUndefined();
     expect(coldInstall.execution.kind).toBe("script");
 
-    const fixtureScenarioIds = [
-      "codex-plugin-pinned-old",
-      "codex-plugin-pinned-new",
-      "auth-profile-codex-mixed-profiles",
-      "auth-profile-doctor-migration-safety",
-    ];
+    const fixtureScenarioIds = ["codex-plugin-pinned-old", "codex-plugin-pinned-new"];
 
     for (const scenarioId of fixtureScenarioIds) {
       const scenario = readQaScenarioById(scenarioId);
@@ -617,9 +596,32 @@ describe("qa scenario catalog", () => {
       hostVersion: "2026.5.21",
       pluginRelation: "older",
     });
-    expect(readQaScenarioExecutionConfig("auth-profile-doctor-migration-safety")).toMatchObject({
-      matrixCells: ["oauth-only", "mixed-no-pin"],
+  });
+
+  it("routes the Codex doctor migration row through the product-backed Vitest", () => {
+    const scenario = readQaScenarioById("auth-profile-doctor-migration-safety");
+
+    expect(scenario.runtimeParityTier).toBeUndefined();
+    expect(scenario.runtimeParityUsage).toBeUndefined();
+    expect(scenario.execution).toMatchObject({
+      kind: "vitest",
+      path: "test/e2e/qa-lab/runtime/codex-auth-doctor-migration-product-proof.e2e.test.ts",
     });
+    expect(scenario.coverage?.primary).toContain("runtime.doctor-repair");
+    expect(scenario.coverage?.secondary).toContain("runtime.codex-plugin.auth");
+  });
+
+  it("routes the Codex mixed-profile row through the product-backed Vitest", () => {
+    const scenario = readQaScenarioById("auth-profile-codex-mixed-profiles");
+
+    expect(scenario.runtimeParityTier).toBeUndefined();
+    expect(scenario.runtimeParityUsage).toBeUndefined();
+    expect(scenario.execution).toMatchObject({
+      kind: "vitest",
+      path: "test/e2e/qa-lab/runtime/codex-auth-product-proof.e2e.test.ts",
+    });
+    expect(scenario.coverage?.primary).toContain("runtime.codex-plugin.auth");
+    expect(scenario.coverage?.secondary).toContain("runtime.doctor-repair");
   });
 
   it("keeps the character eval scenario natural and task-shaped", () => {

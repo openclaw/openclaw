@@ -1711,7 +1711,9 @@ export const chatHandlers: GatewayRequestHandlers = {
       state: "final" as const,
       message,
     };
-    context.broadcast("chat", chatPayload);
+    context.broadcast("chat", chatPayload, {
+      sessionKeys: sessionKey === "global" && agentId ? [`agent:${agentId}:global`] : [sessionKey],
+    });
     sendGlobalAwareNodeChatPayload({
       context,
       sessionKey,

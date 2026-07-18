@@ -12,7 +12,7 @@ import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import "../../styles/custodian.css";
-import { parseCustodianReply, type CustodianStructuredQuestion } from "./structured-question.ts";
+import { parseCustodianQuestion, type CustodianStructuredQuestion } from "./structured-question.ts";
 
 const SYSTEM_AGENT_CHAT_TIMEOUT_MS = 190_000;
 
@@ -153,15 +153,14 @@ export class CustodianPage extends OpenClawLightDomElement {
     this.sensitive = false;
   }
 
-  private appendAssistant(reply: string): void {
-    const parsed = parseCustodianReply(reply);
+  private appendAssistant(reply: string, question: CustodianStructuredQuestion | null): void {
     this.messages = [
       ...this.messages,
       {
         id: this.nextMessageId++,
         role: "assistant",
-        text: parsed.text,
-        question: parsed.question,
+        text: reply,
+        question,
       },
     ];
   }
@@ -184,7 +183,7 @@ export class CustodianPage extends OpenClawLightDomElement {
       this.sessionId = result.sessionId;
       this.sensitive = result.sensitive === true;
       this.retryParams = null;
-      this.appendAssistant(result.reply);
+      this.appendAssistant(result.reply, parseCustodianQuestion(result.question));
       if (result.action === "open-agent" || result.action === "exit") {
         this.exitSetup();
       }
@@ -204,7 +203,7 @@ export class CustodianPage extends OpenClawLightDomElement {
     }
   }
 
-  private send(text = this.input): void {
+  private send(text = this.input, display?: string): void {
     // Trim decides emptiness only; sensitive values (credentials) may carry
     // meaningful whitespace and must reach the agent exactly as entered.
     const message = this.sensitive ? text : text.trim();
@@ -212,7 +211,7 @@ export class CustodianPage extends OpenClawLightDomElement {
     if (!message.trim() || !client || !this.chatAvailable || this.sending) {
       return;
     }
-    const displayText = this.sensitive ? t("custodian.sensitiveReply") : message;
+    const displayText = this.sensitive ? t("custodian.sensitiveReply") : (display ?? message);
     this.retireQuestions();
     this.messages = [
       ...this.messages,
@@ -236,12 +235,15 @@ export class CustodianPage extends OpenClawLightDomElement {
   }
 
   private answerQuestion(message: CustodianMessage, label: string): void {
-    const questionId = message.question?.id;
-    if (!questionId) {
+    const question = message.question;
+    if (!question) {
       return;
     }
-    this.answeredQuestions = new Set(this.answeredQuestions).add(`${message.id}:${questionId}`);
-    this.send(label);
+    const option = question.options.find((candidate) => candidate.label === label);
+    this.answeredQuestions = new Set(this.answeredQuestions).add(`${message.id}:${question.id}`);
+    // The transcript shows the friendly label; the engine receives the reply
+    // text it actually parses (wizard answers, canonical commands).
+    this.send(option?.reply ?? label, label);
   }
 
   private retireQuestions(): void {

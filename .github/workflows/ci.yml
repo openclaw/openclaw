@@ -61,31 +61,14 @@ env:
 jobs:
   # Keep the canonical main queue quiet long enough for a follow-up push to
   # cancel this run before it registers the Blacksmith matrix.
-  runner-admission:
-    permissions:
-      contents: read
-    runs-on: ubuntu-24.04
-    timeout-minutes: 3
-    env:
-      OPENCLAW_MAIN_CI_DEBOUNCE_SECONDS: "90"
-    steps:
-      - name: Debounce canonical main pushes
-        if: github.event_name == 'push' && github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main'
-        run: |
-          set -euo pipefail
-          echo "Waiting ${OPENCLAW_MAIN_CI_DEBOUNCE_SECONDS}s for a superseding main push before Blacksmith admission"
-          sleep "${OPENCLAW_MAIN_CI_DEBOUNCE_SECONDS}"
-      - name: Admit non-main CI runs immediately
-        if: github.event_name != 'push' || github.repository != 'openclaw/openclaw' || github.ref != 'refs/heads/main'
-        run: echo "No canonical main debounce required"
-
   # Preflight: establish routing truth and job matrices once, then let real
   # work fan out from a single source of truth.
   preflight:
     permissions:
       contents: read
-    needs: [runner-admission]
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    env:
+      OPENCLAW_MAIN_CI_DEBOUNCE_SECONDS: "90"
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
     outputs:
@@ -133,6 +116,10 @@ jobs:
       run_protocol_event_coverage: ${{ steps.manifest.outputs.run_protocol_event_coverage }}
       android_matrix: ${{ steps.manifest.outputs.android_matrix }}
     steps:
+      - name: Record debounce epoch
+        if: github.event_name == 'push' && github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main'
+        run: echo "OPENCLAW_DEBOUNCE_EPOCH=$(date +%s)" >> "$GITHUB_ENV"
+
       - name: Validate release-gate dispatch
         if: github.event_name == 'workflow_dispatch' && inputs.release_gate
         env:
@@ -574,6 +561,12 @@ jobs:
           }
 
           const compactPullRequest = isCanonicalRepository && eventName === "pull_request";
+          // Canonical pushes also use compact bins: 80+ single-group jobs
+          // drain the runner pool for minutes, and per-shard check names on
+          // main have no branch-protection consumers. Dispatch (release
+          // validation) keeps the full named matrix.
+          const compactPlan =
+            isCanonicalRepository && (eventName === "pull_request" || eventName === "push");
           let changedNodeTestShards = null;
           if (
             compactPullRequest &&
@@ -617,7 +610,7 @@ jobs:
               ? changedNodeTestShards
               : createNodeTestPlan({
                   includeReleaseOnlyPluginShards: false,
-                  compact: compactPullRequest,
+                  compact: compactPlan,
                 })
             : [];
           const assignVitestFsCacheWriter =
@@ -758,12 +751,28 @@ jobs:
         if: steps.manifest.outputs.run_protocol_event_coverage == 'true'
         run: node scripts/check-protocol-event-coverage.mjs
 
+      # Fan-out debounce: every heavy job needs preflight, so holding this job
+      # open until the debounce window elapses lets a superseding main push
+      # cancel the run while only one 4 vCPU runner has been spent. Preflight's
+      # own work usually exceeds the window, making the residual sleep zero.
+      - name: Debounce canonical main fan-out
+        if: github.event_name == 'push' && github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main'
+        run: |
+          set -euo pipefail
+          elapsed=$(( $(date +%s) - OPENCLAW_DEBOUNCE_EPOCH ))
+          remaining=$(( OPENCLAW_MAIN_CI_DEBOUNCE_SECONDS - elapsed ))
+          if [ "$remaining" -gt 0 ]; then
+            echo "Holding fan-out ${remaining}s for a superseding main push"
+            sleep "$remaining"
+          else
+            echo "Debounce window already elapsed (${elapsed}s)"
+          fi
+
   # Run dependency-free security checks on a hosted runner in parallel with
   # scope detection. No downstream job waits for Python/pre-commit setup.
   security-fast:
     permissions:
       contents: read
-    needs: [runner-admission]
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -3256,7 +3265,6 @@ jobs:
       contents: read
     name: openclaw/ci-gate
     needs:
-      - runner-admission
       - preflight
       - security-fast
       - pnpm-store-warmup
@@ -3287,7 +3295,6 @@ jobs:
         shell: bash
         env:
           REQUIRED_RESULTS: |
-            runner-admission=${{ needs.runner-admission.result }}
             preflight=${{ needs.preflight.result }}
             security-fast=${{ needs.security-fast.result }}
           SELECTED_RESULTS: |

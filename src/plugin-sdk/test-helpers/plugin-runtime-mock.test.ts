@@ -76,10 +76,7 @@ describe("createPluginRuntimeMock", () => {
   });
 
   it("exposes channel inbound helpers without the removed turn aliases", async () => {
-    const runtime = createPluginRuntimeMock();
     const channel = "test";
-
-    expect("turn" in runtime.channel).toBe(false);
 
     const input = vi.fn((raw: { id: string }) => ({
       id: raw.id,
@@ -92,22 +89,34 @@ describe("createPluginRuntimeMock", () => {
     const afterRecord = vi.fn(() => {
       events.push("afterRecord");
     });
-    const runDispatch = vi.fn(async () => {
+    const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async () => {
       events.push("dispatch");
-      return { visibleReplySent: true };
+      return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
     });
+    const runtime = createPluginRuntimeMock({
+      channel: {
+        session: {
+          resolveStorePath: () => "/tmp/openclaw-test",
+          recordInboundSession,
+        },
+        reply: { dispatchReplyWithBufferedBlockDispatcher },
+      },
+    });
+    expect("turn" in runtime.channel).toBe(false);
     const resolveTurn = vi.fn(async () => ({
+      cfg: {},
       channel,
-      storePath: "/tmp/openclaw-test",
-      routeSessionKey: "agent:main:test:direct:u1",
+      route: {
+        agentId: "main",
+        sessionKey: "agent:main:test:direct:u1",
+      },
       ctxPayload: {
         Body: "hello",
         CommandAuthorized: false,
         SessionKey: "agent:main:test:direct:u1",
       },
-      recordInboundSession,
       afterRecord,
-      runDispatch,
+      delivery: { deliver: vi.fn(async () => undefined) },
     }));
 
     const result = await runtime.channel.inbound.run({
@@ -132,7 +141,7 @@ describe("createPluginRuntimeMock", () => {
       }),
     );
     expect(events).toEqual(["record", "afterRecord", "dispatch"]);
-    expect(runDispatch).toHaveBeenCalled();
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
     expect(result).toEqual(
       expect.objectContaining({
         admission: { kind: "dispatch" },
