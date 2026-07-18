@@ -1559,6 +1559,73 @@ describe("gateway startup config secret preflight", () => {
     expect(emitStateEvent).not.toHaveBeenCalled();
   });
 
+  it("publishes one provider outage diagnostic with its affected owner list", async () => {
+    const sourceConfig = gatewayTokenConfig({});
+    const providerFailures = [{ source: "exec" as const, provider: "vault" }];
+    const prepared = {
+      ...preparedSnapshot(sourceConfig),
+      warnings: [
+        {
+          code: "SECRETS_OWNER_UNAVAILABLE" as const,
+          path: "models.providers.openai.apiKey",
+          message: "Secret owner provider:openai is configured-unavailable.",
+        },
+        {
+          code: "SECRETS_OWNER_UNAVAILABLE" as const,
+          path: "messages.tts.providers.elevenlabs.apiKey",
+          message: "Secret owner capability:tts is configured-unavailable.",
+        },
+      ],
+      degradedOwners: [
+        {
+          ownerKind: "provider" as const,
+          ownerId: "openai",
+          state: "unavailable" as const,
+          degradationState: "cold" as const,
+          paths: ["models.providers.openai.apiKey"],
+          refKeys: ["exec:vault:models/openai"],
+          reason: "secret provider failed",
+          providerFailures,
+        },
+        {
+          ownerKind: "capability" as const,
+          ownerId: "tts",
+          state: "unavailable" as const,
+          degradationState: "stale" as const,
+          paths: ["messages.tts.providers.elevenlabs.apiKey"],
+          refKeys: ["exec:vault:tts/elevenlabs"],
+          reason: "secret provider failed",
+          providerFailures,
+        },
+      ],
+    };
+    const logSecrets = mockLogSecretsForTest();
+    const activateRuntimeSecrets = runtimeSecretsActivatorForTest({
+      logSecrets,
+      prepareRuntimeSecretsSnapshot: vi.fn(async () => prepared),
+    });
+
+    await activateRuntimeSecrets(sourceConfig, { reason: "startup", activate: true });
+
+    expect(logSecrets.warn).toHaveBeenCalledOnce();
+    expect(logSecrets.warn).toHaveBeenCalledWith(
+      "[SECRETS_PROVIDER_DEGRADED] exec:vault: secret provider failed. " +
+        "Affected owners: stale capability:tts, cold provider:openai. " +
+        "Retry: openclaw secrets reload.",
+      {
+        event: "secrets.provider_degraded",
+        source: "exec",
+        provider: "vault",
+        reason: "secret provider failed",
+        affectedOwners: [
+          { ownerKind: "capability", ownerId: "tts", state: "stale" },
+          { ownerKind: "provider", ownerId: "openai", state: "cold" },
+        ],
+        retryHint: "openclaw secrets reload",
+      },
+    );
+  });
+
   it.each(["reload", "restart-check"] as const)(
     "does not classify untyped %s errors as secret degradation",
     async (reason) => {
