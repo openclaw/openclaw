@@ -100,6 +100,50 @@ describe("secrets runtime snapshot", () => {
     expect(() => assertSecretOwnerAvailable("provider", "first")).not.toThrow();
   });
 
+  it("keeps last-known-good across equivalent SecretRef encodings", async () => {
+    const canonicalRef = {
+      source: "env" as const,
+      provider: "default",
+      id: "PROVIDER_KEY",
+    };
+    const config = (apiKey: typeof canonicalRef | string) =>
+      asConfig({
+        models: {
+          providers: {
+            first: {
+              apiKey,
+              baseUrl: "https://first.example.invalid/v1",
+              models: [],
+            },
+          },
+        },
+      });
+    const active = await prepareSecretsRuntimeSnapshot({
+      config: config(canonicalRef),
+      env: { PROVIDER_KEY: "last-known-good" },
+      includeAuthStoreRefs: false,
+      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+    });
+    activateSecretsRuntimeSnapshotState({
+      snapshot: active,
+      refreshContext: null,
+      refreshHandler: null,
+    });
+
+    const candidate = await prepareSecretsRuntimeSnapshot({
+      config: config("$PROVIDER_KEY"),
+      env: {},
+      includeAuthStoreRefs: false,
+      allowUnavailableSecretOwners: true,
+      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+    });
+
+    expect(candidate.config.models?.providers?.first?.apiKey).toBe("last-known-good");
+    expect(candidate.degradedOwners).toMatchObject([
+      { ownerKind: "provider", ownerId: "first", degradationState: "stale" },
+    ]);
+  });
+
   it("makes a changed unresolved owner cold while healthy siblings refresh", async () => {
     const ref = (id: string) => ({ source: "env" as const, provider: "default", id });
     const config = (firstId: string) =>
@@ -721,41 +765,36 @@ describe("secrets runtime snapshot", () => {
     expect(snapshot.warnings[0]?.message).toContain("secret reference was not found");
   });
 
-  it("isolates known owners after provider policy failures", async () => {
-    const snapshot = await prepareSecretsRuntimeSnapshot({
-      config: asConfig({
-        secrets: {
-          providers: {
-            default: {
-              source: "env",
-              allowlist: ["OTHER_API_KEY"],
-            },
-          },
-        },
-        messages: {
-          tts: {
+  it("rejects owner isolation after provider policy failures", async () => {
+    await expect(
+      prepareSecretsRuntimeSnapshot({
+        config: asConfig({
+          secrets: {
             providers: {
-              elevenlabs: {
-                apiKey: TTS_REF,
+              default: {
+                source: "env",
+                allowlist: ["OTHER_API_KEY"],
               },
             },
           },
+          messages: {
+            tts: {
+              providers: {
+                elevenlabs: {
+                  apiKey: TTS_REF,
+                },
+              },
+            },
+          },
+        }),
+        env: {
+          ELEVENLABS_API_KEY: "test-elevenlabs-api-key",
         },
+        includeAuthStoreRefs: false,
+        allowUnavailableSecretOwners: true,
+        loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
       }),
-      env: {
-        ELEVENLABS_API_KEY: "test-elevenlabs-api-key",
-      },
-      includeAuthStoreRefs: false,
-      allowUnavailableSecretOwners: true,
-      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-    });
-    expect(snapshot.degradedOwners).toMatchObject([
-      {
-        ownerKind: "capability",
-        ownerId: "tts",
-        reason: "secret provider policy denied resolution",
-      },
-    ]);
+    ).rejects.toThrow("not allowlisted");
   });
 
   it("reuses provider-scoped failures across isolated owners", async () => {

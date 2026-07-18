@@ -75,6 +75,8 @@ type DeferredSecretsStateTransition =
       kind: "degraded";
       activationRevision: number;
       reason: RuntimeSecretsActivationParams["reason"];
+      stateScope: SecretsStateScope;
+      activationScope: SecretsStateScope;
     }
   | {
       kind: "recovered";
@@ -263,6 +265,7 @@ export function createRuntimeSecretsActivator(params: {
     prepared: PreparedRuntimeSecretsSnapshot,
     reason: RuntimeSecretsActivationParams["reason"],
     scope: SecretsStateScope = "full",
+    activationScope: SecretsStateScope = "full",
   ) => {
     for (const owner of prepared.degradedOwners ?? []) {
       logSecretDegradation(params.logSecrets, {
@@ -276,7 +279,9 @@ export function createRuntimeSecretsActivator(params: {
     if (reason === "startup") {
       return;
     }
-    if (scope === "provider-auth" && activeDegradationScope === "full") {
+    // A provider-auth-only refresh cannot erase unrelated full-reload degradation.
+    // A committed full reload may narrow full state to its remaining provider owners.
+    if (activationScope === "provider-auth" && activeDegradationScope === "full") {
       return;
     }
     if (!secretsDegraded) {
@@ -327,15 +332,18 @@ export function createRuntimeSecretsActivator(params: {
       ? { ...prepared, degradedOwners: options.stateDegradedOwners }
       : prepared;
     const stateScope = options?.stateScope ?? resolvePreparedSecretsStateScope(statePrepared);
+    const activationScope = options?.stateScope ?? "full";
     if (activationParams.activate && (statePrepared.degradedOwners?.length ?? 0) > 0) {
       if (activationParams.deferStatePublication === true) {
         deferredStateTransitions.set(prepared, {
           kind: "degraded",
           activationRevision: getActiveSecretsRuntimeSnapshotRevision(),
           reason: activationParams.reason,
+          stateScope,
+          activationScope,
         });
       } else {
-        publishDegradation(statePrepared, activationParams.reason, stateScope);
+        publishDegradation(statePrepared, activationParams.reason, stateScope, activationScope);
       }
     } else if (activationParams.activate && secretsDegraded) {
       if (activationParams.deferStatePublication === true) {
@@ -601,7 +609,12 @@ export function createRuntimeSecretsActivator(params: {
       return;
     }
     if (transition.kind === "degraded") {
-      publishDegradation(snapshot, transition.reason);
+      publishDegradation(
+        snapshot,
+        transition.reason,
+        transition.stateScope,
+        transition.activationScope,
+      );
       return;
     }
     const sourceOnlyContractRecovered =

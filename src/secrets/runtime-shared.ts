@@ -90,6 +90,28 @@ export type ResolverContext = {
 
 export type SecretDefaults = NonNullable<OpenClawConfig["secrets"]>["defaults"];
 
+function canonicalizeSecretRefsForOwnerContract(
+  value: unknown,
+  defaults: SecretDefaults | undefined,
+): unknown {
+  const ref = coerceSecretRef(value, defaults);
+  if (ref) {
+    return { secretRef: secretRefKey(ref) };
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => canonicalizeSecretRefsForOwnerContract(entry, defaults));
+  }
+  if (!isRecord(value)) {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entry]) => [
+      key,
+      canonicalizeSecretRefsForOwnerContract(entry, defaults),
+    ]),
+  );
+}
+
 /**
  * Creates the mutable collection context used while preparing a secrets runtime snapshot.
  */
@@ -198,7 +220,11 @@ export function collectRuntimeSecretInputAssignment(params: {
     requiredForGateway: params.owner?.requiredForGateway ?? false,
     disposition: params.owner?.disposition ?? "isolate",
     ...(params.owner
-      ? { ownerContractDigest: digestSecretOwnerContract(params.owner.contract) }
+      ? {
+          ownerContractDigest: digestSecretOwnerContract(
+            canonicalizeSecretRefsForOwnerContract(params.owner.contract, params.defaults),
+          ),
+        }
       : {}),
     apply: params.apply,
     ...(params.applyUnavailable ? { applyUnavailable: params.applyUnavailable } : {}),

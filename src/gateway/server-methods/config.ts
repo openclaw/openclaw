@@ -40,7 +40,10 @@ import {
 import { isBuiltInModelProviderOverlayId } from "../../config/zod-schema.core.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isPlainObject } from "../../infra/plain-object.js";
-import { redactSecretDegradationReason } from "../../secrets/runtime-degraded-state.js";
+import {
+  isRetryableSecretDegradationReason,
+  redactSecretDegradationReason,
+} from "../../secrets/runtime-degraded-state.js";
 import {
   prepareSecretsRuntimeSnapshot,
   type PreparedSecretsRuntimeSnapshot,
@@ -500,7 +503,7 @@ async function ensureResolvableSecretRefsOrRespond(params: {
     });
     for (const owner of snapshot.degradedOwners ?? []) {
       const reason = redactSecretDegradationReason(owner.reason);
-      if (reason !== "secret provider failed" && reason !== "secret reference was not found") {
+      if (!isRetryableSecretDegradationReason(reason)) {
         throw new Error(reason);
       }
     }

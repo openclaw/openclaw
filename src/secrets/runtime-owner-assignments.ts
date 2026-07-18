@@ -18,7 +18,10 @@ import type {
   SecretDegradationReason,
   SecretOwnerRefState,
 } from "./runtime-degraded-state.js";
-import { associateSecretResolutionErrorOwners } from "./runtime-degraded-state.js";
+import {
+  associateSecretResolutionErrorOwners,
+  isRetryableSecretDegradationReason,
+} from "./runtime-degraded-state.js";
 import { combineSecretOwnerContractDigests } from "./runtime-owner-contract.js";
 import {
   applyResolvedAssignments,
@@ -351,6 +354,7 @@ function assertOwnerCanBeIsolated(
   const reason = describeSecretResolutionError(error);
   if (
     !reason ||
+    !isRetryableSecretDegradationReason(reason) ||
     owner.ownerKind === "unknown" ||
     owner.requiredForGateway ||
     owner.disposition === "fail-closed"

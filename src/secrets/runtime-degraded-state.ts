@@ -50,6 +50,11 @@ type SecretResolutionErrorOwner = DegradedSecretOwner & {
 
 export const SECRET_DEGRADATION_RETRY_HINT = "openclaw secrets reload" as const;
 
+/** Only transient/unavailable resolution failures may enter degraded runtime state. */
+export function isRetryableSecretDegradationReason(reason: string): boolean {
+  return reason === "secret provider failed" || reason === "secret reference was not found";
+}
+
 /** Redacted owner details for one structured degradation warning. */
 export type SecretDegradation = {
   kind: SecretOwnerKind;
