@@ -42,6 +42,10 @@ export type OnboardOptions = OnboardDynamicProviderOptions & {
   mode?: OnboardMode;
   /** "manual" is an alias for "advanced". */
   flow?: "quickstart" | "advanced" | "manual" | "import";
+  /** Force the classic multi-step interactive wizard instead of guided setup. */
+  classic?: boolean;
+  /** Force the terminal hatch instead of the guided browser handoff. */
+  tui?: boolean;
   workspace?: string;
   nonInteractive?: boolean;
   /** Required for non-interactive setup; skips the interactive risk prompt when true. */
@@ -80,8 +84,6 @@ export type OnboardOptions = OnboardDynamicProviderOptions & {
   installDaemon?: boolean;
   daemonRuntime?: GatewayDaemonRuntime;
   skipChannels?: boolean;
-  /** @deprecated Legacy alias for `skipChannels`. */
-  skipProviders?: boolean;
   skipSkills?: boolean;
   skipBootstrap?: boolean;
   skipSearch?: boolean;

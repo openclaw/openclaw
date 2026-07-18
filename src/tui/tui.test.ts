@@ -1,6 +1,6 @@
 // Covers core TUI state transitions and backend event rendering.
 import { EventEmitter } from "node:events";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../infra/parse-finite-number.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
@@ -8,7 +8,6 @@ import { withEnv } from "../test-utils/env.js";
 import { getSlashCommands, parseCommand } from "./commands.js";
 import {
   createBackspaceDeduper,
-  canSubmitTuiChatMessage,
   createDeferredTuiFinish,
   drainAndStopTuiSafely,
   installTuiTerminalLossExitHandler,
@@ -126,70 +125,13 @@ describe("tui slash commands", () => {
   });
 });
 
-describe("canSubmitTuiChatMessage", () => {
-  it("allows submit when no run registration is pending", () => {
-    expect(canSubmitTuiChatMessage({})).toBe(true);
-  });
-
-  it("allows local submit while a run is active", () => {
-    expect(
-      canSubmitTuiChatMessage({
-        local: true,
-        activeChatRunId: "run-active",
-      }),
-    ).toBe(true);
-  });
-
-  it("blocks gateway submit while a run is active", () => {
-    expect(
-      canSubmitTuiChatMessage({
-        local: false,
-        activeChatRunId: "run-active",
-      }),
-    ).toBe(false);
-  });
-
-  it("allows gateway stop text while a run is active", () => {
-    expect(
-      canSubmitTuiChatMessage({
-        local: false,
-        activeChatRunId: "run-active",
-        message: "please stop",
-      }),
-    ).toBe(true);
-  });
-
-  it("allows local stop text while a queued run is pending", () => {
-    expect(
-      canSubmitTuiChatMessage({
-        local: true,
-        activeChatRunId: "run-active",
-        pendingChatRunId: "run-queued",
-        message: "please stop",
-      }),
-    ).toBe(true);
-  });
-
-  it("blocks submits with pending optimistic state", () => {
-    expect(
-      canSubmitTuiChatMessage({
-        pendingOptimisticUserMessage: true,
-      }),
-    ).toBe(false);
-  });
-
-  it("blocks submits with a pending chat run id", () => {
-    expect(
-      canSubmitTuiChatMessage({
-        pendingChatRunId: "run-pending",
-      }),
-    ).toBe(false);
-  });
-});
-
 describe("isTuiBusyActivityStatus", () => {
   it("treats finishing context as a visible busy status", () => {
     expect(isTuiBusyActivityStatus("finishing context")).toBe(true);
+  });
+
+  it("treats post-connect initialization as a visible busy status", () => {
+    expect(isTuiBusyActivityStatus("starting up")).toBe(true);
   });
 });
 
@@ -241,9 +183,7 @@ describe("resolveTuiShutdownHardExitMs", () => {
 
   it("clamps oversized local run shutdown grace values", () => {
     withEnv({ OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS: String(Number.MAX_SAFE_INTEGER) }, () => {
-      expect(resolveTuiShutdownHardExitMs({ localMode: true })).toBe(
-        MAX_TIMER_TIMEOUT_MS + 2000,
-      );
+      expect(resolveTuiShutdownHardExitMs({ localMode: true })).toBe(MAX_TIMER_TIMEOUT_MS + 2000);
     });
   });
 });
@@ -342,6 +282,18 @@ describe("resolveInitialTuiAgentId", () => {
         cwd: "/var/tmp/unrelated",
       }),
     ).toBe("main");
+  });
+
+  it("falls back when the working directory was deleted", () => {
+    const cwdSpy = vi.spyOn(process, "cwd").mockImplementation(() => {
+      throw new Error("ENOENT: uv_cwd");
+    });
+
+    try {
+      expect(resolveInitialTuiAgentId({ cfg, fallbackAgentId: "main" })).toBe("main");
+    } finally {
+      cwdSpy.mockRestore();
+    }
   });
 });
 
@@ -474,6 +426,10 @@ describe("resolveTuiCtrlCAction", () => {
 });
 
 describe("TUI shutdown safety", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("drains terminal input before stopping the TUI", async () => {
     const calls: string[] = [];
     const drainInput = vi.fn(async () => {
@@ -591,12 +547,10 @@ describe("TUI shutdown safety", () => {
     expect(finish).toHaveBeenCalledTimes(1);
   });
 
-  it("schedules a process-exit guard after standalone TUI return", () => {
-    let callback: (() => void) | undefined;
+  it("does not keep a clean standalone TUI alive for the watchdog deadline", () => {
     const unref = vi.fn();
-    const setTimeoutFn = vi.fn((fn: () => void, ms: number) => {
-      callback = fn;
-      expect(ms).toBe(2000);
+    const setTimeoutFn = vi.fn((_callback: () => void, delayMs: number) => {
+      expect(delayMs).toBe(2000);
       return { unref };
     });
     const exit = vi.fn();
@@ -606,15 +560,31 @@ describe("TUI shutdown safety", () => {
 
     expect(setTimeoutFn).toHaveBeenCalledOnce();
     expect(unref).toHaveBeenCalledOnce();
-    callback?.();
+    expect(writeStderr).not.toHaveBeenCalled();
+    expect(exit).not.toHaveBeenCalled();
+  });
+
+  it("forces standalone TUI exit on deadline while another handle lingers", async () => {
+    vi.useFakeTimers();
+    const lingeringHandle = setInterval(() => {}, 60_000);
+    const exit = vi.fn();
+    const writeStderr = vi.fn();
+
+    const timer = scheduleProcessExitAfterTuiReturn({ exit, writeStderr });
+
+    expect((timer as NodeJS.Timeout).hasRef()).toBe(false);
+    await vi.advanceTimersByTimeAsync(1999);
+    expect(exit).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
     expect(writeStderr).toHaveBeenCalledWith("openclaw tui forcing process exit after return\n");
     expect(exit).toHaveBeenCalledWith(0);
+    clearInterval(lingeringHandle);
   });
 });
 
 describe("resolveCodexCliBin", () => {
-  it("returns a string path when codex CLI is installed", () => {
-    const result = resolveCodexCliBin();
+  it("returns a string path when codex CLI is installed", async () => {
+    const result = await resolveCodexCliBin();
     // In this test environment codex is installed; verify it returns a non-empty path
     if (result !== null) {
       expect(typeof result).toBe("string");
@@ -623,8 +593,8 @@ describe("resolveCodexCliBin", () => {
     }
   });
 
-  it("returns null or a valid path (never throws)", () => {
-    const result = resolveCodexCliBin();
+  it("returns null or a valid path (never throws)", async () => {
+    const result = await resolveCodexCliBin();
     if (result === null) {
       expect(result).toBeNull();
     } else {

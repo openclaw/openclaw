@@ -49,7 +49,7 @@ import { assertExpectedResolvedSecretValue } from "./secret-value.js";
 import { isRecord } from "./shared.js";
 
 /** Result returned after interactive secrets configure builds and preflights an apply plan. */
-export type SecretsConfigureResult = {
+type SecretsConfigureResult = {
   plan: SecretsApplyPlan;
   preflight: SecretsApplyResult;
 };
@@ -1077,3 +1077,4 @@ export async function runSecretsConfigureInteractive(
 
   return { plan, preflight };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

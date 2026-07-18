@@ -7,6 +7,7 @@ import {
   AgentSideConnection,
   PROTOCOL_VERSION,
   ndJsonStream,
+  type AnyMessage,
 } from "@agentclientprotocol/sdk";
 import type { AcpServerOptions } from "@openclaw/acp-core/types";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -21,21 +22,12 @@ import { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-re
 import { GatewayClient } from "../gateway/client.js";
 import { isMainModule } from "../infra/is-main.js";
 import { routeLogsToStderr } from "../logging/console.js";
-import {
-  createSqliteAcpEventLedger,
-  migrateFileAcpEventLedgerToSqlite,
-  resolveDefaultAcpEventLedgerPath,
-} from "./event-ledger.js";
+import { closeOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { createSqliteAcpEventLedger } from "./event-ledger.js";
 import { readSecretFromFile } from "./secret-file.js";
 import { AcpGatewayAgent } from "./translator.js";
 import { normalizeAcpProvenanceMode } from "./types.js";
 
-type AcpStreamMessage =
-  ReturnType<typeof ndJsonStream> extends {
-    readable: ReadableStream<infer Message>;
-  }
-    ? Message
-    : never;
 type JsonObject = Record<string, unknown>;
 
 /** Starts the ACP Gateway bridge and serves AgentSideConnection over stdio. */
@@ -79,6 +71,13 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
     gatewayReadySettled = true;
     onGatewayReadyReject(err instanceof Error ? err : new Error(String(err)));
   };
+  const closeStateDatabase = () => {
+    try {
+      closeOpenClawStateDatabase();
+    } catch (err) {
+      console.warn(`acp: state database close failed during shutdown: ${String(err)}`);
+    }
+  };
 
   const gateway = new GatewayClient({
     url: bootstrap.url,
@@ -89,9 +88,19 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
     clientDisplayName: "ACP",
     clientVersion: "acp",
     mode: GATEWAY_CLIENT_MODES.CLI,
-    caps: [GATEWAY_CLIENT_CAPS.TOOL_EVENTS],
+    caps: [GATEWAY_CLIENT_CAPS.EXEC_APPROVALS, GATEWAY_CLIENT_CAPS.TOOL_EVENTS],
     onEvent: (evt) => {
-      void agent?.handleGatewayEvent(evt);
+      if (stopped) {
+        return;
+      }
+      // Gateway delivery stays non-blocking, but translator failures must not
+      // escape this callback as unhandled process rejections.
+      void agent?.handleGatewayEvent(evt).catch((err: unknown) => {
+        process.stderr.write(`openclaw acp: gateway event ${evt.event} failed\n`);
+        if (opts.verbose) {
+          process.stderr.write(`openclaw acp: gateway event ${evt.event} error: ${String(err)}\n`);
+        }
+      });
     },
     onHelloOk: () => {
       resolveGatewayReady();
@@ -101,33 +110,39 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
       rejectGatewayReady(err);
     },
     onClose: (code, reason) => {
-      if (!stopped) {
-        rejectGatewayReady(new Error(`gateway closed before ready (${code}): ${reason}`));
-      }
-      agent?.handleGatewayDisconnect(`${code}: ${reason}`);
-      // Resolve only on intentional shutdown (gateway.stop() sets closed
-      // which skips scheduleReconnect, then fires onClose).  Transient
-      // disconnects are followed by automatic reconnect attempts.
       if (stopped) {
-        onClosed();
+        return;
       }
+      rejectGatewayReady(new Error(`gateway closed before ready (${code}): ${reason}`));
+      agent?.handleGatewayDisconnect(`${code}: ${reason}`);
     },
   });
 
-  const shutdown = () => {
+  const shutdown = async () => {
     if (stopped) {
       return;
     }
     stopped = true;
     resolveGatewayReady();
-    gateway.stop();
-    // If no WebSocket is active (e.g. between reconnect attempts),
-    // gateway.stop() won't trigger onClose, so resolve directly.
+    // Revoke ledger access before transport teardown. ACP requests and Gateway
+    // events can both resume asynchronously, and must not reopen the shared DB.
+    const activeAgent = agent;
+    agent = null;
+    activeAgent?.shutdown();
+    const gatewayStop = gateway.stopAndWait().catch((err: unknown) => {
+      console.warn(`acp: gateway stop failed during shutdown: ${String(err)}`);
+    });
+    await gatewayStop;
+    closeStateDatabase();
     onClosed();
   };
 
-  process.once("SIGINT", shutdown);
-  process.once("SIGTERM", shutdown);
+  process.once("SIGINT", () => {
+    void shutdown();
+  });
+  process.once("SIGTERM", () => {
+    void shutdown();
+  });
 
   // Start gateway first and wait for hello before accepting ACP requests.
   const readiness = await startGatewayClientWhenEventLoopReady(gateway, {
@@ -136,8 +151,8 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
   if (!readiness.ready) {
     rejectGatewayReady(new Error("gateway event loop readiness timeout"));
   }
-  await gatewayReady.catch((err: unknown) => {
-    shutdown();
+  await gatewayReady.catch(async (err: unknown) => {
+    await shutdown();
     throw err;
   });
   if (stopped) {
@@ -148,16 +163,12 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
   const output = Readable.toWeb(process.stdin) as unknown as ReadableStream<Uint8Array>;
   const stream = ndJsonStream(input, output);
   const readable = stream.readable.pipeThrough(
-    new TransformStream<AcpStreamMessage, AcpStreamMessage>({
+    new TransformStream<AnyMessage, AnyMessage>({
       transform(message, controller) {
         controller.enqueue(normalizeAcpInitializeProtocolVersion(message));
       },
     }),
   );
-  await migrateFileAcpEventLedgerToSqlite({
-    filePath: resolveDefaultAcpEventLedgerPath(process.env),
-    archiveSource: true,
-  });
   const eventLedger = createSqliteAcpEventLedger();
 
   void new AgentSideConnection(
@@ -172,7 +183,7 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
   return closed;
 }
 
-function normalizeAcpInitializeProtocolVersion(message: AcpStreamMessage): AcpStreamMessage {
+function normalizeAcpInitializeProtocolVersion(message: AnyMessage): AnyMessage {
   if (!isJsonObject(message)) {
     return message;
   }
@@ -193,7 +204,7 @@ function normalizeAcpInitializeProtocolVersion(message: AcpStreamMessage): AcpSt
       ...params,
       protocolVersion: PROTOCOL_VERSION,
     },
-  } as AcpStreamMessage;
+  } as AnyMessage;
 }
 
 function isJsonObject(value: unknown): value is JsonObject {

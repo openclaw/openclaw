@@ -5,6 +5,7 @@ import type {
   PluginWebFetchProviderEntry,
   PluginWebSearchProviderEntry,
 } from "../plugins/types.js";
+import { listSecretResolutionErrorOwners } from "./runtime-degraded-state.js";
 
 type ProviderUnderTest = "brave" | "gemini" | "grok" | "kimi" | "perplexity" | "duckduckgo";
 
@@ -71,19 +72,12 @@ let createResolverContext: typeof import("./runtime-shared.js").createResolverCo
 let resolveRuntimeWebTools: typeof import("./runtime-web-tools.js").resolveRuntimeWebTools;
 let restoreResolveSecretRefValuesSpy: (() => void) | undefined;
 
-vi.mock("./runtime-web-tools-fallback.runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("./runtime-web-tools-fallback.runtime.js")>(
-    "./runtime-web-tools-fallback.runtime.js",
-  );
-  return {
-    ...actual,
-    runtimeWebToolsFallbackProviders: {
-      ...actual.runtimeWebToolsFallbackProviders,
-      resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
-      resolvePluginWebFetchProviders: resolvePluginWebFetchProvidersMock,
-    },
-  };
-});
+vi.mock("./runtime-web-tools-fallback.runtime.js", () => ({
+  runtimeWebToolsFallbackProviders: {
+    resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
+    resolvePluginWebFetchProviders: resolvePluginWebFetchProvidersMock,
+  },
+}));
 
 vi.mock("../plugins/web-provider-public-artifacts.explicit.js", () => ({
   resolveBundledExplicitWebSearchProvidersFromPublicArtifacts:
@@ -106,15 +100,9 @@ vi.mock("./runtime-web-tools-manifest.runtime.js", () => ({
     resolveManifestContractPluginIdsByCompatibilityRuntimePathMock,
 }));
 
-vi.mock("../plugins/installed-plugin-index-records.js", async () => {
-  const actual = await vi.importActual<
-    typeof import("../plugins/installed-plugin-index-records.js")
-  >("../plugins/installed-plugin-index-records.js");
-  return {
-    ...actual,
-    loadInstalledPluginIndexInstallRecordsSync: loadInstalledPluginIndexInstallRecordsSyncMock,
-  };
-});
+vi.mock("../plugins/installed-plugin-index-records.js", () => ({
+  loadInstalledPluginIndexInstallRecordsSync: loadInstalledPluginIndexInstallRecordsSyncMock,
+}));
 
 function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
@@ -294,19 +282,24 @@ function buildTestWebFetchProviders(): PluginWebFetchProviderEntry[] {
   ];
 }
 
-async function runRuntimeWebTools(params: { config: OpenClawConfig; env?: NodeJS.ProcessEnv }) {
+async function runRuntimeWebTools(params: {
+  config: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  allowUnavailableSecretOwners?: boolean;
+}) {
   const sourceConfig = structuredClone(params.config);
   const resolvedConfig = structuredClone(params.config);
   const context = createResolverContext({
     sourceConfig,
     env: params.env ?? {},
   });
-  const metadata = await resolveRuntimeWebTools({
+  const result = await resolveRuntimeWebTools({
     sourceConfig,
     resolvedConfig,
     context,
+    allowUnavailableSecretOwners: params.allowUnavailableSecretOwners,
   });
-  return { metadata, resolvedConfig, context };
+  return { ...result, resolvedConfig, context };
 }
 
 function createProviderSecretRefConfig(
@@ -391,6 +384,8 @@ describe("runtime web tools resolution", () => {
     secretResolve = await import("./resolve.js");
     ({ createResolverContext } = await import("./runtime-shared.js"));
     ({ resolveRuntimeWebTools } = await import("./runtime-web-tools.js"));
+    // The managed-index branch lazily loads this stable runtime once per process.
+    await import("./runtime-web-tools-fallback.runtime.js");
   });
 
   beforeEach(() => {
@@ -420,7 +415,7 @@ describe("runtime web tools resolution", () => {
             firecrawl: {
               config: {
                 webFetch: {
-                  apiKey: { source: "env", provider: "default", id: "FIRECRAWL_API_KEY_REF" },
+                  apiKey: { source: "env", provider: "default", id: "FIRECRAWL_API_KEY" },
                 },
               },
             },
@@ -442,7 +437,7 @@ describe("runtime web tools resolution", () => {
     expect(metadata.search.selectedProvider).toBeUndefined();
     expect(metadata.search.providerSource).toBe("none");
     expect(metadata.fetch.selectedProvider).toBe("firecrawl");
-    expect(metadata.fetch.selectedProviderKeySource).toBe("env");
+    expect(metadata.fetch.selectedProviderKeySource).toBe("secretRef");
     expect(resolveBundledExplicitWebSearchProvidersFromPublicArtifactsMock).not.toHaveBeenCalled();
     expect(resolveBundledWebSearchProvidersFromPublicArtifactsMock).not.toHaveBeenCalled();
     expect(resolvePluginWebSearchProvidersMock).not.toHaveBeenCalled();
@@ -903,6 +898,46 @@ describe("runtime web tools resolution", () => {
     expect(context.warnings.map((warning) => warning.code)).not.toContain(
       "WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK",
     );
+  });
+
+  it("isolates unresolved auto-detected providers during cold start", async () => {
+    const { metadata, degradedOwners } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            google: {
+              enabled: true,
+              config: {
+                webSearch: {
+                  apiKey: {
+                    source: "env",
+                    provider: "default",
+                    id: "MISSING_GEMINI_API_KEY_REF",
+                  },
+                },
+              },
+            },
+          },
+        },
+      }),
+      allowUnavailableSecretOwners: true,
+    });
+
+    expect(metadata.search.selectedProvider).toBeUndefined();
+    expect(degradedOwners).toMatchObject([
+      {
+        ownerKind: "capability",
+        ownerId: "web-search:gemini",
+        reason: "secret reference was not found",
+      },
+    ]);
   });
 
   it("auto-detects Gemini from the Google model provider key after env fallbacks", async () => {
@@ -1486,15 +1521,20 @@ describe("runtime web tools resolution", () => {
     expect(firstMockArg(resolvePluginWebFetchProvidersMock).sandboxed).toBe(true);
   });
 
-  it("uses env fallback for unresolved web fetch provider SecretRef when active", async () => {
-    const { metadata, resolvedConfig, context } = await runRuntimeWebTools({
+  it("isolates an explicit web fetch provider when its ref is unavailable", async () => {
+    const { metadata, resolvedConfig, context, degradedOwners } = await runRuntimeWebTools({
       config: asConfig({
+        secrets: {
+          providers: {
+            default: { source: "file", path: "/missing/firecrawl-secrets.json" },
+          },
+        },
         plugins: {
           entries: {
             firecrawl: {
               config: {
                 webFetch: {
-                  apiKey: { source: "env", provider: "default", id: "MISSING_FIRECRAWL_REF" },
+                  apiKey: { source: "file", provider: "default", id: "/firecrawl/apiKey" },
                 },
               },
             },
@@ -1511,21 +1551,147 @@ describe("runtime web tools resolution", () => {
       env: {
         FIRECRAWL_API_KEY: "firecrawl-fallback-key", // pragma: allowlist secret
       },
+      allowUnavailableSecretOwners: true,
     });
 
-    expect(metadata.fetch.selectedProvider).toBe("firecrawl");
-    expect(metadata.fetch.selectedProviderKeySource).toBe("env");
+    expect(metadata.fetch.providerConfigured).toBe("firecrawl");
+    expect(metadata.fetch.selectedProvider).toBeUndefined();
+    expect(metadata.fetch.selectedProviderKeySource).toBeUndefined();
     expect(
       (
         resolvedConfig.plugins?.entries?.firecrawl?.config as
           | { webFetch?: { apiKey?: unknown } }
           | undefined
       )?.webFetch?.apiKey,
-    ).toBe("firecrawl-fallback-key");
+    ).toEqual({ source: "file", provider: "default", id: "/firecrawl/apiKey" });
+    expect(degradedOwners).toContainEqual(
+      expect.objectContaining({
+        ownerKind: "capability",
+        ownerId: "web-fetch:firecrawl",
+        state: "unavailable",
+        paths: ["plugins.entries.firecrawl.config.webFetch.apiKey"],
+        reason: "secret provider failed",
+      }),
+    );
+    expect(degradedOwners[0]?.refKeys).toEqual(["file:default:/firecrawl/apiKey"]);
+    expect(degradedOwners[0]?.reason).not.toContain("/missing/firecrawl-secrets.json");
     expectDiagnostic(context.warnings, {
-      code: "WEB_FETCH_PROVIDER_KEY_UNRESOLVED_FALLBACK_USED",
+      code: "SECRETS_OWNER_UNAVAILABLE",
       path: "plugins.entries.firecrawl.config.webFetch.apiKey",
     });
+  });
+
+  it("fails fast on an invalid resolved value without exposing its ref", async () => {
+    const refId = "FIRECRAWL_API_KEY";
+    const resolveSpy = vi
+      .spyOn(secretResolve, "resolveSecretRefValues")
+      .mockResolvedValue(new Map([[`env:default:${refId}`, { value: "fixture-api-key" }]]));
+    restoreResolveSecretRefValuesSpy = () => resolveSpy.mockRestore();
+
+    const error = await runRuntimeWebTools({
+      config: asConfig({
+        plugins: {
+          entries: {
+            firecrawl: {
+              config: {
+                webFetch: {
+                  apiKey: { source: "env", provider: "default", id: refId },
+                },
+              },
+            },
+          },
+        },
+        tools: { web: { fetch: { provider: "firecrawl" } } },
+      }),
+      allowUnavailableSecretOwners: true,
+    }).then(
+      () => undefined,
+      (caught: unknown) => caught,
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    const message = error instanceof Error ? error.message : String(error);
+    expect(message).toBe(
+      "plugins.entries.firecrawl.config.webFetch.apiKey resolved to a non-string or empty value.",
+    );
+    expect(message).not.toContain(refId);
+    expect(message).not.toContain("fixture-api-key");
+    expect(listSecretResolutionErrorOwners(error)).toEqual([
+      expect.objectContaining({
+        ownerKind: "capability",
+        ownerId: "web-fetch:firecrawl",
+        reason: "resolved secret value was invalid",
+        degradationState: "cold",
+        failureMatched: true,
+        source: "config",
+      }),
+    ]);
+  });
+
+  it("attributes an invalid legacy x_search value to the Grok capability", async () => {
+    const refId = "X_SEARCH_KEY_REF";
+    const resolveSpy = vi
+      .spyOn(secretResolve, "resolveSecretRefValues")
+      .mockResolvedValue(new Map([[`env:default:${refId}`, { value: "fixture-api-key" }]]));
+    restoreResolveSecretRefValuesSpy = () => resolveSpy.mockRestore();
+
+    const error = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            x_search: {
+              apiKey: { source: "env", provider: "default", id: refId },
+            },
+          },
+        },
+      }),
+    }).catch((caught: unknown) => caught);
+
+    expect(listSecretResolutionErrorOwners(error)).toEqual([
+      expect.objectContaining({
+        ownerKind: "capability",
+        ownerId: "web-search:grok",
+        reason: "resolved secret value was invalid",
+        failureMatched: true,
+      }),
+    ]);
+  });
+
+  it("preserves a denied-provider reason without exposing its ref", async () => {
+    const refId = "FIRECRAWL_API_KEY";
+    const { degradedOwners } = await runRuntimeWebTools({
+      config: asConfig({
+        secrets: {
+          providers: {
+            default: { source: "env", allowlist: ["OTHER_API_KEY"] },
+          },
+        },
+        plugins: {
+          entries: {
+            firecrawl: {
+              config: {
+                webFetch: {
+                  apiKey: { source: "env", provider: "default", id: refId },
+                },
+              },
+            },
+          },
+        },
+        tools: { web: { fetch: { provider: "firecrawl" } } },
+      }),
+      env: { [refId]: "fixture-api-key" },
+      allowUnavailableSecretOwners: true,
+    });
+
+    expect(degradedOwners).toMatchObject([
+      {
+        ownerKind: "capability",
+        ownerId: "web-fetch:firecrawl",
+        reason: "secret provider policy denied resolution",
+      },
+    ]);
+    expect(degradedOwners[0]?.reason).not.toContain(refId);
+    expect(degradedOwners[0]?.reason).not.toContain("fixture-api-key");
   });
 
   it("resolves web fetch fallback SecretRefs with provider env var allowlist", async () => {
@@ -1635,7 +1801,7 @@ describe("runtime web tools resolution", () => {
           firecrawl: {
             config: {
               webFetch: {
-                apiKey: { source: "env", provider: "default", id: "MISSING_FIRECRAWL_REF" },
+                apiKey: { source: "env", provider: "default", id: "FIRECRAWL_API_KEY" },
               },
             },
           },
@@ -1702,13 +1868,12 @@ describe("runtime web tools resolution", () => {
         sourceConfig,
         resolvedConfig,
         context,
+        allowUnavailableSecretOwners: true,
       }),
-    ).rejects.toThrow("[WEB_FETCH_PROVIDER_KEY_UNRESOLVED_NO_FALLBACK]");
-    expectDiagnostic(context.warnings, {
-      code: "WEB_FETCH_PROVIDER_KEY_UNRESOLVED_NO_FALLBACK",
-      path: "plugins.entries.firecrawl.config.webFetch.apiKey",
-      messageIncludes: 'SecretRef env var "AWS_SECRET_ACCESS_KEY" is not allowed.',
-    });
+    ).rejects.toThrow(
+      "plugins.entries.firecrawl.config.webFetch.apiKey SecretRef is not allowed for this provider.",
+    );
+    expect(context.warnings).toEqual([]);
   });
 
   it("keeps web fetch provider discovery bundled-only during runtime secret resolution", async () => {
@@ -1833,3 +1998,4 @@ describe("runtime web tools resolution", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,14 +1,54 @@
 // Doctor config preflight tests cover last-known-good snapshots and config snapshot promotion.
 import fs from "node:fs/promises";
-import { describe, expect, it } from "vitest";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import { promoteConfigSnapshotToLastKnownGood, readConfigFileSnapshot } from "../config/config.js";
 import { withTempHome, writeOpenClawConfig } from "../config/test-helpers.js";
+import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import {
   runDoctorConfigPreflight,
   shouldSkipPluginValidationForDoctorConfigPreflight,
 } from "./doctor-config-preflight.js";
 
+type ConfigHealthDatabase = Pick<OpenClawStateKyselyDatabase, "config_health_entries">;
+
+function readConfigHealthRow(env: NodeJS.ProcessEnv, configPath: string) {
+  const { db } = openOpenClawStateDatabase({ env });
+  const healthDb = getNodeSqliteKysely<ConfigHealthDatabase>(db);
+  return executeSqliteQueryTakeFirstSync(
+    db,
+    healthDb
+      .selectFrom("config_health_entries")
+      .select("config_path")
+      .where("config_path", "=", configPath),
+  );
+}
+
 describe("runDoctorConfigPreflight", () => {
+  afterEach(() => {
+    closeOpenClawStateDatabaseForTest();
+  });
+
+  it("supports non-observing config reads", async () => {
+    await withTempHome(async (home) => {
+      const configPath = await writeOpenClawConfig(home, { gateway: { mode: "local" } });
+
+      await runDoctorConfigPreflight({
+        migrateState: false,
+        migrateLegacyConfig: false,
+        invalidConfigNote: false,
+        observe: false,
+      });
+
+      expect(readConfigHealthRow({ ...process.env, HOME: home }, configPath)).toBeUndefined();
+    });
+  });
+
   it("skips plugin schema validation while doctor is running inside update", () => {
     expect(
       shouldSkipPluginValidationForDoctorConfigPreflight({
@@ -80,6 +120,36 @@ describe("runDoctorConfigPreflight", () => {
       expect(repaired.snapshot.valid).toBe(true);
       expect(repaired.snapshot.config.gateway?.mode).toBe("local");
       expect(await fs.readFile(configPath, "utf-8")).toBe(lastGoodRaw);
+    });
+  });
+
+  it("preserves and rejects unparseable config without last-known-good during repair preflight", async () => {
+    await withTempHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const brokenRaw = '{ "gateway": { "mode": "local" }, "models": {';
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, brokenRaw, "utf-8");
+
+      const failure = await runDoctorConfigPreflight({
+        migrateState: false,
+        migrateLegacyConfig: false,
+        repairPrefixedConfig: true,
+        invalidConfigNote: false,
+      }).then(
+        () => null,
+        (error: unknown) => error,
+      );
+
+      expect(failure).toBeInstanceOf(Error);
+      expect((failure as Error).message).toContain("Config could not be parsed or recovered.");
+
+      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(brokenRaw);
+      const entries = await fs.readdir(path.dirname(configPath));
+      const clobbered = entries.filter((entry) => entry.startsWith("openclaw.json.clobbered."));
+      expect(clobbered).toHaveLength(1);
+      const clobberedPath = path.join(path.dirname(configPath), clobbered[0] ?? "missing");
+      expect((failure as Error).message).toContain(`Original preserved at ${clobberedPath}.`);
+      await expect(fs.readFile(clobberedPath, "utf-8")).resolves.toBe(brokenRaw);
     });
   });
 

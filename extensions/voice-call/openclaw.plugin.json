@@ -71,6 +71,10 @@
       "label": "Twilio Auth Token",
       "sensitive": true
     },
+    "twilio.region": {
+      "label": "Twilio Region",
+      "advanced": true
+    },
     "outbound.defaultMode": {
       "label": "Default Call Mode"
     },
@@ -114,6 +118,7 @@
     },
     "streaming.enabled": {
       "label": "Enable Streaming",
+      "help": "Classic streaming transcription currently requires the Twilio call provider.",
       "advanced": true
     },
     "streaming.provider": {
@@ -286,6 +291,10 @@
           },
           "authToken": {
             "type": ["string", "object"]
+          },
+          "region": {
+            "type": "string",
+            "enum": ["us1", "ie1", "au1"]
           }
         }
       },
@@ -526,7 +535,7 @@
           },
           "consultThinkingLevel": {
             "type": "string",
-            "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"]
+            "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max", "ultra"]
           },
           "consultFastMode": {
             "type": "boolean"

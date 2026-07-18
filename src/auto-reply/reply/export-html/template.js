@@ -21,6 +21,7 @@
     systemPrompt,
     tools,
     renderedTools,
+    warning,
   } = data;
 
   // ============================================================
@@ -725,7 +726,19 @@
     if (s.length <= maxLen) {
       return s;
     }
-    return s.slice(0, maxLen) + "...";
+    let endOffset = maxLen;
+    const beforeBoundary = s.charCodeAt(endOffset - 1);
+    const afterBoundary = s.charCodeAt(endOffset);
+    // Keep the existing UTF-16 unit ceiling, but retreat if it splits a surrogate pair.
+    if (
+      beforeBoundary >= 0xd800 &&
+      beforeBoundary <= 0xdbff &&
+      afterBoundary >= 0xdc00 &&
+      afterBoundary <= 0xdfff
+    ) {
+      endOffset -= 1;
+    }
+    return s.slice(0, endOffset) + "...";
   }
 
   /**
@@ -897,7 +910,7 @@
     setTimeout(() => {
       const activeNode = container.querySelector(".tree-node.active");
       if (activeNode) {
-        activeNode.scrollIntoView({ block: "nearest" });
+        activeNode.scrollIntoView?.({ block: "nearest" });
       }
     }, 0);
   }
@@ -1567,7 +1580,11 @@
       msgParts.push(`${globalStats.branchSummaries} branch summaries`);
     }
 
-    let html = `
+    let html = "";
+    if (warning) {
+      html += `<div class="export-warning">${escapeHtml(warning)}</div>`;
+    }
+    html += `
           <div class="header">
             <h1>Session: ${escapeHtml(header?.id || "unknown")}</h1>
             <div class="help-bar">
@@ -1718,7 +1735,7 @@
         const scrollTargetId = scrollToEntryId || targetId;
         const targetEl = document.getElementById(`entry-${scrollTargetId}`);
         if (targetEl) {
-          targetEl.scrollIntoView({ block: "center" });
+          targetEl.scrollIntoView?.({ block: "center" });
           // Briefly highlight the target message
           if (scrollToEntryId) {
             targetEl.classList.add("highlight");

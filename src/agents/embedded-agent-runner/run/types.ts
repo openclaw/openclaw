@@ -15,10 +15,12 @@ import type { AgentHarnessTaskRuntimeScope } from "../../../tasks/agent-harness-
 import type { AcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import type { ToolOutcomeObserver } from "../../agent-tools.before-tool-call.js";
 import type { AuthProfileStore } from "../../auth-profiles/types.js";
+import type { DelegationCapability } from "../../delegation-capability.js";
 import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
 } from "../../embedded-agent-messaging.types.js";
+import type { AgentHarnessRuntimeArtifactBinding } from "../../harness/runtime-artifact.types.js";
 import type { AgentRunTimeoutPhase } from "../../run-timeout-attribution.js";
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
 import type { AgentMessage } from "../../runtime/index.js";
@@ -43,13 +45,50 @@ type EmbeddedRunAttemptBase = Omit<
   | "sessionFile"
 >;
 
-export type EmbeddedRunContextWindowInfo = {
+type EmbeddedRunContextWindowInfo = {
   tokens: number;
   referenceTokens?: number;
   source: "model" | "modelsConfig" | "agentContextTokens" | "default";
 };
 
 export type EmbeddedRunFastModeParam = boolean | (() => boolean | undefined);
+
+type EmbeddedRunAttemptToolTerminalObservation = {
+  toolCallId?: string;
+  toolName: string;
+  arguments?: unknown;
+  meta?: string;
+  executionStarted?: boolean;
+  outcome: "success" | "failure";
+  failure?: Omit<
+    ToolErrorSummary,
+    "toolName" | "meta" | "mutatingAction" | "actionFingerprint" | "fileTarget"
+  >;
+  /** Protocol-owned mutation facts for native tools that do not use OpenClaw definitions. */
+  nativeMutation?: {
+    mutatingAction: boolean;
+    replaySafe: boolean;
+    actionFingerprint?: string;
+    fileTarget?: ToolErrorSummary["fileTarget"];
+  };
+};
+
+type EmbeddedRunAttemptToolTerminalResolution = {
+  lastToolError?: ToolErrorSummary;
+  executionStarted: boolean;
+  executedArguments?: Record<string, unknown>;
+  sideEffectEvidence: boolean;
+};
+
+type EmbeddedRunAttemptToolTerminalObserver = (
+  observation: EmbeddedRunAttemptToolTerminalObservation,
+) => EmbeddedRunAttemptToolTerminalResolution;
+
+/** Host-owned trajectory recorder supplied to plugin harnesses for attempt-local runtime events. */
+export type EmbeddedRunAttemptTrajectoryRecorder = {
+  recordEvent: (type: string, data?: Record<string, unknown>) => void;
+  flush: () => Promise<void>;
+};
 
 export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   /** Active file-backed artifact target resolved by the run/session target seam. */
@@ -75,14 +114,26 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   fallbackActive?: boolean;
   /** Concrete fallback reason that selected this attempt, when known. */
   fallbackReason?: string | null;
+  /** Whether this attempt may start or redirect work to another agent/task. */
+  delegationCapability?: DelegationCapability;
   /** Concrete degraded-runtime reason for this attempt, when known. */
   degradedReason?: string | null;
   /** Session-pinned embedded harness id. Prevents runtime hot-switching. */
   agentHarnessId?: string;
+  /** Capture a local harness implementation only for setup/verified continuations. */
+  captureRuntimeArtifact?: boolean;
+  /** Exact implementation that must own the attempt before it creates a native thread. */
+  expectedRuntimeArtifact?: AgentHarnessRuntimeArtifactBinding;
   /** OpenClaw-owned runtime policy prepared by the orchestrator for this attempt. */
   runtimePlan?: AgentRuntimePlan;
+  /** Reports terminal tool facts to the host-owned attempt outcome accumulator. */
+  observeToolTerminal?: EmbeddedRunAttemptToolTerminalObserver;
   /** Host-issued scope for harnesses that mirror native child runs into task state. */
   agentHarnessTaskRuntimeScope?: AgentHarnessTaskRuntimeScope;
+  /** Storage-neutral trajectory target for harness-owned runtime trace artifacts. */
+  trajectorySessionFile?: string;
+  /** Storage-aware trajectory recorder owned by the OpenClaw host. */
+  trajectoryRecorder?: EmbeddedRunAttemptTrajectoryRecorder | null;
   /** Live observer called after wrapped tool outcomes are recorded. */
   onToolOutcome?: ToolOutcomeObserver;
   /** Signals that the attempt's own run-timeout watchdog is active. */
@@ -114,6 +165,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
 
 export type EmbeddedRunAttemptResult = {
   aborted: boolean;
+  /** True when the runtime made the authoritative final-assistant transcript decision. */
+  assistantTranscriptOwned?: boolean;
   /** True when the abort originated from the caller-provided abortSignal. */
   externalAbort: boolean;
   timedOut: boolean;
@@ -123,6 +176,7 @@ export type EmbeddedRunAttemptResult = {
   timedOutDuringCompaction: boolean;
   /** Optional because this type is re-exported as `AgentHarnessAttemptResult`. */
   timedOutDuringToolExecution?: boolean;
+  timedOutByRunBudget?: boolean;
   promptError: unknown;
   /**
    * Identifies which phase produced the promptError.
@@ -139,18 +193,28 @@ export type EmbeddedRunAttemptResult = {
     | {
         route: Exclude<PreemptiveCompactionRoute, "fits">;
         source?: "mid-turn";
+        estimatedPromptTokens?: number;
+        promptBudgetBeforeReserve?: number;
+        overflowTokens?: number;
         handled: true;
         truncatedCount?: number;
       }
     | {
         route: Exclude<PreemptiveCompactionRoute, "fits">;
         source?: "mid-turn";
+        estimatedPromptTokens?: number;
+        promptBudgetBeforeReserve?: number;
+        overflowTokens?: number;
         handled?: false;
       };
   sessionIdUsed: string;
   sessionFileUsed?: string;
   diagnosticTrace?: DiagnosticTraceContext;
   agentHarnessId?: string;
+  /** Exact credential material fingerprint reported by a harness-owned auth boundary. */
+  authBindingFingerprint?: string;
+  /** Exact local implementation used by a plugin-owned harness attempt. */
+  runtimeArtifact?: AgentHarnessRuntimeArtifactBinding;
   agentHarnessResultClassification?: "empty" | "reasoning-only" | "planning-only";
   promptTimeoutOutcome?: {
     message?: string;
@@ -162,7 +226,7 @@ export type EmbeddedRunAttemptResult = {
   codexAppServerFailure?: {
     kind: "client_closed_before_turn_completed" | "turn_completion_idle_timeout";
     turnWatchTimeoutKind?: "progress" | "completion" | "terminal";
-    transport: "stdio" | "websocket";
+    transport: "stdio" | "unix" | "websocket";
     threadId?: string;
     turnId?: string;
     replaySafe: boolean;
@@ -200,6 +264,7 @@ export type EmbeddedRunAttemptResult = {
     toolName: string;
     meta?: string;
     replaySafe?: boolean;
+    isError?: boolean;
     asyncStarted?: boolean;
     asyncTaskRunId?: string;
     asyncTaskId?: string;
@@ -207,6 +272,8 @@ export type EmbeddedRunAttemptResult = {
   acceptedSessionSpawns?: AcceptedSessionSpawn[];
   lastAssistant: AssistantMessage | undefined;
   currentAttemptAssistant?: AssistantMessage | undefined;
+  /** Completed message_end snapshot owned by this model attempt. */
+  currentAttemptCompletedAssistant?: AssistantMessage | undefined;
   lastToolError?: ToolErrorSummary;
   didSendViaMessagingTool: boolean;
   didDeliverSourceReplyViaMessageTool?: boolean;
@@ -238,6 +305,11 @@ export type EmbeddedRunAttemptResult = {
   /** True when sessions_yield tool was called during this attempt. */
   yieldDetected?: boolean;
   replayMetadata: EmbeddedRunReplayMetadata;
+  /**
+   * Replay metadata for this attempt before prior session state is accumulated.
+   * Older harnesses may omit it and retain conservative cumulative retry gating.
+   */
+  currentAttemptReplayMetadata?: EmbeddedRunReplayMetadata;
   itemLifecycle: {
     startedCount: number;
     completedCount: number;

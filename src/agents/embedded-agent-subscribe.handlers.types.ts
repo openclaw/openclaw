@@ -72,6 +72,7 @@ export type EmbeddedAgentSubscribeState = {
     toolName?: string;
     meta?: string;
     replaySafe?: boolean;
+    isError?: true;
     asyncStarted?: boolean;
     asyncTaskRunId?: string;
     asyncTaskId?: string;
@@ -131,6 +132,7 @@ export type EmbeddedAgentSubscribeState = {
   toolExecutionSinceLastBlockReply: boolean;
   reasoningStreamOpen: boolean;
   assistantMessageIndex: number;
+  lastAssistantStreamContentIndex?: number;
   lastAssistantStreamItemId?: string;
   lastAssistantTextMessageIndex: number;
   lastAssistantTextNormalized?: string;
@@ -194,6 +196,7 @@ export type EmbeddedAgentSubscribeContext = {
   builtinToolNames?: ReadonlySet<string>;
   trustedLocalMediaToolNames?: ReadonlySet<string>;
   noteLastAssistant: (msg: AgentMessage) => void;
+  noteCompletedAssistant: (msg: AgentMessage) => void;
 
   shouldEmitToolResult: () => boolean;
   shouldEmitToolOutput: () => boolean;
@@ -257,7 +260,10 @@ export type EmbeddedAgentSubscribeContext = {
     data: AssistantStreamData,
     options?: { emitPartialReply?: boolean },
   ) => void;
-  emitBlockReply: (payload: BlockReplyPayload) => void;
+  emitBlockReply: (
+    payload: BlockReplyPayload,
+    options?: { assistantMessageIndex?: number; consumePendingToolMedia?: boolean },
+  ) => void;
   flushDeferredAssistantEvents: () => void;
   flushDeferredBlockReplies: () => void;
   clearDeferredAssistantEvents: () => void;
@@ -278,6 +284,7 @@ type ToolHandlerParams = Pick<
   | "onExecutionPhase"
   | "onHeartbeatToolResponse"
   | "onAgentToolResult"
+  | "observeToolTerminal"
   | "onToolResult"
   | "config"
   | "messageChannel"
@@ -294,6 +301,7 @@ type ToolHandlerParams = Pick<
   | "toolResultFormat"
   | "toolProgressDetail"
   | "sourceReplyDeliveryMode"
+  | "onDeliveredMessageToolOnlySourceReply"
 >;
 
 type ToolHandlerState = Pick<
@@ -326,6 +334,7 @@ type ToolHandlerState = Pick<
   | "successfulCronAdds"
   | "deterministicApprovalPromptSent"
   | "toolExecutionSinceLastBlockReply"
+  | "assistantMessageIndex"
 >;
 
 export type ToolHandlerContext = {

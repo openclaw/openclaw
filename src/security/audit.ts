@@ -1,5 +1,4 @@
 // Orchestrates security audit collection and report formatting.
-import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
@@ -40,6 +39,7 @@ import {
 } from "../infra/exec-safe-bin-runtime-policy.js";
 import { listRiskyConfiguredSafeBins } from "../infra/exec-safe-bin-semantics.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { collectDeepCodeSafetyFindings } from "./audit-deep-code-safety.js";
 import { collectDeepProbeFindings } from "./audit-deep-probe-findings.js";
 import {
@@ -48,6 +48,11 @@ import {
   inspectPathPermissions,
 } from "./audit-fs.js";
 import { collectGatewayConfigFindings as collectGatewayConfigFindingsBase } from "./audit-gateway-config.js";
+import {
+  readBoundedMcporterRegistry,
+  type McporterRegistryReadOutcome,
+  type McporterRegistryRejectReason,
+} from "./audit-mcporter-registry.js";
 import type {
   SecurityAuditFinding,
   SecurityAuditReport,
@@ -81,14 +86,9 @@ type AgentSkillMcpBoundaryScope = {
   execAsk: string;
 };
 
-export type {
-  SecurityAuditFinding,
-  SecurityAuditReport,
-  SecurityAuditSeverity,
-  SecurityAuditSummary,
-} from "./audit.types.js";
+export type { SecurityAuditReport } from "./audit.types.js";
 
-export type SecurityAuditOptions = {
+type SecurityAuditOptions = {
   config: OpenClawConfig;
   sourceConfig?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -124,7 +124,7 @@ export type SecurityAuditOptions = {
   probeGatewayFn?: ProbeGatewayFn;
 };
 
-export type AuditExecutionContext = {
+type AuditExecutionContext = {
   cfg: OpenClawConfig;
   sourceConfig: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -147,70 +147,32 @@ export type AuditExecutionContext = {
   workspaceDir?: string;
 };
 
-let readOnlyChannelPluginsModulePromise:
-  | Promise<typeof import("../channels/plugins/read-only.js")>
-  | undefined;
-let auditNonDeepModulePromise: Promise<typeof import("./audit.nondeep.runtime.js")> | undefined;
-let auditChannelModulePromise:
-  | Promise<typeof import("./audit-channel.collect.runtime.js")>
-  | undefined;
-let pluginMetadataRegistryLoaderModulePromise:
-  | Promise<typeof import("../plugins/runtime/metadata-registry-loader.js")>
-  | undefined;
-let pluginAutoEnableModulePromise:
-  | Promise<typeof import("../config/plugin-auto-enable.js")>
-  | undefined;
-let channelPluginIdsModulePromise:
-  | Promise<typeof import("../plugins/channel-plugin-ids.js")>
-  | undefined;
-let pluginRuntimeModulePromise: Promise<typeof import("../plugins/runtime.js")> | undefined;
-let gatewayProbeDepsPromise:
-  | Promise<{
-      buildGatewayConnectionDetails: typeof import("../gateway/call.js").buildGatewayConnectionDetails;
-      resolveGatewayProbeAuthSafe: typeof import("../gateway/probe-auth.js").resolveGatewayProbeAuthSafe;
-      resolveGatewayProbeTarget: typeof import("../gateway/probe-auth.js").resolveGatewayProbeTarget;
-      probeGateway: typeof import("../gateway/probe.js").probeGateway;
-    }>
-  | undefined;
+const loadReadOnlyChannelPlugins = createLazyRuntimeModule(
+  () => import("../channels/plugins/read-only.js"),
+);
 
-async function loadReadOnlyChannelPlugins() {
-  readOnlyChannelPluginsModulePromise ??= import("../channels/plugins/read-only.js");
-  return await readOnlyChannelPluginsModulePromise;
-}
+const loadAuditNonDeepModule = createLazyRuntimeModule(() => import("./audit.nondeep.runtime.js"));
 
-async function loadAuditNonDeepModule() {
-  auditNonDeepModulePromise ??= import("./audit.nondeep.runtime.js");
-  return await auditNonDeepModulePromise;
-}
+const loadAuditChannelModule = createLazyRuntimeModule(
+  () => import("./audit-channel.collect.runtime.js"),
+);
 
-async function loadAuditChannelModule() {
-  auditChannelModulePromise ??= import("./audit-channel.collect.runtime.js");
-  return await auditChannelModulePromise;
-}
+const loadPluginMetadataRegistryLoaderModule = createLazyRuntimeModule(
+  () => import("../plugins/runtime/metadata-registry-loader.js"),
+);
 
-async function loadPluginMetadataRegistryLoaderModule() {
-  pluginMetadataRegistryLoaderModulePromise ??=
-    import("../plugins/runtime/metadata-registry-loader.js");
-  return await pluginMetadataRegistryLoaderModulePromise;
-}
+const loadPluginAutoEnableModule = createLazyRuntimeModule(
+  () => import("../config/plugin-auto-enable.js"),
+);
 
-async function loadPluginAutoEnableModule() {
-  pluginAutoEnableModulePromise ??= import("../config/plugin-auto-enable.js");
-  return await pluginAutoEnableModulePromise;
-}
+const loadChannelPluginIdsModule = createLazyRuntimeModule(
+  () => import("../plugins/channel-plugin-ids.js"),
+);
 
-async function loadChannelPluginIdsModule() {
-  channelPluginIdsModulePromise ??= import("../plugins/channel-plugin-ids.js");
-  return await channelPluginIdsModulePromise;
-}
+const loadPluginRuntimeModule = createLazyRuntimeModule(() => import("../plugins/runtime.js"));
 
-async function loadPluginRuntimeModule() {
-  pluginRuntimeModulePromise ??= import("../plugins/runtime.js");
-  return await pluginRuntimeModulePromise;
-}
-
-async function loadGatewayProbeDeps() {
-  gatewayProbeDepsPromise ??= Promise.all([
+const loadGatewayProbeDeps = createLazyRuntimeModule(() =>
+  Promise.all([
     import("../gateway/call.js"),
     import("../gateway/probe-auth.js"),
     import("../gateway/probe.js"),
@@ -219,9 +181,8 @@ async function loadGatewayProbeDeps() {
     resolveGatewayProbeAuthSafe: probeAuthModule.resolveGatewayProbeAuthSafe,
     resolveGatewayProbeTarget: probeAuthModule.resolveGatewayProbeTarget,
     probeGateway: probeModule.probeGateway,
-  }));
-  return await gatewayProbeDepsPromise;
-}
+  })),
+);
 
 function countBySeverity(findings: SecurityAuditFinding[]): SecurityAuditSummary {
   let critical = 0;
@@ -344,7 +305,7 @@ function buildSecurityAuditSuppressionsActiveFinding(params: {
   };
 }
 
-export function applySecurityAuditSuppressions(
+function applySecurityAuditSuppressions(
   findings: SecurityAuditFinding[],
   suppressions: SecurityAuditSuppression[] | undefined,
 ): { findings: SecurityAuditFinding[]; suppressedFindings: SecurityAuditSuppressedFinding[] } {
@@ -377,7 +338,7 @@ function normalizeAllowFromList(list: Array<string | number> | undefined | null)
   return normalizeStringEntries(list);
 }
 
-export async function collectFilesystemFindings(params: {
+async function collectFilesystemFindings(params: {
   stateDir: string;
   configPath: string;
   env?: NodeJS.ProcessEnv;
@@ -508,7 +469,7 @@ export async function collectFilesystemFindings(params: {
   return findings;
 }
 
-export function collectGatewayConfigFindings(
+function collectGatewayConfigFindings(
   cfg: OpenClawConfig,
   sourceConfig: OpenClawConfig,
   env: NodeJS.ProcessEnv,
@@ -520,7 +481,7 @@ export function collectGatewayConfigFindings(
   });
 }
 
-export async function collectPluginSecurityAuditFindings(
+async function collectPluginSecurityAuditFindings(
   context: AuditExecutionContext,
 ): Promise<SecurityAuditFinding[]> {
   if (!context.loadPluginSecurityCollectors) {
@@ -612,7 +573,7 @@ export async function collectPluginSecurityAuditFindings(
   return collectorResults.flat();
 }
 
-export function collectLoggingFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
+function collectLoggingFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const redact = cfg.logging?.redactSensitive;
   if (redact !== "off") {
     return [];
@@ -628,7 +589,7 @@ export function collectLoggingFindings(cfg: OpenClawConfig): SecurityAuditFindin
   ];
 }
 
-export function collectElevatedFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
+function collectElevatedFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const enabled = cfg.tools?.elevated?.enabled;
   const allowFrom = cfg.tools?.elevated?.allowFrom ?? {};
@@ -778,7 +739,7 @@ function collectYoloExecScopeIds(cfg: OpenClawConfig, approvals: ExecApprovalsFi
     .map((entry) => entry.id);
 }
 
-export function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
+function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const globalExecHost = cfg.tools?.exec?.host;
   const globalStrictInlineEval = cfg.tools?.exec?.strictInlineEval === true;
@@ -1109,25 +1070,49 @@ function listConfiguredMcpServerNames(cfg: OpenClawConfig): string[] {
     .toSorted();
 }
 
+type GlobalMcporterRegistrySummary =
+  | { status: "source"; summary: McpServerSourceSummary }
+  | { status: "absent" }
+  | Extract<McporterRegistryReadOutcome, { status: "rejected" }>;
+
 async function readGlobalMcporterRegistrySummary(
   stateDir: string,
-): Promise<McpServerSourceSummary | null> {
-  const registryPath = path.join(stateDir, "skills", "config", "mcporter.json");
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(await fs.readFile(registryPath, "utf8")) as unknown;
-  } catch {
-    return null;
+): Promise<GlobalMcporterRegistrySummary> {
+  const outcome = await readBoundedMcporterRegistry(stateDir);
+  if (outcome.status === "missing") {
+    return { status: "absent" };
   }
-  const mcpServers = asNullableRecord(asNullableRecord(parsed)?.mcpServers);
+  if (outcome.status === "rejected") {
+    return outcome;
+  }
+  const mcpServers = asNullableRecord(asNullableRecord(outcome.value)?.mcpServers);
   if (!mcpServers) {
-    return null;
+    return { status: "absent" };
   }
   const names = Object.entries(mcpServers)
     .filter(([, value]) => asNullableRecord(value)?.enabled !== false)
     .map(([name]) => name)
     .toSorted();
-  return names.length > 0 ? { label: "skills/config/mcporter.json", names } : null;
+  return names.length > 0
+    ? { status: "source", summary: { label: "skills/config/mcporter.json", names } }
+    : { status: "absent" };
+}
+
+function describeMcporterRegistryRejection(reason: McporterRegistryRejectReason): string {
+  switch (reason) {
+    case "oversized":
+      return "larger than the 16 MiB audit cap";
+    case "unreadable":
+      return "unreadable";
+    case "non-regular":
+      return "not a regular file";
+    case "malformed":
+      return "not valid JSON";
+    default: {
+      const exhaustive: never = reason;
+      return exhaustive;
+    }
+  }
 }
 
 function hasOwnSkillsAllowlist(entry: object | undefined): boolean {
@@ -1191,51 +1176,64 @@ function collectAgentSkillMcpBoundaryScopes(cfg: OpenClawConfig): AgentSkillMcpB
   });
 }
 
-export async function collectAgentSkillMcpBoundaryFindings(params: {
+async function collectAgentSkillMcpBoundaryFindings(params: {
   cfg: OpenClawConfig;
   stateDir: string;
 }): Promise<SecurityAuditFinding[]> {
+  const scopes = collectAgentSkillMcpBoundaryScopes(params.cfg);
+  if (scopes.length === 0) {
+    return [];
+  }
+
+  const findings: SecurityAuditFinding[] = [];
   const sources: McpServerSourceSummary[] = [];
   const configServerNames = listConfiguredMcpServerNames(params.cfg);
   if (configServerNames.length > 0) {
     sources.push({ label: "mcp.servers", names: configServerNames });
   }
   const globalMcporterRegistry = await readGlobalMcporterRegistrySummary(params.stateDir);
-  if (globalMcporterRegistry) {
-    sources.push(globalMcporterRegistry);
+  if (globalMcporterRegistry.status === "rejected") {
+    // An existing registry that cannot be inspected must not silently vanish
+    // from the audit; tell the operator the MCP boundary check is incomplete.
+    findings.push({
+      checkId: "tools.exec.mcporter_registry_inspection_incomplete",
+      severity: "warn",
+      title: "Global mcporter registry could not be inspected",
+      detail:
+        `skills/config/mcporter.json exists but could not be safely inspected (${describeMcporterRegistryRejection(globalMcporterRegistry.reason)}). ` +
+        "The MCP boundary inspection is incomplete: the audit could not verify which MCP servers a host exec process can reach.",
+      remediation:
+        "Repair or remove skills/config/mcporter.json so the audit can inspect it: keep it a regular file readable by the gateway user, valid JSON, and below the 16 MiB audit cap.",
+    });
+  } else if (globalMcporterRegistry.status === "source") {
+    sources.push(globalMcporterRegistry.summary);
   }
   if (sources.length === 0) {
-    return [];
+    return findings;
   }
 
-  const scopes = collectAgentSkillMcpBoundaryScopes(params.cfg);
-  if (scopes.length === 0) {
-    return [];
-  }
-
-  return [
-    {
-      checkId: "tools.exec.agent_skill_mcp_boundary_drift",
-      severity: "warn",
-      title: "Agent skill allowlists do not constrain host exec MCP clients",
-      detail:
-        `Detected agent skill allowlists on host-exec-capable scopes:\n${scopes
-          .slice(0, 8)
-          .map(
-            (scope) =>
-              `- ${scope.id}: ${scope.skillSource}, exec.host=${scope.execHost}, security=${scope.execSecurity}, ask=${scope.execAsk}`,
-          )
-          .join("\n")}` +
-        (scopes.length > 8 ? `\n- +${scopes.length - 8} more scopes.` : "") +
-        `\nMCP server registries visible to the gateway configuration/state:\n${sources
-          .map((source) => `- ${source.label}: ${formatNamesPreview(source.names)}`)
-          .join("\n")}\n` +
-        "agents.*.skills filters OpenClaw skill visibility and snapshots; it is not a shell-time authorization boundary. " +
-        "A host exec process can run external MCP clients or read a global mcporter registry unless sandbox, filesystem, network, or MCP credential boundaries block it.",
-      remediation:
-        'For agents that need per-agent MCP isolation, set their exec policy to security="deny" or a tight allowlist, run them in sandbox/container/OS-user isolation where the global MCP registry is not readable, split sensitive MCP servers into a separate gateway/trust boundary, or require per-agent MCP credentials at the server layer.',
-    },
-  ];
+  findings.push({
+    checkId: "tools.exec.agent_skill_mcp_boundary_drift",
+    severity: "warn",
+    title: "Agent skill allowlists do not constrain host exec MCP clients",
+    detail:
+      `Detected agent skill allowlists on host-exec-capable scopes:\n${scopes
+        .slice(0, 8)
+        .map(
+          (scope) =>
+            `- ${scope.id}: ${scope.skillSource}, exec.host=${scope.execHost}, security=${scope.execSecurity}, ask=${scope.execAsk}`,
+        )
+        .join("\n")}` +
+      (scopes.length > 8 ? `\n- +${scopes.length - 8} more scopes.` : "") +
+      `\nMCP server registries visible to the gateway configuration/state:\n${sources
+        .map((source) => `- ${source.label}: ${formatNamesPreview(source.names)}`)
+        .join("\n")}\n` +
+      "agents.*.skills filters OpenClaw skill visibility and snapshots; it is not a shell-time authorization boundary. " +
+      "A host exec process can run external MCP clients or read a global mcporter registry unless sandbox, filesystem, network, or MCP credential boundaries block it.",
+    remediation:
+      'For agents that need per-agent MCP isolation, set their exec policy to security="deny" or a tight allowlist, run them in sandbox/container/OS-user isolation where the global MCP registry is not readable, split sensitive MCP servers into a separate gateway/trust boundary, or require per-agent MCP credentials at the server layer.',
+  });
+  return findings;
 }
 
 function collectOpenExecSurfacePaths(cfg: OpenClawConfig): string[] {
@@ -1584,3 +1582,4 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
     deep,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

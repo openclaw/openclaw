@@ -336,6 +336,25 @@ describe("subagent announce seam flow", () => {
     });
   });
 
+  it("skips delete cleanup when the lifecycle owner invalidates the attempt", async () => {
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-invalidated-delete",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "do thing",
+      timeoutMs: 10,
+      cleanup: "delete",
+      waitForCompletion: false,
+      outcome: { status: "ok" },
+      roundOneReply: "ANNOUNCE_SKIP",
+      onBeforeDeleteChildSession: () => false,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sessionsDeleteSpy).not.toHaveBeenCalled();
+  });
+
   it("warns when ANNOUNCE_SKIP suppresses a cron job completion", async () => {
     const logSpy = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
 

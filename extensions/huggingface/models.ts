@@ -1,5 +1,6 @@
 // Huggingface plugin module implements models behavior.
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-types";
 import {
   fetchWithSsrFGuard,
@@ -10,7 +11,7 @@ import { isHuggingfaceModelDiscoveryTestEnvironment } from "./model-discovery-en
 
 export const HUGGINGFACE_BASE_URL = "https://router.huggingface.co/v1";
 export const HUGGINGFACE_POLICY_SUFFIXES = ["cheapest", "fastest"] as const;
-export const HUGGINGFACE_DISCOVERY_TIMEOUT_MS = 30_000;
+const HUGGINGFACE_DISCOVERY_TIMEOUT_MS = 30_000;
 
 const HUGGINGFACE_DEFAULT_COST = {
   input: 0,
@@ -58,15 +59,6 @@ export const HUGGINGFACE_MODEL_CATALOG: ModelDefinitionConfig[] = [
     contextWindow: 131072,
     maxTokens: 8192,
     cost: { input: 0.6, output: 1.25, cacheRead: 0.6, cacheWrite: 0.6 },
-  },
-  {
-    id: "meta-llama/Llama-3.3-70B-Instruct-Turbo",
-    name: "Llama 3.3 70B Instruct Turbo",
-    reasoning: false,
-    input: ["text"],
-    contextWindow: 131072,
-    maxTokens: 8192,
-    cost: { input: 0.88, output: 0.88, cacheRead: 0.88, cacheWrite: 0.88 },
   },
   {
     id: "openai/gpt-oss-120b",
@@ -162,10 +154,14 @@ export async function discoverHuggingfaceModels(
     });
     try {
       if (!response.ok) {
+        await response.body?.cancel().catch(() => undefined);
         return HUGGINGFACE_MODEL_CATALOG.map(buildHuggingfaceModelDefinition);
       }
 
-      const body = (await response.json()) as OpenAIListModelsResponse;
+      const body = await readProviderJsonResponse<OpenAIListModelsResponse>(
+        response,
+        "huggingface.model-discovery",
+      );
       const data = body?.data;
       if (!Array.isArray(data) || data.length === 0) {
         return HUGGINGFACE_MODEL_CATALOG.map(buildHuggingfaceModelDefinition);

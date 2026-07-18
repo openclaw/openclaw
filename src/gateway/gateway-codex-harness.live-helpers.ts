@@ -81,6 +81,30 @@ export const EXPECTED_CODEX_MODELS_COMMAND_TEXT = [
   "Current OpenClaw session status reports the active model as:",
 ] as const;
 
+export function shouldUseCodexHarnessSubagentOnlyFastPath(params: {
+  chatImageProbe: boolean;
+  codeModeOnly: boolean;
+  compactionStress: boolean;
+  explicitOptOut: boolean;
+  guardianProbe: boolean;
+  imageProbe: boolean;
+  mcpProbe: boolean;
+  resumeStress: boolean;
+  subagentProbe: boolean;
+}): boolean {
+  return (
+    params.subagentProbe &&
+    !params.chatImageProbe &&
+    !params.codeModeOnly &&
+    !params.compactionStress &&
+    !params.guardianProbe &&
+    !params.imageProbe &&
+    !params.mcpProbe &&
+    !params.resumeStress &&
+    !params.explicitOptOut
+  );
+}
+
 const HEALTHY_CODEX_MODELS_COMMAND_TEXT = [
   "Codex models:",
   "Available Codex models",
@@ -418,4 +442,25 @@ export function isRetryableCodexHarnessLiveError(error: unknown): boolean {
     return false;
   }
   return error.message.includes("gateway request timeout for sessions.list");
+}
+
+/** Matches the terminal snapshot emitted when a native subagent parent yields for delivery. */
+export function isExpectedYieldedAgentTimeout(payload: unknown): boolean {
+  if (!payload || typeof payload !== "object") {
+    return false;
+  }
+  const result = (payload as { result?: unknown; status?: unknown }).result;
+  if (!result || typeof result !== "object") {
+    return false;
+  }
+  const meta = (result as { meta?: unknown }).meta;
+  if (!meta || typeof meta !== "object") {
+    return false;
+  }
+  const record = meta as { livenessState?: unknown; yielded?: unknown };
+  return (
+    (payload as { status?: unknown }).status === "timeout" &&
+    record.yielded === true &&
+    record.livenessState === "paused"
+  );
 }

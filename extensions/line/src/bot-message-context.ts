@@ -2,6 +2,7 @@
 import type { webhook } from "@line/bot-sdk";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import {
+  formatInboundMediaUnavailableText,
   formatInboundEnvelope,
   formatLocationText,
   resolveInboundSessionEnvelopeContext,
@@ -15,10 +16,11 @@ import {
   resolveRuntimeConversationBindingRoute,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-dispatch-runtime";
-import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
+import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { resolveAgentRoute, resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizeAllowFrom } from "./bot-access.js";
 import { resolveLineGroupConfigEntry } from "./group-keys.js";
 import type { ResolvedLineAccount } from "./types.js";
@@ -36,11 +38,11 @@ interface MediaRef {
 interface BuildLineMessageContextParams {
   event: MessageEvent;
   allMedia: MediaRef[];
+  mediaUnavailable?: boolean;
   cfg: OpenClawConfig;
   account: ResolvedLineAccount;
   commandAuthorized: boolean;
-  groupHistories?: Map<string, HistoryEntry[]>;
-  historyLimit?: number;
+  inboundHistory?: HistoryEntry[];
 }
 
 type LineSourceInfo = {
@@ -282,6 +284,7 @@ async function finalizeLineInboundContext(params: {
   route: LineRouteInfo;
   source: LineSourceInfoWithPeerId;
   rawBody: string;
+  agentBody?: string;
   timestamp: number;
   messageSid: string;
   commandAuthorized: boolean;
@@ -318,11 +321,12 @@ async function finalizeLineInboundContext(params: {
     sessionKey: params.route.sessionKey,
   });
 
+  const agentBody = params.agentBody ?? params.rawBody;
   const body = formatInboundEnvelope({
     channel: "LINE",
     from: conversationLabel,
     timestamp: params.timestamp,
-    body: params.rawBody,
+    body: agentBody,
     chatType: params.source.isGroup ? "group" : "direct",
     sender: {
       id: senderId,
@@ -333,12 +337,13 @@ async function finalizeLineInboundContext(params: {
 
   const ctxPayload = finalizeInboundContext({
     Body: body,
-    BodyForAgent: params.rawBody,
+    BodyForAgent: agentBody,
     RawBody: params.rawBody,
     CommandBody: params.rawBody,
     From: fromAddress,
     To: toAddress,
     SessionKey: params.route.sessionKey,
+    DmScope: params.route.dmScope,
     AccountId: params.route.accountId,
     ChatType: params.source.isGroup ? "group" : "direct",
     ConversationLabel: conversationLabel,
@@ -383,7 +388,7 @@ async function finalizeLineInboundContext(params: {
     sessionKey: params.route.sessionKey,
   });
   if (shouldLogVerbose()) {
-    const preview = body.slice(0, 200).replace(/\n/g, "\\n");
+    const preview = truncateUtf16Safe(body, 200).replace(/\n/g, "\\n");
     const mediaInfo =
       params.verboseLog.kind === "inbound" && (params.verboseLog.mediaCount ?? 0) > 1
         ? ` mediaCount=${params.verboseLog.mediaCount}`
@@ -437,7 +442,8 @@ async function finalizeLineInboundContext(params: {
 }
 
 export async function buildLineMessageContext(params: BuildLineMessageContextParams) {
-  const { event, allMedia, cfg, account, commandAuthorized, groupHistories, historyLimit } = params;
+  const { event, allMedia, mediaUnavailable, cfg, account, commandAuthorized, inboundHistory } =
+    params;
 
   const source = event.source;
   const { userId, groupId, roomId, isGroup, peerId, route } = await resolveLineInboundRoute({
@@ -457,8 +463,15 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
   if (!rawBody && allMedia.length > 0) {
     rawBody = `<media:image>${allMedia.length > 1 ? ` (${allMedia.length} images)` : ""}`;
   }
+  const agentBody = mediaUnavailable
+    ? formatInboundMediaUnavailableText({
+        body: rawBody,
+        mediaPlaceholder: placeholder,
+        notice: "[line attachment unavailable]",
+      })
+    : rawBody;
 
-  if (!rawBody && allMedia.length === 0) {
+  if (!agentBody && allMedia.length === 0) {
     return null;
   }
 
@@ -473,15 +486,6 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
     });
   }
 
-  const historyKey = isGroup ? peerId : undefined;
-  const inboundHistory =
-    historyKey && groupHistories && (historyLimit ?? 0) > 0
-      ? createChannelHistoryWindow({ historyMap: groupHistories }).buildInboundHistory({
-          historyKey,
-          limit: historyLimit ?? 0,
-        })
-      : undefined;
-
   const finalized = await finalizeLineInboundContext({
     cfg,
     account,
@@ -489,6 +493,7 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
     route,
     source: { userId, groupId, roomId, isGroup, peerId },
     rawBody,
+    agentBody,
     timestamp,
     messageSid: messageId,
     commandAuthorized,

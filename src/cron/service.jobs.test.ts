@@ -2,6 +2,8 @@
 import { describe, expect, it } from "vitest";
 import {
   applyJobPatch,
+  computeJobNextRunAtMs,
+  computeJobPreviousRunAtOrBeforeMs,
   createJob,
   nextWakeAtMs,
   recomputeNextRuns,
@@ -449,6 +451,34 @@ describe("applyJobPatch", () => {
     }
   });
 
+  it("preserves the default toolsAllow flag when a self-edit echoes the default list", () => {
+    const job = createIsolatedAgentTurnJob("job-tools-default-echo", {
+      mode: "announce",
+      channel: "telegram",
+    });
+    job.payload = {
+      kind: "agentTurn",
+      message: "do it",
+      toolsAllow: ["exec", "read"],
+      toolsAllowIsDefault: true,
+    };
+
+    applyJobPatch(job, {
+      payload: {
+        kind: "agentTurn",
+        message: "do it later",
+        toolsAllow: ["exec", "read"],
+      },
+    });
+
+    expect(job.payload.kind).toBe("agentTurn");
+    if (job.payload.kind === "agentTurn") {
+      expect(job.payload.message).toBe("do it later");
+      expect(job.payload.toolsAllow).toEqual(["exec", "read"]);
+      expect(job.payload.toolsAllowIsDefault).toBe(true);
+    }
+  });
+
   it("clears agentTurn payload.toolsAllow when patch requests null", () => {
     const job = createIsolatedAgentTurnJob("job-tools-clear", {
       mode: "announce",
@@ -793,7 +823,6 @@ function createMockState(now: number, opts?: { defaultAgentId?: string }): CronS
       nowMs: () => now,
       defaultAgentId: opts?.defaultAgentId,
     },
-    pendingCatchupDeferralJobIds: new Set<string>(),
   } as unknown as CronServiceState;
 }
 
@@ -1066,6 +1095,45 @@ describe("cron stagger defaults", () => {
   });
 });
 
+describe("computeJobPreviousRunAtOrBeforeMs", () => {
+  function createCronJob(schedule: Extract<CronJob["schedule"], { kind: "cron" }>): CronJob {
+    return {
+      id: "inclusive-previous-run",
+      name: "inclusive previous run",
+      enabled: true,
+      createdAtMs: 0,
+      updatedAtMs: 0,
+      schedule,
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "tick" },
+      state: {},
+    };
+  }
+
+  it("includes an exact boundary and keeps the prior slot between boundaries", () => {
+    const job = createCronJob({ kind: "cron", expr: "* * * * * *", tz: "UTC", staggerMs: 0 });
+    const boundary = Date.parse("2025-12-13T04:02:00.000Z");
+
+    expect(computeJobPreviousRunAtOrBeforeMs(job, boundary)).toBe(boundary);
+    expect(computeJobPreviousRunAtOrBeforeMs(job, boundary + 500)).toBe(boundary);
+  });
+
+  it("includes an exact effective boundary after per-job staggering", () => {
+    const job = createCronJob({
+      kind: "cron",
+      expr: "0 * * * * *",
+      tz: "UTC",
+      staggerMs: 30_000,
+    });
+    const cursor = Date.parse("2025-12-13T04:02:00.000Z");
+    const effectiveBoundary = computeJobNextRunAtMs(job, cursor);
+
+    expect(effectiveBoundary).toBeTypeOf("number");
+    expect(computeJobPreviousRunAtOrBeforeMs(job, effectiveBoundary!)).toBe(effectiveBoundary);
+  });
+});
+
 describe("createJob delivery defaults", () => {
   const now = Date.parse("2026-02-28T12:00:00.000Z");
 
@@ -1280,18 +1348,16 @@ describe("recomputeNextRuns", () => {
       sessionTarget: "main",
       wakeMode: "now",
       payload: { kind: "systemEvent", text: "tick" },
-      state: { nextRunAtMs: deferred },
+      state: { nextRunAtMs: deferred, startupCatchupAtMs: deferred },
     };
-    const pendingCatchupDeferralJobIds = new Set([job.id]);
     const state = {
       ...createMockState(now),
-      pendingCatchupDeferralJobIds,
       store: { version: 1 as const, jobs: [job] },
     } as CronServiceState;
 
     expect(recomputeNextRunsForMaintenance(state)).toBe(false);
     expect(job.state.nextRunAtMs).toBe(deferred);
-    expect(pendingCatchupDeferralJobIds.has(job.id)).toBe(true);
+    expect(job.state.startupCatchupAtMs).toBe(deferred);
 
     expect(
       recomputeNextRunsForMaintenance(state, {
@@ -1299,11 +1365,11 @@ describe("recomputeNextRuns", () => {
         repairFutureCronNextRunAtMs: true,
       }),
     ).toBe(true);
-    expect(pendingCatchupDeferralJobIds.has(job.id)).toBe(false);
+    expect(job.state.startupCatchupAtMs).toBeUndefined();
     expect(job.state.nextRunAtMs).toBe(deferred);
   });
 
-  it("drops startup catch-up deferral ids for jobs no longer relevant to maintenance", () => {
+  it("drops startup catch-up deferrals for disabled jobs", () => {
     const now = Date.parse("2026-05-05T12:00:00.000Z");
     const deferred = Date.parse("2026-05-05T12:02:00.000Z");
     const disabledJob: CronJob = {
@@ -1316,17 +1382,15 @@ describe("recomputeNextRuns", () => {
       sessionTarget: "main",
       wakeMode: "now",
       payload: { kind: "systemEvent", text: "tick" },
-      state: { nextRunAtMs: deferred },
+      state: { nextRunAtMs: deferred, startupCatchupAtMs: deferred },
     };
-    const pendingCatchupDeferralJobIds = new Set([disabledJob.id, "removed-deferral"]);
     const state = {
       ...createMockState(now),
-      pendingCatchupDeferralJobIds,
       store: { version: 1 as const, jobs: [disabledJob] },
     } as CronServiceState;
 
     expect(recomputeNextRunsForMaintenance(state)).toBe(true);
-    expect([...pendingCatchupDeferralJobIds]).toEqual([]);
+    expect(disabledJob.state.startupCatchupAtMs).toBeUndefined();
     expect(disabledJob.state.nextRunAtMs).toBeUndefined();
   });
 
@@ -1483,3 +1547,4 @@ describe("recomputeNextRuns", () => {
     expect(job.state.scheduleErrorCount).toBeUndefined();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

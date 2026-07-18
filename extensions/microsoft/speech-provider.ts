@@ -6,7 +6,7 @@ import {
   TRUSTED_CLIENT_TOKEN,
   generateSecMsGecToken,
 } from "node-edge-tts/dist/drm.js";
-import { isVoiceCompatibleAudio } from "openclaw/plugin-sdk/media-runtime";
+import { isVoiceMessageCompatibleAudio } from "openclaw/plugin-sdk/media-runtime";
 import {
   assertOkOrThrowProviderError,
   readProviderJsonResponse,
@@ -31,6 +31,7 @@ import { edgeTTS, inferEdgeExtension } from "./tts.js";
 const DEFAULT_EDGE_VOICE = "en-US-MichelleNeural";
 const DEFAULT_EDGE_LANG = "en-US";
 const DEFAULT_EDGE_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
+const DEFAULT_MICROSOFT_VOICE_LIST_TIMEOUT_MS = 30_000;
 
 type MicrosoftProviderConfig = {
   enabled: boolean;
@@ -118,7 +119,7 @@ function formatMicrosoftVoiceDescription(entry: MicrosoftVoiceListEntry): string
   return personalities.length > 0 ? personalities.join(", ") : undefined;
 }
 
-export function isCjkDominant(text: string): boolean {
+function isCjkDominant(text: string): boolean {
   const stripped = text.replace(/\s+/g, "");
   if (stripped.length === 0) {
     return false;
@@ -141,7 +142,9 @@ export function isCjkDominant(text: string): boolean {
 const DEFAULT_CHINESE_EDGE_VOICE = "zh-CN-XiaoxiaoNeural";
 const DEFAULT_CHINESE_EDGE_LANG = "zh-CN";
 
-export async function listMicrosoftVoices(): Promise<SpeechVoiceOption[]> {
+async function listMicrosoftVoices(
+  timeoutMs = DEFAULT_MICROSOFT_VOICE_LIST_TIMEOUT_MS,
+): Promise<SpeechVoiceOption[]> {
   const url =
     "https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/voices/list" +
     `?trustedclienttoken=${TRUSTED_CLIENT_TOKEN}`;
@@ -153,6 +156,7 @@ export async function listMicrosoftVoices(): Promise<SpeechVoiceOption[]> {
     },
     policy: ssrfPolicyFromHttpBaseUrlAllowedHostname("https://speech.platform.bing.com"),
     auditContext: "microsoft.speech.voices",
+    timeoutMs,
   });
   try {
     if (!isDebugProxyGlobalFetchPatchInstalled()) {
@@ -239,7 +243,10 @@ export function buildMicrosoftSpeechProvider(): SpeechProviderPlugin {
         ? {}
         : { outputFormat: trimToUndefined(params.outputFormat) }),
     }),
-    listVoices: async () => await listMicrosoftVoices(),
+    listVoices: async (req) => {
+      const config = readMicrosoftProviderConfig(req.providerConfig ?? {});
+      return await listMicrosoftVoices(config.timeoutMs ?? req.timeoutMs);
+    },
     isConfigured: ({ providerConfig }) => readMicrosoftProviderConfig(providerConfig).enabled,
     synthesize: async (req) => {
       const config = readMicrosoftProviderConfig(req.providerConfig);
@@ -281,7 +288,7 @@ export function buildMicrosoftSpeechProvider(): SpeechProviderPlugin {
             audioBuffer,
             outputFormat: format,
             fileExtension,
-            voiceCompatible: isVoiceCompatibleAudio({ fileName: outputPath }),
+            voiceCompatible: isVoiceMessageCompatibleAudio({ fileName: outputPath }),
           };
         };
 

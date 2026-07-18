@@ -24,6 +24,14 @@ import {
 import { mergeIdentityMarkdownContent } from "../../agents/identity-file.js";
 import { resolveAgentIdentity } from "../../agents/identity.js";
 import {
+  prepareLegacyWorkspaceStateReset,
+  removeLegacyWorkspaceStateForReset,
+} from "../../agents/workspace-legacy-state.js";
+import {
+  deleteWorkspaceState,
+  prepareWorkspaceStateDeletion,
+} from "../../agents/workspace-state-store.js";
+import {
   DEFAULT_AGENTS_FILENAME,
   DEFAULT_BOOTSTRAP_FILENAME,
   DEFAULT_HEARTBEAT_FILENAME,
@@ -34,8 +42,6 @@ import {
   DEFAULT_USER_FILENAME,
   ensureAgentWorkspace,
   isWorkspaceSetupCompleted,
-  resolveWorkspaceAttestationPaths,
-  shouldRemoveWorkspaceAttestation,
 } from "../../agents/workspace.js";
 import { applyAgentConfig } from "../../commands/agents.config.js";
 import {
@@ -47,6 +53,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { root, FsSafeError, type ReadResult } from "../../infra/fs-safe.js";
 import { movePathToTrash } from "../../plugin-sdk/browser-maintenance.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
+import { isReservedSystemAgentId } from "../../system-agent/agent-id.js";
 import { resolveUserPath } from "../../utils.js";
 import { listAgentsForGateway } from "../session-utils.js";
 import {
@@ -312,19 +319,38 @@ function respondAgentConfigPreconditionError(
   );
 }
 
-async function moveToTrashBestEffort(pathname: string): Promise<void> {
-  if (!pathname) {
-    return;
-  }
+type AgentDeleteRemovedPath = {
+  path: string;
+  method: "trash" | "missing";
+};
+
+type AgentDeleteFailedPath = {
+  path: string;
+  reason: string;
+};
+
+type AgentDeletePathOutcome =
+  | { removed: AgentDeleteRemovedPath }
+  | { failed: AgentDeleteFailedPath };
+
+function cleanupFailure(pathname: string, error: unknown): AgentDeletePathOutcome {
+  const reason = error instanceof Error && error.message ? error.message : String(error);
+  return { failed: { path: pathname, reason: reason || "unknown error" } };
+}
+
+async function removeAgentPath(pathname: string): Promise<AgentDeletePathOutcome> {
   try {
-    await fs.access(pathname);
-  } catch {
-    return;
+    await fs.lstat(pathname);
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT"
+      ? { removed: { path: pathname, method: "missing" } }
+      : cleanupFailure(pathname, error);
   }
   try {
     await movePathToTrash(pathname);
-  } catch {
-    // Best-effort: path may already be gone or trash unavailable.
+    return { removed: { path: pathname, method: "trash" } };
+  } catch (error) {
+    return cleanupFailure(pathname, error);
   }
 }
 
@@ -411,14 +437,14 @@ function buildAgentConfigUpdate(params: {
   agentId: string;
   safeName?: string;
   workspaceDir?: string;
-  model?: string;
+  model?: string | null;
   identity?: IdentityConfig;
 }): Parameters<typeof updateAgentConfigEntry>[0] {
   return {
     agentId: params.agentId,
     ...(params.safeName ? { name: params.safeName } : {}),
     ...(params.workspaceDir ? { workspace: params.workspaceDir } : {}),
-    ...(params.model ? { model: params.model } : {}),
+    ...(params.model !== undefined ? { model: params.model } : {}),
     ...(params.identity ? { identity: params.identity } : {}),
   };
 }
@@ -512,12 +538,8 @@ export const agentsHandlers: GatewayRequestHandlers = {
     const cfg = context.getRuntimeConfig();
     const rawName = params.name.trim();
     const agentId = normalizeAgentId(rawName);
-    if (agentId === DEFAULT_AGENT_ID) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `"${DEFAULT_AGENT_ID}" is reserved`),
-      );
+    if (agentId === DEFAULT_AGENT_ID || isReservedSystemAgentId(agentId)) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `"${agentId}" is reserved`));
       return;
     }
 
@@ -620,7 +642,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
         ? resolveUserPath(params.workspace.trim())
         : undefined;
 
-    const model = resolveOptionalStringParam(params.model);
+    const model = params.model === null ? null : resolveOptionalStringParam(params.model);
 
     const safeName =
       typeof params.name === "string" && params.name.trim()
@@ -737,6 +759,16 @@ export const agentsHandlers: GatewayRequestHandlers = {
     // Purge session store entries so orphaned sessions cannot be targeted (#65524).
     await purgeAgentSessionStoreEntries(cfg, agentId);
 
+    const removed: AgentDeleteRemovedPath[] = [];
+    const failed: AgentDeleteFailedPath[] = [];
+    const recordOutcome = (outcome: AgentDeletePathOutcome) => {
+      if ("removed" in outcome) {
+        removed.push(outcome.removed);
+      } else {
+        failed.push(outcome.failed);
+      }
+    };
+
     if (deleteFiles) {
       const workspaceSharedWith = findOverlappingWorkspaceAgentIds(
         committed.nextConfig,
@@ -744,23 +776,31 @@ export const agentsHandlers: GatewayRequestHandlers = {
         deleteResult.workspaceDir,
       );
       const deleteWorkspace = workspaceSharedWith.length === 0;
-      const pathsToTrash = [deleteResult.agentDir, deleteResult.sessionsDir];
       if (deleteWorkspace) {
-        pathsToTrash.unshift(deleteResult.workspaceDir);
-        for (const [index, attestationPath] of resolveWorkspaceAttestationPaths(
-          deleteResult.workspaceDir,
-        ).entries()) {
-          if (
-            await shouldRemoveWorkspaceAttestation(attestationPath, { trustUnknown: index === 0 })
-          ) {
-            pathsToTrash.push(attestationPath);
+        const legacyPlan = prepareLegacyWorkspaceStateReset(deleteResult.workspaceDir);
+        const statePlan = prepareWorkspaceStateDeletion(deleteResult.workspaceDir);
+        const workspaceOutcome = await removeAgentPath(deleteResult.workspaceDir);
+        recordOutcome(workspaceOutcome);
+        if ("removed" in workspaceOutcome) {
+          try {
+            await removeLegacyWorkspaceStateForReset(legacyPlan);
+            deleteWorkspaceState(statePlan);
+          } catch {
+            // Best-effort cleanup. A later explicit reset can remove stale rows.
           }
         }
       }
-      await Promise.all(pathsToTrash.map((pathname) => moveToTrashBestEffort(pathname)));
+      const stateOutcomes = await Promise.all(
+        [deleteResult.agentDir, deleteResult.sessionsDir].map(removeAgentPath),
+      );
+      stateOutcomes.forEach(recordOutcome);
     }
 
-    respond(true, { ok: true, agentId, removedBindings: deleteResult.removedBindings }, undefined);
+    respond(
+      true,
+      { ok: true, agentId, removedBindings: deleteResult.removedBindings, removed, failed },
+      undefined,
+    );
   },
   "agents.files.list": async ({ params, respond, context }) => {
     if (!validateAgentsFilesListParams(params)) {
@@ -886,3 +926,4 @@ export const agentsHandlers: GatewayRequestHandlers = {
   },
 };
 export { testing as __testing };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

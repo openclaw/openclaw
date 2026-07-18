@@ -49,6 +49,21 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Bash",
       detailKeys: ["command"],
     },
+    computer: {
+      emoji: "🖱️",
+      title: "Computer",
+      detailKeys: ["action", "coordinate", "text", "node", "nodeId", "screenIndex"],
+    },
+    screen: {
+      emoji: "🖥️",
+      title: "Screen",
+      detailKeys: ["action", "sessionKey", "dock"],
+    },
+    terminal: {
+      emoji: "⌨️",
+      title: "Terminal",
+      detailKeys: ["action", "sessionId", "command", "cwd"],
+    },
     process: {
       emoji: "🧰",
       title: "Process",
@@ -285,20 +300,35 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Update Plan",
       detailKeys: ["explanation", "plan.0.step"],
     },
+    ask_user: {
+      emoji: "❓",
+      title: "Ask User",
+      detailKeys: ["questions.0.question"],
+    },
+    spawn_task: {
+      emoji: "✨",
+      title: "Suggest Task",
+      detailKeys: ["title", "tldr", "cwd"],
+    },
+    dismiss_task: {
+      emoji: "🗑️",
+      title: "Dismiss Task",
+      detailKeys: ["task_id", "reason"],
+    },
     skill_workshop: {
       emoji: "🧰",
       title: "Skill Workshop",
       detailKeys: ["action", "name", "proposal_id"],
     },
+    openclaw: {
+      emoji: "🦀",
+      title: "OpenClaw",
+      detailKeys: ["action", "path", "model"],
+    },
     gateway: {
       emoji: "🔌",
       title: "Gateway",
-      actions: {
-        restart: {
-          label: "restart",
-          detailKeys: ["reason", "delayMs"],
-        },
-      },
+      detailKeys: ["action", "path"],
     },
     exec: {
       emoji: "🛠️",
@@ -320,6 +350,20 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Session Status",
       detailKeys: ["sessionKey", "model"],
     },
+    sessions: {
+      emoji: "🗂️",
+      title: "Session Settings",
+      actions: {
+        patch: {
+          label: "update",
+          detailKeys: ["sessionKey", "label", "pinned", "archived", "model", "thinkingLevel"],
+        },
+        group_list: { label: "groups" },
+        group_set: { label: "set groups", detailKeys: ["names"] },
+        group_rename: { label: "rename group", detailKeys: ["name", "to"] },
+        group_delete: { label: "delete group", detailKeys: ["name"] },
+      },
+    },
     sessions_list: {
       emoji: "🗂️",
       title: "Sessions",
@@ -335,6 +379,21 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
         "messageLimit",
       ],
     },
+    conversations_list: {
+      emoji: "💬",
+      title: "Conversations",
+      detailKeys: ["channel", "limit"],
+    },
+    conversations_send: {
+      emoji: "📨",
+      title: "Conversation Send",
+      detailKeys: ["conversationRef"],
+    },
+    conversations_turn: {
+      emoji: "↔️",
+      title: "Conversation Turn",
+      detailKeys: ["conversationRef", "timeoutSeconds"],
+    },
     sessions_send: {
       emoji: "📨",
       title: "Session Send",
@@ -344,6 +403,11 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       emoji: "🧾",
       title: "Session History",
       detailKeys: ["sessionKey", "limit", "includeTools"],
+    },
+    sessions_search: {
+      emoji: "🔎",
+      title: "Session Search",
+      detailKeys: ["query", "sessionKey", "limit"],
     },
     transcripts: {
       emoji: "🎙️",

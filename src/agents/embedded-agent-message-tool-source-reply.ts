@@ -1,6 +1,8 @@
 /**
  * Detects message-tool sends that delivered a visible reply to the current source.
  */
+import { safeParseJson } from "@openclaw/normalization-core";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import {
   isMessageToolConversationCreateActionName,
@@ -33,6 +35,10 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
+}
+
+function resultConfirmsCurrentSourceRoute(value: unknown): boolean {
+  return asRecord(asRecord(value).details).sourceReplyRoute === "current-source";
 }
 
 function hasStringValue(value: unknown): boolean {
@@ -70,14 +76,7 @@ function isBareSentDeliveryStatus(value: unknown): boolean {
 }
 
 function parseJsonRecord(value: string): Record<string, unknown> | undefined {
-  try {
-    const parsed = JSON.parse(value);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : undefined;
-  } catch {
-    return undefined;
-  }
+  return asOptionalRecord(safeParseJson(value));
 }
 
 function recordHasDeliveredMessageId(record: Record<string, unknown>): boolean {
@@ -568,7 +567,9 @@ export function isDeliveredMessageToolOnlySourceReplyResult(params: {
   if (!isMessageToolSendActionName(args.action) && !sourceRouteReplyAction) {
     return false;
   }
-  if (hasExplicitMessageRoute(args) && params.allowExplicitSourceRoute !== true) {
+  const hasConfirmedExplicitSourceRoute =
+    params.allowExplicitSourceRoute === true || resultConfirmsCurrentSourceRoute(params.result);
+  if (hasExplicitMessageRoute(args) && !hasConfirmedExplicitSourceRoute) {
     return false;
   }
   return isDeliveredMessagingToolResult(params);

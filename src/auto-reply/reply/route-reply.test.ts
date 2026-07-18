@@ -4,7 +4,7 @@ import type {
   ChannelMessagingAdapter,
   ChannelPlugin,
   ChannelThreadingAdapter,
-} from "../../channels/plugins/types.js";
+} from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
@@ -712,6 +712,33 @@ describe("routeReply", () => {
       cfg,
     });
     expect(lastDeliveryPayload().text).toBe("[openclaw] hi");
+  });
+
+  it("interpolates responsePrefix from the routed channel and account", async () => {
+    const cfg = {
+      messages: { responsePrefix: "[global]" },
+      channels: {
+        slack: {
+          responsePrefix: "[slack]",
+          accounts: {
+            support: { responsePrefix: "[{modelFull} think:{thinkingLevel}]" },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    await routeReply({
+      payload: { text: "hi" },
+      channel: "slack",
+      to: "channel:C123",
+      accountId: "support",
+      sessionKey: "agent:main:main",
+      responsePrefixContext: {
+        modelFull: "anthropic/claude-opus-4-6",
+        thinkingLevel: "high",
+      },
+      cfg,
+    });
+    expect(lastDeliveryPayload().text).toBe("[anthropic/claude-opus-4-6 think:high] hi");
   });
 
   it("routes directive-only Slack replies when interactive replies are enabled", async () => {

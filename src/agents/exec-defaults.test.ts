@@ -2,7 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import * as execApprovals from "../infra/exec-approvals.js";
-import { canExecRequestNode, resolveExecDefaults } from "./exec-defaults.js";
+import { resolveExecDefaults, resolveNodeExecEligibility } from "./exec-defaults.js";
 
 describe("resolveExecDefaults", () => {
   beforeEach(() => {
@@ -294,18 +294,30 @@ describe("resolveExecDefaults", () => {
     });
   });
 
-  it("blocks node advertising in helper calls when sandbox is available", () => {
+  it("blocks node skill eligibility for deny policy and preserves node bindings", () => {
     expect(
-      canExecRequestNode({
+      resolveNodeExecEligibility({
         cfg: {
           tools: {
             exec: {
-              host: "auto",
+              host: "node",
+              security: "deny",
+              node: "build-mac",
             },
           },
         },
-        sandboxAvailable: true,
       }),
-    ).toBe(false);
+    ).toEqual({ canExec: false, node: "build-mac" });
+  });
+
+  it("blocks node skill eligibility when the gateway denies system.run", () => {
+    expect(
+      resolveNodeExecEligibility({
+        cfg: {
+          gateway: { nodes: { denyCommands: [" system.run "] } },
+          tools: { exec: { host: "node", security: "full" } },
+        },
+      }),
+    ).toEqual({ canExec: false });
   });
 });

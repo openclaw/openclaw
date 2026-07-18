@@ -75,7 +75,7 @@ async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<voi
     if (predicate()) {
       return;
     }
-    await delay(25);
+    await delay(5);
   }
   throw new Error("condition was not met before timeout");
 }
@@ -131,18 +131,22 @@ describe("telegram user Crabbox proof log polling", () => {
     ).toBe(4096);
   });
 
-  it("rejects loose and out-of-range proof ports before remote setup", () => {
-    const looseGatewayPort = runProofCli(["--gateway-port", "1e3", "--dry-run"]);
-    expect(looseGatewayPort.status).toBe(1);
-    expect(looseGatewayPort.stderr).toContain("--gateway-port must be a positive integer.");
-
-    const highGatewayPort = runProofCli(["--gateway-port", "65536", "--dry-run"]);
-    expect(highGatewayPort.status).toBe(1);
-    expect(highGatewayPort.stderr).toContain("--gateway-port must be a TCP port from 1 to 65535.");
-
-    const highMockPort = runProofCli(["--mock-port", "65536", "--dry-run"]);
-    expect(highMockPort.status).toBe(1);
-    expect(highMockPort.stderr).toContain("--mock-port must be a TCP port from 1 to 65535.");
+  it.each([
+    ["loose gateway", "--gateway-port", "1e3", "--gateway-port must be a positive integer."],
+    [
+      "out-of-range gateway",
+      "--gateway-port",
+      "65536",
+      "--gateway-port must be a TCP port from 1 to 65535.",
+    ],
+    [
+      "out-of-range mock",
+      "--mock-port",
+      "65536",
+      "--mock-port must be a TCP port from 1 to 65535.",
+    ],
+  ])("rejects %s proof ports before remote setup", (_label, flag, value, message) => {
+    expect(() => parseArgs([flag, value, "--dry-run"])).toThrow(message);
   });
 
   it("rejects short flags as proof option values before dry-run planning", () => {
@@ -286,7 +290,7 @@ describe("telegram user Crabbox proof log polling", () => {
     const stagedDir = stageFullSessionArtifacts(outputDir);
 
     expect(stagedDir).toBe(publishDir);
-    expect(fs.readdirSync(stagedDir).sort()).toEqual([
+    expect(fs.readdirSync(stagedDir).toSorted()).toEqual([
       "probe-2026-06-20T16-47-48-123Z.json",
       "probe.json",
       "status.json",
@@ -519,13 +523,13 @@ const descendant = spawn(process.execPath, [
   "--eval",
   ${JSON.stringify(
     `import { writeFileSync } from "node:fs";
-writeFileSync(${JSON.stringify(readyPath)}, "ready");
 process.on("SIGTERM", () => {
   setTimeout(() => {
     writeFileSync(${JSON.stringify(donePath)}, "done");
     process.exit(0);
   }, 75);
 });
+writeFileSync(${JSON.stringify(readyPath)}, "ready");
 setInterval(() => {}, 1000);`,
   )},
 ], { stdio: "ignore" });
@@ -571,11 +575,11 @@ const descendant = spawn(process.execPath, [
   "-e",
   ${JSON.stringify(
     `const fs = require("node:fs");
-fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(process.pid));
 process.on("SIGTERM", () => {
   fs.writeFileSync(${JSON.stringify(descendantTermPath)}, "terminated");
   process.exit(0);
 });
+fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(process.pid));
 setInterval(() => {}, 1000);`,
   )},
 ], { stdio: "ignore" });
@@ -608,9 +612,16 @@ setInterval(() => {}, 1000);
       stdio: "ignore",
     });
     try {
-      await waitFor(() => fs.existsSync(descendantPidPath));
-      descendantPid = Number.parseInt(fs.readFileSync(descendantPidPath, "utf8"), 10);
-      expect(isProcessAlive(descendantPid)).toBe(true);
+      await waitFor(() => {
+        if (!fs.existsSync(descendantPidPath)) {
+          return false;
+        }
+        descendantPid = Number.parseInt(fs.readFileSync(descendantPidPath, "utf8"), 10);
+        return (
+          Number.isInteger(descendantPid) && descendantPid > 1 && isProcessAlive(descendantPid)
+        );
+      });
+      expect(Number.isInteger(descendantPid)).toBe(true);
       await waitFor(() => fs.existsSync(commandSettledPath));
       if (!runner.pid) {
         throw new Error("runner did not start");
@@ -643,12 +654,14 @@ setInterval(() => {}, 1000);
       `
 import fs from "node:fs";
 
-fs.writeFileSync(${JSON.stringify(mockPidPath)}, String(process.pid));
-process.stdout.write("mock-openai listening\\n");
+// Handler before the readiness line: SIGTERM arrives once the gateway spawn
+// fails, and a late-registered handler can lose it to the default disposition.
 process.on("SIGTERM", () => {
   fs.writeFileSync(${JSON.stringify(mockTermPath)}, "terminated");
   process.exit(0);
 });
+fs.writeFileSync(${JSON.stringify(mockPidPath)}, String(process.pid));
+process.stdout.write("mock-openai listening\\n");
 setInterval(() => {}, 1000);
 `,
     );
@@ -680,6 +693,8 @@ process.exit(2);
           }),
           drainUpdates: async () => ({
             drained: 0,
+            pendingAfter: undefined,
+            pendingBefore: undefined,
             webhookUrlSet: false,
           }),
         },
@@ -743,6 +758,8 @@ process.exit(2);
             }),
             drainUpdates: async () => ({
               drained: 0,
+              pendingAfter: undefined,
+              pendingBefore: undefined,
               webhookUrlSet: false,
             }),
             waitForOutputReady: async (child, _pattern, output, label) => {
@@ -750,11 +767,19 @@ process.exit(2);
                 await waitFor(() => output().includes("mock-openai listening"));
                 return;
               }
-              await waitFor(() => fs.existsSync(gatewayGrandchildPidPath));
-              gatewayGrandchildPid = Number.parseInt(
-                fs.readFileSync(gatewayGrandchildPidPath, "utf8"),
-                10,
-              );
+              // Parse inside the poll: existsSync can observe writeFileSync's
+              // 0-byte open-truncate window, and a NaN pid would skip both the
+              // dead-check and the finally-block SIGKILL cleanup.
+              await waitFor(() => {
+                if (!fs.existsSync(gatewayGrandchildPidPath)) {
+                  return false;
+                }
+                gatewayGrandchildPid = Number.parseInt(
+                  fs.readFileSync(gatewayGrandchildPidPath, "utf8"),
+                  10,
+                );
+                return Number.isInteger(gatewayGrandchildPid) && gatewayGrandchildPid > 1;
+              });
               if (child.exitCode === null && child.signalCode === null) {
                 await new Promise<void>((resolve) => {
                   child.once("exit", () => resolve());
@@ -784,11 +809,15 @@ process.exit(2);
       `#!/usr/bin/env node
 import fs from "node:fs";
 
-fs.writeFileSync(${JSON.stringify(recorderPidPath)}, String(process.pid));
+// Arm the SIGTERM handler before publishing the pid file: the probe throws as
+// soon as the pid file exists and recordProbeVideo SIGTERMs the recorder in
+// its finally, so a handler installed after publish can lose that signal to
+// the default disposition and recorder.term is never written.
 process.on("SIGTERM", () => {
   fs.writeFileSync(${JSON.stringify(recorderTermPath)}, "terminated");
   process.exit(0);
 });
+fs.writeFileSync(${JSON.stringify(recorderPidPath)}, String(process.pid));
 setInterval(() => {}, 1000);
 `,
     );
@@ -846,7 +875,7 @@ fs.writeFileSync(${JSON.stringify(recorderExitPath)}, "exited");
             startDelayMs: 0,
             target: "linux",
           }),
-          delay(2_000).then(() => {
+          delay(500, undefined, { ref: false }).then(() => {
             throw new Error("recordProbeVideo hung after the recorder had already exited");
           }),
         ]),

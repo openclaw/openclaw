@@ -7,12 +7,14 @@ read_when:
 title: "SecretRef credential surface"
 ---
 
-This page defines the canonical SecretRef credential surface.
+This page defines the canonical SecretRef credential surface: which credential fields accept a `SecretRef` (env/file/exec-backed reference) instead of a raw secret value.
 
-Scope intent:
+Scope:
 
 - In scope: strictly user-supplied credentials that OpenClaw does not mint or rotate.
 - Out of scope: runtime-minted or rotating credentials, OAuth refresh material, and session-like artifacts.
+
+The lists below are generated from the source target registry and checked against `docs/reference/secretref-user-supplied-credentials-matrix.json` in CI; do not hand-edit entries.
 
 ## Supported credentials
 
@@ -59,6 +61,7 @@ Scope intent:
 - `plugins.entries.voice-call.config.streaming.providers.*.apiKey`
 - `plugins.entries.voice-call.config.tts.providers.*.apiKey`
 - `plugins.entries.voice-call.config.twilio.authToken`
+- `plugins.entries.webhooks.config.routes.*.secret`
 - `tools.web.search.*.apiKey`
 - `tools.web.search.apiKey`
 - `gateway.auth.password`
@@ -82,6 +85,8 @@ Scope intent:
 - `channels.slack.accounts.*.signingSecret`
 - `channels.sms.authToken`
 - `channels.sms.accounts.*.authToken`
+- `channels.clickclack.token`
+- `channels.clickclack.accounts.*.token`
 - `channels.discord.token`
 - `channels.discord.pluralkit.token`
 - `channels.discord.voice.tts.providers.*.apiKey`
@@ -127,22 +132,17 @@ Scope intent:
 
 Notes:
 
-- Auth-profile plan targets require `agentId`.
-- Plan entries target `profiles.*.key` / `profiles.*.token` and write sibling refs (`keyRef` / `tokenRef`).
-- Auth-profile refs are included in runtime resolution and audit coverage.
+- Auth-profile plan targets require `agentId`; plan entries target `profiles.*.key` / `profiles.*.token` and write sibling refs (`keyRef` / `tokenRef`). Auth-profile refs are included in runtime resolution and audit coverage.
 - In `openclaw.json`, SecretRefs must use structured objects such as `{"source":"env","provider":"default","id":"DISCORD_BOT_TOKEN"}`. Legacy `secretref-env:<ENV_VAR>` marker strings are rejected on SecretRef credential paths; run `openclaw doctor --fix` to migrate valid markers.
 - OAuth policy guard: `auth.profiles.<id>.mode = "oauth"` cannot be combined with SecretRef inputs for that profile. Startup/reload and auth-profile resolution fail fast when this policy is violated.
-- For SecretRef-managed model providers, generated `agents/*/agent/models.json` entries persist non-secret markers (not resolved secret values) for `apiKey`/header surfaces.
-- Marker persistence is source-authoritative: OpenClaw writes markers from the active source config snapshot (pre-resolution), not from resolved runtime secret values.
-- For web search:
-  - In explicit provider mode (`tools.web.search.provider` set), only the selected provider key is active.
-  - In auto mode (`tools.web.search.provider` unset), only the first provider key that resolves by precedence is active.
-  - In auto mode, non-selected provider refs are treated as inactive until selected.
-  - Legacy `tools.web.search.*` provider paths still resolve during the compatibility window, but the canonical SecretRef surface is `plugins.entries.<plugin>.config.webSearch.*`.
+- For SecretRef-managed model providers, generated `agents/*/agent/models.json` entries persist non-secret markers (not resolved secret values) for `apiKey`/header surfaces. Marker persistence is source-authoritative: OpenClaw writes markers from the active source config snapshot (pre-resolution), not from resolved runtime secret values.
+- Cold Gateway startup can isolate resolution failures for mapped owners. The initial mapped owners are `models.providers.*` and the built-in TTS capability (`messages.tts.providers.*`, `agents.list[].tts.providers.*`, and channel voice TTS provider keys). Startup keeps each failed owner's explicit refs in the runtime snapshot, reports the owner through status and doctor, and rejects requests for that owner without trying environment or profile credentials. Gateway ingress auth remains required. Structurally invalid refs or values and currently unmapped owners fail startup. Reload and config-write preflight remain strict and retain the last-known-good snapshot.
+- For web search: in explicit provider mode (`tools.web.search.provider` set), only the selected provider key is active. In auto mode (`tools.web.search.provider` unset), only the first provider key that resolves by precedence is active, and non-selected provider refs are treated as inactive until selected. Legacy `tools.web.search.*` provider paths still resolve during the compatibility window, but the canonical SecretRef surface is `plugins.entries.<plugin>.config.webSearch.*`.
+- Slack `identity: "user"` uses `channels.slack.userToken` with `channels.slack.appToken` for Socket Mode or `channels.slack.signingSecret` for HTTP mode. The same pairing applies under `channels.slack.accounts.*`; no bot token is required for this identity.
 
 ## Unsupported credentials
 
-Out-of-scope credentials include:
+These credentials are minted, rotated, session-bearing, or OAuth-durable classes that do not fit read-only external SecretRef resolution:
 
 [//]: # "secretref-unsupported-list-start"
 
@@ -157,10 +157,6 @@ Out-of-scope credentials include:
 - `channels.whatsapp.accounts.*.creds.json`
 
 [//]: # "secretref-unsupported-list-end"
-
-Rationale:
-
-- These credentials are minted, rotated, session-bearing, or OAuth-durable classes that do not fit read-only external SecretRef resolution.
 
 ## Related
 

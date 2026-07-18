@@ -6,7 +6,7 @@ import type {
 } from "./agent-tool-result-middleware-types.js";
 import { getActivePluginRegistry } from "./runtime.js";
 
-export const AGENT_TOOL_RESULT_MIDDLEWARE_RUNTIMES = [
+const AGENT_TOOL_RESULT_MIDDLEWARE_RUNTIMES = [
   "openclaw",
   "codex",
 ] as const satisfies AgentToolResultMiddlewareRuntime[];
@@ -54,11 +54,6 @@ export function normalizeAgentToolResultMiddlewareRuntimes(
   }
   return normalized;
 }
-
-/** @deprecated Use normalizeAgentToolResultMiddlewareRuntimes. */
-export const normalizeAgentToolResultMiddlewareHarnesses =
-  normalizeAgentToolResultMiddlewareRuntimes;
-
 export function normalizeAgentToolResultMiddlewareRuntimeIds(
   runtimes: readonly string[] | undefined,
 ): AgentToolResultMiddlewareRuntime[] {

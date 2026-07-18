@@ -871,6 +871,528 @@ $0 \\"$1\\"" touch {marker}`,
     });
   });
 
+  it("prevents allow-always bypass for package-manager shell carriers", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    makeExecutable(dir, "pnpm");
+    makeExecutable(dir, "sh");
+    const echo = makeExecutable(dir, "echo");
+    makeExecutable(dir, "id");
+    const env = makePathEnv(dir);
+
+    await expectAllowAlwaysBypassBlocked({
+      dir,
+      firstCommand: "pnpm exec sh -c 'echo warmup-ok'",
+      secondCommand: "pnpm exec sh -c 'id > marker'",
+      env,
+      persistedPattern: null,
+      allowlistPattern: echo,
+    });
+  });
+
+  it("rejects stale package-manager allow-always entries for shell carriers", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const pnpmPath = makeExecutable(dir, "pnpm");
+    makeExecutable(dir, "sh");
+    makeExecutable(dir, "id");
+    const env = makePathEnv(dir);
+    const safeBins = resolveSafeBins(undefined);
+
+    const result = await evaluateShellAllowlistWithAuthorization({
+      command: "pnpm exec sh -c 'id > marker'",
+      allowlist: [{ pattern: pnpmPath, source: "allow-always" }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+
+    expect(result.allowlistSatisfied).toBe(false);
+    expect(result.segmentAllowlistEntries).toEqual([null]);
+    expect(
+      requiresExecApproval({
+        ask: "on-miss",
+        security: "allowlist",
+        analysisOk: result.analysisOk,
+        allowlistSatisfied: result.allowlistSatisfied,
+      }),
+    ).toBe(true);
+  });
+
+  it.each(["exec", "x"])(
+    "rejects stale npm allow-always entries when unknown options hide %s",
+    async (subcommand) => {
+      if (process.platform === "win32") {
+        return;
+      }
+      const dir = makeTempDir();
+      const npmPath = makeExecutable(dir, "npm");
+      makeExecutable(dir, "sh");
+      makeExecutable(dir, "id");
+      const env = makePathEnv(dir);
+      const safeBins = resolveSafeBins(undefined);
+
+      const result = await evaluateShellAllowlistWithAuthorization({
+        command: `npm --unknown-global-option ${subcommand} sh -c 'id > marker'`,
+        allowlist: [{ pattern: npmPath, source: "allow-always" }],
+        safeBins,
+        cwd: dir,
+        env,
+        platform: process.platform,
+      });
+
+      expect(result.allowlistSatisfied).toBe(false);
+      expect(result.segmentAllowlistEntries).toEqual([null]);
+      expect(
+        requiresExecApproval({
+          ask: "on-miss",
+          security: "allowlist",
+          analysisOk: result.analysisOk,
+          allowlistSatisfied: result.allowlistSatisfied,
+        }),
+      ).toBe(true);
+    },
+  );
+
+  it("rejects stale pnpm allow-always entries when unknown options hide exec", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const pnpmPath = makeExecutable(dir, "pnpm");
+    makeExecutable(dir, "sh");
+    makeExecutable(dir, "id");
+    const env = makePathEnv(dir);
+    const safeBins = resolveSafeBins(undefined);
+
+    const result = await evaluateShellAllowlistWithAuthorization({
+      command: "pnpm --unknown-global-option exec sh -c 'id > marker'",
+      allowlist: [{ pattern: pnpmPath, source: "allow-always" }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+
+    expect(result.allowlistSatisfied).toBe(false);
+    expect(result.segmentAllowlistEntries).toEqual([null]);
+    expect(
+      requiresExecApproval({
+        ask: "on-miss",
+        security: "allowlist",
+        analysisOk: result.analysisOk,
+        allowlistSatisfied: result.allowlistSatisfied,
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects stale npm allow-always entries for x shell carriers", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const npmPath = makeExecutable(dir, "npm");
+    makeExecutable(dir, "sh");
+    makeExecutable(dir, "id");
+    const env = makePathEnv(dir);
+    const safeBins = resolveSafeBins(undefined);
+
+    const result = await evaluateShellAllowlistWithAuthorization({
+      command: "npm x sh -c 'id > marker'",
+      allowlist: [{ pattern: npmPath, source: "allow-always" }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+
+    expect(result.allowlistSatisfied).toBe(false);
+    expect(result.segmentAllowlistEntries).toEqual([null]);
+    expect(
+      requiresExecApproval({
+        ask: "on-miss",
+        security: "allowlist",
+        analysisOk: result.analysisOk,
+        allowlistSatisfied: result.allowlistSatisfied,
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects stale package-manager allow-always entries for chained shell carriers", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const pnpmPath = makeExecutable(dir, "pnpm");
+    const npmPath = makeExecutable(dir, "npm");
+    makeExecutable(dir, "sh");
+    makeExecutable(dir, "id");
+    const env = makePathEnv(dir);
+    const safeBins = resolveSafeBins(undefined);
+
+    const result = await evaluateShellAllowlistWithAuthorization({
+      command: "pnpm exec -- npm x sh -c 'id > marker'",
+      allowlist: [
+        { pattern: pnpmPath, source: "allow-always" },
+        { pattern: npmPath, source: "allow-always" },
+      ],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+
+    expect(result.allowlistSatisfied).toBe(false);
+    expect(result.segmentAllowlistEntries).toEqual([null]);
+    expect(
+      requiresExecApproval({
+        ask: "on-miss",
+        security: "allowlist",
+        analysisOk: result.analysisOk,
+        allowlistSatisfied: result.allowlistSatisfied,
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects stale yarn allow-always entries for exec-like carriers", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const yarnPath = makeExecutable(dir, "yarn");
+    makeExecutable(dir, "sh");
+    makeExecutable(dir, "id");
+    const env = makePathEnv(dir);
+    const safeBins = resolveSafeBins(undefined);
+
+    const result = await evaluateShellAllowlistWithAuthorization({
+      command: "yarn exec -- sh -c 'id > marker'",
+      allowlist: [{ pattern: yarnPath, source: "allow-always" }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+
+    expect(result.allowlistSatisfied).toBe(false);
+    expect(result.segmentAllowlistEntries).toEqual([null]);
+    expect(
+      requiresExecApproval({
+        ask: "on-miss",
+        security: "allowlist",
+        analysisOk: result.analysisOk,
+        allowlistSatisfied: result.allowlistSatisfied,
+      }),
+    ).toBe(true);
+  });
+
+  it.each([
+    { command: "npm run test -- x", executable: "npm" },
+    { command: "pnpm run build -- node", executable: "pnpm" },
+    { command: "pnpm test -- node", executable: "pnpm" },
+    { command: "pnpm install", executable: "pnpm" },
+    { command: "yarn install", executable: "yarn" },
+  ])(
+    "keeps exec-like arguments on known non-exec package-manager subcommands allowlisted: $command",
+    async ({ command, executable }) => {
+      if (process.platform === "win32") {
+        return;
+      }
+      const dir = makeTempDir();
+      const executablePath = makeExecutable(dir, executable);
+      const env = makePathEnv(dir);
+      const safeBins = resolveSafeBins(undefined);
+
+      const result = await evaluateShellAllowlistWithAuthorization({
+        command,
+        allowlist: [{ pattern: executablePath, source: "allow-always" }],
+        safeBins,
+        cwd: dir,
+        env,
+        platform: process.platform,
+      });
+
+      expect(result.allowlistSatisfied).toBe(true);
+    },
+  );
+
+  it("rejects stale pnpm allow-always entries for implicit exec shorthands", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const pnpmPath = makeExecutable(dir, "pnpm");
+    makeExecutable(dir, "eslint");
+    const env = makePathEnv(dir);
+    const safeBins = resolveSafeBins(undefined);
+
+    const result = await evaluateShellAllowlistWithAuthorization({
+      command: "pnpm eslint .",
+      allowlist: [{ pattern: pnpmPath, source: "allow-always" }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+
+    expect(result.allowlistSatisfied).toBe(false);
+    expect(result.segmentAllowlistEntries).toEqual([null]);
+    expect(
+      requiresExecApproval({
+        ask: "on-miss",
+        security: "allowlist",
+        analysisOk: result.analysisOk,
+        allowlistSatisfied: result.allowlistSatisfied,
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects stale pnpm allow-always entries for cwd implicit exec shorthands", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const pnpmPath = makeExecutable(dir, "pnpm");
+    makeExecutable(dir, "eslint");
+    const env = makePathEnv(dir);
+    const safeBins = resolveSafeBins(undefined);
+
+    const result = await evaluateShellAllowlistWithAuthorization({
+      command: "pnpm -C ./package eslint .",
+      allowlist: [{ pattern: pnpmPath, source: "allow-always" }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+
+    expect(result.allowlistSatisfied).toBe(false);
+    expect(result.segmentAllowlistEntries).toEqual([null]);
+    expect(
+      requiresExecApproval({
+        ask: "on-miss",
+        security: "allowlist",
+        analysisOk: result.analysisOk,
+        allowlistSatisfied: result.allowlistSatisfied,
+      }),
+    ).toBe(true);
+  });
+
+  it.each(["yarn run eslint .", "yarn eslint ."])(
+    "rejects stale yarn allow-always entries for script or bin fallback: %s",
+    async (command) => {
+      if (process.platform === "win32") {
+        return;
+      }
+      const dir = makeTempDir();
+      const yarnPath = makeExecutable(dir, "yarn");
+      makeExecutable(dir, "eslint");
+      const env = makePathEnv(dir);
+      const safeBins = resolveSafeBins(undefined);
+
+      const result = await evaluateShellAllowlistWithAuthorization({
+        command,
+        allowlist: [{ pattern: yarnPath, source: "allow-always" }],
+        safeBins,
+        cwd: dir,
+        env,
+        platform: process.platform,
+      });
+
+      expect(result.allowlistSatisfied).toBe(false);
+      expect(result.segmentAllowlistEntries).toEqual([null]);
+      expect(
+        requiresExecApproval({
+          ask: "on-miss",
+          security: "allowlist",
+          analysisOk: result.analysisOk,
+          allowlistSatisfied: result.allowlistSatisfied,
+        }),
+      ).toBe(true);
+    },
+  );
+
+  it("requires bound args for package-manager shell script carriers", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const { dir, script, env, safeBins } = createShellScriptFixture();
+    makeExecutable(dir, "pnpm");
+    const shPath = makeExecutable(dir, "sh");
+
+    const result = await evaluateShellAllowlistWithAuthorization({
+      command: `pnpm exec sh ${script}`,
+      allowlist: [{ pattern: shPath, source: "allow-always" }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+
+    expect(result.allowlistSatisfied).toBe(false);
+    expect(result.segmentAllowlistEntries).toEqual([null]);
+    expect(
+      requiresExecApproval({
+        ask: "on-miss",
+        security: "allowlist",
+        analysisOk: result.analysisOk,
+        allowlistSatisfied: result.allowlistSatisfied,
+      }),
+    ).toBe(true);
+  });
+
+  it("matches package-manager shell-script arg patterns against inner argv", () => {
+    const { dir, script, env, safeBins } = createShellScriptFixture();
+    makeExecutable(dir, "pnpm");
+    makeExecutable(dir, "bash");
+    const platform = "win32";
+    const analysis = analyzeArgvCommand({
+      argv: ["pnpm", "exec", "bash", script, "allowed"],
+      cwd: dir,
+      env,
+      platform,
+    });
+    expect(analysis.ok).toBe(true);
+
+    const entries = resolveAllowAlwaysPatternEntries({
+      segments: analysis.segments,
+      cwd: dir,
+      env,
+      platform,
+    });
+    expect(entries).toEqual([{ pattern: script, argPattern: "^allowed\x00$" }]);
+
+    const allowed = evaluateExecAllowlist({
+      analysis,
+      allowlist: entries,
+      safeBins,
+      cwd: dir,
+      env,
+      platform,
+    });
+    expect(allowed.allowlistSatisfied).toBe(true);
+
+    const extraArgAnalysis = analyzeArgvCommand({
+      argv: ["pnpm", "exec", "bash", script, "allowed", "extra"],
+      cwd: dir,
+      env,
+      platform,
+    });
+    const denied = evaluateExecAllowlist({
+      analysis: extraArgAnalysis,
+      allowlist: entries,
+      safeBins,
+      cwd: dir,
+      env,
+      platform,
+    });
+    expect(denied.allowlistSatisfied).toBe(false);
+    expect(
+      requiresExecApproval({
+        ask: "on-miss",
+        security: "allowlist",
+        analysisOk: extraArgAnalysis.ok,
+        allowlistSatisfied: denied.allowlistSatisfied,
+      }),
+    ).toBe(true);
+  });
+
+  it("matches package-manager exec allow-always entries by inner executable", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const pnpmPath = makeExecutable(dir, "pnpm");
+    const tsxPath = makeExecutable(dir, "tsx");
+    const env = makePathEnv(dir);
+    const safeBins = resolveSafeBins(undefined);
+
+    const staleOuter = await evaluateShellAllowlistWithAuthorization({
+      command: "pnpm exec -- tsx ./run.ts",
+      allowlist: [{ pattern: pnpmPath, source: "allow-always" }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(staleOuter.allowlistSatisfied).toBe(false);
+
+    const inner = await evaluateShellAllowlistWithAuthorization({
+      command: "pnpm exec -- tsx ./run.ts",
+      allowlist: [{ pattern: tsxPath, source: "allow-always" }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(inner.allowlistSatisfied).toBe(true);
+
+    const pnpmCwdInner = await evaluateShellAllowlistWithAuthorization({
+      command: "pnpm -C ./package exec -- tsx ./run.ts",
+      allowlist: [{ pattern: tsxPath, source: "allow-always" }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(pnpmCwdInner.allowlistSatisfied).toBe(true);
+
+    const npmInner = await evaluateShellAllowlistWithAuthorization({
+      command: "npm --loglevel=silent exec -- tsx ./run.ts",
+      allowlist: [{ pattern: tsxPath, source: "allow-always" }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(npmInner.allowlistSatisfied).toBe(true);
+
+    const npmCwdInner = await evaluateShellAllowlistWithAuthorization({
+      command: "npm -C ./package exec -- tsx ./run.ts",
+      allowlist: [{ pattern: tsxPath, source: "allow-always" }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(npmCwdInner.allowlistSatisfied).toBe(true);
+
+    const npmAliasInner = await evaluateShellAllowlistWithAuthorization({
+      command: "npm x -- tsx ./run.ts",
+      allowlist: [{ pattern: tsxPath, source: "allow-always" }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(npmAliasInner.allowlistSatisfied).toBe(true);
+
+    const chainedInner = await evaluateShellAllowlistWithAuthorization({
+      command: "pnpm exec -- npm x -- tsx ./run.ts",
+      allowlist: [{ pattern: tsxPath, source: "allow-always" }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(chainedInner.allowlistSatisfied).toBe(true);
+
+    const yarnInner = await evaluateShellAllowlistWithAuthorization({
+      command: "yarn exec -- tsx ./run.ts",
+      allowlist: [{ pattern: tsxPath, source: "allow-always" }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(yarnInner.allowlistSatisfied).toBe(true);
+  });
+
   it("prevents allow-always bypass for sandbox-exec wrapper chains", async () => {
     if (process.platform === "win32") {
       return;
@@ -1170,3 +1692,4 @@ $0 \\"$1\\"" touch {marker}`,
     expect(second.allowlistSatisfied).toBe(true);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

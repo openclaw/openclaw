@@ -1,4 +1,5 @@
 // Together provider module implements model/runtime integration.
+import { toImageDataUrl } from "openclaw/plugin-sdk/image-generation";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
@@ -82,10 +83,6 @@ function stripTrailingSlash(value: string): string {
   return value.replace(/\/+$/u, "");
 }
 
-function toDataUrl(buffer: Buffer, mimeType: string): string {
-  return `data:${mimeType};base64,${buffer.toString("base64")}`;
-}
-
 function extractTogetherVideoUrl(payload: TogetherVideoResponse): string | undefined {
   if (Array.isArray(payload.outputs)) {
     for (const entry of payload.outputs) {
@@ -156,16 +153,29 @@ async function downloadTogetherVideo(params: {
   fetchFn: typeof fetch;
   maxBytes: number;
 }): Promise<GeneratedVideoAsset> {
+  const deadline = createProviderOperationDeadline({
+    timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    label: "Together generated video download",
+  });
+  const timeoutMs = createProviderOperationTimeoutResolver({
+    deadline,
+    defaultTimeoutMs: deadline.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+  });
   const response = await fetchProviderDownloadResponse({
     url: params.url,
     init: { method: "GET" },
-    timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    deadline,
     fetchFn: params.fetchFn,
     provider: "together",
     requestFailedMessage: "Together generated video download failed",
   });
   const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
   const buffer = await readResponseWithLimit(response, params.maxBytes, {
+    timeoutMs,
+    onTimeout: ({ timeoutMs: bodyTimeoutMs }) =>
+      new Error(
+        `Together generated video download timed out after ${deadline.timeoutMs ?? bodyTimeoutMs}ms`,
+      ),
     onOverflow: ({ maxBytes }) =>
       new Error(`Together generated video download exceeds ${maxBytes} bytes`),
   });
@@ -184,8 +194,8 @@ export function buildTogetherVideoGenerationProvider(): VideoGenerationProvider 
     models: [
       DEFAULT_TOGETHER_VIDEO_MODEL,
       "Wan-AI/Wan2.2-I2V-A14B",
-      "minimax/Hailuo-02",
-      "Kwai/Kling-2.1-Master",
+      "minimax/hailuo-02",
+      "kwaivgI/kling-2.1-master",
     ],
     isConfigured: ({ agentDir }) =>
       isProviderApiKeyConfigured({
@@ -269,7 +279,7 @@ export function buildTogetherVideoGenerationProvider(): VideoGenerationProvider 
         const value = normalizeOptionalString(input.url)
           ? normalizeOptionalString(input.url)
           : input.buffer
-            ? toDataUrl(input.buffer, normalizeOptionalString(input.mimeType) ?? "image/png")
+            ? toImageDataUrl({ ...input, buffer: input.buffer, defaultMimeType: "image/png" })
             : undefined;
         if (!value) {
           throw new Error("Together reference image is missing image data.");
