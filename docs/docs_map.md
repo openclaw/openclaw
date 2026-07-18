@@ -7389,6 +7389,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Message adapter
   - H3: Inbound ingress (experimental)
   - H3: Durable ingress and replay dedupe
+  - H4: Transport classes and retention
   - H4: At-least-once side effects
   - H4: Account-scoped restart contract
   - H3: Typing indicators
