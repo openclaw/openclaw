@@ -96,9 +96,15 @@ type ZaloProcessingContext = {
   turnAdoptionLifecycle?: ZaloWebhookIngressLifecycle;
 };
 
-type ZaloPollingLoopParams = ZaloProcessingContext & {
+type ZaloPollingLoopParams = {
+  token: string;
+  account: ResolvedZaloAccount;
+  runtime: ZaloRuntimeEnv;
   abortSignal: AbortSignal;
   isStopped: () => boolean;
+  statusSink?: ZaloStatusSink;
+  fetcher?: ZaloFetch;
+  acceptUpdate: (rawEvent: string) => Promise<void>;
 };
 type ZaloUpdateProcessingParams = ZaloProcessingContext & {
   update: ZaloUpdate;
@@ -232,35 +238,9 @@ async function handleZaloWebhookRequest(
 }
 
 function startPollingLoop(params: ZaloPollingLoopParams) {
-  const {
-    token,
-    account,
-    config,
-    runtime,
-    core,
-    mediaMaxMb,
-    canHostMedia,
-    webhookUrl,
-    webhookPath,
-    abortSignal,
-    isStopped,
-    statusSink,
-    fetcher,
-  } = params;
+  const { token, account, runtime, abortSignal, isStopped, statusSink, fetcher, acceptUpdate } =
+    params;
   const pollTimeout = 30;
-  const processingContext = {
-    token,
-    account,
-    config,
-    runtime,
-    core,
-    mediaMaxMb,
-    canHostMedia,
-    webhookUrl,
-    webhookPath,
-    statusSink,
-    fetcher,
-  };
 
   runtime.log?.(`[${account.accountId}] Zalo polling loop started timeout=${String(pollTimeout)}s`);
 
@@ -276,10 +256,12 @@ function startPollingLoop(params: ZaloPollingLoopParams) {
       }
       if (response.ok && response.result) {
         statusSink?.({ lastInboundAt: Date.now() });
-        await processUpdate({
-          update: response.result,
-          ...processingContext,
-        });
+        // The Bot API consumes each polled update on response, so the durable
+        // journal is the only crash recovery. Non-message events are no-ops
+        // downstream, so they skip journaling.
+        if (response.result.message) {
+          await acceptUpdate(JSON.stringify(response.result));
+        }
       }
     } catch (err) {
       if (err instanceof ZaloApiError && err.isPollingTimeout) {
@@ -1016,20 +998,43 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
       );
     }
 
+    const { createZaloWebhookIngress } = await loadZaloWebhookIngressRuntime();
+    // Polling and webhook share one durable ingress per account: the Bot API
+    // consumes polled updates on response, so a crash between poll and dispatch
+    // is unrecoverable without the same append-before-dispatch journal.
+    const ingress = createZaloWebhookIngress({
+      accountId: account.accountId,
+      runtime,
+      deliver: async (update, turnAdoptionLifecycle) => {
+        await processUpdate({
+          update,
+          token,
+          account,
+          config,
+          runtime,
+          core,
+          mediaMaxMb: effectiveMediaMaxMb,
+          canHostMedia,
+          webhookUrl: effectiveWebhookUrl,
+          webhookPath: effectiveWebhookPath,
+          statusSink,
+          fetcher,
+          turnAdoptionLifecycle,
+        });
+      },
+    });
+    ingress.start();
+    asyncStopHandlers.push(ingress.stop);
+
     startPollingLoop({
       token,
       account,
-      config,
       runtime,
-      core,
-      canHostMedia,
-      webhookUrl: effectiveWebhookUrl,
-      webhookPath: effectiveWebhookPath,
       abortSignal,
       isStopped: () => stopped,
-      mediaMaxMb: effectiveMediaMaxMb,
       statusSink,
       fetcher,
+      acceptUpdate: ingress.accept,
     });
 
     await waitForAbortSignal(abortSignal);
