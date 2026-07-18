@@ -348,7 +348,6 @@ extensions/zalouser/src/monitor.ts
 extensions/zalouser/src/zalo-js.ts
 packages/agent-core/src/agent-loop.test.ts
 packages/agent-core/src/agent-loop.ts
-packages/agent-core/src/harness/agent-harness.ts
 packages/agent-core/src/harness/compaction/compaction.ts
 packages/ai/src/providers/agent-tools-parameter-schema.ts
 packages/ai/src/providers/anthropic.test.ts

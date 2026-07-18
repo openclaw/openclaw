@@ -2054,6 +2054,9 @@ importers:
       '@openclaw/ai':
         specifier: workspace:*
         version: link:../ai
+      '@openclaw/llm-core':
+        specifier: workspace:*
+        version: link:../llm-core
       '@openclaw/normalization-core':
         specifier: workspace:*
         version: link:../normalization-core
