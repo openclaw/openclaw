@@ -18,6 +18,10 @@ import { resolveContextEngineCapabilities } from "../context-engine-capabilities
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { log } from "../logger.js";
 import {
+  getProviderPromptState,
+  markLastProviderPromptContextRejected,
+} from "../provider-prompt-state.js";
+import {
   resolveLiveToolResultMaxChars,
   sessionLikelyHasOversizedToolResults,
   truncateOversizedToolResultsInActiveTarget,
@@ -122,6 +126,11 @@ export async function recoverEmbeddedRunOverflow(input: {
     return { action: "none" };
   }
 
+  const providerPromptRejection =
+    contextOverflowError.source === "assistantError" || input.attempt.promptErrorSource === "prompt"
+      ? markLastProviderPromptContextRejected(getProviderPromptState(input.runParams.runId))
+      : undefined;
+
   const runParams = input.runParams;
   const overflowDiagId = createCompactionDiagId();
   const errorText = contextOverflowError.text;
@@ -146,6 +155,7 @@ export async function recoverEmbeddedRunOverflow(input: {
       `observedTokens=${observedOverflowTokens ?? "unknown"} ` +
       `preflightEstimatedTokens=${preflightEstimatedPromptTokens ?? "unknown"} ` +
       `compactionTokens=${overflowTokenCountForCompaction ?? "unknown"} ` +
+      `providerPayloadBytes=${providerPromptRejection?.byteWeight ?? "unknown"} ` +
       `error=${truncateUtf16Safe(errorText, 200)}`,
   );
 
