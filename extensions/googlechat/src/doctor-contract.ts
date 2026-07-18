@@ -17,6 +17,7 @@ type GoogleChatChannelsConfig = NonNullable<OpenClawConfig["channels"]>;
 const streamingAliasMigration = defineChannelAliasMigration({
   channelId: "googlechat",
   streaming: { defaultMode: "partial", deliveryOnly: true },
+  dm: { root: true, accounts: true },
 });
 
 function hasLegacyGoogleChatStreamMode(value: unknown): boolean {

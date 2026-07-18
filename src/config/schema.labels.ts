@@ -828,7 +828,6 @@ export const FIELD_LABELS: Record<string, string> = {
   "mcp.servers.*.oauth.clientMetadataUrl": "MCP OAuth Client Metadata URL",
   "mcp.servers.*.requestTimeoutMs": "MCP Request Timeout (ms)",
   "mcp.servers.*.connectionTimeoutMs": "MCP Connect Timeout (ms)",
-  "mcp.servers.*.connectionTimeoutMs": "MCP Connect Timeout (ms)",
   "mcp.servers.*.supportsParallelToolCalls": "MCP Parallel Tool Calls",
   "mcp.servers.*.supports_parallel_tool_calls": "MCP Parallel Tool Calls",
   "mcp.servers.*.sslVerify": "MCP TLS Verification",

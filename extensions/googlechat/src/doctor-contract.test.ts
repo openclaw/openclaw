@@ -100,6 +100,30 @@ describe("googlechat doctor contract", () => {
     expect(rootRule?.match?.({ streaming: { block: { enabled: true } } }, {})).toBe(false);
   });
 
+  it("detects and promotes legacy nested DM access at root and account scope", () => {
+    const dmRules = legacyConfigRules.filter((rule) => rule.message.includes("dm.policy"));
+    expect(dmRules[0]?.match?.({ dm: { policy: "allowlist" } }, {})).toBe(true);
+    expect(dmRules[1]?.match?.({ work: { dm: { allowFrom: ["users/work"] } } }, {})).toBe(true);
+
+    const result = normalizeCompatibilityConfig({
+      cfg: {
+        channels: {
+          googlechat: {
+            dm: { enabled: false, policy: "allowlist", allowFrom: ["users/root"] },
+            accounts: { work: { dm: { policy: "open", allowFrom: ["*"] } } },
+          },
+        },
+      } as never,
+    });
+
+    expect(result.config.channels?.googlechat).toEqual({
+      dm: { enabled: false },
+      dmPolicy: "allowlist",
+      allowFrom: ["users/root"],
+      accounts: { work: { dmPolicy: "open", allowFrom: ["*"] } },
+    });
+  });
+
   it("moves flat delivery aliases at root and account level with root seeding", () => {
     const result = normalizeCompatibilityConfig({
       cfg: {

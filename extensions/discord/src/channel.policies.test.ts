@@ -67,8 +67,9 @@ describe("discordPlugin security", () => {
     const cfg = {
       channels: {
         discord: {
-          token: "discord-token",
-          dm: { policy: "allowlist", allowFrom: ["  discord:<@!123456789>  "] },
+          token: "test-token",
+          dmPolicy: "allowlist",
+          allowFrom: ["  discord:<@!123456789>  "],
         },
       },
     } as OpenClawConfig;
@@ -95,7 +96,7 @@ describe("discordPlugin groups", () => {
     const cfg = {
       channels: {
         discord: {
-          token: "discord-test",
+          token: "test-token",
           guilds: {
             guild1: {
               requireMention: false,

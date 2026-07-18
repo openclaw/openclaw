@@ -20,7 +20,6 @@ import { ProxyConfigSchema } from "./zod-schema.proxy.js";
 import {
   AccessGroupsSchema,
   CommitmentsSchema,
-  HttpUrlSchema,
   LoggingLevelSchema,
   MarketplacesSchema,
   McpConfigSchema,

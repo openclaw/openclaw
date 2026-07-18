@@ -1,34 +1,18 @@
 // Defines WhatsApp provider schema fragments for config parsing.
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { z } from "zod";
+import { buildGroupEntrySchema } from "../channels/plugins/config-schema.js";
 import { resolveAccountEntry } from "../routing/account-lookup.js";
-import { ToolPolicySchema } from "./zod-schema.agent-runtime.js";
 import {
-  ChannelHealthMonitorSchema,
-  ChannelHeartbeatVisibilitySchema,
-} from "./zod-schema.channels.js";
-import {
-  ChannelDeliveryStreamingConfigSchema,
-  ContextVisibilityModeSchema,
-  DmConfigSchema,
-  DmPolicySchema,
-  GroupPolicySchema,
-  MarkdownConfigSchema,
-  MentionPatternsPolicySchema,
-  ReplyToModeSchema,
-} from "./zod-schema.core.js";
+  ChannelSendReadReceiptsSchema,
+  buildChannelReactionShape,
+  buildCommonChannelAccountShape,
+} from "./zod-schema.channel-messaging-common.js";
+import { ChannelDeliveryStreamingConfigSchema } from "./zod-schema.core.js";
 
-const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional();
-
-const WhatsAppGroupEntrySchema = z
-  .object({
-    requireMention: z.boolean().optional(),
-    tools: ToolPolicySchema,
-    toolsBySender: ToolPolicyBySenderSchema,
-    systemPrompt: z.string().optional(),
-  })
-  .strict()
-  .optional();
+const WhatsAppGroupEntrySchema = buildGroupEntrySchema(undefined, {
+  omit: ["skills", "enabled", "allowFrom"],
+}).optional();
 
 const WhatsAppGroupsSchema = z.record(z.string(), WhatsAppGroupEntrySchema).optional();
 
@@ -59,40 +43,26 @@ const WhatsAppPluginHooksSchema = z
 
 function buildWhatsAppCommonShape(params: { useDefaults: boolean }) {
   return {
-    enabled: z.boolean().optional(),
-    capabilities: z.array(z.string()).optional(),
-    markdown: MarkdownConfigSchema,
-    configWrites: z.boolean().optional(),
-    sendReadReceipts: z.boolean().optional(),
+    ...buildCommonChannelAccountShape({
+      useDefaults: params.useDefaults,
+      omit: ["name"],
+      allowFrom: z.array(z.string()).optional(),
+      groupAllowFrom: z.array(z.string()).optional(),
+      streaming: ChannelDeliveryStreamingConfigSchema.optional(),
+      mediaMaxMb: z.number().int().positive().optional(),
+    }),
+    sendReadReceipts: ChannelSendReadReceiptsSchema,
     messagePrefix: z.string().optional(),
-    responsePrefix: z.string().optional(),
-    dmPolicy: params.useDefaults
-      ? DmPolicySchema.optional().default("pairing")
-      : DmPolicySchema.optional(),
     selfChatMode: z.boolean().optional(),
-    allowFrom: z.array(z.string()).optional(),
-    defaultTo: z.string().optional(),
-    groupAllowFrom: z.array(z.string()).optional(),
-    groupPolicy: params.useDefaults
-      ? GroupPolicySchema.optional().default("allowlist")
-      : GroupPolicySchema.optional(),
-    mentionPatterns: MentionPatternsPolicySchema.optional(),
-    contextVisibility: ContextVisibilityModeSchema.optional(),
-    historyLimit: z.number().int().min(0).optional(),
-    dmHistoryLimit: z.number().int().min(0).optional(),
-    dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
-    textChunkLimit: z.number().int().positive().optional(),
-    streaming: ChannelDeliveryStreamingConfigSchema.optional(),
     groups: WhatsAppGroupsSchema,
     direct: WhatsAppDirectSchema,
-    ackReaction: WhatsAppAckReactionSchema,
-    reactionLevel: z.enum(["off", "ack", "minimal", "extensive"]).optional(),
+    ...buildChannelReactionShape({
+      reactionLevels: ["off", "ack", "minimal", "extensive"],
+      ackReaction: WhatsAppAckReactionSchema,
+    }),
     debounceMs: params.useDefaults
       ? z.number().int().nonnegative().optional().default(0)
       : z.number().int().nonnegative().optional(),
-    replyToMode: ReplyToModeSchema.optional(),
-    heartbeat: ChannelHeartbeatVisibilitySchema,
-    healthMonitor: ChannelHealthMonitorSchema,
     pluginHooks: WhatsAppPluginHooksSchema,
   };
 }
@@ -143,7 +113,6 @@ const WhatsAppAccountObjectSchema = z
   .object({
     ...buildWhatsAppCommonShape({ useDefaults: false }),
     name: z.string().optional(),
-    enabled: z.boolean().optional(),
     /** Override auth directory for this WhatsApp account (Baileys multi-file auth state). */
     authDir: z.string().optional(),
     mediaMaxMb: z.number().int().positive().optional(),

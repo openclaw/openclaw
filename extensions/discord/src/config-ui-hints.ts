@@ -9,11 +9,7 @@ export const discordChannelConfigUiHints = {
   },
   ...createChannelConfigUiHints({
     channelLabel: "Discord",
-    dmPolicy: {
-      channelKey: "discord",
-      includeLegacyNestedPolicy: true,
-      legacyNestedPolicyOrder: "after",
-    },
+    dmPolicy: { channelKey: "discord" },
     configWrites: true,
     mentionPatterns: {
       targetDescription: "Discord channel IDs",

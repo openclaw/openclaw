@@ -49,7 +49,7 @@ describe("googlechat message actions", () => {
       ...overrides,
       config: {
         groupPolicy: "open",
-        dm: { policy: "open" },
+        dmPolicy: "open",
         ...overrideConfig,
       },
     };

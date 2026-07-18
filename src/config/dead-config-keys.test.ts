@@ -20,6 +20,41 @@ function expectUnknownKey(params: { config: Record<string, unknown>; path: strin
 }
 
 describe("dead config keys", () => {
+  it.each([
+    ["Discord root", "discord", { dm: { policy: "pairing" } }, "channels.discord.dm", "policy"],
+    [
+      "Discord account",
+      "discord",
+      { accounts: { work: { dm: { allowFrom: ["1"] } } } },
+      "channels.discord.accounts.work.dm",
+      "allowFrom",
+    ],
+    ["Slack root", "slack", { dm: { policy: "pairing" } }, "channels.slack.dm", "policy"],
+    [
+      "Slack account",
+      "slack",
+      { accounts: { work: { dm: { allowFrom: ["U1"] } } } },
+      "channels.slack.accounts.work.dm",
+      "allowFrom",
+    ],
+    [
+      "Google Chat root",
+      "googlechat",
+      { dm: { policy: "pairing" } },
+      "channels.googlechat.dm",
+      "policy",
+    ],
+    [
+      "Google Chat account",
+      "googlechat",
+      { accounts: { work: { dm: { allowFrom: ["users/1"] } } } },
+      "channels.googlechat.accounts.work.dm",
+      "allowFrom",
+    ],
+  ] as const)("rejects legacy nested DM aliases for %s", (_name, channel, entry, path, key) => {
+    expectUnknownKey({ config: { channels: { [channel]: entry } }, path, key });
+  });
+
   it("rejects retired audio.transcription", () => {
     expectUnknownKey({
       config: { audio: { transcription: { command: ["whisper"] } } },

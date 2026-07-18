@@ -63,6 +63,19 @@ function deprecatedCompatRecord<Code extends string>(
 // architecture because ownership and config footprint can shift during rollout.
 const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
   deprecatedCompatRecord({
+    code: "doctor-phase2-channel-dm-aliases",
+    deprecated: "2026-07-18",
+    warningStarts: "2026-07-18",
+    removeAfter: "2026-09-18",
+    owner: "channel",
+    introduced: "2026-07-18",
+    source: "Discord, Slack, and Google Chat dm.policy and dm.allowFrom",
+    migration: "src/config/channel-alias-migration.ts",
+    replacement: "dmPolicy and allowFrom at the same channel or account level",
+    docsPath: "/cli/doctor",
+    tests: ["src/config/channel-alias-migration.test.ts", "src/config/dead-config-keys.test.ts"],
+  }),
+  deprecatedCompatRecord({
     code: "doctor-phase1-retired-runtime-config",
     deprecated: "2026-07-18",
     warningStarts: "2026-07-18",
