@@ -1,6 +1,6 @@
+import { constants as fsConstants } from "node:fs";
 // Qa Lab plugin module implements cli behavior.
 import fs from "node:fs/promises";
-import { constants as fsConstants } from "node:fs";
 import path from "node:path";
 import {
   OPENCLAW_CRABLINE_DEFAULT_CHANNEL,
