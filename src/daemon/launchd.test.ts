@@ -1994,7 +1994,24 @@ describe("launchd install", () => {
     ]);
     expect(launchctlCommandNames()).not.toContain("bootout");
     expect(launchctlCommandNames()).not.toContain("bootstrap");
-    expect(onMutation).toHaveBeenCalledWith({ mode: "kickstart" });
+    expect(onMutation.mock.calls).toEqual([[{ mode: "enable" }], [{ mode: "kickstart" }]]);
+  });
+
+  it("audits kickstart before a later output failure", async () => {
+    const env = {
+      ...createDefaultLaunchdEnv(),
+      OPENCLAW_GATEWAY_PORT: "18789",
+    };
+    const onMutation = vi.fn();
+    const stdout = {
+      write: vi.fn(() => {
+        throw new Error("output failed");
+      }),
+    } as unknown as NodeJS.WritableStream;
+
+    await expect(restartLaunchAgent({ env, stdout, onMutation })).rejects.toThrow("output failed");
+
+    expect(onMutation.mock.calls).toEqual([[{ mode: "enable" }], [{ mode: "kickstart" }]]);
   });
 
   it("reloads launchd after rewriting an existing plist", async () => {
@@ -2036,7 +2053,63 @@ describe("launchd install", () => {
     expect(plist).toContain("<string>/Users/test/Library/Logs/openclaw/gateway.log</string>");
     expect(launchctlCommandNames()).toEqual(["enable", "bootout", "enable", "bootstrap"]);
     expect(launchctlCommandNames()).not.toContain("kickstart");
-    expect(onMutation).toHaveBeenCalledWith({ mode: "bootout-bootstrap" });
+    expect(onMutation.mock.calls).toEqual([
+      [{ mode: "enable" }],
+      [{ mode: "bootout" }],
+      [{ mode: "enable" }],
+      [{ mode: "bootstrap" }],
+    ]);
+  });
+
+  it("audits reload bootout before a later bootstrap failure", async () => {
+    const env = {
+      ...createDefaultLaunchdEnv(),
+      OPENCLAW_GATEWAY_PORT: "18789",
+    };
+    setLaunchAgentPlist({
+      env,
+      label: "ai.openclaw.gateway",
+      programArguments: ["node", "gateway.js"],
+    });
+    state.bootstrapError = "Operation not permitted";
+    state.bootstrapCode = 5;
+    const onMutation = vi.fn();
+
+    await expect(
+      restartLaunchAgent({ env, stdout: new PassThrough(), onMutation }),
+    ).rejects.toThrow("launchctl bootstrap failed: Operation not permitted");
+
+    expect(onMutation.mock.calls).toEqual([
+      [{ mode: "enable" }],
+      [{ mode: "bootout" }],
+      [{ mode: "enable" }],
+    ]);
+    expect(onMutation).not.toHaveBeenCalledWith({ mode: "bootstrap" });
+  });
+
+  it("completes reload when the mutation observer fails after bootout", async () => {
+    const env = {
+      ...createDefaultLaunchdEnv(),
+      OPENCLAW_GATEWAY_PORT: "18789",
+    };
+    setLaunchAgentPlist({
+      env,
+      label: "ai.openclaw.gateway",
+      programArguments: ["node", "gateway.js"],
+    });
+    const onMutation = vi.fn(({ mode }: { mode: string }) => {
+      if (mode === "bootout") {
+        throw new Error("audit failed");
+      }
+    });
+
+    await expect(
+      restartLaunchAgent({ env, stdout: new PassThrough(), onMutation }),
+    ).resolves.toEqual({ outcome: "completed" });
+
+    expect(launchctlCommandNames()).toEqual(["enable", "bootout", "enable", "bootstrap"]);
+    expect(onMutation).toHaveBeenCalledWith({ mode: "bootout" });
+    expect(onMutation).toHaveBeenCalledWith({ mode: "bootstrap" });
   });
 
   it("treats a concurrent launchd bootstrap as success when the service is loaded", async () => {

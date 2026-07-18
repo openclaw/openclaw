@@ -87,18 +87,13 @@ function parseFuserPidList(output: string): number[] {
     return [];
   }
   const values = new Set<number>();
-  for (const rawLine of output.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line) {
+  for (const token of output.split(/\s+/)) {
+    if (!token) {
       continue;
     }
-    const pidRegion = line.includes(":") ? line.slice(line.indexOf(":") + 1) : line;
-    const pidMatches = pidRegion.match(/\d+/g) ?? [];
-    for (const match of pidMatches) {
-      const pid = Number.parseInt(match, 10);
-      if (Number.isFinite(pid) && pid > 0) {
-        values.add(pid);
-      }
+    const pid = parseStrictPositiveInteger(token);
+    if (pid !== undefined) {
+      values.add(pid);
     }
   }
   return [...values];
@@ -162,8 +157,9 @@ function listPortListenersWithFuser(port: number): PortProcess[] {
   } catch (err: unknown) {
     const execErr = err as ExecFileError;
     const stdout = readExecOutput(execErr.stdout);
-    const stderr = readExecOutput(execErr.stderr);
-    const parsed = parseFuserPidList([stdout, stderr].filter(Boolean).join("\n"));
+    // fuser writes resource labels and diagnostics to stderr. Only its stdout
+    // PID stream is safe to turn into direct signal targets.
+    const parsed = parseFuserPidList(stdout);
     if (execErr.status === 1) {
       return parsed.map((pid) => ({ pid }));
     }
