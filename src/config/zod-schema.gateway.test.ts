@@ -4,10 +4,10 @@ import { GatewayConfigSchema } from "./zod-schema.gateway.js";
 describe("GatewayConfigSchema port validation", () => {
   it("accepts a valid gateway port (1–65535)", () => {
     const result = GatewayConfigSchema.safeParse({ port: 8080 });
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.port).toBe(8080);
+    if (!result.success) {
+      throw new Error("expected valid port 8080");
     }
+    expect(result.data.port).toBe(8080);
   });
 
   it("accepts port 1 (minimum valid TCP port)", () => {
