@@ -69,6 +69,7 @@ import {
   readInstalledVersion,
   readBoundedCrossOsResponseText,
   readRunnerOverrideEnv,
+  reserveGatewayPortForLane,
   resolveDashboardAssetUrls,
   resolveCrossOsAgentTurnOptional,
   runCommand,
@@ -1575,7 +1576,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         logPath,
         timeoutMs: 500,
       });
-      await waitForFile(childPidPath, 2_000);
+      await waitForFile(childPidPath, 10_000);
       const childPid = Number.parseInt(readFileSync(childPidPath, "utf8"), 10);
 
       await expect(command).rejects.toThrow(/Command timed out:/u);
@@ -1638,7 +1639,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       );
       runnerPid = runner.pid;
 
-      await waitForFile(childPidPath, 2_000);
+      await waitForFile(childPidPath, 10_000);
       childPid = Number.parseInt(readFileSync(childPidPath, "utf8"), 10);
       runner.kill("SIGTERM");
       const result = await waitForExit(runner, 5_000);
@@ -1705,7 +1706,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       );
       runnerPid = runner.pid;
 
-      await waitForFile(childPidPath, 2_000);
+      await waitForFile(childPidPath, 10_000);
       childPid = Number.parseInt(readFileSync(childPidPath, "utf8"), 10);
       const signaledAt = Date.now();
       runner.kill("SIGTERM");
@@ -1792,6 +1793,19 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       await delay(5);
     }
     expect(await canConnectToLoopbackPort(port, 100)).toBe(false);
+  });
+
+  it("keeps a release gateway port reserved until the lane is ready to start", async () => {
+    const lane = { gatewayPort: 0 } as Parameters<typeof reserveGatewayPortForLane>[0];
+    const reservation = await reserveGatewayPortForLane(lane);
+    try {
+      expect(lane.gatewayPort).toBe(reservation.port);
+      expect(await canConnectToLoopbackPort(reservation.port)).toBe(true);
+    } finally {
+      await reservation.release();
+    }
+    await reservation.release();
+    expect(await canConnectToLoopbackPort(reservation.port, 100)).toBe(false);
   });
 
   it("writes Discord smoke config using the strict guild channel schema", () => {

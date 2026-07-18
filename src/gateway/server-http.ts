@@ -100,6 +100,8 @@ const getManagedImageAttachmentsModule = createLazyRuntimeModule(
   () => import("./managed-image-attachments.js"),
 );
 
+const getMcpAppStandaloneModule = createLazyRuntimeModule(() => import("./mcp-app-standalone.js"));
+
 const getPluginIconHttpModule = createLazyRuntimeModule(() => import("./plugin-icon-http.js"));
 
 const getModelsHttpModule = createLazyRuntimeModule(() => import("./models-http.js"));
@@ -181,6 +183,10 @@ function getCachedPluginGatewayAuthBypassPaths(
 
 function isOpenAiModelsPath(pathname: string): boolean {
   return pathname === "/v1/models" || pathname.startsWith("/v1/models/");
+}
+
+function isMcpAppStandalonePath(pathname: string): boolean {
+  return pathname === "/__openclaw__/mcp-app" || pathname === "/__openclaw__/mcp-app/view";
 }
 
 function isEmbeddingsPath(pathname: string): boolean {
@@ -786,6 +792,16 @@ export function createGatewayHttpServer(opts: {
               trustedProxies,
               allowRealIpFallback,
               rateLimiter,
+            }),
+        });
+      }
+      if (configSnapshot.mcp?.apps?.enabled === true && isMcpAppStandalonePath(scopedRequestPath)) {
+        requestStages.push({
+          name: "mcp-app-standalone",
+          run: async () =>
+            (await getMcpAppStandaloneModule()).handleMcpAppStandaloneHttpRequest(req, res, {
+              sandboxPort: configSnapshot.mcp?.apps?.sandboxPort,
+              sandboxOrigin: configSnapshot.mcp?.apps?.sandboxOrigin,
             }),
         });
       }

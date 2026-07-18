@@ -1755,6 +1755,10 @@ export const th: TranslationMap = {
       testingButton: "กำลังทดสอบ…",
       testing: "กำลังทดสอบ — กำลังขอให้ {modelRef} ตอบกลับสั้นๆ…",
     },
+    empty: {
+      title: "การติดตั้งที่แนะนำ",
+      intro: "ไม่พบการเข้าถึง AI ที่มีอยู่ ติดตั้งเครื่องมือใดเครื่องมือหนึ่งเหล่านี้ แล้วตรวจสอบอีกครั้ง",
+    },
     unavailable: {
       title: "ตรวจพบ แต่ไม่ได้ทดสอบโดยอัตโนมัติ",
     },
@@ -2291,6 +2295,13 @@ export const th: TranslationMap = {
     session: "เซสชัน",
     outputTruncated: "ตัวอย่างถูกปกปิดและตัดให้สั้นลง",
     noOutputPreview: "ไม่มีตัวอย่างเอาต์พุต",
+    answerCandidate: {
+      title: "คำตอบที่เป็นไปได้",
+      itemId: "รายการ",
+      candidate: "คำตอบที่เป็นไปได้",
+      superseded: "คำตอบที่ถูกแทนที่",
+      selected: "คำตอบที่เลือก",
+    },
     status: {
       running: "กำลังทำงาน",
       done: "เสร็จสิ้น",
@@ -3671,6 +3682,11 @@ export const th: TranslationMap = {
       pause: "หยุดเป้าหมายชั่วคราว",
       resume: "ดำเนินเป้าหมายต่อ",
       clear: "ล้างเป้าหมาย",
+    },
+    questions: {
+      title: "Codex ต้องการข้อมูลเพิ่มเติม",
+      other: "พิมพ์คำตอบอื่น",
+      submit: "ส่งคำตอบ",
     },
     messages: {
       activity: "กิจกรรม",

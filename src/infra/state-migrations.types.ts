@@ -2,6 +2,8 @@ import type { ChannelLegacyStateMigrationPlan } from "../channels/plugins/types.
 import type { SessionScope } from "../config/sessions/types.js";
 import type { PluginDoctorStateMigration } from "../plugins/doctor-contract-registry.js";
 import type { LegacyChannelPairingStateDetection } from "./state-migrations.channel-pairing.js";
+import type { LegacyMcpOAuthDetection } from "./state-migrations.mcp-oauth.types.js";
+import type { LegacyRestartSentinelDetection } from "./state-migrations.restart-sentinel.types.js";
 import type { LegacyWorkspaceStateDetection } from "./state-migrations.workspace-setup.types.js";
 
 export type LegacyRescuePendingDetection = {
@@ -113,6 +115,8 @@ export type LegacyStateDetection = {
     sourcePath: string;
     hasLegacy: boolean;
   };
+  mcpOauth: LegacyMcpOAuthDetection;
+  restartSentinel?: LegacyRestartSentinelDetection;
   workspace: LegacyWorkspaceStateDetection;
   webPush: {
     subscriptionsPath: string;

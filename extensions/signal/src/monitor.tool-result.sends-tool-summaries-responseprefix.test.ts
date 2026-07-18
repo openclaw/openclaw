@@ -30,6 +30,10 @@ const {
 const SIGNAL_BASE_URL = "http://127.0.0.1:8080";
 type MonitorSignalProviderOptions = NonNullable<Parameters<typeof monitorSignalProvider>[0]>;
 
+function waitForSignalDelivery(assertion: () => void) {
+  return vi.waitFor(assertion, { interval: 1 });
+}
+
 async function runMonitorWithMocks(opts: MonitorSignalProviderOptions) {
   return monitorSignalProvider({
     config: config as OpenClawConfig,
@@ -141,7 +145,7 @@ describe("monitorSignalProvider tool results", () => {
       ],
     });
 
-    await vi.waitFor(() => {
+    await waitForSignalDelivery(() => {
       expect(sendMock).toHaveBeenCalledTimes(1);
     });
     expect(sendMock.mock.calls[0]?.[1]).toBe("PFX final reply");
@@ -165,7 +169,7 @@ describe("monitorSignalProvider tool results", () => {
       ],
     });
 
-    await vi.waitFor(() => {
+    await waitForSignalDelivery(() => {
       expect(sendMock).toHaveBeenCalledTimes(1);
     });
     expect(sendMock.mock.calls[0]?.[2]).toMatchObject({
@@ -193,7 +197,7 @@ describe("monitorSignalProvider tool results", () => {
       ],
     });
 
-    await vi.waitFor(() => {
+    await waitForSignalDelivery(() => {
       expect(sendMock).toHaveBeenCalledTimes(1);
     });
     expect(sendMock.mock.calls[0]?.[2]).toMatchObject({
@@ -233,7 +237,7 @@ describe("monitorSignalProvider tool results", () => {
       ],
     });
 
-    await vi.waitFor(() => {
+    await waitForSignalDelivery(() => {
       expect(sendMock).toHaveBeenCalledTimes(1);
     });
     expect(sendMock.mock.calls[0]?.[0]).toBe("group:signal-group-id");
@@ -269,7 +273,7 @@ describe("monitorSignalProvider tool results", () => {
       ],
     });
 
-    await vi.waitFor(() => {
+    await waitForSignalDelivery(() => {
       expect(sendMock.mock.calls.length).toBeGreaterThan(1);
     });
     for (const call of sendMock.mock.calls) {
@@ -306,7 +310,7 @@ describe("monitorSignalProvider tool results", () => {
       ],
     });
 
-    await vi.waitFor(() => {
+    await waitForSignalDelivery(() => {
       expect(sendMock.mock.calls.length).toBeGreaterThan(1);
     });
     expect(sendMock.mock.calls[0]?.[2]).toMatchObject({
@@ -345,7 +349,7 @@ describe("monitorSignalProvider tool results", () => {
       ],
     });
 
-    await vi.waitFor(() => {
+    await waitForSignalDelivery(() => {
       expect(sendMock).toHaveBeenCalledTimes(2);
     });
     expect(sendMock.mock.calls[0]?.[2]).toMatchObject({
@@ -388,7 +392,7 @@ describe("monitorSignalProvider tool results", () => {
         ],
       });
 
-      await vi.waitFor(() => {
+      await waitForSignalDelivery(() => {
         expect(sendMock).toHaveBeenCalledTimes(2);
       });
       for (const call of sendMock.mock.calls) {
@@ -431,7 +435,7 @@ describe("monitorSignalProvider tool results", () => {
         ],
       });
 
-      await vi.waitFor(() => {
+      await waitForSignalDelivery(() => {
         expect(sendMock).toHaveBeenCalledTimes(2);
       });
       for (const call of sendMock.mock.calls) {
@@ -472,7 +476,7 @@ describe("monitorSignalProvider tool results", () => {
       ],
     });
 
-    await vi.waitFor(() => {
+    await waitForSignalDelivery(() => {
       expect(sendMock).toHaveBeenCalledTimes(1);
     });
     expect(sendMock.mock.calls[0]?.[2]).not.toHaveProperty("replyToId");
@@ -504,7 +508,7 @@ describe("monitorSignalProvider tool results", () => {
       ],
     });
 
-    await vi.waitFor(() => {
+    await waitForSignalDelivery(() => {
       expect(sendMock).toHaveBeenCalledTimes(1);
     });
     expect(sendMock.mock.calls[0]?.[2]).not.toHaveProperty("replyToId");
@@ -513,47 +517,56 @@ describe("monitorSignalProvider tool results", () => {
   });
 
   it("keeps durable conversation events separate in batched reply mode", async () => {
-    setSignalToolResultTestConfig({
-      ...createSignalToolResultConfig({
+    vi.useFakeTimers();
+    try {
+      setSignalToolResultTestConfig({
+        ...createSignalToolResultConfig({
+          autoStart: false,
+          replyToMode: "batched",
+        }),
+        messages: { inbound: { debounceMs: 10 } },
+      });
+      replyMock.mockResolvedValue({ text: "reply" });
+      const abortController = new AbortController();
+      streamMock.mockImplementation(async ({ onEvent }) => {
+        for (const [timestamp, message] of [
+          [1700000000001, "first message"],
+          [1700000000002, "second message"],
+        ] as const) {
+          await onEvent({
+            event: "receive",
+            data: JSON.stringify({
+              envelope: {
+                sourceNumber: "+15550001111",
+                sourceName: "Ada",
+                timestamp,
+                dataMessage: { message },
+              },
+            }),
+          });
+        }
+        try {
+          await vi.advanceTimersByTimeAsync(2_000);
+          expect(replyMock).toHaveBeenCalledTimes(2);
+        } finally {
+          abortController.abort();
+        }
+      });
+
+      await runMonitorWithMocks({
         autoStart: false,
-        replyToMode: "batched",
-      }),
-      messages: { inbound: { debounceMs: 10 } },
-    });
-    replyMock.mockResolvedValue({ text: "reply" });
-    const abortController = new AbortController();
-    streamMock.mockImplementation(async ({ onEvent }) => {
-      for (const [timestamp, message] of [
-        [1700000000001, "first message"],
-        [1700000000002, "second message"],
-      ] as const) {
-        await onEvent({
-          event: "receive",
-          data: JSON.stringify({
-            envelope: {
-              sourceNumber: "+15550001111",
-              sourceName: "Ada",
-              timestamp,
-              dataMessage: { message },
-            },
-          }),
-        });
+        baseUrl: SIGNAL_BASE_URL,
+        abortSignal: abortController.signal,
+      });
+
+      expect(sendMock).toHaveBeenCalledTimes(2);
+      for (const call of sendMock.mock.calls) {
+        expect(call[2]).not.toHaveProperty("replyToId");
+        expect(call[2]).not.toHaveProperty("replyToAuthor");
+        expect(call[2]).not.toHaveProperty("replyToBody");
       }
-      await vi.waitFor(() => expect(replyMock).toHaveBeenCalledTimes(2));
-      abortController.abort();
-    });
-
-    await runMonitorWithMocks({
-      autoStart: false,
-      baseUrl: SIGNAL_BASE_URL,
-      abortSignal: abortController.signal,
-    });
-
-    expect(sendMock).toHaveBeenCalledTimes(2);
-    for (const call of sendMock.mock.calls) {
-      expect(call[2]).not.toHaveProperty("replyToId");
-      expect(call[2]).not.toHaveProperty("replyToAuthor");
-      expect(call[2]).not.toHaveProperty("replyToBody");
+    } finally {
+      vi.useRealTimers();
     }
   });
 
@@ -575,7 +588,7 @@ describe("monitorSignalProvider tool results", () => {
       ],
     });
 
-    await vi.waitFor(() => {
+    await waitForSignalDelivery(() => {
       expect(sendMock).toHaveBeenCalledTimes(1);
     });
     expect(sendMock.mock.calls[0]?.[2]).toMatchObject({
@@ -604,7 +617,7 @@ describe("monitorSignalProvider tool results", () => {
       ],
     });
 
-    await vi.waitFor(() => {
+    await waitForSignalDelivery(() => {
       expect(sendMock).toHaveBeenCalledTimes(1);
     });
     expect(sendMock.mock.calls[0]?.[2]).not.toHaveProperty("replyToId");
@@ -630,7 +643,7 @@ describe("monitorSignalProvider tool results", () => {
       ],
     });
 
-    await vi.waitFor(() => {
+    await waitForSignalDelivery(() => {
       expect(sendMock).toHaveBeenCalledTimes(1);
     });
     expect(sendMock.mock.calls[0]?.[2]).not.toHaveProperty("replyToId");
@@ -659,7 +672,7 @@ describe("monitorSignalProvider tool results", () => {
       ],
     });
 
-    await vi.waitFor(() => {
+    await waitForSignalDelivery(() => {
       expect(sendMock).toHaveBeenCalledTimes(1);
     });
     expect(sendMock.mock.calls[0]?.[2]).not.toHaveProperty("replyToId");
@@ -688,7 +701,7 @@ describe("monitorSignalProvider tool results", () => {
       ],
     });
 
-    await vi.waitFor(() => {
+    await waitForSignalDelivery(() => {
       expect(sendMock).toHaveBeenCalledTimes(1);
     });
     expect(sendMock.mock.calls[0]?.[2]).toMatchObject({
@@ -723,7 +736,7 @@ describe("monitorSignalProvider tool results", () => {
       ],
     });
 
-    await vi.waitFor(() => {
+    await waitForSignalDelivery(() => {
       expect(sendMock).toHaveBeenCalledTimes(1);
     });
     expect(sendMock.mock.calls[0]?.[2]).not.toHaveProperty("replyToId");
@@ -760,7 +773,7 @@ describe("monitorSignalProvider tool results", () => {
       ],
     });
 
-    await vi.waitFor(() => {
+    await waitForSignalDelivery(() => {
       expect(sendMock).toHaveBeenCalledTimes(1);
     });
     expect(sendMock.mock.calls[0]?.[2]).not.toHaveProperty("replyToId");
@@ -920,7 +933,7 @@ describe("monitorSignalProvider tool results", () => {
       ],
     });
 
-    await vi.waitFor(() => {
+    await waitForSignalDelivery(() => {
       expect(sendMock).toHaveBeenCalledTimes(1);
     });
   });

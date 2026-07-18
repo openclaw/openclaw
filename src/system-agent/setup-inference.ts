@@ -194,6 +194,10 @@ export type VerifySetupInferenceResult =
   | { ok: true; modelRef: string; latencyMs: number }
   | { ok: false; status: SetupInferenceFailureStatus; error: string };
 
+export type CompleteSetupInferenceResult =
+  | { ok: true; modelRef: string; latencyMs: number; text: string }
+  | { ok: false; status: SetupInferenceFailureStatus; error: string };
+
 export type BoundVerifySetupInferenceResult =
   | {
       ok: true;
@@ -2688,6 +2692,95 @@ export async function verifySetupInferenceConfig(params: {
   }
 }
 
+/** Run one tool-free completion through the configured setup inference route. */
+export async function completeSetupInference(params: {
+  prompt: string;
+  runtime: RuntimeEnv;
+  timeoutMs?: number;
+  deps?: ActivateSetupInferenceDeps;
+}): Promise<CompleteSetupInferenceResult> {
+  const readSnapshot =
+    params.deps?.readConfigFileSnapshot ??
+    (await import("../config/config.js")).readConfigFileSnapshot;
+  const snapshot = await readSnapshot();
+  if (!snapshot.exists) {
+    return { ok: false, status: "unavailable", error: "No OpenClaw config exists." };
+  }
+  if (!snapshot.valid) {
+    return { ok: false, status: "format", error: invalidSetupConfigError(snapshot) };
+  }
+  return await completeSetupInferenceConfig({
+    config: snapshot.runtimeConfig ?? snapshot.config,
+    prompt: params.prompt,
+    runtime: params.runtime,
+    ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
+    ...(params.deps ? { deps: params.deps } : {}),
+  });
+}
+
+/** Config-injected variant used by setup clients and live provider tests. */
+export async function completeSetupInferenceConfig(params: {
+  config: OpenClawConfig;
+  prompt: string;
+  runtime: RuntimeEnv;
+  timeoutMs?: number;
+  deps?: ActivateSetupInferenceDeps;
+}): Promise<CompleteSetupInferenceResult> {
+  const deps: ActivateSetupInferenceDeps = {
+    ...params.deps,
+    ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
+  };
+  const routeAgentId = normalizeAgentId(resolveDefaultAgentId(params.config));
+  if (!resolveAgentEffectiveModelPrimary(params.config, routeAgentId)) {
+    return { ok: false, status: "unavailable", error: "No agent model is configured." };
+  }
+  const tempDir = await (
+    deps.createTempDir ?? (() => fs.mkdtemp(path.join(os.tmpdir(), "openclaw-setup-inference-")))
+  )();
+  try {
+    const plan = await buildTestPlan({
+      kind: "existing-model",
+      cfg: params.config,
+      sourceCfg: params.config,
+      workspaceDir: tempDir,
+      pluginWorkspaceDir: tempDir,
+      agentDir: path.join(tempDir, "agent"),
+      runtime: params.runtime,
+      routeAgentId,
+      deps,
+    });
+    if ("error" in plan) {
+      return { ok: false, status: "unavailable", error: plan.error };
+    }
+    const result = await runSetupInferenceTest({
+      plan,
+      prompt: params.prompt,
+      tempDir,
+      deps,
+      authProfileStateMode: "read-only",
+      requireExecutionOwner: false,
+    });
+    if (!result.ok) {
+      return { ...result, error: await redactSetupInferenceError(result.error) };
+    }
+    if (plan.authProfileId && result.auth.authProfileId !== plan.authProfileId) {
+      return {
+        ok: false,
+        status: "auth",
+        error: "The inference completion used a different credential than the configured route.",
+      };
+    }
+    return {
+      ok: true,
+      modelRef: plan.modelRef,
+      latencyMs: result.latencyMs,
+      text: result.text,
+    };
+  } finally {
+    await cleanupSetupInferenceTempDir({ tempDir, deps, runtime: params.runtime });
+  }
+}
+
 async function cleanupSetupInferenceTempDir(params: {
   tempDir: string;
   deps: ActivateSetupInferenceDeps;
@@ -3102,13 +3195,14 @@ async function rollbackManualAuthProfiles(
 
 async function runSetupInferenceTest(params: {
   plan: SetupInferenceTestPlan;
+  prompt?: string;
   tempDir: string;
   deps: ActivateSetupInferenceDeps;
   authProfileStateMode: "read-write" | "read-only";
   requireExecutionOwner: boolean;
   signal?: AbortSignal;
 }): Promise<
-  | { ok: true; latencyMs: number; auth: AgentExecutionAuthBinding }
+  | { ok: true; latencyMs: number; auth: AgentExecutionAuthBinding; text: string }
   | {
       ok: false;
       status: SetupInferenceFailureStatus;
@@ -3152,7 +3246,7 @@ async function runSetupInferenceTest(params: {
         workspaceDir: tempDir,
         ...(plan.agentDir ? { agentDir: plan.agentDir } : {}),
         config: plan.config,
-        prompt: SETUP_INFERENCE_TEST_PROMPT,
+        prompt: params.prompt ?? SETUP_INFERENCE_TEST_PROMPT,
         provider: plan.provider,
         model: plan.model,
         ...(plan.authProfileId ? { authProfileId: plan.authProfileId } : {}),
@@ -3180,7 +3274,7 @@ async function runSetupInferenceTest(params: {
         workspaceDir: tempDir,
         ...(plan.agentDir ? { agentDir: plan.agentDir } : {}),
         config: plan.config,
-        prompt: SETUP_INFERENCE_TEST_PROMPT,
+        prompt: params.prompt ?? SETUP_INFERENCE_TEST_PROMPT,
         provider: plan.provider,
         model: plan.model,
         ...(plan.authProfileId
@@ -3197,7 +3291,13 @@ async function runSetupInferenceTest(params: {
         thinkLevel: "off",
         reasoningLevel: "off",
         verboseLevel: "off",
-        ...resolveSetupInferenceProbeStreamParams(plan.agentHarnessRuntimeOverride),
+        // The 32-token probe cap is sized for the "reply OK" verification
+        // prompt only. Custom completions pass no explicit cap: the stream
+        // layer then applies the resolved model's own required maxTokens
+        // budget, which both bounds output and never exceeds provider limits.
+        ...(params.prompt === undefined
+          ? resolveSetupInferenceProbeStreamParams(plan.agentHarnessRuntimeOverride)
+          : {}),
         disableTools: true,
         modelRun: true,
         messageChannel: "openclaw",
@@ -3243,6 +3343,7 @@ async function runSetupInferenceTest(params: {
     return {
       ok: true,
       latencyMs: Date.now() - started,
+      text,
       auth:
         successfulAuth ??
         (!requireExecutionOwner && plan.authProfileId ? { authProfileId: plan.authProfileId } : {}),

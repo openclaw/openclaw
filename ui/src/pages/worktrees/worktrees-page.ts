@@ -711,4 +711,6 @@ class WorktreesPage extends OpenClawLightDomElement {
   }
 }
 
-customElements.define("openclaw-worktrees-page", WorktreesPage);
+if (!customElements.get("openclaw-worktrees-page")) {
+  customElements.define("openclaw-worktrees-page", WorktreesPage);
+}

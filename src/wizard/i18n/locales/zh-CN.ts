@@ -152,6 +152,22 @@ export const zh_CN = {
       summaryTitle: "Memory 导入摘要",
       title: "发现 memory",
     },
+    appRecommendations: {
+      catalogEntryMissing: "官方插件目录条目不可用。",
+      detected: "检测到的应用：{apps}",
+      disclosure: "应用名称使用你配置的模型和 ClawHub 搜索进行匹配。",
+      installFailed: "无法安装 {name}：{reason}",
+      noneFound: "未找到基于应用的插件或技能推荐。",
+      option: "{name} — {reason}（检测到：{app}）",
+      optionThirdParty:
+        "{name} — {reason}（检测到：{app}）— 第三方 ClawHub 技能；将安装其发布者的代码",
+      scanning:
+        "正在扫描已安装应用 — 应用名称将通过你配置的模型与 ClawHub 搜索进行匹配（可通过 wizard.appRecommendations 关闭）…",
+      select: "安装推荐的插件和技能",
+      skillTrust: "信任并安装 ClawHub 技能 {name}？",
+      skipped: "已跳过应用推荐：{reason}",
+      title: "应用推荐",
+    },
     plugins: {
       configureBackHint: "返回分区菜单",
       configureEmpty: "没有找到带可配置字段的插件。",
@@ -257,6 +273,11 @@ export const zh_CN = {
       aiAccessTitle: "AI 访问",
       alreadySetUp: "这里已经全部设置好了 — 你的 AI 刚刚通过了一次新的检查。",
       applyFailedFallback: "应用设置时出了问题：{detail}\n我们改为在聊天中一起完成吧。",
+      browserHandoffContinuing: "仪表盘已连接 — 请在浏览器中继续。",
+      browserHandoffCopy: "请在浏览器中打开此 URL：\n\n{url}\n\n正在等待仪表盘连接…",
+      browserHandoffOpening: "正在打开 Control UI 仪表盘并等待连接…",
+      browserHandoffReady: "浏览器已准备好 — 之后可以在设置中找到我。",
+      browserHandoffTitle: "在浏览器中继续",
       codingAgentQuip:
         "我看到这台机器上有 {labels} — 品味不错。等 AI 就绪后，我还能把它们的记忆一并带过来。",
       custodianIntro: "你好 — 我是 OpenClaw，负责维护这套系统。我们开始设置吧。",

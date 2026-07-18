@@ -129,6 +129,11 @@ enum class GatewayMethod(
   ExecApprovalRequest("exec.approval.request"),
   ExecApprovalWaitDecision("exec.approval.waitDecision"),
   ExecApprovalResolve("exec.approval.resolve"),
+  QuestionRequest("question.request"),
+  QuestionWaitAnswer("question.waitAnswer"),
+  QuestionResolve("question.resolve"),
+  QuestionGet("question.get"),
+  QuestionList("question.list"),
   PluginApprovalList("plugin.approval.list"),
   PluginApprovalRequest("plugin.approval.request"),
   PluginApprovalWaitDecision("plugin.approval.waitDecision"),
@@ -386,6 +391,7 @@ enum class GatewayMethod(
   UiCommand("ui.command"),
   ApprovalHistory("approval.history"),
   PluginSurfaceRefresh("plugin.surface.refresh"),
+  ConversationsList("conversations.list"),
 }
 
 enum class GatewayEvent(
@@ -422,6 +428,8 @@ enum class GatewayEvent(
   VoicewakeRoutingChanged("voicewake.routing.changed"),
   ExecApprovalRequested("exec.approval.requested"),
   ExecApprovalResolved("exec.approval.resolved"),
+  QuestionRequested("question.requested"),
+  QuestionResolved("question.resolved"),
   PluginApprovalRequested("plugin.approval.requested"),
   PluginApprovalResolved("plugin.approval.resolved"),
   OpenclawApprovalRequested("openclaw.approval.requested"),

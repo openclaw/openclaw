@@ -214,7 +214,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // Registry sweep: 77 packages, zero fetch failures; retired dead channel-ingress facade.
       // +1: speech-settings keeps agent prompt imports off the synthesis/runtime graph.
       // +1: meeting-runtime barrel: browser meeting-bot core behind MeetingPlatformAdapter.
-      330,
+      // +1: question-gateway-runtime resolves ask_user choices for channel plugins.
+      331,
       env,
     ),
     // ScopeTree adds six channel-policy exports, mirrored by compat, including three functions.
@@ -262,7 +263,9 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // Harvest: retired dual-field plan payload builder -1.
       // +23: core channel, envelope, direct-DM, feedback, legacy-payload, and memory contracts.
       // +81: meeting-runtime barrel: browser meeting-bot core behind MeetingPlatformAdapter.
-      8149,
+      // +3: question-gateway-runtime resolver plus request/result types.
+      // +1: async memory prompt preparation registration.
+      8153,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -296,7 +299,9 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // Harvest: retired dual-field plan payload builder -1.
       // +13: core channel, envelope, direct-DM, feedback, legacy-payload, and memory operations.
       // +32: meeting-runtime barrel: browser meeting-bot core behind MeetingPlatformAdapter.
-      4533,
+      // +1: question-gateway-runtime resolver.
+      // +1: async memory prompt preparation registration.
+      4535,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

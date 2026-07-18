@@ -203,6 +203,7 @@ function createLifecycleController({
     resolveSubagentTask: () => ({ lookup: "available" }),
     shouldEmitEndedHookForRun: () => false,
     emitSubagentEndedHookForRun: vi.fn(async () => {}),
+    emitSubagentProgressEndedForRun: vi.fn(async () => {}),
     notifyContextEngineSubagentEnded: vi.fn(async () => {}),
     retireSupersededRun: vi.fn(async () => {}),
     resumeSubagentRun: vi.fn(),
@@ -295,6 +296,25 @@ describe("subagent registry lifecycle hardening", () => {
     browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd.mockClear();
     bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey.mockClear();
     bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey.mockResolvedValue(true);
+  });
+
+  it("emits one progress end event at the canonical terminal transition", async () => {
+    const entry = createRunEntry({ expectsCompletionMessage: false });
+    const emitSubagentProgressEndedForRun = vi.fn(async () => {});
+    const controller = createLifecycleController({ entry, emitSubagentProgressEndedForRun });
+    const completion = {
+      runId: entry.runId,
+      endedAt: 4_000,
+      outcome: { status: "ok" as const },
+      reason: SUBAGENT_ENDED_REASON_COMPLETE,
+      triggerCleanup: false,
+    };
+
+    await controller.completeSubagentRun(completion);
+    await controller.completeSubagentRun(completion);
+
+    expect(emitSubagentProgressEndedForRun).toHaveBeenCalledTimes(1);
+    expect(emitSubagentProgressEndedForRun).toHaveBeenCalledWith(entry);
   });
 
   it("keeps task finalization, resource retirement, and announce cleanup root-admitted", async () => {

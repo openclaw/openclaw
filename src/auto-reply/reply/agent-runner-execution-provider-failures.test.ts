@@ -496,6 +496,32 @@ describe("runAgentTurnWithFallback: provider failures", () => {
     );
   });
 
+  it("interrupts the transient HTTP retry backoff on abort", async () => {
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    vi.useFakeTimers();
+    state.runEmbeddedAgentMock.mockRejectedValue(
+      new FailoverError("provider request timed out", {
+        reason: "timeout",
+        provider: "anthropic",
+        model: "claude-opus-4-1",
+      }),
+    );
+    const abortController = new AbortController();
+    const { replyOperation } = createMockReplyOperation({ abortSignal: abortController.signal });
+
+    const resultPromise = runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({ replyOperation }),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    abortController.abort();
+    await expect(resultPromise).resolves.toMatchObject({
+      kind: "final",
+      payload: { text: SILENT_REPLY_TOKEN },
+    });
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("cancels the overload notice immediately when a slow retrying turn is aborted", async () => {
     const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
     vi.useFakeTimers();

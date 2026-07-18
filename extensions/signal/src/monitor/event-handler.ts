@@ -26,6 +26,7 @@ import {
   hasVisibleInboundReplyDispatch,
   runChannelInboundEvent,
   shouldDebounceTextInbound,
+  type ChannelInboundTurnPlan,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
   bindIngressLifecycleToReplyOptions,
@@ -46,9 +47,6 @@ import {
 import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import { resolveBatchedReplyThreadingPolicy } from "openclaw/plugin-sdk/reply-reference";
-import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
-import { createReplyDispatcherWithTyping } from "openclaw/plugin-sdk/reply-runtime";
-import { settleReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute, resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   danger,
@@ -157,7 +155,9 @@ function resolveSignalStatusReactionTimestamp(params: {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
-type SignalStatusDispatchResult = Awaited<ReturnType<typeof dispatchInboundMessage>>;
+type SignalStatusDispatchResult = {
+  failedCounts?: Partial<Record<"tool" | "block" | "final", number>>;
+};
 
 function hasSignalStatusReplyDeliveryFailure(result: SignalStatusDispatchResult): boolean {
   const failedCounts = result.failedCounts;
@@ -332,6 +332,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       },
       route: {
         agentId: route.agentId,
+        dmScope: route.dmScope,
         accountId: route.accountId,
         routeSessionKey: route.sessionKey,
       },
@@ -498,10 +499,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         replyToMode !== "off" && replyThreading?.implicitCurrentMessage !== "deny",
       state: { hasReplied: false },
     };
-    const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
+    const dispatcherOptions: NonNullable<ChannelInboundTurnPlan["dispatcherOptions"]> = {
       ...replyPipeline,
       humanDelay: resolveHumanDelayConfig(deps.cfg, route.agentId),
       typingCallbacks,
+    };
+    const delivery: ChannelInboundTurnPlan["delivery"] = {
       deliver: async (payload, _info) => {
         await deps.deliverReplies({
           cfg: deps.cfg,
@@ -521,7 +524,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       onError: (err, info) => {
         deps.runtime.error?.(danger(`signal ${info.kind} reply failed: ${String(err)}`));
       },
-    });
+    };
     const inboundLastRouteSessionKey = resolveInboundLastRouteSessionKey({
       route,
       sessionKey: route.sessionKey,
@@ -585,52 +588,39 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
             historyMap: deps.groupHistories,
             limit: deps.historyLimit,
           },
-          onPreDispatchFailure: () =>
-            settleReplyDispatcher({
-              dispatcher,
-              onSettled: () => markDispatchIdle(),
-            }),
-          runDispatch: async () => {
-            try {
-              if (statusReactionController) {
-                void statusReactionController.setThinking();
-              }
-              return await dispatchInboundMessage({
-                ctx: ctxPayload,
-                cfg: deps.cfg,
-                dispatcher,
-                replyOptions: {
-                  ...replyOptions,
-                  ...(entry.turnAdoptionLifecycle
-                    ? bindIngressLifecycleToReplyOptions(entry.turnAdoptionLifecycle)
-                    : {}),
-                  disableBlockStreaming:
-                    typeof deps.blockStreaming === "boolean" ? !deps.blockStreaming : undefined,
-                  ...(statusReactionController
-                    ? {
-                        allowProgressCallbacksWhenSourceDeliverySuppressed: true,
-                        allowToolLifecycleWhenProgressHidden: true,
-                        onToolStart: async (payload: { name?: string }) => {
-                          const toolName = payload.name?.trim();
-                          if (toolName) {
-                            await statusReactionController.setTool(toolName);
-                          }
-                        },
-                        onCompactionStart: async () => {
-                          await statusReactionController.setCompacting();
-                        },
-                        onCompactionEnd: async () => {
-                          statusReactionController.cancelPending();
-                          await statusReactionController.setThinking();
-                        },
-                      }
-                    : {}),
-                  onModelSelected,
-                },
-              });
-            } finally {
-              markDispatchIdle();
+          afterRecord: () => {
+            if (statusReactionController) {
+              void statusReactionController.setThinking();
             }
+          },
+          dispatcherOptions,
+          delivery,
+          replyOptions: {
+            ...(entry.turnAdoptionLifecycle
+              ? bindIngressLifecycleToReplyOptions(entry.turnAdoptionLifecycle)
+              : {}),
+            disableBlockStreaming:
+              typeof deps.blockStreaming === "boolean" ? !deps.blockStreaming : undefined,
+            ...(statusReactionController
+              ? {
+                  allowProgressCallbacksWhenSourceDeliverySuppressed: true,
+                  allowToolLifecycleWhenProgressHidden: true,
+                  onToolStart: async (payload: { name?: string }) => {
+                    const toolName = payload.name?.trim();
+                    if (toolName) {
+                      await statusReactionController.setTool(toolName);
+                    }
+                  },
+                  onCompactionStart: async () => {
+                    await statusReactionController.setCompacting();
+                  },
+                  onCompactionEnd: async () => {
+                    statusReactionController.cancelPending();
+                    await statusReactionController.setThinking();
+                  },
+                }
+              : {}),
+            onModelSelected,
           },
         }),
         onFinalize: (result) => {
@@ -731,11 +721,11 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const combinedText = entries
       .map((entry) => entry.bodyText)
       .filter(Boolean)
-      .join("\\n");
+      .join("\n");
     const combinedCommandBody = entries
       .map((entry) => entry.commandBody)
       .filter(Boolean)
-      .join("\\n");
+      .join("\n");
     if (!combinedText.trim()) {
       await settle();
       return;

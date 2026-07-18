@@ -615,6 +615,7 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
     },
     route: {
       agentId: route.agentId,
+      dmScope: route.dmScope,
       accountId: route.accountId,
       routeSessionKey: route.sessionKey,
     },
@@ -677,7 +678,7 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
     cfg: config,
     channel: "zalo",
     accountId: account.accountId,
-    route: { agentId: route.agentId, sessionKey: route.sessionKey },
+    route: { agentId: route.agentId, dmScope: route.dmScope, sessionKey: route.sessionKey },
     ctxPayload,
     delivery: {
       preparePayload: (payload) =>

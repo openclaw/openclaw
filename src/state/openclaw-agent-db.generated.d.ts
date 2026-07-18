@@ -68,6 +68,23 @@ export interface Conversations {
   updated_at: number;
 }
 
+export interface HeartbeatOutcomes {
+  context_claimed_at: number | null;
+  context_run_id: string | null;
+  next_check: string | null;
+  occurred_at: number;
+  outcome: string;
+  priority: string | null;
+  response_reason: string | null;
+  run_session_key: string;
+  session_key: string;
+  summary: string;
+  task_names_json: string | null;
+  updated_at: number;
+  wake_reason: string | null;
+  wake_source: string | null;
+}
+
 export interface MemoryEmbeddingCache {
   dims: number | null;
   embedding: string;
@@ -266,6 +283,7 @@ export interface DB {
   cache_entries: CacheEntries;
   conversation_deliveries: ConversationDeliveries;
   conversations: Conversations;
+  heartbeat_outcomes: HeartbeatOutcomes;
   memory_embedding_cache: MemoryEmbeddingCache;
   memory_index_chunks: MemoryIndexChunks;
   memory_index_meta: MemoryIndexMeta;

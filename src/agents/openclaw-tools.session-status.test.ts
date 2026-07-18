@@ -38,6 +38,9 @@ const resolveUsableCustomProviderApiKeyMock = vi.hoisted(() =>
 const getSessionStateVersionMock = vi.hoisted(() =>
   vi.fn((_sessionKey: string, _agentId: string) => 0),
 );
+const listAmbientGroupWatchTargetsMock = vi.hoisted(() =>
+  vi.fn((_watcherSessionKey: string) => new Set<string>()),
+);
 const listSessionStateEventsSinceMock = vi.hoisted(() =>
   vi.fn((_sessionKey: string, _agentId: string, _after: number, _limit: number) => ({
     events: [] as Array<Record<string, unknown>>,
@@ -357,6 +360,8 @@ vi.mock("../tasks/task-owner-access.js", () => ({
 vi.mock("../sessions/session-state-events.js", () => ({
   getSessionStateVersion: (sessionKey: string, agentId: string) =>
     getSessionStateVersionMock(sessionKey, agentId),
+  listAmbientGroupWatchTargets: (watcherSessionKey: string) =>
+    listAmbientGroupWatchTargetsMock(watcherSessionKey),
   listSessionStateEventsSince: (
     sessionKey: string,
     agentId: string,
@@ -396,6 +401,8 @@ function resetSessionStore(store: Record<string, SessionEntry>) {
   listTasksForRelatedSessionKeyForOwnerMock.mockReturnValue([]);
   getSessionStateVersionMock.mockReset();
   getSessionStateVersionMock.mockReturnValue(0);
+  listAmbientGroupWatchTargetsMock.mockReset();
+  listAmbientGroupWatchTargetsMock.mockReturnValue(new Set());
   listSessionStateEventsSinceMock.mockReset();
   listSessionStateEventsSinceMock.mockReturnValue({
     events: [],
@@ -566,6 +573,48 @@ describe("session_status tool", () => {
     expect(details.stateChanges).toMatchObject({ historyGap: true });
     expect(text).toContain("Session state changes:");
     expect(text).toContain('"kind": "upstream_missing"');
+  });
+
+  it("returns watched group changesSince under tree visibility", async () => {
+    const groupSessionKey = "agent:main:telegram:group:watched";
+    resetSessionStore({
+      "agent:main:main": { sessionId: "s-main", updatedAt: 10 },
+      [groupSessionKey]: {
+        sessionId: "s-group",
+        updatedAt: 20,
+        chatType: "group",
+      },
+    });
+    mockConfig = {
+      ...createMockConfig(),
+      tools: {
+        sessions: { visibility: "tree" },
+        agentToAgent: { enabled: false },
+      },
+    };
+    listAmbientGroupWatchTargetsMock.mockReturnValue(new Set([groupSessionKey]));
+    getSessionStateVersionMock.mockReturnValue(9);
+    listSessionStateEventsSinceMock.mockReturnValue({
+      events: [
+        { sequence: 9, kind: "human_direct_message", summary: "human message via telegram" },
+      ],
+      truncated: false,
+      earliestAvailableSequence: 9,
+      historyGap: false,
+    });
+
+    const result = await getSessionStatusTool("agent:main:main").execute("call-group-state", {
+      sessionKey: groupSessionKey,
+      changesSince: 4,
+    });
+
+    expect(listAmbientGroupWatchTargetsMock).toHaveBeenCalledWith("agent:main:main");
+    expect(listSessionStateEventsSinceMock).toHaveBeenCalledWith(groupSessionKey, "main", 4, 200);
+    expect(result.details).toMatchObject({
+      ok: true,
+      sessionKey: groupSessionKey,
+      stateVersion: 9,
+    });
   });
 
   it("enables transcript usage fallback for session_status", async () => {

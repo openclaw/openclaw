@@ -82,6 +82,7 @@ jobs:
           persist-credentials: false
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
           fetch-depth: 0
+          filter: blob:none
 
       - name: Resolve checked-out ref
         id: ref

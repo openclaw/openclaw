@@ -6,6 +6,7 @@
         android:name="android.hardware.type.watch"
         android:required="true" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
     <queries>
         <intent>
