@@ -472,7 +472,16 @@ export class ReefInboxConnection {
         // Do not let a stale generation observe a later channel abort while
         // its asynchronous WebSocket close handshake is still in flight.
         closeTimer = setTimeout(() => {
-          socket.terminate?.();
+          if (!socket.terminate) {
+            return;
+          }
+          try {
+            socket.terminate();
+          } catch {
+            // A failed force-close is not proof that the old generation ended.
+            // Keep waiting for its real close event instead of overlapping peers.
+            return;
+          }
           closeComplete = true;
           finishAfterClose();
         }, REEF_WS_CLOSE_MS);
