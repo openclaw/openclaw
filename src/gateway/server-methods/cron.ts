@@ -215,7 +215,10 @@ function assertCronDoesNotTargetAgentHarness(input: {
 }
 
 function resolveCronJobId(params: CronJobIdParams): string | undefined {
-  return params.id ?? params.jobId;
+  // Exact store lookups; clipboard/UI padding must not fake "id not found".
+  const raw = params.id ?? params.jobId;
+  const trimmed = typeof raw === "string" ? raw.trim() : undefined;
+  return trimmed ? trimmed : undefined;
 }
 
 function respondInvalidCronParams(respond: RespondFn, method: string, reason: string): void {
@@ -631,7 +634,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       expectedConfigRevision?: string;
     };
     const callerScope = readCronCallerScope(client);
-    const jobId = p.id ?? p.jobId;
+    const jobId = resolveCronJobId(p);
     if (!jobId) {
       respond(
         false,
