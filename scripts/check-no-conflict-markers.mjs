@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // Rejects unresolved merge conflict markers in tracked files.
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -29,20 +29,6 @@ export function findConflictMarkerLines(content) {
     }
   }
   return matches;
-}
-
-/**
- * Lists tracked files in the repository.
- */
-export function listTrackedFiles(cwd = process.cwd()) {
-  const output = execFileSync("git", ["ls-files", "-z"], {
-    cwd,
-    encoding: "utf8",
-  });
-  return output
-    .split("\0")
-    .filter(Boolean)
-    .map((relativePath) => path.join(cwd, relativePath));
 }
 
 /**

@@ -4,10 +4,6 @@
  */
 export function findConflictMarkerLines(content: string): number[];
 /**
- * Lists tracked files in the repository.
- */
-export function listTrackedFiles(cwd?: string): string[];
-/**
  * Scans a list of files for merge conflict markers, skipping binary content.
  * Intended for direct/small-scale use; the tracked-files path uses git grep
  * directly to avoid reading large files into memory.
