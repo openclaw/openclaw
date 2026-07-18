@@ -139,6 +139,49 @@ describe("thread-ownership plugin", () => {
       );
     });
 
+    it("uses the default forwarder URL when the env override is blank", async () => {
+      process.env.SLACK_FORWARDER_URL = "   ";
+      vi.mocked(globalThis.fetch).mockResolvedValue(
+        new Response(JSON.stringify({ owner: "test-agent" }), { status: 200 }),
+      );
+
+      const result = await sendSlackThreadMessage();
+
+      expect(result).toBeUndefined();
+      expectOwnershipFetchCall(
+        0,
+        "http://slack-forwarder:8750/api/v1/ownership/C123/1234.5678",
+        "test-agent",
+      );
+    });
+
+    it("keeps live plugin config ahead of the env override", async () => {
+      configFile = {
+        ...configFile,
+        plugins: {
+          entries: {
+            "thread-ownership": {
+              config: {
+                forwarderUrl: "http://config-forwarder:8750",
+              },
+            },
+          },
+        },
+      };
+      vi.mocked(globalThis.fetch).mockResolvedValue(
+        new Response(JSON.stringify({ owner: "test-agent" }), { status: 200 }),
+      );
+
+      const result = await sendSlackThreadMessage();
+
+      expect(result).toBeUndefined();
+      expectOwnershipFetchCall(
+        0,
+        "http://config-forwarder:8750/api/v1/ownership/C123/1234.5678",
+        "test-agent",
+      );
+    });
+
     it("prefers shared conversationId over non-canonical Slack target shapes", async () => {
       vi.mocked(globalThis.fetch).mockResolvedValue(
         new Response(JSON.stringify({ owner: "test-agent" }), { status: 200 }),

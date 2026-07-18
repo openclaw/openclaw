@@ -132,19 +132,16 @@ html.openclaw-native-nav .topbar .topbar-nav-toggle {
 }
 
 /* Shipped Mac builds without web chrome only replace the sidebar toggle via
-   openclaw-native-nav. Web-chrome hosts replace toggle, search, and new-session
-   controls in-document; they keep the drawer hamburger because that toolbar
-   hides in compact layouts. */
+   openclaw-native-nav. Web-chrome hosts replace the toggle and brand search;
+   new-thread stays in the brand row and moves to the titlebar only when the
+   rail is collapsed. */
 html.openclaw-native-web-chrome .shell-nav-expand,
 html.openclaw-native-web-chrome .sidebar-brand__collapse {
   display: none;
 }
 
-/* The titlebar strip replaces brand search/new-session only while it is
-   visible; compact layouts hide the strip (.shell--mobile-nav), so the drawer
-   keeps its own copies there, matching the plain-browser drawer. */
-html.openclaw-native-web-chrome .shell:not(.shell--mobile-nav) .sidebar-brand .sidebar-search,
-html.openclaw-native-web-chrome .shell:not(.shell--mobile-nav) .sidebar-brand .sidebar-new-session {
+/* The titlebar strip replaces brand search only while it is visible. */
+html.openclaw-native-web-chrome .shell:not(.shell--mobile-nav) .sidebar-brand .sidebar-search {
   display: none;
 }
 
@@ -908,6 +905,17 @@ html.openclaw-native-web-chrome .shell:not(.shell--mobile-nav) .sidebar-brand .s
   stroke-linejoin: round;
 }
 
+.sidebar-brand__new-thread {
+  width: 32px;
+  height: 32px;
+  color: var(--text);
+}
+
+.sidebar-brand__new-thread svg {
+  width: 18px;
+  height: 18px;
+}
+
 .sidebar-shell__body {
   min-height: 0;
   flex: 1;
@@ -1312,6 +1320,20 @@ html.openclaw-native-macos
   display: inline-flex;
   flex: 0 0 auto;
   opacity: 0.75;
+  transition: opacity var(--duration-fast) ease;
+}
+
+.sidebar-session-group-toggle[aria-expanded="true"] .sidebar-session-group-toggle__icon {
+  opacity: 0;
+}
+
+.sidebar-recent-sessions__head:hover
+  .sidebar-session-group-toggle[aria-expanded="true"]
+  .sidebar-session-group-toggle__icon,
+.sidebar-recent-sessions__head:focus-within
+  .sidebar-session-group-toggle[aria-expanded="true"]
+  .sidebar-session-group-toggle__icon {
+  opacity: 0.75;
 }
 
 .sidebar-session-group-toggle__icon svg {
@@ -1464,6 +1486,10 @@ html.openclaw-native-macos
 }
 
 @media (hover: none), (pointer: coarse) {
+  .sidebar-session-group-toggle[aria-expanded="true"] .sidebar-session-group-toggle__icon {
+    opacity: 0.75;
+  }
+
   .sidebar-session-group-actions {
     opacity: 1;
     pointer-events: auto;

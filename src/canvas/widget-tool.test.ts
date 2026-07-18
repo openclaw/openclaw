@@ -66,9 +66,9 @@ describe("show_widget", () => {
       '<SvG viewBox="0 0 10 10"><circle r="4" /></SvG>',
     );
 
-    expect(Buffer.byteLength(html)).toBe(5158);
+    expect(Buffer.byteLength(html)).toBe(5221);
     expect(createHash("sha256").update(html).digest("hex")).toBe(
-      "650992e812051ff451a2aa5d85a040e93615fe19579912d2bcc5acecce080060",
+      "8a6c07f9004e816fcadd8fab009f9c78ef831a8027991d61dbeeb4b254721acc",
     );
   });
 
@@ -113,6 +113,7 @@ describe("show_widget", () => {
     expect(html).toContain("<title>&lt;Status&gt;</title>");
     expect(html).toContain("--accent:#bd4531");
     expect(html).toContain("--accent:#ff5c5c");
+    expect(html).toContain("--accent-fill:#d13c3c");
     expect(html).toContain('<body class="svg-widget"><script>');
     expect(html).toContain("openclaw:widget-size");
     const manifest = JSON.parse(
@@ -150,6 +151,7 @@ describe("show_widget", () => {
       "border",
       "border-strong",
       "accent",
+      "accent-fill",
       "accent-fg",
       "ok",
       "warn",

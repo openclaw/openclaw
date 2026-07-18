@@ -568,7 +568,7 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
 
     try {
       await page.goto(`${server.baseUrl}chat?session=${encodeURIComponent("agent:main:work")}`);
-      const brand = page.locator("openclaw-app-sidebar").getByRole("link", { name: "New session" });
+      const brand = page.locator("openclaw-app-sidebar").getByRole("link", { name: "New thread" });
       await expect.poll(() => brand.getAttribute("href")).toBe("/new");
 
       await brand.click();
@@ -816,7 +816,7 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
           ),
         )
         .toBe(true);
-      await expect.poll(() => menu.getByText(/^New session —/).count()).toBe(0);
+      await expect.poll(() => menu.getByText(/^New thread —/).count()).toBe(0);
       await expect
         .poll(() => mainSwitch.evaluate((element) => element === document.activeElement))
         .toBe(true);

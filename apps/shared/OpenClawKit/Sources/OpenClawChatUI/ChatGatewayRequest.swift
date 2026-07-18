@@ -84,6 +84,13 @@ public enum OpenClawChatGatewayRequests {
         OpenClawChatGatewayRequest(method: "question.list", timeoutMs: self.defaultTimeoutMs)
     }
 
+    public static func questionGet(id: String) -> OpenClawChatGatewayRequest {
+        OpenClawChatGatewayRequest(
+            method: "question.get",
+            params: ["id": AnyCodable(id)],
+            timeoutMs: self.defaultTimeoutMs)
+    }
+
     public static func resolveQuestion(
         id: String,
         answers: [String: [String]]) -> OpenClawChatGatewayRequest
@@ -94,6 +101,16 @@ public enum OpenClawChatGatewayRequests {
             params: [
                 "id": AnyCodable(id),
                 "answers": AnyCodable(["answers": AnyCodable(values)]),
+            ],
+            timeoutMs: self.mutationTimeoutMs)
+    }
+
+    public static func cancelQuestion(id: String) -> OpenClawChatGatewayRequest {
+        OpenClawChatGatewayRequest(
+            method: "question.resolve",
+            params: [
+                "id": AnyCodable(id),
+                "cancel": AnyCodable(true),
             ],
             timeoutMs: self.mutationTimeoutMs)
     }
