@@ -63,7 +63,7 @@ type OpenCodeReadParams = {
   cursor?: string;
 };
 
-export function optionalOpenCodeString(value: unknown, maxLength: number): string | undefined {
+function optionalOpenCodeString(value: unknown, maxLength: number): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }

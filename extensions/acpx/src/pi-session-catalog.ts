@@ -19,7 +19,7 @@ const SESSION_ID_PATTERN = /^(?!-)[A-Za-z0-9._:-]{1,256}$/u;
 
 export type PiSessionPage = { sessions: SessionCatalogSession[]; nextCursor?: string };
 
-export function optionalPiString(value: unknown, maxLength: number): string | undefined {
+function optionalPiString(value: unknown, maxLength: number): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
