@@ -52,6 +52,7 @@ function createStatusFinalizationPullServer(
         "checking blob",
         "cleanup",
       ];
+      // Status-only phases (~75ms) finish inside one 150ms non-renewable grace.
       const timer = setInterval(() => {
         if (step < 5) {
           completed += 250;
@@ -61,9 +62,6 @@ function createStatusFinalizationPullServer(
           if (phaseIdx < statusPhases.length) {
             res.write(`{"status":"${statusPhases[phaseIdx]}"}\n`);
           } else {
-            // Spent >statusPhases.length status-only steps past the 100ms
-            // budget; healthy finalization survives because distinct status
-            // transitions reset the watchdog each step.
             res.write('{"status":"success"}\n');
             res.end();
             clearInterval(timer);
@@ -71,7 +69,7 @@ function createStatusFinalizationPullServer(
           }
         }
         step++;
-      }, 30);
+      }, 15);
       dripTimers.add(timer);
       res.on("close", () => {
         clearInterval(timer);
@@ -101,6 +99,36 @@ function createCyclingStatusPullServer(
       const timer = setInterval(() => {
         const status = i % 2 === 0 ? "verifying sha256 digest" : "writing manifest";
         res.write(`{"status":"${status}"}\n`);
+        i++;
+      }, 40);
+      dripTimers.add(timer);
+      res.on("close", () => {
+        clearInterval(timer);
+        dripTimers.delete(timer);
+      });
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  server.on("clientError", (_err, socket) => socket.destroy());
+  return server;
+}
+
+function createDistinctStatusDripPullServer(
+  dripTimers: Set<ReturnType<typeof setInterval>>,
+): http.Server {
+  const server = http.createServer((req, res) => {
+    if (req.url === "/api/tags") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ models: [] }));
+      return;
+    }
+    if (req.url === "/api/pull") {
+      res.writeHead(200, { "Content-Type": "application/x-ndjson" });
+      let i = 0;
+      const timer = setInterval(() => {
+        res.write(`{"status":"stalled phase ${i}"}\n`);
         i++;
       }, 40);
       dripTimers.add(timer);
@@ -269,7 +297,7 @@ describe("Ollama pull stream no-progress loopback", () => {
     expect(stopMessages.some((message) => message.includes("no progress for"))).toBe(true);
   });
 
-  it("allows status-only finalization past the shortened no-progress timeout", async () => {
+  it("allows finite status-only finalization within one non-renewable grace", async () => {
     server = createStatusFinalizationPullServer(dripTimers);
     server.listen(0, "127.0.0.1");
     await once(server, "listening");
@@ -285,19 +313,47 @@ describe("Ollama pull stream no-progress loopback", () => {
       config: createLoopbackConfig(baseUrl),
       model: "ollama/gemma4",
       prompter,
-      // Status-only finalization phases (~180ms total) survive past a 100ms budget
-      // because distinct status transitions reset the no-progress watchdog.
-      streamNoProgressTimeoutMs: 100,
+      // Status-only phases (~75ms) finish inside one 150ms non-renewable grace.
+      streamNoProgressTimeoutMs: 150,
       streamIdleTimeoutMs: 10_000,
     });
     expect(stopMessages).toContain("Downloaded gemma4");
     expect(stopMessages.some((message) => message.includes("no progress for"))).toBe(false);
   });
 
+  it("aborts distinct novel status drips without completed progress", async () => {
+    server = createDistinctStatusDripPullServer(dripTimers);
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected loopback server address");
+    }
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+    const { prompter, stopMessages } = createPullPrompter();
+
+    const startedAt = Date.now();
+    await expect(
+      ensureOllamaModelPulled({
+        config: createLoopbackConfig(baseUrl),
+        model: "ollama/gemma4",
+        prompter,
+        streamNoProgressTimeoutMs: 250,
+        streamIdleTimeoutMs: 10_000,
+      }),
+    ).rejects.toMatchObject({
+      name: "WizardCancelledError",
+    });
+    const elapsedMs = Date.now() - startedAt;
+    expect(elapsedMs).toBeGreaterThanOrEqual(200);
+    expect(elapsedMs).toBeLessThan(2_000);
+    expect(stopMessages.some((message) => message.includes("no progress for"))).toBe(true);
+  });
+
   it("aborts cycling status without completed progress within the no-progress timeout", async () => {
     // Alternating status values without completed progress must NOT act as
-    // an unlimited keepalive. After both statuses have been seen once, the
-    // watchdog fires because cycling back to a seen status does not reset it.
+    // an unlimited keepalive. Only one status-only grace renews the watchdog.
     server = createCyclingStatusPullServer(dripTimers);
     server.listen(0, "127.0.0.1");
     await once(server, "listening");

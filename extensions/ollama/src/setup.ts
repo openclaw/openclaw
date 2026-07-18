@@ -303,10 +303,10 @@ async function pullOllamaModelCore(params: {
       let buffer = "";
       const layers = new Map<string, { total: number; completed: number }>();
       let lastCompletedSum = 0;
-      // Track distinct statuses seen so only first-time status transitions reset
-      // the watchdog. Prevents cycling status values (e.g. "verifying" → "writing"
-      // → "verifying" → ...) from acting as an unlimited keepalive.
-      const seenStatuses = new Set<string>();
+      // Status text is freeform on /api/pull, so novel status drips must not renew
+      // forever. Completed growth renews the normal watchdog; status-only gets one
+      // non-renewable finalization grace (cleared when completed advances again).
+      let statusOnlyGraceConsumed = false;
 
       const parseLine = (line: string): OllamaPullResult => {
         const trimmed = line.trim();
@@ -330,10 +330,10 @@ async function pullOllamaModelCore(params: {
               completedSum += layer.completed;
             }
             // Monotonically advancing aggregate completed resets the watchdog.
-            // Duplicate status drips without byte progress cannot extend setup forever.
+            // Status-only grace can be granted again after real byte progress.
             if (completedSum > lastCompletedSum) {
               lastCompletedSum = completedSum;
-              seenStatuses.add(chunk.status);
+              statusOnlyGraceConsumed = false;
               armStreamNoProgressTimeout();
             }
             params.onStatus?.(
@@ -341,14 +341,12 @@ async function pullOllamaModelCore(params: {
               totalSum > 0 ? Math.round((completedSum / totalSum) * 100) : null,
             );
           } else {
-            // Published Ollama /api/pull protocol emits status-only post-download
-            // phases (e.g. "verifying sha256 digest", "writing manifest") after
-            // completed stops increasing. Reset the watchdog the first time a
-            // new status text appears, so healthy finalization phases are not
-            // aborted. Once a status has been seen, re-encountering it does not
-            // reset — preventing cycling values from acting as an unlimited keepalive.
-            if (!seenStatuses.has(chunk.status)) {
-              seenStatuses.add(chunk.status);
+            // Post-download status-only phases (e.g. verifying digest, writing
+            // manifest) get one bounded grace arm. Further status-only lines —
+            // including distinct novel strings — do not renew, so a stalled peer
+            // cannot keepalive setup forever.
+            if (!statusOnlyGraceConsumed) {
+              statusOnlyGraceConsumed = true;
               armStreamNoProgressTimeout();
             }
             params.onStatus?.(chunk.status, null);
@@ -373,8 +371,8 @@ async function pullOllamaModelCore(params: {
         if (done) {
           break;
         }
-        // First body bytes start the no-progress clock; advancing completed or
-        // distinct status transitions reset it so healthy finalization is not cut off.
+        // First body bytes start the no-progress clock; only completed growth or
+        // the single status-only grace renews it afterward.
         if (streamNoProgressTimeout === undefined) {
           armStreamNoProgressTimeout();
         }
