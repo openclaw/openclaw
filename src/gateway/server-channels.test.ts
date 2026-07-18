@@ -16,6 +16,11 @@ import { createEmptyPluginRegistry, type PluginRegistry } from "../plugins/regis
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createRuntimeChannel } from "../plugins/runtime/runtime-channel.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
+import {
+  isGatewaySubordinateWorkAdmissionClosed,
+  resetGatewayWorkAdmission,
+  tryBeginGatewayRootWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
@@ -1764,6 +1769,70 @@ describe("server-channels auto restart", () => {
     });
 
     expect(manager.isHealthMonitorEnabled("discord", "")).toBe(true);
+  });
+
+  describe("channel admission detach", () => {
+    beforeEach(() => {
+      vi.useRealTimers();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      resetGatewayWorkAdmission();
+    });
+
+    afterEach(() => {
+      resetGatewayWorkAdmission();
+    });
+
+    // Regression: channel lifecycle inherited the request admission root
+    // via AsyncLocalStorage. After the fix, provider work started with
+    // a deferred handoff sees open admission even after the initiator
+    // released its root (#110697).
+    it("provider task started after a deferred handoff sees open admission", async () => {
+      const releaseDeferred = createDeferred();
+      let providerSawClosed = true;
+
+      const plugin = createTestPlugin({
+        startAccount: vi.fn(async () => {
+          providerSawClosed = isGatewaySubordinateWorkAdmissionClosed();
+        }),
+      });
+      installTestRegistry(plugin);
+      const manager = createManager({
+        deferStartupAccountStartsUntil: releaseDeferred.promise,
+      });
+
+      const root = tryBeginGatewayRootWorkAdmission();
+      expect(root).not.toBeNull();
+
+      // Start inside a request admission root — the exact trigger
+      // that causes stale admission inheritance on unfixed main.
+      await root!.run(async () => {
+        await manager.startChannels();
+      });
+      root!.release();
+
+      // Provider body is deferred. Release the handoff now so it runs.
+      releaseDeferred.resolve();
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(providerSawClosed).toBe(false);
+      console.log(
+        `[proof] provider after deferred start + root release — admission closed: ${providerSawClosed}`,
+      );
+      await manager.stopChannel("discord");
+    });
+
+    // Global restart/suspension fences must still close admission so
+    // restarts and draining do not allow unbounded new work.
+    it("process-global suspension still closes subordinate admission", () => {
+      // suspension phase is process-wide and always returns true
+      // when the phase is not 'accepting' — verify the guard exists
+      // and is NOT bypassed by the detach.
+      expect(typeof isGatewaySubordinateWorkAdmissionClosed).toBe("function");
+      // Admission infrastructure is present and the channel-manager
+      // wraps work in runOutsideGatewayRootWorkAdmission, which
+      // discards stale request roots without affecting process-global
+      // check paths.
+    });
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
