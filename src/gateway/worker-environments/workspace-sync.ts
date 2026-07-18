@@ -16,6 +16,7 @@ import type {
   WorkerWorkspaceSyncRequest,
   WorkerWorkspaceSyncResult,
 } from "./tunnel-contract.js";
+import { DERIVED_WORKSPACE_RSYNC_EXCLUDES } from "./workspace-path-exclusions.js";
 import {
   applyStagedWorkerWorkspace,
   assertWorkspaceMatchesManifest,
@@ -447,6 +448,7 @@ export function createWorkerWorkspaceActions(
           "--archive",
           "--checksum",
           "--exclude=.git",
+          ...DERIVED_WORKSPACE_RSYNC_EXCLUDES.map((pattern) => `--exclude=${pattern}`),
           ...(fileListPath ? ["--recursive", "--from0", `--files-from=${fileListPath}`] : []),
           "-e",
           rsyncSsh,

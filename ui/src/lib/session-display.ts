@@ -92,6 +92,10 @@ type SessionDisplayRow = {
   derivedTitle?: string;
 } & SessionWorktreeDisplayRow;
 
+type SessionDisplayOptions = {
+  includeSubagentPrefix?: boolean;
+};
+
 function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
@@ -169,7 +173,11 @@ function parseSessionKey(key: string): SessionKeyInfo {
   return { prefix: "", fallbackName: key };
 }
 
-export function resolveSessionDisplayName(key: string, row?: SessionDisplayRow): string {
+export function resolveSessionDisplayName(
+  key: string,
+  row?: SessionDisplayRow,
+  options: SessionDisplayOptions = {},
+): string {
   const label = normalizeOptionalString(row?.label) ?? "";
   const displayName = normalizeOptionalString(row?.displayName) ?? "";
   const derivedTitle = normalizeOptionalString(row?.derivedTitle) ?? "";
@@ -180,6 +188,9 @@ export function resolveSessionDisplayName(key: string, row?: SessionDisplayRow):
       return name;
     }
     const prefixPattern = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}\\s*`, "i");
+    if (prefix === "Subagent:" && options.includeSubagentPrefix === false) {
+      return name.replace(prefixPattern, "").trim() || fallbackName;
+    }
     return prefixPattern.test(name) ? name : `${prefix} ${name}`;
   };
 

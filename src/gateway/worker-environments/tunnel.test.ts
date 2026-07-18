@@ -607,6 +607,11 @@ describe("worker tunnel manager", () => {
       fs.writeFile(path.join(plainPath, "hello.txt"), "plain\n"),
       fs.writeFile(path.join(plainPath, "nested/.git/config"), "private metadata\n"),
     ]);
+    await fs.mkdir(path.join(plainPath, "__pycache__"));
+    await Promise.all([
+      fs.writeFile(path.join(plainPath, "__pycache__/fizzbuzz.pyc"), "derived\n"),
+      fs.writeFile(path.join(plainPath, ".mypy_cache"), "derived name file\n"),
+    ]);
     await git(gitPath, "init");
     await git(gitPath, "config", "user.name", "Worker Sync Test");
     await git(gitPath, "config", "user.email", "worker-sync@example.invalid");
@@ -641,6 +646,10 @@ describe("worker tunnel manager", () => {
       await expect(
         fs.access(path.join(plain.remoteWorkspaceDir, "nested/.git/config")),
       ).rejects.toThrow();
+      await expect(
+        fs.access(path.join(plain.remoteWorkspaceDir, "__pycache__/fizzbuzz.pyc")),
+      ).rejects.toThrow();
+      await expect(fs.access(path.join(plain.remoteWorkspaceDir, ".mypy_cache"))).rejects.toThrow();
 
       await expect(
         handle.syncWorkspace({
