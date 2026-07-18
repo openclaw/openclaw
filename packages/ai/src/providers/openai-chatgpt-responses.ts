@@ -1723,3 +1723,6 @@ function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   return error;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+// Temporary export for runtime proof - see PR #110419
+export { decodeWebSocketData };
