@@ -62,7 +62,11 @@ function attachStderrLineLogger(params: {
   debug: RuntimeLogger["debug"];
   prefix: string;
 }): void {
-  if (!params.stderr || !params.debug) {
+  if (!params.stderr) {
+    return;
+  }
+  if (!params.debug) {
+    params.stderr.on("data", () => {});
     return;
   }
   const decoder = new StringDecoder("utf8");

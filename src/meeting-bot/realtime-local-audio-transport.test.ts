@@ -91,7 +91,7 @@ describe("createLocalMeetingRealtimeAudioTransport", () => {
     expect(debug).toHaveBeenCalledTimes(cases.length * 2);
   });
 
-  it("bounds unterminated diagnostics and skips decoding without a debug logger", async () => {
+  it("bounds unterminated diagnostics and drains stderr without a debug logger", async () => {
     const withoutDebug = new Map<string, TestBridgeProcess>();
     const transportWithoutDebug = createLocalMeetingRealtimeAudioTransport({
       inputCommand: ["input"],
@@ -110,7 +110,12 @@ describe("createLocalMeetingRealtimeAudioTransport", () => {
     });
     transportWithoutDebug.startBargeInMonitor?.(() => false);
     for (const proc of withoutDebug.values()) {
-      expect(proc.stderr.listenerCount("data")).toBe(0);
+      expect(proc.stderr.listenerCount("data")).toBe(1);
+      expect(proc.stderr.readableFlowing).toBe(true);
+      for (let index = 0; index < 16; index += 1) {
+        proc.stderr.write(Buffer.alloc(8 * 1024));
+      }
+      expect(proc.stderr.readableLength).toBe(0);
     }
 
     const processes = new Map<string, TestBridgeProcess>();
