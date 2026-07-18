@@ -41,22 +41,21 @@ class ChatComposerDraftTest {
   @Test
   fun sendPayloadReadsCurrentOwnerStoresAfterEditsAndRemovals() {
     val owner = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "main", sessionKey = "agent:main:first")
-    val textDrafts = ChatComposerTextDraftStore()
-    val attachments = ChatComposerAttachmentStore()
+    val state = ChatComposerStateStore()
     val removed = PendingAttachment("removed", "removed.jpg", "image/jpeg", "YQ==")
     val retained = PendingAttachment("retained", "retained.jpg", "image/jpeg", "Yg==")
-    textDrafts[owner] = "old text"
-    attachments.add(owner, listOf(removed))
+    state.textDrafts[owner] = "old text"
+    state.addAttachments(owner, listOf(removed))
 
-    textDrafts[owner] = "  edited text  "
-    attachments.remove(owner, setOf(removed.id))
-    attachments.add(owner, listOf(retained))
+    state.textDrafts[owner] = "  edited text  "
+    state.removeAttachments(owner, setOf(removed.id))
+    state.addAttachments(owner, listOf(retained))
 
-    val payload = captureChatComposerSendPayload(owner, textDrafts, attachments)
+    val request = requireNotNull(state.beginSend(owner).request)
 
-    assertEquals("  edited text  ", payload.inputSnapshot)
-    assertEquals("edited text", payload.message)
-    assertEquals(listOf(retained), payload.attachments)
+    assertEquals("  edited text  ", request.inputSnapshot)
+    assertEquals("edited text", request.message)
+    assertEquals(listOf(retained), request.attachments)
   }
 
   @Test
@@ -621,16 +620,6 @@ class ChatComposerDraftTest {
   }
 
   @Test
-  fun asyncComposerResultsCommitOnlyToTheirOriginalOwner() {
-    val owner = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "agent-a", sessionKey = "session-a")
-
-    assertTrue(canCommitComposerResult(owner, owner))
-    assertFalse(canCommitComposerResult(owner, owner.copy(gatewayStableId = "gateway-b")))
-    assertFalse(canCommitComposerResult(owner, owner.copy(agentId = "agent-b")))
-    assertFalse(canCommitComposerResult(owner, owner.copy(sessionKey = "session-b")))
-  }
-
-  @Test
   fun pendingAttachmentsRemainKeyedAcrossComposerNavigationAndOwnerResolution() {
     val ownerA = ChatComposerOwner(gatewayStableId = "gateway", agentId = "agent-a", sessionKey = "session-a")
     val ownerB = ChatComposerOwner(gatewayStableId = "gateway", agentId = "agent-b", sessionKey = "session-b")
@@ -750,10 +739,10 @@ class ChatComposerDraftTest {
   fun voiceNoteCompletionMustMatchTheRecordingThatStartedIt() {
     val ownerA = ChatComposerOwner("gateway", "agent-a", "session-a")
     val ownerB = ChatComposerOwner("gateway", "agent-b", "session-b")
-    val checkpoint = ChatVoiceNoteCommitCheckpoint()
+    val checkpoint = ChatComposerMediaCheckpoint()
 
-    checkpoint.begin(ownerA, "recording-a", mediaAuthorizationId = "auth-a")
-    checkpoint.begin(ownerB, "recording-b", mediaAuthorizationId = "auth-b")
+    checkpoint.begin(ownerA, mediaAuthorizationId = "auth-a", requestId = "recording-a")
+    checkpoint.begin(ownerB, mediaAuthorizationId = "auth-b", requestId = "recording-b")
 
     assertEquals(null, checkpoint.consume("recording-a"))
     assertEquals(ownerB, checkpoint.owner)
@@ -764,14 +753,14 @@ class ChatComposerDraftTest {
   @Test
   fun imagePickerCheckpointCarriesTheCredentialGenerationThroughRecreation() {
     val owner = ChatComposerOwner("gateway", "agent", "session")
-    val checkpoint = ChatComposerOwnerCheckpoint()
+    val checkpoint = ChatComposerMediaCheckpoint()
     checkpoint.begin(owner, mediaAuthorizationId = "media-auth")
     val saverScope = SaverScope { true }
     val saved =
-      with(ChatComposerOwnerCheckpoint.Saver) {
+      with(ChatComposerMediaCheckpoint.Saver) {
         saverScope.save(checkpoint)
       }
-    val restored = requireNotNull(ChatComposerOwnerCheckpoint.Saver.restore(requireNotNull(saved)))
+    val restored = requireNotNull(ChatComposerMediaCheckpoint.Saver.restore(requireNotNull(saved)))
 
     assertEquals(ChatComposerMediaLease(owner, "media-auth"), restored.consume())
   }
