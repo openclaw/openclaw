@@ -5,6 +5,7 @@ import { loadInstalledPluginIndexInstallRecords } from "./installed-plugin-index
 import type { InstalledPluginIndexRefreshReason } from "./installed-plugin-index.js";
 import { tracePluginLifecyclePhaseAsync } from "./plugin-lifecycle-trace.js";
 import { refreshPluginRegistry } from "./plugin-registry.js";
+import { invalidatePersistedAuthStateCache } from "../channels/config-presence.js";
 
 /** Optional warning sink for best-effort registry/cache refresh failures. */
 export type PluginRegistryRefreshLogger = {
@@ -60,5 +61,14 @@ export async function invalidatePluginRuntimeDiscoveryAfterConfigMutation(params
     clearPluginRegistryLoadCache();
   } catch (error) {
     params.logger?.warn?.(`Plugin runtime cache invalidation failed: ${formatErrorMessage(error)}`);
+  }
+  // Installing, removing, enabling, disabling, or reloading a plugin mutates the
+  // bundled channel registry, so the module-level persisted-auth presence cache
+  // must not keep serving the pre-mutation channel list. Invalidate on the same
+  // shared registry-mutation boundary that clears discovery caches.
+  try {
+    invalidatePersistedAuthStateCache();
+  } catch (error) {
+    params.logger?.warn?.(`Persisted-auth presence cache invalidation failed: ${formatErrorMessage(error)}`);
   }
 }
