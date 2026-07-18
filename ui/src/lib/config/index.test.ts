@@ -198,7 +198,7 @@ describe("createRuntimeConfigCapability", () => {
     runtimeConfig.dispose();
   });
 
-  it.each(["0x10", "0b1010", "0o17", "1e3", "+5"])(
+  it.each(["0x10", "0b1010", "0o17", "+5", "1_000", "Infinity", "NaN", "1e", "e5"])(
     "keeps nondecimal spelling %s as a string instead of coercing",
     async (spelling) => {
       const submitted: Array<{ method: string; params: unknown }> = [];
@@ -244,7 +244,11 @@ describe("createRuntimeConfigCapability", () => {
     ["42.5", 42.5],
     ["-7", -7],
     [".5", 0.5],
-  ])("still coerces decimal spelling %s to %s", async (spelling, expected) => {
+    ["1e3", 1000],
+    ["1e5", 100000],
+    [".5e2", 50],
+    ["-2.5E-3", -0.0025],
+  ])("still coerces decimal or scientific spelling %s to %s", async (spelling, expected) => {
     const submitted: Array<{ method: string; params: unknown }> = [];
     const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "config.get") {
@@ -275,7 +279,7 @@ describe("createRuntimeConfigCapability", () => {
   });
 
   it.each([
-    ["1e5", "1e5"],
+    ["1e5", 100000],
     ["0x10", "0x10"],
     ["42", 42],
   ])("string-or-number union field keeps typed spelling %s as %s", async (spelling, expected) => {
@@ -309,8 +313,8 @@ describe("createRuntimeConfigCapability", () => {
     const submission = submitted.find((entry) => entry.method === "config.set");
     const raw = (submission?.params as { raw?: unknown } | undefined)?.raw;
     expect(typeof raw).toBe("string");
-    // Nondecimal spellings stay strings (a string variant accepts them
-    // verbatim); only plain decimals coerce to numbers.
+    // Radix spellings stay strings (a string variant accepts them verbatim);
+    // decimal and scientific spellings coerce to numbers.
     expect(JSON.parse(raw as string)).toEqual({ threshold: expected });
     runtimeConfig.dispose();
   });

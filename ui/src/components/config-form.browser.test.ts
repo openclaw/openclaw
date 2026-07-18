@@ -124,7 +124,7 @@ describe("config form renderer", () => {
     expect(onPatch).toHaveBeenCalledWith(["bind"], "tailnet");
   });
 
-  it("keeps nondecimal spellings typed into plain number inputs as strings", () => {
+  it("coerces decimal and scientific spellings typed into plain number inputs", () => {
     const onPatch = vi.fn();
     const container = document.createElement("div");
     const analysis = analyzeConfigSchema({
@@ -152,12 +152,11 @@ describe("config form renderer", () => {
     const portInput = expectElement(numberInputs[0], "integer field input");
     const ratioInput = expectElement(numberInputs[1], "number field input");
 
-    // The HTML number grammar accepts 1e5-style spellings; the typed text must
-    // reach the form state verbatim so schema validation can reject it instead
-    // of a bare Number() silently persisting 100000.
+    // Scientific notation is part of the HTML number grammar and the standard
+    // Number() spelling, so it coerces like any plain decimal.
     portInput.value = "1e5";
     portInput.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(onPatch).toHaveBeenCalledWith(["port"], "1e5");
+    expect(onPatch).toHaveBeenCalledWith(["port"], 100000);
 
     portInput.value = "42";
     portInput.dispatchEvent(new Event("input", { bubbles: true }));
@@ -171,6 +170,10 @@ describe("config form renderer", () => {
     ratioInput.value = "42.5";
     ratioInput.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onPatch).toHaveBeenCalledWith(["ratio"], 42.5);
+
+    ratioInput.value = "-2.5E-3";
+    ratioInput.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onPatch).toHaveBeenCalledWith(["ratio"], -0.0025);
 
     ratioInput.value = "";
     ratioInput.dispatchEvent(new Event("input", { bubbles: true }));
