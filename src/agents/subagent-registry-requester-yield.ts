@@ -1,36 +1,77 @@
-/** Re-arms durable requester-settle delivery after an explicit yield. */
+/** Settles durable child ownership when the spawning requester turn ends. */
 import type { AcceptedSessionSpawn } from "./accepted-session-spawn.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-export function resumeRequesterSettleWakeAfterYield(params: {
+/** Persists explicit yield intent before the requester run is aborted. */
+export function markRequesterTurnYieldedInRuns(params: {
   requesterSessionKey: string;
+  requesterTurnRunId: string;
+  runs: Map<string, SubagentRunRecord>;
+  persistOrThrow(): void;
+}): number {
+  const requesterSessionKey = params.requesterSessionKey.trim();
+  const requesterTurnRunId = params.requesterTurnRunId.trim();
+  if (!requesterSessionKey || !requesterTurnRunId) {
+    return 0;
+  }
+  const entries = [...params.runs.values()].filter(
+    (entry) =>
+      entry.requesterSessionKey === requesterSessionKey &&
+      entry.requesterTurnRunId === requesterTurnRunId,
+  );
+  if (entries.every((entry) => entry.requesterTurnYielded === true)) {
+    return entries.length;
+  }
+  const previous = entries.map((entry) => entry.requesterTurnYielded);
+  for (const entry of entries) {
+    entry.requesterTurnYielded = true;
+  }
+  try {
+    params.persistOrThrow();
+  } catch (error) {
+    entries.forEach((entry, index) => {
+      entry.requesterTurnYielded = previous[index];
+    });
+    throw error;
+  }
+  return entries.length;
+}
+
+export function settleRequesterTurnAfterSessionSpawns(params: {
+  requesterSessionKey: string;
+  requesterTurnRunId: string;
+  requesterYielded: boolean;
   acceptedSessionSpawns: readonly AcceptedSessionSpawn[];
   runs: Map<string, SubagentRunRecord>;
   persistOrThrow(): void;
   schedule(runId: string, entry: SubagentRunRecord): void;
 }): boolean {
   const requesterSessionKey = params.requesterSessionKey.trim();
+  const requesterTurnRunId = params.requesterTurnRunId.trim();
   const spawnsByRunId = new Map(
     params.acceptedSessionSpawns.map((spawn) => [spawn.runId, spawn] as const),
   );
-  if (!requesterSessionKey || spawnsByRunId.size === 0) {
+  if (!requesterSessionKey || !requesterTurnRunId || spawnsByRunId.size === 0) {
     return false;
   }
 
-  const entries: SubagentRunRecord[] = [];
-  for (const [runId, spawn] of spawnsByRunId) {
-    const entry = params.runs.get(runId);
+  // Registry markers select completion-producing children. Accepted inline or
+  // otherwise non-completion spawns are intentionally outside this batch.
+  const entries = [...params.runs.values()].filter(
+    (entry) =>
+      entry.requesterSessionKey === requesterSessionKey &&
+      entry.requesterTurnRunId === requesterTurnRunId,
+  );
+  for (const entry of entries) {
+    const spawn = spawnsByRunId.get(entry.runId);
     if (
-      !entry ||
-      entry.childSessionKey !== spawn.childSessionKey ||
-      entry.requesterSessionKey !== requesterSessionKey ||
-      typeof entry.endedAt !== "number" ||
+      !spawn ||
       entry.expectsCompletionMessage !== true ||
-      entry.delivery?.status !== "delivered"
+      entry.childSessionKey !== spawn.childSessionKey ||
+      (params.requesterYielded && entry.requesterTurnYielded !== true)
     ) {
       return false;
     }
-    entries.push(entry);
   }
 
   const firstEntry = entries[0];
@@ -38,31 +79,68 @@ export function resumeRequesterSettleWakeAfterYield(params: {
     return false;
   }
   const batchRunIds = entries.map((entry) => entry.runId).toSorted();
-  const rearmGeneration =
-    Math.max(0, ...entries.map((entry) => entry.requesterSettleWake?.rearmGeneration ?? 0)) + 1;
-  const previousStates = entries.map((entry) => structuredClone(entry.requesterSettleWake));
-  for (const entry of entries) {
-    const existing = entry.requesterSettleWake;
-    entry.requesterSettleWake = {
-      status: "pending",
-      attemptCount: 0,
-      batchRunIds,
-      afterRequesterYield: true,
-      rearmGeneration,
-      ...(existing?.retireAfterSettle === true ? { retireAfterSettle: true } : {}),
-    };
+  const previousStates = entries.map((entry) => ({
+    requesterSettleWake: structuredClone(entry.requesterSettleWake),
+    requesterTurnRunId: entry.requesterTurnRunId,
+    requesterTurnYielded: entry.requesterTurnYielded,
+    retireAfterRequesterTurn: entry.retireAfterRequesterTurn,
+  }));
+  let rearmGeneration: number | undefined;
+  if (params.requesterYielded) {
+    rearmGeneration =
+      Math.max(0, ...entries.map((entry) => entry.requesterSettleWake?.rearmGeneration ?? 0)) + 1;
+    for (const entry of entries) {
+      const existing = entry.requesterSettleWake;
+      entry.requesterSettleWake = {
+        status: "pending",
+        attemptCount: 0,
+        batchRunIds,
+        afterRequesterYield: true,
+        rearmGeneration,
+        ...(existing?.retireAfterSettle === true || entry.retireAfterRequesterTurn === true
+          ? { retireAfterSettle: true }
+          : {}),
+      };
+      entry.requesterTurnRunId = undefined;
+      entry.requesterTurnYielded = undefined;
+      entry.retireAfterRequesterTurn = undefined;
+    }
+  } else {
+    for (const entry of entries) {
+      entry.requesterTurnRunId = undefined;
+      entry.requesterTurnYielded = undefined;
+      if (entry.retireAfterRequesterTurn === true) {
+        if (entry.requesterSettleWake) {
+          entry.requesterSettleWake.retireAfterSettle = true;
+          entry.retireAfterRequesterTurn = undefined;
+        } else {
+          params.runs.delete(entry.runId);
+        }
+      }
+    }
   }
   try {
     params.persistOrThrow();
   } catch (error) {
     entries.forEach((entry, index) => {
-      entry.requesterSettleWake = previousStates[index];
+      const previous = previousStates[index];
+      params.runs.set(entry.runId, entry);
+      entry.requesterSettleWake = previous?.requesterSettleWake;
+      entry.requesterTurnRunId = previous?.requesterTurnRunId;
+      entry.requesterTurnYielded = previous?.requesterTurnYielded;
+      entry.retireAfterRequesterTurn = previous?.retireAfterRequesterTurn;
     });
     throw error;
   }
 
-  // The caller invokes this only after the yielded requester leaves the active-run map.
-  // Frozen exact-turn membership makes one delivered child eligible for a durable wake.
-  params.schedule(firstEntry.runId, firstEntry);
+  if (
+    rearmGeneration !== undefined &&
+    entries.every(
+      (entry) => typeof entry.endedAt === "number" && entry.delivery?.status === "delivered",
+    )
+  ) {
+    // Active children keep the frozen batch but let their normal cleanup owner schedule it.
+    params.schedule(firstEntry.runId, firstEntry);
+  }
   return true;
 }

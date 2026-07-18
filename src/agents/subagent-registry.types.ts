@@ -127,6 +127,12 @@ export type SubagentRunRecord = {
   runId: string;
   /** Detached task owner; steer/restart changes runId but continues the same task. */
   taskRunId?: string;
+  /** Requester attempt that must settle before this completion row can retire. */
+  requesterTurnRunId?: string;
+  /** Durable proof that this requester attempt invoked sessions_yield. */
+  requesterTurnYielded?: true;
+  /** Cleanup retirement deferred until requesterTurnRunId settles. */
+  retireAfterRequesterTurn?: boolean;
   childSessionKey: string;
   controllerSessionKey?: string;
   requesterSessionKey: string;

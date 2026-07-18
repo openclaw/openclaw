@@ -70,7 +70,7 @@ import {
   resolveAnnounceRetryDelayMs,
   safeRemoveAttachmentsDir,
 } from "./subagent-registry-helpers.js";
-import { resumeRequesterSettleWakeAfterYield } from "./subagent-registry-requester-yield.js";
+import { settleRequesterTurnAfterSessionSpawns } from "./subagent-registry-requester-yield.js";
 import type {
   PendingFinalDeliveryPayload,
   RequesterSettleWakeState,
@@ -819,9 +819,19 @@ export function createSubagentRegistryLifecycleController(params: {
           pair[1]?.requesterSettleWake?.rearmGeneration === rearmGeneration,
       );
     const requesterSessionKeys = new Set(entries.map(([, entry]) => entry.requesterSessionKey));
-    const previousStates = entries.map(([, entry]) => structuredClone(entry.requesterSettleWake));
+    const previousStates = entries.map(([, entry]) => ({
+      requesterSettleWake: structuredClone(entry.requesterSettleWake),
+      retireAfterRequesterTurn: entry.retireAfterRequesterTurn,
+    }));
     for (const [runId, entry] of entries) {
-      if (entry.requesterSettleWake?.retireAfterSettle === true) {
+      if (entry.requesterTurnRunId) {
+        entry.retireAfterRequesterTurn =
+          entry.retireAfterRequesterTurn === true ||
+          entry.requesterSettleWake?.retireAfterSettle === true
+            ? true
+            : undefined;
+        entry.requesterSettleWake = undefined;
+      } else if (entry.requesterSettleWake?.retireAfterSettle === true) {
         params.runs.delete(runId);
       } else {
         entry.requesterSettleWake = undefined;
@@ -831,8 +841,10 @@ export function createSubagentRegistryLifecycleController(params: {
       params.persistOrThrow();
     } catch (error) {
       entries.forEach(([runId, entry], index) => {
+        const previous = previousStates[index];
         params.runs.set(runId, entry);
-        entry.requesterSettleWake = previousStates[index];
+        entry.requesterSettleWake = previous?.requesterSettleWake;
+        entry.retireAfterRequesterTurn = previous?.retireAfterRequesterTurn;
       });
       throw error;
     }
@@ -2331,11 +2343,13 @@ export function createSubagentRegistryLifecycleController(params: {
     completeSubagentRun,
     finalizeResumedAnnounceGiveUp,
     refreshFrozenResultFromSession,
-    resumeRequesterSettleWakeAfterYield: (args: {
+    settleRequesterTurnAfterSessionSpawns: (args: {
       requesterSessionKey: string;
+      requesterTurnRunId: string;
+      requesterYielded: boolean;
       acceptedSessionSpawns: readonly AcceptedSessionSpawn[];
     }) =>
-      resumeRequesterSettleWakeAfterYield({
+      settleRequesterTurnAfterSessionSpawns({
         ...args,
         runs: params.runs,
         persistOrThrow: () => params.persistOrThrow(),

@@ -288,6 +288,8 @@ export function createOpenClawTools(
   const taskSuggestionSessionKey = normalizeOptionalString(
     options?.runSessionKey ?? options?.agentSessionKey,
   );
+  const requesterSessionKey = options?.agentSessionKey;
+  const requesterTurnRunId = options?.runId;
   const imageToolAgentDir = options?.agentDir;
   const imageTool = resolveImageToolFactoryAvailable({
     config: availabilityConfig ?? resolvedConfig,
@@ -647,6 +649,7 @@ export function createOpenClawTools(
       ? [
           createSessionsSpawnTool({
             agentSessionKey: options?.agentSessionKey,
+            requesterTurnRunId: options?.runId,
             completionOwnerKey: options?.runSessionKey,
             agentChannel: options?.agentChannel,
             agentAccountId: options?.agentAccountId,
@@ -671,6 +674,13 @@ export function createOpenClawTools(
       : []),
     createSessionsYieldTool({
       sessionId: options?.sessionId,
+      onBeforeYield:
+        requesterSessionKey && requesterTurnRunId
+          ? async () => {
+              const { markRequesterTurnYielded } = await import("./subagent-registry.js");
+              markRequesterTurnYielded({ requesterSessionKey, requesterTurnRunId });
+            }
+          : undefined,
       onYield: options?.onYield,
     }),
     createSubagentsTool({

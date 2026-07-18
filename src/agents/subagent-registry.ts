@@ -80,6 +80,7 @@ import {
   listRunsForControllerFromRuns,
   listDescendantRunsForRequesterFromRuns,
 } from "./subagent-registry-queries.js";
+import { markRequesterTurnYieldedInRuns } from "./subagent-registry-requester-yield.js";
 import {
   createSubagentRunManager,
   markSubagentRunPausedAfterYield,
@@ -786,8 +787,8 @@ const {
   completeSubagentRun,
   finalizeResumedAnnounceGiveUp,
   refreshFrozenResultFromSession,
-  resumeRequesterSettleWakeAfterYield,
   resumeRequesterSettleWake,
+  settleRequesterTurnAfterSessionSpawns,
   startSubagentAnnounceCleanupFlow,
 } = subagentLifecycleController;
 
@@ -860,7 +861,16 @@ function resumeSubagentRun(runId: string) {
     resumedRuns.add(runId);
     return;
   }
-  if (entry.requesterSettleWake) {
+  const yieldedWakeWaitingForDelivery =
+    entry.requesterSettleWake?.afterRequesterYield === true &&
+    (entry.delivery?.status === "pending" ||
+      entry.delivery?.status === "in_progress" ||
+      entry.delivery?.status === "failed");
+  if (
+    entry.requesterSettleWake &&
+    typeof entry.endedAt === "number" &&
+    !yieldedWakeWaitingForDelivery
+  ) {
     resumeRequesterSettleWake(runId, entry);
     return;
   }
@@ -961,6 +971,34 @@ function restoreSubagentRunsOnce() {
       })
     ) {
       persistSubagentRuns();
+    }
+    const requesterTurns = new Map<string, Map<string, SubagentRunRecord[]>>();
+    for (const entry of subagentRuns.values()) {
+      const requesterTurnRunId = entry.requesterTurnRunId?.trim();
+      if (!requesterTurnRunId) {
+        continue;
+      }
+      let turns = requesterTurns.get(entry.requesterSessionKey);
+      if (!turns) {
+        turns = new Map();
+        requesterTurns.set(entry.requesterSessionKey, turns);
+      }
+      const entries = turns.get(requesterTurnRunId) ?? [];
+      entries.push(entry);
+      turns.set(requesterTurnRunId, entries);
+    }
+    for (const [requesterSessionKey, turns] of requesterTurns) {
+      for (const [requesterTurnRunId, entries] of turns) {
+        settleRequesterTurnAfterSessionSpawns({
+          requesterSessionKey,
+          requesterTurnRunId,
+          requesterYielded: entries.every((entry) => entry.requesterTurnYielded === true),
+          acceptedSessionSpawns: entries.map((entry) => ({
+            runId: entry.runId,
+            childSessionKey: entry.childSessionKey,
+          })),
+        });
+      }
     }
     if (subagentRuns.size === 0) {
       return;
@@ -2052,11 +2090,26 @@ export function initSubagentRegistry() {
 }
 
 /** Re-admits a delivered child batch after its requester explicitly yields. */
-export function resumeRequesterAfterYieldedSessionSpawns(params: {
+export function settleRequesterAfterSessionSpawns(params: {
   requesterSessionKey: string;
+  requesterTurnRunId: string;
+  requesterYielded: boolean;
   acceptedSessionSpawns: readonly AcceptedSessionSpawn[];
 }): boolean {
-  return resumeRequesterSettleWakeAfterYield(params);
+  return settleRequesterTurnAfterSessionSpawns(params);
+}
+
+/** Records sessions_yield before the active requester run is aborted. */
+export function markRequesterTurnYielded(params: {
+  requesterSessionKey: string;
+  requesterTurnRunId: string;
+}): number {
+  restoreSubagentRunsOnce();
+  return markRequesterTurnYieldedInRuns({
+    ...params,
+    runs: subagentRuns,
+    persistOrThrow: persistSubagentRunsOrThrow,
+  });
 }
 
 const SUBAGENT_REGISTRY_TEST_HANDLE = Symbol.for("openclaw.subagentRegistryTestApi");
