@@ -11,7 +11,7 @@ import { isRecord } from "../utils.js";
 import { asBoolean } from "../utils/boolean.js";
 import type { ChannelAccountSnapshot } from "./plugins/types.core.js";
 
-export type CredentialUnavailableDiagnostic = {
+type CredentialUnavailableDiagnostic = {
   code: "CREDENTIAL_FILE_UNAVAILABLE";
   path: string;
   reason: string;
