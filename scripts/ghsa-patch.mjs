@@ -48,7 +48,7 @@ function runGh(args) {
   try {
     return runGhCommand(args);
   } catch (error) {
-    fail(error instanceof Error ? error.message : String(error));
+    return fail(error instanceof Error ? error.message : String(error));
   }
 }
 
