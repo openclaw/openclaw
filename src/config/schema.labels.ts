@@ -31,6 +31,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "wizard.lastRunCommit": "Wizard Last Run Commit",
   "wizard.lastRunCommand": "Wizard Last Run Command",
   "wizard.lastRunMode": "Wizard Last Run Mode",
+  "wizard.localModelLeanAutoModel": "Wizard Auto-Set Lean Model",
   "wizard.securityAcknowledgedAt": "Wizard Security Acknowledgement Timestamp",
   audit: "Audit Ledger",
   "audit.enabled": "Audit Ledger Enabled",
