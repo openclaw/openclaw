@@ -93,17 +93,9 @@ async function runChannelInboundEventForMediaPolicyTest(params: RunChannelInboun
   if (!("route" in turn) || !("delivery" in turn)) {
     throw new Error("expected assembled iMessage channel turn plan");
   }
+  // Terminal admissions returned at preflight above; an assembled plan only
+  // carries dispatch/observeOnly, so no handled/drop branch exists here.
   const admission = turn.admission ?? preflightAdmission ?? { kind: "dispatch" as const };
-  if (admission.kind === "handled" || admission.kind === "drop") {
-    const result = {
-      admission,
-      dispatched: false as const,
-      ctxPayload: turn.ctxPayload,
-      routeSessionKey: turn.route.sessionKey,
-    };
-    await params.adapter.onFinalize?.(result);
-    return result;
-  }
   const result = {
     admission,
     dispatched: true as const,
