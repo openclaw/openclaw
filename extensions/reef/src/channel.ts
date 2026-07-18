@@ -10,6 +10,7 @@ import {
   type ChannelPlugin,
 } from "openclaw/plugin-sdk/core";
 import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
+import { runReefChannelLifecycle } from "./channel-lifecycle.js";
 import {
   ReefChannelConfigSchema,
   autonomyBudget,
@@ -24,6 +25,7 @@ import { resolveReefInboundDispatchContent } from "./inbound.js";
 import { reefMessageAdapter, reefOutboundAdapter } from "./outbound.js";
 import {
   createReefOwnerNoticeHandler,
+  notifyOverdueReefDeliveries,
   processReefInboxEntriesInOrder,
   ReefReceiptNotifier,
 } from "./owner-notice.js";
@@ -31,12 +33,7 @@ import { isRephrasedReefResend } from "./rejection-resend.js";
 import { getActiveReef, getOptionalReefRuntime, getReefRuntime, setActiveReef } from "./runtime.js";
 import { reefSetupAdapter, reefSetupWizard } from "./setup.js";
 import { assertReefIdentityBinding, loadKeys, openStores, ReefInboxCursorStore } from "./state.js";
-import {
-  ReefInboxConnection,
-  ReefTransportClient,
-  abortableSleep,
-  createReefWebSocket,
-} from "./transport.js";
+import { ReefInboxConnection, ReefTransportClient, createReefWebSocket } from "./transport.js";
 import { isReefPairingApprovalToken, openReefTrustStore } from "./trust-store.js";
 import type { ReefAccount, ReefIngressMessage } from "./types.js";
 
@@ -454,16 +451,28 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
           },
         },
       );
-      const reconciliationLoop = async () => {
-        while (!ctx.abortSignal.aborted) {
-          await abortableSleep(30_000, ctx.abortSignal);
-          if (!ctx.abortSignal.aborted) {
-            await reconcile();
-          }
-        }
-      };
       try {
-        await Promise.all([inbox.start(ctx.abortSignal), reconciliationLoop()]);
+        await runReefChannelLifecycle({
+          parentSignal: ctx.abortSignal,
+          startInbox: (signal) => inbox.start(signal),
+          reconcile: async () => {
+            // The overdue sweep must run even while the relay is unreachable:
+            // that outage is exactly when queued sends go unconfirmed, and the
+            // notices themselves are local.
+            let reconcileError: Error | undefined;
+            try {
+              await reconcile();
+            } catch (error) {
+              reconcileError = error instanceof Error ? error : new Error(String(error));
+            }
+            await notifyOverdueReefDeliveries({ trust, ownerNotice });
+            if (reconcileError) {
+              throw reconcileError;
+            }
+          },
+          onReconcileError: (error) =>
+            ctx.log?.error?.(`reef friend reconcile failed: ${String(error)}`),
+        });
       } finally {
         ctx.setStatus({ accountId: "default", running: false, connected: false });
       }

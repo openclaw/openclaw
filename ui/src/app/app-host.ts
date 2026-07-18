@@ -21,7 +21,7 @@ import "../components/resizable-divider.ts";
 import "../components/sidebar-update-card.ts";
 import "../components/tooltip.ts";
 import "../components/update-banner.ts";
-import { isSettingsNavigationRoute, type SidebarNavRoute } from "../app-navigation.ts";
+import { isSettingsNavigationRoute } from "../app-navigation.ts";
 import { APP_ROUTE_IDS, isRouteId, type RouteId } from "../app-routes.ts";
 import {
   COMMAND_PALETTE_OPEN_EVENT,
@@ -48,10 +48,10 @@ import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../lib/plugin-activation.ts";
 import { searchForSession } from "../lib/sessions/index.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
+import "../lib/toast.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { findSettingsSearchBlocks } from "../pages/config/settings-search.ts";
-import "../pages/approval/approval-page-registration.ts";
 import { newSessionSearch, type NewSessionTarget } from "../pages/new-session/location.ts";
 import { renderDevicePairSetup } from "../pages/nodes/view-pairing.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.ts";
@@ -63,6 +63,7 @@ import {
 } from "./context.ts";
 import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
 import {
+  APPROVAL_PAGE_ELEMENT,
   BROWSER_PANEL_ELEMENT,
   COMMAND_PALETTE_ELEMENT,
   ensureOptionalElementForHost,
@@ -243,6 +244,9 @@ class OpenClawApp extends OpenClawLightDomElement {
     this.runtime = bootstrapApplication();
     if (this.terminalOnly) {
       preloadOptionalElement(this, TERMINAL_PANEL_ELEMENT);
+    }
+    if (this.runtime.documentMode?.kind === "approval") {
+      preloadOptionalElement(this, APPROVAL_PAGE_ELEMENT);
     }
     const context = this.runtime.context;
     this.initialAuthPresent = hasStoredGatewayAuth(context.gateway.connection);
@@ -654,6 +658,16 @@ class OpenClawShell extends OpenClawLightDomElement {
   }
 
   private readonly handleGatewayEvent = (event: GatewayEventFrame) => {
+    if (event.event === "config.changed") {
+      // Another writer (agent-approved config_set, other device, CLI) changed
+      // openclaw.json; refresh the snapshot so ui.prefs reconcile live. A
+      // dirty local settings draft wins — the autosave/conflict flow owns it.
+      const runtimeConfig = this.context?.runtimeConfig;
+      if (runtimeConfig && !runtimeConfig.state.configFormDirty) {
+        void runtimeConfig.refresh();
+      }
+      return;
+    }
     if (event.event !== "ui.command" || !event.payload) {
       return;
     }
@@ -1380,7 +1394,7 @@ class OpenClawShell extends OpenClawLightDomElement {
                 .catalogOpenTarget=${normalizeCatalogOpenTarget(uiSettings.catalogOpenTarget)}
                 .canPairDevice=${gatewaySnapshot.connected &&
                 hasOperatorAdminAccess(gatewaySnapshot.hello?.auth ?? null)}
-                .sidebarPinnedRoutes=${navigationSnapshot.sidebarPinnedRoutes}
+                .sidebarEntries=${navigationSnapshot.sidebarEntries}
                 .pinnedAgentIds=${navigationSnapshot.pinnedAgentIds}
                 .themeMode=${context.theme.mode}
                 .lobsterPetVisits=${uiSettings.lobsterPetVisits !== false}
@@ -1400,8 +1414,8 @@ class OpenClawShell extends OpenClawLightDomElement {
                   this.navigate("new-session", { search });
                 }}
                 .draftSessionAgentId=${this.draftSessionAgentId()}
-                .onUpdatePinnedRoutes=${(routes: SidebarNavRoute[]) =>
-                  context.navigation.update({ sidebarPinnedRoutes: routes })}
+                .onUpdateSidebarEntries=${(entries: string[]) =>
+                  context.navigation.update({ sidebarEntries: entries })}
                 .onPairMobile=${() => void context.overlays.openDevicePairSetup()}
                 .onNavigate=${(routeId: string, options?: ApplicationNavigationOptions) =>
                   this.navigate(routeId, options)}
@@ -1496,6 +1510,10 @@ class OpenClawShell extends OpenClawLightDomElement {
             context.overlays.closeDevicePairSetup();
             this.navigate("nodes");
           },
+          onGetApps: () => {
+            context.overlays.closeDevicePairSetup();
+            this.navigate("apps");
+          },
         })}
         ${onboarding && activeRoute !== "custodian"
           ? html`<openclaw-onboarding-memory-import
@@ -1503,6 +1521,7 @@ class OpenClawShell extends OpenClawLightDomElement {
               .context=${context}
             ></openclaw-onboarding-memory-import>`
           : nothing}
+        <openclaw-toast-host></openclaw-toast-host>
       </div>
     `;
   }

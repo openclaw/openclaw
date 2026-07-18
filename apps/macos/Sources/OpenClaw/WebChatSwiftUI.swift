@@ -226,6 +226,45 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
             sessions: decoded.sessions)
     }
 
+    func listAgents() async throws -> OpenClawChatAgentsListResponse? {
+        let data = try await GatewayConnection.shared.request(OpenClawChatGatewayRequests.agentsList())
+        let result = try JSONDecoder().decode(AgentsListResult.self, from: data)
+        return OpenClawChatAgentsListResponse(
+            defaultId: result.defaultid,
+            agents: result.agents.map {
+                OpenClawChatAgentChoice(
+                    id: $0.id,
+                    name: $0.name,
+                    workspaceGit: $0.workspacegit)
+            })
+    }
+
+    func listSessionGroups() async throws -> OpenClawChatSessionGroupsResponse? {
+        let data = try await GatewayConnection.shared.request(OpenClawChatGatewayRequests.sessionGroupsList())
+        return try JSONDecoder().decode(OpenClawChatSessionGroupsResponse.self, from: data)
+    }
+
+    func putSessionGroups(names: [String]) async throws -> OpenClawChatSessionGroupsMutationResponse {
+        let request = OpenClawChatGatewayRequests.sessionGroupsPut(names: names)
+        let data = try await GatewayConnection.shared.request(request)
+        return try JSONDecoder().decode(OpenClawChatSessionGroupsMutationResponse.self, from: data)
+    }
+
+    func renameSessionGroup(
+        name: String,
+        to: String) async throws -> OpenClawChatSessionGroupsMutationResponse
+    {
+        let request = OpenClawChatGatewayRequests.sessionGroupsRename(name: name, to: to)
+        let data = try await GatewayConnection.shared.request(request)
+        return try JSONDecoder().decode(OpenClawChatSessionGroupsMutationResponse.self, from: data)
+    }
+
+    func deleteSessionGroup(name: String) async throws -> OpenClawChatSessionGroupsMutationResponse {
+        let request = OpenClawChatGatewayRequests.sessionGroupsDelete(name: name)
+        let data = try await GatewayConnection.shared.request(request)
+        return try JSONDecoder().decode(OpenClawChatSessionGroupsMutationResponse.self, from: data)
+    }
+
     func setSessionModel(sessionKey: String, model: String?) async throws {
         let target = self.sessionTarget(for: sessionKey)
         _ = try await self.patchSessionModel(
@@ -460,7 +499,25 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
         parentSessionKey: String?,
         worktree: Bool?) async throws -> OpenClawChatCreateSessionResponse
     {
-        let agentID = OpenClawChatSessionKey.agentID(from: key)
+        try await self.createSession(
+            key: key,
+            label: label,
+            agentID: nil,
+            parentSessionKey: parentSessionKey,
+            worktree: worktree,
+            worktreeBaseRef: nil)
+    }
+
+    func createSession(
+        key: String,
+        label: String?,
+        agentID explicitAgentID: String?,
+        parentSessionKey: String?,
+        worktree: Bool?,
+        worktreeBaseRef: String?) async throws -> OpenClawChatCreateSessionResponse
+    {
+        let agentID = explicitAgentID
+            ?? OpenClawChatSessionKey.agentID(from: key)
             ?? parentSessionKey.flatMap { OpenClawChatSessionKey.agentID(from: $0) }
             ?? self.routingIdentity.currentAgentID()
         let request = OpenClawChatGatewayRequests.createSession(
@@ -468,7 +525,8 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
             agentID: agentID,
             label: label,
             parentSessionKey: parentSessionKey,
-            worktree: worktree)
+            worktree: worktree,
+            worktreeBaseRef: worktreeBaseRef)
         let data = try await GatewayConnection.shared.request(request)
         return try JSONDecoder().decode(OpenClawChatCreateSessionResponse.self, from: data)
     }
@@ -503,6 +561,26 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
 
     func requestHealth(timeoutMs: Int) async throws -> Bool {
         try await GatewayConnection.shared.healthOK(timeoutMs: timeoutMs)
+    }
+
+    func listQuestions() async throws -> [QuestionRecord] {
+        let data = try await GatewayConnection.shared.request(OpenClawChatGatewayRequests.questionList())
+        return try JSONDecoder().decode(QuestionListResult.self, from: data).questions
+    }
+
+    func getQuestion(id: String) async throws -> QuestionRecord {
+        let data = try await GatewayConnection.shared.request(OpenClawChatGatewayRequests.questionGet(id: id))
+        return try JSONDecoder().decode(QuestionGetResult.self, from: data).question
+    }
+
+    func resolveQuestion(id: String, answers: [String: [String]]) async throws {
+        _ = try await GatewayConnection.shared.request(
+            OpenClawChatGatewayRequests.resolveQuestion(id: id, answers: answers))
+    }
+
+    func cancelQuestion(id: String) async throws {
+        _ = try await GatewayConnection.shared.request(
+            OpenClawChatGatewayRequests.cancelQuestion(id: id))
     }
 
     func waitForRunCompletion(
@@ -804,6 +882,7 @@ final class WebChatSwiftUIWindowController {
     private let presentation: WebChatPresentation
     private let sessionKey: String
     private let initialActiveAgentID: String?
+    private let viewModel: OpenClawChatViewModel
     private let contentController: NSViewController
     private let sessionKeyRelay: WebChatSessionKeyRelay
     private let speech: OpenClawChatSpeechController
@@ -819,6 +898,7 @@ final class WebChatSwiftUIWindowController {
     convenience init(
         sessionKey: String,
         agentID: String? = nil,
+        initialDraft: String? = nil,
         presentation: WebChatPresentation)
     {
         // Connection-mode changes tear chat windows down via resetTunnels(),
@@ -829,6 +909,7 @@ final class WebChatSwiftUIWindowController {
         self.init(
             sessionKey: sessionKey,
             agentID: agentID,
+            initialDraft: initialDraft,
             presentation: presentation,
             cachedRoutingIdentity: context?.routingIdentity,
             store: context?.store)
@@ -837,6 +918,7 @@ final class WebChatSwiftUIWindowController {
     convenience init(
         sessionKey: String,
         agentID: String?,
+        initialDraft: String? = nil,
         presentation: WebChatPresentation,
         cachedRoutingIdentity: OpenClawChatSessionRoutingIdentity?,
         store: OpenClawChatSQLiteTranscriptCache?)
@@ -847,6 +929,7 @@ final class WebChatSwiftUIWindowController {
             cachedDefaultAgentID: cachedRoutingIdentity?.defaultAgentID)
         self.init(
             sessionKey: sessionKey,
+            initialDraft: initialDraft,
             presentation: presentation,
             transport: MacGatewayChatTransport(
                 outboxGatewayID: store?.gatewayID,
@@ -860,6 +943,7 @@ final class WebChatSwiftUIWindowController {
 
     init(
         sessionKey: String,
+        initialDraft: String? = nil,
         presentation: WebChatPresentation,
         transport: any OpenClawChatTransport,
         initialActiveAgentID: String? = nil,
@@ -909,6 +993,12 @@ final class WebChatSwiftUIWindowController {
             onVerbosePreferenceChanged: { level in
                 Self.persistVerbosePreference(level)
             })
+        if let initialDraft,
+           !initialDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            vm.input = initialDraft
+        }
+        self.viewModel = vm
         let explicitAgentID = WebChatRoute.normalizedAgentID(explicitAgentID)
         Task { @MainActor [weak vm] in
             let pushes = await GatewayConnection.shared.subscribe()
@@ -975,6 +1065,14 @@ final class WebChatSwiftUIWindowController {
 
     var isVisible: Bool {
         self.window?.isVisible ?? false
+    }
+
+    func applyDraftIfEmpty(_ draft: String?) {
+        guard self.viewModel.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let draft,
+              !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return }
+        self.viewModel.input = draft
     }
 
     func show() {
@@ -1229,6 +1327,10 @@ final class WebChatSwiftUIWindowController {
 
     var _testActiveAgentID: String? {
         self.initialActiveAgentID
+    }
+
+    var _testDraft: String {
+        self.viewModel.input
     }
     #endif
 }
