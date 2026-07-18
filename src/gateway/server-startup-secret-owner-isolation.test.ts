@@ -1,5 +1,8 @@
 /** Real Gateway startup coverage for SecretRef owner isolation boundaries. */
+import { readFileSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import { getRuntimeAuthProfileStoreSnapshot } from "../agents/auth-profiles/runtime-snapshots.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
@@ -18,6 +21,7 @@ import {
 } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function writeConfig(config: OpenClawConfig): Promise<void> {
   const { writeConfigFile } = await import("../config/config.js");
@@ -100,6 +104,70 @@ describe("Gateway startup SecretRef owner isolation", () => {
         );
       },
     );
+  });
+
+  it("fans one Vault auth outage out to every affected owner", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const root = tempDirs.make("openclaw-gateway-provider-outage-");
+    const callLogPath = path.join(root, "calls.log");
+    const commandPath = path.join(root, "provider.sh");
+    const resolverPath = path.resolve("extensions/vault/vault-secret-ref-resolver.js");
+    writeFileSync(
+      commandPath,
+      `#!/bin/sh\nprintf 'call\\n' >> ${JSON.stringify(callLogPath)}\n` +
+        `exec ${JSON.stringify(process.execPath)} ${JSON.stringify(resolverPath)}\n`,
+      { encoding: "utf8", mode: 0o700 },
+    );
+    await withEnvAsync({ VAULT_ADDR: "https://vault.example.test" }, async () => {
+      await writeConfig({
+        ...baseConfig(),
+        secrets: {
+          providers: {
+            vault: { source: "exec", command: commandPath, passEnv: ["PATH", "VAULT_ADDR"] },
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              apiKey: { source: "exec", provider: "vault", id: "models/openai" },
+              baseUrl: "https://api.openai.com/v1",
+              models: [],
+            },
+          },
+        },
+        messages: {
+          tts: {
+            providers: {
+              elevenlabs: {
+                apiKey: { source: "exec", provider: "vault", id: "tts/elevenlabs" },
+              },
+            },
+          },
+        },
+      });
+
+      const port = await getFreePort();
+      server = await startGatewayServer(port, { auth: { mode: "none" } });
+      const ready = await fetch(`http://127.0.0.1:${port}/readyz`);
+
+      expect(ready.status).toBe(200);
+      await expect(ready.json()).resolves.toMatchObject({ ready: true });
+      expect(readFileSync(callLogPath, "utf8").trim().split("\n")).toHaveLength(1);
+      expect(getActiveSecretsRuntimeSnapshot()?.degradedOwners).toMatchObject([
+        {
+          ownerKind: "provider",
+          ownerId: "openai",
+          providerFailures: [{ source: "exec", provider: "vault" }],
+        },
+        {
+          ownerKind: "capability",
+          ownerId: "tts",
+          providerFailures: [{ source: "exec", provider: "vault" }],
+        },
+      ]);
+    });
   });
 
   it("reaches /readyz with a cold memory provider and rejects only that owner", async () => {
