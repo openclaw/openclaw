@@ -11,6 +11,7 @@ type TranscriptHeartbeatSummary = {
 };
 
 type TestApi = {
+  TRANSCRIPT_RECORD_MAX_CHARS: number;
   moveHeartbeatMainSessionEntry(params: {
     store: Record<string, SessionEntry>;
     mainKey: string;
@@ -20,6 +21,7 @@ type TestApi = {
     entry: SessionEntry | undefined;
     transcriptPath?: string;
   }): { reason: "metadata" | "transcript"; summary?: TranscriptHeartbeatSummary } | null;
+  summarizeTranscriptHeartbeatMessages(transcriptPath: string): TranscriptHeartbeatSummary | null;
 };
 
 function getTestApi(): TestApi {
@@ -28,8 +30,13 @@ function getTestApi(): TestApi {
   ] as TestApi;
 }
 
+export const getTranscriptRecordMaxChars = (): number => getTestApi().TRANSCRIPT_RECORD_MAX_CHARS;
+
 export const moveHeartbeatMainSessionEntry: TestApi["moveHeartbeatMainSessionEntry"] = (params) =>
   getTestApi().moveHeartbeatMainSessionEntry(params);
 
 export const resolveHeartbeatMainSessionRepairCandidate: TestApi["resolveHeartbeatMainSessionRepairCandidate"] =
   (params) => getTestApi().resolveHeartbeatMainSessionRepairCandidate(params);
+
+export const summarizeTranscriptHeartbeatMessages: TestApi["summarizeTranscriptHeartbeatMessages"] =
+  (transcriptPath) => getTestApi().summarizeTranscriptHeartbeatMessages(transcriptPath);

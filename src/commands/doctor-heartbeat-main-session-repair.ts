@@ -1,5 +1,6 @@
 /** Doctor repair for main sessions accidentally occupied by synthetic heartbeat transcripts. */
 import fs from "node:fs";
+import { StringDecoder } from "node:string_decoder";
 import { asNullableObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import type { note } from "../../packages/terminal-core/src/note.js";
 import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
@@ -14,6 +15,12 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { clearTuiLastSessionPointers } from "../tui/tui-last-session.js";
+
+/** Chunk size for sync transcript scans. */
+const TRANSCRIPT_SCAN_CHUNK_BYTES = 64 * 1024;
+// Cap incomplete/complete JSONL records so a missing newline or huge line cannot
+// recreate full-file allocation after chunked reads. Oversized records fail closed.
+const TRANSCRIPT_RECORD_MAX_CHARS = 256 * 1024;
 
 type DoctorPrompterLike = {
   confirmRuntimeRepair: (params: {
@@ -69,12 +76,49 @@ function parseTranscriptMessageLine(line: string): { role: string; content?: unk
   return { role, content: message.content };
 }
 
+function accumulateTranscriptHeartbeatMessage(
+  summary: TranscriptHeartbeatSummary,
+  line: string,
+): void {
+  const trimmed = line.trim();
+  if (!trimmed) {
+    return;
+  }
+  const message = parseTranscriptMessageLine(trimmed);
+  if (!message) {
+    return;
+  }
+  summary.inspectedMessages += 1;
+  if (message.role === "user") {
+    summary.userMessages += 1;
+    if (isHeartbeatUserMessage(message)) {
+      summary.heartbeatUserMessages += 1;
+    } else {
+      summary.nonHeartbeatUserMessages += 1;
+    }
+    return;
+  }
+  if (message.role === "assistant") {
+    summary.assistantMessages += 1;
+    if (isHeartbeatOkResponse(message)) {
+      summary.heartbeatOkAssistantMessages += 1;
+    }
+  }
+}
+
+/**
+ * Scans a transcript JSONL file in fixed-size chunks so doctor repair never loads
+ * the whole file into a single string (large poisoned heartbeat transcripts).
+ *
+ * Incomplete lines are retained only up to TRANSCRIPT_RECORD_MAX_CHARS; larger
+ * records decline classification so repair stays fail-closed.
+ */
 function summarizeTranscriptHeartbeatMessages(
   transcriptPath: string,
 ): TranscriptHeartbeatSummary | null {
-  let raw: string;
+  let fd: number;
   try {
-    raw = fs.readFileSync(transcriptPath, "utf8");
+    fd = fs.openSync(transcriptPath, "r");
   } catch {
     return null;
   }
@@ -86,29 +130,39 @@ function summarizeTranscriptHeartbeatMessages(
     assistantMessages: 0,
     heartbeatOkAssistantMessages: 0,
   };
-  for (const line of raw.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      continue;
-    }
-    const message = parseTranscriptMessageLine(trimmed);
-    if (!message) {
-      continue;
-    }
-    summary.inspectedMessages += 1;
-    if (message.role === "user") {
-      summary.userMessages += 1;
-      if (isHeartbeatUserMessage(message)) {
-        summary.heartbeatUserMessages += 1;
-      } else {
-        summary.nonHeartbeatUserMessages += 1;
+  try {
+    const decoder = new StringDecoder("utf8");
+    const chunk = Buffer.alloc(TRANSCRIPT_SCAN_CHUNK_BYTES);
+    let carry = "";
+    for (;;) {
+      const bytesRead = fs.readSync(fd, chunk, 0, chunk.length, null);
+      if (bytesRead <= 0) {
+        break;
       }
-    } else if (message.role === "assistant") {
-      summary.assistantMessages += 1;
-      if (isHeartbeatOkResponse(message)) {
-        summary.heartbeatOkAssistantMessages += 1;
+      carry += decoder.write(chunk.subarray(0, bytesRead));
+      let newline = carry.indexOf("\n");
+      while (newline >= 0) {
+        if (newline > TRANSCRIPT_RECORD_MAX_CHARS) {
+          return null;
+        }
+        const line = carry.slice(0, newline).replace(/\r$/, "");
+        carry = carry.slice(newline + 1);
+        accumulateTranscriptHeartbeatMessage(summary, line);
+        newline = carry.indexOf("\n");
+      }
+      if (carry.length > TRANSCRIPT_RECORD_MAX_CHARS) {
+        return null;
       }
     }
+    carry += decoder.end();
+    if (carry.length > TRANSCRIPT_RECORD_MAX_CHARS) {
+      return null;
+    }
+    if (carry) {
+      accumulateTranscriptHeartbeatMessage(summary, carry.replace(/\r$/, ""));
+    }
+  } finally {
+    fs.closeSync(fd);
   }
   return summary.inspectedMessages > 0 ? summary : null;
 }
@@ -195,8 +249,10 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[
     Symbol.for("openclaw.doctorHeartbeatMainSessionRepairTestApi")
   ] = {
+    TRANSCRIPT_RECORD_MAX_CHARS,
     moveHeartbeatMainSessionEntry,
     resolveHeartbeatMainSessionRepairCandidate,
+    summarizeTranscriptHeartbeatMessages,
   };
 }
 
