@@ -865,6 +865,7 @@ describe("models.authStatus", () => {
     const [, payload] = firstRespondCall(opts) ?? [];
     const result = payload as ModelAuthStatusResult;
     expect(result.providers[0]?.usage).toEqual({
+      providerId: "kimi",
       windows: [
         { label: "5h", usedPercent: 8 },
         { label: "7d", usedPercent: 3 },
