@@ -2,6 +2,8 @@
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 
+const CLOSE_DUPES_TIMEOUT_MS = 120_000;
+
 const DEFAULT_LABELS = ["duplicate", "close:duplicate", "dedupe:child"];
 
 function usage() {
