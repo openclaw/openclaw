@@ -15,7 +15,7 @@ import {
   filterRecordsToActive,
   runActivePluginPayloadSmokeCheck,
 } from "./active-plugin-payload-validation.js";
-import { type PluginPayloadSmokeFailure } from "./plugin-payload-validation.js";
+import type { PluginPayloadSmokeFailure } from "./plugin-payload-validation.js";
 
 type PostCoreConvergenceWarning = {
   pluginId?: string;

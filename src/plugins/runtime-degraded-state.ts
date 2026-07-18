@@ -15,14 +15,14 @@ export type PluginVerificationFailureReason =
   | "missing-extension-entry"
   | "missing-openclaw-peer-link";
 
-export type PluginVerificationDiagnostic = {
+type PluginVerificationDiagnostic = {
   kind: "plugin-verification";
   reason: PluginVerificationFailureReason;
   detail: string;
   installPath?: string;
 };
 
-export type PublicPluginVerificationDiagnostic = Pick<
+type PublicPluginVerificationDiagnostic = Pick<
   PluginVerificationDiagnostic,
   "kind" | "reason" | "detail"
 >;
