@@ -144,7 +144,8 @@ function readRawDeltaInTransaction(
     cursor: encodeRawTranscriptCursor(initialCursor),
     reason,
   });
-  const cursor = encodedCursor ? parseRawTranscriptCursor(encodedCursor) : initialCursor;
+  const cursor =
+    encodedCursor !== undefined ? parseRawTranscriptCursor(encodedCursor) : initialCursor;
   if (!cursor) {
     return reset("invalid_cursor");
   }

@@ -162,6 +162,14 @@ describe("session transcript runtime SDK", () => {
       maxEvents: 1,
     });
     expect(blocked).toMatchObject({ kind: "reset", reason: "invalid_cursor" });
+    await expect(
+      readSessionTranscriptRawDelta({
+        ...scope,
+        cursor: "",
+        maxBytes: 10,
+        maxEvents: 1,
+      }),
+    ).resolves.toMatchObject({ kind: "reset", reason: "invalid_cursor" });
     if (blocked.kind !== "reset") {
       throw new Error("expected invalid cursor reset");
     }
