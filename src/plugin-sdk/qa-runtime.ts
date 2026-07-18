@@ -568,12 +568,12 @@ export function createQaDockerRuntime(params: {
         break;
       }
       let response: QaDockerFetchResponse | undefined;
+      const probeDeadlineBounded = remainingMs <= DEFAULT_QA_DOCKER_HEALTH_REQUEST_TIMEOUT_MS;
+      const probeSignal = AbortSignal.timeout(
+        Math.max(1, Math.min(DEFAULT_QA_DOCKER_HEALTH_REQUEST_TIMEOUT_MS, remainingMs)),
+      );
       try {
-        response = await deps.fetchImpl(url, {
-          signal: AbortSignal.timeout(
-            Math.max(1, Math.min(DEFAULT_QA_DOCKER_HEALTH_REQUEST_TIMEOUT_MS, remainingMs)),
-          ),
-        });
+        response = await deps.fetchImpl(url, { signal: probeSignal });
         if (response.ok) {
           return;
         }
@@ -582,6 +582,12 @@ export function createQaDockerRuntime(params: {
         lastError = error;
       } finally {
         await releaseQaDockerFetchResponse(response);
+      }
+      // A deadline-bounded probe whose abort timer fired has consumed the whole
+      // remaining budget; timer jitter can leave Date.now() a hair under the
+      // deadline, and looping again would start a probe past it.
+      if (probeDeadlineBounded && probeSignal.aborted) {
+        break;
       }
       const remainingSleepMs = deadline - Date.now();
       if (remainingSleepMs > 0) {
