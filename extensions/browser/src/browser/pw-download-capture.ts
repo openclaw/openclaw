@@ -121,13 +121,13 @@ export function createDownloadCaptureForPage(
           finish();
           resolve(result);
         },
-        (error) => {
+        (error: unknown) => {
           if (settled) {
             return;
           }
           settled = true;
           finish();
-          reject(error);
+          reject(error instanceof Error ? error : new Error(String(error)));
         },
       );
     };
