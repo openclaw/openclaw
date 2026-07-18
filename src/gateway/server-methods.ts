@@ -647,6 +647,8 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "sessions.create",
       "sessions.compaction.branch",
       "sessions.compaction.restore",
+      "sessions.branches.list",
+      "sessions.branches.switch",
       "sessions.rewind",
       "sessions.fork",
       "sessions.send",
