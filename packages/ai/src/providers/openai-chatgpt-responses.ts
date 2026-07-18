@@ -811,7 +811,7 @@ async function* parseSSE(response: Response): AsyncGenerator<Record<string, unkn
         `OpenAI ChatGPT Responses success body exceeded ${maxBytes} bytes (received ${size})`,
       ),
   });
-  const decoder = new TextDecoder();
+  const decoder = new TextDecoder("utf-8", { fatal: true });
   let buffer = "";
 
   try {
@@ -1236,16 +1236,18 @@ async function decodeWebSocketData(data: unknown): Promise<string | null> {
     return data;
   }
   if (data instanceof ArrayBuffer) {
-    return new TextDecoder().decode(new Uint8Array(data));
+    return new TextDecoder("utf-8", { fatal: true }).decode(new Uint8Array(data));
   }
   if (ArrayBuffer.isView(data)) {
     const view = data;
-    return new TextDecoder().decode(new Uint8Array(view.buffer, view.byteOffset, view.byteLength));
+    return new TextDecoder("utf-8", { fatal: true }).decode(
+      new Uint8Array(view.buffer, view.byteOffset, view.byteLength),
+    );
   }
   if (data && typeof data === "object" && "arrayBuffer" in data) {
     const blobLike = data as { arrayBuffer: () => Promise<ArrayBuffer> };
     const arrayBuffer = await blobLike.arrayBuffer();
-    return new TextDecoder().decode(new Uint8Array(arrayBuffer));
+    return new TextDecoder("utf-8", { fatal: true }).decode(new Uint8Array(arrayBuffer));
   }
   return null;
 }
@@ -1534,7 +1536,7 @@ async function readChatGptResponsesErrorTextLimited(response: Response): Promise
     return "";
   }
 
-  const decoder = new TextDecoder();
+  const decoder = new TextDecoder("utf-8", { fatal: true });
   let total = 0;
   let text = "";
   let reachedLimit = false;
