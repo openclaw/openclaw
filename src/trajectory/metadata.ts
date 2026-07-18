@@ -125,6 +125,7 @@ function buildPluginsFromActiveRegistry() {
         ),
         realtimeVoiceProviderIds: toSortedUniqueStrings(plugin.realtimeVoiceProviderIds),
         mediaUnderstandingProviderIds: toSortedUniqueStrings(plugin.mediaUnderstandingProviderIds),
+        computerUseProviderIds: toSortedUniqueStrings(plugin.computerUseProviderIds),
         imageGenerationProviderIds: toSortedUniqueStrings(plugin.imageGenerationProviderIds),
         videoGenerationProviderIds: toSortedUniqueStrings(plugin.videoGenerationProviderIds),
         musicGenerationProviderIds: toSortedUniqueStrings(plugin.musicGenerationProviderIds),

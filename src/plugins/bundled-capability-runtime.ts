@@ -160,6 +160,7 @@ function createCapabilityPluginRecord(params: {
     realtimeTranscriptionProviderIds: [],
     realtimeVoiceProviderIds: [],
     mediaUnderstandingProviderIds: [],
+    computerUseProviderIds: [],
     transcriptSourceProviderIds: [],
     imageGenerationProviderIds: [],
     videoGenerationProviderIds: [],
@@ -334,6 +335,7 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
       record.mediaUnderstandingProviderIds.push(
         ...captured.mediaUnderstandingProviders.map((entry) => entry.id),
       );
+      record.computerUseProviderIds.push(...captured.computerUseProviders.map((entry) => entry.id));
       record.transcriptSourceProviderIds.push(
         ...captured.transcriptSourceProviders.map((entry) => entry.id),
       );

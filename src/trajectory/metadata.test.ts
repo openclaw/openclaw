@@ -110,6 +110,7 @@ describe("trajectory metadata", () => {
       realtimeTranscriptionProviderIds: [],
       realtimeVoiceProviderIds: [],
       mediaUnderstandingProviderIds: [],
+      computerUseProviderIds: [],
       transcriptSourceProviderIds: [],
       imageGenerationProviderIds: [],
       videoGenerationProviderIds: [],

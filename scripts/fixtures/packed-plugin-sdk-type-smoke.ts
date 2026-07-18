@@ -7,6 +7,19 @@ type PublicPluginSdkModules = [
   typeof import("openclaw/plugin-sdk/runtime-env"),
 ];
 
+type ComputerUseProviderDescriptor =
+  import("openclaw/plugin-sdk/plugin-entry").ComputerUseProviderDescriptor;
+
+const computerUseProvider = {
+  id: "fixture-computer-use",
+  label: "Fixture Computer Use",
+} satisfies ComputerUseProviderDescriptor;
+
+function registerComputerUseProvider(api: import("openclaw/plugin-sdk").OpenClawPluginApi) {
+  api.registerComputerUseProvider(computerUseProvider);
+}
+
 const resolvedModules = null as unknown as PublicPluginSdkModules;
 
 void resolvedModules;
+void registerComputerUseProvider;

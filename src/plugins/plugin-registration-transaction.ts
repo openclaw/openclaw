@@ -82,7 +82,11 @@ function snapshotPluginRegistry(registry: PluginRegistry): PluginRegistry {
         return [key, [...value]];
       }
       if (value instanceof Map) {
-        return [key, new Map(value)];
+        const copy = new Map<string, unknown>();
+        for (const [entryKey, entryValue] of value) {
+          copy.set(entryKey, entryValue);
+        }
+        return [key, copy];
       }
       if (value && typeof value === "object") {
         return [key, { ...value }];

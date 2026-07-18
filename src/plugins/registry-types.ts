@@ -41,6 +41,7 @@ import type {
 import type { PluginMcpServerConnectionResolverRegistration } from "./types.mcp-connection.js";
 type ChannelPlugin = import("../channels/plugins/types.plugin.js").ChannelPlugin;
 type CliBackendPlugin = import("./types.js").CliBackendPlugin;
+type ComputerUseProviderDescriptor = import("./types.js").ComputerUseProviderDescriptor;
 type ImageGenerationProviderPlugin = import("./types.js").ImageGenerationProviderPlugin;
 type MediaUnderstandingProviderPlugin = import("./types.js").MediaUnderstandingProviderPlugin;
 type TranscriptSourceProvider = import("./types.js").TranscriptSourceProvider;
@@ -216,6 +217,8 @@ type PluginMusicGenerationProviderRegistration =
 type PluginWebFetchProviderRegistration = PluginOwnedProviderRegistration<WebFetchProviderPlugin>;
 type PluginWebSearchProviderRegistration = PluginOwnedProviderRegistration<WebSearchProviderPlugin>;
 type PluginWorkerProviderRegistration = PluginOwnedProviderRegistration<WorkerProvider>;
+type PluginComputerUseProviderRegistration =
+  PluginOwnedProviderRegistration<ComputerUseProviderDescriptor>;
 type PluginMigrationProviderRegistration = PluginOwnedProviderRegistration<MigrationProviderPlugin>;
 type PluginMemoryEmbeddingProviderRegistration =
   PluginOwnedProviderRegistration<MemoryEmbeddingProviderAdapter>;
@@ -429,6 +432,7 @@ export type PluginRecord = {
   realtimeTranscriptionProviderIds: string[];
   realtimeVoiceProviderIds: string[];
   mediaUnderstandingProviderIds: string[];
+  computerUseProviderIds: string[];
   transcriptSourceProviderIds: string[];
   imageGenerationProviderIds: string[];
   videoGenerationProviderIds: string[];
@@ -477,6 +481,7 @@ export type PluginRegistry = {
   webFetchProviders: PluginWebFetchProviderRegistration[];
   webSearchProviders: PluginWebSearchProviderRegistration[];
   workerProviders: Map<string, PluginWorkerProviderRegistration>;
+  computerUseProviders: Map<string, PluginComputerUseProviderRegistration>;
   migrationProviders: PluginMigrationProviderRegistration[];
   codexAppServerExtensionFactories: PluginCodexAppServerExtensionFactoryRegistration[];
   agentToolResultMiddlewares: PluginAgentToolResultMiddlewareRegistration[];

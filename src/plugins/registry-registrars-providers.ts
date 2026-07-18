@@ -4,6 +4,7 @@ import {
   registerAgentHarness as registerGlobalAgentHarness,
 } from "../agents/harness/registry.js";
 import type { AgentHarness } from "../agents/harness/types.js";
+import { validateComputerUseProviderDescriptor } from "./computer-use-provider-registry.js";
 import {
   getRegisteredEmbeddingProvider,
   registerEmbeddingProvider as registerGlobalEmbeddingProvider,
@@ -18,6 +19,7 @@ import type {
   MediaUnderstandingProviderPlugin,
   MigrationProviderPlugin,
   MusicGenerationProviderPlugin,
+  OpenClawPluginApi,
   ProviderPlugin,
   RealtimeTranscriptionProviderPlugin,
   RealtimeVoiceProviderPlugin,
@@ -314,6 +316,35 @@ export function createProviderRegistrars(state: PluginRegistryState) {
     });
   };
 
+  const registerComputerUseProvider = (
+    record: PluginRecord,
+    provider: Parameters<OpenClawPluginApi["registerComputerUseProvider"]>[0],
+  ) => {
+    const reject = (message: string) =>
+      pushDiagnostic({ level: "error", pluginId: record.id, source: record.source, message });
+    const validation = validateComputerUseProviderDescriptor(
+      provider,
+      record.contracts?.computerUseProviders ?? [],
+    );
+    if (!validation.ok) {
+      reject(validation.message);
+      return;
+    }
+    const { id } = validation.provider;
+    const existing = registry.computerUseProviders.get(id);
+    if (existing) {
+      reject(`Computer Use provider already registered: ${id} (${existing.pluginId})`);
+      return;
+    }
+    registry.computerUseProviders.set(id, {
+      pluginId: record.id,
+      pluginName: record.name,
+      provider: validation.provider,
+      source: record.source,
+      rootDir: record.rootDir,
+    });
+  };
+
   const registerSpeechProvider = (record: PluginRecord, provider: SpeechProviderPlugin) => {
     if (
       registerUniqueProviderLike({
@@ -486,6 +517,7 @@ export function createProviderRegistrars(state: PluginRegistryState) {
     registerTextTransforms,
     registerEmbeddingProvider,
     registerWorkerProvider,
+    registerComputerUseProvider,
     registerSpeechProvider,
     registerRealtimeTranscriptionProvider,
     registerRealtimeVoiceProvider,

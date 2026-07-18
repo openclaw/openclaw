@@ -907,6 +907,12 @@ Beyond `api.runtime`, the API object also provides:
 <ParamField path="api.registrationMode" type="PluginRegistrationMode">
   Current load mode: `"full"` (live activation), `"discovery"` / `"tool-discovery"` (read-only capability discovery), `"setup-only"` (lightweight setup entry), `"setup-runtime"` (setup flow that also needs the runtime channel entry), or `"cli-metadata"` (CLI command metadata collection).
 </ParamField>
+<ParamField path="api.registerComputerUseProvider(provider)" type="(ComputerUseProviderDescriptor) => void">
+  Register a transport-neutral Computer Use descriptor with `id` and `label`.
+  The id must also appear in `contracts.computerUseProviders`. Launch,
+  permissions, platform availability, and action transport remain outside this
+  descriptor and belong to the consuming node-host runtime and plugin.
+</ParamField>
 <ParamField path="api.resolvePath(input)" type="(string) => string">
   Resolve a path relative to the plugin root.
 </ParamField>

@@ -2410,6 +2410,32 @@ describe("loadPluginManifestRegistry", () => {
     });
   });
 
+  it("preserves Computer Use provider ownership without transport metadata", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "desktop-driver",
+      contracts: {
+        computerUseProviders: ["native-desktop"],
+      },
+      computerUseProviderMetadata: {
+        "native-desktop": {
+          mcpServerName: "must-not-become-contract",
+          hostProtocol: "must-not-become-contract",
+        },
+      },
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "desktop-driver",
+      rootDir: dir,
+      origin: "global",
+    });
+
+    expect(registry.plugins[0]?.contracts?.computerUseProviders).toEqual(["native-desktop"]);
+    expect(registry.plugins[0]).not.toHaveProperty("computerUseProviderMetadata");
+  });
+
   it("preserves provider hook contracts from plugin manifests", () => {
     const dir = makeTempDir();
     writeManifest(dir, {

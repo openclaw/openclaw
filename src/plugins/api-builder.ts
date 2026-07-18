@@ -42,6 +42,7 @@ type BuildPluginApiParams = {
       | "registerAutoEnableProbe"
       | "registerProvider"
       | "registerWorkerProvider"
+      | "registerComputerUseProvider"
       | "registerModelCatalogProvider"
       | "registerEmbeddingProvider"
       | "registerSpeechProvider"
@@ -116,6 +117,7 @@ const noopRegisterMigrationProvider: OpenClawPluginApi["registerMigrationProvide
 const noopRegisterAutoEnableProbe: OpenClawPluginApi["registerAutoEnableProbe"] = () => {};
 const noopRegisterProvider: OpenClawPluginApi["registerProvider"] = () => {};
 const noopRegisterWorkerProvider: OpenClawPluginApi["registerWorkerProvider"] = () => {};
+const noopRegisterComputerUseProvider: OpenClawPluginApi["registerComputerUseProvider"] = () => {};
 const noopRegisterModelCatalogProvider: OpenClawPluginApi["registerModelCatalogProvider"] =
   () => {};
 const noopRegisterEmbeddingProvider: OpenClawPluginApi["registerEmbeddingProvider"] = () => {};
@@ -233,6 +235,8 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
     registerAutoEnableProbe: handlers.registerAutoEnableProbe ?? noopRegisterAutoEnableProbe,
     registerProvider: handlers.registerProvider ?? noopRegisterProvider,
     registerWorkerProvider: handlers.registerWorkerProvider ?? noopRegisterWorkerProvider,
+    registerComputerUseProvider:
+      handlers.registerComputerUseProvider ?? noopRegisterComputerUseProvider,
     registerModelCatalogProvider:
       handlers.registerModelCatalogProvider ?? noopRegisterModelCatalogProvider,
     registerEmbeddingProvider: handlers.registerEmbeddingProvider ?? noopRegisterEmbeddingProvider,

@@ -426,6 +426,8 @@ export type PluginManifestContracts = {
   realtimeTranscriptionProviders?: string[];
   realtimeVoiceProviders?: string[];
   mediaUnderstandingProviders?: string[];
+  /** Computer Use provider ids owned by this plugin. */
+  computerUseProviders?: string[];
   transcriptSourceProviders?: string[];
   documentExtractors?: string[];
   imageGenerationProviders?: string[];
@@ -891,6 +893,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
   );
   const realtimeVoiceProviders = normalizeTrimmedStringList(value.realtimeVoiceProviders);
   const mediaUnderstandingProviders = normalizeTrimmedStringList(value.mediaUnderstandingProviders);
+  const computerUseProviders = normalizeTrimmedStringList(value.computerUseProviders);
   const transcriptSourceProviders = normalizeTrimmedStringList(value.transcriptSourceProviders);
   const documentExtractors = normalizeTrimmedStringList(value.documentExtractors);
   const imageGenerationProviders = normalizeTrimmedStringList(value.imageGenerationProviders);
@@ -915,6 +918,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
     ...(realtimeTranscriptionProviders.length > 0 ? { realtimeTranscriptionProviders } : {}),
     ...(realtimeVoiceProviders.length > 0 ? { realtimeVoiceProviders } : {}),
     ...(mediaUnderstandingProviders.length > 0 ? { mediaUnderstandingProviders } : {}),
+    ...(computerUseProviders.length > 0 ? { computerUseProviders } : {}),
     ...(transcriptSourceProviders.length > 0 ? { transcriptSourceProviders } : {}),
     ...(documentExtractors.length > 0 ? { documentExtractors } : {}),
     ...(imageGenerationProviders.length > 0 ? { imageGenerationProviders } : {}),

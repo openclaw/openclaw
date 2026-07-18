@@ -17,6 +17,7 @@ export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export type { ChannelSetupWizard } from "../channels/plugins/setup-wizard-types.js";
 export type {
   AnyAgentTool,
+  ComputerUseProviderDescriptor,
   OpenClawPluginApi,
   OpenClawPluginConfigSchema,
   PluginLogger,

@@ -60,6 +60,7 @@ export function createPluginApiFactory(
     registerMcpServerConnectionResolver,
     registerProvider,
     registerWorkerProvider,
+    registerComputerUseProvider,
     registerModelCatalogProvider,
     registerEmbeddingProvider,
     registerAgentHarness,
@@ -185,6 +186,8 @@ export function createPluginApiFactory(
                 registerMcpServerConnectionResolver(record, resolver),
               registerProvider: (provider) => registerProvider(record, provider),
               registerWorkerProvider: (provider) => registerWorkerProvider(record, provider),
+              registerComputerUseProvider: (provider) =>
+                registerComputerUseProvider(record, provider),
               registerModelCatalogProvider: (provider) =>
                 registerModelCatalogProvider(record, provider),
               registerEmbeddingProvider: (provider) => registerEmbeddingProvider(record, provider),

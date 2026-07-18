@@ -39,6 +39,11 @@ describe("plugin registration transaction", () => {
       source: "failed-plugin",
     });
     registry.gatewayHandlers.failed = async () => {};
+    registry.computerUseProviders.set("failed-computer-use", {
+      pluginId: "failed-plugin",
+      provider: { id: "failed-computer-use", label: "Failed Computer Use" },
+      source: "failed-plugin",
+    });
     registerMemoryCapability("failed-memory", { promptBuilder: () => ["failed"] });
 
     transaction.rollback();
@@ -46,6 +51,7 @@ describe("plugin registration transaction", () => {
     expect(rollbackGlobalSideEffects).toHaveBeenCalledOnce();
     expect(registry.hostedMediaResolvers).toStrictEqual([]);
     expect(registry.gatewayHandlers).toStrictEqual({});
+    expect(registry.computerUseProviders.size).toBe(0);
     expect(getMemoryCapabilityRegistration()).toEqual({
       pluginId: "active-memory",
       capability: { promptBuilder: activePromptBuilder },

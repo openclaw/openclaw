@@ -10,6 +10,7 @@ export type PluginCapabilityKind =
   | "realtime-transcription"
   | "realtime-voice"
   | "media-understanding"
+  | "computer-use"
   | "transcript-source"
   | "document-extractors"
   | "image-generation"
@@ -53,6 +54,7 @@ function buildPluginCapabilityEntries(
     { kind: "realtime-transcription" as const, ids: plugin.realtimeTranscriptionProviderIds },
     { kind: "realtime-voice" as const, ids: plugin.realtimeVoiceProviderIds },
     { kind: "media-understanding" as const, ids: plugin.mediaUnderstandingProviderIds },
+    { kind: "computer-use" as const, ids: plugin.computerUseProviderIds },
     { kind: "transcript-source" as const, ids: plugin.transcriptSourceProviderIds },
     { kind: "document-extractors" as const, ids: plugin.contracts?.documentExtractors ?? [] },
     { kind: "image-generation" as const, ids: plugin.imageGenerationProviderIds },

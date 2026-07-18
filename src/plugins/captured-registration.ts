@@ -27,6 +27,7 @@ import type {
   AnyAgentTool,
   AgentHarness,
   CliBackendPlugin,
+  ComputerUseProviderDescriptor,
   OpenClawPluginApi,
   ImageGenerationProviderPlugin,
   MediaUnderstandingProviderPlugin,
@@ -75,6 +76,7 @@ export type CapturedPluginRegistration = {
   webFetchProviders: WebFetchProviderPlugin[];
   webSearchProviders: WebSearchProviderPlugin[];
   workerProviders: WorkerProvider[];
+  computerUseProviders: ComputerUseProviderDescriptor[];
   migrationProviders: MigrationProviderPlugin[];
   memoryEmbeddingProviders: MemoryEmbeddingProviderAdapter[];
   sessionExtensions: PluginSessionExtensionRegistration[];
@@ -116,6 +118,7 @@ export function createCapturedPluginRegistration(params?: {
   const webFetchProviders: WebFetchProviderPlugin[] = [];
   const webSearchProviders: WebSearchProviderPlugin[] = [];
   const workerProviders: WorkerProvider[] = [];
+  const computerUseProviders: ComputerUseProviderDescriptor[] = [];
   const migrationProviders: MigrationProviderPlugin[] = [];
   const memoryEmbeddingProviders: MemoryEmbeddingProviderAdapter[] = [];
   const sessionExtensions: PluginSessionExtensionRegistration[] = [];
@@ -160,6 +163,7 @@ export function createCapturedPluginRegistration(params?: {
     webFetchProviders,
     webSearchProviders,
     workerProviders,
+    computerUseProviders,
     migrationProviders,
     memoryEmbeddingProviders,
     sessionExtensions,
@@ -276,6 +280,9 @@ export function createCapturedPluginRegistration(params?: {
         },
         registerWorkerProvider(provider: WorkerProvider) {
           workerProviders.push(provider);
+        },
+        registerComputerUseProvider(provider: ComputerUseProviderDescriptor) {
+          computerUseProviders.push(provider);
         },
         registerMigrationProvider(provider: MigrationProviderPlugin) {
           migrationProviders.push(provider);

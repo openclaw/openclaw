@@ -57,6 +57,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registerMcpServerConnectionResolver: registrars.registerMcpServerConnectionResolver,
     registerProvider: registrars.registerProvider,
     registerWorkerProvider: registrars.registerWorkerProvider,
+    registerComputerUseProvider: registrars.registerComputerUseProvider,
     registerModelCatalogProvider: registrars.registerModelCatalogProvider,
     registerAgentHarness: registrars.registerAgentHarness,
     registerCliBackend: registrars.registerCliBackend,

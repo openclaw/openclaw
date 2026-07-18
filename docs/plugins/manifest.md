@@ -583,6 +583,7 @@ Use `contracts` only for static capability ownership metadata that OpenClaw can 
     "realtimeVoiceProviders": ["openai"],
     "memoryEmbeddingProviders": ["local"],
     "mediaUnderstandingProviders": ["openai"],
+    "computerUseProviders": ["native-desktop"],
     "imageGenerationProviders": ["openai"],
     "videoGenerationProviders": ["qwen"],
     "musicGenerationProviders": ["stability-audio"],
@@ -613,6 +614,7 @@ Each list is optional:
 | `realtimeVoiceProviders`         | `string[]` | Realtime-voice provider ids this plugin owns.                                                                                        |
 | `memoryEmbeddingProviders`       | `string[]` | Deprecated memory-specific embedding provider ids this plugin owns.                                                                  |
 | `mediaUnderstandingProviders`    | `string[]` | Media-understanding provider ids this plugin owns.                                                                                   |
+| `computerUseProviders`           | `string[]` | Computer Use provider ids this plugin owns.                                                                                          |
 | `transcriptSourceProviders`      | `string[]` | Transcript source provider ids this plugin owns.                                                                                     |
 | `documentExtractors`             | `string[]` | Document (for example PDF) extractor provider ids this plugin owns.                                                                  |
 | `imageGenerationProviders`       | `string[]` | Image-generation provider ids this plugin owns.                                                                                      |
@@ -640,6 +642,8 @@ Provider plugins that implement both `resolveUsageAuth` and `fetchUsageSnapshot`
 General embedding providers should declare `contracts.embeddingProviders` for each adapter registered with `api.registerEmbeddingProvider(...)`. Use the general contract for reusable vector generation, including providers consumed by memory search. `contracts.memoryEmbeddingProviders` is deprecated memory-specific compatibility and remains only while existing providers migrate to the generic embedding provider seam.
 
 Worker providers must declare each `api.registerWorkerProvider(...)` id in `contracts.workerProviders`. Core persists durable intent before calling `provision`; providers validate their settings before external allocation, and repeated calls with the same operation id must adopt the same lease. Core also persists that validated settings snapshot and passes it with `leaseId` to `inspect({ leaseId, profile })` and `destroy({ leaseId, profile })`, including after the named profile is changed or removed. Destruction is idempotent, inspection returns the closed `active` / `destroyed` / `unknown` status union, and SSH private-key material is referenced only through `SecretRef`. Provisioned SSH endpoints must also include a public `hostKey` from trusted provisioning output as exactly `algorithm base64`, without a hostname or comment, so core can pin the host before connecting. Providers that mint dynamic identity refs may implement authoritative `resolveSshIdentity({ leaseId, profile, keyRef })`; providers without it use core's generic secret resolver. An authoritative `unknown` orphans an active local record; after a persisted destroy request it confirms teardown.
+
+Computer Use plugins must declare each `api.registerComputerUseProvider(...)` id in `contracts.computerUseProviders`. The runtime descriptor contains only `id` and `label`; transport, platform availability, permissions, launch, and action handling stay with the plugin and the node-host runtime that consumes the descriptor. Manifest ownership is discovery metadata, not authorization to use Accessibility, Screen Recording, or another host permission.
 
 `contracts.gatewayMethodDispatch` currently accepts `"authenticated-request"`. It is an API hygiene gate for native plugin HTTP routes that intentionally dispatch Gateway control-plane methods in-process, not a sandbox against malicious native plugins. Use it only for tightly reviewed bundled/operator surfaces that already require Gateway HTTP auth. An entitled route remains reachable while Gateway root-work admission is closed only when it also declares `auth: "gateway"` and the route-specific `gatewayRuntimeScopeSurface: "trusted-operator"`; ordinary sibling routes from the same plugin remain behind the admission boundary. This keeps suspension status and resume reachable without granting the whole plugin an admission bypass. Keep parsing and response shaping bounded outside dispatch; substantive or mutating work must go through Gateway method dispatch, which owns admission and scope enforcement.
 

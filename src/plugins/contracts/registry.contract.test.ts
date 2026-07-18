@@ -40,6 +40,7 @@ describe("plugin contract registry", () => {
               realtimeTranscriptionProviders: entry.realtimeTranscriptionProviderIds,
               realtimeVoiceProviders: entry.realtimeVoiceProviderIds,
               mediaUnderstandingProviders: entry.mediaUnderstandingProviderIds,
+              computerUseProviders: entry.computerUseProviderIds,
               transcriptSourceProviders: entry.transcriptSourceProviderIds,
               documentExtractors: entry.documentExtractorIds,
               imageGenerationProviders: entry.imageGenerationProviderIds,
@@ -98,6 +99,11 @@ describe("plugin contract registry", () => {
       name: "does not duplicate bundled media provider ids",
       ids: () =>
         pluginRegistrationContractRegistry.flatMap((entry) => entry.mediaUnderstandingProviderIds),
+    },
+    {
+      name: "does not duplicate bundled Computer Use provider ids",
+      ids: () =>
+        pluginRegistrationContractRegistry.flatMap((entry) => entry.computerUseProviderIds),
     },
     {
       name: "does not duplicate bundled transcripts source provider ids",

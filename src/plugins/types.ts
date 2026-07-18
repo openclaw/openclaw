@@ -87,6 +87,7 @@ export type {
   OpenClawPluginToolOptions,
 } from "./tool-types.js";
 export type {
+  ComputerUseProviderDescriptor,
   OpenClawPluginNodeHostCommand,
   OpenClawPluginNodeHostCommandAvailabilityContext,
   OpenClawPluginNodeHostCommandIo,

@@ -1,6 +1,15 @@
 // Node-host plugin command contracts, including the opt-in duplex transport.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
+/**
+ * Transport-neutral identity for a plugin-owned Computer Use implementation.
+ * Node-host launch and action transport stay outside this discovery contract.
+ */
+export type ComputerUseProviderDescriptor = {
+  id: string;
+  label: string;
+};
+
 export type OpenClawPluginNodeHostCommandAvailabilityContext = {
   /** Node-local configuration used to build this host's Gateway declaration. */
   config: OpenClawConfig;

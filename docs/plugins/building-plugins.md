@@ -119,6 +119,12 @@ local proof.
     `contracts.trustedToolPolicies`. These declarations keep install-time
     inspection and runtime registration aligned.
 
+    Computer Use plugins follow the same manifest-first ownership pattern:
+    declare each provider id in `contracts.computerUseProviders`, then register
+    its transport-neutral `{ id, label }` descriptor with
+    `api.registerComputerUseProvider(...)`. Node-host launch and transport
+    behavior remain plugin-owned.
+
     For every manifest field, see [Plugin manifest](/plugins/manifest).
 
   </Step>

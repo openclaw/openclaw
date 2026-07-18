@@ -34,6 +34,10 @@ describe("captured plugin registration", () => {
           inspect: async () => ({ status: "active" }),
           destroy: async () => {},
         });
+        api.registerComputerUseProvider({
+          id: "captured-computer-use",
+          label: "Captured Computer Use",
+        });
         api.registerModelCatalogProvider({
           provider: "captured-provider",
           kinds: ["text"],
@@ -113,6 +117,9 @@ describe("captured plugin registration", () => {
     expect(captured.tools.map((tool) => tool.name)).toEqual(["captured-tool"]);
     expect(captured.providers.map((provider) => provider.id)).toEqual(["captured-provider"]);
     expect(captured.workerProviders.map((provider) => provider.id)).toEqual(["captured-worker"]);
+    expect(captured.computerUseProviders).toEqual([
+      { id: "captured-computer-use", label: "Captured Computer Use" },
+    ]);
     expect(captured.modelCatalogProviders.map((provider) => provider.provider)).toEqual([
       "captured-provider",
     ]);
