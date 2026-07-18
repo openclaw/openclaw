@@ -27,10 +27,12 @@ describe("Twitch durable ingress", () => {
       const appendGate = new Promise<void>((resolve) => {
         releaseAppend = resolve;
       });
-      const enqueue: typeof queue.enqueue = vi.fn(async (...args) => {
-        await appendGate;
-        return await realEnqueue(...args);
-      });
+      const enqueue: typeof queue.enqueue = vi.fn(
+        async (...args: Parameters<typeof queue.enqueue>) => {
+          await appendGate;
+          return await realEnqueue(...args);
+        },
+      );
       const gatedQueue: ChannelIngressQueue<TwitchIngressTestPayload> = { ...queue, enqueue };
       const deliver = vi.fn(async (_message, lifecycle) => {
         await lifecycle.onAdopted();
@@ -189,7 +191,7 @@ describe("Twitch durable ingress", () => {
       const appendGate = new Promise<void>((resolve) => {
         releaseAppend = resolve;
       });
-      const enqueue: typeof queue.enqueue = async (...args) => {
+      const enqueue: typeof queue.enqueue = async (...args: Parameters<typeof queue.enqueue>) => {
         await appendGate;
         return await realEnqueue(...args);
       };

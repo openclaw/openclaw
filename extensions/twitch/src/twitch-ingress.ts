@@ -90,19 +90,17 @@ function parseClaimedTwitchMessage(
     );
   }
   const candidate = parsed as Partial<TwitchChatMessage>;
-  if (
-    !nonEmptyString(candidate.username) ||
-    typeof candidate.message !== "string" ||
-    !nonEmptyString(candidate.channel)
-  ) {
+  const username = nonEmptyString(candidate.username);
+  const rawChannel = nonEmptyString(candidate.channel);
+  if (!username || typeof candidate.message !== "string" || !rawChannel) {
     throw new TwitchIngressPermanentError("Twitch ingress event shape is invalid.");
   }
   return {
     ...candidate,
     id: claimedId,
-    username: candidate.username,
+    username,
     message: candidate.message,
-    channel: normalizeTwitchChannel(candidate.channel),
+    channel: normalizeTwitchChannel(rawChannel),
   } as TwitchChatMessage;
 }
 
