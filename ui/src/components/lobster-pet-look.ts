@@ -128,7 +128,6 @@ export const LOBSTER_PET_CLAW_MULS: Record<LobsterPetClawSize, number> = {
   mighty: 1.18,
 };
 
-
 // Seeded pet names; rare palettes carry signature names. Shown via the
 // sprite's native title tooltip, so no i18n surface.
 const PET_NAMES = [
@@ -175,7 +174,6 @@ export function lobsterPetName(look: LobsterPetLook, seed: number): string {
   );
 }
 
-
 // A stranger wears a different palette than the resident pet.
 export function strangerLookFor(seed: number, own: LobsterPetPaletteId): LobsterPetLook {
   for (let offset = 1; offset <= 24; offset++) {
@@ -186,7 +184,6 @@ export function strangerLookFor(seed: number, own: LobsterPetPaletteId): Lobster
   }
   return createLobsterPetLook((seed + 1) >>> 0);
 }
-
 
 export function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
@@ -264,7 +261,6 @@ export function createLobsterPetLook(seed: number, now: Date = new Date()): Lobs
     tailFan,
   };
 }
-
 
 const ACCESSORY_SPRITES: Record<Exclude<LobsterPetAccessory, "none">, TemplateResult> = {
   crown: svg`
@@ -561,7 +557,6 @@ export function renderLobsterSvg(
   `;
 }
 
-
 export const SPOT_ZONES = { left: [12, 38], right: [60, 84] } as const;
 
 export function lobsterPetSpriteStyle(
@@ -718,9 +713,7 @@ export function renderLobsterPetScene(args: {
   // are other lobsters (never your palette); the crab is, allegedly, also a
   // lobster. Neither perches, neither counts for the Lobsterdex.
   const passerLook =
-    args.passer?.kind === "stranger"
-      ? strangerLookFor(args.seed, args.look.palette.id)
-      : args.look;
+    args.passer?.kind === "stranger" ? strangerLookFor(args.seed, args.look.palette.id) : args.look;
   const passerClasses = args.passer
     ? [
         "lobster-pet",
@@ -735,12 +728,7 @@ export function renderLobsterPetScene(args: {
     args.passer?.kind === "crab"
       ? `--lob-scale:2;--lob-w:1;--lob-h:0.82;--lob-face:1`
       : args.passer
-        ? lobsterPetSpriteStyle(
-            passerLook,
-            Math.min(passerLook.scale, 2),
-            0,
-            args.passer.direction,
-          )
+        ? lobsterPetSpriteStyle(passerLook, Math.min(passerLook.scale, 2), 0, args.passer.direction)
         : "";
   return html`
     ${showShell

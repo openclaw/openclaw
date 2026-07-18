@@ -1,8 +1,5 @@
 import { getSafeLocalStorage } from "../local-storage.ts";
-import type {
-  LobsterPetMode,
-  LobsterPetPersonalityId,
-} from "./lobster-pet-contract.ts";
+import type { LobsterPetMode, LobsterPetPersonalityId } from "./lobster-pet-contract.ts";
 import { mulberry32, SPOT_ZONES } from "./lobster-pet-look.ts";
 
 export { SPOT_ZONES };

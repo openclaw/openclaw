@@ -9,12 +9,12 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { LitElement, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { isLobsterDay } from "../../../src/shared/lobster-day.js";
-import { playLobsterPetChirp, type LobsterPetChirpKind } from "./lobster-pet-audio.ts";
 import * as dex from "./lobster-dex.ts";
-import * as lobsterLook from "./lobster-pet-look.ts";
-import * as plans from "./lobster-pet-plans.ts";
-import "./lobster-pet-standin.ts";
+import { playLobsterPetChirp, type LobsterPetChirpKind } from "./lobster-pet-audio.ts";
 import * as contract from "./lobster-pet-contract.ts";
+import * as lobsterLook from "./lobster-pet-look.ts";
+import "./lobster-pet-standin.ts";
+import * as plans from "./lobster-pet-plans.ts";
 
 export {
   LOBSTER_LOGO_VISIT_EVENT,
@@ -83,7 +83,12 @@ class LobsterPet extends LitElement {
   private passerTimer: number | null = null;
   private passerEndTimer: number | null = null;
   private passerWatchTimer: number | null = null;
-  private familiarity: dex.LobsterFamiliarity = { tier: "regular", wary: false, visits: 0, shoos: 0 };
+  private familiarity: dex.LobsterFamiliarity = {
+    tier: "regular",
+    wary: false,
+    visits: 0,
+    shoos: 0,
+  };
   private greetedThisLoad = false;
 
   private look: contract.LobsterPetLook | null = null;
@@ -467,7 +472,9 @@ class LobsterPet extends LitElement {
     // still returns on a later scheduled visit.
     this.clearVisitTimers();
     this.scheduledVisiting = false;
-    this.armArrival(lobsterLook.randomBetween(this.visitRng, plans.VISIT_GAP_MS[0], plans.VISIT_GAP_MS[1]));
+    this.armArrival(
+      lobsterLook.randomBetween(this.visitRng, plans.VISIT_GAP_MS[0], plans.VISIT_GAP_MS[1]),
+    );
   }
 
   // Long runs earn solidarity: after 10 minutes of busy the pet settles
@@ -551,8 +558,11 @@ class LobsterPet extends LitElement {
     }
     const tuning = dex.LOBSTER_FAMILIARITY_TUNING[this.familiarity.tier];
     this.armArrival(
-      lobsterLook.randomBetween(this.visitRng, plans.VISIT_FIRST_DELAY_MS[0], plans.VISIT_FIRST_DELAY_MS[1]) *
-        tuning.firstDelayMul,
+      lobsterLook.randomBetween(
+        this.visitRng,
+        plans.VISIT_FIRST_DELAY_MS[0],
+        plans.VISIT_FIRST_DELAY_MS[1],
+      ) * tuning.firstDelayMul,
     );
   }
 
@@ -575,7 +585,9 @@ class LobsterPet extends LitElement {
       const tuning = dex.LOBSTER_FAMILIARITY_TUNING[this.familiarity.tier];
       const waryMul = this.familiarity.wary ? dex.LOBSTER_FAMILIARITY_TUNING.waryGapMul : 1;
       this.armArrival(
-        lobsterLook.randomBetween(this.visitRng, plans.VISIT_GAP_MS[0], plans.VISIT_GAP_MS[1]) * tuning.gapMul * waryMul,
+        lobsterLook.randomBetween(this.visitRng, plans.VISIT_GAP_MS[0], plans.VISIT_GAP_MS[1]) *
+          tuning.gapMul *
+          waryMul,
       );
     }, stayMs);
   }
@@ -806,7 +818,6 @@ class LobsterPet extends LitElement {
       onContextMenu: this.handleShoo,
     });
   }
-
 }
 if (!customElements.get("openclaw-lobster-pet")) {
   customElements.define("openclaw-lobster-pet", LobsterPet);
