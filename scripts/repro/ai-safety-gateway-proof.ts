@@ -119,6 +119,7 @@ async function main(): Promise<void> {
   try {
     let queryText = "";
     let lastError: unknown;
+    let matched = false;
     for (let attempt = 0; attempt < 40; attempt += 1) {
       if (gateway.exitCode !== null) {
         throw new Error(`Gateway exited before proof query: ${gatewayLog.slice(-1_000)}`);
@@ -137,11 +138,12 @@ async function main(): Promise<void> {
             JSON.stringify({ eventType: "ai_safety.external_content.consumed", limit: 10 }),
             "--json",
           ],
-          { cwd: process.cwd(), env, timeout: 10_000 },
+          { cwd: process.cwd(), env, timeout: 2_000 },
         );
         queryText = result.stdout;
         const parsed = JSON.parse(queryText) as { events?: unknown[] };
         if (parsed.events?.length) {
+          matched = true;
           break;
         }
       } catch (error) {
@@ -149,8 +151,10 @@ async function main(): Promise<void> {
       }
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
-    if (!queryText) {
-      throw new Error(`Gateway query never succeeded: ${String(lastError)}`);
+    if (!matched) {
+      throw new Error(
+        `Gateway proof event never became queryable: ${String(lastError)}\n${gatewayLog.slice(-2_000)}`,
+      );
     }
 
     const gatewayResult = JSON.parse(queryText) as {
