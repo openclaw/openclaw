@@ -117,6 +117,7 @@ public struct OpenClawChatView: View {
     @State private var followTarget: ScrollFollowTarget? = .latest
     @State private var isAtLiveEdge = true
     @State private var isUserScrolling = false
+    @State private var isKeyboardVisible = false
     @State private var fullMessageRequest: ChatFullMessageReaderRequest?
     private let showsSessionSwitcher: Bool
     private let drawsBackground: Bool
@@ -400,6 +401,14 @@ public struct OpenClawChatView: View {
         .onChange(of: self.viewModel.timelineRevision) { _, _ in
             self.handleTimelineChange()
         }
+        #if canImport(UIKit) && !os(macOS)
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+            self.isKeyboardVisible = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            self.isKeyboardVisible = false
+        }
+        #endif
     }
 
     @ViewBuilder
@@ -848,9 +857,17 @@ public struct OpenClawChatView: View {
             return
         case let .added(latestUserMessageID):
             self.lastUserMessageID = latestUserMessageID
-            self.followTarget = .user(latestUserMessageID)
             self.hasNewerContentBelow = false
-            self.moveScrollPosition(to: latestUserMessageID, anchor: Layout.newTurnAnchor)
+            // The anchored-question layout assumes a viewport tall enough to read the turn
+            // below the anchor. With the keyboard up that space is gone and the reply streams
+            // straight past the fold (#108692), so follow the live edge instead.
+            if self.isKeyboardVisible {
+                self.followTarget = .latest
+                self.moveScrollPosition(to: self.scrollerBottomID)
+            } else {
+                self.followTarget = .user(latestUserMessageID)
+                self.moveScrollPosition(to: latestUserMessageID, anchor: Layout.newTurnAnchor)
+            }
             return
         case .unchanged:
             break

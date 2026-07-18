@@ -324,11 +324,11 @@ const WORKSPACE_RAIL_MAX_WIDTH = 280;
 const DETAIL_SIDEBAR_SIDE_MIN_WIDTH = 680;
 
 const NEW_SESSION_ACTIVE_RUN_MESSAGE =
-  "Start a new session after the active run or queued messages finish.";
+  "Start a new thread after the active run or queued messages finish.";
 const NEW_SESSION_LIST_LOADING_MESSAGE =
-  "Session list is still refreshing. Try New Chat again in a moment.";
+  "Thread list is still refreshing. Try New Chat again in a moment.";
 const NEW_SESSION_CREATE_FAILED_MESSAGE =
-  "New Chat could not create a new session. Try again in a moment.";
+  "New Chat could not create a new thread. Try again in a moment.";
 
 function keyboardEventPathMatches(event: KeyboardEvent, selector: string): boolean {
   return event
