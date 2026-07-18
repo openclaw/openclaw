@@ -430,6 +430,7 @@ Common patterns: personal agent (full access, no sandbox), family/work agent (sa
         tools: {
           // Session tools can reveal transcript data. Default scope is current + spawned;
           // reads also include same-agent groups watched through ambient group awareness.
+          // Use visibility: "self" to exclude those watched sessions.
           sessions: { visibility: "tree" }, // self | tree | agent | all
           allow: [
             "sessions_list",
