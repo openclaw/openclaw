@@ -87,9 +87,12 @@ describe("buildPollStartContent", () => {
     expect(content["m.poll.start"]?.answers).toHaveLength(20);
   });
 
-  it("rejects more than 20 poll options per MSC3381", () => {
+  it("truncates to 20 poll options per MSC3381 instead of rejecting", () => {
     const options = Array.from({ length: 21 }, (_, i) => `Option ${i + 1}`);
-    expect(() => buildPollStartContent({ question: "Q", options })).toThrow(/at most 20/);
+    const content = buildPollStartContent({ question: "Q", options });
+    expect(content["m.poll.start"]?.answers).toHaveLength(20);
+    expect(content["m.poll.start"]?.answers?.[0]?.text).toBe("Option 1");
+    expect(content["m.poll.start"]?.answers?.[19]?.text).toBe("Option 20");
   });
 });
 
