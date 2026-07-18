@@ -41,9 +41,12 @@ function scheduleLobsterPetLoad() {
   }
   const start = () => {
     // A failed chunk fetch must not pin a rejected promise forever: clear the
-    // cache so a later scheduling call can retry instead of never registering.
+    // cache and retry when connectivity returns. The sidebar mounts once per
+    // page, so without this a transient failure would disable the pet for the
+    // whole session; a deploy-pruned chunk stays off until reload, by design.
     lobsterPetModuleLoad ??= import("./lobster-pet.ts").catch(() => {
       lobsterPetModuleLoad = null;
+      window.addEventListener("online", () => start(), { once: true });
     });
   };
   if ("requestIdleCallback" in window) {
