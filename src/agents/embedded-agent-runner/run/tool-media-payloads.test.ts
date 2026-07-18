@@ -84,6 +84,21 @@ describe("mergeAttemptToolMediaPayloads", () => {
     expect(getReplyPayloadMetadata(mediaReply ?? {})).toBeUndefined();
   });
 
+  it("ignores host-owned provenance outside the delivered tool media set", () => {
+    const [mediaReply] =
+      mergeAttemptToolMediaPayloads({
+        toolMediaUrls: ["/tmp/tool.png"],
+        hostOwnedToolMediaUrls: ["/tmp/forged.png"],
+        sourceReplyDeliveryMode: "message_tool_only",
+      }) ?? [];
+
+    expect(mediaReply).toMatchObject({
+      mediaUrls: ["/tmp/tool.png"],
+      mediaUrl: "/tmp/tool.png",
+    });
+    expect(getReplyPayloadMetadata(mediaReply ?? {})).toBeUndefined();
+  });
+
   it("keeps generic and host-owned media in separate delivery payloads", () => {
     const [genericReply, hostOwnedReply] =
       mergeAttemptToolMediaPayloads({
