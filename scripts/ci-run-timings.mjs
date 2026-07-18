@@ -323,7 +323,8 @@ function loadRun(runId) {
       "-X",
       "GET",
       `repos/${repository}/actions/runs/${runId}/jobs?per_page=${RUN_JOBS_PAGE_SIZE}&page=${page}`,
-    ], { timeout: CI_RUN_TIMINGS_TIMEOUT_MS });
+    ],
+    { timeout: CI_RUN_TIMINGS_TIMEOUT_MS });
     pages.push(payload);
     const jobs = Array.isArray(payload.jobs) ? payload.jobs : [];
     totalCount = typeof payload.total_count === "number" ? payload.total_count : totalCount;
