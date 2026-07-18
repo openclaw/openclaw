@@ -163,6 +163,7 @@ export async function checkOllamaCloudAuth(
         await response.body?.cancel().catch(() => {});
         return { signedIn: false };
       }
+      await response.body?.cancel().catch(() => {});
       return { signedIn: true };
     } finally {
       await release();

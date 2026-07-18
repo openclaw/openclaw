@@ -1106,4 +1106,29 @@ describe("checkOllamaCloudAuth", () => {
 
     expect(bodyCanceled).toBe(true);
   });
+
+  it("cancels the response body on successful 200 cloud-auth response", async () => {
+    let bodyCanceled = false;
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(new Uint8Array(1024));
+            controller.close();
+          },
+          cancel() {
+            bodyCanceled = true;
+          },
+        }),
+        { status: 200 },
+      ),
+      finalUrl: "https://ollama.com/api/me",
+      release: async () => {},
+    });
+
+    const result = await checkOllamaCloudAuth("https://ollama.com");
+
+    expect(result.signedIn).toBe(true);
+    expect(bodyCanceled).toBe(true);
+  });
 });
