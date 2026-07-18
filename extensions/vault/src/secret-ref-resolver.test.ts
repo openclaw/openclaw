@@ -388,7 +388,7 @@ describe("vault SecretRef resolver", () => {
     expect(fixture.requests).toEqual([
       {
         url: "/v1/secret/data/providers/openai",
-        token: "not-a-real-auth-header",
+        token: "test-token",
         namespace: "team-a",
       },
     ]);

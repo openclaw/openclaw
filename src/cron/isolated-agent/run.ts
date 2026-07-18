@@ -11,7 +11,7 @@ import { createAgentRunRestartAbortError } from "../../agents/run-termination.js
 import { expandToolGroups, normalizeToolName } from "../../agents/tool-policy.js";
 import { deriveContextPromptTokens } from "../../agents/usage.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
-import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
+import { HEARTBEAT_TOKEN, isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -509,6 +509,19 @@ function appendCronDeliveryInstruction(params: {
   return `${params.commandBody}\n\nYour response will be delivered automatically. If the task explicitly calls for messaging a specific external recipient, note who/where it should go instead of sending it yourself.`.trim();
 }
 
+// Static per job class on purpose: the free-form job name must not be promoted
+// into the trusted suffix past the external-content fence, and byte-identical
+// suffixes keep prompt caching effective. External-hook runs get only the
+// common core: deferring to "the job's instructions" or advertising job
+// removal would hand fenced webhook content an override lever or a
+// destructive action inside the trusted suffix.
+function appendCronUnattendedRunPreamble(commandBody: string, opts: { externalHook: boolean }) {
+  const core = `This is an unattended scheduled run. Nobody is present to clarify or approve, so complete the task with what you have. Your final reply is the deliverable — not a plan, an acknowledgement, or a request for input. If nothing needs doing, reply exactly ${HEARTBEAT_TOKEN}. If something failed, state plainly what failed and what you tried — the scheduler owns retries and failure alerts.`;
+  const trustedExtra =
+    " Where the job's own instructions conflict with this preamble, the job's instructions win (a question or plan the job explicitly requests is a valid deliverable). If this job is no longer needed, you may remove it with the cron tool.";
+  return `${commandBody}\n\n${core}${opts.externalHook ? "" : trustedExtra}`;
+}
+
 function resolvePositiveContextTokens(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 }
@@ -756,7 +769,9 @@ async function prepareCronRunContext(params: {
   }
 
   const resolvedModelSelection = await resolveCronModelSelection({
-    cfg: input.cfg,
+    // Authorization needs the unflattened active config so inherited policy
+    // aliases cannot be rebound by the selected agent's metadata aliases.
+    cfg: runtimeCfg,
     cfgWithAgentDefaults,
     agentConfigOverride,
     sessionEntry: cronSession.sessionEntry,
@@ -978,6 +993,7 @@ async function prepareCronRunContext(params: {
     sourceDelivery,
     toolsAllow: agentPayload?.toolsAllow,
   });
+  commandBody = appendCronUnattendedRunPreamble(commandBody, { externalHook: isExternalHook });
   commandBody = appendCronDeliveryInstruction({
     commandBody,
     deliveryRequested,

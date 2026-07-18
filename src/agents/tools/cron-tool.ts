@@ -711,7 +711,9 @@ SCHEDULE:
 TRIGGER SCRIPT:
 - Requires cron.triggers.enabled; if off, explain and never model-poll fallback.
 - Headless owner allowlist; quiet check has no model. Prior trigger.state is frozen JSON. Return/json({fire:boolean,message?:string,state?:JSONValue}); create new state, never mutate prior.
-- fire:false saves state only; no payload/history. fire:true runs payload and appends message; fired state saves only after payload success. Check reads; payload acts.
+- fire:false saves state only; no payload/history. fire:true runs payload and appends message; fired state saves only after payload success.
+- Fire on every actionable state, including failures/timeouts; success-only watchers go silent when broken, which looks healthy. Dedupe by comparing trigger.state and returning new state, never memory.
+- Keep scripts read-only; actions belong in payload. message must be self-contained: it is the fired run's entire context.
 - Silent watcher: top-level delivery.mode="none". Omitted delivery on isolated agentTurn announces and missing route may fail.
 - once:true disables after first successful fire. Per check: 30s, 5 tool calls, 16KB state.
 - Hidden Code Mode tools: await tools.call("exec", {command:"..."}); unknown id => search/describe.
