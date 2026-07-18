@@ -5,12 +5,10 @@ import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runt
 import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
-  createProviderOperationTimeoutError,
   createProviderOperationTimeoutResolver,
   fetchWithTimeout,
   pollProviderOperationJson,
   resolveProviderHttpRequestConfig,
-  resolveProviderRequestTimeoutMs,
   type ProviderOperationDeadline,
   type ProviderOperationTimeoutMs,
 } from "openclaw/plugin-sdk/provider-http";
@@ -209,6 +207,20 @@ function resolveVydraFileExtension(kind: VydraMediaKind, mimeType: string): stri
   );
 }
 
+function resolveVydraHttpTimeoutMs(timeoutMs: ProviderOperationTimeoutMs | undefined): number {
+  const resolved = typeof timeoutMs === "function" ? timeoutMs() : timeoutMs;
+  if (typeof resolved !== "number" || !Number.isFinite(resolved) || resolved <= 0) {
+    return DEFAULT_HTTP_TIMEOUT_MS;
+  }
+  return resolved;
+}
+
+function createVydraTimeoutError(deadline: ProviderOperationDeadline): Error {
+  const timeoutLabel =
+    typeof deadline.timeoutMs === "number" ? ` after ${deadline.timeoutMs}ms` : "";
+  return new Error(`${deadline.label} timed out${timeoutLabel}`);
+}
+
 export function resolveVydraGeneratedMediaMaxBytes(params: {
   cfg: { agents?: { defaults?: { mediaMaxMb?: number } } };
   kind: VydraMediaKind;
@@ -233,10 +245,7 @@ export async function downloadVydraAsset(params: {
   fetchFn: typeof fetch;
   maxBytes: number;
 }): Promise<{ buffer: Buffer; mimeType: string; fileName: string }> {
-  const timeoutMs = resolveProviderRequestTimeoutMs({
-    timeoutMs: params.timeoutMs,
-    defaultTimeoutMs: DEFAULT_HTTP_TIMEOUT_MS,
-  });
+  const timeoutMs = resolveVydraHttpTimeoutMs(params.timeoutMs);
   const deadline = createProviderOperationDeadline({
     timeoutMs,
     label: `Vydra ${params.kind} download`,
@@ -253,14 +262,14 @@ export async function downloadVydraAsset(params: {
   );
   await assertOkOrThrowHttpError(response, `Vydra ${params.kind} download failed`, {
     bodyTimeoutMs: resolveTimeoutMs,
-    onBodyTimeout: () => createProviderOperationTimeoutError(deadline),
+    onBodyTimeout: () => createVydraTimeoutError(deadline),
   });
   const mimeType =
     response.headers.get("content-type")?.trim() ||
     (params.kind === "image" ? "image/png" : params.kind === "audio" ? "audio/mpeg" : "video/mp4");
   const buffer = await readResponseWithLimit(response, params.maxBytes, {
     timeoutMs: resolveTimeoutMs,
-    onTimeout: () => createProviderOperationTimeoutError(deadline),
+    onTimeout: () => createVydraTimeoutError(deadline),
     onOverflow: ({ maxBytes }) =>
       new Error(`Vydra ${params.kind} download exceeds ${maxBytes} bytes`),
   });

@@ -75,7 +75,9 @@ function createTricklingResponse(status = 200): Response {
     new ReadableStream<Uint8Array>({
       async pull(controller) {
         controller.enqueue(chunk);
-        await new Promise<void>((resolve) => setTimeout(resolve, 20));
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 20);
+        });
       },
     }),
     { status, headers: { "content-type": "application/json" } },

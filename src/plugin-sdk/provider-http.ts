@@ -18,15 +18,9 @@ export {
   readResponseTextLimited,
   truncateErrorDetail,
 } from "../agents/provider-http-errors.js";
-export type {
-  ProviderHttpErrorOptions,
-  ProviderResponseReadOptions,
-} from "../agents/provider-http-errors.js";
 export {
   buildAudioTranscriptionFormData,
-  createProviderOperationBodyReadOptions,
   createProviderOperationDeadline,
-  createProviderOperationTimeoutError,
   createProviderOperationTimeoutResolver,
   fetchProviderDownloadResponse,
   fetchProviderOperationResponse,
@@ -38,7 +32,6 @@ export {
   postMultipartRequest,
   postTranscriptionRequest,
   resolveProviderOperationTimeoutMs,
-  resolveProviderRequestTimeoutMs,
   resolveProviderHttpRequestConfig,
   resolveAudioTranscriptionUploadFileName,
   requireTranscriptionText,

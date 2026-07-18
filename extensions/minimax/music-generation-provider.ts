@@ -9,7 +9,6 @@ import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
-  createProviderOperationTimeoutError,
   createProviderOperationDeadline,
   executeProviderOperationWithRetry,
   fetchWithTimeoutGuarded,
@@ -196,6 +195,12 @@ function createGeneratedMusicTooLargeError(maxBytes: number): Error {
   return new Error(`MiniMax generated music download exceeds ${maxBytes} bytes`);
 }
 
+function createMinimaxMusicTimeoutError(deadline: ProviderOperationDeadline): Error {
+  const timeoutLabel =
+    typeof deadline.timeoutMs === "number" ? ` after ${deadline.timeoutMs}ms` : "";
+  return new Error(`${deadline.label} timed out${timeoutLabel}`);
+}
+
 function resolveStreamEnvelopeMaxBytes(maxBytes: number): number {
   return Math.max(
     STREAM_ENVELOPE_OVERHEAD_BYTES,
@@ -210,7 +215,7 @@ async function readResponseBufferWithDeadline(
 ): Promise<Buffer> {
   return await readResponseWithLimit(response, maxBytes, {
     timeoutMs: () => resolveBodyReadTimeoutMs(deadline),
-    onTimeout: () => createProviderOperationTimeoutError(deadline),
+    onTimeout: () => createMinimaxMusicTimeoutError(deadline),
     onOverflow: ({ maxBytes: limit }) => createGeneratedMusicTooLargeError(limit),
   });
 }

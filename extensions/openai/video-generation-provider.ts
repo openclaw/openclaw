@@ -16,7 +16,6 @@ import {
   readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
-  resolveProviderRequestTimeoutMs,
   sanitizeConfiguredModelProviderRequest,
   type ProviderOperationTimeoutMs,
 } from "openclaw/plugin-sdk/provider-http";
@@ -184,6 +183,13 @@ async function pollOpenAIVideo(
   });
 }
 
+function resolveOpenAIVideoDownloadTimeoutMs(timeoutMs: ProviderOperationTimeoutMs | undefined) {
+  const resolved = typeof timeoutMs === "function" ? timeoutMs() : timeoutMs;
+  return typeof resolved === "number" && Number.isFinite(resolved) && resolved > 0
+    ? resolved
+    : DEFAULT_TIMEOUT_MS;
+}
+
 async function fetchOpenAIVideoDownload(
   params: {
     url: string;
@@ -214,10 +220,7 @@ async function fetchOpenAIVideoDownload(
       const result = await fetchWithTimeoutGuarded(
         params.url,
         params.init,
-        resolveProviderRequestTimeoutMs({
-          timeoutMs: params.timeoutMs,
-          defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
-        }),
+        resolveOpenAIVideoDownloadTimeoutMs(params.timeoutMs),
         params.fetchFn,
         {
           ...(params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),

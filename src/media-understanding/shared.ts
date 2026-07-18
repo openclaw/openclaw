@@ -148,14 +148,14 @@ export function resolveProviderOperationTimeoutMs(params: {
 }
 
 /** Builds the canonical error for an exhausted provider operation deadline. */
-export function createProviderOperationTimeoutError(deadline: ProviderOperationDeadline): Error {
+function createProviderOperationTimeoutError(deadline: ProviderOperationDeadline): Error {
   const timeoutLabel =
     typeof deadline.timeoutMs === "number" ? ` after ${deadline.timeoutMs}ms` : "";
   return new Error(`${deadline.label} timed out${timeoutLabel}`);
 }
 
 /** Resolves a static or lazy request timeout with a validated fallback. */
-export function resolveProviderRequestTimeoutMs(params: {
+function resolveProviderRequestTimeoutMs(params: {
   timeoutMs?: ProviderOperationTimeoutMs;
   defaultTimeoutMs: number;
 }): number {
@@ -168,7 +168,7 @@ export function resolveProviderRequestTimeoutMs(params: {
 }
 
 /** Returns lazy body-read options tied to the same absolute provider operation deadline. */
-export function createProviderOperationBodyReadOptions(params: {
+function createProviderOperationBodyReadOptions(params: {
   deadline: ProviderOperationDeadline;
   defaultTimeoutMs: number;
 }) {

@@ -289,12 +289,6 @@ vi.mock("openclaw/plugin-sdk/provider-http", () => ({
     ({ defaultTimeoutMs }: { defaultTimeoutMs: number }) =>
     () =>
       defaultTimeoutMs,
-  createProviderOperationTimeoutError: (deadline: { label: string; timeoutMs?: number }) =>
-    new Error(
-      `${deadline.label} timed out${
-        typeof deadline.timeoutMs === "number" ? ` after ${deadline.timeoutMs}ms` : ""
-      }`,
-    ),
   executeProviderOperationWithRetry: providerHttpMocks.executeProviderOperationWithRetryMock,
   fetchProviderDownloadResponse: providerHttpMocks.fetchProviderDownloadResponseMock,
   fetchProviderOperationResponse: providerHttpMocks.fetchProviderOperationResponseMock,
@@ -307,13 +301,6 @@ vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   readProviderJsonResponse: providerHttpMocks.readProviderJsonResponseMock,
   resolveProviderOperationTimeoutMs: ({ defaultTimeoutMs }: { defaultTimeoutMs: number }) =>
     defaultTimeoutMs,
-  resolveProviderRequestTimeoutMs: ({
-    timeoutMs,
-    defaultTimeoutMs,
-  }: {
-    timeoutMs?: number | (() => number);
-    defaultTimeoutMs: number;
-  }) => (typeof timeoutMs === "function" ? timeoutMs() : (timeoutMs ?? defaultTimeoutMs)),
   resolveProviderHttpRequestConfig: providerHttpMocks.resolveProviderHttpRequestConfigMock,
   resolveProviderRequestHeaders: providerHttpMocks.resolveProviderRequestHeadersMock,
   [providerHttpMockKeys.sanitizeConfiguredModelProviderRequest]:

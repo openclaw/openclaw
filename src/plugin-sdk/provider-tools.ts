@@ -6,6 +6,7 @@ import {
   stripUnsupportedSchemaKeywords,
 } from "@openclaw/ai/internal/openai";
 // Provider tool helpers expose shared tool-call payload contracts for provider plugins.
+import type { TSchema } from "typebox";
 import type {
   AnyAgentTool,
   ProviderNormalizeToolSchemasContext,
