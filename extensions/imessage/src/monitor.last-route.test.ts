@@ -731,7 +731,7 @@ describe("iMessage monitor last-route updates", () => {
     { label: "unset", imessagePatch: {}, expectedDisable: undefined },
   ] as const)(
     "passes iMessage block streaming config ($label) through to reply dispatch",
-    async ({ imessagePatch, expectedDisable }) => {
+    async ({ label, imessagePatch, expectedDisable }) => {
       dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(async (params) => {
         expect(params.replyOptions?.disableBlockStreaming).toBe(expectedDisable);
         return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } } as const;
@@ -811,7 +811,7 @@ describe("iMessage monitor last-route updates", () => {
     },
   ] as const)(
     "preserves account-level block streaming opt-outs when inheriting channel streaming ($label)",
-    async ({ channelBlockEnabled, accountBlockEnabled, expectedDisable }) => {
+    async ({ label, channelBlockEnabled, accountBlockEnabled, expectedDisable }) => {
       dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(async (params) => {
         expect(params.replyOptions?.disableBlockStreaming).toBe(expectedDisable);
         return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } } as const;
@@ -893,7 +893,7 @@ describe("iMessage monitor last-route updates", () => {
     },
   ] as const)(
     "preserves channel-level nested block streaming when an account overrides $label",
-    async ({ accountStreaming }) => {
+    async ({ label, accountStreaming }) => {
       dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(async (params) => {
         expect(params.replyOptions?.disableBlockStreaming).toBe(false);
         return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } } as const;
@@ -1267,7 +1267,7 @@ describe("iMessage monitor last-route updates", () => {
       { timeoutMs: 30_000 },
     );
     await vi.waitFor(() => {
-      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+      expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
     });
   });
 
