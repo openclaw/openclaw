@@ -194,12 +194,11 @@ async function restoreArchivedLegacyRootMemoryFile(params: {
     // The successful archive rename proves both paths share a filesystem.
     // link() restores atomically without overwriting a concurrent replacement.
     await fs.promises.link(params.archivedLegacyPath, params.legacyPath);
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException | undefined)?.code;
-    if (code === "EEXIST" || code === "EPERM" || code === "EOPNOTSUPP" || code === "ENOSYS") {
-      return false;
-    }
-    throw err;
+  } catch {
+    // A failed hard link is non-mutating. Preserve the archive for manual
+    // recovery regardless of whether the filesystem rejected links, ran out
+    // of space/link slots, or a concurrent writer recreated the legacy path.
+    return false;
   }
   await fs.promises.unlink(params.archivedLegacyPath);
   return true;

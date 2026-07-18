@@ -145,7 +145,7 @@ describe("root memory repair", () => {
       await fs.rename(sourcePath, targetPath);
     });
     vi.spyOn(fs, "link").mockRejectedValueOnce(
-      Object.assign(new Error("hard links unavailable"), { code: "EPERM" }),
+      Object.assign(new Error("hard link limit reached"), { code: "EMLINK" }),
     );
 
     const migration = await migrateLegacyRootMemoryFile(tmpDir);
