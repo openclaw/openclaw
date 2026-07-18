@@ -189,7 +189,7 @@ class MainViewModelTest {
       viewModel.chatComposerState.addAuthorizedAttachments(
         owner = resolved,
         mediaAuthorizationId = authorizationId,
-        attachments = listOf(PendingAttachment("migrated", "photo.jpg", "image/jpeg", "YQ==")),
+        candidates = listOf(PendingAttachment("migrated", "photo.jpg", "image/jpeg", "YQ==")),
       ),
     )
     assertEquals(1, viewModel.chatComposerState.attachments.value[resolved]?.size)
@@ -267,7 +267,7 @@ class MainViewModelTest {
         viewModel.chatComposerState.addAuthorizedAttachments(
           owner = owner,
           mediaAuthorizationId = authorizationId,
-          attachments = listOf(PendingAttachment("late", "late.txt", "text/plain", "YQ==")),
+          candidates = listOf(PendingAttachment("late", "late.txt", "text/plain", "YQ==")),
         ),
       )
       viewModel.importChatComposerAttachments(owner, authorizationId, mainSessionKey = "main", expectedCount = 1) {
@@ -328,7 +328,7 @@ class MainViewModelTest {
         viewModel.chatComposerState.addAuthorizedAttachments(
           owner = canonical,
           mediaAuthorizationId = mediaAuthorizationId,
-          attachments = listOf(PendingAttachment("late", "late.txt", "text/plain", "YQ==")),
+          candidates = listOf(PendingAttachment("late", "late.txt", "text/plain", "YQ==")),
         ),
       )
     }
