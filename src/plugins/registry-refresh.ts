@@ -1,3 +1,4 @@
+import { invalidatePersistedAuthStateCache } from "../channels/config-presence.js";
 // Registry refresh helper shared by plugin config mutations that need post-write discovery repair.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -5,7 +6,6 @@ import { loadInstalledPluginIndexInstallRecords } from "./installed-plugin-index
 import type { InstalledPluginIndexRefreshReason } from "./installed-plugin-index.js";
 import { tracePluginLifecyclePhaseAsync } from "./plugin-lifecycle-trace.js";
 import { refreshPluginRegistry } from "./plugin-registry.js";
-import { invalidatePersistedAuthStateCache } from "../channels/config-presence.js";
 
 /** Optional warning sink for best-effort registry/cache refresh failures. */
 export type PluginRegistryRefreshLogger = {
@@ -69,6 +69,8 @@ export async function invalidatePluginRuntimeDiscoveryAfterConfigMutation(params
   try {
     invalidatePersistedAuthStateCache();
   } catch (error) {
-    params.logger?.warn?.(`Persisted-auth presence cache invalidation failed: ${formatErrorMessage(error)}`);
+    params.logger?.warn?.(
+      `Persisted-auth presence cache invalidation failed: ${formatErrorMessage(error)}`,
+    );
   }
 }
