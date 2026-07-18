@@ -18,6 +18,7 @@ export function resolveGitHubRepoFromOrigin(): string {
   const remote = execFileSync("git", ["config", "--get", "remote.origin.url"], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
+    timeout: 10_000,
   }).trim();
   if (!remote) {
     throw new Error("Unable to determine repository from git remote.");
