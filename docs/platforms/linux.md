@@ -51,10 +51,15 @@ dependencies and development commands.
 
 ### Quick Chat
 
-Open Quick Chat with `Ctrl+Shift+Space` or the **Quick Chat** tray item. The
-shortcut is available on X11; on Wayland, use the tray item for now. Quick Chat
-sends the message through the OpenClaw CLI to the default agent's main session,
-then hides. Replies remain in the normal session; open the dashboard to read them.
+Open Quick Chat with `Ctrl+Shift+Space` or the **Quick Chat** tray item. The agent
+chip shows the configured avatar, emoji, or monogram; select it to switch agents.
+Messages use the selected agent's main session and honor global session scope.
+
+On X11, use the gear in Quick Chat to record or reset a custom shortcut. The
+**Quick Chat shortcut** tray toggle enables or disables it without disabling the
+plain **Quick Chat** tray item. Global shortcuts are not available on Wayland, so
+the shortcut settings are hidden and the tray item remains the entry point.
+Replies remain in the normal session; open the dashboard to read them.
 
 ### Canvas
 

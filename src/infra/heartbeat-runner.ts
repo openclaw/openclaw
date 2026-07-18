@@ -88,14 +88,21 @@ import {
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { hasActiveCronJobs } from "../cron/active-jobs.js";
+import {
+  hasActiveCronJobs,
+  hasActiveCronJobsExceptMarker,
+  isCronActiveJobMarkerCurrent,
+  type CronActiveJobMarker,
+} from "../cron/active-jobs.js";
 import { resolveCronSession } from "../cron/isolated-agent/session.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getActivePluginChannelRegistry } from "../plugins/runtime.js";
 import {
   getCommandLaneSnapshots,
   getQueueSize,
+  isCommandLaneTaskMarkerCurrent,
   type CommandLaneSnapshot,
+  type CommandLaneTaskMarker,
 } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import {
@@ -196,15 +203,7 @@ const loadHeartbeatRunnerRuntime = createLazyRuntimeModule(
   () => import("./heartbeat-runner.runtime.js"),
 );
 
-const HEARTBEAT_ALWAYS_BUSY_LANES = [CommandLane.Cron, CommandLane.CronNested] as const;
 const DEFAULT_HEARTBEAT_TIMEOUT_SECONDS = 10 * 60;
-
-function hasQueuedWorkInLanes(
-  lanes: readonly string[],
-  getSize: (lane?: string) => number,
-): boolean {
-  return lanes.some((lane) => getSize(lane) > 0);
-}
 
 function hasQueuedWorkInLaneSnapshots(
   snapshots: readonly CommandLaneSnapshot[],
@@ -1297,6 +1296,9 @@ export async function runHeartbeatOnce(opts: {
   intent?: HeartbeatWakeIntent;
   reason?: string;
   runScope?: HeartbeatRunScope;
+  /** Exact cron run marker whose own activity must not block this wake. */
+  owningCronJobMarker?: CronActiveJobMarker;
+  owningCronLaneTaskMarker?: CommandLaneTaskMarker;
   deps?: HeartbeatDeps;
 }): Promise<HeartbeatRunResult> {
   const cfg = opts.cfg ?? getRuntimeConfig();
@@ -1337,7 +1339,25 @@ export async function runHeartbeatOnce(opts: {
     return { status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT };
   }
 
-  if (hasActiveCronJobs() || hasQueuedWorkInLanes(HEARTBEAT_ALWAYS_BUSY_LANES, getSize)) {
+  // Ignore only the exact Cron lane task that owns this wake. Other queued or active
+  // Cron work and all CronNested work remain busy signals.
+  const owningCronJobMarker = opts.owningCronJobMarker;
+  const ownsActiveCronRun = owningCronJobMarker
+    ? isCronActiveJobMarkerCurrent(owningCronJobMarker)
+    : false;
+  const cronBusy =
+    ownsActiveCronRun && owningCronJobMarker
+      ? hasActiveCronJobsExceptMarker(owningCronJobMarker)
+      : hasActiveCronJobs();
+  const owningCronLaneTaskMarker = opts.owningCronLaneTaskMarker;
+  const ownsCronLaneTask =
+    ownsActiveCronRun &&
+    owningCronLaneTaskMarker?.lane === CommandLane.Cron &&
+    isCommandLaneTaskMarkerCurrent(owningCronLaneTaskMarker);
+  const cronLaneDepth = getSize(CommandLane.Cron);
+  const cronLaneBusy =
+    cronLaneDepth > (ownsCronLaneTask ? 1 : 0) || getSize(CommandLane.CronNested) > 0;
+  if (cronBusy || cronLaneBusy) {
     emitHeartbeatEvent({
       status: "skipped",
       reason: HEARTBEAT_SKIP_CRON_IN_PROGRESS,

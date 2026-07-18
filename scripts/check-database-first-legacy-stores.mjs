@@ -161,9 +161,7 @@ const allowedRuntimeMigrationPaths = [
 
 const allowedFixturePaths = new Set(["extensions/qa-lab/src/providers/shared/auth-store.ts"]);
 
-const allowedCurrentLegacyWriteViolations = [
-  "extensions/memory-wiki/src/compile.ts:legacy store filesystem write:root.write(relativePath, content)",
-];
+const allowedCurrentLegacyWriteViolations = [];
 
 const sourceFileExtensions = new Set([".cjs", ".cts", ".js", ".mjs", ".mts", ".ts", ".tsx"]);
 

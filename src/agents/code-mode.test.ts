@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
 import { buildBlockedToolResult } from "./agent-tools.before-tool-call.js";
+import { createOpenClawReadTool } from "./agent-tools.read.js";
 import {
   clearCodeModeNamespacesForPlugin,
   createCodeModeNamespaceTool,
@@ -23,6 +24,7 @@ import {
   resolveCodeModeConfig,
 } from "./code-mode.js";
 import { testing } from "./code-mode.test-support.js";
+import { createReadTool } from "./sessions/index.js";
 import { createToolSearchCatalogRef, type ToolSearchCatalogRef } from "./tool-search.js";
 import {
   TOOL_CALL_RAW_TOOL_NAME,
@@ -404,6 +406,8 @@ describe("Code Mode", () => {
     expect(execTool.description).toContain("`-> ?` means never guess result field names");
     expect(execTool.description).toContain("never guess result field names");
     expect(execTool.description).toContain("return the raw tool value unchanged");
+    expect(execTool.description).toContain("final dependent call after declared-output calls");
+    expect(execTool.description).toContain("do not wrap it in the requested answer shape");
     expect(execTool.description).toContain("filter or map it only in a later exec");
     expect(execTool.description).toContain("returns its JSON value directly");
     expect(execTool.description).toContain("const hit = ALL_TOOLS.find");
@@ -472,6 +476,35 @@ describe("Code Mode", () => {
     const description = compacted.tools[0]?.description ?? "";
     expect(description).toContain('"openclaw:catalog-owner:tool_071"');
     expect(description).not.toContain("additional OpenClaw/plugin tools omitted");
+  });
+
+  it("keeps declared-output tools indexed when truncation drops unknown-output lines", () => {
+    const { config, catalogRef, tools } = createCodeModeHarness();
+    const pluginId = `fake-${"x".repeat(120)}`;
+    const catalogTools = Array.from({ length: 100 }, (_, index) =>
+      pluginTool(`fake_${index.toString().padStart(3, "0")}`, "Deferred", pluginId),
+    );
+    // Alphabetically last, but carries a declared output contract.
+    const contracted = pluginTool("zzz_contracted_tool", "Deferred", pluginId);
+    (contracted as { outputSchema?: unknown }).outputSchema = Type.Object(
+      { ok: Type.Boolean() },
+      { additionalProperties: false },
+    );
+    const compacted = applyCodeModeCatalog({
+      tools: [...tools, ...catalogTools, contracted],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const description = compacted.tools[0]?.description ?? "";
+    const indexStart = description.indexOf("OpenClaw/plugin tool quick index");
+    const index = indexStart >= 0 ? description.slice(indexStart) : "";
+    expect(index).toContain("additional OpenClaw/plugin tools omitted");
+    expect(index).toContain("zzz_contracted_tool");
+    expect(index).toContain("-> { ok: boolean }");
   });
 
   it("bounds the model-visible native tool index", () => {
@@ -971,6 +1004,36 @@ describe("Code Mode", () => {
     expect(details.output).toEqual([{ type: "text", text: "created" }]);
     expect(details.telemetry).toMatchObject({ searchCount: 1, describeCount: 0, callCount: 1 });
     expect(ticket.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns ordinary read content through tools.callValue", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const read = createOpenClawReadTool(
+      createReadTool("/workspace", {
+        operations: {
+          access: async () => {},
+          detectImageMimeType: async () => null,
+          readFile: async () => Buffer.from("ordinary file content"),
+        },
+      }) as unknown as Parameters<typeof createOpenClawReadTool>[0],
+    );
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, read],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = await runUntilCompleted({
+      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
+      code: `return await tools.callValue("openclaw:core:read", { path: "notes.txt" });`,
+    });
+
+    expect(details.status).toBe("completed");
+    expect(details.value).toEqual({ kind: "text", content: "ordinary file content" });
   });
 
   it("resolves sequential bridge tool calls inline within one exec instead of a wait per call", async () => {

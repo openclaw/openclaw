@@ -7,7 +7,7 @@ import {
   type SimpleStreamOptions,
   type StreamFn,
   type Usage,
-} from "../../../../llm-core/src/index.js";
+} from "@openclaw/llm-core";
 import { resolveAgentReasoningOption } from "../../reasoning.js";
 import {
   type AgentCoreCompletionRuntimeDeps,

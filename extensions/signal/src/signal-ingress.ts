@@ -42,7 +42,7 @@ export type SignalIngressLifecycle = {
   onAdopted: () => void | Promise<void>;
   onDeferred: () => void;
   onAdoptionFinalizing: () => void;
-  onAbandoned: () => void;
+  onAbandoned: () => void | Promise<void>;
 };
 
 type SignalIngressDispatchResult =
@@ -152,14 +152,6 @@ function inspectSignalIngressEvent(event: SignalSseEvent): SignalIngressEventFac
   };
 }
 
-function resolveSignalIngressEventId(event: SignalSseEvent): string | null {
-  return inspectSignalIngressEvent(event)?.eventId ?? null;
-}
-
-function resolveSignalIngressLaneKey(event: SignalSseEvent): string | null {
-  return inspectSignalIngressEvent(event)?.laneKey ?? null;
-}
-
 type SignalIngressEnqueueResult =
   | Awaited<ReturnType<ChannelIngressQueue<SignalIngressPayload>["enqueue"]>>
   | { kind: "ignored" };
@@ -230,17 +222,21 @@ export type SignalIngressMonitor = {
 /** Open the account queue, recover it, and keep newly appended rows draining. */
 export async function startSignalIngressMonitor(params: {
   accountId: string;
+  queue?: ChannelIngressQueue<SignalIngressPayload>;
   dispatch: SignalIngressDispatch;
   runtime: Pick<RuntimeEnv, "error" | "log">;
   runTrackedTask: (task: () => Promise<void>) => void;
 }): Promise<SignalIngressMonitor> {
-  const pluginRuntime = getOptionalSignalRuntime();
-  if (!pluginRuntime) {
-    throw new Error("Signal runtime not initialized for durable ingress");
+  let queue = params.queue;
+  if (!queue) {
+    const pluginRuntime = getOptionalSignalRuntime();
+    if (!pluginRuntime) {
+      throw new Error("Signal runtime not initialized for durable ingress");
+    }
+    queue = pluginRuntime.state.openChannelIngressQueue<SignalIngressPayload>({
+      accountId: params.accountId,
+    });
   }
-  const queue = pluginRuntime.state.openChannelIngressQueue<SignalIngressPayload>({
-    accountId: params.accountId,
-  });
   const drain = createSignalIngressDrain({
     queue,
     dispatch: params.dispatch,
@@ -295,14 +291,5 @@ export async function startSignalIngressMonitor(params: {
       await drainPass?.catch(() => undefined);
       drain.dispose();
     },
-  };
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.signalIngressTestApi")] = {
-    createSignalIngressDrain,
-    enqueueSignalIngressEvent,
-    resolveSignalIngressEventId,
-    resolveSignalIngressLaneKey,
   };
 }

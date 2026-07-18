@@ -1559,6 +1559,64 @@ describe("Claude session catalog", () => {
     }
   });
 
+  it("publishes a paired-node page that finishes after the fail-soft response", async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveInvoke!: (value: unknown) => void;
+      const invokeResult = new Promise<unknown>((resolve) => {
+        resolveInvoke = resolve;
+      });
+      const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async () => await invokeResult);
+      const provider = captureCatalogProvider({
+        nodes: {
+          list: vi.fn().mockResolvedValue({
+            nodes: [
+              {
+                nodeId: "slow-node",
+                displayName: "Slow node",
+                connected: true,
+                commands: [CLAUDE_SESSIONS_LIST_COMMAND],
+              },
+            ],
+          }),
+          invoke,
+        },
+      } as unknown as PluginRuntime);
+      const onHost = vi.fn();
+      const pending = provider.list({ hostIds: ["node:slow-node"], onHost });
+
+      await vi.advanceTimersByTimeAsync(8_000);
+      await expect(pending).resolves.toEqual([
+        expect.objectContaining({ error: expect.objectContaining({ code: "NODE_INVOKE_FAILED" }) }),
+      ]);
+      expect(onHost).not.toHaveBeenCalled();
+
+      resolveInvoke({
+        payloadJSON: JSON.stringify({
+          sessions: [
+            {
+              threadId: "late-thread",
+              status: "stored",
+              source: "claude-cli",
+              modelProvider: "anthropic",
+              archived: false,
+            },
+          ],
+        }),
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(onHost).toHaveBeenCalledWith(
+        expect.objectContaining({
+          hostId: "node:slow-node",
+          sessions: [expect.objectContaining({ threadId: "late-thread" })],
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("starts paired-node discovery while the local catalog is still reading", async () => {
     const home = await createHome();
     process.env.HOME = home;
