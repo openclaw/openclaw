@@ -16,7 +16,7 @@ function bodyLessResponse(text: string): Response {
   const encoder = new TextEncoder();
   return {
     body: null,
-    text: async () => text,
+    arrayBuffer: async () => encoded.buffer.slice(0, encoded.byteLength),
     arrayBuffer: async () => encoder.encode(text).buffer as ArrayBuffer,
   } as unknown as Response;
 }
