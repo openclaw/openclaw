@@ -86,12 +86,12 @@ export async function loadFreshIMessageReplyCacheForTest(options?: {
     state: {
       resolveStateDir: () => imessageTestEnv.OPENCLAW_STATE_DIR,
       openChannelIngressQueue: (
-        options?: Omit<Parameters<typeof createChannelIngressQueueForTests>[0], "channelId">,
+        queueOptions?: Omit<Parameters<typeof createChannelIngressQueueForTests>[0], "channelId">,
       ) =>
         createChannelIngressQueueForTests({
-          ...options,
+          ...queueOptions,
           channelId: "imessage",
-          stateDir: options?.stateDir ?? imessageTestEnv.OPENCLAW_STATE_DIR,
+          stateDir: queueOptions?.stateDir ?? imessageTestEnv.OPENCLAW_STATE_DIR,
         }),
       openKeyedStore: ((storeOptions) =>
         createPluginStateKeyedStoreForTests("imessage", {

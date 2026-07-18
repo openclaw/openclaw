@@ -259,9 +259,12 @@ export function createIMessageDurableIngress(options: {
           if (lifecycle.abortSignal.aborted) {
             throw lifecycle.abortSignal.reason;
           }
-          return await options.dispatch(message, lifecycle, record.payload.receivedAt, {
-            ...(record.payload.catchup ? { catchup: true } : {}),
-          });
+          return await options.dispatch(
+            message,
+            lifecycle,
+            record.payload.receivedAt,
+            record.payload.catchup ? { catchup: true } : {},
+          );
         }),
     });
     return drain;

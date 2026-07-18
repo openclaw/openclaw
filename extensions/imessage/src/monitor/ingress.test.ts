@@ -222,9 +222,9 @@ describe("iMessage durable ingress", () => {
       const ingress = createIMessageDurableIngress({
         accountId: "default",
         queue,
-        dispatch: vi.fn(async (_message, lifecycle, _receivedAt, provenance) => {
+        dispatch: vi.fn(async (_message, claimLifecycle, _receivedAt, provenance) => {
           provenances.push(provenance);
-          await lifecycle.onAdopted();
+          await claimLifecycle.onAdopted();
         }),
         runtime: runtime(),
       });

@@ -1464,11 +1464,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         // recoverable via catchup either. The window is narrow (downtime
         // backlog + catchup enabled) and preferring it over releasable
         // suppressions keeps restart replay deterministic.
-        return;
+        return { kind: "completed" };
       }
       const repairedMessage = await repairMessageConversationAnchor(message);
       if (!repairedMessage) {
-        return;
+        return { kind: "completed" };
       }
       await inboundDebouncer.enqueue({
         message: repairedMessage,
