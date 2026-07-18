@@ -1013,6 +1013,23 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
       labelPrefix: "Long running session",
     }),
   ];
+  const archivedSessions = [
+    sessionRow("agent:main:archived-launch-notes", "Archived launch notes", baseTime - 86_400_000, {
+      archived: true,
+      totalTokens: 42_000,
+    }),
+    sessionRow(
+      "agent:main:discord:channel:archived-lounge",
+      "#archived-lounge",
+      baseTime - 172_800_000,
+      {
+        archived: true,
+        channel: "discord",
+        kind: "group",
+        totalTokens: 18_000,
+      },
+    ),
+  ];
   const telegramSessions = buildSessionRows({
     baseTime: baseTime - 30_000,
     count: TOTAL_TELEGRAM_SESSIONS,
@@ -1046,6 +1063,7 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
       // (raw persists, hash advances) because config.get ships a raw fixture.
       "config.get": configMocks.get,
       "config.schema": configMocks.schema,
+      "sessions.patch": { ok: true },
       "sessions.diff": buildSessionDiffMock(),
       "plugins.list": buildPluginCatalogMock(),
       "channels.status": buildChannelsStatusMock(baseTime),
@@ -1355,11 +1373,12 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
             ...searchPrefixes("claude-sonnet-4-6"),
             ...searchPrefixes("anthropic"),
           ]),
-          ...buildSessionListCases(sessions),
+          ...buildSessionListCases([...sessions, ...archivedSessions]),
         ],
       },
     },
     models: modelProviders.models,
+    sessionArchiveFiltering: true,
     sessionKey: "agent:main:main",
   };
 }

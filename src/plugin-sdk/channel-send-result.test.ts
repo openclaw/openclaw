@@ -36,6 +36,24 @@ describe("attachChannelToResult(s)", () => {
       { channel: "signal", messageId: "m2", timestamp: 2 },
     ]);
   });
+
+  it("keeps the explicitly attached channel authoritative", () => {
+    const providerResult = {
+      channel: "stale-provider-channel",
+      messageId: "m1",
+    };
+
+    expect(attachChannelToResult("configured-channel", providerResult)).toEqual({
+      channel: "configured-channel",
+      messageId: "m1",
+    });
+    expect(attachChannelToResults("configured-channel", [providerResult])).toEqual([
+      {
+        channel: "configured-channel",
+        messageId: "m1",
+      },
+    ]);
+  });
 });
 
 describe("buildChannelSendResult", () => {

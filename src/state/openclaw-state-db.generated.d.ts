@@ -401,14 +401,6 @@ export interface CurrentConversationBindings {
   updated_at: number;
 }
 
-export interface DatabaseVerifications {
-  error: string | null;
-  kind: string;
-  path: string;
-  result: string;
-  verified_at: number;
-}
-
 export interface DeliveryQueueEntries {
   account_id: string | null;
   channel: string | null;
@@ -1338,7 +1330,6 @@ export interface DB {
   config_health_entries: ConfigHealthEntries;
   cron_jobs: CronJobs;
   current_conversation_bindings: CurrentConversationBindings;
-  database_verifications: DatabaseVerifications;
   delivery_queue_entries: DeliveryQueueEntries;
   device_auth_tokens: DeviceAuthTokens;
   device_bootstrap_tokens: DeviceBootstrapTokens;

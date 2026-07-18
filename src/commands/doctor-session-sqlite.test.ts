@@ -25,10 +25,7 @@ import {
   readOpenClawDatabaseQuarantine,
   recordOpenClawDatabaseQuarantine,
 } from "../state/openclaw-quarantine-store.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   assertSafeSessionSqliteMigrationMove,
   createSessionSqliteMigrationFailureIssue,
@@ -618,17 +615,8 @@ describe("runDoctorSessionSqlite", () => {
     },
   );
 
-  it("clears agent quarantine and verification history after compaction", async () => {
+  it("clears agent quarantine after compaction", async () => {
     const { sqlitePath, store } = await createImportedStoreForCompaction();
-    const state = openOpenClawStateDatabase({ env: store.env });
-    state.db
-      .prepare(
-        `
-          INSERT INTO database_verifications (path, kind, verified_at, result, error)
-          VALUES (?, 'agent', 1, 'error', 'corrupt index')
-        `,
-      )
-      .run(sqlitePath);
     expect(
       recordOpenClawDatabaseQuarantine({
         env: store.env,
@@ -646,9 +634,6 @@ describe("runDoctorSessionSqlite", () => {
 
     expect(report.totals.issues).toBe(0);
     expect(readOpenClawDatabaseQuarantine(sqlitePath, { env: store.env })).toBeUndefined();
-    expect(
-      state.db.prepare("SELECT 1 FROM database_verifications WHERE path = ?").get(sqlitePath),
-    ).toBeUndefined();
     expect(openOpenClawAgentDatabase({ agentId: "main", env: store.env }).db.isOpen).toBe(true);
   });
 
