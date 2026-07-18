@@ -43,6 +43,7 @@ import {
   clearSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshotRevision,
+  hasActiveSecretsRuntimeSnapshotLineage,
   hasSameSecretReloadContract,
   setSecretsRuntimeSourceSnapshotIfCurrent,
   type PreparedSecretsRuntimeSnapshot,
@@ -2111,10 +2112,13 @@ export function startManagedGatewayConfigReloader(
             includeAuthStoreRefs: true,
           },
         );
-        if (
-          !previousRuntimeMetadata ||
-          getRuntimeConfigSnapshotMetadata()?.revision !== previousRuntimeMetadata.revision
-        ) {
+        if (!previousRuntimeMetadata || !transactionOwnership.isCurrent()) {
+          throw new GatewayConfigReloadSupersededError();
+        }
+        if (getRuntimeConfigSnapshotMetadata()?.revision !== previousRuntimeMetadata.revision) {
+          if (hasActiveSecretsRuntimeSnapshotLineage(previousSecretsRevision)) {
+            continue;
+          }
           throw new GatewayConfigReloadSupersededError();
         }
         if (

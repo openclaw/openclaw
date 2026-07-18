@@ -1,14 +1,12 @@
 // Gateway startup config loads, repairs, validates, and activates runtime config
 // plus secrets snapshots before the server exposes user-facing surfaces.
 import { isDeepStrictEqual } from "node:util";
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { applyConfigOverrides } from "../config/runtime-overrides.js";
 import type { GatewayAuthConfig, GatewayTailscaleConfig } from "../config/types.gateway.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { measureDiagnosticsTimelineSpan } from "../infra/diagnostics-timeline.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import { resolveAuthProfileSecretOwnerId } from "../secrets/runtime-auth-profile-owner.js";
 import {
   classifySecretResolutionErrorDegradations,
   isRetryableSecretDegradationReason,
@@ -20,6 +18,11 @@ import {
 import { prepareSecretsRuntimeFastPathSnapshot } from "../secrets/runtime-fast-path.js";
 import { registerProviderAuthRuntimeSnapshotActivationOwner } from "../secrets/runtime-provider-auth-activation.js";
 import {
+  listProviderAuthDegradedOwners,
+  resolvePreparedSecretsStateScope,
+  type SecretsStateScope,
+} from "../secrets/runtime-provider-auth-scope.js";
+import {
   activateSecretsRuntimeSnapshotState,
   graftActiveSecretsRuntimeAuthState,
   getActiveSecretsRuntimeSnapshot,
@@ -28,6 +31,7 @@ import {
   hasSameSecretReloadContract,
   hasCurrentAuthStoreCredentialsRevision,
 } from "../secrets/runtime-state.js";
+import { logRuntimeSecretWarnings } from "../secrets/runtime-warning-log.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
 import type { ChannelAutostartSuppression } from "./server-channels.js";
 import {
@@ -77,40 +81,6 @@ type DeferredSecretsStateTransition = {
   reason: RuntimeSecretsActivationParams["reason"];
   activationScope: SecretsStateScope;
 } & ({ kind: "degraded" } | { kind: "recovered"; degradationGeneration: number });
-
-type SecretsStateScope = "full" | "provider-auth";
-
-function listProviderAuthDegradedOwners(
-  snapshot: PreparedRuntimeSecretsSnapshot,
-): NonNullable<PreparedRuntimeSecretsSnapshot["degradedOwners"]> {
-  const modelProviderOwnerIds = new Set(
-    Object.keys(snapshot.sourceConfig.models?.providers ?? {}).map(
-      (providerId) => normalizeOptionalLowercaseString(providerId) ?? providerId,
-    ),
-  );
-  const authOwnerIds = new Set(
-    snapshot.authStores.flatMap(({ agentDir, store }) =>
-      Object.keys(store.profiles).map((profileId) =>
-        resolveAuthProfileSecretOwnerId({ agentDir, profileId }),
-      ),
-    ),
-  );
-  return (snapshot.degradedOwners ?? []).filter(
-    (owner) =>
-      (owner.ownerKind === "provider" && modelProviderOwnerIds.has(owner.ownerId)) ||
-      (owner.ownerKind === "account" && authOwnerIds.has(owner.ownerId)),
-  );
-}
-
-function resolvePreparedSecretsStateScope(
-  snapshot: PreparedRuntimeSecretsSnapshot,
-): SecretsStateScope {
-  const degradedOwners = snapshot.degradedOwners ?? [];
-  return degradedOwners.length > 0 &&
-    listProviderAuthDegradedOwners(snapshot).length === degradedOwners.length
-    ? "provider-auth"
-    : "full";
-}
 
 /** Gateway startup hook that prepares secrets and optionally activates the prepared snapshot. */
 export type ActivateRuntimeSecrets = ((
@@ -319,9 +289,14 @@ export function createRuntimeSecretsActivator(params: {
       options?.onActivated?.();
       logGatewayAuthSurfaceDiagnostics(prepared, params.logSecrets);
     }
-    for (const warning of prepared.warnings) {
-      params.logSecrets.warn(`[${warning.code}] ${warning.message}`);
-    }
+    logRuntimeSecretWarnings({
+      snapshot: prepared,
+      log: params.logSecrets,
+      ownerUnavailable:
+        activationParams.activate && activationParams.deferStatePublication !== true
+          ? "include"
+          : "exclude",
+    });
     const statePrepared = options?.stateDegradedOwners
       ? { ...prepared, degradedOwners: options.stateDegradedOwners }
       : prepared;
@@ -610,11 +585,17 @@ export function createRuntimeSecretsActivator(params: {
     if (!activeSnapshot) {
       return;
     }
+    logRuntimeSecretWarnings({
+      snapshot: activeSnapshot,
+      log: params.logSecrets,
+      ownerUnavailable: "active-only",
+    });
     if ((activeSnapshot.degradedOwners?.length ?? 0) > 0) {
+      const activeScope = resolvePreparedSecretsStateScope(activeSnapshot);
       publishDegradation(
         activeSnapshot,
         transition.reason,
-        resolvePreparedSecretsStateScope(activeSnapshot),
+        activeScope,
         transition.activationScope,
       );
       return;
@@ -627,11 +608,9 @@ export function createRuntimeSecretsActivator(params: {
     ) {
       return;
     }
-    publishRecovery(
-      activeSnapshot.config,
-      transition.kind === "recovered" ? transition.degradationGeneration : undefined,
-      transition.activationScope,
-    );
+    const generation =
+      transition.kind === "recovered" ? transition.degradationGeneration : undefined;
+    publishRecovery(activeSnapshot.config, generation, transition.activationScope);
   });
 
   return activateRuntimeSecrets;

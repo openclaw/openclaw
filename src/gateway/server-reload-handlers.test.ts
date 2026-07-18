@@ -46,6 +46,7 @@ import { createEmptyRuntimeWebToolsMetadata } from "../secrets/runtime-fast-path
 import { classifySecretOwnerDegradationState } from "../secrets/runtime-owner-assignments.js";
 import {
   activateSecretsRuntimeSnapshot,
+  activateSecretsRuntimeSnapshotIfCurrent,
   clearSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshotRevision,
@@ -5262,7 +5263,13 @@ describe("gateway Gmail hot reload handlers", () => {
       vi.fn(async (config: OpenClawConfig) => {
         preparationCount += 1;
         if (preparationCount === 1) {
-          activateSecretsRuntimeSnapshot(refreshedSnapshot);
+          expect(
+            activateSecretsRuntimeSnapshotIfCurrent(
+              refreshedSnapshot,
+              getActiveSecretsRuntimeSnapshotRevision(),
+              { preserveActivationLineage: true },
+            ),
+          ).toBe(true);
         }
         return {
           sourceConfig: config,

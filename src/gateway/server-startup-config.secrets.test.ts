@@ -781,6 +781,13 @@ describe("gateway startup config secret preflight", () => {
     const initial = preparedSnapshot(gatewayTokenConfig({}));
     const degradedSnapshot = (token: string): PreparedSecretsRuntimeSnapshot => ({
       ...preparedSnapshotWithGatewayToken(initial.sourceConfig, token),
+      warnings: [
+        {
+          code: "SECRETS_OWNER_UNAVAILABLE",
+          path: "models.providers.openai.apiKey",
+          message: "Secret owner provider:openai is using last-known-good.",
+        },
+      ],
       degradedOwners: [
         {
           ownerKind: "provider",
@@ -837,7 +844,10 @@ describe("gateway startup config secret preflight", () => {
       "Secret resolution degraded one or more owners; healthy owners were refreshed.",
       committedCandidate.config,
     );
-    expect(logSecrets.warn).toHaveBeenCalledOnce();
+    expect(logSecrets.warn).toHaveBeenCalledTimes(2);
+    expect(logSecrets.warn).toHaveBeenCalledWith(
+      "[SECRETS_OWNER_UNAVAILABLE] Secret owner provider:openai is using last-known-good.",
+    );
     expect(logSecrets.warn).toHaveBeenCalledWith(
       expect.stringContaining("[SECRETS_DEGRADED] stale provider:openai"),
       expect.objectContaining({ event: "secrets.degraded", state: "stale" }),
