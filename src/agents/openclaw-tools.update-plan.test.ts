@@ -67,6 +67,21 @@ describe("openclaw-tools update_plan gating", () => {
     ).toEqual([]);
   });
 
+  it("lets group:core authorize transcripts only when the feature is enabled", () => {
+    const disabledTools = createFastToolNames({
+      config: { tools: { allow: ["group:core"] } } as OpenClawConfig,
+    });
+    const enabledTools = createFastToolNames({
+      config: {
+        tools: { allow: ["group:core"] },
+        transcripts: { enabled: true },
+      } as OpenClawConfig,
+    });
+
+    expect(disabledTools).not.toContain("transcripts");
+    expect(enabledTools).toContain("transcripts");
+  });
+
   it("enables update_plan by default", () => {
     expectUpdatePlanEnabled({ config: {} as OpenClawConfig }, true);
   });

@@ -93,6 +93,7 @@ Available groups:
 
 | Group              | Tools                                                                                                                                                      |
 | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `group:core`       | all shipped core tools (excludes plugin-owned tools)                                                                                                       |
 | `group:runtime`    | `exec`, `process`, `code_execution` (`bash` is accepted as an alias for `exec`)                                                                            |
 | `group:fs`         | `read`, `write`, `edit`, `apply_patch`                                                                                                                     |
 | `group:sessions`   | `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`, `sessions_yield`, `subagents`, `session_status`                                    |

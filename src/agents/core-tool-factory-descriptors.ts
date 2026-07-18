@@ -61,6 +61,10 @@ const CORE_TOOL_FACTORY_FAMILY_BY_NAME = new Map<string, CoreToolFactoryFamily>(
   CORE_TOOL_FACTORY_DESCRIPTORS.map(({ name, family }) => [name, family]),
 );
 
+export function listCoreToolFactoryNames(): string[] {
+  return CORE_TOOL_FACTORY_DESCRIPTORS.map(({ name }) => name);
+}
+
 export type OpenClawCodingToolConstructionPlan = {
   includeBaseCodingTools: boolean;
   includeShellTools: boolean;

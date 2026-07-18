@@ -1662,6 +1662,44 @@ describe("createOpenClawCodingTools", () => {
     expect(names.has("browser")).toBe(false);
   });
 
+  it("expands group:core to all available core tools in global tool policy", () => {
+    const tools = createOpenClawCodingTools({
+      config: { tools: { allow: ["group:core"] } },
+      senderIsOwner: true,
+    });
+    const names = new Set(tools.map((tool) => tool.name));
+    expect(names.has("read")).toBe(true);
+    expect(names.has("exec")).toBe(true);
+    expect(names.has("message")).toBe(true);
+    expect(names.has("cron")).toBe(true);
+    expect(names.has("pdf")).toBe(true);
+    expect(names.has("browser")).toBe(false);
+    expect(names.has("canvas")).toBe(false);
+  });
+
+  it("does not fabricate gated core tools that are unavailable", () => {
+    const tools = createOpenClawCodingTools({
+      config: { tools: { allow: ["group:core"] } },
+      senderIsOwner: true,
+    });
+    const names = new Set(tools.map((tool) => tool.name));
+    expect(names.has("read")).toBe(true);
+    expect(names.has("transcripts")).toBe(false);
+    expect(names.has("spawn_task")).toBe(false);
+    expect(names.has("dismiss_task")).toBe(false);
+  });
+
+  it("applies deny entries after group:core expansion", () => {
+    const tools = createOpenClawCodingTools({
+      config: { tools: { allow: ["group:core"], deny: ["exec", "pdf"] } },
+      senderIsOwner: true,
+    });
+    const names = new Set(tools.map((tool) => tool.name));
+    expect(names.has("read")).toBe(true);
+    expect(names.has("exec")).toBe(false);
+    expect(names.has("pdf")).toBe(false);
+  });
+
   it("expands group shorthands in global tool deny policy", () => {
     const tools = createOpenClawCodingTools({
       config: { tools: { deny: ["group:fs"] } },
