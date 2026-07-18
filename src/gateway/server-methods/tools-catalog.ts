@@ -50,10 +50,10 @@ type ToolCatalogGroup = {
   tools: ToolCatalogEntry[];
 };
 
-function buildCoreGroups(): ToolCatalogGroup[] {
+function buildCoreGroups(params: { cfg: OpenClawConfig; agentId: string }): ToolCatalogGroup[] {
   // Core catalog rows come from static tool sections so profile chips remain
   // stable even before any runtime agent session exists.
-  return listCoreToolSections().map((section) => ({
+  return listCoreToolSections({ config: params.cfg, agentId: params.agentId }).map((section) => ({
     id: section.id,
     label: section.label,
     source: "core",
@@ -201,7 +201,7 @@ function buildToolsCatalogResult(params: {
 }): ToolsCatalogResult {
   const agentId = normalizeOptionalString(params.agentId) || resolveDefaultAgentId(params.cfg);
   const includePlugins = params.includePlugins !== false;
-  const groups = buildCoreGroups();
+  const groups = buildCoreGroups({ cfg: params.cfg, agentId });
   if (includePlugins) {
     const existingToolNames = new Set(
       groups.flatMap((group) => group.tools.map((tool) => tool.id)),

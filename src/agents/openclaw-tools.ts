@@ -43,9 +43,16 @@ import {
 } from "./openclaw-tools.registration.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
+import {
+  getLatestSubagentRunByChildSessionKey,
+  getSubagentRunByRunId,
+  recordSwarmStructuredOutput,
+} from "./subagent-registry.js";
+import { resolveSwarmConfig } from "./swarm-config.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
 import { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
 import { createAgentsListTool } from "./tools/agents-list-tool.js";
+import { createAgentsWaitTool } from "./tools/agents-wait-tool.js";
 import { createAskUserTool } from "./tools/ask-user-tool.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { createComputerTool } from "./tools/computer-tool.js";
@@ -82,6 +89,7 @@ import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createSessionsTool } from "./tools/sessions-tool.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 import { createConfiguredSkillWorkshopTool } from "./tools/skill-workshop-tool-factory.js";
+import { createStructuredOutputTool } from "./tools/structured-output-tool.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
 import { createTaskSuggestionTools } from "./tools/task-suggestion-tools.js";
 import { createTerminalTool } from "./tools/terminal-tool.js";
@@ -191,6 +199,8 @@ export function createOpenClawTools(
     inboundEventKind?: InboundEventKind;
     /** If true, omit the message tool from the tool list. */
     disableMessageTool?: boolean;
+    swarmCollector?: boolean;
+    swarmOutputSchema?: Record<string, unknown>;
     /** If true, include the heartbeat response tool for structured heartbeat outcomes. */
     enableHeartbeatTool?: boolean;
     /** If true, skip plugin tool resolution and return only shipped core tools. */
@@ -245,6 +255,7 @@ export function createOpenClawTools(
     config: resolvedConfig,
     agentId: options?.requesterAgentIdOverride,
   });
+  const effectiveRequesterAgentId = sessionAgentId;
   // Fall back to the session agent workspace so plugin loading stays workspace-stable
   // even when a caller forgets to thread workspaceDir explicitly.
   const inferredWorkspaceDir =
@@ -592,6 +603,23 @@ export function createOpenClawTools(
           }),
         ]),
     ...(includeUpdatePlanTool ? [createUpdatePlanTool()] : []),
+    ...(options?.swarmCollector && options.runId && options.swarmOutputSchema
+      ? (() => {
+          const childSessionKey = options.runSessionKey ?? options.agentSessionKey;
+          const collectorEntry =
+            getSubagentRunByRunId(options.runId) ??
+            (childSessionKey ? getLatestSubagentRunByChildSessionKey(childSessionKey) : undefined);
+          return [
+            createStructuredOutputTool({
+              runId: options.runId,
+              schema: options.swarmOutputSchema,
+              initialState: collectorEntry?.structuredOutput,
+              onStateChange: (state) =>
+                recordSwarmStructuredOutput({ runId: options.runId, childSessionKey }, state),
+            }),
+          ];
+        })()
+      : []),
     ...(includeAskUserTool
       ? [
           createAskUserTool({
@@ -672,10 +700,22 @@ export function createOpenClawTools(
             agentMemberRoleIds: options?.agentMemberRoleIds,
             sandboxed: options?.sandboxed,
             config: resolvedConfig,
-            requesterAgentIdOverride: options?.requesterAgentIdOverride,
+            requesterAgentIdOverride: effectiveRequesterAgentId,
+            requesterRunId: options?.runId,
+            swarmCollector: options?.swarmCollector,
             workspaceDir: spawnWorkspaceDir,
             inheritedToolAllowlist: options?.inheritedToolAllowlist,
             inheritedToolDenylist: options?.inheritedToolDenylist,
+          }),
+        ]
+      : []),
+    ...(resolveSwarmConfig(resolvedConfig, effectiveRequesterAgentId).enabled
+      ? [
+          createAgentsWaitTool({
+            agentSessionKey: options?.agentSessionKey,
+            runSessionKey: options?.runSessionKey,
+            agentId: effectiveRequesterAgentId,
+            config: resolvedConfig,
           }),
         ]
       : []),
