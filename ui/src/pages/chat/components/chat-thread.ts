@@ -25,6 +25,7 @@ import {
 } from "../../../components/markdown.ts";
 import { McpAppUnmountGate } from "../../../components/mcp-app-unmount.ts";
 import { i18n, t } from "../../../i18n/index.ts";
+import type { BoardProvider } from "../../../lib/board/provider.ts";
 import type {
   ChatQueueItem,
   ChatStreamSegment,
@@ -97,6 +98,7 @@ type ChatThreadState = {
 type ChatThreadProps = {
   paneId: string;
   sessionKey: string;
+  boardProvider?: BoardProvider;
   announceTranscript?: boolean;
   loading: boolean;
   historyPagination?: {
@@ -1137,6 +1139,7 @@ function renderChatThreadContents(
       onOpenSidebar: props.onOpenSidebar,
       onOpenWorkspaceFile: props.onOpenWorkspaceFile,
       sessionKey: props.sessionKey,
+      boardProvider: props.boardProvider,
       agentId: props.fullMessageAgentId,
       showReasoning,
       showToolCalls: props.showToolCalls,
@@ -1256,6 +1259,8 @@ function renderChatThreadContents(
     getToolTitlesVersion(),
     props.sessionKey,
     props.gatewayUrl,
+    props.boardProvider,
+    props.boardProvider?.snapshot$.value.revision,
     props.fullMessageAgentId,
     showReasoning,
     props.showToolCalls,

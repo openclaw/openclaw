@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   boardExists,
   boardProviderForSession,
+  canvasWidgetNameForDocument,
+  GatewayBoardProvider,
   type BoardCommandEvent,
   type BoardProvider,
 } from "./provider.ts";
@@ -21,10 +23,25 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
 describe("board providers", () => {
+  it("keeps generated canvas widget names distinct after normalization and truncation", () => {
+    const longPrefix = "x".repeat(80);
+    const names = [
+      canvasWidgetNameForDocument("Foo"),
+      canvasWidgetNameForDocument("foo"),
+      canvasWidgetNameForDocument(`${longPrefix}-one`),
+      canvasWidgetNameForDocument(`${longPrefix}-two`),
+    ];
+
+    expect(new Set(names).size).toBe(names.length);
+    expect(names.every((name) => name.length <= 64)).toBe(true);
+    expect(names.every((name) => /^[a-z0-9][a-z0-9._-]*$/u.test(name))).toBe(true);
+  });
+
   it("keeps the null provider chat-only", () => {
     mockLocation.search = "";
     const provider = boardProviderForSession("agent:main:plain");
@@ -36,6 +53,14 @@ describe("board providers", () => {
       tabs: [],
       widgets: [],
     });
+  });
+
+  it("keeps older gateways without board methods on the null provider", () => {
+    mockLocation.search = "";
+    const provider = boardProviderForSession("agent:main:legacy", {} as never, false);
+
+    expect(provider.canPinWidgets).toBe(false);
+    expect(boardExists(provider.snapshot$.value)).toBe(false);
   });
 
   it("provides two mock tabs with mixed widget sizes", () => {
@@ -149,5 +174,416 @@ describe("board providers", () => {
     vi.stubGlobal("location", { search: "?mockBoard=1" });
 
     expect(boardExists(boardProviderForSession("agent:work:primary").snapshot$.value)).toBe(true);
+  });
+
+  it("refetches changed boards while reloading only the named widget frame", async () => {
+    let listener: ((event: { event: string; payload: unknown }) => void) | undefined;
+    const snapshots = [
+      {
+        sessionKey: "agent:main:live",
+        revision: 1,
+        tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" as const }],
+        widgets: [
+          {
+            name: "alpha",
+            tabId: "main",
+            contentKind: "html" as const,
+            sizeW: 6,
+            sizeH: 4,
+            position: 0,
+            grantState: "none" as const,
+            revision: 1,
+            frameUrl: "/alpha-old",
+          },
+          {
+            name: "beta",
+            tabId: "main",
+            contentKind: "html" as const,
+            sizeW: 6,
+            sizeH: 4,
+            position: 1,
+            grantState: "none" as const,
+            revision: 1,
+            frameUrl: "/beta-old",
+          },
+        ],
+      },
+      {
+        sessionKey: "agent:main:live",
+        revision: 2,
+        tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" as const }],
+        widgets: [
+          {
+            name: "alpha",
+            tabId: "main",
+            contentKind: "html" as const,
+            sizeW: 6,
+            sizeH: 4,
+            position: 0,
+            grantState: "none" as const,
+            revision: 2,
+            frameUrl: "/alpha-new",
+          },
+          {
+            name: "beta",
+            tabId: "main",
+            contentKind: "html" as const,
+            sizeW: 6,
+            sizeH: 4,
+            position: 1,
+            grantState: "none" as const,
+            revision: 1,
+            frameUrl: "/beta-reminted-but-preserved",
+          },
+        ],
+      },
+      {
+        sessionKey: "agent:main:live",
+        revision: 2,
+        tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" as const }],
+        widgets: [
+          {
+            name: "alpha",
+            tabId: "main",
+            contentKind: "html" as const,
+            sizeW: 6,
+            sizeH: 4,
+            position: 0,
+            grantState: "none" as const,
+            revision: 2,
+            frameUrl: "/alpha-reminted",
+          },
+          {
+            name: "beta",
+            tabId: "main",
+            contentKind: "html" as const,
+            sizeW: 6,
+            sizeH: 4,
+            position: 1,
+            grantState: "none" as const,
+            revision: 1,
+            frameUrl: "/beta-reminted-again",
+          },
+        ],
+      },
+    ];
+    const request = vi.fn(async (method: string) => {
+      expect(method).toBe("board.get");
+      return snapshots.shift();
+    });
+    const provider = new GatewayBoardProvider("agent:main:live", {
+      request: request as never,
+      addEventListener: (next) => {
+        listener = next as typeof listener;
+        return () => {};
+      },
+    });
+    await vi.waitFor(() => expect(provider.snapshot$.value.revision).toBe(1));
+
+    listener?.({
+      event: "board.changed",
+      payload: { sessionKey: "agent:main:live", revision: 2, widget: "alpha" },
+    });
+    await vi.waitFor(() => expect(provider.snapshot$.value.revision).toBe(2));
+
+    expect(provider.widgetFrameUrl("alpha", 2)).toBe("/alpha-new");
+    expect(provider.widgetFrameUrl("beta", 1)).toBe("/beta-old");
+
+    await provider.refreshWidgetFrame("alpha");
+    expect(provider.widgetFrameUrl("alpha", 2)).toBe("/alpha-reminted");
+    expect(provider.widgetFrameUrl("beta", 1)).toBe("/beta-old");
+  });
+
+  it("does not publish an activation snapshot older than a completed mutation", async () => {
+    let resolveActivation: ((snapshot: BoardProvider["snapshot$"]["value"]) => void) | undefined;
+    const stale = {
+      sessionKey: "agent:main:stale",
+      revision: 1,
+      tabs: [],
+      widgets: [],
+    };
+    const current = {
+      sessionKey: "agent:main:stale",
+      revision: 2,
+      tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" as const }],
+      widgets: [],
+    };
+    const request = vi.fn((method: string) => {
+      if (method === "board.get") {
+        return new Promise<BoardProvider["snapshot$"]["value"]>((resolve) => {
+          resolveActivation = resolve;
+        });
+      }
+      return Promise.resolve(current);
+    });
+    const provider = new GatewayBoardProvider("agent:main:stale", {
+      request: request as never,
+      addEventListener: () => () => {},
+    });
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("board.get", expect.anything()));
+
+    await provider.pinWidget({ docId: "cv-current" });
+    expect(provider.snapshot$.value.revision).toBe(2);
+    resolveActivation?.(stale);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+
+    expect(provider.snapshot$.value).toEqual(current);
+  });
+
+  it("discards mutation responses from a replaced gateway client", async () => {
+    let resolveMutation: ((snapshot: BoardProvider["snapshot$"]["value"]) => void) | undefined;
+    const oldClient = {
+      request: vi.fn(
+        () =>
+          new Promise<BoardProvider["snapshot$"]["value"]>((resolve) => {
+            resolveMutation = resolve;
+          }),
+      ) as never,
+      addEventListener: () => () => {},
+    };
+    const current = {
+      sessionKey: "agent:main:replacement",
+      revision: 3,
+      tabs: [],
+      widgets: [],
+    };
+    const newClient = {
+      request: vi.fn(async () => current) as never,
+      addEventListener: () => () => {},
+    };
+    const provider = new GatewayBoardProvider("agent:main:replacement", oldClient, false);
+    const mutation = provider.applyOps([]);
+
+    provider.attachClient(newClient, true);
+    await vi.waitFor(() => expect(provider.snapshot$.value).toEqual(current));
+    resolveMutation?.({ ...current, revision: 4 });
+    await mutation;
+
+    expect(provider.snapshot$.value).toEqual(current);
+  });
+
+  it("clears an old gateway snapshot before accepting a lower revision", async () => {
+    const oldSnapshot = {
+      sessionKey: "agent:main:gateway-swap",
+      revision: 5,
+      tabs: [{ tabId: "main", title: "Old", position: 0, chatDock: "right" as const }],
+      widgets: [],
+    };
+    const newSnapshot = {
+      sessionKey: "agent:main:gateway-swap",
+      revision: 1,
+      tabs: [{ tabId: "main", title: "New", position: 0, chatDock: "left" as const }],
+      widgets: [],
+    };
+    const oldClient = {
+      request: vi.fn(async () => oldSnapshot) as never,
+      addEventListener: () => () => {},
+    };
+    let resolveNewSnapshot: ((snapshot: BoardProvider["snapshot$"]["value"]) => void) | undefined;
+    const newClient = {
+      request: vi.fn(
+        () =>
+          new Promise<BoardProvider["snapshot$"]["value"]>((resolve) => {
+            resolveNewSnapshot = resolve;
+          }),
+      ) as never,
+      addEventListener: () => () => {},
+    };
+    const provider = new GatewayBoardProvider("agent:main:gateway-swap", oldClient);
+    await vi.waitFor(() => expect(provider.snapshot$.value).toEqual(oldSnapshot));
+
+    provider.attachClient(newClient, true);
+    expect(provider.snapshot$.value).toEqual({
+      sessionKey: "agent:main:gateway-swap",
+      revision: 0,
+      tabs: [],
+      widgets: [],
+    });
+    resolveNewSnapshot?.(newSnapshot);
+    await vi.waitFor(() => expect(provider.snapshot$.value).toEqual(newSnapshot));
+  });
+
+  it("retries a transient activation failure", async () => {
+    vi.useFakeTimers();
+    const snapshot = {
+      sessionKey: "agent:main:retry",
+      revision: 1,
+      tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" as const }],
+      widgets: [],
+    };
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("temporarily unavailable"))
+      .mockResolvedValue(snapshot);
+    const provider = new GatewayBoardProvider("agent:main:retry", {
+      request: request as never,
+      addEventListener: () => () => {},
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(request).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(provider.snapshot$.value).toEqual(snapshot);
+  });
+
+  it("reactivates the same gateway client after reconnect", async () => {
+    const snapshot = {
+      sessionKey: "agent:main:reconnect",
+      revision: 1,
+      tabs: [],
+      widgets: [],
+    };
+    const request = vi.fn(async () => snapshot);
+    const client = {
+      request: request as never,
+      addEventListener: () => () => {},
+    };
+    const provider = new GatewayBoardProvider("agent:main:reconnect", client, false);
+
+    expect(request).not.toHaveBeenCalled();
+    provider.attachClient(client, true);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    expect(provider.snapshot$.value).toEqual(snapshot);
+  });
+
+  it("wakes a pending refresh backoff when the gateway reconnects", async () => {
+    vi.useFakeTimers();
+    const snapshot = {
+      sessionKey: "agent:main:reconnect-backoff",
+      revision: 1,
+      tabs: [],
+      widgets: [],
+    };
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("temporarily unavailable"))
+      .mockResolvedValue(snapshot);
+    const client = {
+      request: request as never,
+      addEventListener: () => () => {},
+    };
+    const provider = new GatewayBoardProvider("agent:main:reconnect-backoff", client);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(request).toHaveBeenCalledOnce();
+
+    provider.attachClient(client, false);
+    provider.attachClient(client, true);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(provider.snapshot$.value).toEqual(snapshot);
+  });
+
+  it("retries a transient board.changed refresh failure", async () => {
+    vi.useFakeTimers();
+    let listener: ((event: { event: string; payload: unknown }) => void) | undefined;
+    const initial = {
+      sessionKey: "agent:main:event-retry",
+      revision: 1,
+      tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" as const }],
+      widgets: [],
+    };
+    const changed = { ...initial, revision: 2 };
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(initial)
+      .mockRejectedValueOnce(new Error("temporarily unavailable"))
+      .mockResolvedValue(changed);
+    const provider = new GatewayBoardProvider("agent:main:event-retry", {
+      request: request as never,
+      addEventListener: (next) => {
+        listener = next as typeof listener;
+        return () => {};
+      },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    listener?.({
+      event: "board.changed",
+      payload: { sessionKey: "agent:main:event-retry", revision: 2 },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(provider.snapshot$.value.revision).toBe(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(provider.snapshot$.value.revision).toBe(2);
+  });
+
+  it("passes mutations through and surfaces board commands", async () => {
+    let listener: ((event: { event: string; payload: unknown }) => void) | undefined;
+    const empty = { sessionKey: "agent:main:live", revision: 0, tabs: [], widgets: [] };
+    const pinned = {
+      sessionKey: "agent:main:live",
+      revision: 1,
+      tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" as const }],
+      widgets: [
+        {
+          name: "canvas-cv-1",
+          tabId: "main",
+          contentKind: "html" as const,
+          sizeW: 6,
+          sizeH: 4,
+          position: 0,
+          grantState: "none" as const,
+          revision: 1,
+          frameUrl: "/frame",
+        },
+      ],
+    };
+    let getCount = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "board.get") {
+        getCount += 1;
+        return getCount === 1 ? empty : pinned;
+      }
+      return pinned;
+    });
+    const provider = new GatewayBoardProvider("agent:main:live", {
+      request: request as never,
+      addEventListener: (next) => {
+        listener = next as typeof listener;
+        return () => {};
+      },
+    });
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("board.get", expect.anything()));
+    const command = vi.fn();
+    provider.events.subscribe(command);
+
+    await provider.applyOps([{ kind: "tab_update", tabId: "main", chatDock: "left" }]);
+    await provider.grant("canvas-cv-1", "granted");
+    const longTitle = "Pinned ".repeat(20).trim();
+    await provider.pinWidget({ docId: "cv-1", title: longTitle });
+    listener?.({
+      event: "board.command",
+      payload: {
+        sessionKey: "agent:main:live",
+        command: { kind: "focus_tab", tabId: "main" },
+      },
+    });
+
+    expect(request).toHaveBeenCalledWith("board.update", {
+      sessionKey: "agent:main:live",
+      ops: [{ kind: "tab_update", tabId: "main", chatDock: "left" }],
+    });
+    expect(request).toHaveBeenCalledWith("board.widget.grant", {
+      sessionKey: "agent:main:live",
+      name: "canvas-cv-1",
+      decision: "granted",
+    });
+    expect(request).toHaveBeenCalledWith("board.widget.put", {
+      sessionKey: "agent:main:live",
+      name: "canvas-cv-1",
+      title: [...longTitle].slice(0, 80).join(""),
+      content: { kind: "canvas-doc", docId: "cv-1" },
+    });
+    expect(request.mock.calls.filter(([method]) => method === "board.get")).toHaveLength(1);
+    expect(provider.snapshot$.value).toEqual(pinned);
+    expect(command).toHaveBeenCalledWith({
+      sessionKey: "agent:main:live",
+      command: { kind: "focus_tab", tabId: "main" },
+    });
   });
 });

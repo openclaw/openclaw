@@ -102,6 +102,7 @@ async function mount(
 
 afterEach(() => {
   document.body.replaceChildren();
+  vi.unstubAllGlobals();
 });
 
 describe("openclaw-board-view", () => {
@@ -155,6 +156,101 @@ describe("openclaw-board-view", () => {
     expect(view.querySelector("iframe")).toBeNull();
     expect(view.querySelector(".board-widget__menu")).toBeNull();
     expect(view.querySelector(".board-widget__resize-handle")).toBeNull();
+  });
+
+  it("requests a fresh frame ticket after iframe errors or 401 loads", async () => {
+    const frameLoadFailed = vi.fn(async () => undefined);
+    const fetchMock = vi.fn(async () => new Response("expired", { status: 401 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const view = await mount({
+      callbacks: callbacks({ frameLoadFailed }),
+      snapshot: snapshot({ widgets: [boardWidget()] }),
+      widgetFrameUrl: () => "/__openclaw__/board/session/status/index.html?bt=expired",
+    });
+    const frame = view.querySelector("iframe");
+
+    frame?.dispatchEvent(new Event("error"));
+    await vi.waitFor(() => expect(frameLoadFailed).toHaveBeenCalledTimes(1));
+    frame?.dispatchEvent(new Event("load"));
+    await vi.waitFor(() => expect(frameLoadFailed).toHaveBeenCalledTimes(2));
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/__openclaw__/board/session/status/index.html?bt=expired",
+      { cache: "no-store" },
+    );
+  });
+
+  it("bounds repeated frame ticket refreshes after persistent 401 responses", async () => {
+    const frameLoadFailed = vi.fn(async () => undefined);
+    let frameStatus = 401;
+    let frameUrl = "/__openclaw__/board/session/status/index.html?bt=expired";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () => new Response(frameStatus === 401 ? "expired" : "ok", { status: frameStatus }),
+      ),
+    );
+    const view = await mount({
+      callbacks: callbacks({ frameLoadFailed }),
+      snapshot: snapshot({ widgets: [boardWidget()] }),
+      widgetFrameUrl: () => frameUrl,
+    });
+    const frame = view.querySelector("iframe");
+
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      frame?.dispatchEvent(new Event("load"));
+      await Promise.resolve();
+    }
+
+    await vi.waitFor(() => expect(frameLoadFailed).toHaveBeenCalledTimes(3));
+    await vi.waitFor(() =>
+      expect(view.querySelector('[data-test-id="board-widget-error"]')?.textContent).toContain(
+        "repeated refresh attempts",
+      ),
+    );
+
+    frameStatus = 200;
+    frameUrl = "/__openclaw__/board/session/status/index.html?bt=fresh";
+    view.snapshot = snapshot({ revision: 2, widgets: [boardWidget()] });
+    await settleCells(view);
+    const freshFrame = view.querySelector("iframe");
+    expect(freshFrame?.getAttribute("src")).toBe(frameUrl);
+    freshFrame?.dispatchEvent(new Event("load"));
+    await vi.waitFor(() => expect(view.querySelector("iframe")).toBe(freshFrame));
+    expect(frameLoadFailed).toHaveBeenCalledTimes(3);
+  });
+
+  it("ignores authorization results from a superseded widget frame", async () => {
+    const frameLoadFailed = vi.fn(async () => undefined);
+    let resolveProbe: ((response: Response) => void) | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        () =>
+          new Promise<Response>((resolve) => {
+            resolveProbe = resolve;
+          }),
+      ),
+    );
+    const view = await mount({
+      callbacks: callbacks({ frameLoadFailed }),
+      snapshot: snapshot({ widgets: [boardWidget()] }),
+      widgetFrameUrl: (_name, revision) =>
+        `/__openclaw__/board/session/status/index.html?revision=${revision}`,
+    });
+    const frame = view.querySelector("iframe");
+    frame?.dispatchEvent(new Event("load"));
+
+    view.snapshot = snapshot({
+      revision: 2,
+      widgets: [boardWidget({ revision: 2 })],
+    });
+    await settleCells(view);
+    expect(frame?.getAttribute("src")).toContain("revision=2");
+    resolveProbe?.(new Response("expired", { status: 401 }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(frameLoadFailed).not.toHaveBeenCalled();
   });
 
   it("preserves each widget cell and iframe identity when order changes", async () => {
@@ -302,6 +398,23 @@ describe("openclaw-board-view", () => {
     await vi.waitFor(() => expect(reject?.disabled).toBe(false));
     reject?.click();
     await vi.waitFor(() => expect(grant).toHaveBeenCalledWith("alpha", "rejected"));
+  });
+
+  it("renders declared approval details instead of the generic copy", async () => {
+    const source = snapshot({
+      widgets: [
+        boardWidget({
+          grantState: "pending",
+          declaredSummary: ["Network: api.example.com", "Tools: lookup"],
+        }),
+      ],
+    });
+    const view = await mount({ snapshot: source });
+    const pending = view.querySelector('[data-test-id="board-pending"]');
+
+    expect(pending?.querySelectorAll(".board-widget__grant-summary li")).toHaveLength(2);
+    expect(pending?.textContent).toContain("Network: api.example.com");
+    expect(pending?.textContent).not.toContain("This widget requested additional access.");
   });
 
   it("serializes pending approval decisions while the callback is in flight", async () => {

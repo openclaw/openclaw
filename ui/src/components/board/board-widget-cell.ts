@@ -20,6 +20,7 @@ const BOARD_SIZE_PRESETS = {
   lg: { w: 8, h: 6 },
   xl: { w: 12, h: 8 },
 } as const;
+const MAX_FRAME_REFRESH_ATTEMPTS = 3;
 
 export type BoardWidgetCellCallbacks = {
   grant: (name: string, decision: BoardGrantDecision) => Promise<void>;
@@ -31,6 +32,7 @@ export type BoardWidgetCellCallbacks = {
   nudge: (widget: BoardWidget, direction: BoardGridDirection) => Promise<void>;
   focus: (widget: BoardWidget, direction: BoardGridDirection) => void;
   focusChanged: (name: string) => void;
+  frameLoadFailed: (name: string) => Promise<void>;
 };
 
 class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
@@ -49,12 +51,37 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
 
   @state() private actionError = "";
   @state() private actionPending = false;
+  @state() private frameError = "";
+  private frameFailureKey = "";
+  private frameRefreshAttempts = 0;
+  private frameProbeGeneration = 0;
+  private lastFrameUrl = "";
 
   override willUpdate(changed: PropertyValues<this>): void {
     const previousWidget = changed.get("widget");
     if (previousWidget && previousWidget !== this.widget) {
       this.actionError = "";
+      if (
+        previousWidget.name !== this.widget?.name ||
+        previousWidget.revision !== this.widget?.revision
+      ) {
+        this.resetFrameFailures();
+      } else if (this.widget && this.frameError) {
+        const nextFrameUrl = this.widgetFrameUrl?.(this.widget.name, this.widget.revision) ?? "";
+        if (nextFrameUrl && nextFrameUrl !== this.lastFrameUrl) {
+          // A newly minted ticket gets one authorization probe, but keeps the
+          // existing remint budget until that probe proves the frame healthy.
+          this.frameError = "";
+        }
+      }
     }
+  }
+
+  private resetFrameFailures(): void {
+    this.frameProbeGeneration += 1;
+    this.frameFailureKey = "";
+    this.frameRefreshAttempts = 0;
+    this.frameError = "";
   }
 
   private closeMenu(): void {
@@ -164,7 +191,11 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
       <div class="board-widget__grant board-widget__grant--pending" data-test-id="board-pending">
         <div class="board-widget__grant-mark" aria-hidden="true">!</div>
         <strong>${t("board.widget.needsApproval")}</strong>
-        <span>${t("board.widget.needsApprovalDetail")}</span>
+        ${widget.declaredSummary?.length
+          ? html`<ul class="board-widget__grant-summary">
+              ${widget.declaredSummary.map((summary) => html`<li>${summary}</li>`)}
+            </ul>`
+          : html`<span>${t("board.widget.needsApprovalDetail")}</span>`}
         <div class="board-widget__grant-actions">
           <button
             class="btn btn--small btn--primary"
@@ -207,11 +238,68 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     `;
   }
 
-  private renderFrame(widget: BoardWidget): TemplateResult {
+  private refreshFailedFrame(widget: BoardWidget, callbacks: BoardWidgetCellCallbacks): void {
+    this.frameProbeGeneration += 1;
+    const failureKey = `${widget.name}:${widget.revision}`;
+    if (this.frameFailureKey !== failureKey) {
+      this.resetFrameFailures();
+      this.frameFailureKey = failureKey;
+    }
+    if (this.frameRefreshAttempts >= MAX_FRAME_REFRESH_ATTEMPTS) {
+      this.frameError = t("board.widget.frameAuthorizationFailed");
+      return;
+    }
+    this.frameRefreshAttempts += 1;
+    void callbacks.frameLoadFailed(widget.name).catch((error: unknown) => {
+      this.frameError = error instanceof Error ? error.message : String(error);
+    });
+  }
+
+  private verifyFrameAuthorization(
+    event: Event,
+    widget: BoardWidget,
+    callbacks: BoardWidgetCellCallbacks,
+  ): void {
+    const frame = event.currentTarget;
+    const src = frame instanceof HTMLIFrameElement ? (frame.getAttribute("src") ?? "") : "";
+    if (!src.startsWith("/__openclaw__/board/")) {
+      return;
+    }
+    const probeGeneration = this.frameProbeGeneration + 1;
+    this.frameProbeGeneration = probeGeneration;
+    const isCurrentProbe = () =>
+      frame instanceof HTMLIFrameElement &&
+      frame.isConnected &&
+      frame.getAttribute("src") === src &&
+      this.frameProbeGeneration === probeGeneration &&
+      this.widget?.name === widget.name &&
+      this.widget.revision === widget.revision;
+    // View tickets are reusable HMAC bindings until expiry. Iframe load events
+    // hide HTTP status, so a credentialed probe is the only 401 signal.
+    void fetch(src, { cache: "no-store" })
+      .then((response) => {
+        if (!isCurrentProbe()) {
+          return;
+        }
+        if (response.status === 401) {
+          this.refreshFailedFrame(widget, callbacks);
+        } else if (response.ok) {
+          this.resetFrameFailures();
+        }
+      })
+      .catch(() => {
+        if (isCurrentProbe()) {
+          this.refreshFailedFrame(widget, callbacks);
+        }
+      });
+  }
+
+  private renderFrame(widget: BoardWidget, callbacks: BoardWidgetCellCallbacks): TemplateResult {
     if (!this.widgetFrameUrl) {
       throw new Error(t("board.widget.frameResolverMissing"));
     }
     const src = this.widgetFrameUrl(widget.name, widget.revision);
+    this.lastFrameUrl = src;
     return html`
       <iframe
         class="board-widget__frame"
@@ -220,6 +308,8 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
         loading="lazy"
         title=${widget.title || widget.name}
         src=${src}
+        @error=${() => this.refreshFailedFrame(widget, callbacks)}
+        @load=${(event: Event) => this.verifyFrameAuthorization(event, widget, callbacks)}
       ></iframe>
     `;
   }
@@ -238,7 +328,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
       }
       return renderer({ sessions: this.sessions, sessionKey: this.sessionKey });
     }
-    return this.renderFrame(widget);
+    return this.renderFrame(widget, callbacks);
   }
 
   private renderError(error: unknown): TemplateResult {
@@ -311,7 +401,10 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     let body: TemplateResult;
     let bodyErrored = false;
     try {
-      body = this.renderBody(widget, callbacks);
+      body = this.frameError
+        ? this.renderError(this.frameError)
+        : this.renderBody(widget, callbacks);
+      bodyErrored = Boolean(this.frameError);
     } catch (error) {
       body = this.renderError(error);
       bodyErrored = true;

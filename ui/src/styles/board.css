@@ -429,6 +429,18 @@ openclaw-board-widget-cell {
   max-width: 32ch;
 }
 
+.board-widget__grant-summary {
+  color: var(--muted, #8a919e);
+  display: grid;
+  font-size: 11px;
+  gap: 4px;
+  line-height: 1.45;
+  margin: 0;
+  max-width: 36ch;
+  padding-left: 18px;
+  text-align: left;
+}
+
 .board-widget__grant-mark {
   align-items: center;
   background: color-mix(in srgb, var(--warning, #e6ad55) 15%, transparent);
