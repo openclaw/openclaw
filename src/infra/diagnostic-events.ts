@@ -918,6 +918,7 @@ type DiagnosticEventsGlobalState = {
   dispatchDepth: number;
   asyncQueue: QueuedDiagnosticEvent[];
   pendingAsyncRunEventSequences: Map<string, Set<number>>;
+  pendingAsyncSessionEventSequences: Map<string, Set<number>>;
   asyncDrainScheduled: boolean;
   asyncDroppedEvents: number;
   asyncDroppedTrustedEvents: number;
@@ -969,6 +970,7 @@ function createDiagnosticEventsState(): DiagnosticEventsGlobalState {
     dispatchDepth: 0,
     asyncQueue: [],
     pendingAsyncRunEventSequences: new Map(),
+    pendingAsyncSessionEventSequences: new Map(),
     asyncDrainScheduled: false,
     asyncDroppedEvents: 0,
     asyncDroppedTrustedEvents: 0,
@@ -1011,6 +1013,12 @@ function getDiagnosticEventsState(): DiagnosticEventsGlobalState {
       existing.pendingAsyncRunEventSequences = new Map();
       for (const entry of existing.asyncQueue) {
         trackPendingAsyncRunEvent(existing, entry);
+      }
+    }
+    if (!(existing.pendingAsyncSessionEventSequences instanceof Map)) {
+      existing.pendingAsyncSessionEventSequences = new Map();
+      for (const entry of existing.asyncQueue) {
+        trackPendingAsyncSessionEvent(existing, entry);
       }
     }
     return existing;
@@ -1139,6 +1147,16 @@ function pendingAsyncRunEventIdentity(
   return runId ? { runId, sequence: entry.event.seq } : undefined;
 }
 
+function pendingAsyncSessionEventIdentity(
+  entry: QueuedDiagnosticEvent,
+): { sessionId: string; sequence: number } | undefined {
+  if (!("sessionId" in entry.event) || typeof entry.event.sessionId !== "string") {
+    return undefined;
+  }
+  const sessionId = entry.event.sessionId.trim();
+  return sessionId ? { sessionId, sequence: entry.event.seq } : undefined;
+}
+
 function trackPendingAsyncRunEvent(
   state: DiagnosticEventsGlobalState,
   entry: QueuedDiagnosticEvent,
@@ -1150,6 +1168,20 @@ function trackPendingAsyncRunEvent(
   const sequences = state.pendingAsyncRunEventSequences.get(identity.runId) ?? new Set<number>();
   sequences.add(identity.sequence);
   state.pendingAsyncRunEventSequences.set(identity.runId, sequences);
+}
+
+function trackPendingAsyncSessionEvent(
+  state: DiagnosticEventsGlobalState,
+  entry: QueuedDiagnosticEvent,
+): void {
+  const identity = pendingAsyncSessionEventIdentity(entry);
+  if (!identity) {
+    return;
+  }
+  const sequences =
+    state.pendingAsyncSessionEventSequences.get(identity.sessionId) ?? new Set<number>();
+  sequences.add(identity.sequence);
+  state.pendingAsyncSessionEventSequences.set(identity.sessionId, sequences);
 }
 
 function untrackPendingAsyncRunEvent(
@@ -1164,6 +1196,21 @@ function untrackPendingAsyncRunEvent(
   sequences?.delete(identity.sequence);
   if (sequences?.size === 0) {
     state.pendingAsyncRunEventSequences.delete(identity.runId);
+  }
+}
+
+function untrackPendingAsyncSessionEvent(
+  state: DiagnosticEventsGlobalState,
+  entry: QueuedDiagnosticEvent,
+): void {
+  const identity = pendingAsyncSessionEventIdentity(entry);
+  if (!identity) {
+    return;
+  }
+  const sequences = state.pendingAsyncSessionEventSequences.get(identity.sessionId);
+  sequences?.delete(identity.sequence);
+  if (sequences?.size === 0) {
+    state.pendingAsyncSessionEventSequences.delete(identity.sessionId);
   }
 }
 
@@ -1229,6 +1276,7 @@ function scheduleAsyncDiagnosticDrain(state: DiagnosticEventsGlobalState): void 
         });
       } finally {
         untrackPendingAsyncRunEvent(state, entry);
+        untrackPendingAsyncSessionEvent(state, entry);
       }
     }
     if (state.asyncQueue.length > 0) {
@@ -1336,12 +1384,14 @@ function emitDiagnosticEventWithTrust(
       const droppedEntry = makeRoomForPriorityAsyncDiagnosticEvent(state);
       if (droppedEntry) {
         untrackPendingAsyncRunEvent(state, droppedEntry);
+        untrackPendingAsyncSessionEvent(state, droppedEntry);
         noteAsyncDiagnosticDrop(state, droppedEntry);
       }
     }
     const queued = { event: enriched, metadata, privateData };
     state.asyncQueue.push(queued);
     trackPendingAsyncRunEvent(state, queued);
+    trackPendingAsyncSessionEvent(state, queued);
     scheduleAsyncDiagnosticDrain(state);
     return;
   }
@@ -1434,6 +1484,7 @@ export function emitTrustedSkillUsedDiagnosticEvent(
   }
   state.asyncQueue.push(queued);
   trackPendingAsyncRunEvent(state, queued);
+  trackPendingAsyncSessionEvent(state, queued);
   scheduleAsyncDiagnosticDrain(state);
 }
 
@@ -1520,23 +1571,6 @@ export function hasPendingInternalDiagnosticEvent(
   return false;
 }
 
-/** Checks queued or currently dispatching async events for a run through a sequence. */
-export function hasPendingInternalDiagnosticRunEvent(
-  runId: string,
-  throughSequence: number,
-): boolean {
-  const sequences = getDiagnosticEventsState().pendingAsyncRunEventSequences.get(runId);
-  if (!sequences) {
-    return false;
-  }
-  for (const sequence of sequences) {
-    if (sequence <= throughSequence) {
-      return true;
-    }
-  }
-  return false;
-}
-
 /** Subscribes to public untrusted diagnostic events only. */
 export function onDiagnosticEvent(listener: (evt: DiagnosticEventPayload) => void): () => void {
   return onInternalDiagnosticEvent((event, metadata) => {
@@ -1576,6 +1610,7 @@ export function resetDiagnosticEventsForTest(): void {
   state.dispatchDepth = 0;
   state.asyncQueue = [];
   state.pendingAsyncRunEventSequences.clear();
+  state.pendingAsyncSessionEventSequences.clear();
   state.asyncDrainScheduled = false;
   state.asyncDroppedEvents = 0;
   state.asyncDroppedTrustedEvents = 0;

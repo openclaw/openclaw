@@ -1,7 +1,7 @@
+import { hasPendingInternalDiagnosticRunEvent } from "../infra/diagnostic-events-pending-runs.js";
 // Diagnostic run activity helpers summarize run lifecycle activity for diagnostics.
 import {
   getInternalDiagnosticEventSequence,
-  hasPendingInternalDiagnosticRunEvent,
   onInternalDiagnosticEvent,
   type DiagnosticEventPayload,
   type DiagnosticSessionActiveWorkKind,
@@ -12,11 +12,16 @@ import {
   diagnosticToolActivityKey,
 } from "./diagnostic-run-activity-keys.js";
 import {
+  pruneRecoveredOwnerStartEventCutoffs,
+  rememberRecoveredOwnerStartEventCutoffs,
+  shouldIgnoreRecoveredOwnerStartEvent,
+} from "./diagnostic-run-activity-recovery-cutoffs.js";
+import {
   activityMarkerBelongsToOwner,
   activityMarkerStartedAfter,
   recoveryOwnerRefs,
-  startedEventOwnerRefs,
 } from "./diagnostic-run-activity-recovery.js";
+import { createDiagnosticSessionActivityRefStore } from "./diagnostic-run-activity-refs.js";
 import { createDiagnosticRunActivityRetention } from "./diagnostic-run-activity-retention.js";
 import {
   deleteDiagnosticActiveRunsStartedBefore,
@@ -29,6 +34,7 @@ import {
 type SessionActivity = {
   sessionId?: string;
   sessionKey?: string;
+  sessionRefs: Set<string>;
   activeRuns: Map<string, DiagnosticActiveRun>;
   activeReplyOperations: Set<string>;
   activeEmbeddedRuns: Map<string, ActiveEmbeddedRun>;
@@ -111,18 +117,10 @@ const activityByRef = new Map<string, SessionActivity>();
 const activityByRunId = new Map<string, SessionActivity>();
 const sessionActivities = new Set<SessionActivity>();
 let embeddedRunSequence = 0;
-
-function registerSessionActivityRefs(
-  activity: SessionActivity,
-  params: { sessionId?: string; sessionKey?: string },
-): void {
-  sessionActivities.add(activity);
-  activity.sessionId ??= params.sessionId;
-  activity.sessionKey ??= params.sessionKey;
-  for (const ref of diagnosticSessionRefs(params)) {
-    activityByRef.set(ref, activity);
-  }
-}
+const sessionActivityRefs = createDiagnosticSessionActivityRefStore(
+  activityByRef,
+  sessionActivities,
+);
 
 function registerActiveRun(
   activity: SessionActivity,
@@ -135,11 +133,7 @@ function registerActiveRun(
 }
 
 function replaceSessionActivityReferences(source: SessionActivity, target: SessionActivity): void {
-  for (const [ref, activity] of activityByRef) {
-    if (activity === source) {
-      activityByRef.set(ref, target);
-    }
-  }
+  sessionActivityRefs.replace(source, target);
   for (const [runId, activity] of activityByRunId) {
     if (activity === source) {
       activityByRunId.set(runId, target);
@@ -175,6 +169,7 @@ function mergeSessionActivity(target: SessionActivity, source: SessionActivity):
   }
   replaceSessionActivityReferences(source, target);
   sessionActivities.delete(source);
+  sessionActivityRefs.prune(target);
 }
 
 function resolveSessionActivity(params: {
@@ -182,6 +177,7 @@ function resolveSessionActivity(params: {
   sessionKey?: string;
   runId?: string;
   create?: boolean;
+  trackCurrent?: boolean;
 }): SessionActivity | undefined {
   let activity: SessionActivity | undefined;
   if (params.runId) {
@@ -204,7 +200,7 @@ function resolveSessionActivity(params: {
   }
 
   if (activity) {
-    registerSessionActivityRefs(activity, params);
+    sessionActivityRefs.register(activity, params, params.trackCurrent !== false);
     return activity;
   }
 
@@ -216,6 +212,7 @@ function resolveSessionActivity(params: {
   const created: SessionActivity = {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
+    sessionRefs: new Set(),
     activeRuns: new Map(),
     activeReplyOperations: new Set(),
     activeEmbeddedRuns: new Map(),
@@ -224,7 +221,7 @@ function resolveSessionActivity(params: {
     recoveredOwnerStartEventCutoffs: new Map(),
     lastProgressAt: Date.now(),
   };
-  registerSessionActivityRefs(created, params);
+  sessionActivityRefs.register(created, params);
   return created;
 }
 
@@ -239,12 +236,7 @@ function isIdleSessionActivity(activity: SessionActivity): boolean {
 }
 
 function deleteSessionActivity(activity: SessionActivity): void {
-  for (const [ref, candidate] of activityByRef) {
-    if (candidate === activity) {
-      activityByRef.delete(ref);
-    }
-  }
-  sessionActivities.delete(activity);
+  sessionActivityRefs.delete(activity);
 }
 
 const activityRetention = createDiagnosticRunActivityRetention({
@@ -258,6 +250,8 @@ const activityRetention = createDiagnosticRunActivityRetention({
 function touchSessionActivity(activity: SessionActivity, reason: string, now = Date.now()): void {
   activity.lastProgressAt = now;
   activity.lastProgressReason = reason;
+  pruneRecoveredOwnerStartEventCutoffs(activity.recoveredOwnerStartEventCutoffs);
+  sessionActivityRefs.prune(activity);
   activityRetention.prune(now);
 }
 
@@ -269,7 +263,8 @@ function recordToolStarted(event: DiagnosticToolStartedActivityEvent): void {
   if (!activity) {
     return;
   }
-  if (shouldIgnoreRecoveredOwnerStartEvent(activity, event)) {
+  if (shouldIgnoreRecoveredOwnerStartEvent(activity.recoveredOwnerStartEventCutoffs, event)) {
+    sessionActivityRefs.prune(activity);
     return;
   }
   registerActiveRun(activity, event);
@@ -312,7 +307,8 @@ function recordModelStarted(event: DiagnosticModelStartedActivityEvent): void {
   if (!activity) {
     return;
   }
-  if (shouldIgnoreRecoveredOwnerStartEvent(activity, event)) {
+  if (shouldIgnoreRecoveredOwnerStartEvent(activity.recoveredOwnerStartEventCutoffs, event)) {
+    sessionActivityRefs.prune(activity);
     return;
   }
   registerActiveRun(activity, event);
@@ -366,6 +362,7 @@ export function setDiagnosticReplyOperationActive(params: {
   }
   if (!params.active) {
     activity.activeReplyOperations.delete(params.sessionKey);
+    sessionActivityRefs.prune(activity);
     return;
   }
   if (!activity.activeReplyOperations.has(params.sessionKey)) {
@@ -548,43 +545,6 @@ function pruneActivityStartedBeforeRecoveryCutoff(
   );
 }
 
-function rememberRecoveredOwnerStartEventCutoffs(
-  activity: SessionActivity,
-  ownerRefs: Set<string>,
-  recoveryStartedAfterSequence: number | undefined,
-): void {
-  if (recoveryStartedAfterSequence === undefined) {
-    return;
-  }
-  for (const ownerRef of ownerRefs) {
-    // Recovery can clear a session before the async diagnostic queue drains.
-    // Remember the queue watermark so older start events cannot recreate stale activity.
-    activity.recoveredOwnerStartEventCutoffs.set(
-      ownerRef,
-      Math.max(
-        recoveryStartedAfterSequence,
-        activity.recoveredOwnerStartEventCutoffs.get(ownerRef) ?? 0,
-      ),
-    );
-  }
-}
-
-function shouldIgnoreRecoveredOwnerStartEvent(
-  activity: SessionActivity,
-  event: { runId?: string; sessionId?: string; seq?: number },
-): boolean {
-  if (event.seq === undefined) {
-    return false;
-  }
-  for (const ownerRef of startedEventOwnerRefs(event)) {
-    const cutoff = activity.recoveredOwnerStartEventCutoffs.get(ownerRef);
-    if (cutoff !== undefined && event.seq <= cutoff) {
-      return true;
-    }
-  }
-  return false;
-}
-
 // Reconciles a session's terminal embedded-run activity at once. Used when an
 // authority (stuck-session recovery) declares the lane idle and the per-run
 // markDiagnosticEmbeddedRunEnded may have been bypassed. Clears the embedded-run
@@ -610,14 +570,15 @@ export function clearDiagnosticEmbeddedRunActivityForSession(params: {
     return { cleared: false, blockedByActiveEmbeddedRun: false };
   }
   if (params.activeSessionId) {
-    registerSessionActivityRefs(activity, {
+    sessionActivityRefs.register(activity, {
       sessionId: params.activeSessionId,
       sessionKey: params.sessionKey,
     });
   }
   const ownerRefs = recoveryOwnerRefs(params);
+  pruneRecoveredOwnerStartEventCutoffs(activity.recoveredOwnerStartEventCutoffs);
   rememberRecoveredOwnerStartEventCutoffs(
-    activity,
+    activity.recoveredOwnerStartEventCutoffs,
     ownerRefs,
     params.recoveryStartedAfterDiagnosticEventSequence,
   );
@@ -662,7 +623,7 @@ export function getDiagnosticSessionActivitySnapshot(
   params: { sessionId?: string; sessionKey?: string },
   now = Date.now(),
 ): DiagnosticSessionActivitySnapshot {
-  const activity = resolveSessionActivity(params);
+  const activity = resolveSessionActivity({ ...params, trackCurrent: false });
   if (!activity) {
     return {};
   }
@@ -699,6 +660,14 @@ export function getDiagnosticEmbeddedRunActivitySequence(): number {
 
 function markDiagnosticRunProgressForTest(params: DiagnosticRunProgressActivityEvent): void {
   markDiagnosticRunProgress(params);
+}
+
+function getRecoveredOwnerCutoffCountForTest(params: {
+  sessionId?: string;
+  sessionKey?: string;
+}): number {
+  const activity = resolveSessionActivity({ ...params, trackCurrent: false });
+  return activity?.recoveredOwnerStartEventCutoffs.size ?? 0;
 }
 
 function markDiagnosticToolStartedForTest(params: {
@@ -773,6 +742,7 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[
     Symbol.for("openclaw.diagnosticRunActivityTestApi")
   ] = {
+    getRecoveredOwnerCutoffCountForTest,
     markDiagnosticModelStartedForTest,
     markDiagnosticRunProgressForTest,
     markDiagnosticToolStartedForTest,

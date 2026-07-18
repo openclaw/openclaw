@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { hasInternalDiagnosticEventListeners } from "../infra/diagnostic-event-listener-presence.js";
 import {
   emitTrustedDiagnosticEvent,
+  getInternalDiagnosticEventSequence,
   resetDiagnosticEventsForTest,
   waitForDiagnosticEventsDrained,
 } from "../infra/diagnostic-events.js";
@@ -18,7 +19,10 @@ import {
   startDiagnosticRunActivityTracking,
   stopDiagnosticRunActivityTracking,
 } from "./diagnostic-run-activity.js";
-import { markDiagnosticModelStartedForTest } from "./diagnostic-run-activity.test-support.js";
+import {
+  getRecoveredOwnerCutoffCountForTest,
+  markDiagnosticModelStartedForTest,
+} from "./diagnostic-run-activity.test-support.js";
 
 afterEach(() => {
   stopDiagnosticRunActivityTracking();
@@ -108,14 +112,15 @@ describe("resolveRunStaleThresholdMs", () => {
 
 describe("diagnostic run activity retention", () => {
   it("does not retain identifier-free tool lifecycles", async () => {
+    startDiagnosticRunActivityTracking();
     for (let index = 0; index <= 2_000; index += 1) {
       const toolCallId = `identifier-free-tool-${index}`;
-      emitInternalDiagnosticEvent({
+      emitTrustedDiagnosticEvent({
         type: "tool.execution.started",
         toolName: "proof-tool",
         toolCallId,
       });
-      emitInternalDiagnosticEvent({
+      emitTrustedDiagnosticEvent({
         type: "tool.execution.completed",
         toolName: "proof-tool",
         toolCallId,
@@ -130,7 +135,7 @@ describe("diagnostic run activity retention", () => {
       sessionKey: "agent:main:post-identifier-free",
     };
     markDiagnosticRunProgress({ ...completed, reason: "proof:active" });
-    emitInternalDiagnosticEvent({
+    emitTrustedDiagnosticEvent({
       type: "run.completed",
       ...completed,
       durationMs: 1,
@@ -288,5 +293,56 @@ describe("diagnostic run activity retention", () => {
       }).lastProgressReason,
     ).toBe("run:completed");
     expect(getDiagnosticSessionActivitySnapshot(active).lastProgressReason).toBe("proof:active");
+  });
+
+  it("bounds rotated session id aliases under a stable session key", () => {
+    startDiagnosticRunActivityTracking();
+    const sessionKey = "agent:main:stable-rotation";
+    for (let index = 0; index <= 2_500; index += 1) {
+      const runId = `rotated-run-${index}`;
+      const sessionId = `rotated-session-${index}`;
+      markDiagnosticRunProgress({ runId, sessionId, sessionKey, reason: "proof:active" });
+      emitTrustedDiagnosticEvent({
+        type: "run.completed",
+        runId,
+        sessionId,
+        sessionKey,
+        durationMs: 1,
+        outcome: "completed",
+      });
+    }
+
+    expect(getDiagnosticSessionActivitySnapshot({ sessionId: "rotated-session-0" })).toEqual({});
+    expect(
+      getDiagnosticSessionActivitySnapshot({ sessionId: "rotated-session-2500" })
+        .lastProgressReason,
+    ).toBe("run:completed");
+  });
+
+  it("releases recovered-owner cutoffs when the async queue drains", async () => {
+    startDiagnosticRunActivityTracking();
+    const sessionKey = "agent:main:stable-recovery";
+    for (let index = 0; index <= 2_500; index += 1) {
+      const sessionId = `recovered-rotation-${index}`;
+      emitTrustedDiagnosticEvent({
+        type: "model.call.started",
+        runId: `recovered-run-${index}`,
+        sessionId,
+        sessionKey,
+        provider: "openai",
+        model: "gpt-5.5",
+      });
+      clearDiagnosticEmbeddedRunActivityForSession({
+        sessionId,
+        sessionKey,
+        activeSessionId: sessionId,
+        recoveryStartedAfterDiagnosticEventSequence: getInternalDiagnosticEventSequence(),
+      });
+    }
+
+    await waitForDiagnosticEventsDrained();
+
+    expect(getRecoveredOwnerCutoffCountForTest({ sessionKey })).toBe(0);
+    expect(getDiagnosticSessionActivitySnapshot({ sessionId: "recovered-rotation-0" })).toEqual({});
   });
 });
