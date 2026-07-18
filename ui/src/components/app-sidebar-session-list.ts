@@ -23,47 +23,18 @@ import {
   sidebarSessionMetaId,
   storeSidebarCatalogGrouping,
   type SidebarRecentSession,
-  type SidebarSessionAttention,
 } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
+import {
+  renderSessionAttentionIcon,
+  renderSessionState,
+  sessionAttentionSubtitle,
+} from "./session-attention-presentation.ts";
 import { resolveSessionIcon } from "./session-icon-registry.ts";
 import { renderSessionRowBadges } from "./session-row-badges.ts";
 import "./elapsed-time.ts";
 
 const SIDEBAR_VISIBLE_CHILD_SESSION_LIMIT = 4;
-
-function renderSessionAttentionIcon(attention: SidebarSessionAttention) {
-  if (attention.kind === "none") {
-    return nothing;
-  }
-  const icon =
-    attention.kind === "question"
-      ? icons.hand
-      : attention.kind === "approval"
-        ? icons.key
-        : icons.alertTriangle;
-  return html`<span
-    class="sidebar-session-attention__icon sidebar-session-attention__icon--${attention.kind}"
-    data-session-attention=${attention.kind}
-    aria-hidden="true"
-    >${icon}</span
-  >`;
-}
-
-function sessionAttentionSubtitle(attention: SidebarSessionAttention): string | undefined {
-  switch (attention.kind) {
-    case "question":
-      return t("sessionsView.waitingForAnswer");
-    case "approval":
-      return t("sessionsView.waitingForApproval");
-    case "error":
-      return t("sessionsView.runFailedReason", { reason: attention.reason });
-    case "none":
-      return undefined;
-    default:
-      return attention satisfies never;
-  }
-}
 
 /** Session-list presentation and catalog renderer wiring. */
 export abstract class AppSidebarSessionListElement extends AppSidebarMenusElement {
@@ -81,49 +52,6 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
     ) {
       this.toggleSessionSection("ungrouped");
     }
-  }
-
-  private renderSessionState(session: SidebarRecentSession) {
-    if (session.hasActiveRun || (session.isChild && session.status === "running")) {
-      return html`<span
-        class="session-run-spinner sidebar-recent-session__state"
-        role="img"
-        aria-label=${t("sessionsView.activeRun")}
-        title=${t("sessionsView.activeRun")}
-      ></span>`;
-    }
-    if (!session.isChild) {
-      return session.unread
-        ? html`<span
-            class="session-unread-dot sidebar-recent-session__unread"
-            role="img"
-            aria-label=${t("sessionsView.unread")}
-          ></span>`
-        : nothing;
-    }
-    const status = session.status;
-    if (!status) {
-      return nothing;
-    }
-    const statusBadge =
-      status === "done"
-        ? { icon: icons.check, label: t("sessionsView.statusDone") }
-        : status === "killed"
-          ? { icon: icons.stop, label: t("sessionsView.statusKilled") }
-          : status === "timeout"
-            ? { icon: icons.alertTriangle, label: t("sessionsView.statusTimeout") }
-            : status === "failed"
-              ? { icon: icons.alertTriangle, label: t("sessionsView.statusFailed") }
-              : null;
-    return statusBadge
-      ? html`<span
-          class="sidebar-child-session__status sidebar-child-session__status--${status}"
-          role="img"
-          aria-label=${statusBadge.label}
-          title=${statusBadge.label}
-          >${statusBadge.icon}</span
-        >`
-      : nothing;
   }
 
   private renderRecentSession(
@@ -147,7 +75,7 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
     // Pinned rows reposition the state badge into the nav-item slot; render
     // every state renderSessionState knows (spinner, unread, child terminal
     // badges) so pinning a subagent session cannot hide its outcome.
-    const sessionState = this.renderSessionState(session);
+    const sessionState = renderSessionState(session);
     const pinnedState =
       session.pinned && sessionState !== nothing
         ? html`<span class="nav-item__state">${sessionState}</span>`
