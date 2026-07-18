@@ -237,6 +237,8 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
       reply: { text: buildToolsMessage(result, { verbose }) },
     };
   } catch {
+    // Inventory resolves in-process after sender authorization; this path cannot receive
+    // gateway RPC scope errors, so failures here are local discovery failures.
     return {
       shouldContinue: false,
       reply: { text: "Couldn't load available tools right now. Try again in a moment." },
