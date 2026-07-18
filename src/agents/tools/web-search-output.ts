@@ -94,14 +94,17 @@ export const WebSearchOutputSchema = Type.Union([
 
 export type WebSearchOutput = Static<typeof WebSearchOutputSchema>;
 
-// Matches well-formed envelope framing lines from wrapExternalContent. Provider
-// text is stripped of any existing (or forged) envelopes before the boundary
-// applies its own, so output carries exactly one provable envelope per field.
-const ENVELOPE_LINE_RE =
-  /^[ \t]*<<<(?:END_)?EXTERNAL_UNTRUSTED_CONTENT id="[0-9a-f]+">>>[ \t]*$\n?|^Source: [^\n]*\n---\n/gmu;
+// Matches well-formed envelope framing from wrapExternalContent. Provider text
+// is stripped of any existing (or forged) envelopes before the boundary applies
+// its own, so output carries exactly one provable envelope per field. The
+// source header is consumed only when it directly follows an opening marker;
+// ordinary prose like "Source: Reuters" is content, not framing.
+const ENVELOPE_OPEN_RE =
+  /^[ \t]*<<<EXTERNAL_UNTRUSTED_CONTENT id="[0-9a-f]+">>>[ \t]*\r?\n(?:Source: [^\n]*\r?\n---\r?\n)?/gmu;
+const ENVELOPE_END_RE = /^[ \t]*<<<END_EXTERNAL_UNTRUSTED_CONTENT id="[0-9a-f]+">>>[ \t]*\r?\n?/gmu;
 
 function unwrapEnvelopes(value: string): string {
-  return value.replace(ENVELOPE_LINE_RE, "").trim();
+  return value.replace(ENVELOPE_OPEN_RE, "").replace(ENVELOPE_END_RE, "").trim();
 }
 
 function readFiniteNumber(value: unknown): number | undefined {
@@ -186,7 +189,9 @@ export function normalizeWebSearchOutput(params: {
 
   // A results branch requires conforming rows; anything else is preserved as
   // raw so nonstandard external payloads are never silently gutted.
-  const rows = Array.isArray(result.results) ? result.results : undefined;
+  // Array.from densifies holes into undefined so sparse arrays cannot slip
+  // past row conformance and serialize as null rows.
+  const rows = Array.isArray(result.results) ? Array.from(result.results) : undefined;
   const conformingRows = rows?.every(
     (entry): entry is Record<string, unknown> =>
       isRecord(entry) &&

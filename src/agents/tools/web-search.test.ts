@@ -706,6 +706,29 @@ describe("web_search normalized output contract", () => {
     expect(normalized.citations).toEqual([{ url: "https://example.com/ok" }]);
   });
 
+  it("keeps ordinary Source attribution lines in answer content", () => {
+    const normalized = normalizeWebSearchOutput({
+      provider: "external-answer",
+      query: "attribution",
+      result: { content: "Summary text.\nSource: Reuters\n---\nMore detail." },
+    });
+
+    if (normalized.kind !== "answer") {
+      throw new Error("expected answer branch");
+    }
+    expect(normalized.content).toContain("Source: Reuters");
+  });
+
+  it("routes sparse result arrays to the raw branch", () => {
+    const normalized = normalizeWebSearchOutput({
+      provider: "external-demo",
+      query: "sparse",
+      result: { results: new Array(1) },
+    });
+
+    expect(normalized.kind).toBe("raw");
+  });
+
   it("reports a declared error even when an empty results array is present", () => {
     const normalized = normalizeWebSearchOutput({
       provider: "external-demo",
