@@ -73,7 +73,7 @@ describe("AppSidebar session section visibility", () => {
     expect(draftSidebar.querySelector('[aria-label="Load more sessions"]')).not.toBeNull();
   });
 
-  it("hides empty known categories and renders them once they have a row", async () => {
+  it("hides empty Threads at rest but keeps empty categories and the drag drop target", async () => {
     const harness = createSessionsHarness("main", ["agent:main:main", "agent:main:alpha"]);
     const result = harness.sessions.state.result;
     const alpha = result?.sessions.find((row) => row.key === "agent:main:alpha");
@@ -81,11 +81,20 @@ describe("AppSidebar session section visibility", () => {
       throw new Error("expected Alpha session fixture");
     }
     alpha.category = "Alpha";
+    alpha.pinned = true;
     harness.publish({ groups: ["Empty", "Alpha"] });
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, harness.sessions);
 
-    expect(sidebar.querySelector('[data-session-section="category:Empty"]')).toBeNull();
-    expect(sidebar.querySelector('[data-session-section="category:Alpha"]')).not.toBeNull();
+    // Empty user-created groups stay visible (creation and drag targets);
+    // only the bare Threads header disappears while nothing lives in it.
+    expect(sidebar.querySelector('[data-session-section="category:Empty"]')).not.toBeNull();
+    expect(sidebar.querySelector('[data-session-section="ungrouped"]')).toBeNull();
+
+    const dragSidebar = sidebar as SidebarLifecycleState & { draggingSessionKey: string | null };
+    dragSidebar.draggingSessionKey = "agent:main:alpha";
+    dragSidebar.requestUpdate();
+    await dragSidebar.updateComplete;
+    expect(sidebar.querySelector('[data-session-section="ungrouped"]')).not.toBeNull();
   });
 });

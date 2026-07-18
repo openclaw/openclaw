@@ -552,17 +552,25 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
     return html`
       ${sections.map((section) => {
         const showDraft = section.id === "ungrouped" && options.showDraft;
-        // Empty categories stay drop targets on the Sessions page, but the sidebar
-        // hides them until a session is assigned through the session menu.
+        if (section.id === "work") {
+          // Coding hosts live work/ACP rows plus the CLI catalogs; hide the
+          // whole zone when both are empty.
+          if (section.totalRowCount === 0 && options.codingTrailingPresent !== true) {
+            return nothing;
+          }
+          return this.renderSessionSection(section, options.codingTrailing ?? nothing);
+        }
+        // Threads hides its bare header when empty, except while a draft needs
+        // a home or a session drag needs the unpin drop target. Empty custom
+        // categories keep rendering: they are user-created containers and the
+        // "New group…" / drag-into-group flows depend on seeing them.
         if (
+          section.id === "ungrouped" &&
           section.totalRowCount === 0 &&
           !showDraft &&
-          !(section.id === "work" && options.codingTrailingPresent === true)
+          this.draggingSessionKey === null
         ) {
           return nothing;
-        }
-        if (section.id === "work") {
-          return this.renderSessionSection(section, options.codingTrailing ?? nothing);
         }
         return this.renderSessionSection(section, nothing, showDraft);
       })}
