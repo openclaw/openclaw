@@ -1259,7 +1259,7 @@ describe("handleSendChat", () => {
     const request = vi.fn(async (method: string) => {
       throw new Error(`Unexpected request: ${method}`);
     });
-    const createChatSession = vi.fn();
+    const createChatSession = vi.fn(async () => true);
     const host = makeHost({
       client: { request } as unknown as ChatHost["client"],
       chatMessage: "restore me",
@@ -1282,7 +1282,7 @@ describe("handleSendChat", () => {
     const request = vi.fn(async (method: string) => {
       throw new Error(`Unexpected request: ${method}`);
     });
-    const createChatSession = vi.fn();
+    const createChatSession = vi.fn(async () => true);
     const host = makeHost({
       client: { request } as unknown as ChatHost["client"],
       chatMessage: "/new",
@@ -1298,8 +1298,22 @@ describe("handleSendChat", () => {
     expect(host.chatMessage).toBe("");
   });
 
+  it("restores typed /new when session creation is cancelled", async () => {
+    const createChatSession = vi.fn(async () => false);
+    const host = makeHost({
+      chatMessage: "/new",
+      sessionKey: "agent:main",
+      createChatSession,
+    });
+
+    await handleSendChat(host);
+
+    expect(createChatSession).toHaveBeenCalledOnce();
+    expect(host.chatMessage).toBe("/new");
+  });
+
   it("does not queue typed /new behind an active run", async () => {
-    const createChatSession = vi.fn();
+    const createChatSession = vi.fn(async () => true);
     const host = makeHost({
       chatMessage: "/new",
       chatRunId: "run-main",

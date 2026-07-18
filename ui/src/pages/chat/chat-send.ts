@@ -2322,7 +2322,10 @@ export async function handleSendChat(
         if (dispatchResult === "failed") {
           opts?.onLocalCommandSendRejected?.();
         }
-        if (dispatchResult === "failed" && messageOverride == null) {
+        if (
+          (dispatchResult === "failed" || dispatchResult === "cancelled") &&
+          messageOverride == null
+        ) {
           const restorePlan = pendingComposerRestorePlan(host, {
             previousAttachments: attachmentsToSend,
             previousDraft,
