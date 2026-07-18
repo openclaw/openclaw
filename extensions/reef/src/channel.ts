@@ -402,10 +402,12 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
       };
       // Refresh peer keys before recovery can dispatch an agent turn. Activate
       // only after reconciliation, but before that turn can use Reef outbound.
-      await reconcile();
-      setActiveReef({ flow, friends, reviews });
-      await receiptNotifier.notifyRejections(trust.pendingOutboundRejections());
-      ctx.setStatus({ accountId: "default", running: true, connected: false });
+      // The lifecycle owns both the ordering and the reconcile failure policy.
+      const activate = async () => {
+        setActiveReef({ flow, friends, reviews });
+        await receiptNotifier.notifyRejections(trust.pendingOutboundRejections());
+        ctx.setStatus({ accountId: "default", running: true, connected: false });
+      };
       const inbox = new ReefInboxConnection(
         transport,
         (entries) =>
@@ -457,6 +459,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
           reconcile,
           onReconcileError: (error) =>
             ctx.log?.error?.(`reef friend reconcile failed: ${String(error)}`),
+          onReady: activate,
         });
       } finally {
         ctx.setStatus({ accountId: "default", running: false, connected: false });

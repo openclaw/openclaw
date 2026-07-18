@@ -2,6 +2,21 @@ import { abortableSleep } from "./transport.js";
 
 const REEF_RECONCILE_INTERVAL_MS = 30_000;
 
+// Startup and periodic reconcile share one failure policy: a transient relay
+// failure (429, network) reports and continues. Letting one escape startAccount
+// hands the supervisor a crash to restart, and that restart cycle is itself
+// what escalates relay rate limiting.
+async function runReconcileStep(params: {
+  reconcile: () => Promise<void>;
+  onReconcileError: (error: unknown) => void;
+}): Promise<void> {
+  try {
+    await params.reconcile();
+  } catch (error) {
+    params.onReconcileError(error);
+  }
+}
+
 // One abort scope owns both account loops. If either branch throws, the inbox
 // loop must be torn down and awaited before startAccount settles: a leaked
 // loop keeps reconnecting as this handle, fights the replacement instance for
@@ -11,6 +26,9 @@ export async function runReefChannelLifecycle(params: {
   startInbox: (signal: AbortSignal) => Promise<void>;
   reconcile: () => Promise<void>;
   onReconcileError: (error: unknown) => void;
+  // Runs after the startup reconcile refreshes peer keys, before the inbox can
+  // dispatch a turn that uses Reef outbound.
+  onReady?: () => Promise<void>;
   reconcileIntervalMs?: number;
 }): Promise<void> {
   const lifecycle = new AbortController();
@@ -27,18 +45,18 @@ export async function runReefChannelLifecycle(params: {
       if (lifecycle.signal.aborted) {
         return;
       }
-      try {
-        await params.reconcile();
-      } catch (error) {
-        // Transient relay failures (429, network) must not crash the channel:
-        // the crash-restart cycle re-registers the inbox connection and is
-        // itself what escalates relay rate limiting.
-        params.onReconcileError(error);
-      }
+      await runReconcileStep(params);
     }
   };
-  const inboxTask = params.startInbox(lifecycle.signal);
+  // Declared outside the try so the finally can await it even when the startup
+  // steps below throw before the inbox is started.
+  let inboxTask: Promise<void> | undefined;
   try {
+    if (!lifecycle.signal.aborted) {
+      await runReconcileStep(params);
+    }
+    await params.onReady?.();
+    inboxTask = params.startInbox(lifecycle.signal);
     await Promise.all([inboxTask, reconciliationLoop()]);
   } finally {
     lifecycle.abort();
