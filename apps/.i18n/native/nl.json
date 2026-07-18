@@ -10439,6 +10439,11 @@
       "translated": "Nieuwe chat in worktree"
     },
     {
+      "id": "native.apple.a1b0d289758e2213",
+      "source": "Sessions…",
+      "translated": "Sessies…"
+    },
+    {
       "id": "native.apple.17c13312e7532c89",
       "source": "Background Tasks",
       "translated": "Achtergrondtaken"
@@ -10447,6 +10452,11 @@
       "id": "native.apple.ced228bb4d20a726",
       "source": "Export Transcript",
       "translated": "Transcript exporteren"
+    },
+    {
+      "id": "native.apple.f26cef22f417abb4",
+      "source": "Show reasoning & tool activity",
+      "translated": "Redenering en toolactiviteit tonen"
     },
     {
       "id": "native.apple.940e1f943750c94b",
@@ -22734,6 +22744,41 @@
       "translated": "%@ tokens gebruikt"
     },
     {
+      "id": "native.apple.ccfd6ae994d82449",
+      "source": "Loading full message…",
+      "translated": "Volledig bericht laden…"
+    },
+    {
+      "id": "native.apple.669ad52de4a26b87",
+      "source": "Full message unavailable",
+      "translated": "Volledig bericht niet beschikbaar"
+    },
+    {
+      "id": "native.apple.6f79794ee74caf99",
+      "source": "Full Message",
+      "translated": "Volledig bericht"
+    },
+    {
+      "id": "native.apple.d648251591db5dec",
+      "source": "Close",
+      "translated": "Sluiten"
+    },
+    {
+      "id": "native.apple.ba3963204bda5e84",
+      "source": "The full message is no longer available.",
+      "translated": "Het volledige bericht is niet meer beschikbaar."
+    },
+    {
+      "id": "native.apple.8bb98bd86ae85c1c",
+      "source": "The full message has no readable text.",
+      "translated": "Het volledige bericht bevat geen leesbare tekst."
+    },
+    {
+      "id": "native.apple.2f43669d87c0e26d",
+      "source": "The full message could not be loaded.",
+      "translated": "Het volledige bericht kon niet worden geladen."
+    },
+    {
       "id": "native.apple.2c865ac4a69645d3",
       "source": "Widget unavailable",
       "translated": "Widget niet beschikbaar"
@@ -23119,9 +23164,29 @@
       "translated": "Luisteren"
     },
     {
+      "id": "native.apple.f84b674ad395b694",
+      "source": "Jump to latest",
+      "translated": "Naar nieuwste springen"
+    },
+    {
+      "id": "native.apple.429d825201b2cb85",
+      "source": "Jump to latest reply",
+      "translated": "Naar nieuwste antwoord springen"
+    },
+    {
+      "id": "native.apple.9ab586b85834705c",
+      "source": "Refresh",
+      "translated": "Vernieuwen"
+    },
+    {
       "id": "native.apple.fe9f30f12f1dcfaf",
       "source": "Copy Message",
       "translated": "Bericht kopiëren"
+    },
+    {
+      "id": "native.apple.90bc8a8045e7017e",
+      "source": "Open Full Message",
+      "translated": "Volledig bericht openen"
     },
     {
       "id": "native.apple.b37ec7bd7dc1579a",
@@ -23137,21 +23202,6 @@
       "id": "native.apple.3b44a67aa284886f",
       "source": "Assistant",
       "translated": "Assistent"
-    },
-    {
-      "id": "native.apple.f84b674ad395b694",
-      "source": "Jump to latest",
-      "translated": "Naar nieuwste springen"
-    },
-    {
-      "id": "native.apple.429d825201b2cb85",
-      "source": "Jump to latest reply",
-      "translated": "Naar nieuwste antwoord springen"
-    },
-    {
-      "id": "native.apple.9ab586b85834705c",
-      "source": "Refresh",
-      "translated": "Vernieuwen"
     },
     {
       "id": "native.apple.28c2691c03030434",
@@ -23364,9 +23414,14 @@
       "translated": "Transcript exporteren…"
     },
     {
-      "id": "native.apple.3294ababd29c4457",
-      "source": "Show reasoning & tool activity",
-      "translated": "Redenering en toolactiviteit tonen"
+      "id": "native.apple.ebb130189022c7ec",
+      "source": "Show Reasoning",
+      "translated": "Redenering tonen"
+    },
+    {
+      "id": "native.apple.d0dba9aad550fa6e",
+      "source": "Show Tool Activity",
+      "translated": "Toolactiviteit tonen"
     },
     {
       "id": "native.apple.4b24d792545e5086",

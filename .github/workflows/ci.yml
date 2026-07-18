@@ -53,22 +53,20 @@ run-name: ${{ github.event_name == 'workflow_dispatch' && inputs.dispatch_id != 
 
 concurrency:
   group: ${{ github.event_name == 'workflow_dispatch' && format('{0}-manual-v1-{1}', github.workflow, github.run_id) || (github.event_name == 'pull_request' && format('{0}-v7-{1}', github.workflow, github.event.pull_request.number) || (github.repository == 'openclaw/openclaw' && format('{0}-v7-{1}', github.workflow, github.ref) || format('{0}-v7-{1}-{2}', github.workflow, github.ref, github.sha))) }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main') }}
+  # PRs want newest-head feedback. Canonical main instead runs one complete
+  # integration cycle while GitHub's single pending slot coalesces later pushes.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
-  # Keep the canonical main queue quiet long enough for a follow-up push to
-  # cancel this run before it registers the Blacksmith matrix.
   # Preflight: establish routing truth and job matrices once, then let real
   # work fan out from a single source of truth.
   preflight:
     permissions:
       contents: read
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-    env:
-      OPENCLAW_MAIN_CI_DEBOUNCE_SECONDS: "90"
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
     outputs:
@@ -116,10 +114,6 @@ jobs:
       run_protocol_event_coverage: ${{ steps.manifest.outputs.run_protocol_event_coverage }}
       android_matrix: ${{ steps.manifest.outputs.android_matrix }}
     steps:
-      - name: Record debounce epoch
-        if: github.event_name == 'push' && github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main'
-        run: echo "OPENCLAW_DEBOUNCE_EPOCH=$(date +%s)" >> "$GITHUB_ENV"
-
       - name: Validate release-gate dispatch
         if: github.event_name == 'workflow_dispatch' && inputs.release_gate
         env:
@@ -751,23 +745,6 @@ jobs:
         if: steps.manifest.outputs.run_protocol_event_coverage == 'true'
         run: node scripts/check-protocol-event-coverage.mjs
 
-      # Fan-out debounce: every heavy job needs preflight, so holding this job
-      # open until the debounce window elapses lets a superseding main push
-      # cancel the run while only one 4 vCPU runner has been spent. Preflight's
-      # own work usually exceeds the window, making the residual sleep zero.
-      - name: Debounce canonical main fan-out
-        if: github.event_name == 'push' && github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main'
-        run: |
-          set -euo pipefail
-          elapsed=$(( $(date +%s) - OPENCLAW_DEBOUNCE_EPOCH ))
-          remaining=$(( OPENCLAW_MAIN_CI_DEBOUNCE_SECONDS - elapsed ))
-          if [ "$remaining" -gt 0 ]; then
-            echo "Holding fan-out ${remaining}s for a superseding main push"
-            sleep "$remaining"
-          else
-            echo "Debounce window already elapsed (${elapsed}s)"
-          fi
-
   # Run dependency-free security checks on a hosted runner in parallel with
   # scope detection. No downstream job waits for Python/pre-commit setup.
   security-fast:
@@ -1375,7 +1352,7 @@ jobs:
               exit 1
             fi
             if [[ "$mergeable" == "true" ]] &&
-              git fetch --no-tags --depth=2 origin \
+              timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=2 origin \
                 "+refs/pull/${PULL_REQUEST_NUMBER}/merge:refs/remotes/origin/ci-max-lines-merge"; then
               merge_sha="$(git rev-parse refs/remotes/origin/ci-max-lines-merge)"
               read -r merge_base merge_head extra_parent <<<"$(git show -s --format=%P "$merge_sha")"
@@ -1453,11 +1430,11 @@ jobs:
                   exit 1
                 fi
                 merge_base="${merge_parents[0]}"
-                git fetch --no-tags --depth=1 origin \
+                timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=1 origin \
                   "+${merge_base}:refs/remotes/origin/ci-max-lines-base"
                 base_ref="refs/remotes/origin/ci-max-lines-base"
               elif [[ -n "$base_sha" ]]; then
-                git fetch --no-tags --depth=1 origin \
+                timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=1 origin \
                   "+${base_sha}:refs/remotes/origin/ci-max-lines-base"
                 base_ref="refs/remotes/origin/ci-max-lines-base"
               elif [[ -n "${RATCHET_MANUAL_TARGET_SHA:-}" ]]; then
@@ -1478,12 +1455,12 @@ jobs:
                   echo "Could not resolve the manual target merge base for the max-lines ratchet." >&2
                   exit 1
                 fi
-                git fetch --no-tags --depth=1 origin \
+                timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=1 origin \
                   "+${merge_base_sha}:refs/remotes/origin/ci-max-lines-base"
                 base_ref="refs/remotes/origin/ci-max-lines-base"
               else
                 default_branch="${RATCHET_DEFAULT_BRANCH:-main}"
-                git fetch --no-tags --depth=1 origin \
+                timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=1 origin \
                   "+refs/heads/${default_branch}:refs/remotes/origin/ci-max-lines-base"
                 base_ref="refs/remotes/origin/ci-max-lines-base"
               fi
@@ -1818,8 +1795,8 @@ jobs:
     timeout-minutes: ${{ matrix.timeout_minutes || 60 }}
     strategy:
       fail-fast: false
-      # The canonical main path waits for the admission debounce above, so
-      # widen this large matrix within the current runner-registration budget.
+      # Canonical main admits only one complete run at a time, so widen this
+      # matrix within the current runner-registration budget.
       max-parallel: 28
       matrix: ${{ fromJson(needs.preflight.outputs.checks_node_core_nondist_matrix) }}
     steps:
@@ -1919,7 +1896,7 @@ jobs:
             fi
             harness_root="${RUNNER_TEMP}/openclaw-ci-shard-runner"
             workflow_remote="https://github.com/${job_workflow_repository}.git"
-            git fetch --no-tags --depth=1 "$workflow_remote" "$job_workflow_sha"
+            timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=1 "$workflow_remote" "$job_workflow_sha"
             for file in \
               scripts/ci-run-node-test-shard.mjs \
               scripts/lib/direct-run.mjs \
@@ -2050,11 +2027,12 @@ jobs:
           case "$TASK" in
             guards)
               pnpm check:no-conflict-markers
+              pnpm check:script-declarations
               pnpm tool-display:check
               pnpm check:host-env-policy:swift
               pnpm dup:check:coverage
               if [ -n "$PR_BASE_SHA" ]; then
-                git fetch --no-tags --depth=1 origin "+${PR_BASE_SHA}:refs/remotes/origin/ci-base"
+                timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=1 origin "+${PR_BASE_SHA}:refs/remotes/origin/ci-base"
                 node scripts/report-test-temp-creations.mjs --base refs/remotes/origin/ci-base --head HEAD --no-merge-base
               fi
               pnpm deps:patches:check

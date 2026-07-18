@@ -11,6 +11,7 @@ import {
   describeFailoverError,
   FailoverError,
   findCliMaxTurnsError,
+  findCliTimeoutError,
   isNonProviderRuntimeCoordinationError,
   isSignalTimeoutReason,
   isTimeoutError,
@@ -73,6 +74,23 @@ describe("failover-error", () => {
     );
 
     expect(findCliMaxTurnsError(aggregate)).toBe(maxTurns);
+  });
+
+  it("finds structured CLI timeout context through aggregate wrappers", () => {
+    const timeout = new FailoverError("CLI exceeded timeout", {
+      reason: "timeout",
+      code: "cli_overall_timeout",
+      cliTimeout: {
+        mode: "overall",
+        timeoutSeconds: 600,
+        observedActivity: true,
+        activeToolCount: 0,
+        backgroundTaskCount: 1,
+      },
+    });
+    const aggregate = new AggregateError([{ cause: timeout }], "CLI turn failed");
+
+    expect(findCliTimeoutError(aggregate)).toBe(timeout);
   });
 
   it("infers failover reason from HTTP status", () => {

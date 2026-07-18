@@ -1,6 +1,6 @@
 // Verifies Claude CLI model diagnostics stay listener-gated and memory-bounded.
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   onTrustedInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -41,6 +41,10 @@ function createContext(): PreparedCliRunContext {
 }
 
 describe("Claude CLI model-call diagnostics", () => {
+  beforeEach(() => {
+    resetDiagnosticEventsForTest();
+  });
+
   afterEach(() => {
     resetDiagnosticEventsForTest();
   });

@@ -249,6 +249,10 @@ beforeEach(() => {
     configurable: true,
     value: createStorageMock(),
   });
+  // The Coding zone defaults to collapsed on first run; most cases assert its
+  // contents (work rows, CLI catalogs), so start expanded and let the
+  // collapse-specific tests override the stored value themselves.
+  localStorage.setItem("openclaw:sidebar:sessions:collapsed-sections", JSON.stringify([]));
 });
 
 function createContext(
@@ -301,6 +305,14 @@ afterEach(() => {
 });
 
 describe("AppSidebar update card wiring", () => {
+  it("shows OpenClaw in the default pinned routes", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
+
+    const link = sidebar.querySelector<HTMLAnchorElement>('.nav-item[href="/custodian"]');
+    expect(link?.textContent?.trim()).toBe("OpenClaw");
+  });
+
   it("renders the update card in the footer after the attention slot and forwards its action", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
@@ -324,7 +336,7 @@ describe("AppSidebar update card wiring", () => {
 });
 
 describe("AppSidebar brand actions", () => {
-  it("starts a session for the active agent and leaves the sessions header sort-only", async () => {
+  it("starts a session for the active agent from the Threads header", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const agentsList = {
       defaultId: "main",
@@ -343,12 +355,14 @@ describe("AppSidebar brand actions", () => {
     sidebar.onOpenNewSession = onOpenNewSession;
     await sidebar.updateComplete;
 
-    const button = sidebar.querySelector<HTMLButtonElement>(".sidebar-brand .sidebar-new-session");
+    // The new-session affordance moved off the brand row onto Threads.
+    expect(sidebar.querySelector(".sidebar-brand .sidebar-new-session")).toBeNull();
+    expect(sidebar.querySelector(".sidebar-recent-sessions__head--root")).toBeNull();
+    const button = sidebar.querySelector<HTMLButtonElement>(
+      '[data-session-section="ungrouped"] .sidebar-new-session',
+    );
     expect(button?.getAttribute("aria-label")).toBe("New session");
     expect(button?.disabled).toBe(false);
-    expect(
-      sidebar.querySelector(".sidebar-recent-sessions__head--root .sidebar-session-new"),
-    ).toBeNull();
 
     button?.click();
     expect(onOpenNewSession).toHaveBeenCalledExactlyOnceWith("research");
@@ -379,7 +393,7 @@ describe("AppSidebar agent chip", () => {
     sidebar.onNavigate = onNavigate;
     await sidebar.updateComplete;
 
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__main")?.click();
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
     await sidebar.updateComplete;
     const rows = [
       ...sidebar.querySelectorAll<HTMLElement>(
@@ -414,7 +428,7 @@ describe("AppSidebar agent chip", () => {
     sidebar.onNavigate = onNavigate;
     await sidebar.updateComplete;
 
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__main")?.click();
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
     await sidebar.updateComplete;
     const menu = sidebar.querySelector<HTMLElement>(".sidebar-agent-menu");
     const settingsAgent = [
@@ -438,7 +452,7 @@ describe("AppSidebar agent chip", () => {
     sidebar.connected = false;
     await sidebar.updateComplete;
 
-    expect(sidebar.querySelector(".sidebar-agent-chip__subtitle")?.textContent?.trim()).toBe(
+    expect(sidebar.querySelector(".sidebar-agent-card__subtitle")?.textContent?.trim()).toBe(
       "Offline",
     );
   });
@@ -460,7 +474,7 @@ describe("AppSidebar agent chip", () => {
     });
     await sidebar.updateComplete;
 
-    expect(sidebar.querySelector(".sidebar-agent-chip__subtitle")?.textContent).toContain(
+    expect(sidebar.querySelector(".sidebar-agent-card__subtitle")?.textContent).toContain(
       "Working",
     );
   });
@@ -501,10 +515,11 @@ describe("AppSidebar agent chip", () => {
     });
     await sidebar.updateComplete;
 
-    // No per-agent sections: the chip menu owns agent switching now.
+    // No per-agent sections: the card switcher owns agent switching now, and
+    // the main session lives behind the identity card instead of the list.
     expect(sidebar.querySelector(".sidebar-agent-section")).toBeNull();
-    expect(sidebar.querySelectorAll(".sidebar-recent-session")).toHaveLength(1);
-    expect(sidebar.querySelector(".sidebar-agent-chip__menu-unread")).not.toBeNull();
+    expect(sidebar.querySelectorAll(".sidebar-recent-session")).toHaveLength(0);
+    expect(sidebar.querySelector(".sidebar-agent-card__menu-unread")).not.toBeNull();
 
     // Mid-switch (selected agent != loaded result agent) the list renders the
     // target agent's cached rows instead of flashing empty until refresh.
@@ -515,6 +530,100 @@ describe("AppSidebar agent chip", () => {
     const rows = [...sidebar.querySelectorAll(".sidebar-recent-session")];
     expect(rows).toHaveLength(1);
     expect(rows[0]?.textContent).toContain("Research task");
+  });
+
+  it("routes Home to the main session and marks it active there", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const setSessionKey = vi.fn();
+    (gateway as { setSessionKey: (key: string) => void }).setSessionKey = setSessionKey;
+    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
+    const navigate = vi.fn();
+    sidebar.onNavigate = navigate;
+    sidebar.connected = true;
+    (sidebar as unknown as { activeRouteId: string }).activeRouteId = "chat";
+    sidebar.sessionKey = "agent:main:main";
+    await sidebar.updateComplete;
+
+    const home = sidebar.querySelector<HTMLAnchorElement>(".nav-item--home");
+    expect(home?.textContent).toContain("Home");
+    expect(home?.getAttribute("aria-current")).toBe("page");
+
+    home?.click();
+    expect(setSessionKey).toHaveBeenCalledWith("agent:main:main");
+    expect(navigate).toHaveBeenCalledWith("chat", { search: "?session=agent%3Amain%3Amain" });
+  });
+
+  it("treats the global key as the main session under global scope", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const harness = createSessionsHarness("main", ["global"]);
+    const globalAgents = {
+      defaultId: "main",
+      mainKey: "main",
+      scope: "global",
+      agents: [{ id: "main", identity: { name: "Molty" } }],
+    } as AgentsListResult;
+    const { sidebar } = await mountSidebar(gateway, harness.sessions, "panel", globalAgents);
+    harness.publishList({
+      result: {
+        ts: 2,
+        path: "",
+        count: 2,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          { key: "global", kind: "global", updatedAt: 5, unread: true },
+          { key: "agent:main:side-quest", kind: "direct", label: "Side quest", updatedAt: 4 },
+        ],
+      },
+    });
+    await sidebar.updateComplete;
+
+    // The advertised global main hides behind the Home row instead of
+    // leaking into Threads; ordinary sessions still list, and Home surfaces
+    // the global row's unread state.
+    expect(sidebar.querySelector('[data-session-key="global"]')).toBeNull();
+    expect(sidebar.querySelector('[data-session-key="agent:main:side-quest"]')).not.toBeNull();
+    expect(sidebar.querySelector(".nav-item--home .session-unread-dot")).not.toBeNull();
+  });
+
+  it("promotes main-session children to top-level threads, including alias parent keys", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    // The gateway row uses the unprefixed "main" alias; children index under
+    // that literal key, so promotion must follow the row's key, not only the
+    // synthesized agent:main:main form.
+    const harness = createSessionsHarness("main", ["main"]);
+    const { sidebar } = await mountSidebar(gateway, harness.sessions);
+    harness.publishList({
+      result: {
+        ts: 2,
+        path: "",
+        count: 2,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          {
+            key: "main",
+            kind: "direct",
+            updatedAt: 5,
+            childSessions: ["agent:main:subagent:thread-a"],
+          },
+          {
+            key: "agent:main:subagent:thread-a",
+            spawnedBy: "main",
+            kind: "direct",
+            label: "Spawned thread",
+            updatedAt: 4,
+          },
+        ],
+      },
+    });
+    await sidebar.updateComplete;
+
+    // The main row hides behind the identity card; its child surfaces as a
+    // top-level (non-child) thread row.
+    expect(sidebar.querySelector('[data-session-key="main"]')).toBeNull();
+    const promoted = sidebar.querySelector('[data-session-key="agent:main:subagent:thread-a"]');
+    expect(promoted).not.toBeNull();
+    expect(promoted?.classList.contains("sidebar-recent-session--child")).toBe(false);
+    expect(promoted?.textContent).toContain("Spawned thread");
   });
 
   it("loads and expands child sessions inline without root session controls", async () => {
@@ -1120,8 +1229,8 @@ describe("AppSidebar agent chip", () => {
     sidebar.onNavigate = onNavigate;
     await sidebar.updateComplete;
 
-    expect(sidebar.querySelector(".sidebar-agent-chip__name")?.textContent?.trim()).toBe("Molty");
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__main")?.click();
+    expect(sidebar.querySelector(".sidebar-agent-card__name")?.textContent?.trim()).toBe("Molty");
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
     await sidebar.updateComplete;
 
     const menu = sidebar.querySelector(".sidebar-agent-menu");
@@ -1158,7 +1267,7 @@ describe("AppSidebar agent chip", () => {
     openExternal.mockRestore();
     await sidebar.updateComplete;
 
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__main")?.click();
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
     await sidebar.updateComplete;
     const reopenedMenu = sidebar.querySelector(".sidebar-agent-menu");
 
@@ -1198,7 +1307,7 @@ describe("AppSidebar agent chip", () => {
     sidebar.onNavigate = onNavigate;
     await sidebar.updateComplete;
 
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__main")?.click();
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
     await sidebar.updateComplete;
     const settingsRow = [
       ...sidebar.querySelectorAll<HTMLElement>(".sidebar-agent-menu wa-dropdown-item"),
@@ -1229,7 +1338,7 @@ describe("AppSidebar agent chip", () => {
     sidebar.connected = true;
     await sidebar.updateComplete;
 
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__main")?.click();
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
     await sidebar.updateComplete;
     expect(sidebar.querySelector(".sidebar-agent-menu__filter")).toBeNull();
     expect(
@@ -1253,7 +1362,7 @@ describe("AppSidebar agent chip", () => {
     context.agentSelection.state.selectedId = "agent-1";
     await sidebar.updateComplete;
 
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__main")?.click();
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
     await sidebar.updateComplete;
     const input = sidebar.querySelector<HTMLInputElement>(".sidebar-agent-menu__filter input");
     expect(input).not.toBeNull();
@@ -1304,7 +1413,7 @@ describe("AppSidebar agent chip", () => {
     sidebar.connected = true;
     await sidebar.updateComplete;
 
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__main")?.click();
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
     await sidebar.updateComplete;
     expect(sidebar.querySelector(".sidebar-agent-menu__filter")).not.toBeNull();
     expect(
@@ -1326,7 +1435,7 @@ describe("AppSidebar agent chip", () => {
     sidebar.pinnedAgentIds = ["deleted-agent"];
     await sidebar.updateComplete;
 
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__main")?.click();
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
     await sidebar.updateComplete;
     expect(
       sidebar.querySelectorAll(
@@ -1349,7 +1458,7 @@ describe("AppSidebar agent chip", () => {
     sidebar.connected = true;
     await sidebar.updateComplete;
 
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__main")?.click();
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
     await sidebar.updateComplete;
     const rows = [
       ...sidebar.querySelectorAll(
@@ -2975,7 +3084,7 @@ describe("AppSidebar session catalog pagination", () => {
 describe("AppSidebar session pagination", () => {
   it("does not show pagination controls at the ten-session boundary", async () => {
     const keys = [
-      "agent:main:main",
+      "agent:main:session-0",
       ...Array.from({ length: 9 }, (_, index) => `agent:main:session-${index + 1}`),
     ];
     const gateway = createGateway({} as GatewayBrowserClient);
@@ -2990,7 +3099,7 @@ describe("AppSidebar session pagination", () => {
     const keys = [
       ...Array.from({ length: 10 }, (_, index) => `agent:main:session-${index + 1}`),
       pinnedKey,
-      "agent:main:main",
+      "agent:main:extra",
     ];
     const sessions = createSessionsHarness("main", keys);
     const result = sessions.sessions.state.result;
@@ -3017,13 +3126,12 @@ describe("AppSidebar session pagination", () => {
 
     expect(sidebar.querySelectorAll(".sidebar-recent-session")).toHaveLength(10);
     expect(sidebar.querySelector(`[data-session-key="${pinnedKey}"]`)).not.toBeNull();
-    expect(sidebar.querySelector('[data-session-key="agent:main:main"]')).not.toBeNull();
-    expect(sidebar.querySelector('[data-session-key="agent:main:session-9"]')).toBeNull();
+    expect(sidebar.querySelector('[data-session-key="agent:main:session-10"]')).toBeNull();
   });
 
   it("hides pagination when required sessions cannot be collapsed", async () => {
     const keys = [
-      "agent:main:main",
+      "agent:main:pinned-0",
       ...Array.from({ length: 30 }, (_, index) => `agent:main:pinned-${index + 1}`),
     ];
     const sessions = createSessionsHarness("main", keys);
@@ -3044,7 +3152,7 @@ describe("AppSidebar session pagination", () => {
 
   it("reveals optional sessions immediately when required sessions exceed the page size", async () => {
     const keys = [
-      "agent:main:main",
+      "agent:main:session-0",
       ...Array.from({ length: 40 }, (_, index) => `agent:main:session-${index + 1}`),
     ];
     const sessions = createSessionsHarness("main", keys);
@@ -3081,7 +3189,7 @@ describe("AppSidebar session pagination", () => {
 
   it("reveals sessions ten at a time and offers Collapse after thirty", async () => {
     const keys = [
-      "agent:main:main",
+      "agent:main:session-0",
       ...Array.from({ length: 40 }, (_, index) => `agent:main:session-${index + 1}`),
     ];
     const gateway = createGateway({} as GatewayBrowserClient);
@@ -3372,7 +3480,7 @@ describe("AppSidebar session accessibility", () => {
     const list = sidebar.querySelector('[data-session-section="ungrouped"] [role="list"]');
     const row = sidebar.querySelector(`[data-session-key="${key}"]`);
     const link = row?.querySelector<HTMLAnchorElement>(".sidebar-recent-session__link");
-    expect(list?.getAttribute("aria-label")).toBe("Chats");
+    expect(list?.getAttribute("aria-label")).toBe("Threads");
     expect(row?.getAttribute("role")).toBe("listitem");
     expect(row?.hasAttribute("aria-label")).toBe(false);
     expect(link?.hasAttribute("aria-label")).toBe(false);
@@ -3386,15 +3494,15 @@ describe("AppSidebar session accessibility", () => {
     expect(descriptionId ? document.getElementById(descriptionId)?.textContent : "").toBe("now");
   });
 
-  it("keeps the empty-chat fallback as a current link inside a list item", async () => {
+  it("renders no chat rows when only the main session exists", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, createSessions("main", []));
+    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
     (sidebar as unknown as { activeRouteId: string }).activeRouteId = "chat";
     await sidebar.updateComplete;
 
-    const fallback = sidebar.querySelector(".sidebar-recent-session--active");
-    expect(fallback?.getAttribute("role")).toBe("listitem");
-    expect(fallback?.querySelector("a")?.getAttribute("aria-current")).toBe("page");
+    // The identity card is the main-session entry; the list stays empty.
+    expect(sidebar.querySelectorAll(".sidebar-recent-session")).toHaveLength(0);
+    expect(sidebar.querySelector("openclaw-sidebar-agent-card")).not.toBeNull();
   });
 });
 
@@ -3868,7 +3976,7 @@ describe("AppSidebar transient menus", () => {
   it("ignores a stale agent-menu hide after opening its replacement", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
-    const trigger = sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__main");
+    const trigger = sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main");
     if (!trigger) {
       throw new Error("expected agent menu trigger");
     }
@@ -3902,9 +4010,9 @@ describe("AppSidebar transient menus", () => {
   it("ignores a stale More-menu hide after opening its replacement", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
-    const trigger = sidebar.querySelector<HTMLButtonElement>("button.nav-item--action");
+    const trigger = sidebar.querySelector<HTMLButtonElement>(".sidebar-nav__head-action");
     if (!trigger) {
-      throw new Error("expected More menu trigger");
+      throw new Error("expected Pages menu trigger");
     }
 
     trigger.click();
@@ -4200,11 +4308,13 @@ describe("AppSidebar catalog session rows", () => {
       expect(active[0]?.closest('[role="list"]')?.getAttribute("aria-label")).toBe("Local Codex");
       expect(active[0]?.querySelector("a")?.getAttribute("aria-current")).toBe("page");
       // The raw catalog key must not surface as a synthesized chat row.
+      // Catalogs nest inside the Coding zone, so classify each row by its
+      // closest section rather than any ancestor group.
       const chatRows = [
-        ...sidebar.querySelectorAll(
-          '.sidebar-recent-sessions__group:not([data-session-section^="catalog:"]) [data-session-key]',
-        ),
-      ].map((row) => row.getAttribute("data-session-key"));
+        ...sidebar.querySelectorAll(".sidebar-recent-sessions__group [data-session-key]"),
+      ]
+        .filter((row) => !row.closest('[data-session-section^="catalog:"]'))
+        .map((row) => row.getAttribute("data-session-key"));
       expect(chatRows).not.toContain("catalog:codex:gateway%3Alocal:thread-1");
     } finally {
       vi.useRealTimers();

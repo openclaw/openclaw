@@ -449,6 +449,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                 : `mattermost:channel:${optsLocal.channelId}`,
           To: to,
           SessionKey: threadContext.sessionKey,
+          DmScope: route.dmScope,
           ParentSessionKey: threadContext.parentSessionKey,
           AccountId: route.accountId,
           ChatType: chatType,
@@ -640,6 +641,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             : `mattermost:channel:${params.channelId}`,
       To: to,
       SessionKey: params.sessionKey,
+      DmScope: params.route.dmScope,
       ParentSessionKey: params.parentSessionKey,
       AccountId: params.route.accountId,
       ChatType: params.chatType,
@@ -1334,6 +1336,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                 : `mattermost:channel:${channelId}`,
           To: to,
           SessionKey: sessionKey,
+          DmScope: route.dmScope,
           ParentSessionKey: parentSessionKey,
           AccountId: route.accountId,
           ChatType: chatType,
@@ -1698,7 +1701,11 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                 cfg,
                 channel: "mattermost",
                 accountId: route.accountId,
-                route: { agentId: route.agentId, sessionKey: route.sessionKey },
+                route: {
+                  agentId: route.agentId,
+                  dmScope: route.dmScope,
+                  sessionKey: route.sessionKey,
+                },
                 ctxPayload,
                 record: {
                   updateLastRoute:

@@ -1844,29 +1844,23 @@ describe("ci workflow guards", () => {
     expect(runStep.run).toContain(":benchmark:assembleDebug");
   });
 
-  it("debounces canonical main fan-out inside preflight", () => {
+  it("runs canonical main CI single-flight while coalescing the pending tip", () => {
     const workflow = readCiWorkflow();
-    const source = readFileSync(".github/workflows/ci.yml", "utf8");
 
-    // The debounce lives at the tail of preflight: heavy jobs all need
-    // preflight, so a superseding main push can cancel the run before fan-out
-    // while only one runner has been spent. No standalone admission job may
-    // reappear on the critical path.
+    // GitHub concurrency keeps one running and one pending run by default.
+    // Replacing only the pending run preserves a complete integration cycle
+    // while coalescing merge bursts to the newest main tip.
+    expect(workflow.concurrency["cancel-in-progress"]).toBe(
+      "${{ github.event_name == 'pull_request' }}",
+    );
     expect(workflow.jobs["runner-admission"]).toBeUndefined();
     const preflight = workflow.jobs.preflight;
     expect(preflight.needs).toBeUndefined();
-    expect(preflight.env.OPENCLAW_MAIN_CI_DEBOUNCE_SECONDS).toBe("90");
+    expect(preflight.env?.OPENCLAW_MAIN_CI_DEBOUNCE_SECONDS).toBeUndefined();
     const steps = preflight.steps as Array<{ if?: string; name?: string; run?: string }>;
-    expect(steps[0]?.name).toBe("Record debounce epoch");
-    expect(steps[0]?.if).toContain("github.ref == 'refs/heads/main'");
-    const gate = steps.at(-1);
-    expect(gate?.name).toBe("Debounce canonical main fan-out");
-    expect(gate?.if).toContain("github.ref == 'refs/heads/main'");
-    expect(gate?.run).toContain('sleep "$remaining"');
+    expect(steps.some((step) => step.name === "Record debounce epoch")).toBe(false);
+    expect(steps.some((step) => step.name === "Debounce canonical main fan-out")).toBe(false);
     expect(workflow.jobs["security-fast"].needs).toBeUndefined();
-    expect(source).toContain(
-      "cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main') }}",
-    );
   });
 
   it("keeps CodeQL critical quality scans off Blacksmith registrations", () => {
@@ -2490,11 +2484,17 @@ describe("ci workflow guards", () => {
     const warmerSetup = warmer.jobs.warm.steps.find(
       (step: WorkflowStep) => step.name === "Setup Node environment",
     );
+    const checkoutStep = warmer.jobs.warm.steps.find(
+      (step: WorkflowStep) => step.name === "Checkout",
+    );
     const seedStep = warmer.jobs.warm.steps.find(
       (step: WorkflowStep) => step.name === "Select broad cache seed",
     );
     const warmStep = warmer.jobs.warm.steps.find(
       (step: WorkflowStep) => step.name === "Warm transform and compile caches",
+    );
+    const maintainStoreStep = warmer.jobs.warm.steps.find(
+      (step: WorkflowStep) => step.name === "Maintain dependency store budget",
     );
 
     expect(warmer.concurrency["cancel-in-progress"]).toBe(false);
@@ -2502,6 +2502,11 @@ describe("ci workflow guards", () => {
     expect(warmer.on.workflow_dispatch).toBeUndefined();
     expect(warmer.on.repository_dispatch.types).toEqual(["vitest-cache-warm"]);
     expect(warmer.jobs.warm.if).toContain("github.repository == 'openclaw/openclaw'");
+    expect(warmer.jobs.warm.if).toContain("github.event.workflow_run.conclusion == 'success'");
+    expect(warmer.jobs.warm.if).not.toContain("cancelled");
+    expect(checkoutStep.with.ref).toBe(
+      "${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}",
+    );
     expect(warmerSource).toContain('cron: "17 8 * * *"');
     expect(warmerSource).toContain('candidate.shardName.startsWith("core-unit-fast")');
     expect(warmerSetup.with).toMatchObject({
@@ -2520,6 +2525,34 @@ describe("ci workflow guards", () => {
     );
     expect(seedStep.if).toBe("github.event_name != 'workflow_run'");
     expect(warmStep.if).toBe("github.event_name != 'workflow_run'");
+    expect(warmer.jobs.warm.steps.indexOf(warmerSetup)).toBeLessThan(
+      warmer.jobs.warm.steps.indexOf(maintainStoreStep),
+    );
+    expect(maintainStoreStep.env.OPENCLAW_PNPM_STORE_MAX_KIB).toBe("8388608");
+    expect(maintainStoreStep.run).toContain('store_dir="${PNPM_CONFIG_STORE_DIR:?}"');
+    expect(maintainStoreStep.run).toContain('PNPM_CONFIG_STORE_DIR="$store_dir" pnpm store prune');
+    expect(maintainStoreStep.run).toContain('>> "$GITHUB_STEP_SUMMARY"');
+
+    const maintenanceRoot = mkdtempSync(path.join(tmpdir(), "openclaw-pnpm-maintenance-"));
+    try {
+      const storeDir = path.join(maintenanceRoot, "store");
+      const summaryPath = path.join(maintenanceRoot, "summary.md");
+      mkdirSync(storeDir);
+      const result = spawnSync("bash", ["-c", maintainStoreStep.run], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          GITHUB_STEP_SUMMARY: summaryPath,
+          OPENCLAW_PNPM_STORE_MAX_KIB: "-1",
+          PNPM_CONFIG_STORE_DIR: storeDir,
+        },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain("pruning above -1 KiB ceiling");
+      expect(readFileSync(summaryPath, "utf8")).toContain("- Pruned: true");
+    } finally {
+      rmSync(maintenanceRoot, { force: true, recursive: true });
+    }
   });
 
   it("uses bundled Node shards and telemetry-backed runner sizes", () => {
@@ -2692,6 +2725,131 @@ describe("ci workflow guards", () => {
       expect(key, file).not.toContain("github.ref");
       expect(key, file).not.toContain("github.run_");
       expect(key, file).not.toContain("hashFiles(");
+    }
+  });
+
+  it("deletes only exact allowlisted retired sticky disks from protected main", () => {
+    const cleanupSource = readFileSync(".github/workflows/sticky-disk-cleanup.yml", "utf8");
+    const cleanup = parse(cleanupSource);
+    const job = cleanup.jobs.delete;
+    const checkoutStep = job.steps.find(
+      (step: WorkflowStep) => step.name === "Checkout protected manifest",
+    );
+    const validateStep = job.steps.find(
+      (step: WorkflowStep) => step.name === "Validate exact retired key",
+    );
+    const deleteStep = job.steps.find(
+      (step: WorkflowStep) => step.name === "Delete retired sticky disk",
+    );
+    const retiredDisks = JSON.parse(
+      readFileSync(".github/retired-sticky-disks.json", "utf8"),
+    ) as Array<{ architecture?: unknown; key?: unknown; region?: unknown }>;
+
+    expect(Array.isArray(retiredDisks)).toBe(true);
+    expect(
+      retiredDisks.every(
+        (disk) =>
+          typeof disk.key === "string" &&
+          disk.key.length > 0 &&
+          disk.key === disk.key.trim() &&
+          (disk.architecture === "amd64" || disk.architecture === "arm64") &&
+          typeof disk.region === "string" &&
+          disk.region.length > 0 &&
+          disk.region === disk.region.trim(),
+      ),
+    ).toBe(true);
+    expect(
+      new Set(retiredDisks.map((disk) => `${disk.key}:${disk.architecture}:${disk.region}`)).size,
+    ).toBe(retiredDisks.length);
+    expect(cleanup.on).toHaveProperty("workflow_dispatch");
+    expect(cleanup.permissions).toEqual({ contents: "read" });
+    expect(cleanup.concurrency).toEqual({
+      group: "sticky-disk-cleanup",
+      "cancel-in-progress": false,
+    });
+    expect(job.if).toContain("github.ref == 'refs/heads/main'");
+    expect(job.if).toContain("inputs.confirm");
+    expect(checkoutStep.with.ref).toBe("refs/heads/main");
+    expect(job["runs-on"]).toContain("inputs.architecture == 'arm64'");
+    expect(validateStep.env.RETIRED_ARCHITECTURE).toBe("${{ inputs.architecture }}");
+    expect(validateStep.env.RETIRED_KEY).toBe("${{ inputs.retired_key }}");
+    expect(validateStep.env.RETIRED_REGION).toBe("${{ inputs.region }}");
+    expect(validateStep.run).toContain('process.env.BLACKSMITH_ENV?.includes("arm")');
+    expect(validateStep.run).toContain("requestedRegion !== process.env.BLACKSMITH_REGION");
+    expect(validateStep.run).toContain("requestedKey !== requestedKey.trim()");
+    expect(validateStep.run).toContain("disk?.key === requestedKey");
+    const rejectedKey = spawnSync("bash", ["-c", validateStep.run], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        BLACKSMITH_ENV: "production-amd64",
+        BLACKSMITH_REGION: "us-test-1",
+        RETIRED_ARCHITECTURE: "amd64",
+        RETIRED_KEY: "openclaw/openclaw-not-retired",
+        RETIRED_REGION: "us-test-1",
+      },
+    });
+    expect(rejectedKey.status).not.toBe(0);
+    expect(rejectedKey.stderr).toContain("identity is not allowlisted for retirement");
+    const paddedKey = spawnSync("bash", ["-c", validateStep.run], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        BLACKSMITH_ENV: "production-amd64",
+        BLACKSMITH_REGION: "us-test-1",
+        RETIRED_ARCHITECTURE: "amd64",
+        RETIRED_KEY: " openclaw/openclaw-active-key ",
+        RETIRED_REGION: "us-test-1",
+      },
+    });
+    expect(paddedKey.status).not.toBe(0);
+    expect(paddedKey.stderr).toContain("key must be non-empty and canonical");
+    expect(deleteStep).toMatchObject({
+      uses: "useblacksmith/stickydisk-delete@3bd8d43f9da764c6b80c2cd6db129bdb568c79b6",
+      with: {
+        "delete-docker-cache": "false",
+        "delete-key": "${{ inputs.retired_key }}",
+      },
+    });
+
+    // A retired-key entry must never match any disk family still mounted by
+    // the repository. Expressions stand for one non-empty resolved segment.
+    const workflowFiles = readdirSync(".github/workflows")
+      .filter((name) => name.endsWith(".yml"))
+      .map((name) => `.github/workflows/${name}`);
+    const actionFiles = readdirSync(".github/actions").map(
+      (name) => `.github/actions/${name}/action.yml`,
+    );
+    const activeKeyPatterns: RegExp[] = [];
+    for (const file of [...workflowFiles, ...actionFiles]) {
+      if (!existsSync(file)) {
+        continue;
+      }
+      const parsed = parse(readFileSync(file, "utf8"));
+      const jobs = parsed?.jobs ? Object.values(parsed.jobs) : [];
+      const stepLists = [
+        ...jobs.map((candidate) => (candidate as { steps?: WorkflowStep[] }).steps ?? []),
+        (parsed?.runs?.steps ?? []) as WorkflowStep[],
+      ];
+      for (const step of stepLists.flat()) {
+        if (typeof step?.uses !== "string" || !step.uses.startsWith("useblacksmith/stickydisk@")) {
+          continue;
+        }
+        const key = step.with?.key;
+        if (typeof key !== "string") {
+          continue;
+        }
+        const escapedParts = key
+          .split(/\$\{\{[^}]+\}\}/u)
+          .map((part) => part.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"));
+        activeKeyPatterns.push(new RegExp(`^${escapedParts.join(".+")}$`, "u"));
+      }
+    }
+    for (const retiredDisk of retiredDisks) {
+      expect(
+        activeKeyPatterns.some((pattern) => pattern.test(retiredDisk.key as string)),
+        `${retiredDisk.key} is still an active sticky-disk key`,
+      ).toBe(false);
     }
   });
 
@@ -3196,6 +3354,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
 
     expect(workflow).toContain("check-guards");
     expect(workflow).toContain("check-shrinkwrap");
+    expect(preflightGuards).toContain("pnpm check:script-declarations");
     expect(shrinkwrapGuards).toContain("pnpm deps:shrinkwrap:check");
     expect(preflightGuards).toContain("pnpm deps:patches:check");
     expect(parsedWorkflow.jobs.preflight.outputs.diff_base_revision).toBe(
@@ -3211,12 +3370,14 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     ).run;
     expect(securityDiffBase).toContain("git rev-list --parents -n 1 HEAD");
     expect(securityDiffBase).not.toContain("node scripts/lib/merge-head-diff-base.mjs");
-    expect(
-      parsedWorkflow.jobs["check-shard"].steps.find(
-        (step: WorkflowStep) => step.name === "Run check shard",
-      ).env.PR_BASE_SHA,
-    ).toBe(
+    const checkShardStep = parsedWorkflow.jobs["check-shard"].steps.find(
+      (step: WorkflowStep) => step.name === "Run check shard",
+    );
+    expect(checkShardStep.env.PR_BASE_SHA).toBe(
       "${{ github.event_name == 'pull_request' && needs.preflight.outputs.diff_base_revision || '' }}",
+    );
+    expect(checkShardStep.run).toContain(
+      'timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=1 origin "+${PR_BASE_SHA}:refs/remotes/origin/ci-base"',
     );
   });
 
@@ -3344,7 +3505,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(releaseGateMerge.run).toContain(
       '"+refs/pull/${PULL_REQUEST_NUMBER}/merge:refs/remotes/origin/ci-max-lines-merge"',
     );
-    expect(releaseGateMerge.run).toContain("git fetch --no-tags --depth=2 origin \\");
+    expect(releaseGateMerge.run).toContain(
+      "timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=2 origin \\",
+    );
     expect(releaseGateMerge.run).toContain(
       "release-gate merge tree did not refresh to the current pull request base and head",
     );
@@ -3355,7 +3518,11 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(releaseGateMerge.run).toContain(
       'echo "RATCHET_RELEASE_MERGE_TREE=true" >> "$GITHUB_ENV"',
     );
-    expect(checksFastRun.run).toContain("git fetch --no-tags --depth=1 origin \\");
+    expect(
+      checksFastRun.run.match(
+        /timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=1 origin \\/gu,
+      ),
+    ).toHaveLength(4);
     expect(checksFastRun.run).toContain('git ls-remote origin "refs/heads/${default_branch}"');
     expect(checksFastRun.run).toContain(
       '"repos/${GITHUB_REPOSITORY}/compare/${default_sha}...${RATCHET_MANUAL_TARGET_SHA}"',
@@ -3952,7 +4119,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       'if [[ ! -f "$runner" ]]',
       "job_workflow_repository=$(jq -r '.workflow_repository // empty' <<<\"$JOB_CONTEXT_JSON\")",
       "job_workflow_sha=$(jq -r '.workflow_sha // empty' <<<\"$JOB_CONTEXT_JSON\")",
-      'git fetch --no-tags --depth=1 "$workflow_remote" "$job_workflow_sha"',
+      'timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=1 "$workflow_remote" "$job_workflow_sha"',
       'git show "${job_workflow_sha}:${file}" > "${harness_root}/${file}"',
       'node "$runner"',
     ]) {

@@ -77,7 +77,7 @@ describeControlUiE2e("Control UI mobile pairing mocked Gateway E2E", () => {
       const response = await page.goto(`${server.baseUrl}chat`);
       expect(response?.status()).toBe(200);
 
-      // Pairing folded into the footer agent-chip menu.
+      // Pairing folded into the identity-card agent menu.
       const sidebar = page.locator("openclaw-app-sidebar");
       await sidebar.getByRole("button", { name: /Agent menu/ }).click();
       const sidebarPairingButton = sidebar

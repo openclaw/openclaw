@@ -1566,6 +1566,8 @@ describe("runDoctorSessionSqlite", () => {
   it("keeps truncated GitHub issue bodies on a valid UTF-16 boundary", () => {
     const store = createLegacyStore();
     const manifestPath = path.join(store.tempDir, "failed-migration.json");
+    const unpairedSurrogate =
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
     const writeManifest = (messages: string[], targetCount = 1) => {
       const manifest: SessionSqliteMigrationManifest = {
         failedAt: "2030-01-01T00:00:00.000Z",
@@ -1591,6 +1593,11 @@ describe("runDoctorSessionSqlite", () => {
       };
       fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
     };
+
+    writeManifest([`${"x".repeat(499)}🎉tail`]);
+    const fieldIssue = createSessionSqliteMigrationFailureIssue(manifestPath);
+    expect(fieldIssue?.body).not.toMatch(unpairedSurrogate);
+    expect(new URL(fieldIssue?.url ?? "").searchParams.get("body")).not.toContain("�");
 
     const baseMessages = Array.from({ length: 9 }, () => "x".repeat(500));
     writeManifest([...baseMessages, "MESSAGE_START"]);
@@ -1622,9 +1629,7 @@ describe("runDoctorSessionSqlite", () => {
 
     writeManifest([`${"x".repeat(19_999 - bodyMessageOffset)}🎉tail`], bodyTargetCount);
     const bodyIssue = createSessionSqliteMigrationFailureIssue(manifestPath);
-    expect(bodyIssue?.body).not.toMatch(
-      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
-    );
+    expect(bodyIssue?.body).not.toMatch(unpairedSurrogate);
   });
 
   it("recovers only manifests matching an explicit store selector", async () => {

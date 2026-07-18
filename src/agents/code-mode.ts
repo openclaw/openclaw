@@ -1292,7 +1292,10 @@ function formatCodeModeCatalogIndex(catalog: readonly ToolSearchCatalogEntry[]):
   const lines = catalog
     .filter((entry) => entry.source === "openclaw")
     .map((entry) => compactToolSearchCatalogEntry(entry))
-    .toSorted((a, b) => a.id.localeCompare(b.id))
+    // Declared-output entries sort first so byte truncation drops `-> ?`
+    // lines, which stay fully discoverable through ALL_TOOLS, before it drops
+    // contracts the model can one-pass on. Deterministic within each tier.
+    .toSorted((a, b) => (a.output ? 0 : 1) - (b.output ? 0 : 1) || a.id.localeCompare(b.id))
     .map(
       (entry) =>
         `- ${JSON.stringify(entry.id)} ${entry.input ?? "unknown"} -> ${entry.output ?? "?"}`,

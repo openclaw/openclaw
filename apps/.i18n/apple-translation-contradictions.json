@@ -7646,6 +7646,14 @@
       ]
     },
     {
+      "locale": "fa",
+      "source": "Sessions…",
+      "translations": [
+        "جلسه‌ها…",
+        "نشست‌ها…"
+      ]
+    },
+    {
       "locale": "ar",
       "source": "Setup",
       "translations": [

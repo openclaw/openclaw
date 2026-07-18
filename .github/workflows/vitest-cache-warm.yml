@@ -19,16 +19,19 @@ concurrency:
 
 jobs:
   warm:
-    # Cancelled main runs count as refresh triggers: under merge traffic every
-    # push cancels the prior run, so success-only gating starves the snapshot
-    # for hours (observed 15:34->18:45 stale window) while this job checks out
-    # main tip anyway. Failed runs still skip so a broken main cannot publish.
-    if: github.repository == 'openclaw/openclaw' && (github.event_name != 'workflow_run' || (github.event.workflow_run.event == 'push' && (github.event.workflow_run.conclusion == 'success' || github.event.workflow_run.conclusion == 'cancelled') && github.event.workflow_run.head_branch == 'main'))
+    # Canonical main CI is single-flight, so only a completed green integration
+    # cycle may refresh the dependency snapshot. Scheduled/dispatch runs remain
+    # the transform and compile cache writers.
+    if: github.repository == 'openclaw/openclaw' && (github.event_name != 'workflow_run' || (github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main'))
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          # workflow_run's github.sha follows the current default-branch tip,
+          # which can be newer than the green run that authorized this write.
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -46,6 +49,40 @@ jobs:
           sticky-disk: "true"
           use-actions-cache: "false"
           vitest-fs-cache: ${{ github.event_name != 'workflow_run' && 'true' || 'false' }}
+
+      - name: Maintain dependency store budget
+        shell: bash
+        env:
+          # The current store is well below this ceiling. Prune only after
+          # accumulated retired package versions exceed 8 GiB.
+          OPENCLAW_PNPM_STORE_MAX_KIB: "8388608"
+        run: |
+          set -euo pipefail
+          store_dir="${PNPM_CONFIG_STORE_DIR:?}"
+          before_kib="$(du -sk "$store_dir" | cut -f1)"
+          after_kib="$before_kib"
+          pruned=false
+
+          if [ "$before_kib" -gt "$OPENCLAW_PNPM_STORE_MAX_KIB" ]; then
+            echo "pnpm store is ${before_kib} KiB; pruning above ${OPENCLAW_PNPM_STORE_MAX_KIB} KiB ceiling"
+            PNPM_CONFIG_STORE_DIR="$store_dir" pnpm store prune
+            after_kib="$(du -sk "$store_dir" | cut -f1)"
+            pruned=true
+          else
+            echo "pnpm store is ${before_kib} KiB; below ${OPENCLAW_PNPM_STORE_MAX_KIB} KiB ceiling"
+          fi
+
+          {
+            echo "### Dependency store maintenance"
+            echo
+            echo "- Before: ${before_kib} KiB"
+            echo "- After: ${after_kib} KiB"
+            echo "- Pruned: ${pruned}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$after_kib" -gt "$OPENCLAW_PNPM_STORE_MAX_KIB" ]; then
+            echo "::warning::pnpm store remains above its 8 GiB maintenance ceiling after prune"
+          fi
 
       - name: Select broad cache seed
         if: github.event_name != 'workflow_run'
