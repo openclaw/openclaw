@@ -24154,6 +24154,11 @@
       "translated": "إنهاء الإملاء"
     },
     {
+      "id": "native.apple.95eeae0399fbc990",
+      "source": "Cancel",
+      "translated": "إلغاء"
+    },
+    {
       "id": "native.apple.5a0793d2827b9399",
       "source": "Transcribe speech into the message",
       "translated": "حوّل الكلام إلى نص داخل الرسالة."

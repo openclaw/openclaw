@@ -271,11 +271,12 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +4: gateway-backed harness question runner, claim/cancel helpers, and caller type.
       // Harvest: internal question runtime exports -2.
       // +1: ingress-effect-once factory.
+      // +1: shared persistent-dedupe claim loop.
       // +3: bounded raw transcript cursor request, result, and reader.
       // +3: bounded visible transcript cursor request, result, and reader.
       // +1: explicit AgentModelPolicyConfig shared with provider setup surfaces.
       // +1: AgentHarnessSessionSupersededError lets harness plugins stop stale-owner fallback.
-      8166,
+      8167,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -316,9 +317,10 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +3: gateway-backed harness question runner and claim/cancel helpers.
       // Harvest: internal question runtime callable -1.
       // +1: ingress-effect-once factory.
+      // +1: shared persistent-dedupe claim loop.
       // +1: bounded raw transcript cursor reader.
       // +1: bounded visible transcript cursor reader.
-      4542,
+      4543,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

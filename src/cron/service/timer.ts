@@ -28,6 +28,7 @@ import {
   type CronActiveJobMarker,
 } from "../active-jobs.js";
 import { resolveCronDeliveryPlan, resolveFailureDestination } from "../delivery-plan.js";
+import { resolvePacedNextRunAtMs } from "../pacing.js";
 import { resolveCronExecutionRetryHint } from "../retry-hint.js";
 import {
   createCronRunDiagnosticsFromError,
@@ -43,6 +44,7 @@ import type {
   CronDeliveryTrace,
   CronFailureNotificationDelivery,
   CronJob,
+  CronNextCheckProposal,
   CronRunOutcome,
   CronRunStatus,
   CronRunTelemetry,
@@ -144,6 +146,7 @@ type TimedCronRunOutcome = CronRunOutcome &
     startedAt: number;
     endedAt: number;
     triggerEval?: CronTriggerEvalOutcome;
+    nextCheck?: CronNextCheckProposal;
   };
 
 type CronJobRunResult = CronRunOutcome &
@@ -152,6 +155,7 @@ type CronJobRunResult = CronRunOutcome &
     delivered?: boolean;
     startedAt: number;
     endedAt: number;
+    nextCheck?: CronNextCheckProposal;
   };
 
 export type CronTriggerEvalOutcome = {
@@ -762,6 +766,7 @@ export function applyJobResult(
   };
   job.state.queuedAtMs = undefined;
   job.state.runningAtMs = undefined;
+  job.state.pacedNextRunAtMs = undefined;
   job.state.lastRunAtMs = result.startedAt;
   job.state.lastRunStatus = result.status;
   job.state.lastStatus = result.status;
@@ -1019,6 +1024,21 @@ export function applyJobResult(
         },
         "cron: applying error backoff",
       );
+    } else if (
+      isJobEnabled(job) &&
+      result.status === "ok" &&
+      job.pacing !== undefined &&
+      result.nextCheck !== undefined
+    ) {
+      // Pacing bounds are the explicit per-job cadence contract. Do not apply
+      // normal schedule floors here; that would change the promised clamp.
+      const nextRunAtMs = resolvePacedNextRunAtMs({
+        nowMs: result.endedAt,
+        delayMs: result.nextCheck.delayMs,
+        pacing: job.pacing,
+      });
+      job.state.nextRunAtMs = nextRunAtMs;
+      job.state.pacedNextRunAtMs = nextRunAtMs;
     } else if (isJobEnabled(job)) {
       let naturalNext: number | undefined;
       try {
@@ -1191,6 +1211,7 @@ function applyOutcomeToStoredJob(
       triggerEval: result.triggerEval,
     });
     job.state.startupCatchupAtMs = undefined;
+    job.state.pacedNextRunAtMs = undefined;
     return undefined;
   }
 
@@ -2284,6 +2305,7 @@ async function runStartupCatchupCandidate(
       diagnostics: result.diagnostics,
       delivered: result.delivered,
       deliveryError: result.deliveryError,
+      nextCheck: result.nextCheck,
       sessionId: result.sessionId,
       sessionKey: result.sessionKey,
       model: result.model,
@@ -2434,6 +2456,7 @@ async function executeJobCore(
       deliveryAttempted?: boolean;
       deliveryError?: string;
       delivery?: CronDeliveryTrace;
+      nextCheck?: CronNextCheckProposal;
       triggerEval?: CronTriggerEvalOutcome;
     }
 > {
@@ -2693,6 +2716,7 @@ async function executeDetachedCronJob(
       deliveryAttempted?: boolean;
       deliveryError?: string;
       delivery?: CronDeliveryTrace;
+      nextCheck?: CronNextCheckProposal;
     }
 > {
   if (job.payload.kind === "command") {
@@ -2782,6 +2806,7 @@ async function executeDetachedCronJob(
     // successful run so the service can persist it as `lastDeliveryError` and
     // emit it on the finished event for CLI/UI/API run logs (#95419).
     deliveryError: res.deliveryError,
+    nextCheck: res.nextCheck,
     summary: res.summary,
     delivered: res.delivered,
     deliveryAttempted: res.deliveryAttempted,

@@ -127,7 +127,7 @@ struct RootTabsSourceGuardTests {
         #expect(!rootSource.contains("tabViewBottomAccessory"))
         #expect(!rootSource.contains("PhoneVoiceTabAccessory"))
         #expect(!chromeSource.contains("PhoneVoiceTabAccessory"))
-        #expect(chatSource.contains("talkControl: viewModel.isAttachmentOwnerPinned ? nil : self.talkControl"))
+        #expect(chatSource.contains("talkControl: Self.shouldExposeCaptureControl("))
         #expect(chatSource.contains("private var talkControl: OpenClawChatTalkControl"))
         #expect(chatSource.contains("self.appModel.setTalkEnabled(!self.appModel.talkMode.isEnabled)"))
     }
