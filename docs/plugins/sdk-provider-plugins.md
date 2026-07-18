@@ -565,13 +565,29 @@ catalog, API-key auth, and dynamic model resolution.
     | `openrouter-thinking` | OpenRouter reasoning wrapper for proxy routes, with unsupported-model/`auto` skips handled centrally | `openrouter` |
     | `tool-stream-default-on` | Default-on `tool_stream` wrapper for providers like Z.AI that want tool streaming unless explicitly disabled | `zai` |
 
+    Available tool-schema compatibility families today:
+
+    | Family | What it wires in | Bundled examples |
+    | --- | --- | --- |
+    | `deepseek` | Removes JSON Schema keywords unsupported by DeepSeek tool calling and reports remaining violations | `deepseek` |
+    | `gemini` | Projects canonical schemas into Gemini's supported schema subset and reports unsupported keywords | `google`, `google-gemini-cli` |
+    | `llamacpp-gbnf` | Removes `pattern` and `maxLength` values above 2,000 before llama.cpp converts tool schemas to GBNF; smaller bounds remain | `llama-cpp`, `lmstudio`, `ollama`, `ollama-cloud` |
+    | `openai` | Applies native OpenAI strict-object schema requirements where the active model API requires them | `openai` |
+
+    Use `llamacpp-gbnf` only for providers whose tool schemas are converted by
+    llama.cpp. The family operates in the provider's `normalizeToolSchemas`
+    hook, so canonical tool definitions and ordinary-provider schemas remain
+    unchanged. Custom OpenAI-compatible llama.cpp endpoints can opt in per model
+    with `compat.toolSchemaProfile: "llamacpp"`; see
+    [Local models](/gateway/local-models#other-openai-compatible-local-proxies).
+
     <Accordion title="SDK seams powering the family builders">
       Each family builder is composed from lower-level public helpers exported from the same package, which you can reach for when a provider needs to go off the common pattern:
 
       - `openclaw/plugin-sdk/provider-model-shared` - `ProviderReplayFamily`, `buildProviderReplayFamilyHooks(...)`, and the raw replay builders (`buildOpenAICompatibleReplayPolicy`, `buildAnthropicReplayPolicyForModel`, `buildGoogleGeminiReplayPolicy`, `buildHybridAnthropicOrOpenAIReplayPolicy`). Also exports Gemini replay helpers (`sanitizeGoogleGeminiReplayHistory`, `resolveTaggedReasoningOutputMode`) and endpoint/model helpers (`resolveProviderEndpoint`, `normalizeProviderId`, `normalizeGooglePreviewModelId`).
       - `openclaw/plugin-sdk/provider-stream` - `ProviderStreamFamily`, `buildProviderStreamFamilyHooks(...)`, `composeProviderStreamWrappers(...)`, plus the shared OpenAI/Codex wrappers (`createOpenAIAttributionHeadersWrapper`, `createOpenAIFastModeWrapper`, `createOpenAIServiceTierWrapper`, `createOpenAIResponsesContextManagementWrapper`, `createCodexNativeWebSearchWrapper`), DeepSeek V4 OpenAI-compatible wrapper (`createDeepSeekV4OpenAICompatibleThinkingWrapper`), Anthropic Messages thinking prefill cleanup (`createAnthropicThinkingPrefillPayloadWrapper`), plain-text tool-call compat (`createPlainTextToolCallCompatWrapper`), and shared proxy/provider wrappers (`createOpenRouterWrapper`, `createToolStreamWrapper`, `createMinimaxFastModeWrapper`).
       - `openclaw/plugin-sdk/provider-stream-shared` - lightweight payload and event wrappers for hot provider paths, including `createOpenAICompatibleCompletionsThinkingOffWrapper`, `createPayloadPatchStreamWrapper`, `createPlainTextToolCallCompatWrapper`, `normalizeOpenAICompatibleReasoningPayload(...)`, and `setQwenChatTemplateThinking(...)`.
-      - `openclaw/plugin-sdk/provider-tools` - `ProviderToolCompatFamily`, `buildProviderToolCompatFamilyHooks("deepseek" | "gemini" | "openai")`, and underlying provider schema helpers.
+      - `openclaw/plugin-sdk/provider-tools` - `ProviderToolCompatFamily`, `buildProviderToolCompatFamilyHooks("deepseek" | "gemini" | "llamacpp-gbnf" | "openai")`, and underlying provider schema cleanup and diagnostic helpers.
 
       For Gemini-family providers, keep the reasoning-output mode aligned with
       the transport. Direct Google Gemini API providers should use `native`
