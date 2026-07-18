@@ -326,6 +326,7 @@ describe("diagnostic run activity retention", () => {
       const sessionId = `recovered-rotation-${index}`;
       emitTrustedDiagnosticEvent({
         type: "model.call.started",
+        callId: `recovered-call-${index}`,
         runId: `recovered-run-${index}`,
         sessionId,
         sessionKey,
