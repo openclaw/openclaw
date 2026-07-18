@@ -392,12 +392,8 @@ raw PCM.
 <Tabs>
   <Tab title="macOS HTTP">
 <Warning>
-The OpenAI-compatible speech route landed after Speech Swift v0.0.22. Use the
-first Speech Swift release that includes
-[soniqo/speech-swift#415](https://github.com/soniqo/speech-swift/pull/415).
-If Homebrew still installs v0.0.22, use the macOS CLI tab below or build
-Speech Swift from current source; v0.0.22 includes `speech-server` but not
-`POST /v1/audio/speech`.
+This HTTP setup requires Speech Swift v0.0.23 or later. If Homebrew already
+installed an older version, run `brew update && brew upgrade speech` first.
 </Warning>
 
 Start Speech Swift's local server:
