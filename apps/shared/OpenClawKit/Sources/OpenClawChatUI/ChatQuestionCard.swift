@@ -527,6 +527,11 @@ private enum QuestionLookupResult {
     case failed
 }
 
+private struct QuestionRefreshApplyResult {
+    let complete: Bool
+    let changed: Bool
+}
+
 extension OpenClawChatViewModel {
     public var visibleQuestionCards: [OpenClawQuestionCardModel] {
         self.questionCards.filter { card in
@@ -566,13 +571,13 @@ extension OpenClawChatViewModel {
                 generation: refreshGeneration,
                 stateRevision: stateRevision)
             else { return }
-            let complete = self.applyQuestionRefresh(records: records, lookups: lookups)
-            if complete {
+            let result = self.applyQuestionRefresh(records: records, lookups: lookups)
+            if result.complete {
                 self.questionRefreshRetryTask = nil
             } else {
                 self.scheduleQuestionRefreshRetry(
                     generation: refreshGeneration,
-                    retryIndex: retryIndex)
+                    retryIndex: result.changed ? 0 : retryIndex)
             }
         } catch let error as GatewayResponseError where Self.questionListIsUnavailable(error) {
             guard self.questionRefreshSnapshotIsCurrent(
@@ -614,7 +619,7 @@ extension OpenClawChatViewModel {
 
     private func applyQuestionRefresh(
         records: [QuestionRecord],
-        lookups: [(OpenClawQuestionCardModel, QuestionLookupResult)]) -> Bool
+        lookups: [(OpenClawQuestionCardModel, QuestionLookupResult)]) -> QuestionRefreshApplyResult
     {
         var changed = false
         for record in records {
@@ -644,7 +649,7 @@ extension OpenClawChatViewModel {
             self.questionStateRevision &+= 1
             self.markTimelineChanged()
         }
-        return complete
+        return QuestionRefreshApplyResult(complete: complete, changed: changed)
     }
 
     private func clearPendingQuestionsForUnavailableList() {

@@ -1572,6 +1572,55 @@ struct ChatViewModelTests {
         #expect(await listCalls.current() == 3)
     }
 
+    @Test @MainActor func `question refresh resets exhausted retry budget after partial progress`() async throws {
+        let listCalls = AsyncCounter()
+        let recoveringCalls = AsyncCounter()
+        let progressed = chatQuestionRecord(id: "ask_progressed")
+        let recovering = chatQuestionRecord(id: "ask_recovering")
+        let transport = TestChatTransport(
+            historyResponses: [],
+            listQuestionsHook: {
+                let call = await listCalls.increment()
+                if call == 1 {
+                    throw GatewayResponseError(
+                        method: "question.list",
+                        code: "UNAVAILABLE",
+                        message: "consume retry budget",
+                        details: nil)
+                }
+                return []
+            },
+            getQuestionHook: { id in
+                if id == progressed.id {
+                    return chatQuestionRecord(id: id, status: .answered)
+                }
+                let call = await recoveringCalls.increment()
+                if call == 1 {
+                    throw GatewayResponseError(
+                        method: "question.get",
+                        code: "UNAVAILABLE",
+                        message: "partial failure",
+                        details: nil)
+                }
+                return chatQuestionRecord(id: id, status: .cancelled)
+            })
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        viewModel.questionRefreshRetryDelaysMs = [0]
+        viewModel.upsertQuestion(progressed)
+        viewModel.upsertQuestion(recovering)
+
+        await viewModel.refreshQuestions()
+        try await waitUntil("question retry after partial progress") {
+            await MainActor.run {
+                viewModel.questionCards.first { $0.id == recovering.id }?.status() == .cancelled
+            }
+        }
+
+        #expect(await listCalls.current() == 3)
+        #expect(await recoveringCalls.current() == 2)
+        #expect(viewModel.questionCards.first { $0.id == progressed.id }?.status() == .answeredElsewhere)
+    }
+
     @Test @MainActor func `question refresh resets retry budget after state change during backoff`() async throws {
         let listCalls = AsyncCounter()
         let transport = TestChatTransport(
