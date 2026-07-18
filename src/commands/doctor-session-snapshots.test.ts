@@ -1,4 +1,5 @@
 // Doctor session snapshot tests cover session snapshot validation and repair guidance.
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -1085,5 +1086,35 @@ describe("doctor session snapshot repair (shouldRepair)", () => {
       shouldRepair: true,
     });
     expect(note).not.toHaveBeenCalled();
+  });
+
+  it("skips oversized session stores instead of reading them into memory", async () => {
+    const storePath = path.join(root, "state", "agents", "main", "sessions", "huge-sessions.json");
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    const fd = await fs.open(storePath, "w");
+    try {
+      const chunk = Buffer.alloc(1024 * 1024, 0x61);
+      for (let i = 0; i < 17; i += 1) {
+        await fd.write(chunk);
+      }
+    } finally {
+      await fd.close();
+    }
+    const readFileSyncSpy = vi.spyOn(fsSync, "readFileSync");
+    try {
+      const issues = await detectSessionSnapshotHealthIssues({
+        storePaths: [storePath],
+        bundledSkillsDir,
+      });
+      expect(issues).toEqual([]);
+      expect(
+        readFileSyncSpy.mock.calls.some((call) => {
+          const target = call[0];
+          return typeof target === "string" && path.resolve(target) === path.resolve(storePath);
+        }),
+      ).toBe(false);
+    } finally {
+      readFileSyncSpy.mockRestore();
+    }
   });
 });

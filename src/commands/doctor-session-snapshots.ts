@@ -17,6 +17,9 @@ import { resolveBundledSkillsDir } from "../skills/loading/bundled-dir.js";
 import { resolveConfigDir, shortenHomePath } from "../utils.js";
 
 const SESSION_SNAPSHOTS_CHECK_ID = "core/doctor/session-snapshots";
+// Session stores are JSON maps of session records. Cap reads so a corrupted or
+// hostile multi-GB store cannot OOM doctor during snapshot scan/repair.
+const MAX_SNAPSHOT_STORE_BYTES = 16 * 1024 * 1024;
 
 type SnapshotPathSource =
   | "skillsSnapshot.prompt"
@@ -332,8 +335,21 @@ function resolveSessionStorePaths(params: {
     .toSorted((a, b) => a.localeCompare(b));
 }
 
+function readSnapshotStoreRaw(storePath: string): string {
+  const storeStat = fs.statSync(storePath, { throwIfNoEntry: false });
+  if (!storeStat?.isFile()) {
+    throw new Error(`${storePath}: not a regular file`);
+  }
+  if (storeStat.size > MAX_SNAPSHOT_STORE_BYTES) {
+    throw new Error(
+      `${storePath}: file too large (${storeStat.size} bytes, max ${MAX_SNAPSHOT_STORE_BYTES})`,
+    );
+  }
+  return fs.readFileSync(storePath, "utf-8");
+}
+
 function loadSessionStoreForSnapshotScan(storePath: string): Record<string, SessionEntry> {
-  const parsed = JSON.parse(fs.readFileSync(storePath, "utf-8")) as unknown;
+  const parsed = JSON.parse(readSnapshotStoreRaw(storePath)) as unknown;
   if (!isRecord(parsed)) {
     return {};
   }
@@ -567,7 +583,7 @@ export async function noteSessionSnapshotHealth(params?: {
         const repairResult = await updateSessionStore(
           storePath,
           async (store) => {
-            const raw = fs.readFileSync(storePath, "utf-8");
+            const raw = readSnapshotStoreRaw(storePath);
             const parsed = JSON.parse(raw) as unknown;
             const rawStore = isRecord(parsed) ? parsed : {};
             const replacements = repairFreshSessionSnapshotPaths({
