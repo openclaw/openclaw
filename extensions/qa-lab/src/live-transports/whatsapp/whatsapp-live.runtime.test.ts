@@ -15,10 +15,7 @@ import { createWhatsAppQaScenarioEnvironment } from "./scenario-environment.js";
 import { resolveWhatsAppQaScenarioIds } from "./scenario-selection.js";
 import { runWhatsAppApprovalScenario } from "./whatsapp-live.approvals.js";
 import { buildWhatsAppQaConfig, parseWhatsAppQaCredentialPayload } from "./whatsapp-live.config.js";
-import {
-  formatWhatsAppQaBusTarget,
-  resolveWhatsAppQaMessageTargets,
-} from "./whatsapp-live.contracts.js";
+import { resolveWhatsAppQaMessageTargets } from "./whatsapp-live.contracts.js";
 import {
   callWhatsAppGatewayMessageAction,
   callWhatsAppGatewayPoll,
@@ -972,21 +969,6 @@ describe("WhatsApp QA live runtime", () => {
       driverTarget: "120363000000000000@g.us",
       gatewayTarget: "120363000000000000@g.us",
     });
-  });
-
-  it("formats observed WhatsApp conversations without loading the QA Channel runtime", () => {
-    expect(
-      formatWhatsAppQaBusTarget({
-        conversationId: "+15550000001",
-        conversationKind: "direct",
-      }),
-    ).toBe("dm:+15550000001");
-    expect(
-      formatWhatsAppQaBusTarget({
-        conversationId: "120363000000000000@g.us",
-        conversationKind: "group",
-      }),
-    ).toBe("group:120363000000000000@g.us");
   });
 
   it("routes WhatsApp Gateway DM helper calls to the driver peer", async () => {

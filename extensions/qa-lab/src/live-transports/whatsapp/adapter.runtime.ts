@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { WhatsAppQaDriverSession } from "@openclaw/whatsapp/api.js";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { buildQaTarget } from "openclaw/plugin-sdk/qa-channel-protocol";
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import {
@@ -16,7 +17,6 @@ import {
   resolveWhatsAppQaRuntimeEnv,
 } from "./whatsapp-live.config.js";
 import {
-  formatWhatsAppQaBusTarget,
   resolveWhatsAppQaMessageTargets,
   type WhatsAppQaRuntimeEnv,
 } from "./whatsapp-live.contracts.js";
@@ -112,8 +112,8 @@ export async function createWhatsAppQaTransportAdapter(
         }
         await context.messages.addOutboundMessage({
           accountId,
-          to: formatWhatsAppQaBusTarget({
-            conversationKind: logicalConversationKind,
+          to: buildQaTarget({
+            chatType: logicalConversationKind,
             conversationId: logicalConversationId,
           }),
           senderId: message.fromPhoneE164,
