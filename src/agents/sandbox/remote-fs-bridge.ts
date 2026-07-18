@@ -13,7 +13,11 @@ import type {
 } from "./backend-handle.types.js";
 import { SANDBOX_PINNED_MUTATION_PYTHON } from "./fs-bridge-mutation-helper.js";
 import { createWritableRenameTargetResolver } from "./fs-bridge-rename-targets.js";
-import { parseSandboxStatMtimeMs, parseSandboxStatSize } from "./fs-bridge-stat-parse.js";
+import {
+  parseSandboxStatEpochSecondsMtimeMs,
+  parseSandboxStatModeType,
+  parseSandboxStatSize,
+} from "./fs-bridge-stat-parse.js";
 import type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "./fs-bridge.types.js";
 import {
   isPathInsideContainerRoot,
@@ -255,16 +259,16 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       signal: params.signal,
     });
     const result = await this.runRemoteScript({
-      script: 'set -eu\nLC_ALL=C stat -c "%F|%s|%y" -- "$1"',
+      script: 'set -eu\nstat -c "%f|%s|%Y" -- "$1"',
       args: [canonical],
       signal: params.signal,
     });
     const output = result.stdout.toString("utf8").trim();
     const [kindRaw = "", sizeRaw = "0", mtimeRaw = "0"] = output.split("|");
     return {
-      type: kindRaw === "directory" ? "directory" : kindRaw === "regular file" ? "file" : "other",
+      type: parseSandboxStatModeType(kindRaw),
       size: parseSandboxStatSize(sizeRaw),
-      mtimeMs: parseSandboxStatMtimeMs(mtimeRaw),
+      mtimeMs: parseSandboxStatEpochSecondsMtimeMs(mtimeRaw),
     };
   }
 
@@ -529,7 +533,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     const result = await this.runRemoteScript({
       script: [
         'if [ ! -e "$1" ] && [ ! -L "$1" ]; then exit 0; fi',
-        'stats=$(LC_ALL=C stat -c "%F|%h" -- "$1")',
+        'stats=$(stat -c "%f|%h" -- "$1")',
         'printf "%s\\n" "$stats"',
       ].join("\n"),
       args: [params.containerPath],
@@ -541,7 +545,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       return;
     }
     const [kind = "", linksRaw = "1"] = output.split("|");
-    if (kind === "regular file" && hasMultipleHardlinks(linksRaw)) {
+    if (parseSandboxStatModeType(kind) === "file" && hasMultipleHardlinks(linksRaw)) {
       throw new Error(
         `Hardlinked path is not allowed under sandbox mount root: ${params.containerPath}`,
       );
