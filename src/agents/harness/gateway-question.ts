@@ -219,6 +219,10 @@ export async function claimPendingAgentQuestionAnswer(params: {
     throw error;
   }
   if (!state.answer) {
+    // Accepted tradeoff: the claim acknowledges once registration commits. If
+    // the later buffered resolve fails non-terminally the question is still
+    // live on every surface, so the user can re-answer; replaying the text
+    // into steering would double-process it in the common path.
     state.bufferedAnswers = answers;
     return true;
   }
@@ -388,6 +392,15 @@ export async function runAgentHarnessGatewayQuestion(
     }
     if (beforeDelivery.kind === "answer-error") {
       throw beforeDelivery.error;
+    }
+    if (claim.isResolving()) {
+      // A registration-time text claim is already answering this question; a
+      // prompt delivered now would be stale before it renders.
+      const outcome = await answerOutcome;
+      if (outcome.kind === "answer-error") {
+        throw outcome.error;
+      }
+      return await finishAnswer(outcome.result);
     }
     const deliveryAbort = new AbortController();
     const delivery = deliverAgentHarnessQuestionPrompt(

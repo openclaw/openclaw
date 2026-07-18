@@ -260,7 +260,8 @@ class ChatQuestionPanel extends LitElement {
         ? current.includes(label)
           ? current.filter((value) => value !== label)
           : [...current, label]
-        : [label],
+        : // Single-select re-click keeps the choice: radios never deselect.
+          [label],
     );
     this.selectedById = selectedById;
     if (!question.multiSelect) {
