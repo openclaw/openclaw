@@ -32,7 +32,11 @@ import {
 } from "./api.js";
 import { DEFAULT_MINIMAX_MAX_TOKENS, resolveMinimaxApiCost } from "./model-definitions.js";
 import type { MiniMaxRegion } from "./oauth.js";
-import { applyMinimaxApiConfig, applyMinimaxApiConfigCn } from "./onboard.js";
+import {
+  applyMinimaxApiConfig,
+  applyMinimaxApiConfigCn,
+  type MinimaxApiHeaderMode,
+} from "./onboard.js";
 import {
   buildMinimaxPortalProvider,
   buildMinimaxProvider,
@@ -241,30 +245,36 @@ function createOAuthHandler(region: MiniMaxRegion) {
   };
 }
 
-function createMinimaxApiKeyMethod(region: MiniMaxRegion) {
+function createMinimaxApiKeyMethod(region: MiniMaxRegion, headerMode: MinimaxApiHeaderMode) {
   const regionLabel = resolveMinimaxRegionLabel(region);
   const endpointHint = resolveMinimaxEndpointHint(region);
   const isCn = region === "cn";
+  const usesXApiKey = headerMode === "x-api-key";
+  const headerLabel = usesXApiKey ? "X-Api-Key" : "Bearer";
+  const methodSuffix = usesXApiKey ? "-x-api-key" : "";
   return createProviderApiKeyAuthMethod({
     providerId: API_PROVIDER_ID,
-    methodId: isCn ? "api-cn" : "api-global",
-    label: `MiniMax API key (${regionLabel})`,
-    hint: endpointHint,
+    methodId: `${isCn ? "api-cn" : "api-global"}${methodSuffix}`,
+    label: `MiniMax API key (${regionLabel}, ${headerLabel})`,
+    hint: `${endpointHint}; ${usesXApiKey ? "explicit X-Api-Key compatibility" : "documented Bearer default"}`,
     optionKey: "minimaxApiKey",
     flagName: "--minimax-api-key",
     envVar: "MINIMAX_API_KEY",
     promptMessage: isCn
-      ? "Enter MiniMax CN API key (sk-api- or sk-cp-)\nhttps://platform.minimaxi.com/user-center/basic-information/interface-key"
-      : "Enter MiniMax API key (sk-api- or sk-cp-)\nhttps://platform.minimax.io/user-center/basic-information/interface-key",
+      ? `Enter MiniMax CN API key for ${headerLabel} authentication\nhttps://platform.minimaxi.com/user-center/basic-information/interface-key`
+      : `Enter MiniMax API key for ${headerLabel} authentication\nhttps://platform.minimax.io/user-center/basic-information/interface-key`,
     profileId: isCn ? "minimax:cn" : "minimax:global",
     allowProfile: false,
     defaultModel: apiModelRef(DEFAULT_MODEL),
     expectedProviders: isCn ? ["minimax", "minimax-cn"] : ["minimax"],
-    applyConfig: (cfg) => (isCn ? applyMinimaxApiConfigCn(cfg) : applyMinimaxApiConfig(cfg)),
+    applyConfig: (cfg) =>
+      isCn
+        ? applyMinimaxApiConfigCn(cfg, DEFAULT_MODEL, headerMode)
+        : applyMinimaxApiConfig(cfg, DEFAULT_MODEL, headerMode),
     wizard: {
-      choiceId: isCn ? "minimax-cn-api" : "minimax-global-api",
-      choiceLabel: `MiniMax API key (${regionLabel})`,
-      choiceHint: endpointHint,
+      choiceId: `${isCn ? "minimax-cn-api" : "minimax-global-api"}${methodSuffix}`,
+      choiceLabel: `MiniMax API key (${regionLabel}, ${headerLabel})`,
+      choiceHint: `${endpointHint}; ${usesXApiKey ? "explicit X-Api-Key compatibility" : "documented Bearer default"}`,
       ...MINIMAX_WIZARD_GROUP,
     },
   });
@@ -296,7 +306,12 @@ function buildMinimaxApiProviderPlugin(): ProviderPlugin {
     hookAliases: ["minimax-cn"],
     docsPath: "/providers/minimax",
     envVars: ["MINIMAX_API_KEY"],
-    auth: [createMinimaxApiKeyMethod("global"), createMinimaxApiKeyMethod("cn")],
+    auth: [
+      createMinimaxApiKeyMethod("global", "bearer"),
+      createMinimaxApiKeyMethod("cn", "bearer"),
+      createMinimaxApiKeyMethod("global", "x-api-key"),
+      createMinimaxApiKeyMethod("cn", "x-api-key"),
+    ],
     catalog: {
       order: "simple",
       run: async (ctx) => resolveApiCatalog(ctx),

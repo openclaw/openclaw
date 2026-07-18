@@ -876,6 +876,28 @@ describe("anthropic transport stream", () => {
     expect(headers.get("X-Provider")).toBe("foundry");
   });
 
+  it("uses X-Api-Key for the explicitly selected MiniMax transport mode", async () => {
+    const model = makeAnthropicTransportModel({
+      provider: "minimax",
+      baseUrl: "https://api.minimax.io/anthropic",
+      authHeader: false,
+    });
+
+    await runTransportStream(
+      model,
+      {
+        messages: [{ role: "user", content: "hello" }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-minimax-test",
+      } as AnthropicStreamOptions,
+    );
+
+    const headers = latestAnthropicRequestHeaders();
+    expect(headers.get("x-api-key")).toBe("sk-minimax-test");
+    expect(headers.get("authorization")).toBeNull();
+  });
+
   it("bounds streamed Anthropic error responses without content-length", async () => {
     const encoder = new TextEncoder();
     let pullCount = 0;

@@ -14,10 +14,13 @@ import {
 } from "./model-definitions.js";
 import { MINIMAX_DEFAULT_MODEL_ID } from "./provider-models.js";
 
+export type MinimaxApiHeaderMode = "bearer" | "x-api-key";
+
 type MinimaxApiProviderConfigParams = {
   providerId: string;
   modelId: string;
   baseUrl: string;
+  headerMode: MinimaxApiHeaderMode;
 };
 
 function applyMinimaxApiProviderConfigWithBaseUrl(
@@ -49,7 +52,7 @@ function applyMinimaxApiProviderConfigWithBaseUrl(
     ...existingProviderRest,
     baseUrl: params.baseUrl,
     api: "anthropic-messages",
-    authHeader: true,
+    authHeader: params.headerMode === "bearer",
     ...(preservedApiKey ? { apiKey: preservedApiKey } : {}),
     models: mergedModels.length > 0 ? mergedModels : [apiModel],
   };
@@ -75,43 +78,51 @@ function applyMinimaxApiConfigWithBaseUrl(
 export function applyMinimaxApiProviderConfig(
   cfg: OpenClawConfig,
   modelId = MINIMAX_DEFAULT_MODEL_ID,
+  headerMode: MinimaxApiHeaderMode = "bearer",
 ): OpenClawConfig {
   return applyMinimaxApiProviderConfigWithBaseUrl(cfg, {
     providerId: "minimax",
     modelId,
     baseUrl: MINIMAX_API_BASE_URL,
+    headerMode,
   });
 }
 
 export function applyMinimaxApiConfig(
   cfg: OpenClawConfig,
   modelId = MINIMAX_DEFAULT_MODEL_ID,
+  headerMode: MinimaxApiHeaderMode = "bearer",
 ): OpenClawConfig {
   return applyMinimaxApiConfigWithBaseUrl(cfg, {
     providerId: "minimax",
     modelId,
     baseUrl: MINIMAX_API_BASE_URL,
+    headerMode,
   });
 }
 
 export function applyMinimaxApiProviderConfigCn(
   cfg: OpenClawConfig,
   modelId = MINIMAX_DEFAULT_MODEL_ID,
+  headerMode: MinimaxApiHeaderMode = "bearer",
 ): OpenClawConfig {
   return applyMinimaxApiProviderConfigWithBaseUrl(cfg, {
     providerId: "minimax",
     modelId,
     baseUrl: MINIMAX_CN_API_BASE_URL,
+    headerMode,
   });
 }
 
 export function applyMinimaxApiConfigCn(
   cfg: OpenClawConfig,
   modelId = MINIMAX_DEFAULT_MODEL_ID,
+  headerMode: MinimaxApiHeaderMode = "bearer",
 ): OpenClawConfig {
   return applyMinimaxApiConfigWithBaseUrl(cfg, {
     providerId: "minimax",
     modelId,
     baseUrl: MINIMAX_CN_API_BASE_URL,
+    headerMode,
   });
 }

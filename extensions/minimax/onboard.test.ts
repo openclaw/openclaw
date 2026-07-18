@@ -6,7 +6,11 @@ import {
 } from "openclaw/plugin-sdk/provider-test-contracts";
 import { describe, expect, it } from "vitest";
 import { buildMinimaxApiModelDefinition } from "./model-definitions.js";
-import { applyMinimaxApiConfig, applyMinimaxApiProviderConfig } from "./onboard.js";
+import {
+  applyMinimaxApiConfig,
+  applyMinimaxApiConfigCn,
+  applyMinimaxApiProviderConfig,
+} from "./onboard.js";
 
 describe("minimax onboard", () => {
   it("adds minimax provider with correct settings", () => {
@@ -21,6 +25,17 @@ describe("minimax onboard", () => {
       alias: "Minimax",
     });
     expect(cfg.agents?.defaults?.model).toEqual({ primary: "minimax/MiniMax-M3" });
+  });
+
+  it("keeps Bearer as the default and requires explicit X-Api-Key selection", () => {
+    expect(applyMinimaxApiConfig({}).models?.providers?.minimax?.authHeader).toBe(true);
+    expect(applyMinimaxApiConfigCn({}).models?.providers?.minimax?.authHeader).toBe(true);
+    expect(
+      applyMinimaxApiConfig({}, undefined, "x-api-key").models?.providers?.minimax?.authHeader,
+    ).toBe(false);
+    expect(
+      applyMinimaxApiConfigCn({}, undefined, "x-api-key").models?.providers?.minimax?.authHeader,
+    ).toBe(false);
   });
 
   it("keeps reasoning enabled for MiniMax-M3", () => {
