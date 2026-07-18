@@ -28,7 +28,7 @@ async function withPluginAssetFixture(run: (rootDir: string) => Promise<void>) {
         openclaw: {
           assetScripts: {
             build: "node scripts/bundle-a2ui.mjs",
-            buildOutputs: ["src/host/a2ui/a2ui.bundle.js"],
+            buildOutputs: ["assets/generated-runtime.js"],
             copy: "node scripts/copy-a2ui.mjs",
           },
         },
@@ -126,10 +126,10 @@ describe("bundled plugin assets", () => {
 
       const classifier = createRunNodePathClassifier({ rootDir });
       classifier.refreshGeneratedPluginAssetPaths();
-      const generatedPath = "extensions/canvas/src/host/a2ui/a2ui.bundle.js";
+      const generatedPath = "extensions/canvas/assets/generated-runtime.js";
       expect(classifier.isRestartRelevantRunNodePath(generatedPath)).toBe(true);
 
-      packageJson.openclaw.assetScripts.buildOutputs = ["src/host/a2ui/a2ui.bundle.js"];
+      packageJson.openclaw.assetScripts.buildOutputs = ["assets/generated-runtime.js"];
       fs.writeFileSync(packagePath, JSON.stringify(packageJson, null, 2));
       classifier.refreshGeneratedPluginAssetPaths();
 
