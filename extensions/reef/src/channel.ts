@@ -25,6 +25,7 @@ import { resolveReefInboundDispatchContent } from "./inbound.js";
 import { reefMessageAdapter, reefOutboundAdapter } from "./outbound.js";
 import {
   createReefOwnerNoticeHandler,
+  notifyOverdueReefDeliveries,
   processReefInboxEntriesInOrder,
   ReefReceiptNotifier,
 } from "./owner-notice.js";
@@ -454,7 +455,21 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
         await runReefChannelLifecycle({
           parentSignal: ctx.abortSignal,
           startInbox: (signal) => inbox.start(signal),
-          reconcile,
+          reconcile: async () => {
+            // The overdue sweep must run even while the relay is unreachable:
+            // that outage is exactly when queued sends go unconfirmed, and the
+            // notices themselves are local.
+            let reconcileError: Error | undefined;
+            try {
+              await reconcile();
+            } catch (error) {
+              reconcileError = error instanceof Error ? error : new Error(String(error));
+            }
+            await notifyOverdueReefDeliveries({ trust, ownerNotice });
+            if (reconcileError) {
+              throw reconcileError;
+            }
+          },
           onReconcileError: (error) =>
             ctx.log?.error?.(`reef friend reconcile failed: ${String(error)}`),
         });
