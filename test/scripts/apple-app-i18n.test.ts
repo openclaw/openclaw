@@ -285,6 +285,10 @@ describe("Apple app i18n catalogs", () => {
       "apps/ios/Sources/Design/AgentProTab+Overview.swift",
       "utf8",
     );
+    const agentDetailComponents = await readFile(
+      "apps/ios/Sources/Design/AgentProTab+DetailComponents.swift",
+      "utf8",
+    );
     const settingsActions = await readFile(
       "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "utf8",
@@ -327,6 +331,17 @@ describe("Apple app i18n catalogs", () => {
     expect(agentOverview).toContain(
       "func metricTile(\n        icon: String,\n        title: OpenClawTextValue,\n        value: String,\n        detail: OpenClawTextValue",
     );
+    expect(agentDetailComponents).toContain(
+      "func detailMetric(label: OpenClawTextValue, value: String)",
+    );
+    expect(agentDetailComponents).toContain("Text(verbatim: value)");
+    expect(agentDetailComponents).toContain(
+      "func emptyDetailRow(\n        icon: String,\n        title: OpenClawTextValue,\n        detail: OpenClawTextValue)",
+    );
+    expect(agentDetailComponents).toContain("title.text");
+    expect(agentDetailComponents).toContain("detail.text");
+    expect(agentDetailComponents).not.toContain("func detailMetric(label: String");
+    expect(agentDetailComponents).not.toContain("func emptyDetailRow(icon: String, title: String");
     expect(settingsActions).toContain(
       "func diagnosticCheckRow(\n        icon: String,\n        title: OpenClawTextValue,\n        detail: OpenClawTextValue,\n        value: OpenClawTextValue",
     );
