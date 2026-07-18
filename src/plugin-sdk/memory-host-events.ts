@@ -3,6 +3,7 @@
  */
 export {
   appendMemoryHostEvent,
+  normalizeMemoryHostEventRecordForStorage,
   readMemoryHostEventRecords,
   readMemoryHostEvents,
   resolveMemoryHostEventLogPath,

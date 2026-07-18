@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import { resolveWorkspaceStateIdentity } from "../agents/workspace-state-store.js";
 import {
-  createPluginStateSyncKeyedStore,
   pluginStateEntriesInKeyRange,
+  registerPluginStateSyncSequencedJournalEntry,
 } from "../plugin-state/plugin-state-store.js";
 import type { MemoryHostEventRecord } from "./event-types.js";
 
@@ -24,11 +24,6 @@ type StoredMemoryHostEvent = {
   event: MemoryHostEventRecord;
   recordedAt: number;
   sequence: number;
-};
-
-type StoredMemoryHostCursor = {
-  kind: "cursor";
-  lastSequence: number;
 };
 
 let maxMemoryHostEventsForTests: number | undefined;
@@ -68,24 +63,6 @@ function memoryHostEventStorageKey(workspaceDir: string, sequence: number): stri
   return `${eventKeyPrefix(workspaceDir)}1:${sequence.toString().padStart(16, "0")}`;
 }
 
-function openMemoryHostEventStore(env?: NodeJS.ProcessEnv) {
-  return createPluginStateSyncKeyedStore<StoredMemoryHostEvent>(MEMORY_HOST_EVENTS_PLUGIN_ID, {
-    namespace: MEMORY_HOST_EVENTS_NAMESPACE,
-    maxEntries: maxMemoryHostEventsForTests ?? MAX_MEMORY_HOST_EVENTS,
-    ...(env ? { env } : {}),
-  });
-}
-
-function openMemoryHostCursorStore(env?: NodeJS.ProcessEnv) {
-  // Cursor isolation keeps event rotation from evicting sequence ownership.
-  // Lost inactive cursors remain recoverable from each workspace's latest event.
-  return createPluginStateSyncKeyedStore<StoredMemoryHostCursor>(MEMORY_HOST_EVENTS_PLUGIN_ID, {
-    namespace: MEMORY_HOST_EVENT_CURSORS_NAMESPACE,
-    maxEntries: MAX_MEMORY_HOST_EVENT_CURSORS,
-    ...(env ? { env } : {}),
-  });
-}
-
 function cursorKey(workspaceDir: string): string {
   return `${memoryHostWorkspacePrefix(workspaceDir)}:cursor`;
 }
@@ -117,7 +94,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /** Validate and bound one diagnostic event before storing it in plugin state. */
-function normalizeMemoryHostEventRecordForStorage(value: unknown): MemoryHostEventRecord | null {
+export function normalizeMemoryHostEventRecordForStorage(
+  value: unknown,
+): MemoryHostEventRecord | null {
   if (!isRecord(value) || typeof value.type !== "string" || typeof value.timestamp !== "string") {
     return null;
   }
@@ -308,37 +287,6 @@ function normalizeMemoryHostEventRecordForStorage(value: unknown): MemoryHostEve
   return null;
 }
 
-function allocateEventSequence(params: {
-  workspaceDir: string;
-  cursorStore: ReturnType<typeof openMemoryHostCursorStore>;
-  env?: NodeJS.ProcessEnv;
-}): number {
-  const key = cursorKey(params.workspaceDir);
-  const cursor = params.cursorStore.lookup(key);
-  const existingMax =
-    cursor?.kind === "cursor"
-      ? cursor.lastSequence
-      : Math.max(
-          0,
-          listStoredMemoryHostEvents({
-            workspaceDir: params.workspaceDir,
-            limit: 1,
-            ...(params.env ? { env: params.env } : {}),
-          }).at(-1)?.value.sequence ?? 0,
-        );
-  let allocated = 0;
-  params.cursorStore.update?.(key, (current) => {
-    const lastSequence =
-      current?.kind === "cursor" ? Math.max(current.lastSequence, existingMax) : existingMax;
-    allocated = lastSequence + 1;
-    return { kind: "cursor", lastSequence: allocated };
-  });
-  if (allocated === 0) {
-    throw new Error("Memory host event store cannot allocate a workspace sequence");
-  }
-  return allocated;
-}
-
 export function registerMemoryHostEvent(params: {
   workspaceDir: string;
   event: MemoryHostEventRecord;
@@ -348,18 +296,31 @@ export function registerMemoryHostEvent(params: {
   if (!event) {
     throw new TypeError("Memory host event is invalid");
   }
-  const store = openMemoryHostEventStore(params.env);
-  const cursorStore = openMemoryHostCursorStore(params.env);
-  const sequence = allocateEventSequence({
-    workspaceDir: params.workspaceDir,
-    cursorStore,
-    ...(params.env ? { env: params.env } : {}),
-  });
-  store.register(memoryHostEventStorageKey(params.workspaceDir, sequence), {
-    kind: "event",
-    event,
-    recordedAt: Date.now(),
-    sequence,
+  const initialSequence = Math.max(
+    0,
+    listStoredMemoryHostEvents({
+      workspaceDir: params.workspaceDir,
+      limit: 1,
+      ...(params.env ? { env: params.env } : {}),
+    }).at(-1)?.value.sequence ?? 0,
+  );
+  const recordedAt = Date.now();
+  registerPluginStateSyncSequencedJournalEntry({
+    pluginId: MEMORY_HOST_EVENTS_PLUGIN_ID,
+    cursorOptions: {
+      namespace: MEMORY_HOST_EVENT_CURSORS_NAMESPACE,
+      maxEntries: MAX_MEMORY_HOST_EVENT_CURSORS,
+      ...(params.env ? { env: params.env } : {}),
+    },
+    cursorKey: cursorKey(params.workspaceDir),
+    journalOptions: {
+      namespace: MEMORY_HOST_EVENTS_NAMESPACE,
+      maxEntries: maxMemoryHostEventsForTests ?? MAX_MEMORY_HOST_EVENTS,
+      ...(params.env ? { env: params.env } : {}),
+    },
+    initialSequence,
+    journalKey: (sequence) => memoryHostEventStorageKey(params.workspaceDir, sequence),
+    journalValue: (sequence) => ({ kind: "event", event, recordedAt, sequence }),
   });
 }
 

@@ -12,6 +12,7 @@ import {
   pluginStateLookup,
   pluginStateRegister,
   pluginStateRegisterIfAbsent,
+  pluginStateRegisterSequencedJournalEntry,
   pluginStateUpdate,
 } from "./plugin-state-store.sqlite.js";
 import type {
@@ -47,8 +48,8 @@ export {
   getPluginStateCapacity,
   isPluginStateDatabaseOpen,
   MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN,
-  resolveMaxPluginStateEntriesPerPlugin,
   pluginStateEntriesInKeyRange,
+  resolveMaxPluginStateEntriesPerPlugin,
   sweepExpiredPluginStateEntries,
 } from "./plugin-state-store.sqlite.js";
 
@@ -582,7 +583,7 @@ export function importPluginStateEntriesForDoctor(
       valueJson: prepared.valueJson,
       maxEntries,
       overflowPolicy,
-      createdAt: entry.createdAt,
+      createdAtMs: entry.createdAt,
       ...(env ? { env } : {}),
       ...(prepared.ttlMs != null ? { ttlMs: prepared.ttlMs } : {}),
     });

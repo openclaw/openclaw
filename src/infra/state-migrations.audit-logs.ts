@@ -17,11 +17,11 @@ import {
 import { root as createFsSafeRoot } from "./fs-safe.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import { createSqliteAuditRecordStore } from "./sqlite-audit-record-store.js";
-import { withLegacyAuditMigrationLease } from "./state-migrations.audit-coordination.js";
 import {
   hasLegacyAuditRawCheckpointCapacity,
   legacyAuditSourceGenerationKey,
 } from "./state-migrations.audit-checkpoints.js";
+import { withLegacyAuditMigrationLease } from "./state-migrations.audit-coordination.js";
 import type {
   LegacyAuditLogSource,
   LegacyAuditLogsDetection,

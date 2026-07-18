@@ -1,6 +1,10 @@
 // Memory host event helpers append and read persisted memory host events.
 import path from "node:path";
-import { listStoredMemoryHostEvents, registerMemoryHostEvent } from "./event-store.js";
+import {
+  listStoredMemoryHostEvents,
+  normalizeMemoryHostEventRecordForStorage,
+  registerMemoryHostEvent,
+} from "./event-store.js";
 import type { MemoryHostEvent, MemoryHostEventRecord } from "./event-types.js";
 
 export type {
@@ -12,6 +16,8 @@ export type {
   MemoryHostRecallRecordedEvent,
   MemoryHostRecallSkippedEvent,
 } from "./event-types.js";
+
+export { normalizeMemoryHostEventRecordForStorage };
 
 /** Legacy workspace JSONL path retained only for doctor migration discovery. */
 export const MEMORY_HOST_EVENT_LOG_RELATIVE_PATH = path.join("memory", ".dreams", "events.jsonl");

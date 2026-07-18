@@ -63,4 +63,18 @@ describe("ACP parent stream SQLite store", () => {
       ).toEqual([]);
     });
   });
+
+  it("rejects events that serialize to undefined before opening a transaction", async () => {
+    await withTempDir({ prefix: "openclaw-acp-parent-stream-invalid-" }, async (stateDir) => {
+      expect(() =>
+        recordAcpParentStreamEvents({
+          agentId: "codex",
+          env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+          sessionId: "session-1",
+          runId: "run-1",
+          events: [{ createdAt: 10, event: { toJSON: () => undefined } }],
+        }),
+      ).toThrow("ACP parent stream event is not JSON-serializable");
+    });
+  });
 });

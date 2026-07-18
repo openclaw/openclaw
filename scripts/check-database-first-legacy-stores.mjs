@@ -161,12 +161,7 @@ const allowedRuntimeMigrationPaths = [
 
 const allowedFixturePaths = new Set(["extensions/qa-lab/src/providers/shared/auth-store.ts"]);
 
-const allowedCurrentLegacyWriteViolations = [
-  "extensions/memory-wiki/src/compile.ts:legacy store filesystem write:root.write(relativePath, content)",
-  // SQLite remains authoritative; this bounded JSONL export is a named public artifact.
-  "src/plugin-sdk/memory-host-core.ts:legacy store filesystem write:workspaceRoot.remove(MEMORY_HOST_EVENTS_RELATIVE_PATH)",
-  "src/plugin-sdk/memory-host-core.ts:legacy store filesystem write:workspaceRoot.write(MEMORY_HOST_EVENTS_RELATIVE_PATH, content, { mkdir: true, mode: 0o600, })",
-];
+const allowedCurrentLegacyWriteViolations = [];
 
 const sourceFileExtensions = new Set([".cjs", ".cts", ".js", ".mjs", ".mts", ".ts", ".tsx"]);
 

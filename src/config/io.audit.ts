@@ -30,6 +30,7 @@ const CONFIG_SET_VALUE_OPTIONS = new Set([
   "--ref-id",
   "--ref-provider",
   "--ref-source",
+  "--section",
 ]);
 
 function findConfigSetPositionals(argv: readonly string[], setIndex: number): number[] {
@@ -57,15 +58,46 @@ function findConfigSetPositionals(argv: readonly string[], setIndex: number): nu
   return positionals;
 }
 
+function findConfigSetCommandIndex(argv: readonly string[], configIndex: number): number {
+  let optionsEnded = false;
+  for (let index = configIndex + 1; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === undefined) {
+      return -1;
+    }
+    if (!optionsEnded && arg === "--") {
+      optionsEnded = true;
+      continue;
+    }
+    if (!optionsEnded && arg.startsWith("-")) {
+      const equalsIndex = arg.indexOf("=");
+      const optionName = equalsIndex < 0 ? arg : arg.slice(0, equalsIndex);
+      if (equalsIndex < 0 && CONFIG_SET_VALUE_OPTIONS.has(optionName)) {
+        index += 1;
+      }
+      continue;
+    }
+    return arg === "set" ? index : -1;
+  }
+  return -1;
+}
+
 function redactConfigAuditArgv(argv: readonly string[]): string[] {
   const redacted = redactSensitiveArgv(argv);
-  const configIndex = redacted.findIndex(
-    (arg, index) => arg === "config" && redacted[index + 1] === "set",
-  );
-  if (configIndex < 0) {
+  let setIndex = -1;
+  for (let index = 0; index < redacted.length; index += 1) {
+    if (redacted[index] !== "config") {
+      continue;
+    }
+    setIndex = findConfigSetCommandIndex(redacted, index);
+    if (setIndex >= 0) {
+      break;
+    }
+  }
+  if (setIndex < 0) {
     return redacted;
   }
-  for (let index = configIndex + 2; index < redacted.length; index += 1) {
+  for (let index = setIndex + 1; index < redacted.length; index += 1) {
     const arg = redacted[index];
     if (arg === undefined) {
       break;
@@ -79,7 +111,7 @@ function redactConfigAuditArgv(argv: readonly string[]): string[] {
       redacted[index] = "--batch-json=***";
     }
   }
-  const positionals = findConfigSetPositionals(redacted, configIndex + 1);
+  const positionals = findConfigSetPositionals(redacted, setIndex);
   if (positionals.length < 2) {
     return redacted;
   }

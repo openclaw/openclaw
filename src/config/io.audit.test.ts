@@ -388,6 +388,53 @@ describe("config io audit helpers", () => {
       expected: ["openclaw", "config", "set", "--profile", "work", "channels.slack.token", "***"],
     },
     {
+      name: "sensitive config set value after option before subcommand",
+      argv: [
+        "openclaw",
+        "config",
+        "--profile",
+        "work",
+        "set",
+        "channels.slack.token",
+        "secret-value",
+      ],
+      expected: ["openclaw", "config", "--profile", "work", "set", "channels.slack.token", "***"],
+    },
+    {
+      name: "sensitive config set value after config parent option",
+      argv: [
+        "openclaw",
+        "config",
+        "--section",
+        "channels",
+        "set",
+        "channels.slack.token",
+        "secret-value",
+      ],
+      expected: [
+        "openclaw",
+        "config",
+        "--section",
+        "channels",
+        "set",
+        "channels.slack.token",
+        "***",
+      ],
+    },
+    {
+      name: "sensitive config set value when a root option value is config",
+      argv: [
+        "openclaw",
+        "--profile",
+        "config",
+        "config",
+        "set",
+        "channels.slack.token",
+        "secret-value",
+      ],
+      expected: ["openclaw", "--profile", "config", "config", "set", "channels.slack.token", "***"],
+    },
+    {
       name: "sensitive config set value after interleaved option",
       argv: [
         "openclaw",

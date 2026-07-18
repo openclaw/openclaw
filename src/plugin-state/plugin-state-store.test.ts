@@ -16,6 +16,7 @@ import {
   createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
   pluginStateEntriesInKeyRange,
+  registerPluginStateSyncSequencedJournalEntry,
   resetPluginStateStoreForTests,
   sweepExpiredPluginStateEntries,
 } from "./plugin-state-store.js";
@@ -558,6 +559,74 @@ describe("plugin state keyed store", () => {
       });
       await expect(messageStore.entries()).resolves.toHaveLength(maxPluginEntries - 11);
       await expect(topicStore.entries()).resolves.toHaveLength(11);
+    });
+  });
+
+  it("sheds sequenced journal rows without evicting durable sibling state", async () => {
+    await withPluginStateTestState(async () => {
+      const maxPluginEntries = 40;
+      setMaxPluginStateEntriesPerPluginForTests(maxPluginEntries);
+      seedPluginStateEntriesForTests([
+        ...Array.from({ length: maxPluginEntries - 3 }, (_, entryIndex) => ({
+          pluginId: "memory-core",
+          namespace: "durable-state",
+          key: `durable-${entryIndex}`,
+          value: { entryIndex },
+        })),
+        {
+          pluginId: "memory-core",
+          namespace: "memory-host.event-migration-checkpoints",
+          key: "generation",
+          value: { kind: "raw-checkpoint" },
+        },
+        {
+          pluginId: "memory-core",
+          namespace: "memory-host.event-cursors",
+          key: "workspace",
+          value: { kind: "cursor", lastSequence: 1 },
+        },
+        {
+          pluginId: "memory-core",
+          namespace: "memory-host.events",
+          key: "event-1",
+          value: { sequence: 1 },
+        },
+      ]);
+
+      expect(
+        registerPluginStateSyncSequencedJournalEntry({
+          pluginId: "memory-core",
+          cursorOptions: {
+            namespace: "memory-host.event-cursors",
+            maxEntries: 1_000,
+          },
+          cursorKey: "workspace",
+          journalOptions: { namespace: "memory-host.events", maxEntries: 10_000 },
+          initialSequence: 0,
+          journalKey: (sequence) => `event-${sequence}`,
+          journalValue: (sequence) => ({ sequence }),
+        }),
+      ).toBe(2);
+
+      const durable = createPluginStateKeyedStore("memory-core", {
+        namespace: "durable-state",
+        maxEntries: maxPluginEntries,
+      });
+      const checkpoints = createPluginStateKeyedStore("memory-core", {
+        namespace: "memory-host.event-migration-checkpoints",
+        maxEntries: 10_000,
+        overflowPolicy: "reject-new",
+      });
+      const journal = createPluginStateKeyedStore("memory-core", {
+        namespace: "memory-host.events",
+        maxEntries: 10_000,
+      });
+      await expect(durable.lookup("durable-0")).resolves.toEqual({ entryIndex: 0 });
+      await expect(checkpoints.lookup("generation")).resolves.toEqual({
+        kind: "raw-checkpoint",
+      });
+      await expect(journal.lookup("event-1")).resolves.toBeUndefined();
+      await expect(journal.lookup("event-2")).resolves.toEqual({ sequence: 2 });
     });
   });
 
