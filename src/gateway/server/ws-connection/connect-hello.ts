@@ -9,8 +9,8 @@ import {
   restoreDeviceBootstrapToken,
 } from "../../../infra/device-bootstrap.js";
 import {
-  claimPairedNodeConnection,
   finalizeNodePairingCleanupClaim,
+  recordPairedNodeConnection,
 } from "../../../infra/node-pairing.js";
 import { resolveRuntimeServiceVersion } from "../../../version.js";
 import { listControlUiPluginTabs } from "../../control-ui-plugin-tabs.js";
@@ -192,15 +192,15 @@ export async function sendGatewayHello(
     // persistence waits; the router transfers the pending alert by node identity.
     if (nodeSession?.connId === connId) {
       try {
-        const claim = await claimPairedNodeConnection(
+        const connection = await recordPairedNodeConnection(
           nodeSession.nodeId,
           nodeSession.connectedAtMs,
         );
-        if (!claim.recorded) {
+        if (!connection.recorded) {
           logGateway.warn(`failed to record last connect for ${nodeSession.nodeId}: not paired`);
         } else {
           scheduleNodeConnectionNotification(requestContext.nodeRegistry, nodeSession, {
-            isFirstConnection: claim.firstConnection,
+            isFirstConnection: connection.firstConnection,
           });
         }
       } catch (err) {

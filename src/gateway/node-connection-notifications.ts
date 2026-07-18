@@ -13,7 +13,7 @@ type RouterOptions = {
 
 type PendingConnectionAlert = {
   nodeId: string;
-  generation: number;
+  timer?: ReturnType<typeof setTimeout>;
 };
 
 const DEFAULT_PRIMARY_DELAY_MS = 750;
@@ -44,9 +44,7 @@ function connectionLabel(node: NodeSession): string {
 class NodeConnectionNotificationRouter {
   private readonly primaryDelayMs: number;
   private readonly fallbackDelayMs: number;
-  private readonly timersByNodeId = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly pendingByNodeId = new Map<string, PendingConnectionAlert>();
-  private nextGeneration = 0;
 
   constructor(
     private readonly registry: NotificationRegistry,
@@ -62,22 +60,21 @@ class NodeConnectionNotificationRouter {
     if (!isFirstConnection && !this.pendingByNodeId.has(source.nodeId)) {
       return;
     }
-    const pending = { nodeId: source.nodeId, generation: ++this.nextGeneration };
+    const previous = this.pendingByNodeId.get(source.nodeId);
+    if (previous?.timer) {
+      clearTimeout(previous.timer);
+    }
+    const pending: PendingConnectionAlert = { nodeId: source.nodeId };
     this.pendingByNodeId.set(source.nodeId, pending);
-    this.replaceTimer(
-      source.nodeId,
-      setTimeout(() => {
-        this.timersByNodeId.delete(source.nodeId);
-        void this.deliverPrimary(pending);
-      }, this.primaryDelayMs),
-    );
+    this.armTimer(pending, this.primaryDelayMs, () => this.deliverPrimary(pending));
   }
 
   dispose(): void {
-    for (const timer of this.timersByNodeId.values()) {
-      clearTimeout(timer);
+    for (const pending of this.pendingByNodeId.values()) {
+      if (pending.timer) {
+        clearTimeout(pending.timer);
+      }
     }
-    this.timersByNodeId.clear();
     this.pendingByNodeId.clear();
   }
 
@@ -99,12 +96,8 @@ class NodeConnectionNotificationRouter {
       this.finishAlert(pending);
       return;
     }
-    this.replaceTimer(
-      pending.nodeId,
-      setTimeout(() => {
-        this.timersByNodeId.delete(pending.nodeId);
-        void this.deliverFallback(pending, primary?.connId);
-      }, this.fallbackDelayMs),
+    this.armTimer(pending, this.fallbackDelayMs, () =>
+      this.deliverFallback(pending, primary?.connId),
     );
   }
 
@@ -132,11 +125,16 @@ class NodeConnectionNotificationRouter {
   }
 
   private attemptIsCurrent(pending: PendingConnectionAlert): boolean {
-    return this.pendingByNodeId.get(pending.nodeId)?.generation === pending.generation;
+    // Object identity lets a replacement invalidate both staged timers and
+    // in-flight deliveries without a second generation bookkeeping path.
+    return this.pendingByNodeId.get(pending.nodeId) === pending;
   }
 
   private finishAlert(pending: PendingConnectionAlert): void {
     if (this.attemptIsCurrent(pending)) {
+      if (pending.timer) {
+        clearTimeout(pending.timer);
+      }
       this.pendingByNodeId.delete(pending.nodeId);
     }
   }
@@ -166,12 +164,18 @@ class NodeConnectionNotificationRouter {
     }
   }
 
-  private replaceTimer(nodeId: string, timer: ReturnType<typeof setTimeout>): void {
-    const existing = this.timersByNodeId.get(nodeId);
-    if (existing) {
-      clearTimeout(existing);
+  private armTimer(
+    pending: PendingConnectionAlert,
+    delayMs: number,
+    deliver: () => Promise<void>,
+  ): void {
+    if (pending.timer) {
+      clearTimeout(pending.timer);
     }
-    this.timersByNodeId.set(nodeId, timer);
+    pending.timer = setTimeout(() => {
+      pending.timer = undefined;
+      void deliver();
+    }, delayMs);
   }
 }
 
