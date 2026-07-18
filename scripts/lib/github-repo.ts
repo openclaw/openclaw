@@ -19,6 +19,7 @@ export function resolveGitHubRepoFromOrigin(): string {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
     timeout: 10_000,
+    killSignal: "SIGKILL",
   }).trim();
   if (!remote) {
     throw new Error("Unable to determine repository from git remote.");
