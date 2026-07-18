@@ -1,5 +1,8 @@
 /** Gateway startup coverage for active and inactive web-provider SecretRefs. */
+import { writeFileSync } from "node:fs";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { setActiveDegradedSecretOwners } from "../secrets/runtime-degraded-state.js";
 import { getActiveSecretsRuntimeSnapshot } from "../secrets/runtime.js";
@@ -79,6 +82,7 @@ const ACTIVE_SECRET_ENV = "OPENCLAW_TEST_ACTIVE_WEB_SEARCH_SECRET";
 const SECRET_PATH = "plugins.entries.google.config.webSearch.apiKey";
 
 installGatewayTestHooks({ scope: "suite" });
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function buildConfig(params: { enabled: boolean; envVar: string }): OpenClawConfig {
   return {
@@ -171,5 +175,56 @@ describe("gateway startup web-provider SecretRefs", () => {
         );
       },
     );
+  });
+
+  it("attributes a Vault outage to an unavailable web-search owner", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const root = tempDirs.make("openclaw-gateway-web-provider-outage-");
+    const commandPath = path.join(root, "provider.sh");
+    const resolverPath = path.resolve("extensions/vault/vault-secret-ref-resolver.js");
+    writeFileSync(
+      commandPath,
+      `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(resolverPath)}\n`,
+      { encoding: "utf8", mode: 0o700 },
+    );
+
+    await withEnvAsync({ VAULT_ADDR: "https://vault.example.test" }, async () => {
+      await writeConfig({
+        ...buildConfig({ enabled: true, envVar: ACTIVE_SECRET_ENV }),
+        secrets: {
+          providers: {
+            vault: { source: "exec", command: commandPath, passEnv: ["PATH", "VAULT_ADDR"] },
+          },
+        },
+        plugins: {
+          enabled: true,
+          entries: {
+            google: {
+              enabled: true,
+              config: {
+                webSearch: {
+                  apiKey: { source: "exec", provider: "vault", id: "web/gemini" },
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig);
+
+      const port = await getFreePort();
+      server = await startGatewayServer(port, { auth: { mode: "none" } });
+      const ready = await fetch(`http://127.0.0.1:${port}/readyz`);
+
+      expect(ready.status).toBe(200);
+      expect(getActiveSecretsRuntimeSnapshot()?.degradedOwners).toContainEqual(
+        expect.objectContaining({
+          ownerKind: "capability",
+          ownerId: "web-search:gemini",
+          providerFailures: [{ source: "exec", provider: "vault" }],
+        }),
+      );
+    });
   });
 });

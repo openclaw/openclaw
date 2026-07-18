@@ -15,6 +15,48 @@ afterEach(() => {
 });
 
 describe("provider-scoped SecretRef failure fan-out", () => {
+  it("preserves provider provenance for an unavailable web-search owner", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const root = tempDirs.make("openclaw-web-secret-provider-failure-");
+    const commandPath = path.join(root, "provider.sh");
+    await fs.writeFile(commandPath, "#!/bin/sh\nexit 1\n", {
+      encoding: "utf8",
+      mode: 0o700,
+    });
+    const ref = { source: "exec" as const, provider: "vault", id: "web/gemini" };
+
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        secrets: {
+          providers: {
+            vault: { source: "exec", command: commandPath, passEnv: ["PATH"] },
+          },
+        },
+        tools: { web: { search: { provider: "gemini" } } },
+        plugins: {
+          entries: {
+            google: { config: { webSearch: { apiKey: ref } } },
+          },
+        },
+      }),
+      env: { PATH: process.env.PATH ?? "" },
+      includeAuthStoreRefs: false,
+      allowUnavailableSecretOwners: true,
+      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+    });
+
+    expect(snapshot.degradedOwners).toContainEqual(
+      expect.objectContaining({
+        ownerKind: "capability",
+        ownerId: "web-search:gemini",
+        reason: "secret provider failed",
+        providerFailures: [{ source: "exec", provider: "vault" }],
+      }),
+    );
+  });
+
   it("reuses one provider failure across isolated owners", async () => {
     if (process.platform === "win32") {
       return;
