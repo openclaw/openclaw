@@ -126,10 +126,10 @@ export function validateTrustedToolingPin({
   latestTrustedToolingSha,
   isAncestor,
 }: {
-  toolingSha: unknown;
-  pinnedToolingSha: unknown;
-  latestTrustedToolingSha: unknown;
-  isAncestor?: ((ancestor: string, target: string) => boolean) | undefined;
+  toolingSha: string;
+  pinnedToolingSha: string;
+  latestTrustedToolingSha: string;
+  isAncestor?: (ancestor: string, target: string) => boolean;
 }): string;
 export function candidateCumulativeShippedPullRequests(
   changelog: string,
@@ -197,6 +197,17 @@ export function requireRunIdFromDispatchOutput(output: unknown, workflowFile: un
 export function buildPublishCommand(options: unknown): string;
 export function validatePreflightManifest(manifest: unknown, params: unknown): void;
 export function validateFullManifest(manifest: unknown, params: unknown): void;
+export function validateTrustedToolingPin({
+  toolingSha,
+  pinnedToolingSha,
+  latestTrustedToolingSha,
+  isAncestor,
+}: {
+  toolingSha: string;
+  pinnedToolingSha: string;
+  latestTrustedToolingSha: string;
+  isAncestor?: ((ancestor: string, target: string) => boolean) | undefined;
+}): string;
 export function validateNpmPreflightRunSource({
   workflowRun,
   workflowRef,
@@ -210,6 +221,17 @@ export function validateNpmPreflightRunSource({
   headSha: string;
   workflowRef: string;
 };
+export function validateTrustedToolingPin({
+  toolingSha,
+  pinnedToolingSha,
+  latestTrustedToolingSha,
+  isAncestor,
+}: {
+  toolingSha: string;
+  pinnedToolingSha: string;
+  latestTrustedToolingSha: string;
+  isAncestor?: ((ancestor: string, target: string) => boolean) | undefined;
+}): string;
 export function candidateParallelsArgs(
   tarballPath: unknown,
   dependencyTarballPaths?: unknown[],
