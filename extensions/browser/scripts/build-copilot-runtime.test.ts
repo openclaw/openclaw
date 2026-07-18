@@ -1,8 +1,19 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../test-support.js";
 import { buildCopilotRuntime } from "./build-copilot-runtime.mjs";
+
+const scriptsDir = path.dirname(fileURLToPath(import.meta.url));
+const trackedBundlePath = path.join(
+  scriptsDir,
+  "..",
+  "chrome-extension",
+  "modules",
+  "copilot-runtime.js",
+);
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -28,5 +39,20 @@ describe("scripts/build-copilot-runtime.mjs", () => {
         write: false,
       }),
     );
+  });
+
+  it("keeps the tracked bundle in sync with the current Gateway client sources", async () => {
+    const scratchDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-browser-copilot-runtime-tracked-"),
+    );
+    const scratchOutput = path.join(scratchDir, "copilot-runtime.js");
+    try {
+      await buildCopilotRuntime({ outputPath: scratchOutput });
+      const rebuilt = fs.readFileSync(scratchOutput, "utf8");
+      const tracked = fs.readFileSync(trackedBundlePath, "utf8");
+      expect(tracked).toBe(rebuilt);
+    } finally {
+      fs.rmSync(scratchDir, { recursive: true, force: true });
+    }
   });
 });
