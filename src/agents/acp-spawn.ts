@@ -95,6 +95,7 @@ import {
   resolveThinkingDefault,
 } from "./model-selection.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
+import type { SandboxToolPolicy } from "./sandbox/types.js";
 import { resolveRequesterOriginForChild } from "./spawn-requester-origin.js";
 import { resolveSpawnedWorkspaceInheritance } from "./spawned-context.js";
 import {
@@ -181,6 +182,8 @@ export type SpawnAcpContext = {
   sandboxed?: boolean;
   inheritedToolAllowlist?: string[];
   inheritedToolDenylist?: string[];
+  /** Parent's resolved senderPolicy carried to the spawned child session. */
+  inheritedSenderPolicy?: SandboxToolPolicy;
 };
 
 const ACP_SPAWN_ERROR_CODES = [

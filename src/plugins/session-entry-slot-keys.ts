@@ -33,6 +33,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "subagentControlScope",
   "inheritedToolDeny",
   "inheritedToolAllow",
+  "inheritedSenderPolicy",
   "subagentRecovery",
   "pluginOwnerId",
   "systemSent",
