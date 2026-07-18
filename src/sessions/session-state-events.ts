@@ -948,10 +948,7 @@ export function registerMainSessionGroupWatch(
   },
   options: OpenClawStateDatabaseOptions & { now?: number } = {},
 ): boolean {
-  if (
-    params.dmScope !== "main" ||
-    classifySessionKind(params.sessionKey, params.entry) !== "group"
-  ) {
+  if (classifySessionKind(params.sessionKey, params.entry) !== "group") {
     return false;
   }
   const watcherSessionKey = buildAgentMainSessionKey({
@@ -960,6 +957,27 @@ export function registerMainSessionGroupWatch(
   const now = options.now ?? Date.now();
   try {
     const { db: readDb } = openOpenClawStateDatabase(options);
+    if (params.dmScope !== "main") {
+      const markerKey = ambientGroupWatchMarkerKey(watcherSessionKey);
+      if (!readCursor(readDb, markerKey, params.sessionKey)) {
+        return false;
+      }
+      runOpenClawStateWriteTransaction(({ db }) => {
+        // Recheck provenance in the write transaction: an explicit registration
+        // may have promoted this pair after the read-only preflight.
+        if (!readCursor(db, markerKey, params.sessionKey)) {
+          return;
+        }
+        executeSqliteQuerySync(
+          db,
+          getSessionStateKysely(db)
+            .deleteFrom("session_watch_cursors")
+            .where("target_session_key", "=", params.sessionKey)
+            .where("watcher_session_key", "in", [watcherSessionKey, markerKey]),
+        );
+      }, options);
+      return false;
+    }
     // This runs on every human group turn. Keep the steady-state path read-only;
     // the transaction below is only for first registration and its race recheck.
     if (readCursor(readDb, watcherSessionKey, params.sessionKey)) {

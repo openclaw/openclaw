@@ -580,6 +580,31 @@ describe("session state events", () => {
     expect(listAmbientGroupWatchTargets(watcher, database)).toEqual(new Set());
   });
 
+  it("revokes ambient watches outside main scope but preserves explicit watches", () => {
+    const database = createDatabaseOptions();
+    registerMainSessionGroupWatch(
+      { sessionKey: group, agentId: "main", dmScope: "main" },
+      database,
+    );
+    expect(
+      registerMainSessionGroupWatch(
+        { sessionKey: group, agentId: "main", dmScope: "per-channel-peer" },
+        database,
+      ),
+    ).toBe(false);
+    expect(listAmbientGroupWatchTargets(watcher, database)).toEqual(new Set());
+    expect(readCursor(database, watcher, group)).toBeUndefined();
+
+    registerSessionStateWatch({ watcherSessionKey: watcher, targetSessionKey: group }, database);
+    expect(
+      registerMainSessionGroupWatch(
+        { sessionKey: group, agentId: "main", dmScope: "per-channel-peer" },
+        database,
+      ),
+    ).toBe(false);
+    expect(readCursor(database, watcher, group)).toBeDefined();
+  });
+
   it("records and coalesces group activity without an immediate wake", async () => {
     vi.useFakeTimers();
     const wakes = vi.fn(async () => ({ status: "ran" as const, durationMs: 1 }));
