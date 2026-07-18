@@ -812,6 +812,12 @@ class OpenClawShell extends OpenClawLightDomElement {
     resolved?.focus();
   }
 
+  private visibleNavDrawerToggle(): HTMLElement | undefined {
+    return [
+      ...this.querySelectorAll<HTMLElement>(".topbar-nav-toggle, .chat-pane__nav-toggle"),
+    ].find((candidate) => candidate.checkVisibility());
+  }
+
   private closeNavDrawer(options: { restoreFocus?: boolean } = {}) {
     if (this.navDrawerOpen) {
       this.dismissSidebarTransientMenus();
@@ -884,14 +890,14 @@ class OpenClawShell extends OpenClawLightDomElement {
   };
 
   private readonly handleWindowResize = () => {
-    const dismissedHiddenMenus =
-      isMobileNavLayout() && !this.navDrawerOpen && this.dismissSidebarTransientMenus();
     this.requestUpdate();
-    if (dismissedHiddenMenus) {
-      void this.updateComplete.then(() => {
-        this.restoreFocusTo(this.querySelector<HTMLElement>(".topbar-nav-toggle"));
-      });
-    }
+    void this.updateComplete.then(() => {
+      if (isMobileNavLayout() && !this.navDrawerOpen && this.dismissSidebarTransientMenus()) {
+        requestAnimationFrame(() => {
+          this.restoreFocusTo(this.visibleNavDrawerToggle());
+        });
+      }
+    });
   };
 
   private dismissSidebarTransientMenus(): boolean {

@@ -263,6 +263,7 @@ window.mcpConformanceGatewayBrowserClient = GatewayBrowserClient;
           snapshot: { client },
           connection: { gatewayUrl: params.gatewayUrl },
         },
+        theme: { subscribe: () => () => {} },
       });
       view.sessionKey = params.sessionKey;
       view.viewId = params.viewId;
