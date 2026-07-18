@@ -210,7 +210,12 @@ class ChatQuestionTest {
       controller.handleGatewayEvent("question.resolved", """{"id":"ask_123","status":"answered"}""")
       controller.handleGatewayEvent("question.requested", json.encodeToString(pending))
 
-      assertEquals(ChatQuestionStatus.AnsweredElsewhere, controller.questions.value.single().status())
+      assertEquals(
+        ChatQuestionStatus.AnsweredElsewhere,
+        controller.questions.value
+          .single()
+          .status(),
+      )
     }
 
   @Test
@@ -233,7 +238,12 @@ class ChatQuestionTest {
       controller.handleGatewayEvent("health", null)
       advanceUntilIdle()
 
-      assertEquals(ChatQuestionStatus.Cancelled, controller.questions.value.single().status())
+      assertEquals(
+        ChatQuestionStatus.Cancelled,
+        controller.questions.value
+          .single()
+          .status(),
+      )
     }
 
   @Test
