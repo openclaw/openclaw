@@ -105,12 +105,6 @@ export function isRetryableMemoryEmbeddingError(message: string): boolean {
   );
 }
 
-export function isStructuredInputTooLargeMemoryEmbeddingError(message: string): boolean {
-  return /(413|payload too large|request too large|input too large|too many tokens|input limit|request size)/i.test(
-    message,
-  );
-}
-
 export function isRateLimitMemoryEmbeddingError(message: string): boolean {
   // Require both a rate-limit type indicator (status code / standard status
   // text / error type) AND a human-readable keyword, so that pure quota or

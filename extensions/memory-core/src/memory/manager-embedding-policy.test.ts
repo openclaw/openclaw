@@ -6,7 +6,6 @@ import {
   isRetryableMemoryEmbeddingError,
   isSplittableMemoryEmbeddingTransportError,
   isRateLimitMemoryEmbeddingError,
-  isStructuredInputTooLargeMemoryEmbeddingError,
   resolveMemoryEmbeddingRetryDelay,
   runMemoryEmbeddingBatchRetryWithSplit,
   runMemoryEmbeddingRetryLoop,
@@ -272,24 +271,6 @@ describe("memory embedding policy", () => {
     expect(resolveMemoryEmbeddingRetryDelay(500, 0, 8000)).toBe(500);
     expect(resolveMemoryEmbeddingRetryDelay(500, 1, 8000)).toBe(600);
     expect(resolveMemoryEmbeddingRetryDelay(10_000, 1, 8000)).toBe(8000);
-  });
-
-  it("detects structured input too large errors (413 / request too large)", () => {
-    expect(isStructuredInputTooLargeMemoryEmbeddingError("413 Payload Too Large")).toBe(true);
-    expect(
-      isStructuredInputTooLargeMemoryEmbeddingError("request too large: 10MB > 1MB limit"),
-    ).toBe(true);
-    expect(isStructuredInputTooLargeMemoryEmbeddingError("input too large, max 4096 tokens")).toBe(
-      true,
-    );
-    expect(
-      isStructuredInputTooLargeMemoryEmbeddingError("request size exceeds limit for model"),
-    ).toBe(true);
-    expect(
-      isStructuredInputTooLargeMemoryEmbeddingError("too many tokens in embedding input"),
-    ).toBe(true);
-    expect(isStructuredInputTooLargeMemoryEmbeddingError("429 rate limit")).toBe(false);
-    expect(isStructuredInputTooLargeMemoryEmbeddingError("502 Bad Gateway")).toBe(false);
   });
 
   it("detects rate-limit errors (429 / resource exhausted)", () => {
