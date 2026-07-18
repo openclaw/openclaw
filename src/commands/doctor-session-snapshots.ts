@@ -364,6 +364,7 @@ export async function detectSessionSnapshotHealthIssues(params?: {
     try {
       store = loadSessionStoreForSnapshotScan(storePath);
     } catch {
+      note(`Failed to load session snapshot store: ${storePath}`, "Session snapshots");
       continue;
     }
     const findings = scanSessionStoreForStaleRuntimeSnapshotPaths({
