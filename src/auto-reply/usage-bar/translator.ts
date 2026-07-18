@@ -124,7 +124,7 @@ function parseFixedDigits(raw: string | undefined): number | undefined {
 
 function parseMeterWidth(raw: string | undefined): number | undefined {
   const width = raw === undefined ? 5 : parseStrictInteger(raw);
-  return width !== undefined && width >= 0 && width <= 40 ? width : undefined;
+  return width !== undefined && width >= 0 && width <= 100 ? width : undefined;
 }
 
 function applyVerb(name: string, args: string[], value: unknown, vocab: Vocab): unknown {

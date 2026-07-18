@@ -73,14 +73,16 @@ describe("usage-bar verbs", () => {
   });
 
   it("meter — rejects out-of-range and non-integer widths", () => {
-    // width 0: meter returns "" for width < 1; || 5 previously swallowed 0
+    // width 0: || 5 previously swallowed 0
     expect(render([{ text: "{x|meter:0:braille}" }], { x: 75 })).toBe("");
     // text width: parseStrictInteger returns undefined
     expect(render([{ text: "{x|meter:abc:braille}" }], { x: 75 })).toBe("");
     // negative width
     expect(render([{ text: "{x|meter:-1:braille}" }], { x: 75 })).toBe("");
-    // width above maximum (40)
-    expect(render([{ text: "{x|meter:99:braille}" }], { x: 75 })).toBe("");
+    // width 100 at upper bound is preserved
+    expect(render([{ text: "{x|meter:100:braille}" }], { x: 50 })).toHaveLength(100);
+    // width 101 above maximum is rejected
+    expect(render([{ text: "{x|meter:101:braille}" }], { x: 75 })).toBe("");
   });
 
   it("alias — listed shortens, unlisted echoes through", () => {
