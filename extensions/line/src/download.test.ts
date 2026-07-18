@@ -14,7 +14,10 @@ function responseWithChunks(status: number, parts: Buffer[]): Response {
   return new Response(Buffer.concat(parts), { status });
 }
 
-function cancellableResponse(status: number, parts: Buffer[] = []): {
+function cancellableResponse(
+  status: number,
+  parts: Buffer[] = [],
+): {
   response: Response;
   cancel: ReturnType<typeof vi.fn>;
 } {
