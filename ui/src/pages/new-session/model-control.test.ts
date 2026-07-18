@@ -61,6 +61,16 @@ describe("new-session model runtime", () => {
     expect(control.resolveAgentRuntimeId({ agent, context })).toBe("claude-cli");
   });
 
+  it.each(["auto", "default"])(
+    "leaves the %s runtime selector unresolved for server-side policy",
+    (runtime) => {
+      const { context } = contextWith([], runtime);
+      const control = new NewSessionModelControl(() => undefined);
+
+      expect(control.resolveAgentRuntimeId({ context })).toBeUndefined();
+    },
+  );
+
   it("does not apply default runtime metadata to an explicit model", async () => {
     const { context } = contextWith(
       [{ id: "sonnet-4.6", name: "Sonnet 4.6", provider: "anthropic" }],

@@ -127,11 +127,13 @@ export class NewSessionModelControl {
       agentDefaultModel ? undefined : defaults?.modelProvider,
       this.catalog,
     );
-    return (
+    const runtime =
       defaultTarget?.entry?.agentRuntime?.id.trim() ??
       options.agent?.agentRuntime?.id.trim() ??
-      defaults?.agentRuntime?.id.trim()
-    );
+      defaults?.agentRuntime?.id.trim();
+    // Default selectors need server-side model/provider policy before they are
+    // concrete, so the UI must leave Cloud eligibility to the dispatch gate.
+    return runtime === "auto" || runtime === "default" ? undefined : runtime;
   }
 
   render(options: {
