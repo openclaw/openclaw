@@ -466,7 +466,9 @@ export function createAcpReplyProjector(params: {
       const accepted = remaining < text.length ? truncateUtf16Safe(text, remaining) : text;
       if (accepted.length > 0) {
         emittedOutputChars += accepted.length;
-        lastVisibleOutputTail = accepted.slice(-1);
+        // Code-point tail: slice(-1) can leave a lone UTF-16 surrogate after emoji,
+        // which breaks whitespace/separator decisions on the next visible chunk.
+        lastVisibleOutputTail = Array.from(accepted).at(-1);
         if (settings.deliveryMode === "live") {
           liveBufferText += accepted;
           if (shouldFlushLiveBufferOnBoundary(liveBufferText)) {

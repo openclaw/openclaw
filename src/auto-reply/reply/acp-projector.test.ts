@@ -951,6 +951,17 @@ describe("createAcpReplyProjector", () => {
     });
   });
 
+  it("keeps hidden boundary spacing when the previous visible chunk ends with an emoji", async () => {
+    await runHiddenBoundaryCase({
+      cfgOverrides: createHiddenBoundaryCfg({
+        hiddenBoundarySeparator: "space",
+      }),
+      toolCallId: "call_hidden_emoji_tail",
+      firstText: "fallback👍",
+      expectedText: "fallback👍 I don't",
+    });
+  });
+
   it("does not insert boundary separator for hidden non-tool status updates", async () => {
     const { deliveries, projector } = createProjectorHarness({
       acp: {
