@@ -16635,7 +16635,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 147,
+      "line": 159,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Unable to Export Transcript",
       "surface": "apple",
@@ -16643,7 +16643,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 151,
+      "line": 163,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "OK",
       "surface": "apple",
@@ -16651,7 +16651,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 155,
+      "line": 167,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "OpenClaw could not prepare the Markdown file.",
       "surface": "apple",
@@ -16659,7 +16659,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 177,
+      "line": 189,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "What would you like to work on?",
       "surface": "apple",
@@ -16667,7 +16667,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 190,
+      "line": 202,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "The session attaches once the gateway is ready.",
       "surface": "apple",
@@ -16675,7 +16675,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 318,
+      "line": 330,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Opens Settings / Gateway",
       "surface": "apple",
@@ -16683,7 +16683,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 343,
+      "line": 355,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "New Chat",
       "surface": "apple",
@@ -16691,7 +16691,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 356,
+      "line": 368,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "New Chat in Worktree",
       "surface": "apple",
@@ -16699,7 +16699,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 369,
+      "line": 381,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Sessions…",
       "surface": "apple",
@@ -16707,7 +16707,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 382,
+      "line": 394,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Background Tasks",
       "surface": "apple",
@@ -16715,7 +16715,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 394,
+      "line": 406,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Export Transcript",
       "surface": "apple",
@@ -16723,7 +16723,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 404,
+      "line": 416,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Show reasoning & tool activity",
       "surface": "apple",
@@ -16731,7 +16731,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 413,
+      "line": 425,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Chat actions",
       "surface": "apple",
@@ -16739,7 +16739,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 482,
+      "line": 494,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Connected",
       "surface": "apple",
@@ -16747,7 +16747,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 482,
+      "line": 494,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Unavailable",
       "surface": "apple",
@@ -16755,7 +16755,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 495,
+      "line": 507,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Message %@...",
       "surface": "apple",
@@ -16763,7 +16763,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 500,
+      "line": 512,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Message %@; sends when connected",
       "surface": "apple",
@@ -16771,7 +16771,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 503,
+      "line": 515,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Connect to a gateway",
       "surface": "apple",
@@ -16779,7 +16779,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 601,
+      "line": 613,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Check OpenClaw status",
       "surface": "apple",
@@ -16787,7 +16787,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 602,
+      "line": 614,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Summarize the current OpenClaw status and tell me what needs attention.",
       "surface": "apple",
@@ -16795,7 +16795,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 605,
+      "line": 617,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "What can I control here?",
       "surface": "apple",
@@ -16803,7 +16803,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 606,
+      "line": 618,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Show me which phone controls and device capabilities are available right now.",
       "surface": "apple",
@@ -16811,7 +16811,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 609,
+      "line": 621,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Help me start voice chat",
       "surface": "apple",
@@ -16819,7 +16819,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 610,
+      "line": 622,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Help me start a realtime voice session from this phone.",
       "surface": "apple",
