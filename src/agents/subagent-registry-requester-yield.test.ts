@@ -104,6 +104,29 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     expect(schedule).not.toHaveBeenCalled();
   });
 
+  it("re-arms a completion whose delivery is in progress when its requester yields", () => {
+    const entry = makeRun("run-child");
+    entry.delivery = { status: "in_progress" };
+    const schedule = vi.fn();
+
+    expect(
+      settleRequesterTurnAfterSessionSpawns({
+        requesterSessionKey: REQUESTER,
+        requesterTurnRunId: REQUESTER_TURN,
+        requesterYielded: true,
+        acceptedSessionSpawns: [accepted(entry)],
+        runs: new Map([[entry.runId, entry]]),
+        persistOrThrow: vi.fn(),
+        schedule,
+      }),
+    ).toBe(true);
+    expect(entry.requesterSettleWake).toMatchObject({
+      requesterYieldBatch: true,
+      afterRequesterYield: true,
+    });
+    expect(schedule).not.toHaveBeenCalled();
+  });
+
   it("ignores accepted spawns that do not produce completion messages", () => {
     const completion = makeRun("run-completion");
     const inline = makeRun("run-inline");

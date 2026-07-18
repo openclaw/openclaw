@@ -91,14 +91,17 @@ export function settleRequesterTurnAfterSessionSpawns(params: {
       Math.max(0, ...entries.map((entry) => entry.requesterSettleWake?.rearmGeneration ?? 0)) + 1;
     for (const entry of entries) {
       const existing = entry.requesterSettleWake;
+      // An in-progress delivery may already target the requester run being aborted.
+      // Re-arm it like a delivered result so that completion cannot die with that turn.
+      const completionMayBeAttachedToYieldedTurn =
+        typeof entry.endedAt === "number" &&
+        (entry.delivery?.status === "delivered" || entry.delivery?.status === "in_progress");
       entry.requesterSettleWake = {
         status: "pending",
         attemptCount: 0,
         batchRunIds,
         requesterYieldBatch: true,
-        ...(typeof entry.endedAt === "number" && entry.delivery?.status === "delivered"
-          ? { afterRequesterYield: true }
-          : {}),
+        ...(completionMayBeAttachedToYieldedTurn ? { afterRequesterYield: true } : {}),
         rearmGeneration,
         ...(existing?.retireAfterSettle === true || entry.retireAfterRequesterTurn === true
           ? { retireAfterSettle: true }
