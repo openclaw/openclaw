@@ -47,7 +47,11 @@ import {
 } from "../../../lib/format.ts";
 import "../../../components/tooltip.ts";
 import { getMediaFileExtension } from "../../../lib/media-file-extension.ts";
-import { openExternalUrlSafe, resolveSafeExternalUrl } from "../../../lib/open-external-url.ts";
+import {
+  openExternalUrlSafe,
+  reserveExternalWindowForDeferredNavigation,
+  resolveSafeExternalUrl,
+} from "../../../lib/open-external-url.ts";
 import { stripThinkingTags } from "../../../lib/strip-thinking-tags.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { getSafeLocalStorage } from "../../../local-storage.ts";
@@ -1375,10 +1379,7 @@ function renderMessageImages(images: RenderableImageBlock[], opts?: ImageRenderO
 
     // Reserve the tab during the click's user activation. An evicted Blob URL
     // must be refetched before navigation, after popup permission has expired.
-    const pendingWindow = window.open("about:blank", "_blank");
-    if (pendingWindow) {
-      pendingWindow.opener = null;
-    }
+    const pendingWindow = reserveExternalWindowForDeferredNavigation();
     void resolveManagedOutgoingImageBlobUrl(img.displayUrl, opts)
       .then((freshUrl) => {
         const safeUrl = freshUrl
