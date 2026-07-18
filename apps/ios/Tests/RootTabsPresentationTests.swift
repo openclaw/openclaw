@@ -369,16 +369,16 @@ struct RootTabsPresentationTests {
         #expect(ChatProTab.transportAgentID(" Main ") == "main")
     }
 
-    @Test func `chat keeps active dictation stoppable while attachment ownership is pinned`() {
-        #expect(ChatProTab.shouldExposeDictationControl(
+    @Test func `chat keeps active voice capture stoppable while attachment ownership is pinned`() {
+        #expect(ChatProTab.shouldExposeCaptureControl(
             isAttachmentOwnerPinned: true,
-            isDictationActive: true))
-        #expect(!ChatProTab.shouldExposeDictationControl(
+            isCaptureActive: true))
+        #expect(!ChatProTab.shouldExposeCaptureControl(
             isAttachmentOwnerPinned: true,
-            isDictationActive: false))
-        #expect(ChatProTab.shouldExposeDictationControl(
+            isCaptureActive: false))
+        #expect(ChatProTab.shouldExposeCaptureControl(
             isAttachmentOwnerPinned: false,
-            isDictationActive: false))
+            isCaptureActive: false))
     }
 
     @Test func `chat view model rebuilds only when its transport owner changes`() {
