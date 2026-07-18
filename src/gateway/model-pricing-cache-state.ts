@@ -53,18 +53,37 @@ function buildBoundedGatewayModelPricingCache(
   nextPricing: Map<string, CachedModelPricing>,
 ): Map<string, CachedModelPricing> {
   const bounded = new Map<string, CachedModelPricing>();
+  const refreshedEntries: Array<[string, CachedModelPricing]> = [];
   const refreshedKeys = new Set<string>();
   for (const [key] of cachedPricing) {
     const pricing = nextPricing.get(key);
     if (pricing !== undefined) {
       refreshedKeys.add(key);
-      setBoundedGatewayModelPricingEntry(bounded, key, pricing);
+      refreshedEntries.push([key, pricing]);
     }
   }
+  const newEntries: Array<[string, CachedModelPricing]> = [];
   for (const [key, pricing] of nextPricing) {
     if (!refreshedKeys.has(key)) {
-      setBoundedGatewayModelPricingEntry(bounded, key, pricing);
+      newEntries.push([key, pricing]);
     }
+  }
+  const refreshedBudget =
+    newEntries.length >= GATEWAY_MODEL_PRICING_CACHE_MAX_ENTRIES
+      ? 1
+      : GATEWAY_MODEL_PRICING_CACHE_MAX_ENTRIES - newEntries.length;
+  const hotRefreshedCount = Math.min(refreshedEntries.length, refreshedBudget);
+  const coldRefreshedCount = refreshedEntries.length - hotRefreshedCount;
+  // Insert cold refreshed rows before new catalog rows, then hot refreshed rows.
+  // The cap trims oldest insertions, so refreshes retain new rows and recent hits.
+  for (const [key, pricing] of refreshedEntries.slice(0, coldRefreshedCount)) {
+    setBoundedGatewayModelPricingEntry(bounded, key, pricing);
+  }
+  for (const [key, pricing] of newEntries) {
+    setBoundedGatewayModelPricingEntry(bounded, key, pricing);
+  }
+  for (const [key, pricing] of refreshedEntries.slice(coldRefreshedCount)) {
+    setBoundedGatewayModelPricingEntry(bounded, key, pricing);
   }
   return bounded;
 }

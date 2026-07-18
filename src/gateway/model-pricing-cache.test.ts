@@ -217,6 +217,35 @@ describe("model-pricing-cache", () => {
       }),
     ).toEqual(createCachedModelPricing(GATEWAY_MODEL_PRICING_CACHE_MAX_ENTRIES));
   });
+
+  it("keeps a small hot overlap when a refreshed catalog adds more than the cap", () => {
+    const hotPricing = createCachedModelPricing(42);
+    replaceGatewayModelPricingCache(
+      new Map<string, CachedModelPricing>([[modelKey("custom", "hot-model"), hotPricing]]),
+      123,
+    );
+
+    expect(getCachedGatewayModelPricing({ provider: "custom", model: "hot-model" })).toEqual(
+      hotPricing,
+    );
+
+    const refreshed = createCachedModelPricingMap(GATEWAY_MODEL_PRICING_CACHE_MAX_ENTRIES + 1);
+    refreshed.set(modelKey("custom", "hot-model"), hotPricing);
+    replaceGatewayModelPricingCache(refreshed, 456);
+
+    expect(getGatewayModelPricingCacheMeta().size).toBe(GATEWAY_MODEL_PRICING_CACHE_MAX_ENTRIES);
+    expect(getCachedGatewayModelPricing({ provider: "custom", model: "hot-model" })).toEqual(
+      hotPricing,
+    );
+    expect(getCachedGatewayModelPricing({ provider: "custom", model: "model-0" })).toBeUndefined();
+    expect(
+      getCachedGatewayModelPricing({
+        provider: "custom",
+        model: `model-${GATEWAY_MODEL_PRICING_CACHE_MAX_ENTRIES}`,
+      }),
+    ).toEqual(createCachedModelPricing(GATEWAY_MODEL_PRICING_CACHE_MAX_ENTRIES));
+  });
+
   it("keeps normalized lookup hits recently used when a refreshed cache exceeds the cap", () => {
     const normalizedPricing = createCachedModelPricing(42);
     replaceGatewayModelPricingCache(
