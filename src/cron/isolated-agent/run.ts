@@ -4,6 +4,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { hasAcceptedSessionSpawn } from "../../agents/accepted-session-spawn.js";
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 import { hasAnyAuthProfileStoreSource } from "../../agents/auth-profiles/source-check.js";
+import { hasCommittedMessagingToolDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-routing.js";
@@ -11,6 +12,7 @@ import { createAgentRunRestartAbortError } from "../../agents/run-termination.js
 import { expandToolGroups, normalizeToolName } from "../../agents/tool-policy.js";
 import { deriveContextPromptTokens } from "../../agents/usage.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import {
   getRuntimeConfigSnapshot,
@@ -1345,15 +1347,20 @@ async function finalizeCronRun(params: {
     });
   }
   const hasCommittedTerminalProgress =
+    hasCommittedMessagingToolDeliveryEvidence(finalRunResult) ||
     finalRunResult.didSendDeterministicApprovalPrompt === true ||
     hasAcceptedSessionSpawn(finalRunResult.acceptedSessionSpawns) ||
     (finalRunResult.successfulCronAdds ?? 0) > 0;
+  const hasIntentionalSilentReply =
+    finalRunResult.meta?.terminalReplyKind === "silent-empty" ||
+    isSilentReplyPayloadText(finalRunResult.meta?.finalAssistantRawText) ||
+    isSilentReplyPayloadText(finalRunResult.meta?.finalAssistantVisibleText);
   if (
     prepared.deliveryRequested &&
     !hasFatalErrorPayload &&
     !sourceDeliveryOutcome.satisfiesSourceDelivery &&
     !hasCommittedTerminalProgress &&
-    finalRunResult.meta?.terminalReplyKind !== "silent-empty" &&
+    !hasIntentionalSilentReply &&
     deliveryPayloads.length === 0 &&
     normalizeOptionalString(synthesizedText) === undefined
   ) {

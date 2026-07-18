@@ -170,6 +170,85 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
     expect(result.delivered).toBe(false);
   });
 
+  it("keeps explicit silent replies as successful cron completions", async () => {
+    runWithModelFallbackMock.mockResolvedValueOnce({
+      result: {
+        payloads: [],
+        meta: {
+          finalAssistantRawText: "NO_REPLY",
+          finalAssistantVisibleText: "NO_REPLY",
+          agentMeta: { usage: { input: 10, output: 1 } },
+        },
+      },
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+      attempts: [],
+    });
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: true,
+      mode: "announce",
+      channel: "messagechat",
+      to: "test-target",
+    });
+    resolveCronPayloadOutcomeMock.mockReturnValue({
+      summary: undefined,
+      outputText: undefined,
+      synthesizedText: undefined,
+      deliveryPayload: undefined,
+      deliveryPayloads: [],
+      deliveryPayloadHasStructuredContent: false,
+      hasFatalErrorPayload: false,
+      hasFatalStructuredErrorPayload: false,
+      embeddedRunError: undefined,
+    });
+
+    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
+
+    expect(dispatchCronDeliveryMock).toHaveBeenCalled();
+    expect(result.status).toBe("ok");
+    expect(result.error).toBeUndefined();
+  });
+
+  it("keeps committed message-tool deliveries as successful cron completions", async () => {
+    runWithModelFallbackMock.mockResolvedValueOnce({
+      result: {
+        payloads: [],
+        didSendViaMessagingTool: true,
+        messagingToolSentTexts: ["Delivered to an intentional recipient"],
+        messagingToolSentTargets: [],
+        meta: {
+          agentMeta: { usage: { input: 10, output: 0 } },
+        },
+      },
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+      attempts: [],
+    });
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: true,
+      mode: "announce",
+      channel: "messagechat",
+      to: "test-target",
+    });
+    resolveCronPayloadOutcomeMock.mockReturnValue({
+      summary: undefined,
+      outputText: undefined,
+      synthesizedText: undefined,
+      deliveryPayload: undefined,
+      deliveryPayloads: [],
+      deliveryPayloadHasStructuredContent: false,
+      hasFatalErrorPayload: false,
+      hasFatalStructuredErrorPayload: false,
+      embeddedRunError: undefined,
+    });
+
+    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
+
+    expect(dispatchCronDeliveryMock).toHaveBeenCalled();
+    expect(result.status).toBe("ok");
+    expect(result.error).toBeUndefined();
+  });
+
   it("does not mark empty deterministic approval prompts as cron errors", async () => {
     runWithModelFallbackMock.mockResolvedValueOnce({
       result: {
