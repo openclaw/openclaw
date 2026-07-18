@@ -39,7 +39,7 @@ function fixed(value: unknown, digits: number): string {
   if (!Number.isFinite(n)) {
     return "";
   }
-  return n.toFixed(Math.max(0, digits));
+  return n.toFixed(digits);
 }
 
 function dur(value: unknown): string {
@@ -117,12 +117,9 @@ function meter(value: unknown, width: number, scale: unknown): string {
 
 const VERB_NAMES = new Set(["num", "fixed", "dur", "pct", "inv", "alias", "meter"]);
 
-function parseBoundedIntegerArg(
-  raw: string | undefined,
-  bounds: { defaultValue: number; min: number; max: number },
-): number | undefined {
-  const value = raw === undefined ? bounds.defaultValue : parseStrictInteger(raw);
-  return value !== undefined && value >= bounds.min && value <= bounds.max ? value : undefined;
+function parseFixedDigits(raw: string | undefined): number | undefined {
+  const digits = raw === undefined ? 2 : parseStrictInteger(raw);
+  return digits !== undefined && digits >= 0 && digits <= 100 ? digits : undefined;
 }
 
 function applyVerb(name: string, args: string[], value: unknown, vocab: Vocab): unknown {
@@ -130,7 +127,7 @@ function applyVerb(name: string, args: string[], value: unknown, vocab: Vocab): 
     case "num":
       return num(value);
     case "fixed": {
-      const digits = parseBoundedIntegerArg(args[0], { defaultValue: 2, min: 0, max: 100 });
+      const digits = parseFixedDigits(args[0]);
       return digits === undefined ? "" : fixed(value, digits);
     }
     case "dur":
@@ -151,10 +148,7 @@ function applyVerb(name: string, args: string[], value: unknown, vocab: Vocab): 
       return Object.hasOwn(table, lower) ? table[lower] : value;
     }
     case "meter": {
-      const width = parseBoundedIntegerArg(args[0], { defaultValue: 5, min: 1, max: 100 });
-      if (width === undefined) {
-        return "";
-      }
+      const width = args[0] ? Number.parseInt(args[0], 10) || 5 : 5;
       const scale = args.length > 1 ? vocab[expectDefined(args[1], "args entry at 1")] : undefined;
       return meter(value, width, scale);
     }
