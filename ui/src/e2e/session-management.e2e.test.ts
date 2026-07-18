@@ -546,6 +546,68 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
     }
   });
 
+  it("reveals a cross-agent spawned session only in the all-agents sidebar scope", async () => {
+    const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
+    const childKey = "agent:orchestrator:subagent:planner";
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": {
+          cases: [
+            {
+              match: { agentId: "main" },
+              response: sessionsListResponse([sessionRow("agent:main:main", "Main", baseTime)]),
+            },
+            {
+              match: {},
+              response: sessionsListResponse([
+                sessionRow(childKey, "Subagent: Planner", baseTime - 30_000, {
+                  spawnedBy: "agent:orchestrator:main",
+                }),
+                sessionRow("agent:main:main", "Main", baseTime),
+              ]),
+            },
+          ],
+        },
+      },
+      sessionKey: "agent:main:main",
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+
+      const childRow = page.locator(`.sidebar-recent-session[data-session-key="${childKey}"]`);
+      await page
+        .locator('.sidebar-recent-session[data-session-key="agent:main:main"]')
+        .waitFor({ state: "visible", timeout: 10_000 });
+      await expect.poll(() => childRow.count()).toBe(0);
+
+      const allAgentsButton = page.getByRole("button", { name: "All agents" });
+      await expect.poll(() => allAgentsButton.getAttribute("aria-pressed")).toBe("false");
+      await allAgentsButton.click();
+      await childRow.waitFor({ state: "visible", timeout: 10_000 });
+      await expect.poll(() => allAgentsButton.getAttribute("aria-pressed")).toBe("true");
+      await expect.poll(() => childRow.textContent()).toContain("Subagent: Planner");
+
+      const requests = await gateway.getRequests("sessions.list");
+      expect(requests.some((request) => requireRecord(request.params).agentId === "main")).toBe(
+        true,
+      );
+      const allAgentsRequest = requests.findLast(
+        (request) => !("agentId" in requireRecord(request.params)),
+      );
+      expect(allAgentsRequest).toBeDefined();
+      await captureUiProof(page, "sidebar-all-agents-child.png");
+    } finally {
+      await context.close();
+    }
+  });
+
   it("dismisses fixed session menus before the sidebar or drawer hides", async () => {
     const context = await browser.newContext({
       locale: "en-US",

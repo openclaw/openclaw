@@ -178,6 +178,85 @@ describe("resolveSessionNavigation", () => {
     ]);
     expect(navigation.activeRowKey).toBeNull();
   });
+
+  it("keeps the default view scoped and excludes child or spawned rows", () => {
+    const navigation = resolveSessionNavigation({
+      result: sessionsResult([
+        { key: "agent:main:dashboard", kind: "direct", updatedAt: 30 },
+        { key: "agent:main:subagent:local-child", kind: "direct", updatedAt: 50 },
+        { key: "agent:work:dashboard", kind: "direct", updatedAt: 20 },
+        {
+          key: "agent:work:spawned-worker",
+          kind: "direct",
+          spawnedBy: "agent:work:dashboard",
+          updatedAt: 40,
+        },
+      ]),
+      resultAgentId: "main",
+      sessionKey: "agent:main:dashboard",
+    });
+
+    expect(navigation.visibleSessions.map((row) => row.key)).toEqual(["agent:main:dashboard"]);
+  });
+
+  it("includes cross-agent direct, subagent-key, and spawned rows without widening exclusions", () => {
+    const navigation = resolveSessionNavigation({
+      result: sessionsResult([
+        { key: "agent:main:main", kind: "direct", updatedAt: 60 },
+        { key: "agent:work:main", kind: "direct", updatedAt: 90 },
+        { key: "agent:work:subagent:key-child", kind: "direct", updatedAt: 80 },
+        {
+          key: "agent:work:spawned-worker",
+          kind: "direct",
+          spawnedBy: "agent:work:main",
+          updatedAt: 70,
+        },
+        { key: "agent:work:archived", kind: "direct", archived: true, updatedAt: 100 },
+        { key: "global", kind: "global", updatedAt: 120 },
+        { key: "unknown", kind: "unknown", updatedAt: 110 },
+        { key: "agent:main:cron:nightly", kind: "cron", updatedAt: 105 },
+        { key: "agent:main:cron:legacy", kind: "direct", updatedAt: 95 },
+      ]),
+      resultAgentId: null,
+      sessionKey: "agent:main:main",
+      allAgents: true,
+    });
+
+    expect(navigation.visibleSessions.map((row) => row.key)).toEqual([
+      "agent:work:main",
+      "agent:work:subagent:key-child",
+      "agent:work:spawned-worker",
+      "agent:main:main",
+    ]);
+  });
+
+  it("preserves selected-row visibility and caller sorting in all-agents mode", () => {
+    const navigation = resolveSessionNavigation({
+      result: sessionsResult([
+        { key: "agent:work:zeta", kind: "direct", updatedAt: 30 },
+        {
+          key: "agent:work:subagent:selected",
+          kind: "direct",
+          archived: true,
+          spawnedBy: "agent:work:zeta",
+          updatedAt: 10,
+        },
+        { key: "agent:main:alpha", kind: "direct", updatedAt: 20 },
+      ]),
+      resultAgentId: null,
+      sessionKey: "agent:work:subagent:selected",
+      allAgents: true,
+      compareSessions: (a, b) => a.key.localeCompare(b.key),
+    });
+
+    expect(navigation.visibleSessions.map((row) => row.key)).toEqual([
+      "agent:main:alpha",
+      "agent:work:subagent:selected",
+      "agent:work:zeta",
+    ]);
+    expect(navigation.selectedSession?.key).toBe("agent:work:subagent:selected");
+    expect(navigation.activeRowKey).toBe("agent:work:subagent:selected");
+  });
 });
 
 describe("visibleSessionMatches", () => {

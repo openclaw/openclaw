@@ -30,6 +30,7 @@ type SessionNavigationInput = {
   hello?: GatewayHelloOk | null;
   showCron?: boolean;
   compareSessions?: (a: GatewaySessionRow, b: GatewaySessionRow) => number;
+  allAgents?: boolean;
 };
 
 type SessionNavigation = {
@@ -224,6 +225,7 @@ type VisibleSessionRowOptions = {
   defaultAgentId: string;
   filterByAgent?: boolean;
   showCron?: boolean;
+  includeSubagents?: boolean;
 };
 
 export function filterVisibleSessionRows(
@@ -239,8 +241,7 @@ export function filterVisibleSessionRows(
       row.kind !== "global" &&
       row.kind !== "unknown" &&
       (options.showCron === true || (row.kind !== "cron" && !isCronSessionKey(row.key))) &&
-      !isSubagentSessionKey(row.key) &&
-      !row.spawnedBy &&
+      (options.includeSubagents || (!isSubagentSessionKey(row.key) && !row.spawnedBy)) &&
       (!options.filterByAgent ||
         isSessionKeyTiedToAgent(row.key, options.agentId, options.defaultAgentId))
     );
@@ -270,7 +271,7 @@ export function resolveSessionNavigation(input: SessionNavigationInput): Session
     hello: input.hello,
   });
   const selectedAgentId = parseAgentSessionKey(currentSessionKey)?.agentId ?? defaultAgentId;
-  const shouldFilterByAgent = currentSessionKey.toLowerCase() !== "unknown";
+  const shouldFilterByAgent = !input.allAgents && currentSessionKey.toLowerCase() !== "unknown";
   const resultScopeMatches =
     normalizeOptionalString(input.resultAgentId) !== undefined &&
     normalizeAgentId(input.resultAgentId) === normalizeAgentId(selectedAgentId);
@@ -292,6 +293,7 @@ export function resolveSessionNavigation(input: SessionNavigationInput): Session
     defaultAgentId,
     filterByAgent: shouldFilterByAgent,
     showCron: input.showCron,
+    includeSubagents: input.allAgents,
   }).toSorted(input.compareSessions ?? compareSessionRowsByUpdatedAt);
   // The sidebar is the session list, not a recent-session preview. Keep every
   // active row in its sorted slot so selecting a session never reshuffles or

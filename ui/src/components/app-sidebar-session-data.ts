@@ -56,6 +56,9 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
   @state() protected sessionCatalogs: SessionCatalog[] = [];
   @state() protected loadingMoreSessionCatalogIds: ReadonlySet<string> = new Set();
   @state() protected sessionMutationError: string | null = null;
+  @state() protected sessionsAllAgents = false;
+  @state() protected allAgentsResult: SessionsListResult | null = null;
+  @state() protected allAgentsLoading = false;
 
   protected sessionRowsByAgent: Record<string, SessionsListResult["sessions"]> = {};
   protected sessionCreatedOrder = new Map<string, number>();
@@ -72,6 +75,11 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
   private gatewaySource: ApplicationContext<RouteId>["gateway"] | null = null;
   private gatewayClient: GatewayBrowserClient | null = null;
   private gatewayConnected = false;
+  private allAgentsRequestId = 0;
+  private allAgentsRequestRevision: number | null = null;
+  private allAgentsRefreshRevision = -1;
+  private allAgentsRefreshQueued = false;
+  private allAgentsForceRefreshQueued = false;
   // Mutation completions belong to one context/capability/connection epoch.
   // Bumping this prevents old failures or batch tails crossing a reconnect.
   private sessionMutationEpoch = 0;
@@ -104,7 +112,11 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
       )
       .effect(
         () => this.context?.sessions,
-        (sessions) => sessions.subscribeCreated((key) => this.promoteCreatedSession(key)),
+        (sessions) =>
+          sessions.subscribeCreated((key) => {
+            this.promoteCreatedSession(key);
+            this.refreshAllAgentsAfterSessionCreated(sessions);
+          }),
       )
       .effect(
         () => this.context?.gateway,
@@ -153,6 +165,7 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
     globalThis.removeEventListener("focus", this.handleSessionCatalogPageActivation);
     this.dismissTransientMenus();
     this.invalidateSessionMutations();
+    this.resetAllAgentsState();
     this.gatewaySource = null;
     this.gatewayClient = null;
     this.gatewayConnected = false;
@@ -456,6 +469,7 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
       }
     }
     this.sessionsLoading = snapshot.loading;
+    this.refreshAllAgentsIfStale(sessions);
   };
 
   private synchronizeSessions(sessions: SessionCapability) {
@@ -484,6 +498,9 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
     this.gatewayClient = client;
     this.gatewayConnected = connected;
     if (!sourceOrClientChanged) {
+      // A connection toggle on the same client invalidates the cross-agent
+      // snapshot but preserves the canonical agent-scoped cache.
+      this.resetAllAgentsState();
       return;
     }
     this.clearSessionCache();
@@ -502,6 +519,7 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
     this.reconnectListRevision = null;
     this.sessionsResult = null;
     this.sessionsAgentId = null;
+    this.resetAllAgentsState();
     this.sessionRowsByAgent = {};
     this.childSessionRowsByParent = {};
     this.loadedChildSessionKeys = new Set();
@@ -518,6 +536,146 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
     this.sessionCreatedOrder.clear();
     this.visibleSessionLimit = SIDEBAR_SESSION_PAGE_SIZE;
   }
+
+  protected resetAllAgentsState() {
+    this.allAgentsRequestId += 1;
+    this.allAgentsRequestRevision = null;
+    this.allAgentsRefreshRevision = -1;
+    this.allAgentsRefreshQueued = false;
+    this.allAgentsForceRefreshQueued = false;
+    this.sessionsAllAgents = false;
+    this.allAgentsResult = null;
+    this.allAgentsLoading = false;
+  }
+
+  private canApplyAllAgentsRequest(sessions: SessionCapability, requestId: number): boolean {
+    const gateway = this.context?.gateway;
+    if (!gateway) {
+      return false;
+    }
+    return (
+      requestId === this.allAgentsRequestId &&
+      this.sessionsAllAgents &&
+      this.sessionsSource === sessions &&
+      this.context?.sessions === sessions &&
+      gateway === this.gatewaySource &&
+      gateway.snapshot.client === this.gatewayClient &&
+      gateway.snapshot.connected
+    );
+  }
+
+  protected refreshAllAgentsIfStale(sessions: SessionCapability) {
+    if (
+      !this.sessionsAllAgents ||
+      sessions.canonicalListRevision <= this.allAgentsRefreshRevision
+    ) {
+      return;
+    }
+    this.loadAllAgentsSessions(sessions);
+  }
+
+  protected refreshAllAgentsAfterSessionCreated(sessions: SessionCapability) {
+    if (!this.sessionsAllAgents || this.sessionsSource !== sessions) {
+      return;
+    }
+    if (this.allAgentsRequestRevision !== null) {
+      this.allAgentsRefreshQueued = true;
+      this.allAgentsForceRefreshQueued = true;
+      return;
+    }
+    this.loadAllAgentsSessions(sessions, {
+      force: sessions.canonicalListRevision <= this.allAgentsRefreshRevision,
+    });
+  }
+
+  protected loadAllAgentsSessions(
+    sessions: SessionCapability,
+    options: { force?: boolean; initial?: boolean } = {},
+  ) {
+    if (
+      !this.sessionsAllAgents ||
+      !this.connected ||
+      this.sessionsSource !== sessions ||
+      this.context?.sessions !== sessions
+    ) {
+      return;
+    }
+    const revision = sessions.canonicalListRevision;
+    if (this.allAgentsRequestRevision !== null) {
+      if (revision > this.allAgentsRequestRevision) {
+        this.allAgentsRefreshQueued = true;
+      }
+      return;
+    }
+    if (!options.force && revision <= this.allAgentsRefreshRevision) {
+      return;
+    }
+
+    const requestId = ++this.allAgentsRequestId;
+    this.allAgentsRequestRevision = revision;
+    this.allAgentsRefreshRevision = revision;
+    this.allAgentsLoading = true;
+    void sessions
+      .list({})
+      .then((result) => {
+        if (!this.canApplyAllAgentsRequest(sessions, requestId)) {
+          return;
+        }
+        if (sessions.canonicalListRevision !== revision) {
+          this.allAgentsRefreshQueued = true;
+          return;
+        }
+        if (!result) {
+          if (options.initial) {
+            this.resetAllAgentsState();
+          }
+          return;
+        }
+        this.allAgentsResult = result;
+        for (const row of result.sessions) {
+          if (row.key && !this.sessionCreatedOrder.has(row.key)) {
+            this.sessionCreatedOrder.set(row.key, this.sessionCreatedOrder.size);
+          }
+        }
+      })
+      .catch(() => {
+        if (options.initial && this.canApplyAllAgentsRequest(sessions, requestId)) {
+          this.resetAllAgentsState();
+        }
+      })
+      .finally(() => {
+        if (!this.canApplyAllAgentsRequest(sessions, requestId)) {
+          return;
+        }
+        this.allAgentsRequestRevision = null;
+        if (
+          this.allAgentsRefreshQueued ||
+          sessions.canonicalListRevision > this.allAgentsRefreshRevision
+        ) {
+          const force = this.allAgentsForceRefreshQueued;
+          this.allAgentsRefreshQueued = false;
+          this.allAgentsForceRefreshQueued = false;
+          this.loadAllAgentsSessions(sessions, { force });
+          return;
+        }
+        this.allAgentsLoading = false;
+      });
+  }
+
+  protected readonly toggleSessionsAgentScope = () => {
+    const sessions = this.context?.sessions;
+    if (!sessions || !this.connected) {
+      return;
+    }
+    if (this.sessionsAllAgents) {
+      this.resetAllAgentsState();
+      return;
+    }
+
+    this.sessionsAllAgents = true;
+    this.allAgentsResult = null;
+    this.loadAllAgentsSessions(sessions, { force: true, initial: true });
+  };
 
   protected async loadChildSessions(parentKey: string): Promise<void> {
     if (

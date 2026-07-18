@@ -381,6 +381,22 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
                   ? html`
                       <button
                         type="button"
+                        class="sidebar-recent-sessions__scope"
+                        data-sidebar-all-agents="true"
+                        aria-label=${t("workboard.allAgents")}
+                        aria-pressed=${String(this.sessionsAllAgents)}
+                        aria-busy=${String(this.sessionsAllAgents && this.allAgentsLoading)}
+                        title=${t("workboard.allAgents")}
+                        ?disabled=${!this.connected}
+                        @click=${(event: MouseEvent) => {
+                          event.stopPropagation();
+                          this.toggleSessionsAgentScope();
+                        }}
+                      >
+                        ${t("workboard.allAgents")}
+                      </button>
+                      <button
+                        type="button"
                         class="sidebar-session-group-actions sidebar-session-sort"
                         title=${t("chat.sidebar.sortSessions")}
                         aria-label=${t("chat.sidebar.sortSessions")}
