@@ -2484,6 +2484,9 @@ describe("ci workflow guards", () => {
     const warmerSetup = warmer.jobs.warm.steps.find(
       (step: WorkflowStep) => step.name === "Setup Node environment",
     );
+    const checkoutStep = warmer.jobs.warm.steps.find(
+      (step: WorkflowStep) => step.name === "Checkout",
+    );
     const seedStep = warmer.jobs.warm.steps.find(
       (step: WorkflowStep) => step.name === "Select broad cache seed",
     );
@@ -2501,6 +2504,9 @@ describe("ci workflow guards", () => {
     expect(warmer.jobs.warm.if).toContain("github.repository == 'openclaw/openclaw'");
     expect(warmer.jobs.warm.if).toContain("github.event.workflow_run.conclusion == 'success'");
     expect(warmer.jobs.warm.if).not.toContain("cancelled");
+    expect(checkoutStep.with.ref).toBe(
+      "${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}",
+    );
     expect(warmerSource).toContain('cron: "17 8 * * *"');
     expect(warmerSource).toContain('candidate.shardName.startsWith("core-unit-fast")');
     expect(warmerSetup.with).toMatchObject({
