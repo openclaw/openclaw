@@ -4,14 +4,12 @@ import { access, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveCanvasDocumentDir } from "./documents.js";
-import {
-  createShowWidgetTool,
-  WIDGET_CODE_MAX_CHARS,
-  WIDGET_MAX_PER_SCOPE,
-} from "./widget-tool.js";
+import { resolveCanvasDocumentsDir } from "./documents.js";
+import { createShowWidgetTool } from "./widget-tool.js";
 import { buildWidgetDocument } from "./wrap.js";
 
+const WIDGET_CODE_MAX_CHARS = 262_144;
+const WIDGET_MAX_PER_SCOPE = 32;
 const tempDirs: string[] = [];
 
 afterEach(async () => {
@@ -23,6 +21,10 @@ async function createStateDir(): Promise<string> {
   const stateDir = await mkdtemp(path.join(tmpdir(), "openclaw-widget-tool-"));
   tempDirs.push(stateDir);
   return stateDir;
+}
+
+function resolveCanvasDocumentDir(stateDir: string, documentId: string): string {
+  return path.join(resolveCanvasDocumentsDir(stateDir), documentId);
 }
 
 async function executeWidget(params: {
@@ -102,7 +104,7 @@ describe("show_widget", () => {
     });
     expect(sandbox).toBe("scripts");
     const html = await readFile(
-      path.join(resolveCanvasDocumentDir(viewId, { stateDir }), "index.html"),
+      path.join(resolveCanvasDocumentDir(stateDir, viewId), "index.html"),
       "utf8",
     );
     expect(html).toContain(
@@ -113,7 +115,7 @@ describe("show_widget", () => {
     expect(html).toContain("openclaw:widget-size");
     const manifest = JSON.parse(
       await readFile(
-        path.join(resolveCanvasDocumentDir(viewId, { stateDir }), "manifest.json"),
+        path.join(resolveCanvasDocumentDir(stateDir, viewId), "manifest.json"),
         "utf8",
       ),
     ) as { cspSandbox?: string };
@@ -127,7 +129,7 @@ describe("show_widget", () => {
       widgetCode: "<section><button>Run</button><script>document.title='ready'</script></section>",
     });
     const html = await readFile(
-      path.join(resolveCanvasDocumentDir(viewId, { stateDir }), "index.html"),
+      path.join(resolveCanvasDocumentDir(stateDir, viewId), "index.html"),
       "utf8",
     );
 
@@ -150,7 +152,7 @@ describe("show_widget", () => {
       await executeWidget({ stateDir, widgetCode: `<p>${index}</p>` });
     }
 
-    await expect(access(resolveCanvasDocumentDir(first.viewId, { stateDir }))).rejects.toThrow();
+    await expect(access(resolveCanvasDocumentDir(stateDir, first.viewId))).rejects.toThrow();
     const entries = await readdir(path.join(stateDir, "canvas", "documents"));
     expect(entries).toHaveLength(WIDGET_MAX_PER_SCOPE);
   });

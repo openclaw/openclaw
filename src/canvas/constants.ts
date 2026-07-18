@@ -1,11 +1,11 @@
 import type { PluginNodeCapabilitySurface } from "../gateway/plugin-node-capability.js";
 
 /** Stable Gateway path used by chat clients for hosted Canvas content. */
-export const CANVAS_HOST_PATH = "/__openclaw__/canvas";
+const CANVAS_HOST_PATH = "/__openclaw__/canvas";
 export const CANVAS_DOCUMENTS_PATH = `${CANVAS_HOST_PATH}/documents`;
 
 /** Keep the historical Canvas plugin scope so existing capability URLs remain valid. */
-export const CANVAS_NODE_CAPABILITY: PluginNodeCapabilitySurface = {
+const CANVAS_NODE_CAPABILITY: PluginNodeCapabilitySurface = {
   surface: "canvas",
   scopeKey: "canvas:canvas",
 };

@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  CANVAS_NODE_CAPABILITY,
   isCanvasDocumentHttpPath,
   resolveCanvasNodeCapability,
   withCoreCanvasNodeCapability,
@@ -15,7 +14,7 @@ describe("core canvas contracts", () => {
         "/encoded-path",
         "/__openclaw__/canvas/documents/cv_1/index.html",
       ]),
-    ).toEqual(CANVAS_NODE_CAPABILITY);
+    ).toEqual({ surface: "canvas", scopeKey: "canvas:canvas" });
   });
 
   it("advertises one core-owned canvas surface with the historical scope key", () => {

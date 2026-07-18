@@ -6,11 +6,11 @@ import { assertWidgetHtmlSize, WidgetHtmlInputError } from "../plugin-sdk/widget
 import { createCanvasDocument } from "./documents.js";
 import { buildWidgetDocument } from "./wrap.js";
 
-export const SHOW_WIDGET_REQUIRED_CLIENT_CAPS = ["inline-widgets"];
-export const WIDGET_CODE_MAX_CHARS = 262_144;
-export const WIDGET_MAX_PER_SCOPE = 32;
+const SHOW_WIDGET_REQUIRED_CLIENT_CAPS = ["inline-widgets"];
+const WIDGET_CODE_MAX_CHARS = 262_144;
+const WIDGET_MAX_PER_SCOPE = 32;
 
-export const ShowWidgetToolSchema = Type.Object({
+const ShowWidgetToolSchema = Type.Object({
   title: Type.String(),
   widget_code: Type.String(),
 });

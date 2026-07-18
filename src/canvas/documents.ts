@@ -8,20 +8,20 @@ import { root as fsRoot } from "../infra/fs-safe.js";
 import { resolveUserPath } from "../utils.js";
 import { CANVAS_DOCUMENTS_PATH } from "./constants.js";
 
-export type CanvasDocumentKind = "html_bundle" | "url_embed" | "document" | "image" | "video_asset";
+type CanvasDocumentKind = "html_bundle" | "url_embed" | "document" | "image" | "video_asset";
 
-export type CanvasDocumentAsset = {
+type CanvasDocumentAsset = {
   logicalPath: string;
   sourcePath: string;
   contentType?: string;
 };
 
-export type CanvasDocumentEntrypoint =
+type CanvasDocumentEntrypoint =
   | { type: "html"; value: string }
   | { type: "path"; value: string }
   | { type: "url"; value: string };
 
-export type CanvasDocumentCreateInput = {
+type CanvasDocumentCreateInput = {
   id?: string;
   kind: CanvasDocumentKind;
   title?: string;
@@ -50,13 +50,6 @@ export type CanvasDocumentManifest = {
     logicalPath: string;
     contentType?: string;
   }>;
-};
-
-export type CanvasDocumentResolvedAsset = {
-  logicalPath: string;
-  contentType?: string;
-  url: string;
-  localPath: string;
 };
 
 function escapeHtml(value: string): string {
@@ -169,15 +162,12 @@ async function pruneCanvasDocumentsForScope(params: {
 }
 
 /** Resolves the on-disk directory for one Canvas document id. */
-export function resolveCanvasDocumentDir(
-  documentId: string,
-  options?: { stateDir?: string },
-): string {
+function resolveCanvasDocumentDir(documentId: string, options?: { stateDir?: string }): string {
   return path.join(resolveCanvasDocumentsDir(options?.stateDir), documentId);
 }
 
 /** Builds the hosted URL path for a Canvas document entrypoint. */
-export function buildCanvasDocumentEntryUrl(documentId: string, entrypoint: string): string {
+function buildCanvasDocumentEntryUrl(documentId: string, entrypoint: string): string {
   const normalizedEntrypoint = normalizeLogicalPath(entrypoint);
   const encodedEntrypoint = normalizedEntrypoint
     .split("/")
@@ -366,21 +356,4 @@ export async function createCanvasDocument(
     });
   }
   return manifest;
-}
-
-/** Resolves manifest assets to local paths and hosted URLs. */
-export function resolveCanvasDocumentAssets(
-  manifest: CanvasDocumentManifest,
-  options?: { baseUrl?: string; stateDir?: string },
-): CanvasDocumentResolvedAsset[] {
-  const baseUrl = options?.baseUrl?.trim().replace(/\/+$/, "");
-  const documentDir = resolveCanvasDocumentDir(manifest.id, { stateDir: options?.stateDir });
-  return manifest.assets.map((asset) => ({
-    logicalPath: asset.logicalPath,
-    ...(asset.contentType ? { contentType: asset.contentType } : {}),
-    localPath: path.join(documentDir, asset.logicalPath),
-    url: baseUrl
-      ? `${baseUrl}${buildCanvasDocumentEntryUrl(manifest.id, asset.logicalPath)}`
-      : buildCanvasDocumentEntryUrl(manifest.id, asset.logicalPath),
-  }));
 }

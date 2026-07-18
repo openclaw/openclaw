@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -120,8 +121,10 @@ describe("Canvas doctor state migration", () => {
     await fs.writeFile(path.join(legacyDocumentDir, "index.html"), "complete", "utf8");
     const params = migrationParams({ stateDir, customRoot });
     const copy = vi.spyOn(fs, "cp").mockImplementationOnce(async (_source, destination) => {
-      await fs.mkdir(destination, { recursive: true });
-      await fs.writeFile(path.join(destination, "index.html"), "partial", "utf8");
+      const destinationPath =
+        typeof destination === "string" ? destination : fileURLToPath(destination);
+      await fs.mkdir(destinationPath, { recursive: true });
+      await fs.writeFile(path.join(destinationPath, "index.html"), "partial", "utf8");
       throw new Error("interrupted copy");
     });
 
