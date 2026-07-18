@@ -2791,21 +2791,22 @@ describe("qa cli runtime", () => {
     await fs.writeFile(payloadPath, payloadText, "utf8");
     vi.stubEnv("OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_BYTES", "32");
     vi.stubEnv("OPENCLAW_QA_CONVEX_SECRET_MAINTAINER", "maint-secret");
-    const fetchImpl = vi.fn(async () =>
-      new Response(
-        JSON.stringify({
-          status: "ok",
-          credential: {
-            credentialId: "cred-boundary",
-            kind: "telegram",
-            status: "active",
-            createdAtMs: 100,
-            updatedAtMs: 100,
-            lastLeasedAtMs: 0,
-          },
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      ),
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            status: "ok",
+            credential: {
+              credentialId: "cred-boundary",
+              kind: "telegram",
+              status: "active",
+              createdAtMs: 100,
+              updatedAtMs: 100,
+              lastLeasedAtMs: 0,
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
     );
     vi.stubGlobal("fetch", fetchImpl);
 
@@ -2828,21 +2829,22 @@ describe("qa cli runtime", () => {
     await fs.writeFile(payloadPath, boundaryPayloadText, "utf8");
     vi.stubEnv("OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_BYTES", "32");
     vi.stubEnv("OPENCLAW_QA_CONVEX_SECRET_MAINTAINER", "maint-secret");
-    const fetchImpl = vi.fn(async () =>
-      new Response(
-        JSON.stringify({
-          status: "ok",
-          credential: {
-            credentialId: "cred-growing",
-            kind: "telegram",
-            status: "active",
-            createdAtMs: 100,
-            updatedAtMs: 100,
-            lastLeasedAtMs: 0,
-          },
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      ),
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            status: "ok",
+            credential: {
+              credentialId: "cred-growing",
+              kind: "telegram",
+              status: "active",
+              createdAtMs: 100,
+              updatedAtMs: 100,
+              lastLeasedAtMs: 0,
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
     );
     vi.stubGlobal("fetch", fetchImpl);
     const originalOpen = fs.open.bind(fs);
