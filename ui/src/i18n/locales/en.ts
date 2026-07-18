@@ -3685,8 +3685,11 @@ export const en: TranslationMap = {
     },
     messages: {
       activity: "Activity",
-      deleteMessage: "Delete message",
       forkFromHere: "Fork from here",
+      hide: "Hide",
+      hideConfirm: "Hide this message in this browser? The agent still sees it.",
+      hideMessage: "Hide message",
+      hideTooltip: "Hide in this browser only",
       openInCanvas: "Open in canvas",
       rewind: "Rewind",
       rewindConfirm: "Rewind to before this message?",
