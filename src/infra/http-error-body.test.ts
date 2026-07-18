@@ -12,11 +12,14 @@ import { readResponseBodySnippet } from "./http-error-body.js";
 
 function bodyLessResponse(text: string): Response {
   return {
+function bodyLessResponse(text: string): Response {
+  const encoder = new TextEncoder();
+  return {
     body: null,
     text: async () => text,
+    arrayBuffer: async () => encoder.encode(text).buffer as ArrayBuffer,
   } as unknown as Response;
 }
-
 describe("readResponseBodySnippet", () => {
   it("returns full text when under both limits (body-less path)", async () => {
     const text = "short text";
@@ -150,11 +153,14 @@ describe("readResponseBodySnippet error visibility", () => {
 
   it.each([
     {
-      name: "response.text() rejection",
+      name: "response.arrayBuffer() rejection",
       response: () =>
         ({
           body: null,
           text: async () => {
+            throw new Error("body already consumed");
+          },
+          arrayBuffer: async () => {
             throw new Error("body already consumed");
           },
         }) as unknown as Response,
