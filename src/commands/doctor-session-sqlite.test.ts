@@ -21,6 +21,10 @@ import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
+import {
+  readOpenClawDatabaseQuarantine,
+  recordOpenClawDatabaseQuarantine,
+} from "../state/openclaw-quarantine-store.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   assertSafeSessionSqliteMigrationMove,
@@ -304,6 +308,26 @@ describe("runDoctorSessionSqlite", () => {
       message?: { content?: unknown };
     };
     expect(message?.message?.content).toEqual([{ type: "text", text: "legacy string" }]);
+    closeOpenClawAgentDatabasesForTest();
+    const sqlite = nodeSqlite.requireNodeSqlite();
+    const migrated = new sqlite.DatabaseSync(
+      resolveOpenClawAgentSqlitePath({ agentId: "main", env: store.env }),
+      { readOnly: true },
+    );
+    try {
+      expect(migrated.prepare("PRAGMA user_version").get()).toEqual({
+        user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+      });
+      expect(
+        migrated
+          .prepare(
+            "SELECT session_id, length(generation) AS generation_length FROM session_transcript_generations",
+          )
+          .all(),
+      ).toEqual([{ generation_length: 32, session_id: "session-1" }]);
+    } finally {
+      migrated.close();
+    }
   });
 
   it("preserves the legacy transcript mtime as the SQLite mutation watermark", async () => {
@@ -610,6 +634,28 @@ describe("runDoctorSessionSqlite", () => {
       );
     },
   );
+
+  it("clears agent quarantine after compaction", async () => {
+    const { sqlitePath, store } = await createImportedStoreForCompaction();
+    expect(
+      recordOpenClawDatabaseQuarantine({
+        env: store.env,
+        kind: "agent",
+        path: sqlitePath,
+        reason: "corrupt index",
+      }),
+    ).toBe(true);
+
+    const report = await runDoctorSessionSqlite({
+      env: store.env,
+      mode: "compact",
+      store: store.storePath,
+    });
+
+    expect(report.totals.issues).toBe(0);
+    expect(readOpenClawDatabaseQuarantine(sqlitePath, { env: store.env })).toBeUndefined();
+    expect(openOpenClawAgentDatabase({ agentId: "main", env: store.env }).db.isOpen).toBe(true);
+  });
 
   it.skipIf(process.platform === "win32")(
     "reapplies owner-only permissions after compaction",

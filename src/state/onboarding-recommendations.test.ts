@@ -1,7 +1,9 @@
+import fs from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   acknowledgeOnboardingRecommendations,
+  clearOnboardingRecommendations,
   readOnboardingRecommendations,
   writeOnboardingRecommendationsOffer,
   type OnboardingRecommendationMatch,
@@ -34,6 +36,7 @@ describe("onboarding recommendations store", () => {
       const inventory = [{ label: "Chat", bundleId: "com.example.chat" }];
 
       expect(readOnboardingRecommendations(database)).toBeNull();
+      expect(fs.existsSync(state.statePath("state", "openclaw.sqlite"))).toBe(false);
       const written = writeOnboardingRecommendationsOffer({
         inventory,
         matches,
@@ -80,6 +83,23 @@ describe("onboarding recommendations store", () => {
       });
       expect(acknowledged).toEqual({ ...record, acceptedAt: 3_456, updatedAt: 3_456 });
       expect(readOnboardingRecommendations({ env: state.env })).toEqual(acknowledged);
+    });
+  });
+
+  it("deletes the stored offer so recommendations can be scanned again", async () => {
+    await withOpenClawTestState({ label: "onboarding-recommendations-clear" }, async (state) => {
+      const database = { env: state.env };
+      writeOnboardingRecommendationsOffer({
+        inventory: [{ label: "Chat" }],
+        matches,
+        answered: true,
+        nowMs: 4_567,
+        database,
+      });
+
+      expect(clearOnboardingRecommendations(database)).toBe(true);
+      expect(readOnboardingRecommendations(database)).toBeNull();
+      expect(clearOnboardingRecommendations(database)).toBe(false);
     });
   });
 });

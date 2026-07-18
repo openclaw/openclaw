@@ -266,6 +266,18 @@ export function registerOnboardCommand(program: Command): void {
       });
     });
 
+  recommendations
+    .command("refresh")
+    .description("Clear stored app recommendations so the next onboarding run rescans")
+    .action(async () => {
+      const { defaultRuntime } = await import("../../runtime.js");
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { refreshOnboardRecommendationsCommand } =
+          await import("../../commands/onboard-recommendations.js");
+        refreshOnboardRecommendationsCommand(defaultRuntime);
+      });
+    });
+
   command.action(async (opts, commandRuntime: Command) => {
     const { defaultRuntime } = await import("../../runtime.js");
     await runCommandWithRuntime(defaultRuntime, async () => {

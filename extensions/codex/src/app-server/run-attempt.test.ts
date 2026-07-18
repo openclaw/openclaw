@@ -4123,39 +4123,40 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("surfaces Codex-native image generation saved paths as reply media", async () => {
-    const harness = createStartedThreadHarness();
-    const params = createParams(
-      path.join(tempDir, "session.jsonl"),
-      path.join(tempDir, "workspace"),
-    );
-
-    const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
-    await harness.notify({
-      method: "turn/completed",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        turn: {
-          id: "turn-1",
-          status: "completed",
-          items: [
-            {
-              type: "imageGeneration",
-              id: "ig_123",
-              status: "completed",
-              revisedPrompt: "A tiny blue square",
-              result: "Zm9v",
-              savedPath: "/tmp/codex-home/generated_images/session-1/ig_123.png",
-            },
-          ],
-        },
-      },
+    const savedPath = "/tmp/codex-home/generated_images/session-1/ig_123.png";
+    const harness = createAppServerHarness(async (method) => {
+      if (method === "thread/start") {
+        return threadStartResult();
+      }
+      if (method === "turn/start") {
+        return {
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            items: [
+              {
+                type: "imageGeneration",
+                id: "ig_123",
+                status: "completed",
+                revisedPrompt: "A tiny blue square",
+                result: "Zm9v",
+                savedPath,
+              },
+            ],
+          },
+        };
+      }
+      return {};
     });
 
-    const result = await run;
+    const result = await runCodexAppServerAttempt(
+      createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
+    );
+
+    expect(harness.requests.map((entry) => entry.method)).toContain("turn/start");
     expect(result.assistantTexts).toEqual([]);
-    expect(result.toolMediaUrls).toEqual(["/tmp/codex-home/generated_images/session-1/ig_123.png"]);
+    expect(result.toolMediaUrls).toEqual([savedPath]);
+    expect(result.hostOwnedToolMediaUrls).toEqual([savedPath]);
   });
 
   it("does not complete on unscoped turn/completed notifications", async () => {
@@ -6109,7 +6110,10 @@ describe("runCodexAppServerAttempt", () => {
         pluginConfig: { supervision: { enabled: true } },
         clientFactory,
       }),
-    ).rejects.toThrow("Codex session generation is no longer current");
+    ).rejects.toMatchObject({
+      name: "AgentHarnessSessionSupersededError",
+      message: "Codex session generation is no longer current: session-current",
+    });
     expect(clientFactory).not.toHaveBeenCalled();
 
     registerCodexTestSessionIdentity(sessionFile, "session-previous", sessionKey);

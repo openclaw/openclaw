@@ -331,12 +331,20 @@ function mergeCatalogRouteVariants(
 function createModelCatalogSnapshot(
   entries: ModelCatalogEntry[],
   routeVariants: ModelCatalogRouteVariantCollector,
+  authoritative = true,
 ): ModelCatalogSnapshot {
   return {
     entries: sortModelCatalogEntries(entries),
     routeVariants: sortModelCatalogEntries(routeVariants.entries),
+    authoritative,
   };
 }
+
+const EMPTY_DEGRADED_MODEL_CATALOG_SNAPSHOT: ModelCatalogSnapshot = {
+  entries: [],
+  routeVariants: [],
+  authoritative: false,
+};
 
 export function loadManifestModelCatalog(params: {
   config: OpenClawConfig;
@@ -666,7 +674,8 @@ function loadReadOnlyStaticModelCatalog(params?: {
     mergeCatalogRouteVariants(routeVariants, configuredModels);
     mergeCatalogEntries(models, configuredModels, { preserveBaseName: true });
   }
-  return createModelCatalogSnapshot(models, routeVariants);
+  // Static-only catalog: discovery/persisted rows were unavailable, so this is degraded.
+  return createModelCatalogSnapshot(models, routeVariants, false);
 }
 
 /** Loads logical entries together with browse-only physical route provenance. */
@@ -675,8 +684,8 @@ export async function loadModelCatalogSnapshot(
 ): Promise<ModelCatalogSnapshot> {
   if (params?.cacheOnly === true) {
     return loadedModelCatalogGeneration === modelCatalogGeneration
-      ? (loadedModelCatalogSnapshot ?? { entries: [], routeVariants: [] })
-      : { entries: [], routeVariants: [] };
+      ? (loadedModelCatalogSnapshot ?? EMPTY_DEGRADED_MODEL_CATALOG_SNAPSHOT)
+      : EMPTY_DEGRADED_MODEL_CATALOG_SNAPSHOT;
   }
   const readOnly = params?.readOnly === true;
   if (readOnly) {
@@ -944,9 +953,9 @@ export async function loadModelCatalogSnapshot(
         modelCatalogPromise = null;
       }
       if (models.length > 0) {
-        return createModelCatalogSnapshot(models, routeVariants);
+        return createModelCatalogSnapshot(models, routeVariants, false);
       }
-      return { entries: [], routeVariants: [] };
+      return EMPTY_DEGRADED_MODEL_CATALOG_SNAPSHOT;
     }
   };
 

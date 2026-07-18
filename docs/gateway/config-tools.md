@@ -20,12 +20,12 @@ sidebarTitle: "Tools and custom providers"
 Local onboarding defaults new local configs to `tools.profile: "coding"` when unset (existing explicit profiles are preserved).
 </Note>
 
-| Profile     | Includes                                                                                                                                                                                                                     |
-| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `minimal`   | `session_status` only                                                                                                                                                                                                        |
-| `coding`    | `group:fs`, `group:runtime`, `group:web`, `group:sessions`, `group:memory`, `cron`, `get_goal`, `create_goal`, `update_goal`, `update_plan`, `skill_workshop`, `image`, `image_generate`, `music_generate`, `video_generate` |
-| `messaging` | `group:messaging`, `sessions_list`, `sessions_history`, `sessions_send`, `session_status`                                                                                                                                    |
-| `full`      | No restriction (same as unset)                                                                                                                                                                                               |
+| Profile     | Includes                                                                                                                                                                                                                                 |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `minimal`   | `session_status` only                                                                                                                                                                                                                    |
+| `coding`    | `group:fs`, `group:runtime`, `group:web`, `group:sessions`, `group:memory`, `cron`, `get_goal`, `create_goal`, `update_goal`, `update_plan`, `ask_user`, `skill_workshop`, `image`, `image_generate`, `music_generate`, `video_generate` |
+| `messaging` | `group:messaging`, `sessions_list`, `sessions_history`, `sessions_send`, `session_status`, `ask_user`                                                                                                                                    |
+| `full`      | No restriction (same as unset)                                                                                                                                                                                                           |
 
 `coding` and `messaging` also implicitly allow `bundle-mcp` (configured MCP servers).
 
@@ -42,7 +42,7 @@ Local onboarding defaults new local configs to `tools.profile: "coding"` when un
 | `group:automation` | `heartbeat_respond`, `cron`, `gateway`                                                                                                                |
 | `group:messaging`  | `message`                                                                                                                                             |
 | `group:nodes`      | `nodes`, `computer`                                                                                                                                   |
-| `group:agents`     | `agents_list`, `get_goal`, `create_goal`, `update_goal`, `update_plan`, `skill_workshop`                                                              |
+| `group:agents`     | `agents_list`, `get_goal`, `create_goal`, `update_goal`, `update_plan`, `ask_user`, `skill_workshop`                                                  |
 | `group:media`      | `image`, `image_generate`, `music_generate`, `video_generate`, `tts`                                                                                  |
 | `group:openclaw`   | All built-in tools above except `read`/`write`/`edit`/`apply_patch`/`exec`/`process`/`canvas` (excludes plugin tools)                                 |
 | `group:plugins`    | Tools owned by loaded plugins, including configured MCP servers exposed through `bundle-mcp`                                                          |
@@ -396,7 +396,8 @@ Configures inbound media understanding (image/audio/video):
 
 Controls which sessions can be targeted by the session tools (`sessions_list`, `sessions_history`, `sessions_send`).
 
-Default: `tree` (current session + sessions spawned by it, such as subagents).
+Default: `tree` (current session + sessions spawned by it, such as subagents, plus ambient
+watched group sessions for the same agent).
 
 ```json5
 {
@@ -412,7 +413,7 @@ Default: `tree` (current session + sessions spawned by it, such as subagents).
 <AccordionGroup>
   <Accordion title="Visibility scopes">
     - `self`: only the current session key.
-    - `tree`: current session + sessions spawned by the current session (subagents).
+    - `tree`: current session + sessions spawned by the current session (subagents). For read operations, it also includes same-agent group sessions that the current session watches through ambient group awareness.
     - `agent`: any session belonging to the current agent id (can include other users if you run per-sender sessions under the same agent id).
     - `all`: any session. Cross-agent targeting still requires `tools.agentToAgent`.
     - Sandbox clamp: when the current session is sandboxed and `agents.defaults.sandbox.sessionToolsVisibility="spawned"` (the default), visibility is forced to `tree` even if `tools.sessions.visibility="all"`.
@@ -422,6 +423,12 @@ Default: `tree` (current session + sessions spawned by it, such as subagents).
 
   </Accordion>
 </AccordionGroup>
+
+With the default `session.dmScope: "main"`, human activity in a group makes that same-agent group
+session ambiently visible to the agent's main session. In a multi-user setup, `"main"` also shares
+one DM session across users, so each user routed there can read from ambiently watched groups,
+including through session-memory `memory_search`. Use a per-peer `dmScope` for DM isolation, or set
+`tools.sessions.visibility: "self"` to opt out of ambient watched-session reads.
 
 ### `tools.sessions_spawn`
 

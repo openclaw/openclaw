@@ -1,7 +1,11 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type {
+  GatewayBrowserClient,
+  GatewayEventFrame,
+  GatewayEventListener,
+} from "../../api/gateway.ts";
 import type {
   ApplicationContext,
   ApplicationGateway,
@@ -11,6 +15,7 @@ import {
   createApplicationContextProvider,
   type ApplicationContextProvider,
 } from "../../test-helpers/application-context.ts";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
 import "./custodian-page.ts";
 
 type TestCustodianPage = HTMLElement & {
@@ -25,6 +30,7 @@ type ContextHarness = {
   setGatewayToken: (token: string) => void;
   setGatewayBootstrapToken: (bootstrapToken: string) => void;
   setGatewayDeviceToken: (deviceToken: string) => void;
+  emitGatewayEvent: (event: Pick<GatewayEventFrame, "event" | "payload">) => void;
 };
 
 function createContext(request: ReturnType<typeof vi.fn>): ContextHarness {
@@ -45,6 +51,7 @@ function createContext(request: ReturnType<typeof vi.fn>): ContextHarness {
     lastErrorCode: null,
   };
   const listeners = new Set<(snapshot: ApplicationGatewaySnapshot) => void>();
+  const eventListeners = new Set<GatewayEventListener>();
   const connection = {
     gatewayUrl: "ws://gateway.test/control",
     token: "",
@@ -59,6 +66,10 @@ function createContext(request: ReturnType<typeof vi.fn>): ContextHarness {
     subscribe: (listener: (snapshot: ApplicationGatewaySnapshot) => void) => {
       listeners.add(listener);
       return () => listeners.delete(listener);
+    },
+    subscribeEvents: (listener: GatewayEventListener) => {
+      eventListeners.add(listener);
+      return () => eventListeners.delete(listener);
     },
   } as unknown as ApplicationGateway;
   const context = {
@@ -90,6 +101,11 @@ function createContext(request: ReturnType<typeof vi.fn>): ContextHarness {
           ? { ...snapshot.hello, auth: { ...snapshot.hello.auth, deviceToken } }
           : snapshot.hello,
       };
+    },
+    emitGatewayEvent: (event) => {
+      for (const listener of eventListeners) {
+        listener(event as GatewayEventFrame);
+      }
     },
   };
 }
@@ -140,7 +156,7 @@ describe("custodian page", () => {
       .fn()
       .mockResolvedValueOnce({
         sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
-        reply: "Welcome aboard.",
+        reply: "Welcome **aboard**.",
         action: "none",
         question,
       })
@@ -152,16 +168,20 @@ describe("custodian page", () => {
     const { context } = createContext(request);
     const { page } = await mountPage(context);
 
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
     await page.updateComplete;
+    const assistantGroup = page.querySelector<HTMLElement>(".chat-group.assistant")!;
+    expect(assistantGroup.querySelector("strong")?.textContent).toBe("aboard");
+    expect(assistantGroup.querySelector(".chat-avatar.assistant")?.textContent?.trim()).toBe("OC");
     const card = page.querySelector("openclaw-option-card")!;
     await card.updateComplete;
     expect(page.querySelector(".option-card__choice--recommended")?.textContent).toContain(
       "Talk to my agent",
     );
-    page.querySelector<HTMLButtonElement>('[data-option-value="Connect WhatsApp"]')!.click();
+    const connectOption = page.querySelectorAll<HTMLButtonElement>("[data-option-value]")[1]!;
+    connectOption.click();
 
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
     await page.updateComplete;
     expect(request.mock.calls[0]?.[0]).toBe("openclaw.chat");
     expect(request.mock.calls[0]?.[1]).toMatchObject({ welcomeVariant: "onboarding" });
@@ -170,10 +190,9 @@ describe("custodian page", () => {
       welcomeVariant: "onboarding",
       message: "connect whatsapp",
     });
-    expect(page.textContent).toContain("Connect WhatsApp");
-    expect(
-      page.querySelector<HTMLButtonElement>('[data-option-value="Connect WhatsApp"]')?.disabled,
-    ).toBe(true);
+    const userGroup = page.querySelector<HTMLElement>(".chat-group.user")!;
+    expect(userGroup.textContent).toContain("Connect WhatsApp");
+    expect(connectOption.disabled).toBe(true);
   });
 
   it("keeps failed sensitive replies masked for correction and retry", async () => {
@@ -188,20 +207,20 @@ describe("custodian page", () => {
       .mockRejectedValueOnce(new Error("Request failed"));
     const { context } = createContext(request);
     const { page } = await mountPage(context);
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
     await page.updateComplete;
     const input = page.querySelector<HTMLInputElement>(
-      '.custodian__composer input[type="password"]',
+      '.agent-chat__composer-combobox input[type="password"]',
     )!;
     input.value = "test-token-placeholder";
     input.dispatchEvent(new InputEvent("input", { bubbles: true }));
     await page.updateComplete;
-    page.querySelector<HTMLButtonElement>(".custodian__composer button")!.click();
+    page.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
 
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
-    await vi.waitFor(() => expect(page.querySelector('[role="alert"]')).not.toBeNull());
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+    await waitForFast(() => expect(page.querySelector('[role="alert"]')).not.toBeNull());
     await page.updateComplete;
-    expect(page.querySelector('.custodian__composer input[type="password"]')).not.toBeNull();
+    expect(input.isConnected).toBe(true);
     expect(page.textContent).toContain("Sensitive reply sent");
     expect(page.innerHTML).not.toContain("test-token-placeholder");
   });
@@ -214,7 +233,7 @@ describe("custodian page", () => {
     });
     const { context, setGatewaySnapshot } = createContext(request);
     const { page } = await mountPage(context);
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
     await page.updateComplete;
 
     setGatewaySnapshot({ client: null, connected: false, reconnecting: true });
@@ -239,7 +258,7 @@ describe("custodian page", () => {
     const { context, setGatewaySnapshot, setGatewayDeviceToken } = createContext(request);
     setGatewayDeviceToken("stored-device-token");
     const { page } = await mountPage(context);
-    await vi.waitFor(() => expect(page.textContent).toContain("Device-token conversation."));
+    await waitForFast(() => expect(page.textContent).toContain("Device-token conversation."));
 
     // Transient drop: the retrying client stays but hello is cleared.
     setGatewaySnapshot({ client: null, connected: false, reconnecting: true, hello: null });
@@ -276,17 +295,17 @@ describe("custodian page", () => {
       });
     const { context, setGatewaySnapshot } = createContext(request);
     const { page } = await mountPage(context);
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
 
     setGatewaySnapshot({ client: { request } as unknown as GatewayBrowserClient });
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(page.querySelector('[role="alert"]')?.textContent).toContain(
         "Gateway connection changed",
       ),
     );
     page.querySelector<HTMLButtonElement>('[role="alert"] button')!.click();
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
-    await vi.waitFor(() => expect(page.textContent).toContain("Hello after reconnect."));
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+    await waitForFast(() => expect(page.textContent).toContain("Hello after reconnect."));
   });
 
   it("clears the prior conversation when the gateway changes while offline", async () => {
@@ -297,11 +316,11 @@ describe("custodian page", () => {
     });
     const { context, setGatewaySnapshot, setGatewayUrl } = createContext(request);
     const { page } = await mountPage(context);
-    await vi.waitFor(() => expect(page.textContent).toContain("Gateway A conversation."));
+    await waitForFast(() => expect(page.textContent).toContain("Gateway A conversation."));
 
     setGatewayUrl("ws://gateway-b.test/control");
     setGatewaySnapshot({ client: null, connected: false, reconnecting: true });
-    await vi.waitFor(() => expect(page.textContent).not.toContain("Gateway A conversation."));
+    await waitForFast(() => expect(page.textContent).not.toContain("Gateway A conversation."));
 
     expect(page.querySelector('[role="alert"] button')).toBeNull();
   });
@@ -321,7 +340,7 @@ describe("custodian page", () => {
       });
     const { context, setGatewaySnapshot, setGatewayToken } = createContext(request);
     const { page } = await mountPage(context);
-    await vi.waitFor(() => expect(page.textContent).toContain("Operator A conversation."));
+    await waitForFast(() => expect(page.textContent).toContain("Operator A conversation."));
 
     setGatewayToken("test-token-placeholder");
     setGatewaySnapshot({
@@ -330,7 +349,7 @@ describe("custodian page", () => {
       reconnecting: false,
     });
 
-    await vi.waitFor(() => expect(page.textContent).toContain("Operator B welcome."));
+    await waitForFast(() => expect(page.textContent).toContain("Operator B welcome."));
     expect(page.textContent).not.toContain("Operator A conversation.");
     expect(request).toHaveBeenCalledTimes(2);
     expect(request.mock.calls[1]?.[1]).toMatchObject({ welcomeVariant: "onboarding" });
@@ -352,7 +371,7 @@ describe("custodian page", () => {
       });
     const { context, setGatewaySnapshot, setGatewayBootstrapToken } = createContext(request);
     const { page } = await mountPage(context);
-    await vi.waitFor(() => expect(page.textContent).toContain("Paired device conversation."));
+    await waitForFast(() => expect(page.textContent).toContain("Paired device conversation."));
 
     setGatewayBootstrapToken("test-token-placeholder");
     setGatewaySnapshot({
@@ -361,7 +380,7 @@ describe("custodian page", () => {
       reconnecting: false,
     });
 
-    await vi.waitFor(() => expect(page.textContent).toContain("Re-paired welcome."));
+    await waitForFast(() => expect(page.textContent).toContain("Re-paired welcome."));
     expect(page.textContent).not.toContain("Paired device conversation.");
   });
 
@@ -380,7 +399,7 @@ describe("custodian page", () => {
       });
     const { context, setGatewaySnapshot, setGatewayDeviceToken } = createContext(request);
     const { page } = await mountPage(context);
-    await vi.waitFor(() => expect(page.textContent).toContain("Device A conversation."));
+    await waitForFast(() => expect(page.textContent).toContain("Device A conversation."));
 
     setGatewayDeviceToken("test-token-placeholder");
     setGatewaySnapshot({
@@ -389,7 +408,7 @@ describe("custodian page", () => {
       reconnecting: false,
     });
 
-    await vi.waitFor(() => expect(page.textContent).toContain("Device B welcome."));
+    await waitForFast(() => expect(page.textContent).toContain("Device B welcome."));
     expect(page.textContent).not.toContain("Device A conversation.");
     expect(request).toHaveBeenCalledTimes(2);
   });
@@ -415,14 +434,14 @@ describe("custodian page", () => {
       });
     const { context, setGatewaySnapshot, setGatewayDeviceToken } = createContext(request);
     const { page } = await mountPage(context);
-    await vi.waitFor(() => expect(page.textContent).toContain("Paste your token."));
+    await waitForFast(() => expect(page.textContent).toContain("Paste your token."));
 
     const composer = page.querySelector<HTMLInputElement>('input[type="password"]')!;
     composer.value = "test-token-placeholder";
     composer.dispatchEvent(new InputEvent("input", { bubbles: true }));
     await page.updateComplete;
-    page.querySelector<HTMLButtonElement>(".custodian__composer button")!.click();
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    page.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
 
     setGatewayDeviceToken("test-token-placeholder");
     setGatewaySnapshot({
@@ -431,7 +450,7 @@ describe("custodian page", () => {
       reconnecting: false,
     });
 
-    await vi.waitFor(() => expect(page.textContent).toContain("New operator welcome."));
+    await waitForFast(() => expect(page.textContent).toContain("New operator welcome."));
     expect(page.textContent).not.toContain("Paste your token.");
     expect(page.textContent).not.toContain("Sensitive reply sent");
     expect(page.querySelector('[role="alert"]')).toBeNull();
@@ -449,15 +468,15 @@ describe("custodian page", () => {
       .mockRejectedValueOnce(new Error("gateway timeout"));
     const { context } = createContext(request);
     const { page } = await mountPage(context);
-    await vi.waitFor(() => expect(page.textContent).toContain("Welcome."));
+    await waitForFast(() => expect(page.textContent).toContain("Welcome."));
 
     const composer = page.querySelector<HTMLTextAreaElement>("textarea")!;
     composer.value = "install everything";
     composer.dispatchEvent(new Event("input"));
     await page.updateComplete;
-    page.querySelector<HTMLButtonElement>(".custodian__composer button")!.click();
+    page.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
 
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(page.querySelector('[role="alert"]')?.textContent).toContain("gateway timeout"),
     );
     expect(page.querySelector('[role="alert"] button')).toBeNull();
@@ -479,18 +498,18 @@ describe("custodian page", () => {
       });
     const { context } = createContext(request);
     const { page } = await mountPage(context);
-    await vi.waitFor(() => expect(page.textContent).toContain("Paste your API key."));
+    await waitForFast(() => expect(page.textContent).toContain("Paste your API key."));
 
     const composer = page.querySelector<HTMLInputElement>('input[type="password"]')!;
     const sensitiveValue = ["", "test-token-placeholder", ""].join(" ");
     composer.value = sensitiveValue;
     composer.dispatchEvent(new Event("input"));
     await page.updateComplete;
-    page.querySelector<HTMLButtonElement>(".custodian__composer button")!.click();
+    page.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
 
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
     expect(request.mock.calls[1]?.[1]).toMatchObject({ message: sensitiveValue });
-    await vi.waitFor(() => expect(page.textContent).toContain("Key accepted."));
+    await waitForFast(() => expect(page.textContent).toContain("Key accepted."));
     expect(page.textContent).not.toContain("test-token-placeholder");
   });
 
@@ -517,12 +536,12 @@ describe("custodian page", () => {
       });
     const { context } = createContext(request);
     const { page } = await mountPage(context);
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
     await page.updateComplete;
 
     page.querySelector<HTMLButtonElement>(".option-card__skip")!.click();
 
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
     await page.updateComplete;
     expect(request.mock.calls[1]?.[1]).toMatchObject({ message: "Skip for now" });
     expect(page.querySelector("openclaw-option-card")).toBeNull();
@@ -551,18 +570,23 @@ describe("custodian page", () => {
       });
     const { context } = createContext(request);
     const { page } = await mountPage(context);
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
     await page.updateComplete;
-    const input = page.querySelector<HTMLTextAreaElement>(".custodian__composer textarea")!;
-    input.value = "Something else";
+    const input = page.querySelector<HTMLTextAreaElement>(
+      ".agent-chat__composer-combobox textarea",
+    )!;
+    input.value = "**Something** else";
     input.dispatchEvent(new InputEvent("input", { bubbles: true }));
     await page.updateComplete;
 
-    page.querySelector<HTMLButtonElement>(".custodian__composer button")!.click();
+    page.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
 
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
     await page.updateComplete;
-    expect(request.mock.calls[1]?.[1]).toMatchObject({ message: "Something else" });
+    expect(request.mock.calls[1]?.[1]).toMatchObject({ message: "**Something** else" });
+    // Parity with the regular chat: user turns run through the same markdown pipeline.
+    const sentGroup = page.querySelector<HTMLElement>(".chat-group.user")!;
+    expect(sentGroup.querySelector("strong")?.textContent).toBe("Something");
     expect(page.querySelector<HTMLButtonElement>('[data-option-value="Ask first"]')?.disabled).toBe(
       true,
     );
@@ -576,7 +600,7 @@ describe("custodian page", () => {
     });
     const { context } = createContext(request);
     const { page } = await mountPage(context, { onboarding: false });
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
     await page.updateComplete;
 
     // The onboarding variant seeds the first-run setup proposal; permanent
@@ -587,10 +611,409 @@ describe("custodian page", () => {
     composer.value = "status";
     composer.dispatchEvent(new Event("input"));
     await page.updateComplete;
-    page.querySelector<HTMLButtonElement>(".custodian__composer button")!.click();
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    page.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
     expect(request.mock.calls[1]?.[1]).not.toHaveProperty("welcomeVariant");
     expect(request.mock.calls[1]?.[1]).toMatchObject({ message: "status" });
+  });
+
+  it("shows a channel-error nudge but ignores routine events", async () => {
+    const request = vi.fn().mockResolvedValue({
+      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+      reply: "Everything is healthy.",
+      action: "none",
+    });
+    const { context, emitGatewayEvent } = createContext(request);
+    const { page } = await mountPage(context, { onboarding: false });
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+
+    emitGatewayEvent({ event: "tick", payload: { ts: Date.now() } });
+    await page.updateComplete;
+    expect(page.querySelector(".custodian__nudge")).toBeNull();
+
+    emitGatewayEvent({
+      event: "health",
+      payload: {
+        channels: {
+          telegram: {
+            enabled: false,
+            accounts: {
+              default: {
+                configured: true,
+                enabled: false,
+                running: true,
+                connected: false,
+              },
+            },
+          },
+        },
+      },
+    });
+    await page.updateComplete;
+    expect(page.querySelector(".custodian__nudge")).toBeNull();
+
+    emitGatewayEvent({
+      event: "health",
+      payload: {
+        channelLabels: { telegram: "Telegram" },
+        channels: {
+          telegram: {
+            enabled: false,
+            accounts: {
+              default: { configured: true, enabled: false, connected: false },
+              work: { configured: true, enabled: true, running: true, connected: false },
+            },
+          },
+        },
+      },
+    });
+    await page.updateComplete;
+    expect(page.querySelector(".custodian__nudge")?.textContent).toContain(
+      "Telegram just disconnected",
+    );
+  });
+
+  it("does not report an intentionally stopped channel as disconnected", async () => {
+    const request = vi.fn().mockResolvedValue({
+      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+      reply: "Everything is healthy.",
+      action: "none",
+    });
+    const { context, emitGatewayEvent } = createContext(request);
+    const { page } = await mountPage(context, { onboarding: false });
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+
+    emitGatewayEvent({
+      event: "health",
+      payload: {
+        channels: {
+          telegram: {
+            configured: true,
+            enabled: true,
+            running: false,
+            connected: false,
+            healthState: "not-running",
+            restartPending: false,
+            reconnectAttempts: 0,
+            lastStopAt: 1_700_000_000_000,
+            lastError: "connection closed during the previous run",
+          },
+        },
+      },
+    });
+    await page.updateComplete;
+    expect(page.querySelector(".custodian__nudge")).toBeNull();
+  });
+
+  it("does not report a recovered channel with a retained error", async () => {
+    const request = vi.fn().mockResolvedValue({
+      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+      reply: "Everything is healthy.",
+      action: "none",
+    });
+    const { context, emitGatewayEvent } = createContext(request);
+    const { page } = await mountPage(context, { onboarding: false });
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+
+    emitGatewayEvent({
+      event: "health",
+      payload: {
+        channels: {
+          telegram: {
+            configured: true,
+            enabled: true,
+            running: true,
+            healthState: "healthy",
+            lastError: "connection closed during the previous run",
+          },
+        },
+      },
+    });
+    await page.updateComplete;
+    expect(page.querySelector(".custodian__nudge")).toBeNull();
+  });
+
+  it("reports a channel that fails before its first start", async () => {
+    const request = vi.fn().mockResolvedValue({
+      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+      reply: "Everything is healthy.",
+      action: "none",
+    });
+    const { context, emitGatewayEvent } = createContext(request);
+    const { page } = await mountPage(context, { onboarding: false });
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+
+    emitGatewayEvent({
+      event: "health",
+      payload: {
+        channelLabels: { telegram: "Telegram" },
+        channels: {
+          telegram: {
+            configured: true,
+            enabled: true,
+            running: false,
+            connected: false,
+            restartPending: false,
+            reconnectAttempts: 0,
+            healthState: "not-running",
+            lastError: "failed to initialize transport",
+          },
+        },
+      },
+    });
+    await page.updateComplete;
+    expect(page.querySelector(".custodian__nudge")?.textContent).toContain("Telegram is degraded");
+  });
+
+  it("reports a failed restart after an earlier clean stop", async () => {
+    const request = vi.fn().mockResolvedValue({
+      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+      reply: "Everything is healthy.",
+      action: "none",
+    });
+    const { context, emitGatewayEvent } = createContext(request);
+    const { page } = await mountPage(context, { onboarding: false });
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+
+    emitGatewayEvent({
+      event: "health",
+      payload: {
+        channelLabels: { telegram: "Telegram" },
+        channels: {
+          telegram: {
+            configured: true,
+            enabled: true,
+            running: false,
+            restartPending: false,
+            reconnectAttempts: 0,
+            healthState: "not-running",
+            lastStopAt: 1_700_000_000_000,
+            lastStartAt: 1_700_000_001_000,
+            lastError: "failed to initialize transport",
+          },
+        },
+      },
+    });
+    await page.updateComplete;
+    expect(page.querySelector(".custodian__nudge")?.textContent).toContain("Telegram is degraded");
+  });
+
+  it("reports a current failed probe for an intentionally stopped channel", async () => {
+    const request = vi.fn().mockResolvedValue({
+      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+      reply: "Everything is healthy.",
+      action: "none",
+    });
+    const { context, emitGatewayEvent } = createContext(request);
+    const { page } = await mountPage(context, { onboarding: false });
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+
+    emitGatewayEvent({
+      event: "health",
+      payload: {
+        channelLabels: { telegram: "Telegram" },
+        channels: {
+          telegram: {
+            configured: true,
+            enabled: true,
+            running: false,
+            restartPending: false,
+            reconnectAttempts: 0,
+            healthState: "not-running",
+            lastStopAt: 1_700_000_001_000,
+            lastStartAt: 1_700_000_000_000,
+            probe: { ok: false },
+          },
+        },
+      },
+    });
+    await page.updateComplete;
+    expect(page.querySelector(".custodian__nudge")?.textContent).toContain("Telegram is degraded");
+  });
+
+  it("shows a channel disconnect from the aggregate health row", async () => {
+    const request = vi.fn().mockResolvedValue({
+      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+      reply: "Everything is healthy.",
+      action: "none",
+    });
+    const { context, emitGatewayEvent } = createContext(request);
+    const { page } = await mountPage(context, { onboarding: false });
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+
+    emitGatewayEvent({
+      event: "health",
+      payload: {
+        channelLabels: { telegram: "Telegram" },
+        channels: {
+          telegram: { configured: true, running: true, connected: false },
+        },
+      },
+    });
+    await page.updateComplete;
+
+    expect(page.querySelector(".custodian__nudge")?.textContent).toContain(
+      "Telegram just disconnected",
+    );
+  });
+
+  it("clears a pending event nudge when the gateway identity changes", async () => {
+    const request = vi.fn().mockResolvedValue({
+      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+      reply: "Everything is healthy.",
+      action: "none",
+    });
+    const { context, emitGatewayEvent, setGatewaySnapshot, setGatewayUrl } = createContext(request);
+    const { page } = await mountPage(context, { onboarding: false });
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+
+    emitGatewayEvent({
+      event: "health",
+      payload: {
+        channels: { telegram: { configured: true, running: true, connected: false } },
+      },
+    });
+    await page.updateComplete;
+    expect(page.querySelector(".custodian__nudge")).not.toBeNull();
+
+    setGatewayUrl("ws://gateway-b.test/control");
+    setGatewaySnapshot({
+      client: { request } as unknown as GatewayBrowserClient,
+      connected: true,
+      reconnecting: false,
+    });
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+    await page.updateComplete;
+    expect(page.querySelector(".custodian__nudge")).toBeNull();
+
+    emitGatewayEvent({
+      event: "health",
+      payload: { configReload: { hotReloadStatus: "disabled" }, channels: {} },
+    });
+    await page.updateComplete;
+    expect(page.querySelector(".custodian__nudge")?.textContent).toContain(
+      "Configuration reload stopped",
+    );
+  });
+
+  it("dismisses event nudges for the rest of the page visit", async () => {
+    const request = vi.fn().mockResolvedValue({
+      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+      reply: "Everything is healthy.",
+      action: "none",
+    });
+    const { context, emitGatewayEvent } = createContext(request);
+    const { page } = await mountPage(context, { onboarding: false });
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+
+    emitGatewayEvent({
+      event: "health",
+      payload: {
+        channels: { telegram: { configured: true, running: true, connected: false } },
+      },
+    });
+    await page.updateComplete;
+    page.querySelector<HTMLButtonElement>(".custodian__nudge-dismiss")!.click();
+    await page.updateComplete;
+
+    emitGatewayEvent({
+      event: "health",
+      payload: { configReload: { hotReloadStatus: "disabled" }, channels: {} },
+    });
+    await page.updateComplete;
+    expect(page.querySelector(".custodian__nudge")).toBeNull();
+    expect(request).toHaveBeenCalledOnce();
+  });
+
+  it("replaces a pending nudge only with a more severe event", async () => {
+    const request = vi.fn().mockResolvedValue({
+      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+      reply: "Everything is healthy.",
+      action: "none",
+    });
+    const { context, emitGatewayEvent } = createContext(request);
+    const { page } = await mountPage(context, { onboarding: false });
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+
+    emitGatewayEvent({
+      event: "health",
+      payload: {
+        channelLabels: { telegram: "Telegram" },
+        channels: { telegram: { configured: true, healthState: "stale-socket" } },
+      },
+    });
+    await page.updateComplete;
+    expect(page.querySelector(".custodian__nudge")?.textContent).toContain("Telegram is degraded");
+
+    emitGatewayEvent({
+      event: "health",
+      payload: {
+        channelLabels: { discord: "Discord" },
+        channels: { discord: { configured: true, healthState: "stale-socket" } },
+      },
+    });
+    await page.updateComplete;
+    expect(page.querySelector(".custodian__nudge")?.textContent).toContain("Telegram is degraded");
+
+    emitGatewayEvent({
+      event: "health",
+      payload: {
+        channelLabels: { discord: "Discord" },
+        channels: { discord: { configured: true, running: true, connected: false } },
+      },
+    });
+    await page.updateComplete;
+    expect(page.querySelector(".custodian__nudge")?.textContent).toContain(
+      "Discord just disconnected",
+    );
+  });
+
+  it("sends a real message when an event nudge is clicked", async () => {
+    const request = vi.fn().mockResolvedValue({
+      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+      reply: "Everything is healthy.",
+      action: "none",
+    });
+    const { context, emitGatewayEvent } = createContext(request);
+    const { page } = await mountPage(context, { onboarding: false });
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+
+    emitGatewayEvent({
+      event: "health",
+      payload: {
+        channels: {
+          telegram: { configured: true, tokenStatus: "configured_unavailable" },
+        },
+      },
+    });
+    await page.updateComplete;
+    page.querySelector<HTMLButtonElement>(".custodian__nudge-action")!.click();
+
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+    expect(request.mock.calls[1]?.[1]).toMatchObject({
+      message: "what happened with telegram authentication?",
+    });
+    expect(page.textContent).toContain("what happened with telegram authentication?");
+    expect(page.querySelector(".custodian__nudge")).toBeNull();
+  });
+
+  it("never shows event nudges during onboarding", async () => {
+    const request = vi.fn().mockResolvedValue({
+      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+      reply: "Welcome.",
+      action: "none",
+    });
+    const { context, emitGatewayEvent } = createContext(request);
+    const { page } = await mountPage(context, { onboarding: true });
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+
+    emitGatewayEvent({
+      event: "health",
+      payload: { configReload: { hotReloadStatus: "disabled" }, channels: {} },
+    });
+    await page.updateComplete;
+
+    expect(page.querySelector(".custodian__nudge")).toBeNull();
   });
 
   it("starts a fresh welcome when onboarding mode changes", async () => {
@@ -608,15 +1031,45 @@ describe("custodian page", () => {
       });
     const { context } = createContext(request);
     const { page } = await mountPage(context, { onboarding: false });
-    await vi.waitFor(() => expect(page.textContent).toContain("Normal caretaker conversation."));
+    await waitForFast(() => expect(page.textContent).toContain("Normal caretaker conversation."));
 
     page.onboarding = true;
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
-    await vi.waitFor(() => expect(page.textContent).toContain("Onboarding proposal."));
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+    await waitForFast(() => expect(page.textContent).toContain("Onboarding proposal."));
 
     expect(page.textContent).not.toContain("Normal caretaker conversation.");
     expect(request.mock.calls[1]?.[1]).toMatchObject({ welcomeVariant: "onboarding" });
     expect(request.mock.calls[1]?.[1]).not.toHaveProperty("message");
+  });
+
+  it("hands off to agent chat with the hatch draft on open-agent", async () => {
+    const request = vi.fn().mockResolvedValue({
+      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+      reply: "Your agent is hatching — handing you over now.",
+      action: "open-agent",
+      agentDraft: "hatch",
+    });
+    const { context } = createContext(request);
+    const { page } = await mountPage(context);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    await page.updateComplete;
+
+    expect(context.navigate).toHaveBeenCalledWith("chat", {
+      search: `?session=main&draft=${encodeURIComponent("Wake up, my friend!")}`,
+    });
+  });
+
+  it("hands off to normal agent chat without the hatch draft", async () => {
+    const request = vi.fn().mockResolvedValue({
+      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+      reply: "Setup here is done — continue with your agent.",
+      action: "open-agent",
+    });
+    const { context } = createContext(request);
+    await mountPage(context);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+
+    expect(context.navigate).toHaveBeenCalledWith("chat");
   });
 
   it("exits setup through normal chat navigation", async () => {
@@ -628,7 +1081,7 @@ describe("custodian page", () => {
     const { context } = createContext(request);
     const { page } = await mountPage(context);
     page.onboarding = true;
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
     await page.updateComplete;
 
     page.querySelector<HTMLButtonElement>(".custodian__header button")!.click();

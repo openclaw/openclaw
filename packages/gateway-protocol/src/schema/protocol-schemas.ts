@@ -248,6 +248,7 @@ import {
   WorkerEnvironmentStateSchema,
   WorkerTunnelStatusSchema,
 } from "./environments.js";
+import { GatewayErrorDetailsSchema } from "./error-codes.js";
 import {
   ExecApprovalsGetParamsSchema,
   ExecApprovalsNodeGetParamsSchema,
@@ -548,6 +549,7 @@ export const ProtocolSchemas = {
   StateVersion: StateVersionSchema,
   Snapshot: SnapshotSchema,
   ErrorShape: ErrorShapeSchema,
+  GatewayErrorDetails: GatewayErrorDetailsSchema,
   GatewaySuspendTaskBlocker: GatewaySuspendTaskBlockerSchema,
   GatewaySuspendBlocker: GatewaySuspendBlockerSchema,
   GatewaySuspendPrepareParams: GatewaySuspendPrepareParamsSchema,

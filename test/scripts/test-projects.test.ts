@@ -272,6 +272,19 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
+  it.each(["extensions/codex/package.json", "extensions/codex/src/app-server/version.ts"])(
+    "routes Codex version changes through cross-plugin contract tests for %s",
+    (changedPath) => {
+      expect(resolveChangedTestTargetPlan([changedPath])).toEqual({
+        mode: "targets",
+        targets: [
+          "extensions/codex/src/manifest.test.ts",
+          "extensions/openai/openai-provider.test.ts",
+        ],
+      });
+    },
+  );
+
   it("routes release wrapper changes through their owner tests", () => {
     expect(resolveChangedTestTargetPlan(["scripts/apple-release-source-check.sh"])).toEqual({
       mode: "targets",
@@ -2166,8 +2179,17 @@ describe("scripts/test-projects changed-target routing", () => {
         ["test/scripts/plugin-npm-runtime-build-args.test.ts"],
       ],
       [
+        "scripts/lib/generated-text-asset.mjs",
+        [
+          "extensions/browser/scripts/build-copilot-runtime.test.ts",
+          "test/scripts/build-diffs-viewer-runtime.test.ts",
+          "test/scripts/bundled-plugin-assets.test.ts",
+        ],
+      ],
+      [
         "scripts/lib/static-extension-assets.mjs",
         [
+          "test/scripts/bundled-plugin-assets.test.ts",
           "test/scripts/runtime-postbuild.test.ts",
           "src/infra/run-node.test.ts",
           "test/scripts/plugin-npm-runtime-build-args.test.ts",
@@ -2859,7 +2881,7 @@ describe("scripts/test-projects changed-target routing", () => {
         includePatterns: expect.arrayContaining(["src/plugin-sdk/access-groups.test.ts"]),
       }),
       expect.objectContaining({
-        config: "test/vitest/vitest.unit-fast-isolated.config.ts",
+        config: "test/vitest/vitest.unit-fast-fake-timers.config.ts",
         includePatterns: ["src/plugin-sdk/memory-host-events.test.ts"],
       }),
       expect.objectContaining({

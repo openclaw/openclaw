@@ -11,6 +11,7 @@ import {
 } from "openclaw/plugin-sdk/channel-inbound";
 import { hasVisibleInboundReplyDispatch } from "openclaw/plugin-sdk/channel-inbound";
 import {
+  bindIngressLifecycleToReplyOptions,
   deliverInboundReplyWithMessageSendContext,
   resolveChannelStreamingBlockEnabled,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -18,6 +19,7 @@ import { buildInboundHistoryFromEntries } from "openclaw/plugin-sdk/reply-histor
 import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { requireWhatsAppInboundAdmission } from "../../inbound/admission.js";
+import { resolveWhatsAppIngressLifecycle } from "../../inbound/ingress-lifecycle.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import {
   type DeliverableWhatsAppOutboundPayload,
@@ -529,6 +531,7 @@ export function createWhatsAppReplyPlan(params: {
   statusReactionController?: StatusReactionController | null;
 }) {
   const admission = requireWhatsAppInboundAdmission(params.msg);
+  const ingressLifecycle = resolveWhatsAppIngressLifecycle(params.msg);
   const conversationId = admission.conversation.id;
   const conversationKind = admission.conversation.kind;
   const statusReactionController = params.statusReactionController ?? null;
@@ -733,6 +736,7 @@ export function createWhatsAppReplyPlan(params: {
     },
   };
   const replyOptions = {
+    ...(ingressLifecycle ? bindIngressLifecycleToReplyOptions(ingressLifecycle) : {}),
     // Message-tool-only unmentioned group turns have no automatic visible reply.
     // Suppress composing there so silent background runs do not leak presence.
     suppressTyping:

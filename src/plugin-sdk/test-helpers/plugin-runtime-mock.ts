@@ -158,6 +158,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
     ) as unknown as PluginRuntime["tasks"]["managedFlows"]["fromToolContext"],
   };
   const dispatchAssembledChannelTurnMock = vi.fn(async (params: Record<string, unknown>) => {
+    const admission = (params.admission ?? { kind: "dispatch" }) as { kind: string };
     const ctxPayload = params.ctxPayload as Record<string, unknown>;
     const record = params.record as
       | Parameters<PluginRuntime["channel"]["inbound"]["runPreparedReply"]>[0]["record"]
@@ -167,11 +168,15 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
     >[0]["recordInboundSession"];
     const routeSessionKey = params.routeSessionKey as string;
     const storePath = params.storePath as string;
-    const delivery = params.delivery as {
+    const sourceDelivery = params.delivery as {
       deliver: (payload: unknown, info: unknown) => Promise<unknown>;
       onDelivered?: (payload: unknown, info: unknown, result: unknown) => Promise<void> | void;
       onError?: (err: unknown, info: unknown) => void;
     };
+    const delivery =
+      admission.kind === "observeOnly"
+        ? { deliver: async () => ({ visibleReplySent: false }) }
+        : sourceDelivery;
     const ctxSessionKey = ctxPayload.SessionKey;
     const sessionKey = typeof ctxSessionKey === "string" ? ctxSessionKey : routeSessionKey;
     const dispatchReplyWithBufferedBlockDispatcher =
@@ -209,7 +214,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       trackSessionMetaTask: record?.trackSessionMetaTask,
     });
     await (params.afterRecord as (() => void | Promise<void>) | undefined)?.();
-    const dispatchResult = await dispatchReplyWithBufferedBlockDispatcher({
+    const rawDispatchResult = await dispatchReplyWithBufferedBlockDispatcher({
       ctx: ctxPayload,
       cfg: params.cfg,
       dispatcherOptions: {
@@ -225,11 +230,18 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       replyOptions: {
         ...(onModelSelected ? { onModelSelected } : {}),
         ...(params.replyOptions as Record<string, unknown> | undefined),
+        ...(params.turnAdoptionLifecycle
+          ? { turnAdoptionLifecycle: params.turnAdoptionLifecycle }
+          : {}),
       },
       replyResolver: params.replyResolver,
     });
+    const dispatchResult =
+      admission.kind === "observeOnly"
+        ? { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } }
+        : rawDispatchResult;
     return {
-      admission: params.admission ?? { kind: "dispatch" },
+      admission,
       dispatched: true,
       ctxPayload,
       routeSessionKey,
@@ -259,13 +271,16 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         throw err;
       }
       const admission = params.admission ?? { kind: "dispatch" as const };
-      const dispatchResult =
-        admission.kind === "observeOnly"
-          ? (params.observeOnlyDispatchResult ?? {
-              queuedFinal: false,
-              counts: { tool: 0, block: 0, final: 0 },
-            })
-          : await params.runDispatch();
+      let dispatchResult;
+      if (admission.kind === "observeOnly") {
+        await params.runDispatchLifecycle?.onDispatchSkipped("observeOnly");
+        dispatchResult = params.observeOnlyDispatchResult ?? {
+          queuedFinal: false,
+          counts: { tool: 0, block: 0, final: 0 },
+        };
+      } else {
+        dispatchResult = await params.runDispatch();
+      }
       return {
         admission,
         dispatched: true,
@@ -332,6 +347,20 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         resolved.admission ?? preflight.admission ?? ({ kind: "dispatch" } as const);
       let dispatchResult;
       if ("runDispatch" in resolved) {
+        const lifecycle = resolved.runDispatchLifecycle;
+        if (!lifecycle) {
+          throw new Error(
+            "runChannelInboundEvent prepared turns must declare runDispatchLifecycle when creating runDispatch",
+          );
+        }
+        if (
+          params.turnAdoptionLifecycle &&
+          lifecycle.turnAdoptionLifecycle !== params.turnAdoptionLifecycle
+        ) {
+          throw new Error(
+            "runChannelInboundEvent prepared turn runDispatchLifecycle must own the top-level turnAdoptionLifecycle",
+          );
+        }
         const prepared =
           "route" in resolved
             ? (() => {
@@ -353,24 +382,22 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
           ...prepared,
           admission,
         } as unknown as Parameters<PluginRuntime["channel"]["inbound"]["runPreparedReply"]>[0]);
+      } else if ("route" in resolved) {
+        dispatchResult = await dispatchChannelTurnPlanMock({
+          ...resolved,
+          admission,
+          ...(params.turnAdoptionLifecycle
+            ? { turnAdoptionLifecycle: params.turnAdoptionLifecycle }
+            : {}),
+        });
       } else {
-        const delivery =
-          admission.kind === "observeOnly"
-            ? { deliver: async () => ({ visibleReplySent: false }) }
-            : resolved.delivery;
-        if ("route" in resolved) {
-          dispatchResult = await dispatchChannelTurnPlanMock({
-            ...resolved,
-            admission,
-            delivery,
-          });
-        } else {
-          dispatchResult = await dispatchAssembledChannelTurnMock({
-            ...resolved,
-            admission,
-            delivery,
-          });
-        }
+        dispatchResult = await dispatchAssembledChannelTurnMock({
+          ...resolved,
+          admission,
+          ...(params.turnAdoptionLifecycle
+            ? { turnAdoptionLifecycle: params.turnAdoptionLifecycle }
+            : {}),
+        });
       }
       const result = {
         ...dispatchResult,

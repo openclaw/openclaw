@@ -4,7 +4,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { enqueueCommandInLane } from "../../process/command-queue.js";
+import { enqueueCommandInLane, type CommandLaneTaskMarker } from "../../process/command-queue.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import { CommandLane } from "../../process/lanes.js";
 import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
@@ -12,6 +12,7 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import {
   clearCronJobActive,
   isCronActiveJobMarkerCurrent,
+  isCronJobActive,
   markCronJobActive,
   type CronActiveJobMarker,
 } from "../active-jobs.js";
@@ -29,6 +30,7 @@ import {
   computeJobNextRunAtMs,
   createJob,
   findJobOrThrow,
+  hasActiveCronRun,
   hasScheduledNextRunAtMs,
   isJobEnabled,
   isJobDue,
@@ -506,7 +508,11 @@ function finalizeUpdatedJob(params: {
     } else {
       nextJob.state.nextRunAtMs = undefined;
       nextJob.state.queuedAtMs = undefined;
-      nextJob.state.runningAtMs = undefined;
+      // Preserve only genuine execution. Queued reservations must clear so a
+      // disabled job can accept a later force run with the same timestamp.
+      if (!isCronJobActive(nextJob.id)) {
+        nextJob.state.runningAtMs = undefined;
+      }
     }
   } else if (isJobEnabled(nextJob) && !hasScheduledNextRunAtMs(nextJob.state.nextRunAtMs)) {
     nextJob.state.nextRunAtMs = computeJobNextRunAtMs(nextJob, now);
@@ -737,6 +743,7 @@ type PreparedManualRun =
       jobId: string;
       runId?: string;
       terminalTracker?: ManualRunTerminalTracker;
+      owningCronLaneTaskMarker?: CommandLaneTaskMarker;
       reservationAt: number;
       reservationIdentity: object;
       wasEnabled: boolean;
@@ -755,6 +762,7 @@ type ManualRunOptions = {
   runId?: string;
   payload?: CronPayload;
   terminalTracker?: ManualRunTerminalTracker;
+  owningCronLaneTaskMarker?: CommandLaneTaskMarker;
 };
 
 type ManualRunTerminalTracker = { emitted: boolean };
@@ -874,7 +882,7 @@ async function inspectManualRunPreflight(
       await skipInvalidPersistedManualRun({ state, job, mode, runId, terminalTracker, error });
       return { ok: true, ran: false, reason: "invalid-spec" as const };
     }
-    if (typeof job.state.queuedAtMs === "number" || typeof job.state.runningAtMs === "number") {
+    if (hasActiveCronRun(job)) {
       return { ok: true, ran: false, reason: "already-running" as const };
     }
     const now = state.deps.nowMs();
@@ -953,7 +961,7 @@ async function prepareManualRun(
       });
       return { ok: true, ran: false, reason: "invalid-spec" as const };
     }
-    if (typeof job.state.queuedAtMs === "number" || typeof job.state.runningAtMs === "number") {
+    if (hasActiveCronRun(job)) {
       return { ok: true, ran: false, reason: "already-running" as const };
     }
     const reservationAt = state.deps.nowMs();
@@ -1009,6 +1017,7 @@ async function prepareManualRun(
       jobId: job.id,
       runId: opts?.runId,
       terminalTracker: opts?.terminalTracker,
+      owningCronLaneTaskMarker: opts?.owningCronLaneTaskMarker,
       reservationAt,
       reservationIdentity,
       wasEnabled: isJobEnabled(job),
@@ -1212,6 +1221,7 @@ async function finishPreparedManualRun(
       coreResult = await executeJobCoreWithTimeout(state, executionJob, {
         runId: taskRunId,
         activeJobMarker: prepared.activeJobMarker,
+        owningCronLaneTaskMarker: prepared.owningCronLaneTaskMarker,
       });
     } catch (err) {
       coreResult = { status: "error", error: normalizeCronRunErrorText(err) };
@@ -1459,8 +1469,12 @@ export async function enqueueRun(state: CronServiceState, id: string, mode?: "du
   void runWithGatewayIndependentRootWorkContinuation(() =>
     enqueueCommandInLane(
       CommandLane.Cron,
-      async () => {
-        const result = await run(state, id, mode, { runId, terminalTracker });
+      async (owningCronLaneTaskMarker) => {
+        const result = await run(state, id, mode, {
+          runId,
+          terminalTracker,
+          owningCronLaneTaskMarker,
+        });
         if (result.ok && "ran" in result && !result.ran) {
           if (result.reason !== "invalid-spec") {
             const finishedAt = state.deps.nowMs();

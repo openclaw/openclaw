@@ -435,7 +435,7 @@ private fun DictationScreen(
 }
 
 @Composable
-private fun TalkSessionScreen(
+internal fun TalkSessionScreen(
   entries: List<VoiceConversationEntry>,
   listening: Boolean,
   speaking: Boolean,
@@ -448,6 +448,7 @@ private fun TalkSessionScreen(
   onToggleSpeaker: () -> Unit,
   onEndTalk: () -> Unit,
   onOpenVoiceSettings: () -> Unit,
+  embeddedInChat: Boolean = false,
 ) {
   Column(
     modifier =
@@ -458,7 +459,9 @@ private fun TalkSessionScreen(
     verticalArrangement = Arrangement.spacedBy(10.dp),
   ) {
     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-      ClawPlainIconButton(icon = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = nativeString("Back to voice"), onClick = onEndTalk)
+      if (!embeddedInChat) {
+        ClawPlainIconButton(icon = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = nativeString("Back to voice"), onClick = onEndTalk)
+      }
       Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(3.dp)) {
         Text(text = nativeString("Realtime Talk"), style = ClawTheme.type.title.copy(fontSize = 16.sp, lineHeight = 20.sp), color = ClawTheme.colors.text)
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
