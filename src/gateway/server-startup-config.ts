@@ -7,7 +7,6 @@ import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.opencla
 import { measureDiagnosticsTimelineSpan } from "../infra/diagnostics-timeline.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import { resolveAuthProfileSecretOwnerId } from "../secrets/runtime-auth-profile-owner.js";
 import {
   classifySecretResolutionErrorDegradations,
   isRetryableSecretDegradationReason,
@@ -20,6 +19,7 @@ import { prepareSecretsRuntimeFastPathSnapshot } from "../secrets/runtime-fast-p
 import { registerProviderAuthRuntimeSnapshotActivationOwner } from "../secrets/runtime-provider-auth-activation.js";
 import {
   listProviderAuthDegradedOwners,
+  preparedDegradationSupportsSourceOnlyRecovery,
   resolvePreparedSecretsStateScope,
   type SecretsStateScope,
 } from "../secrets/runtime-provider-auth-scope.js";
@@ -131,27 +131,6 @@ function logSecretDegradation(log: GatewayStartupLog, degradation: SecretDegrada
       state: degradation.state,
       retryHint: degradation.retryHint,
     },
-  );
-}
-
-function preparedDegradationSupportsSourceOnlyRecovery(
-  snapshot: PreparedRuntimeSecretsSnapshot,
-): boolean {
-  const degradedOwners = snapshot.degradedOwners ?? [];
-  const authStoreOwnerIds = new Set(
-    snapshot.authStores.flatMap(({ agentDir, store }) =>
-      Object.keys(store.profiles).map((profileId) =>
-        resolveAuthProfileSecretOwnerId({ agentDir, profileId }),
-      ),
-    ),
-  );
-  return (
-    degradedOwners.length > 0 &&
-    degradedOwners.every(
-      (owner) =>
-        owner.degradationState === "cold" &&
-        !(owner.ownerKind === "account" && authStoreOwnerIds.has(owner.ownerId)),
-    )
   );
 }
 

@@ -27,6 +27,28 @@ export function listProviderAuthDegradedOwners(
   );
 }
 
+/** Whether a config-source repair may recover without replacing active auth-store state. */
+export function preparedDegradationSupportsSourceOnlyRecovery(
+  snapshot: PreparedSecretsRuntimeSnapshot,
+): boolean {
+  const degradedOwners = snapshot.degradedOwners ?? [];
+  const authOwnerIds = new Set(
+    snapshot.authStores.flatMap(({ agentDir, store }) =>
+      Object.keys(store.profiles).map((profileId) =>
+        resolveAuthProfileSecretOwnerId({ agentDir, profileId }),
+      ),
+    ),
+  );
+  return (
+    degradedOwners.length > 0 &&
+    degradedOwners.every(
+      (owner) =>
+        owner.degradationState === "cold" &&
+        !(owner.ownerKind === "account" && authOwnerIds.has(owner.ownerId)),
+    )
+  );
+}
+
 export function resolvePreparedSecretsStateScope(
   snapshot: PreparedSecretsRuntimeSnapshot,
 ): SecretsStateScope {
