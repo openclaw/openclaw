@@ -321,6 +321,7 @@ export function writePreRegisteredChatAbort(params: {
 export function resolveAuthorizedPreRegisteredRunsForSessionKeys(params: {
   context: GatewayRequestContext;
   sessionKeys: Iterable<string>;
+  explicitSessionKey: string;
   agentId?: string;
   defaultAgentId: string;
   requester: ChatAbortRequester;
@@ -332,9 +333,11 @@ export function resolveAuthorizedPreRegisteredRunsForSessionKeys(params: {
       (sessionKey): sessionKey is string => Boolean(sessionKey),
     ),
   );
-  // Hidden channel runs are addressable only when the caller names their full
-  // channel session. Broad main/global stops must not discover them.
-  const includeHiddenChannelScopedRuns = [...sessionKeys].some(isExplicitChannelScopedSessionKey);
+  // Hidden channel runs are addressable only through the exact full session
+  // named by the caller. Broad aliases in the candidate set cannot widen it.
+  const explicitHiddenSessionKey = isExplicitChannelScopedSessionKey(params.explicitSessionKey)
+    ? params.explicitSessionKey
+    : undefined;
   const authorizedByRunId = new Map<string, PreRegisteredAgentRun>();
   let matchedSessionRuns = 0;
   for (const [key, entry] of params.context.dedupe) {
@@ -342,7 +345,7 @@ export function resolveAuthorizedPreRegisteredRunsForSessionKeys(params: {
       key,
       entry,
       keyPrefix: params.keyPrefix,
-      includeHidden: includeHiddenChannelScopedRuns,
+      includeHidden: Boolean(explicitHiddenSessionKey),
     });
     if (!run) {
       continue;
@@ -356,6 +359,12 @@ export function resolveAuthorizedPreRegisteredRunsForSessionKeys(params: {
         ? run.payload.sessionKeyAliases.map(normalizeUnknownText)
         : []),
     ];
+    if (
+      run.payload.controlUiVisible === false &&
+      (!explicitHiddenSessionKey || !runSessionKeys.includes(explicitHiddenSessionKey))
+    ) {
+      continue;
+    }
     if (!runSessionKeys.some((sessionKey) => Boolean(sessionKey && sessionKeys.has(sessionKey)))) {
       continue;
     }
@@ -387,6 +396,7 @@ export function resolveAuthorizedPreRegisteredRunsForSessionKeys(params: {
 export function resolveAuthorizedRunsForSessionKeys(params: {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   sessionKeys: Iterable<string>;
+  explicitSessionKey: string;
   sessionIds?: Iterable<string | undefined>;
   agentId?: string;
   defaultAgentId: string;
@@ -404,12 +414,17 @@ export function resolveAuthorizedRunsForSessionKeys(params: {
     ),
   );
   const agentId = normalizeOptionalText(params.agentId)?.toLowerCase();
-  // Keep the same explicit-session boundary for registered and pre-registered runs.
-  const includeHiddenChannelScopedRuns = [...sessionKeys].some(isExplicitChannelScopedSessionKey);
+  // Keep the same exact explicit-session boundary for registered and pre-registered runs.
+  const explicitHiddenSessionKey = isExplicitChannelScopedSessionKey(params.explicitSessionKey)
+    ? params.explicitSessionKey
+    : undefined;
   const authorizedRuns: Array<{ runId: string; sessionKey: string }> = [];
   let matchedSessionRuns = 0;
   for (const [runId, active] of params.chatAbortControllers) {
-    if (active.controlUiVisible === false && !includeHiddenChannelScopedRuns) {
+    if (
+      active.controlUiVisible === false &&
+      (!explicitHiddenSessionKey || active.sessionKey !== explicitHiddenSessionKey)
+    ) {
       continue;
     }
     if (params.preserveSideRuns && active.turnKind === "btw") {

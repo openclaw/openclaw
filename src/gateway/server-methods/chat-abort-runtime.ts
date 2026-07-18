@@ -202,6 +202,7 @@ export async function abortChatRunsForSessionKeyWithPartials(params: {
   const { matchedSessionRuns, authorizedRuns } = resolveAuthorizedRunsForSessionKeys({
     chatAbortControllers: params.context.chatAbortControllers,
     sessionKeys,
+    explicitSessionKey: params.sessionKey,
     sessionIds: [params.sessionId],
     agentId: params.agentId,
     defaultAgentId: params.defaultAgentId,
@@ -214,6 +215,7 @@ export async function abortChatRunsForSessionKeyWithPartials(params: {
   } = resolveAuthorizedPreRegisteredRunsForSessionKeys({
     context: params.context,
     sessionKeys,
+    explicitSessionKey: params.sessionKey,
     agentId: params.agentId,
     defaultAgentId: params.defaultAgentId,
     requester: params.requester,
@@ -224,6 +226,7 @@ export async function abortChatRunsForSessionKeyWithPartials(params: {
     resolveAuthorizedPreRegisteredRunsForSessionKeys({
       context: params.context,
       sessionKeys,
+      explicitSessionKey: params.sessionKey,
       agentId: params.agentId,
       defaultAgentId: params.defaultAgentId,
       requester: params.requester,

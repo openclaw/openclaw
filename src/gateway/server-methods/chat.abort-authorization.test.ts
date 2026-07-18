@@ -222,9 +222,11 @@ describe("chat.abort authorization", () => {
 
   it("aborts hidden channel runs by explicit channel session key", async () => {
     const sessionKey = "agent:main:openclaw-weixin:direct:o9cq802hhmfc@im.wechat";
+    const siblingSessionKey = "agent:main:telegram:direct:8661849123";
     const context = createChatAbortContext({
       chatAbortControllers: new Map([
         ["run-wechat", createActiveRun(sessionKey, { controlUiVisible: false })],
+        ["run-telegram", createActiveRun(siblingSessionKey, { controlUiVisible: false })],
       ]),
     });
 
@@ -239,6 +241,52 @@ describe("chat.abort authorization", () => {
     expect(ok).toBe(true);
     expectAbortPayload(payload, { aborted: true, runIds: ["run-wechat"] });
     expect(context.chatAbortControllers.has("run-wechat")).toBe(false);
+    expect(context.chatAbortControllers.has("run-telegram")).toBe(true);
+  });
+
+  it("aborts only hidden pending runs for the explicitly named channel session", async () => {
+    const sessionKey = "agent:main:openclaw-weixin:direct:o9cq802hhmfc@im.wechat";
+    const siblingSessionKey = "agent:main:telegram:direct:8661849123";
+    const context = createChatAbortContext();
+    context.dedupe.set("agent:run-wechat-pending", {
+      ts: Date.now(),
+      ok: true,
+      payload: {
+        runId: "run-wechat-pending",
+        sessionKey,
+        sessionKeyAliases: ["agent:main"],
+        status: "accepted",
+        controlUiVisible: false,
+      },
+    });
+    context.dedupe.set("agent:run-telegram-pending", {
+      ts: Date.now(),
+      ok: true,
+      payload: {
+        runId: "run-telegram-pending",
+        sessionKey: siblingSessionKey,
+        sessionKeyAliases: ["agent:main"],
+        status: "accepted",
+        controlUiVisible: false,
+      },
+    });
+
+    const respond = await invokeAbort({
+      context,
+      sessionKey,
+      connId: "conn-owner",
+      deviceId: "dev-owner",
+    });
+
+    const [ok, payload] = requireLastRespondCall(respond);
+    expect(ok).toBe(true);
+    expectAbortPayload(payload, { aborted: true, runIds: ["run-wechat-pending"] });
+    expect(context.dedupe.get("agent:run-wechat-pending")?.payload).toMatchObject({
+      status: "timeout",
+    });
+    expect(context.dedupe.get("agent:run-telegram-pending")?.payload).toMatchObject({
+      status: "accepted",
+    });
   });
 
   it("aborts hidden channel runs whose session key omits direct or group markers", async () => {
