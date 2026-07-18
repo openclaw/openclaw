@@ -1127,7 +1127,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
         '.sidebar-recent-session[data-session-key="agent:main:session-10"]',
       );
       await sessionTen.hover();
-        await sessionTen.getByRole("button", { name: "Open thread menu" }).click();
+      await sessionTen.getByRole("button", { name: "Open thread menu" }).click();
       const moveToGroup = page.getByRole("menuitem", { name: "Move to group" });
       await expect.poll(() => moveToGroup.getAttribute("aria-haspopup")).toBe("menu");
       const moveToGroupIndex = await moveToGroup.evaluate((element) =>
