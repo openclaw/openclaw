@@ -1083,6 +1083,13 @@ export async function processGatewayAllowlist(
           });
         }
       }
+      // A run-abort cancellation must propagate as cancellation, not resolve
+      // into an ordinary denial the aborted run would keep processing. The
+      // abort owner cancels approvals before firing the controller, so the
+      // signal is aborted by the time the released waiter reaches us.
+      if (approvalDecision.runAborted) {
+        params.signal?.throwIfAborted();
+      }
       if (approvalDecision.deniedReason) {
         return {
           deniedResult: buildGatewayExecApprovalDeniedToolResult({
