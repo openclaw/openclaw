@@ -1,10 +1,9 @@
-/** Converts a SQLite number or bigint column into a JavaScript number.
- *  Returns undefined when the value is null, non-numeric, or a bigint that
- *  exceeds Number.MAX_SAFE_INTEGER (2^53-1) where Number() would silently
- *  lose precision or return Infinity. */
+const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
+
+/** Converts a SQLite number or safely representable bigint column into a JavaScript number. */
 export function normalizeSqliteNumber(value: number | bigint | null): number | undefined {
   if (typeof value === "bigint") {
-    if (value > Number.MAX_SAFE_INTEGER || value < -Number.MAX_SAFE_INTEGER) {
+    if (value > MAX_SAFE_INTEGER_BIGINT || value < -MAX_SAFE_INTEGER_BIGINT) {
       return undefined;
     }
     return Number(value);
