@@ -342,6 +342,9 @@ async function readVaultSecret(baseUrl, vaultToken, id) {
       headers,
     }));
   } catch (error) {
+    if (error instanceof SyntaxError) {
+      throw new Error(`Vault read response for "${id}" was not valid JSON.`, { cause: error });
+    }
     throw new VaultProviderError("Vault request failed.", { cause: error });
   }
   if (!response.ok) {
