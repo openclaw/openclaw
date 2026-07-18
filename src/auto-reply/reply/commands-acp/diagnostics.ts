@@ -191,8 +191,11 @@ export async function handleAcpSessionsAction(
   const normalizedAccountId = bindingContext.accountId || undefined;
   const bindingService = getSessionBindingService();
   const entries = await listAcpSessionEntries({ cfg: params.cfg });
+  const visibleEntries = params.command.senderIsOwner
+    ? entries
+    : entries.filter((candidate) => candidate.storeSessionKey === currentSessionKey);
 
-  const rows = entries
+  const rows = visibleEntries
     .toSorted((a, b) => (b.entry?.updatedAt ?? 0) - (a.entry?.updatedAt ?? 0))
     .slice(0, 20)
     .map(({ storeSessionKey, entry, acp }) => {

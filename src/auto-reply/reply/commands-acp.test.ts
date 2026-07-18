@@ -1910,6 +1910,38 @@ describe("/acp command", () => {
     expect(result?.reply?.text).toContain(`thread:${defaultThreadId}`);
   });
 
+  it("lists all stored ACP sessions for the owner", async () => {
+    hoisted.sessionBindingResolveByConversationMock.mockReturnValue(
+      createBoundThreadSession("agent:codex:acp:own"),
+    );
+    hoisted.listAcpSessionEntriesMock.mockResolvedValue([
+      createAcpSessionEntry({ sessionKey: "agent:codex:acp:own" }),
+      createAcpSessionEntry({ sessionKey: "agent:claude:acp:foreign" }),
+    ]);
+
+    const result = await runDiscordAcpCommand("/acp sessions", baseCfg);
+
+    expect(result?.reply?.text).toContain("agent:codex:acp:own");
+    expect(result?.reply?.text).toContain("agent:claude:acp:foreign");
+  });
+
+  it("hides foreign ACP sessions from authorized non-owner senders", async () => {
+    hoisted.sessionBindingResolveByConversationMock.mockReturnValue(
+      createBoundThreadSession("agent:codex:acp:own"),
+    );
+    hoisted.listAcpSessionEntriesMock.mockResolvedValue([
+      createAcpSessionEntry({ sessionKey: "agent:codex:acp:own" }),
+      createAcpSessionEntry({ sessionKey: "agent:claude:acp:foreign" }),
+    ]);
+    const params = createDiscordParams("/acp sessions");
+    params.command.senderIsOwner = false;
+
+    const result = await handleAcpCommand(params, true);
+
+    expect(result?.reply?.text).toContain("agent:codex:acp:own");
+    expect(result?.reply?.text).not.toContain("agent:claude:acp:foreign");
+  });
+
   it("shows ACP status for the thread-bound ACP session", async () => {
     mockBoundThreadSession({
       identity: {

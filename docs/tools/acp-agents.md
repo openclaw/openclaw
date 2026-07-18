@@ -790,7 +790,9 @@ Runtime controls (`spawn`, `cancel`, `steer`, `close`, `status`, `set-mode`,
 `set`, `cwd`, `permissions`, `timeout`, `model`, and `reset-options`) require
 owner identity from external channels and `operator.admin` from internal
 Gateway clients. Authorized non-owner senders can still use `sessions`,
-`doctor`, `install`, and `help`.
+`doctor`, `install`, and `help`. For non-owner senders, `/acp sessions`
+lists only the current bound or requester session; owner identity and
+`operator.admin` clients see all recent sessions.
 
 `/acp status` shows the effective runtime options plus runtime-level and
 backend-level session identifiers. Unsupported-control errors surface
