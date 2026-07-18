@@ -113,14 +113,14 @@ export async function runPackageInstallUpdate(params: {
   } else if (rollbackEnv.OPENCLAW_UPDATE_NO_ROLLBACK !== "1") {
     if (retainPreviousPackage) {
       defaultRuntime.error(
-        "Warning: OpenClaw will retain one launchable previous package, but automatic rollback is not enabled. If startup fails, reinstall the previous version manually.",
+        "Warning: OpenClaw will retain one launchable previous package, but automatic rollback is not enabled. If startup fails after migration, restore compatible state before running an older version; otherwise repair or update forward with the current version.",
       );
     } else {
       const reason = !params.allowGatewayServiceRepair
         ? "the Gateway service is not owned by this install"
         : "the Gateway service was not stopped for this update";
       defaultRuntime.error(
-        `Warning: Previous-package retention is unavailable because ${reason}. If startup fails, reinstall the previous version manually.`,
+        `Warning: Previous-package retention is unavailable because ${reason}. If startup fails after migration, restore compatible state before running an older version; otherwise repair or update forward with the current version.`,
       );
     }
   }

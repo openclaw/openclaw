@@ -54,7 +54,9 @@ land before package swapping is safe.
 Resident old/new Gateway handover and its exclusive channel pause/resume and
 delivery/human confirmation tiers are also not enabled. Ordinary npm-global,
 pnpm, Git, Windows, unowned service layouts, and unverifiable lookalike prefixes
-receive manual recovery instructions instead of retention or swapping. Set
+do not get retention or swapping. If startup fails after migration, restore
+compatible state before running an older version; otherwise repair or update
+forward with the current version. Set
 `OPENCLAW_UPDATE_NO_ROLLBACK=1` in the managed service environment to bypass
 retention; there is no config surface.
 

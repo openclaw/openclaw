@@ -92,7 +92,8 @@ export async function resolveUpdateSwapCoverage(params: {
       reason: "managed-prefix swap protection currently requires the POSIX service wrapper",
     };
   }
-  const normalized = path.resolve(params.packageRoot);
+  const requestedRoot = path.resolve(params.packageRoot);
+  const normalized = await fs.realpath(requestedRoot).catch(() => requestedRoot);
   const segments = normalized.split(path.sep);
   const toolsIndex = segments.lastIndexOf("tools");
   const nodeSegment = segments[toolsIndex + 1];
@@ -151,5 +152,5 @@ export function formatUpdateSwapCoverageWarning(coverage: UpdateSwapCoverage): s
   if (coverage.protection === "retention-only") {
     return null;
   }
-  return `Automatic update rollback is unavailable for this ${coverage.kind} install: ${coverage.reason}. If startup fails, reinstall the previous version manually.`;
+  return `Automatic update rollback is unavailable for this ${coverage.kind} install: ${coverage.reason}. If startup fails after migration, restore compatible state before running an older version; otherwise repair or update forward with the current version.`;
 }

@@ -195,8 +195,9 @@ and commit migrations only after confirmation. Startup remains fail-closed.
 
 Ordinary npm-global installs, pnpm globals, Git checkouts, Windows services,
 unowned services, and lookalike prefixes without verifiable installer
-provenance do not get retention or package swapping. The updater prints manual
-reinstall guidance and preserves their existing update behavior. Shared or
+provenance do not get retention or package swapping. The updater preserves
+their existing update behavior and warns that an older version must not run
+against migrated state without restoring a compatible snapshot. Shared or
 root-owned global package parents cannot be replaced safely by the service
 account.
 
