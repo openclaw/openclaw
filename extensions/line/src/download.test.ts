@@ -182,9 +182,7 @@ describe("downloadLineMedia", () => {
     const result = await downloadLineMedia("mid-audio", "token");
 
     expect(result.contentType).toBe("audio/x-m4a");
-    expect(saveResponseMediaCall()[1]).toEqual(
-      expect.objectContaining({ subdir: "inbound" }),
-    );
+    expect(saveResponseMediaCall()[1]).toEqual(expect.objectContaining({ subdir: "inbound" }));
   });
 
   it("passes original filenames to the media store for extension fallback", async () => {
