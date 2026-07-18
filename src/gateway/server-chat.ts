@@ -1373,7 +1373,10 @@ export function createAgentEventHandler({
       ? sessionMessageSubscribers.get(resolveSessionDeliveryKey(sessionKey, sessionAgentId)).size >
         0
       : false;
-    const last = agentRunSeq.get(evt.runId) ?? 0;
+    const previousSeq = agentRunSeq.get(evt.runId) ?? 0;
+    // A lifecycle start that survives the ownership/recovery checks above can
+    // begin a same-run retry whose event sequence restarts from one.
+    const last = lifecyclePhase === "start" && evt.seq <= previousSeq ? 0 : previousSeq;
     const isNewerEvent = evt.seq > last;
     if (isNewerEvent && lifecyclePhase === "start") {
       if (chatLink) {

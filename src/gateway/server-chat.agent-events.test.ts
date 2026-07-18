@@ -445,37 +445,34 @@ describe("agent event handler", () => {
     expect(agentRunSeq.get("provider-run")).toBe(3);
   });
 
-  it("does not clear a newer validation diagnostic from a stale lifecycle start", () => {
+  it("resets validation diagnostic sequence state for an owned same-id retry", () => {
     const updateRunToolErrorSummary = vi.fn();
-    const { agentRunSeq, chatRunState, handler } = createHarness({ updateRunToolErrorSummary });
+    const { agentRunSeq, chatRunState, handler } = createHarness({
+      updateRunToolErrorSummary,
+      resolveActiveLifecycleGenerationForRun: () => "attempt-b",
+    });
     chatRunState.registry.add("provider-run", {
       sessionKey: "session-1",
       clientRunId: "client-run",
+      toolErrorSummary: "edit tool validation failed: attempt a",
     });
-    const summary = "edit tool validation failed: invalid arguments";
-
+    agentRunSeq.set("provider-run", 5);
     handler({
       runId: "provider-run",
-      seq: 2,
-      stream: "tool",
-      ts: 1_100,
-      data: { phase: "result", name: "edit", isError: true, toolErrorSummary: summary },
-    });
-    handler({
-      runId: "provider-run",
+      lifecycleGeneration: "attempt-b",
       seq: 1,
       stream: "lifecycle",
-      ts: 1_000,
+      ts: 1_100,
       data: { phase: "start" },
     });
 
     expect(updateRunToolErrorSummary).toHaveBeenLastCalledWith({
       runId: "provider-run",
       clientRunId: "client-run",
-      summary,
+      summary: undefined,
     });
-    expect(chatRunState.registry.peek("provider-run")?.toolErrorSummary).toBe(summary);
-    expect(agentRunSeq.get("provider-run")).toBe(2);
+    expect(chatRunState.registry.peek("provider-run")?.toolErrorSummary).toBeUndefined();
+    expect(agentRunSeq.get("provider-run")).toBe(1);
   });
 
   function sessionAgentCalls(nodeSendToSession: ReturnType<typeof vi.fn>) {
