@@ -134,7 +134,9 @@ describe("DiscordMessageListener", () => {
     const listener = new DiscordMessageListener(handler);
 
     const handlePromise = listener.handle(
-      {} as unknown as import("./monitor/listeners.js").DiscordRawMessageEvent,
+      {} as unknown as Parameters<
+        import("./monitor/listeners.js").DiscordMessageListener["handle"]
+      >[0],
       {} as unknown as import("./internal/discord.js").Client,
     );
 
@@ -162,11 +164,15 @@ describe("DiscordMessageListener", () => {
     const listener = new DiscordMessageListener(handler);
 
     const firstHandle = listener.handle(
-      {} as unknown as import("./monitor/listeners.js").DiscordRawMessageEvent,
+      {} as unknown as Parameters<
+        import("./monitor/listeners.js").DiscordMessageListener["handle"]
+      >[0],
       {} as unknown as import("./internal/discord.js").Client,
     );
     const secondHandle = listener.handle(
-      {} as unknown as import("./monitor/listeners.js").DiscordRawMessageEvent,
+      {} as unknown as Parameters<
+        import("./monitor/listeners.js").DiscordMessageListener["handle"]
+      >[0],
       {} as unknown as import("./internal/discord.js").Client,
     );
 
@@ -191,7 +197,9 @@ describe("DiscordMessageListener", () => {
     const listener = new DiscordMessageListener(handler, logger);
 
     await listener.handle(
-      {} as unknown as import("./monitor/listeners.js").DiscordRawMessageEvent,
+      {} as unknown as Parameters<
+        import("./monitor/listeners.js").DiscordMessageListener["handle"]
+      >[0],
       {} as unknown as import("./internal/discord.js").Client,
     );
     await flushAsyncWork();
@@ -210,7 +218,9 @@ describe("DiscordMessageListener", () => {
     const listener = new DiscordMessageListener(handler, logger);
 
     const handlePromise = listener.handle(
-      {} as unknown as import("./monitor/listeners.js").DiscordRawMessageEvent,
+      {} as unknown as Parameters<
+        import("./monitor/listeners.js").DiscordMessageListener["handle"]
+      >[0],
       {} as unknown as import("./internal/discord.js").Client,
     );
     deferred.resolve();

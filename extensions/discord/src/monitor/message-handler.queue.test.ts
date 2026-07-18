@@ -289,6 +289,23 @@ describe("createDiscordMessageHandler queue behavior", () => {
     expect(second.onAdopted).toHaveBeenCalledTimes(1);
   });
 
+  it("returns retryable, never completed, for a dispatch after shutdown", async () => {
+    preflightDiscordMessageMock.mockReset();
+    processDiscordMessageMock.mockReset();
+    const handler = createDiscordMessageHandler(createDiscordHandlerParams());
+    await handler.deactivate();
+    const lifecycle = createIngressLifecycle();
+
+    // Completing here would tombstone a message that never dispatched; the
+    // claim must release so a restarted drain replays it.
+    const result = await handler(createTextMessageData("m-after-stop") as never, {} as never, {
+      turnAdoptionLifecycle: lifecycle,
+    });
+
+    expect(result).toMatchObject({ kind: "failed-retryable" });
+    expect(lifecycle.onAdopted).not.toHaveBeenCalled();
+  });
+
   it("abandons a buffered ingress claim during deactivation", async () => {
     preflightDiscordMessageMock.mockReset();
     processDiscordMessageMock.mockReset();

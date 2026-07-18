@@ -10,11 +10,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  createDiscordIngressMonitor,
-  type DiscordIngressLifecycle,
-  type DiscordIngressMonitor,
-} from "./ingress.js";
+import { createDiscordIngressMonitor, type DiscordIngressLifecycle } from "./ingress.js";
 
 type DiscordIngressPayload = {
   version: 1;
@@ -80,6 +76,8 @@ async function withQueue<T>(
     await fs.rm(stateDir, { recursive: true, force: true });
   }
 }
+
+type DiscordIngressMonitor = ReturnType<typeof createDiscordIngressMonitor>;
 
 async function stopAll(monitors: DiscordIngressMonitor[]): Promise<void> {
   await Promise.allSettled(monitors.map((monitor) => monitor.stop()));

@@ -340,7 +340,13 @@ export function createDiscordMessageDispatcher(
   ): Promise<DiscordIngressDispatchResult> => {
     try {
       if (dispatcherShutdown.signal.aborted || options?.abortSignal?.aborted) {
-        return { kind: "completed" };
+        // Shutdown/abort before dispatch must NOT complete: completing
+        // tombstones a message that never ran, and a restarted drain would
+        // skip it forever. Retryable releases the claim for replay.
+        const reason = dispatcherShutdown.signal.aborted
+          ? (dispatcherShutdown.signal.reason ?? new Error("discord dispatcher shut down"))
+          : (options?.abortSignal?.reason ?? new Error("discord dispatch aborted"));
+        return { kind: "failed-retryable", error: reason };
       }
       // Filter bot-own messages before they enter the debounce queue.
       // The same check exists in preflightDiscordMessage(), but by that point
