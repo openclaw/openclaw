@@ -116,6 +116,27 @@ describe("resolveAgentRoute", () => {
     });
   });
 
+  test.each([
+    { alias: "lark", canonical: "feishu" },
+    { alias: "imsg", canonical: "imessage" },
+  ])("does not canonicalize the $alias binding alias to $canonical", ({ alias, canonical }) => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "main", default: true }, { id: "alias-agent" }],
+      },
+      bindings: [{ agentId: "alias-agent", match: { channel: alias } }],
+    };
+
+    expectResolvedRoute(resolveRoute({ cfg, channel: canonical }), {
+      agentId: "main",
+      matchedBy: "default",
+    });
+    expectResolvedRoute(resolveRoute({ cfg, channel: alias }), {
+      agentId: "alias-agent",
+      matchedBy: "binding.account",
+    });
+  });
+
   test("uses the configured main session key for shared direct routes", () => {
     const route = resolveRoute({
       cfg: { session: { dmScope: "main", mainKey: "work" } },
