@@ -423,12 +423,18 @@ async function inspectRecoverableTab<
       break;
     } catch (error) {
       const remainingMs = deadline - Date.now();
-      if (!isMeetingBrowserTransientNavigationError(error) || remainingMs <= 0) throw error;
+      if (!isMeetingBrowserTransientNavigationError(error) || remainingMs <= 0) {
+        throw error;
+      }
       navigationNotes.push(
         `${params.adapter.browserLabel} navigated while recovering; retrying browser inspection.`,
       );
-      await new Promise((resolve) => setTimeout(resolve, Math.min(250, remainingMs)));
-      if (Date.now() >= deadline) throw error;
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, Math.min(250, remainingMs));
+      });
+      if (Date.now() >= deadline) {
+        throw error;
+      }
     }
   }
   const browser = mergeBrowserNotes(

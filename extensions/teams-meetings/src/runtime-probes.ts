@@ -136,10 +136,30 @@ export async function testTeamsMeetingListening(
     const deadline =
       Date.now() + resolveProbeTimeoutMs(request.timeoutMs, context.config.chrome.joinTimeoutMs);
     while (Date.now() < deadline) {
-      await sleep(250);
-      await context.refreshCaptionHealth(result.session);
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) {
+        break;
+      }
+      let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+      const deadlineReached = new Promise<boolean>((resolve) => {
+        deadlineTimer = setTimeout(() => resolve(false), remainingMs);
+      });
+      const refreshed = await Promise.race([
+        context.refreshCaptionHealth(result.session).then(() => true),
+        deadlineReached,
+      ]).finally(() => {
+        if (deadlineTimer !== undefined) {
+          clearTimeout(deadlineTimer);
+        }
+      });
+      if (!refreshed) {
+        break;
+      }
       health = result.session.chrome?.health;
-      if (health?.manualActionRequired || advanced()) break;
+      if (health?.manualActionRequired || advanced()) {
+        break;
+      }
+      await sleep(Math.min(250, deadline - Date.now()));
     }
   }
   const listenVerified = advanced();
