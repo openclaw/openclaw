@@ -5,6 +5,8 @@ type ProviderRuntimeModule = typeof import("./provider-runtime.js");
 
 type AugmentModelCatalogWithProviderPlugins =
   ProviderRuntimeModule["augmentModelCatalogWithProviderPlugins"];
+type AugmentModelCatalogWithProviderPluginsResult =
+  ProviderRuntimeModule["augmentModelCatalogWithProviderPluginsResult"];
 type BuildProviderAuthDoctorHintWithPlugin =
   ProviderRuntimeModule["buildProviderAuthDoctorHintWithPlugin"];
 type FormatProviderAuthProfileApiKeyWithPlugin =
@@ -29,6 +31,14 @@ export async function augmentModelCatalogWithProviderPlugins(
 ): Promise<Awaited<ReturnType<AugmentModelCatalogWithProviderPlugins>>> {
   const runtime = await loadProviderRuntime();
   return runtime.augmentModelCatalogWithProviderPlugins(...args);
+}
+
+/** Lazily augments the model catalog and reports whether every plugin completed. */
+export async function augmentModelCatalogWithProviderPluginsResult(
+  ...args: Parameters<AugmentModelCatalogWithProviderPluginsResult>
+): Promise<Awaited<ReturnType<AugmentModelCatalogWithProviderPluginsResult>>> {
+  const runtime = await loadProviderRuntime();
+  return runtime.augmentModelCatalogWithProviderPluginsResult(...args);
 }
 
 /** Lazily builds doctor hint text for provider auth problems. */

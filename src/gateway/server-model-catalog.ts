@@ -78,6 +78,7 @@ function startGatewayModelCatalogRefresh(
     .then((snapshot) => {
       if (
         (readOnly || snapshot.entries.length > 0) &&
+        snapshot.authoritative !== false &&
         refreshGeneration === cache.staleGeneration
       ) {
         cache.lastSuccessfulCatalog = snapshot;

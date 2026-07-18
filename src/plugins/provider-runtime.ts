@@ -1108,13 +1108,14 @@ export function shouldDeferProviderSyntheticProfileAuthWithPlugin(params: {
   return undefined;
 }
 
-export async function augmentModelCatalogWithProviderPlugins(params: {
+export async function augmentModelCatalogWithProviderPluginsResult(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   context: ProviderAugmentModelCatalogContext;
 }) {
   const supplemental = [] as ProviderAugmentModelCatalogContext["entries"];
+  let authoritative = true;
   const pending = resolveProviderPluginsForCatalogHooks(params).map((plugin) => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const clearTimer = () => {
@@ -1146,6 +1147,7 @@ export async function augmentModelCatalogWithProviderPlugins(params: {
         throw outcome.error;
       }
       if (outcome.status === "timed-out") {
+        authoritative = false;
         const pluginId = plugin.pluginId ?? plugin.id;
         log.warn(
           `Provider plugin "${sanitizeForLog(pluginId)}" augmentModelCatalog hook timed out after ${PROVIDER_MODEL_CATALOG_AUGMENT_TIMEOUT_MS}ms; skipping hook and continuing catalog discovery`,
@@ -1163,6 +1165,12 @@ export async function augmentModelCatalogWithProviderPlugins(params: {
       item.clearTimer();
     }
   }
-  return supplemental;
+  return { entries: supplemental, authoritative };
+}
+
+export async function augmentModelCatalogWithProviderPlugins(
+  params: Parameters<typeof augmentModelCatalogWithProviderPluginsResult>[0],
+) {
+  return (await augmentModelCatalogWithProviderPluginsResult(params)).entries;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

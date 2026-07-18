@@ -143,6 +143,32 @@ describe("loadGatewayModelCatalog", () => {
     expect(loadModelCatalog).toHaveBeenCalledTimes(2);
   });
 
+  it("does not cache a degraded full catalog so the next request retries", async () => {
+    const degradedCatalog = [model("partial")];
+    const freshCatalog = [model("fresh")];
+    const loadModelCatalogSnapshot = vi
+      .fn()
+      .mockResolvedValueOnce({
+        entries: degradedCatalog,
+        routeVariants: degradedCatalog,
+        authoritative: false,
+      })
+      .mockResolvedValueOnce({
+        entries: freshCatalog,
+        routeVariants: freshCatalog,
+        authoritative: true,
+      });
+
+    await expect(
+      loadGatewayModelCatalog({ getConfig, loadModelCatalogSnapshot, readOnly: false }),
+    ).resolves.toBe(degradedCatalog);
+    await expect(
+      loadGatewayModelCatalog({ getConfig, loadModelCatalogSnapshot, readOnly: false }),
+    ).resolves.toBe(freshCatalog);
+
+    expect(loadModelCatalogSnapshot).toHaveBeenCalledTimes(2);
+  });
+
   it("returns the last catalog while a stale reload refresh is still pending", async () => {
     const staleCatalog = [model("gpt-5.4")];
     const freshCatalog = [model("gpt-5.5")];

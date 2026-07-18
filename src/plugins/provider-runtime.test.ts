@@ -54,6 +54,7 @@ const resolveBundledProviderPolicySurfaceMock = vi.fn<ResolveBundledProviderPoli
 const providerRuntimeWarnMock = vi.fn();
 
 let augmentModelCatalogWithProviderPlugins: typeof import("./provider-runtime.js").augmentModelCatalogWithProviderPlugins;
+let augmentModelCatalogWithProviderPluginsResult: typeof import("./provider-runtime.js").augmentModelCatalogWithProviderPluginsResult;
 let buildProviderAuthDoctorHintWithPlugin: typeof import("./provider-runtime.js").buildProviderAuthDoctorHintWithPlugin;
 let buildProviderMissingAuthMessageWithPlugin: typeof import("./provider-runtime.js").buildProviderMissingAuthMessageWithPlugin;
 let buildProviderUnknownModelHintWithPlugin: typeof import("./provider-runtime.js").buildProviderUnknownModelHintWithPlugin;
@@ -322,6 +323,7 @@ describe("provider-runtime", () => {
     }));
     ({
       augmentModelCatalogWithProviderPlugins,
+      augmentModelCatalogWithProviderPluginsResult,
       buildProviderAuthDoctorHintWithPlugin,
       buildProviderMissingAuthMessageWithPlugin,
       buildProviderUnknownModelHintWithPlugin,
@@ -1130,7 +1132,7 @@ describe("provider-runtime", () => {
         },
       ]);
 
-      const catalogLoad = augmentModelCatalogWithProviderPlugins({
+      const catalogLoad = augmentModelCatalogWithProviderPluginsResult({
         env: process.env,
         context: { env: process.env, entries: [] },
       });
@@ -1140,9 +1142,10 @@ describe("provider-runtime", () => {
 
       await vi.advanceTimersByTimeAsync(15_000);
 
-      await expect(catalogLoad).resolves.toEqual([
-        { provider: "healthy", id: "healthy-model", name: "Healthy Model" },
-      ]);
+      await expect(catalogLoad).resolves.toEqual({
+        entries: [{ provider: "healthy", id: "healthy-model", name: "Healthy Model" }],
+        authoritative: false,
+      });
       expect(providerRuntimeWarnMock).toHaveBeenCalledTimes(2);
       const warning = firstMockStringArg(providerRuntimeWarnMock, "provider warning");
       expect(warning).toContain('Provider plugin "hung-plugin-oneWARN forged"');

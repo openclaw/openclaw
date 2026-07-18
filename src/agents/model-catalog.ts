@@ -21,7 +21,7 @@ import {
 } from "../plugins/manifest-contract-eligibility.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
-import { augmentModelCatalogWithProviderPlugins } from "../plugins/provider-runtime.runtime.js";
+import { augmentModelCatalogWithProviderPluginsResult } from "../plugins/provider-runtime.runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { resolveDefaultAgentDir } from "./agent-scope.js";
 import { ensureAuthProfileStoreWithoutExternalProfiles } from "./auth-profiles.js";
@@ -709,6 +709,7 @@ export async function loadModelCatalogSnapshot(
   const loadCatalog = async () => {
     const models: ModelCatalogEntry[] = [];
     const routeVariants = createModelCatalogRouteVariantCollector();
+    let catalogAuthoritative = true;
     const cfg = params?.config ?? getRuntimeConfig();
     const timingEnabled = isDiagnosticFlagEnabled("ingress.timing", cfg);
     const startMs = timingEnabled ? Date.now() : 0;
@@ -755,7 +756,7 @@ export async function loadModelCatalogSnapshot(
           | undefined;
         if (cachedSnapshot?.entries.length) {
           logStage("state-cache-hit", `entries=${cachedSnapshot.entries.length}`);
-          return cachedSnapshot;
+          return { ...cachedSnapshot, authoritative: true };
         }
       }
       if (!readOnly) {
@@ -780,7 +781,7 @@ export async function loadModelCatalogSnapshot(
             }) as { entries: ModelCatalogEntry[]; routeVariants: ModelCatalogEntry[] } | undefined;
             if (cachedSnapshot?.entries.length) {
               logStage("state-cache-hit", `entries=${cachedSnapshot.entries.length}`);
-              return cachedSnapshot;
+              return { ...cachedSnapshot, authoritative: true };
             }
           }
         }
@@ -891,7 +892,7 @@ export async function loadModelCatalogSnapshot(
           providerId?.trim()
             ? resolveProviderApiKeyForProvider(providerId)
             : { apiKey: undefined, discoveryApiKey: undefined };
-        const supplemental = await augmentModelCatalogWithProviderPlugins({
+        const augmentation = await augmentModelCatalogWithProviderPluginsResult({
           config: cfg,
           workspaceDir,
           env: process.env,
@@ -904,6 +905,8 @@ export async function loadModelCatalogSnapshot(
             entries: augmentEntries ?? [...models],
           },
         });
+        const supplemental = augmentation.entries;
+        catalogAuthoritative = augmentation.authoritative;
         if (supplemental.length > 0) {
           const normalizedSupplemental: ModelCatalogEntry[] = [];
           for (const entry of supplemental) {
@@ -932,9 +935,12 @@ export async function loadModelCatalogSnapshot(
           modelCatalogPromise = null;
         }
       }
+      if (!catalogAuthoritative && useSharedCache) {
+        modelCatalogPromise = null;
+      }
 
-      const snapshot = createModelCatalogSnapshot(models, routeVariants);
-      if (!readOnly) {
+      const snapshot = createModelCatalogSnapshot(models, routeVariants, catalogAuthoritative);
+      if (!readOnly && catalogAuthoritative) {
         writeCachedAgentModelCatalog({
           agentDir,
           catalogKey,
@@ -968,6 +974,7 @@ export async function loadModelCatalogSnapshot(
   const publishedPromise = loadCatalog().then((snapshot) => {
     if (
       snapshot.entries.length > 0 &&
+      snapshot.authoritative !== false &&
       modelCatalogGeneration === loadGeneration &&
       modelCatalogPromise === publishedPromise
     ) {
