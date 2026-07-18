@@ -64,7 +64,7 @@ function createHandler(cfg: OpenClawConfig) {
 
 describe("Microsoft Teams drain claim ownership", () => {
   beforeEach(() => {
-    runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher.mockClear();
+    runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mockClear();
   });
 
   it("defers a claimed activity and binds completion to reply adoption", async () => {
@@ -78,14 +78,14 @@ describe("Microsoft Teams drain claim ownership", () => {
     expect(result).toEqual({ kind: "deferred" });
     await vi.waitFor(
       () => {
-        expect(
-          runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher,
-        ).toHaveBeenCalledTimes(1);
+        expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(
+          1,
+        );
         expect(lifecycle.adoptedCount()).toBe(1);
       },
       { timeout: 5_000 },
     );
-    const dispatchParams = runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher.mock
+    const dispatchParams = runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mock
       .calls[0]?.[0] as
       | { replyOptions?: { turnAdoptionLifecycle?: { admission?: string } } }
       | undefined;
@@ -111,17 +111,17 @@ describe("Microsoft Teams drain claim ownership", () => {
     expect(results).toEqual([{ kind: "deferred" }, { kind: "deferred" }]);
     await vi.waitFor(
       () => {
-        expect(
-          runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher,
-        ).toHaveBeenCalledTimes(1);
+        expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(
+          1,
+        );
         expect(first.adoptedCount()).toBe(1);
         expect(second.adoptedCount()).toBe(1);
       },
       { timeout: 5_000 },
     );
-    const dispatchParams = runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher.mock
-      .calls[0]?.[0] as { ctxPayload?: { BodyForAgent?: string } } | undefined;
-    expect(dispatchParams?.ctxPayload?.BodyForAgent).toContain("part one\npart two");
+    const dispatchParams = runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mock
+      .calls[0]?.[0] as { ctx?: { BodyForAgent?: string } } | undefined;
+    expect(dispatchParams?.ctx?.BodyForAgent).toContain("part one\npart two");
     expect(first.abandonedCount()).toBe(0);
     expect(second.abandonedCount()).toBe(0);
   });
@@ -153,7 +153,7 @@ describe("Microsoft Teams drain claim ownership", () => {
 
     expect(result).toEqual({ kind: "deferred" });
     await vi.waitFor(() => expect(lifecycle.adoptedCount()).toBe(1), { timeout: 5_000 });
-    expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).not.toHaveBeenCalled();
+    expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
     expect(lifecycle.abandonedCount()).toBe(0);
   });
 });
