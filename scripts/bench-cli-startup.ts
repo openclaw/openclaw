@@ -6,6 +6,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { parseStrictIntegerOption } from "./lib/dev-tooling-safety.ts";
+import { terminateManagedChild } from "./lib/managed-child-process.mjs";
 
 type CommandCase = {
   id: string;
@@ -111,6 +112,9 @@ const TIMEOUT_KILL_GRACE_MS = resolveTimeoutKillGraceMs(process.env);
 const PROCESS_GROUP_EXIT_POLL_MS = 25;
 const DEFAULT_ENTRY = "openclaw.mjs";
 const MAX_RSS_MARKER = "__OPENCLAW_MAX_RSS_KB__=";
+const activeSampleProcesses = new Set<ReturnType<typeof spawn>>();
+const activeTempDirs = new Set<string>();
+let benchmarkShutdownPromise: Promise<never> | null = null;
 
 function resolveTimeoutKillGraceMs(env: NodeJS.ProcessEnv): number {
   const raw = env.VITEST ? env.OPENCLAW_TEST_CLI_STARTUP_TIMEOUT_KILL_GRACE_MS : undefined;
@@ -710,6 +714,71 @@ function appendLimited(current: string, chunk: Buffer | string, maxLength: numbe
   return next.length > maxLength ? next.slice(next.length - maxLength) : next;
 }
 
+function removeTrackedTempDir(tempDir: string): void {
+  activeTempDirs.delete(tempDir);
+  rmSync(tempDir, { recursive: true, force: true });
+}
+
+function installBenchmarkSignalCleanup(): () => void {
+  const signalHandlers = new Map<NodeJS.Signals, () => void>();
+  let shutdownChildren: Array<ReturnType<typeof spawn>> = [];
+
+  const removeHandlers = () => {
+    for (const [signal, handler] of signalHandlers) {
+      process.off(signal, handler);
+    }
+    signalHandlers.clear();
+  };
+
+  const forceKillShutdownChildren = () => {
+    for (const child of shutdownChildren) {
+      signalSampleProcess(child, "SIGKILL", process.platform !== "win32");
+    }
+  };
+
+  const beginShutdown = (signal: NodeJS.Signals) => {
+    if (benchmarkShutdownPromise) {
+      forceKillShutdownChildren();
+      return;
+    }
+    shutdownChildren = [...activeSampleProcesses];
+    benchmarkShutdownPromise = (async (): Promise<never> => {
+      for (const child of shutdownChildren) {
+        signalSampleProcess(child, signal, process.platform !== "win32");
+      }
+      // The budget wrapper reserves two final grace periods: drain after the cooperative signal,
+      // then reap the forced sample group before the benchmark leader exits.
+      await Promise.all(
+        shutdownChildren.map((child) =>
+          waitForSampleProcessGroupExit(child, process.platform !== "win32", TIMEOUT_KILL_GRACE_MS),
+        ),
+      );
+      forceKillShutdownChildren();
+      for (const tempDir of activeTempDirs) {
+        removeTrackedTempDir(tempDir);
+      }
+      await Promise.all(
+        shutdownChildren.map((child) =>
+          waitForSampleProcessGroupExit(child, process.platform !== "win32", TIMEOUT_KILL_GRACE_MS),
+        ),
+      );
+      removeHandlers();
+      process.kill(process.pid, signal);
+      return await new Promise<never>(() => {});
+    })();
+  };
+
+  const signals: NodeJS.Signals[] =
+    process.platform === "win32" ? ["SIGINT", "SIGTERM"] : ["SIGHUP", "SIGINT", "SIGTERM"];
+  for (const signal of signals) {
+    const handler = () => beginShutdown(signal);
+    signalHandlers.set(signal, handler);
+    process.on(signal, handler);
+  }
+
+  return removeHandlers;
+}
+
 async function runSample(params: {
   entry: string;
   commandCase: CommandCase;
@@ -719,6 +788,7 @@ async function runSample(params: {
   rssHookPath: string;
 }): Promise<Sample> {
   const runRoot = mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-bench-home-"));
+  activeTempDirs.add(runRoot);
   const stateDir = path.join(runRoot, ".openclaw");
   const configPath = path.join(stateDir, "openclaw.json");
   const configFixture = buildConfigFixture(params.commandCase);
@@ -744,10 +814,11 @@ async function runSample(params: {
   let timedOut = false;
   let forceKillAt: number | null = null;
   let forceKillTimer: ReturnType<typeof setTimeout> | null = null;
+  let activeProc: ReturnType<typeof spawn> | null = null;
   const maxOutputLength = 32 * 1024 * 1024;
 
   try {
-    return await new Promise<Sample>((resolve) => {
+    const completedSample = await new Promise<Sample>((resolve) => {
       const useProcessGroup = process.platform !== "win32";
       const proc = spawn(process.execPath, nodeArgs, {
         cwd: process.cwd(),
@@ -765,6 +836,8 @@ async function runSample(params: {
         },
         stdio: ["ignore", "pipe", "pipe"],
       });
+      activeProc = proc;
+      activeSampleProcesses.add(proc);
 
       const finish = (sample: Omit<Sample, "ms" | "firstOutputMs" | "maxRssMb">) => {
         if (settled) {
@@ -848,8 +921,15 @@ async function runSample(params: {
         complete();
       });
     });
+    if (benchmarkShutdownPromise) {
+      return await benchmarkShutdownPromise;
+    }
+    return completedSample;
   } finally {
-    rmSync(runRoot, { recursive: true, force: true });
+    if (activeProc) {
+      activeSampleProcesses.delete(activeProc);
+    }
+    removeTrackedTempDir(runRoot);
   }
 }
 
@@ -878,15 +958,15 @@ function signalSampleProcess(
   signal: NodeJS.Signals,
   useProcessGroup: boolean,
 ): void {
+  if (!useProcessGroup) {
+    terminateManagedChild(proc, signal, { platform: "win32" });
+    return;
+  }
   if (!proc.pid) {
     return;
   }
   try {
-    if (useProcessGroup) {
-      process.kill(-proc.pid, signal);
-    } else {
-      proc.kill(signal);
-    }
+    process.kill(-proc.pid, signal);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException | undefined)?.code;
     if (code !== "ESRCH" && code !== "EPERM") {
@@ -1218,7 +1298,9 @@ async function main(): Promise<void> {
     printDelta(baseline, candidate);
     return;
   }
+  const removeSignalHandlers = installBenchmarkSignalCleanup();
   const tmpDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-bench-"));
+  activeTempDirs.add(tmpDir);
   const rssHookPath = buildRssHook(tmpDir);
   try {
     const primary = await buildSuiteResult({
@@ -1292,7 +1374,8 @@ async function main(): Promise<void> {
       }
     }
   } finally {
-    rmSync(tmpDir, { recursive: true, force: true });
+    removeTrackedTempDir(tmpDir);
+    removeSignalHandlers();
   }
 }
 

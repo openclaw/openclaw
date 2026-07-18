@@ -5,18 +5,16 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-const SCRIPT_PATHS = [
-  "scripts/test-cli-startup-bench-budget.mjs",
-  "scripts/test-update-cli-startup-bench.mjs",
-];
-
 describe("CLI startup benchmark script spawners", () => {
   it("use the active Node executable for benchmark child processes", () => {
-    for (const scriptPath of SCRIPT_PATHS) {
+    for (const [scriptPath, invocation] of [
+      ["scripts/test-cli-startup-bench-budget.mjs", "spawn(process.execPath, args"],
+      ["scripts/test-update-cli-startup-bench.mjs", "spawnSync(process.execPath, args"],
+    ] as const) {
       const source = fs.readFileSync(path.resolve(process.cwd(), scriptPath), "utf8");
 
-      expect(source).toContain("spawnSync(process.execPath, args");
-      expect(source).not.toContain('spawnSync("node", args');
+      expect(source).toContain(invocation);
+      expect(source).not.toContain('("node", args');
     }
   });
 
@@ -26,9 +24,7 @@ describe("CLI startup benchmark script spawners", () => {
       "utf8",
     );
 
-    expect(source).toContain(
-      'spawnSync(process.execPath, ["scripts/ensure-cli-startup-build.mjs"]',
-    );
+    expect(source).toContain('runCommandWithDeadline(["scripts/ensure-cli-startup-build.mjs"]');
     expect(source.indexOf("scripts/ensure-cli-startup-build.mjs")).toBeLessThan(
       source.indexOf("scripts/bench-cli-startup.ts"),
     );

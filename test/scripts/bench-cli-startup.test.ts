@@ -9,12 +9,37 @@ import { withEnv } from "../../src/test-utils/env.js";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
 
 function isProcessAlive(pid: number): boolean {
+  if (process.platform === "linux") {
+    try {
+      // Bounded test supervisors can retain an already-killed orphan as a zombie until the shard
+      // exits; treat that state as terminated for process-cleanup assertions.
+      const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+      const commandEnd = stat.lastIndexOf(")");
+      if (commandEnd >= 0 && stat.slice(commandEnd + 2).startsWith("Z")) {
+        return false;
+      }
+    } catch {
+      return false;
+    }
+  }
   try {
     process.kill(pid, 0);
     return true;
   } catch {
     return false;
   }
+}
+
+function waitForProcessExit(pid: number, timeoutMs: number): boolean {
+  const deadlineAt = Date.now() + timeoutMs;
+  const waitBuffer = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+  while (Date.now() < deadlineAt) {
+    if (!isProcessAlive(pid)) {
+      return true;
+    }
+    Atomics.wait(waitBuffer, 0, 0, 25);
+  }
+  return !isProcessAlive(pid);
 }
 
 describe("bench-cli-startup", () => {
@@ -163,7 +188,7 @@ describe("bench-cli-startup", () => {
         expect(result.status).toBe(1);
         expect(result.signal).toBeNull();
         expect(result.stderr).toContain("version sample 1: timed out");
-        expect(isProcessAlive(childPid)).toBe(false);
+        expect(waitForProcessExit(childPid, 1_000)).toBe(true);
       } finally {
         if (childPid !== undefined && isProcessAlive(childPid)) {
           process.kill(childPid, "SIGKILL");

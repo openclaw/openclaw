@@ -1,9 +1,10 @@
 // Compares CLI startup benchmark reports against checked-in budgets.
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import { resolveCliStartupBuildTimeoutMs } from "./ensure-cli-startup-build.mjs";
 import { booleanFlag, intFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
 import { budgetFloatFlag, readBudgetEnvNumber } from "./lib/budget-number-args.mjs";
+import { terminateManagedChild } from "./lib/managed-child-process.mjs";
 import { readJsonFile } from "./test-report-utils.mjs";
 
 const CLI_STARTUP_BENCH_FIXTURE_PATH = "test/fixtures/cli-startup-bench.json";
@@ -35,10 +36,117 @@ function resolveBenchmarkDeadlineMs(options, env) {
   const sampleLifecycleMs = options.timeoutMs + cleanupGraceMs * 2;
   const totalRunsPerCase = options.runs + options.warmup;
   // The current all preset has 43 cases. Keep headroom for case growth and for module/report
-  // teardown while preserving both cleanup waits used by each timed-out sample.
+  // teardown while preserving both cleanup waits used by each timed-out sample. The final two
+  // grace periods let the benchmark reap an active detached sample before its own group is forced.
   return clampTimerTimeoutMs(
-    BENCHMARK_CASE_DEADLINE_CAP * totalRunsPerCase * sampleLifecycleMs + cleanupGraceMs,
+    BENCHMARK_CASE_DEADLINE_CAP * totalRunsPerCase * sampleLifecycleMs + cleanupGraceMs * 2,
   );
+}
+
+function isProcessGroupAlive(child) {
+  if (process.platform === "win32" || !child.pid) {
+    return false;
+  }
+  try {
+    process.kill(-child.pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
+}
+
+function runCommandWithDeadline(args, options) {
+  const terminationGraceMs = options.terminationGraceMs;
+  const executionTimeoutMs = clampTimerTimeoutMs(options.deadlineMs - terminationGraceMs);
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, args, {
+      cwd: process.cwd(),
+      detached: process.platform !== "win32",
+      stdio: "inherit",
+      env: process.env,
+    });
+    let settled = false;
+    let timedOut = false;
+    let parentSignal = null;
+    let forceKillTimer = null;
+    const signalHandlers = new Map();
+
+    const removeSignalHandlers = () => {
+      for (const [signal, handler] of signalHandlers) {
+        process.off(signal, handler);
+      }
+      signalHandlers.clear();
+    };
+    const clearTimers = () => {
+      clearTimeout(executionTimer);
+      if (forceKillTimer) {
+        clearTimeout(forceKillTimer);
+      }
+    };
+    const finish = (result) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimers();
+      removeSignalHandlers();
+      if (parentSignal) {
+        process.kill(process.pid, parentSignal);
+        return;
+      }
+      resolve(result);
+    };
+    const timeoutResult = () => ({
+      error: undefined,
+      signal: "SIGKILL",
+      status: 1,
+      timedOut: true,
+    });
+    const forceKill = () => {
+      terminateManagedChild(child, "SIGKILL");
+      finish(timeoutResult());
+    };
+    const beginTermination = (signal, { fromTimeout = false } = {}) => {
+      if (timedOut || parentSignal) {
+        forceKill();
+        return;
+      }
+      timedOut = fromTimeout;
+      if (!fromTimeout) {
+        parentSignal = signal;
+      }
+      terminateManagedChild(child, signal);
+      forceKillTimer = setTimeout(forceKill, terminationGraceMs);
+      forceKillTimer.unref?.();
+    };
+
+    const executionTimer = setTimeout(
+      () => beginTermination("SIGTERM", { fromTimeout: true }),
+      executionTimeoutMs,
+    );
+    executionTimer.unref?.();
+
+    const forwardedSignals =
+      process.platform === "win32" ? ["SIGINT", "SIGTERM"] : ["SIGHUP", "SIGINT", "SIGTERM"];
+    for (const signal of forwardedSignals) {
+      const handler = () => beginTermination(signal);
+      signalHandlers.set(signal, handler);
+      process.on(signal, handler);
+    }
+
+    child.once("error", (error) => {
+      finish({ error, signal: null, status: null, timedOut });
+    });
+    child.once("close", (status, signal) => {
+      if (!timedOut && !parentSignal) {
+        finish({ error: undefined, signal, status: status ?? (signal ? 1 : 0), timedOut: false });
+        return;
+      }
+      if (!isProcessGroupAlive(child)) {
+        finish(timeoutResult());
+      }
+    });
+  });
 }
 
 function formatMs(value) {
@@ -137,17 +245,21 @@ if (shouldAutoSkipNonCanonicalBaselineChecks && !opts.skipBaseline) {
   };
 }
 
-function resolveCurrentReportPath() {
+async function resolveCurrentReportPath() {
   if (opts.report) {
     return opts.report;
   }
-  const build = spawnSync(process.execPath, ["scripts/ensure-cli-startup-build.mjs"], {
-    cwd: process.cwd(),
-    stdio: "inherit",
-    env: process.env,
-    killSignal: "SIGKILL",
-    timeout: resolveBuildDeadlineMs(process.env),
+  const cleanupGraceMs = resolveBenchmarkCleanupGraceMs(process.env);
+  const buildDeadlineMs = resolveBuildDeadlineMs(process.env);
+  const build = await runCommandWithDeadline(["scripts/ensure-cli-startup-build.mjs"], {
+    deadlineMs: buildDeadlineMs,
+    terminationGraceMs: cleanupGraceMs,
   });
+  if (build.timedOut) {
+    console.error(`[test-cli-startup-bench-budget] build timed out after ${buildDeadlineMs}ms`);
+  } else if (build.error) {
+    console.error(build.error instanceof Error ? build.error.message : String(build.error));
+  }
   if (build.status !== 0) {
     process.exit(build.status ?? 1);
   }
@@ -170,13 +282,18 @@ function resolveCurrentReportPath() {
     "--output",
     reportPath,
   ];
-  const run = spawnSync(process.execPath, args, {
-    cwd: process.cwd(),
-    stdio: "inherit",
-    env: process.env,
-    killSignal: "SIGKILL",
-    timeout: resolveBenchmarkDeadlineMs(opts, process.env),
+  const benchmarkDeadlineMs = resolveBenchmarkDeadlineMs(opts, process.env);
+  const run = await runCommandWithDeadline(args, {
+    deadlineMs: benchmarkDeadlineMs,
+    terminationGraceMs: cleanupGraceMs * 2,
   });
+  if (run.timedOut) {
+    console.error(
+      `[test-cli-startup-bench-budget] benchmark timed out after ${benchmarkDeadlineMs}ms`,
+    );
+  } else if (run.error) {
+    console.error(run.error instanceof Error ? run.error.message : String(run.error));
+  }
   if (run.status !== 0) {
     process.exit(run.status ?? 1);
   }
@@ -188,7 +305,7 @@ function indexCases(report) {
 }
 
 const baseline = readJsonFile(opts.baseline);
-const current = readJsonFile(resolveCurrentReportPath());
+const current = readJsonFile(await resolveCurrentReportPath());
 const baselineCases = indexCases(baseline);
 const currentCases = indexCases(current);
 const shouldRequireEveryBaselineCase = opts.preset === "all";
