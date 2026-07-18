@@ -27,6 +27,11 @@ describe("chunkDiscordText", () => {
       "first",
       "second",
     ]);
+    expect(chunkDiscordText(`${"x".repeat(35)}\nz`, { maxChars: 30, maxLines: 1 })).toEqual([
+      "x".repeat(30),
+      "x".repeat(5),
+      "z",
+    ]);
   });
 
   it("uses default chunk limits for non-finite options", () => {
@@ -140,6 +145,19 @@ describe("chunkDiscordText", () => {
         .every((chunk) => /^```(?:ts)?(?:\n|$)/.test(chunk)),
     ).toBe(true);
     expect(chunks.every((chunk) => chunk.length <= 30)).toBe(true);
+  });
+
+  it("keeps the hard size limit when synthetic fence balancing cannot fit", () => {
+    const cases = [
+      { text: "```\nabcdefghij\n```", maxChars: 8 },
+      { text: "~~~~~~~~\nabcdefghij\n~~~~~~~~", maxChars: 18 },
+    ];
+
+    for (const { text, maxChars } of cases) {
+      const chunks = chunkDiscordText(text, { maxChars, maxLines: 50 });
+      expect(chunks.length).toBeGreaterThan(1);
+      expect(chunks.every((chunk) => chunk.length <= maxChars)).toBe(true);
+    }
   });
 
   it("preserves whitespace when splitting long lines", () => {
