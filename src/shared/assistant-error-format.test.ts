@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   extractLeadingHttpStatus,
   extractProviderWrappedHttpStatus,
+  formatRawAssistantErrorForUi,
+  parseApiErrorInfo,
 } from "./assistant-error-format.js";
 
 describe("extractLeadingHttpStatus", () => {
@@ -53,5 +55,33 @@ describe("extractProviderWrappedHttpStatus", () => {
     expect(extractProviderWrappedHttpStatus("API error (000): something")).toBeNull();
     expect(extractProviderWrappedHttpStatus("API error (999): something")).toBeNull();
     expect(extractProviderWrappedHttpStatus("API error (600): something")).toBeNull();
+  });
+});
+
+describe("HTTP status consumers", () => {
+  it("formats only status lines inside the HTTP range", () => {
+    expect(formatRawAssistantErrorForUi("100 Continue")).toBe("HTTP 100: Continue");
+    expect(formatRawAssistantErrorForUi("599 Provider Error")).toBe("HTTP 599: Provider Error");
+    expect(formatRawAssistantErrorForUi("000 Invalid")).toBe("000 Invalid");
+    expect(formatRawAssistantErrorForUi("600 Invalid")).toBe("600 Invalid");
+    expect(formatRawAssistantErrorForUi("999 Invalid")).toBe("999 Invalid");
+  });
+
+  it("does not attach invalid status prefixes to API payloads", () => {
+    const payload = '{"type":"error","error":{"type":"server_error","message":"Provider failed."}}';
+
+    expect(parseApiErrorInfo(`599 ${payload}`)).toMatchObject({
+      httpCode: "599",
+      type: "server_error",
+      message: "Provider failed.",
+    });
+    expect(formatRawAssistantErrorForUi(`599 ${payload}`)).toBe(
+      "HTTP 599 server_error: Provider failed.",
+    );
+
+    for (const code of ["000", "600", "999"]) {
+      expect(parseApiErrorInfo(`${code} ${payload}`)).toBeNull();
+      expect(formatRawAssistantErrorForUi(`${code} ${payload}`)).toBe(`${code} ${payload}`);
+    }
   });
 });
