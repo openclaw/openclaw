@@ -334,7 +334,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Troubleshooting
   - H3: The Activity says “Gateway offline”
   - H3: Discord opens a blank page or reports blocked:csp
-  - H3: “Not authorized”
   - H3: “Widget unavailable”
   - H3: “You cannot launch Activities in this channel”
 
