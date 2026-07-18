@@ -96,6 +96,7 @@ describe("ensureConfigReady", () => {
       snapshot,
       baseConfig: {},
     });
+    return snapshot;
   }
 
   function useTempOpenClawHome(): string {
@@ -505,11 +506,51 @@ describe("ensureConfigReady", () => {
       "Problem:",
       "  - channels.quietchat: invalid",
       "",
-      `Fix: ${formatCliCommand("openclaw doctor --fix")}`,
       `Inspect: ${formatCliCommand("openclaw config validate")}`,
       "Audit, status, health, logs, tasks list/audit, and doctor commands still run with invalid config.",
+      `Run "${formatCliCommand("openclaw doctor --fix")}" to repair the config, then retry.`,
     ]);
     expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("runs doctor and retries the config guard once after consent", async () => {
+    writeLegacyTaskSidecarMarker(useTempOpenClawHome());
+    const invalidSnapshot = setInvalidSnapshot();
+    const validSnapshot = {
+      ...makeSnapshot(),
+      config: { gateway: { mode: "local" } },
+      sourceConfig: { gateway: { mode: "local" } },
+    };
+    loadAndMaybeMigrateDoctorConfigMock
+      .mockResolvedValueOnce({ snapshot: invalidSnapshot, baseConfig: {} })
+      .mockResolvedValueOnce({ snapshot: validSnapshot, baseConfig: validSnapshot.config });
+    readConfigFileSnapshotMock.mockResolvedValue(validSnapshot);
+    const runtime = makeRuntime();
+    const confirm = vi.fn(async () => true);
+    const runDoctor = vi.fn(async () => {});
+
+    await ensureConfigReady(
+      { runtime: runtime as never, commandPath: ["message"] },
+      { confirm, isInteractive: () => true, runDoctor },
+    );
+
+    expect(confirm).toHaveBeenCalledWith(
+      `Run "${formatCliCommand("openclaw doctor --fix")}" now?`,
+      true,
+    );
+    expect(runDoctor).toHaveBeenCalledOnce();
+    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledTimes(2);
+    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenLastCalledWith({
+      migrateState: false,
+      migrateLegacyConfig: false,
+      invalidConfigNote: false,
+    });
+    expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
+    expect(setRuntimeConfigSnapshotMock).toHaveBeenCalledWith(
+      validSnapshot.config,
+      validSnapshot.sourceConfig,
+    );
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
 
   it("replaces doctor fix advice for plugin packaging-only invalid config", async () => {
@@ -534,9 +575,12 @@ describe("ensureConfigReady", () => {
     expect(calls).toContain(`Fix: ${pluginPackagingRecoveryHint}`);
     expect(calls).not.toContain(`Fix: ${formatCliCommand("openclaw doctor --fix")}`);
     expect(runtime.exit).toHaveBeenCalledWith(1);
+
+    const gatewayRuntime = await runEnsureConfigReady(["gateway", "start"]);
+    expect(gatewayRuntime.exit).toHaveBeenCalledWith(78);
   });
 
-  it("does not exit for invalid config on allowlisted commands", async () => {
+  it("allows read-only invalid-config commands but blocks gateway startup", async () => {
     setInvalidSnapshot({
       issues: [{ path: "agents.defaults", message: 'Unrecognized key: "agentRuntime"' }],
     });
@@ -547,10 +591,16 @@ describe("ensureConfigReady", () => {
     expect(auditRuntime.exit).not.toHaveBeenCalled();
 
     const bareGatewayRuntime = await runEnsureConfigReady(["gateway"]);
-    expect(bareGatewayRuntime.exit).not.toHaveBeenCalled();
+    expect(bareGatewayRuntime.exit).toHaveBeenCalledWith(78);
 
     const gatewayRunRuntime = await runEnsureConfigReady(["gateway", "run"]);
-    expect(gatewayRunRuntime.exit).not.toHaveBeenCalled();
+    expect(gatewayRunRuntime.exit).toHaveBeenCalledWith(78);
+
+    const gatewayStartRuntime = await runEnsureConfigReady(["gateway", "start"]);
+    expect(gatewayStartRuntime.exit).toHaveBeenCalledWith(78);
+
+    const gatewayRestartRuntime = await runEnsureConfigReady(["gateway", "restart"]);
+    expect(gatewayRestartRuntime.exit).toHaveBeenCalledWith(78);
 
     const gatewayRuntime = await runEnsureConfigReady(["gateway", "health"]);
     expect(gatewayRuntime.exit).not.toHaveBeenCalled();
