@@ -220,7 +220,9 @@ export class GatewayChatClient implements TuiBackend {
   }
 
   stop() {
-    this.client.stop();
+    // Keep TUI teardown ordered after the transport closes. Otherwise the
+    // late close callback can re-arm UI timers after shutdown cleared them.
+    return this.client.stopAndWait();
   }
 
   async subscribeSessionEvents() {
