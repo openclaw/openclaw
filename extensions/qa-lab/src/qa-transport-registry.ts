@@ -119,14 +119,27 @@ function createQaTransportAdapterFactoryRegistry(
         await adapter.cleanupAfterGatewayStop?.();
         cleanupAfterGatewayStopComplete = true;
       };
+      const cleanupWithoutGateway = async () => {
+        const errors: unknown[] = [];
+        for (const cleanup of [cleanupBeforeGatewayStop, cleanupAfterGatewayStop]) {
+          try {
+            await cleanup();
+          } catch (error) {
+            errors.push(error);
+          }
+        }
+        if (errors.length === 1) {
+          throw errors[0];
+        }
+        if (errors.length > 1) {
+          throw new AggregateError(errors, "QA transport cleanup failed");
+        }
+      };
       return {
         adapter,
         cleanupBeforeGatewayStop,
         cleanupAfterGatewayStop,
-        cleanupWithoutGateway: async () => {
-          await cleanupBeforeGatewayStop();
-          await cleanupAfterGatewayStop();
-        },
+        cleanupWithoutGateway,
       };
     },
   };

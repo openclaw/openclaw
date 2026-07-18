@@ -115,6 +115,59 @@ describe("qa transport registry", () => {
     expect(cleanupAfterGatewayStop).toHaveBeenCalledOnce();
   });
 
+  it("runs post-gateway cleanup when gateway-less pre-cleanup fails", async () => {
+    const cleanup = vi.fn(async () => {
+      throw new Error("pre-cleanup failed");
+    });
+    const cleanupAfterGatewayStop = vi.fn(async () => undefined);
+    const definition = createAdapterDefinition(cleanup, cleanupAfterGatewayStop);
+    const created = await createQaTransportAdapter(
+      createFactoryContext({ channelId: "cleanup", driver: "live" }),
+      [
+        {
+          id: "cleanup",
+          matches: () => true,
+          async create() {
+            return definition;
+          },
+        },
+      ],
+    );
+
+    await expect(created.cleanupWithoutGateway()).rejects.toThrow("pre-cleanup failed");
+    expect(cleanupAfterGatewayStop).toHaveBeenCalledOnce();
+  });
+
+  it("aggregates failures from both gateway-less cleanup phases", async () => {
+    const definition = createAdapterDefinition(
+      async () => {
+        throw new Error("pre-cleanup failed");
+      },
+      async () => {
+        throw new Error("post-cleanup failed");
+      },
+    );
+    const created = await createQaTransportAdapter(
+      createFactoryContext({ channelId: "cleanup", driver: "live" }),
+      [
+        {
+          id: "cleanup",
+          matches: () => true,
+          async create() {
+            return definition;
+          },
+        },
+      ],
+    );
+
+    const cleanupError = await created.cleanupWithoutGateway().catch((error: unknown) => error);
+    expect(cleanupError).toBeInstanceOf(AggregateError);
+    expect((cleanupError as AggregateError).errors).toEqual([
+      expect.objectContaining({ message: "pre-cleanup failed" }),
+      expect.objectContaining({ message: "post-cleanup failed" }),
+    ]);
+  });
+
   it("reports no-match and startup failures with transport context", async () => {
     const context = createFactoryContext({ channelId: "missing", driver: "live" });
     await expect(createQaTransportAdapter(context, [])).rejects.toThrow(
