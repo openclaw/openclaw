@@ -97,7 +97,7 @@ export function buildAgentSummaries(cfg: OpenClawConfig): AgentSummary[] {
     );
     const identitySource = identity
       ? "identity"
-      : configIdentity && (identityName || identityEmoji || identityAvatarUrl)
+      : configIdentity && (identityName || identityEmoji)
         ? "config"
         : undefined;
     return {
