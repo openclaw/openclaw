@@ -156,7 +156,7 @@ function sanitizeOpenAISdkSseResponse(
     (/\bapplication\/json\b/i.test(contentType) || /\+json\b/i.test(contentType))
   ) {
     const source = response.body;
-    const decoder = new TextDecoder();
+    const decoder = new TextDecoder("utf-8", { fatal: true });
     const encoder = new TextEncoder();
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
     let buffer = "";
@@ -210,7 +210,7 @@ function sanitizeOpenAISdkSseResponse(
   }
 
   const source = response.body;
-  const decoder = new TextDecoder();
+  const decoder = new TextDecoder("utf-8", { fatal: true });
   const encoder = new TextEncoder();
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   let buffer = "";
@@ -337,7 +337,7 @@ async function classifyOpenAISdkStreamBody(response: Response): Promise<OpenAISd
     return "unknown";
   }
 
-  const decoder = new TextDecoder();
+  const decoder = new TextDecoder("utf-8", { fatal: true });
   let total = 0;
   let text = "";
   try {

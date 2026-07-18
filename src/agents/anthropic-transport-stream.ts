@@ -759,7 +759,7 @@ async function* parseAnthropicSseBody(
   signal?: AbortSignal,
 ): AsyncIterable<Record<string, unknown>> {
   const reader = body.getReader();
-  const decoder = new TextDecoder();
+  const decoder = new TextDecoder("utf-8", { fatal: true });
   let buffer = "";
   let completed = false;
   try {
