@@ -1786,6 +1786,12 @@ export async function attachWebInboxToSocket(
       if (timeout) {
         clearTimeout(timeout);
       }
+      // A drain timeout abandons the graceful path before its own dispose
+      // runs; a successor monitor must never share this account queue with a
+      // still-live drain. dispose() is idempotent, so the graceful path's own
+      // cleanup stays harmless.
+      durableDrainClosed = true;
+      durableInboundDrain.dispose();
     }
   };
   const handleConnectionUpdate = (update: Partial<import("baileys").ConnectionState>) => {
