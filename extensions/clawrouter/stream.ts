@@ -10,9 +10,31 @@ const CLIENT_HEADER = "X-ClawRouter-Client";
 const AGENT_HEADER = "X-ClawRouter-Agent-Id";
 const SESSION_HEADER = "X-ClawRouter-Session-Id";
 const REQUEST_ID_HEADER = "X-Request-ID";
-const REQUEST_ID_HASH_LENGTH = 16;
+const ID_HASH_LENGTH = 16;
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9._~:/+@=-]+$/u;
 const REQUEST_ID_UNSAFE_CHARACTER_PATTERN = /[^A-Za-z0-9._~:/+@=-]/gu;
+const ATTRIBUTION_PRINTABLE_ASCII_PATTERN = /^[\x20-\x7E]+$/u;
+const ATTRIBUTION_NON_PRINTABLE_ASCII_PATTERN = /[^\x20-\x7E]/gu;
+const REQUEST_ID_SUFFIX_PATTERN = /:model:\d+$/u;
+
+type BoundedIdPolicy = {
+  maxLength: number;
+  safePattern: RegExp;
+  unsafeCharacterPattern: RegExp;
+  preservedSuffixPattern?: RegExp;
+};
+
+const ATTRIBUTION_ID_POLICY: BoundedIdPolicy = {
+  maxLength: ATTRIBUTION_VALUE_MAX_LENGTH,
+  safePattern: ATTRIBUTION_PRINTABLE_ASCII_PATTERN,
+  unsafeCharacterPattern: ATTRIBUTION_NON_PRINTABLE_ASCII_PATTERN,
+};
+const REQUEST_ID_POLICY: BoundedIdPolicy = {
+  maxLength: REQUEST_ID_MAX_LENGTH,
+  safePattern: REQUEST_ID_PATTERN,
+  unsafeCharacterPattern: REQUEST_ID_UNSAFE_CHARACTER_PATTERN,
+  preservedSuffixPattern: REQUEST_ID_SUFFIX_PATTERN,
+};
 
 function hasControlCharacter(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
@@ -24,7 +46,7 @@ function hasControlCharacter(value: string): boolean {
   return false;
 }
 
-function normalizeAttributionValue(value: string | undefined): string | undefined {
+function normalizeHeaderId(value: string | undefined): string | undefined {
   const normalized = value?.trim();
   if (!normalized || hasControlCharacter(normalized)) {
     return undefined;
@@ -32,36 +54,24 @@ function normalizeAttributionValue(value: string | undefined): string | undefine
   return normalized;
 }
 
-function sanitizeAttributionValue(value: string | undefined): string | undefined {
-  const normalized = normalizeAttributionValue(value);
+function sanitizeBoundedId(value: string | undefined, policy: BoundedIdPolicy): string | undefined {
+  const normalized = normalizeHeaderId(value);
   if (!normalized) {
     return undefined;
   }
-  return normalized.slice(0, ATTRIBUTION_VALUE_MAX_LENGTH);
-}
-
-function sanitizeRequestId(value: string | undefined): string | undefined {
-  const normalized = normalizeAttributionValue(value);
-  if (!normalized) {
+  if (normalized.length <= policy.maxLength && policy.safePattern.test(normalized)) {
     return normalized;
   }
-  if (normalized.length <= REQUEST_ID_MAX_LENGTH && REQUEST_ID_PATTERN.test(normalized)) {
-    return normalized;
-  }
-  // Retain the per-call suffix while bounding long run ids; the hash keeps
-  // distinct long prefixes from collapsing onto the same audit identifier.
-  const hash = createHash("sha256")
-    .update(normalized)
-    .digest("hex")
-    .slice(0, REQUEST_ID_HASH_LENGTH);
-  const modelSuffix = normalized.match(/:model:\d+$/u)?.[0] ?? "";
-  const rawPrefix = modelSuffix ? normalized.slice(0, -modelSuffix.length) : normalized;
-  const safePrefix = rawPrefix.replace(REQUEST_ID_UNSAFE_CHARACTER_PATTERN, "_");
-  const boundedSuffix = `~${hash}${modelSuffix}`;
-  if (boundedSuffix.length >= REQUEST_ID_MAX_LENGTH) {
-    return `${safePrefix.slice(0, REQUEST_ID_MAX_LENGTH - hash.length - 1)}~${hash}`;
-  }
-  return `${safePrefix.slice(0, REQUEST_ID_MAX_LENGTH - boundedSuffix.length)}${boundedSuffix}`;
+  // Fetch converts header values to ByteString. Keep automatic IDs ASCII,
+  // bounded, readable, and collision-resistant before transport construction.
+  const hash = createHash("sha256").update(normalized).digest("hex").slice(0, ID_HASH_LENGTH);
+  const preservedSuffix = policy.preservedSuffixPattern?.exec(normalized)?.[0] ?? "";
+  const rawPrefix = preservedSuffix ? normalized.slice(0, -preservedSuffix.length) : normalized;
+  const safePrefix = rawPrefix.replace(policy.unsafeCharacterPattern, "_");
+  const hashSuffix = `~${hash}`;
+  const boundedSuffix = `${hashSuffix}${preservedSuffix}`;
+  const suffix = boundedSuffix.length < policy.maxLength ? boundedSuffix : hashSuffix;
+  return `${safePrefix.slice(0, policy.maxLength - suffix.length)}${suffix}`;
 }
 
 function findHeader(headers: Record<string, string>, target: string): string | undefined {
@@ -95,9 +105,13 @@ function withClawRouterHeaders(
     }
   }
   setHeaderDefault(next, CLIENT_HEADER, "openclaw");
-  setHeaderDefault(next, AGENT_HEADER, sanitizeAttributionValue(params.agentId));
-  setHeaderDefault(next, SESSION_HEADER, sanitizeAttributionValue(params.sessionId));
-  setHeaderDefault(next, REQUEST_ID_HEADER, sanitizeRequestId(params.requestId));
+  setHeaderDefault(next, AGENT_HEADER, sanitizeBoundedId(params.agentId, ATTRIBUTION_ID_POLICY));
+  setHeaderDefault(
+    next,
+    SESSION_HEADER,
+    sanitizeBoundedId(params.sessionId, ATTRIBUTION_ID_POLICY),
+  );
+  setHeaderDefault(next, REQUEST_ID_HEADER, sanitizeBoundedId(params.requestId, REQUEST_ID_POLICY));
   if (params.apiKey) {
     next.Authorization = `Bearer ${params.apiKey}`;
   }

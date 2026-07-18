@@ -171,11 +171,53 @@ describe("ClawRouter plugin", () => {
       Authorization: "Bearer runtime-proxy-key",
     });
     expect(calls[0]?.headers?.["X-ClawRouter-Session-Id"]).toHaveLength(256);
+    expect(calls[0]?.headers?.["X-ClawRouter-Session-Id"]).toMatch(/~[a-f0-9]{16}$/u);
     expect(calls[0]?.headers?.["X-Request-ID"]).toHaveLength(128);
     expect(calls[0]?.headers?.["X-Request-ID"]).toMatch(/~[a-f0-9]{16}:model:1$/u);
     expect(calls[1]?.headers?.["X-Request-ID"]).toMatch(/~[a-f0-9]{16}:model:2$/u);
     expect(calls[1]?.headers?.["X-Request-ID"]).not.toBe(calls[0]?.headers?.["X-Request-ID"]);
     expect(calls[2]?.headers?.["X-Request-ID"]).toMatch(/^turn-_~[a-f0-9]{16}:model:3$/u);
+  });
+
+  it("sanitizes Unicode attribution to distinct printable ASCII ByteStrings", () => {
+    const captured: Array<Record<string, string>> = [];
+    const baseStreamFn: StreamFn = (model) => {
+      captured.push(model.headers ?? {});
+      return {} as ReturnType<StreamFn>;
+    };
+
+    for (const [agentId, sessionId] of [
+      ["agent-😀中文-id", "session-🚀测试-id"],
+      ["agent-🚀中文-id", "session-😀测试-id"],
+    ] as const) {
+      const wrapped = wrapClawRouterProviderStream({
+        provider: "clawrouter",
+        modelId: "openai/gpt-5.5",
+        agentId,
+        streamFn: baseStreamFn,
+      } as never);
+
+      void wrapped?.(
+        {
+          provider: "clawrouter",
+          api: "openai-responses",
+          id: "openai/gpt-5.5",
+        } as never,
+        {} as never,
+        { sessionId } as never,
+      );
+    }
+
+    expect(captured).toHaveLength(2);
+    for (const headers of captured) {
+      expect(headers["X-ClawRouter-Agent-Id"]).toMatch(/^agent-___-id~[a-f0-9]{16}$/u);
+      expect(headers["X-ClawRouter-Session-Id"]).toMatch(/^session-___-id~[a-f0-9]{16}$/u);
+      expect(() => new Headers(headers)).not.toThrow();
+    }
+    expect(captured[0]?.["X-ClawRouter-Agent-Id"]).not.toBe(captured[1]?.["X-ClawRouter-Agent-Id"]);
+    expect(captured[0]?.["X-ClawRouter-Session-Id"]).not.toBe(
+      captured[1]?.["X-ClawRouter-Session-Id"],
+    );
   });
 
   it("keeps an explicit per-request header ahead of the automatic model-call id", () => {
