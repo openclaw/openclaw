@@ -1110,7 +1110,9 @@ function renderChatPreferencesSection(props: ConfigProps) {
       <div class="settings-section__header">
         <h2 class="settings-section__heading">${t("configView.chatPrefs.title")}</h2>
       </div>
-      <p class="settings-section__desc">${t("configView.chatPrefs.hint")}</p>
+      <p class="settings-section__desc">
+        ${t("configView.chatPrefs.hint")} ${t("configView.syncedHint")}
+      </p>
       <div class="settings-group">
         ${renderSettingsSelectRow({
           title: t("chat.sendShortcut"),
@@ -1287,7 +1289,9 @@ function renderAppearanceSection(props: ConfigProps) {
         <div class="settings-section__header">
           <h2 class="settings-section__heading">${t("configView.appearance.theme")}</h2>
         </div>
-        <p class="settings-section__desc">${t("configView.appearance.chooseTheme")}</p>
+        <p class="settings-section__desc">
+          ${t("configView.appearance.chooseTheme")} ${t("configView.syncedHint")}
+        </p>
         <div class="settings-group">
           <div class="settings-row settings-row--stacked">
             <div class="settings-theme-grid">

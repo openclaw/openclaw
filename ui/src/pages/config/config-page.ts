@@ -54,7 +54,13 @@ export type { ConfigPageId } from "./config-sections.ts";
 
 type ConfigFormMode = "form" | "raw";
 type ConfigSelection = { activeSection: string | null; activeSubsection: string | null };
-type LocalUiSetting = "textScale" | "chatSendShortcut" | "chatFollowUpMode" | "catalogOpenTarget";
+// Keys settable through this page's setSetting helper. Whether a key syncs
+// across devices is owned by app/server-prefs.ts, not by this type.
+type ConfigPageSetting =
+  | "textScale"
+  | "chatSendShortcut"
+  | "chatFollowUpMode"
+  | "catalogOpenTarget";
 
 const CONFIG_PAGE_I18N_KEYS = {
   config: "config",
@@ -621,7 +627,7 @@ export class ConfigPage extends OpenClawLightDomElement {
     });
   }
 
-  private setSetting<K extends LocalUiSetting>(key: K, value: UiSettings[K]) {
+  private setSetting<K extends ConfigPageSetting>(key: K, value: UiSettings[K]) {
     this.applySettings({ ...this.settings, [key]: value });
   }
 
