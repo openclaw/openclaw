@@ -531,10 +531,15 @@ async function processDiscordMessageInner(
   let pendingToolWarningFinal:
     | { payload: ReplyPayload; info: { kind: ReplyDispatchKind } }
     | undefined;
+  let pendingProgressBlockReplies: Array<{
+    payload: ReplyPayload;
+    info: { kind: ReplyDispatchKind };
+  }> = [];
   const markUserFacingFinalDelivered = () => {
     userFacingFinalDelivered = true;
     userFacingFinalDeliveryFailed = false;
     pendingToolWarningFinal = undefined;
+    pendingProgressBlockReplies = [];
     draftPreview.markFinalReplyDelivered();
     observer?.onFinalReplyDelivered?.();
   };
@@ -663,6 +668,21 @@ async function processDiscordMessageInner(
     await replyPipeline.typingCallbacks?.onReplyStart();
     await statusReactions.setThinking();
   };
+  const isDeferrableProgressBlockReply = (
+    payload: ReplyPayload,
+    info: { kind: ReplyDispatchKind },
+  ) => {
+    if (
+      !draftPreview.draftStream ||
+      !draftPreview.isProgressMode ||
+      !draftPreview.shouldDeferProgressBlockReplies ||
+      info.kind !== "block"
+    ) {
+      return false;
+    }
+    const reply = resolveSendableOutboundReplyParts(payload);
+    return !reply.hasMedia && !payload.isError;
+  };
   const beforeDiscordPayloadDelivery = (
     payload: ReplyPayload,
     info: { kind: ReplyDispatchKind },
@@ -681,7 +701,12 @@ async function processDiscordMessageInner(
     if (payload.isReasoning || payload.isCommentary) {
       return payload;
     }
-    if (draftPreview.draftStream && draftPreview.isProgressMode && info.kind === "block") {
+    if (
+      draftPreview.draftStream &&
+      draftPreview.isProgressMode &&
+      draftPreview.shouldSuppressBlockReplies &&
+      info.kind === "block"
+    ) {
       const reply = resolveSendableOutboundReplyParts(payload);
       if (!reply.hasMedia && !payload.isError) {
         return null;
@@ -696,7 +721,10 @@ async function processDiscordMessageInner(
   const deliverDiscordPayload = async (
     payload: ReplyPayload,
     info: { kind: ReplyDispatchKind },
-    options?: { allowFallbackOnlyToolWarning?: boolean },
+    options?: {
+      allowDeferredProgressBlockFallback?: boolean;
+      allowFallbackOnlyToolWarning?: boolean;
+    },
   ) => {
     if (isProcessAborted(abortSignal)) {
       // Surface so operators don't chase missing replies when an abort
@@ -797,11 +825,17 @@ async function processDiscordMessageInner(
       await onDiscordReplyStart();
     }
     const draftStream = draftPreview.draftStream;
-    if (draftStream && draftPreview.isProgressMode && info.kind === "block") {
-      const reply = resolveSendableOutboundReplyParts(deliverablePayload);
-      if (!reply.hasMedia && !deliverablePayload.isError) {
+    if (draftStream && isDeferrableProgressBlockReply(deliverablePayload, info)) {
+      if (draftPreview.shouldSuppressBlockReplies) {
         return { visibleReplySent: false };
       }
+      if (!options?.allowDeferredProgressBlockFallback) {
+        pendingProgressBlockReplies.push({ payload: deliverablePayload, info });
+        return { visibleReplySent: false };
+      }
+    }
+    if (isFinal && pendingProgressBlockReplies.length && !userFacingFinalDelivered) {
+      await deliverPendingProgressBlockRepliesIfNeeded();
     }
     const shouldCollapseProgressDraft =
       draftStream &&
@@ -1015,6 +1049,38 @@ async function processDiscordMessageInner(
       return { visibleReplySent: false };
     }
   };
+  const deliverPendingProgressBlockRepliesIfNeeded = async () => {
+    if (!pendingProgressBlockReplies.length) {
+      return undefined;
+    }
+    const pending = pendingProgressBlockReplies;
+    pendingProgressBlockReplies = [];
+    if (
+      userFacingFinalDelivered ||
+      isProcessAborted(abortSignal) ||
+      draftPreview.shouldSuppressBlockReplies ||
+      draftPreview.hasProgressDraftStarted
+    ) {
+      return undefined;
+    }
+    let lastResult: { visibleReplySent: boolean } | undefined;
+    for (const pendingReply of pending) {
+      try {
+        lastResult = await deliverDiscordPayload(pendingReply.payload, pendingReply.info, {
+          allowDeferredProgressBlockFallback: true,
+        });
+      } catch (err) {
+        dispatchError = true;
+        onDiscordDeliveryError(err, pendingReply.info);
+        lastResult = { visibleReplySent: false };
+      }
+    }
+    return lastResult;
+  };
+  const deliverPendingFreshDiscordDeliveries = async () => {
+    await deliverPendingProgressBlockRepliesIfNeeded();
+    return await deliverPendingToolWarningFinalIfNeeded();
+  };
   try {
     if (isProcessAborted(abortSignal)) {
       dispatchAborted = true;
@@ -1037,7 +1103,7 @@ async function processDiscordMessageInner(
         humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
         beforeDeliver: beforeDiscordPayloadDelivery,
         onReplyStart: onDiscordReplyStart,
-        onFreshSettledDelivery: deliverPendingToolWarningFinalIfNeeded,
+        onFreshSettledDelivery: deliverPendingFreshDiscordDeliveries,
       },
       delivery: {
         deliver: deliverDiscordPayload,
@@ -1084,11 +1150,12 @@ async function processDiscordMessageInner(
             }
           : undefined,
         onModelSelected,
-        suppressDefaultToolProgressMessages:
-          (sourceRepliesAreToolOnly && statusReactionsExplicitlyEnabled) ||
-          draftPreview.suppressDefaultToolProgressMessages
+        get suppressDefaultToolProgressMessages() {
+          return (sourceRepliesAreToolOnly && statusReactionsExplicitlyEnabled) ||
+            draftPreview.suppressDefaultToolProgressMessages
             ? true
-            : undefined,
+            : undefined;
+        },
         allowToolLifecycleWhenProgressHidden: statusReactionsEnabled ? true : undefined,
         commentaryProgressEnabled: draftPreview.isProgressMode
           ? draftPreview.commentaryProgressEnabled
