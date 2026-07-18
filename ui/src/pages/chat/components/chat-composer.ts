@@ -2061,8 +2061,12 @@ export function renderChatComposer(props: ChatComposerProps) {
     : null;
   const questionTakeoverActive = Boolean(questionPanelProps && !state.gatewayQuestionCollapsed);
   if (!state.questionTakeoverActive && questionTakeoverActive) {
-    // A question can arrive mid-IME composition before the host draft commits.
-    // Keep that buffer for the remounted composer, but end the detached input's composition mode.
+    // A question can arrive mid-IME composition before compositionend commits the host draft.
+    // Commit before unmounting so the detached input cannot leave a stale shadow behind.
+    if (state.composingDraft?.key === draftKey) {
+      commitComposerDraft(props, state.composingDraft.value);
+      state.composingDraft = null;
+    }
     state.composerComposing = false;
   }
   if (state.questionTakeoverActive && !questionTakeoverActive) {

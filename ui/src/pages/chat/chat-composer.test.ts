@@ -349,12 +349,15 @@ describe("renderChatComposer status", () => {
     expect(container.querySelector(".agent-chat__input")).toBeNull();
     expect(container.querySelector(".agent-chat__composer-footer")).toBeNull();
     expect(document.activeElement).toBe(panel.querySelector(".chat-question-panel"));
+    expect(composerProps.draft).toBe("Keep this draft while composing");
+
+    composerProps.draft = "Host updated this draft while the question was open";
 
     panel.querySelector<HTMLButtonElement>(".chat-question-panel__collapse")?.click();
     draw();
     await Promise.resolve();
     let textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
-    expect(textarea.value).toBe("Keep this draft while composing");
+    expect(textarea.value).toBe("Host updated this draft while the question was open");
     expect(document.activeElement).toBe(textarea);
 
     panel = container.querySelector("openclaw-chat-question-panel") as typeof panel;
@@ -368,7 +371,7 @@ describe("renderChatComposer status", () => {
     draw();
     await Promise.resolve();
     textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
-    expect(textarea.value).toBe("Keep this draft while composing");
+    expect(textarea.value).toBe("Host updated this draft while the question was open");
     expect(document.activeElement).toBe(textarea);
     expect(container.querySelector("openclaw-chat-question-panel")).toBeNull();
 
