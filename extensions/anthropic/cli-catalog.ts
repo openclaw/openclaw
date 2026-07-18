@@ -17,6 +17,7 @@ const CLAUDE_CLI_MAX_OUTPUT_TOKENS: Record<string, number> = {
   "claude-opus-4-7": 128_000,
   "claude-opus-4-6": 128_000,
   "claude-sonnet-5": 128_000,
+  "claude-fable-5": 128_000,
   "claude-sonnet-4-6": 128_000,
 };
 
