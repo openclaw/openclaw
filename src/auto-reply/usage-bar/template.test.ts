@@ -227,9 +227,26 @@ describe("loadUsageBarTemplate", () => {
       // Write valid content to disk.
       writeFileSync(path, JSON.stringify(tplB));
 
-      // With the fix, entry.watcher is undefined → cacheTemplateFile re-reads.
-      // Without the fix, entry.watcher is a closed FSWatcher (truthy) →
-      // returns undefined → DEFAULT.
+      expect(loadUsageBarTemplate(path)).toMatchObject(tplB);
+    });
+
+    it("reloads a still-valid template after watcher error", async () => {
+      const path = tmpFile("t.json", JSON.stringify(tplA));
+
+      // Load valid template → creates a watcher in the cache.
+      expect(loadUsageBarTemplate(path)).toMatchObject(tplA);
+      expect(capturedWatchers.length).toBe(1);
+
+      // Simulate a transient watcher error while the template is still valid.
+      capturedWatchers[0]?.emit("error", new Error("simulated watcher error"));
+
+      // Without the fix (entry.template cleared): the stale tplA is still
+      // served from cache because entry.template is truthy.  File edits
+      // are never observed because the dead watcher doesn't fire and
+      // loadUsageBarTemplate never calls cacheTemplateFile() again.
+      // With the fix: entry.template is also cleared, so the next load
+      // re-reads from disk and creates a fresh watcher.
+      writeFileSync(path, JSON.stringify(tplB));
       expect(loadUsageBarTemplate(path)).toMatchObject(tplB);
     });
 
