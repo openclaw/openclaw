@@ -2,8 +2,14 @@
  * Regression coverage for IDENTITY.md parsing and merging.
  * Ensures placeholders are ignored and rich identity fields stay stable.
  */
-import { describe, expect, it } from "vitest";
-import { mergeIdentityMarkdownContent, parseIdentityMarkdown } from "./identity-file.js";
+import fs from "node:fs";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  loadAgentIdentityFromWorkspace,
+  mergeIdentityMarkdownContent,
+  parseIdentityMarkdown,
+} from "./identity-file.js";
 
 describe("parseIdentityMarkdown", () => {
   it("ignores identity template placeholders", () => {
@@ -115,5 +121,48 @@ Fluent in over six million error messages.
     });
 
     expect(merged).toBe("- Name: New Name\n");
+  });
+});
+
+describe("loadAgentIdentityFromWorkspace", () => {
+  let tmpDir: string;
+
+  afterEach(() => {
+    if (tmpDir) {
+      fs.rmSync(tmpDir, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects oversized identity files", () => {
+    tmpDir = fs.mkdtempSync("identity-bound-test-");
+    const identityPath = path.join(tmpDir, "IDENTITY.md");
+
+    // Write a file exceeding the 1 MiB internal cap.
+    const largeContent = Buffer.alloc(2 * 1024 * 1024);
+    const header = Buffer.from("- **Name:** Test\n", "utf8");
+    header.copy(largeContent, 0);
+    fs.writeFileSync(identityPath, largeContent);
+
+    const result = loadAgentIdentityFromWorkspace(tmpDir);
+    expect(result).toBeNull();
+  });
+
+  it("accepts normal-sized identity files", () => {
+    tmpDir = fs.mkdtempSync("identity-bound-test-");
+    const identityPath = path.join(tmpDir, "IDENTITY.md");
+    const content = "- **Name:** Patch Agent\n- **Emoji:** 🦀\n";
+    fs.writeFileSync(identityPath, content, "utf8");
+
+    const result = loadAgentIdentityFromWorkspace(tmpDir);
+    expect(result).toEqual({
+      name: "Patch Agent",
+      emoji: "🦀",
+    });
+  });
+
+  it("returns null for missing identity files", () => {
+    tmpDir = fs.mkdtempSync("identity-bound-test-");
+    const result = loadAgentIdentityFromWorkspace(tmpDir);
+    expect(result).toBeNull();
   });
 });

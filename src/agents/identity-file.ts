@@ -209,8 +209,18 @@ export function mergeIdentityMarkdownContent(
   return nextLines.join("\n").replace(/\n*$/, "\n");
 }
 
+// Cap identity file reads at 1 MiB — IDENTITY.md files are small metadata files.
+const MAX_IDENTITY_FILE_BYTES = 1 * 1024 * 1024;
+
 function loadIdentityFromFile(identityPath: string): AgentIdentityFile | null {
   try {
+    const stats = fs.statSync(identityPath);
+    if (!stats.isFile()) {
+      return null;
+    }
+    if (stats.size > MAX_IDENTITY_FILE_BYTES) {
+      return null;
+    }
     const content = fs.readFileSync(identityPath, "utf-8");
     const parsed = parseIdentityMarkdown(content);
     if (!identityHasValues(parsed)) {
