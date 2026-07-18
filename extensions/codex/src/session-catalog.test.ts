@@ -448,7 +448,7 @@ describe("Codex supervision catalog", () => {
         archived: false,
         limit: 25,
         modelProviders: [],
-        sortKey: "recency_at",
+        sortKey: "updated_at",
         sortDirection: "desc",
         cwd: "/workspace/one",
       },
@@ -1023,6 +1023,50 @@ describe("Codex supervision catalog", () => {
         error: { code: "NODE_INVOKE_FAILED" },
       });
       expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 65_000 }));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("publishes a paired-node page that finishes after the fail-soft response", async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveInvoke!: (value: unknown) => void;
+      const invokeResult = new Promise<unknown>((resolve) => {
+        resolveInvoke = resolve;
+      });
+      const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async () => await invokeResult);
+      const onHost = vi.fn();
+      const pending = listPairedNode({
+        runtime: { nodes: { invoke } } as unknown as PluginRuntime,
+        node: {
+          nodeId: "slow-node",
+          displayName: "Slow node",
+          connected: true,
+          commands: [CODEX_APP_SERVER_THREADS_LIST_COMMAND],
+        },
+        query: { limitPerHost: 40 },
+        adoptedSessions: new Map(),
+        onHost,
+      });
+
+      await vi.advanceTimersByTimeAsync(8_000);
+      await expect(pending).resolves.toMatchObject({ error: { code: "NODE_INVOKE_FAILED" } });
+      expect(onHost).not.toHaveBeenCalled();
+
+      resolveInvoke({
+        payloadJSON: JSON.stringify({
+          sessions: [{ threadId: "late-thread", status: "idle", archived: false }],
+        }),
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(onHost).toHaveBeenCalledWith(
+        expect.objectContaining({
+          hostId: "node:slow-node",
+          sessions: [expect.objectContaining({ threadId: "late-thread" })],
+        }),
+      );
     } finally {
       vi.useRealTimers();
     }

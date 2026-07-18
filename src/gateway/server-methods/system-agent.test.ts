@@ -29,6 +29,9 @@ const setupInferenceMocks = vi.hoisted(() => ({
   detectSetupInference: vi.fn(),
   verifySetupInference: vi.fn(),
 }));
+const setupInferenceDetectionMocks = vi.hoisted(() => ({
+  detectSetupInferenceIsolated: vi.fn(),
+}));
 const providerAuthChoiceMocks = vi.hoisted(() => ({
   applyAuthChoiceLoadedPluginProvider: vi.fn(),
 }));
@@ -41,6 +44,9 @@ vi.mock("../../system-agent/setup-inference.js", () => ({
   activateSetupInference: setupInferenceMocks.activateSetupInference,
   detectSetupInference: setupInferenceMocks.detectSetupInference,
   verifySetupInference: setupInferenceMocks.verifySetupInference,
+}));
+vi.mock("../../system-agent/setup-inference-detection.js", () => ({
+  detectSetupInferenceIsolated: setupInferenceDetectionMocks.detectSetupInferenceIsolated,
 }));
 vi.mock("../../plugins/provider-auth-choice.js", () => ({
   applyAuthChoiceLoadedPluginProvider: providerAuthChoiceMocks.applyAuthChoiceLoadedPluginProvider,
@@ -168,6 +174,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   setupInferenceMocks.activateSetupInference.mockReset();
   setupInferenceMocks.detectSetupInference.mockReset();
+  setupInferenceDetectionMocks.detectSetupInferenceIsolated.mockReset();
   setupInferenceMocks.verifySetupInference.mockReset();
   providerAuthChoiceMocks.applyAuthChoiceLoadedPluginProvider.mockReset();
   setupSharedMocks.readSetupConfigFileSnapshot.mockReset();
@@ -443,10 +450,10 @@ describe("openclaw.chat", () => {
     expect(secondCall.ok).toBe(true);
   });
 
-  it("tracks setup detection until its RPC response is sent", async () => {
+  it("keeps read-only setup detection outside the serialized system-agent lane", async () => {
     const started = createDeferred();
     const release = createDeferred();
-    setupInferenceMocks.detectSetupInference.mockImplementation(async () => {
+    setupInferenceDetectionMocks.detectSetupInferenceIsolated.mockImplementation(async () => {
       started.resolve();
       await release.promise;
       return {
@@ -472,11 +479,11 @@ describe("openclaw.chat", () => {
     } as never);
 
     await started.promise;
-    expect(getCommandLaneSnapshot(CommandLane.SystemAgent).activeCount).toBe(1);
+    expect(getCommandLaneSnapshot(CommandLane.SystemAgent).activeCount).toBe(0);
     release.resolve();
     await pending;
 
-    expect(activeAtResponse).toEqual([1]);
+    expect(activeAtResponse).toEqual([0]);
     expect(getCommandLaneSnapshot(CommandLane.SystemAgent).activeCount).toBe(0);
   });
 
@@ -853,7 +860,26 @@ describe("openclaw.chat", () => {
     });
 
     expect(call.payload).toMatchObject({ action: "open-agent" });
+    expect(call.payload).not.toHaveProperty("agentDraft");
     expect((call.payload as { reply: string }).reply).toContain("continue with your agent");
+  });
+
+  it("forwards the hatch draft intent with an agent handoff", async () => {
+    const engine = makeVerifiedEngine();
+    vi.spyOn(engine, "handle").mockResolvedValue({
+      text: "Your agent is hatching.",
+      action: "open-tui",
+      agentDraft: "hatch",
+      handoff: { kind: "open-tui" },
+    });
+    const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
+
+    const call = await callChat(makeContext(sessions), {
+      sessionId: "s1",
+      message: "yes",
+    });
+
+    expect(call.payload).toMatchObject({ action: "open-agent", agentDraft: "hatch" });
   });
 
   it("resets a session on request", async () => {

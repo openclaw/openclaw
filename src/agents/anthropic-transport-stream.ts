@@ -94,6 +94,8 @@ const CLAUDE_CODE_BILLING_SYSTEM_BLOCK = `x-anthropic-billing-header: cc_version
 const ANTHROPIC_MESSAGES_ERROR_BODY_MAX_BYTES = 8 * 1024;
 const ANTHROPIC_MESSAGES_ERROR_BODY_MAX_CHARS = 400;
 const ANTHROPIC_MESSAGES_ERROR_BODY_READ_IDLE_TIMEOUT_MS = 10_000;
+const ANTHROPIC_MESSAGES_DEFAULT_MAX_TOKENS = 4_096;
+const ANTHROPIC_MESSAGES_FALLBACK_CONTEXT_DIVISOR = 4;
 // Mirror the fetch sanitizer cap here because compatible routes such as Kimi
 // bypass that layer; without a parser-local guard, partial frames grow forever.
 const ANTHROPIC_MESSAGES_SSE_PENDING_BUFFER_MAX_CHARS = 16 * 1024 * 1024;
@@ -242,7 +244,7 @@ function clampReasoningLevel(level: ThinkingLevel): "minimal" | "low" | "medium"
   return level === "xhigh" || level === "max" ? "high" : level;
 }
 
-function resolvePositiveAnthropicMaxTokens(value: unknown): number | undefined {
+function resolvePositiveAnthropicTokenLimit(value: unknown): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return undefined;
   }
@@ -251,20 +253,34 @@ function resolvePositiveAnthropicMaxTokens(value: unknown): number | undefined {
 }
 
 function resolveAnthropicMessagesMaxTokens(params: {
+  modelContextWindow: number | undefined;
   modelMaxTokens: number | undefined;
   requestedMaxTokens: number | undefined;
   useModelDefault?: boolean;
 }): number | undefined {
-  const requested = resolvePositiveAnthropicMaxTokens(params.requestedMaxTokens);
+  const requested = resolvePositiveAnthropicTokenLimit(params.requestedMaxTokens);
   if (requested !== undefined) {
     return requested;
   }
-  const modelMax = resolvePositiveAnthropicMaxTokens(params.modelMaxTokens);
-  return modelMax !== undefined
-    ? params.useModelDefault
-      ? modelMax
-      : Math.min(modelMax, 32_000)
-    : undefined;
+  const modelMax = resolvePositiveAnthropicTokenLimit(params.modelMaxTokens);
+  if (modelMax !== undefined) {
+    return params.useModelDefault ? modelMax : Math.min(modelMax, 32_000);
+  }
+  if (params.modelMaxTokens !== undefined) {
+    return undefined;
+  }
+  // Anthropic requires max_tokens even when an optional custom-model row has no output cap.
+  // Use a conservative compatibility baseline; higher model limits require explicit metadata.
+  const contextWindow = resolvePositiveAnthropicTokenLimit(params.modelContextWindow);
+  return contextWindow === undefined
+    ? ANTHROPIC_MESSAGES_DEFAULT_MAX_TOKENS
+    : Math.max(
+        1,
+        Math.min(
+          ANTHROPIC_MESSAGES_DEFAULT_MAX_TOKENS,
+          Math.floor(contextWindow / ANTHROPIC_MESSAGES_FALLBACK_CONTEXT_DIVISOR),
+        ),
+      );
 }
 
 function adjustMaxTokensForThinking(params: {
@@ -1000,6 +1016,7 @@ function buildAnthropicParams(
   const mandatoryAdaptiveThinking = requiresClaudeAdaptiveThinking(model);
   const replayThinkingEnabled = mandatoryAdaptiveThinking || options?.thinkingEnabled === true;
   const maxTokens = resolveAnthropicMessagesMaxTokens({
+    modelContextWindow: model.contextWindow,
     modelMaxTokens: model.maxTokens,
     requestedMaxTokens: options?.maxTokens,
   });
@@ -1130,6 +1147,7 @@ function resolveAnthropicTransportOptions(
   apiKey: string,
 ): AnthropicTransportOptions {
   const baseMaxTokens = resolveAnthropicMessagesMaxTokens({
+    modelContextWindow: model.contextWindow,
     modelMaxTokens: model.maxTokens,
     requestedMaxTokens: options?.maxTokens,
     useModelDefault: resolveClaudeSonnet5ModelIdentity(model) !== undefined,
@@ -1140,7 +1158,7 @@ function resolveAnthropicTransportOptions(
     );
   }
   const reasoningModelMaxTokens =
-    resolvePositiveAnthropicMaxTokens(model.maxTokens) ?? baseMaxTokens;
+    resolvePositiveAnthropicTokenLimit(model.maxTokens) ?? baseMaxTokens;
   const mandatoryAdaptiveThinking = requiresClaudeAdaptiveThinking(model);
   const reasoning =
     options?.reasoning === "off" && mandatoryAdaptiveThinking ? "low" : options?.reasoning;

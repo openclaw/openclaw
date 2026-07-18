@@ -65,6 +65,7 @@ import {
   resolveConversationCapabilityProfile,
   type ResolvedConversationCapabilityProfile,
 } from "./conversation-capability-profile.js";
+import type { ConversationRecallContext } from "./conversation-recall.types.js";
 import type { OpenClawCodingToolConstructionPlan } from "./core-tool-factory-descriptors.js";
 import { applyDelegationCapability, type DelegationCapability } from "./delegation-capability.js";
 import { resolveImageSanitizationLimits } from "./image-sanitization.js";
@@ -281,6 +282,10 @@ type OpenClawCodingToolsOptions = {
   messageChannel?: string;
   /** Capabilities declared by the gateway client that originated this run. */
   clientCaps?: string[];
+  /** Out-of-band plugin bindings attached by the run initiator. */
+  toolBindings?: Readonly<Record<string, unknown>>;
+  /** Trusted runtime-only authorization for one bounded cross-conversation recall pass. */
+  conversationRecall?: ConversationRecallContext;
   /** Normalized conversation kind when the caller already has channel metadata. */
   chatType?: ChatType;
   /** Specific ingress provider used only for transport tool availability. */
@@ -858,6 +863,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             requesterSenderId: options?.senderId,
             senderIsOwner: options?.senderIsOwner,
             sessionId: options?.sessionId,
+            conversationRecall: options?.conversationRecall,
             oneShotCliRun: options?.oneShotCliRun,
             sandboxBrowserBridgeUrl: sandbox?.browser?.bridgeUrl,
             allowHostBrowserControl: sandbox ? sandbox.browserAllowHostControl : true,
@@ -876,6 +882,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             requesterAgentIdOverride: agentId,
             allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
             clientCaps: options?.clientCaps,
+            toolBindings: options?.toolBindings,
             authProfileStore: options?.authProfileStore,
           },
           resolvedConfig: options?.config,
@@ -965,6 +972,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             sandboxed: Boolean(sandbox),
             config: options?.config,
             clientCaps: options?.clientCaps,
+            toolBindings: options?.toolBindings,
             pluginToolAllowlist,
             pluginToolDenylist,
             cronCreatorToolAllowlist: shouldCaptureCronCreatorToolAllowlist
@@ -998,6 +1006,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             senderIsOwner: options?.senderIsOwner,
             authProfileStore: options?.authProfileStore,
             sessionId: options?.sessionId,
+            conversationRecall: options?.conversationRecall,
             oneShotCliRun: options?.oneShotCliRun,
             inheritedToolAllowlist,
             inheritedToolDenylist,

@@ -248,6 +248,7 @@ import {
   WorkerEnvironmentStateSchema,
   WorkerTunnelStatusSchema,
 } from "./environments.js";
+import { GatewayErrorDetailsSchema } from "./error-codes.js";
 import {
   ExecApprovalsGetParamsSchema,
   ExecApprovalsNodeGetParamsSchema,
@@ -369,6 +370,25 @@ import {
 import { NodeInvokeProtocolSchemas } from "./protocol-schemas-node-invoke.js";
 import { NodePresenceProtocolSchemas } from "./protocol-schemas-node-presence.js";
 import { PushTestParamsSchema, PushTestResultSchema } from "./push.js";
+import {
+  QuestionAnswersSchema,
+  QuestionGetParamsSchema,
+  QuestionGetResultSchema,
+  QuestionListParamsSchema,
+  QuestionListResultSchema,
+  QuestionOptionSchema,
+  QuestionRecordSchema,
+  QuestionRequestParamsSchema,
+  QuestionRequestQuestionSchema,
+  QuestionRequestResultSchema,
+  QuestionResolvedEventSchema,
+  QuestionResolveParamsSchema,
+  QuestionResolveResultSchema,
+  QuestionSchema,
+  QuestionStatusSchema,
+  QuestionWaitAnswerParamsSchema,
+  QuestionWaitAnswerResultSchema,
+} from "./questions.js";
 import {
   SecretsReloadParamsSchema,
   SecretsResolveAssignmentSchema,
@@ -529,6 +549,7 @@ export const ProtocolSchemas = {
   StateVersion: StateVersionSchema,
   Snapshot: SnapshotSchema,
   ErrorShape: ErrorShapeSchema,
+  GatewayErrorDetails: GatewayErrorDetailsSchema,
   GatewaySuspendTaskBlocker: GatewaySuspendTaskBlockerSchema,
   GatewaySuspendBlocker: GatewaySuspendBlockerSchema,
   GatewaySuspendPrepareParams: GatewaySuspendPrepareParamsSchema,
@@ -938,6 +959,25 @@ export const ProtocolSchemas = {
   ExecApprovalGetParams: ExecApprovalGetParamsSchema,
   ExecApprovalRequestParams: ExecApprovalRequestParamsSchema,
   ExecApprovalResolveParams: ExecApprovalResolveParamsSchema,
+  QuestionOption: QuestionOptionSchema,
+  Question: QuestionSchema,
+  QuestionRequestQuestion: QuestionRequestQuestionSchema,
+  QuestionAnswers: QuestionAnswersSchema,
+  QuestionStatus: QuestionStatusSchema,
+  QuestionRecord: QuestionRecordSchema,
+  QuestionRequestParams: QuestionRequestParamsSchema,
+  QuestionRequestResult: QuestionRequestResultSchema,
+  QuestionWaitAnswerParams: QuestionWaitAnswerParamsSchema,
+  QuestionWaitAnswerResult: QuestionWaitAnswerResultSchema,
+  QuestionResolveParams: QuestionResolveParamsSchema,
+  QuestionResolveResult: QuestionResolveResultSchema,
+  QuestionGetParams: QuestionGetParamsSchema,
+  QuestionGetResult: QuestionGetResultSchema,
+  QuestionListParams: QuestionListParamsSchema,
+  QuestionListResult: QuestionListResultSchema,
+  // QuestionRequestedEvent is a TS-only alias of QuestionRecord; registering both
+  // names makes native codegen reference a type it never emits.
+  QuestionResolvedEvent: QuestionResolvedEventSchema,
   PluginApprovalRequestParams: PluginApprovalRequestParamsSchema,
   PluginApprovalResolveParams: PluginApprovalResolveParamsSchema,
   PluginCatalogClawHubInstall: PluginCatalogClawHubInstallSchema,

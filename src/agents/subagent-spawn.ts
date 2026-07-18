@@ -168,6 +168,7 @@ type SpawnSubagentParams = {
 
 type SpawnSubagentContext = {
   agentSessionKey?: string;
+  requesterTurnRunId?: string;
   /** Separate key used only for completion routing, not sandbox policy. */
   completionOwnerKey?: string;
   agentChannel?: string;
@@ -1636,6 +1637,7 @@ export async function spawnSubagentDirect(
   try {
     registerSubagentRun({
       runId: childRunId,
+      requesterTurnRunId: ctx.requesterTurnRunId,
       childSessionKey,
       controllerSessionKey: ownership.controllerSessionKey,
       requesterSessionKey: ownership.completionRequesterSessionKey,

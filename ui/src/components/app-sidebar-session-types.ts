@@ -27,10 +27,13 @@ export type SidebarRecentSession = {
   modelSelectionLocked: boolean;
   kind?: string;
   pinned: boolean;
+  icon?: string;
   category?: string;
   channel?: string;
   channelSession?: boolean;
   workSession?: boolean;
+  /** ACP-backed harness session; lands in the Coding zone with work sessions. */
+  acpSession?: boolean;
   worktreeId?: string;
   placementState?: SessionPlacementState;
   cloudWorkerActive: boolean;
@@ -87,6 +90,7 @@ export type SidebarSessionPatch = {
   unread?: boolean;
   label?: string | null;
   category?: string | null;
+  icon?: string | null;
 };
 
 export const SIDEBAR_AGENT_SESSION_LIST_LIMIT = 60;
@@ -139,14 +143,19 @@ export function loadStoredSidebarSessionsShowCron(): boolean {
 export function loadStoredCollapsedSessionSections(): ReadonlySet<string> {
   try {
     const raw = getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_COLLAPSED_SECTIONS_STORAGE_KEY);
-    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    if (raw == null) {
+      // First run: the Coding zone starts collapsed so dev sessions stay muted
+      // until the user opts in; expanding persists an empty entry for "work".
+      return new Set(["work"]);
+    }
+    const parsed: unknown = JSON.parse(raw);
     return new Set(
       Array.isArray(parsed)
         ? parsed.flatMap((value) => (typeof value === "string" && value ? [value] : []))
         : [],
     );
   } catch {
-    return new Set();
+    return new Set(["work"]);
   }
 }
 

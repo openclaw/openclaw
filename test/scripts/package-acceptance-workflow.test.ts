@@ -35,6 +35,7 @@ const DOCKER_E2E_PLAN_ACTION = ".github/actions/docker-e2e-plan/action.yml";
 const RELEASE_CHECKS_WORKFLOW = ".github/workflows/openclaw-release-checks.yml";
 const RELEASE_TELEGRAM_QA_WORKFLOW = ".github/workflows/openclaw-release-telegram-qa.yml";
 const RELEASE_PUBLISH_WORKFLOW = ".github/workflows/openclaw-release-publish.yml";
+const PLUGIN_PRERELEASE_WORKFLOW = ".github/workflows/plugin-prerelease.yml";
 const OPENCLAW_NPM_RELEASE_WORKFLOW = ".github/workflows/openclaw-npm-release.yml";
 const PLUGIN_CLAWHUB_RELEASE_WORKFLOW = ".github/workflows/plugin-clawhub-release.yml";
 const PLUGIN_NPM_RELEASE_WORKFLOW = ".github/workflows/plugin-npm-release.yml";
@@ -181,6 +182,7 @@ function runPackageAcceptanceSummary(params: {
   advisory?: boolean;
   dockerArtifactResult?: string;
   dockerRegistryResult?: string;
+  telegramAdvisory?: boolean;
   telegramEnabled: boolean;
   telegramResult: string;
 }) {
@@ -199,6 +201,7 @@ function runPackageAcceptanceSummary(params: {
       PACKAGE_TELEGRAM_RESULT: params.telegramResult,
       PATH: process.env.PATH,
       RESOLVE_RESULT: "success",
+      TELEGRAM_ADVISORY: String(params.telegramAdvisory ?? false),
       TELEGRAM_ENABLED: String(params.telegramEnabled),
     },
   });
@@ -620,7 +623,7 @@ describe("package acceptance workflow", () => {
       cwd: existingDir,
     });
     const sourceArchive = readFileSync(sourceZip);
-    writeFileSync(corruptZip, sourceArchive.subarray(0, sourceArchive.length - 10));
+    writeFileSync(corruptZip, sourceArchive.subarray(0, -10));
 
     const compare = (left: string, right: string) =>
       spawnSync("python3", ["scripts/compare-release-evidence-zip.py", left, right], {
@@ -1261,7 +1264,10 @@ describe("package acceptance workflow", () => {
 
     expect(performanceStep.env?.RELEASE_PROFILE).toBe("${{ inputs.release_profile }}");
     expectTextToIncludeAll(performanceStep.run, [
+      "fail_on_regression=true",
       'if [[ "$RELEASE_PROFILE" == "beta" ]]',
+      "fail_on_regression=false",
+      '-f fail_on_regression="$fail_on_regression"',
       "Release impact: advisory",
       "advisory for beta",
     ]);
@@ -1556,6 +1562,7 @@ describe("package artifact reuse", () => {
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS:
         "${{ inputs.published_upgrade_survivor_baselines }}",
       OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: "${{ inputs.published_upgrade_survivor_scenarios }}",
+      PREPARE_ONLY: "${{ inputs.prepare_only }}",
       RELEASE_TEST_PROFILE: "${{ inputs.release_test_profile }}",
     });
     expect(workflow).toContain("plan_docker_lane_groups:");
@@ -1640,13 +1647,70 @@ describe("package artifact reuse", () => {
     expect(dockerE2ePlanAction).not.toContain('docker pull "${OPENCLAW_DOCKER_E2E_');
   });
 
-  it("uses Blacksmith Docker build caching for prepared E2E images", () => {
+  it("reuses a content-addressed bare image for prepared E2E images", () => {
     const workflow = readFileSync(LIVE_E2E_WORKFLOW, "utf8");
 
+    expect(workflow).toContain("bare_context_sha=");
+    expect(workflow).toContain("-docker-e2e-bare:base-${bare_context_sha:0:32}");
+    expect(workflow).toContain('docker manifest inspect "$CACHE_IMAGE_REF"');
+    expect(workflow).toContain('cache=(--cache-from "$CACHE_IMAGE_REF")');
+    expect(workflow).not.toContain('docker tag "$CACHE_IMAGE_REF" "$IMAGE_REF"');
+    expect(workflow).toContain(
+      "Shared release candidate preparation requires both Docker image variants.",
+    );
+    expect(workflow).toContain(
+      "inputs.shared_image_artifact_id != '' && '1' || steps.plan.outputs.needs_bare_image",
+    );
+    expect(workflow).toContain("env DOCKER_BUILDKIT=1 docker build");
+    expect(workflow).toContain(
+      'if bash .release-harness/scripts/ci-docker-pull-retry.sh "$CACHE_IMAGE_REF"; then',
+    );
+    expect(workflow).toContain("Bare image cache pull failed; continuing with a cold build.");
+    expect(workflow).toContain("--build-context openclaw_package=.artifacts/docker-e2e-package");
+    expect(workflow).toContain('cache=(--cache-from "$BARE_IMAGE_REF")');
+    expect(workflow).not.toContain('docker push "$CACHE_IMAGE_REF"');
     expect(workflow).toContain("uses: useblacksmith/setup-docker-builder@");
     expect(workflow).toContain("uses: useblacksmith/build-push-action@");
     expect(workflow).not.toContain("cache-from: type=gha,scope=docker-e2e");
     expect(workflow).not.toContain("cache-to: type=gha,mode=max,scope=docker-e2e");
+  });
+
+  it("prepares one immutable candidate for release validation children", () => {
+    const workflow = readFileSync(FULL_RELEASE_VALIDATION_WORKFLOW, "utf8");
+    const prepare = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "prepare_release_candidate");
+    const pluginDispatch = workflowStep(
+      workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "plugin_prerelease"),
+      "Dispatch and monitor plugin prerelease",
+    );
+    const releaseDispatch = workflowStep(
+      workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "release_checks"),
+      "Dispatch and monitor release checks",
+    );
+
+    expect(prepare.uses).toBe("./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml");
+    expect(prepare.with).toMatchObject({
+      prepare_only: true,
+      shared_image_policy: "no-push-artifact",
+    });
+    expect(pluginDispatch.run).toContain(
+      'args+=(-f candidate_artifact_json="$CANDIDATE_ARTIFACT_JSON")',
+    );
+    expect(releaseDispatch.run).toContain(
+      'args+=(-f candidate_artifact_json="$CANDIDATE_ARTIFACT_JSON")',
+    );
+    expect(workflow).toContain("Shared release candidate preparation ended with");
+  });
+
+  it("gives memory extension shards enough CPU without lowering their planner cost", () => {
+    const workflow = readFileSync(PLUGIN_PRERELEASE_WORKFLOW, "utf8");
+
+    expect(workflow).toContain('extensionId.startsWith("memory-")');
+    expect(workflow).toContain('"blacksmith-16vcpu-ubuntu-2404"');
+    expect(workflow).toContain("vitest_max_workers:");
+    expect(workflow).toContain("OPENCLAW_VITEST_MAX_WORKERS: ${{ matrix.vitest_max_workers }}");
+    expect(readFileSync("scripts/lib/extension-test-plan.mjs", "utf8")).toContain(
+      '"test/vitest/vitest.extension-memory.config.ts": 1',
+    );
   });
 
   it("shards broad native live tests instead of one serial live-all job", () => {
@@ -2423,6 +2487,9 @@ describe("package artifact reuse", () => {
       "published_upgrade_survivor_scenarios: ${{ needs.resolve_target.outputs.run_release_soak == 'true' && 'reported-issues' || '' }}",
     );
     expect(workflow).toContain("telegram_mode: mock-openai");
+    expect(packageAcceptanceJob.with).toMatchObject({
+      telegram_advisory: "${{ needs.resolve_target.outputs.release_profile == 'beta' }}",
+    });
     expect(workflow).not.toContain("telegram_scenarios:");
     expect(workflow).toContain("ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}");
     expect(workflow).toContain("ANTHROPIC_API_TOKEN: ${{ secrets.ANTHROPIC_API_TOKEN }}");
@@ -2920,6 +2987,27 @@ describe("package artifact reuse", () => {
     );
   });
 
+  it("allows beta callers to make only Telegram package acceptance advisory", () => {
+    const telegramResult = runPackageAcceptanceSummary({
+      telegramAdvisory: true,
+      telegramEnabled: true,
+      telegramResult: "failure",
+    });
+    const dockerResult = runPackageAcceptanceSummary({
+      dockerArtifactResult: "failure",
+      telegramAdvisory: true,
+      telegramEnabled: true,
+      telegramResult: "success",
+    });
+
+    expect(telegramResult.status).toBe(0);
+    expect(telegramResult.stdout).toContain(
+      "::warning::package_telegram ended with failure; package acceptance is advisory for this caller.",
+    );
+    expect(dockerResult.status).toBe(1);
+    expect(dockerResult.stdout).toContain("::error::docker_acceptance ended with failure");
+  });
+
   it("gives release build steps enough Node heap", () => {
     for (const workflowPath of [LIVE_E2E_WORKFLOW, RELEASE_CHECKS_WORKFLOW]) {
       const jobs = readWorkflow(workflowPath).jobs ?? {};
@@ -2984,8 +3072,10 @@ describe("package artifact reuse", () => {
       "Verify release checks accepted Tideclaw alpha advisory lanes",
       "release_checks_advisory_only",
       "release_check_blocking_job",
+      'if [[ "$RELEASE_PROFILE" == "beta" && "$1" == "Run package acceptance / Telegram package acceptance / "* ]]; then',
       'or (.name | startswith("Run QA Lab runtime parity tier ("))',
       'or .name == "Run QA Lab live Discord lane"',
+      'or (.name | startswith("Run package acceptance / Telegram package acceptance / ")))',
       "is a package-safety Tideclaw alpha release-check lane",
       '"Run package acceptance" | \\',
       '"Run package acceptance / "*)',
@@ -3168,7 +3258,7 @@ describe("package artifact reuse", () => {
 
   it("uses bounded Convex lease waits instead of GitHub concurrency for CI Telegram consumers", () => {
     const telegramJobs = [
-      [NPM_TELEGRAM_WORKFLOW, "run_package_telegram_e2e", "Run package Telegram E2E", "1800000"],
+      [NPM_TELEGRAM_WORKFLOW, "run_package_telegram_e2e", "Run package Telegram E2E", "600000"],
       [RELEASE_TELEGRAM_QA_WORKFLOW, "run_telegram", "Run Telegram live lane", "600000"],
       [QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_telegram", "Run Telegram live lane", "1800000"],
       [
@@ -3431,21 +3521,21 @@ describe("package artifact reuse", () => {
     expect(output).toContain("Tideclaw alpha");
   });
 
-  it("summarizes queue time separately from execution time in full validation", () => {
+  it("summarizes start delay separately from execution time in full validation", () => {
     const workflow = readFileSync(FULL_RELEASE_VALIDATION_WORKFLOW, "utf8");
     const parsedWorkflow = readWorkflow(FULL_RELEASE_VALIDATION_WORKFLOW);
     const summaryJob = parsedWorkflow.jobs?.summary;
     const manifestStep = workflowStep(summaryJob ?? {}, "Write release validation manifest");
 
     expect(workflow).toContain("### Slowest jobs: ${label}");
-    expect(workflow).toContain("### Longest queues: ${label}");
+    expect(workflow).toContain("### Longest start delays: ${label}");
     expect(workflow).toContain("Write release validation manifest");
     expect(workflow).toContain("PERFORMANCE_RUN_ID: ${{ needs.performance.outputs.run_id }}");
     expect(workflow).toContain("Upload release validation manifest");
     expect(workflow).toContain("Failed child detail: ${label}");
     expect(workflow).toContain("actions/runs/${run_id}/artifacts?per_page=100");
     expect(workflow).toContain("full-release-validation-${{ github.run_id }}");
-    expect(workflow).toContain("| Job | Result | Queue minutes | Run minutes |");
+    expect(workflow).toContain("| Job | Result | Start delay minutes | Run minutes |");
     expect(workflow).toContain(
       'gh_with_retry api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100"',
     );
@@ -4601,6 +4691,52 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       "timeout --foreground --kill-after=30s 8m pnpm test:live:cache",
     );
     expect(readFileSync(LIVE_E2E_WORKFLOW, "utf8")).toContain("live-cache attempt ${attempt}/2");
+  });
+
+  it("executes shared release candidate identity validation with its JSON input", () => {
+    const selectedSha = "a".repeat(40);
+    const candidate = {
+      packageArtifactName: "docker-e2e-package-123-1",
+      packageArtifactId: "123",
+      packageArtifactDigest: "b".repeat(64),
+      packageArtifactRunId: "456",
+      packageArtifactRunAttempt: "1",
+      packageFileName: "openclaw-current.tgz",
+      packageSourceSha: selectedSha,
+      packageSha256: "c".repeat(64),
+      packageVersion: "2026.7.2",
+      imageArtifactName: "docker-e2e-shared-images-123-1",
+      imageArtifactId: "789",
+      imageArtifactDigest: "d".repeat(64),
+      imageArtifactRunId: "456",
+      imageArtifactRunAttempt: "1",
+      imageArchiveSha256: "e".repeat(64),
+    };
+    const validation = workflowStep(
+      workflowJob(RELEASE_CHECKS_WORKFLOW, "prepare_release_package"),
+      "Validate shared release candidate identity",
+    ).run;
+    expect(validation).toBeDefined();
+
+    const valid = spawnSync("bash", ["-c", validation ?? ""], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        CANDIDATE_ARTIFACT_JSON: JSON.stringify(candidate),
+        SELECTED_SHA: selectedSha,
+      },
+    });
+    expect(valid.status, valid.stderr).toBe(0);
+
+    const mismatched = spawnSync("bash", ["-c", validation ?? ""], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        CANDIDATE_ARTIFACT_JSON: JSON.stringify(candidate),
+        SELECTED_SHA: "f".repeat(40),
+      },
+    });
+    expect(mismatched.status).not.toBe(0);
   });
 
   it("keeps release history checks blobless", () => {

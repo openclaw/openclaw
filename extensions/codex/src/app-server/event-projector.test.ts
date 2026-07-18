@@ -1101,6 +1101,7 @@ describe("CodexAppServerEventProjector", () => {
 
     expect(result.assistantTexts).toStrictEqual([]);
     expect(result.toolMediaUrls).toEqual([savedPath]);
+    expect(result.hostOwnedToolMediaUrls).toEqual([savedPath]);
     expect(result.replayMetadata).toStrictEqual({
       hadPotentialSideEffects: true,
       replaySafe: false,
@@ -1130,6 +1131,7 @@ describe("CodexAppServerEventProjector", () => {
 
     expect(result.assistantTexts).toStrictEqual([]);
     expect(result.toolMediaUrls).toHaveLength(1);
+    expect(result.hostOwnedToolMediaUrls).toEqual(result.toolMediaUrls);
     expect(mediaUrl).toContain(`${path.sep}media${path.sep}tool-image-generation${path.sep}`);
     expect(mediaUrl?.endsWith(".png")).toBe(true);
     await expect(fs.readFile(mediaUrl ?? "")).resolves.toEqual(
@@ -1349,6 +1351,7 @@ describe("CodexAppServerEventProjector", () => {
 
     expect(result.toolMediaUrls).toHaveLength(2);
     expect(new Set(result.toolMediaUrls)).toHaveLength(2);
+    expect(result.hostOwnedToolMediaUrls).toEqual(result.toolMediaUrls);
   });
 
   it("does not append native Codex image-generation media after explicit media delivery", async () => {
@@ -1375,6 +1378,7 @@ describe("CodexAppServerEventProjector", () => {
     });
 
     expect(result.toolMediaUrls).toStrictEqual([]);
+    expect(result.hostOwnedToolMediaUrls).toBeUndefined();
   });
 
   it("propagates message-tool-only source reply delivery telemetry", async () => {
@@ -2996,7 +3000,12 @@ describe("CodexAppServerEventProjector", () => {
     ]);
     expect(JSON.stringify(result.messagesSnapshot[1])).toContain("Codex reasoning");
     expect(JSON.stringify(result.messagesSnapshot[2])).toContain("Codex plan");
-    expect(requireRecord(result.itemLifecycle, "item lifecycle").compactionCount).toBe(1);
+    expect(JSON.stringify(result.messagesSnapshot[2])).toContain("next");
+    expect(JSON.stringify(result.messagesSnapshot[2])).toContain("[in_progress] patch");
+    expect(result.compactionCount).toBe(1);
+    expect(requireRecord(result.itemLifecycle, "item lifecycle")).not.toHaveProperty(
+      "compactionCount",
+    );
     expect(onContextCompacted).toHaveBeenCalledOnce();
   });
 
@@ -6322,6 +6331,8 @@ describe("CodexAppServerEventProjector", () => {
     const params = await createParams();
     const onPartialReply = vi.fn();
     const projector = await createProjector({ ...params, onPartialReply });
+    await projector.handleNotification(forCurrentTurn("thread/compacted", {}));
+    expect(warn).not.toHaveBeenCalled();
     const rawEventKind = "item/futureStatus/updated\nforged";
     const collidingSanitizedEventKind = "item/futureStatus/updated\\nforged";
     const notification = forCurrentTurn(rawEventKind, {

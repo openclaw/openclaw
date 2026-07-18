@@ -236,6 +236,48 @@ export function registerOnboardCommand(program: Command): void {
     .option("--import-secrets", "Import supported secrets during onboarding migration", false)
     .option("--json", "Output JSON summary", false);
 
+  const recommendations = command
+    .command("recommendations")
+    .description("Read the app recommendations stored during onboarding")
+    .option("--json", "Output stored recommendation matches as JSON", false)
+    .action(async (opts, recommendationsCommand: Command) => {
+      const { defaultRuntime } = await import("../../runtime.js");
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { onboardRecommendationsCommand } =
+          await import("../../commands/onboard-recommendations.js");
+        onboardRecommendationsCommand(
+          {
+            json: Boolean(opts.json || recommendationsCommand.parent?.opts().json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  recommendations
+    .command("acknowledge")
+    .description("Mark the stored onboarding recommendation offer as answered")
+    .action(async () => {
+      const { defaultRuntime } = await import("../../runtime.js");
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { acknowledgeOnboardRecommendationsCommand } =
+          await import("../../commands/onboard-recommendations.js");
+        acknowledgeOnboardRecommendationsCommand(defaultRuntime);
+      });
+    });
+
+  recommendations
+    .command("refresh")
+    .description("Clear stored app recommendations so the next onboarding run rescans")
+    .action(async () => {
+      const { defaultRuntime } = await import("../../runtime.js");
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { refreshOnboardRecommendationsCommand } =
+          await import("../../commands/onboard-recommendations.js");
+        refreshOnboardRecommendationsCommand(defaultRuntime);
+      });
+    });
+
   command.action(async (opts, commandRuntime: Command) => {
     const { defaultRuntime } = await import("../../runtime.js");
     await runCommandWithRuntime(defaultRuntime, async () => {

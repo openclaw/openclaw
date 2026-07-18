@@ -37,24 +37,35 @@ function makeQaSuiteTestLabHandle(): QaLabServerHandle {
 }
 
 describe("qa suite", () => {
-  it("continues ordered cleanup after a resource reports failure", async () => {
+  it("runs the production cleanup plan in dependency order after a failure", async () => {
     const calls: string[] = [];
-    const failure = new Error("gateway pipe failed");
+    const failure = new Error("transport close failed");
+    const step = (name: string, error?: Error) => async () => {
+      calls.push(name);
+      if (error) {
+        throw error;
+      }
+    };
 
-    const errors = await qaSuiteProgressTesting.runQaSuiteCleanupSteps([
-      async () => {
-        calls.push("gateway");
-        throw failure;
-      },
-      async () => {
-        calls.push("transport");
-      },
-      async () => {
-        calls.push("lab");
-      },
+    const errors = await qaSuiteProgressTesting.runQaFlowSuiteCleanupPlan({
+      closeWebSessions: step("web sessions"),
+      cleanupTransportBeforeGatewayStop: step("transport before gateway", failure),
+      cleanupTransportAfterGatewayStop: step("transport after gateway"),
+      stopGateway: step("gateway"),
+      disposeAgentHarnesses: step("agent harnesses"),
+      stopProvider: step("provider"),
+      finishLab: step("lab"),
+    });
+
+    expect(calls).toEqual([
+      "web sessions",
+      "transport before gateway",
+      "gateway",
+      "transport after gateway",
+      "agent harnesses",
+      "provider",
+      "lab",
     ]);
-
-    expect(calls).toEqual(["gateway", "transport", "lab"]);
     expect(errors).toEqual([failure]);
   });
 
@@ -68,6 +79,28 @@ describe("qa suite", () => {
         runError,
       }),
     ).toThrow(expect.objectContaining({ cause: runError }));
+  });
+
+  it("does not release transport credentials when gateway teardown fails", async () => {
+    const calls: string[] = [];
+    const gatewayFailure = new Error("gateway remained alive");
+    const step = (name: string, error?: Error) => async () => {
+      calls.push(name);
+      if (error) {
+        throw error;
+      }
+    };
+
+    const errors = await qaSuiteProgressTesting.runQaFlowSuiteCleanupPlan({
+      cleanupTransportBeforeGatewayStop: step("transport before gateway"),
+      cleanupTransportAfterGatewayStop: step("transport after gateway"),
+      stopGateway: step("gateway", gatewayFailure),
+      disposeAgentHarnesses: step("agent harnesses"),
+      finishLab: step("lab"),
+    });
+
+    expect(calls).toEqual(["transport before gateway", "gateway", "agent harnesses", "lab"]);
+    expect(errors).toEqual([gatewayFailure]);
   });
 
   it("rejects unsupported transport ids before starting the lab", async () => {
@@ -211,6 +244,37 @@ describe("qa suite", () => {
       }),
     ).rejects.toThrow("timed out after 1ms waiting for qa-lab ready");
     expect(stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels a successful lab readiness body before releasing its guard", async () => {
+    const events: string[] = [];
+    const stop = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
+        new ReadableStream<Uint8Array>({
+          cancel() {
+            events.push("cancel");
+          },
+        }),
+        { status: 200 },
+      ),
+      release: async () => {
+        events.push("release");
+      },
+    });
+
+    await expect(
+      qaSuiteProgressTesting.waitForQaLabReadyOrStopOwned({
+        lab: {
+          listenUrl: "http://127.0.0.1:43123",
+          stop,
+        },
+        ownsLab: false,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(events).toEqual(["cancel", "release"]);
+    expect(stop).not.toHaveBeenCalled();
   });
 
   it("bounds a hung lab readiness request by the remaining startup deadline", async () => {

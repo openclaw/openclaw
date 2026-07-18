@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME,
@@ -83,7 +84,6 @@ function createOpenAiTransport(
   client: Record<string, unknown> = {},
   callbacks: Record<string, unknown> = {},
   inputDeviceId?: string,
-  videoEnabled?: boolean,
 ): WebRtcSdpRealtimeTalkTransport {
   return new WebRtcSdpRealtimeTalkTransport(
     {
@@ -96,7 +96,6 @@ function createOpenAiTransport(
       sessionKey: "main",
       callbacks: callbacks as never,
       inputDeviceId,
-      videoEnabled,
     },
   );
 }
@@ -142,7 +141,7 @@ async function startActiveConsult(
     dispatchRealtimeEvent(peer, { type: "response.created" });
   }
   dispatchConsultToolCall(peer);
-  await vi.waitFor(() =>
+  await waitForFast(() =>
     expect(request).toHaveBeenCalledWith("talk.client.toolCall", expect.any(Object)),
   );
 
@@ -276,7 +275,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
           rejectOffer = reject;
         }),
     );
-    await vi.waitFor(() => expect(createOfferSpy).toHaveBeenCalled());
+    await waitForFast(() => expect(createOfferSpy).toHaveBeenCalled());
     transport.stop();
     rejectOffer(new Error("closed peer rejected offer creation"));
 
@@ -350,7 +349,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
       (error: unknown) => error,
     );
 
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await waitForFast(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     expect(offerSignal?.aborted).toBe(false);
 
     await vi.runAllTimersAsync();
@@ -385,7 +384,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
     const transport = createOpenAiTransport();
 
     const startResult = transport.start();
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await waitForFast(() => expect(fetchMock).toHaveBeenCalledTimes(1));
 
     transport.stop();
 
@@ -681,7 +680,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
         }),
       }),
     );
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(1));
     expect(request).toHaveBeenCalledWith("talk.client.toolCall", {
       sessionKey: "main",
       callId: "call-1",
@@ -691,7 +690,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
 
     transport.stop();
 
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(request).toHaveBeenCalledWith("chat.abort", { sessionKey: "main", runId: "run-1" }),
     );
     expect(listeners.size).toBe(0);
@@ -721,7 +720,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
 
     dispatchTranscription(peer, "status");
 
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(request).toHaveBeenCalledWith("talk.client.steer", expect.any(Object)),
     );
     const sent = sentRealtimeEvents(peer);
@@ -756,7 +755,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
 
     dispatchTranscription(peer, "status");
 
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(request).toHaveBeenCalledWith("talk.client.steer", expect.any(Object)),
     );
     let sent = sentRealtimeEvents(peer);
@@ -798,7 +797,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
 
     dispatchTranscription(peer, "actually focus on WebUI");
 
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(request).toHaveBeenCalledWith("talk.client.steer", expect.any(Object)),
     );
     const sent = sentRealtimeEvents(peer);
@@ -835,7 +834,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
 
     dispatchTranscription(peer, "cancel that");
 
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(request).toHaveBeenCalledWith("talk.client.steer", expect.any(Object)),
     );
     const sent = sentRealtimeEvents(peer);
@@ -888,7 +887,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
         }),
       }),
     );
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(request).toHaveBeenCalledWith("talk.client.toolCall", expect.any(Object)),
     );
 
@@ -960,7 +959,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
       }),
     );
 
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(request).toHaveBeenCalledWith("talk.client.steer", {
         sessionKey: "main",
         text: "revísalo en WebUI",
@@ -1011,7 +1010,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
       arguments: JSON.stringify({ text: "status", mode: "status" }),
     });
 
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(onStatus).toHaveBeenCalledWith(
         "error",
         "OpenAI data channel rejected the tool result",

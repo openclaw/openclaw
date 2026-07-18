@@ -58,6 +58,11 @@ the concrete thing being approved or mutated:
 This lets lower-scope operators perform low-risk pairing actions without
 making all pairing approval admin-only.
 
+Session mutation RPCs are authorized by their negotiated operator scopes,
+independent of the connecting client's `client.id` or `client.mode`. Client
+identity can still affect connection and device-auth policy, but it neither
+grants nor removes session mutation authority.
+
 ## Device pairing approvals
 
 Device pairing records are the durable source of approved roles and scopes.

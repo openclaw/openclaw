@@ -2,6 +2,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { SessionsCatalogHostEvent } from "../../../packages/gateway-protocol/src/index.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -88,6 +89,67 @@ suite("Codex native session catalog", () => {
     expect(await page.locator('[data-session-section="catalog:codex"]').count()).toBe(0);
     expect(await page.locator('[data-session-section="catalog:claude"]').count()).toBe(0);
     await page.close();
+  });
+
+  it("shows a completed host while the aggregate catalog request is still pending", async () => {
+    const page = await browser.newPage({ viewport: { height: 900, width: 1280 } });
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["sessions.catalog.list"],
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const request = await gateway.waitForRequest("sessions.catalog.list");
+      const progressId = (request.params as { progressId?: string })?.progressId;
+      expect(progressId).toEqual(expect.any(String));
+      if (!progressId) {
+        throw new Error("catalog request did not opt in to progressive host events");
+      }
+      await gateway.emitGatewayEvent("sessions.catalog.host", {
+        progressId,
+        agentId: "main",
+        catalog: {
+          id: "codex",
+          label: "Codex",
+          capabilities: { continueSession: true, archive: true },
+          hosts: [
+            {
+              hostId: "node:fast",
+              label: "Fast Mac",
+              kind: "node",
+              connected: true,
+              nodeId: "fast",
+              sessions: [
+                {
+                  threadId: "thread-fast",
+                  name: "Progressive node result",
+                  status: "idle",
+                  archived: false,
+                  canContinue: true,
+                  canArchive: false,
+                },
+              ],
+            },
+          ],
+        },
+      } satisfies SessionsCatalogHostEvent);
+
+      await page.getByText("Progressive node result", { exact: true }).waitFor();
+      expect((await gateway.getRequests("sessions.catalog.list")).length).toBe(1);
+      if (captureUiProofEnabled) {
+        await mkdir(uiProofArtifactDir, { recursive: true });
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(uiProofArtifactDir, "05-progressive-host-result.png"),
+        });
+      }
+
+      await gateway.resolveDeferred("sessions.catalog.list", { catalogs: [] });
+    } finally {
+      await page.close();
+    }
   });
 
   it("groups sessions by host and hides empty offline nodes", async () => {
@@ -210,9 +272,8 @@ suite("Codex native session catalog", () => {
       expect(await section.getByText("Worktree fix session", { exact: true }).count()).toBe(1);
       const toggle = section.locator(".sidebar-session-group-toggle");
       expect(await toggle.getAttribute("title")).toBeNull();
-      await expect
-        .poll(() => section.locator(".sidebar-session-group-count").textContent())
-        .toBe("4");
+      // Counts only render while a section is collapsed.
+      expect(await section.locator(".sidebar-session-group-count").count()).toBe(0);
 
       const groupingToggle = section.locator('[data-session-catalog-grouping-toggle="codex"]');
       await groupingToggle.click();
