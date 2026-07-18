@@ -11,6 +11,7 @@ import {
 
 const READABILITY_MAX_HTML_CHARS = 1_000_000;
 const READABILITY_MAX_ESTIMATED_NESTING_DEPTH = 3_000;
+const HTML_MAX_TAG_SCAN_CHARS = 200;
 const HTML_VOID_TAGS = new Set([
   "area",
   "base",
@@ -27,7 +28,16 @@ const HTML_VOID_TAGS = new Set([
   "track",
   "wbr",
 ]);
-const HTML_RAW_TEXT_TAGS = new Set(["script", "style", "textarea", "title", "xmp"]);
+const HTML_RAW_TEXT_TAGS = new Set([
+  "iframe",
+  "noembed",
+  "noframes",
+  "script",
+  "style",
+  "textarea",
+  "title",
+  "xmp",
+]);
 
 const READABILITY_MODULE = "@mozilla/readability";
 const LINKEDOM_MODULE = "linkedom";
@@ -111,7 +121,7 @@ function exceedsEstimatedHtmlNestingDepth(html: string, maxDepth: number): boole
 
     let quote = 0;
     let tagEnd = -1;
-    for (let k = j; k < len; k += 1) {
+    for (let k = j; k < len && k < j + HTML_MAX_TAG_SCAN_CHARS; k += 1) {
       const c = html.charCodeAt(k);
       if (quote) {
         if (c === quote) {

@@ -104,4 +104,27 @@ describe("web readability extractor", () => {
     });
     expect(requireReadabilityResult(result).text).toContain("Main content starts here");
   });
+
+  it("does not count pseudo tags inside iframe raw-text content", async () => {
+    const extractor = createReadabilityWebContentExtractor();
+    const pseudoTags = "<div>".repeat(3100);
+    const html = SAMPLE_HTML.replace("<article>", `<article><iframe>${pseudoTags}</iframe>`);
+    const result = await extractor.extract({
+      html,
+      url: "https://example.com/article",
+      extractMode: "markdown",
+    });
+    expect(requireReadabilityResult(result).text).toContain("Main content starts here");
+  });
+
+  it("bounds malformed apparent start-tag scanning", async () => {
+    const extractor = createReadabilityWebContentExtractor();
+    const html = `<main>${"<a".repeat(50_000)}</main>`;
+    const result = await extractor.extract({
+      html,
+      url: "https://example.com/article",
+      extractMode: "markdown",
+    });
+    expect(result).toBeNull();
+  });
 });
