@@ -243,6 +243,7 @@ export async function loadAgentIdentityFromFile(
     if (error instanceof Error && error.message.includes("exceeds")) {
       throw new Error(
         `Identity file ${identityPath} exceeds the maximum size of ${MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES} bytes`,
+        { cause: error },
       );
     }
     return null;
