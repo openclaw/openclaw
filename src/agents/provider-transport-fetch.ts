@@ -194,7 +194,7 @@ function sanitizeOpenAISdkSseResponse(
         }
       },
       async cancel(reason) {
-        await reader?.cancel(reason);
+        await reader?.cancel(reason).catch(() => {});
       },
     });
     const headers = new Headers(response.headers);
@@ -282,7 +282,7 @@ function sanitizeOpenAISdkSseResponse(
       }
     },
     async cancel(reason) {
-      await reader?.cancel(reason);
+      await reader?.cancel(reason).catch(() => {});
     },
   });
 
