@@ -22,6 +22,8 @@ export type ToolSchemaModelCompat = {
   toolSchemaProfile?: string;
   unsupportedToolSchemaKeywords?: string[];
   omitEmptyArrayItems?: boolean;
+  /** When true, caps string maxLength > 2000 to avoid llama.cpp GBNF repetition ceiling. */
+  capGbnfMaxLength?: boolean;
 };
 
 /** Extracts the compat record whether callers pass a model (`{ compat }`) or the compat itself. */
@@ -832,27 +834,70 @@ function normalizeToolParameterSchemaUncached(
   const unsupportedToolSchemaKeywords = resolveUnsupportedToolSchemaKeywords(options?.modelCompat);
   const omitEmptyArrayItems = shouldOmitEmptyArrayItems(options?.modelCompat);
 
+  // llama.cpp GBNF grammar compiler enforces a hard repetition ceiling (~2000)
+  // when converting JSON Schema maxLength constraints to GBNF format. Cap any
+  // maxLength values exceeding this ceiling so the compiled grammar stays valid.
+  // Protocol-layer validation (not LLM-facing) retains the original bounds.
+  const GBNF_SAFE_MAX_REPETITION = 2000;
+
+  function capMaxLengthForGbnf(schemaNode: unknown): void {
+    if (!schemaNode || typeof schemaNode !== "object") {
+      return;
+    }
+    const record = schemaNode as Record<string, unknown>;
+    if (
+      record.type === "string" &&
+      typeof record.maxLength === "number" &&
+      (record.maxLength as number) > GBNF_SAFE_MAX_REPETITION
+    ) {
+      record.maxLength = GBNF_SAFE_MAX_REPETITION;
+    }
+    if (record.properties && typeof record.properties === "object") {
+      for (const val of Object.values(record.properties)) {
+        capMaxLengthForGbnf(val);
+      }
+    }
+    if (record.items && typeof record.items === "object") {
+      capMaxLengthForGbnf(record.items);
+    }
+    const variantKey = record.anyOf ? "anyOf" : record.oneOf ? "oneOf" : null;
+    if (variantKey && Array.isArray(record[variantKey])) {
+      for (const entry of record[variantKey] as unknown[]) {
+        capMaxLengthForGbnf(entry);
+      }
+    }
+    if (record.additionalProperties && typeof record.additionalProperties === "object") {
+      capMaxLengthForGbnf(record.additionalProperties);
+    }
+  }
+
   function applyProviderCleaning(s: unknown): TSchema {
     const normalizedSchema = normalizeArraySchemasMissingItems(s);
     const arrayItemsCompatibleSchema = omitEmptyArrayItems
       ? stripEmptyArrayItemsFromArraySchemas(normalizedSchema)
       : normalizedSchema;
+    let result: TSchema;
     if (isGeminiProvider && !isAnthropicProvider) {
       const geminiCompatibleSchema = cleanSchemaForGemini(arrayItemsCompatibleSchema);
-      return unsupportedToolSchemaKeywords.size > 0
-        ? (stripUnsupportedSchemaKeywords(
-            geminiCompatibleSchema,
-            unsupportedToolSchemaKeywords,
-          ) as TSchema)
-        : geminiCompatibleSchema;
-    }
-    if (unsupportedToolSchemaKeywords.size > 0) {
-      return stripUnsupportedSchemaKeywords(
+      result =
+        unsupportedToolSchemaKeywords.size > 0
+          ? (stripUnsupportedSchemaKeywords(
+              geminiCompatibleSchema,
+              unsupportedToolSchemaKeywords,
+            ) as TSchema)
+          : geminiCompatibleSchema;
+    } else if (unsupportedToolSchemaKeywords.size > 0) {
+      result = stripUnsupportedSchemaKeywords(
         arrayItemsCompatibleSchema,
         unsupportedToolSchemaKeywords,
       ) as TSchema;
+    } else {
+      result = arrayItemsCompatibleSchema as TSchema;
     }
-    return arrayItemsCompatibleSchema as TSchema;
+    if (options?.modelCompat?.capGbnfMaxLength) {
+      capMaxLengthForGbnf(result);
+    }
+    return result;
   }
 
   const conditionalKey = getTopLevelConditionalKey(schemaRecord);

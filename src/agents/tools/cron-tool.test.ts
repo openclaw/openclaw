@@ -29,6 +29,11 @@ describe("cron tool", () => {
     description?: string;
     properties?: Record<string, SchemaLike>;
     type?: string;
+    maxLength?: number;
+    minLength?: number;
+    pattern?: string;
+    items?: SchemaLike;
+    additionalProperties?: boolean | SchemaLike;
   };
 
   type TestDelivery = {
@@ -769,6 +774,50 @@ describe("cron tool", () => {
       "object",
       "null",
     ]);
+  });
+
+  it("keeps source-level trigger.script schema with protocol maxLength", () => {
+    const tool = createTestCronTool();
+    const params = tool.parameters as SchemaLike;
+    // The source schema carries protocol-level maxLength for server-side
+    // validation.  The GBNF-safe cap (≤2000) is applied at schema
+    // normalization time (see packages/ai tests).
+    const findTriggerScript = (
+      label: string,
+      schema: SchemaLike | undefined,
+    ): SchemaLike | undefined => {
+      if (!schema) {
+        return undefined;
+      }
+      if (label.endsWith(".script") && schema.type === "string") {
+        return schema;
+      }
+      if (schema.properties) {
+        for (const [key, val] of Object.entries(schema.properties)) {
+          const found = findTriggerScript(`${label}.${key}`, val);
+          if (found) {
+            return found;
+          }
+        }
+      }
+      if (schema.items) {
+        return findTriggerScript(`${label}[]`, schema.items);
+      }
+      if (Array.isArray(schema.anyOf)) {
+        for (const [i, alt] of schema.anyOf.entries()) {
+          const found = findTriggerScript(`${label}[anyOf:${i}]`, alt);
+          if (found) {
+            return found;
+          }
+        }
+      }
+      return undefined;
+    };
+    const script = findTriggerScript("cron-tool", params);
+    expect(script).toBeDefined();
+    expect(script?.type).toBe("string");
+    expect(script?.minLength).toBe(1);
+    expect(script?.maxLength).toBe(65_536);
   });
 
   it.each([
