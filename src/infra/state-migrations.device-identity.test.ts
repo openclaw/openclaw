@@ -390,6 +390,50 @@ describe("legacy device identity Doctor migration", () => {
     ).toBe(false);
   });
 
+  it("repairs canonical identity metadata without rotating valid key material", async () => {
+    const { env, stateDir } = useStateDir();
+    const expected = normalizedSwift();
+    seedCanonical(env, expected);
+    const db = database(env);
+    executeSqliteQuerySync(
+      db,
+      getNodeSqliteKysely<MigrationDatabase>(db)
+        .updateTable("device_identities")
+        .set({
+          device_id: "0".repeat(64),
+          public_key_pem: rewrapPem(expected.publicKeyPem),
+          private_key_pem: rewrapPem(expected.privateKeyPem),
+          created_at_ms: -1,
+          updated_at_ms: -1,
+        })
+        .where("identity_key", "=", "primary"),
+    );
+    const detected = detectLegacyDeviceIdentity({
+      stateDir,
+      env,
+      doctorOnlyStateMigrations: true,
+    });
+
+    const result = await migrateLegacyDeviceIdentity({
+      detected,
+      env,
+      stateDir,
+      doctorOnlyStateMigrations: true,
+    });
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual([
+      "Repaired invalid primary device identity metadata in SQLite.",
+    ]);
+    expect(result.notices ?? []).toEqual([]);
+    expect(identityRow(env)).toMatchObject({
+      device_id: expected.deviceId,
+      public_key_pem: expected.publicKeyPem,
+      private_key_pem: expected.privateKeyPem,
+      created_at_ms: expect.any(Number),
+    });
+  });
+
   it("prefers legacy key material that appears after invalid-row detection", async () => {
     const { env, stateDir } = useStateDir();
     seedInvalidCanonical(env);

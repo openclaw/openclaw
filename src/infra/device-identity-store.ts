@@ -167,9 +167,54 @@ function rowToStoredIdentity(
   };
 }
 
+function salvageStoredIdentityRow(
+  row: DeviceIdentityRow,
+  expectedIdentityKey: string,
+  repairedAtMs: number,
+): StoredDeviceIdentity | null {
+  // Device ids, timestamps, and PEM framing are repairable metadata. Preserve matching
+  // Ed25519 key bytes because rotating them would invalidate pairing and stored auth.
+  if (
+    row.identity_key !== expectedIdentityKey ||
+    typeof row.public_key_pem !== "string" ||
+    typeof row.private_key_pem !== "string"
+  ) {
+    return null;
+  }
+  try {
+    const publicKey = crypto.createPublicKey(row.public_key_pem);
+    const privateKey = crypto.createPrivateKey(row.private_key_pem);
+    if (publicKey.asymmetricKeyType !== "ed25519" || privateKey.asymmetricKeyType !== "ed25519") {
+      return null;
+    }
+    const canonicalPublicKeyPem = publicKey.export({ type: "spki", format: "pem" }).toString();
+    const canonicalPrivateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+    const derivedPublicKeyPem = crypto
+      .createPublicKey(privateKey)
+      .export({ type: "spki", format: "pem" })
+      .toString();
+    if (derivedPublicKeyPem !== canonicalPublicKeyPem) {
+      return null;
+    }
+    const createdAtMs =
+      parseCreatedAtMs(row.created_at_ms) ?? parseCreatedAtMs(row.updated_at_ms) ?? repairedAtMs;
+    const salvaged = {
+      deviceId: fingerprintPublicKey(canonicalPublicKeyPem),
+      publicKeyPem: canonicalPublicKeyPem,
+      privateKeyPem: canonicalPrivateKeyPem,
+      createdAtMs,
+    };
+    validateStoredDeviceIdentity(salvaged, expectedIdentityKey);
+    return salvaged;
+  } catch {
+    return null;
+  }
+}
+
 function storedIdentityToRow(
   identityKey: string,
   stored: StoredDeviceIdentity,
+  updatedAtMs = stored.createdAtMs,
 ): DeviceIdentityInsert {
   return {
     identity_key: identityKey,
@@ -177,19 +222,28 @@ function storedIdentityToRow(
     public_key_pem: stored.publicKeyPem,
     private_key_pem: stored.privateKeyPem,
     created_at_ms: stored.createdAtMs,
-    updated_at_ms: stored.createdAtMs,
+    updated_at_ms: updatedAtMs,
   };
+}
+
+function readStoredIdentityRowFromDatabase(
+  database: { db: Parameters<typeof getNodeSqliteKysely>[0] },
+  identityKey: string,
+): DeviceIdentityRow | null {
+  const db = getNodeSqliteKysely<DeviceIdentityDatabase>(database.db);
+  return (
+    executeSqliteQueryTakeFirstSync(
+      database.db,
+      db.selectFrom("device_identities").selectAll().where("identity_key", "=", identityKey),
+    ) ?? null
+  );
 }
 
 function readStoredIdentityFromDatabase(
   database: { db: Parameters<typeof getNodeSqliteKysely>[0] },
   identityKey: string,
 ): StoredDeviceIdentity | null {
-  const db = getNodeSqliteKysely<DeviceIdentityDatabase>(database.db);
-  const row = executeSqliteQueryTakeFirstSync(
-    database.db,
-    db.selectFrom("device_identities").selectAll().where("identity_key", "=", identityKey),
-  );
+  const row = readStoredIdentityRowFromDatabase(database, identityKey);
   return row ? rowToStoredIdentity(row, identityKey) : null;
 }
 
@@ -287,21 +341,56 @@ export function insertStoredDeviceIdentityIfAbsent(
 export function repairInvalidStoredDeviceIdentity(
   candidate: StoredDeviceIdentity,
   options: DeviceIdentityStoreOptions = {},
-): { identity: StoredDeviceIdentity; repaired: boolean } {
+): { identity: StoredDeviceIdentity; repaired: boolean; rotated: boolean } {
   const resolved = resolveDeviceIdentityStore(options);
   validateStoredDeviceIdentity(candidate, resolved.identityKey);
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
       let repaired = false;
+      let rotated = false;
+      let existingRow: DeviceIdentityRow | null = null;
       try {
-        const existing = readStoredIdentityFromDatabase({ db }, resolved.identityKey);
+        existingRow = readStoredIdentityRowFromDatabase({ db }, resolved.identityKey);
+        const existing = existingRow
+          ? rowToStoredIdentity(existingRow, resolved.identityKey)
+          : null;
         if (existing) {
           validateStoredDeviceIdentity(existing, resolved.identityKey);
-          return { identity: existing, repaired };
+          return { identity: existing, repaired, rotated };
         }
       } catch (error) {
         if (!(error instanceof DeviceIdentityStorageError)) {
           throw error;
+        }
+      }
+      if (existingRow) {
+        const salvaged = salvageStoredIdentityRow(
+          existingRow,
+          resolved.identityKey,
+          candidate.createdAtMs,
+        );
+        if (salvaged) {
+          executeSqliteQuerySync(
+            db,
+            getNodeSqliteKysely<DeviceIdentityDatabase>(db)
+              .updateTable("device_identities")
+              .set({
+                device_id: salvaged.deviceId,
+                public_key_pem: salvaged.publicKeyPem,
+                private_key_pem: salvaged.privateKeyPem,
+                created_at_ms: salvaged.createdAtMs,
+                updated_at_ms: candidate.createdAtMs,
+              })
+              .where("identity_key", "=", resolved.identityKey),
+          );
+          const authoritative = readStoredIdentityFromDatabase({ db }, resolved.identityKey);
+          if (!authoritative) {
+            throw new DeviceIdentityStorageError(
+              `SQLite device identity "${resolved.identityKey}" was not durable after repair.`,
+            );
+          }
+          validateStoredDeviceIdentity(authoritative, resolved.identityKey);
+          return { identity: authoritative, repaired: true, rotated };
         }
         executeSqliteQuerySync(
           db,
@@ -314,6 +403,7 @@ export function repairInvalidStoredDeviceIdentity(
       // An absent row after an invalid-row detection still means identity continuity was lost.
       // Report the generated winner so Doctor always surfaces the required re-approval.
       repaired = true;
+      rotated = true;
 
       executeSqliteQuerySync(
         db,
@@ -329,7 +419,7 @@ export function repairInvalidStoredDeviceIdentity(
         );
       }
       validateStoredDeviceIdentity(authoritative, resolved.identityKey);
-      return { identity: authoritative, repaired };
+      return { identity: authoritative, repaired, rotated };
     },
     { env: options.env, path: resolved.databasePath },
     { operationLabel: "device-identity.doctor-repair" },

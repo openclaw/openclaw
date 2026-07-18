@@ -39,6 +39,11 @@ enum DeviceIdentitySQLiteStore {
         let modifiedAt: Date?
     }
 
+    private struct LegacyAuthCandidate {
+        let data: Data
+        let store: DeviceAuthStoreFile
+    }
+
     private struct Column: Equatable {
         let name: String
         let type: String
@@ -124,7 +129,8 @@ enum DeviceIdentitySQLiteStore {
             try self.relocateLegacyAuthIfNeeded(
                 claims: claims,
                 destinationStateDirURL: destinationStateDirURL,
-                profile: profile)
+                profile: profile,
+                deviceId: authoritative.identity.deviceId)
             try self.removeClaimedLegacyIdentities(claims)
         }
         return authoritative.identity
@@ -437,34 +443,42 @@ enum DeviceIdentitySQLiteStore {
     private static func relocateLegacyAuthIfNeeded(
         claims: [LegacyClaim],
         destinationStateDirURL: URL,
-        profile: GatewayDeviceIdentityProfile) throws
+        profile: GatewayDeviceIdentityProfile,
+        deviceId: String) throws
     {
         let fileManager = FileManager.default
         let destinationIdentityDirURL = destinationStateDirURL
             .appendingPathComponent("identity", isDirectory: true)
         let destinationAuthURL = destinationIdentityDirURL
             .appendingPathComponent(profile.authFileName, isDirectory: false)
-        guard !fileManager.fileExists(atPath: destinationAuthURL.path) else { return }
-        guard let source = claims
-            .map(\.source)
-            .first(where: {
-                $0.stateDirURL.standardizedFileURL != destinationStateDirURL.standardizedFileURL
-                    && fileManager.fileExists(atPath: $0.authURL.path)
-            })
-        else { return }
-
-        let before = try self.legacyFileSnapshot(
-            source.authURL,
-            beneath: source.stateDirURL,
-            maximumBytes: self.maximumLegacyAuthBytes)
-        let data = try Data(contentsOf: source.authURL, options: [.mappedIfSafe])
-        let after = try self.legacyFileSnapshot(
-            source.authURL,
-            beneath: source.stateDirURL,
-            maximumBytes: self.maximumLegacyAuthBytes)
-        guard before == after, UInt64(data.count) == before.size else {
-            throw DeviceIdentityStoreError("Legacy device auth changed during identity migration")
+        let sourceAuth = try claims.compactMap { claim -> LegacyAuthCandidate? in
+            let source = claim.source
+            guard source.stateDirURL.standardizedFileURL != destinationStateDirURL.standardizedFileURL,
+                  fileManager.fileExists(atPath: source.authURL.path)
+            else { return nil }
+            return try self.readDeviceAuth(
+                source.authURL,
+                beneath: source.stateDirURL,
+                deviceId: deviceId)
         }
+        if let firstSourceAuth = sourceAuth.first,
+           !sourceAuth.dropFirst().allSatisfy({ $0.store == firstSourceAuth.store })
+        {
+            throw DeviceIdentityStoreError(
+                "Legacy device auth sources conflict; all identity sources preserved")
+        }
+        if fileManager.fileExists(atPath: destinationAuthURL.path) {
+            let destinationAuth = try self.readDeviceAuth(
+                destinationAuthURL,
+                beneath: destinationStateDirURL,
+                deviceId: deviceId)
+            guard sourceAuth.allSatisfy({ $0.store == destinationAuth.store }) else {
+                throw DeviceIdentityStoreError(
+                    "Destination device auth differs from legacy auth; identity source preserved")
+            }
+            return
+        }
+        guard let selectedAuth = sourceAuth.first else { return }
 
         // DeviceAuthStore remains file-backed. Copy it when identity ownership moves between
         // Apple containers, but never delete or rewrite the source auth file.
@@ -473,7 +487,7 @@ enum DeviceIdentitySQLiteStore {
             ".\(profile.authFileName).identity-migrating-\(UUID().uuidString)",
             isDirectory: false)
         defer { try? fileManager.removeItem(at: temporaryAuthURL) }
-        try data.write(to: temporaryAuthURL, options: [.atomic])
+        try selectedAuth.data.write(to: temporaryAuthURL, options: [.atomic])
         try self.secureFile(temporaryAuthURL)
 
         // Publish only complete bytes, and never replace a token another process won first.
@@ -489,9 +503,44 @@ enum DeviceIdentitySQLiteStore {
                 throw DeviceIdentityStoreError(
                     "Could not publish migrated device auth: \(String(cString: strerror(renameError)))")
             }
+            let destinationAuth = try self.readDeviceAuth(
+                destinationAuthURL,
+                beneath: destinationStateDirURL,
+                deviceId: deviceId)
+            guard destinationAuth.store == selectedAuth.store else {
+                throw DeviceIdentityStoreError(
+                    "Concurrently created device auth differs from legacy auth; identity source preserved")
+            }
             return
         }
         try self.secureFile(destinationAuthURL)
+    }
+
+    private static func readDeviceAuth(
+        _ url: URL,
+        beneath stateDirURL: URL,
+        deviceId: String) throws -> LegacyAuthCandidate
+    {
+        let before = try self.legacyFileSnapshot(
+            url,
+            beneath: stateDirURL,
+            maximumBytes: self.maximumLegacyAuthBytes)
+        let data = try Data(contentsOf: url, options: [.mappedIfSafe])
+        let after = try self.legacyFileSnapshot(
+            url,
+            beneath: stateDirURL,
+            maximumBytes: self.maximumLegacyAuthBytes)
+        guard before == after, UInt64(data.count) == before.size else {
+            throw DeviceIdentityStoreError("Device auth changed during identity migration")
+        }
+        guard let decoded = try? JSONDecoder().decode(DeviceAuthStoreFile.self, from: data),
+              let normalized = DeviceAuthStore.normalizedStore(decoded),
+              normalized.deviceId == deviceId
+        else {
+            throw DeviceIdentityStoreError(
+                "Device auth does not belong to the migrated device identity; source preserved")
+        }
+        return LegacyAuthCandidate(data: data, store: normalized)
     }
 
     private static func removeClaimedLegacyIdentities(_ claims: [LegacyClaim]) throws {

@@ -66,6 +66,12 @@ export function repairInvalidCanonicalIdentity(env: NodeJS.ProcessEnv): Migratio
     if (!result.repaired) {
       return { changes: [], warnings: [] };
     }
+    if (!result.rotated) {
+      return {
+        changes: ["Repaired invalid primary device identity metadata in SQLite."],
+        warnings: [],
+      };
+    }
     return {
       changes: ["Replaced invalid primary device identity in SQLite."],
       warnings: [],
