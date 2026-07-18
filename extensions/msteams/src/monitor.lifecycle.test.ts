@@ -805,8 +805,8 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     });
     ingress.accept.mockImplementationOnce(async (activity: unknown, context?: unknown) => {
       await appendWork;
-      void ingress.options
-        .dispatch(
+      void Promise.resolve(
+        ingress.options.dispatch(
           activity,
           {
             abortSignal: new AbortController().signal,
@@ -816,8 +816,8 @@ describe("monitorMSTeamsProvider lifecycle", () => {
             onAbandoned: vi.fn(),
           },
           context,
-        )
-        .catch(() => undefined);
+        ),
+      ).catch(() => undefined);
     });
 
     const responseWork = cardActionHandler({
