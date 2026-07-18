@@ -4,6 +4,7 @@ import {
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
 } from "../lib/sessions/session-key.ts";
+import { showToast } from "../lib/toast.ts";
 import { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
 import type {
   SidebarRecentSession,
@@ -80,6 +81,78 @@ export abstract class AppSidebarSessionMutationsElement extends AppSidebarSessio
     return result;
   }
 
+  protected async archiveSessionWithUndo(session: SidebarRecentSession) {
+    const scope = this.beginSessionMutation();
+    if (!scope) {
+      return;
+    }
+    const result = await this.patchSession(session, { archived: true }, scope);
+    if (result !== "completed" || !this.isSessionMutationScopeCurrent(scope)) {
+      return;
+    }
+    showToast({
+      message: t("sessionsView.sessionArchived"),
+      actionLabel: t("common.undo"),
+      onAction: () => {
+        void this.restoreArchivedSessions([{ session, pinned: session.pinned }], scope);
+      },
+    });
+  }
+
+  private async archiveSessionsWithUndo(rows: readonly SidebarRecentSession[]) {
+    const scope = this.beginSessionMutation();
+    if (!scope) {
+      return;
+    }
+    const archived: Array<{ session: SidebarRecentSession; pinned: boolean }> = [];
+    for (const session of rows) {
+      const result = await this.patchSession(session, { archived: true }, scope);
+      if (result === "stale") {
+        return;
+      }
+      if (result === "completed") {
+        archived.push({ session, pinned: session.pinned });
+      }
+    }
+    if (archived.length === 0 || !this.isSessionMutationScopeCurrent(scope)) {
+      return;
+    }
+    showToast({
+      message:
+        archived.length === 1
+          ? t("sessionsView.sessionArchived")
+          : t("sessionsView.sessionsArchived", { count: String(archived.length) }),
+      actionLabel: t("common.undo"),
+      onAction: () => void this.restoreArchivedSessions(archived, scope),
+    });
+  }
+
+  private async restoreArchivedSessions(
+    archived: readonly { session: SidebarRecentSession; pinned: boolean }[],
+    scope: SidebarSessionMutationScope,
+  ) {
+    if (!this.isSessionMutationScopeCurrent(scope)) {
+      return;
+    }
+    let restoredActiveKey: string | null = null;
+    for (const { session, pinned } of archived) {
+      const result = await this.patchSession(
+        session,
+        { archived: false, ...(pinned ? { pinned: true } : {}) },
+        scope,
+      );
+      if (result === "stale") {
+        return;
+      }
+      if (result === "completed" && session.active) {
+        restoredActiveKey = session.key;
+      }
+    }
+    if (restoredActiveKey && this.isSessionMutationScopeCurrent(scope)) {
+      this.replaceCurrentSession(restoredActiveKey);
+    }
+  }
+
   /** One confirm and one preserved-worktrees alert for the whole selection. */
   protected async deleteSessionsBatch(rows: readonly SidebarRecentSession[]) {
     if (rows.length === 0) {
@@ -153,7 +226,7 @@ export abstract class AppSidebarSessionMutationsElement extends AppSidebarSessio
         this.createSessionGroup(rows);
         break;
       case "toggle-archived":
-        void this.patchSessions(rows, { archived: true });
+        void this.archiveSessionsWithUndo(rows);
         break;
       case "delete":
         void this.deleteSessionsBatch(rows);

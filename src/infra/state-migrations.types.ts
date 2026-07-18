@@ -1,7 +1,11 @@
 import type { ChannelLegacyStateMigrationPlan } from "../channels/plugins/types.core.js";
 import type { SessionScope } from "../config/sessions/types.js";
 import type { PluginDoctorStateMigration } from "../plugins/doctor-contract-registry.js";
+import type { LegacyAuditLogsDetection } from "./state-migrations.audit-logs.types.js";
 import type { LegacyChannelPairingStateDetection } from "./state-migrations.channel-pairing.js";
+import type { LegacyMcpOAuthDetection } from "./state-migrations.mcp-oauth.types.js";
+import type { LegacyRestartSentinelDetection } from "./state-migrations.restart-sentinel.types.js";
+import type { LegacyWorkspaceStateDetection } from "./state-migrations.workspace-setup.types.js";
 
 export type LegacyRescuePendingDetection = {
   sourcePaths: string[];
@@ -15,6 +19,7 @@ export type SessionStoreAliasPlan = {
 };
 
 export type LegacyStateDetection = {
+  doctorOnlyStateMigrations?: boolean;
   targetAgentId: string;
   targetMainKey: string;
   targetScope?: SessionScope;
@@ -100,6 +105,11 @@ export type LegacyStateDetection = {
     sourcePath: string;
     hasLegacy: boolean;
   };
+  auditLogs: LegacyAuditLogsDetection;
+  acpReplayLedger: {
+    sourcePath: string;
+    hasLegacy: boolean;
+  };
   managedOutgoingImages: {
     sourceDir: string;
     hasLegacy: boolean;
@@ -108,6 +118,9 @@ export type LegacyStateDetection = {
     sourcePath: string;
     hasLegacy: boolean;
   };
+  mcpOauth: LegacyMcpOAuthDetection;
+  restartSentinel?: LegacyRestartSentinelDetection;
+  workspace: LegacyWorkspaceStateDetection;
   webPush: {
     subscriptionsPath: string;
     vapidKeysPath: string;
@@ -123,17 +136,10 @@ export type LegacyStateDetection = {
   };
   rescuePending: LegacyRescuePendingDetection;
   channelPairing: LegacyChannelPairingStateDetection;
-  execApprovals: {
-    sourcePath: string;
-    targetPath: string;
-    hasLegacy: boolean;
-  };
   warnings: string[];
   notices: string[];
   preview: string[];
 };
-
-export type LegacyExecApprovalsMigrationDetection = LegacyStateDetection["execApprovals"];
 
 export type MigrationLogger = {
   info: (message: string) => void;

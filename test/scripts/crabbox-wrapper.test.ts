@@ -32,6 +32,8 @@ const GIT_CONFIG_SPARSE_KEY = "config\u0000--bool\u0000core.sparseCheckout";
 const GIT_SPARSE_LIST_KEY = "sparse-checkout\u0000list";
 const GIT_STATUS_PORCELAIN_KEY = "status\u0000--porcelain=v1";
 const GIT_MERGE_BASE_MAIN_HEAD_KEY = "merge-base\u0000origin/main\u0000HEAD";
+const GIT_MERGE_BASE_RELEASE_HEAD_KEY = "merge-base\u0000origin/release/2026.7.2\u0000HEAD";
+const GIT_CHECK_RELEASE_REF_KEY = "check-ref-format\u0000refs/remotes/origin/release/2026.7.2";
 const defaultGitResponses: Record<string, { status?: number; stdout?: string; stderr?: string }> = {
   [GIT_CONFIG_SPARSE_KEY]: { stdout: "false\n" },
   [GIT_SPARSE_LIST_KEY]: { status: 1 },
@@ -56,9 +58,14 @@ function writeFakeCrabbox(binDir: string, helpText: string): string {
 
   if (process.platform !== "win32") {
     const signalIgnoringDescendantScript = [
+      "import fs from 'node:fs';",
       "process.on('SIGHUP', () => {});",
       "process.on('SIGINT', () => {});",
       "process.on('SIGTERM', () => {});",
+      "const pidPath = process.env.OPENCLAW_FAKE_CRABBOX_DESCENDANT_PID_PATH;",
+      "const pidTmpPath = `${pidPath}.tmp.${process.pid}`;",
+      "fs.writeFileSync(pidTmpPath, String(process.pid));",
+      "fs.renameSync(pidTmpPath, pidPath);",
       "setInterval(() => {}, 1000);",
     ].join("");
     const script = [
@@ -145,8 +152,9 @@ function writeFakeCrabbox(binDir: string, helpText: string): string {
       '  cd "$deleted_cwd" || exit 1',
       "fi",
       'if [ -n "${OPENCLAW_FAKE_CRABBOX_DESCENDANT_PID_PATH:-}" ]; then',
+      // The descendant publishes its own PID only after its signal handlers exist.
+      // Atomic rename makes path existence a complete readiness handshake.
       `  ${shellSingleQuote(process.execPath)} --input-type=module --eval ${shellSingleQuote(signalIgnoringDescendantScript)} &`,
-      '  printf "%s" "$!" > "$OPENCLAW_FAKE_CRABBOX_DESCENDANT_PID_PATH"',
       '  trap "exit 0" INT TERM HUP',
       "  while :; do sleep 1; done",
       "fi",
@@ -640,7 +648,9 @@ async function runSignalCleanupProof(sendSignals: (pid: number) => Promise<void>
     const runnerExit = waitForProcessExit(runner);
     await sendSignals(runner.pid!);
     await expect(runnerExit).resolves.toEqual({ status: 143, signal: null });
-    await waitForCondition(() => !isProcessAlive(descendantPid));
+    // The wrapper waits for the detached process group to disappear before exit.
+    // A live PID here would expose the cleanup-ordering regression this proves.
+    expect(isProcessAlive(descendantPid)).toBe(false);
   } finally {
     if (runner.pid && isProcessAlive(runner.pid)) {
       runner.kill("SIGKILL");
@@ -3482,6 +3492,103 @@ describe("scripts/crabbox-wrapper", () => {
     expect(remoteCommand).toContain("refs/heads/openclaw-changed-gate-head");
     expect(remoteCommand).toMatch(
       /&& env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1 corepack pnpm check:changed$/u,
+    );
+  });
+
+  it("uses an explicit release base for changed-gate sync and remote Git metadata", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      [
+        "run",
+        "--provider",
+        "aws",
+        "--",
+        "corepack",
+        "pnpm",
+        "check:changed",
+        "--base",
+        "origin/release/2026.7.2",
+        "--head",
+        "HEAD",
+      ],
+      {
+        env: { OPENCLAW_FAKE_GIT_BASE_SHA: "release123" },
+        gitResponses: {
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+          [GIT_CHECK_RELEASE_REF_KEY]: { stdout: "" },
+          [GIT_MERGE_BASE_RELEASE_HEAD_KEY]: { stdout: "release123\n" },
+        },
+      },
+    );
+
+    const remoteCommand = normalizeShellLineEndings(
+      parseFakeCrabboxOutput(result).args.at(-1) ?? "",
+    );
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("overlaying local HEAD as worktree changes from release123");
+    expect(remoteCommand).toContain("openclaw_changed_gate_base=release123");
+    expect(remoteCommand).toContain(
+      "openclaw_changed_gate_alias=refs/remotes/origin/release/2026.7.2",
+    );
+    expect(remoteCommand).toContain(
+      'git update-ref "$openclaw_changed_gate_alias" refs/remotes/origin/main',
+    );
+    expect(remoteCommand).toContain(
+      "corepack pnpm check:changed --base origin/release/2026.7.2 --head HEAD",
+    );
+  });
+
+  it("rejects changed-gate revision expressions that cannot be recreated remotely", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      [
+        "run",
+        "--provider",
+        "aws",
+        "--",
+        "corepack",
+        "pnpm",
+        "check:changed",
+        "--base",
+        "origin/main~1",
+      ],
+      {
+        gitResponses: {
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+        },
+      },
+    );
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      "remote changed-gate sync requires an exact origin/<branch> base; received: origin/main~1",
+    );
+  });
+
+  it("rejects compound changed gates with incompatible bases", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      [
+        "run",
+        "--provider",
+        "aws",
+        "--shell",
+        "--",
+        "pnpm check:changed --base origin/release/2026.7.2 && pnpm check:changed --base origin/hotfix",
+      ],
+      {
+        gitResponses: {
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+        },
+      },
+    );
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      "remote changed-gate sync requires one base; received: origin/release/2026.7.2, origin/hotfix",
     );
   });
 

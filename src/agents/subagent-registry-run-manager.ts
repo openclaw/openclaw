@@ -40,7 +40,7 @@ import {
   resolveArchiveAfterMs,
   safeRemoveAttachmentsDir,
 } from "./subagent-registry-helpers.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import type { SubagentProgressOrigin, SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   compareSubagentRunGeneration,
   nextSubagentRunGeneration,
@@ -172,6 +172,7 @@ export type RegisterSubagentRunParams = {
   controllerSessionKey?: string;
   requesterSessionKey: string;
   requesterOrigin?: DeliveryContext;
+  progressOrigin?: SubagentProgressOrigin;
   requesterDisplayKey: string;
   task: string;
   taskName?: string;
@@ -664,6 +665,7 @@ export function createSubagentRunManager(params: {
       browserCleanupDispatchedAt: undefined,
       deleteCleanupDispatchedAt: undefined,
       wakeOnDescendantSettle: undefined,
+      requesterSettleWake: undefined,
       outcome: undefined,
       execution: {
         status: "running",
@@ -757,6 +759,7 @@ export function createSubagentRunManager(params: {
       controllerSessionKey,
       requesterSessionKey,
       requesterOrigin,
+      progressOrigin: registerParams.progressOrigin,
       requesterDisplayKey: registerParams.requesterDisplayKey,
       task: registerParams.task,
       taskName: registerParams.taskName,
@@ -786,6 +789,7 @@ export function createSubagentRunManager(params: {
       archiveAtMs,
       cleanupHandled: false,
       wakeOnDescendantSettle: undefined,
+      requesterSettleWake: undefined,
       attachmentsDir: registerParams.attachmentsDir,
       attachmentsRootDir: registerParams.attachmentsRootDir,
       retainAttachmentsOnKeep: registerParams.retainAttachmentsOnKeep,
