@@ -2438,6 +2438,7 @@ class ChatController internal constructor(
       val job =
         scope.launch(start = CoroutineStart.LAZY) {
           delay(remainingMs)
+          var shouldRefresh = false
           synchronized(questionStateLock) {
             questionEvictionJobs.remove(id)
             val current = _questions.value
@@ -2452,9 +2453,13 @@ class ChatController internal constructor(
             if (next != current) {
               _questions.value = next
               questionStateRevision += 1
+              shouldRefresh = true
             }
             syncQuestionEvictionsLocked()
           }
+          // The local deadline is only a presentation fallback. Reconcile outside
+          // the state lock in case another surface supplied the terminal outcome.
+          if (shouldRefresh) refreshQuestions()
         }
       questionEvictionJobs[id] = QuestionEvictionJob(job, observedAt)
       job.start()

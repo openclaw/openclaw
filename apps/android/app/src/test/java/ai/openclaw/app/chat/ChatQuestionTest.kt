@@ -343,6 +343,49 @@ class ChatQuestionTest {
 
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)
+  fun localExpiryReconcilesMissedRemoteAnswer() =
+    runTest {
+      val json = Json { ignoreUnknownKeys = true }
+      val pending = record(expiresAtMs = System.currentTimeMillis() + 1_000)
+      val answered = pending.copy(status = "answered")
+      var listCalls = 0
+      var getCalls = 0
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, _ ->
+            when (method) {
+              "question.list" -> {
+                listCalls += 1
+                json.encodeToString(QuestionListResult(if (listCalls == 1) listOf(pending) else emptyList()))
+              }
+              "question.get" -> {
+                getCalls += 1
+                json.encodeToString(QuestionGetResult(answered))
+              }
+              else -> "{}"
+            }
+          },
+        )
+
+      controller.handleGatewayEvent("question.requested", json.encodeToString(pending))
+      runCurrent()
+      advanceTimeBy(2_000)
+      advanceUntilIdle()
+
+      assertEquals(2, listCalls)
+      assertEquals(1, getCalls)
+      assertEquals(
+        ChatQuestionStatus.AnsweredElsewhere,
+        controller.questions.value
+          .single()
+          .status(),
+      )
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
   fun missingPendingQuestionUsesPerIdGetFallback() =
     runTest {
       val json = Json { ignoreUnknownKeys = true }
