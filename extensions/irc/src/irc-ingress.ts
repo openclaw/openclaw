@@ -64,7 +64,7 @@ function inspectRawPrivmsg(rawLine: string): {
     throw new IrcIngressPayloadError("IRC ingress row is not a PRIVMSG line.");
   }
   const rawTarget = line.params[0]?.trim() ?? "";
-  const text = line.trailing ?? "";
+  const text = line.trailing ?? line.params[1] ?? "";
   const prefix = parseIrcPrefix(line.prefix);
   const senderNick = prefix.nick?.trim() ?? "";
   if (!rawTarget || !senderNick || !text.trim()) {

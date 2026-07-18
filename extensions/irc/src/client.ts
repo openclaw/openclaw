@@ -388,7 +388,7 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
       if (line.command === "PRIVMSG") {
         const targetParam = line.params[0];
         const target = targetParam ? targetParam.trim() : "";
-        const text = line.trailing != null ? line.trailing : "";
+        const text = line.trailing ?? line.params[1] ?? "";
         const prefix = parseIrcPrefix(line.prefix);
         const senderNick = prefix.nick ? prefix.nick.trim() : "";
         if (!target || !senderNick || !text.trim()) {

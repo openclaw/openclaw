@@ -153,6 +153,7 @@ async function startDisconnectingIrcServer(): Promise<DisconnectingIrcServer> {
 async function startInboundIrcServer(
   target?: string,
   welcomeNick = "bot",
+  colonlessBody = false,
 ): Promise<InboundIrcServer> {
   const sockets = new Set<net.Socket>();
   const server = net.createServer((socket) => {
@@ -170,7 +171,8 @@ async function startInboundIrcServer(
           socket.write(`:server 001 ${welcomeNick} :welcome\r\n`);
           if (target) {
             setTimeout(() => {
-              socket.write(`:alice!ident@example.org PRIVMSG ${target} :hello\r\n`);
+              const bodySeparator = colonlessBody ? " " : " :";
+              socket.write(`:alice!ident@example.org PRIVMSG ${target}${bodySeparator}hello\r\n`);
             }, 20);
           }
         }
@@ -435,45 +437,57 @@ describe("irc monitor inbound target", () => {
       serverTarget: "openclaw-bot",
       expected: { isGroup: false, target: "alice", rawTarget: "openclaw-bot" },
     },
-  ])("maps $label targets through the monitor boundary", async ({ serverTarget, expected }) => {
-    await withIngressQueue(async (ingressQueue) => {
-      installMonitorRuntime();
-      const server = await startInboundIrcServer(serverTarget);
-      const messages: IrcInboundMessage[] = [];
-      let monitor: { stop: () => Promise<void> } | undefined;
-      try {
-        monitor = await monitorIrcProvider({
-          config: {
-            channels: {
-              irc: {
-                host: "127.0.0.1",
-                port: server.port,
-                tls: false,
-                nick: "bot",
-                username: "bot",
-                realname: "OpenClaw",
+    {
+      label: "channel with a colonless body",
+      serverTarget: "#openclaw",
+      colonlessBody: true,
+      expected: { isGroup: true, target: "#openclaw", rawTarget: "#openclaw" },
+    },
+  ])(
+    "maps $label targets through the monitor boundary",
+    async ({ serverTarget, colonlessBody, expected }) => {
+      await withIngressQueue(async (ingressQueue) => {
+        installMonitorRuntime();
+        const server = await startInboundIrcServer(serverTarget, "bot", colonlessBody);
+        const messages: IrcInboundMessage[] = [];
+        let monitor: { stop: () => Promise<void> } | undefined;
+        try {
+          monitor = await monitorIrcProvider({
+            config: {
+              channels: {
+                irc: {
+                  host: "127.0.0.1",
+                  port: server.port,
+                  tls: false,
+                  nick: "bot",
+                  username: "bot",
+                  realname: "OpenClaw",
+                },
               },
+            } as CoreConfig,
+            ingressQueue,
+            onMessage: (message) => {
+              messages.push(message);
             },
-          } as CoreConfig,
-          ingressQueue,
-          onMessage: (message) => {
-            messages.push(message);
-          },
-        });
-        await waitForIrcCondition(() => messages.length === 1, "expected one inbound IRC message");
-        expect(messages[0]).toMatchObject({
-          ...expected,
-          senderNick: "alice",
-          text: "hello",
-        });
-      } finally {
-        if (monitor) {
-          await monitor.stop();
+          });
+          await waitForIrcCondition(
+            () => messages.length === 1,
+            "expected one inbound IRC message",
+          );
+          expect(messages[0]).toMatchObject({
+            ...expected,
+            senderNick: "alice",
+            text: "hello",
+          });
+        } finally {
+          if (monitor) {
+            await monitor.stop();
+          }
+          await server.close();
         }
-        await server.close();
-      }
-    });
-  });
+      });
+    },
+  );
 
   it("uses the receipt-time nickname when replaying a self echo", async () => {
     await withIngressQueue(async (ingressQueue) => {
