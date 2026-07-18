@@ -426,6 +426,7 @@ export async function restoreInterruptedAuditRecoveryArchive(params: {
     }
     if (
       completedCheckpoint &&
+      completedCheckpoint.phase === "raw" &&
       completedCheckpoint.recordCount === 0 &&
       completedCheckpoint.size === journal.sourceRaw.length &&
       auditRecoveryCheckpointPrefixMatches(currentSnapshot, completedCheckpoint)
@@ -620,12 +621,19 @@ export async function recordLegacyAuditRawCheckpoint(params: {
   stateDir: string;
   rawPath: string;
   rawRelativePath: string;
+  sanitizedRelativePath: string;
   root: AuditMigrationRoot;
   snapshot: LegacyAuditSourceSnapshot;
+  phase: "merge-intent" | "raw";
   recordCount: number;
+  recordOrdinalBase: number;
   warnings: string[];
 }): Promise<boolean> {
   try {
+    const sanitizedSnapshot = await readLegacyAuditSourceSnapshot(
+      params.root,
+      params.sanitizedRelativePath,
+    );
     const opened = await params.root.open(params.rawRelativePath);
     let checkpoint: LegacyAuditRawCheckpoint;
     try {
@@ -635,9 +643,13 @@ export async function recordLegacyAuditRawCheckpoint(params: {
         ino: stat.ino,
         mtimeMs: stat.mtimeMs,
         size: stat.size,
+        phase: params.phase,
         generationKey: legacyAuditSourceGenerationKey(params.rawRelativePath),
         recordCount: params.recordCount,
+        recordOrdinalBase: params.recordOrdinalBase,
         contentHash: createHash("sha256").update(params.snapshot.rawBytes).digest("hex"),
+        sanitizedContentHash: createHash("sha256").update(sanitizedSnapshot.rawBytes).digest("hex"),
+        sanitizedSize: sanitizedSnapshot.rawBytes.length,
       };
     } finally {
       await opened.handle.close();

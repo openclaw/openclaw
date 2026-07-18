@@ -696,6 +696,44 @@ describe("memory-core doctor dreaming migration", () => {
     ).resolves.toMatchObject([{ query: "newer generation" }]);
   });
 
+  it("refuses to replay a checkpointless older archive after a newer generation", async () => {
+    const eventPath = path.join(workspaceDir, "memory", ".dreams", "events.jsonl");
+    const event = (query: string) => ({
+      type: "memory.recall.recorded" as const,
+      timestamp: "2026-07-01T00:00:00.000Z",
+      query,
+      resultCount: 0,
+      results: [],
+    });
+    const migration = hostEventsMigration();
+    await fs.writeFile(eventPath, `${JSON.stringify(event("older generation"))}\n`, "utf8");
+    await migration.migrateLegacyState(migrationParams());
+    await context()
+      .openPluginStateKeyedStore({ namespace: "memory-host.events", maxEntries: 10_000 })
+      .clear();
+    await fs.writeFile(eventPath, `${JSON.stringify(event("newer generation"))}\n`, "utf8");
+    await migration.migrateLegacyState(migrationParams());
+    await context()
+      .openPluginStateKeyedStore({
+        namespace: "memory-host.event-migration-checkpoints",
+        maxEntries: 10_000,
+        overflowPolicy: "reject-new",
+      })
+      .clear();
+
+    const replay = await migration.migrateLegacyState(migrationParams());
+
+    expect(replay.changes).toEqual([]);
+    expect(replay.warnings).toEqual([
+      expect.stringContaining(
+        "has no durable checkpoint and later generations are already imported",
+      ),
+    ]);
+    await expect(readMemoryHostEventRecords({ workspaceDir, env })).resolves.toMatchObject([
+      { query: "newer generation" },
+    ]);
+  });
+
   it("defers host event import when a source contains invalid rows", async () => {
     const eventPath = path.join(workspaceDir, "memory", ".dreams", "events.jsonl");
     await fs.writeFile(

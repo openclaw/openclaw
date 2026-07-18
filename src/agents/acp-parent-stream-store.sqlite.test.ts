@@ -64,17 +64,42 @@ describe("ACP parent stream SQLite store", () => {
     });
   });
 
-  it("rejects events that serialize to undefined before opening a transaction", async () => {
+  it("drops unserializable events without blocking later diagnostics", async () => {
     await withTempDir({ prefix: "openclaw-acp-parent-stream-invalid-" }, async (stateDir) => {
-      expect(() =>
-        recordAcpParentStreamEvents({
-          agentId: "codex",
-          env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-          sessionId: "session-1",
-          runId: "run-1",
-          events: [{ createdAt: 10, event: { toJSON: () => undefined } }],
-        }),
-      ).toThrow("ACP parent stream event is not JSON-serializable");
+      const options = {
+        agentId: "codex",
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      };
+      runOpenClawAgentWriteTransaction((database) => {
+        const db = getNodeSqliteKysely<Pick<OpenClawAgentKyselyDatabase, "sessions">>(database.db);
+        executeSqliteQuerySync(
+          database.db,
+          db.insertInto("sessions").values({
+            session_id: "session-1",
+            session_key: "agent:codex:acp:invalid",
+            session_scope: "conversation",
+            created_at: 1,
+            updated_at: 1,
+          }),
+        );
+      }, options);
+      const circular: Record<string, unknown> = { kind: "circular" };
+      circular.self = circular;
+
+      recordAcpParentStreamEvents({
+        ...options,
+        sessionId: "session-1",
+        runId: "run-1",
+        events: [
+          { createdAt: 10, event: { toJSON: () => undefined } },
+          { createdAt: 11, event: circular },
+          { createdAt: 12, event: { kind: "lifecycle", phase: "end" } },
+        ],
+      });
+
+      expect(
+        listAcpParentStreamEventsForTest({ ...options, sessionId: "session-1", runId: "run-1" }),
+      ).toEqual([{ kind: "lifecycle", phase: "end" }]);
     });
   });
 });

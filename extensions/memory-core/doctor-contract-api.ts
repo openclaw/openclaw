@@ -1654,6 +1654,24 @@ async function migrateLegacyMemoryHostEventSource(params: {
       const existing = existingByIdentity.get(identity);
       return existing ? [existing.value.sequence - (record.ordinal + 1)] : [];
     })[0];
+    const laterGenerationExists = existingEntries.some((entry) => {
+      if (!entry.key.startsWith(legacyKeyPrefix) || entry.value.sequence >= 0) {
+        return false;
+      }
+      const generationKey = entry.key.split(":")[5];
+      return generationKey !== undefined && generationKey > source.generationKey!;
+    });
+    if (
+      source.storage === "archive" &&
+      !previousCheckpoint &&
+      existingSourceBase === undefined &&
+      laterGenerationExists
+    ) {
+      params.warnings.push(
+        `Skipped Memory Core host event recovery because ${source.filePath} has no durable checkpoint and later generations are already imported; left the archive in place`,
+      );
+      return "blocked";
+    }
     const sourceSequenceBase =
       previousCheckpoint?.sequenceBase ?? existingSourceBase ?? latestLegacySequence;
     let nextSequence = latestLegacySequence;

@@ -15,9 +15,13 @@ export type LegacyAuditFileCheckpoint = {
 };
 
 export type LegacyAuditRawCheckpoint = LegacyAuditFileCheckpoint & {
+  phase: "merge-intent" | "raw";
   generationKey: string;
   recordCount: number;
+  recordOrdinalBase: number;
   contentHash: string;
+  sanitizedContentHash: string;
+  sanitizedSize: number;
 };
 
 const LEGACY_AUDIT_RAW_CHECKPOINT_SCOPE = "migration.legacy-audit-raw";
@@ -217,6 +221,7 @@ export function detectLegacyAuditLogs(params: {
         loadCheckpoints().some(
           (candidate) =>
             candidate.generationKey === generationKey &&
+            candidate.phase === "raw" &&
             candidate.recordCount === 0 &&
             legacyAuditRawCheckpointsMatch(candidate, checkpoint) &&
             legacyAuditRawCheckpointIsCurrent(rawPath, candidate),

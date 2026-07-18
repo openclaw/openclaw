@@ -33,13 +33,20 @@ export function recordAcpParentStreamEvents(
   if (options.events.length === 0) {
     return;
   }
-  const prepared = options.events.map((entry) => {
-    const eventJson = JSON.stringify(entry.event);
-    if (eventJson === undefined) {
-      throw new Error("ACP parent stream event is not JSON-serializable");
+  const prepared = options.events.flatMap((entry) => {
+    try {
+      const eventJson = JSON.stringify(entry.event);
+      if (eventJson !== undefined) {
+        return [{ eventJson, createdAt: entry.createdAt }];
+      }
+    } catch {
+      // One malformed diagnostic must not poison later valid events or retries.
     }
-    return { eventJson, createdAt: entry.createdAt };
+    return [];
   });
+  if (prepared.length === 0) {
+    return;
+  }
   runOpenClawAgentWriteTransaction((database) => {
     const db = getAcpParentStreamKysely(database.db);
     const row = executeSqliteQueryTakeFirstSync(
