@@ -460,6 +460,72 @@ describe("secrets runtime degraded-owner attribution", () => {
     );
   });
 
+  it("includes later active web-tool co-owners when web resolution fails first", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const root = tempDirs.make("openclaw-invalid-web-sibling-");
+    const secretsPath = path.join(root, "secrets.json");
+    await fs.writeFile(secretsPath, JSON.stringify({ shared: "dummy" }), "utf8");
+    await fs.chmod(secretsPath, 0o600);
+    const sharedRef = { source: "file" as const, provider: "shared", id: "/shared" };
+    const config = asConfig({
+      secrets: {
+        providers: {
+          shared: { source: "file", path: secretsPath, mode: "json" },
+        },
+      },
+      tools: {
+        web: {
+          search: { provider: "gemini" },
+          fetch: { provider: "firecrawl" },
+        },
+      },
+      plugins: {
+        entries: {
+          google: { config: { webSearch: { apiKey: sharedRef } } },
+          firecrawl: { config: { webFetch: { apiKey: sharedRef } } },
+        },
+      },
+    });
+    const active = await prepareSecretsRuntimeSnapshot({
+      config,
+      includeAuthStoreRefs: false,
+      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+    });
+    activateSecretsRuntimeSnapshotState({
+      snapshot: active,
+      refreshContext: null,
+      refreshHandler: null,
+    });
+    await fs.writeFile(secretsPath, JSON.stringify({ shared: { invalid: true } }), "utf8");
+
+    const error = await prepareSecretsRuntimeSnapshot({
+      config,
+      includeAuthStoreRefs: false,
+      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+    }).catch((failure: unknown) => failure);
+
+    expect(listSecretResolutionErrorOwners(error)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ownerKind: "capability",
+          ownerId: "web-search:gemini",
+          reason: "resolved secret value was invalid",
+          degradationState: "stale",
+          failureMatched: true,
+        }),
+        expect.objectContaining({
+          ownerKind: "capability",
+          ownerId: "web-fetch:firecrawl",
+          reason: "resolved secret value was invalid",
+          degradationState: "stale",
+          failureMatched: true,
+        }),
+      ]),
+    );
+  });
+
   it("keeps TTS SecretRefs that resolve to non-strings fail-closed", async () => {
     if (process.platform === "win32") {
       return;

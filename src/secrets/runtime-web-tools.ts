@@ -32,6 +32,7 @@ import {
 } from "./runtime-owner-assignments.js";
 import { hasCredentialBearingObjectValue } from "./runtime-secret-scan.js";
 import type { ResolverContext, SecretDefaults } from "./runtime-shared.js";
+import { getActiveSecretsRuntimeSnapshot } from "./runtime-state.js";
 import { runtimeWebSecretOwnerId } from "./runtime-web-secret-owner.js";
 import {
   ensureObject,
@@ -125,23 +126,62 @@ function associateWebProviderResolutionError(params: {
   error: unknown;
   unavailableProviders: RuntimeWebUnavailableProvider[];
 }): void {
-  associateSecretResolutionErrorOwners(
-    params.error,
-    params.unavailableProviders.map((unavailable) => {
-      const owner = createUnavailableWebProviderOwner({ kind: params.kind, unavailable });
-      return {
-        ...owner,
-        degradationState: classifySecretOwnerDegradationState({
+  const failureByRefKey = new Map(
+    params.unavailableProviders.map((unavailable) => [unavailable.refKey, unavailable] as const),
+  );
+  const owners = params.unavailableProviders.map((unavailable) => {
+    const owner = createUnavailableWebProviderOwner({ kind: params.kind, unavailable });
+    return {
+      ...owner,
+      degradationState: classifySecretOwnerDegradationState({
+        ownerKind: owner.ownerKind,
+        ownerId: owner.ownerId,
+        refs: [unavailable.ref],
+        config: params.config,
+      }),
+      failureMatched: true,
+      source: "config" as const,
+    };
+  });
+  const ownerIds = new Set(owners.map((owner) => owner.ownerId));
+  const activeCoOwners = (getActiveSecretsRuntimeSnapshot()?.secretOwners ?? []).flatMap(
+    (owner) => {
+      if (
+        owner.ownerKind !== "capability" ||
+        ownerIds.has(owner.ownerId) ||
+        (!owner.ownerId.startsWith("web-search:") && !owner.ownerId.startsWith("web-fetch:"))
+      ) {
+        return [];
+      }
+      const matches = owner.refKeys.flatMap((refKey) => {
+        const unavailable = failureByRefKey.get(refKey);
+        return unavailable ? [unavailable] : [];
+      });
+      const firstMatch = matches[0];
+      if (!firstMatch) {
+        return [];
+      }
+      return [
+        {
           ownerKind: owner.ownerKind,
           ownerId: owner.ownerId,
-          refs: [unavailable.ref],
-          config: params.config,
-        }),
-        failureMatched: true,
-        source: "config" as const,
-      };
-    }),
+          state: "unavailable" as const,
+          paths: [],
+          refKeys: [...owner.refKeys],
+          reason: firstMatch.reason,
+          degradationState: classifySecretOwnerDegradationState({
+            ownerKind: owner.ownerKind,
+            ownerId: owner.ownerId,
+            refs: matches.map((match) => match.ref),
+            config: params.config,
+          }),
+          failureMatched: true,
+          source: "config" as const,
+        },
+      ];
+    },
   );
+  associateSecretResolutionErrorOwners(params.error, [...owners, ...activeCoOwners]);
 }
 
 function needsRuntimeWebFetchProviderDiscovery(params: {
