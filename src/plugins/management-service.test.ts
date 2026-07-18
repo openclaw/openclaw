@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   randomUUID: vi.fn<() => string>(),
   readConfig: vi.fn(),
   recommendedInstalls: vi.fn(),
+  loadConfigResult: vi.fn<() => Record<string, unknown>>(),
   refreshRegistry: vi.fn(),
   replaceConfig: vi.fn(),
   planUninstall: vi.fn(),
@@ -38,6 +39,10 @@ vi.mock("../config/config.js", () => ({
   },
   readConfigFileSnapshotForWrite: () => mocks.readConfig(),
   replaceConfigFile: (params: unknown) => mocks.replaceConfig(params),
+}));
+
+vi.mock("../config/io.runtime.js", () => ({
+  loadConfig: () => mocks.loadConfigResult(),
 }));
 
 vi.mock("./install-persistence.js", () => ({
@@ -941,6 +946,54 @@ describe("plugin management service", () => {
     // The stale target is removed because the record was created by the current
     // failed transaction, not by a prior committed install.
     expect(mocks.applyUninstall).toHaveBeenCalledWith({ target: targetDir });
+  });
+
+  it("preserves target after a post-commit persistence error when config commit succeeded", async () => {
+    // Simulate: persistence throws AFTER config commit succeeded (e.g. a
+    // registry-refresh failure). The config already has the install at the
+    // target path, so cleanup must NOT delete the valid target directory.
+    const postCommitError = new Error("post-commit registry refresh failed");
+    const targetDir = "/tmp/extensions/demo";
+    const attemptToken = "txn-post-commit";
+    mocks.randomUUID.mockReturnValue(attemptToken);
+    mocks.readConfig.mockResolvedValue(configSnapshot());
+    mocks.clawhubInstall.mockResolvedValue({
+      ok: true,
+      pluginId: "demo",
+      targetDir,
+      extensions: ["index.js"],
+      packageName: "community/demo",
+      clawhub: {
+        source: "clawhub",
+        clawhubUrl: "https://clawhub.ai",
+        clawhubPackage: "community/demo",
+        clawhubFamily: "code-plugin",
+      },
+    });
+    mocks.persistInstall.mockRejectedValue(postCommitError);
+    // Simulate: the SQLite record has the matching token (this txn wrote it),
+    // but the config also has the install — the commit succeeded.
+    mocks.installRecords.mockResolvedValue({
+      demo: { source: "clawhub", installPath: targetDir, installAttemptToken: attemptToken },
+    });
+    // loadConfig returns the config WITH the install → commitConfirmed
+    mocks.loadConfigResult.mockReturnValue({
+      plugins: { installs: { demo: { source: "clawhub", installPath: targetDir } } },
+    });
+
+    await expect(
+      installManagedPlugin({
+        request: { source: "clawhub", packageName: "community/demo" },
+        env: {},
+      }),
+    ).rejects.toMatchObject({
+      message: "post-commit registry refresh failed",
+      warning: expect.stringContaining("retained the managed target"),
+      cause: postCommitError,
+    });
+    // ★ CRITICAL: cleanup must NOT delete a target whose config commit succeeded.
+    expect(mocks.applyUninstall).not.toHaveBeenCalled();
+    expect(mocks.planUninstall).not.toHaveBeenCalled();
   });
 
   it("serializes install and enable mutations through one Gateway lock", async () => {

@@ -9,6 +9,7 @@ import {
   replaceConfigFile,
 } from "../config/config.js";
 import { collectChangedPaths } from "../config/io.write-prepare.js";
+import { loadConfig } from "../config/io.runtime.js";
 import { resolveIsNixMode } from "../config/paths.js";
 import { ensurePluginAllowlisted } from "../config/plugins-allowlist.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -1022,14 +1023,37 @@ async function persistManagedPluginInstall(params: {
       runtime: createSilentRuntime(),
     });
   } catch (error) {
-    const cleanupWarnings = await cleanupFailedManagedPluginInstall({
-      pluginId: params.pluginId,
-      install: params.install,
-      targetDir: params.targetDir,
-      extensionsDir: params.extensionsDir,
-      attemptToken,
-    });
+    // Only run cleanup when we can confirm the config commit failed.
+    // If the config already has this install at the target path, the
+    // error came from a post-commit refresh — the install is valid and
+    // the target must be preserved regardless of token match.
+    const commitFailed = await wasConfigCommitFailed(params);
+    const cleanupWarnings = commitFailed
+      ? await cleanupFailedManagedPluginInstall({
+          pluginId: params.pluginId,
+          install: params.install,
+          targetDir: params.targetDir,
+          extensionsDir: params.extensionsDir,
+          attemptToken,
+        })
+      : [
+          `Plugin install recorded but a post-commit operation failed for ${params.pluginId}; retained the managed target at ${params.targetDir}.`,
+        ];
     return throwPersistenceFailureWithCleanupWarnings(error, cleanupWarnings);
+  }
+}
+
+async function wasConfigCommitFailed(params: {
+  pluginId: string;
+  targetDir: string;
+}): Promise<boolean> {
+  try {
+    const current = loadConfig({ skipPluginValidation: true });
+    const install = current.plugins?.installs?.[params.pluginId];
+    return !install || !installRecordOwnsTarget(install, params.targetDir);
+  } catch {
+    // Can't read config → assume commit failed and run cleanup.
+    return true;
   }
 }
 
