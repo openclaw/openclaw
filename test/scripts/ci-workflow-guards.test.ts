@@ -1961,7 +1961,7 @@ describe("ci workflow guards", () => {
     expect(refreshStep.if).toContain("steps.manifest.outputs.run_node == 'true'");
     expect(maintainStep.if).toBe(refreshStep.if);
     expect(preflightSteps.indexOf(refreshStep)).toBeLessThan(preflightSteps.indexOf(maintainStep));
-    expect(maintainStep.env.OPENCLAW_PNPM_STORE_MAX_KIB).toBe("8388608");
+    expect(maintainStep.env?.OPENCLAW_PNPM_STORE_MAX_KIB).toBe("8388608");
     expect(maintainStep.run).toContain('store_dir="${PNPM_CONFIG_STORE_DIR:?}"');
     expect(maintainStep.run).toContain('PNPM_CONFIG_STORE_DIR="$store_dir" pnpm store prune');
     expect(maintainStep.run).toContain('>> "$GITHUB_STEP_SUMMARY"');
