@@ -103,6 +103,44 @@ describe("Microsoft Teams durable ingress", () => {
     });
   });
 
+  it("does not dispatch a failed append's stale live context on retry", async () => {
+    await withQueue(async (queue) => {
+      let failNext = true;
+      const enqueue = queue.enqueue.bind(queue);
+      queue.enqueue = async (...args) => {
+        if (failNext) {
+          failNext = false;
+          throw new Error("sqlite busy");
+        }
+        return await enqueue(...args);
+      };
+      const contexts: unknown[] = [];
+      const ingress = createMSTeamsIngress({
+        accountId: "default",
+        queue,
+        runtime: runtime(),
+        dispatch: async (_activity, lifecycle, liveContext) => {
+          contexts.push(liveContext);
+          await lifecycle.onAdopted();
+        },
+      });
+      const staleContext = { id: "stale" } as never;
+      const retryContext = { id: "retry" } as never;
+      const retryActivity = activity({ id: "activity-ctx-retry" });
+      try {
+        ingress.start();
+        await expect(ingress.accept(retryActivity, staleContext)).rejects.toThrow("sqlite busy");
+        // The failed append must uninstall its context; the retry's own
+        // context is the one a claim may consume.
+        await ingress.accept(retryActivity, retryContext);
+        await vi.waitFor(() => expect(contexts).toHaveLength(1));
+        expect(contexts[0]).toBe(retryContext);
+      } finally {
+        await ingress.stop();
+      }
+    });
+  });
+
   it("recovers an uncompleted append with a fresh drain and dispatches exactly once", async () => {
     await withQueue(async (queue) => {
       const incoming = activity({ id: "activity-restart" });

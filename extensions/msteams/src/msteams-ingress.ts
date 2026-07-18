@@ -257,18 +257,32 @@ export function createMSTeamsIngress(options: MSTeamsIngressOptions): MSTeamsIng
       if (liveContext && installedLiveContext) {
         liveContexts.set(facts.eventId, liveContext);
       }
-      const result = await queue.enqueue(
-        facts.eventId,
-        {
-          version: MSTEAMS_INGRESS_VERSION,
-          receivedAt,
-          rawActivity: JSON.stringify(activity),
-        },
-        { receivedAt, laneKey: facts.laneKey },
-      );
-      if (installedLiveContext && !(result.kind === "accepted" || result.kind === "pending")) {
-        // Tombstoned duplicate: no claim will ever consume this context.
-        liveContexts.delete(facts.eventId);
+      // Identity-guarded uninstall: only remove OUR context so a concurrent
+      // redelivery's fresh install is never clobbered. A failed or
+      // tombstoned-duplicate append leaves no claim to consume the entry, and
+      // a later retry must not dispatch this request's stale context.
+      const uninstallLiveContext = () => {
+        if (installedLiveContext && liveContexts.get(facts.eventId) === liveContext) {
+          liveContexts.delete(facts.eventId);
+        }
+      };
+      let result;
+      try {
+        result = await queue.enqueue(
+          facts.eventId,
+          {
+            version: MSTEAMS_INGRESS_VERSION,
+            receivedAt,
+            rawActivity: JSON.stringify(activity),
+          },
+          { receivedAt, laneKey: facts.laneKey },
+        );
+      } catch (error) {
+        uninstallLiveContext();
+        throw error;
+      }
+      if (!(result.kind === "accepted" || result.kind === "pending")) {
+        uninstallLiveContext();
       }
       requestDrain();
     },
