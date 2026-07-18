@@ -351,10 +351,8 @@ impl RequestFailure {
     }
 
     fn classify_connect(mut self, auth: &GatewayAuth) -> Self {
-        self.connect_state = classify_connect_failure(
-            self.connect_details.code.as_deref(),
-            !auth.is_none(),
-        );
+        self.connect_state =
+            classify_connect_failure(self.connect_details.code.as_deref(), !auth.is_none());
         self
     }
 }
@@ -948,9 +946,7 @@ fn connection_notice(
     reconnect_paused: bool,
 ) -> Option<String> {
     let fallback = match state {
-        GatewayConnectionState::PairingRequired => {
-            "Approve this device in the dashboard (Nodes)"
-        }
+        GatewayConnectionState::PairingRequired => "Approve this device in the dashboard (Nodes)",
         GatewayConnectionState::CredentialRequired => {
             "Gateway requires a credential — open the dashboard on the gateway host"
         }
@@ -964,11 +960,7 @@ fn connection_notice(
         .clone()
         .unwrap_or_else(|| fallback.to_string());
     if state == GatewayConnectionState::PairingRequired {
-        if let Some(device_id) = details
-            .device_id
-            .as_deref()
-            .and_then(short_device_id)
-        {
+        if let Some(device_id) = details.device_id.as_deref().and_then(short_device_id) {
             notice.push_str(" · Device ");
             notice.push_str(&device_id);
         }
@@ -1540,11 +1532,9 @@ mod tests {
         );
 
         let pairing_details = json!({ "code": PAIRING_REQUIRED_DETAIL_CODE });
-        let pending = RequestFailure::method_with_details(
-            "pairing required",
-            Some(&pairing_details),
-        )
-        .classify_connect(&GatewayAuth::SharedToken("bootstrap".to_string()));
+        let pending =
+            RequestFailure::method_with_details("pairing required", Some(&pairing_details))
+                .classify_connect(&GatewayAuth::SharedToken("bootstrap".to_string()));
         assert_eq!(
             pending.connect_state,
             Some(GatewayConnectionState::PairingRequired)
