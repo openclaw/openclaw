@@ -96,6 +96,19 @@ internal fun WearUiState.switchSessionContext(session: WearSession): WearUiState
     error = null,
   )
 
+internal fun WearUiState.switchModelContext(modelRef: String): WearUiState {
+  val currentSession = selectedSession ?: return this
+  val updatedSession = currentSession.copy(modelRef = modelRef)
+  return copy(
+    selectedModelRef = modelRef,
+    selectedSession = updatedSession,
+    // The phone preserves the selected model in its bounded catalog slice.
+    // A model change therefore invalidates the previous slice.
+    models = emptyList(),
+    sessions = sessions.map { session -> if (session.key == updatedSession.key) updatedSession else session },
+  )
+}
+
 internal fun shouldAcceptWearTalkSnapshot(
   snapshot: WearRealtimeTalkSnapshot,
   attemptId: String?,
@@ -358,7 +371,7 @@ internal class WearViewModel(
             phoneNodeId = phoneNodeId,
             capabilities = current.proxyCapabilities,
           )
-        val currentSession = mutableState.value.selectedSession
+        val currentSession = mutableState.value.selectedSession ?: return@launch
         if (!wearSessionRequestIsCurrent(session, currentSession, selection.phoneNodeId)) return@launch
         if (
           !eventSequenceTracker.isResponseCurrent(
@@ -372,19 +385,13 @@ internal class WearViewModel(
           return@launch
         }
         val acceptedModelRef = selection.selectedModelRef
+        val updatedSession = currentSession.copy(modelRef = acceptedModelRef)
         mutableState.update { state ->
           val selectedSession = state.selectedSession ?: return@update state
           if (!wearSessionRequestIsCurrent(session, selectedSession, selection.phoneNodeId)) return@update state
-          val updatedSession = selectedSession.copy(modelRef = acceptedModelRef)
-          state.copy(
-            selectedModelRef = acceptedModelRef,
-            selectedSession = updatedSession,
-            sessions =
-              state.sessions.map { item ->
-                if (item.key == updatedSession.key) updatedSession else item
-              },
-          )
+          state.switchModelContext(acceptedModelRef)
         }
+        loadModels(updatedSession)
       } catch (err: CancellationException) {
         throw err
       } catch (err: Throwable) {

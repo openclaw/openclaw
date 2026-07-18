@@ -173,4 +173,35 @@ class WearSessionScopeTest {
     assertNull(switched.streamText)
     assertNull(switched.activeRunId)
   }
+
+  @Test
+  fun modelSwitchClearsTheSelectedModelScopedCatalog() {
+    val selectedSession =
+      WearSession(
+        key = "agent:main:thread-2",
+        title = "Selected",
+        updatedAt = null,
+        hasActiveRun = false,
+        phoneNodeId = "phone-a",
+        modelRef = "openai/model-59",
+      )
+    val state =
+      WearUiState(
+        sessions = listOf(selectedSession),
+        selectedSession = selectedSession,
+        selectedModelRef = "openai/model-59",
+        models =
+          listOf(
+            WearModel("openai/model-0", "Model 0"),
+            WearModel("openai/model-59", "Model 59"),
+          ),
+      )
+
+    val switched = state.switchModelContext("openai/model-0")
+
+    assertEquals("openai/model-0", switched.selectedModelRef)
+    assertEquals("openai/model-0", switched.selectedSession?.modelRef)
+    assertEquals("openai/model-0", switched.sessions.single().modelRef)
+    assertEquals(emptyList<WearModel>(), switched.models)
+  }
 }
