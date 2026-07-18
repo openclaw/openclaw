@@ -101,14 +101,27 @@ function context(): GatewayRequestContext {
   } as unknown as GatewayRequestContext;
 }
 
-async function invoke(method: "sessions.fork" | "sessions.rewind", entryId: string) {
+type MessageCutMethod =
+  | "sessions.branches.list"
+  | "sessions.branches.switch"
+  | "sessions.fork"
+  | "sessions.rewind";
+
+async function invoke(method: MessageCutMethod, entryId?: string) {
   const respond = vi.fn() as unknown as RespondFn;
   await expectDefined(
     sessionsHandlers[method],
     `${method} handler`,
   )({
     req: { id: `${method}-request` } as never,
-    params: { sessionKey, entryId },
+    params: {
+      sessionKey,
+      ...(method === "sessions.branches.switch"
+        ? { leafEntryId: entryId }
+        : method === "sessions.branches.list"
+          ? {}
+          : { entryId }),
+    },
     respond,
     context: context(),
     client: null,
@@ -118,6 +131,50 @@ async function invoke(method: "sessions.fork" | "sessions.rewind", entryId: stri
 }
 
 describe("session message-cut methods", () => {
+  it("lists branches and switches to an inactive tip", async () => {
+    const listed = await invoke("sessions.branches.list");
+    expect(listed).toHaveBeenCalledWith(
+      true,
+      {
+        branches: [
+          expect.objectContaining({
+            leafEntryId: "assistant-entry",
+            headline: "answer",
+            messageCount: 2,
+            active: true,
+          }),
+          expect.objectContaining({
+            leafEntryId: "off-path-entry",
+            headline: "inactive",
+            messageCount: 1,
+            active: false,
+          }),
+        ],
+      },
+      undefined,
+    );
+
+    const switched = await invoke("sessions.branches.switch", "off-path-entry");
+    expect(switched).toHaveBeenCalledWith(true, {}, undefined);
+    expect(mocks.queueClear).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["missing", "branch entry not found"],
+    ["user-entry", "entry is not a branch tip"],
+    ["assistant-entry", "branch is already active"],
+  ])("rejects invalid branch switch target %s", async (entryId, message) => {
+    const respond = await invoke("sessions.branches.switch", entryId);
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: expect.stringContaining(message),
+      }),
+    );
+  });
+
   it("returns editor text for rewind and a new key for fork", async () => {
     const fork = await invoke("sessions.fork", "user-entry");
     expect(fork).toHaveBeenCalledWith(
@@ -150,16 +207,19 @@ describe("session message-cut methods", () => {
 
   it("rejects externally owned conversations", async () => {
     mocks.external = true;
-    const respond = await invoke("sessions.rewind", "user-entry");
+    const respond = await invoke("sessions.branches.switch", "off-path-entry");
+    const listed = await invoke("sessions.branches.list");
 
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: ErrorCodes.INVALID_REQUEST,
-        message: expect.stringContaining("external agent harness"),
-      }),
-    );
+    for (const response of [respond, listed]) {
+      expect(response).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: ErrorCodes.INVALID_REQUEST,
+          message: expect.stringContaining("external agent harness"),
+        }),
+      );
+    }
   });
 
   it("returns a typed error for unsupported transcript storage", async () => {
@@ -170,6 +230,7 @@ describe("session message-cut methods", () => {
       },
     );
     const respond = await invoke("sessions.rewind", "user-entry");
+    const listed = await invoke("sessions.branches.list");
 
     expect(respond).toHaveBeenCalledWith(
       false,
@@ -179,14 +240,26 @@ describe("session message-cut methods", () => {
         message: expect.stringContaining("storage does not support rewind"),
       }),
     );
+    expect(listed).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: expect.stringContaining("storage does not support branch listing"),
+      }),
+    );
   });
 
   it.each([
     ["sessions.fork", "Fork"],
     ["sessions.rewind", "Rewind"],
+    ["sessions.branches.switch", "Branch switch"],
   ] as const)("rejects %s while the source run is active", async (method, label) => {
     mocks.active = true;
-    const respond = await invoke(method, "user-entry");
+    const respond = await invoke(
+      method,
+      method === "sessions.branches.switch" ? "off-path-entry" : "user-entry",
+    );
 
     expect(respond).toHaveBeenCalledWith(
       false,

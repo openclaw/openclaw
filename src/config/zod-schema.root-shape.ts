@@ -59,6 +59,11 @@ export const OpenClawSchemaShape = {
             .pipe(z.string()),
         ])
         .optional(),
+      migrations: z
+        .strictObject({
+          modelPolicyAllowlist: z.literal(true).optional(),
+        })
+        .optional(),
     })
     .optional(),
   env: z

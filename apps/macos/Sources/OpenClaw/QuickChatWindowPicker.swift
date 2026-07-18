@@ -161,6 +161,12 @@ final class QuickChatWindowPicker {
             self.finishInteraction()
             return
         }
+        // The permission check above suspends; a dismissal/reopen during it may have
+        // taken over the interaction. Re-validate before installing any picker chrome
+        // so a cancelled operation cannot strand full-screen area overlays.
+        guard self.operationID == operationID, self.isInteractionActive, !Task.isCancelled else {
+            return
+        }
 
         if mode == .area {
             guard self.showAreaOverlays() else {
@@ -487,6 +493,10 @@ final class QuickChatWindowPicker {
                     self.clearCaptureTask(for: operationID)
                     return
                 }
+                // Pixels are captured; restore the bar now (kept hidden only so it could
+                // not appear inside the selected region) so image processing and the
+                // chat.send round-trip show progress instead of a vanished panel.
+                self.finishInteraction(invalidateOperation: false)
                 let accepted = await self.model.sendCapturedImage(
                     pipelineID: pipelineID,
                     data: result.imageData,

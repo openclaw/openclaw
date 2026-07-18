@@ -11,6 +11,9 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   meta: "Metadata fields automatically maintained by OpenClaw to record write/version history for this config file. Keep these values system-managed and avoid manual edits unless debugging migration history.",
   "meta.lastTouchedVersion": "Auto-set when OpenClaw writes the config.",
   "meta.lastTouchedAt": "ISO timestamp of the last config write (auto-set).",
+  "meta.migrations": "System-managed completion markers for one-time config migrations.",
+  "meta.migrations.modelPolicyAllowlist":
+    "Records that doctor preserved or evaluated legacy default and per-agent model-map override restrictions.",
   marketplaces:
     "Marketplace feed and local package source profile settings. Feeds provide package selection and governance metadata, while sources define the local source names that install candidates may reference.",
   "marketplaces.feeds":

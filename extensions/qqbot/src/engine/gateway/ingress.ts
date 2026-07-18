@@ -21,8 +21,8 @@ import type { EngineLogger, GatewayPluginRuntime, QQBotIngressLifecycle } from "
 const QQBOT_INGRESS_PAYLOAD_VERSION = 1;
 const QQBOT_INGRESS_POLL_INTERVAL_MS = 1_000;
 const QQBOT_INGRESS_PRUNE_INTERVAL_MS = 60 * 60 * 1_000;
-const QQBOT_INGRESS_COMPLETED_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
-const QQBOT_INGRESS_COMPLETED_MAX_ENTRIES = 20_000;
+export const QQBOT_INGRESS_COMPLETED_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
+export const QQBOT_INGRESS_COMPLETED_MAX_ENTRIES = 20_000;
 const QQBOT_INGRESS_FAILED_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
 const QQBOT_INGRESS_FAILED_MAX_ENTRIES = 20_000;
 
@@ -40,6 +40,7 @@ export type QQBotIngressDispatchResult =
 type QQBotIngressDispatch = (
   message: QueuedMessage,
   lifecycle: QQBotIngressLifecycle,
+  eventId: string,
 ) => Promise<QQBotIngressDispatchResult | void> | QQBotIngressDispatchResult | void;
 
 export class QQBotIngressAdmissionError extends Error {
@@ -123,7 +124,7 @@ export function createQQBotIngressMonitor(options: {
             `QQBot ingress row ${claimed.id} no longer maps to a message turn.`,
           );
         }
-        return await options.dispatch(mapped.msg, lifecycle);
+        return await options.dispatch(mapped.msg, lifecycle, claimed.id);
       },
     });
     return drain;
