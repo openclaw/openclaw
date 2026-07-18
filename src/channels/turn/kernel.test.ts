@@ -1374,7 +1374,11 @@ describe("channel turn kernel", () => {
         resolveTurn: () => ({
           cfg,
           channel: "test",
-          route: { agentId: "observer", sessionKey: "agent:observer:test:peer" },
+          route: {
+            agentId: "observer",
+            dmScope: "per-channel-peer",
+            sessionKey: "agent:observer:test:peer",
+          },
           ctxPayload: createCtx({ SessionKey: "agent:observer:test:peer" }),
           delivery: { deliver },
           record: {
@@ -1391,6 +1395,11 @@ describe("channel turn kernel", () => {
     });
     expect(result.dispatched).toBe(true);
     expect(events).toEqual(["record", "dispatch"]);
+    expect(dispatchReplyWithBufferedBlockDispatcherCore).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ctx: expect.objectContaining({ DmScope: "per-channel-peer" }),
+      }),
+    );
     expect(deliver).not.toHaveBeenCalled();
     if (!result.dispatched) {
       throw new Error("expected dispatch");

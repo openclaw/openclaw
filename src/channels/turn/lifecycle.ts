@@ -29,6 +29,7 @@ export function assembleResolvedChannelTurn<TDispatchResult>(
     const { cfg, route, ...turn } = value;
     return {
       ...turn,
+      ctxPayload: route.dmScope ? { ...turn.ctxPayload, DmScope: route.dmScope } : turn.ctxPayload,
       routeSessionKey: route.sessionKey,
       storePath: resolveStorePath(cfg.session?.store, { agentId: route.agentId }),
       recordInboundSession,
@@ -37,6 +38,7 @@ export function assembleResolvedChannelTurn<TDispatchResult>(
   const { cfg, route, ...turn } = value;
   return {
     ...turn,
+    ctxPayload: route.dmScope ? { ...turn.ctxPayload, DmScope: route.dmScope } : turn.ctxPayload,
     cfg,
     agentId: route.agentId,
     routeSessionKey: route.sessionKey,

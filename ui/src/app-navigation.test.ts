@@ -366,6 +366,7 @@ describe("SIDEBAR_NAV_ROUTES", () => {
     const settingsRoutes = SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.routes);
     expect(SIDEBAR_NAV_ROUTES).not.toContain("config");
     expect(settingsRoutes).toEqual([
+      "custodian",
       "profile",
       "config",
       "appearance",

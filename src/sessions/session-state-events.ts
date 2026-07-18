@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import type { Insertable, Selectable } from "kysely";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { DmScope } from "../config/types.base.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -10,13 +11,14 @@ import {
 } from "../infra/kysely-sync.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { buildAgentMainSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import { classifySessionKind } from "./classify-session-kind.js";
 import type { InputProvenance } from "./input-provenance.js";
 import {
   NOTIFY_BY_SESSION_STATE_EVENT_KIND as NOTIFY_BY_KIND,
@@ -68,6 +70,7 @@ type SessionWatchCursorRow = Selectable<OpenClawStateKyselyDatabase["session_wat
 const SESSION_STATE_RETENTION_MS = 30 * 24 * 60 * 60_000;
 const SESSION_STATE_MAX_ROWS = 50_000;
 const SESSION_STATE_PRUNE_INTERVAL_MS = 60 * 60_000;
+const AMBIENT_GROUP_WATCH_MARKER_PREFIX = "ambient-group-watch:";
 const log = createSubsystemLogger("sessions/state-events");
 let lastPruneAt = 0;
 
@@ -144,6 +147,26 @@ function readCursor(
       .where("watcher_session_key", "=", watcherSessionKey)
       .where("target_session_key", "=", targetSessionKey),
   );
+}
+
+function ambientGroupWatchMarkerKey(watcherSessionKey: string): string {
+  return `${AMBIENT_GROUP_WATCH_MARKER_PREFIX}${Buffer.from(watcherSessionKey, "utf8").toString("hex")}`;
+}
+
+function decodeAmbientGroupWatchMarkerKey(markerKey: string): string | undefined {
+  const encoded = markerKey.slice(AMBIENT_GROUP_WATCH_MARKER_PREFIX.length);
+  if (!encoded || encoded.length % 2 !== 0 || !/^[0-9a-f]+$/.test(encoded)) {
+    return undefined;
+  }
+  return Buffer.from(encoded, "hex").toString("utf8");
+}
+
+function hasAmbientGroupWatchMarker(
+  db: DatabaseSync,
+  watcherSessionKey: string,
+  targetSessionKey: string,
+): boolean {
+  return Boolean(readCursor(db, ambientGroupWatchMarkerKey(watcherSessionKey), targetSessionKey));
 }
 
 function upsertSeedCursor(params: {
@@ -258,6 +281,7 @@ export function recordSessionStateEvent(
     watcherSessionKey: string;
     targetSessionKey: string;
     lastSeenSequence: number;
+    queueOnly: boolean;
   }> = [];
   try {
     const event = runOpenClawStateWriteTransaction(({ db }) => {
@@ -340,7 +364,12 @@ export function recordSessionStateEvent(
           sequence: insertedSequence,
           now,
         });
-        notices.push({ watcherSessionKey, targetSessionKey: input.sessionKey, lastSeenSequence });
+        notices.push({
+          watcherSessionKey,
+          targetSessionKey: input.sessionKey,
+          lastSeenSequence,
+          queueOnly: hasAmbientGroupWatchMarker(db, watcherSessionKey, input.sessionKey),
+        });
       }
 
       const row = executeSqliteQueryTakeFirstSync(
@@ -499,6 +528,7 @@ export function acknowledgeSessionStateNotices(
     watcherSessionKey: string;
     targetSessionKey: string;
     lastSeenSequence: number;
+    queueOnly: boolean;
   }> = [];
   try {
     runOpenClawStateWriteTransaction(({ db }) => {
@@ -527,6 +557,7 @@ export function acknowledgeSessionStateNotices(
             watcherSessionKey,
             targetSessionKey,
             lastSeenSequence: notified,
+            queueOnly: hasAmbientGroupWatchMarker(db, watcherSessionKey, targetSessionKey),
           });
         }
       }
@@ -546,13 +577,18 @@ export function handleSessionStateSessionReset(
 ): void {
   try {
     runOpenClawStateWriteTransaction(({ db }) => {
-      // Cursor rows only exist for agent-qualified watcher keys (see
-      // isNotifiableWatcherKey), so a bare-key reset cannot cross agents here.
+      // Notifiable cursor rows use agent-qualified keys. The encoded ambient
+      // marker is deleted alongside its owner without interpreting bare keys.
       executeSqliteQuerySync(
         db,
         getSessionStateKysely(db)
           .deleteFrom("session_watch_cursors")
-          .where("watcher_session_key", "=", sessionKey),
+          .where((eb) =>
+            eb.or([
+              eb("watcher_session_key", "=", sessionKey),
+              eb("watcher_session_key", "=", ambientGroupWatchMarkerKey(sessionKey)),
+            ]),
+          ),
       );
     }, options);
   } catch (error) {
@@ -591,6 +627,7 @@ export function handleSessionStateSessionDeleted(
           .where((eb) =>
             eb.or([
               eb("watcher_session_key", "=", sessionKey),
+              eb("watcher_session_key", "=", ambientGroupWatchMarkerKey(sessionKey)),
               eb("target_session_key", "=", sessionKey),
             ]),
           ),
@@ -640,6 +677,7 @@ export function sweepSessionStateWatchNotices(
         watcherSessionKey: row.watcher_session_key,
         targetSessionKey: row.target_session_key,
         lastSeenSequence: normalizeSqliteNumber(row.last_seen_sequence) ?? 0,
+        queueOnly: hasAmbientGroupWatchMarker(db, row.watcher_session_key, row.target_session_key),
       });
     }
     pruneSessionStateEvents({ ...options, now });
@@ -710,12 +748,38 @@ function pruneSessionStateEvents(
           kysely.deleteFrom("session_state_events").where("sequence", "<=", sequenceCutoff),
         );
       }
+      const cursorCutoff = now - SESSION_STATE_RETENTION_MS;
       executeSqliteQuerySync(
         db,
         kysely
           .deleteFrom("session_watch_cursors")
-          .where("updated_at", "<", now - SESSION_STATE_RETENTION_MS),
+          .where("updated_at", "<", cursorCutoff)
+          .where("watcher_session_key", "not like", `${AMBIENT_GROUP_WATCH_MARKER_PREFIX}%`),
       );
+      const staleMarkers = executeSqliteQuerySync(
+        db,
+        kysely
+          .selectFrom("session_watch_cursors")
+          .select(["watcher_session_key", "target_session_key"])
+          .where("updated_at", "<", cursorCutoff)
+          .where("watcher_session_key", "like", `${AMBIENT_GROUP_WATCH_MARKER_PREFIX}%`),
+      ).rows;
+      for (const marker of staleMarkers) {
+        const watcherSessionKey = decodeAmbientGroupWatchMarkerKey(marker.watcher_session_key);
+        if (
+          watcherSessionKey &&
+          readCursor(db, watcherSessionKey, marker.target_session_key) !== undefined
+        ) {
+          continue;
+        }
+        executeSqliteQuerySync(
+          db,
+          kysely
+            .deleteFrom("session_watch_cursors")
+            .where("watcher_session_key", "=", marker.watcher_session_key)
+            .where("target_session_key", "=", marker.target_session_key),
+        );
+      }
     }, options);
     lastPruneAt = now;
   } catch (error) {
@@ -783,6 +847,7 @@ function hasSessionStateWatchers(
         .selectFrom("session_watch_cursors")
         .select("watcher_session_key")
         .where("target_session_key", "=", targetSessionKey)
+        .where("watcher_session_key", "not like", `${AMBIENT_GROUP_WATCH_MARKER_PREFIX}%`)
         .limit(1),
     );
     return row !== undefined;
@@ -790,6 +855,31 @@ function hasSessionStateWatchers(
     // Best-effort log: enrichment reads must never fail core session tools.
     log.warn(`failed to probe session state watchers: ${String(error)}`);
     return false;
+  }
+}
+
+/** List durable ambient-group targets owned by one watcher; failures grant nothing. */
+export function listAmbientGroupWatchTargets(
+  watcherSessionKey: string,
+  options: OpenClawStateDatabaseOptions = {},
+): Set<string> {
+  try {
+    const { db } = openOpenClawStateDatabase(options);
+    const rows = executeSqliteQuerySync(
+      db,
+      getSessionStateKysely(db)
+        .selectFrom("session_watch_cursors")
+        .select("target_session_key")
+        .where("watcher_session_key", "=", ambientGroupWatchMarkerKey(watcherSessionKey)),
+    ).rows;
+    return new Set(
+      rows
+        .map((row) => row.target_session_key)
+        .filter((targetSessionKey) => readCursor(db, watcherSessionKey, targetSessionKey)),
+    );
+  } catch (error) {
+    log.warn(`failed to list ambient group watch targets: ${String(error)}`);
+    return new Set();
   }
 }
 
@@ -808,6 +898,15 @@ export function registerSessionStateWatch(
   try {
     let registered = false;
     runOpenClawStateWriteTransaction(({ db }) => {
+      // An explicit watch promotes an ambient group watch back to the normal
+      // immediate-wake path and removes its tree-read authorization marker.
+      executeSqliteQuerySync(
+        db,
+        getSessionStateKysely(db)
+          .deleteFrom("session_watch_cursors")
+          .where("watcher_session_key", "=", ambientGroupWatchMarkerKey(params.watcherSessionKey))
+          .where("target_session_key", "=", params.targetSessionKey),
+      );
       // Re-watching must not clobber pending-notice cursor state.
       if (readCursor(db, params.watcherSessionKey, params.targetSessionKey)) {
         registered = true;
@@ -835,6 +934,98 @@ export function registerSessionStateWatch(
     return registered;
   } catch (error) {
     log.warn(`failed to register session state watch: ${String(error)}`);
+    return false;
+  }
+}
+
+/** Register the personal agent's main session to observe one routed group session. */
+export function registerMainSessionGroupWatch(
+  params: {
+    sessionKey: string;
+    agentId: string;
+    entry?: SessionEntry;
+    dmScope: DmScope;
+  },
+  options: OpenClawStateDatabaseOptions & { now?: number } = {},
+): boolean {
+  if (classifySessionKind(params.sessionKey, params.entry) !== "group") {
+    return false;
+  }
+  const watcherSessionKey = buildAgentMainSessionKey({
+    agentId: params.agentId,
+  });
+  const now = options.now ?? Date.now();
+  try {
+    const { db: readDb } = openOpenClawStateDatabase(options);
+    if (params.dmScope !== "main") {
+      const markerKey = ambientGroupWatchMarkerKey(watcherSessionKey);
+      if (!readCursor(readDb, markerKey, params.sessionKey)) {
+        return false;
+      }
+      runOpenClawStateWriteTransaction(({ db }) => {
+        // Recheck provenance in the write transaction: an explicit registration
+        // may have promoted this pair after the read-only preflight.
+        if (!readCursor(db, markerKey, params.sessionKey)) {
+          return;
+        }
+        executeSqliteQuerySync(
+          db,
+          getSessionStateKysely(db)
+            .deleteFrom("session_watch_cursors")
+            .where("target_session_key", "=", params.sessionKey)
+            .where("watcher_session_key", "in", [watcherSessionKey, markerKey]),
+        );
+      }, options);
+      return false;
+    }
+    // This runs on every human group turn. Keep the steady-state path read-only;
+    // the transaction below is only for first registration and its race recheck.
+    if (readCursor(readDb, watcherSessionKey, params.sessionKey)) {
+      return true;
+    }
+    let registered = false;
+    runOpenClawStateWriteTransaction(({ db }) => {
+      const existing = readCursor(db, watcherSessionKey, params.sessionKey);
+      const markerKey = ambientGroupWatchMarkerKey(watcherSessionKey);
+      const marker = readCursor(db, markerKey, params.sessionKey);
+      if (existing) {
+        // Missing marker means an explicit watch already owns this pair. Do not
+        // downgrade it when later human group turns revisit registration.
+        registered = true;
+        return;
+      }
+      const head = executeSqliteQueryTakeFirstSync(
+        db,
+        getSessionStateKysely(db)
+          .selectFrom("session_state_heads")
+          .select("last_sequence")
+          .where("session_key", "=", params.sessionKey)
+          .where("agent_id", "=", params.agentId),
+      );
+      const sequence = normalizeOptionalSqliteNumber(head?.last_sequence) ?? 0;
+      upsertSeedCursor({
+        db,
+        watcherSessionKey,
+        targetSessionKey: params.sessionKey,
+        sequence,
+        now,
+      });
+      if (!marker) {
+        // The paired marker is durable provenance, not a notifiable watcher. It
+        // authorizes tree reads and queue-only delivery only for this auto-watch.
+        upsertSeedCursor({
+          db,
+          watcherSessionKey: markerKey,
+          targetSessionKey: params.sessionKey,
+          sequence,
+          now,
+        });
+      }
+      registered = true;
+    }, options);
+    return registered;
+  } catch (error) {
+    log.warn(`failed to register ambient group watch: ${String(error)}`);
     return false;
   }
 }

@@ -879,6 +879,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       },
       route: {
         agentId: route.agentId,
+        dmScope: route.dmScope,
         accountId: route.accountId,
         routeSessionKey: route.sessionKey,
       },

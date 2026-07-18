@@ -7646,6 +7646,14 @@
       ]
     },
     {
+      "locale": "fa",
+      "source": "Sessions…",
+      "translations": [
+        "جلسه‌ها…",
+        "نشست‌ها…"
+      ]
+    },
+    {
       "locale": "ar",
       "source": "Setup",
       "translations": [
@@ -7692,6 +7700,38 @@
       "translations": [
         "Configurar",
         "Configuração"
+      ]
+    },
+    {
+      "locale": "de",
+      "source": "Show reasoning & tool activity",
+      "translations": [
+        "Denkprozess und Tool-Aktivität anzeigen",
+        "Gedankengang und Werkzeugaktivität anzeigen"
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "Show reasoning & tool activity",
+      "translations": [
+        "แสดงกระบวนการให้เหตุผลและการทำงานของเครื่องมือ",
+        "แสดงการให้เหตุผลและกิจกรรมของเครื่องมือ"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "Show reasoning & tool activity",
+      "translations": [
+        "Akıl yürütme ve araç etkinliğini göster",
+        "Akıl yürütmeyi ve araç etkinliğini göster"
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "Show reasoning & tool activity",
+      "translations": [
+        "Показувати міркування та активність інструментів",
+        "Показувати міркування та дії інструментів"
       ]
     },
     {

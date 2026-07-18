@@ -10439,6 +10439,11 @@
       "translated": "在 Worktree 中新增聊天"
     },
     {
+      "id": "native.apple.a1b0d289758e2213",
+      "source": "Sessions…",
+      "translated": "工作階段…"
+    },
+    {
       "id": "native.apple.17c13312e7532c89",
       "source": "Background Tasks",
       "translated": "背景任務"
@@ -10447,6 +10452,11 @@
       "id": "native.apple.ced228bb4d20a726",
       "source": "Export Transcript",
       "translated": "匯出逐字稿"
+    },
+    {
+      "id": "native.apple.f26cef22f417abb4",
+      "source": "Show reasoning & tool activity",
+      "translated": "顯示推理與工具活動"
     },
     {
       "id": "native.apple.940e1f943750c94b",
@@ -22734,6 +22744,41 @@
       "translated": "已使用 %@ 個權杖"
     },
     {
+      "id": "native.apple.ccfd6ae994d82449",
+      "source": "Loading full message…",
+      "translated": "正在載入完整訊息…"
+    },
+    {
+      "id": "native.apple.669ad52de4a26b87",
+      "source": "Full message unavailable",
+      "translated": "無法取得完整訊息"
+    },
+    {
+      "id": "native.apple.6f79794ee74caf99",
+      "source": "Full Message",
+      "translated": "完整訊息"
+    },
+    {
+      "id": "native.apple.d648251591db5dec",
+      "source": "Close",
+      "translated": "關閉"
+    },
+    {
+      "id": "native.apple.ba3963204bda5e84",
+      "source": "The full message is no longer available.",
+      "translated": "完整訊息已無法取得。"
+    },
+    {
+      "id": "native.apple.8bb98bd86ae85c1c",
+      "source": "The full message has no readable text.",
+      "translated": "完整訊息中沒有可讀取的文字。"
+    },
+    {
+      "id": "native.apple.2f43669d87c0e26d",
+      "source": "The full message could not be loaded.",
+      "translated": "無法載入完整訊息。"
+    },
+    {
       "id": "native.apple.2c865ac4a69645d3",
       "source": "Widget unavailable",
       "translated": "小工具無法使用"
@@ -23119,9 +23164,29 @@
       "translated": "聆聽"
     },
     {
+      "id": "native.apple.f84b674ad395b694",
+      "source": "Jump to latest",
+      "translated": "跳至最新內容"
+    },
+    {
+      "id": "native.apple.429d825201b2cb85",
+      "source": "Jump to latest reply",
+      "translated": "跳至最新回覆"
+    },
+    {
+      "id": "native.apple.9ab586b85834705c",
+      "source": "Refresh",
+      "translated": "重新整理"
+    },
+    {
       "id": "native.apple.fe9f30f12f1dcfaf",
       "source": "Copy Message",
       "translated": "複製訊息"
+    },
+    {
+      "id": "native.apple.90bc8a8045e7017e",
+      "source": "Open Full Message",
+      "translated": "開啟完整訊息"
     },
     {
       "id": "native.apple.b37ec7bd7dc1579a",
@@ -23137,21 +23202,6 @@
       "id": "native.apple.3b44a67aa284886f",
       "source": "Assistant",
       "translated": "助理"
-    },
-    {
-      "id": "native.apple.f84b674ad395b694",
-      "source": "Jump to latest",
-      "translated": "跳至最新內容"
-    },
-    {
-      "id": "native.apple.429d825201b2cb85",
-      "source": "Jump to latest reply",
-      "translated": "跳至最新回覆"
-    },
-    {
-      "id": "native.apple.9ab586b85834705c",
-      "source": "Refresh",
-      "translated": "重新整理"
     },
     {
       "id": "native.apple.28c2691c03030434",
@@ -23364,9 +23414,14 @@
       "translated": "匯出對話紀錄…"
     },
     {
-      "id": "native.apple.3294ababd29c4457",
-      "source": "Show reasoning & tool activity",
-      "translated": "顯示推理與工具活動"
+      "id": "native.apple.ebb130189022c7ec",
+      "source": "Show Reasoning",
+      "translated": "顯示推理過程"
+    },
+    {
+      "id": "native.apple.d0dba9aad550fa6e",
+      "source": "Show Tool Activity",
+      "translated": "顯示工具活動"
     },
     {
       "id": "native.apple.4b24d792545e5086",
