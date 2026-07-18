@@ -22,6 +22,7 @@ import {
   normalizeInputProvenance,
   shouldPreserveUserFacingSessionStateForInputProvenance,
 } from "../../sessions/input-provenance.js";
+import { isSubagentSessionKey } from "../../sessions/session-key-utils.js";
 import {
   isAcceptedAgentDedupePayload,
   readGatewayDedupeEntry,
@@ -81,16 +82,20 @@ export function prepareAgentRequestPreflight(
   const request = params.params as AgentRunRequest;
   const cfg = params.context.getRuntimeConfig();
   const canUseInternalRuntimeHandoff = resolveCanUseInternalRuntimeHandoff(params.client);
-  const collectorSession = findSwarmCollectorSession(request.sessionKey);
   const requestSessionKey = request.sessionKey?.trim();
-  const persistedCollectorSession = requestSessionKey
-    ? loadSessionEntry({
-        storePath: resolveStorePath(cfg.session?.store, {
-          agentId: resolveAgentIdFromSessionKey(requestSessionKey),
-        }),
-        sessionKey: requestSessionKey,
-      })?.swarmCollector === true
-    : false;
+  const collectorSession = findSwarmCollectorSession(requestSessionKey);
+  // Collector children always use subagent session keys, so ordinary traffic
+  // must never pay the persisted-store read. The store fallback only covers a
+  // freshly restarted gateway whose in-memory registry has not reloaded yet.
+  const persistedCollectorSession =
+    !collectorSession && requestSessionKey && isSubagentSessionKey(requestSessionKey)
+      ? loadSessionEntry({
+          storePath: resolveStorePath(cfg.session?.store, {
+            agentId: resolveAgentIdFromSessionKey(requestSessionKey),
+          }),
+          sessionKey: requestSessionKey,
+        })?.swarmCollector === true
+      : false;
   if (
     collectorSession ||
     persistedCollectorSession ||

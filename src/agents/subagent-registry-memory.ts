@@ -6,7 +6,45 @@
 import { isDeepStrictEqual } from "node:util";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-export const subagentRuns = new Map<string, SubagentRunRecord>();
+// Preflight consults the collector lookup on every Gateway agent request, so it
+// must stay O(1) regardless of retained collector records. The map subclass
+// maintains the index through every existing mutation path (registry, run
+// manager, tests); collect/childSessionKey are fixed at registration, so
+// in-place field edits never require re-indexing.
+const collectorRunIdByChildSessionKey = new Map<string, string>();
+
+class SubagentRunMap extends Map<string, SubagentRunRecord> {
+  override set(runId: string, entry: SubagentRunRecord): this {
+    const prev = this.get(runId);
+    if (prev?.collect === true && prev.childSessionKey) {
+      collectorRunIdByChildSessionKey.delete(prev.childSessionKey);
+    }
+    super.set(runId, entry);
+    if (entry.collect === true && entry.childSessionKey) {
+      collectorRunIdByChildSessionKey.set(entry.childSessionKey, runId);
+    }
+    return this;
+  }
+
+  override delete(runId: string): boolean {
+    const prev = this.get(runId);
+    if (
+      prev?.collect === true &&
+      prev.childSessionKey &&
+      collectorRunIdByChildSessionKey.get(prev.childSessionKey) === runId
+    ) {
+      collectorRunIdByChildSessionKey.delete(prev.childSessionKey);
+    }
+    return super.delete(runId);
+  }
+
+  override clear(): void {
+    super.clear();
+    collectorRunIdByChildSessionKey.clear();
+  }
+}
+
+export const subagentRuns: Map<string, SubagentRunRecord> = new SubagentRunMap();
 
 /** Resolve a collector tombstone that reserves its child session from ordinary turns. */
 export function findSwarmCollectorSession(childSessionKey?: string): SubagentRunRecord | undefined {
@@ -14,9 +52,8 @@ export function findSwarmCollectorSession(childSessionKey?: string): SubagentRun
   if (!key) {
     return undefined;
   }
-  return [...subagentRuns.values()].find(
-    (entry) => entry.collect === true && entry.childSessionKey === key,
-  );
+  const runId = collectorRunIdByChildSessionKey.get(key);
+  return runId ? subagentRuns.get(runId) : undefined;
 }
 
 /** Resolve the host-registered collector that authorizes a Gateway request. */
@@ -25,16 +62,16 @@ export function findAuthorizedSwarmCollectorRequest(params: {
   idempotencyKey?: string;
   outputSchema?: Record<string, unknown>;
 }): SubagentRunRecord | undefined {
-  const childSessionKey = params.childSessionKey?.trim();
   const idempotencyKey = params.idempotencyKey?.trim();
-  if (!childSessionKey || !idempotencyKey) {
+  if (!idempotencyKey) {
     return undefined;
   }
-  return [...subagentRuns.values()].find(
-    (entry) =>
-      entry.collect === true &&
-      entry.childSessionKey === childSessionKey &&
-      entry.swarmLaunchIdempotencyKey === idempotencyKey &&
-      isDeepStrictEqual(entry.outputSchema, params.outputSchema),
-  );
+  const entry = findSwarmCollectorSession(params.childSessionKey);
+  if (!entry) {
+    return undefined;
+  }
+  return entry.swarmLaunchIdempotencyKey === idempotencyKey &&
+    isDeepStrictEqual(entry.outputSchema, params.outputSchema)
+    ? entry
+    : undefined;
 }
