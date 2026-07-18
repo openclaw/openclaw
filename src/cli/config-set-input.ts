@@ -141,7 +141,10 @@ export function parseBatchSource(opts: ConfigSetOptions): ConfigSetBatchEntry[] 
   }
   let raw: string;
   try {
-    raw = readRegularFileSync({ filePath: pathname, maxBytes: BATCH_FILE_MAX_BYTES }).buffer.toString("utf8");
+    raw = readRegularFileSync({
+      filePath: pathname,
+      maxBytes: BATCH_FILE_MAX_BYTES,
+    }).buffer.toString("utf8");
   } catch (err) {
     if (hasErrnoCode(err, "ENOENT")) {
       throw new Error(`--batch-file not found: ${pathname}`, { cause: err });
