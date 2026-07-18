@@ -10537,6 +10537,26 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Debugging/testing: dev server + remote Gateway
   - H2: Related
 
+## web/dashboard-architecture.md
+
+- Route: /web/dashboard-architecture
+- Headings:
+  - H2: Vision
+  - H2: Concepts
+  - H2: UX flows
+  - H2: Interaction tiers
+  - H2: Widget model and hosting
+  - H3: Widgets host content; MCP apps are one content kind
+  - H3: Transcript display: one widget card
+  - H3: Server-sourced widgets (pinned MCP apps)
+  - H2: Layout: fluid grid
+  - H2: Data model (per-agent DB)
+  - H2: Protocol surface
+  - H2: Agent tools
+  - H2: What this replaces
+  - H2: Non-goals (this program)
+  - H2: Implementation plan
+
 ## web/dashboard.md
 
 - Route: /web/dashboard
