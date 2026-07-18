@@ -30,7 +30,7 @@ export type WhatsAppQaScenarioEnvironment = {
   sutAuthDir: string;
 };
 
-export function resolveWhatsAppQaReplacePaths(accountId: string): string[] {
+function resolveWhatsAppQaReplacePaths(accountId: string): string[] {
   return [
     "agents",
     "approvals",
@@ -57,7 +57,7 @@ export function createWhatsAppQaScenarioEnvironment(params: {
   const prepareFlow = async (input: FlowPreparationInput) => {
     const scenarioId = input.config.whatsappScenarioId;
     if (typeof scenarioId !== "string") {
-      return;
+      return undefined;
     }
     const scenario = getWhatsAppQaScenarioDefinition(scenarioId);
     if (scenario.requiresGroupJid && !params.runtimeEnv.groupJid) {

@@ -11,10 +11,7 @@ import type {
 } from "@openclaw/whatsapp/api.js";
 import { describe, expect, it, vi } from "vitest";
 import { fingerprintQaCredentialId } from "../../qa-credentials-fingerprint.runtime.js";
-import {
-  createWhatsAppQaScenarioEnvironment,
-  resolveWhatsAppQaReplacePaths,
-} from "./scenario-environment.js";
+import { createWhatsAppQaScenarioEnvironment } from "./scenario-environment.js";
 import { resolveWhatsAppQaScenarioIds } from "./scenario-selection.js";
 import { runWhatsAppApprovalScenario } from "./whatsapp-live.approvals.js";
 import { buildWhatsAppQaConfig, parseWhatsAppQaCredentialPayload } from "./whatsapp-live.config.js";
@@ -1135,9 +1132,65 @@ describe("WhatsApp QA live runtime", () => {
     }
   });
 
-  it("authorizes the exact WhatsApp account allowlist replacement path", () => {
-    expect(resolveWhatsAppQaReplacePaths("work")).toContain(
-      "channels.whatsapp.accounts.work.allowFrom",
+  it("authorizes the exact active WhatsApp account allowlist replacement path", async () => {
+    const gatewayCall = vi.fn(async (method: string, _params?: unknown) => {
+      if (method === "config.get") {
+        return { config: {}, hash: "config-hash" };
+      }
+      if (method === "config.patch") {
+        return { noop: true };
+      }
+      if (method === "channels.status") {
+        return {
+          channelAccounts: {
+            whatsapp: [
+              {
+                accountId: "work",
+                busy: false,
+                connected: true,
+                lastConnectedAt: Date.now() - 30_000,
+                restartPending: false,
+                running: true,
+              },
+            ],
+          },
+        };
+      }
+      throw new Error(`unexpected gateway method: ${method}`);
+    });
+    const { prepareFlow } = createWhatsAppQaScenarioEnvironment({
+      accountId: "work",
+      driverAuthDir: "/tmp/whatsapp-driver",
+      explicitScenarioSelection: true,
+      getDriver: vi.fn(() => undefined as never),
+      replaceDriver: vi.fn(),
+      runtimeEnv: {
+        driverAuthArchiveBase64: "driver-auth",
+        driverPhoneE164: "+15550000001",
+        sutAuthArchiveBase64: "sut-auth",
+        sutPhoneE164: "+15550000002",
+      },
+      sutAuthDir: "/tmp/whatsapp-sut",
+    });
+
+    await prepareFlow({
+      config: { whatsappScenarioId: "whatsapp-canary" },
+      gateway: { call: gatewayCall } as never,
+      outputDir: "/tmp/whatsapp-output",
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      timeoutMs: 60_000,
+      waitForConfigRestartSettle: vi.fn(),
+    });
+
+    const patchCall = gatewayCall.mock.calls.find(([method]) => method === "config.patch");
+    if (!patchCall) {
+      throw new Error("config.patch was not called");
+    }
+    expect(patchCall[1]).toMatchObject({
+      replacePaths: expect.arrayContaining(["channels.whatsapp.accounts.work.allowFrom"]),
+    });
+    expect((patchCall[1] as { replacePaths?: string[] }).replacePaths).not.toContain(
+      "channels.whatsapp.accounts.sut.allowFrom",
     );
   });
 
