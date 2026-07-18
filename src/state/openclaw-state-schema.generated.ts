@@ -1817,6 +1817,7 @@ CREATE TABLE IF NOT EXISTS worker_workspace_pending_results (
   gateway_instance_id TEXT NOT NULL,
   recovery_requested_at_ms INTEGER,
   workspace_accepted_at_ms INTEGER,
+  staged_result_ref TEXT,
   created_at_ms INTEGER NOT NULL,
   FOREIGN KEY (session_id) REFERENCES worker_session_placements(session_id) ON DELETE CASCADE
 ) STRICT;

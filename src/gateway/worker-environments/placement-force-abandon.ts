@@ -1,5 +1,11 @@
 import type { WorkerDispatchPlacementStore } from "./placement-dispatch-failure.js";
 import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
+import {
+  deleteStagedWorkerWorkspaceResult,
+  hasWorkerWorkspaceResultRef,
+  preparedWorkerWorkspaceResultRef,
+  workerWorkspaceResultRef,
+} from "./workspace-result-staging.js";
 
 export async function forceAbandonWorkerEnvironment(params: {
   placements: WorkerDispatchPlacementStore;
@@ -34,6 +40,23 @@ export async function forceAbandonWorkerEnvironment(params: {
   }
   for (const pending of placements.listPendingWorkspaceResults()) {
     if (pending.environmentId === environmentId) {
+      const placement = placements.get(pending.sessionId);
+      if (!placement) {
+        if (pending.stagedResultRef) {
+          throw new Error(
+            `Forced teardown found a staged result without a placement: ${pending.sessionId}`,
+          );
+        }
+      } else {
+        const root = await params.resolveWorkspacePath(placement);
+        const finalRef = pending.stagedResultRef ?? workerWorkspaceResultRef(pending.claimId);
+        const refs = [finalRef, preparedWorkerWorkspaceResultRef(finalRef)];
+        for (const stagedResultRef of refs) {
+          if (await hasWorkerWorkspaceResultRef({ root, stagedResultRef })) {
+            await deleteStagedWorkerWorkspaceResult({ root, stagedResultRef });
+          }
+        }
+      }
       placements.abandonWorkspaceResult(pending);
     }
   }
