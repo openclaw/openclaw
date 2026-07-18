@@ -19,9 +19,11 @@ const GOOGLECHAT_INGRESS_POLL_INTERVAL_MS = 500;
 const GOOGLECHAT_INGRESS_PRUNE_INTERVAL_MS = 60 * 60 * 1_000;
 const GOOGLECHAT_INGRESS_MAX_CONCURRENT_DELIVERIES = 8;
 const GOOGLECHAT_INGRESS_COMPLETED_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
-const GOOGLECHAT_INGRESS_COMPLETED_MAX_ENTRIES = 1_000;
+// The webhook retry horizon must fit beneath this cap; match Slack/Mattermost fleet sizing.
+// The 30-day TTL is the real horizon, while the cap only bounds disk usage.
+const GOOGLECHAT_INGRESS_COMPLETED_MAX_ENTRIES = 20_000;
 const GOOGLECHAT_INGRESS_FAILED_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
-const GOOGLECHAT_INGRESS_FAILED_MAX_ENTRIES = 1_000;
+const GOOGLECHAT_INGRESS_FAILED_MAX_ENTRIES = 20_000;
 
 type GoogleChatIngressPayload = {
   version: 1;

@@ -138,6 +138,42 @@ describe("Google Chat durable ingress", () => {
     });
   });
 
+  it("retains more than 1,000 completed webhook tombstones within the retry horizon", async () => {
+    await withQueue(async (queue) => {
+      const completedAt = Date.now();
+      const oldestId = "spaces/AAA/messages/completed-0000";
+      for (let index = 0; index < 1_050; index += 1) {
+        const id = `spaces/AAA/messages/completed-${String(index).padStart(4, "0")}`;
+        const event = messageEvent({ messageName: id });
+        await queue.enqueue(
+          id,
+          { version: 1, rawEvent: JSON.stringify(event) },
+          { receivedAt: completedAt - 1_050 + index, laneKey: "space:spaces/AAA" },
+        );
+        await queue.complete(id, { completedAt: completedAt - 1_050 + index });
+      }
+
+      const dispatch = vi.fn();
+      const ingress = startIngress(queue, dispatch);
+      try {
+        await ingress.waitForIdle();
+        await ingress.receive(messageEvent({ messageName: oldestId, text: "redelivery" }));
+        await ingress.waitForIdle();
+
+        expect(
+          await queue.enqueue(oldestId, {
+            version: 1,
+            rawEvent: JSON.stringify(messageEvent({ messageName: oldestId })),
+          }),
+        ).toMatchObject({ kind: "completed", duplicate: true });
+        expect(await queue.listPending({ limit: "all" })).toEqual([]);
+        expect(dispatch).not.toHaveBeenCalled();
+      } finally {
+        await ingress.stop();
+      }
+    });
+  });
+
   it("redacts Add-on auth while preserving event data until claim-time normalization", async () => {
     await withQueue(async (queue) => {
       const raw = addOnMessageEvent({
