@@ -6,14 +6,6 @@ function hasStaticAwsCredentialEnv(env: NodeJS.ProcessEnv): boolean {
   return Boolean(env.AWS_ACCESS_KEY_ID?.trim() && env.AWS_SECRET_ACCESS_KEY?.trim());
 }
 
-/** Return whether Bedrock should refresh the AWS shared config cache before discovery. */
-function shouldRefreshAwsSharedConfigCacheForBedrock(env: NodeJS.ProcessEnv): boolean {
-  if (env.AWS_BEDROCK_SKIP_AUTH === "1" || env.AWS_BEARER_TOKEN_BEDROCK?.trim()) {
-    return false;
-  }
-  return !hasStaticAwsCredentialEnv(env);
-}
-
 /**
  * Clear whitespace-only AWS credential environment variables so the AWS SDK
  * default credential chain bypasses them. Its env credential providers accept
@@ -44,10 +36,15 @@ export function sanitizeBlankAwsCredentials(env: NodeJS.ProcessEnv = process.env
 export async function refreshAwsSharedConfigCacheForBedrock(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<void> {
+  // Bearer and skip-auth modes bypass the AWS credential chain. Leave the
+  // process-wide AWS environment untouched for other consumers in the gateway.
+  if (env.AWS_BEDROCK_SKIP_AUTH === "1" || env.AWS_BEARER_TOKEN_BEDROCK?.trim()) {
+    return;
+  }
   // Every default-chain Bedrock client passes through this preparation step.
   // Keep invalid env credentials out before any client resolves credentials.
   sanitizeBlankAwsCredentials(env);
-  if (!shouldRefreshAwsSharedConfigCacheForBedrock(env)) {
+  if (hasStaticAwsCredentialEnv(env)) {
     return;
   }
   const { loadSharedConfigFiles } = await import("@smithy/shared-ini-file-loader");

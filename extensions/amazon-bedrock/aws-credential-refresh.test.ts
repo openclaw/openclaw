@@ -36,6 +36,28 @@ describe("refreshAwsSharedConfigCacheForBedrock", () => {
 
     expect(loadSharedConfigFiles).not.toHaveBeenCalled();
   });
+
+  it.each([
+    {
+      AWS_BEDROCK_SKIP_AUTH: "1",
+      AWS_ACCESS_KEY_ID: " ",
+      AWS_SECRET_ACCESS_KEY: "test-aws-secret-access-key",
+      AWS_SESSION_TOKEN: " ",
+    },
+    {
+      AWS_BEARER_TOKEN_BEDROCK: "test-aws-bearer-token-bedrock",
+      AWS_ACCESS_KEY_ID: " ",
+      AWS_SECRET_ACCESS_KEY: "test-aws-secret-access-key",
+      AWS_SESSION_TOKEN: " ",
+    },
+  ])("preserves AWS credential env vars when Bedrock bypasses the default chain", async (env) => {
+    const originalEnv = { ...env };
+
+    await refreshAwsSharedConfigCacheForBedrock(env);
+
+    expect(env).toEqual(originalEnv);
+    expect(loadSharedConfigFiles).not.toHaveBeenCalled();
+  });
 });
 
 describe("sanitizeBlankAwsCredentials", () => {
