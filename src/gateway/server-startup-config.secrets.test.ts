@@ -13,7 +13,7 @@ import {
 } from "../agents/auth-profiles/runtime-snapshots.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
 import { measureDiagnosticsTimelineSpan } from "../infra/diagnostics-timeline.js";
-import { refResolutionError } from "../secrets/resolve-errors.js";
+import { providerResolutionError, refResolutionError } from "../secrets/resolve-errors.js";
 import { associateSecretResolutionErrorOwners } from "../secrets/runtime-degraded-state.js";
 import {
   activateSecretsRuntimeSnapshotState,
@@ -992,11 +992,10 @@ describe("gateway startup config secret preflight", () => {
   });
 
   it("preserves invalid provider diagnostics instead of reporting runtime degradation", async () => {
-    const invalidProviderError = refResolutionError({
+    const invalidProviderError = providerResolutionError({
       code: "SECRET_PROVIDER_INVALID",
       source: "env",
       provider: "missing",
-      refId: "INVALID_PROVIDER_REF",
       message: 'Secret provider "missing" is not configured.',
     });
     const emitStateEvent = vi.fn();
