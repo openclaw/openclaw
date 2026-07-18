@@ -342,11 +342,42 @@ function resolveFullyCoveredLegacyStorePaths(
   return covered;
 }
 
+// Legacy session store files are JSON-serialized maps of session records.
+// Most stores are under 10 MiB; cap at 50 MiB to prevent OOM on corrupted files.
+const MAX_LEGACY_SESSION_STORE_BYTES = 50 * 1024 * 1024;
+
 function readLegacySessionRecords(
   target: SessionStoreTarget,
   issues: DoctorSessionSqliteIssue[],
   options: { allowMissingStore?: boolean } = {},
 ): LegacySessionRecord[] {
+  // Pre-check file size to avoid OOM on corrupted or malicious store files.
+  const storeStat = fs.statSync(target.storePath, { throwIfNoEntry: false });
+  if (!storeStat) {
+    if (options.allowMissingStore === true) {
+      return [];
+    }
+    issues.push({
+      code: "store_unreadable",
+      message: `${target.storePath}: file not found`,
+    });
+    return [];
+  }
+  if (!storeStat.isFile()) {
+    issues.push({
+      code: "store_unreadable",
+      message: `${target.storePath}: not a regular file`,
+    });
+    return [];
+  }
+  if (storeStat.size > MAX_LEGACY_SESSION_STORE_BYTES) {
+    issues.push({
+      code: "store_unreadable",
+      message: `${target.storePath}: file too large (${storeStat.size} bytes, max ${MAX_LEGACY_SESSION_STORE_BYTES})`,
+    });
+    return [];
+  }
+
   let parsed: unknown;
   try {
     parsed = JSON.parse(fs.readFileSync(target.storePath, "utf-8"));
