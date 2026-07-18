@@ -261,9 +261,12 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
       groups?: boolean;
       work?: boolean;
       rows: SidebarRecentSession[];
+      /** Pre-pagination size; rows may be page-filtered for rendering. */
+      totalRowCount?: number;
     },
     trailing: TemplateResult | typeof nothing = nothing,
   ) {
+    const totalRowCount = section.totalRowCount ?? section.rows.length;
     const group = section.category;
     const isPinned = section.id === "pinned";
     const showHeader = sidebarSectionHasHeader(section.id, this.sessionsGrouping);
@@ -362,9 +365,9 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
                     >${collapsed ? icons.chevronRight : icons.chevronDown}</span
                   >
                   <span class="sidebar-recent-sessions__label-text">${label}</span>
-                  ${section.work && section.rows.length === 0
+                  ${section.work && totalRowCount === 0
                     ? nothing
-                    : html`<span class="sidebar-session-group-count">${section.rows.length}</span>`}
+                    : html`<span class="sidebar-session-group-count">${totalRowCount}</span>`}
                   ${collapsedRunningDot
                     ? html`<span
                         class="session-run-spinner sidebar-session-group-running"
@@ -438,7 +441,7 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
         if (section.id === "work") {
           // Coding hosts live work/ACP rows plus the CLI catalogs; hide the
           // whole zone when both are empty.
-          if (section.rows.length === 0 && options.codingTrailingPresent !== true) {
+          if (section.totalRowCount === 0 && options.codingTrailingPresent !== true) {
             return nothing;
           }
           return this.renderSessionSection(section, options.codingTrailing ?? nothing);

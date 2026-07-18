@@ -229,7 +229,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
    * out of the first page.
    */
   protected zonedVisibleSections(rows: SidebarRecentSession[]): {
-    sections: SidebarSessionSection<SidebarRecentSession>[];
+    sections: (SidebarSessionSection<SidebarRecentSession> & { totalRowCount: number })[];
     expandedRows: SidebarRecentSession[];
     visibleRows: SidebarRecentSession[];
   } {
@@ -243,11 +243,15 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
     const visibleRows = limitSidebarSessionRows(expandedRows, this.visibleSessionLimit);
     const keep = new Set(visibleRows.map((row) => row.key));
     return {
-      sections: sections.map((section) =>
-        this.isSessionSectionCollapsed(section.id)
-          ? section
-          : { ...section, rows: section.rows.filter((row) => keep.has(row.key)) },
-      ),
+      // totalRowCount is the pre-pagination size: headers and empty-zone
+      // checks must not mistake a page-filtered section for an empty one.
+      sections: sections.map((section) => ({
+        ...section,
+        totalRowCount: section.rows.length,
+        rows: this.isSessionSectionCollapsed(section.id)
+          ? section.rows
+          : section.rows.filter((row) => keep.has(row.key)),
+      })),
       expandedRows,
       visibleRows,
     };
