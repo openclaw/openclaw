@@ -2,6 +2,7 @@ import { parseCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import {
   normalizeAgentId,
   normalizeSessionKeyForUiComparison,
+  parseAgentSessionKey,
 } from "../lib/sessions/session-key.ts";
 import type { ExecApprovalRequest } from "./exec-approval.ts";
 
@@ -39,7 +40,11 @@ export function deriveApprovalBadgeSnapshot(
   const agentCounts = new Map<string, number>();
   const sessionKeys = new Set<string>();
   for (const entry of queue) {
-    const agentId = entry.request.agentId?.trim();
+    // agentId is optional on approval events; an agent-scoped session key
+    // still names the owner, and dropping it would badge the session row
+    // while the agent card shows no pending count.
+    const agentId =
+      entry.request.agentId?.trim() || parseAgentSessionKey(entry.request.sessionKey)?.agentId;
     if (agentId) {
       const normalizedAgentId = normalizeAgentId(agentId);
       agentCounts.set(normalizedAgentId, (agentCounts.get(normalizedAgentId) ?? 0) + 1);

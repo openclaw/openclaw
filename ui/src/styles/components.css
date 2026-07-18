@@ -3002,15 +3002,6 @@ td.data-table-key-col {
   gap: 8px;
 }
 
-.exec-approval-shortcut {
-  min-width: 18px;
-  padding: 1px 4px;
-  border: 1px solid currentColor;
-  border-radius: 4px;
-  font: 10px/1.3 var(--mono);
-  opacity: 0.55;
-}
-
 .exec-approval-list {
   display: grid;
   gap: 4px;

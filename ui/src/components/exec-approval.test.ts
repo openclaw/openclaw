@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExecApprovalRequest } from "../app/exec-approval.ts";
 import { i18n } from "../i18n/index.ts";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
-import { APPROVAL_SHORTCUT_ARM_DELAY_MS, formatApprovalCountdown } from "./exec-approval.ts";
+import { formatApprovalCountdown } from "./exec-approval.ts";
 import "./exec-approval.ts";
 
 let container: HTMLDivElement;
@@ -60,10 +60,8 @@ async function renderApproval(
   return { approval, onDecision };
 }
 
-/** Jump past the shortcut arming window without touching other timers. */
-function armShortcuts() {
-  const realNow = Date.now();
-  vi.spyOn(Date, "now").mockReturnValue(realNow + APPROVAL_SHORTCUT_ARM_DELAY_MS + 1);
+function chord(key: string, init: KeyboardEventInit = {}): KeyboardEvent {
+  return new KeyboardEvent("keydown", { key, metaKey: true, bubbles: true, ...init });
 }
 
 describe("openclaw-exec-approval", () => {
@@ -160,11 +158,10 @@ describe("openclaw-exec-approval", () => {
   it("handles modal approval keyboard shortcuts", async () => {
     const { onDecision } = await renderApproval(createExecRequest());
     const { modal } = await getRenderedModalDialog(container);
-    armShortcuts();
 
-    modal.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
-    modal.dispatchEvent(new KeyboardEvent("keydown", { key: "A", shiftKey: true, bubbles: true }));
-    modal.dispatchEvent(new KeyboardEvent("keydown", { key: "d", bubbles: true }));
+    modal.dispatchEvent(chord("Enter"));
+    modal.dispatchEvent(chord("Enter", { shiftKey: true }));
+    modal.dispatchEvent(chord("d", { metaKey: false, ctrlKey: true }));
 
     expect(onDecision.mock.calls).toEqual([
       ["approval-1", "allow-once"],
@@ -173,29 +170,51 @@ describe("openclaw-exec-approval", () => {
     ]);
   });
 
-  it("ignores auto-repeated shortcut keydown events", async () => {
+  it("ignores bare keys so stray typing cannot authorize a command", async () => {
     const { onDecision } = await renderApproval(createExecRequest());
     const { modal } = await getRenderedModalDialog(container);
-    armShortcuts();
 
-    modal.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true, repeat: true }));
-    modal.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "A", shiftKey: true, bubbles: true, repeat: true }),
-    );
+    modal.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
+    modal.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    modal.dispatchEvent(new KeyboardEvent("keydown", { key: "d", bubbles: true }));
+    modal.dispatchEvent(chord("Enter", { altKey: true }));
 
     expect(onDecision).not.toHaveBeenCalled();
   });
 
-  it("disarms shortcuts until the arming window elapses", async () => {
+  it("ignores auto-repeated shortcut keydown events", async () => {
     const { onDecision } = await renderApproval(createExecRequest());
     const { modal } = await getRenderedModalDialog(container);
 
-    modal.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
-    expect(onDecision).not.toHaveBeenCalled();
+    modal.dispatchEvent(chord("Enter", { repeat: true }));
+    modal.dispatchEvent(chord("Enter", { shiftKey: true, repeat: true }));
 
-    armShortcuts();
-    modal.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
-    expect(onDecision.mock.calls).toEqual([["approval-1", "allow-once"]]);
+    expect(onDecision).not.toHaveBeenCalled();
+  });
+
+  it("keeps the displayed approval pinned when an older request arrives", async () => {
+    const newer = createExecRequest({ id: "approval-newer", createdAtMs: 2_000 });
+    const older = createExecRequest({ id: "approval-older", createdAtMs: 1_000 });
+    const { approval } = await renderApproval([newer]);
+    await getRenderedModalDialog(container);
+    expect(container.querySelector(".exec-approval-card")?.getAttribute("data-approval-id")).toBe(
+      "approval-newer",
+    );
+
+    // Oldest-first sorting puts the late arrival at the head, but the card
+    // the user is reading must not swap out from under them.
+    await renderApproval([older, newer]);
+    await approval.updateComplete;
+    expect(container.querySelector(".exec-approval-card")?.getAttribute("data-approval-id")).toBe(
+      "approval-newer",
+    );
+
+    // Once the pinned request settles, the head takes over.
+    await renderApproval([older]);
+    await approval.updateComplete;
+    expect(container.querySelector(".exec-approval-card")?.getAttribute("data-approval-id")).toBe(
+      "approval-older",
+    );
   });
 
   it("guards shortcuts while busy, disallowed, or focused in text input", async () => {
@@ -205,25 +224,20 @@ describe("openclaw-exec-approval", () => {
     const onDecision = vi.fn();
     await renderApproval(restricted, { busy: true, onDecision });
     let rendered = await getRenderedModalDialog(container);
-    armShortcuts();
-    rendered.modal.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
+    rendered.modal.dispatchEvent(chord("Enter"));
 
     await renderApproval(restricted, { onDecision });
     rendered = await getRenderedModalDialog(container);
-    rendered.modal.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "A", shiftKey: true, bubbles: true }),
-    );
+    rendered.modal.dispatchEvent(chord("Enter", { shiftKey: true }));
     const input = document.createElement("input");
     rendered.modal.append(input);
-    input.dispatchEvent(new KeyboardEvent("keydown", { key: "d", bubbles: true, composed: true }));
+    input.dispatchEvent(chord("d", { composed: true }));
     const editor = document.createElement("div");
     editor.setAttribute("contenteditable", "true");
     const editorChild = document.createElement("span");
     editor.append(editorChild);
     rendered.modal.append(editor);
-    editorChild.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "a", bubbles: true, composed: true }),
-    );
+    editorChild.dispatchEvent(chord("Enter", { composed: true }));
 
     expect(onDecision).not.toHaveBeenCalled();
   });

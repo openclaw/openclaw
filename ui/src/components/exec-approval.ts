@@ -26,9 +26,9 @@ const APPROVAL_DECISION_CLASSES: Record<ExecApprovalDecision, string> = {
 };
 
 const APPROVAL_DECISION_SHORTCUTS: Record<ExecApprovalDecision, string> = {
-  "allow-once": "A",
-  "allow-always": "⇧A",
-  deny: "D",
+  "allow-once": "Ctrl/Cmd+Enter",
+  "allow-always": "Ctrl/Cmd+Shift+Enter",
+  deny: "Ctrl/Cmd+D",
 };
 
 type ExecApprovalProps = {
@@ -193,6 +193,8 @@ function approvalTitle(active: ExecApprovalRequest): string {
 export function renderExecApprovalCard(props: ExecApprovalCardProps) {
   const active = props.approval;
   const decisions = resolveApprovalDecisions(active);
+  // Countdown stays role=timer without aria-live: per-second announcements
+  // would monopolize the screen-reader queue for every visible approval.
   const remaining = approvalRemainingLabel(active.expiresAtMs, props.nowMs);
   const title = approvalTitle(active);
   return html`
@@ -203,14 +205,7 @@ export function renderExecApprovalCard(props: ExecApprovalCardProps) {
       <div class="exec-approval-header">
         <div>
           <div class="exec-approval-title">${title}</div>
-          <div
-            class="exec-approval-sub exec-approval-countdown"
-            role="timer"
-            aria-live="polite"
-            aria-atomic="true"
-          >
-            ${remaining}
-          </div>
+          <div class="exec-approval-sub exec-approval-countdown" role="timer">${remaining}</div>
         </div>
         ${(props.queueCount ?? 0) > 1
           ? html`<div class="exec-approval-queue">
@@ -234,9 +229,6 @@ export function renderExecApprovalCard(props: ExecApprovalCardProps) {
               @click=${() => props.onDecision(active.id, decision)}
             >
               <span>${label}</span>
-              ${props.variant === "modal"
-                ? html`<kbd class="exec-approval-shortcut" aria-hidden="true">${shortcut}</kbd>`
-                : nothing}
             </button>
           `;
         })}
@@ -295,30 +287,25 @@ function keyEventComesFromTextEntry(event: KeyboardEvent): boolean {
     );
 }
 
+// Authorization shortcuts require a Ctrl/Cmd chord: the modal steals focus
+// when it opens, so a bare letter typed mid-sentence into the composer could
+// otherwise approve a command the user never read.
 function shortcutDecision(event: KeyboardEvent): ExecApprovalDecision | null {
-  if (event.altKey || event.ctrlKey || event.metaKey || keyEventComesFromTextEntry(event)) {
+  const hasModChord = (event.metaKey || event.ctrlKey) && !event.altKey;
+  if (!hasModChord || keyEventComesFromTextEntry(event)) {
     return null;
   }
-  if (event.key.toLowerCase() === "a") {
+  if (event.key === "Enter") {
     return event.shiftKey ? "allow-always" : "allow-once";
   }
   return !event.shiftKey && event.key.toLowerCase() === "d" ? "deny" : null;
 }
-
-/**
- * Shortcuts stay disarmed briefly after the active approval changes: the modal
- * steals focus when it opens, so a keystroke meant for the composer (or the
- * previous request) could otherwise authorize a command the user never read.
- */
-export const APPROVAL_SHORTCUT_ARM_DELAY_MS = 600;
 
 class ExecApproval extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) props?: ExecApprovalProps;
   @query("openclaw-modal-dialog") private dialog?: OpenClawModalDialog;
   @state() private selectedApprovalId: string | null = null;
   @state() private forceShowAll = false;
-  private shortcutsArmedAtMs = 0;
-  private armedApprovalId: string | null = null;
 
   show(): void {
     this.forceShowAll = true;
@@ -339,20 +326,10 @@ class ExecApproval extends OpenClawLightDomContentsElement {
     return queue.find((entry) => entry.id === this.selectedApprovalId) ?? queue.at(0) ?? null;
   }
 
-  private armShortcuts(activeId: string): void {
-    if (this.armedApprovalId !== activeId) {
-      this.armedApprovalId = activeId;
-      this.shortcutsArmedAtMs = Date.now() + APPROVAL_SHORTCUT_ARM_DELAY_MS;
-    }
-  }
-
   private handleKeydown(event: KeyboardEvent, active: ExecApprovalRequest): void {
-    // A held key auto-repeats: once a decision settles and the queue advances,
-    // the repeat would apply the same decision to the next request unseen.
+    // A held chord auto-repeats: once a decision settles and the queue
+    // advances, the repeat would apply the same decision to the next request.
     if (event.defaultPrevented || event.repeat || this.props?.busy) {
-      return;
-    }
-    if (Date.now() < this.shortcutsArmedAtMs) {
       return;
     }
     const decision = shortcutDecision(event);
@@ -368,6 +345,19 @@ class ExecApproval extends OpenClawLightDomContentsElement {
     if (previousProps?.queue.length && !this.props?.queue.length) {
       this.forceShowAll = false;
       this.selectedApprovalId = null;
+      return;
+    }
+    // Pin the presented request: late-arriving older approvals re-sort the
+    // queue, and swapping the card mid-read (or mid-decision) could attach the
+    // user's answer or a failure message to a request they never saw.
+    if (
+      this.selectedApprovalId &&
+      !this.props?.queue.some((entry) => entry.id === this.selectedApprovalId)
+    ) {
+      this.selectedApprovalId = null;
+    }
+    if (!this.selectedApprovalId) {
+      this.selectedApprovalId = this.displayedQueue().at(0)?.id ?? null;
     }
   }
 
@@ -376,10 +366,8 @@ class ExecApproval extends OpenClawLightDomContentsElement {
     const queue = this.displayedQueue();
     const active = this.activeApproval(queue);
     if (!props || !active) {
-      this.armedApprovalId = null;
       return nothing;
     }
-    this.armShortcuts(active.id);
     const decisions = resolveApprovalDecisions(active);
     const handleCancel = () => {
       if (!props.busy && decisions.includes("deny")) {

@@ -68,4 +68,13 @@ describe("approval presentation", () => {
     expect(sessionHasPendingApproval(snapshot, "AGENT:MAIN:ONE")).toBe(true);
     expect(sessionHasPendingApproval(snapshot, "agent:main:missing")).toBe(false);
   });
+
+  it("falls back to the agent session key when agentId is absent", () => {
+    const snapshot = deriveApprovalBadgeSnapshot([
+      approval("approval-1", { sessionKey: "agent:worker:one" }),
+      approval("approval-2", { sessionKey: "not-an-agent-key" }),
+    ]);
+
+    expect(Object.fromEntries(snapshot.agentCounts)).toEqual({ worker: 1 });
+  });
 });
