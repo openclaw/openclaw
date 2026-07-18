@@ -53,7 +53,7 @@ function resolveApprovalTimeoutMs(timeoutMs: number): number {
 
 // Approval IDs cross terminal, UI, push, and channel surfaces unchanged. Keep
 // unsafe display bytes and unbounded identifiers out at the creation boundary.
-const EXPLICIT_APPROVAL_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
+const EXPLICIT_APPROVAL_ID_INVALID_CHAR_PATTERN = /[^A-Za-z0-9._:-]/;
 
 /** Typed creation failure for an explicit approval id outside the shared safe format. */
 export class InvalidApprovalIdError extends Error {
@@ -238,7 +238,10 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
       throw new Error("approval expiry is unavailable");
     }
     const hasExplicitId = id !== null && id !== undefined && id.length > 0;
-    if (hasExplicitId && !EXPLICIT_APPROVAL_ID_PATTERN.test(id)) {
+    if (
+      hasExplicitId &&
+      (id.length > 128 || EXPLICIT_APPROVAL_ID_INVALID_CHAR_PATTERN.test(id))
+    ) {
       throw new InvalidApprovalIdError();
     }
     const resolvedId = hasExplicitId ? id : randomUUID();

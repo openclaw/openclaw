@@ -599,6 +599,10 @@ describe("ExecApprovalManager", () => {
   it.each([
     ["ANSI escape", "approval-\u001b[31mred"],
     ["Unicode control", "approval-\u202Ehidden"],
+    ["trailing line feed", "approval-safe\n"],
+    ["trailing carriage return", "approval-safe\r"],
+    ["trailing line separator", "approval-safe\u2028"],
+    ["trailing paragraph separator", "approval-safe\u2029"],
     ["overlong value", "a".repeat(129)],
   ])("rejects an explicit approval id containing an %s", (_label, id) => {
     const manager = new ExecApprovalManager();
