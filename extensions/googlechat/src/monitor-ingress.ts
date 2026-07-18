@@ -16,12 +16,12 @@ const GOOGLECHAT_COMPLETED_MAX_ENTRIES = 20_000;
 const GOOGLECHAT_FAILED_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const GOOGLECHAT_FAILED_MAX_ENTRIES = 1_000;
 
-export type GoogleChatIngressPayload = {
+type GoogleChatIngressPayload = {
   version: typeof GOOGLECHAT_INGRESS_PAYLOAD_VERSION;
   rawEvent: string;
 };
 
-export type GoogleChatIngressLifecycle = ReturnType<
+type GoogleChatIngressLifecycle = ReturnType<
   typeof bindIngressLifecycleToReplyOptions
 >["turnAdoptionLifecycle"];
 
@@ -133,5 +133,3 @@ export function createGoogleChatIngressSpool(params: {
     dispose: () => drain.dispose(),
   };
 }
-
-export type GoogleChatIngressSpool = ReturnType<typeof createGoogleChatIngressSpool>;

@@ -81,6 +81,7 @@ function createTarget(): WebhookTarget {
     core: {} as never,
     path: "/googlechat",
     mediaMaxMb: 20,
+    ingress: { enqueue: vi.fn(async () => ({ kind: "accepted", duplicate: false })) },
   };
 }
 

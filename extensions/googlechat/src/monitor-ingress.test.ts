@@ -4,9 +4,14 @@ import os from "node:os";
 import path from "node:path";
 import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createGoogleChatIngressSpool, type GoogleChatIngressPayload } from "./monitor-ingress.js";
+import { createGoogleChatIngressSpool } from "./monitor-ingress.js";
 import type { GoogleChatRuntimeEnv } from "./monitor-types.js";
 import type { GoogleChatEvent } from "./types.js";
+
+type GoogleChatIngressPayload = {
+  version: 1;
+  rawEvent: string;
+};
 
 const runtime: GoogleChatRuntimeEnv = { log: vi.fn(), error: vi.fn() };
 

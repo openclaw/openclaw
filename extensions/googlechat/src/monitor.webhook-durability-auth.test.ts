@@ -19,11 +19,15 @@ import { createWebhookInFlightLimiter } from "openclaw/plugin-sdk/webhook-reques
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
-import type { GoogleChatIngressPayload } from "./monitor-ingress.js";
 import { createGoogleChatIngressSpool } from "./monitor-ingress.js";
 import type { WebhookTarget } from "./monitor-types.js";
 import { createGoogleChatWebhookRequestHandler } from "./monitor-webhook.js";
 import type { GoogleChatEvent } from "./types.js";
+
+type GoogleChatIngressPayload = {
+  version: 1;
+  rawEvent: string;
+};
 
 const PROJECT_NUMBER = "123456789012";
 const CHAT_ISSUER = "chat@system.gserviceaccount.com";
@@ -34,7 +38,7 @@ const { privateKey: attackerPrivateKey } = generateKeyPairSync("rsa", { modulusL
 // google-auth-library passes this PEM straight into node crypto verify; an SPKI
 // public-key PEM exercises the identical RSA-SHA256 signature check as the X509
 // certificate PEMs Google serves.
-const publicKeyPem = publicKey.export({ type: "spki", format: "pem" }).toString();
+const publicKeyPem = publicKey.export({ type: "spki", format: "pem" });
 
 function base64UrlJson(value: unknown): string {
   return Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
@@ -165,7 +169,11 @@ function createSpool(params: {
 function createAuthedWebhookHandler(target: WebhookTarget) {
   return createGoogleChatWebhookRequestHandler({
     webhookTargets: new Map([[target.path, [target]]]),
-    webhookRateLimiter: createFixedWindowRateLimiter({ windowMs: 60_000, maxRequests: 1_000 }),
+    webhookRateLimiter: createFixedWindowRateLimiter({
+      windowMs: 60_000,
+      maxRequests: 1_000,
+      maxTrackedKeys: 1_000,
+    }),
     webhookInFlightLimiter: createWebhookInFlightLimiter(),
     processEvent: vi.fn(async () => undefined),
   });
@@ -264,7 +272,7 @@ describe("Google Chat webhook durability through real JWT authentication", () =>
       spoolBeforeRestart.dispose();
 
       const deliverAfterRestart = vi.fn(
-        async (_event: GoogleChatEvent, lifecycle: { onAdopted: () => Promise<void> }) => {
+        async (_event: GoogleChatEvent, lifecycle: { onAdopted: () => void | Promise<void> }) => {
           await lifecycle.onAdopted();
         },
       );

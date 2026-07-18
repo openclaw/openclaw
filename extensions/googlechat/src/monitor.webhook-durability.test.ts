@@ -9,11 +9,15 @@ import { createWebhookInFlightLimiter } from "openclaw/plugin-sdk/webhook-reques
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
-import type { GoogleChatIngressPayload } from "./monitor-ingress.js";
 import { createGoogleChatIngressSpool } from "./monitor-ingress.js";
 import type { WebhookTarget } from "./monitor-types.js";
 import { createGoogleChatWebhookRequestHandler } from "./monitor-webhook.js";
 import type { GoogleChatEvent } from "./types.js";
+
+type GoogleChatIngressPayload = {
+  version: 1;
+  rawEvent: string;
+};
 
 vi.mock("./auth.js", () => ({
   verifyGoogleChatRequest: vi.fn(async () => ({ ok: true })),
@@ -110,7 +114,11 @@ describe("Google Chat webhook durability", () => {
     };
     const handler = createGoogleChatWebhookRequestHandler({
       webhookTargets: new Map([[target.path, [target]]]),
-      webhookRateLimiter: createFixedWindowRateLimiter({ windowMs: 60_000, maxRequests: 1_000 }),
+      webhookRateLimiter: createFixedWindowRateLimiter({
+        windowMs: 60_000,
+        maxRequests: 1_000,
+        maxTrackedKeys: 1_000,
+      }),
       webhookInFlightLimiter: createWebhookInFlightLimiter(),
       processEvent: vi.fn(async () => undefined),
     });
@@ -146,7 +154,7 @@ describe("Google Chat webhook durability", () => {
     spoolBeforeRestart.dispose();
 
     const deliverAfterRestart = vi.fn(
-      async (_event: GoogleChatEvent, lifecycle: { onAdopted: () => Promise<void> }) => {
+      async (_event: GoogleChatEvent, lifecycle: { onAdopted: () => void | Promise<void> }) => {
         await lifecycle.onAdopted();
       },
     );
