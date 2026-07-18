@@ -111,7 +111,9 @@ export function isRateLimitMemoryEmbeddingError(message: string): boolean {
   // billing messages (whose reset window is hours, not seconds) fall through
   // to the normal retry path.
   const hasRateLimitIndicator =
-    /(429|too\s+many\s+requests|resource\s+has\s+been\s+exhausted)/i.test(message);
+    /(429|too\s+many\s+requests|resource\s+has\s+been\s+exhausted|resource_exhausted)/i.test(
+      message,
+    );
   const hasRateLimitKeyword =
     /(rate\s*_?\s*limit|too\s+many\s+requests|resource\s+has\s+been\s+exhausted)/i.test(message);
   return hasRateLimitIndicator && hasRateLimitKeyword;

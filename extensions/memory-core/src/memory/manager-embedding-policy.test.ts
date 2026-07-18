@@ -281,6 +281,14 @@ describe("memory embedding policy", () => {
     expect(isRateLimitMemoryEmbeddingError("fetch failed | other side closed")).toBe(false);
     expect(isRateLimitMemoryEmbeddingError("502 Bad Gateway (cloudflare)")).toBe(false);
     expect(isRateLimitMemoryEmbeddingError("too many tokens per day")).toBe(false);
+    // Canonical Google-style RESOURCE_EXHAUSTED with rate-limit keyword
+    expect(isRateLimitMemoryEmbeddingError("RESOURCE_EXHAUSTED: rate limit exceeded")).toBe(true);
+    // Pure quota/billing RESOURCE_EXHAUSTED without rate-limit keyword
+    expect(
+      isRateLimitMemoryEmbeddingError(
+        "RESOURCE_EXHAUSTED: You exceeded your current quota, please check your plan and billing details",
+      ),
+    ).toBe(false);
   });
 
   it("uses longer backoff for rate-limit errors when rateLimitBaseDelayMs is set", async () => {
@@ -361,5 +369,53 @@ describe("memory embedding policy", () => {
     expect(run).toHaveBeenCalledTimes(2);
     // 1 retry with rate-limit backoff before exhausting maxAttempts=2
     expect(waits).toEqual([30_000]);
+  });
+
+  it("uses longer backoff for Google-style RESOURCE_EXHAUSTED with rate-limit keyword", async () => {
+    const run = vi.fn(async () => {
+      throw new Error("RESOURCE_EXHAUSTED: rate limit exceeded");
+    });
+    const waits: number[] = [];
+
+    await expect(
+      runMemoryEmbeddingRetryLoop({
+        run,
+        isRetryable: isRetryableMemoryEmbeddingError,
+        waitForRetry: async (delayMs) => {
+          waits.push(delayMs);
+        },
+        maxAttempts: 3,
+        baseDelayMs: 500,
+        rateLimitBaseDelayMs: 30_000,
+      }),
+    ).rejects.toThrow("RESOURCE_EXHAUSTED");
+
+    expect(run).toHaveBeenCalledTimes(3);
+    expect(waits).toEqual([30_000, 60_000]);
+  });
+
+  it("uses short backoff for RESOURCE_EXHAUSTED with quota message (not rate-limit)", async () => {
+    const waits: number[] = [];
+
+    await expect(
+      runMemoryEmbeddingRetryLoop({
+        run: async () => {
+          throw new Error(
+            "RESOURCE_EXHAUSTED: You exceeded your current quota, please check your plan and billing details",
+          );
+        },
+        isRetryable: isRetryableMemoryEmbeddingError,
+        waitForRetry: async (delayMs) => {
+          waits.push(delayMs);
+        },
+        maxAttempts: 3,
+        baseDelayMs: 500,
+        rateLimitBaseDelayMs: 30_000,
+      }),
+    ).rejects.toThrow("RESOURCE_EXHAUSTED");
+
+    // The quota message does not match isRetryableMemoryEmbeddingError,
+    // so the error is thrown immediately without any retry wait.
+    expect(waits).toEqual([]);
   });
 });
