@@ -5,14 +5,23 @@ import { resolveSecretInputRef, type SecretRef } from "../config/types.secrets.j
 import { createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
 import { setPathExistingStrict } from "./path-utils.js";
 import type { SecretDegradationReason } from "./runtime-degraded-state.js";
-import type {
-  ResolverContext,
-  SecretDefaults,
-  SecretResolverWarningCode,
-} from "./runtime-shared.js";
+import type { ResolverContext, SecretDefaults } from "./runtime-shared.js";
 import { pushInactiveSurfaceWarning, pushWarning } from "./runtime-shared.js";
-import type { RuntimeWebDiagnostic, RuntimeWebDiagnosticCode } from "./runtime-web-tools.types.js";
+import {
+  RuntimeWebProviderUnavailableError,
+  type RuntimeWebProviderSelectionResult,
+  type RuntimeWebUnavailableProvider,
+  type SecretResolutionResult,
+} from "./runtime-web-tools-selection.types.js";
+import type { RuntimeWebDiagnostic } from "./runtime-web-tools.types.js";
 export { isRecord } from "./shared.js";
+export {
+  RuntimeWebProviderUnavailableError,
+  type RuntimeWebProviderSelectionResult,
+  type RuntimeWebSecretOwner,
+  type RuntimeWebUnavailableProvider,
+  type SecretResolutionResult,
+} from "./runtime-web-tools-selection.types.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "./shared.js";
 
@@ -20,54 +29,6 @@ const loadResolveManifestContractOwnerPluginId = createLazyRuntimeNamedExport(
   () => import("./runtime-web-tools-manifest.runtime.js"),
   "resolveManifestContractOwnerPluginId",
 );
-
-type RuntimeWebWarningCode = Extract<RuntimeWebDiagnosticCode, SecretResolverWarningCode>;
-/**
- * Result of resolving one provider credential from config, SecretRef, env, or fallback.
- */
-export type SecretResolutionResult<TSource extends string> = {
-  value?: string;
-  source: TSource;
-  secretRefConfigured: boolean;
-  secretRef?: SecretRef;
-  secretRefKey?: string;
-  unresolvedRefReason?: SecretDegradationReason;
-  fallbackEnvVar?: string;
-};
-
-export type RuntimeWebSecretOwner = {
-  providerId: string;
-  path: string;
-  ref: SecretRef;
-  refKey: string;
-  resolvedValue?: string;
-  reason?: SecretDegradationReason;
-  restoreResolvedValue?: (value: string) => void;
-};
-
-export type RuntimeWebUnavailableProvider = RuntimeWebSecretOwner & {
-  reason: SecretDegradationReason;
-};
-
-export type RuntimeWebProviderSelectionResult = {
-  secretOwners: RuntimeWebSecretOwner[];
-  unavailableProviders: RuntimeWebUnavailableProvider[];
-};
-
-/** Carries typed web-provider ownership through strict reload failures. */
-class RuntimeWebProviderUnavailableError extends Error {
-  readonly unavailableProviders: RuntimeWebUnavailableProvider[];
-
-  constructor(
-    code: RuntimeWebWarningCode,
-    reason: SecretDegradationReason,
-    unavailableProviders: RuntimeWebUnavailableProvider[],
-  ) {
-    super(`[${code}] ${reason}`);
-    this.name = "RuntimeWebProviderUnavailableError";
-    this.unavailableProviders = unavailableProviders;
-  }
-}
 
 /**
  * Metadata fields shared by runtime web search and fetch provider selection.
@@ -112,6 +73,7 @@ type RuntimeWebProviderSelectionParams<
   onUnavailableProviders?: (error: RuntimeWebProviderUnavailableError) => void;
   noFallbackCode: RuntimeWebWarningCode;
   autoDetectSelectedCode: RuntimeWebWarningCode;
+  /** Reads the primary credential location for a provider from source config. */
   readConfiguredCredential: (params: {
     provider: TProvider;
     config: OpenClawConfig;
@@ -122,12 +84,13 @@ type RuntimeWebProviderSelectionParams<
     config: OpenClawConfig;
     toolConfig: TToolConfig;
   }) => { path: string; value: unknown } | undefined;
+  /** Resolves inline/env/SecretRef credentials and reports the winning source. */
   resolveSecretInput: (params: {
-    providerId: string;
     value: unknown;
     path: string;
     envVars: string[];
   }) => Promise<SecretResolutionResult<TSource>>;
+  /** Writes the selected credential into the resolved runtime config snapshot. */
   setResolvedCredential: (params: {
     resolvedConfig: OpenClawConfig;
     provider: TProvider;
@@ -447,6 +410,7 @@ export async function resolveRuntimeWebProviderSelection<
       restoreResolvedValue: (value: string) => void;
     };
     const unresolvedWithoutFallback: UnresolvedProvider[] = [];
+
     let keylessFallbackProvider: TProvider | undefined;
 
     for (const provider of candidates) {
@@ -467,14 +431,11 @@ export async function resolveRuntimeWebProviderSelection<
         config: params.sourceConfig,
         toolConfig: params.toolConfig,
       });
-      const resolveSecretInput = (input: unknown, inputPath: string) =>
-        params.resolveSecretInput({
-          providerId: provider.id,
-          value: input,
-          path: inputPath,
-          envVars: getProviderEnvVars(provider),
-        });
-      const resolution = await resolveSecretInput(value, path);
+      const resolution = await params.resolveSecretInput({
+        value,
+        path,
+        envVars: getProviderEnvVars(provider),
+      });
       let selectedCandidatePath = path;
       let selectedCandidateResolution = resolution;
 
@@ -486,7 +447,11 @@ export async function resolveRuntimeWebProviderSelection<
         });
         if (fallback?.value !== undefined) {
           selectedCandidatePath = fallback.path;
-          selectedCandidateResolution = await resolveSecretInput(fallback.value, fallback.path);
+          selectedCandidateResolution = await params.resolveSecretInput({
+            value: fallback.value,
+            path: fallback.path,
+            envVars: getProviderEnvVars(provider),
+          });
         }
       } else if (resolution.source === "env" && !resolution.secretRefConfigured) {
         const fallback = params.readConfiguredCredentialFallback?.({
@@ -498,7 +463,11 @@ export async function resolveRuntimeWebProviderSelection<
           fallback?.value !== undefined &&
           params.hasConfiguredSecretRef(fallback.value, params.defaults)
         ) {
-          const fallbackResolution = await resolveSecretInput(fallback.value, fallback.path);
+          const fallbackResolution = await params.resolveSecretInput({
+            value: fallback.value,
+            path: fallback.path,
+            envVars: getProviderEnvVars(provider),
+          });
           if (fallbackResolution.source === "secretRef" && fallbackResolution.value) {
             // Preserve transcript/config bytes for env-selected providers while materializing refs.
             setResolvedCredentialPath({
