@@ -21,6 +21,20 @@ describe("GATEWAY_EVENTS", () => {
   it("advertises node presence activity updates", () => {
     expect(GATEWAY_EVENTS).toContain("node.presence");
   });
+
+  it("advertises question methods and events", () => {
+    expect(GATEWAY_EVENTS).toContain("question.requested");
+    expect(GATEWAY_EVENTS).toContain("question.resolved");
+    expect(listGatewayMethods()).toEqual(
+      expect.arrayContaining([
+        "question.request",
+        "question.waitAnswer",
+        "question.resolve",
+        "question.get",
+        "question.list",
+      ]),
+    );
+  });
 });
 
 describe("listGatewayMethods", () => {

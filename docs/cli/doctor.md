@@ -207,6 +207,8 @@ This includes retired MCP OAuth files under `<state-dir>/mcp-oauth/*.json`. Stop
 
 ## Shared state SQLite compaction
 
+See [Database schemas](/reference/database-schemas) for schema versioning, integrity checks, and downgrade recovery.
+
 `openclaw doctor --state-sqlite compact` is explicit offline maintenance for
 the canonical shared state database at
 `<state-dir>/state/openclaw.sqlite`. It does not accept an arbitrary database

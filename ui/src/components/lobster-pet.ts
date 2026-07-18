@@ -315,6 +315,12 @@ const VISIT_FIRST_DELAY_MS = [15_000, 180_000] as const;
 const VISIT_STAY_MS = [90_000, 300_000] as const;
 const VISIT_GAP_MS = [360_000, 1_080_000] as const;
 
+// Some ledge visits spook the logo: a beat after the crab settles in, the
+// brand mark ducks away, and it pops back once the visit ends. Rolled from a
+// dedicated seeded stream so tests can probe arrivals purely.
+const LOGO_SCARE_CHANCE = 0.3;
+const LOGO_SCARE_DELAY_MS = 900;
+
 // Seeded pet names; rare palettes carry signature names. Shown via the
 // sprite's native title tooltip, so no i18n surface.
 const PET_NAMES = [
@@ -383,6 +389,8 @@ type LobsterLogoVisitPhase = "in" | "leaving" | "out";
 
 export type LobsterLogoVisitDetail = {
   phase: LobsterLogoVisitPhase;
+  // A null look on a non-"out" phase means "hide the logo, render no
+  // stand-in": a ledge visit scared the brand mark away.
   look: LobsterPetLook | null;
   name: string | null;
 };
@@ -917,6 +925,10 @@ class LobsterPet extends LitElement {
   @state() private anchor: LobsterPetAnchor = "ledge";
   @state() private scheduledVisiting = false;
   @state() private logoPerched = false;
+  @state() private logoScared = false;
+  private logoScarePending = false;
+  private logoScareTimer: number | null = null;
+  private scareRng: () => number = mulberry32(0);
   private logoPlanned = false;
   private logoDone = false;
   private lastLogoPhase: LobsterLogoVisitPhase = "out";
@@ -983,6 +995,7 @@ class LobsterPet extends LitElement {
       this.passerTimer,
       this.passerEndTimer,
       this.passerWatchTimer,
+      this.logoScareTimer,
     ]) {
       if (timer !== null) {
         window.clearTimeout(timer);
@@ -993,6 +1006,7 @@ class LobsterPet extends LitElement {
     this.passerTimer = null;
     this.passerEndTimer = null;
     this.passerWatchTimer = null;
+    this.logoScareTimer = null;
     if (this.audioCtx) {
       this.audioCtx.close().catch(() => {});
       this.audioCtx = null;
@@ -1018,6 +1032,7 @@ class LobsterPet extends LitElement {
       this.look = createLobsterPetLook(this.seed);
       this.rng = mulberry32(this.seed ^ 0x9e3779b9);
       this.visitRng = mulberry32(this.seed ^ 0x5eaf00d);
+      this.scareRng = mulberry32((this.seed ^ 0x5ca2e) >>> 0);
       this.spotPct = this.look.spotPct;
       this.facing = this.look.facing;
       // Reset the act loop inside the update pass; deferring state flips to
@@ -1038,6 +1053,12 @@ class LobsterPet extends LitElement {
       this.logoPlanned = isLobsterLogoLoad(this.seed);
       this.logoDone = false;
       this.logoPerched = false;
+      this.logoScared = false;
+      this.logoScarePending = false;
+      if (this.logoScareTimer !== null) {
+        window.clearTimeout(this.logoScareTimer);
+        this.logoScareTimer = null;
+      }
       this.familiarity = getLobsterFamiliarity();
       this.sailorDay = isLobsterDay(new Date());
       this.greetedThisLoad = false;
@@ -1103,6 +1124,16 @@ class LobsterPet extends LitElement {
         if (this.logoPerched) {
           this.logoDone = true;
         }
+        // One scare roll per arrival keeps the stream aligned across visit
+        // kinds; only an idle ledge visit may spook the logo (a perch owns
+        // the slot outright, offline summons are on status duty).
+        const scareRolled = this.scareRng() < LOGO_SCARE_CHANCE;
+        this.logoScarePending =
+          scareRolled &&
+          !this.logoPerched &&
+          this.scheduledVisiting &&
+          this.mode === "idle" &&
+          !prefersReducedMotion();
         if (this.look) {
           // Anniversary check reads the dex before this arrival records into
           // it: a first-ever visit today must not celebrate itself.
@@ -1128,11 +1159,19 @@ class LobsterPet extends LitElement {
       this.clearActTimers();
       this.act = null;
       this.entering = false;
+      this.logoScarePending = false;
+      if (this.logoScareTimer !== null) {
+        window.clearTimeout(this.logoScareTimer);
+        this.logoScareTimer = null;
+      }
       this.presence = "leaving";
       this.leaveTimer = window.setTimeout(() => {
         this.leaveTimer = null;
         this.presence = "out";
         this.logoPerched = false;
+        // The "out" edge is the single restore point: the logo fades back
+        // in the same update that ends the visit, scare or perch alike.
+        this.logoScared = false;
       }, LEAVE_MS);
     }
   }
@@ -1159,11 +1198,23 @@ class LobsterPet extends LitElement {
         this.performAct("wave");
       }
     }, ENTER_MS);
+    if (this.logoScarePending) {
+      this.logoScarePending = false;
+      // The beat between arrival and the duck is what sells "the crab scared
+      // the logo" instead of reading as a render glitch.
+      this.logoScareTimer = window.setTimeout(() => {
+        this.logoScareTimer = null;
+        if (this.presence === "in" && !this.logoPerched) {
+          this.logoScared = true;
+        }
+      }, LOGO_SCARE_DELAY_MS);
+    }
     this.scheduleNextAct();
   }
 
   private logoVisitPhase(): LobsterLogoVisitPhase {
-    if (!this.logoPerched || !this.visitsEnabled || this.dismissed) {
+    const occupied = this.logoPerched || this.logoScared;
+    if (!occupied || !this.visitsEnabled || this.dismissed) {
       return "out";
     }
     return this.presence === "in" ? "in" : this.presence === "leaving" ? "leaving" : "out";
@@ -1177,7 +1228,8 @@ class LobsterPet extends LitElement {
       return;
     }
     this.lastLogoPhase = phase;
-    const look = phase === "out" || !this.look ? null : this.look;
+    // Scare phases send no look: the logo just hides, nobody fills in.
+    const look = phase === "out" || !this.logoPerched || !this.look ? null : this.look;
     // The ledge sprite dresses up for palette anniversaries; the stand-in
     // celebrates the same way.
     const dressed =

@@ -34,6 +34,7 @@ final class QuickChatController: NSObject, NSWindowDelegate {
     typealias MonitorClearer = (inout Any?) -> Void
     typealias HotkeyRegistrar = (@escaping () -> Void) -> Void
     typealias HotkeyRemover = () -> Void
+    typealias ChatOpener = @MainActor (_ sessionKey: String?, _ agentID: String?) -> Void
 
     static let shared = QuickChatController()
 
@@ -48,6 +49,7 @@ final class QuickChatController: NSObject, NSWindowDelegate {
     @ObservationIgnored private let monitorClearer: MonitorClearer
     @ObservationIgnored private let hotkeyRegistrar: HotkeyRegistrar
     @ObservationIgnored private let hotkeyRemover: HotkeyRemover
+    @ObservationIgnored private let chatOpener: ChatOpener
     @ObservationIgnored private let allowsHotkeyRegistrationInTests: Bool
     @ObservationIgnored private var panel: QuickChatPanel?
     @ObservationIgnored private var hostingView: NSHostingView<QuickChatView>?
@@ -82,6 +84,9 @@ final class QuickChatController: NSObject, NSWindowDelegate {
         hotkeyRemover: @escaping HotkeyRemover = {
             KeyboardShortcuts.removeHandler(for: .toggleQuickChat)
         },
+        chatOpener: @escaping ChatOpener = { sessionKey, agentID in
+            AppNavigationActions.openChat(sessionKey: sessionKey, agentID: agentID)
+        },
         allowsHotkeyRegistrationInTests: Bool = false)
     {
         self.enableUI = enableUI
@@ -92,6 +97,7 @@ final class QuickChatController: NSObject, NSWindowDelegate {
         self.monitorClearer = monitorClearer
         self.hotkeyRegistrar = hotkeyRegistrar
         self.hotkeyRemover = hotkeyRemover
+        self.chatOpener = chatOpener
         self.allowsHotkeyRegistrationInTests = allowsHotkeyRegistrationInTests
         super.init()
     }
@@ -262,21 +268,7 @@ final class QuickChatController: NSObject, NSWindowDelegate {
             model: self.model,
             onDismiss: { [weak self] in self?.dismiss() },
             onSendAccepted: { [weak self] openChat in
-                guard let self else { return }
-                // Command-Return must open the session that actually received the send;
-                // the accepted route is immutable, unlike live model routing state.
-                let route = self.model.lastAcceptedRoute
-                self.dismiss()
-                guard openChat else { return }
-                if let route, !route.sessionKey.isEmpty {
-                    // Accepted tradeoff: in global scope the window opens the shared "global"
-                    // session without the agent discriminator; threading route.agentID through
-                    // the WebChat window contract is a follow-up if that config needs it.
-                    NSApp.activate(ignoringOtherApps: true)
-                    WebChatManager.shared.show(sessionKey: route.sessionKey)
-                } else {
-                    AppNavigationActions.openChat()
-                }
+                self?.handleSendAccepted(openChat: openChat)
             },
             onShowAgentPicker: { [weak self] in
                 self?.showAgentPicker()
@@ -291,6 +283,19 @@ final class QuickChatController: NSObject, NSWindowDelegate {
                 self?.textView = textView
                 self?.focusEditor()
             })
+    }
+
+    private func handleSendAccepted(openChat: Bool) {
+        // Command-Return must open the immutable route that accepted the send,
+        // not live model routing state that may already have changed.
+        let route = self.model.lastAcceptedRoute
+        self.dismiss()
+        guard openChat else { return }
+        if let route, !route.sessionKey.isEmpty {
+            self.chatOpener(route.sessionKey, route.agentID)
+        } else {
+            self.chatOpener(nil, nil)
+        }
     }
 
     private func updateContentHeight(_ height: CGFloat) {
@@ -432,6 +437,10 @@ final class QuickChatController: NSObject, NSWindowDelegate {
 
     var hotkeyRegisteredForTesting: Bool {
         self.hotkeyRegistered
+    }
+
+    func handleSendAcceptedForTesting(openChat: Bool) {
+        self.handleSendAccepted(openChat: openChat)
     }
     #endif
 }

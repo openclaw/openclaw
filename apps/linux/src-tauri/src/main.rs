@@ -3,6 +3,8 @@ mod canvas;
 mod cli;
 mod discovery;
 mod gateway;
+mod gateway_device_identity;
+mod gateway_ws;
 mod installer;
 mod notify;
 mod pending_approvals;
@@ -177,6 +179,18 @@ impl DesktopState {
         *self.inner.tray.lock().expect("tray mutex poisoned") = Some(handles);
     }
 
+    pub(crate) fn set_quickchat_shortcut_checked(&self, checked: bool) {
+        if let Some(tray) = self
+            .inner
+            .tray
+            .lock()
+            .expect("tray mutex poisoned")
+            .as_ref()
+        {
+            tray.set_quickchat_shortcut_checked(checked);
+        }
+    }
+
     pub fn connect(&self, app: &AppHandle) -> Result<GatewaySnapshot, String> {
         let _operation = self
             .inner
@@ -186,6 +200,8 @@ impl DesktopState {
         let cli = match self.resolve_cli() {
             Ok(cli) => cli,
             Err(CliError::Missing) => {
+                app.state::<gateway_ws::GatewayClient>()
+                    .clear_configuration(app);
                 let snapshot = GatewaySnapshot::missing_cli();
                 self.update_tray(&snapshot);
                 return Ok(snapshot);
@@ -193,6 +209,8 @@ impl DesktopState {
             Err(error) => return Err(error.to_string()),
         };
         let ready = gateway::ensure_ready(&cli)?;
+        app.state::<gateway_ws::GatewayClient>()
+            .configure(app, ready.gateway_ws.clone());
         let navigated = self.navigate_local(app, &ready.dashboard_url, false, None, true, true)?;
         self.update_tray(&ready.snapshot);
         if navigated {
@@ -220,6 +238,8 @@ impl DesktopState {
         let cli = OpenClawCli::discover().map_err(|error| error.to_string())?;
         *self.inner.cli.lock().expect("CLI mutex poisoned") = Some(cli.clone());
         let ready = gateway::ensure_ready(&cli)?;
+        app.state::<gateway_ws::GatewayClient>()
+            .configure(app, ready.gateway_ws.clone());
         let navigated = self.navigate_local(app, &ready.dashboard_url, false, None, true, true)?;
         self.update_tray(&ready.snapshot);
         if navigated {
@@ -244,12 +264,16 @@ impl DesktopState {
         let cli = self.resolve_cli().map_err(|error| error.to_string())?;
         let snapshot = gateway::act(&cli, action)?;
         if matches!(action, GatewayAction::Stop) {
+            app.state::<gateway_ws::GatewayClient>()
+                .clear_configuration(app);
             self.show_local(app, "stopped", false, None)?;
             self.update_tray(&snapshot);
             return Ok(snapshot);
         }
 
         let ready = gateway::dashboard(&cli, snapshot)?;
+        app.state::<gateway_ws::GatewayClient>()
+            .configure(app, ready.gateway_ws.clone());
         let navigated = self.navigate_local(app, &ready.dashboard_url, false, None, true, true)?;
         self.update_tray(&ready.snapshot);
         if navigated {
@@ -480,6 +504,8 @@ impl DesktopState {
                     state.update_tray(&snapshot);
                     if snapshot.reachable {
                         if let Ok(ready) = gateway::dashboard(&cli, snapshot) {
+                            app.state::<gateway_ws::GatewayClient>()
+                                .configure(&app, ready.gateway_ws.clone());
                             match state.navigate_local(
                                 &app,
                                 &ready.dashboard_url,
@@ -663,6 +689,8 @@ async fn gateway_action(
 
 fn main() {
     let global_shortcuts_supported = tray::global_shortcuts_supported();
+    let quickchat_state = quickchat::QuickChatState::new(global_shortcuts_supported);
+    let quickchat_shortcut_state = quickchat_state.clone();
     // Single-instance must run first so it can pass deep-link argv to the primary process.
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -678,9 +706,9 @@ fn main() {
     let builder = if global_shortcuts_supported {
         builder.plugin(
             tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(|app, shortcut, event| {
+                .with_handler(move |app, shortcut, event| {
                     if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
-                        if shortcut.matches(Modifiers::CONTROL | Modifiers::SHIFT, Code::Space) {
+                        if quickchat_shortcut_state.matches_shortcut(shortcut) {
                             quickchat::toggle_quickchat(app);
                         } else if shortcut
                             .matches(Modifiers::CONTROL | Modifiers::SHIFT, Code::KeyO)
@@ -712,6 +740,7 @@ fn main() {
             .expect("tauri.conf.json must define the main window");
         let state = DesktopState::new(window.url()?);
         app.manage(state.clone());
+        app.manage(gateway_ws::GatewayClient::new());
         let deep_link_app = app.handle().clone();
         app.deep_link().on_open_url(move |event| {
             handle_deep_links(&deep_link_app, event.urls());
@@ -725,7 +754,7 @@ fn main() {
         }
 
         app.manage(discovery::GatewayDiscovery::default());
-        app.manage(quickchat::QuickChatState::default());
+        app.manage(quickchat_state.clone());
         app.manage(updater::UpdaterState::default());
         #[cfg(target_os = "linux")]
         match canvas::CanvasBridge::start(app.handle().clone()) {
@@ -747,10 +776,15 @@ fn main() {
         discovery::discover_gateways,
         install_cli,
         gateway_action,
+        quickchat::quickchat_agents,
         quickchat::quickchat_hide,
         quickchat::quickchat_identity,
         quickchat::quickchat_ready,
+        quickchat::quickchat_select_agent,
         quickchat::quickchat_send,
+        quickchat::quickchat_set_expanded,
+        quickchat::quickchat_set_shortcut,
+        quickchat::quickchat_shortcut,
         quickchat::quickchat_show_dashboard,
         updater::open_release_page,
         updater::relaunch,
@@ -765,10 +799,15 @@ fn main() {
         discovery::discover_gateways,
         install_cli,
         gateway_action,
+        quickchat::quickchat_agents,
         quickchat::quickchat_hide,
         quickchat::quickchat_identity,
         quickchat::quickchat_ready,
+        quickchat::quickchat_select_agent,
         quickchat::quickchat_send,
+        quickchat::quickchat_set_expanded,
+        quickchat::quickchat_set_shortcut,
+        quickchat::quickchat_shortcut,
         quickchat::quickchat_show_dashboard,
         updater::open_release_page,
         updater::relaunch,

@@ -13,7 +13,11 @@ import {
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createLineNodeWebhookHandler } from "./webhook-node.js";
-import { createLineWebhookSpool, LineWebhookTerminalDeliveryError } from "./webhook-spool.js";
+import {
+  createLineWebhookSpool,
+  LineWebhookTerminalDeliveryError,
+  type LineWebhookTurnAdoptionLifecycle,
+} from "./webhook-spool.js";
 
 type SpoolPayload = {
   version: number;
@@ -271,6 +275,46 @@ describe("LINE webhook spool", () => {
       } finally {
         await restarted.stop();
       }
+    });
+  });
+
+  it("waits for deferred claim settlement before disposing on stop", async () => {
+    await withQueue(async (queue) => {
+      let deferredLifecycle: LineWebhookTurnAdoptionLifecycle | undefined;
+      const deliver = vi.fn(async (_event, _destination, control) => {
+        deferredLifecycle = control.turnAdoptionLifecycle;
+        control.turnAdoptionLifecycle.onDeferred();
+      });
+      const spool = createLineWebhookSpool({
+        accountId: "default",
+        runtime: runtime(),
+        queue,
+        deliver,
+      });
+      const event = createEvent({ webhookEventId: "event-stop-deferred" });
+
+      spool.start();
+      await spool.accept(callback(event));
+      await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1));
+
+      let stopSettled = false;
+      const stopping = spool.stop().then(() => {
+        stopSettled = true;
+      });
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 50);
+      });
+      expect(stopSettled).toBe(false);
+      expect(await queue.listClaims()).toHaveLength(1);
+
+      if (!deferredLifecycle) {
+        throw new Error("LINE delivery did not expose its deferred lifecycle");
+      }
+      await deferredLifecycle.onAbandoned();
+      await stopping;
+      expect(stopSettled).toBe(true);
+      expect(await queue.listClaims()).toEqual([]);
+      expect(await queue.listPending()).toHaveLength(1);
     });
   });
 

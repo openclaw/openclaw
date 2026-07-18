@@ -1,7 +1,6 @@
 // Feishu plugin module implements comment handler behavior.
 import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
-import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
@@ -231,6 +230,7 @@ export async function handleFeishuCommentEvent(
     conversation: { kind: "direct", id: commentTarget, label: conversationLabel },
     route: {
       agentId: route.agentId,
+      dmScope: route.dmScope,
       accountId: route.accountId,
       routeSessionKey: commentSessionKey,
       dispatchSessionKey: commentSessionKey,
@@ -248,8 +248,8 @@ export async function handleFeishuCommentEvent(
     },
   });
 
-  const { dispatcher, replyOptions, markDispatchIdle, markRunComplete, cleanupTypingReaction } =
-    createFeishuCommentReplyDispatcher({
+  const { dispatcherOptions, delivery, cleanupTypingReaction } = createFeishuCommentReplyDispatcher(
+    {
       cfg: effectiveCfg,
       agentId: route.agentId,
       runtime,
@@ -259,9 +259,9 @@ export async function handleFeishuCommentEvent(
       commentId: turn.commentId,
       replyId: turn.replyId,
       isWholeComment: turn.isWholeComment,
-    });
+    },
+  );
 
-  let dispatchSettledBeforeStart = false;
   try {
     log(
       `feishu[${account.accountId}]: dispatching drive comment to agent ` +
@@ -293,23 +293,8 @@ export async function handleFeishuCommentEvent(
               );
             },
           },
-          onPreDispatchFailure: async () => {
-            dispatchSettledBeforeStart = true;
-            await core.channel.reply.settleReplyDispatcher({
-              dispatcher,
-              onSettled: () => {
-                markRunComplete();
-                markDispatchIdle();
-              },
-            });
-          },
-          runDispatch: () =>
-            dispatchInboundMessage({
-              ctx: ctxPayload,
-              cfg: effectiveCfg,
-              dispatcher,
-              replyOptions,
-            }),
+          dispatcherOptions,
+          delivery,
         }),
       },
     });
@@ -321,10 +306,6 @@ export async function handleFeishuCommentEvent(
         `(queuedFinal=${queuedFinal}, replies=${counts.final}, session=${commentSessionKey})`,
     );
   } finally {
-    if (!dispatchSettledBeforeStart) {
-      markRunComplete();
-      markDispatchIdle();
-    }
     void cleanupTypingReaction();
   }
 }

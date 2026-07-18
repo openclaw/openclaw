@@ -11,6 +11,7 @@ export const SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY = "Spawn subagent or ACP sessio
 export const SESSIONS_SPAWN_SUBAGENT_TOOL_DISPLAY_SUMMARY = "Spawn subagent session.";
 export const SESSION_STATUS_TOOL_DISPLAY_SUMMARY = "Show session status/model/usage.";
 export const UPDATE_PLAN_TOOL_DISPLAY_SUMMARY = "Track short work plan.";
+export const ASK_USER_TOOL_DISPLAY_SUMMARY = "Ask the user and wait for an answer.";
 export const SPAWN_TASK_TOOL_DISPLAY_SUMMARY = "Suggest follow-up work for operator approval.";
 export const DISMISS_TASK_TOOL_DISPLAY_SUMMARY = "Withdraw a pending task suggestion.";
 
@@ -97,4 +98,15 @@ export function describeSessionStatusTool(): string {
 /** Describes the update_plan tool for model-facing instructions. */
 export function describeUpdatePlanTool(): string {
   return "Use for multi-step work. Send the full list each call; keep statuses current and exactly one `in_progress` until done.";
+}
+
+/** Describes the ask_user tool and its decision-only use policy. */
+export function describeAskUserTool(): string {
+  return [
+    "Ask the human user 1-3 structured questions and wait for their answer.",
+    "Use only when blocked on a decision genuinely theirs that cannot be resolved from the request, code, or sensible defaults; never ask whether to proceed or confirm a plan.",
+    "Prefer one question. Put the recommended option first and suffix its label with ` (Recommended)`.",
+    "Do not include an Other option; free text is added automatically.",
+    "If the result is no_answer, continue with best judgment.",
+  ].join(" ");
 }

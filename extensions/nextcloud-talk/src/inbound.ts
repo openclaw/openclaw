@@ -338,6 +338,7 @@ export async function handleNextcloudTalkInbound(params: {
     conversation: { kind: isGroup ? "group" : "direct", id: roomToken, label: fromLabel },
     route: {
       agentId: route.agentId,
+      dmScope: route.dmScope,
       accountId: route.accountId,
       routeSessionKey: route.sessionKey,
     },

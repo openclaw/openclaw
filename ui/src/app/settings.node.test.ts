@@ -366,7 +366,7 @@ describe("loadSettings default gateway URL derivation", () => {
     expect(sessionStorage.length).toBe(1);
   });
 
-  it("persists sidebar customization across save and load, normalizing bad values", () => {
+  it("persists custodian unpinning across save and load, normalizing bad values", () => {
     setTestLocation({
       protocol: "https:",
       host: "gateway.example:8443",
@@ -403,7 +403,7 @@ describe("loadSettings default gateway URL derivation", () => {
     persisted.navWidth = 220;
     localStorage.setItem(scopedKey, JSON.stringify(persisted));
 
-    expect(loadSettings().sidebarPinnedRoutes).toEqual(["usage", "cron", "plugins"]);
+    expect(loadSettings().sidebarPinnedRoutes).toEqual(["custodian", "usage", "cron", "plugins"]);
     expect(loadSettings().navWidth).toBe(258);
   });
 

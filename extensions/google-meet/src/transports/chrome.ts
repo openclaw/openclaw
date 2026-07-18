@@ -237,6 +237,8 @@ export async function launchChromeMeet(params: {
   await checkRealtimeAudioPrerequisites();
 
   if (!params.config.chrome.launch) {
+    // An external owner supplies the already-open call, so no browser health exists to gate on.
+    // Configuring this mode explicitly authorizes its realtime bridge to start immediately.
     return { launched: false, audioBridge: await startRealtimeAudioBridge() };
   }
 
@@ -253,7 +255,7 @@ export async function launchChromeMeet(params: {
   const shouldStartRealtimeBridge =
     isGoogleMeetTalkBackMode(params.mode) &&
     result.browser?.inCall === true &&
-    result.browser.micMuted !== true &&
+    result.browser.micMuted === false &&
     result.browser.manualActionRequired !== true;
   const audioBridge = shouldStartRealtimeBridge ? await startRealtimeAudioBridge() : undefined;
   return { ...result, audioBridge };
@@ -536,6 +538,22 @@ export async function launchChromeMeetOnNode(params: {
     meetingSessionId: params.meetingSessionId,
     url: params.url,
   });
+  // launch:false explicitly delegates call state to an already-open session.
+  // Browser-managed joins require explicit unmuted health before node audio starts.
+  if (
+    params.config.chrome.launch &&
+    isGoogleMeetTalkBackMode(params.mode) &&
+    (browserControl.browser?.inCall !== true ||
+      browserControl.browser.micMuted !== false ||
+      browserControl.browser.manualActionRequired === true)
+  ) {
+    return {
+      nodeId,
+      launched: browserControl.launched,
+      browser: browserControl.browser,
+      tab: browserControl.tab,
+    };
+  }
   const raw = await params.runtime.nodes.invoke({
     nodeId,
     command: GOOGLE_MEET_NODE_COMMAND,

@@ -35,6 +35,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { serveOpenClawChannelMcp } from "../mcp/channel-server.js";
 import { defaultRuntime } from "../runtime.js";
+import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { formatCliCommand } from "./command-format.js";
 import { resolveGatewayAuthOptions } from "./gateway-secret-options.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
@@ -182,6 +183,8 @@ type McpDoctorServerResult = {
   ok: boolean;
   issues: McpDoctorIssue[];
 };
+
+const MCP_DOCTOR_CONCURRENCY = 4;
 
 const SENSITIVE_HEADER_NAMES = new Set([
   "authorization",
@@ -799,24 +802,35 @@ export function registerMcpCli(program: Command) {
           `No MCP server named "${name}" in ${loaded.path}. Run ${formatCliCommand("openclaw mcp list")} to see configured servers.`,
         );
       }
-      const servers = await Promise.all(
-        Object.entries(selected)
-          .toSorted(([a], [b]) => a.localeCompare(b))
-          .map(async ([serverName, server]): Promise<McpDoctorServerResult> => {
-            const issues = await collectMcpDoctorIssues({
-              name: serverName,
-              server,
-              config: loaded.config,
-              path: loaded.path,
-              probe: Boolean(opts.probe),
-            });
-            return {
-              name: serverName,
-              ok: !issues.some((entry) => entry.level === "error"),
-              issues,
-            };
-          }),
-      );
+      const tasks = Object.entries(selected)
+        .toSorted(([a], [b]) => a.localeCompare(b))
+        .map(([serverName, server]) => async (): Promise<McpDoctorServerResult> => {
+          const issues = await collectMcpDoctorIssues({
+            name: serverName,
+            server,
+            config: loaded.config,
+            path: loaded.path,
+            probe: Boolean(opts.probe),
+          });
+          return {
+            name: serverName,
+            ok: !issues.some((entry) => entry.level === "error"),
+            issues,
+          };
+        });
+      // A probe can start one process or connection per server. Keep large
+      // registries from fanning out every transport at once.
+      const {
+        results: servers,
+        firstError,
+        hasError,
+      } = await runTasksWithConcurrency({
+        tasks,
+        limit: MCP_DOCTOR_CONCURRENCY,
+      });
+      if (hasError) {
+        throw firstError;
+      }
       const ok = servers.every((server) => server.ok);
       if (opts.json) {
         printJson({ path: loaded.path, ok, servers });
