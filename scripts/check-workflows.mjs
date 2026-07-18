@@ -10,16 +10,51 @@ import { join } from "node:path";
 const ACTIONLINT_VERSION = "1.7.11";
 const PRE_COMMIT_VERSION = "4.2.0";
 const WORKFLOW_DIR = ".github/workflows";
+const DEFAULT_COMMAND_TIMEOUT_MS = 5 * 60_000;
+const MAX_COMMAND_TIMEOUT_MS = 30 * 60_000;
+const COMMAND_TIMEOUT_ENV = "OPENCLAW_CHECK_WORKFLOWS_COMMAND_TIMEOUT_MS";
+
+function resolveCommandTimeoutMs() {
+  const raw = process.env[COMMAND_TIMEOUT_ENV]?.trim();
+  if (!raw) {
+    return DEFAULT_COMMAND_TIMEOUT_MS;
+  }
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    return DEFAULT_COMMAND_TIMEOUT_MS;
+  }
+  return Math.min(parsed, MAX_COMMAND_TIMEOUT_MS);
+}
+
+const commandTimeoutMs = resolveCommandTimeoutMs();
+
+function commandLabel(command, args) {
+  return [command, ...args].join(" ");
+}
+
+function spawnCommand(command, args, options = {}) {
+  return spawnSync(command, args, {
+    ...options,
+    timeout: commandTimeoutMs,
+  });
+}
+
+function commandFailureMessage(command, args, error) {
+  if (error?.code === "ETIMEDOUT") {
+    return `[check-workflows] timed out after ${commandTimeoutMs}ms: ${commandLabel(command, args)}`;
+  }
+  return `[check-workflows] failed to run ${command}: ${error?.message ?? "unknown error"}`;
+}
 
 function commandExists(command, args = ["--version"]) {
-  const result = spawnSync(command, args, { stdio: "ignore" });
+  const result = spawnCommand(command, args, { stdio: "ignore" });
   return !result.error && result.status === 0;
 }
 
 function run(command, args) {
-  const result = spawnSync(command, args, { stdio: "inherit" });
+  const result = spawnCommand(command, args, { stdio: "inherit" });
   if (result.error) {
-    console.error(`[check-workflows] failed to run ${command}: ${result.error.message}`);
+    console.error(commandFailureMessage(command, args, result.error));
     process.exit(1);
   }
   if (result.status !== 0) {
@@ -28,10 +63,10 @@ function run(command, args) {
 }
 
 function runChecked(command, args) {
-  const result = spawnSync(command, args, { stdio: "inherit" });
+  const result = spawnCommand(command, args, { stdio: "inherit" });
   if (result.error) {
     return {
-      message: `[check-workflows] failed to run ${command}: ${result.error.message}`,
+      message: commandFailureMessage(command, args, result.error),
       status: 1,
     };
   }
