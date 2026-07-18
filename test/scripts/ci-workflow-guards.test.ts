@@ -4999,6 +4999,12 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       'codex_transport="extensions/codex/src/app-server/transport-websocket.ts"',
     );
     expect(workflow).toContain(
+      "network_codeql_contract_pattern='^\\.github/codeql/(codeql-network-runtime-boundary-critical-quality\\.yml|openclaw-boundary/queries/(raw-socket-callsite-classification|managed-proxy-runtime-mutation)\\.ql)$'",
+    );
+    expect(workflow).toContain(
+      'if grep -Eq "$network_codeql_contract_pattern" "$changed_files" ||',
+    );
+    expect(workflow).toContain(
       '| select(.filename != "extensions/codex/src/app-server/transport-websocket.ts")',
     );
     expect(workflow).not.toContain('grep -Fv "$codex_transport: " "$added_lines"');
