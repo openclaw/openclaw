@@ -2114,6 +2114,8 @@ importers:
         specifier: 2.9.0
         version: 2.9.0
 
+  packages/localization-core: {}
+
   packages/media-core:
     dependencies:
       '@openclaw/normalization-core':
@@ -2242,6 +2244,9 @@ importers:
       '@openclaw/gateway-client':
         specifier: workspace:*
         version: link:../packages/gateway-client
+      '@openclaw/localization-core':
+        specifier: workspace:*
+        version: link:../packages/localization-core
       '@openclaw/libterminal':
         specifier: 0.3.2
         version: 0.3.2

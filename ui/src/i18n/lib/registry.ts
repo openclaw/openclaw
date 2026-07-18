@@ -1,4 +1,5 @@
 // Control UI i18n module implements registry behavior.
+import { matchInferredOpenClawLocale } from "@openclaw/localization-core";
 import type { Locale, TranslationMap } from "./types.ts";
 
 type LazyLocale = Exclude<Locale, "en">;
@@ -128,64 +129,7 @@ function isLazyLocale(locale: Locale): locale is LazyLocale {
 }
 
 export function resolveNavigatorLocale(navLang: string): Locale {
-  if (navLang.startsWith("zh")) {
-    return navLang === "zh-TW" || navLang === "zh-HK" ? "zh-TW" : "zh-CN";
-  }
-  if (navLang.startsWith("pt")) {
-    return "pt-BR";
-  }
-  if (navLang.startsWith("de")) {
-    return "de";
-  }
-  if (navLang.startsWith("es")) {
-    return "es";
-  }
-  if (navLang.startsWith("ja")) {
-    return "ja-JP";
-  }
-  if (navLang.startsWith("ko")) {
-    return "ko";
-  }
-  if (navLang.startsWith("fr")) {
-    return "fr";
-  }
-  if (navLang.startsWith("hi")) {
-    return "hi";
-  }
-  if (navLang.startsWith("ar")) {
-    return "ar";
-  }
-  if (navLang.startsWith("it")) {
-    return "it";
-  }
-  if (navLang.startsWith("tr")) {
-    return "tr";
-  }
-  if (navLang.startsWith("uk")) {
-    return "uk";
-  }
-  if (navLang.startsWith("id")) {
-    return "id";
-  }
-  if (navLang.startsWith("pl")) {
-    return "pl";
-  }
-  if (navLang.startsWith("th")) {
-    return "th";
-  }
-  if (navLang.startsWith("vi")) {
-    return "vi";
-  }
-  if (navLang.startsWith("nl")) {
-    return "nl";
-  }
-  if (navLang.startsWith("fa")) {
-    return "fa";
-  }
-  if (navLang.startsWith("ru")) {
-    return "ru";
-  }
-  return DEFAULT_LOCALE;
+  return (matchInferredOpenClawLocale(navLang, SUPPORTED_LOCALES) ?? DEFAULT_LOCALE) as Locale;
 }
 
 export async function loadLazyLocaleTranslation(locale: Locale): Promise<TranslationMap | null> {

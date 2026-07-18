@@ -3,6 +3,7 @@ import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import * as translate from "../lib/translate.ts";
+import type { TranslationMap } from "../lib/types.ts";
 import { ar } from "../locales/ar.ts";
 import { de } from "../locales/de.ts";
 import { en } from "../locales/en.ts";
@@ -131,6 +132,78 @@ describe("i18n", () => {
     });
     expect(fresh.i18n.getLocale()).toBe("zh-CN");
     expect(fresh.t("common.health")).toBe("健康状况");
+  });
+
+  it("resets stale stored locales and continues with the browser locale", async () => {
+    vi.stubGlobal("localStorage", createStorageMock());
+    vi.stubGlobal("navigator", { language: "de-DE" } as Navigator);
+    localStorage.setItem("openclaw.i18n.locale", "xx-invalid");
+    const fresh = await importFreshTranslate();
+    await vi.waitFor(() => {
+      expect(fresh.i18n.getLocale()).toBe("de");
+    });
+    expect(localStorage.getItem("openclaw.i18n.locale")).toBe("de");
+  });
+
+  it("uses the first supported browser language from the preference list", async () => {
+    vi.stubGlobal("localStorage", createStorageMock());
+    vi.stubGlobal("navigator", {
+      language: "he-IL",
+      languages: ["he-IL", "de-DE"],
+    } as Navigator);
+    const fresh = await importFreshTranslate();
+    await vi.waitFor(() => {
+      expect(fresh.i18n.getLocale()).toBe("de");
+    });
+  });
+
+  it.each([
+    ["ar", "rtl"],
+    ["fa", "rtl"],
+    ["de", "ltr"],
+  ] as const)("updates document language and direction for %s", async (locale, direction) => {
+    translate.i18n.registerTranslation(locale, shippedLocales[locale]);
+    await translate.i18n.setLocale(locale);
+    expect(document.documentElement.lang).toBe(locale);
+    expect(document.documentElement.dir).toBe(direction);
+  });
+
+  it("keeps the latest locale when lazy loads complete out of order", async () => {
+    const pending = new Map<string, (translation: TranslationMap | null) => void>();
+    const manager = new translate.I18nManager(
+      (locale) =>
+        new Promise((resolve) => {
+          pending.set(locale, resolve);
+        }),
+    );
+
+    const german = manager.setLocale("de");
+    const chinese = manager.setLocale("zh-CN");
+    pending.get("zh-CN")?.(zh_CN);
+    await chinese;
+    pending.get("de")?.(de);
+    await german;
+
+    expect(manager.getLocale()).toBe("zh-CN");
+    expect(manager.t("common.health")).toBe("健康状况");
+  });
+
+  it("persists English when it cancels a stored-locale startup load", async () => {
+    localStorage.setItem("openclaw.i18n.locale", "zh-CN");
+    const pending = new Map<string, (translation: TranslationMap | null) => void>();
+    const manager = new translate.I18nManager(
+      (locale) =>
+        new Promise((resolve) => {
+          pending.set(locale, resolve);
+        }),
+    );
+
+    await manager.setLocale("en");
+    pending.get("zh-CN")?.(zh_CN);
+    await Promise.resolve();
+
+    expect(manager.getLocale()).toBe("en");
+    expect(localStorage.getItem("openclaw.i18n.locale")).toBe("en");
   });
 
   it("skips node localStorage accessors that warn without a storage file", async () => {

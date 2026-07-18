@@ -1,0 +1,1248 @@
+{
+  "version": 1,
+  "localeRegistry": "packages/localization-core/src/locale-registry.ts",
+  "registryRevision": "sha256:f1fc485ce67ea02b74c69e63e648da3fddc51e276d507a2eeb21d49a18898207",
+  "testFixtures": {
+    "pseudo-expanded": {
+      "kind": "expansion",
+      "direction": "ltr"
+    },
+    "pseudo-bidi": {
+      "kind": "bidirectional",
+      "direction": "rtl"
+    },
+    "he-rtl": {
+      "kind": "bidirectional",
+      "direction": "rtl",
+      "languageTag": "he"
+    },
+    "bn-indic": {
+      "kind": "shaping",
+      "direction": "ltr",
+      "languageTag": "bn"
+    },
+    "km-segmentation": {
+      "kind": "segmentation",
+      "direction": "ltr",
+      "languageTag": "km"
+    },
+    "am-ethiopic": {
+      "kind": "shaping",
+      "direction": "ltr",
+      "languageTag": "am"
+    }
+  },
+  "surfaces": {
+    "control-ui": {
+      "owner": "control-ui",
+      "artifactId": "control-ui-web",
+      "catalogRevision": "sha256:2c6d4249ba83882c18216aab61ae59bdcb5a2f1cb76e63741aac3b806706921b",
+      "source": "ui/src/i18n/locales/en.ts",
+      "catalogs": "ui/src/i18n/locales",
+      "contentClasses": [
+        "general",
+        "authentication",
+        "recovery"
+      ],
+      "checks": [],
+      "locales": {
+        "en": {
+          "maturity": "source"
+        },
+        "zh-CN": {
+          "maturity": "partial"
+        },
+        "zh-TW": {
+          "maturity": "partial"
+        },
+        "pt-BR": {
+          "maturity": "partial"
+        },
+        "de": {
+          "maturity": "partial"
+        },
+        "es": {
+          "maturity": "partial"
+        },
+        "ja-JP": {
+          "maturity": "partial"
+        },
+        "ko": {
+          "maturity": "partial"
+        },
+        "fr": {
+          "maturity": "partial"
+        },
+        "hi": {
+          "maturity": "partial"
+        },
+        "ar": {
+          "maturity": "partial"
+        },
+        "it": {
+          "maturity": "partial"
+        },
+        "tr": {
+          "maturity": "partial"
+        },
+        "uk": {
+          "maturity": "partial"
+        },
+        "id": {
+          "maturity": "partial"
+        },
+        "pl": {
+          "maturity": "partial"
+        },
+        "th": {
+          "maturity": "partial"
+        },
+        "vi": {
+          "maturity": "partial"
+        },
+        "nl": {
+          "maturity": "partial"
+        },
+        "fa": {
+          "maturity": "partial"
+        },
+        "ru": {
+          "maturity": "partial"
+        },
+        "sv": {
+          "maturity": "unsupported"
+        }
+      }
+    },
+    "cli-onboarding": {
+      "owner": "cli",
+      "artifactId": "openclaw-cli",
+      "catalogRevision": "sha256:439eda80d3aaf66e52d17e21d7f2e4d8f9d2d5e44c6fcdd11e6d6ceff46181d7",
+      "source": "src/wizard/i18n/locales/en.ts",
+      "catalogs": "src/wizard/i18n/locales",
+      "contentClasses": [
+        "general",
+        "authentication",
+        "recovery"
+      ],
+      "checks": [],
+      "locales": {
+        "en": {
+          "maturity": "source"
+        },
+        "zh-CN": {
+          "maturity": "partial"
+        },
+        "zh-TW": {
+          "maturity": "partial"
+        },
+        "pt-BR": {
+          "maturity": "unsupported"
+        },
+        "de": {
+          "maturity": "unsupported"
+        },
+        "es": {
+          "maturity": "unsupported"
+        },
+        "ja-JP": {
+          "maturity": "unsupported"
+        },
+        "ko": {
+          "maturity": "unsupported"
+        },
+        "fr": {
+          "maturity": "unsupported"
+        },
+        "hi": {
+          "maturity": "unsupported"
+        },
+        "ar": {
+          "maturity": "unsupported"
+        },
+        "it": {
+          "maturity": "unsupported"
+        },
+        "tr": {
+          "maturity": "unsupported"
+        },
+        "uk": {
+          "maturity": "unsupported"
+        },
+        "id": {
+          "maturity": "unsupported"
+        },
+        "pl": {
+          "maturity": "unsupported"
+        },
+        "th": {
+          "maturity": "unsupported"
+        },
+        "vi": {
+          "maturity": "unsupported"
+        },
+        "nl": {
+          "maturity": "unsupported"
+        },
+        "fa": {
+          "maturity": "unsupported"
+        },
+        "ru": {
+          "maturity": "unsupported"
+        },
+        "sv": {
+          "maturity": "unsupported"
+        }
+      }
+    },
+    "channel-plugin-setup": {
+      "owner": "channels",
+      "artifactId": "openclaw-cli",
+      "catalogRevision": "sha256:439eda80d3aaf66e52d17e21d7f2e4d8f9d2d5e44c6fcdd11e6d6ceff46181d7",
+      "source": "src/wizard/i18n/locales/en.ts",
+      "catalogs": "src/wizard/i18n/locales",
+      "contentClasses": [
+        "general",
+        "authentication",
+        "recovery"
+      ],
+      "checks": [],
+      "locales": {
+        "en": {
+          "maturity": "source"
+        },
+        "zh-CN": {
+          "maturity": "partial"
+        },
+        "zh-TW": {
+          "maturity": "partial"
+        },
+        "pt-BR": {
+          "maturity": "unsupported"
+        },
+        "de": {
+          "maturity": "unsupported"
+        },
+        "es": {
+          "maturity": "unsupported"
+        },
+        "ja-JP": {
+          "maturity": "unsupported"
+        },
+        "ko": {
+          "maturity": "unsupported"
+        },
+        "fr": {
+          "maturity": "unsupported"
+        },
+        "hi": {
+          "maturity": "unsupported"
+        },
+        "ar": {
+          "maturity": "unsupported"
+        },
+        "it": {
+          "maturity": "unsupported"
+        },
+        "tr": {
+          "maturity": "unsupported"
+        },
+        "uk": {
+          "maturity": "unsupported"
+        },
+        "id": {
+          "maturity": "unsupported"
+        },
+        "pl": {
+          "maturity": "unsupported"
+        },
+        "th": {
+          "maturity": "unsupported"
+        },
+        "vi": {
+          "maturity": "unsupported"
+        },
+        "nl": {
+          "maturity": "unsupported"
+        },
+        "fa": {
+          "maturity": "unsupported"
+        },
+        "ru": {
+          "maturity": "unsupported"
+        },
+        "sv": {
+          "maturity": "unsupported"
+        }
+      }
+    },
+    "cli": {
+      "owner": "cli",
+      "artifactId": "openclaw-cli",
+      "catalogRevision": "none",
+      "source": "src/cli",
+      "contentClasses": [
+        "general",
+        "recovery"
+      ],
+      "checks": [],
+      "locales": {
+        "en": {
+          "maturity": "source"
+        },
+        "zh-CN": {
+          "maturity": "unsupported"
+        },
+        "zh-TW": {
+          "maturity": "unsupported"
+        },
+        "pt-BR": {
+          "maturity": "unsupported"
+        },
+        "de": {
+          "maturity": "unsupported"
+        },
+        "es": {
+          "maturity": "unsupported"
+        },
+        "ja-JP": {
+          "maturity": "unsupported"
+        },
+        "ko": {
+          "maturity": "unsupported"
+        },
+        "fr": {
+          "maturity": "unsupported"
+        },
+        "hi": {
+          "maturity": "unsupported"
+        },
+        "ar": {
+          "maturity": "unsupported"
+        },
+        "it": {
+          "maturity": "unsupported"
+        },
+        "tr": {
+          "maturity": "unsupported"
+        },
+        "uk": {
+          "maturity": "unsupported"
+        },
+        "id": {
+          "maturity": "unsupported"
+        },
+        "pl": {
+          "maturity": "unsupported"
+        },
+        "th": {
+          "maturity": "unsupported"
+        },
+        "vi": {
+          "maturity": "unsupported"
+        },
+        "nl": {
+          "maturity": "unsupported"
+        },
+        "fa": {
+          "maturity": "unsupported"
+        },
+        "ru": {
+          "maturity": "unsupported"
+        },
+        "sv": {
+          "maturity": "unsupported"
+        }
+      }
+    },
+    "tui": {
+      "owner": "tui",
+      "artifactId": "openclaw-cli",
+      "catalogRevision": "none",
+      "source": "src/tui",
+      "contentClasses": [
+        "general",
+        "recovery"
+      ],
+      "checks": [],
+      "locales": {
+        "en": {
+          "maturity": "source"
+        },
+        "zh-CN": {
+          "maturity": "unsupported"
+        },
+        "zh-TW": {
+          "maturity": "unsupported"
+        },
+        "pt-BR": {
+          "maturity": "unsupported"
+        },
+        "de": {
+          "maturity": "unsupported"
+        },
+        "es": {
+          "maturity": "unsupported"
+        },
+        "ja-JP": {
+          "maturity": "unsupported"
+        },
+        "ko": {
+          "maturity": "unsupported"
+        },
+        "fr": {
+          "maturity": "unsupported"
+        },
+        "hi": {
+          "maturity": "unsupported"
+        },
+        "ar": {
+          "maturity": "unsupported"
+        },
+        "it": {
+          "maturity": "unsupported"
+        },
+        "tr": {
+          "maturity": "unsupported"
+        },
+        "uk": {
+          "maturity": "unsupported"
+        },
+        "id": {
+          "maturity": "unsupported"
+        },
+        "pl": {
+          "maturity": "unsupported"
+        },
+        "th": {
+          "maturity": "unsupported"
+        },
+        "vi": {
+          "maturity": "unsupported"
+        },
+        "nl": {
+          "maturity": "unsupported"
+        },
+        "fa": {
+          "maturity": "unsupported"
+        },
+        "ru": {
+          "maturity": "unsupported"
+        },
+        "sv": {
+          "maturity": "unsupported"
+        }
+      }
+    },
+    "runtime": {
+      "owner": "core-runtime",
+      "artifactId": "openclaw-runtime",
+      "catalogRevision": "none",
+      "source": "src",
+      "contentClasses": [
+        "general",
+        "safety",
+        "security",
+        "authentication",
+        "authorization",
+        "destructive-action",
+        "privacy",
+        "recovery"
+      ],
+      "checks": [],
+      "locales": {
+        "en": {
+          "maturity": "source"
+        },
+        "zh-CN": {
+          "maturity": "unsupported"
+        },
+        "zh-TW": {
+          "maturity": "unsupported"
+        },
+        "pt-BR": {
+          "maturity": "unsupported"
+        },
+        "de": {
+          "maturity": "unsupported"
+        },
+        "es": {
+          "maturity": "unsupported"
+        },
+        "ja-JP": {
+          "maturity": "unsupported"
+        },
+        "ko": {
+          "maturity": "unsupported"
+        },
+        "fr": {
+          "maturity": "unsupported"
+        },
+        "hi": {
+          "maturity": "unsupported"
+        },
+        "ar": {
+          "maturity": "unsupported"
+        },
+        "it": {
+          "maturity": "unsupported"
+        },
+        "tr": {
+          "maturity": "unsupported"
+        },
+        "uk": {
+          "maturity": "unsupported"
+        },
+        "id": {
+          "maturity": "unsupported"
+        },
+        "pl": {
+          "maturity": "unsupported"
+        },
+        "th": {
+          "maturity": "unsupported"
+        },
+        "vi": {
+          "maturity": "unsupported"
+        },
+        "nl": {
+          "maturity": "unsupported"
+        },
+        "fa": {
+          "maturity": "unsupported"
+        },
+        "ru": {
+          "maturity": "unsupported"
+        },
+        "sv": {
+          "maturity": "unsupported"
+        }
+      }
+    },
+    "gateway-errors": {
+      "owner": "gateway",
+      "artifactId": "openclaw-gateway",
+      "catalogRevision": "none",
+      "source": "packages/gateway-protocol/src/schema/error-codes.ts",
+      "contentClasses": [
+        "general",
+        "authentication",
+        "authorization",
+        "recovery"
+      ],
+      "checks": [],
+      "locales": {
+        "en": {
+          "maturity": "source"
+        },
+        "zh-CN": {
+          "maturity": "unsupported"
+        },
+        "zh-TW": {
+          "maturity": "unsupported"
+        },
+        "pt-BR": {
+          "maturity": "unsupported"
+        },
+        "de": {
+          "maturity": "unsupported"
+        },
+        "es": {
+          "maturity": "unsupported"
+        },
+        "ja-JP": {
+          "maturity": "unsupported"
+        },
+        "ko": {
+          "maturity": "unsupported"
+        },
+        "fr": {
+          "maturity": "unsupported"
+        },
+        "hi": {
+          "maturity": "unsupported"
+        },
+        "ar": {
+          "maturity": "unsupported"
+        },
+        "it": {
+          "maturity": "unsupported"
+        },
+        "tr": {
+          "maturity": "unsupported"
+        },
+        "uk": {
+          "maturity": "unsupported"
+        },
+        "id": {
+          "maturity": "unsupported"
+        },
+        "pl": {
+          "maturity": "unsupported"
+        },
+        "th": {
+          "maturity": "unsupported"
+        },
+        "vi": {
+          "maturity": "unsupported"
+        },
+        "nl": {
+          "maturity": "unsupported"
+        },
+        "fa": {
+          "maturity": "unsupported"
+        },
+        "ru": {
+          "maturity": "unsupported"
+        },
+        "sv": {
+          "maturity": "unsupported"
+        }
+      }
+    },
+    "server-rendered-channels": {
+      "owner": "channels",
+      "artifactId": "openclaw-runtime",
+      "catalogRevision": "none",
+      "source": "src/infra",
+      "contentClasses": [
+        "general",
+        "safety",
+        "security",
+        "recovery"
+      ],
+      "checks": [],
+      "locales": {
+        "en": {
+          "maturity": "source"
+        },
+        "zh-CN": {
+          "maturity": "unsupported"
+        },
+        "zh-TW": {
+          "maturity": "unsupported"
+        },
+        "pt-BR": {
+          "maturity": "unsupported"
+        },
+        "de": {
+          "maturity": "unsupported"
+        },
+        "es": {
+          "maturity": "unsupported"
+        },
+        "ja-JP": {
+          "maturity": "unsupported"
+        },
+        "ko": {
+          "maturity": "unsupported"
+        },
+        "fr": {
+          "maturity": "unsupported"
+        },
+        "hi": {
+          "maturity": "unsupported"
+        },
+        "ar": {
+          "maturity": "unsupported"
+        },
+        "it": {
+          "maturity": "unsupported"
+        },
+        "tr": {
+          "maturity": "unsupported"
+        },
+        "uk": {
+          "maturity": "unsupported"
+        },
+        "id": {
+          "maturity": "unsupported"
+        },
+        "pl": {
+          "maturity": "unsupported"
+        },
+        "th": {
+          "maturity": "unsupported"
+        },
+        "vi": {
+          "maturity": "unsupported"
+        },
+        "nl": {
+          "maturity": "unsupported"
+        },
+        "fa": {
+          "maturity": "unsupported"
+        },
+        "ru": {
+          "maturity": "unsupported"
+        },
+        "sv": {
+          "maturity": "unsupported"
+        }
+      }
+    },
+    "command-metadata": {
+      "owner": "command-catalog",
+      "artifactId": "openclaw-runtime",
+      "catalogRevision": "none",
+      "source": "src/commands",
+      "contentClasses": [
+        "general"
+      ],
+      "checks": [],
+      "locales": {
+        "en": {
+          "maturity": "source"
+        },
+        "zh-CN": {
+          "maturity": "unsupported"
+        },
+        "zh-TW": {
+          "maturity": "unsupported"
+        },
+        "pt-BR": {
+          "maturity": "unsupported"
+        },
+        "de": {
+          "maturity": "unsupported"
+        },
+        "es": {
+          "maturity": "unsupported"
+        },
+        "ja-JP": {
+          "maturity": "unsupported"
+        },
+        "ko": {
+          "maturity": "unsupported"
+        },
+        "fr": {
+          "maturity": "unsupported"
+        },
+        "hi": {
+          "maturity": "unsupported"
+        },
+        "ar": {
+          "maturity": "unsupported"
+        },
+        "it": {
+          "maturity": "unsupported"
+        },
+        "tr": {
+          "maturity": "unsupported"
+        },
+        "uk": {
+          "maturity": "unsupported"
+        },
+        "id": {
+          "maturity": "unsupported"
+        },
+        "pl": {
+          "maturity": "unsupported"
+        },
+        "th": {
+          "maturity": "unsupported"
+        },
+        "vi": {
+          "maturity": "unsupported"
+        },
+        "nl": {
+          "maturity": "unsupported"
+        },
+        "fa": {
+          "maturity": "unsupported"
+        },
+        "ru": {
+          "maturity": "unsupported"
+        },
+        "sv": {
+          "maturity": "unsupported"
+        }
+      }
+    },
+    "telegram-command-menu": {
+      "owner": "telegram",
+      "artifactId": "openclaw-plugin-telegram",
+      "catalogRevision": "none",
+      "source": "extensions/telegram",
+      "contentClasses": [
+        "general"
+      ],
+      "checks": [],
+      "locales": {
+        "en": {
+          "maturity": "source"
+        },
+        "zh-CN": {
+          "maturity": "unsupported"
+        },
+        "zh-TW": {
+          "maturity": "unsupported"
+        },
+        "pt-BR": {
+          "maturity": "unsupported"
+        },
+        "de": {
+          "maturity": "unsupported"
+        },
+        "es": {
+          "maturity": "unsupported"
+        },
+        "ja-JP": {
+          "maturity": "unsupported"
+        },
+        "ko": {
+          "maturity": "unsupported"
+        },
+        "fr": {
+          "maturity": "unsupported"
+        },
+        "hi": {
+          "maturity": "unsupported"
+        },
+        "ar": {
+          "maturity": "unsupported"
+        },
+        "it": {
+          "maturity": "unsupported"
+        },
+        "tr": {
+          "maturity": "unsupported"
+        },
+        "uk": {
+          "maturity": "unsupported"
+        },
+        "id": {
+          "maturity": "unsupported"
+        },
+        "pl": {
+          "maturity": "unsupported"
+        },
+        "th": {
+          "maturity": "unsupported"
+        },
+        "vi": {
+          "maturity": "unsupported"
+        },
+        "nl": {
+          "maturity": "unsupported"
+        },
+        "fa": {
+          "maturity": "unsupported"
+        },
+        "ru": {
+          "maturity": "unsupported"
+        },
+        "sv": {
+          "maturity": "unsupported"
+        }
+      }
+    },
+    "discord-command-menu": {
+      "owner": "discord",
+      "artifactId": "openclaw-plugin-discord",
+      "catalogRevision": "none",
+      "source": "extensions/discord",
+      "contentClasses": [
+        "general"
+      ],
+      "checks": [],
+      "locales": {
+        "en": {
+          "maturity": "source"
+        },
+        "zh-CN": {
+          "maturity": "unsupported"
+        },
+        "zh-TW": {
+          "maturity": "unsupported"
+        },
+        "pt-BR": {
+          "maturity": "unsupported"
+        },
+        "de": {
+          "maturity": "unsupported"
+        },
+        "es": {
+          "maturity": "unsupported"
+        },
+        "ja-JP": {
+          "maturity": "unsupported"
+        },
+        "ko": {
+          "maturity": "unsupported"
+        },
+        "fr": {
+          "maturity": "unsupported"
+        },
+        "hi": {
+          "maturity": "unsupported"
+        },
+        "ar": {
+          "maturity": "unsupported"
+        },
+        "it": {
+          "maturity": "unsupported"
+        },
+        "tr": {
+          "maturity": "unsupported"
+        },
+        "uk": {
+          "maturity": "unsupported"
+        },
+        "id": {
+          "maturity": "unsupported"
+        },
+        "pl": {
+          "maturity": "unsupported"
+        },
+        "th": {
+          "maturity": "unsupported"
+        },
+        "vi": {
+          "maturity": "unsupported"
+        },
+        "nl": {
+          "maturity": "unsupported"
+        },
+        "fa": {
+          "maturity": "unsupported"
+        },
+        "ru": {
+          "maturity": "unsupported"
+        },
+        "sv": {
+          "maturity": "unsupported"
+        }
+      }
+    },
+    "skill-metadata": {
+      "owner": "skills",
+      "artifactId": "openclaw-runtime",
+      "catalogRevision": "none",
+      "source": "src/agents/skills",
+      "contentClasses": [
+        "general"
+      ],
+      "checks": [],
+      "locales": {
+        "en": {
+          "maturity": "source"
+        },
+        "zh-CN": {
+          "maturity": "unsupported"
+        },
+        "zh-TW": {
+          "maturity": "unsupported"
+        },
+        "pt-BR": {
+          "maturity": "unsupported"
+        },
+        "de": {
+          "maturity": "unsupported"
+        },
+        "es": {
+          "maturity": "unsupported"
+        },
+        "ja-JP": {
+          "maturity": "unsupported"
+        },
+        "ko": {
+          "maturity": "unsupported"
+        },
+        "fr": {
+          "maturity": "unsupported"
+        },
+        "hi": {
+          "maturity": "unsupported"
+        },
+        "ar": {
+          "maturity": "unsupported"
+        },
+        "it": {
+          "maturity": "unsupported"
+        },
+        "tr": {
+          "maturity": "unsupported"
+        },
+        "uk": {
+          "maturity": "unsupported"
+        },
+        "id": {
+          "maturity": "unsupported"
+        },
+        "pl": {
+          "maturity": "unsupported"
+        },
+        "th": {
+          "maturity": "unsupported"
+        },
+        "vi": {
+          "maturity": "unsupported"
+        },
+        "nl": {
+          "maturity": "unsupported"
+        },
+        "fa": {
+          "maturity": "unsupported"
+        },
+        "ru": {
+          "maturity": "unsupported"
+        },
+        "sv": {
+          "maturity": "unsupported"
+        }
+      }
+    },
+    "android": {
+      "owner": "android",
+      "artifactId": "openclaw-android",
+      "catalogRevision": "sha256:ff247ac0c5141229e32d352bd51e3cf25df4c8a57d868883ccb3ddc4f564e205",
+      "source": "apps/.i18n/native-source.json",
+      "catalogs": "apps/.i18n/native",
+      "contentClasses": [
+        "general",
+        "safety",
+        "security",
+        "authentication",
+        "recovery",
+        "generated"
+      ],
+      "checks": [],
+      "locales": {
+        "en": {
+          "maturity": "source"
+        },
+        "zh-CN": {
+          "maturity": "partial"
+        },
+        "zh-TW": {
+          "maturity": "partial"
+        },
+        "pt-BR": {
+          "maturity": "partial"
+        },
+        "de": {
+          "maturity": "partial"
+        },
+        "es": {
+          "maturity": "partial"
+        },
+        "ja-JP": {
+          "maturity": "partial"
+        },
+        "ko": {
+          "maturity": "partial"
+        },
+        "fr": {
+          "maturity": "partial"
+        },
+        "hi": {
+          "maturity": "partial"
+        },
+        "ar": {
+          "maturity": "partial"
+        },
+        "it": {
+          "maturity": "partial"
+        },
+        "tr": {
+          "maturity": "partial"
+        },
+        "uk": {
+          "maturity": "partial"
+        },
+        "id": {
+          "maturity": "partial"
+        },
+        "pl": {
+          "maturity": "partial"
+        },
+        "th": {
+          "maturity": "partial"
+        },
+        "vi": {
+          "maturity": "partial"
+        },
+        "nl": {
+          "maturity": "partial"
+        },
+        "fa": {
+          "maturity": "partial"
+        },
+        "ru": {
+          "maturity": "partial"
+        },
+        "sv": {
+          "maturity": "partial"
+        }
+      }
+    },
+    "apple": {
+      "owner": "apple",
+      "artifactId": "openclaw-apple",
+      "catalogRevision": "sha256:ff247ac0c5141229e32d352bd51e3cf25df4c8a57d868883ccb3ddc4f564e205",
+      "source": "apps/.i18n/native-source.json",
+      "catalogs": "apps/.i18n/native",
+      "contentClasses": [
+        "general",
+        "safety",
+        "security",
+        "authentication",
+        "recovery",
+        "generated"
+      ],
+      "checks": [],
+      "locales": {
+        "en": {
+          "maturity": "source"
+        },
+        "zh-CN": {
+          "maturity": "partial"
+        },
+        "zh-TW": {
+          "maturity": "partial"
+        },
+        "pt-BR": {
+          "maturity": "partial"
+        },
+        "de": {
+          "maturity": "partial"
+        },
+        "es": {
+          "maturity": "partial"
+        },
+        "ja-JP": {
+          "maturity": "partial"
+        },
+        "ko": {
+          "maturity": "partial"
+        },
+        "fr": {
+          "maturity": "partial"
+        },
+        "hi": {
+          "maturity": "partial"
+        },
+        "ar": {
+          "maturity": "partial"
+        },
+        "it": {
+          "maturity": "partial"
+        },
+        "tr": {
+          "maturity": "partial"
+        },
+        "uk": {
+          "maturity": "partial"
+        },
+        "id": {
+          "maturity": "partial"
+        },
+        "pl": {
+          "maturity": "partial"
+        },
+        "th": {
+          "maturity": "partial"
+        },
+        "vi": {
+          "maturity": "partial"
+        },
+        "nl": {
+          "maturity": "partial"
+        },
+        "fa": {
+          "maturity": "partial"
+        },
+        "ru": {
+          "maturity": "partial"
+        },
+        "sv": {
+          "maturity": "partial"
+        }
+      }
+    },
+    "docs": {
+      "owner": "docs",
+      "artifactId": "openclaw-docs",
+      "catalogRevision": "sha256:1d0e502e49da9aaca575744d30e71d68e997b0ee79b27998ea05e69a6f77284a",
+      "source": "docs",
+      "catalogs": "docs/.i18n",
+      "contentClasses": [
+        "general",
+        "security",
+        "authentication",
+        "recovery",
+        "generated"
+      ],
+      "checks": [],
+      "locales": {
+        "en": {
+          "maturity": "source"
+        },
+        "zh-CN": {
+          "maturity": "partial"
+        },
+        "zh-TW": {
+          "maturity": "partial"
+        },
+        "pt-BR": {
+          "maturity": "partial"
+        },
+        "de": {
+          "maturity": "partial"
+        },
+        "es": {
+          "maturity": "partial"
+        },
+        "ja-JP": {
+          "maturity": "partial"
+        },
+        "ko": {
+          "maturity": "partial"
+        },
+        "fr": {
+          "maturity": "partial"
+        },
+        "hi": {
+          "maturity": "partial"
+        },
+        "ar": {
+          "maturity": "partial"
+        },
+        "it": {
+          "maturity": "partial"
+        },
+        "tr": {
+          "maturity": "partial"
+        },
+        "uk": {
+          "maturity": "partial"
+        },
+        "id": {
+          "maturity": "partial"
+        },
+        "pl": {
+          "maturity": "partial"
+        },
+        "th": {
+          "maturity": "partial"
+        },
+        "vi": {
+          "maturity": "partial"
+        },
+        "nl": {
+          "maturity": "partial"
+        },
+        "fa": {
+          "maturity": "partial"
+        },
+        "ru": {
+          "maturity": "partial"
+        },
+        "sv": {
+          "maturity": "unsupported"
+        }
+      }
+    }
+  }
+}

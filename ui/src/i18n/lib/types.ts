@@ -1,25 +1,6 @@
 // Control UI type declarations define types contracts.
+import type { OpenClawLocale } from "@openclaw/localization-core";
+
 export type TranslationMap = { [key: string]: string | TranslationMap };
 
-export type Locale =
-  | "en"
-  | "zh-CN"
-  | "zh-TW"
-  | "pt-BR"
-  | "de"
-  | "es"
-  | "ja-JP"
-  | "ko"
-  | "fr"
-  | "hi"
-  | "ar"
-  | "it"
-  | "tr"
-  | "uk"
-  | "id"
-  | "pl"
-  | "th"
-  | "vi"
-  | "nl"
-  | "fa"
-  | "ru";
+export type Locale = Exclude<OpenClawLocale, "sv">;
