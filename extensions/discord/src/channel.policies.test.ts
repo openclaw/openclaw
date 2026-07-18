@@ -67,7 +67,7 @@ describe("discordPlugin security", () => {
     const cfg = {
       channels: {
         discord: {
-          token: "test-token",
+          token: "discord-token",
           dmPolicy: "allowlist",
           allowFrom: ["  discord:<@!123456789>  "],
         },
@@ -96,7 +96,7 @@ describe("discordPlugin groups", () => {
     const cfg = {
       channels: {
         discord: {
-          token: "test-token",
+          token: "discord-test",
           guilds: {
             guild1: {
               requireMention: false,
