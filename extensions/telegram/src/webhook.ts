@@ -42,6 +42,7 @@ import {
   resolveTelegramIngressSpoolDir,
   writeTelegramSpooledUpdate,
 } from "./telegram-ingress-spool.js";
+import { runTelegramWebhookShutdownPhases } from "./webhook-shutdown.js";
 import { createTelegramWebhookStatusPublisher } from "./webhook-status.js";
 
 const TELEGRAM_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
@@ -353,8 +354,8 @@ export async function startTelegramWebhook(opts: {
     });
   } catch (err) {
     botAbortController.abort();
-    await bot.stop();
-    await closeTransportOnce();
+    await bot.stop().catch(() => undefined);
+    await closeTransportOnce().catch(() => undefined);
     throw err;
   }
   const telegramWebhookRateLimiter = createFixedWindowRateLimiter({
@@ -544,21 +545,20 @@ export async function startTelegramWebhook(opts: {
     }
     botAbortController.abort();
     shutDown = true;
-    shutdownAbortController.abort();
-    if (drainTimer) {
-      clearInterval(drainTimer);
-    }
-    webhookIngressDrain?.dispose();
-    webhookIngressDrain = undefined;
-    server.close();
-    await bot.stop();
-    // The webhook owns this transport because it resolved and injected it into
-    // createTelegramBot; close once so abort/startup-failure paths cannot leak sockets.
-    await closeTransportOnce();
-    status.noteWebhookStop();
-    if (diagnosticsEnabled) {
-      stopDiagnosticHeartbeat();
-    }
+    await runTelegramWebhookShutdownPhases({
+      abortShutdown: () => shutdownAbortController.abort(),
+      clearDrainTimer: () => {
+        clearInterval(drainTimer);
+        webhookIngressDrain?.dispose();
+        webhookIngressDrain = undefined;
+      },
+      closeServer: () => server.close(),
+      stopBot: () => bot.stop(),
+      closeTransport: closeTransportOnce,
+      noteStop: () => status.noteWebhookStop(),
+      stopDiagnostics: diagnosticsEnabled ? stopDiagnosticHeartbeat : undefined,
+      onError: (message) => runtime.error(message),
+    });
   };
   if (opts.abortSignal?.aborted) {
     void shutdown();

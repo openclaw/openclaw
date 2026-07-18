@@ -107,6 +107,8 @@ export const createTelegramIngressWorker: TelegramIngressWorkerFactory = (option
     }
   });
 
+  let stopPromise: Promise<void> | undefined;
+
   return {
     onMessage(listener) {
       listeners.add(listener);
@@ -123,19 +125,32 @@ export const createTelegramIngressWorker: TelegramIngressWorkerFactory = (option
         // Worker may have exited after the parent committed the queue write.
       }
     },
-    async stop() {
-      Reflect.apply(Reflect.get(worker, "postMessage") as (value: unknown) => void, worker, [
-        { type: "stop" } satisfies TelegramIngressWorkerCommand,
-      ]);
-      const timeout = setTimeout(() => {
-        void worker.terminate();
-      }, 15_000);
-      timeout.unref?.();
-      try {
-        await taskPromise.catch(() => undefined);
-      } finally {
-        clearTimeout(timeout);
+    stop() {
+      // Idempotent stop: return the in-flight stop promise on repeated calls
+      // to prevent teardown races where a second caller returns before the
+      // worker has actually exited.
+      if (stopPromise) {
+        return stopPromise;
       }
+      stopPromise = (async () => {
+        try {
+          Reflect.apply(Reflect.get(worker, "postMessage") as (value: unknown) => void, worker, [
+            { type: "stop" } satisfies TelegramIngressWorkerCommand,
+          ]);
+        } catch {
+          // Worker may have already been terminated; ignore postMessage errors.
+        }
+        const timeout = setTimeout(() => {
+          void worker.terminate().catch(() => undefined);
+        }, 15_000);
+        timeout.unref?.();
+        try {
+          await taskPromise.catch(() => undefined);
+        } finally {
+          clearTimeout(timeout);
+        }
+      })();
+      return stopPromise;
     },
     task() {
       return taskPromise;
