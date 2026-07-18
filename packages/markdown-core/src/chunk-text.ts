@@ -105,6 +105,19 @@ export function chunkTextRanges(text: string, options: ChunkTextRangesOptions): 
     const end = avoidTrailingHighSurrogateBreak(text, start, candidateEnd);
     ranges.push({ start, end });
     start = end;
+    // Ensure start doesn't land on a trailing low surrogate
+    if (start > 0 && start < text.length) {
+      const codeUnit = text.charCodeAt(start);
+      if (
+        codeUnit >= 0xdc00 &&
+        codeUnit <= 0xdfff &&
+        text.charCodeAt(start - 1) >= 0xd800 &&
+        text.charCodeAt(start - 1) <= 0xdbff
+      ) {
+        ranges[ranges.length - 1].end += 1;
+        start += 1;
+      }
+    }
   }
   return ranges;
 }
