@@ -165,6 +165,24 @@ describe("session transcript runtime SDK", () => {
     if (blocked.kind !== "reset") {
       throw new Error("expected invalid cursor reset");
     }
+    const unsafeCursor = Buffer.from(
+      JSON.stringify({
+        agentId: scope.agentId,
+        generation: "untrusted",
+        lastSeq: 1e100,
+        sessionId: scope.sessionId,
+        version: 1,
+      }),
+      "utf8",
+    ).toString("base64url");
+    await expect(
+      readSessionTranscriptRawDelta({
+        ...scope,
+        cursor: unsafeCursor,
+        maxBytes: 10,
+        maxEvents: 1,
+      }),
+    ).resolves.toMatchObject({ kind: "reset", reason: "invalid_cursor" });
 
     const bounded = await readSessionTranscriptRawDelta({
       ...scope,

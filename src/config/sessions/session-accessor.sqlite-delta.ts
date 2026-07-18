@@ -64,7 +64,7 @@ function parseRawTranscriptCursor(value: string): RawTranscriptCursor | undefine
       typeof parsed.agentId !== "string" ||
       typeof parsed.sessionId !== "string" ||
       typeof parsed.generation !== "string" ||
-      !Number.isInteger(parsed.lastSeq) ||
+      !Number.isSafeInteger(parsed.lastSeq) ||
       (parsed.lastSeq ?? -2) < -1
     ) {
       return undefined;
