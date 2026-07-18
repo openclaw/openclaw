@@ -1,6 +1,7 @@
 // Feishu tests cover reply dispatcher plugin behavior.
 import os from "node:os";
 import path from "node:path";
+import { createReplyDispatcherWithTyping } from "openclaw/plugin-sdk/reply-runtime";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 type StreamingSessionStub = {
@@ -2087,6 +2088,75 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(result.getVisibleReplyState()).toEqual({
       visibleReplySent: false,
       skippedFinalReason: "silent",
+    });
+  });
+
+  it("does not send no-visible-reply fallback after an intentional silent block reply", async () => {
+    const runtime = createRuntimeLogger();
+    const { result, options } = createDispatcherHarness({ runtime, sessionKey: "main" });
+
+    options.onSkip?.({ text: "NO_REPLY" }, { kind: "block", reason: "silent" });
+    await expect(result.ensureNoVisibleReplyFallback("empty-complete")).resolves.toBe(false);
+
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(result.getVisibleReplyState()).toEqual({
+      visibleReplySent: false,
+      skippedFinalReason: "silent",
+    });
+  });
+
+  it("still sends no-visible-reply fallback after a non-silent block skip", async () => {
+    const runtime = createRuntimeLogger();
+    const { result, options } = createDispatcherHarness({ runtime, sessionKey: "main" });
+
+    options.onSkip?.({ text: "" }, { kind: "block", reason: "empty" });
+    await expect(result.ensureNoVisibleReplyFallback("empty-complete")).resolves.toBe(true);
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    expect(String(firstMockArg(sendMessageFeishuMock, "send message params").text)).toContain(
+      "without visible content",
+    );
+    expect(result.getVisibleReplyState()).toEqual({
+      visibleReplySent: true,
+      skippedFinalReason: null,
+    });
+  });
+
+  it("suppresses the fallback for a real NO_REPLY block reply through the full dispatch pipeline", async () => {
+    // Unlike the tests above (which invoke the captured onSkip callback
+    // directly), this drives the exact production call path: the shared
+    // createReplyDispatcherWithTyping + normalizeReplyPayload pipeline decides
+    // "NO_REPLY" is silent on its own and calls Feishu's onSkip for us. Only
+    // the outbound Feishu HTTP calls are mocked, same as every other test here.
+    const runtime = createRuntimeLogger();
+    const { result, options } = createDispatcherHarness({ runtime, sessionKey: "main" });
+    const { dispatcher } = createReplyDispatcherWithTyping(options);
+
+    dispatcher.sendBlockReply({ text: "NO_REPLY" });
+    await expect(result.ensureNoVisibleReplyFallback("empty-complete")).resolves.toBe(false);
+
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(result.getVisibleReplyState()).toEqual({
+      visibleReplySent: false,
+      skippedFinalReason: "silent",
+    });
+  });
+
+  it("still delivers the fallback for a real genuinely-empty block reply through the full dispatch pipeline", async () => {
+    const runtime = createRuntimeLogger();
+    const { result, options } = createDispatcherHarness({ runtime, sessionKey: "main" });
+    const { dispatcher } = createReplyDispatcherWithTyping(options);
+
+    dispatcher.sendBlockReply({ text: "" });
+    await expect(result.ensureNoVisibleReplyFallback("empty-complete")).resolves.toBe(true);
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    expect(String(firstMockArg(sendMessageFeishuMock, "send message params").text)).toContain(
+      "without visible content",
+    );
+    expect(result.getVisibleReplyState()).toEqual({
+      visibleReplySent: true,
+      skippedFinalReason: null,
     });
   });
 

@@ -1,7 +1,8 @@
 // Feishu delivery trace goldens: replayable wire-level lifecycle recordings.
 //
-// IN events are fed straight into the reply-dispatcher wiring (the options
-// createReplyDispatcherWithTyping receives plus replyOptions callbacks); OUT
+// IN events are fed straight into the reply-dispatcher wiring (the core-owned
+// dispatcher options and delivery returned by createFeishuReplyDispatcher plus
+// replyOptions callbacks); OUT
 // events are recorded at the mocked Lark SDK client and the mocked CardKit
 // HTTP fetch, so streaming-card entity calls are captured at the wire seam.
 // Refresh goldens with OPENCLAW_TRACE_UPDATE=1 (see delivery-trace harness docs).
@@ -37,7 +38,6 @@ type FeishuTraceState = {
   account: ResolvedFeishuAccount | null;
   larkClient: unknown;
   cardKitFetch: typeof fetch | null;
-  dispatcherOptions: FeishuDispatcherOptions | null;
   messageCount: number;
   reactionCount: number;
   cardCount: number;
@@ -51,7 +51,6 @@ const traceState = vi.hoisted(
     account: null,
     larkClient: null,
     cardKitFetch: null,
-    dispatcherOptions: null,
     messageCount: 0,
     reactionCount: 0,
     cardCount: 0,
@@ -84,17 +83,6 @@ vi.mock("./client.js", async (importOriginal) => {
         throw new Error("trace Lark client not initialized");
       }
       return traceState.larkClient;
-    },
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
-  return {
-    ...actual,
-    createReplyDispatcherWithTyping: (options: FeishuDispatcherOptions) => {
-      traceState.dispatcherOptions = options;
-      return { dispatcher: {}, replyOptions: {}, markDispatchIdle: () => {} };
     },
   };
 });
@@ -161,7 +149,6 @@ afterAll(() => {
   vi.doUnmock("./client.js");
   vi.doUnmock("./runtime.js");
   vi.doUnmock("./streaming-card.js");
-  vi.doUnmock("openclaw/plugin-sdk/reply-runtime");
   vi.resetModules();
 });
 
@@ -169,7 +156,6 @@ afterEach(() => {
   traceState.account = null;
   traceState.larkClient = null;
   traceState.cardKitFetch = null;
-  traceState.dispatcherOptions = null;
   traceState.wireFaults = [];
   streamingStartBackoffUntilByAccount.clear();
 });
@@ -378,10 +364,10 @@ function setupFeishuTrace(recorder: WireRecorder, scenario: DeliveryTraceScenari
     sendTarget: "oc-trace-chat",
     replyToMessageId: "om-inbound",
   });
-  const options = traceState.dispatcherOptions;
-  if (!options) {
-    throw new Error("dispatcher options were not captured");
-  }
+  const options = {
+    ...created.dispatcherOptions,
+    deliver: created.delivery.deliver,
+  } as FeishuDispatcherOptions;
 
   return async (step: DeliveryTraceInStep) => {
     switch (step.kind) {
