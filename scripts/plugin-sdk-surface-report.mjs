@@ -271,7 +271,9 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +4: gateway-backed harness question runner, claim/cancel helpers, and caller type.
       // Harvest: internal question runtime exports -2.
       // +1: ingress-effect-once factory.
-      8158,
+      // +3: bounded raw transcript cursor request, result, and reader.
+      // +3: bounded visible transcript cursor request, result, and reader.
+      8164,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -312,7 +314,9 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +3: gateway-backed harness question runner and claim/cancel helpers.
       // Harvest: internal question runtime callable -1.
       // +1: ingress-effect-once factory.
-      4540,
+      // +1: bounded raw transcript cursor reader.
+      // +1: bounded visible transcript cursor reader.
+      4542,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

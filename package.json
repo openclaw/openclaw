@@ -4,7 +4,7 @@
   "openclaw": {
     "schemaVersions": {
       "state": 4,
-      "agent": 12
+      "agent": 13
     }
   },
   "description": "Multi-channel AI gateway with extensible messaging integrations",
