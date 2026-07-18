@@ -45,6 +45,7 @@ type ConfigState = {
   configRaw: string;
   configRawOriginal: string;
   configRawOriginalParsed: Record<string, unknown> | null;
+  configRawOriginalParsePending: Promise<void> | null;
   configValid: boolean | null;
   configIssues: unknown[];
   configSaving: boolean;
@@ -152,6 +153,7 @@ function createInitialConfigState(snapshot?: Partial<RuntimeConfigGatewaySnapsho
     configRaw: "{\n}\n",
     configRawOriginal: "",
     configRawOriginalParsed: null,
+    configRawOriginalParsePending: null,
     configValid: null,
     configIssues: [],
     configSaving: false,
@@ -601,6 +603,14 @@ async function submitConfigChange(
   }
   const connectionEpoch = currentConfigConnectionEpoch(state);
   const isCurrent = () => isCurrentConfigConnection(state, client, connectionEpoch);
+  if (state.configRawOriginalParsePending) {
+    // JSON5 originals parse asynchronously on first load; sanitize needs them.
+    // Await only when pending: teardown flushes rely on a synchronous prefix.
+    await state.configRawOriginalParsePending;
+    if (!isCurrent()) {
+      return false;
+    }
+  }
   state[busyKey] = true;
   state.lastError = null;
   state.chatError = null;
@@ -687,8 +697,18 @@ function teardownFlushConfigDraft(
   client: GatewayBrowserClient,
   baseHash: string,
 ): void {
-  const raw = serializeFormForSubmit(state);
-  void client.request("config.set", { raw, baseHash }).catch(() => undefined);
+  const send = () => {
+    const raw = serializeFormForSubmit(state);
+    void client.request("config.set", { raw, baseHash }).catch(() => undefined);
+  };
+  // Best-effort flush still defers to a pending JSON5 original parse so the
+  // sanitize step never submits unrestorable redaction placeholders.
+  const pending = state.configRawOriginalParsePending;
+  if (pending) {
+    void pending.then(send);
+    return;
+  }
+  send();
 }
 
 /**
@@ -708,6 +728,14 @@ async function autoSaveConfig(
   }
   const connectionEpoch = currentConfigConnectionEpoch(state);
   const isCurrent = () => isCurrentConfigConnection(state, client, connectionEpoch);
+  if (state.configRawOriginalParsePending) {
+    // JSON5 originals parse asynchronously on first load; sanitize needs them.
+    // Await only when pending: teardown flushes rely on a synchronous prefix.
+    await state.configRawOriginalParsePending;
+    if (!isCurrent() || !state.configFormDirty || state.configFormMode !== "form") {
+      return false;
+    }
+  }
   const submittedRaw = serializeFormForSubmit(state);
   const baseHash = state.configDraftBaseHash ?? state.configSnapshot?.hash;
   if (!baseHash) {
@@ -881,25 +909,30 @@ function parseConfigRawDraft(raw: string): Record<string, unknown> | null {
 }
 
 // Parse the authoritative raw once at ingestion so submit-time sanitizing
-// stays synchronous and never races the lazy JSON5 parser.
+// stays synchronous and never races the lazy JSON5 parser. Submit paths await
+// configRawOriginalParsePending so a JSON5 config racing the first parser load
+// cannot bypass redaction sanitizing.
 function setConfigRawOriginal(state: ConfigState, raw: string) {
   state.configRawOriginal = raw;
+  state.configRawOriginalParsePending = null;
   try {
-    state.configRawOriginalParsed = asConfigRecord(JSON.parse(raw));
+    state.configRawOriginalParsed = asConfigRecord(parseJson5Text(raw));
     return;
   } catch {
     state.configRawOriginalParsed = null;
   }
-  void warmJson5().then((json5) => {
-    if (state.configRawOriginal !== raw) {
+  const pending = warmJson5().then((json5) => {
+    if (state.configRawOriginal !== raw || state.configRawOriginalParsePending !== pending) {
       return;
     }
+    state.configRawOriginalParsePending = null;
     try {
       state.configRawOriginalParsed = asConfigRecord(json5.parse(raw));
     } catch {
       state.configRawOriginalParsed = null;
     }
   });
+  state.configRawOriginalParsePending = pending;
 }
 
 function mutateConfigForm(state: ConfigState, mutate: (draft: Record<string, unknown>) => void) {
