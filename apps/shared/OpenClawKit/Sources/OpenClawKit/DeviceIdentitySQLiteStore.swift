@@ -78,6 +78,20 @@ enum DeviceIdentitySQLiteStore {
         }
     }
 
+    private struct SchemaObject: Hashable {
+        let type: String
+        let name: String
+    }
+
+    /// Native stores may seed their canonical tables before Node expands the shared schema.
+    /// Keep names closed here; each store separately validates the exact shape it owns.
+    private static let nativeBootstrapSchemaObjects: Set<SchemaObject> = [
+        SchemaObject(type: "index", name: "idx_device_identities_device"),
+        SchemaObject(type: "index", name: "idx_macos_port_guardian_records_port"),
+        SchemaObject(type: "table", name: "device_identities"),
+        SchemaObject(type: "table", name: "macos_port_guardian_records"),
+    ]
+
     static func loadOrCreate(
         databaseURL: URL,
         destinationStateDirURL: URL,
@@ -329,12 +343,10 @@ enum DeviceIdentitySQLiteStore {
         }
 
         if try !self.schemaObjectExists(database, type: "table", name: self.tableName) {
-            let objectCount = try self.queryInt64(
-                database,
-                sql: "SELECT COUNT(*) FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'")
-            guard allowFreshCreation, userVersion == 0, objectCount == 0 else {
+            guard allowFreshCreation, userVersion == 0 else {
                 throw DeviceIdentityStore.storageError("Nonempty OpenClaw database is missing device_identities")
             }
+            try self.validateVersionZeroDatabaseOwnership(database, requireIdentityObjects: false)
             try self.execute(database, sql: self.createSchemaSQL)
         }
         try self.validateDatabaseOwnership(database, userVersion: userVersion)
@@ -370,33 +382,7 @@ enum DeviceIdentitySQLiteStore {
         userVersion: Int64) throws
     {
         if userVersion == 0 {
-            let statement = try self.prepare(
-                database,
-                sql: """
-                SELECT type, name
-                FROM sqlite_schema
-                WHERE name NOT LIKE 'sqlite_%'
-                ORDER BY type, name
-                """)
-            defer { sqlite3_finalize(statement) }
-            var objects: [(String, String)] = []
-            while true {
-                let result = sqlite3_step(statement)
-                if result == SQLITE_DONE { break }
-                guard result == SQLITE_ROW else {
-                    throw self.databaseError(database, operation: "validate Swift identity database ownership")
-                }
-                try objects.append((
-                    self.requiredText(statement, column: 0, field: "schema object type"),
-                    self.requiredText(statement, column: 1, field: "schema object name")))
-            }
-            guard objects.count == 2,
-                  objects[0].0 == "index", objects[0].1 == self.indexName,
-                  objects[1].0 == "table", objects[1].1 == self.tableName
-            else {
-                throw DeviceIdentityStore.storageError(
-                    "Schema version zero database contains objects not owned by the Swift identity store")
-            }
+            try self.validateVersionZeroDatabaseOwnership(database, requireIdentityObjects: true)
             return
         }
 
@@ -412,6 +398,45 @@ enum DeviceIdentitySQLiteStore {
         else {
             throw DeviceIdentityStore.storageError(
                 "OpenClaw state database schema metadata does not match its global schema version")
+        }
+    }
+
+    private static func validateVersionZeroDatabaseOwnership(
+        _ database: OpaquePointer,
+        requireIdentityObjects: Bool) throws
+    {
+        let statement = try self.prepare(
+            database,
+            sql: """
+            SELECT type, name
+            FROM sqlite_schema
+            WHERE name NOT LIKE 'sqlite_%'
+            ORDER BY type, name
+            """)
+        defer { sqlite3_finalize(statement) }
+        var objects = Set<SchemaObject>()
+        while true {
+            let result = sqlite3_step(statement)
+            if result == SQLITE_DONE { break }
+            guard result == SQLITE_ROW else {
+                throw self.databaseError(database, operation: "validate native state database ownership")
+            }
+            try objects.insert(SchemaObject(
+                type: self.requiredText(statement, column: 0, field: "schema object type"),
+                name: self.requiredText(statement, column: 1, field: "schema object name")))
+        }
+        guard objects.isSubset(of: self.nativeBootstrapSchemaObjects) else {
+            throw DeviceIdentityStore.storageError(
+                "Schema version zero database contains objects not owned by a native OpenClaw store")
+        }
+        if requireIdentityObjects {
+            let required: Set<SchemaObject> = [
+                SchemaObject(type: "index", name: self.indexName),
+                SchemaObject(type: "table", name: self.tableName),
+            ]
+            guard required.isSubset(of: objects) else {
+                throw DeviceIdentityStore.storageError("Schema version zero database is missing device identity objects")
+            }
         }
     }
 
