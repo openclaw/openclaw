@@ -200,6 +200,8 @@ function ticketFromRequest(req: IncomingMessage): string | undefined {
 function supportsStandaloneToolOperations(
   view: Pick<McpAppViewLease, "allowedAppToolNames" | "readOnly">,
 ): boolean {
+  // The ticket is the short-lived grant. Tool authority still requires the
+  // originating run's explicit allowlist and is revalidated on every request.
   return view.allowedAppToolNames !== undefined && view.readOnly !== true;
 }
 
