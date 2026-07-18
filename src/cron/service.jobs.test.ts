@@ -2,6 +2,8 @@
 import { describe, expect, it } from "vitest";
 import {
   applyJobPatch,
+  computeJobNextRunAtMs,
+  computeJobPreviousRunAtOrBeforeMs,
   createJob,
   nextWakeAtMs,
   recomputeNextRuns,
@@ -1091,6 +1093,45 @@ describe("cron stagger defaults", () => {
     if (job.schedule.kind === "cron") {
       expect(job.schedule.staggerMs).toBe(DEFAULT_TOP_OF_HOUR_STAGGER_MS);
     }
+  });
+});
+
+describe("computeJobPreviousRunAtOrBeforeMs", () => {
+  function createCronJob(schedule: Extract<CronJob["schedule"], { kind: "cron" }>): CronJob {
+    return {
+      id: "inclusive-previous-run",
+      name: "inclusive previous run",
+      enabled: true,
+      createdAtMs: 0,
+      updatedAtMs: 0,
+      schedule,
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "tick" },
+      state: {},
+    };
+  }
+
+  it("includes an exact boundary and keeps the prior slot between boundaries", () => {
+    const job = createCronJob({ kind: "cron", expr: "* * * * * *", tz: "UTC", staggerMs: 0 });
+    const boundary = Date.parse("2025-12-13T04:02:00.000Z");
+
+    expect(computeJobPreviousRunAtOrBeforeMs(job, boundary)).toBe(boundary);
+    expect(computeJobPreviousRunAtOrBeforeMs(job, boundary + 500)).toBe(boundary);
+  });
+
+  it("includes an exact effective boundary after per-job staggering", () => {
+    const job = createCronJob({
+      kind: "cron",
+      expr: "0 * * * * *",
+      tz: "UTC",
+      staggerMs: 30_000,
+    });
+    const cursor = Date.parse("2025-12-13T04:02:00.000Z");
+    const effectiveBoundary = computeJobNextRunAtMs(job, cursor);
+
+    expect(effectiveBoundary).toBeTypeOf("number");
+    expect(computeJobPreviousRunAtOrBeforeMs(job, effectiveBoundary!)).toBe(effectiveBoundary);
   });
 });
 

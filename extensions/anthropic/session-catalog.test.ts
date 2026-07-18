@@ -864,6 +864,17 @@ describe("Claude session catalog", () => {
       }),
     ]);
     expect(first.nextCursor).toEqual(expect.any(String));
+    await expect(
+      listLocalClaudeSessionPage({ limit: 1, cursor: ` ${first.nextCursor} ` }, home),
+    ).rejects.toThrow("catalog cursor is invalid");
+    const runtime = { nodes: { list: vi.fn() } } as unknown as PluginRuntime;
+    const provider = captureCatalogProvider(runtime);
+    await expect(
+      provider.list({
+        hostIds: ["gateway:local"],
+        cursors: { "gateway:local": ` ${first.nextCursor} ` },
+      }),
+    ).rejects.toThrow("cursor for gateway:local is invalid");
 
     const second = await listLocalClaudeSessionPage({ limit: 1, cursor: first.nextCursor }, home);
     expect(second.sessions).toEqual([
@@ -877,6 +888,12 @@ describe("Claude session catalog", () => {
     await expect(
       readLocalClaudeTranscriptPage({ threadId: "archived-session", limit: 1 }, home),
     ).rejects.toThrow("Claude session is unavailable");
+    await expect(listLocalClaudeSessionPage({ cursor: "x".repeat(257) }, home)).rejects.toThrow(
+      "catalog cursor is invalid",
+    );
+    await expect(listLocalClaudeSessionPage({ cursor: null }, home)).rejects.toThrow(
+      "catalog cursor is invalid",
+    );
   });
 
   it("rejects sidechain, unindexed, and symlink-escaped transcript ids", async () => {
@@ -1103,6 +1120,99 @@ describe("Claude session catalog", () => {
     );
     expect(older.items.map((item) => item.text)).toEqual(["old assistant", oldUser]);
     expect(older.nextCursor).toBeUndefined();
+    await expect(
+      readLocalClaudeTranscriptPage(
+        { threadId: sessionId, limit: 1, cursor: ` ${latest.nextCursor} ` },
+        home,
+      ),
+    ).rejects.toThrow("transcript cursor is invalid");
+    await expect(
+      readLocalClaudeTranscriptPage({ threadId: sessionId, cursor: " ", limit: 1 }, home),
+    ).rejects.toThrow("transcript cursor is invalid");
+    await expect(
+      readLocalClaudeTranscriptPage({ threadId: sessionId, cursor: null, limit: 1 }, home),
+    ).rejects.toThrow("transcript cursor is invalid");
+  });
+
+  it("rejects malformed provider read cursors before paired-node I/O", async () => {
+    const listNodes = vi.fn(async () => ({ nodes: [] }));
+    const provider = captureCatalogProvider({
+      nodes: { list: listNodes },
+    } as unknown as PluginRuntime);
+
+    for (const cursor of ["", " wrapped ", "x".repeat(257)]) {
+      await expect(
+        provider.read({
+          hostId: "node:node-a",
+          threadId: "session-a",
+          cursor,
+          limit: 1,
+        }),
+      ).rejects.toThrow("transcript cursor is invalid");
+    }
+    expect(listNodes).not.toHaveBeenCalled();
+  });
+
+  it("forwards paired-node cursors exactly and rejects malformed response cursors", async () => {
+    const catalogCursor = "catalog+/=_cursor";
+    const transcriptCursor = "transcript+/=_cursor";
+    let catalogNextCursor = "catalog+/=_next";
+    let transcriptNextCursor = "transcript+/=_next";
+    const invoke = vi.fn(async ({ command }: Parameters<PluginRuntime["nodes"]["invoke"]>[0]) => ({
+      payloadJSON: JSON.stringify(
+        command === CLAUDE_SESSIONS_LIST_COMMAND
+          ? { sessions: [], nextCursor: catalogNextCursor }
+          : { threadId: "session-a", items: [], nextCursor: transcriptNextCursor },
+      ),
+    }));
+    const provider = captureCatalogProvider({
+      nodes: {
+        list: vi.fn(async () => ({
+          nodes: [
+            {
+              nodeId: "node-a",
+              connected: true,
+              commands: [CLAUDE_SESSIONS_LIST_COMMAND, CLAUDE_SESSION_READ_COMMAND],
+            },
+          ],
+        })),
+        invoke,
+      },
+    } as unknown as PluginRuntime);
+
+    await expect(
+      provider.list({ hostIds: ["node:node-a"], cursors: { "node:node-a": catalogCursor } }),
+    ).resolves.toMatchObject([{ nextCursor: catalogNextCursor }]);
+    expect(invoke).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        command: CLAUDE_SESSIONS_LIST_COMMAND,
+        params: expect.objectContaining({ cursor: catalogCursor }),
+      }),
+    );
+
+    await expect(
+      provider.read({
+        hostId: "node:node-a",
+        threadId: "session-a",
+        cursor: transcriptCursor,
+        limit: 1,
+      }),
+    ).resolves.toMatchObject({ nextCursor: transcriptNextCursor });
+    expect(invoke).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        command: CLAUDE_SESSION_READ_COMMAND,
+        params: expect.objectContaining({ cursor: transcriptCursor }),
+      }),
+    );
+
+    catalogNextCursor = " wrapped ";
+    await expect(provider.list({ hostIds: ["node:node-a"] })).resolves.toMatchObject([
+      { error: { code: "NODE_INVOKE_FAILED" } },
+    ]);
+    transcriptNextCursor = " ";
+    await expect(
+      provider.read({ hostId: "node:node-a", threadId: "session-a", limit: 1 }),
+    ).rejects.toThrow("Claude node returned an invalid transcript page");
   });
 
   it("advertises terminal resume only when the store and Claude binary exist", async () => {
@@ -1114,6 +1224,9 @@ describe("Claude session catalog", () => {
       CLAUDE_TERMINAL_RESUME_COMMAND,
     ]);
     expect(commands.every((command) => command.dangerous === false)).toBe(true);
+    await expect(commands[0]?.handle(JSON.stringify({ cursor: " wrapped " }))).rejects.toThrow(
+      "catalog cursor is invalid",
+    );
     const policy = createClaudeSessionNodeInvokePolicies()[0];
     expect(policy?.commands).toEqual([
       CLAUDE_SESSIONS_LIST_COMMAND,
@@ -1404,6 +1517,140 @@ describe("Claude session catalog", () => {
     expect(hosts).toEqual([
       expect.objectContaining({ hostId: "node:failed", error: expect.any(Object) }),
       expect.objectContaining({ hostId: "node:healthy", sessions: [] }),
+    ]);
+  });
+
+  it("bounds how long a hung paired-node catalog can delay the caller", async () => {
+    vi.useFakeTimers();
+    try {
+      const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(
+        async () => await new Promise<never>(() => {}),
+      );
+      const provider = captureCatalogProvider({
+        nodes: {
+          list: vi.fn().mockResolvedValue({
+            nodes: [
+              {
+                nodeId: "slow-node",
+                displayName: "Slow node",
+                connected: true,
+                commands: [CLAUDE_SESSIONS_LIST_COMMAND],
+              },
+            ],
+          }),
+          invoke,
+        },
+      } as unknown as PluginRuntime);
+      const pending = provider.list({ hostIds: ["node:slow-node"] });
+
+      await vi.advanceTimersByTimeAsync(8_000);
+
+      await expect(pending).resolves.toEqual([
+        expect.objectContaining({
+          hostId: "node:slow-node",
+          connected: true,
+          sessions: [],
+          error: expect.objectContaining({ code: "NODE_INVOKE_FAILED" }),
+        }),
+      ]);
+      expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 30_000 }));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("publishes a paired-node page that finishes after the fail-soft response", async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveInvoke!: (value: unknown) => void;
+      const invokeResult = new Promise<unknown>((resolve) => {
+        resolveInvoke = resolve;
+      });
+      const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async () => await invokeResult);
+      const provider = captureCatalogProvider({
+        nodes: {
+          list: vi.fn().mockResolvedValue({
+            nodes: [
+              {
+                nodeId: "slow-node",
+                displayName: "Slow node",
+                connected: true,
+                commands: [CLAUDE_SESSIONS_LIST_COMMAND],
+              },
+            ],
+          }),
+          invoke,
+        },
+      } as unknown as PluginRuntime);
+      const onHost = vi.fn();
+      const pending = provider.list({ hostIds: ["node:slow-node"], onHost });
+
+      await vi.advanceTimersByTimeAsync(8_000);
+      await expect(pending).resolves.toEqual([
+        expect.objectContaining({ error: expect.objectContaining({ code: "NODE_INVOKE_FAILED" }) }),
+      ]);
+      expect(onHost).not.toHaveBeenCalled();
+
+      resolveInvoke({
+        payloadJSON: JSON.stringify({
+          sessions: [
+            {
+              threadId: "late-thread",
+              status: "stored",
+              source: "claude-cli",
+              modelProvider: "anthropic",
+              archived: false,
+            },
+          ],
+        }),
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(onHost).toHaveBeenCalledWith(
+        expect.objectContaining({
+          hostId: "node:slow-node",
+          sessions: [expect.objectContaining({ threadId: "late-thread" })],
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("starts paired-node discovery while the local catalog is still reading", async () => {
+    const home = await createHome();
+    process.env.HOME = home;
+    const sessionId = "concurrent-local-session";
+    await writeProject({
+      home,
+      entries: [],
+      transcripts: { [sessionId]: [sdkCliMessage(sessionId, "Local")] },
+    });
+    let releaseOpen = () => {};
+    const openGate = new Promise<void>((resolve) => {
+      releaseOpen = resolve;
+    });
+    let reportOpen = () => {};
+    const opened = new Promise<void>((resolve) => {
+      reportOpen = resolve;
+    });
+    const originalOpen = fs.open.bind(fs);
+    vi.spyOn(fs, "open").mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+      reportOpen();
+      await openGate;
+      return await originalOpen(...args);
+    });
+    const listNodes = vi.fn(async () => ({ nodes: [] }));
+    const provider = captureCatalogProvider({
+      nodes: { list: listNodes },
+    } as unknown as PluginRuntime);
+
+    const listing = provider.list({});
+    await opened;
+    expect(listNodes).toHaveBeenCalledOnce();
+    releaseOpen();
+    await expect(listing).resolves.toMatchObject([
+      { hostId: "gateway:local", sessions: [expect.objectContaining({ threadId: sessionId })] },
     ]);
   });
 

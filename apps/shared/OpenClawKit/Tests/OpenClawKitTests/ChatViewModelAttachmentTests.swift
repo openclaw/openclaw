@@ -446,6 +446,8 @@ final class ChatViewModelAttachmentTests: XCTestCase {
                 outbox: outbox)
         }
         await MainActor.run { viewModel.load() }
+        // Wait for outbox restore too: until it completes, sends deliberately
+        // route behind the outbox (FIFO gate), which is not the path under test.
         try await waitUntil("legacy gateway bootstrap completed") {
             await MainActor.run {
                 viewModel.healthOK && !viewModel.isLoading && viewModel.hasRestoredOutboxMessages

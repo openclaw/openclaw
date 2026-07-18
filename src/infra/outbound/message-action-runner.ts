@@ -36,10 +36,10 @@ import type {
 import type { InternalChannelThreadingToolContext } from "../../channels/threading-tool-context-internal.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
-  hasInteractiveReplyBlocks,
+  hasLegacyInteractiveReplyBlocks,
   hasMessagePresentationBlocks,
   hasReplyPayloadContent,
-  normalizeInteractiveReply,
+  normalizeLegacyInteractiveReply,
   normalizeMessagePresentation,
   type ReplyPayloadDelivery,
 } from "../../interactive/payload.js";
@@ -1126,7 +1126,7 @@ async function buildSendPayloadParts(params: {
   const hasMediaHint =
     Boolean(mediaHint) || mediaUrlHints.length > 0 || attachmentMediaHints.length > 0;
   const hasPresentation = hasMessagePresentationBlocks(actionParams.presentation);
-  const hasInteractive = hasInteractiveReplyBlocks(actionParams.interactive);
+  const hasInteractive = hasLegacyInteractiveReplyBlocks(actionParams.interactive);
   const location = normalizeOutboundLocation(actionParams.location);
   const caption = readStringParam(actionParams, "caption", { allowEmpty: true }) ?? "";
   let message =
@@ -1249,7 +1249,7 @@ async function buildSendPayloadParts(params: {
       ? (rawChannelData as Record<string, unknown>)
       : undefined;
   const presentation = normalizeMessagePresentation(actionParams.presentation);
-  const interactive = normalizeInteractiveReply(actionParams.interactive);
+  const interactive = normalizeLegacyInteractiveReply(actionParams.interactive);
   return {
     message,
     payload: {

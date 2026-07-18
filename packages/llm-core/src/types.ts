@@ -268,6 +268,8 @@ export interface Usage {
   output: number;
   cacheRead: number;
   cacheWrite: number;
+  /** Subset of `cacheWrite` written with 1-hour retention when reported. */
+  cacheWrite1h?: number;
   /** Exact context snapshot for the final provider iteration. */
   contextUsage?:
     | { state: "available"; promptTokens: number; totalTokens: number }
@@ -513,6 +515,8 @@ export interface AnthropicMessagesCompat {
    * Default: true.
    */
   supportsCacheControlOnTools?: boolean;
+  /** Whether empty thinking signatures can be replayed as native thinking blocks. Default: false. */
+  allowEmptySignature?: boolean;
 }
 
 /**

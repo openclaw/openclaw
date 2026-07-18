@@ -1793,6 +1793,11 @@ export const it: TranslationMap = {
       testingButton: "Test in corso…",
       testing: "Test in corso: richiesta di una risposta rapida a {modelRef}…",
     },
+    empty: {
+      title: "Installazioni consigliate",
+      intro:
+        "Nessun accesso AI esistente rilevato. Installa uno di questi strumenti, quindi verifica di nuovo.",
+    },
     unavailable: {
       title: "Rilevato, ma non testato automaticamente",
     },
@@ -2356,6 +2361,13 @@ export const it: TranslationMap = {
     session: "Sessione",
     outputTruncated: "Anteprima oscurata e troncata.",
     noOutputPreview: "Nessuna anteprima dell'output.",
+    answerCandidate: {
+      title: "Risposta candidata",
+      itemId: "Elemento",
+      candidate: "Risposta candidata",
+      superseded: "Risposta sostituita",
+      selected: "Risposta selezionata",
+    },
     status: {
       running: "In esecuzione",
       done: "Completato",
@@ -3773,6 +3785,11 @@ export const it: TranslationMap = {
       pause: "Sospendi obiettivo",
       resume: "Riprendi obiettivo",
       clear: "Cancella obiettivo",
+    },
+    questions: {
+      title: "Codex richiede un input",
+      other: "Digita un'altra risposta",
+      submit: "Invia risposta",
     },
     messages: {
       activity: "Attività",

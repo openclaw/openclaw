@@ -5,6 +5,7 @@ import ai.openclaw.wear.shared.WearEventType
 import ai.openclaw.wear.shared.WearMessage
 import ai.openclaw.wear.shared.WearProtocol
 import ai.openclaw.wear.shared.WearProtocolCodec
+import ai.openclaw.wear.shared.WearProxyCapability
 import ai.openclaw.wear.shared.WearRpcMethod
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -468,6 +469,7 @@ class WearProxyClientTest {
         loading = false,
         connected = true,
         status = "Connected",
+        proxyCapabilities = WearProxyCapability.entries.toSet(),
         sessions = listOf(selected),
         selectedSession = selected,
         messages = listOf(WearChatMessage(id = "m1", role = "assistant", text = "old", timestamp = 1)),
@@ -481,6 +483,7 @@ class WearProxyClientTest {
 
     assertTrue(reset.loading)
     assertTrue(!reset.connected)
+    assertTrue(reset.proxyCapabilities.isEmpty())
     assertTrue(reset.sessions.isEmpty())
     assertEquals(null, reset.selectedSession)
     assertTrue(reset.messages.isEmpty())

@@ -511,6 +511,10 @@ type PluginManifestProviderAuthChoice = {
   /** Optional user-facing choice label/hint for grouped onboarding UI. */
   choiceLabel?: string;
   choiceHint?: string;
+  /** Optional HTTPS artwork URL for native and web onboarding surfaces. */
+  icon?: string;
+  /** Optional HTTPS product or installation URL for onboarding surfaces. */
+  website?: string;
   /** Lower values sort earlier in interactive assistant pickers. */
   assistantPriority?: number;
   /** Keep the choice out of interactive assistant pickers while preserving manual CLI support. */
@@ -1529,6 +1533,26 @@ function normalizeManifestQaRunners(value: unknown): PluginManifestQaRunner[] | 
   return normalized.length > 0 ? normalized : undefined;
 }
 
+function normalizeManifestHttpsUrl(value: unknown): string | undefined {
+  const normalized = normalizeOptionalString(value);
+  if (!normalized) {
+    return undefined;
+  }
+  try {
+    const url = new URL(normalized);
+    const canonical = url.toString();
+    return url.protocol === "https:" &&
+      url.hostname &&
+      !url.username &&
+      !url.password &&
+      canonical.length <= 2048
+      ? canonical
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function normalizeProviderAuthChoices(
   value: unknown,
 ): PluginManifestProviderAuthChoice[] | undefined {
@@ -1548,6 +1572,8 @@ function normalizeProviderAuthChoices(
     }
     const choiceLabel = normalizeOptionalString(entry.choiceLabel) ?? "";
     const choiceHint = normalizeOptionalString(entry.choiceHint) ?? "";
+    const icon = normalizeManifestHttpsUrl(entry.icon);
+    const website = normalizeManifestHttpsUrl(entry.website);
     const assistantPriority =
       typeof entry.assistantPriority === "number" && Number.isFinite(entry.assistantPriority)
         ? entry.assistantPriority
@@ -1581,6 +1607,8 @@ function normalizeProviderAuthChoices(
       choiceId,
       ...(choiceLabel ? { choiceLabel } : {}),
       ...(choiceHint ? { choiceHint } : {}),
+      ...(icon ? { icon } : {}),
+      ...(website ? { website } : {}),
       ...(assistantPriority !== undefined ? { assistantPriority } : {}),
       ...(assistantVisibility ? { assistantVisibility } : {}),
       ...(deprecatedChoiceIds.length > 0 ? { deprecatedChoiceIds } : {}),

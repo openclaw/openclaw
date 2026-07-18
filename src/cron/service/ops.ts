@@ -47,11 +47,11 @@ import { locked } from "./locked.js";
 import { normalizeOptionalAgentId } from "./normalize.js";
 import {
   cancelCronRunAdmissionWaiters,
+  clearQueuedCronRunReservationMarker,
   isQueuedCronRunReservationCurrent,
   isQueuedCronRunReservationMarkerCurrent,
   releaseQueuedCronRun,
   reserveQueuedCronRun,
-  restoreQueuedCronRunReservationLastError,
   runWithCronAdmission,
   updateQueuedCronRunReservationMarker,
 } from "./run-admission.js";
@@ -171,7 +171,17 @@ export async function start(state: CronServiceState) {
     const jobs = state.store?.jobs ?? [];
     for (const job of jobs) {
       job.state ??= {};
+      if (typeof job.state.queuedAtMs === "number") {
+        state.deps.log.info(
+          { jobId: job.id, queuedAtMs: job.state.queuedAtMs },
+          "cron: releasing queued job reservation on startup",
+        );
+        job.state.queuedAtMs = undefined;
+        repairedAnyStartupRun = true;
+      }
       if (typeof job.state.runningAtMs === "number") {
+        // Older releases used runningAtMs for both queued and active work. Those
+        // rows are intentionally recovered conservatively to avoid replaying side effects.
         const runningAtMs = job.state.runningAtMs;
         const taskRunId = tryFindCronTaskRunIdForRecovery(state, job.id, runningAtMs);
         const finalized = tryFindFinalizedCronTaskRun(state, job.id, runningAtMs);
@@ -494,6 +504,7 @@ function finalizeUpdatedJob(params: {
       nextJob.state.nextRunAtMs = computeJobNextRunAtMs(nextJob, now);
     } else {
       nextJob.state.nextRunAtMs = undefined;
+      nextJob.state.queuedAtMs = undefined;
       nextJob.state.runningAtMs = undefined;
     }
   } else if (isJobEnabled(nextJob) && !hasScheduledNextRunAtMs(nextJob.state.nextRunAtMs)) {
@@ -862,7 +873,7 @@ async function inspectManualRunPreflight(
       await skipInvalidPersistedManualRun({ state, job, mode, runId, terminalTracker, error });
       return { ok: true, ran: false, reason: "invalid-spec" as const };
     }
-    if (typeof job.state.runningAtMs === "number") {
+    if (typeof job.state.queuedAtMs === "number" || typeof job.state.runningAtMs === "number") {
       return { ok: true, ran: false, reason: "already-running" as const };
     }
     const now = state.deps.nowMs();
@@ -941,7 +952,7 @@ async function prepareManualRun(
       });
       return { ok: true, ran: false, reason: "invalid-spec" as const };
     }
-    if (typeof job.state.runningAtMs === "number") {
+    if (typeof job.state.queuedAtMs === "number" || typeof job.state.runningAtMs === "number") {
       return { ok: true, ran: false, reason: "already-running" as const };
     }
     const reservationAt = state.deps.nowMs();
@@ -949,8 +960,8 @@ async function prepareManualRun(
       return { ok: true, ran: false, reason: "not-due" as const };
     }
     const reservationRollbackSnapshot = snapshotStoreForRollback(state);
-    job.state.runningAtMs = reservationAt;
-    // Persist the running marker before releasing lock so timer ticks that
+    job.state.queuedAtMs = reservationAt;
+    // Persist the queued marker before releasing lock so timer ticks that
     // force-reload from disk cannot start the same job concurrently.
     await persistOrRestore(state, reservationRollbackSnapshot);
     const reservationIdentity = reserveQueuedCronRun(state, job.id, reservationAt, {
@@ -961,19 +972,19 @@ async function prepareManualRun(
         await ensureLoaded(state, { forceReload: true, skipRecompute: true });
         const persistedJob = state.store?.jobs.find((entry) => entry.id === id);
         if (
-          typeof persistedJob?.state.runningAtMs !== "number" ||
+          typeof persistedJob?.state.queuedAtMs !== "number" ||
           !isQueuedCronRunReservationMarkerCurrent(
             state,
             job.id,
             reservationIdentity,
-            persistedJob.state.runningAtMs,
+            persistedJob.state.queuedAtMs,
           )
         ) {
           releaseQueuedCronRun(state, job.id, reservationIdentity);
           return;
         }
         const rollbackSnapshot = snapshotStoreForRollback(state);
-        delete persistedJob.state.runningAtMs;
+        delete persistedJob.state.queuedAtMs;
         await persistOrRestore(state, rollbackSnapshot);
         releaseQueuedCronRun(state, job.id, reservationIdentity);
       };
@@ -1026,13 +1037,13 @@ async function activatePreparedManualRun(
     if (
       !job ||
       !isQueuedCronRunReservationCurrent(state, prepared.jobId, prepared.reservationIdentity) ||
-      job.state.runningAtMs !== prepared.reservationAt
+      job.state.queuedAtMs !== prepared.reservationAt
     ) {
       await releasePreparedManualReservationWithRetry(state, prepared);
       return { ok: true, ran: false, reason: "not-due" } as const;
     }
     const dueProbe = structuredClone(job);
-    delete dueProbe.state.runningAtMs;
+    delete dueProbe.state.queuedAtMs;
     if (
       (prepared.wasEnabled && !isJobEnabled(job)) ||
       !isJobDue(dueProbe, state.deps.nowMs(), { forced: mode === "force" })
@@ -1058,6 +1069,7 @@ async function activatePreparedManualRun(
     const startedAt = state.deps.nowMs();
     const previousLastError = job.state.lastError;
     const activationRollbackSnapshot = snapshotStoreForRollback(state);
+    delete job.state.queuedAtMs;
     job.state.runningAtMs = startedAt;
     job.state.lastError = undefined;
     // A failed write restores the durable reservation; run() owns releasing
@@ -1087,7 +1099,6 @@ async function activatePreparedManualRun(
         reason: state.stopped ? "stopped" : "restart-recovery-pending",
       } as const;
     }
-    releaseQueuedCronRun(state, prepared.jobId, prepared.reservationIdentity);
     emit(state, { jobId: job.id, action: "started", job, runAtMs: startedAt });
     const taskRunId = tryCreateCronTaskRun({
       state,
@@ -1126,26 +1137,19 @@ async function releasePreparedManualReservation(
     return;
   }
   const job = state.store?.jobs.find((entry) => entry.id === prepared.jobId);
+  const rollbackSnapshot = snapshotStoreForRollback(state);
   if (
-    typeof job?.state.runningAtMs !== "number" ||
-    !isQueuedCronRunReservationMarkerCurrent(
+    !job ||
+    !clearQueuedCronRunReservationMarker(
       state,
       prepared.jobId,
       prepared.reservationIdentity,
-      job.state.runningAtMs,
+      job.state,
     )
   ) {
     releaseQueuedCronRun(state, prepared.jobId, prepared.reservationIdentity);
     return;
   }
-  restoreQueuedCronRunReservationLastError(
-    state,
-    prepared.jobId,
-    prepared.reservationIdentity,
-    job.state,
-  );
-  const rollbackSnapshot = snapshotStoreForRollback(state);
-  delete job.state.runningAtMs;
   await persistOrRestore(state, rollbackSnapshot);
   releaseQueuedCronRun(state, prepared.jobId, prepared.reservationIdentity);
 }
@@ -1394,6 +1398,7 @@ async function finishPreparedManualRun(
     }
     emitMissingQueuedTerminal();
   } finally {
+    releaseQueuedCronRun(state, prepared.jobId, prepared.reservationIdentity);
     clearManualCronJobActive(state, jobId, prepared.activeJobMarker);
   }
 }
@@ -1414,9 +1419,8 @@ export async function run(
     try {
       activeRun = await activatePreparedManualRun(state, prepared, mode);
     } catch (error) {
-      // Only activation failures still own the original durable reservation.
-      // Once activation succeeds, a same-millisecond started marker is valid
-      // recovery state and must survive any later execution/finalization error.
+      // Activation failures still own the original durable reservation. Once
+      // activation succeeds, finishPreparedManualRun releases it after execution.
       try {
         await locked(state, async () => {
           await releasePreparedManualReservationWithRetry(state, prepared);

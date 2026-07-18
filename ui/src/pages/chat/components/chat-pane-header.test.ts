@@ -32,7 +32,6 @@ function mount(patch: Partial<ChatPaneHeaderProps> = {}) {
   containers.push(container);
   const props: ChatPaneHeaderProps = {
     paneId: "pane-1",
-    active: true,
     narrow: false,
     mergedChrome: false,
     title: "Session title",

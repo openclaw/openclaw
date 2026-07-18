@@ -21,7 +21,6 @@ const sendStructuredCardFeishuMock = vi.hoisted(() => vi.fn());
 const sendMediaFeishuMock = vi.hoisted(() => vi.fn());
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
 const resolveReceiveIdTypeMock = vi.hoisted(() => vi.fn());
-const createReplyDispatcherWithTypingMock = vi.hoisted(() => vi.fn());
 const addTypingIndicatorMock = vi.hoisted(() => vi.fn(async () => ({ messageId: "om_msg" })));
 const removeTypingIndicatorMock = vi.hoisted(() => vi.fn(async () => {}));
 const streamingInstances = vi.hoisted((): StreamingSessionStub[] => []);
@@ -149,21 +148,9 @@ afterAll(() => {
 
 describe("createFeishuReplyDispatcher streaming behavior", () => {
   type ReplyDispatcherArgs = Parameters<typeof createFeishuReplyDispatcher>[0];
-  type TypingDispatcherOptions = {
-    onReplyStart?: () => Promise<void> | void;
-    onIdle?: () => Promise<void> | void;
-    deliver: (
-      payload: {
-        text?: string;
-        mediaUrl?: string;
-        mediaUrls?: string[];
-        audioAsVoice?: boolean;
-        ttsSupplement?: { spokenText: string; visibleTextAlreadyDelivered?: boolean };
-        isError?: boolean;
-      },
-      meta: { kind: string },
-    ) => Promise<void> | void;
-  };
+  type ReplyDispatcherPlan = ReturnType<typeof createFeishuReplyDispatcher>;
+  type TypingDispatcherOptions = ReplyDispatcherPlan["dispatcherOptions"] &
+    ReplyDispatcherPlan["delivery"];
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -187,13 +174,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     resolveReceiveIdTypeMock.mockReturnValue("chat_id");
     createFeishuClientMock.mockReturnValue({});
 
-    createReplyDispatcherWithTypingMock.mockImplementation((opts) => ({
-      dispatcher: {},
-      replyOptions: {},
-      markDispatchIdle: vi.fn(),
-      _opts: opts,
-    }));
-
     getFeishuRuntimeMock.mockReturnValue({
       channel: {
         text: {
@@ -205,7 +185,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
           chunkMarkdownTextWithMode: vi.fn((text) => [text]),
         },
         reply: {
-          createReplyDispatcherWithTyping: createReplyDispatcherWithTypingMock,
           resolveHumanDelayConfig: vi.fn(() => undefined),
         },
       },
@@ -241,7 +220,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   function setupNonStreamingAutoDispatcher() {
     useNonStreamingAutoAccount();
 
-    createFeishuReplyDispatcher({
+    const result = createFeishuReplyDispatcher({
       cfg: {} as never,
       agentId: "agent",
       runtime: { log: vi.fn(), error: vi.fn() } as never,
@@ -249,7 +228,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       sendTarget: "oc_chat",
     });
 
-    return firstMockArg(createReplyDispatcherWithTypingMock, "reply dispatcher options");
+    return toTypingDispatcherOptions(result);
   }
 
   function createRuntimeLogger() {
@@ -268,8 +247,12 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
 
     return {
       result,
-      options: createReplyDispatcherWithTypingMock.mock.calls.at(-1)?.[0],
+      options: toTypingDispatcherOptions(result),
     };
+  }
+
+  function toTypingDispatcherOptions(result: ReplyDispatcherPlan): TypingDispatcherOptions {
+    return { ...result.dispatcherOptions, ...result.delivery };
   }
 
   function isRecord(value: unknown): value is Record<string, unknown> {
@@ -318,13 +301,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
 
   function firstMockArg(mock: ReturnType<typeof vi.fn>, label: string, argIndex = 0) {
     return mockArg(mock, 0, argIndex, label);
-  }
-
-  function firstTypingDispatcherOptions(): TypingDispatcherOptions {
-    return firstMockArg(
-      createReplyDispatcherWithTypingMock,
-      "reply dispatcher options",
-    ) as TypingDispatcherOptions;
   }
 
   function requireStreamingInstance(instanceIndex: number): StreamingSessionStub {
@@ -383,7 +359,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       },
     });
 
-    createFeishuReplyDispatcher({
+    const result = createFeishuReplyDispatcher({
       cfg: {} as never,
       agentId: "agent",
       runtime: {} as never,
@@ -392,14 +368,14 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       replyToMessageId: "om_parent",
     });
 
-    const options = firstTypingDispatcherOptions();
+    const options = toTypingDispatcherOptions(result);
     await options.onReplyStart?.();
 
     expect(addTypingIndicatorMock).not.toHaveBeenCalled();
   });
 
   it("skips typing indicator for stale replayed messages", async () => {
-    createFeishuReplyDispatcher({
+    const result = createFeishuReplyDispatcher({
       cfg: {} as never,
       agentId: "agent",
       runtime: {} as never,
@@ -409,14 +385,14 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       messageCreateTimeMs: Date.now() - 3 * 60_000,
     });
 
-    const options = firstTypingDispatcherOptions();
+    const options = toTypingDispatcherOptions(result);
     await options.onReplyStart?.();
 
     expect(addTypingIndicatorMock).not.toHaveBeenCalled();
   });
 
   it("treats second-based timestamps as stale for typing suppression", async () => {
-    createFeishuReplyDispatcher({
+    const result = createFeishuReplyDispatcher({
       cfg: {} as never,
       agentId: "agent",
       runtime: {} as never,
@@ -426,14 +402,14 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       messageCreateTimeMs: Math.floor((Date.now() - 3 * 60_000) / 1000),
     });
 
-    const options = firstTypingDispatcherOptions();
+    const options = toTypingDispatcherOptions(result);
     await options.onReplyStart?.();
 
     expect(addTypingIndicatorMock).not.toHaveBeenCalled();
   });
 
   it("keeps typing indicator for fresh messages", async () => {
-    createFeishuReplyDispatcher({
+    const result = createFeishuReplyDispatcher({
       cfg: {} as never,
       agentId: "agent",
       runtime: {} as never,
@@ -443,7 +419,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       messageCreateTimeMs: Date.now() - 30_000,
     });
 
-    const options = firstTypingDispatcherOptions();
+    const options = toTypingDispatcherOptions(result);
     await options.onReplyStart?.();
 
     expect(addTypingIndicatorMock).toHaveBeenCalledTimes(1);
@@ -660,6 +636,43 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expectMockArgFields(sendMessageFeishuMock, "message send params", {
       text: 'plain text <at user_id="ou_body">Body User</at>',
       mentions: [{ openId: "ou_target", name: "Target User", key: "@_user_1" }],
+    });
+  });
+
+  it("puts required bot mentions on every chunk and disables streaming cards", async () => {
+    const runtime = getFeishuRuntimeMock();
+    runtime.channel.text.resolveTextChunkLimit.mockReturnValue(10);
+    runtime.channel.text.chunkMarkdownTextWithMode.mockImplementation((text: string) =>
+      text === "First paragraph." ? ["First ", "paragraph."] : [text],
+    );
+    const requiredMentionTargets = [{ openId: "ou_peer_bot", name: "Peer Bot", key: "" }];
+    const { options } = createDispatcherHarness({ requiredMentionTargets });
+
+    await options.deliver({ text: "First paragraph." }, { kind: "final" });
+
+    expect(streamingInstances).toHaveLength(0);
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
+    expectMockArgFields(sendMessageFeishuMock, "first bot reply chunk", {
+      text: "First ",
+      mentions: requiredMentionTargets,
+    });
+    expectMockArgFields(
+      sendMessageFeishuMock,
+      "second bot reply chunk",
+      { text: "paragraph.", mentions: requiredMentionTargets },
+      1,
+    );
+  });
+
+  it("puts required bot mentions on static card replies", async () => {
+    const requiredMentionTargets = [{ openId: "ou_peer_bot", name: "Peer Bot", key: "" }];
+    const { options } = createDispatcherHarness({ requiredMentionTargets });
+
+    await options.deliver({ text: "```md\nanswer\n```" }, { kind: "final" });
+
+    expect(streamingInstances).toHaveLength(0);
+    expectMockArgFields(sendStructuredCardFeishuMock, "bot card reply", {
+      mentions: requiredMentionTargets,
     });
   });
 
@@ -1991,7 +2004,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       ),
     ).rejects.toThrow("media failed");
     await Promise.all([
-      options.onError?.(new Error("media failed"), { kind: "final" }),
+      Promise.resolve(options.onError?.(new Error("media failed"), { kind: "final" })),
       options.onIdle?.(),
     ]);
     await options.deliver({ text: "Second answer" }, { kind: "final" });
@@ -2033,7 +2046,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
         { kind: "final" },
       ),
     ).rejects.toThrow("media failed");
-    await options.onError?.(new Error("media failed"), { kind: "final" });
+    await Promise.resolve(options.onError?.(new Error("media failed"), { kind: "final" }));
     await options.deliver({ text: "Recovered answer" }, { kind: "final" });
     await options.onIdle?.();
 
@@ -2327,7 +2340,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     };
 
     try {
-      createFeishuReplyDispatcher({
+      const result = createFeishuReplyDispatcher({
         cfg: {} as never,
         agentId: "agent",
         runtime: { log: vi.fn(), error: errorMock } as never,
@@ -2335,7 +2348,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
         sendTarget: "oc_chat",
       });
 
-      const options = firstTypingDispatcherOptions();
+      const options = toTypingDispatcherOptions(result);
 
       // First deliver with markdown triggers startStreaming - which will fail
       await options.deliver({ text: "```ts\nconst x = 1\n```" }, { kind: "final" });

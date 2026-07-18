@@ -49,6 +49,13 @@ The `Linux App` CI workflow uploads the same bundles as the
 manual runs. See `apps/linux/README.md` in the repository for Linux build
 dependencies and development commands.
 
+### Quick Chat
+
+Open Quick Chat with `Ctrl+Shift+Space` or the **Quick Chat** tray item. The
+shortcut is available on X11; on Wayland, use the tray item for now. Quick Chat
+sends the message through the OpenClaw CLI to the default agent's main session,
+then hides. Replies remain in the normal session; open the dashboard to read them.
+
 ### Canvas
 
 Linux Canvas uses two cooperating processes. `openclaw node run` remains the single Gateway node connection; the bundled `linux-canvas` plugin forwards `canvas.*` calls to the running desktop app over a user-only Unix socket. The app owns one on-demand WebView window, including the bundled A2UI renderer and action bridge back to the agent.
