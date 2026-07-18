@@ -12,6 +12,7 @@ function runGit(args, options = {}) {
     stdio: ["ignore", "pipe", "pipe"],
     encoding: "utf8",
     timeout: options.timeout ?? 10_000,
+    killSignal: "SIGKILL",
     ...options,
   });
 }
