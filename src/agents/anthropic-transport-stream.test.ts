@@ -876,7 +876,7 @@ describe("anthropic transport stream", () => {
     expect(headers.get("X-Provider")).toBe("foundry");
   });
 
-  it("uses X-Api-Key for MiniMax API-key provider transport requests", async () => {
+  it("uses X-Api-Key for the explicitly selected MiniMax transport mode", async () => {
     const model = makeAnthropicTransportModel({
       provider: "minimax",
       baseUrl: "https://api.minimax.io/anthropic",

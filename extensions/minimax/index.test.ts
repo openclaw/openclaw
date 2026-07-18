@@ -116,17 +116,33 @@ describe("minimax provider hooks", () => {
     ).toEqual([
       {
         id: "api-global",
-        label: "MiniMax API key (Global)",
-        hint: "Global endpoint - api.minimax.io",
+        label: "MiniMax API key (Global, Bearer)",
+        hint: "Global endpoint - api.minimax.io; documented Bearer default",
         choiceId: "minimax-global-api",
         groupId: "minimax",
         groupHint: "M3 (recommended)",
       },
       {
         id: "api-cn",
-        label: "MiniMax API key (CN)",
-        hint: "CN endpoint - api.minimaxi.com",
+        label: "MiniMax API key (CN, Bearer)",
+        hint: "CN endpoint - api.minimaxi.com; documented Bearer default",
         choiceId: "minimax-cn-api",
+        groupId: "minimax",
+        groupHint: "M3 (recommended)",
+      },
+      {
+        id: "api-global-x-api-key",
+        label: "MiniMax API key (Global, X-Api-Key)",
+        hint: "Global endpoint - api.minimax.io; explicit X-Api-Key compatibility",
+        choiceId: "minimax-global-api-x-api-key",
+        groupId: "minimax",
+        groupHint: "M3 (recommended)",
+      },
+      {
+        id: "api-cn-x-api-key",
+        label: "MiniMax API key (CN, X-Api-Key)",
+        hint: "CN endpoint - api.minimaxi.com; explicit X-Api-Key compatibility",
+        choiceId: "minimax-cn-api-x-api-key",
         groupId: "minimax",
         groupHint: "M3 (recommended)",
       },
@@ -220,7 +236,7 @@ describe("minimax provider hooks", () => {
 
     const provider = catalog && "provider" in catalog ? catalog.provider : undefined;
     expect(provider?.api).toBe("anthropic-messages");
-    expect(provider?.authHeader).toBe(false);
+    expect(provider?.authHeader).toBe(true);
     expect(provider?.baseUrl).toBe("https://api.minimax.io/anthropic");
     const model = provider?.models.find((entry: { id?: string }) => entry.id === "MiniMax-M3");
     expect(model?.id).toBe("MiniMax-M3");
