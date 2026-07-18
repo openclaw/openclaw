@@ -135,6 +135,10 @@ export async function readMatrixMessages(
       relationPage ? (rootFillsThreadPage ? [] : relationPage.events) : (flatPage?.chunk ?? []),
     );
     const messages: MatrixMessageSummary[] = [];
+    // Track which event IDs originated from regular room messages so the
+    // dedup pass only suppresses eligible targets (never poll summaries or
+    // thread root summaries that a malformed m.replace happens to point at).
+    const roomMessageIds = new Set<string>();
     if (threadRootSummary) {
       messages.push(threadRootSummary);
     }
@@ -149,6 +153,14 @@ export async function readMatrixMessages(
         if (threadId && event.event_id === threadId) {
           continue;
         }
+        // Matrix spec: valid m.replace events must carry m.new_content.
+        // Drop events that are tagged as replaces but lack the new-content
+        // payload (e.g. redacted remnants, malformed events).
+        const relates = event.content["m.relates_to"] as { rel_type?: unknown } | undefined;
+        if (relates?.rel_type === "m.replace" && !event.content["m.new_content"]) {
+          continue;
+        }
+        roomMessageIds.add(event.event_id);
         messages.push(summarizeMatrixRawEvent(event));
         continue;
       }
@@ -176,12 +188,94 @@ export async function readMatrixMessages(
         messages.push(pollSummary);
       }
     }
+    // Deduplicate streaming m.replace events. Matrix streaming produces one
+    // m.replace per edit chunk, so a single blocked-stream message can leave
+    // 8+ intermediate events in the room timeline. Use timestamp comparison
+    // to pick the latest edit per target — this is correct for both backward
+    // (reverse-chronological) and forward (chronological, --after) pagination.
+    // When timestamps are equal, fall back to event_id lexicographic order
+    // per the Matrix spec tie-break rules.
+    //
+    // Matrix spec requires m.replace sender to match the original event sender.
+    // Build an eventId→sender map from the current page before deduping so we
+    // can validate sender ownership before suppressing the original.
+    const senderByEventId = new Map<string, string | undefined>();
+    for (const msg of messages) {
+      if (msg.eventId) {
+        senderByEventId.set(msg.eventId, msg.sender);
+      }
+    }
+    const latestReplaceByTarget = new Map<string, MatrixMessageSummary>();
+    for (const msg of messages) {
+      const replacedId = msg.relatesTo?.eventId;
+      if (msg.relatesTo?.relType === "m.replace" && replacedId) {
+        // Matrix spec: m.replace sender must match the original event sender.
+        // A cross-sender m.replace is invalid and must not suppress the original.
+        if (msg.sender && senderByEventId.has(replacedId)) {
+          const originalSender = senderByEventId.get(replacedId);
+          if (originalSender !== undefined && msg.sender !== originalSender) {
+            continue; // cross-sender replace — invalid, skip
+          }
+        }
+        const existing = latestReplaceByTarget.get(replacedId);
+        if (
+          !existing ||
+          (msg.timestamp != null &&
+            existing.timestamp != null &&
+            (msg.timestamp > existing.timestamp ||
+              (msg.timestamp === existing.timestamp &&
+                (msg.eventId ?? "") > (existing.eventId ?? ""))))
+        ) {
+          latestReplaceByTarget.set(replacedId, msg);
+        }
+      }
+    }
+
+    // Matrix spec: m.replace must target a regular room-message event, not
+    // another m.replace or a non-room-message summary (e.g. a poll).  Only
+    // suppress targets that originated from room messages and are not
+    // themselves m.replace events — replacement chains do not lose content
+    // and malformed replacements cannot hide poll or thread-root summaries.
+    const eligibleTargetIds = new Set<string>();
+    for (const msg of messages) {
+      if (
+        msg.eventId &&
+        roomMessageIds.has(msg.eventId) &&
+        msg.relatesTo?.relType !== "m.replace"
+      ) {
+        eligibleTargetIds.add(msg.eventId);
+      }
+    }
+    const replacedOriginals = new Set<string>();
+    for (const replacedId of latestReplaceByTarget.keys()) {
+      if (eligibleTargetIds.has(replacedId)) {
+        replacedOriginals.add(replacedId);
+      }
+    }
+    const deduped: MatrixMessageSummary[] = [];
+    for (const msg of messages) {
+      const replacedId = msg.relatesTo?.eventId;
+      // Keep only the latest m.replace per target; drop older intermediate edits.
+      if (msg.relatesTo?.relType === "m.replace" && replacedId) {
+        if (msg !== latestReplaceByTarget.get(replacedId)) {
+          continue;
+        }
+        deduped.push(msg);
+        continue;
+      }
+      // Drop original events whose content was superseded by a later replace.
+      if (msg.eventId && replacedOriginals.has(msg.eventId)) {
+        continue;
+      }
+      deduped.push(msg);
+    }
+
     const nextBatch =
       rootFillsThreadPage && threadId && relationPage?.events.length
         ? encodeMatrixThreadRelationsStartCursor(threadId)
         : (relationPage?.nextBatch ?? flatPage?.end ?? null);
     return {
-      messages,
+      messages: deduped,
       nextBatch,
       prevBatch: relationPage?.prevBatch ?? flatPage?.start ?? null,
     };
