@@ -96,7 +96,8 @@ function resolveMattermostRequireMention(config: MattermostAccountConfig): boole
 export function resolveMattermostAccount(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
-  allowUnresolvedSecretRef?: boolean;
+  /** "inspect" treats an unresolved SecretRef as no token instead of throwing. */
+  mode?: "strict" | "inspect";
 }): ResolvedMattermostAccount {
   const accountId = normalizeAccountId(
     params.accountId ?? resolveDefaultMattermostAccountId(params.cfg),
@@ -109,12 +110,13 @@ export function resolveMattermostAccount(params: {
   const allowEnv = accountId === DEFAULT_ACCOUNT_ID;
   const envToken = allowEnv ? process.env.MATTERMOST_BOT_TOKEN?.trim() : undefined;
   const envUrl = allowEnv ? process.env.MATTERMOST_URL?.trim() : undefined;
-  const configToken = params.allowUnresolvedSecretRef
-    ? normalizeSecretInputString(merged.botToken)
-    : normalizeResolvedSecretInputString({
-        value: merged.botToken,
-        path: `channels.mattermost.accounts.${accountId}.botToken`,
-      });
+  const configToken =
+    params.mode === "inspect"
+      ? normalizeSecretInputString(merged.botToken)
+      : normalizeResolvedSecretInputString({
+          value: merged.botToken,
+          path: `channels.mattermost.accounts.${accountId}.botToken`,
+        });
   const configUrl = merged.baseUrl?.trim();
   const botToken = configToken || envToken;
   const baseUrl = normalizeMattermostBaseUrl(configUrl || envUrl);

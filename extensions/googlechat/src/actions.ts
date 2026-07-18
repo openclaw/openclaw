@@ -49,7 +49,7 @@ function hasGoogleChatOutboundAttachment(params: Record<string, unknown>): boole
 export const googlechatMessageActions: ChannelMessageActionAdapter = {
   describeMessageTool: ({ cfg, accountId }) => {
     const accounts = accountId
-      ? [resolveGoogleChatAccount({ cfg, accountId })].filter(
+      ? [resolveGoogleChatAccount({ cfg, accountId, mode: "inspect" })].filter(
           (account) =>
             account.enabled &&
             account.credentialSource !== "none" &&

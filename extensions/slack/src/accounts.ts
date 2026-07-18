@@ -13,6 +13,10 @@ import {
   type ChannelDmPolicy,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
+import {
+  normalizeResolvedSecretInputString,
+  normalizeSecretInputString,
+} from "openclaw/plugin-sdk/secret-input";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SlackAccountSurfaceFields } from "./account-surface-fields.js";
 import type { SlackAccountConfig } from "./runtime-api.js";
@@ -21,6 +25,19 @@ import { resolveSlackAppToken, resolveSlackBotToken, resolveSlackUserToken } fro
 export { resolveSlackReplyToMode } from "./account-reply-mode.js";
 
 export type SlackTokenSource = "env" | "config" | "none";
+
+// Inspect mode reads tokens non-strictly: an unresolved SecretRef reads as "no
+// token" so discovery enumeration skips that account instead of throwing away
+// the whole channel's message actions (see listEnabledSlackAccounts).
+function resolveConfigToken(params: {
+  inspect: boolean;
+  raw: unknown;
+  path: string;
+}): string | undefined {
+  return params.inspect
+    ? normalizeSecretInputString(params.raw)
+    : normalizeResolvedSecretInputString({ value: params.raw, path: params.path });
+}
 
 export type ResolvedSlackAccount = {
   accountId: string;
@@ -233,10 +250,13 @@ export function resolveSlackAccountDmPolicy(params: {
 export function resolveSlackAccount(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
+  /** "inspect" treats unresolved SecretRefs as missing tokens instead of throwing. */
+  mode?: "strict" | "inspect";
 }): ResolvedSlackAccount {
   const accountId = normalizeAccountId(
     params.accountId ?? resolveDefaultSlackAccountId(params.cfg),
   );
+  const inspect = params.mode === "inspect";
   const baseEnabled = params.cfg.channels?.slack?.enabled !== false;
   const merged = mergeSlackAccountConfig(params.cfg, accountId);
   const identity = merged.identity ?? "bot";
@@ -254,13 +274,25 @@ export function resolveSlackAccount(params: {
   const envUser =
     userActive && baseAllowEnv ? resolveSlackUserToken(process.env.SLACK_USER_TOKEN) : undefined;
   const configBot = botActive
-    ? resolveSlackBotToken(merged.botToken, `channels.slack.accounts.${accountId}.botToken`)
+    ? resolveConfigToken({
+        inspect,
+        raw: merged.botToken,
+        path: `channels.slack.accounts.${accountId}.botToken`,
+      })
     : undefined;
   const configApp = appActive
-    ? resolveSlackAppToken(merged.appToken, `channels.slack.accounts.${accountId}.appToken`)
+    ? resolveConfigToken({
+        inspect,
+        raw: merged.appToken,
+        path: `channels.slack.accounts.${accountId}.appToken`,
+      })
     : undefined;
   const configUser = userActive
-    ? resolveSlackUserToken(merged.userToken, `channels.slack.accounts.${accountId}.userToken`)
+    ? resolveConfigToken({
+        inspect,
+        raw: merged.userToken,
+        path: `channels.slack.accounts.${accountId}.userToken`,
+      })
     : undefined;
   const botToken = configBot ?? envBot;
   const appToken = configApp ?? envApp;
@@ -296,7 +328,9 @@ export function resolveSlackAccount(params: {
 }
 
 export function listEnabledSlackAccounts(cfg: OpenClawConfig): ResolvedSlackAccount[] {
+  // Discovery fans in every account; inspect mode keeps one account with an
+  // unresolved SecretRef from throwing away healthy accounts' message actions.
   return listSlackAccountIds(cfg)
-    .map((accountId) => resolveSlackAccount({ cfg, accountId }))
+    .map((accountId) => resolveSlackAccount({ cfg, accountId, mode: "inspect" }))
     .filter((account) => account.enabled);
 }

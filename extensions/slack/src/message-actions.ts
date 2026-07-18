@@ -11,7 +11,9 @@ export function listSlackMessageActions(
   accountId?: string | null,
 ): ChannelMessageActionName[] {
   const accounts = (
-    accountId ? [resolveSlackAccount({ cfg, accountId })] : listEnabledSlackAccounts(cfg)
+    accountId
+      ? [resolveSlackAccount({ cfg, accountId, mode: "inspect" })]
+      : listEnabledSlackAccounts(cfg)
   ).filter(
     (account) =>
       account.enabled &&

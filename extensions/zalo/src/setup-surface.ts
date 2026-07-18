@@ -113,7 +113,7 @@ export const zaloSetupWizard: ChannelSetupWizard = {
       const account = resolveZaloAccount({
         cfg,
         accountId,
-        allowUnresolvedSecretRef: true,
+        mode: "inspect",
       });
       return (
         Boolean(account.token) ||
@@ -128,7 +128,7 @@ export const zaloSetupWizard: ChannelSetupWizard = {
     const resolvedAccount = resolveZaloAccount({
       cfg: next,
       accountId,
-      allowUnresolvedSecretRef: true,
+      mode: "inspect",
     });
     const accountConfigured = Boolean(resolvedAccount.token);
     const allowEnv = accountId === DEFAULT_ACCOUNT_ID;

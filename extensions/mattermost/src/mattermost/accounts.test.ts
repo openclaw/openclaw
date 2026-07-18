@@ -224,3 +224,37 @@ describe("resolveMattermostReplyToMode", () => {
     expect(account.streamingMode).toBe("off");
   });
 });
+
+describe("mattermost accounts with an unresolved SecretRef", () => {
+  const cfg = {
+    channels: {
+      mattermost: {
+        enabled: true,
+        accounts: {
+          broken: {
+            enabled: true,
+            botToken: { source: "env", provider: "default", id: "OPENCLAW_TEST_MISSING_MM" },
+            baseUrl: "https://mm.example.com",
+          },
+          healthy: {
+            enabled: true,
+            botToken: "mm-healthy-token",
+            baseUrl: "https://mm.example.com",
+          },
+        },
+      },
+    },
+  } as OpenClawConfig;
+
+  it("keeps strict resolution throwing for direct account use", () => {
+    expect(() => resolveMattermostAccount({ cfg, accountId: "broken" })).toThrow(
+      /unresolved SecretRef/,
+    );
+  });
+
+  it("inspect mode reads the unresolved ref as no token", () => {
+    const resolved = resolveMattermostAccount({ cfg, accountId: "broken", mode: "inspect" });
+    expect(resolved.botToken).toBeUndefined();
+    expect(resolved.botTokenSource).toBe("none");
+  });
+});

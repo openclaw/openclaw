@@ -51,14 +51,14 @@ const loadGoogleChatChannelRuntime = createLazyRuntimeNamedExport(
 const googlechatActions: ChannelMessageActionAdapter = {
   describeMessageTool: ({ cfg, accountId }) => {
     const accounts = accountId
-      ? [resolveGoogleChatAccount({ cfg, accountId })].filter(
+      ? [resolveGoogleChatAccount({ cfg, accountId, mode: "inspect" })].filter(
           (account) =>
             account.enabled &&
             account.credentialSource !== "none" &&
             account.tokenStatus !== "configured_unavailable",
         )
       : listGoogleChatAccountIds(cfg)
-          .map((id) => resolveGoogleChatAccount({ cfg, accountId: id }))
+          .map((id) => resolveGoogleChatAccount({ cfg, accountId: id, mode: "inspect" }))
           .filter(
             (account) =>
               account.enabled &&

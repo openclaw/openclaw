@@ -10,6 +10,7 @@ import {
   resolveSlackAccountDmPolicy,
   resolveSlackOperationToken,
 } from "./accounts.js";
+import { listSlackMessageActions } from "./message-actions.js";
 
 describe("resolveSlackOperationToken", () => {
   it.each([
@@ -638,5 +639,45 @@ describe("resolveSlackAccount active secret surfaces", () => {
         process.env.SLACK_APP_TOKEN = previousAppToken;
       }
     }
+  });
+});
+
+describe("slack accounts with an unresolved SecretRef", () => {
+  const cfg = {
+    channels: {
+      slack: {
+        enabled: true,
+        accounts: {
+          broken: {
+            enabled: true,
+            botToken: { source: "env", provider: "default", id: "OPENCLAW_TEST_MISSING_SLACK" },
+          },
+          healthy: { enabled: true, botToken: "xoxb-healthy" },
+        },
+      },
+    },
+  } as OpenClawConfig;
+
+  it("keeps healthy accounts visible in enumeration instead of throwing", () => {
+    const accounts = listEnabledSlackAccounts(cfg);
+    const broken = accounts.find((account) => account.accountId === "broken");
+    const healthy = accounts.find((account) => account.accountId === "healthy");
+    expect(healthy?.botToken).toBe("xoxb-healthy");
+    expect(broken?.botToken).toBeUndefined();
+    expect(broken?.botTokenSource).toBe("none");
+  });
+
+  it("keeps message actions discoverable for healthy accounts", () => {
+    expect(listSlackMessageActions(cfg)).toContain("send");
+  });
+
+  it("keeps strict resolution throwing for direct account use", () => {
+    expect(() => resolveSlackAccount({ cfg, accountId: "broken" })).toThrow(/unresolved SecretRef/);
+  });
+
+  it("inspect mode reads the unresolved ref as no token", () => {
+    expect(resolveSlackAccount({ cfg, accountId: "broken", mode: "inspect" }).botTokenSource).toBe(
+      "none",
+    );
   });
 });

@@ -27,7 +27,7 @@ export function resolveMattermostAccountWithSecrets(cfg: OpenClawConfig, account
   return resolveMattermostAccount({
     cfg,
     accountId,
-    allowUnresolvedSecretRef: true,
+    mode: "inspect",
   });
 }
 

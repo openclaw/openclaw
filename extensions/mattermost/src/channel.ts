@@ -151,11 +151,13 @@ function describeMattermostMessageTool({
 }: Parameters<
   NonNullable<ChannelMessageActionAdapter["describeMessageTool"]>
 >[0]): ChannelMessageToolDiscovery {
+  // Inspect mode per account: discovery fans in every account, so one account
+  // with an unresolved SecretRef must not throw away healthy accounts' actions.
   const enabledAccounts = (
     accountId
-      ? [resolveMattermostAccount({ cfg, accountId })]
+      ? [resolveMattermostAccount({ cfg, accountId, mode: "inspect" })]
       : listMattermostAccountIds(cfg).map((listedAccountId) =>
-          resolveMattermostAccount({ cfg, accountId: listedAccountId }),
+          resolveMattermostAccount({ cfg, accountId: listedAccountId, mode: "inspect" }),
         )
   )
     .filter((account) => account.enabled)
@@ -188,9 +190,9 @@ function hasConfiguredMattermostDirectoryAccount({
   accountId,
 }: Pick<MattermostDirectoryListParams, "cfg" | "accountId">): boolean {
   const accounts = accountId
-    ? [resolveMattermostAccount({ cfg, accountId })]
+    ? [resolveMattermostAccount({ cfg, accountId, mode: "inspect" })]
     : listMattermostAccountIds(cfg).map((listedAccountId) =>
-        resolveMattermostAccount({ cfg, accountId: listedAccountId }),
+        resolveMattermostAccount({ cfg, accountId: listedAccountId, mode: "inspect" }),
       );
   return accounts.some((account) =>
     Boolean(account.enabled && account.botToken?.trim() && account.baseUrl?.trim()),

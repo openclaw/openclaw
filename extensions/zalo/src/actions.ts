@@ -19,7 +19,9 @@ const ZALO_ACTIONS = new Set<ChannelMessageActionName>(["send"]);
 
 function listEnabledAccounts(cfg: OpenClawConfig, accountId?: string | null) {
   return (
-    accountId ? [resolveZaloAccount({ cfg, accountId })] : listEnabledZaloAccounts(cfg)
+    accountId
+      ? [resolveZaloAccount({ cfg, accountId, mode: "inspect" })]
+      : listEnabledZaloAccounts(cfg)
   ).filter((account) => account.enabled && account.tokenSource !== "none");
 }
 

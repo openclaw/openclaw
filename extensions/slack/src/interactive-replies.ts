@@ -198,10 +198,13 @@ function resolveInteractiveRepliesFromCapabilities(capabilities: unknown): boole
 export function isSlackInteractiveRepliesEnabled(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
+  /** Discovery passes "inspect" so an unresolved SecretRef cannot break tool schema building. */
+  mode?: "strict" | "inspect";
 }): boolean {
   const account = resolveSlackAccount({
     cfg: params.cfg,
     accountId: params.accountId ?? resolveDefaultSlackAccountId(params.cfg),
+    mode: params.mode,
   });
   return resolveInteractiveRepliesFromCapabilities(account.config.capabilities);
 }
