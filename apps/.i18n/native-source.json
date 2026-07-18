@@ -29259,7 +29259,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 878,
+      "line": 881,
       "path": "apps/macos/Sources/OpenClaw/DashboardWindowController.swift",
       "source": "[\\(host)]",
       "surface": "apple",
@@ -36083,7 +36083,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 758,
+      "line": 816,
       "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift",
       "source": "Talk mode off",
       "surface": "apple",
@@ -36091,7 +36091,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 759,
+      "line": 817,
       "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift",
       "source": "Talk mode paused",
       "surface": "apple",
@@ -36099,7 +36099,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 761,
+      "line": 819,
       "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift",
       "source": "Talk mode ready",
       "surface": "apple",
@@ -36107,7 +36107,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 762,
+      "line": 820,
       "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift",
       "source": "Listening",
       "surface": "apple",
@@ -36115,7 +36115,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 763,
+      "line": 821,
       "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift",
       "source": "Thinking",
       "surface": "apple",
@@ -36123,7 +36123,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 764,
+      "line": 822,
       "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift",
       "source": "Speaking",
       "surface": "apple",
@@ -36131,7 +36131,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 768,
+      "line": 826,
       "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift",
       "source": "What would you like to work on?",
       "surface": "apple",
@@ -36139,7 +36139,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 772,
+      "line": 830,
       "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift",
       "source": "Check OpenClaw status",
       "surface": "apple",
@@ -36147,7 +36147,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 773,
+      "line": 831,
       "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift",
       "source": "Summarize the current OpenClaw status and tell me what needs attention.",
       "surface": "apple",
@@ -36155,7 +36155,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 776,
+      "line": 834,
       "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift",
       "source": "What can you do?",
       "surface": "apple",
@@ -36163,7 +36163,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 777,
+      "line": 835,
       "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift",
       "source": "Show me what you can help with on this Mac right now.",
       "surface": "apple",
@@ -36171,7 +36171,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 780,
+      "line": 838,
       "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift",
       "source": "Catch me up",
       "surface": "apple",
@@ -36179,7 +36179,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 781,
+      "line": 839,
       "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift",
       "source": "Summarize what happened in my sessions since yesterday.",
       "surface": "apple",
@@ -36907,7 +36907,455 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 33,
+      "line": 30,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "This session cannot be archived while it is active or running.",
+      "surface": "apple",
+      "id": "native.apple.b1cdcb906a43d5d6"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 32,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "The main session cannot be deleted.",
+      "surface": "apple",
+      "id": "native.apple.5817e3f3dab1ee19"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 34,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "Remove attachments or wait for delivery before archiving or deleting this session.",
+      "surface": "apple",
+      "id": "native.apple.a6b8df3f18171c91"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 141,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "Running",
+      "surface": "apple",
+      "id": "native.apple.476b3862e0449857"
+    },
+    {
+      "kind": "ui-call",
+      "line": 171,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "Identity",
+      "surface": "apple",
+      "id": "native.apple.83b41e41f428cffb"
+    },
+    {
+      "kind": "ui-call",
+      "line": 172,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "Name",
+      "surface": "apple",
+      "id": "native.apple.ba6710da42846eed"
+    },
+    {
+      "kind": "ui-call",
+      "line": 174,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "Key",
+      "surface": "apple",
+      "id": "native.apple.bdb1928f7e63c4c6"
+    },
+    {
+      "kind": "ui-modifier",
+      "line": 181,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "Copy session key",
+      "surface": "apple",
+      "id": "native.apple.7259d51423f8def0"
+    },
+    {
+      "kind": "ui-call",
+      "line": 183,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "Kind",
+      "surface": "apple",
+      "id": "native.apple.1494b638984ddca3"
+    },
+    {
+      "kind": "ui-call",
+      "line": 187,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "Organization",
+      "surface": "apple",
+      "id": "native.apple.49cd6c21bdd0d8da"
+    },
+    {
+      "kind": "ui-call",
+      "line": 188,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "Group",
+      "surface": "apple",
+      "id": "native.apple.83e2ae5c4c7dbb94"
+    },
+    {
+      "kind": "ui-call",
+      "line": 189,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "None",
+      "surface": "apple",
+      "id": "native.apple.1ba465bfa16ed23b"
+    },
+    {
+      "kind": "ui-call",
+      "line": 199,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "Pinned",
+      "surface": "apple",
+      "id": "native.apple.2c7c9e5dc8ad574e"
+    },
+    {
+      "kind": "ui-call",
+      "line": 201,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "Archived",
+      "surface": "apple",
+      "id": "native.apple.b0d3e265af9f562a"
+    },
+    {
+      "kind": "ui-call",
+      "line": 208,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "Run",
+      "surface": "apple",
+      "id": "native.apple.de94ca2cf7d4d766"
+    },
+    {
+      "kind": "ui-call",
+      "line": 209,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "Status",
+      "surface": "apple",
+      "id": "native.apple.f7a51dca3268b26c"
+    },
+    {
+      "kind": "ui-call",
+      "line": 210,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "Model",
+      "surface": "apple",
+      "id": "native.apple.12678de5fa43321d"
+    },
+    {
+      "kind": "ui-call",
+      "line": 211,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "Provider",
+      "surface": "apple",
+      "id": "native.apple.8ec6bd6001df285d"
+    },
+    {
+      "kind": "ui-call",
+      "line": 212,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "Runtime",
+      "surface": "apple",
+      "id": "native.apple.f43534cf1ee73605"
+    },
+    {
+      "kind": "ui-call",
+      "line": 214,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "Run duration",
+      "surface": "apple",
+      "id": "native.apple.f0775e602bbe75ed"
+    },
+    {
+      "kind": "ui-call",
+      "line": 221,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "Worktree",
+      "surface": "apple",
+      "id": "native.apple.ecde91d89eab026b"
+    },
+    {
+      "kind": "ui-call",
+      "line": 222,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "ID",
+      "surface": "apple",
+      "id": "native.apple.1ef1698bb3ff7166"
+    },
+    {
+      "kind": "ui-call",
+      "line": 223,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "Branch",
+      "surface": "apple",
+      "id": "native.apple.69bc49f9663fa205"
+    },
+    {
+      "kind": "ui-call",
+      "line": 224,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "Repository root",
+      "surface": "apple",
+      "id": "native.apple.aa430e81e52e2354"
+    },
+    {
+      "kind": "ui-call",
+      "line": 228,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "Activity",
+      "surface": "apple",
+      "id": "native.apple.6e851b012a982d38"
+    },
+    {
+      "kind": "ui-call",
+      "line": 229,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "Updated",
+      "surface": "apple",
+      "id": "native.apple.bf87c6fd92c9315a"
+    },
+    {
+      "kind": "ui-call",
+      "line": 230,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "Last activity",
+      "surface": "apple",
+      "id": "native.apple.dcb1734cba578b79"
+    },
+    {
+      "kind": "ui-call",
+      "line": 231,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "Last interaction",
+      "surface": "apple",
+      "id": "native.apple.58ca290e3f032865"
+    },
+    {
+      "kind": "ui-call",
+      "line": 232,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "Run started",
+      "surface": "apple",
+      "id": "native.apple.7020bd521499f3b8"
+    },
+    {
+      "kind": "ui-call",
+      "line": 233,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "Run ended",
+      "surface": "apple",
+      "id": "native.apple.abb2b24d6378b605"
+    },
+    {
+      "kind": "ui-modifier",
+      "line": 244,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "Session Info",
+      "surface": "apple",
+      "id": "native.apple.cd7c3095a22f80a9"
+    },
+    {
+      "kind": "ui-call",
+      "line": 359,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "Groups",
+      "surface": "apple",
+      "id": "native.apple.e308b012d84b3b3e"
+    },
+    {
+      "kind": "ui-call",
+      "line": 366,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "Rename…",
+      "surface": "apple",
+      "id": "native.apple.6438f66cfcaefaf7"
+    },
+    {
+      "kind": "ui-call",
+      "line": 370,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "Delete…",
+      "surface": "apple",
+      "id": "native.apple.58b0f1df4985b0d1"
+    },
+    {
+      "kind": "ui-call",
+      "line": 383,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "No groups",
+      "surface": "apple",
+      "id": "native.apple.bc70cc0f0b882179"
+    },
+    {
+      "kind": "ui-call",
+      "line": 388,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "Create Group",
+      "surface": "apple",
+      "id": "native.apple.cb3e1fa7783a35d2"
+    },
+    {
+      "kind": "ui-call",
+      "line": 392,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "Add Group",
+      "surface": "apple",
+      "id": "native.apple.4ac72aeb70f107d8"
+    },
+    {
+      "kind": "ui-modifier",
+      "line": 412,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "Session Groups",
+      "surface": "apple",
+      "id": "native.apple.23d628606fe0734f"
+    },
+    {
+      "kind": "ui-call",
+      "line": 415,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "Done",
+      "surface": "apple",
+      "id": "native.apple.7777b2d2ec43ed59"
+    },
+    {
+      "kind": "ui-modifier",
+      "line": 423,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "Rename Group",
+      "surface": "apple",
+      "id": "native.apple.0b0149661cacfe36"
+    },
+    {
+      "kind": "ui-call",
+      "line": 428,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "Group name",
+      "surface": "apple",
+      "id": "native.apple.8cbd863aa4d0524f"
+    },
+    {
+      "kind": "ui-call",
+      "line": 430,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "Rename",
+      "surface": "apple",
+      "id": "native.apple.6021088d5ed9c301"
+    },
+    {
+      "kind": "ui-call",
+      "line": 437,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "Cancel",
+      "surface": "apple",
+      "id": "native.apple.e697417338a47751"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 440,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "Delete “%@”?",
+      "surface": "apple",
+      "id": "native.apple.cc89328a14af7a23"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 441,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "Delete group?",
+      "surface": "apple",
+      "id": "native.apple.4c09741db2e6c624"
+    },
+    {
+      "kind": "ui-call",
+      "line": 446,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "Delete Group",
+      "surface": "apple",
+      "id": "native.apple.ddb1bbbd3c1a9c5e"
+    },
+    {
+      "kind": "ui-call",
+      "line": 453,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "Sessions in this group become ungrouped.",
+      "surface": "apple",
+      "id": "native.apple.b049c8a4d2805e08"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 515,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "Gateway changed. Close and reopen Groups to continue.",
+      "surface": "apple",
+      "id": "native.apple.5aa6082d78027c5f"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 555,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "No agents are available on this gateway.",
+      "surface": "apple",
+      "id": "native.apple.bb4b44183929c881"
+    },
+    {
+      "kind": "ui-call",
+      "line": 570,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "New Session Options",
+      "surface": "apple",
+      "id": "native.apple.6c89f35d53506406"
+    },
+    {
+      "kind": "ui-call",
+      "line": 572,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "Agent",
+      "surface": "apple",
+      "id": "native.apple.5b0cde807ccb4241"
+    },
+    {
+      "kind": "ui-call",
+      "line": 580,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "Create in a worktree",
+      "surface": "apple",
+      "id": "native.apple.124a640f9620d9cd"
+    },
+    {
+      "kind": "ui-call",
+      "line": 584,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "Base ref (optional)",
+      "surface": "apple",
+      "id": "native.apple.632ce245d5575fea"
+    },
+    {
+      "kind": "ui-call",
+      "line": 594,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "Retry",
+      "surface": "apple",
+      "id": "native.apple.fd81909fc9719a59"
+    },
+    {
+      "kind": "ui-call",
+      "line": 600,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "Create",
+      "surface": "apple",
+      "id": "native.apple.a085278be62286b2"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 618,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
+      "source": "The session could not be created.",
+      "surface": "apple",
+      "id": "native.apple.795ba37f6782cf28"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 64,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar.swift",
       "source": "Search sessions",
       "surface": "apple",
@@ -36915,7 +37363,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 38,
+      "line": 69,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar.swift",
       "source": "No Sessions",
       "surface": "apple",
@@ -36923,7 +37371,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 39,
+      "line": 70,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar.swift",
       "source": "No Results",
       "surface": "apple",
@@ -36931,7 +37379,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 49,
+      "line": 81,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar.swift",
       "source": "New Session",
       "surface": "apple",
@@ -36939,7 +37387,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 51,
+      "line": 83,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar.swift",
       "source": "New session",
       "surface": "apple",
@@ -36947,7 +37395,15 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 61,
+      "line": 89,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar.swift",
+      "source": "New session options",
+      "surface": "apple",
+      "id": "native.apple.2ef0e34db02ad255"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 117,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar.swift",
       "source": "Rename Session",
       "surface": "apple",
@@ -36955,7 +37411,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 64,
+      "line": 120,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar.swift",
       "source": "Session name",
       "surface": "apple",
@@ -36963,7 +37419,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 65,
+      "line": 121,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar.swift",
       "source": "Rename",
       "surface": "apple",
@@ -36971,7 +37427,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 71,
+      "line": 127,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar.swift",
       "source": "Cancel",
       "surface": "apple",
@@ -36979,7 +37435,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 76,
+      "line": 132,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar.swift",
       "source": "Delete Session",
       "surface": "apple",
@@ -36987,7 +37443,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 83,
+      "line": 139,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar.swift",
       "source": "The session and its transcript are removed from the gateway.",
       "surface": "apple",
@@ -36995,7 +37451,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 105,
+      "line": 167,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar.swift",
       "source": "Delete “%@”?",
       "surface": "apple",
@@ -37003,7 +37459,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 153,
+      "line": 215,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar.swift",
       "source": "Session running",
       "surface": "apple",
@@ -37011,7 +37467,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 158,
+      "line": 220,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar.swift",
       "source": "Session failed",
       "surface": "apple",
@@ -37019,7 +37475,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 167,
+      "line": 229,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar.swift",
       "source": "Unread",
       "surface": "apple",
@@ -37027,7 +37483,15 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 177,
+      "line": 238,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar.swift",
+      "source": "Get Info…",
+      "surface": "apple",
+      "id": "native.apple.f57a4b9c14d31867"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 245,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar.swift",
       "source": "Rename…",
       "surface": "apple",
@@ -37035,7 +37499,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 183,
+      "line": 251,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar.swift",
       "source": "Pin",
       "surface": "apple",
@@ -37043,7 +37507,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 183,
+      "line": 251,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar.swift",
       "source": "Unpin",
       "surface": "apple",
@@ -37051,7 +37515,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 189,
+      "line": 257,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar.swift",
       "source": "Fork",
       "surface": "apple",
@@ -37059,7 +37523,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 195,
+      "line": 263,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar.swift",
       "source": "Mark Read",
       "surface": "apple",
@@ -37067,7 +37531,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 195,
+      "line": 263,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar.swift",
       "source": "Mark Unread",
       "surface": "apple",
@@ -37075,7 +37539,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 206,
+      "line": 274,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar.swift",
       "source": "Archive",
       "surface": "apple",
@@ -37083,7 +37547,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 206,
+      "line": 274,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar.swift",
       "source": "Restore",
       "surface": "apple",
@@ -37091,7 +37555,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 215,
+      "line": 283,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar.swift",
       "source": "Copy Session Key",
       "surface": "apple",
@@ -37099,7 +37563,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 224,
+      "line": 292,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar.swift",
       "source": "Delete Session…",
       "surface": "apple",
@@ -37107,7 +37571,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 254,
+      "line": 334,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar.swift",
       "source": "Gateway connected",
       "surface": "apple",
@@ -37115,15 +37579,23 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 255,
+      "line": 335,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar.swift",
       "source": "Connecting…",
       "surface": "apple",
       "id": "native.apple.e3958d1053259f1d"
     },
     {
+      "kind": "ui-localized-call",
+      "line": 346,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar.swift",
+      "source": "Retry session groups",
+      "surface": "apple",
+      "id": "native.apple.79f708b3bc1d3a6c"
+    },
+    {
       "kind": "ui-named-argument",
-      "line": 67,
+      "line": 76,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebarModel.swift",
       "source": "Pinned",
       "surface": "apple",
@@ -37147,7 +37619,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 65,
+      "line": 76,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSheets.swift",
       "source": "Scope",
       "surface": "apple",
@@ -37155,7 +37627,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 77,
+      "line": 88,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSheets.swift",
       "source": "Search sessions",
       "surface": "apple",
@@ -37163,7 +37635,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 78,
+      "line": 89,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSheets.swift",
       "source": "Sessions",
       "surface": "apple",
@@ -37171,7 +37643,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 103,
+      "line": 146,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSheets.swift",
       "source": "Rename Session",
       "surface": "apple",
@@ -37179,7 +37651,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 109,
+      "line": 152,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSheets.swift",
       "source": "Session name",
       "surface": "apple",
@@ -37187,15 +37659,71 @@
     },
     {
       "kind": "ui-call",
-      "line": 124,
+      "line": 167,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSheets.swift",
       "source": "Cancel",
       "surface": "apple",
       "id": "native.apple.833fe2915430c89d"
     },
     {
+      "kind": "ui-modifier",
+      "line": 178,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSheets.swift",
+      "source": "Delete selected sessions?",
+      "surface": "apple",
+      "id": "native.apple.751e0f6b81cd374a"
+    },
+    {
+      "kind": "ui-call",
+      "line": 183,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSheets.swift",
+      "source": "Delete Sessions",
+      "surface": "apple",
+      "id": "native.apple.aa679276581b0058"
+    },
+    {
+      "kind": "ui-call",
+      "line": 187,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSheets.swift",
+      "source": "Each selected session and its transcript will be removed from the gateway.",
+      "surface": "apple",
+      "id": "native.apple.f837129cbee23297"
+    },
+    {
+      "kind": "ui-call",
+      "line": 216,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSheets.swift",
+      "source": "Groups",
+      "surface": "apple",
+      "id": "native.apple.bf09df5e38a7a950"
+    },
+    {
+      "kind": "ui-modifier",
+      "line": 222,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSheets.swift",
+      "source": "Manage session groups",
+      "surface": "apple",
+      "id": "native.apple.64013cfee5e25305"
+    },
+    {
       "kind": "conditional-branch",
-      "line": 153,
+      "line": 226,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSheets.swift",
+      "source": "Done",
+      "surface": "apple",
+      "id": "native.apple.185f4688f98e244e"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 226,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSheets.swift",
+      "source": "Select",
+      "surface": "apple",
+      "id": "native.apple.58133fc5791847e6"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 241,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSheets.swift",
       "source": "No archived sessions",
       "surface": "apple",
@@ -37203,7 +37731,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 153,
+      "line": 241,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSheets.swift",
       "source": "No sessions found",
       "surface": "apple",
@@ -37211,55 +37739,31 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 162,
+      "line": 260,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSheets.swift",
       "source": "Restore",
       "surface": "apple",
       "id": "native.apple.f0e9d8f69c1d9190"
     },
     {
-      "kind": "ui-localized-call",
-      "line": 163,
+      "kind": "ui-call",
+      "line": 310,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSheets.swift",
-      "source": "Archive",
+      "source": "Get Info…",
       "surface": "apple",
-      "id": "native.apple.666ba6eb696e649f"
-    },
-    {
-      "kind": "ui-modifier",
-      "line": 197,
-      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSheets.swift",
-      "source": "Pinned",
-      "surface": "apple",
-      "id": "native.apple.05cb1fecc5844b69"
+      "id": "native.apple.158cfa096c57bcb9"
     },
     {
       "kind": "ui-call",
-      "line": 235,
+      "line": 317,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSheets.swift",
       "source": "Rename",
       "surface": "apple",
       "id": "native.apple.080fce25e4a9bb61"
     },
     {
-      "kind": "conditional-branch",
-      "line": 243,
-      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSheets.swift",
-      "source": "Pin",
-      "surface": "apple",
-      "id": "native.apple.d148288258094aa6"
-    },
-    {
-      "kind": "conditional-branch",
-      "line": 243,
-      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSheets.swift",
-      "source": "Unpin",
-      "surface": "apple",
-      "id": "native.apple.3c62aaf44e6ab4d4"
-    },
-    {
       "kind": "ui-localized-call",
-      "line": 264,
+      "line": 346,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSheets.swift",
       "source": "Fork",
       "surface": "apple",
@@ -37267,7 +37771,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 273,
+      "line": 355,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSheets.swift",
       "source": "Mark Read",
       "surface": "apple",
@@ -37275,11 +37779,51 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 274,
+      "line": 356,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSheets.swift",
       "source": "Mark Unread",
       "surface": "apple",
       "id": "native.apple.4f259c4409cfcc75"
+    },
+    {
+      "kind": "ui-modifier",
+      "line": 387,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSheets.swift",
+      "source": "Pinned",
+      "surface": "apple",
+      "id": "native.apple.05cb1fecc5844b69"
+    },
+    {
+      "kind": "ui-call",
+      "line": 394,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSheets.swift",
+      "source": "Pin",
+      "surface": "apple",
+      "id": "native.apple.d148288258094aa6"
+    },
+    {
+      "kind": "ui-call",
+      "line": 395,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSheets.swift",
+      "source": "Unpin",
+      "surface": "apple",
+      "id": "native.apple.3c62aaf44e6ab4d4"
+    },
+    {
+      "kind": "ui-call",
+      "line": 396,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSheets.swift",
+      "source": "Archive",
+      "surface": "apple",
+      "id": "native.apple.666ba6eb696e649f"
+    },
+    {
+      "kind": "ui-call",
+      "line": 398,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSheets.swift",
+      "source": "Delete",
+      "surface": "apple",
+      "id": "native.apple.b09b91392835fe58"
     },
     {
       "kind": "ui-localized-call",
@@ -37531,23 +38075,39 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1150,
-      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel.swift",
-      "source": "Remove attachments or wait for delivery to resolve before switching chats.",
+      "line": 84,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+SessionActions.swift",
+      "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
       "surface": "apple",
-      "id": "native.apple.710c7bd117a7cc12"
+      "id": "native.apple.787047d0da6b8b9f"
     },
     {
       "kind": "ui-localized-call",
-      "line": 1208,
+      "line": 229,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+SessionActions.swift",
+      "source": "Gateway changed before the session operation started.",
+      "surface": "apple",
+      "id": "native.apple.980f552bb0f96c0f"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 773,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel.swift",
       "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
       "surface": "apple",
       "id": "native.apple.d93e6fe16ec1b0e5"
     },
     {
+      "kind": "ui-localized-call",
+      "line": 1156,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel.swift",
+      "source": "Remove attachments or wait for delivery to resolve before switching chats.",
+      "surface": "apple",
+      "id": "native.apple.710c7bd117a7cc12"
+    },
+    {
       "kind": "ui-modifier",
-      "line": 77,
+      "line": 78,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
       "source": "Clear this session's history?",
       "surface": "apple",
@@ -37555,7 +38115,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 83,
+      "line": 84,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
       "source": "Clear History",
       "surface": "apple",
@@ -37563,7 +38123,7 @@
     },
     {
       "kind": "ui-localized-call-multiline",
-      "line": 88,
+      "line": 89,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
       "source": "This resets the conversation for %@. The session key stays the same.",
       "surface": "apple",
@@ -37571,7 +38131,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 94,
+      "line": 95,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
       "source": "Rename Session",
       "surface": "apple",
@@ -37579,7 +38139,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 95,
+      "line": 96,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
       "source": "Session name",
       "surface": "apple",
@@ -37587,7 +38147,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 96,
+      "line": 97,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
       "source": "Rename",
       "surface": "apple",
@@ -37595,7 +38155,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 101,
+      "line": 102,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
       "source": "Cancel",
       "surface": "apple",
@@ -37603,7 +38163,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 142,
+      "line": 143,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
       "source": "Export Transcript",
       "surface": "apple",
@@ -37611,7 +38171,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 151,
+      "line": 152,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
       "source": "Sessions",
       "surface": "apple",
@@ -37619,7 +38179,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 239,
+      "line": 240,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
       "source": "%@ (override)",
       "surface": "apple",
@@ -37627,7 +38187,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 245,
+      "line": 246,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
       "source": "Thinking",
       "surface": "apple",
@@ -37635,7 +38195,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 249,
+      "line": 250,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
       "source": "Thinking level",
       "surface": "apple",
@@ -37643,7 +38203,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 262,
+      "line": 263,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
       "source": "Full",
       "surface": "apple",
@@ -37651,7 +38211,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 268,
+      "line": 269,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
       "source": "Verbosity",
       "surface": "apple",
@@ -37659,7 +38219,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 277,
+      "line": 278,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
       "source": "Default (inherited)",
       "surface": "apple",
@@ -37667,7 +38227,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 279,
+      "line": 280,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
       "source": "On",
       "surface": "apple",
@@ -37675,7 +38235,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 280,
+      "line": 281,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
       "source": "Off",
       "surface": "apple",
@@ -37683,7 +38243,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 282,
+      "line": 283,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
       "source": "Fast",
       "surface": "apple",
@@ -37691,7 +38251,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 285,
+      "line": 286,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
       "source": "Fast responses",
       "surface": "apple",
@@ -37699,7 +38259,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 299,
+      "line": 300,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
       "source": "Pinned",
       "surface": "apple",
@@ -37707,7 +38267,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 302,
+      "line": 303,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
       "source": "Recent",
       "surface": "apple",
@@ -37715,7 +38275,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 319,
+      "line": 320,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
       "source": "Model",
       "surface": "apple",
@@ -37723,7 +38283,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 333,
+      "line": 334,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
       "source": "Default",
       "surface": "apple",
@@ -37731,7 +38291,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 347,
+      "line": 348,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
       "source": "New Session",
       "surface": "apple",
@@ -37741,13 +38301,21 @@
       "kind": "ui-call",
       "line": 355,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
+      "source": "New Session Options…",
+      "surface": "apple",
+      "id": "native.apple.a7119fbf9d25df5e"
+    },
+    {
+      "kind": "ui-call",
+      "line": 362,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
       "source": "Refresh",
       "surface": "apple",
       "id": "native.apple.5361129a24118af6"
     },
     {
       "kind": "ui-call",
-      "line": 362,
+      "line": 369,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
       "source": "Sessions…",
       "surface": "apple",
@@ -37755,7 +38323,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 374,
+      "line": 381,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
       "source": "Rename Session…",
       "surface": "apple",
@@ -37763,7 +38331,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 382,
+      "line": 389,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
       "source": "Fork Session",
       "surface": "apple",
@@ -37771,7 +38339,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 393,
+      "line": 400,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
       "source": "Unpin",
       "surface": "apple",
@@ -37779,7 +38347,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 394,
+      "line": 401,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
       "source": "Pin",
       "surface": "apple",
@@ -37787,7 +38355,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 405,
+      "line": 412,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
       "source": "Mark Read",
       "surface": "apple",
@@ -37795,7 +38363,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 406,
+      "line": 413,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
       "source": "Mark Unread",
       "surface": "apple",
@@ -37803,7 +38371,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 422,
+      "line": 429,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
       "source": "Restore",
       "surface": "apple",
@@ -37811,7 +38379,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 423,
+      "line": 430,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
       "source": "Archive",
       "surface": "apple",
@@ -37819,7 +38387,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 435,
+      "line": 442,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
       "source": "Copy Session Key",
       "surface": "apple",
@@ -37827,7 +38395,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 441,
+      "line": 448,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
       "source": "Export Transcript…",
       "surface": "apple",
@@ -37835,7 +38403,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 453,
+      "line": 460,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
       "source": "Show Reasoning",
       "surface": "apple",
@@ -37843,7 +38411,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 465,
+      "line": 472,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
       "source": "Show Tool Activity",
       "surface": "apple",
@@ -37851,7 +38419,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 482,
+      "line": 489,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
       "source": "Clear History…",
       "surface": "apple",
@@ -37859,7 +38427,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 485,
+      "line": 492,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
       "source": "Session",
       "surface": "apple",
@@ -37867,7 +38435,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 488,
+      "line": 500,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
       "source": "Session actions",
       "surface": "apple",
@@ -37875,7 +38443,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 522,
+      "line": 534,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
       "source": "Session cost %@",
       "surface": "apple",
@@ -37883,7 +38451,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 528,
+      "line": 540,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
       "source": "Compact Session",
       "surface": "apple",
