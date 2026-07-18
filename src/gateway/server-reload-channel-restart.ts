@@ -16,15 +16,29 @@ function isChannelPath(path: string, channel: ChannelKind): boolean {
   return path === channelPrefix || path.startsWith(`${channelPrefix}.`);
 }
 
+function hasCompetingChannelConfigChange(
+  changedPaths: readonly string[],
+  channel: ChannelKind,
+): boolean {
+  return changedPaths.some(
+    (path) => isChannelPath(path, channel) && !isChannelAccountIndexReloadPath(path, channel),
+  );
+}
+
+export function shouldIncludeKnownAccountsForPluginReload(
+  changedPaths: readonly string[],
+  channel: ChannelKind,
+): boolean {
+  return !hasCompetingChannelConfigChange(changedPaths, channel);
+}
+
 function shouldIncludeKnownAccountsForAccountIndexReload(
   changedPaths: readonly string[],
   channel: ChannelKind,
 ): boolean {
   return (
     changedPaths.some((path) => isChannelAccountIndexReloadPath(path, channel)) &&
-    !changedPaths.some(
-      (path) => isChannelPath(path, channel) && !isChannelAccountIndexReloadPath(path, channel),
-    )
+    !hasCompetingChannelConfigChange(changedPaths, channel)
   );
 }
 
@@ -182,7 +196,9 @@ export async function restartGatewayChannels(options: {
             return;
           }
           const includeKnownAccounts =
-            (plan.reloadPlugins && channelsStoppedBeforePluginReload.has(name)) ||
+            (plan.reloadPlugins &&
+              channelsStoppedBeforePluginReload.has(name) &&
+              shouldIncludeKnownAccountsForPluginReload(plan.changedPaths, name)) ||
             (!plan.reloadPlugins &&
               shouldIncludeKnownAccountsForAccountIndexReload(plan.changedPaths, name));
           params.logChannels.info(`restarting ${name} channel`);

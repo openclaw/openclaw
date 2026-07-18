@@ -24,7 +24,10 @@ import { commitHooksConfigReload, resolveHooksConfig } from "./hooks.js";
 import { buildGatewayCronService } from "./server-cron.js";
 import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "./server-lanes.js";
 import { createGatewayActiveWorkTracker } from "./server-reload-active-work.js";
-import { restartGatewayChannels } from "./server-reload-channel-restart.js";
+import {
+  restartGatewayChannels,
+  shouldIncludeKnownAccountsForPluginReload,
+} from "./server-reload-channel-restart.js";
 import {
   GatewayHotReloadCancelledError,
   GatewayHotReloadRecoveryError,
@@ -335,9 +338,13 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           channels: [...channelsStoppedBeforePluginReload],
           run: async (channel) => {
             params.logChannels.info(`restarting ${channel} channel after ${reason}`);
-            await runOutsideGatewayRootWorkAdmission(() =>
-              params.startChannel(channel, undefined, { includeKnownAccounts: true }),
-            );
+            if (shouldIncludeKnownAccountsForPluginReload(plan.changedPaths, channel)) {
+              await runOutsideGatewayRootWorkAdmission(() =>
+                params.startChannel(channel, undefined, { includeKnownAccounts: true }),
+              );
+            } else {
+              await runOutsideGatewayRootWorkAdmission(() => params.startChannel(channel));
+            }
             channelsStoppedBeforePluginReload.delete(channel);
           },
           onFailure: (channel, err) => {
