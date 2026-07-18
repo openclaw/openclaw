@@ -336,7 +336,9 @@ export async function ensureConfigReady(
   }
   params.runtime.error("");
   const isPluginPackagingFailure = isPluginPackagingRuntimeOutputInvalidConfigSnapshot(snapshot);
-  const shouldOfferRecovery = !allowInvalid || isGatewayStartupCommand(commandPath);
+  const isGatewayStartup = isGatewayStartupCommand(commandPath);
+  const mustBlockInvalid = !allowInvalid || (isGatewayStartup && params.allowInvalid !== true);
+  const shouldOfferRecovery = mustBlockInvalid && !params.suppressDoctorStdout;
   if (isPluginPackagingFailure || !shouldOfferRecovery) {
     const fixHint = isPluginPackagingFailure
       ? formatPluginPackagingRuntimeOutputRecoveryHint()
@@ -351,7 +353,7 @@ export async function ensureConfigReady(
       "Audit, status, health, logs, tasks list/audit, and doctor commands still run with invalid config.",
     ),
   );
-  if (isPluginPackagingFailure && isGatewayStartupCommand(commandPath)) {
+  if (isPluginPackagingFailure && isGatewayStartup) {
     params.runtime.exit(78);
     return;
   }
@@ -392,11 +394,11 @@ export async function ensureConfigReady(
     if (recovery.status === "recovered") {
       return;
     }
-    params.runtime.exit(isGatewayStartupCommand(commandPath) ? 78 : 1);
+    params.runtime.exit(isGatewayStartup ? 78 : 1);
     return;
   }
-  if (!allowInvalid) {
-    params.runtime.exit(1);
+  if (mustBlockInvalid) {
+    params.runtime.exit(isGatewayStartup ? 78 : 1);
   }
 }
 

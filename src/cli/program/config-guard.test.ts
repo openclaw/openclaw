@@ -553,6 +553,24 @@ describe("ensureConfigReady", () => {
     expect(runtime.exit).not.toHaveBeenCalled();
   });
 
+  it("does not prompt for repair when stdout belongs to a machine-readable command", async () => {
+    setInvalidSnapshot();
+    const runtime = makeRuntime();
+    const confirm = vi.fn(async () => true);
+
+    await ensureConfigReady(
+      {
+        runtime: runtime as never,
+        commandPath: ["agents", "list"],
+        suppressDoctorStdout: true,
+      },
+      { confirm, isInteractive: () => true },
+    );
+
+    expect(confirm).not.toHaveBeenCalled();
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
   it("replaces doctor fix advice for plugin packaging-only invalid config", async () => {
     setInvalidSnapshot({
       issues: [
@@ -630,6 +648,24 @@ describe("ensureConfigReady", () => {
       commandPath: ["plugins", "install"],
       allowInvalid: true,
     });
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it("does not offer repair for an explicitly allowed gateway startup", async () => {
+    setInvalidSnapshot();
+    const runtime = makeRuntime();
+    const confirm = vi.fn(async () => true);
+
+    await ensureConfigReady(
+      {
+        runtime: runtime as never,
+        commandPath: ["gateway", "run"],
+        allowInvalid: true,
+      },
+      { confirm, isInteractive: () => true },
+    );
+
+    expect(confirm).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
   });
 

@@ -1223,7 +1223,7 @@ export async function runGatewayCommand(
       throw error;
     }
     defaultRuntime.error(`Gateway failed to start: ${formatErrorMessage(error)}`);
-    if (!isDoctorRecoverableInvalidConfigError(error)) {
+    if (opts.allowUnconfigured || !isDoctorRecoverableInvalidConfigError(error)) {
       defaultRuntime.exit(EXIT_CONFIG_ERROR);
       return;
     }
