@@ -31,7 +31,7 @@ export const sessionLog = createSubsystemLogger("gateway/sessions");
 export class SessionWorkerPlacementMutationError extends Error {
   constructor(
     readonly placementState: SessionPlacement["state"],
-    action: "delete" | "reset" | "restore",
+    action: "delete" | "fork" | "reset" | "restore" | "rewind",
     key: string,
   ) {
     super(`Session ${key} cannot ${action} while cloud worker placement is ${placementState}.`);
@@ -39,7 +39,7 @@ export class SessionWorkerPlacementMutationError extends Error {
 }
 
 export function resolveSessionWorkerPlacementMutationError(params: {
-  action: "delete" | "reset" | "restore";
+  action: "delete" | "fork" | "reset" | "restore" | "rewind";
   context: GatewayRequestContext;
   key: string;
   sessionId: string | undefined;
@@ -278,7 +278,16 @@ export function emitSessionOperation(
 }
 
 export function rejectWebchatSessionMutation(params: {
-  action: "patch" | "delete" | "compact" | "branch" | "restore" | "dispatch" | "reclaim";
+  action:
+    | "patch"
+    | "delete"
+    | "compact"
+    | "branch"
+    | "restore"
+    | "rewind"
+    | "fork"
+    | "dispatch"
+    | "reclaim";
   client: GatewayClient | null;
   isWebchatConnect: (params: GatewayClient["connect"] | null | undefined) => boolean;
   respond: RespondFn;

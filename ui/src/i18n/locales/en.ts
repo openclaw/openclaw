@@ -3674,7 +3674,13 @@ export const en: TranslationMap = {
     messages: {
       activity: "Activity",
       deleteMessage: "Delete message",
+      forkFromHere: "Fork from here",
       openInCanvas: "Open in canvas",
+      rewind: "Rewind",
+      rewindConfirm: "Rewind to before this message?",
+      rewindToHere: "Rewind to here",
+      rewindUnavailable: "Rewind is unavailable while the agent is working",
+      forkUnavailable: "Fork is unavailable while the agent is working",
       unknownDate: "Unknown date",
       voiceNote: "Voice note",
     },
