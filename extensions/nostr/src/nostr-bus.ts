@@ -144,7 +144,7 @@ export interface NostrBusHandle {
   /** Get the bot's public key */
   publicKey: string;
   /** Send a DM to a pubkey */
-  sendDm: (toPubkey: string, text: string) => Promise<void>;
+  sendDm: (toPubkey: string, text: string) => Promise<string>;
   /** Get current metrics snapshot */
   getMetrics: () => MetricsSnapshot;
   /** Publish a profile (kind:0) to all relays */
@@ -514,6 +514,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
           circuitBreakers,
           healthTracker,
           onError,
+          event.id,
         );
       };
 
@@ -642,8 +643,8 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
   });
 
   // Public sendDm function
-  const sendDm = async (toPubkey: string, text: string): Promise<void> => {
-    await sendEncryptedDm(
+  const sendDm = async (toPubkey: string, text: string): Promise<string> => {
+    return await sendEncryptedDm(
       pool,
       sk,
       toPubkey,
@@ -742,13 +743,19 @@ async function sendEncryptedDm(
   circuitBreakers: Map<string, CircuitBreaker>,
   healthTracker: RelayHealthTracker,
   onError?: (error: Error, context: string) => void,
-): Promise<void> {
+  replyToEventId?: string,
+): Promise<string> {
   const ciphertext = encrypt(sk, toPubkey, text);
+  // NIP-04 uses an e tag to keep a reply attached to its verified inbound event.
+  const tags = [["p", toPubkey]];
+  if (replyToEventId) {
+    tags.push(["e", replyToEventId]);
+  }
   const reply = finalizeEvent(
     {
       kind: 4,
       content: ciphertext,
-      tags: [["p", toPubkey]],
+      tags,
       created_at: Math.floor(Date.now() / 1000),
     },
     sk,
@@ -781,7 +788,7 @@ async function sendEncryptedDm(
       cb?.recordSuccess();
       healthTracker.recordSuccess(relay, latency);
 
-      return; // Success - exit early
+      return reply.id;
     } catch (err) {
       lastError = err as Error;
       const latency = Date.now() - startTime;

@@ -238,6 +238,15 @@ OpenClaw's CLI boundary through
 - `paired-node-cli` - one-shot Claude Code execution delegated to a paired
   node.
 
+Claude CLI diagnostics are instantiated only while the process diagnostic
+dispatcher is enabled and an internal or trusted event listener is attached.
+With no observability plugin or other listener active, Claude CLI turns skip
+the synthetic trace hierarchy, content buffers, and diagnostic stream-byte
+accounting. When content capture is enabled, prompt and system-prompt fields
+are capped at 128 KiB each; assistant output is capped at 128 KiB across at
+most 200 envelopes, with 16 KiB and one item reserved for a final visible
+fallback response. A marker records truncation when the limit is reached.
+
 OpenClaw gives Claude CLI turns the same ownership hierarchy used by other
 agent runtimes: `openclaw.harness.run` (`openclaw.harness.id = claude-cli`)
 contains `openclaw.run`, which contains the Claude `openclaw.model.call`

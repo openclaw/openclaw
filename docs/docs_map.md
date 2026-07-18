@@ -3200,6 +3200,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Using it as a fallback
   - H2: Configuration
   - H2: How it works
+  - H2: Timeouts and long-running work
   - H3: Claude CLI specifics
   - H2: Sessions
   - H2: Fallback prelude from claude-cli sessions
@@ -3876,6 +3877,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /gateway/secrets-plan-contract
 - Headings:
+  - H2: Plan file requirements
   - H2: Plan file shape
   - H2: Provider upserts and deletes
   - H2: Supported target scope
@@ -4204,6 +4206,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /help/testing-live
 - Headings:
+  - H2: Live tests vs your real gateway
   - H2: Live: local smoke commands
   - H2: Live: Android node capability sweep
   - H2: Live: model smoke (profile keys)
@@ -8637,6 +8640,18 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: License
   - H2: Related
 
+## reference/database-schemas.md
+
+- Route: /reference/database-schemas
+- Headings:
+  - H2: Database layout
+  - H2: Versioning contract
+  - H2: Agent schema history
+  - H2: State schema history
+  - H2: Integrity checks
+  - H2: Downgrades are unsupported
+  - H3: Example: agent schema 11 to 9
+
 ## reference/device-models.md
 
 - Route: /reference/device-models
@@ -9630,6 +9645,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: How it works
   - H2: Install and pair
   - H2: Use it
+  - H3: Tab copilot side panel
   - H2: Remote / cross-machine
   - H2: Diagnostics
   - H2: Security model
@@ -10426,6 +10442,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Quick start
   - H2: Tool parameters
+  - H2: Result
   - H2: How it works
   - H2: Progress updates
   - H2: Config
@@ -10442,6 +10459,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Quick start
   - H2: Choosing a provider
   - H3: Provider comparison
+  - H2: Result shape
   - H2: Auto-detection
   - H2: Native OpenAI web search
   - H2: Native Codex web search

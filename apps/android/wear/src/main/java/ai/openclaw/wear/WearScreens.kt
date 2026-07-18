@@ -53,7 +53,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -84,8 +83,6 @@ private const val CONTROLS_PAGE = 4
 private const val VOICE_MODE_COUNT = 2
 private const val VOICE_HOME_MODE = 0
 private const val VOICE_THREAD_MODE = 1
-private val DictateBlue = Color(0xFF0A84FF)
-private val LiveCyan = Color(0xFF10DCC2)
 
 @Composable
 internal fun OpenClawWearScreens(
@@ -529,22 +526,22 @@ private fun VoiceHomeMode(
     }
   val accent =
     when {
-      dictatePreview || state == RealtimeVoiceButtonState.IDLE -> DictateBlue
+      dictatePreview || state == RealtimeVoiceButtonState.IDLE -> colors.voiceAccent
       state == RealtimeVoiceButtonState.ERROR -> colors.danger
-      else -> DictateBlue
+      else -> colors.voiceAccent
     }
   val containerColor =
     when {
       dictatePreview || state == RealtimeVoiceButtonState.IDLE -> colors.surfaceRaised
       state == RealtimeVoiceButtonState.ERROR -> colors.danger.copy(alpha = 0.28f)
-      else -> lerp(colors.surfaceRaised, DictateBlue, 0.18f)
+      else -> colors.voiceAccentSoft
     }
   val contentColor =
     when {
-      dictatePreview -> DictateBlue
+      dictatePreview -> colors.voiceAccent
       state == RealtimeVoiceButtonState.IDLE -> colors.text
       state == RealtimeVoiceButtonState.ERROR -> colors.danger
-      else -> DictateBlue
+      else -> colors.voiceAccent
     }
   Box(
     modifier =
@@ -563,7 +560,7 @@ private fun VoiceHomeMode(
       VoiceGestureLabel(
         title = stringResource(R.string.hold),
         detail = stringResource(R.string.dictate),
-        accent = DictateBlue,
+        accent = colors.voiceAccent,
         onClick = if (dictateEnabled) startDictate else null,
         modifier =
           Modifier
@@ -578,7 +575,7 @@ private fun VoiceHomeMode(
         VoiceGestureLabel(
           title = stringResource(R.string.double_tap),
           detail = stringResource(R.string.thread),
-          accent = DictateBlue,
+          accent = colors.voiceAccent,
           verticalPadding = 0.dp,
           modifier =
             Modifier
@@ -608,7 +605,7 @@ private fun VoiceHomeMode(
             state == RealtimeVoiceButtonState.SPEAKING
           ) {
             LiveWaveform(
-              color = DictateBlue,
+              color = colors.voiceAccent,
               active = true,
             )
           } else {
@@ -638,7 +635,7 @@ private fun VoiceHomeMode(
       VoiceGestureLabel(
         title = stringResource(R.string.tap),
         detail = stringResource(R.string.live),
-        accent = DictateBlue,
+        accent = colors.voiceAccent,
         onClick = if (liveEnabled) toggleLive else null,
         modifier =
           Modifier
@@ -778,11 +775,11 @@ private fun ThreadVoiceMode(
           Modifier
             .size(36.dp)
             .background(
-              color = if (realtimeActive) LiveCyan else colors.surfaceRaised,
+              color = if (realtimeActive) colors.voiceAccent else colors.surfaceRaised,
               shape = CircleShape,
             ).border(
               width = 1.dp,
-              color = if (realtimeActive) LiveCyan else DictateBlue,
+              color = colors.voiceAccent,
               shape = CircleShape,
             ).clickable(
               enabled = realtimeActive || (inputEnabled && !actionBusy),
@@ -792,7 +789,7 @@ private fun ThreadVoiceMode(
         contentAlignment = Alignment.Center,
       ) {
         MicrophoneGlyph(
-          color = if (realtimeActive) colors.canvas else colors.text,
+          color = if (realtimeActive) colors.onVoiceAccent else colors.text,
           modifier = Modifier.size(18.dp),
         )
       }
@@ -973,8 +970,8 @@ private enum class RealtimeVoiceButtonState {
 private fun RealtimeTalkBubble(entry: WearRealtimeTalkEntry) {
   val colors = OpenClawWearTheme.colors
   val isUser = entry.role == WearRealtimeTalkRole.USER
-  val background = if (isUser) colors.primary else colors.surfaceRaised
-  val foreground = if (isUser) colors.primaryText else colors.text
+  val background = if (isUser) colors.surfacePressed else colors.surfaceRaised
+  val foreground = colors.text
   Column(
     modifier =
       Modifier
@@ -984,11 +981,11 @@ private fun RealtimeTalkBubble(entry: WearRealtimeTalkEntry) {
           end = if (isUser) 12.dp else 28.dp,
         ).background(background, RoundedCornerShape(14.dp))
         .then(
-          if (isUser) {
-            Modifier
-          } else {
-            Modifier.border(1.dp, colors.borderStrong, RoundedCornerShape(14.dp))
-          },
+          Modifier.border(
+            width = 1.dp,
+            color = colors.borderStrong,
+            shape = RoundedCornerShape(14.dp),
+          ),
         ).padding(horizontal = 12.dp, vertical = 9.dp),
   ) {
     Text(
@@ -1406,11 +1403,11 @@ private fun MessageBubble(message: WearChatMessage) {
   val isUser = message.chatRole == WearChatRole.USER
   val background =
     when (message.chatRole) {
-      WearChatRole.USER -> colors.primary
+      WearChatRole.USER -> colors.surfacePressed
       WearChatRole.ASSISTANT -> colors.surfaceRaised
       WearChatRole.SYSTEM -> colors.surface
     }
-  val foreground = if (isUser) colors.primaryText else colors.text
+  val foreground = colors.text
   Column(
     modifier =
       Modifier
@@ -1420,11 +1417,11 @@ private fun MessageBubble(message: WearChatMessage) {
           end = if (isUser) 12.dp else 28.dp,
         ).background(background, RoundedCornerShape(14.dp))
         .then(
-          if (isUser) {
-            Modifier
-          } else {
-            Modifier.border(1.dp, colors.borderStrong, RoundedCornerShape(14.dp))
-          },
+          Modifier.border(
+            width = 1.dp,
+            color = colors.borderStrong,
+            shape = RoundedCornerShape(14.dp),
+          ),
         ).padding(horizontal = 12.dp, vertical = 9.dp),
   ) {
     Text(
@@ -1655,7 +1652,7 @@ private fun SelectionButton(
         containerColor = if (selected) colors.primary else colors.surfaceRaised,
         contentColor = if (selected) colors.primaryText else colors.text,
         disabledContainerColor =
-          if (selected) colors.primary else colors.surfaceRaised,
+          if (selected) colors.primary else colors.surface,
         disabledContentColor =
           if (selected) colors.primaryText else colors.textMuted,
       ),
@@ -1665,7 +1662,12 @@ private fun SelectionButton(
         .padding(horizontal = 12.dp)
         .border(
           width = 1.dp,
-          color = colors.borderStrong,
+          color =
+            when {
+              selected -> colors.primary
+              enabled -> colors.borderStrong
+              else -> colors.border
+            },
           shape = RoundedCornerShape(26.dp),
         ),
     label = {
@@ -1703,6 +1705,8 @@ private fun ActionButton(
       ButtonDefaults.buttonColors(
         containerColor = colors.primary,
         contentColor = colors.primaryText,
+        disabledContainerColor = colors.surface,
+        disabledContentColor = colors.textMuted,
       ),
     modifier = modifier,
     label = {
@@ -1737,7 +1741,7 @@ private fun CompactVoiceButton(
     modifier =
       modifier.border(
         width = 1.dp,
-        color = colors.borderStrong,
+        color = if (enabled) colors.borderStrong else colors.border,
         shape = RoundedCornerShape(24.dp),
       ),
     label = {
@@ -1767,11 +1771,18 @@ private fun SecondaryButton(
       ButtonDefaults.buttonColors(
         containerColor = colors.surfaceRaised,
         contentColor = colors.text,
+        disabledContainerColor = colors.surface,
+        disabledContentColor = colors.textMuted,
       ),
     modifier =
       Modifier
         .fillMaxWidth()
-        .padding(horizontal = 12.dp),
+        .padding(horizontal = 12.dp)
+        .border(
+          width = 1.dp,
+          color = if (enabled) colors.borderStrong else colors.border,
+          shape = RoundedCornerShape(26.dp),
+        ),
     label = {
       Text(
         text = label,

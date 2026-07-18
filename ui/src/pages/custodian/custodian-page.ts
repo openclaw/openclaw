@@ -1,7 +1,7 @@
 import { consume } from "@lit/context";
 import type { SystemAgentChatParams, SystemAgentChatResult } from "@openclaw/gateway-protocol";
 import { html, nothing, type PropertyValues } from "lit";
-import { state } from "lit/decorators.js";
+import { property, state } from "lit/decorators.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
@@ -12,7 +12,7 @@ import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import "../../styles/custodian.css";
-import { parseCustodianReply, type CustodianStructuredQuestion } from "./structured-question.ts";
+import { parseCustodianQuestion, type CustodianStructuredQuestion } from "./structured-question.ts";
 
 const SYSTEM_AGENT_CHAT_TIMEOUT_MS = 190_000;
 
@@ -42,6 +42,9 @@ function errorMessage(error: unknown): string {
 export class CustodianPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
+
+  /** Onboarding mode shows the Exit setup control; the route view sets this. */
+  @property({ attribute: false }) onboarding = false;
 
   @state() private messages: CustodianMessage[] = [];
   @state() private input = "";
@@ -102,10 +105,16 @@ export class CustodianPage extends OpenClawLightDomElement {
     return JSON.stringify([gatewayUrl, token, password, bootstrapToken, this.lastHelloDeviceToken]);
   }
 
+  private currentSessionScopeKey(): string {
+    // Mode selects the welcome contract, so changing it starts a new session
+    // instead of carrying the previous route's transcript across modes.
+    return JSON.stringify([this.onboarding, this.connectionScopeKey()]);
+  }
+
   private synchronizeClient(): void {
     const snapshot = this.context.gateway.snapshot;
     const client = snapshot.connected ? snapshot.client : null;
-    const scopeKey = this.connectionScopeKey();
+    const scopeKey = this.currentSessionScopeKey();
     const scopeChanged = this.sessionScopeKey !== null && this.sessionScopeKey !== scopeKey;
     if (client === this.activeClient && !scopeChanged) {
       return;
@@ -140,7 +149,12 @@ export class CustodianPage extends OpenClawLightDomElement {
     this.sessionScopeKey = scopeKey;
     this.sessionStarted = true;
     this.clearConversation();
-    void this.requestReply(client, { sessionId: this.sessionId, welcomeVariant: "onboarding" });
+    // The onboarding variant seeds the first-run setup proposal; the permanent
+    // presence surface gets the normal caretaker greeting instead.
+    void this.requestReply(client, {
+      sessionId: this.sessionId,
+      ...(this.onboarding ? { welcomeVariant: "onboarding" as const } : {}),
+    });
   }
 
   private clearConversation(): void {
@@ -153,15 +167,14 @@ export class CustodianPage extends OpenClawLightDomElement {
     this.sensitive = false;
   }
 
-  private appendAssistant(reply: string): void {
-    const parsed = parseCustodianReply(reply);
+  private appendAssistant(reply: string, question: CustodianStructuredQuestion | null): void {
     this.messages = [
       ...this.messages,
       {
         id: this.nextMessageId++,
         role: "assistant",
-        text: parsed.text,
-        question: parsed.question,
+        text: reply,
+        question,
       },
     ];
   }
@@ -184,7 +197,7 @@ export class CustodianPage extends OpenClawLightDomElement {
       this.sessionId = result.sessionId;
       this.sensitive = result.sensitive === true;
       this.retryParams = null;
-      this.appendAssistant(result.reply);
+      this.appendAssistant(result.reply, parseCustodianQuestion(result.question));
       if (result.action === "open-agent" || result.action === "exit") {
         this.exitSetup();
       }
@@ -204,7 +217,7 @@ export class CustodianPage extends OpenClawLightDomElement {
     }
   }
 
-  private send(text = this.input): void {
+  private send(text = this.input, display?: string): void {
     // Trim decides emptiness only; sensitive values (credentials) may carry
     // meaningful whitespace and must reach the agent exactly as entered.
     const message = this.sensitive ? text : text.trim();
@@ -212,7 +225,7 @@ export class CustodianPage extends OpenClawLightDomElement {
     if (!message.trim() || !client || !this.chatAvailable || this.sending) {
       return;
     }
-    const displayText = this.sensitive ? t("custodian.sensitiveReply") : message;
+    const displayText = this.sensitive ? t("custodian.sensitiveReply") : (display ?? message);
     this.retireQuestions();
     this.messages = [
       ...this.messages,
@@ -221,7 +234,7 @@ export class CustodianPage extends OpenClawLightDomElement {
     this.input = "";
     void this.requestReply(client, {
       sessionId: this.sessionId,
-      welcomeVariant: "onboarding",
+      ...(this.onboarding ? { welcomeVariant: "onboarding" as const } : {}),
       message,
     });
   }
@@ -236,12 +249,15 @@ export class CustodianPage extends OpenClawLightDomElement {
   }
 
   private answerQuestion(message: CustodianMessage, label: string): void {
-    const questionId = message.question?.id;
-    if (!questionId) {
+    const question = message.question;
+    if (!question) {
       return;
     }
-    this.answeredQuestions = new Set(this.answeredQuestions).add(`${message.id}:${questionId}`);
-    this.send(label);
+    const option = question.options.find((candidate) => candidate.label === label);
+    this.answeredQuestions = new Set(this.answeredQuestions).add(`${message.id}:${question.id}`);
+    // The transcript shows the friendly label; the engine receives the reply
+    // text it actually parses (wizard answers, canonical commands).
+    this.send(option?.reply ?? label, label);
   }
 
   private retireQuestions(): void {
@@ -291,9 +307,11 @@ export class CustodianPage extends OpenClawLightDomElement {
               <p>${t("custodian.subtitle")}</p>
             </div>
           </div>
-          <button class="btn btn--ghost" type="button" @click=${() => this.exitSetup()}>
-            ${t("custodian.exitSetup")}
-          </button>
+          ${this.onboarding
+            ? html`<button class="btn btn--ghost" type="button" @click=${() => this.exitSetup()}>
+                ${t("custodian.exitSetup")}
+              </button>`
+            : nothing}
         </header>
 
         <div class="custodian__messages" aria-live="polite">

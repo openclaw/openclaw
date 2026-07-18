@@ -698,14 +698,7 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
       respondSessionFileUnsafe(respond, params.path);
       return;
     }
-    const contentBuffer = Buffer.from(params.content, "utf8");
-    // Node replaces lone UTF-16 surrogates while encoding. Reject them instead
-    // of reporting a hash for bytes that no longer match the submitted text.
-    if (contentBuffer.toString("utf8") !== params.content) {
-      respondSessionFileUnsafe(respond, params.path);
-      return;
-    }
-    const contentSize = contentBuffer.byteLength;
+    const contentSize = Buffer.byteLength(params.content, "utf8");
     if (contentSize > MAX_PREVIEW_BYTES) {
       respond(
         false,
@@ -716,6 +709,13 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
           size: contentSize,
         }),
       );
+      return;
+    }
+    const contentBuffer = Buffer.from(params.content, "utf8");
+    // Node replaces lone UTF-16 surrogates while encoding. Reject them instead
+    // of reporting a hash for bytes that no longer match the submitted text.
+    if (contentBuffer.toString("utf8") !== params.content) {
+      respondSessionFileUnsafe(respond, params.path);
       return;
     }
     const loaded = loadSessionFileRoot(params);

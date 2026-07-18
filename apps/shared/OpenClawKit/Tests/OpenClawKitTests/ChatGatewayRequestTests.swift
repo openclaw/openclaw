@@ -94,6 +94,24 @@ struct ChatGatewayRequestTests {
         #expect(request.params["verboseLevel"]?.value as? String == "full")
     }
 
+    @Test func `settings patch request encodes fast values and explicit resets`() {
+        let reset = OpenClawChatGatewayRequests.patchSessionSettings(
+            sessionKey: "main",
+            agentID: nil,
+            thinkingLevel: .some(nil),
+            fastMode: .some(nil),
+            verboseLevel: .some(nil))
+        let automatic = OpenClawChatGatewayRequests.patchSessionSettings(
+            sessionKey: "main",
+            agentID: nil,
+            fastMode: .some(.automatic))
+
+        #expect(reset.params["thinkingLevel"]?.value is NSNull)
+        #expect(reset.params["fastMode"]?.value is NSNull)
+        #expect(reset.params["verboseLevel"]?.value is NSNull)
+        #expect(automatic.params["fastMode"]?.value as? String == "auto")
+    }
+
     @Test func `fork and create requests preserve routing identity`() {
         let fork = OpenClawChatGatewayRequests.forkSession(
             parentSessionKey: "agent:reviewer:telegram:group:1",

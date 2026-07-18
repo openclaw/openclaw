@@ -232,6 +232,14 @@ export function buildThreadResumeParams(
       });
   return {
     threadId: options.threadId,
+    // Only the latest turn id/status is needed to preserve active-turn conflict
+    // handling; avoid rebuilding and validating the full persisted history.
+    excludeTurns: true,
+    initialTurnsPage: {
+      limit: 1,
+      sortDirection: "desc",
+      itemsView: "notLoaded",
+    },
     ...(modelSelection
       ? {
           model: modelSelection.model,
