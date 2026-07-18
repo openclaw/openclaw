@@ -64,8 +64,8 @@ describeControlUiE2e("Control UI browser screenshot failed-body E2E", () => {
           fetchCount: number;
           statuses: number[];
         };
-        const proofWindow = window as Window & { __openclawScreenshotProof?: ScreenshotProof };
-        const proof = (proofWindow.__openclawScreenshotProof ??= {
+        const proofWindow = window as Window & { openclawScreenshotProof?: ScreenshotProof };
+        const proof = (proofWindow.openclawScreenshotProof ??= {
           cancelCount: 0,
           cancelResolvedCount: 0,
           fetchCount: 0,
@@ -130,7 +130,7 @@ describeControlUiE2e("Control UI browser screenshot failed-body E2E", () => {
     try {
       const response = await page.goto(`${server.baseUrl}chat`);
       expect(response?.status()).toBe(200);
-      const showFiles = page.getByRole("button", { name: "Show session files", exact: true });
+      const showFiles = page.getByRole("button", { name: "Show thread files", exact: true });
       await showFiles.waitFor();
       await showFiles.click();
       const toggle = page.getByRole("button", { name: "Toggle browser panel", exact: true });
@@ -148,14 +148,14 @@ describeControlUiE2e("Control UI browser screenshot failed-body E2E", () => {
             () =>
               (
                 window as Window & {
-                  __openclawScreenshotProof?: {
+                  openclawScreenshotProof?: {
                     cancelCount?: number;
                     cancelResolvedCount?: number;
                     fetchCount?: number;
                     statuses?: number[];
                   };
                 }
-              ).__openclawScreenshotProof,
+              ).openclawScreenshotProof,
           ),
         )
         .toEqual({
@@ -186,8 +186,7 @@ describeControlUiE2e("Control UI browser screenshot failed-body E2E", () => {
           path: path.join(proofDir, "failed-screenshot.png"),
         });
         const stream = await page.evaluate(
-          () =>
-            (window as Window & { __openclawScreenshotProof?: unknown }).__openclawScreenshotProof,
+          () => (window as Window & { openclawScreenshotProof?: unknown }).openclawScreenshotProof,
         );
         await writeFile(
           path.join(proofDir, "proof.json"),
