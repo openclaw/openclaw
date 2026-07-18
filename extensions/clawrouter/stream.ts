@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
@@ -15,9 +16,12 @@ const REQUEST_ID_PATTERN = /^[A-Za-z0-9._~:/+@=-]+$/u;
 const REQUEST_ID_UNSAFE_CHARACTER_PATTERN = /[^A-Za-z0-9._~:/+@=-]/gu;
 const ATTRIBUTION_PRINTABLE_ASCII_PATTERN = /^[\x20-\x7E]+$/u;
 const ATTRIBUTION_NON_PRINTABLE_ASCII_PATTERN = /[^\x20-\x7E]/gu;
+const ATTRIBUTION_ENCODED_SUFFIX_PATTERN = /~[a-f0-9]{16}$/u;
 const REQUEST_ID_SUFFIX_PATTERN = /:model:\d+$/u;
+const REQUEST_ID_ENCODED_SUFFIX_PATTERN = /~[a-f0-9]{16}(?::model:\d+)?$/u;
 
 type BoundedIdPolicy = {
+  encodedSuffixPattern: RegExp;
   maxLength: number;
   safePattern: RegExp;
   unsafeCharacterPattern: RegExp;
@@ -25,11 +29,13 @@ type BoundedIdPolicy = {
 };
 
 const ATTRIBUTION_ID_POLICY: BoundedIdPolicy = {
+  encodedSuffixPattern: ATTRIBUTION_ENCODED_SUFFIX_PATTERN,
   maxLength: ATTRIBUTION_VALUE_MAX_LENGTH,
   safePattern: ATTRIBUTION_PRINTABLE_ASCII_PATTERN,
   unsafeCharacterPattern: ATTRIBUTION_NON_PRINTABLE_ASCII_PATTERN,
 };
 const REQUEST_ID_POLICY: BoundedIdPolicy = {
+  encodedSuffixPattern: REQUEST_ID_ENCODED_SUFFIX_PATTERN,
   maxLength: REQUEST_ID_MAX_LENGTH,
   safePattern: REQUEST_ID_PATTERN,
   unsafeCharacterPattern: REQUEST_ID_UNSAFE_CHARACTER_PATTERN,
@@ -59,12 +65,20 @@ function sanitizeBoundedId(value: string | undefined, policy: BoundedIdPolicy): 
   if (!normalized) {
     return undefined;
   }
-  if (normalized.length <= policy.maxLength && policy.safePattern.test(normalized)) {
+  if (
+    normalized.length <= policy.maxLength &&
+    policy.safePattern.test(normalized) &&
+    !policy.encodedSuffixPattern.test(normalized)
+  ) {
     return normalized;
   }
-  // Fetch converts header values to ByteString. Keep automatic IDs ASCII,
-  // bounded, readable, and collision-resistant before transport construction.
-  const hash = createHash("sha256").update(normalized).digest("hex").slice(0, ID_HASH_LENGTH);
+  // Hash UTF-16 code units losslessly: UTF-8 string hashing replaces lone
+  // surrogates with U+FFFD. The reserved encoded suffix keeps a rewritten ID
+  // from aliasing an otherwise safe input that already looks encoded.
+  const hash = createHash("sha256")
+    .update(Buffer.from(normalized, "utf16le"))
+    .digest("hex")
+    .slice(0, ID_HASH_LENGTH);
   const preservedSuffix = policy.preservedSuffixPattern?.exec(normalized)?.[0] ?? "";
   const rawPrefix = preservedSuffix ? normalized.slice(0, -preservedSuffix.length) : normalized;
   const safePrefix = rawPrefix.replace(policy.unsafeCharacterPattern, "_");
