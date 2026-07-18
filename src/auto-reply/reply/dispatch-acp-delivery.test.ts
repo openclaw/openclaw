@@ -361,6 +361,47 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     await expect(coordinator.resolveAccumulatedDeliveredTranscriptText()).resolves.toBe("");
   });
 
+  it("keeps canonical ACP text after an outbound hook rewrites the payload", async () => {
+    const delivered: unknown[] = [];
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload) => {
+        delivered.push(payload);
+      },
+    });
+    dispatcher.appendBeforeDeliver?.((payload) => ({ ...payload, text: "transport rewrite" }));
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig(),
+      ctx: buildTestCtx({
+        Provider: "visiblechat",
+        Surface: "visiblechat",
+        SessionKey: "agent:codex-acp:session-1",
+      }),
+      dispatcher,
+      inboundAudio: false,
+      shouldRouteToOriginating: false,
+    });
+
+    await expect(
+      coordinator.deliver("block", { text: "canonical runtime text" }, { skipTts: true }),
+    ).resolves.toBe(true);
+    await dispatcher.waitForIdle();
+
+    expect(delivered).toEqual([{ text: "transport rewrite" }]);
+    await expect(coordinator.resolveAccumulatedDeliveredTranscriptText()).resolves.toBe(
+      "canonical runtime text",
+    );
+  });
+
+  it("does not treat custom dispatcher enqueue acceptance as confirmed delivery", async () => {
+    const coordinator = createCoordinator();
+
+    await expect(
+      coordinator.deliver("block", { text: "unconfirmed" }, { skipTts: true }),
+    ).resolves.toBe(true);
+
+    await expect(coordinator.resolveAccumulatedDeliveredTranscriptText()).resolves.toBe("");
+  });
+
   it("excludes status notices from delivered transcript text", async () => {
     const coordinator = createCoordinator();
 

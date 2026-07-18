@@ -275,6 +275,8 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     blockText: string | undefined,
     finalText: string | undefined,
   ) => {
+    // ACP history keeps canonical runtime text, while delivery hooks may render
+    // transport-specific text. Only the delivery outcome gates this snapshot.
     if (kind === "block" && blockText) {
       state.accumulatedDeliveredBlockText = state.accumulatedDeliveredBlockText
         ? `${state.accumulatedDeliveredBlockText}\n${blockText}`
@@ -547,10 +549,6 @@ export function createAcpDispatchDeliveryCoordinator(params: {
             }
           }),
         );
-      } else {
-        // Custom dispatchers expose only enqueue acceptance; core dispatchers
-        // provide the exact asynchronous delivery outcome above.
-        appendDeliveredTranscriptText(kind, rawBlockText, rawFinalText);
       }
     }
     if (kind === "final" && delivered) {

@@ -830,7 +830,12 @@ describe("tryDispatchAcpReply", () => {
 
   it("persists delivered ACP output for backend cancellation without a caller abort", async () => {
     setReadyAcpResolution();
-    const { dispatcher } = createDispatcher();
+    const deliveredPayloads: unknown[] = [];
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload) => {
+        deliveredPayloads.push(payload);
+      },
+    });
     const recordProcessed = vi.fn();
     const markIdle = vi.fn();
     managerMocks.runTurn.mockImplementationOnce(
@@ -848,7 +853,7 @@ describe("tryDispatchAcpReply", () => {
     });
 
     expect(result?.queuedFinal).toBe(true);
-    expect(dispatcherCall(dispatcher.sendFinalReply).text).toBe("partial");
+    expect(deliveredPayloads).toEqual([{ text: "partial" }]);
     expect(transcriptMocks.persistAcpDispatchTranscript).toHaveBeenCalledTimes(1);
     const transcript = requireRecord(
       mockArg(transcriptMocks.persistAcpDispatchTranscript, 0, 0, "transcript call"),
