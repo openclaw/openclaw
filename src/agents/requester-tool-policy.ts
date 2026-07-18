@@ -24,7 +24,7 @@ import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
 
 const MAX_DELEGATION_LINEAGE_DEPTH = 32;
 
-export type RequesterToolPolicyResolution = {
+type RequesterToolPolicyResolution = {
   delegated: boolean;
   groupPolicy?: SandboxToolPolicy;
   senderPolicy?: SandboxToolPolicy;

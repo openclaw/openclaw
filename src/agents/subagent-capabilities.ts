@@ -61,7 +61,7 @@ export type SessionCapabilityStore = Record<
   }
 >;
 
-export type PersistedSubagentToolPolicyEnvelope = {
+type PersistedSubagentToolPolicyEnvelope = {
   sessionKey: string;
   spawnedBy: string;
   inheritedToolAllow: string[];
