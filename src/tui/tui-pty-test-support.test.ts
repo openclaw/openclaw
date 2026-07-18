@@ -19,8 +19,9 @@ describe("TUI PTY test support", () => {
   it("waits for PTY exit before completing idempotent disposal", async () => {
     const order: string[] = [];
     let exitListener: ((event: { exitCode: number; signal?: number }) => void) | undefined;
+    const kill = vi.fn(() => order.push("kill"));
     const pty = {
-      kill: vi.fn(() => order.push("kill")),
+      kill,
       onData: vi.fn(() => ({ dispose: () => order.push("data-dispose") })),
       onExit: vi.fn((listener: typeof exitListener) => {
         exitListener = listener;
@@ -46,6 +47,6 @@ describe("TUI PTY test support", () => {
     await disposal;
 
     expect(order).toEqual(["data-dispose", "kill", "exit", "exit-dispose"]);
-    expect(pty.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(kill).toHaveBeenCalledWith("SIGTERM");
   });
 });
