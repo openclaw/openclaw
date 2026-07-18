@@ -5,6 +5,7 @@ import { ifDefined } from "lit/directives/if-defined.js";
 import { ref } from "lit/directives/ref.js";
 import type { GatewaySessionRow, SessionGoal, SessionsListResult } from "../../../api/types.ts";
 import { normalizeBasePath } from "../../../app-route-paths.ts";
+import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import { normalizeChatSendShortcut, type ChatSendShortcut } from "../../../app/settings.ts";
 import { icons, type IconName } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
@@ -38,6 +39,7 @@ import {
   formatGoalUsage,
   goalElapsedMs,
 } from "../../../lib/session-goal.ts";
+import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { exportChatMarkdown } from "../export.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../input-history.ts";
@@ -54,6 +56,7 @@ import {
   renderChatAttachmentMenu,
 } from "./chat-attachments.ts";
 import { renderChatPlanChecklist } from "./chat-plan-checklist.ts";
+import { createGatewayQuestionPanelProps } from "./chat-question-card.ts";
 import {
   renderChatVoiceError,
   renderMicrophoneActivity,
@@ -91,6 +94,7 @@ type ChatComposerProps = {
   compactionStatus?: CompactionStatus | null;
   fallbackStatus?: FallbackStatus | null;
   planStatus?: PlanStatus | null;
+  gatewayQuestionPrompts?: readonly QuestionPrompt[];
   messages: unknown[];
   stream: string | null;
   queue: ChatQueueItem[];
@@ -128,6 +132,9 @@ type ChatComposerProps = {
   onClearReply?: () => void;
   onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
   onGoalCommand?: (command: string) => void;
+  onGatewayQuestionChange?: () => void;
+  onGatewayQuestionSubmit?: (id: string, answers: Record<string, string[]>) => void | Promise<void>;
+  onGatewayQuestionSkip?: (id: string) => void | Promise<void>;
 };
 
 type PendingClearedSubmittedDraft = {
@@ -154,6 +161,7 @@ type ChatComposerState = {
   composerInputIntentKey: string | null;
   pendingClearedSubmittedDraft: PendingClearedSubmittedDraft | null;
   goalExpandedId: string | null;
+  activeGatewayQuestionId: string | null;
 };
 
 function createChatComposerState(): ChatComposerState {
@@ -171,6 +179,7 @@ function createChatComposerState(): ChatComposerState {
     composerInputIntentKey: null,
     pendingClearedSubmittedDraft: null,
     goalExpandedId: null,
+    activeGatewayQuestionId: null,
   };
 }
 
@@ -286,6 +295,7 @@ export function resetChatComposerState(paneId?: string) {
 }
 
 const composerTextareaResizeObservers = new WeakMap<HTMLTextAreaElement, ResizeObserver>();
+const questionDockResizeObservers = new WeakMap<HTMLElement, ResizeObserver>();
 
 function updateTextareaOverflow(el: HTMLTextAreaElement) {
   el.style.overflowY = el.scrollHeight > el.clientHeight ? "auto" : "hidden";
@@ -312,6 +322,29 @@ function observeTextareaOverflow(el: HTMLTextAreaElement) {
 function disconnectTextareaOverflowObserver(el: HTMLTextAreaElement) {
   composerTextareaResizeObservers.get(el)?.disconnect();
   composerTextareaResizeObservers.delete(el);
+}
+
+function syncQuestionDockHeight(el: HTMLElement): void {
+  el.closest<HTMLElement>(".chat")?.style.setProperty(
+    "--chat-question-dock-height",
+    `${el.offsetHeight}px`,
+  );
+}
+
+function observeQuestionDock(el: HTMLElement): void {
+  syncQuestionDockHeight(el);
+  if (typeof ResizeObserver !== "function" || questionDockResizeObservers.has(el)) {
+    return;
+  }
+  const observer = new ResizeObserver(() => syncQuestionDockHeight(el));
+  observer.observe(el);
+  questionDockResizeObservers.set(el, observer);
+}
+
+function disconnectQuestionDock(el: HTMLElement): void {
+  questionDockResizeObservers.get(el)?.disconnect();
+  questionDockResizeObservers.delete(el);
+  el.closest<HTMLElement>(".chat")?.style.removeProperty("--chat-question-dock-height");
 }
 
 function scheduleTextareaHeightAdjustment(el: HTMLTextAreaElement) {
@@ -1880,6 +1913,7 @@ export function renderChatComposer(props: ChatComposerProps) {
   const actionDraft =
     state.composingDraft?.key === draftKey ? state.composingDraft.value : visibleDraft;
   let composerTextarea: HTMLTextAreaElement | null = null;
+  let questionDock: HTMLElement | null = null;
   const hasVisualAttachments = (props.attachments ?? []).some(
     (attachment) => !isLargePastedTextAttachment(attachment),
   );
@@ -1917,6 +1951,52 @@ export function renderChatComposer(props: ChatComposerProps) {
           : t("chat.composer.runInterrupted");
   const requestUpdate = props.onRequestUpdate ?? (() => {});
   const sendShortcut = normalizeChatSendShortcut(props.sendShortcut);
+  const gatewayQuestionPrompts =
+    props.gatewayQuestionPrompts?.filter(
+      (prompt) =>
+        prompt.status === "pending" &&
+        prompt.sessionKey !== undefined &&
+        areUiSessionKeysEquivalent(prompt.sessionKey, props.sessionKey),
+    ) ?? [];
+  let gatewayQuestionIndex = gatewayQuestionPrompts.findIndex(
+    (prompt) => prompt.id === state.activeGatewayQuestionId,
+  );
+  if (gatewayQuestionIndex < 0 && gatewayQuestionPrompts.length > 0) {
+    gatewayQuestionIndex = 0;
+    state.activeGatewayQuestionId = gatewayQuestionPrompts[0]?.id ?? null;
+  }
+  const gatewayQuestionPrompt = gatewayQuestionPrompts[gatewayQuestionIndex];
+  const selectGatewayQuestion = (index: number) => {
+    const prompt = gatewayQuestionPrompts[index];
+    if (!prompt) {
+      return;
+    }
+    state.activeGatewayQuestionId = prompt.id;
+    requestUpdate();
+  };
+  const questionPanelProps = gatewayQuestionPrompt
+    ? createGatewayQuestionPanelProps(gatewayQuestionPrompt, {
+        nowMs: Date.now(),
+        onChange: props.onGatewayQuestionChange,
+        onSubmit: props.onGatewayQuestionSubmit
+          ? (answers) => props.onGatewayQuestionSubmit?.(gatewayQuestionPrompt.id, answers)
+          : undefined,
+        onSkip: props.onGatewayQuestionSkip
+          ? () => props.onGatewayQuestionSkip?.(gatewayQuestionPrompt.id)
+          : undefined,
+        requestPosition:
+          gatewayQuestionPrompts.length > 1
+            ? { current: gatewayQuestionIndex + 1, total: gatewayQuestionPrompts.length }
+            : undefined,
+        onPreviousRequest: () =>
+          selectGatewayQuestion(
+            (gatewayQuestionIndex - 1 + gatewayQuestionPrompts.length) %
+              gatewayQuestionPrompts.length,
+          ),
+        onNextRequest: () =>
+          selectGatewayQuestion((gatewayQuestionIndex + 1) % gatewayQuestionPrompts.length),
+      })
+    : null;
 
   const placeholder =
     !canCompose && props.disabledReason
@@ -2192,6 +2272,27 @@ export function renderChatComposer(props: ChatComposerProps) {
       onQueueRemove: props.onQueueRemove,
     })}
     <div class="agent-chat__composer-shell">
+      ${questionPanelProps
+        ? html`
+            <div
+              class="agent-chat__question-dock"
+              ${ref((element) => {
+                const nextDock = element instanceof HTMLElement ? element : null;
+                if (questionDock && questionDock !== nextDock) {
+                  disconnectQuestionDock(questionDock);
+                }
+                questionDock = nextDock;
+                if (questionDock) {
+                  observeQuestionDock(questionDock);
+                }
+              })}
+            >
+              <openclaw-chat-question-panel
+                .props=${questionPanelProps}
+              ></openclaw-chat-question-panel>
+            </div>
+          `
+        : nothing}
       <div
         class="agent-chat__input"
         @click=${(event: MouseEvent) => focusComposerFromChrome(event, canCompose)}

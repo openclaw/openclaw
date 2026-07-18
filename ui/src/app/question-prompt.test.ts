@@ -1,6 +1,7 @@
 // Control UI tests cover operator question parsing and lifecycle state.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  cancelQuestionPrompt,
   createQuestionPromptState,
   disposeQuestionPromptState,
   handleQuestionPromptEvent,
@@ -337,6 +338,23 @@ describe("question RPC helpers", () => {
           extras: { answers: ["Tests", "Docs"] },
         },
       },
+    });
+  });
+
+  it("cancels a pending question when the docked panel is skipped", async () => {
+    const request = vi.fn<RequestFn>(async () => ({}));
+    const state = createState();
+    setQuestionPromptClient(state, { request });
+    handleQuestionPromptEvent(state, {
+      event: "question.requested",
+      payload: requestedPayload(),
+    });
+
+    await cancelQuestionPrompt(state, "question-1");
+
+    expect(request).toHaveBeenCalledWith("question.resolve", {
+      id: "question-1",
+      cancel: true,
     });
   });
 });
