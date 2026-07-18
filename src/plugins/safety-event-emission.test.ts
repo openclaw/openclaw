@@ -58,7 +58,9 @@ describe("emitPluginSafetyEvent — trusted plugin", () => {
     });
     expect(result).toEqual({ ok: true });
     expect(emitTrustedDiagnosticEventMock).toHaveBeenCalledOnce();
-    expect(emitTrustedDiagnosticEventMock).toHaveBeenCalledWith(baseExternalContentEvent);
+    expect(emitTrustedDiagnosticEventMock).toHaveBeenCalledWith(baseExternalContentEvent, {
+      pluginId: "my-bundled-plugin",
+    });
     expect(emitAuthorizedAISafetyDiagnosticEventMock).not.toHaveBeenCalled();
   });
 
@@ -79,7 +81,9 @@ describe("emitPluginSafetyEvent — trusted plugin", () => {
       trusted: true,
     });
     expect(result).toEqual({ ok: true });
-    expect(emitTrustedDiagnosticEventMock).toHaveBeenCalledWith(basePromptInjectionEvent);
+    expect(emitTrustedDiagnosticEventMock).toHaveBeenCalledWith(basePromptInjectionEvent, {
+      pluginId: "my-bundled-plugin",
+    });
   });
 });
 
@@ -95,6 +99,7 @@ describe("emitPluginSafetyEvent — non-trusted (external) plugin", () => {
     expect(emitAuthorizedAISafetyDiagnosticEventMock).toHaveBeenCalledOnce();
     expect(emitAuthorizedAISafetyDiagnosticEventMock).toHaveBeenCalledWith(
       baseExternalContentEvent,
+      { pluginId: "third-party-plugin" },
     );
     expect(emitTrustedDiagnosticEventMock).not.toHaveBeenCalled();
   });
@@ -237,7 +242,7 @@ describe("emitPluginSafetyEvent — all taxonomy types accepted for trusted plug
     it(`accepts ${event.type}`, () => {
       const result = emitPluginSafetyEvent({ pluginId: "bundled", event, trusted: true });
       expect(result).toEqual({ ok: true });
-      expect(emitTrustedDiagnosticEventMock).toHaveBeenCalledWith(event);
+      expect(emitTrustedDiagnosticEventMock).toHaveBeenCalledWith(event, { pluginId: "bundled" });
       emitTrustedDiagnosticEventMock.mockClear();
     });
   }

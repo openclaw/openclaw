@@ -105,6 +105,12 @@ type DiagnosticAISafetyEventInput = {
 export type AISafetyEventMetadata = {
   /** true = emitted via core trusted path; false = plugin authorized path. */
   trusted: boolean;
+  /**
+   * Host-stamped identifier of the emitting plugin. Set by the host-bound
+   * plugin emitter; never supplied by the plugin payload itself, so durable
+   * history can attribute plugin emissions without trusting plugin input.
+   */
+  pluginId?: string;
 };
 
 type AISafetyListener = (
@@ -124,10 +130,14 @@ function getStore(): AISafetyStore {
   }));
 }
 
-function dispatchAISafetyEvent(input: DiagnosticAISafetyEventInput, trusted: boolean): void {
+function dispatchAISafetyEvent(
+  input: DiagnosticAISafetyEventInput,
+  trusted: boolean,
+  pluginId?: string,
+): void {
   const store = getStore();
   const event = { ...input, seq: ++store.seq, ts: Date.now() } as DiagnosticAISafetyEventPayload;
-  const metadata: AISafetyEventMetadata = { trusted };
+  const metadata: AISafetyEventMetadata = { trusted, ...(pluginId ? { pluginId } : {}) };
   for (const listener of store.listeners) {
     try {
       listener(event, metadata);
@@ -145,11 +155,17 @@ export function onAISafetyDiagnosticEvent(listener: AISafetyListener): () => voi
 }
 
 /** Emit an AI safety event via the trusted core path. */
-export function emitTrustedAISafetyEvent(input: DiagnosticAISafetyEventInput): void {
-  dispatchAISafetyEvent(input, true);
+export function emitTrustedAISafetyEvent(
+  input: DiagnosticAISafetyEventInput,
+  opts?: { pluginId?: string },
+): void {
+  dispatchAISafetyEvent(input, true, opts?.pluginId);
 }
 
 /** Emit an AI safety event via the manifest-authorized plugin path (untrusted provenance). */
-export function emitAuthorizedAISafetyEvent(input: DiagnosticAISafetyEventInput): void {
-  dispatchAISafetyEvent(input, false);
+export function emitAuthorizedAISafetyEvent(
+  input: DiagnosticAISafetyEventInput,
+  opts?: { pluginId?: string },
+): void {
+  dispatchAISafetyEvent(input, false, opts?.pluginId);
 }

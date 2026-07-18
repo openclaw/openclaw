@@ -106,12 +106,12 @@ export function emitPluginSafetyEvent(params: {
   }
 
   if (trusted) {
-    emitTrustedAISafetyEvent(event);
+    emitTrustedAISafetyEvent(event, { pluginId });
   } else {
     // Manifest-authorized external plugin: emit with untrusted provenance so
     // exporters can distinguish it from core-trusted emissions. The generic
     // untrusted emitDiagnosticEvent() API rejects AI safety events entirely.
-    emitAuthorizedAISafetyEvent(event);
+    emitAuthorizedAISafetyEvent(event, { pluginId });
   }
 
   return { ok: true };

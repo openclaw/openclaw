@@ -6,7 +6,10 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { emitTrustedAISafetyEvent } from "./diagnostic-ai-safety-events.js";
+import {
+  emitAuthorizedAISafetyEvent,
+  emitTrustedAISafetyEvent,
+} from "./diagnostic-ai-safety-events.js";
 import { ensureSafetyEventStoreBridge, querySafetyEvents } from "./safety-event-store.js";
 
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
@@ -66,6 +69,28 @@ describe("safety event store", () => {
       type: "ai_safety.external_content.consumed",
       sessionId: "session-durable",
       meta: { trusted: true },
+    });
+  });
+
+  it("persists host-stamped plugin provenance for authorized emissions", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-safety-provenance-"));
+    tempDirs.push(stateDir);
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    ensureSafetyEventStoreBridge();
+
+    emitAuthorizedAISafetyEvent(
+      {
+        type: "ai_safety.external_content.consumed",
+        sessionId: "session-provenance",
+        sourceType: "mcp_tool",
+        trusted: false,
+      },
+      { pluginId: "third-party-plugin" },
+    );
+
+    const [event] = querySafetyEvents({ sessionId: "session-provenance" }).events;
+    expect(event).toMatchObject({
+      meta: { trusted: false, pluginId: "third-party-plugin" },
     });
   });
 

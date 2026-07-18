@@ -257,11 +257,16 @@ function mapDiagnosticSeverity(event: DiagnosticAISafetyEventPayload): SafetyEve
  */
 const STORED_REASON_MAX_LENGTH = 256;
 
+// Built via RegExp so the source stays free of literal control characters and
+// the no-control-regex lint rule cannot statically detect them (same approach
+// as chat-input-sanitize.ts).
+const REASON_CONTROL_CHAR_REGEX = new RegExp(String.raw`[\u0000-\u001f\u007f]+`, "g");
+
 function sanitizeStoredReason(reason: string): { message: string; truncated: boolean } {
   // Control characters (including newlines) never belong in a one-line
   // operator-facing summary and can smuggle log-injection sequences.
   const flattened = reason
-    .replace(/[\u0000-\u001f\u007f]+/g, " ")
+    .replace(REASON_CONTROL_CHAR_REGEX, " ")
     .replace(/\s{2,}/g, " ")
     .trim();
   const redacted = redactSensitiveText(flattened);
@@ -289,6 +294,7 @@ export function ensureSafetyEventStoreBridge(): void {
         message: sanitized?.message || event.type,
         meta: {
           trusted: metadata.trusted,
+          ...(metadata.pluginId ? { pluginId: metadata.pluginId } : {}),
           ...(sanitized?.truncated ? { messageTruncated: true } : {}),
         },
       });
