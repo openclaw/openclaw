@@ -19,11 +19,11 @@ import { join } from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
-import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
 import chalk from "chalk";
 import { extractArchive } from "../../infra/archive.js";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
 import { APP_NAME, getBinDir } from "../config.js";
+import { readProviderJsonResponse } from "../provider-http-errors.js";
 
 const TOOLS_DIR = getBinDir();
 const NETWORK_TIMEOUT_MS = 10_000;
@@ -162,22 +162,10 @@ async function getLatestVersion(repo: string): Promise<string> {
       throw new Error(`GitHub API error: ${response.status}`);
     }
 
-    const bytes = await readResponseWithLimit(response, GITHUB_RELEASE_JSON_MAX_BYTES, {
-      onOverflow: ({ size, maxBytes }) =>
-        new Error(`GitHub release response exceeds ${maxBytes} bytes (got ${size})`),
+    const data = await readProviderJsonResponse<{ tag_name: string }>(response, "GitHub release", {
+      maxBytes: GITHUB_RELEASE_JSON_MAX_BYTES,
     });
-    let data: unknown;
-    try {
-      data = JSON.parse(bytes.toString("utf8")) as unknown;
-    } catch (cause) {
-      throw new Error("GitHub release response is malformed JSON", { cause });
-    }
-    const tagName =
-      data && typeof data === "object" && "tag_name" in data ? data.tag_name : undefined;
-    if (typeof tagName !== "string" || !tagName.trim()) {
-      throw new Error("GitHub release response has no valid tag_name");
-    }
-    return tagName.replace(/^v/, "");
+    return data.tag_name.replace(/^v/, "");
   } finally {
     await guarded.release();
   }
@@ -426,13 +414,13 @@ export async function ensureTool(tool: "fd" | "rg", silent = false): Promise<str
     }
     return path;
   } catch (e) {
-    const error = e instanceof Error ? e : new Error(String(e));
-    // Silent callers surface the failure through their tool result instead of
-    // replacing actionable release/download corruption with a generic message.
-    if (silent) {
-      throw error;
+    if (!silent) {
+      console.log(
+        chalk.yellow(
+          `Failed to download ${config.name}: ${e instanceof Error ? e.message : String(e)}`,
+        ),
+      );
     }
-    console.log(chalk.yellow(`Failed to download ${config.name}: ${error.message}`));
     return undefined;
   }
 }
