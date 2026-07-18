@@ -1,10 +1,21 @@
 import { describe, expect, it, vi } from "vitest";
 import { formatSqliteSessionFileMarker } from "../../../config/sessions/sqlite-marker.js";
 import { buildCompactionPersistenceGuard } from "./attempt-session-manager-prepare.js";
+import type { EmbeddedAttemptSessionLockController } from "./attempt.session-lock.js";
+
+function createOwnedSessionFileWriteMock() {
+  const calls = vi.fn();
+  const withOwnedSessionFileWrite: EmbeddedAttemptSessionLockController["withOwnedSessionFileWrite"] =
+    (append, validateAppend) => {
+      calls(append, validateAppend);
+      return append();
+    };
+  return { calls, withOwnedSessionFileWrite };
+}
 
 describe("buildCompactionPersistenceGuard", () => {
   it("leaves SQLite compaction persistence to the transcript owner", () => {
-    const withOwnedSessionFileWrite = vi.fn();
+    const { calls, withOwnedSessionFileWrite } = createOwnedSessionFileWriteMock();
 
     const guard = buildCompactionPersistenceGuard({
       sessionFile: formatSqliteSessionFileMarker({
@@ -16,11 +27,11 @@ describe("buildCompactionPersistenceGuard", () => {
     });
 
     expect(guard).toEqual({});
-    expect(withOwnedSessionFileWrite).not.toHaveBeenCalled();
+    expect(calls).not.toHaveBeenCalled();
   });
 
   it("wraps JSONL compaction appends in the session-file ownership fence", () => {
-    const withOwnedSessionFileWrite = vi.fn((append: () => string) => append());
+    const { calls, withOwnedSessionFileWrite } = createOwnedSessionFileWriteMock();
     const append = vi.fn(() => "entry-1");
     const validateAppend = vi.fn(() => true);
 
@@ -31,6 +42,6 @@ describe("buildCompactionPersistenceGuard", () => {
     const entryId = guard.withCompactionPersistence?.(append, validateAppend);
 
     expect(entryId).toBe("entry-1");
-    expect(withOwnedSessionFileWrite).toHaveBeenCalledWith(append, validateAppend);
+    expect(calls).toHaveBeenCalledWith(append, validateAppend);
   });
 });
