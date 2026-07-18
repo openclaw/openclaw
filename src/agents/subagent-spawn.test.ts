@@ -229,6 +229,115 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(registerInput.requesterAgentId).toBe("main");
   });
 
+  it("does not cap a statically-configured target agent's tools to the parent's own effective surface", async () => {
+    // Regression test: targeting a real agents.list entry (e.g. a router
+    // delegating to a specialized value agent) must not intersect the
+    // child's own tools.allow/alsoAllow down to whatever the parent itself
+    // can call -- the parent legitimately lacks tools the target agent has.
+    hoisted.configOverride = createConfigOverride({
+      session: {
+        scope: "global",
+      },
+      agents: {
+        defaults: {
+          workspace: os.tmpdir(),
+        },
+        list: [
+          {
+            id: "main",
+            workspace: "/tmp/workspace-main",
+            subagents: {
+              allowAgents: ["worker"],
+            },
+          },
+          {
+            id: "worker",
+            workspace: "/tmp/workspace-worker",
+          },
+        ],
+      },
+    });
+    let persistedStore: Record<string, Record<string, unknown>> | undefined;
+    installSessionStoreCaptureMock(hoisted.updateSessionStoreMock, {
+      onStore: (store) => {
+        persistedStore = store;
+      },
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "delegate to worker",
+        agentId: "worker",
+      },
+      {
+        agentSessionKey: "global",
+        requesterAgentIdOverride: "main",
+        inheritedToolAllowlist: ["message", "sessions_spawn"],
+        inheritedToolDenylist: ["exec"],
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    if (result.status !== "accepted") {
+      throw new Error("Expected accepted spawn result");
+    }
+    const childSession = persistedStore?.[result.childSessionKey];
+    if (!childSession) {
+      throw new Error("Expected persisted child session");
+    }
+    // Allow-list inheritance is skipped for a known static target -- the
+    // child's own agents.worker.tools policy applies unmodified.
+    expect(childSession.inheritedToolAllow).toBeUndefined();
+    // Deny-list inheritance is a safety floor, not a capability grant, and
+    // still applies regardless of target.
+    expect(childSession.inheritedToolDeny).toEqual(["exec"]);
+  });
+
+  it("caps tool inheritance to the parent's effective surface when the target has no static agents.list entry", async () => {
+    // Same-agent (self) spawns are the only reachable case without a
+    // resolvable target config today; containment must still hold there.
+    hoisted.configOverride = createConfigOverride({
+      session: {
+        scope: "global",
+      },
+      agents: {
+        defaults: {
+          workspace: os.tmpdir(),
+        },
+        list: [],
+      },
+    });
+    let persistedStore: Record<string, Record<string, unknown>> | undefined;
+    installSessionStoreCaptureMock(hoisted.updateSessionStoreMock, {
+      onStore: (store) => {
+        persistedStore = store;
+      },
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "spawn a helper of myself",
+      },
+      {
+        agentSessionKey: "global",
+        requesterAgentIdOverride: "main",
+        inheritedToolAllowlist: ["message", "sessions_spawn"],
+        inheritedToolDenylist: ["exec"],
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    if (result.status !== "accepted") {
+      throw new Error("Expected accepted spawn result");
+    }
+    const childSession = persistedStore?.[result.childSessionKey];
+    if (!childSession) {
+      throw new Error("Expected persisted child session");
+    }
+    expect(childSession.inheritedToolAllow).toEqual(["message", "sessions_spawn"]);
+    expect(childSession.inheritedToolDeny).toEqual(["exec"]);
+  });
+
   it("accepts a spawned run across session patching, runtime-model persistence, registry registration, and lifecycle emission", async () => {
     const operations: string[] = [];
     let persistedStore: Record<string, Record<string, unknown>> | undefined;

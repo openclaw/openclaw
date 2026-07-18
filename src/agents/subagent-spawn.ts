@@ -1301,7 +1301,14 @@ export async function spawnSubagentDirect(
     spawnDepth: childDepth,
     subagentRole: childCapabilities.role === "main" ? null : childCapabilities.role,
     subagentControlScope: childCapabilities.controlScope,
-    ...inheritedToolAllowPatch(ctx.inheritedToolAllowlist),
+    // Statically-configured named agents (targetAgentConfig resolved from
+    // agents.list) run their own vetted tools.allow/alsoAllow policy and must
+    // not be capped to the spawning parent's own effective tool surface --
+    // that intersection silently drops every plugin tool the target agent has
+    // but the router doesn't (e.g. a router delegating to a specialized value
+    // agent). Only dynamic/ad-hoc spawn targets (no static agents.list entry)
+    // inherit the parent's surface as a privilege-containment floor.
+    ...(targetAgentConfig ? {} : inheritedToolAllowPatch(ctx.inheritedToolAllowlist)),
     ...inheritedToolDenyPatch(ctx.inheritedToolDenylist),
     ...plan.initialSessionPatch,
   };
