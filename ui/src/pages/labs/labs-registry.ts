@@ -18,8 +18,8 @@ export const LAB_FEATURES = [
     configPath: ["tools", "codeMode", "enabled"],
     restartHint: null,
   },
-  // eslint-disable-next-line no-warning-comments -- #110325 requires a durable schema gate marker.
-  // TODO(#110325): Add this entry when tools.swarm lands in the config schema.
+  // Swarm entry ships once tools.swarm exists in the config schema (#110325);
+  // rendering it earlier would write an unknown key and invalidate the config.
   // {
   //   id: "swarm",
   //   title: () => t("labsPage.swarm.title"),
