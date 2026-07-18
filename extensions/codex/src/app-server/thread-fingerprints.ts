@@ -131,7 +131,7 @@ function stabilizeJsonValue(value: JsonValue): JsonValue {
   return stable;
 }
 
-export function readActiveCodexTurnIds(thread: unknown): string[] {
+function readActiveCodexTurnIds(thread: unknown): string[] {
   const turns = (thread as { turns?: Array<{ id?: unknown; status?: unknown }> }).turns;
   return (turns ?? [])
     .filter((turn) => turn.status === "inProgress")
