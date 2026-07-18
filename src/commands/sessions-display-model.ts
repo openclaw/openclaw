@@ -11,6 +11,7 @@ import {
 } from "../agents/model-selection.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 
 type SessionDisplayModelRow = {
   key: string;
@@ -139,7 +140,7 @@ export function resolveSessionDisplayModelRef(
   cfg: OpenClawConfig,
   row: SessionDisplayModelRow,
 ): SessionDisplayModelRef {
-  const agentId = row.key.startsWith("agent:") ? row.key.split(":")[1] : undefined;
+  const agentId = parseAgentSessionKey(row.key)?.agentId;
   const defaultRef = resolveDefaultModelRef(cfg, agentId);
   const normalizedOverride = normalizeStoredOverrideModel({
     providerOverride: row.providerOverride,
