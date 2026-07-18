@@ -20,7 +20,9 @@ The anchored compact chat panel from the menu bar keeps the compact single-colum
 
 Press Option-Space (⌥Space) or choose **Quick Chat** from the menu bar menu to open a floating composer for the main session. Change the global shortcut with the recorder in **Settings → General → Quick Chat shortcut**.
 
-Quick Chat shows the targeted agent (avatar or emoji, with the agent's name as the placeholder), sends to that agent's main session, and leaves replies in the full chat window. With more than one agent configured, click the avatar to switch agents from a native menu. Press Return to send, Command-Return to send and open full chat, Shift-Return for a newline, or Escape to dismiss. Clicking outside the bar also dismisses it. When relevant macOS permissions are missing, an attached strip offers **Grant** and **Not now** actions.
+Quick Chat shows the targeted agent (avatar or emoji, with the agent's name as the placeholder) and sends to that agent's main session. After Return accepts a send, the bar stays open and expands downward with the streamed Markdown reply and recent transcript. The bar input remains the composer. Press Command-Return to send and open the same target in the full chat window, Shift-Return for a newline, or Escape to dismiss the whole bar and reply area. Clicking outside also dismisses it. When relevant macOS permissions are missing, an attached strip offers **Grant** and **Not now** actions.
+
+Click the history button to choose from the five most recently updated sessions or return to **New message to &lt;agent&gt;**. A recent selection sends to that exact session and changes the placeholder to **Reply in &lt;session&gt;**. Hiding Quick Chat resets this temporary target to the selected agent's main session; switching agents from the avatar menu also clears it.
 
 Command-Return opens the conversation of the agent that received the send, including when session scope is global.
 
