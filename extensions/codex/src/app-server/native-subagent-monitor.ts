@@ -60,6 +60,7 @@ type ChildState = {
   recoveryTimer?: ReturnType<typeof setTimeout>;
   recoveryInFlight?: Promise<boolean>;
   terminal: boolean;
+  activeTurnId?: string;
   fallbackCompletion?: RecoveredCompletion;
   pendingCompletion?: CodexNativeSubagentCompletion;
   completionDeliveryAttempt: number;
@@ -364,6 +365,11 @@ class Monitor {
     }
     const childState = threadId ? this.childStates.get(threadId) : undefined;
     if (notification.method === "turn/started" && childState) {
+      const turnParams = isJsonObject(notification.params) ? notification.params : undefined;
+      const turnId = readString(turnParams, "turnId") ?? readTurnIdFromTurnParam(turnParams);
+      if (turnId) {
+        childState.activeTurnId = turnId;
+      }
       this.resumeChild(childState);
     }
     this.captureChildAssistantMessage(notification);
@@ -1015,6 +1021,7 @@ class Monitor {
         childThreadId,
         this.threadStatusRevisions.get(childThreadId) ?? { value: 0, readers: 0 },
       );
+      getMonitorsByChildThreadId().set(childThreadId, this);
     }
     this.registerAgentPath(childState, childThreadId);
     this.parentStates
@@ -1065,6 +1072,10 @@ class Monitor {
     const statusRevision = this.threadStatusRevisions.get(childState.childThreadId);
     if (statusRevision?.readers === 0) {
       this.threadStatusRevisions.delete(childState.childThreadId);
+    }
+    const allMonitors = getMonitorsByChildThreadId();
+    if (allMonitors.get(childState.childThreadId) === this) {
+      allMonitors.delete(childState.childThreadId);
     }
     this.releaseClientRetentionIfIdle();
     const state = this.parentStates.get(childState.parentThreadId);
@@ -1422,6 +1433,38 @@ class Monitor {
     return task.endedAt >= this.now() - RECENT_TERMINAL_TASK_RECONCILE_GRACE_MS;
   }
 
+  /** Interrupt a live child thread's active turn and deliver a cancelled completion. */
+  async interruptChildThread(childThreadId: string): Promise<boolean> {
+    const childState = this.childStates.get(childThreadId);
+    if (!childState || childState.terminal) {
+      return false;
+    }
+    const turnId = childState.activeTurnId;
+    if (!turnId) {
+      return false;
+    }
+    const state = this.parentStates.get(childState.parentThreadId);
+    if (!state) {
+      return false;
+    }
+    try {
+      await this.client.request("turn/interrupt", { threadId: childThreadId, turnId });
+    } catch {
+      // turn/interrupt on an already-terminal turn returns -32600. Fall through
+      // to registry-only cleanup.
+      return false;
+    }
+    childState.activeTurnId = undefined;
+    const completion: CodexNativeSubagentCompletion = {
+      childThreadId,
+      statusLabel: "cancelled",
+      status: "cancelled" as const,
+      result: "Cancelled by operator.",
+    };
+    await this.processCompletion(state, childState, completion);
+    return true;
+  }
+
   private logRecoveryFailure(childThreadId: string, error: unknown): void {
     embeddedAgentLog.debug("Codex native subagent history is not ready", {
       childThreadId,
@@ -1431,6 +1474,30 @@ class Monitor {
 }
 
 export const codexNativeSubagentMonitorRuntime = { Monitor, register: registerMonitor };
+
+let monitorsByChildThreadId: Map<string, Monitor> | undefined;
+
+function getMonitorsByChildThreadId(): Map<string, Monitor> {
+  if (!monitorsByChildThreadId) {
+    monitorsByChildThreadId = new Map();
+  }
+  return monitorsByChildThreadId;
+}
+
+export async function cancelCodexNativeSubagent(
+  childThreadId: string,
+): Promise<{ found: boolean; cancelled: boolean }> {
+  const childMonitors = getMonitorsByChildThreadId();
+  const monitor = childMonitors.get(childThreadId);
+  if (!monitor) {
+    return { found: false, cancelled: false };
+  }
+  const cancelled = await monitor.interruptChildThread(childThreadId);
+  return { found: true, cancelled };
+}
+
+const CODEX_NATIVE_CANCEL_KEY = Symbol.for("openclaw.taskRegistry.codexNativeSubagentCancel");
+(globalThis as Record<symbol, unknown>)[CODEX_NATIVE_CANCEL_KEY] = cancelCodexNativeSubagent;
 
 function readThreadTurnRecovery(
   thread: JsonObject,
@@ -1622,6 +1689,12 @@ function readObjectStringKeys(value: JsonValue | undefined): string[] {
 
 function normalizeIdentifier(value: string | undefined): string | undefined {
   return value?.replace(/[^a-z0-9]/giu, "").toLowerCase();
+}
+
+function readTurnIdFromTurnParam(params: JsonObject | undefined): string | undefined {
+  const turnValue = params?.turn;
+  const turn = isJsonObject(turnValue) ? turnValue : undefined;
+  return turn ? readString(turn, "id") : undefined;
 }
 
 function unrefTimer(timer: ReturnType<typeof setTimeout>): void {

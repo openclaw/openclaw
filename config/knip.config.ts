@@ -343,6 +343,7 @@ const config = {
   // reporting enabled. Suppress them only in this application-production scan.
   ignoreIssues: {
     "scripts/**": ["exports", "nsExports", "types", "nsTypes", "enumMembers", "namespaceMembers"],
+    "extensions/codex/src/app-server/native-subagent-monitor.ts": ["exports"],
   },
   workspaces: {
     ".": {

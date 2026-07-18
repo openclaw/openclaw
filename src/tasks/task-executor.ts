@@ -620,7 +620,10 @@ export async function cancelDetachedTaskRunById(params: {
     };
   }
   if (registeredRuntime) {
-    const cancelled = await registeredRuntime.cancelDetachedTaskRunById(params);
+    const cancelled = await registeredRuntime.cancelDetachedTaskRunById({
+      ...params,
+      runId: task.runId?.trim(),
+    });
     if (cancelled.found) {
       return cancelled;
     }

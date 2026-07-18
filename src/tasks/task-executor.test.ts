@@ -771,10 +771,12 @@ describe("task-executor", () => {
         taskId: child.taskId,
       });
 
-      expect(cancelDetachedTaskRunByIdSpy).toHaveBeenCalledWith({
-        cfg: {} as never,
-        taskId: child.taskId,
-      });
+      expect(cancelDetachedTaskRunByIdSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cfg: {} as never,
+          taskId: child.taskId,
+        }),
+      );
       expect(cancelled.found).toBe(true);
       expect(cancelled.cancelled).toBe(true);
     });
@@ -797,11 +799,13 @@ describe("task-executor", () => {
         reason: "operator request",
       });
 
-      expect(cancelDetachedTaskRunByIdSpy).toHaveBeenCalledWith({
-        cfg: {} as never,
-        taskId: "runtime-owned-task",
-        reason: "operator request",
-      });
+      expect(cancelDetachedTaskRunByIdSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cfg: {} as never,
+          taskId: "runtime-owned-task",
+          reason: "operator request",
+        }),
+      );
       expect(cancelled).toEqual({
         found: true,
         cancelled: true,
@@ -873,10 +877,12 @@ describe("task-executor", () => {
         taskId: child.taskId,
       });
 
-      expect(cancelDetachedTaskRunByIdSpy).toHaveBeenCalledWith({
-        cfg: {} as never,
-        taskId: child.taskId,
-      });
+      expect(cancelDetachedTaskRunByIdSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cfg: {} as never,
+          taskId: child.taskId,
+        }),
+      );
       expectCancelledAcpChildTask(child, cancelled);
     });
   });
@@ -908,10 +914,12 @@ describe("task-executor", () => {
       expect(cancelled.found).toBe(true);
       expect(cancelled.cancelled).toBe(false);
       expect(cancelled.reason).toBe("runtime refused cancel");
-      expect(cancelDetachedTaskRunByIdSpy).toHaveBeenCalledWith({
-        cfg: {} as never,
-        taskId: child.taskId,
-      });
+      expect(cancelDetachedTaskRunByIdSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cfg: {} as never,
+          taskId: child.taskId,
+        }),
+      );
       const task = getTaskById(child.taskId);
       expect(task?.taskId).toBe(child.taskId);
       expect(task?.status).toBe("running");
@@ -951,10 +959,12 @@ describe("task-executor", () => {
         taskId: child.taskId,
       });
 
-      expect(cancelDetachedTaskRunByIdSpy).toHaveBeenCalledWith({
-        cfg: {} as never,
-        taskId: child.taskId,
-      });
+      expect(cancelDetachedTaskRunByIdSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cfg: {} as never,
+          taskId: child.taskId,
+        }),
+      );
       expect(cancelled).toEqual({
         found: true,
         cancelled: true,
@@ -1083,10 +1093,12 @@ describe("task-executor", () => {
         flowId: flow.flowId,
       });
 
-      expect(cancelDetachedTaskRunByIdSpy).toHaveBeenCalledWith({
-        cfg: {} as never,
-        taskId: childTask.taskId,
-      });
+      expect(cancelDetachedTaskRunByIdSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cfg: {} as never,
+          taskId: childTask.taskId,
+        }),
+      );
       expect(cancelled.found).toBe(true);
       expect(cancelled.cancelled).toBe(true);
       expect(cancelled.flow?.flowId).toBe(flow.flowId);
