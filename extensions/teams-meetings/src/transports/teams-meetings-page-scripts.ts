@@ -80,6 +80,7 @@ function teamsMeetingToggleStateFunctionSource(): string {
 
 export function teamsMeetingStatusScript(params: {
   allowMicrophone: boolean;
+  allowSessionAdoption: boolean;
   autoJoin: boolean;
   captureCaptions: boolean;
   guestName: string;
@@ -187,15 +188,19 @@ export function teamsMeetingTranscriptScript(
 }`;
 }
 
-export function teamsMeetingLeaveScript(meetingUrl: string) {
+export function teamsMeetingLeaveScript(params: { meetingSessionId: string; meetingUrl: string }) {
   const selectors = JSON.stringify(TEAMS_MEETING_SELECTORS);
-  const expectedIdentity = normalizeTeamsMeetingUrlForReuse(meetingUrl);
+  const expectedIdentity = normalizeTeamsMeetingUrlForReuse(params.meetingUrl);
   return `() => {
   ${pageIdentityFunctionSource()}
   const selectors = ${selectors};
   const expectedIdentity = ${JSON.stringify(expectedIdentity)};
+  const expectedSessionId = ${JSON.stringify(params.meetingSessionId)};
   const currentIdentity = meetingIdentity(location.href);
   const state = window.__openclawTeamsMeeting;
+  if (!expectedSessionId || state?.sessionId !== expectedSessionId) {
+    return JSON.stringify({ departed: false, sessionMatched: false, urlMatched: true });
+  }
   const first = (list) => {
     for (const selector of list) {
       const node = document.querySelector(selector);

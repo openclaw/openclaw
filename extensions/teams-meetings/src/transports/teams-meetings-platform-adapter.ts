@@ -165,6 +165,7 @@ function classifyManualAction(health: TeamsMeetingsChromeHealth) {
 function parseLeaveResult(result: unknown): {
   departed: boolean;
   leaveAction?: "leave" | "confirm";
+  sessionMatched?: boolean;
   urlMatched?: boolean;
 } {
   const record = result && typeof result === "object" ? (result as Record<string, unknown>) : {};
@@ -180,6 +181,9 @@ function parseLeaveResult(result: unknown): {
     return {
       departed: parsed.departed === true,
       ...(leaveAction ? { leaveAction } : {}),
+      ...(typeof parsed.sessionMatched === "boolean"
+        ? { sessionMatched: parsed.sessionMatched }
+        : {}),
       ...(typeof parsed.urlMatched === "boolean" ? { urlMatched: parsed.urlMatched } : {}),
     };
   } catch {
@@ -270,6 +274,7 @@ export const TEAMS_MEETINGS_PLATFORM_ADAPTER: MeetingPlatformAdapter<
     buildStatusJoinScript: (params) =>
       teamsMeetingStatusScript({
         allowMicrophone: isTeamsMeetingsTalkBackMode(params.mode),
+        allowSessionAdoption: params.allowSessionAdoption,
         autoJoin: params.autoJoin,
         captureCaptions: params.captureCaptions,
         guestName: params.guestName,

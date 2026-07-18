@@ -39,7 +39,7 @@ export function teamsMeetingStatusCallSource(): string {
             // Teams mutes local/self-view and intentionally suppressed playback. Preserve
             // that product decision; only our own already-bridged source stays eligible.
             .filter((entry) => !entry.element.muted || bridgedElements.has(entry.element));
-          if (!readOnly) {
+          if (canMutateSession) {
             for (const { element } of routeCandidates) {
               if (!originalMuteBySource.has(element)) {
                 originalMuteBySource.set(element, Boolean(element.muted));
@@ -70,7 +70,7 @@ export function teamsMeetingStatusCallSource(): string {
               });
             }
           }
-          if (!readOnly) {
+          if (canMutateSession) {
             // One bridge owns one Teams playback element. Stream or element replacement
             // retires that bridge so it cannot keep playing or satisfy route verification.
             previousBridgeEntries.filter((entry) => !bridgeEntries.includes(entry)).forEach((entry) => {
@@ -85,7 +85,7 @@ export function teamsMeetingStatusCallSource(): string {
             let entry = bridgeEntries.find((candidate) => candidate.source === element);
             let elementRouted = element.sinkId === output.deviceId;
             let directRouteError;
-            if (!readOnly && !elementRouted) {
+            if (canMutateSession && !elementRouted) {
               try {
                 await element.setSinkId(output.deviceId);
                 elementRouted = element.sinkId === output.deviceId;
@@ -93,7 +93,7 @@ export function teamsMeetingStatusCallSource(): string {
                 directRouteError = error?.message || String(error);
               }
             }
-            if (elementRouted && entry && !readOnly) {
+            if (elementRouted && entry && canMutateSession) {
               const bridgedIndex = bridgeEntries.indexOf(entry);
               if (bridgedIndex >= 0) {
                 const [bridged] = bridgeEntries.splice(bridgedIndex, 1);
@@ -104,7 +104,7 @@ export function teamsMeetingStatusCallSource(): string {
             // Direct sink routing is valid for src/MediaSource and pre-attachment elements.
             // A live MediaStream is required only when the hidden bridge fallback is needed.
             if (elementRouted) {
-              if (!readOnly && originalMuteBySource.has(element)) {
+              if (canMutateSession && originalMuteBySource.has(element)) {
                 element.muted = originalMuteBySource.get(element);
               }
               suspendedBySource.delete(element);
@@ -117,7 +117,7 @@ export function teamsMeetingStatusCallSource(): string {
               );
               routed.push(false);
               if (hasPlaybackSource && directRouteError) routeErrors.push(directRouteError);
-              if (!readOnly && originalMuteBySource.get(element) === false) {
+              if (canMutateSession && originalMuteBySource.get(element) === false) {
                 // Teams may attach the remote MediaStream after creating its media element.
                 // Retain ownership so the muted element remains eligible on the next poll.
                 suspendedBySource.set(element, {
@@ -131,7 +131,7 @@ export function teamsMeetingStatusCallSource(): string {
               continue;
             }
             if (!elementRouted && stream) {
-              if (!entry && !readOnly) {
+              if (!entry && canMutateSession) {
                 const bridge = document.createElement("audio");
                 bridge.id = "openclaw-teams-audio-output-" + bridgeEntries.length;
                 bridge.autoplay = false;
@@ -153,7 +153,7 @@ export function teamsMeetingStatusCallSource(): string {
               }
               if (entry?.bridge) {
                 try {
-                  if (!readOnly) {
+                  if (canMutateSession) {
                     if (entry.bridge.sinkId !== output.deviceId) {
                       await entry.bridge.setSinkId(output.deviceId);
                     }
@@ -164,18 +164,18 @@ export function teamsMeetingStatusCallSource(): string {
                     entry.bridge.sinkId === output.deviceId && entry.playing === true;
                   if (elementRouted) {
                     suspendedBySource.delete(element);
-                    if (!readOnly && !entry.sourceMuted) element.muted = true;
+                    if (canMutateSession && !entry.sourceMuted) element.muted = true;
                   }
                 } catch (error) {
                   entry.playing = false;
-                  if (!readOnly) retireAudioBridge(entry, false);
+                  if (canMutateSession) retireAudioBridge(entry, false);
                   routeErrors.push(error?.message || String(error));
                 }
               }
             }
             routed.push(elementRouted);
           }
-          if (!readOnly) {
+          if (canMutateSession) {
             const nextBridgeEntries = [
               ...retainedBridgeEntries,
               ...bridgeEntries,
@@ -188,7 +188,7 @@ export function teamsMeetingStatusCallSource(): string {
             }
           }
           audioOutputRouted = routed.length > 0 && routed.every(Boolean);
-          if (!readOnly && !audioOutputRouted) suspendOwnedAudioBridges();
+          if (canMutateSession && !audioOutputRouted) suspendOwnedAudioBridges();
           if (audioOutputRouted && bridgeEntries.length > 0) {
             notes.push("Routed Teams remote audio to BlackHole 2ch through MediaStream bridges.");
           }
@@ -200,24 +200,24 @@ export function teamsMeetingStatusCallSource(): string {
           }
         } else {
           audioOutputRouted = false;
-          if (!readOnly) suspendOwnedAudioBridges();
+          if (canMutateSession) suspendOwnedAudioBridges();
           notes.push("BlackHole 2ch speaker output was not visible to Teams.");
         }
       } catch (error) {
         audioOutputRouted = false;
         audioOutputRouteError = error?.message || String(error);
-        if (!readOnly) suspendOwnedAudioBridges();
+        if (canMutateSession) suspendOwnedAudioBridges();
       }
       if (!audioOutputRouted && audioOutputRouteError) {
         notes.push("Could not route Teams speaker output to BlackHole 2ch: " + audioOutputRouteError);
       }
     } else {
       audioOutputRouted = false;
-      if (!readOnly) retireOwnedAudioBridges();
+      if (canMutateSession) retireOwnedAudioBridges();
     }
   } else if (inCall && allowMicrophone) {
     audioOutputRouted = false;
-    if (!readOnly) retireOwnedAudioBridges();
+    if (canMutateSession) retireOwnedAudioBridges();
   }
   let captioning = false;
   let captionsEnabledAttempted = false;
@@ -229,22 +229,21 @@ export function teamsMeetingStatusCallSource(): string {
   const captionState = (() => {
     let active = window.__openclawTeamsCaptions;
     const activeOwnedByRequest = Boolean(
-      !active?.sessionId || !sessionId || active.sessionId === sessionId
+      !active || (sessionId && (!active.sessionId || active.sessionId === sessionId))
     );
     if (!identityVerified) {
       if (identityAwaitingRerender && activeOwnedByRequest) return active;
-      if (!readOnly && activeOwnedByRequest) finalizeOwnedCaptions();
+      if (canMutateSession && activeOwnedByRequest) finalizeOwnedCaptions();
       return undefined;
     }
     if (!activeOwnedByRequest) {
       const replacedPriorOwner = Boolean(
-        !readOnly &&
-        replacedSession &&
+        canMutateSession &&
         active?.sessionId &&
-        active.sessionId === priorMeeting?.sessionId
+        active.sessionId !== sessionId
       );
       if (replacedPriorOwner) finalizeCaptionState(active);
-      else if (readOnly || !captureCaptions || active?.finalized !== true) return undefined;
+      else if (!canMutateSession || !captureCaptions || active?.finalized !== true) return undefined;
       archiveFinalizedCaptions(active);
       if (active.settleTimer !== undefined) clearTimeout(active.settleTimer);
       active.observer?.disconnect?.();
@@ -252,13 +251,14 @@ export function teamsMeetingStatusCallSource(): string {
       active = undefined;
     }
     if (!captureCaptions) {
-      if (readOnly) return undefined;
+      if (!canMutateSession) return undefined;
       if (active?.settleTimer !== undefined) clearTimeout(active.settleTimer);
       active?.observer?.disconnect?.();
       if (active) delete window.__openclawTeamsCaptions;
       return undefined;
     }
     if (!inCall && !active) return undefined;
+    if (!active && !canMutateSession) return undefined;
     if (!active) {
       if (active?.settleTimer !== undefined) clearTimeout(active.settleTimer);
       active?.observer?.disconnect?.();
@@ -509,7 +509,7 @@ export function teamsMeetingStatusCallSource(): string {
     let captionsEnabledNow = captionsFinalized
       ? Boolean(captionState.enabledAttempted)
       : Boolean(firstRaw(selectors.captionRenderer) || firstRaw(selectors.captionsOff));
-    if (!captionsFinalized && !readOnly && inCall && !captionsEnabledNow) {
+    if (!captionsFinalized && canMutateSession && inCall && !captionsEnabledNow) {
       let captionButton = first(selectors.captions);
       if (!captionButton) {
         first(selectors.moreActions)?.click?.();
@@ -535,9 +535,9 @@ export function teamsMeetingStatusCallSource(): string {
         }
       }
     }
-    if (!captionsFinalized) captionState.enabledAttempted = captionsEnabledNow;
+    if (!captionsFinalized && canMutateSession) captionState.enabledAttempted = captionsEnabledNow;
     captionsEnabledAttempted = Boolean(captionState.enabledAttempted);
-    if (!captionsFinalized && inCall && !captionState.observerInstalled) {
+    if (!captionsFinalized && canMutateSession && inCall && !captionState.observerInstalled) {
       captionState.observerInstalled = true;
       captionState.observer = new MutationObserver(scrapeCaptions);
       captionState.observer.observe(document.body, {
@@ -547,7 +547,7 @@ export function teamsMeetingStatusCallSource(): string {
       });
       notes.push("Installed Teams live-caption observer.");
     }
-    if (!captionsFinalized && inCall) scrapeCaptions();
+    if (!captionsFinalized && canMutateSession && inCall) scrapeCaptions();
     const allLines = [...captionState.lines, ...captionState.visible];
     const lines = allLines.slice(-${TEAMS_MEETING_TRANSCRIPT_MAX_LINES});
     const last = lines[lines.length - 1];

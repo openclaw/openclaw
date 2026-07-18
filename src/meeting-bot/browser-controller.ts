@@ -1,4 +1,5 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { runMeetingBrowserAct } from "./browser-act-lock.js";
 import { asMeetingBrowserTabs, readMeetingBrowserTab } from "./browser-request.js";
 import type {
   MeetingBrowserJoinSession,
@@ -232,23 +233,33 @@ export async function openMeetingWithBrowser<
     browserTitle: tab?.title,
     notes: permissionNotes,
   } as unknown as Health;
+  let allowSessionAdoption = true;
   do {
     try {
-      const evaluated = await params.callBrowser({
-        method: "POST",
-        path: "/act",
-        body: {
-          kind: "evaluate",
-          targetId,
-          fn: params.adapter.browser.buildStatusJoinScript({
-            ...params.session,
-            autoJoin: params.config.autoJoin,
-            captureCaptions: params.adapter.browser.captions.enabled(params.session.mode),
-            guestName: params.config.guestName,
-            waitForInCallMs: params.config.waitForInCallMs,
+      const adoptSession = allowSessionAdoption;
+      allowSessionAdoption = false;
+      const actionTimeoutMs = Math.min(timeoutMs, 10_000);
+      const evaluated = await runMeetingBrowserAct({
+        deadline: Date.now() + actionTimeoutMs,
+        targetId,
+        operation: async (remainingMs) =>
+          await params.callBrowser({
+            method: "POST",
+            path: "/act",
+            body: {
+              kind: "evaluate",
+              targetId,
+              fn: params.adapter.browser.buildStatusJoinScript({
+                ...params.session,
+                allowSessionAdoption: adoptSession,
+                autoJoin: params.config.autoJoin,
+                captureCaptions: params.adapter.browser.captions.enabled(params.session.mode),
+                guestName: params.config.guestName,
+                waitForInCallMs: params.config.waitForInCallMs,
+              }),
+            },
+            timeoutMs: remainingMs,
           }),
-        },
-        timeoutMs: Math.min(timeoutMs, 10_000),
       });
       browser = mergeBrowserNotes(
         params.adapter.browser.parseStatus(evaluated) ?? browser,
@@ -352,6 +363,7 @@ async function inspectRecoverableTab<
   Transcript extends MeetingTranscriptSnapshot,
 >(params: {
   adapter: BrowserAdapter<Session, Mode, Health, Transcript>;
+  allowSessionAdoption?: boolean;
   autoJoin?: boolean;
   callBrowser: MeetingBrowserRequestCaller;
   config: MeetingBrowserControllerConfig;
@@ -399,28 +411,36 @@ async function inspectRecoverableTab<
       });
   const navigationNotes: string[] = [];
   const deadline = Date.now() + Math.min(params.timeoutMs, 10_000);
+  let allowSessionAdoption = params.allowSessionAdoption ?? false;
   let evaluated: unknown;
   for (;;) {
     try {
-      const remainingMs = Math.max(1, deadline - Date.now());
-      evaluated = await params.callBrowser({
-        method: "POST",
-        path: "/act",
-        body: {
-          kind: "evaluate",
-          targetId: params.targetId,
-          fn: params.adapter.browser.buildStatusJoinScript({
-            meetingSessionId: params.meetingSessionId ?? "",
-            mode: params.mode,
-            url: params.requestedMeetingUrl ?? params.tab.url ?? "",
-            autoJoin: params.autoJoin ?? false,
-            captureCaptions: params.adapter.browser.captions.enabled(params.mode),
-            guestName: params.config.guestName,
-            readOnly: params.readOnly,
-            waitForInCallMs: params.config.waitForInCallMs,
+      const adoptSession = allowSessionAdoption;
+      allowSessionAdoption = false;
+      evaluated = await runMeetingBrowserAct({
+        deadline,
+        targetId: params.targetId,
+        operation: async (remainingMs) =>
+          await params.callBrowser({
+            method: "POST",
+            path: "/act",
+            body: {
+              kind: "evaluate",
+              targetId: params.targetId,
+              fn: params.adapter.browser.buildStatusJoinScript({
+                allowSessionAdoption: adoptSession,
+                meetingSessionId: params.meetingSessionId ?? "",
+                mode: params.mode,
+                url: params.requestedMeetingUrl ?? params.tab.url ?? "",
+                autoJoin: params.autoJoin ?? false,
+                captureCaptions: params.adapter.browser.captions.enabled(params.mode),
+                guestName: params.config.guestName,
+                readOnly: params.readOnly,
+                waitForInCallMs: params.config.waitForInCallMs,
+              }),
+            },
+            timeoutMs: remainingMs,
           }),
-        },
-        timeoutMs: Math.min(params.timeoutMs, 10_000, remainingMs),
       });
       break;
     } catch (error) {
@@ -477,6 +497,7 @@ export async function recoverMeetingBrowserTab<
   Transcript extends MeetingTranscriptSnapshot,
 >(params: {
   adapter: BrowserAdapter<Session, Mode, Health, Transcript>;
+  allowSessionAdoption?: boolean;
   autoJoin?: boolean;
   callBrowser: MeetingBrowserRequestCaller;
   config: MeetingBrowserControllerConfig;
@@ -543,6 +564,7 @@ export async function recoverMeetingBrowserTab<
   }
   return await inspectRecoverableTab({
     adapter: params.adapter,
+    allowSessionAdoption: params.allowSessionAdoption,
     autoJoin: params.autoJoin,
     callBrowser: params.callBrowser,
     config: params.config,

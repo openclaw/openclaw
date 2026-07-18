@@ -20,6 +20,7 @@ describe("meeting browser navigation errors", () => {
 
 describe("meeting browser join readiness", () => {
   it("retries a platform-owned transient in-call status", async () => {
+    const adoptionAttempts: boolean[] = [];
     let evaluationAttempts = 0;
     const result = await openMeetingWithBrowser({
       adapter: {
@@ -42,7 +43,10 @@ describe("meeting browser join readiness", () => {
             message: "Browser unavailable.",
           }),
           buildLeaveScript: () => "",
-          buildStatusJoinScript: () => "() => '{}'",
+          buildStatusJoinScript: (params) => {
+            adoptionAttempts.push(params.allowSessionAdoption);
+            return "() => '{}'";
+          },
           captions: {
             buildTranscriptScript: () => "",
             enabled: () => false,
@@ -92,6 +96,7 @@ describe("meeting browser join readiness", () => {
     });
 
     expect(evaluationAttempts).toBe(2);
+    expect(adoptionAttempts).toEqual([true, false]);
     expect(result.browser).toMatchObject({
       inCall: true,
       manualActionRequired: false,
@@ -102,6 +107,7 @@ describe("meeting browser join readiness", () => {
 
 describe("meeting browser recovery", () => {
   it("retries status inspection when auto-join navigation destroys the page context", async () => {
+    const adoptionAttempts: boolean[] = [];
     let evaluationAttempts = 0;
     const evaluationTimeouts: number[] = [];
     const result = await recoverMeetingBrowserTab({
@@ -125,7 +131,10 @@ describe("meeting browser recovery", () => {
             message: "Browser unavailable.",
           }),
           buildLeaveScript: () => "",
-          buildStatusJoinScript: () => "() => '{}'",
+          buildStatusJoinScript: (params) => {
+            adoptionAttempts.push(params.allowSessionAdoption);
+            return "() => '{}'";
+          },
           captions: {
             buildTranscriptScript: () => "",
             enabled: () => false,
@@ -138,6 +147,7 @@ describe("meeting browser recovery", () => {
           permissionNotes: () => [],
         },
       },
+      allowSessionAdoption: true,
       autoJoin: true,
       callBrowser: async (request) => {
         if (request.path === "/tabs") {
@@ -169,6 +179,7 @@ describe("meeting browser recovery", () => {
     });
 
     expect(evaluationAttempts).toBe(2);
+    expect(adoptionAttempts).toEqual([true, false]);
     expect(evaluationTimeouts[1]).toBeLessThan(evaluationTimeouts[0] ?? 0);
     expect(result.browser).toMatchObject({
       inCall: true,

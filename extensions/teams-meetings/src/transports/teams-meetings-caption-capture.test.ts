@@ -22,6 +22,7 @@ describe("Microsoft Teams meeting captions and permissions", () => {
   it("builds the guest join script from centralized stable selectors and text fallbacks", () => {
     const script = teamsMeetingStatusScript({
       allowMicrophone: true,
+      allowSessionAdoption: true,
       autoJoin: true,
       captureCaptions: true,
       guestName: "OpenClaw Guest",
@@ -515,6 +516,7 @@ describe("Microsoft Teams meeting captions and permissions", () => {
     };
     const wrongTab = await runStatusScript({
       allowMicrophone: false,
+      allowSessionAdoption: false,
       captureCaptions: false,
       currentUrl: "https://teams.live.com/v2/",
       leave: control({ label: "Leave" }),
@@ -522,6 +524,7 @@ describe("Microsoft Teams meeting captions and permissions", () => {
     });
     const wrongSession = await runStatusScript({
       allowMicrophone: false,
+      allowSessionAdoption: false,
       captureCaptions: true,
       leave: control({ label: "Leave" }),
       priorCaptions: active,
@@ -530,6 +533,35 @@ describe("Microsoft Teams meeting captions and permissions", () => {
     expect(disconnects).toBe(0);
     expect(wrongTab.window["__openclawTeamsCaptions"]).toBe(active);
     expect(wrongSession.window["__openclawTeamsCaptions"]).toBe(active);
+  });
+
+  it("finalizes requested-session capture after a confirmed SPA meeting transition", async () => {
+    let disconnects = 0;
+    const captions = {
+      droppedLines: 0,
+      lines: [],
+      observer: { disconnect: () => (disconnects += 1) },
+      observerInstalled: true,
+      sessionId: "session-1",
+      visible: [{ text: "Last caption before navigation" }],
+    };
+    const { window } = await runStatusScript({
+      allowMicrophone: false,
+      currentUrl: CONSUMER_URL,
+      priorCaptions: captions,
+      priorMeeting: {
+        identity: "teams-work:19:meeting_test@thread.v2",
+        sessionId: "session-1",
+      },
+      readOnly: true,
+    });
+
+    expect(disconnects).toBe(1);
+    expect(captions).toMatchObject({
+      finalized: true,
+      lines: [{ text: "Last caption before navigation" }],
+    });
+    expect(window[MEETING_STATE_KEY]).toBeUndefined();
   });
 
   it("finalizes same-session captions when meeting identity is lost", async () => {
@@ -765,6 +797,109 @@ describe("Microsoft Teams meeting captions and permissions", () => {
     });
   });
 
+  it("atomically refuses to replace a newer live owner during recovery", async () => {
+    let disconnects = 0;
+    const leave = control({ label: "Leave" });
+    const priorMeeting = {
+      identity: "teams-work:19:meeting_test@thread.v2",
+      inCallControl: leave,
+      inCallUrl: URL,
+      sessionId: "newer-session",
+      verifiedAt: Date.now(),
+    };
+    const priorCaptions = {
+      droppedLines: 0,
+      lines: [{ text: "Newer live caption" }],
+      observer: { disconnect: () => (disconnects += 1) },
+      observerInstalled: true,
+      sessionId: "newer-session",
+      visible: [],
+    };
+
+    const { result, window } = await runStatusScript({
+      allowMicrophone: false,
+      allowSessionAdoption: false,
+      captureCaptions: true,
+      leave,
+      priorCaptions,
+      priorMeeting,
+    });
+
+    expect(result).toMatchObject({
+      manualActionReason: "teams-session-conflict",
+      manualActionRequired: true,
+    });
+    expect(window[MEETING_STATE_KEY]).toBe(priorMeeting);
+    expect(window["__openclawTeamsCaptions"]).toBe(priorCaptions);
+    expect(disconnects).toBe(0);
+  });
+
+  it("treats a missing recovery session ID as foreign to committed page state", async () => {
+    let disconnects = 0;
+    const leave = control({ label: "Leave" });
+    const priorMeeting = {
+      identity: "teams-work:19:meeting_test@thread.v2",
+      inCallControl: leave,
+      inCallUrl: URL,
+      sessionId: "active-session",
+      verifiedAt: Date.now(),
+    };
+    const priorCaptions = {
+      droppedLines: 0,
+      lines: [{ text: "Active session caption" }],
+      observer: { disconnect: () => (disconnects += 1) },
+      observerInstalled: true,
+      sessionId: "active-session",
+      visible: [],
+    };
+
+    const { result, window } = await runStatusScript({
+      allowMicrophone: false,
+      allowSessionAdoption: false,
+      captureCaptions: true,
+      leave,
+      meetingSessionId: "",
+      priorCaptions,
+      priorMeeting,
+    });
+
+    expect(result).toMatchObject({
+      manualActionReason: "teams-session-conflict",
+      manualActionRequired: true,
+    });
+    expect(window[MEETING_STATE_KEY]).toBe(priorMeeting);
+    expect(window["__openclawTeamsCaptions"]).toBe(priorCaptions);
+    expect(disconnects).toBe(0);
+  });
+
+  it("repairs a stale caption owner for the committed meeting session", async () => {
+    let disconnects = 0;
+    const staleCaptions = {
+      droppedLines: 0,
+      lines: [{ text: "Stale caption owner" }],
+      observer: { disconnect: () => (disconnects += 1) },
+      observerInstalled: true,
+      sessionId: "stale-session",
+      visible: [],
+    };
+    const { result, window } = await runStatusScript({
+      allowMicrophone: false,
+      allowSessionAdoption: false,
+      captureCaptions: true,
+      leave: control({ label: "Leave" }),
+      priorCaptions: staleCaptions,
+      priorMeeting: {
+        identity: "teams-work:19:meeting_test@thread.v2",
+        sessionId: "session-1",
+      },
+    });
+
+    expect(result.manualActionRequired).toBe(false);
+    expect(disconnects).toBe(1);
+    expect(staleCaptions).toMatchObject({ finalized: true });
+    expect(window["__openclawTeamsCaptions"]).toMatchObject({ sessionId: "session-1" });
+  });
+
   it("disconnects caption capture when finalizing a transcript", async () => {
     const first = await runStatusScript({
       allowMicrophone: false,
@@ -867,9 +1002,19 @@ describe("Microsoft Teams meeting captions and permissions", () => {
   it("parses leave steps and malformed status", () => {
     expect(
       TEAMS_MEETINGS_PLATFORM_ADAPTER.browser.parseLeaveResult({
-        result: JSON.stringify({ departed: false, leaveAction: "confirm", urlMatched: true }),
+        result: JSON.stringify({
+          departed: false,
+          leaveAction: "confirm",
+          sessionMatched: true,
+          urlMatched: true,
+        }),
       }),
-    ).toEqual({ departed: false, leaveAction: "confirm", urlMatched: true });
+    ).toEqual({
+      departed: false,
+      leaveAction: "confirm",
+      sessionMatched: true,
+      urlMatched: true,
+    });
     expect(() =>
       TEAMS_MEETINGS_PLATFORM_ADAPTER.browser.parseStatus({ result: "not-json" }),
     ).toThrow("Microsoft Teams browser status JSON is malformed.");

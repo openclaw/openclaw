@@ -37,6 +37,7 @@ export type MeetingBrowserJoinSession<Mode extends string> = {
 
 export type MeetingBrowserStatusScriptParams<Mode extends string> =
   MeetingBrowserJoinSession<Mode> & {
+    allowSessionAdoption: boolean;
     autoJoin: boolean;
     captureCaptions: boolean;
     guestName: string;
@@ -47,6 +48,7 @@ export type MeetingBrowserStatusScriptParams<Mode extends string> =
 export type MeetingBrowserLeaveStep = {
   departed: boolean;
   leaveAction?: "leave" | "confirm";
+  sessionMatched?: boolean;
   urlMatched?: boolean;
 };
 
@@ -67,7 +69,7 @@ type MeetingBrowserAdapter<
   classifyManualAction(health: Health): MeetingManualAction | undefined;
   shouldRetryJoinStatus?(health: Health): boolean;
   browserControlUnavailable(error: unknown): MeetingManualAction;
-  buildLeaveScript(meetingUrl: string): string;
+  buildLeaveScript(params: { meetingSessionId: string; meetingUrl: string }): string;
   parseLeaveResult(result: unknown): MeetingBrowserLeaveStep;
   captions: {
     enabled(mode: Mode): boolean;

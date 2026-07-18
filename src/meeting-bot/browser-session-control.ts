@@ -1,3 +1,4 @@
+import { runMeetingBrowserAct } from "./browser-act-lock.js";
 import { asMeetingBrowserTabs } from "./browser-request.js";
 import type { MeetingBrowserRequestCaller, MeetingPlatformAdapter } from "./platform-adapter.js";
 import type {
@@ -21,6 +22,7 @@ async function leaveMeetingInPage<
 >(params: {
   adapter: BrowserAdapter<Session, Mode, Health, Transcript>;
   callBrowser: MeetingBrowserRequestCaller;
+  meetingSessionId: string;
   meetingUrl: string;
   targetId: string;
   timeoutMs: number;
@@ -28,25 +30,43 @@ async function leaveMeetingInPage<
   departed: boolean;
   clickedLeave: boolean;
   clickedConfirmation: boolean;
+  sessionMatched?: boolean;
   urlMatched?: boolean;
 }> {
   const deadline = Date.now() + params.timeoutMs;
   let clickedLeave = false;
   let clickedConfirmation = false;
   do {
-    const evaluated = await params.callBrowser({
-      method: "POST",
-      path: "/act",
-      body: {
-        kind: "evaluate",
-        targetId: params.targetId,
-        fn: params.adapter.browser.buildLeaveScript(params.meetingUrl),
-      },
-      timeoutMs: params.timeoutMs,
+    const evaluated = await runMeetingBrowserAct({
+      deadline,
+      targetId: params.targetId,
+      operation: async (remainingMs) =>
+        await params.callBrowser({
+          method: "POST",
+          path: "/act",
+          body: {
+            kind: "evaluate",
+            targetId: params.targetId,
+            fn: params.adapter.browser.buildLeaveScript({
+              meetingSessionId: params.meetingSessionId,
+              meetingUrl: params.meetingUrl,
+            }),
+          },
+          timeoutMs: remainingMs,
+        }),
     });
     const step = params.adapter.browser.parseLeaveResult(evaluated);
     clickedLeave ||= step.leaveAction === "leave";
     clickedConfirmation ||= step.leaveAction === "confirm";
+    if (step.sessionMatched === false) {
+      return {
+        departed: false,
+        clickedLeave,
+        clickedConfirmation,
+        sessionMatched: false,
+        urlMatched: step.urlMatched,
+      };
+    }
     if (step.departed || step.urlMatched !== true) {
       return {
         departed: step.departed,
@@ -78,6 +98,7 @@ export async function leaveMeetingWithBrowser<
   adapter: BrowserAdapter<Session, Mode, Health, Transcript>;
   callBrowser: MeetingBrowserRequestCaller;
   launch: boolean;
+  meetingSessionId: string;
   meetingUrl: string;
   tab: MeetingBrowserTab;
   timeoutMs: number;
@@ -106,6 +127,7 @@ export async function leaveMeetingWithBrowser<
       leaveResult = await leaveMeetingInPage({
         adapter: params.adapter,
         callBrowser: params.callBrowser,
+        meetingSessionId: params.meetingSessionId,
         meetingUrl: params.meetingUrl,
         targetId,
         timeoutMs,
@@ -122,6 +144,12 @@ export async function leaveMeetingWithBrowser<
       return {
         left: true,
         note: `${params.adapter.browserLabel} tab moved away from this session; left its current page untouched.`,
+      };
+    }
+    if (leaveResult.sessionMatched === false) {
+      return {
+        left: true,
+        note: `${params.adapter.browserLabel} tab belongs to another OpenClaw meeting session; left its current call untouched.`,
       };
     }
     if (leaveResult.urlMatched !== true) {
@@ -176,19 +204,24 @@ export async function readMeetingTranscriptWithBrowser<
   tab: MeetingBrowserTab;
   timeoutMs: number;
 }): Promise<Transcript> {
-  const result = await params.callBrowser({
-    method: "POST",
-    path: "/act",
-    body: {
-      kind: "evaluate",
-      targetId: params.tab.targetId,
-      fn: params.adapter.browser.captions.buildTranscriptScript({
-        finalize: params.finalize,
-        meetingSessionId: params.meetingSessionId,
-        meetingUrl: params.meetingUrl,
+  const result = await runMeetingBrowserAct({
+    deadline: Date.now() + Math.max(1, params.timeoutMs),
+    targetId: params.tab.targetId,
+    operation: async (remainingMs) =>
+      await params.callBrowser({
+        method: "POST",
+        path: "/act",
+        body: {
+          kind: "evaluate",
+          targetId: params.tab.targetId,
+          fn: params.adapter.browser.captions.buildTranscriptScript({
+            finalize: params.finalize,
+            meetingSessionId: params.meetingSessionId,
+            meetingUrl: params.meetingUrl,
+          }),
+        },
+        timeoutMs: remainingMs,
       }),
-    },
-    timeoutMs: params.timeoutMs,
   });
   const snapshot = params.adapter.browser.captions.parseTranscript(result);
   if (snapshot.urlMatched === false) {

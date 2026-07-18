@@ -449,8 +449,8 @@ export class TeamsMeetingsRuntime {
     if (!tab) {
       return undefined;
     }
-    // Admission may finish after the initial join poll. Refresh mutably here so
-    // the first transcript read can enable captions before taking its snapshot.
+    // Recovery permits caption setup but atomically refuses a different live
+    // session owner, so stale sessions read their archived page buffer instead.
     await this.#sessions.refreshCaptionHealth(session);
     return await readTeamsMeetingTranscript({
       runtime: this.params.runtime,
@@ -488,6 +488,7 @@ export class TeamsMeetingsRuntime {
       const result = await leaveTeamsMeetingInBrowser({
         runtime: this.params.runtime,
         config: this.params.config,
+        meetingSessionId: session.id,
         meetingUrl: session.url,
         nodeId: session.chrome?.nodeId,
         tab,

@@ -111,6 +111,40 @@ describe("Microsoft Teams meeting platform adapter", () => {
     expect(join.clicks).toBe(1);
   });
 
+  it("allows non-adopting recovery to continue for the current page owner", async () => {
+    const join = control({ label: "Join now" });
+    const { result } = await runStatusScript({
+      allowMicrophone: false,
+      allowSessionAdoption: false,
+      camera: control({ label: "Turn camera on", pressed: false }),
+      join,
+      microphone: control({ label: "Turn microphone on", pressed: false }),
+      priorMeeting: {
+        identity: "teams-work:19:meeting_test@thread.v2",
+        sessionId: "session-1",
+      },
+    });
+
+    expect(join.clicks).toBe(1);
+    expect(result).toMatchObject({ clickedJoin: true, manualActionRequired: false });
+  });
+
+  it("preserves a newer owner for a different meeting identity", async () => {
+    const priorMeeting = {
+      identity: "teams-consumer:9326458712345:p:abc",
+      sessionId: "consumer-session",
+    };
+    const { result, window } = await runStatusScript({
+      allowMicrophone: false,
+      allowSessionAdoption: true,
+      currentUrl: CONSUMER_URL,
+      priorMeeting,
+    });
+
+    expect(result).toMatchObject({ manualActionReason: "teams-session-conflict" });
+    expect(window[MEETING_STATE_KEY]).toBe(priorMeeting);
+  });
+
   it("does not unmute or join until BlackHole is visibly selected as the Teams input", async () => {
     const camera = control({ label: "Turn camera on", pressed: false });
     const microphone = control({ label: "Turn microphone on", pressed: false });
@@ -314,6 +348,25 @@ describe("Microsoft Teams meeting platform adapter", () => {
 
     expect(result).toEqual({ departed: false, urlMatched: false });
     expect(currentLeave.clicks).toBe(0);
+  });
+
+  it("does not leave a call owned by a newer OpenClaw session", () => {
+    const leave = control({ label: "Leave" });
+    const inCallUrl = "https://teams.microsoft.com/v2/";
+    const { result } = runLeaveScript({
+      currentUrl: inCallUrl,
+      leave,
+      meetingSessionId: "session-1",
+      priorMeeting: {
+        identity: "teams-work:19:meeting_test@thread.v2",
+        inCallControl: leave,
+        inCallUrl,
+        sessionId: "session-2",
+      },
+    });
+
+    expect(result).toEqual({ departed: false, sessionMatched: false, urlMatched: true });
+    expect(leave.clicks).toBe(0);
   });
 
   it.each([

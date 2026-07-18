@@ -117,6 +117,7 @@ export function captionRow(
 
 export async function runStatusScript(params: {
   allowMicrophone: boolean;
+  allowSessionAdoption?: boolean;
   autoJoin?: boolean;
   bodyText?: string;
   currentUrl?: string;
@@ -144,6 +145,7 @@ export async function runStatusScript(params: {
   waitForInCallMs?: number;
   globalSelectedOption?: PageControl;
   media?: PageMedia[];
+  meetingSessionId?: string;
   devices?: Array<{ deviceId: string; kind: string; label: string }>;
 }) {
   const currentUrl = params.currentUrl ?? URL;
@@ -289,10 +291,11 @@ export async function runStatusScript(params: {
   }
   const script = teamsMeetingStatusScript({
     allowMicrophone: params.allowMicrophone,
+    allowSessionAdoption: params.allowSessionAdoption ?? true,
     autoJoin: params.autoJoin ?? true,
     captureCaptions: params.captureCaptions ?? false,
     guestName: "OpenClaw Guest",
-    meetingSessionId: "session-1",
+    meetingSessionId: params.meetingSessionId === undefined ? "session-1" : params.meetingSessionId,
     meetingUrl: params.meetingUrl ?? URL,
     readOnly: params.readOnly,
     waitForInCallMs: params.waitForInCallMs ?? 60_000,
@@ -344,6 +347,7 @@ export function runLeaveScript(params: {
   bodyText?: string;
   currentUrl?: string;
   leave?: PageControl;
+  meetingSessionId?: string;
   postCall?: PageControl;
   priorMeeting?: Record<string, unknown>;
 }) {
@@ -365,15 +369,20 @@ export function runLeaveScript(params: {
       return undefined;
     },
   };
-  const window: Record<string, unknown> = {};
-  if (params.priorMeeting) {
-    window[MEETING_STATE_KEY] = params.priorMeeting;
-  }
-  const run = runInNewContext(`(${teamsMeetingLeaveScript(URL)})`, {
-    URL: globalThis.URL,
-    document,
-    location,
-    window,
-  }) as () => string;
+  const window: Record<string, unknown> = {
+    [MEETING_STATE_KEY]: {
+      sessionId: params.meetingSessionId ?? "session-1",
+      ...params.priorMeeting,
+    },
+  };
+  const run = runInNewContext(
+    `(${teamsMeetingLeaveScript({ meetingSessionId: params.meetingSessionId ?? "session-1", meetingUrl: URL })})`,
+    {
+      URL: globalThis.URL,
+      document,
+      location,
+      window,
+    },
+  ) as () => string;
   return { result: JSON.parse(run()) as Record<string, unknown>, window };
 }

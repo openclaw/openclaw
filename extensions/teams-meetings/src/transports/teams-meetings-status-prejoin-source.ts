@@ -1,5 +1,6 @@
 type TeamsMeetingStatusPreludeParams = {
   allowMicrophone: boolean;
+  allowSessionAdoption: boolean;
   autoJoin: boolean;
   captureCaptions: boolean;
   expectedIdentity?: string;
@@ -25,6 +26,7 @@ export function teamsMeetingStatusPreludeSource(params: TeamsMeetingStatusPrelud
   const selectors = ${selectors};
   const expectedIdentity = ${JSON.stringify(expectedIdentity)};
   const allowMicrophone = ${JSON.stringify(params.allowMicrophone)};
+  const allowSessionAdoption = ${JSON.stringify(params.allowSessionAdoption)};
   const autoJoin = ${JSON.stringify(params.autoJoin)};
   const captureCaptions = ${JSON.stringify(params.captureCaptions)};
   const readOnly = ${JSON.stringify(Boolean(params.readOnly))};
@@ -66,8 +68,9 @@ export function teamsMeetingStatusPreludeSource(params: TeamsMeetingStatusPrelud
   const buttons = [...document.querySelectorAll("button")];
   const findTextButton = (pattern) => buttons.find((button) => !button.disabled && pattern.test(label(button)));
   const waitForUi = () => new Promise((resolve) => setTimeout(resolve, 120));
-  const bridgeOwnedBySession = (entry) =>
-    !entry?.sessionId || !sessionId || entry.sessionId === sessionId;
+  const bridgeOwnedBySession = (entry) => Boolean(
+    sessionId && (!entry?.sessionId || entry.sessionId === sessionId)
+  );
   const bridgeSources = (entry) => Array.isArray(entry?.sources)
     ? entry.sources
     : entry?.source
@@ -150,7 +153,9 @@ export function teamsMeetingStatusPreludeSource(params: TeamsMeetingStatusPrelud
   };
   const retireOwnedCaptions = () => {
     const active = window.__openclawTeamsCaptions;
-    const owned = active && (!active.sessionId || !sessionId || active.sessionId === sessionId);
+    const owned = Boolean(
+      active && sessionId && (!active.sessionId || active.sessionId === sessionId)
+    );
     if (!owned) return;
     if (active.settleTimer !== undefined) clearTimeout(active.settleTimer);
     active.observer?.disconnect?.();
@@ -195,7 +200,9 @@ export function teamsMeetingStatusPreludeSource(params: TeamsMeetingStatusPrelud
   };
   const finalizeOwnedCaptions = () => {
     const active = window.__openclawTeamsCaptions;
-    const owned = active && (!active.sessionId || !sessionId || active.sessionId === sessionId);
+    const owned = Boolean(
+      active && sessionId && (!active.sessionId || active.sessionId === sessionId)
+    );
     if (owned) finalizeCaptionState(active);
   };
   const toggleState = (node, kind) => parseToggleState({
@@ -209,11 +216,16 @@ export function teamsMeetingStatusPreludeSource(params: TeamsMeetingStatusPrelud
   const currentIdentity = meetingIdentity(location.href);
   const priorMeeting = window.__openclawTeamsMeeting;
   if (expectedIdentity && currentIdentity && currentIdentity !== expectedIdentity) {
-    if (!readOnly) {
-      retireOwnedAudioBridges();
-      finalizeOwnedCaptions();
-    }
-    delete window.__openclawTeamsMeeting;
+    // A confirmed SPA transition must stop resources still owned by this
+    // request, while preserving any newer session already committed to the tab.
+    retireOwnedAudioBridges();
+    finalizeOwnedCaptions();
+    const requestOwnsMeeting = Boolean(
+      priorMeeting &&
+      sessionId &&
+      (!priorMeeting.sessionId || priorMeeting.sessionId === sessionId)
+    );
+    if (requestOwnsMeeting) delete window.__openclawTeamsMeeting;
     return JSON.stringify({
       inCall: false,
       manualActionRequired: true,
@@ -224,11 +236,27 @@ export function teamsMeetingStatusPreludeSource(params: TeamsMeetingStatusPrelud
       notes,
     });
   }
+  const meetingOwnerConflict = Boolean(
+    priorMeeting?.sessionId && priorMeeting.sessionId !== sessionId
+  );
+  const captionOwnerConflict = Boolean(
+    window.__openclawTeamsCaptions?.sessionId &&
+    window.__openclawTeamsCaptions.sessionId !== sessionId
+  );
+  const committedOwnerConflict = meetingOwnerConflict || captionOwnerConflict;
+  const canRepairCaptionOwner = Boolean(
+    !meetingOwnerConflict && priorMeeting?.sessionId === sessionId
+  );
+  const canMutateSession = Boolean(
+    !readOnly &&
+    sessionId &&
+    (!committedOwnerConflict || canRepairCaptionOwner || allowSessionAdoption)
+  );
   const identityMatchedUrl = Boolean(expectedIdentity && currentIdentity === expectedIdentity);
   const identityVerifiedBeforeCall = identityMatchedUrl;
   const continueInBrowser = first(selectors.continueInBrowser) ||
     findTextButton(/continue on this browser|join on the web|use the web app|continue without the app/i);
-  if (!readOnly && identityVerifiedBeforeCall && continueInBrowser) {
+  if (canMutateSession && identityVerifiedBeforeCall && continueInBrowser) {
     continueInBrowser.click();
     notes.push("Continued to the Teams web client.");
     await waitForUi();
@@ -236,7 +264,7 @@ export function teamsMeetingStatusPreludeSource(params: TeamsMeetingStatusPrelud
   const guestInput = first(selectors.guestName) || [...document.querySelectorAll("input")].find((input) =>
     /enter your name|type your name|your name|display name/i.test(label(input) + " " + (input.placeholder || ""))
   );
-  if (!readOnly && identityVerifiedBeforeCall && autoJoin && guestInput && !guestInput.value) {
+  if (canMutateSession && identityVerifiedBeforeCall && autoJoin && guestInput && !guestInput.value) {
     const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
     guestInput.focus();
     if (setter) setter.call(guestInput, ${JSON.stringify(params.guestName)});
@@ -248,7 +276,7 @@ export function teamsMeetingStatusPreludeSource(params: TeamsMeetingStatusPrelud
   const continueWithoutDevices = findTextButton(/^continue without audio or video$/i);
   let dismissedDevicePrompt = false;
   if (
-    !readOnly &&
+    canMutateSession &&
     identityVerifiedBeforeCall &&
     !leave &&
     autoJoin &&
@@ -310,27 +338,22 @@ export function teamsMeetingStatusPreludeSource(params: TeamsMeetingStatusPrelud
   );
   const identityVerified = identityVerifiedBeforeCall || identityPreservedInCall;
   const inCall = Boolean(identityVerified && leave);
-  const replacedSession = Boolean(
-    identityVerified &&
-    priorMeeting?.sessionId &&
-    sessionId &&
-    priorMeeting.sessionId !== sessionId
-  );
-  if (!readOnly && replacedSession) {
+  if (canMutateSession && identityVerified && meetingOwnerConflict) {
     // The tab can survive a Teams SPA meeting/session change. Old hidden bridges
     // must stop, while their muted source streams remain eligible for the new owner.
     adoptAudioBridgeSourcesForSession();
   }
-  if (!readOnly && !inCall && !identityAwaitingRerender) retireOwnedAudioBridges();
-  if (identityVerifiedBeforeCall || identityPreservedInCall) {
+  if (canMutateSession && !inCall && !identityAwaitingRerender) retireOwnedAudioBridges();
+  if (canMutateSession && (identityVerifiedBeforeCall || identityPreservedInCall)) {
     window.__openclawTeamsMeeting = {
-      ...(priorMeeting?.identity === expectedIdentity && !replacedSession ? priorMeeting : {}),
+      ...(priorMeeting?.identity === expectedIdentity && !meetingOwnerConflict ? priorMeeting : {}),
       identity: expectedIdentity,
       sessionId: sessionId || priorMeeting?.sessionId,
       verifiedAt: Date.now(),
       ...(inCall ? { inCallControl: leave, inCallUrl: location.href } : {}),
     };
   } else if (
+    canMutateSession &&
     !currentIdentity &&
     priorMeeting &&
     !identityAwaitingRerender &&
@@ -344,7 +367,7 @@ export function teamsMeetingStatusPreludeSource(params: TeamsMeetingStatusPrelud
   let cameraState = identityVerified ? toggleState(camera, "camera") : undefined;
   let controlManualActionReason;
   let controlManualActionMessage;
-  if (!readOnly && identityVerified && !inCall && camera && cameraState === "on") {
+  if (canMutateSession && identityVerified && !inCall && camera && cameraState === "on") {
     camera.click();
     await waitForUi();
     const currentCamera = first(selectors.camera) || findTextButton(/camera|video/i);
@@ -418,7 +441,7 @@ export function teamsMeetingStatusPreludeSource(params: TeamsMeetingStatusPrelud
         preparedInput?.audioInputDeviceId === input.deviceId
       );
       let selected = Boolean(selectedMicrophoneLabel()) || preparedSelection;
-      if (!selected && !readOnly) {
+      if (!selected && canMutateSession) {
         const settings = first(selectors.deviceSettings);
         if (settings) {
           settings.click();
@@ -461,7 +484,7 @@ export function teamsMeetingStatusPreludeSource(params: TeamsMeetingStatusPrelud
   if (identityVerified && !inCall && allowMicrophone && microphone) {
     audioInputRouted = await ensureVirtualAudioInput();
     if (!audioInputRouted) {
-      if (!readOnly && microphoneState === "on") {
+      if (canMutateSession && microphoneState === "on") {
         microphone.click();
         await waitForUi();
         const currentMicrophone = first(selectors.microphone) || findTextButton(/mute|unmute|microphone/i);
@@ -469,7 +492,7 @@ export function teamsMeetingStatusPreludeSource(params: TeamsMeetingStatusPrelud
       }
       controlManualActionReason = "teams-audio-choice-required";
       controlManualActionMessage = "Select BlackHole 2ch as the Teams microphone and verify it is selected before enabling talk-back.";
-    } else if (!readOnly && microphoneState === "off") {
+    } else if (canMutateSession && microphoneState === "off") {
       microphone.click();
       await waitForUi();
       const currentMicrophone = first(selectors.microphone) || findTextButton(/mute|unmute|microphone/i);
@@ -482,7 +505,7 @@ export function teamsMeetingStatusPreludeSource(params: TeamsMeetingStatusPrelud
       controlManualActionReason = "teams-microphone-required";
       controlManualActionMessage = "Unmute the Teams microphone and verify the microphone control shows it is on, then retry joining.";
     }
-  } else if (!readOnly && identityVerified && !inCall && !allowMicrophone && microphoneState === "on") {
+  } else if (canMutateSession && identityVerified && !inCall && !allowMicrophone && microphoneState === "on") {
       microphone.click();
       await waitForUi();
       const currentMicrophone = first(selectors.microphone) || findTextButton(/mute|unmute|microphone/i);
@@ -492,19 +515,19 @@ export function teamsMeetingStatusPreludeSource(params: TeamsMeetingStatusPrelud
       }
   }
   if (identityVerified && inCall && allowMicrophone) {
-    if (!selectedMicrophoneLabel() && !readOnly && microphoneState === "on") {
+    if (!selectedMicrophoneLabel() && canMutateSession && microphoneState === "on") {
       microphone?.click();
       await waitForUi();
       const currentMicrophone = first(selectors.microphone) || findTextButton(/mute|unmute|microphone/i);
       microphoneState = toggleState(currentMicrophone, "microphone");
     }
     audioInputRouted = await ensureVirtualAudioInput();
-    if (audioInputRouted && !readOnly && microphoneState === "off") {
+    if (audioInputRouted && canMutateSession && microphoneState === "off") {
       microphone?.click();
       await waitForUi();
       const currentMicrophone = first(selectors.microphone) || findTextButton(/mute|unmute|microphone/i);
       microphoneState = toggleState(currentMicrophone, "microphone");
-    } else if (!audioInputRouted && !readOnly && microphoneState === "on") {
+    } else if (!audioInputRouted && canMutateSession && microphoneState === "on") {
       microphone?.click();
       await waitForUi();
       const currentMicrophone = first(selectors.microphone) || findTextButton(/mute|unmute|microphone/i);
@@ -559,7 +582,10 @@ export function teamsMeetingStatusPreludeSource(params: TeamsMeetingStatusPrelud
     (!allowMicrophone || microphonePermissionState !== "granted");
   let manualActionReason;
   let manualActionMessage;
-  if (!inCall && loginRequired) {
+  if (committedOwnerConflict && !canMutateSession) {
+    manualActionReason = "teams-session-conflict";
+    manualActionMessage = "This Teams tab is owned by another active meeting session.";
+  } else if (!inCall && loginRequired) {
     manualActionReason = "teams-login-required";
     manualActionMessage = tenantLoginRequired
       ? "This Teams tenant requires sign-in or email verification. Complete it in the OpenClaw browser profile, then retry."
@@ -577,7 +603,7 @@ export function teamsMeetingStatusPreludeSource(params: TeamsMeetingStatusPrelud
     manualActionMessage = controlManualActionMessage;
   }
   let clickedJoin = false;
-  if (!readOnly && identityVerified && autoJoin && !inCall && join && !join.disabled && !manualActionReason) {
+  if (canMutateSession && identityVerified && autoJoin && !inCall && join && !join.disabled && !manualActionReason) {
     join.click();
     clickedJoin = true;
     notes.push("Clicked the Teams guest join button.");
