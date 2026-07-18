@@ -2,6 +2,34 @@
 import { createHash } from "node:crypto";
 import { stableStringify } from "../agents/stable-stringify.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { coerceSecretRef } from "../config/types.secrets.js";
+import { secretRefKey } from "./ref-contract.js";
+import { isRecord } from "./shared.js";
+
+type SecretDefaults = NonNullable<OpenClawConfig["secrets"]>["defaults"];
+
+/** Normalizes equivalent SecretRef input forms before hashing owner config. */
+export function canonicalizeSecretRefsForOwnerContract(
+  value: unknown,
+  defaults: SecretDefaults | undefined,
+): unknown {
+  const ref = coerceSecretRef(value, defaults);
+  if (ref) {
+    return { secretRef: secretRefKey(ref) };
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => canonicalizeSecretRefsForOwnerContract(entry, defaults));
+  }
+  if (!isRecord(value)) {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entry]) => [
+      key,
+      canonicalizeSecretRefsForOwnerContract(entry, defaults),
+    ]),
+  );
+}
 
 /**
  * Binds last-known-good credentials to their complete owner config. The digest is
@@ -28,11 +56,18 @@ export function digestRuntimeWebOwnerContract(params: {
 }): string {
   const provider = params.providers.find((entry) => entry.id === params.providerId);
   const pluginId = provider?.pluginId;
-  return digestSecretOwnerContract({
-    scopePath: params.scopePath,
-    configuredProvider: params.configuredProvider,
-    toolConfig: params.toolConfig,
-    provider,
-    pluginConfig: pluginId ? params.sourceConfig.plugins?.entries?.[pluginId]?.config : undefined,
-  });
+  return digestSecretOwnerContract(
+    canonicalizeSecretRefsForOwnerContract(
+      {
+        scopePath: params.scopePath,
+        configuredProvider: params.configuredProvider,
+        toolConfig: params.toolConfig,
+        provider,
+        pluginConfig: pluginId
+          ? params.sourceConfig.plugins?.entries?.[pluginId]?.config
+          : undefined,
+      },
+      params.sourceConfig.secrets?.defaults,
+    ),
+  );
 }

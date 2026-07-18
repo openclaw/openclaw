@@ -5,7 +5,10 @@ import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { secretRefKey } from "./ref-contract.js";
 import type { SecretRefResolveCache } from "./resolve-types.js";
 import type { SecretAssignmentDisposition, SecretOwnerKind } from "./runtime-degraded-state.js";
-import { digestSecretOwnerContract } from "./runtime-owner-contract.js";
+import {
+  canonicalizeSecretRefsForOwnerContract,
+  digestSecretOwnerContract,
+} from "./runtime-owner-contract.js";
 import { assertExpectedResolvedSecretValue } from "./secret-value.js";
 import { isRecord } from "./shared.js";
 
@@ -89,28 +92,6 @@ export type ResolverContext = {
 };
 
 export type SecretDefaults = NonNullable<OpenClawConfig["secrets"]>["defaults"];
-
-function canonicalizeSecretRefsForOwnerContract(
-  value: unknown,
-  defaults: SecretDefaults | undefined,
-): unknown {
-  const ref = coerceSecretRef(value, defaults);
-  if (ref) {
-    return { secretRef: secretRefKey(ref) };
-  }
-  if (Array.isArray(value)) {
-    return value.map((entry) => canonicalizeSecretRefsForOwnerContract(entry, defaults));
-  }
-  if (!isRecord(value)) {
-    return value;
-  }
-  return Object.fromEntries(
-    Object.entries(value).map(([key, entry]) => [
-      key,
-      canonicalizeSecretRefsForOwnerContract(entry, defaults),
-    ]),
-  );
-}
 
 /**
  * Creates the mutable collection context used while preparing a secrets runtime snapshot.
