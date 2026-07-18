@@ -274,7 +274,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +3: bounded raw transcript cursor request, result, and reader.
       // +3: bounded visible transcript cursor request, result, and reader.
       // +1: explicit AgentModelPolicyConfig shared with provider setup surfaces.
-      8165,
+      // +1: AgentHarnessSessionSupersededError lets harness plugins stop stale-owner fallback.
+      8166,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(

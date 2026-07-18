@@ -81,6 +81,8 @@ type ReplyTarget = {
   messageId: string;
   text: string;
   senderLabel?: string | null;
+  /** Persisted transcript id; when present chat.send carries it as replyToId. */
+  sourceMessageId?: string | null;
 };
 
 type ChatThreadState = {
@@ -810,7 +812,12 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
     const messageId =
       (bubble as HTMLElement).dataset.messageId?.trim() || stableReplyMessageId(senderLabel, text);
     const replyButton = createReplyContextMenuButton(() => {
-      props.onSetReply?.({ messageId, text, senderLabel });
+      props.onSetReply?.({
+        messageId,
+        text,
+        senderLabel,
+        ...(entryId ? { sourceMessageId: entryId } : {}),
+      });
       removeReplyContextMenu();
       props.onFocusComposer?.();
     });

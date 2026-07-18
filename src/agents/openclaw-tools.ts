@@ -4,6 +4,7 @@ import type {
   SourceReplyDeliveryMode,
   TaskSuggestionDeliveryMode,
 } from "../auto-reply/get-reply-options.types.js";
+import { isCoreCanvasHostEnabled } from "../canvas/config.js";
 import { createShowWidgetTool } from "../canvas/widget-tool.js";
 import type { ChatType } from "../channels/chat-type.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
@@ -527,7 +528,7 @@ export function createOpenClawTools(
     ...(messageTool && includeMessageTool ? [messageTool] : []),
     // Discord sessions get the Discord plugin's own show_widget (Activities
     // delivery); registering the core tool there would collide on the name.
-    ...(options?.agentChannel === "discord"
+    ...(options?.agentChannel === "discord" || !isCoreCanvasHostEnabled(resolvedConfig)
       ? []
       : [
           createShowWidgetTool({
@@ -591,6 +592,7 @@ export function createOpenClawTools(
           createAskUserTool({
             agentId: sessionAgentId,
             sessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+            runId: options?.runId,
           }),
         ]
       : []),
