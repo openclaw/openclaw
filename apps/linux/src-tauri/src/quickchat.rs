@@ -142,17 +142,21 @@ impl QuickChatState {
         Ok(agents)
     }
 
-    fn selected_agent(&self, desktop: &DesktopState) -> Result<QuickChatAgent, String> {
-        let agents = self.agents(desktop)?;
-        let selected = self
+    fn selected_agent(
+        &self,
+        desktop: &DesktopState,
+        on_missing: MissingSelection,
+    ) -> Result<QuickChatAgent, String> {
+        // Snapshot the pin before agents() refreshes the cache: a refresh clears a
+        // stale pin, and the send path must see that the pin existed so it can fail
+        // instead of silently rerouting the message to the default agent.
+        let pinned = self
             .selected_agent_id
             .lock()
             .map_err(|_| "Quick Chat agent selection is unavailable.".to_string())?
             .clone();
-        selected
-            .and_then(|id| agents.iter().find(|agent| agent.id == id).cloned())
-            .or_else(|| agents.iter().find(|agent| agent.is_default).cloned())
-            .ok_or_else(|| "OpenClaw did not report a default agent.".to_string())
+        let agents = self.agents(desktop)?;
+        resolve_selected_agent(pinned.as_deref(), &agents, on_missing)
     }
 
     fn select_agent(
@@ -231,6 +235,32 @@ impl QuickChatState {
             .lock()
             .is_ok_and(|active| active.registered && active.shortcut == *shortcut)
     }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum MissingSelection {
+    FallBackToDefault,
+    Fail,
+}
+
+fn resolve_selected_agent(
+    pinned: Option<&str>,
+    agents: &[QuickChatAgent],
+    on_missing: MissingSelection,
+) -> Result<QuickChatAgent, String> {
+    if let Some(id) = pinned {
+        if let Some(agent) = agents.iter().find(|agent| agent.id == id) {
+            return Ok(agent.clone());
+        }
+        if on_missing == MissingSelection::Fail {
+            return Err("The selected agent is no longer available.".to_string());
+        }
+    }
+    agents
+        .iter()
+        .find(|agent| agent.is_default)
+        .cloned()
+        .ok_or_else(|| "OpenClaw did not report a default agent.".to_string())
 }
 
 fn non_empty(value: Option<String>) -> Option<String> {
@@ -618,9 +648,11 @@ pub async fn quickchat_identity(
     require_quickchat_window(&window)?;
     let desktop = desktop.inner().clone();
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || state.selected_agent(&desktop))
-        .await
-        .map_err(|error| format!("Quick Chat identity task failed: {error}"))?
+    tauri::async_runtime::spawn_blocking(move || {
+        state.selected_agent(&desktop, MissingSelection::FallBackToDefault)
+    })
+    .await
+    .map_err(|error| format!("Quick Chat identity task failed: {error}"))?
 }
 
 #[tauri::command]
@@ -654,7 +686,9 @@ pub async fn quickchat_send(
     let desktop = desktop.inner().clone();
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let agent = state.selected_agent(&desktop)?;
+        // Strict resolution: a pinned agent that vanished must fail the send loudly
+        // rather than reroute the message to the default agent behind a stale chip.
+        let agent = state.selected_agent(&desktop, MissingSelection::Fail)?;
         spawn_agent_turn(app, desktop, message, agent)
     })
     .await
@@ -957,6 +991,19 @@ mod tests {
         let loaded = shortcut_preference_from_path(&path);
         assert_eq!(loaded.accelerator, QUICKCHAT_SHORTCUT);
         fs::remove_dir_all(directory).expect("remove test directory");
+    }
+
+    #[test]
+    fn missing_pinned_agent_fails_sends_and_heals_identity() {
+        let agents = [test_agent("main", true), test_agent("work", false)];
+
+        let pinned = resolve_selected_agent(Some("work"), &agents, MissingSelection::Fail);
+        assert_eq!(pinned.expect("pinned agent").id, "work");
+        let gone = resolve_selected_agent(Some("gone"), &agents, MissingSelection::Fail);
+        assert!(gone.is_err());
+        let healed =
+            resolve_selected_agent(Some("gone"), &agents, MissingSelection::FallBackToDefault);
+        assert_eq!(healed.expect("default agent").id, "main");
     }
 
     #[test]

@@ -79,6 +79,7 @@ describe("agents helpers", () => {
       const summaries = buildAgentSummaries(cfg);
       const work = requireAgentSummary(summaries, "work");
       expect(work.identityAvatarUrl).toBe("data:image/png;base64,iVBORw==");
+      expect(work.identitySource).toBe("config");
       expect(requireAgentSummary(summaries, "main")).not.toHaveProperty("identityAvatarUrl");
     } finally {
       fs.rmSync(workspace, { force: true, recursive: true });

@@ -375,6 +375,8 @@ async function send(openDashboard) {
     setError(sendError);
     updateSendButton();
     elements.input.focus();
+    // A strict send failure can mean the pinned agent vanished; re-sync the chip.
+    void refreshAgents();
   }
 }
 
