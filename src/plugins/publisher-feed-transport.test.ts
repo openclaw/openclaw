@@ -13,12 +13,14 @@ import {
   PUBLISHER_FEED_CHANGES_PAYLOAD_TYPE,
   PUBLISHER_FEED_QUERY_PAYLOAD_TYPE,
   PUBLISHER_FEED_SNAPSHOT_PAYLOAD_TYPE,
+  type PublisherFeedEntry,
 } from "./publisher-feed-projections.js";
 import {
   applyPublisherFeedChanges,
   fetchPublisherFeedChanges,
   fetchPublisherFeedQuery,
   fetchPublisherFeedSnapshot,
+  type PublisherFeedState,
 } from "./publisher-feed-transport.js";
 
 type SigningKey = { keyId: string; privateKey: KeyObject; publicKey: KeyObject };
@@ -89,14 +91,14 @@ const entry = {
   summary: "GPU tools",
   url: "/alice/skills/cuda-helper",
   updatedAt: 2,
-};
+} satisfies PublisherFeedEntry;
 
 const base = {
   schemaVersion: 1,
   feedId: "clawhub.publisher.publishers:alice",
   generatedAt: "2026-07-16T00:00:00.000Z",
   expiresAt: "2026-07-16T00:05:00.000Z",
-};
+} as const;
 
 const evidence = {
   signedBy: "clawhub-feed-2026-q3",
@@ -242,11 +244,7 @@ describe("publisher feed projection transport", () => {
     });
     enqueueSigned(key, PUBLISHER_FEED_QUERY_PAYLOAD_TYPE, {
       ...base,
-      sequence: 7,
       query,
-      requestCursor: "next",
-      pageIndex: 1,
-      startIndex: 1,
       resultCount: 2,
       entries: [{ ...entry, id: "skills:two", name: "two" }],
       nextCursor: null,
@@ -308,7 +306,7 @@ describe("publisher feed projection transport", () => {
 
   it("applies a complete change range atomically without mutating current state", () => {
     const currentEntry = { ...entry, id: "skills:old", name: "old", updatedAt: 1 };
-    const current = {
+    const current: PublisherFeedState = {
       feedId: base.feedId,
       sequence: 7,
       generatedAt: "2026-07-15T00:00:00.000Z",
@@ -354,7 +352,7 @@ describe("publisher feed projection transport", () => {
   });
 
   it("orders equal-timestamp entries by locale-independent code units", () => {
-    const current = {
+    const current: PublisherFeedState = {
       feedId: base.feedId,
       sequence: 7,
       generatedAt: base.generatedAt,
@@ -384,7 +382,7 @@ describe("publisher feed projection transport", () => {
   });
 
   it("retains accepted generation time for a no-op change range", () => {
-    const current = {
+    const current: PublisherFeedState = {
       feedId: base.feedId,
       sequence: 7,
       generatedAt: "2026-07-15T00:00:00.000Z",
@@ -411,7 +409,7 @@ describe("publisher feed projection transport", () => {
   });
 
   it("rejects incomplete change ranges before exposing a next state", () => {
-    const current = {
+    const current: PublisherFeedState = {
       feedId: base.feedId,
       sequence: 7,
       generatedAt: base.generatedAt,
