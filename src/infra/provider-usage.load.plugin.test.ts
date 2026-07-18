@@ -1,11 +1,11 @@
 // Tests provider usage loading from plugin-provided sources.
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createProviderUsageFetch } from "../test-utils/provider-usage-fetch.js";
+import { loadProviderUsageSummary } from "./provider-usage.load.js";
 
 const resolveProviderUsageSnapshotWithPluginMock = vi.fn();
+const resolveProviderUsageAuthWithPluginMock = vi.fn();
+const listProviderUsagePluginDescriptorsMock = vi.fn();
 const { EnvHttpProxyAgent, envAgentSpy, loadUndiciRuntimeDeps, undiciFetch } = vi.hoisted(() => {
   const envAgentSpyLocal = vi.fn();
   const undiciFetchLocal = vi.fn();
@@ -45,23 +45,16 @@ vi.mock("../plugins/provider-runtime.js", async () => {
   );
   return {
     ...actual,
+    listProviderUsagePluginDescriptors: (...args: unknown[]) =>
+      listProviderUsagePluginDescriptorsMock(...args),
+    resolveProviderUsageAuthWithPlugin: (...args: unknown[]) =>
+      resolveProviderUsageAuthWithPluginMock(...args),
     resolveProviderUsageSnapshotWithPlugin: (...args: unknown[]) =>
       resolveProviderUsageSnapshotWithPluginMock(...args),
   };
 });
 
-let loadProviderUsageSummary: typeof import("./provider-usage.load.js").loadProviderUsageSummary;
-
 const usageNow = Date.UTC(2026, 0, 7, 0, 0, 0);
-
-async function withTempHome<T>(fn: (homeDir: string) => Promise<T>): Promise<T> {
-  const homeDir = mkdtempSync(join(tmpdir(), "openclaw-provider-usage-home-"));
-  try {
-    return await fn(homeDir);
-  } finally {
-    rmSync(homeDir, { recursive: true, force: true });
-  }
-}
 
 function requireFirstPluginUsageCall(): {
   provider?: unknown;
@@ -114,10 +107,12 @@ describe("provider-usage.load plugin boundary", () => {
     loadUndiciRuntimeDeps.mockClear();
     undiciFetch.mockReset();
     EnvHttpProxyAgent.lastCreated = undefined;
+    listProviderUsagePluginDescriptorsMock.mockReset();
+    listProviderUsagePluginDescriptorsMock.mockReturnValue([]);
+    resolveProviderUsageAuthWithPluginMock.mockReset();
+    resolveProviderUsageAuthWithPluginMock.mockResolvedValue(undefined);
     resolveProviderUsageSnapshotWithPluginMock.mockReset();
     resolveProviderUsageSnapshotWithPluginMock.mockResolvedValue(null);
-    vi.resetModules();
-    ({ loadProviderUsageSummary } = await import("./provider-usage.load.js"));
   });
 
   it("prefers plugin-owned usage snapshots", async () => {
@@ -195,7 +190,16 @@ describe("provider-usage.load plugin boundary", () => {
     expect(pluginCall.context?.authProfileId).toBe("openai:work");
   });
 
-  it("auto-discovers Kimi usage from its bundled manifest contract", async () => {
+  it("auto-discovers plugin-owned usage providers and routes auth + snapshot hooks", async () => {
+    listProviderUsagePluginDescriptorsMock.mockReturnValueOnce([
+      {
+        provider: "kimi",
+        displayName: "Kimi",
+      },
+    ]);
+    resolveProviderUsageAuthWithPluginMock.mockResolvedValueOnce({
+      token: "resolved-kimi-token",
+    });
     resolveProviderUsageSnapshotWithPluginMock.mockResolvedValueOnce({
       provider: "kimi",
       displayName: "Kimi",
@@ -208,43 +212,48 @@ describe("provider-usage.load plugin boundary", () => {
       throw new Error("usage plugin mock should receive the fetch function without calling it");
     });
 
-    await withTempHome(async (homeDir) => {
-      await expect(
-        loadProviderUsageSummary({
-          now: usageNow,
-          env: {
-            HOME: homeDir,
-            KIMI_API_KEY: "kimi-token",
-          },
-          fetch: mockFetch as unknown as typeof fetch,
-          skipPluginAuthWithoutCredentialSource: true,
-        }),
-      ).resolves.toEqual({
-        updatedAt: usageNow,
-        providers: [
-          {
-            provider: "kimi",
-            displayName: "Kimi",
-            windows: [
-              { label: "5h", usedPercent: 12 },
-              { label: "7d", usedPercent: 34 },
-            ],
-          },
-        ],
-      });
+    await expect(
+      loadProviderUsageSummary({
+        now: usageNow,
+        env: {
+          KIMI_API_KEY: "env-kimi-token",
+        },
+        fetch: mockFetch as unknown as typeof fetch,
+        skipPluginAuthWithoutCredentialSource: true,
+      }),
+    ).resolves.toEqual({
+      updatedAt: usageNow,
+      providers: [
+        {
+          provider: "kimi",
+          displayName: "Kimi",
+          windows: [
+            { label: "5h", usedPercent: 12 },
+            { label: "7d", usedPercent: 34 },
+          ],
+        },
+      ],
     });
 
+    expect(resolveProviderUsageAuthWithPluginMock).toHaveBeenCalledOnce();
     expect(resolveProviderUsageSnapshotWithPluginMock).toHaveBeenCalledOnce();
     const pluginCall = requireFirstPluginUsageCall();
     expect(pluginCall.provider).toBe("kimi");
     expect(pluginCall.context?.provider).toBe("kimi");
-    expect(pluginCall.context?.token).toBe("kimi-token");
+    expect(pluginCall.context?.token).toBe("resolved-kimi-token");
     expect(pluginCall.context?.timeoutMs).toBe(5_000);
     expect(pluginCall.context?.fetchFn).toEqual(expect.any(Function));
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
-  it("skips Kimi usage discovery for custom proxy baseUrl", async () => {
+  it("respects plugin-owned handled skips without falling back to usage polling", async () => {
+    listProviderUsagePluginDescriptorsMock.mockReturnValueOnce([
+      {
+        provider: "kimi",
+        displayName: "Kimi",
+      },
+    ]);
+    resolveProviderUsageAuthWithPluginMock.mockResolvedValueOnce({ handled: true });
     const mockFetch = createProviderUsageFetch(async () => {
       throw new Error("custom Kimi usage proxy should not be polled");
     });
@@ -252,14 +261,6 @@ describe("provider-usage.load plugin boundary", () => {
     await expect(
       loadProviderUsageSummary({
         now: usageNow,
-        agentDir: mkdtempSync(join(tmpdir(), "openclaw-kimi-usage-skip-")),
-        config: {
-          models: {
-            providers: {
-              kimi: { baseUrl: "https://proxy.example/kimi/v1/" },
-            },
-          },
-        } as never,
         env: { KIMI_API_KEY: "kimi-token" },
         fetch: mockFetch as unknown as typeof fetch,
         skipPluginAuthWithoutCredentialSource: true,
@@ -269,6 +270,7 @@ describe("provider-usage.load plugin boundary", () => {
       providers: [],
     });
 
+    expect(resolveProviderUsageAuthWithPluginMock).toHaveBeenCalledOnce();
     expect(resolveProviderUsageSnapshotWithPluginMock).not.toHaveBeenCalled();
     expect(mockFetch).not.toHaveBeenCalled();
   });
