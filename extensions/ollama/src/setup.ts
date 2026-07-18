@@ -303,7 +303,10 @@ async function pullOllamaModelCore(params: {
       let buffer = "";
       const layers = new Map<string, { total: number; completed: number }>();
       let lastCompletedSum = 0;
-      let lastStatus = "";
+      // Track distinct statuses seen so only first-time status transitions reset
+      // the watchdog. Prevents cycling status values (e.g. "verifying" → "writing"
+      // → "verifying" → ...) from acting as an unlimited keepalive.
+      const seenStatuses = new Set<string>();
 
       const parseLine = (line: string): OllamaPullResult => {
         const trimmed = line.trim();
@@ -330,7 +333,7 @@ async function pullOllamaModelCore(params: {
             // Duplicate status drips without byte progress cannot extend setup forever.
             if (completedSum > lastCompletedSum) {
               lastCompletedSum = completedSum;
-              lastStatus = chunk.status;
+              seenStatuses.add(chunk.status);
               armStreamNoProgressTimeout();
             }
             params.onStatus?.(
@@ -340,10 +343,12 @@ async function pullOllamaModelCore(params: {
           } else {
             // Published Ollama /api/pull protocol emits status-only post-download
             // phases (e.g. "verifying sha256 digest", "writing manifest") after
-            // completed stops increasing. Reset the watchdog on distinct status
-            // transitions so healthy finalization work is not aborted.
-            if (chunk.status !== lastStatus) {
-              lastStatus = chunk.status;
+            // completed stops increasing. Reset the watchdog the first time a
+            // new status text appears, so healthy finalization phases are not
+            // aborted. Once a status has been seen, re-encountering it does not
+            // reset — preventing cycling values from acting as an unlimited keepalive.
+            if (!seenStatuses.has(chunk.status)) {
+              seenStatuses.add(chunk.status);
               armStreamNoProgressTimeout();
             }
             params.onStatus?.(chunk.status, null);

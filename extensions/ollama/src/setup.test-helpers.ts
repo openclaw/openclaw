@@ -41,12 +41,8 @@ export function createOllamaFetchMock(params: {
   });
 }
 
-export function mockCall(mock: { mock: { calls: unknown[][] } }, index = 0) {
-  return mock.mock.calls.at(index);
-}
-
 export function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0, argIndex = 0) {
-  return mockCall(mock, index)?.at(argIndex);
+  return mock.mock.calls.at(index)?.at(argIndex);
 }
 
 export function createDefaultOllamaConfig(primary: string) {

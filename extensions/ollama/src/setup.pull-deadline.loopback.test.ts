@@ -86,6 +86,37 @@ function createStatusFinalizationPullServer(
   return server;
 }
 
+function createCyclingStatusPullServer(
+  dripTimers: Set<ReturnType<typeof setInterval>>,
+): http.Server {
+  const server = http.createServer((req, res) => {
+    if (req.url === "/api/tags") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ models: [] }));
+      return;
+    }
+    if (req.url === "/api/pull") {
+      res.writeHead(200, { "Content-Type": "application/x-ndjson" });
+      let i = 0;
+      const timer = setInterval(() => {
+        const status = i % 2 === 0 ? "verifying sha256 digest" : "writing manifest";
+        res.write(`{"status":"${status}"}\n`);
+        i++;
+      }, 40);
+      dripTimers.add(timer);
+      res.on("close", () => {
+        clearInterval(timer);
+        dripTimers.delete(timer);
+      });
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  server.on("clientError", (_err, socket) => socket.destroy());
+  return server;
+}
+
 function createAdvancingPullServer(dripTimers: Set<ReturnType<typeof setInterval>>): http.Server {
   const server = http.createServer((req, res) => {
     if (req.url === "/api/tags") {
@@ -261,6 +292,39 @@ describe("Ollama pull stream no-progress loopback", () => {
     });
     expect(stopMessages).toContain("Downloaded gemma4");
     expect(stopMessages.some((message) => message.includes("no progress for"))).toBe(false);
+  });
+
+  it("aborts cycling status without completed progress within the no-progress timeout", async () => {
+    // Alternating status values without completed progress must NOT act as
+    // an unlimited keepalive. After both statuses have been seen once, the
+    // watchdog fires because cycling back to a seen status does not reset it.
+    server = createCyclingStatusPullServer(dripTimers);
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected loopback server address");
+    }
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+    const { prompter, stopMessages } = createPullPrompter();
+
+    const startedAt = Date.now();
+    await expect(
+      ensureOllamaModelPulled({
+        config: createLoopbackConfig(baseUrl),
+        model: "ollama/gemma4",
+        prompter,
+        streamNoProgressTimeoutMs: 250,
+        streamIdleTimeoutMs: 10_000,
+      }),
+    ).rejects.toMatchObject({
+      name: "WizardCancelledError",
+    });
+    const elapsedMs = Date.now() - startedAt;
+    expect(elapsedMs).toBeGreaterThanOrEqual(200);
+    expect(elapsedMs).toBeLessThan(2_000);
+    expect(stopMessages.some((message) => message.includes("no progress for"))).toBe(true);
   });
 
   it("allows advancing completed progress past the shortened no-progress timeout", async () => {

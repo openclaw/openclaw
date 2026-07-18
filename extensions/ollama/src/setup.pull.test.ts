@@ -306,6 +306,69 @@ describe("ensureOllamaModelPulled", () => {
     }
   });
 
+  it("bounds cycling status without completed progress within the no-progress timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const progress = { update: vi.fn(), stop: vi.fn() };
+      const prompter = {
+        progress: vi.fn(() => progress),
+      } as unknown as WizardPrompter;
+      const encoder = new TextEncoder();
+      let dripTimer: ReturnType<typeof setInterval> | undefined;
+      const fetchMock = vi.fn(async (input: string | URL | Request) => {
+        const url = requestUrl(input);
+        if (url.endsWith("/api/tags")) {
+          return jsonResponse({ models: [] });
+        }
+        if (url.endsWith("/api/pull")) {
+          return new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                let i = 0;
+                dripTimer = setInterval(() => {
+                  const status = i % 2 === 0 ? "verifying sha256 digest" : "writing manifest";
+                  controller.enqueue(encoder.encode(`{"status":"${status}"}\n`));
+                  i++;
+                }, 40);
+              },
+              cancel() {
+                if (dripTimer !== undefined) {
+                  clearInterval(dripTimer);
+                  dripTimer = undefined;
+                }
+              },
+            }),
+            { status: 200 },
+          );
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      const pullPromise = ensureOllamaModelPulled({
+        config: createDefaultOllamaConfig("ollama/gemma4"),
+        model: "ollama/gemma4",
+        prompter,
+        streamNoProgressTimeoutMs: 1_000,
+        streamIdleTimeoutMs: 10_000,
+      }).catch((err: unknown) => err);
+
+      await vi.waitFor(() => expect(mockCallArg(fetchMock, 1)).toContain("/api/pull"));
+      // Cycling resets the watchdog once per unique status before stopping;
+      // 2000ms is enough to fire past both first-time arms.
+      await vi.advanceTimersByTimeAsync(2_000);
+      const pullError = await pullPromise;
+      expect(pullError).toBeInstanceOf(Error);
+      expect((pullError as Error).name).toBe("WizardCancelledError");
+      expect((pullError as Error).message).toBe("Failed to download selected Ollama model");
+      expect(progress.stop).toHaveBeenCalledWith(
+        "Failed to download gemma4: Ollama pull stalled: no progress for 1s",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("skips pull when model is already available", async () => {
     const prompter = {} as unknown as WizardPrompter;
 
