@@ -1787,10 +1787,11 @@ type MicrophonePickerProps = {
 };
 
 function renderMicrophonePicker(props: MicrophonePickerProps) {
-  const options = [
-    { deviceId: "", label: t("chat.composer.systemDefaultMicrophone") },
-    ...props.devices,
-  ];
+  // System default renders even while discovery runs: the dropdown's one-time
+  // focus step needs at least one item or keyboard users never enter the menu.
+  const options = props.loading
+    ? [{ deviceId: "", label: t("chat.composer.systemDefaultMicrophone") }]
+    : [{ deviceId: "", label: t("chat.composer.systemDefaultMicrophone") }, ...props.devices];
   const label = t("chat.composer.microphoneInput");
   return html`
     <wa-dropdown
@@ -1814,33 +1815,30 @@ function renderMicrophonePicker(props: MicrophonePickerProps) {
         ${icons.chevronDown}
       </button>
       <div class="chat-talk-input-picker__heading">${label}</div>
+      ${options.map((option) => {
+        const selected = option.deviceId === props.selectedDeviceId;
+        return html`
+          <wa-dropdown-item
+            class="chat-talk-input-picker__item"
+            value=${option.deviceId}
+            type="checkbox"
+            role="menuitemradio"
+            aria-checked=${String(selected)}
+            ${ref((element) => syncDropdownItemRadio(element, selected))}
+          >
+            <span class="chat-talk-input-picker__label">${option.label}</span>
+            <span slot="details" class="chat-talk-input-picker__check" aria-hidden="true"
+              >${selected ? icons.check : nothing}</span
+            >
+          </wa-dropdown-item>
+        `;
+      })}
       ${props.loading
         ? html`<div class="chat-talk-input-picker__note" role="status">${t("common.loading")}</div>`
-        : html`
-            ${options.map((option) => {
-              const selected = option.deviceId === props.selectedDeviceId;
-              return html`
-                <wa-dropdown-item
-                  class="chat-talk-input-picker__item"
-                  value=${option.deviceId}
-                  type="checkbox"
-                  role="menuitemradio"
-                  aria-checked=${String(selected)}
-                  ${ref((element) => syncDropdownItemRadio(element, selected))}
-                >
-                  <span class="chat-talk-input-picker__label">${option.label}</span>
-                  <span slot="details" class="chat-talk-input-picker__check" aria-hidden="true"
-                    >${selected ? icons.check : nothing}</span
-                  >
-                </wa-dropdown-item>
-              `;
-            })}
-            ${props.devices.length === 0
-              ? html`<div class="chat-talk-input-picker__note">
-                  ${t("chat.composer.noMicrophones")}
-                </div>`
-              : nothing}
-          `}
+        : nothing}
+      ${!props.loading && props.devices.length === 0
+        ? html`<div class="chat-talk-input-picker__note">${t("chat.composer.noMicrophones")}</div>`
+        : nothing}
       ${props.warning
         ? html`<div class="chat-talk-input-picker__warning" role="alert">${props.warning}</div>`
         : nothing}

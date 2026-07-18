@@ -1594,7 +1594,7 @@ describe("chat composer workbench", () => {
     expect(labels).not.toContain(t("chat.runControls.exportChat"));
   });
 
-  it("uses the primary action for voice without a separate voice settings button", () => {
+  it("uses the primary action for voice with only the compact device-picker caret", () => {
     const container = renderChatView({
       onToggleRealtimeTalk: () => undefined,
     });
@@ -1603,7 +1603,9 @@ describe("chat composer workbench", () => {
     expect(voiceButton).not.toBeNull();
     expect(voiceButton?.closest(".agent-chat__composer-input-row")).not.toBeNull();
     expect(container.querySelector('button[aria-label="Talk settings"]')).toBeNull();
-    expect(container.querySelector('button[aria-label="Microphone input"]')).toBeNull();
+    // The mic device picker is a caret on the voice button, not a separate settings button.
+    const picker = container.querySelector('button[aria-label="Microphone input"]');
+    expect(picker?.classList.contains("chat-talk-input-picker__trigger")).toBe(true);
   });
 });
 
