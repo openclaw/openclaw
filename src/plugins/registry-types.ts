@@ -217,7 +217,7 @@ type PluginMusicGenerationProviderRegistration =
 type PluginWebFetchProviderRegistration = PluginOwnedProviderRegistration<WebFetchProviderPlugin>;
 type PluginWebSearchProviderRegistration = PluginOwnedProviderRegistration<WebSearchProviderPlugin>;
 type PluginWorkerProviderRegistration = PluginOwnedProviderRegistration<WorkerProvider>;
-export type PluginComputerUseProviderRegistration =
+type PluginComputerUseProviderRegistration =
   PluginOwnedProviderRegistration<ComputerUseProviderDescriptor>;
 type PluginMigrationProviderRegistration = PluginOwnedProviderRegistration<MigrationProviderPlugin>;
 type PluginMemoryEmbeddingProviderRegistration =
