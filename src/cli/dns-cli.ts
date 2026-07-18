@@ -21,6 +21,7 @@ function run(cmd: string, args: string[], opts?: RunOpts): string {
   const res = spawnSync(cmd, args, {
     encoding: "utf-8",
     stdio: opts?.inherit ? "inherit" : "pipe",
+    timeout: 15_000,
   });
   if (res.error) {
     throw res.error;
@@ -51,6 +52,7 @@ function writeFileSudoIfNeeded(filePath: string, content: string): void {
     input: content,
     encoding: "utf-8",
     stdio: ["pipe", "ignore", "inherit"],
+    timeout: 15_000,
   });
   if (res.error) {
     throw res.error;
