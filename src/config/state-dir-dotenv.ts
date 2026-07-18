@@ -7,10 +7,14 @@ import {
   isDangerousHostEnvVarName,
   normalizeEnvVarKey,
 } from "../infra/host-env-security.js";
+import { readRegularFileSync } from "../infra/regular-file.js";
 import { collectConfigServiceEnvVars } from "./config-env-vars.js";
 import { ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV } from "./future-version-guard.js";
 import { resolveStateDir } from "./paths.js";
 import type { OpenClawConfig } from "./types.js";
+
+/** Maximum bytes to read from the state-directory .env file. */
+const MAX_STATE_DIR_DOTENV_BYTES = 1024 * 1024;
 
 function isBlockedServiceEnvVar(key: string): boolean {
   return (
@@ -96,7 +100,14 @@ function parseStateDirDotEnvContent(content: string | Buffer): ParsedStateDirDot
 export function readStateDirDotEnvFromStateDir(stateDir: string): ParsedStateDirDotEnv {
   const dotEnvPath = path.join(stateDir, ".env");
   try {
-    return parseStateDirDotEnvContent(fs.readFileSync(dotEnvPath));
+    // Resolve symlinks so a .env file that points to a regular file keeps
+    // working while the bounded read still rejects oversized targets.
+    const resolved = fs.realpathSync(dotEnvPath);
+    const { buffer } = readRegularFileSync({
+      filePath: resolved,
+      maxBytes: MAX_STATE_DIR_DOTENV_BYTES,
+    });
+    return parseStateDirDotEnvContent(buffer);
   } catch {
     return { entries: {}, skippedShellReferenceKeys: [] };
   }

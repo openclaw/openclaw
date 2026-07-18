@@ -91,4 +91,32 @@ describe("readStateDirDotEnvFromStateDir", () => {
       await fs.rm(dir, { recursive: true, force: true });
     }
   });
+
+  it("reads a symlinked .env file", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-dotenv-symlink-"));
+    try {
+      const realPath = path.join(dir, "real.env");
+      await fs.writeFile(realPath, "REAL_KEY=from_symlink_target\n", "utf8");
+      await fs.symlink(realPath, path.join(dir, ".env"));
+      const result = readStateDirDotEnvFromStateDir(dir).entries;
+      expect(result["REAL_KEY"]).toBe("from_symlink_target");
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns empty entries when .env exceeds the size limit", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-dotenv-oversized-"));
+    try {
+      // Write a .env file larger than 1 MiB — the bounded reader must reject
+      // it and the catch path must return an empty result instead of crashing.
+      const large = Buffer.alloc(2 * 1024 * 1024, "x");
+      large.write("KEY=value\n", 0, "utf8");
+      await fs.writeFile(path.join(dir, ".env"), large);
+      const result = readStateDirDotEnvFromStateDir(dir).entries;
+      expect(result).toEqual({});
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
 });
