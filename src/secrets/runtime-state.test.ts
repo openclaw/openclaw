@@ -194,7 +194,11 @@ describe("secrets runtime state", () => {
     const initialSource = { logging: { level: "info" as const } };
     const nextSource = { logging: { level: "debug" as const } };
     const runtimeConfig = {
-      models: { providers: { openai: { apiKey: "initial", models: [] } } },
+      models: {
+        providers: {
+          openai: { baseUrl: "https://initial.example.invalid/v1", models: [] },
+        },
+      },
     } satisfies OpenClawConfig;
     activateSecretsRuntimeSnapshotState({
       snapshot: {
@@ -228,7 +232,7 @@ describe("secrets runtime state", () => {
     const committedRevision = getActiveSecretsRuntimeSnapshotRevision();
     const active = getActiveSecretsRuntimeSnapshot()!;
     const descendant = structuredClone(active);
-    descendant.config.models!.providers!.openai!.apiKey = "refreshed";
+    descendant.config.models!.providers!.openai!.baseUrl = "https://refreshed.example.invalid/v1";
     expect(
       activateSecretsRuntimeSnapshotStateIfCurrent({
         snapshot: descendant,
@@ -249,8 +253,8 @@ describe("secrets runtime state", () => {
     ).toBe(true);
     expect(getRuntimeConfigSourceSnapshot()).toEqual(initialSource);
     expect(getActiveSecretsRuntimeSnapshot()?.sourceConfig).toEqual(initialSource);
-    expect(getActiveSecretsRuntimeSnapshot()?.config.models?.providers?.openai?.apiKey).toBe(
-      "refreshed",
+    expect(getActiveSecretsRuntimeSnapshot()?.config.models?.providers?.openai?.baseUrl).toBe(
+      "https://refreshed.example.invalid/v1",
     );
   });
 
