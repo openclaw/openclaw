@@ -23,6 +23,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -754,6 +755,45 @@ class WearProxyClientTest {
     assertEquals(WearSequenceDecision.GapOrReset, tracker.accept("stream", 12))
     tracker.adoptSnapshot("stream", 12)
     assertEquals(WearSequenceDecision.Accepted, tracker.accept("stream", 13))
+  }
+
+  @Test
+  fun rpcResponseMustMatchTheCurrentStreamAndWatermark() {
+    val tracker = WearEventSequenceTracker()
+
+    tracker.adoptSnapshot("stream", 10)
+
+    assertTrue(tracker.isResponseCurrent(tracker.beginResponseRequest(), "stream", 10))
+    assertFalse(tracker.isResponseCurrent(tracker.beginResponseRequest(), "stream", 11))
+    assertFalse(tracker.isResponseCurrent(tracker.beginResponseRequest(), "stream", 9))
+    assertFalse(tracker.isResponseCurrent(tracker.beginResponseRequest(), "new-stream", 11))
+    val pendingSnapshot = tracker.beginResponseRequest()
+    tracker.requireSnapshot()
+    assertFalse(tracker.isResponseCurrent(pendingSnapshot, "stream", 11))
+  }
+
+  @Test
+  fun legacyRpcResponseWithoutWatermarkRequiresUnchangedEvents() {
+    val tracker = WearEventSequenceTracker()
+
+    tracker.adoptSnapshot(null, 10)
+
+    assertTrue(tracker.isResponseCurrent(tracker.beginResponseRequest(), null, null))
+    val staleRequest = tracker.beginResponseRequest()
+    assertEquals(WearSequenceDecision.Accepted, tracker.accept(null, 11))
+    assertFalse(tracker.isResponseCurrent(staleRequest, null, null))
+  }
+
+  @Test
+  fun newerRpcRequestInvalidatesAnOlderCompletion() {
+    val tracker = WearEventSequenceTracker()
+
+    tracker.adoptSnapshot("stream", 10)
+    val olderRequest = tracker.beginResponseRequest()
+    val newerRequest = tracker.beginResponseRequest()
+
+    assertFalse(tracker.isResponseCurrent(olderRequest, "stream", 12))
+    assertTrue(tracker.isResponseCurrent(newerRequest, "stream", 10))
   }
 
   @Test

@@ -349,23 +349,39 @@ internal class WearViewModel(
     viewModelScope.launch {
       mutableState.update { it.copy(controlBusy = true, error = null) }
       try {
-        val acceptedModelRef =
+        cancelModelLoad()
+        val responseRequest = eventSequenceTracker.beginResponseRequest()
+        val selection =
           repository.selectModel(
             sessionKey = session.key,
             modelRef = modelRef,
             phoneNodeId = phoneNodeId,
             capabilities = current.proxyCapabilities,
           )
+        val currentSession = mutableState.value.selectedSession
+        if (!wearSessionRequestIsCurrent(session, currentSession, selection.phoneNodeId)) return@launch
+        if (
+          !eventSequenceTracker.isResponseCurrent(
+            responseRequest,
+            selection.eventStreamId,
+            selection.eventSequence,
+          )
+        ) {
+          // A response older than the accepted event stream cannot overwrite newer session state.
+          loadSessions(selection.phoneNodeId)
+          return@launch
+        }
+        val acceptedModelRef = selection.selectedModelRef
         mutableState.update { state ->
-          val currentSession = state.selectedSession ?: return@update state
-          if (!wearSessionRequestIsCurrent(session, currentSession, phoneNodeId)) return@update state
-          val selectedSession = currentSession.copy(modelRef = acceptedModelRef)
+          val selectedSession = state.selectedSession ?: return@update state
+          if (!wearSessionRequestIsCurrent(session, selectedSession, selection.phoneNodeId)) return@update state
+          val updatedSession = selectedSession.copy(modelRef = acceptedModelRef)
           state.copy(
             selectedModelRef = acceptedModelRef,
-            selectedSession = selectedSession,
+            selectedSession = updatedSession,
             sessions =
               state.sessions.map { item ->
-                if (item.key == selectedSession.key) selectedSession else item
+                if (item.key == updatedSession.key) updatedSession else item
               },
           )
         }
@@ -682,6 +698,7 @@ internal class WearViewModel(
       return
     }
     cancelModelLoad()
+    val responseRequest = eventSequenceTracker.beginResponseRequest()
     modelLoadJob =
       viewModelScope.launch {
         try {
@@ -691,9 +708,21 @@ internal class WearViewModel(
               capabilities = capabilities,
               selectedModelRef = session.modelRef,
             )
+          val selectedSession = mutableState.value.selectedSession
+          if (!wearSessionRequestIsCurrent(session, selectedSession, modelList.phoneNodeId)) return@launch
+          if (
+            !eventSequenceTracker.isResponseCurrent(
+              responseRequest,
+              modelList.eventStreamId,
+              modelList.eventSequence,
+            )
+          ) {
+            // Rebuild from a canonical snapshot instead of exposing a catalog from an old cursor.
+            loadSessions(modelList.phoneNodeId)
+            return@launch
+          }
           mutableState.update { state ->
-            val selectedSession = state.selectedSession
-            if (!wearSessionRequestIsCurrent(session, selectedSession, modelList.phoneNodeId)) {
+            if (!wearSessionRequestIsCurrent(session, state.selectedSession, modelList.phoneNodeId)) {
               state
             } else {
               state.copy(models = modelList.models)
@@ -897,6 +926,7 @@ internal class WearViewModel(
   private fun cancelModelLoad() {
     modelLoadJob?.cancel()
     modelLoadJob = null
+    eventSequenceTracker.invalidateResponseRequests()
   }
 
   private fun reloadHistoryIfSelected(sessionKey: String) {

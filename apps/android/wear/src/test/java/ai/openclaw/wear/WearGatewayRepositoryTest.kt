@@ -198,7 +198,9 @@ class WearGatewayRepositoryTest {
         )
 
       assertEquals(listOf("openai/gpt-a", "openai/gpt-b"), models.models.map(WearModel::ref))
-      assertEquals("openai/gpt-b", selected)
+      assertEquals("openai/gpt-b", selected.selectedModelRef)
+      assertEquals(7L, selected.eventSequence)
+      assertEquals("phone-a", selected.phoneNodeId)
       assertEquals(listOf(WearRpcMethod.ModelsList, WearRpcMethod.ModelsSelect), requester.calls.map { it.first })
       assertTrue(requester.expectedNodeIds.all { it == "phone-a" })
       assertTrue(requester.requirePreferredNodes.all { it })
